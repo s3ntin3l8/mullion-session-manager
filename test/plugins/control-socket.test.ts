@@ -2857,6 +2857,122 @@ describe("controlSocketPlugin (issue #185)", () => {
           socket.destroy();
         });
       });
+
+      // Issue #944/#945 — bundle.status/resync/remove. HOME/MULLION_HOME
+      // redirected to scratch directories for this block specifically
+      // (unlike every other op above): unlike agents.list's PATH probing,
+      // resync/remove do real filesystem writes under os.homedir() (see
+      // bundle-sync.ts) — this must never touch the real machine running
+      // the suite, same posture as test/services/bundle-sync.test.ts.
+      describe("bundle.status / bundle.resync / bundle.remove", () => {
+        const originalHome = process.env.HOME;
+        const originalMullionHome = process.env.MULLION_HOME;
+        let homeDir: string;
+        let mullionHomeDir: string;
+
+        beforeEach(() => {
+          homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "control-socket-bundle-fakehome-"));
+          mullionHomeDir = fs.mkdtempSync(
+            path.join(os.tmpdir(), "control-socket-bundle-fakebundle-"),
+          );
+          process.env.HOME = homeDir;
+          process.env.MULLION_HOME = mullionHomeDir;
+        });
+
+        afterEach(() => {
+          if (originalHome === undefined) delete process.env.HOME;
+          else process.env.HOME = originalHome;
+          if (originalMullionHome === undefined) delete process.env.MULLION_HOME;
+          else process.env.MULLION_HOME = originalMullionHome;
+          fs.rmSync(homeDir, { recursive: true, force: true });
+          fs.rmSync(mullionHomeDir, { recursive: true, force: true });
+        });
+
+        it("bundle.status — full scope: dispatches to GET /api/bundle-sync/status", async () => {
+          app = await buildApp();
+          await app.ready();
+          const socket = await fullScopeSocket();
+          socket.write(`${JSON.stringify({ id: 1, op: "bundle.status" })}\n`);
+          const reply = await waitForReply(socket);
+          expect(reply.ok).toBe(true);
+          expect(reply.status).toBe(200);
+          socket.destroy();
+        });
+
+        it("bundle.status — session scope: rejected — full-scope-only op", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { hookToken } = await createRealSession();
+          const socket = await sessionScopeSocket(hookToken);
+          socket.write(`${JSON.stringify({ id: 1, op: "bundle.status" })}\n`);
+          const reply = await waitForReply(socket);
+          expect(reply).toEqual({
+            id: 1,
+            ok: false,
+            status: 403,
+            error: "not permitted for this connection's scope",
+          });
+          socket.destroy();
+        });
+
+        it("bundle.resync — full scope: dispatches to POST /api/bundle-sync/resync", async () => {
+          app = await buildApp();
+          await app.ready();
+          const socket = await fullScopeSocket();
+          socket.write(`${JSON.stringify({ id: 1, op: "bundle.resync" })}\n`);
+          const reply = await waitForReply(socket);
+          expect(reply.status).toBe(200);
+          expect(reply.result).toEqual({ changed: expect.any(Boolean) });
+          socket.destroy();
+        });
+
+        it("bundle.resync — session scope: rejected — full-scope-only op", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { hookToken } = await createRealSession();
+          const socket = await sessionScopeSocket(hookToken);
+          socket.write(`${JSON.stringify({ id: 1, op: "bundle.resync" })}\n`);
+          const reply = await waitForReply(socket);
+          expect(reply).toEqual({
+            id: 1,
+            ok: false,
+            status: 403,
+            error: "not permitted for this connection's scope",
+          });
+          socket.destroy();
+        });
+
+        it("bundle.remove — full scope: dispatches to POST /api/bundle-sync/remove", async () => {
+          app = await buildApp();
+          await app.ready();
+          const socket = await fullScopeSocket();
+          socket.write(`${JSON.stringify({ id: 1, op: "bundle.remove" })}\n`);
+          const reply = await waitForReply(socket);
+          expect(reply.status).toBe(200);
+          expect(reply.result).toEqual({
+            removed: expect.any(Number),
+            legacySwept: expect.any(Number),
+            settingDisabled: true,
+          });
+          socket.destroy();
+        });
+
+        it("bundle.remove — session scope: rejected — full-scope-only op", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { hookToken } = await createRealSession();
+          const socket = await sessionScopeSocket(hookToken);
+          socket.write(`${JSON.stringify({ id: 1, op: "bundle.remove" })}\n`);
+          const reply = await waitForReply(socket);
+          expect(reply).toEqual({
+            id: 1,
+            ok: false,
+            status: 403,
+            error: "not permitted for this connection's scope",
+          });
+          socket.destroy();
+        });
+      });
     });
   });
 

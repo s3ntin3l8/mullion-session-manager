@@ -38,6 +38,7 @@ import { sessionsRoute } from "./routes/sessions.js";
 import { workspacesRoute } from "./routes/workspaces.js";
 import { groupsRoute } from "./routes/groups.js";
 import { agentsRoute } from "./routes/agents.js";
+import { bundleSyncRoute } from "./routes/bundle-sync.js";
 import { actionsRoute } from "./routes/actions.js";
 import { serverInfoRoute } from "./routes/server-info.js";
 import { updatesRoute } from "./routes/updates.js";
@@ -461,6 +462,11 @@ export async function buildApp() {
   await app.register(workspacesRoute);
   await app.register(groupsRoute);
   await app.register(agentsRoute);
+  // Issue #944/#945 — host-local bundle-sync status/resync/remove, primary
+  // role only (see bundle-sync.ts's own module comment for why no
+  // per-project/per-host branching is needed here). Registered near
+  // agentsRoute/projectSetupRoute, the other host-local-only routes.
+  await app.register(bundleSyncRoute);
   await app.register(actionsRoute);
   await app.register(serverInfoRoute);
   await app.register(updatesRoute);

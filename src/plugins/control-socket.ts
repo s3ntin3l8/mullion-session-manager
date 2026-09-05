@@ -1178,6 +1178,50 @@ const OPS: Record<string, OpSpec> = {
       );
     },
   },
+  // Full scope only — issue #944, same posture as agents.list: bundle-sync
+  // status is operator-facing host config, not something an in-session
+  // agent needs to introspect about itself.
+  "bundle.status": {
+    scopes: ["full"],
+    handler: async ({ app, conn, reply }) => {
+      reply(
+        await injectRoute(app, conn, {
+          method: "GET",
+          url: "/api/bundle-sync/status",
+          headers: buildAuthHeaders(app),
+        }),
+      );
+    },
+  },
+  "bundle.resync": {
+    scopes: ["full"],
+    handler: async ({ app, conn, reply }) => {
+      reply(
+        await injectRoute(app, conn, {
+          method: "POST",
+          url: "/api/bundle-sync/resync",
+          headers: { ...buildAuthHeaders(app), "content-type": "application/json" },
+          payload: "{}",
+        }),
+      );
+    },
+  },
+  // Issue #945 — full scope only, same reasoning: removing Mullion's own
+  // integration from the host is an operator action, never something an
+  // in-session agent should be able to trigger against its own host.
+  "bundle.remove": {
+    scopes: ["full"],
+    handler: async ({ app, conn, reply }) => {
+      reply(
+        await injectRoute(app, conn, {
+          method: "POST",
+          url: "/api/bundle-sync/remove",
+          headers: { ...buildAuthHeaders(app), "content-type": "application/json" },
+          payload: "{}",
+        }),
+      );
+    },
+  },
 };
 
 /**

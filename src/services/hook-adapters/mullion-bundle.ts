@@ -299,21 +299,31 @@ export function installBundleSkills(destRoot: string): void {
  * or installed by some future release that changes this scheme — is left
  * completely untouched. A no-op when `destRoot` doesn't exist yet (nothing
  * was ever installed).
+ *
+ * Returns the number of directories actually removed — used by
+ * bundle-sync.ts's `uninstallBundleContent` (issue #945) to report a
+ * `legacySwept` count for hosts that installed content before the sync
+ * manifest existed. Existing callers (agy.ts's/codex.ts's own
+ * managedInstall steps) ignore the return value, so this is a
+ * backward-compatible addition, not a behavior change for them.
  */
-export function uninstallBundleSkills(destRoot: string): void {
+export function uninstallBundleSkills(destRoot: string): number {
   let entries: Dirent[];
   try {
     entries = readdirSync(destRoot, { withFileTypes: true });
   } catch {
-    return;
+    return 0;
   }
+  let removed = 0;
   for (const entry of entries) {
     if (!entry.isDirectory() || !entry.name.startsWith(INSTALLED_SKILL_PREFIX)) continue;
     const dir = path.join(destRoot, entry.name);
     if (isCurrentMullionManagedDir(dir)) {
       rmSync(dir, { recursive: true, force: true });
+      removed++;
     }
   }
+  return removed;
 }
 
 // PR-5 (per-project skills/reviewer, "apply Mullion tooling to other repos")

@@ -47,7 +47,11 @@ import os from "node:os";
 import path from "node:path";
 import { resolveClaudeConfigDir } from "./hook-adapters/claude-code.js";
 import { resolveCodexAgentsSkillsDir } from "./hook-adapters/codex.js";
-import { resolveAgyGlobalSkillsDir, resolveAgyGlobalAgentsDir } from "./hook-adapters/agy.js";
+import {
+  resolveAgyGlobalSkillsDir,
+  resolveAgyGlobalAgentsDir,
+  removeAgyMcpMullionEntry,
+} from "./hook-adapters/agy.js";
 import { resolveOpenCodeConfigHome } from "./hook-adapters/opencode-skills.js";
 import {
   resolveMullionBundleDir,
@@ -55,6 +59,7 @@ import {
   installSkillDirWithNameRewrite,
   deriveOpenCodeReviewerAgentFile,
   deriveAgyAgentFile,
+  uninstallBundleSkills,
   INSTALLED_SKILL_PREFIX,
   INSTALLED_MARKER_NAME,
   INSTALLED_MARKER_CONTENT,
@@ -62,7 +67,12 @@ import {
 
 export type BundleSyncCli = "claude-code" | "codex" | "agy" | "opencode";
 
-interface BundleSyncManifestEntry {
+// Exported (issue #944) — getBundleSyncStatus's per-CLI rows below expose
+// entry-level detail (count, staleness) that a status-surface caller needs
+// to reason about; readBundleSyncManifest() exposes the whole manifest for
+// the same reason, rather than each caller needing its own copy of this
+// shape.
+export interface BundleSyncManifestEntry {
   path: string;
   kind: "dir" | "file";
   hash: string;
@@ -111,6 +121,18 @@ function readManifest(): BundleSyncManifest | null {
     // resolveMullionBundleDir()'s own contract elsewhere in this codebase.
     return null;
   }
+}
+
+/**
+ * Exported wrapper around the module-private `readManifest` — issue #944's
+ * status surface needs to inspect the manifest directly (e.g. its
+ * `bundleHash`), not just the derived booleans `isBundleSyncedFor` already
+ * exposes. Kept as a thin wrapper, not a promotion of `readManifest` itself
+ * to `export`, so every internal caller in this file keeps calling the
+ * same private binding regardless of what this public name is doing.
+ */
+export function readBundleSyncManifest(): BundleSyncManifest | null {
+  return readManifest();
 }
 
 // Atomic write: `<path>.<pid>.tmp` then `renameSync` into place, same
@@ -262,24 +284,34 @@ function listBundleAgentNames(bundleDir: string): string[] {
   }
 }
 
-function manifestEntriesStillValid(manifest: BundleSyncManifest): boolean {
-  for (const entry of manifest.entries) {
-    if (!existsSync(entry.path)) return false;
-    let actualHash: string;
-    if (entry.kind === "dir") {
-      actualHash = hashInstalledDir(entry.path);
-    } else {
-      let contents: string;
-      try {
-        contents = readFileSync(entry.path, "utf8");
-      } catch {
-        return false;
-      }
-      actualHash = hashInstalledFile(contents);
+/**
+ * Whether ONE manifest entry still matches what's actually on disk — the
+ * per-entry building block `manifestEntriesStillValid` folds over below,
+ * and reused as-is by getBundleSyncStatus (issue #944) to compute a
+ * per-CLI "stale" status without re-deriving this logic. Extracted rather
+ * than duplicated, per this repo's own "one validity check, several
+ * callers" posture (mirrors installSkillDirWithNameRewrite's own doc
+ * comment on why a shared compare-then-write pass matters).
+ */
+function manifestEntryStillValid(entry: BundleSyncManifestEntry): boolean {
+  if (!existsSync(entry.path)) return false;
+  let actualHash: string;
+  if (entry.kind === "dir") {
+    actualHash = hashInstalledDir(entry.path);
+  } else {
+    let contents: string;
+    try {
+      contents = readFileSync(entry.path, "utf8");
+    } catch {
+      return false;
     }
-    if (actualHash !== entry.hash) return false;
+    actualHash = hashInstalledFile(contents);
   }
-  return true;
+  return actualHash === entry.hash;
+}
+
+function manifestEntriesStillValid(manifest: BundleSyncManifest): boolean {
+  return manifest.entries.every(manifestEntryStillValid);
 }
 
 function pruneRemovedEntries(oldEntries: BundleSyncManifestEntry[], keepPaths: Set<string>): void {
@@ -354,13 +386,22 @@ export function syncBundleContent(): { changed: boolean } {
       // posture as installBundleSkills' own marker write).
       //
       // CodeQL js/file-system-race flags the existsSync+writeFileSync
-      // shape here. Safe to ignore: `syncBundleContent` has no concurrent
-      // callers within one process (it's the boot-time singleton), the
-      // write target was just populated by installSkillDirWithNameRewrite
-      // in this same sequential loop iteration, and INSTALLED_MARKER_CONTENT
-      // is a process-lifetime constant — a hypothetical sibling-process
-      // race produces byte-identical content either way. This is the same
-      // shape as the pre-existing, reviewed-and-merged marker write at
+      // shape here. Safe to ignore: `syncBundleContent` is no longer only
+      // ever a boot-time singleton (issue #944 added an HTTP re-sync
+      // route) — what makes this still safe is that every PRODUCTION
+      // caller now goes through this module's own runSerialized() queue
+      // (see its doc comment on runBundleSyncExclusive), which guarantees
+      // two such calls can never interleave their filesystem work.
+      // (`syncBundleContent` stays a public export that this file's own
+      // test suite also calls directly, dozens of times — those calls are
+      // sequential by construction, one `it()` body at a time, so the
+      // property still holds; it just isn't the queue enforcing it there.)
+      // Belt-and-suspenders on top of that: the write target was just
+      // populated by installSkillDirWithNameRewrite in this same
+      // sequential loop iteration, and INSTALLED_MARKER_CONTENT is a
+      // process-lifetime constant, so even two back-to-back serialized
+      // runs would produce byte-identical content either way. This is the
+      // same shape as the pre-existing, reviewed-and-merged marker write at
       // hook-adapters/mullion-bundle.ts:256-257.
       const markerPath = path.join(destDir, INSTALLED_MARKER_NAME);
       if (!existsSync(markerPath)) {
@@ -404,13 +445,21 @@ export function syncBundleContent(): { changed: boolean } {
 /**
  * Manifest-driven removal — reads the manifest, removes every path it
  * lists (skill directories and agent files), then removes the manifest
- * file itself. Deliberately simple: this is the seam #945's fuller
- * uninstall (which also needs to sweep pre-manifest legacy paths) builds
- * on, not a replacement for that work.
+ * file itself. Deliberately simple, and deliberately NOT the fuller "remove
+ * Mullion content from this host" action: this is what the boot-time sync
+ * plugin calls when `sessions.injectMullionBundle` is off (see
+ * plugins/bundle-sync.ts), and it must stay scoped to exactly what THIS
+ * sync mechanism itself installed — see `uninstallBundleContent` below for
+ * the fuller, legacy-sweeping uninstall #945's "remove" action actually
+ * uses, which builds on this rather than replacing it.
+ *
+ * Returns the number of manifest entries actually removed (best-effort —
+ * an entry already gone doesn't count and doesn't throw).
  */
-export function removeBundleContent(): void {
+export function removeBundleContent(): { removed: number } {
   const manifest = readManifest();
-  if (!manifest) return;
+  if (!manifest) return { removed: 0 };
+  let removed = 0;
   for (const entry of manifest.entries) {
     try {
       if (entry.kind === "dir") {
@@ -418,6 +467,7 @@ export function removeBundleContent(): void {
       } else {
         unlinkSync(entry.path);
       }
+      removed++;
     } catch {
       // Best-effort — already gone is fine.
     }
@@ -427,6 +477,7 @@ export function removeBundleContent(): void {
   } catch {
     // Already gone is fine.
   }
+  return { removed };
 }
 
 /**
@@ -447,4 +498,223 @@ export function isBundleSyncedFor(cli: BundleSyncCli): boolean {
   const root = target.root();
   const prefix = root.endsWith(path.sep) ? root : `${root}${path.sep}`;
   return manifest.entries.some((entry) => entry.path.startsWith(prefix));
+}
+
+// Issue #944 — a bare boolean/count queue, not a keyed dedup cache: two
+// concurrent callers passing DIFFERENT arguments (e.g. an HTTP resync
+// request racing an HTTP remove request) must still each get their own,
+// correct result — a naive "share the one in-flight promise" dedup would
+// silently hand a remove-request caller a sync's result (or vice versa).
+// What actually needs guarding is writeManifestAtomic's `<path>.<pid>.tmp`
+// temp file: it's named by PID, not per-call, so two truly overlapping
+// writers in this same process would collide on that one path. Chaining
+// every call onto whatever's already pending — rather than only deduping
+// identical calls — guarantees no two calls into
+// syncBundleContent/removeBundleContent/uninstallBundleContent ever
+// interleave their filesystem work, regardless of which combination of
+// operations is racing.
+let pendingBundleSyncOp: Promise<void> | null = null;
+
+function runSerialized<T>(fn: () => T): Promise<T> {
+  const previous = pendingBundleSyncOp ?? Promise.resolve();
+  const run: Promise<T> = previous.then(fn, fn);
+  // Tracked separately from `run` (rather than reassigning `pendingBundleSyncOp
+  // = run` directly) so a failed run doesn't poison the queue for the next
+  // caller, and so this internal tracking promise never produces an
+  // unhandled-rejection warning of its own — the real result/error still
+  // propagates to whoever awaits the `run` this function returns.
+  pendingBundleSyncOp = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
+
+/**
+ * The single, serialized entry point for the boot-time dispatch
+ * plugins/bundle-sync.ts's onReady hook makes (`enabled` ? sync : remove) —
+ * promoted here from that plugin (issue #944) so the SAME dispatch logic
+ * also backs `POST /api/bundle-sync/resync`'s manual re-sync action,
+ * without either caller racing the other's filesystem writes. Route
+ * handlers and the boot plugin must call this (or `uninstallBundleContent`
+ * below) rather than `syncBundleContent`/`removeBundleContent` directly —
+ * that's what keeps every real caller inside the `runSerialized` queue.
+ */
+export function runBundleSyncExclusive(enabled: boolean): Promise<{ changed: boolean }> {
+  return runSerialized(() => {
+    if (enabled) return syncBundleContent();
+    const result = removeBundleContent();
+    return { changed: result.removed > 0 };
+  });
+}
+
+export interface BundleContentRemovalResult {
+  /** Manifest-tracked paths removed (removeBundleContent's own count). */
+  removed: number;
+  /** Additional marker-owned skill directories removed by the legacy sweep
+   * below, PLUS agy's mcp_config.json `mullion` entry if one was removed —
+   * content the manifest never knew about (installed by a pre-#941 host via
+   * the old per-launch installBundleSkills, or a manifest that's itself
+   * missing/corrupt). */
+  legacySwept: number;
+}
+
+/**
+ * The fuller "remove Mullion bundle content from this host" action (issue
+ * #945) — `removeBundleContent()`'s manifest-driven removal, PLUS a legacy
+ * sweep for content the manifest never tracked. Idempotent: safe to call
+ * with nothing installed at all (returns `{ removed: 0, legacySwept: 0 }`).
+ *
+ * The legacy sweep reuses `uninstallBundleSkills` (mullion-bundle.ts)
+ * against each CLI's own skill root (the SAME roots `SKILL_TARGETS` already
+ * resolves for sync, not a second hardcoded path list) — it already applies
+ * the ownership-marker check (`isCurrentMullionManagedDir`) that keeps this
+ * from ever deleting a same-prefixed directory a user created themselves
+ * (the PR #891 regression class). Agent files are deliberately NOT swept
+ * this way: they're flat `.md` files with no "inside" to carry a marker, so
+ * a prefix-only rule is the ONLY possible legacy check for them — and
+ * that's exactly the unsafe shortcut this function must not take. A stray
+ * pre-manifest `mullion-<name>.md` agent file is therefore a known,
+ * accepted gap here; only manifest-tracked agent files are ever removed.
+ *
+ * Also removes agy's `mullion` MCP entry (`removeAgyMcpMullionEntry`) —
+ * non-durable by design, since agy's own `mergeAgyMcpConfig` is ungated and
+ * re-adds it on the next agy launch regardless of
+ * `sessions.injectMullionBundle` (see that function's own doc comment).
+ *
+ * Serialized through the same queue as `runBundleSyncExclusive` (issue
+ * #944) — a resync racing a remove must not let their filesystem writes
+ * interleave any more than two racing resyncs should.
+ */
+export function uninstallBundleContent(): Promise<BundleContentRemovalResult> {
+  return runSerialized(() => {
+    const { removed } = removeBundleContent();
+    let legacySwept = 0;
+    for (const target of SKILL_TARGETS) {
+      legacySwept += uninstallBundleSkills(target.root());
+    }
+    if (removeAgyMcpMullionEntry()) legacySwept++;
+    return { removed, legacySwept };
+  });
+}
+
+export type BundleSyncStatus = "synced" | "not-synced" | "stale" | "n-a" | "disabled";
+
+export interface BundleSyncCliStatus {
+  cli: BundleSyncCli;
+  /** From agent-detect.ts's getCachedAgents() — whether this CLI's binary
+   * was found on PATH at all, independent of whether Mullion has ever
+   * synced content to it. */
+  detected: boolean;
+  skills: { status: BundleSyncStatus; root: string; count: number };
+  agents: { status: BundleSyncStatus; root: string | null; count: number };
+}
+
+export interface BundleSyncStatusReport {
+  enabled: boolean;
+  /** The shipped bundle's content hash as of the last successful sync, or
+   * `null` when disabled or never synced. */
+  bundleHash: string | null;
+  manifestPath: string;
+  clis: BundleSyncCliStatus[];
+}
+
+const STATUS_CLI_ORDER: readonly BundleSyncCli[] = ["claude-code", "codex", "agy", "opencode"];
+
+/** Every manifest entry under `root` (prefix-matched, same convention as
+ * isBundleSyncedFor) whose `kind` matches — the shared building block for
+ * both a CLI's skills row (kind "dir") and its agents row (kind "file"). */
+function statusForRoot(
+  manifest: BundleSyncManifest | null,
+  root: string,
+  kind: BundleSyncManifestEntry["kind"],
+): { status: BundleSyncStatus; count: number } {
+  if (!manifest) return { status: "not-synced", count: 0 };
+  const prefix = root.endsWith(path.sep) ? root : `${root}${path.sep}`;
+  const entries = manifest.entries.filter(
+    (entry) => entry.kind === kind && entry.path.startsWith(prefix),
+  );
+  if (entries.length === 0) return { status: "not-synced", count: 0 };
+  const allValid = entries.every(manifestEntryStillValid);
+  return { status: allValid ? "synced" : "stale", count: entries.length };
+}
+
+/**
+ * Issue #944's integration status surface — per-CLI sync/detection status,
+ * built from #941's own manifest and `agent-detect.ts`'s binary-presence
+ * probing, never a fresh "does this path exist" check of its own (the
+ * `isCurrentMullionManagedDir`-vs-prefix distinction this issue's own text
+ * calls out).
+ *
+ * `enabled`/`detectedClis` are passed in rather than read here: this module
+ * is not Fastify-aware (no `app.db` to read `sessions.injectMullionBundle`
+ * from) and has no business shelling out to `agent-detect.ts`'s login-shell
+ * probes itself — the caller (routes/bundle-sync.ts) already has both a
+ * cheap settings read and a cached `getCachedAgents()` result on hand.
+ *
+ * When `enabled` is false, EVERY row is `"disabled"` — not `"not-synced"` —
+ * and no manifest/hash comparison happens at all: with
+ * `sessions.injectMullionBundle` off, claude-code.ts's/opencode.ts's own
+ * per-session fallback is ALSO gated on that same setting (see
+ * `prepareLaunch`'s `ctx.injectMullionBundle` checks there), so nothing
+ * reaches any CLI through any mechanism — "not-synced" would wrongly imply
+ * a re-sync alone could fix it.
+ */
+export function getBundleSyncStatus(params: {
+  enabled: boolean;
+  detectedClis: ReadonlySet<BundleSyncCli>;
+}): BundleSyncStatusReport {
+  const manifestPath = resolveBundleSyncManifestPath();
+
+  if (!params.enabled) {
+    return {
+      enabled: false,
+      bundleHash: null,
+      manifestPath,
+      clis: STATUS_CLI_ORDER.map((cli) => {
+        const skillTarget = SKILL_TARGETS.find((target) => target.cli === cli)!;
+        const agentTarget = AGENT_TARGETS.find((target) => target.cli === cli);
+        return {
+          cli,
+          detected: params.detectedClis.has(cli),
+          skills: { status: "disabled", root: skillTarget.root(), count: 0 },
+          agents: {
+            status: "disabled",
+            root: agentTarget ? agentTarget.root() : null,
+            count: 0,
+          },
+        };
+      }),
+    };
+  }
+
+  const manifest = readManifest();
+
+  return {
+    enabled: true,
+    bundleHash: manifest?.bundleHash ?? null,
+    manifestPath,
+    clis: STATUS_CLI_ORDER.map((cli) => {
+      const skillTarget = SKILL_TARGETS.find((target) => target.cli === cli)!;
+      const agentTarget = AGENT_TARGETS.find((target) => target.cli === cli);
+      const skillRoot = skillTarget.root();
+      const skills = statusForRoot(manifest, skillRoot, "dir");
+      // Codex has no static per-agent file format at all (AGENT_TARGETS has
+      // no entry for it — see that table's own comment), so its agents row
+      // is unconditionally "n-a", never derived from manifest content.
+      const agents = agentTarget
+        ? statusForRoot(manifest, agentTarget.root(), "file")
+        : { status: "n-a" as BundleSyncStatus, count: 0 };
+      return {
+        cli,
+        detected: params.detectedClis.has(cli),
+        skills: { status: skills.status, root: skillRoot, count: skills.count },
+        agents: {
+          status: agents.status,
+          root: agentTarget ? agentTarget.root() : null,
+          count: agents.count,
+        },
+      };
+    }),
+  };
 }
