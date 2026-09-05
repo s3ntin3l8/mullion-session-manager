@@ -236,6 +236,45 @@ async function main() {
   const bridgeSock = path.join(sessionsDir, "ssh-agent.sock");
 
   let exitCode = 0;
+  // Tracked at outer scope so finally() can reap them on any failure path.
+  // CRITICAL: must be killed BEFORE app.close() — Fastify's close() waits
+  // for open WS connections to drain, and a still-alive helper (stuck in
+  // its reconnect ladder or just slow to honor SIGTERM) will hold the
+  // /ws/agent-bridge socket open indefinitely, hanging the close call
+  // past the step's timeout. Previously the script's only SIGTERM went
+  // out on the success path; a thrown waitFor timeout left the helper
+  // running into the finally, which then deadlocked at app.close() until
+  // the job-level 10-minute timeout killed the whole step
+  // (issue #1054, first CI run).
+  const children = [];
+  async function reapChildren() {
+    for (const child of children) {
+      if (child.exitCode !== null) continue;
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        // already gone
+      }
+    }
+    // Wait briefly for graceful exit, then escalate to SIGKILL. The
+    // helper's reconnect loop sets `stopped=true` on SIGTERM (line 648
+    // of ssh-agent-helper.mjs) and exits within ms, but a CI runner
+    // under load can take longer — don't trust the happy path.
+    const graceDeadline = Date.now() + 2000;
+    while (Date.now() < graceDeadline) {
+      if (children.every((c) => c.exitCode !== null)) return;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    for (const child of children) {
+      if (child.exitCode === null) {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // already gone
+        }
+      }
+    }
+  }
   try {
     // --- Pair: real helper binary, real pairing payload from the server ---
     const pairRes = await fetch(`${baseUrl}/api/bridges`, { method: "POST" });
@@ -243,7 +282,12 @@ async function main() {
     const { pairing_payload } = await pairRes.json();
 
     const pairEnv = { MULLION_HELPER_STATE_DIR: stateDir };
-    const pairChild = spawnHelper(["helper", "pair", pairing_payload, "--name", "ci-mac"], pairEnv, opts.helperPath);
+    const pairChild = spawnHelper(
+      ["helper", "pair", pairing_payload, "--name", "ci-mac"],
+      pairEnv,
+      opts.helperPath,
+    );
+    children.push(pairChild);
     const pairStderr = [];
     pairChild.stderr.on("data", (chunk) => pairStderr.push(chunk));
     await waitForExit(pairChild, 15000)
@@ -282,6 +326,7 @@ async function main() {
       SSH_AUTH_SOCK: fakeAgentSock,
     };
     const helper = spawnHelper(["helper", "run", "--json-events"], runEnv, opts.helperPath);
+    children.push(helper);
     // Capture helper stderr to the test's own stderr stream. Echoing
     // it (vs swallowing it) keeps a CI failure informative: a missing
     // event that should have fired surfaces as a 30s waitFor timeout
@@ -367,13 +412,22 @@ async function main() {
     );
 
     // --- Clean shutdown --------------------------------------------------
-    helper.kill("SIGTERM");
-    await waitForExit(helper, 5000).catch(() => {});
+    // reapChildren() in the finally block kills the helper on the success
+    // path too, so no explicit helper.kill() here. fakeAgent.close() is
+    // a unix server.shutdown() with no equivalent "wait for connections"
+    // trap, so it can run inline.
     await fakeAgent.close();
   } catch (err) {
     console.error(`test-helper-run-e2e: ${err.message}`);
     exitCode = 1;
   } finally {
+    // Reap helper children FIRST, then close the app. See the children
+    // declaration's block comment for why this ordering matters (a live
+    // helper holds the /ws/agent-bridge socket open across app.close(),
+    // which Fastify's close waits on). SIGTERM, 2s grace, then SIGKILL
+    // — bounded so this finally never hangs the way a hung app.close()
+    // used to.
+    await reapChildren();
     await app.close();
     rmSync(tempRoot, { recursive: true, force: true });
   }
