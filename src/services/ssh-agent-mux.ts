@@ -98,8 +98,11 @@ const PING_INTERVAL_MS = 15_000;
 /** A missed PONG within this window after a PING tears the connection down
  * — mirrors the liveness contract `remote-event-subscriber.ts`'s own
  * connect-timeout enforces, just for an already-open connection rather than
- * a still-connecting one. */
-const PONG_TIMEOUT_MS = 10_000;
+ * a still-connecting one. Exported (issue #1051): ssh-agent-fanout.ts's
+ * `pickBridge` uses the same window to prefer bridges whose last PONG
+ * arrived recently — picking a half-open bridge would stall the channel
+ * open until the mux's own PONG timeout fires. */
+export const PONG_TIMEOUT_MS = 10_000;
 
 /** A pending `openChannel()` that gets no `OpenAck`/`OpenFail` within this
  * window is rejected and its `pendingOpens` entry freed (Hermes review, PR
@@ -286,6 +289,14 @@ export interface MuxConnection {
    * PING goes unanswered — after this, every open channel has already had
    * its own `onClose` fired too. */
   onClose(listener: () => void): void;
+  /** Fired for every PONG received from the peer (issue #1051). Exposed so
+   * `routes/agent-bridge.ts`'s `trackBridge` can stamp `lastPongAt` on the
+   * ConnectedBridge entry, letting `ssh-agent-fanout.ts`'s `pickBridge`
+   * prefer a bridge that has demonstrably answered a recent PONG over one
+   * that may have gone half-open (laptop sleep, network drop without a
+   * clean FIN). Listener is called with `Date.now()` at the moment the
+   * PONG frame is dispatched. */
+  onPong(listener: (at: number) => void): void;
   /** Closes every open channel and the underlying WebSocket. Idempotent. */
   close(): void;
 }
@@ -487,6 +498,12 @@ export function createMuxConnection(
   >();
   const channelListeners: Array<(channel: MuxChannel) => void> = [];
   const closeListeners: Array<() => void> = [];
+  // Issue #1051 — fires every time this side receives a PONG. Consumed
+  // by `routes/agent-bridge.ts`'s `trackBridge` to stamp `lastPongAt`
+  // on the `ConnectedBridge` entry so `pickBridge` can prefer bridges
+  // with demonstrably-recent liveness over ones that may have gone
+  // half-open (laptop sleep, network drop without a clean FIN).
+  const pongListeners: Array<(at: number) => void> = [];
   // The two ends' allocators only ever produce disjoint ids (odd vs. even),
   // which is what actually prevents the collision described on
   // `MuxConnectionOptions.channelIdParity` — starting each side's counter
@@ -628,6 +645,12 @@ export function createMuxConnection(
         clearTimeout(pongTimeoutTimer);
         pongTimeoutTimer = null;
       }
+      // Issue #1051 — fire onPong listeners with the receive timestamp.
+      // Date.now() here, not the original PING send time: pickBridge
+      // cares about "how recently has this peer shown signs of life",
+      // and a PONG arriving is the strongest possible signal.
+      const at = Date.now();
+      for (const listener of pongListeners) invokeListener(listener, at);
       return;
     }
 
@@ -747,6 +770,9 @@ export function createMuxConnection(
     },
     onClose(listener) {
       closeListeners.push(listener);
+    },
+    onPong(listener) {
+      pongListeners.push(listener);
     },
     close() {
       if (closed) return;

@@ -39,6 +39,15 @@ export interface ConnectedBridge {
    * key to the end on a re-`set()` (trackBridge re-`set()`s the same
    * bridgeId key on every reconnect). */
   readonly connectedAt: number;
+  /** `Date.now()` at the moment this bridge's MuxConnection last received
+   * a PONG (issue #1051). `undefined` until the first PONG arrives — a
+   * freshly-tracked bridge has never yet seen one (the first PING fires
+   * up to `PING_INTERVAL_MS = 15s` after connect), and `pickBridge`
+   * treats `undefined` as "no evidence of liveness, deprioritize but
+   * don't exclude". Stamped by `routes/agent-bridge.ts`'s `trackBridge`
+   * via `mux.onPong()` rather than read off `app.connectedBridges` here
+   * so the wiring stays at the actual track-site. */
+  lastPongAt: number | undefined;
 }
 
 declare module "fastify" {

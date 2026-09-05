@@ -2,7 +2,7 @@ import net from "node:net";
 import path from "node:path";
 import { chmodSync } from "node:fs";
 import { reclaimSocketPath } from "./unix-socket.js";
-import { pipeNetSocketToChannel, type MuxChannel } from "./ssh-agent-mux.js";
+import { DEFAULT_MAX_CHANNELS, pipeNetSocketToChannel, type MuxChannel } from "./ssh-agent-mux.js";
 
 // Issue #820 — the agent-host half of the bridge's local surface: a real
 // unix socket a launched session's SSH_AUTH_SOCK can point at (see
@@ -46,6 +46,20 @@ export async function materializeSshAgentSocket(
 
   const openSockets = new Set<net.Socket>();
   const server = net.createServer((socket) => {
+    // Issue #1051 — bound openSockets so a sustained burst of SSH client
+    // connections, each awaiting an openChannel() that may never resolve
+    // (no bridge reachable), can't grow without bound and exhaust FDs.
+    // Mirrors DEFAULT_MAX_CHANNELS: the same well-above-any-real-fan-out
+    // ceiling the per-connection MuxConnection itself enforces on the
+    // bridge side, so neither end can be tricked into an unbounded
+    // backlog by the other. Dropping the new socket here (rather than
+    // queueing it) preserves the same fail-fast posture the
+    // no-bridge-connected case in handleConnection() below has to keep:
+    // a hung SSH client is a UX-breaking stall, not a safe fallback.
+    if (openSockets.size >= DEFAULT_MAX_CHANNELS) {
+      socket.destroy();
+      return;
+    }
     openSockets.add(socket);
     socket.once("close", () => openSockets.delete(socket));
     void handleConnection(socket, opts.openChannel);

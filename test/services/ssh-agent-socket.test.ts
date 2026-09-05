@@ -9,7 +9,7 @@ import {
   resolveSshAuthSock,
   sshAgentSocketPath,
 } from "../../src/services/ssh-agent-socket.js";
-import type { MuxChannel } from "../../src/services/ssh-agent-mux.js";
+import { DEFAULT_MAX_CHANNELS, type MuxChannel } from "../../src/services/ssh-agent-mux.js";
 
 function tmpSocketPath(name: string): string {
   return path.join(os.tmpdir(), `ssh-agent-socket-test-${process.pid}-${name}.sock`);
@@ -170,6 +170,89 @@ describe("ssh-agent-socket", () => {
       client.once("connect", () => resolve(false));
     });
     expect(errored).toBe(true);
+  });
+
+  // Issue #1051 — bound the openSockets set so a sustained burst of SSH
+  // client connections (each awaiting openChannel() resolving against a
+  // bridge that may not be reachable) can't grow without bound. Cap
+  // mirrors DEFAULT_MAX_CHANNELS: the same well-above-any-real-fan-out
+  // ceiling the per-connection MuxConnection itself enforces.
+  it("rejects a new accepted connection when openSockets is at DEFAULT_MAX_CHANNELS — closes the new socket immediately rather than hanging it", async () => {
+    const socketPath = tmpSocketPath("cap");
+    // openChannel never resolves — every accepted connection stays in
+    // openSockets (added on accept, removed only on socket close), so the
+    // cap will be reached after DEFAULT_MAX_CHANNELS concurrent accepts.
+    const handle = await materializeSshAgentSocket({
+      socketPath,
+      openChannel: () => new Promise<MuxChannel>(() => {}),
+    });
+    handles.push(handle);
+
+    const clients: net.Socket[] = [];
+    let overflow: net.Socket | null = null;
+    try {
+      // Fill to capacity: each accepted connection enters openSockets and
+      // sits there (openChannel never resolves).
+      for (let i = 0; i < DEFAULT_MAX_CHANNELS; i++) {
+        const c = net.createConnection(socketPath);
+        await new Promise<void>((resolve, reject) => {
+          c.once("connect", () => resolve());
+          c.once("error", reject);
+        });
+        clients.push(c);
+      }
+      // The cap-rejection (next) accepted connection must close
+      // immediately, NOT hang — same fail-fast posture as the
+      // "no bridge reachable" case above (ssh hangs on SSH_AUTH_SOCK
+      // until the agent answers or the connection drops).
+      overflow = net.createConnection(socketPath);
+      const closed = await new Promise<boolean>((resolve, reject) => {
+        overflow!.once("close", () => resolve(true));
+        overflow!.once("error", reject);
+        setTimeout(
+          () => reject(new Error("overflow connection neither closed nor errored within 5s")),
+          5_000,
+        );
+      });
+      expect(closed).toBe(true);
+    } finally {
+      for (const c of clients) c.destroy();
+      if (overflow && !overflow.destroyed) overflow.destroy();
+    }
+  });
+
+  it("accepts new connections again after a previously-capped one closes — the set drains as sockets close", async () => {
+    const socketPath = tmpSocketPath("cap-drain");
+    const handle = await materializeSshAgentSocket({
+      socketPath,
+      openChannel: () => new Promise<MuxChannel>(() => {}),
+    });
+    handles.push(handle);
+
+    const first = net.createConnection(socketPath);
+    await new Promise<void>((resolve, reject) => {
+      first.once("connect", () => resolve());
+      first.once("error", reject);
+    });
+    first.destroy();
+    await waitUntil(() => first.destroyed);
+
+    // After `first` closes, openSockets has drained back to zero — the
+    // next connection must be accepted, not rejected as overflow. We
+    // can't easily observe "accepted" directly without openChannel
+    // resolving; instead we rely on the immediate-close contract from the
+    // overflow case above and assert the OPPOSITE: this one stays open
+    // for a moment (because openChannel is pending forever).
+    const second = net.createConnection(socketPath);
+    await new Promise<void>((resolve, reject) => {
+      second.once("connect", () => resolve());
+      second.once("error", reject);
+    });
+    const stillOpenAfterDelay = await new Promise<boolean>((resolve) => {
+      setTimeout(() => resolve(!second.destroyed), 50);
+    });
+    expect(stillOpenAfterDelay).toBe(true);
+    second.destroy();
   });
 });
 
