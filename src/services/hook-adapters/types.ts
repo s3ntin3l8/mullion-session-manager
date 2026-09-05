@@ -134,7 +134,14 @@ export interface HookAdapterContext {
    * under the ephemeral OPENCODE_CONFIG_DIR and added to `skills.paths`).
    * Undefined/absent for codex and agy — neither has an ephemeral overlay
    * for project-scoped skills (see the plan's per-CLI coverage table; PR-6
-   * is the repo-write fallback for those two). */
+   * is the repo-write fallback for those two). For agy specifically this is
+   * confirmed, not assumed — see the live spike on issue #943 (2026-09-05):
+   * agy discovers neither shape of a project-scope agent file, with or
+   * without `--add-dir`; there is also no host-global fallback that fits
+   * this DB-stored, live-editable content, since a host-global write would
+   * leak one project's content into every other repo on the host and get
+   * deleted by the next unrelated agy launch (`installBundleSkills`'s prune
+   * pass) — see #1083. */
   projectSkill?: string;
   /** PR-5 — the project's own DB-authored reviewer subagent content
    * (project_tooling.reviewerAgent, schema.ts), same spawn-time-resolved,
@@ -146,7 +153,10 @@ export interface HookAdapterContext {
    * deriveOpenCodeReviewerAgentFile — see that function's own doc comment
    * for why writing this shape verbatim into opencode's config hard-fails
    * the whole session, not just that one skill). Undefined/absent for codex
-   * and agy, same reason as `projectSkill`. */
+   * and agy — for agy this is an empirically confirmed dead end (issue
+   * #943's 2026-09-05 spike), not an assumption pending confirmation; see
+   * `projectSkill`'s doc comment above for the full reasoning, which
+   * applies identically here. */
   projectReviewerAgent?: string;
   /** Issue #957 — the resolved opencode model the session is configured
    * to use, threaded from createSessionRecord (where resolveOpenCodeModel
