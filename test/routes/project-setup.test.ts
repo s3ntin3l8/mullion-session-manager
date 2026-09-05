@@ -676,6 +676,187 @@ describe("project-setup route — /setup/generate (issue #956)", () => {
     await app.close();
   });
 
+  // Issue #1082(c) — diff-aware refresh. Exact committed content, exported
+  // so the "untouched target" assertions below can assert byte-equality
+  // against it rather than a substring — matching the mirror-vs-skill
+  // byte-identity check a few lines below in the same describe block,
+  // instead of the weaker toContain/not.toContain pair a review pass found
+  // here originally (a mutation that appended to, rather than replaced,
+  // the untouched file's content would have slipped past those).
+  const HAND_WRITTEN_SKILL =
+    "---\nname: demo\ndescription: hand-written\n---\nhand-written skill content — do not touch\n";
+  function handWrittenReviewer(slug: string) {
+    return `---\nname: ${slug}-reviewer\n---\nhand-written reviewer content — do not touch\n`;
+  }
+  function commitBothScaffoldFiles(cwd: string, slug: string) {
+    const skillDir = path.join(cwd, ".claude", "skills", slug);
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, "SKILL.md"), HAND_WRITTEN_SKILL);
+    const agentsDir = path.join(cwd, ".claude", "agents");
+    fs.mkdirSync(agentsDir, { recursive: true });
+    fs.writeFileSync(path.join(agentsDir, `${slug}-reviewer.md`), handWrittenReviewer(slug));
+    execFileSync("git", ["add", "-A"], { cwd, env: gitEnv() });
+    execFileSync("git", ["commit", "-m", "pre-existing skill+reviewer", "--no-verify"], {
+      cwd,
+      env: gitEnv(),
+    });
+  }
+
+  // Regression — this is the exact behavior issue #956 built and issue
+  // #1082(c) explicitly must NOT relax as a side effect of adding refresh:
+  // absent an explicit `refresh`, both files already committed still means
+  // "don't spend a real agent turn on content computeScaffold would throw
+  // away anyway."
+  it("both files already committed, no refresh requested -> 409, no agent turn spawned", async () => {
+    const app = await buildApp();
+    commitBothScaffoldFiles(repoDir, "demo");
+    const projectId = await createProject(app, repoDir);
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/projects/${projectId}/setup/generate`,
+      payload: { slug: "demo" },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(generateScaffoldContent).not.toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it('refresh: ["skill"] spawns the agent turn and overwrites only the skill file — the reviewer is left byte-identical', async () => {
+    const app = await buildApp();
+    commitBothScaffoldFiles(repoDir, "demo");
+    const projectId = await createProject(app, repoDir);
+    mockValidGeneration("demo");
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/projects/${projectId}/setup/generate`,
+      payload: { slug: "demo", refresh: ["skill"] },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    // finishPreview's own comment assumes every entry is BRAND NEW (an
+    // untracked file `git diff HEAD` would otherwise show nothing for) —
+    // refresh is the first path where that's false: the skill file is
+    // already tracked and committed, so this is the one case that actually
+    // exercises "does getFileDiff show a MODIFICATION", not just "does a
+    // new file get staged."
+    expect(body.diff).toContain(".claude/skills/demo/SKILL.md");
+    expect(body.diff).toContain("Generated: real invariant about demo.");
+    expect(generateScaffoldContent).toHaveBeenCalledTimes(1);
+    // The seed booleans must reflect what's actually present (both exist),
+    // not the write-view refresh is about to clear — otherwise a refresh
+    // would wrongly start re-injecting a stale DB draft.
+    const call = vi.mocked(generateScaffoldContent).mock.calls[0][0];
+    expect(call.hasSkill).toBe(true);
+    expect(call.hasReviewer).toBe(true);
+
+    const worktreeDir = path.join(repoDir, ".mullion-worktrees", "setup-demo");
+    const skill = fs.readFileSync(
+      path.join(worktreeDir, ".claude", "skills", "demo", "SKILL.md"),
+      "utf8",
+    );
+    // The `.agents/skills/<slug>` mirror carries whatever the skill's final
+    // resolved content is (mullion-scaffold.ts's own `skillContent`) — a
+    // refresh that updated `.claude/skills` but left this mirror stale
+    // would be a real, silent divergence bug.
+    const mirror = fs.readFileSync(
+      path.join(worktreeDir, ".agents", "skills", "demo", "SKILL.md"),
+      "utf8",
+    );
+    const reviewer = fs.readFileSync(
+      path.join(worktreeDir, ".claude", "agents", "demo-reviewer.md"),
+      "utf8",
+    );
+
+    expect(skill).toContain("Generated: real invariant about demo.");
+    expect(skill).not.toContain("hand-written skill content");
+    expect(mirror).toContain("Generated: real invariant about demo.");
+    expect(mirror).not.toContain("hand-written skill content");
+    // Not just "both contain the generated marker" — the mirror must carry
+    // the EXACT same bytes as `.claude/skills`, not an independently
+    // resolved (and potentially diverging) copy.
+    expect(mirror).toBe(skill);
+
+    // Reviewer was NOT named in `refresh` — must still be exactly the bytes
+    // committed before this call, not the mocked generation's own content.
+    // Exact equality, not toContain/not.toContain: a mutation that appended
+    // to (rather than replaced) the untouched file would slip past a
+    // substring check but not this one — same posture as the mirror-vs-
+    // skill byte-identity assertion just above.
+    expect(reviewer).toBe(handWrittenReviewer("demo"));
+
+    await app.close();
+  });
+
+  it('refresh: ["reviewer"] spawns the agent turn and overwrites only the reviewer file — the skill is left byte-identical', async () => {
+    const app = await buildApp();
+    commitBothScaffoldFiles(repoDir, "demo");
+    const projectId = await createProject(app, repoDir);
+    mockValidGeneration("demo");
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/projects/${projectId}/setup/generate`,
+      payload: { slug: "demo", refresh: ["reviewer"] },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(generateScaffoldContent).toHaveBeenCalledTimes(1);
+
+    const worktreeDir = path.join(repoDir, ".mullion-worktrees", "setup-demo");
+    const skill = fs.readFileSync(
+      path.join(worktreeDir, ".claude", "skills", "demo", "SKILL.md"),
+      "utf8",
+    );
+    const reviewer = fs.readFileSync(
+      path.join(worktreeDir, ".claude", "agents", "demo-reviewer.md"),
+      "utf8",
+    );
+
+    expect(reviewer).toContain("Read .claude/skills/demo/SKILL.md first.");
+    expect(reviewer).not.toContain("hand-written reviewer content");
+
+    // Skill was NOT named in `refresh` — must still be exactly the bytes
+    // committed before this call. Exact equality, not toContain/
+    // not.toContain — see the sibling skill-refresh test's identical note.
+    expect(skill).toBe(HAND_WRITTEN_SKILL);
+
+    await app.close();
+  });
+
+  it('refresh: ["skill", "reviewer"] regenerates both already-committed files in one turn', async () => {
+    const app = await buildApp();
+    commitBothScaffoldFiles(repoDir, "demo");
+    const projectId = await createProject(app, repoDir);
+    mockValidGeneration("demo");
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/projects/${projectId}/setup/generate`,
+      payload: { slug: "demo", refresh: ["skill", "reviewer"] },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(generateScaffoldContent).toHaveBeenCalledTimes(1);
+
+    const worktreeDir = path.join(repoDir, ".mullion-worktrees", "setup-demo");
+    const skill = fs.readFileSync(
+      path.join(worktreeDir, ".claude", "skills", "demo", "SKILL.md"),
+      "utf8",
+    );
+    const reviewer = fs.readFileSync(
+      path.join(worktreeDir, ".claude", "agents", "demo-reviewer.md"),
+      "utf8",
+    );
+
+    expect(skill).toContain("Generated: real invariant about demo.");
+    expect(skill).not.toContain("hand-written skill content");
+    expect(reviewer).toContain("Read .claude/skills/demo/SKILL.md first.");
+    expect(reviewer).not.toContain("hand-written reviewer content");
+
+    await app.close();
+  });
+
   it("maps a generation-agent failure to a 502, never partially writing a preview", async () => {
     const app = await buildApp();
     const projectId = await createProject(app, repoDir);
