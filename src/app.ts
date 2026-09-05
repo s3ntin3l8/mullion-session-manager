@@ -8,6 +8,7 @@ import { dbPlugin } from "./plugins/db.js";
 import { ptyPlugin } from "./plugins/pty.js";
 import { browserPlugin } from "./plugins/browser.js";
 import { hooksPlugin } from "./plugins/hooks.js";
+import { bundleSyncPlugin } from "./plugins/bundle-sync.js";
 import { sshAgentPlugin } from "./plugins/ssh-agent.js";
 import { controlSocketPlugin } from "./plugins/control-socket.js";
 import { githubPRPollerPlugin } from "./plugins/github-pr-poller.js";
@@ -321,6 +322,12 @@ export async function buildApp() {
     await app.register(ptyPlugin);
     await app.register(browserPlugin);
     await app.register(hooksPlugin);
+    // Issue #941 — an agent host spawns sessions and owns a filesystem
+    // exactly like the primary does, so it needs its own boot-time bundle
+    // sync too (its `app.db` is absent, but bundleSyncPlugin's own
+    // readInjectMullionBundle falls back to DEFAULT_SETTINGS for that case,
+    // same as hooksPlugin's own settings reads on this branch).
+    await app.register(bundleSyncPlugin);
     await app.register(websocketPlugin);
     // After ptyPlugin (reads app.pty.hookSocketPath to place the local
     // ssh-agent.sock next to hooks.sock). Before internalRoutes: decorates
@@ -366,6 +373,12 @@ export async function buildApp() {
   // and app.pty.resolveToken(), both only available once ptyPlugin has
   // decorated app.pty.
   await app.register(hooksPlugin);
+  // Issue #941 — boot-time host-local bundle sync, primary branch. See
+  // bundleSyncPlugin's own doc comment for the fire-and-forget onReady
+  // idiom and the test-isolation guard. No ordering dependency on dbPlugin/
+  // ptyPlugin beyond needing `app.db` to exist if it's going to be read at
+  // all (readInjectMullionBundle falls back to DEFAULT_SETTINGS otherwise).
+  await app.register(bundleSyncPlugin);
   // Post-ship audit follow-up (#873, PR5e) — the primary's own local
   // sessions get a bridge-backed SSH_AUTH_SOCK too now, same as an agent
   // host. Needs app.pty.hookSocketPath (ptyPlugin, above) for its socket

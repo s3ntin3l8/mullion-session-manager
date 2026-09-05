@@ -73,6 +73,19 @@ vi.mock("node-pty", () => ({
   }),
 }));
 
+// Issue #941 — this suite does real spawns through applyHookAdapters, which
+// now calls bundle-sync.ts's isBundleSyncedFor from inside claude-code.ts's/
+// opencode.ts's prepareLaunch. Left unmocked, that reads the REAL
+// ~/.mullion/bundle-sync.json (HOME is never redirected in this file), so
+// every assertion below asserting today's per-session --plugin-dir/
+// skills.paths fallback would start depending on whether this exact
+// developer/CI machine happens to have already run a real boot-time sync.
+// Pinned to "never synced" so this suite keeps testing the fallback path
+// deterministically, matching its own existing (pre-#941) expectations.
+vi.mock("../../src/services/bundle-sync.js", () => ({
+  isBundleSyncedFor: () => false,
+}));
+
 // Maps a scope unit name (e.g. "crs-session-1.scope") to the `systemctl
 // is-active` reply isMasterAlive() should see for it; defaults to "active"
 // for units not explicitly configured, so tests unrelated to isMasterAlive

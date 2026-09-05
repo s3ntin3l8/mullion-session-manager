@@ -270,6 +270,15 @@ export interface AppSettings {
     // is discovery" reasoning as injectAgentGuide. A plugin-sourced Claude
     // Code skill has no per-skill toggle of its own (see types.ts's
     // `injectMullionBundle` doc comment) — this setting IS the toggle.
+    //
+    // Issue #941 — also gates plugins/bundle-sync.ts's boot-time, host-level
+    // sync of the shipped bundle into all four CLIs' global config roots
+    // (on = syncBundleContent(), off = removeBundleContent()), independently
+    // of any individual session. Per-session delivery (this setting's
+    // original scope) and host-level sync are two mechanisms this one flag
+    // now controls together — see types.ts's `injectMullionBundle` doc
+    // comment for how claude-code.ts/opencode.ts reconcile the two once the
+    // host-level sync has covered a given CLI.
     injectMullionBundle: boolean;
     // Phase 5 (Track B, issue #193 5.3b) — hard cap on how many LIVE
     // (status "active") children a single session may have spawned via the

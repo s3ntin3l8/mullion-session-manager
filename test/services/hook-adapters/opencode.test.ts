@@ -1,15 +1,27 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import {
-  openCodeAdapter,
-  buildOpenCodeMcpConfig,
-} from "../../../src/services/hook-adapters/opencode.js";
-import { resolveMcpServerPath } from "../../../src/services/hook-adapters/shared.js";
-import { buildAgentGuideBlock, sessionAgentGuidePath } from "../../../src/services/agent-guide.js";
-import { sessionBriefingPath } from "../../../src/services/project-briefing.js";
-import { resolveMullionBundleDir } from "../../../src/services/hook-adapters/mullion-bundle.js";
+
+// Issue #941 — defaults to "not synced" everywhere, matching this file's
+// existing expectations that the shipped bundle's skills dir is always
+// pushed onto skills.paths when injectMullionBundle is on. A dedicated
+// describe block below flips this to exercise the new fallback-skip path.
+// Mocked (rather than exercising the real manifest file) so this suite
+// never touches the real developer/CI-runner's own ~/.mullion/.
+const mockIsBundleSyncedFor = vi.fn((_cli: string): boolean => false);
+vi.mock("../../../src/services/bundle-sync.js", () => ({
+  isBundleSyncedFor: (cli: string) => mockIsBundleSyncedFor(cli),
+}));
+
+const { openCodeAdapter, buildOpenCodeMcpConfig } =
+  await import("../../../src/services/hook-adapters/opencode.js");
+const { resolveMcpServerPath } = await import("../../../src/services/hook-adapters/shared.js");
+const { buildAgentGuideBlock, sessionAgentGuidePath } =
+  await import("../../../src/services/agent-guide.js");
+const { sessionBriefingPath } = await import("../../../src/services/project-briefing.js");
+const { resolveMullionBundleDir } =
+  await import("../../../src/services/hook-adapters/mullion-bundle.js");
 
 // Issue #881 — the mcp.mullion entry is now unconditional (see
 // opencode.ts's own comment on why), so every OPENCODE_CONFIG_CONTENT
@@ -308,6 +320,52 @@ describe("openCodeAdapter.prepareLaunch — Mullion tooling bundle skills.paths 
   });
 });
 
+// Issue #941 — once bundle-sync.ts's boot-time sync has globally installed
+// the shipped bundle for opencode, pushing the SAME skills dir onto
+// skills.paths here becomes redundant and should be skipped.
+describe("openCodeAdapter.prepareLaunch — bundle-sync fallback (issue #941)", () => {
+  const ctx = {
+    sessionId: "42",
+    sessionsDir: "/tmp/mullion-sessions",
+    hookSocketPath: "/tmp/mullion-sessions/hooks.sock",
+    hookToken: "token123",
+    controlSocketPath: "/tmp/mullion-sessions/mullion.sock",
+    forwarderPath: "/abs/path/forwarder.mjs",
+    injectAgentGuide: false,
+    injectProjectBriefing: false,
+    injectMullionBundle: true,
+  };
+
+  beforeEach(() => {
+    mockIsBundleSyncedFor.mockClear();
+  });
+
+  afterEach(() => {
+    mockIsBundleSyncedFor.mockReturnValue(false);
+  });
+
+  it("omits the shipped bundle's skills.paths entry once bundle-sync reports opencode as synced", () => {
+    mockIsBundleSyncedFor.mockReturnValue(true);
+    const plan = openCodeAdapter.prepareLaunch(ctx);
+    expect(mockIsBundleSyncedFor).toHaveBeenCalledWith("opencode");
+    const parsed = JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT);
+    expect(parsed.skills).toBeUndefined();
+  });
+
+  it("still pushes skills.paths when bundle-sync reports opencode as NOT synced (today's behavior)", () => {
+    mockIsBundleSyncedFor.mockReturnValue(false);
+    const plan = openCodeAdapter.prepareLaunch(ctx);
+    const parsed = JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT);
+    expect(parsed.skills.paths).toContain(path.join(resolveMullionBundleDir()!, "skills"));
+  });
+
+  it("never checks bundle-sync status when injectMullionBundle is off", () => {
+    mockIsBundleSyncedFor.mockReturnValue(true);
+    openCodeAdapter.prepareLaunch({ ...ctx, injectMullionBundle: false });
+    expect(mockIsBundleSyncedFor).not.toHaveBeenCalled();
+  });
+});
+
 // PR-5 — a project's own skill/reviewer content, threaded from
 // project_tooling. Uses a real temp sessionsDir (same posture as the
 // agent-guide describe block below) so settingsFiles' actual writes can be
@@ -346,6 +404,24 @@ describe("openCodeAdapter.prepareLaunch — per-project skill/reviewer (PR-5)", 
     );
     // Alongside the shipped bundle's own skills dir, not instead of it.
     expect(configContent.skills.paths).toContain(path.join(resolveMullionBundleDir()!, "skills"));
+  });
+
+  // Issue #941 — the project's own skill is a separate, always-per-session
+  // mechanism, never gated on bundle-sync's global-install status; only the
+  // shipped bundle's OWN entry is dropped once synced.
+  it("still writes the project skill and keeps it in skills.paths even when bundle-sync reports opencode as synced", () => {
+    mockIsBundleSyncedFor.mockReturnValue(true);
+    const plan = openCodeAdapter.prepareLaunch({ ...ctx, projectSkill: validSkill });
+    mockIsBundleSyncedFor.mockReturnValue(false);
+
+    const configContent = JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT);
+    expect(configContent.skills.paths).toContain(
+      "/tmp/mullion-sessions/42.opencode-config/mullion-project-skills",
+    );
+    // The shipped bundle's own entry IS dropped now that it's synced.
+    expect(configContent.skills.paths).not.toContain(
+      path.join(resolveMullionBundleDir()!, "skills"),
+    );
   });
 
   it("translates the reviewer agent into opencode's own agent/<name>.md shape — never writes the raw Claude Code frontmatter", () => {

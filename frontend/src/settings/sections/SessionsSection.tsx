@@ -232,12 +232,15 @@ export function SessionsSection() {
       <Row
         label="Inject Mullion tooling bundle"
         desc={
-          "Ship Mullion's own agent-facing skill into every Claude Code" +
-          " session via --plugin-dir, in any project — not just this repo's" +
-          " own checkout. Adds no files to the project itself; the skill is" +
-          " loaded for that session only. Not currently toggleable per-skill" +
-          " in the Skills Manager below (it's delivered as a session-scoped" +
-          " plugin, invisible to Claude Code's own skill-override mechanism)" +
+          "Ship Mullion's own agent-facing skills (and, once shipped," +
+          " subagents) into Claude Code, Codex, opencode, and agy, in any" +
+          " project — not just this repo's own checkout. A host-local sync" +
+          " installs them once, globally, for each of those tools (under" +
+          " each tool's own skills/agents directory) at Mullion boot, and" +
+          " keeps them in sync across Mullion updates; turning this off" +
+          " removes them on the next restart (codex and agy also remove" +
+          " their own copy immediately, on the next session they launch)." +
+          " Not currently toggleable per-skill in the Skills Manager below" +
           " — this setting is the toggle."
         }
       >

@@ -12,6 +12,7 @@ import {
   deriveContentName,
   deriveOpenCodeReviewerAgentFile,
 } from "./mullion-bundle.js";
+import { isBundleSyncedFor } from "../bundle-sync.js";
 import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./types.js";
 
 // OpenCode adapter (issue #175). Unlike Claude Code/Codex/agy, OpenCode has
@@ -308,7 +309,16 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
   // alone, same spawn-time-snapshot posture as injectAgentGuide/
   // injectProjectBriefing above.
   const skillsPaths: string[] = [];
-  if (ctx.injectMullionBundle) {
+  // Issue #941 — once bundle-sync.ts's boot-time sync has globally
+  // installed the shipped bundle's skills under
+  // resolveOpenCodeConfigHome()/skills, opencode discovers them there
+  // natively; pushing the same shipped bundle's skills/ dir onto
+  // skills.paths here would be redundant. isBundleSyncedFor is a cheap
+  // manifest read (not a full re-hash), safe to call on every launch.
+  // Falls back to today's per-session skills.paths entry when nothing's
+  // synced yet. The project-skill/project-reviewer-agent entries below are
+  // a separate, always-per-session mechanism and are NOT gated on this.
+  if (ctx.injectMullionBundle && !isBundleSyncedFor("opencode")) {
     const bundleDir = resolveMullionBundleDir();
     if (bundleDir) skillsPaths.push(path.join(bundleDir, "skills"));
   }
