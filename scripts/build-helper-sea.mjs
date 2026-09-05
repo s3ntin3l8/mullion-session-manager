@@ -40,6 +40,17 @@ const repoRoot = path.join(here, "..");
 const buildDir = path.join(repoRoot, "build", "helper-sea");
 const entryPoint = path.join(repoRoot, "src", "cli", "helper-main.mjs");
 
+// Aligned with package.json's engines.node (>=26) — single source of truth
+// for the minimum Node version this bundle targets. Sourced from
+// package.json rather than hardcoded so the two can't drift apart: if
+// engines.node is ever bumped, esbuild's target follows automatically.
+// Issue #1058: a hand-typed `target` here was a maintenance footgun — a
+// future contributor who adds a Node 23+ API call would otherwise get a
+// silent transpile instead of a build failure.
+const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
+const enginesNode = String(pkg.engines?.node ?? "").replace(/^>=/, "");
+const ESBUILD_TARGET = `node${enginesNode}`;
+
 // The one file this bundle must never inline — see its own header comment.
 // A plugin's onResolve `filter`, not esbuild's plain `external:` array with
 // a computed absolute path: the first attempt (`external:
@@ -91,7 +102,7 @@ async function bundle() {
     bundle: true,
     platform: "node",
     format: "cjs",
-    target: "node22",
+    target: ESBUILD_TARGET,
     // Node's own WebSocket/fetch globals (ssh-agent-bridge-mux.mjs,
     // ssh-agent-helper.mjs's renewal loop) are runtime built-ins, not
     // npm packages — nothing to bundle or externalize for those.
@@ -176,17 +187,47 @@ function removeDarwinSignature() {
 function signDarwinBinary() {
   if (process.platform !== "darwin") return;
   log("re-signing (ad-hoc) after SEA blob injection");
-  execFileSync("codesign", ["--sign", "-", exePath], { stdio: "inherit" });
+  // Issue #1058: `--force` is required when a stale signature is still
+  // attached to the binary (e.g. removeDarwinSignature above silently
+  // failed because codesign exists but the existing signature is
+  // corrupted). Without it, codesign refuses to overwrite the prior
+  // signature and the build fails with a confusing "already signed" error
+  // rather than the actual root cause.
+  execFileSync("codesign", ["--sign", "-", "--force", exePath], { stdio: "inherit" });
 }
 
-function injectBlob() {
-  log("injecting SEA blob via postject");
+// Issue #1058: pre-flight check for node_modules/.bin/postject. The
+// `.bin/postject` entry is a SYMLINK on POSIX (npm's own shim scheme) and a
+// `.cmd` shim on Windows — if it's broken (a stale `npm install` left it
+// dangling, an nvm/fnm switch moved the underlying Node install out from
+// under it, or `node_modules` was wiped without a fresh `npm ci`), spawn
+// fails with an opaque ENOENT deep inside injectBlob. Catching it here
+// surfaces a clear, actionable error at build start instead.
+function verifyPostject() {
   const postjectBin = path.join(
     repoRoot,
     "node_modules",
     ".bin",
     process.platform === "win32" ? "postject.cmd" : "postject",
   );
+  if (!fs.existsSync(postjectBin)) {
+    throw new Error(
+      `postject not found at ${postjectBin} — run \`npm ci\` (or \`npm install\`) at the repo root, then re-run \`npm run build:helper-sea\`.`,
+    );
+  }
+  try {
+    fs.accessSync(postjectBin, fs.constants.X_OK);
+  } catch {
+    throw new Error(
+      `postject at ${postjectBin} is not executable — re-run \`npm ci\` to repair the shim, then re-run \`npm run build:helper-sea\`.`,
+    );
+  }
+  return postjectBin;
+}
+
+function injectBlob() {
+  log("injecting SEA blob via postject");
+  const postjectBin = verifyPostject();
   const args = [exePath, "NODE_SEA_BLOB", blobPath, "--sentinel-fuse", SEA_FUSE];
   // Round 4 (issue #820, macOS SEA support) — macOS needs
   // --macho-segment-name NODE_SEA (postject's own docs: without it, the
