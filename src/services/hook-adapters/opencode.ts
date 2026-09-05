@@ -13,7 +13,7 @@ import {
   deriveContentName,
   deriveOpenCodeReviewerAgentFile,
 } from "./mullion-bundle.js";
-import { isBundleSyncedFor } from "../bundle-sync.js";
+import { isBundleSyncedFor, removeBundleContentForCli } from "../bundle-sync.js";
 import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./types.js";
 
 // OpenCode adapter (issue #175). Unlike Claude Code/Codex/agy, OpenCode has
@@ -492,6 +492,21 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
   return {
     settingsFiles,
     envAdditions,
+    // Issue #1079 — the setting-off counterpart to the `skills.paths`
+    // shipped-bundle branch above (line ~344), which only ever SKIPS adding
+    // a pointer. Codex's and agy's own managedInstall steps already
+    // actively uninstall their globally-synced content on every launch when
+    // the setting is off; opencode never did, so a prior boot-time sync's
+    // content lingered under resolveOpenCodeConfigHome() until the next
+    // Mullion process restart. See removeBundleContentForCli's own doc
+    // comment for why this is scoped to opencode's own two roots only,
+    // never the whole-host removeBundleContent(). A no-op call when nothing
+    // was ever synced for this CLI.
+    managedInstall: ctx.injectMullionBundle
+      ? undefined
+      : async () => {
+          await removeBundleContentForCli("opencode");
+        },
   };
 }
 

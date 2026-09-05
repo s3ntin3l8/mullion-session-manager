@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -14,6 +15,7 @@ import path from "node:path";
 import {
   syncBundleContent,
   removeBundleContent,
+  removeBundleContentForCli,
   isBundleSyncedFor,
   computeBundleContentHash,
   resolveBundleSyncManifestPath,
@@ -512,6 +514,152 @@ describe("removeBundleContent", () => {
 
   it("is a no-op, not a throw, when there is no manifest at all", () => {
     expect(() => removeBundleContent()).not.toThrow();
+  });
+});
+
+describe("removeBundleContentForCli (issue #1079)", () => {
+  it("is a no-op with a clear zero result when nothing is installed at all", async () => {
+    const result = await removeBundleContentForCli("claude-code");
+    expect(result).toEqual({ skillsRemoved: 0, agentsRemoved: 0 });
+  });
+
+  it("removes exactly this CLI's own skill + agent content, on disk and from the manifest", async () => {
+    writeSkill("host");
+    writeAgent("reviewer");
+    syncBundleContent();
+
+    const claudeSkill = path.join(resolveClaudeConfigDir(), "skills", "mullion-host");
+    const claudeAgent = path.join(resolveClaudeConfigDir(), "agents", "mullion-reviewer.md");
+    expect(existsSync(claudeSkill)).toBe(true);
+    expect(existsSync(claudeAgent)).toBe(true);
+
+    const result = await removeBundleContentForCli("claude-code");
+    expect(result.skillsRemoved).toBeGreaterThan(0);
+    expect(result.agentsRemoved).toBeGreaterThan(0);
+
+    expect(existsSync(claudeSkill)).toBe(false);
+    expect(existsSync(claudeAgent)).toBe(false);
+  });
+
+  // The critical regression this function exists specifically to avoid:
+  // removeBundleContent() (whole-host) would also wipe codex's and agy's
+  // own installed content — this must not.
+  it("leaves codex's and agy's installed content, and opencode's, completely untouched", async () => {
+    writeSkill("host");
+    writeAgent("reviewer");
+    syncBundleContent();
+
+    const codexSkill = path.join(resolveCodexAgentsSkillsDir(), "mullion-host");
+    const agySkill = path.join(resolveAgyGlobalSkillsDir(), "mullion-host");
+    const agyAgent = path.join(resolveAgyGlobalAgentsDir(), "mullion-reviewer.md");
+    const opencodeSkill = path.join(resolveOpenCodeConfigHome(), "skills", "mullion-host");
+    const opencodeAgent = path.join(resolveOpenCodeConfigHome(), "agent", "mullion-reviewer.md");
+    for (const p of [codexSkill, agySkill, agyAgent, opencodeSkill, opencodeAgent]) {
+      expect(existsSync(p)).toBe(true);
+    }
+
+    await removeBundleContentForCli("claude-code");
+
+    for (const p of [codexSkill, agySkill, agyAgent, opencodeSkill, opencodeAgent]) {
+      expect(existsSync(p)).toBe(true);
+    }
+    // codex has no marker check of its own to break (no AGENT_TARGETS
+    // entry — see that table's own comment), but agy's skill dir marker
+    // must still be intact, not just the directory's presence.
+    expect(existsSync(path.join(agySkill, INSTALLED_MARKER_NAME))).toBe(true);
+
+    // The manifest-driven status surface must agree: codex/agy/opencode
+    // still report synced, only claude-code doesn't.
+    expect(isBundleSyncedFor("claude-code")).toBe(false);
+    expect(isBundleSyncedFor("codex")).toBe(true);
+    expect(isBundleSyncedFor("agy")).toBe(true);
+    expect(isBundleSyncedFor("opencode")).toBe(true);
+  });
+
+  // The stale-manifest bug this function must not have: pruning only the
+  // agent-file manifest entries and leaving the skill-dir entry behind
+  // would make isBundleSyncedFor("claude-code") keep reporting `true` even
+  // though the skill directory is actually gone from disk — which would
+  // make claude-code.ts's own `else if (!isBundleSyncedFor("claude-code"))`
+  // branch wrongly skip re-emitting the per-session fallback pointer the
+  // next time the setting is turned back on before this host's next full
+  // resync.
+  it("drops BOTH the skill-dir and agent-file manifest entries for this CLI, not just the agent one", async () => {
+    writeSkill("host");
+    writeAgent("reviewer");
+    syncBundleContent();
+
+    await removeBundleContentForCli("claude-code");
+
+    expect(isBundleSyncedFor("claude-code")).toBe(false);
+  });
+
+  // Review finding on PR #1095/#1079 — the agent-file branch used to drop
+  // its manifest entry unconditionally, even when `unlinkSync` failed for a
+  // reason other than "already gone" (EACCES/EBUSY). That both orphans the
+  // file (nothing else will ever try to remove it again until the next full
+  // syncBundleContent resync happens to re-adopt it) and lies in
+  // `agentsRemoved`'s count. Mirrors the skill-dir branch's own
+  // already-tested `!existsSync` gate a few tests up.
+  it("keeps the manifest entry for an agent file that fails to unlink for a reason other than already-gone", async () => {
+    writeSkill("host");
+    writeAgent("reviewer");
+    syncBundleContent();
+
+    const agentsDir = path.join(resolveClaudeConfigDir(), "agents");
+    chmodSync(agentsDir, 0o500); // read+execute, no write — unlink needs write on the containing dir
+    try {
+      const result = await removeBundleContentForCli("claude-code");
+      expect(result.agentsRemoved).toBe(0);
+    } finally {
+      chmodSync(agentsDir, 0o700);
+    }
+
+    const agentFilePath = path.join(agentsDir, "mullion-reviewer.md");
+    expect(existsSync(agentFilePath)).toBe(true);
+    // The manifest entry must have survived too — not just the file itself
+    // — so a later removal attempt can still find and retry it.
+    // isBundleSyncedFor deliberately only ever consults SKILL_TARGETS (see
+    // its own definition), so it can't see an agent-file entry either way —
+    // read the manifest directly instead.
+    const manifest = readBundleSyncManifest();
+    expect(manifest?.entries.some((entry) => entry.path === agentFilePath)).toBe(true);
+  });
+
+  it("PR #891-style regression: never deletes a mullion-prefixed skill directory lacking the ownership marker", async () => {
+    const userOwnedDir = path.join(resolveClaudeConfigDir(), "skills", "mullion-helper");
+    mkdirSync(userOwnedDir, { recursive: true });
+    writeFileSync(path.join(userOwnedDir, "SKILL.md"), "---\nname: mullion-helper\n---\nMine.\n");
+    // Deliberately no INSTALLED_MARKER_NAME file.
+
+    const result = await removeBundleContentForCli("claude-code");
+    expect(result.skillsRemoved).toBe(0);
+    expect(existsSync(userOwnedDir)).toBe(true);
+  });
+
+  it("agent-file removal is manifest-only: a stray pre-manifest mullion-<name>.md agent file is left alone", async () => {
+    writeSkill("host");
+    writeAgent("reviewer");
+    syncBundleContent();
+
+    const strayAgentPath = path.join(resolveClaudeConfigDir(), "agents", "mullion-orphan.md");
+    writeFileSync(strayAgentPath, "---\nname: orphan\ndescription: stray\n---\nBody.\n");
+
+    await removeBundleContentForCli("claude-code");
+
+    expect(existsSync(strayAgentPath)).toBe(true);
+  });
+
+  it("is safe to call twice in a row (idempotent, no throw)", async () => {
+    writeSkill("host");
+    writeAgent("reviewer");
+    syncBundleContent();
+
+    await removeBundleContentForCli("opencode");
+    await expect(removeBundleContentForCli("opencode")).resolves.toEqual({
+      skillsRemoved: 0,
+      agentsRemoved: 0,
+    });
   });
 });
 

@@ -251,6 +251,31 @@ export const projects = sqliteTable("projects", {
   // release trigger is outward-facing and must not silently enable itself
   // for existing projects at upgrade.
   autoTagRelease: integer("auto_tag_release", { mode: "boolean" }),
+  // Issue #1082(a) — the scaffold slug this project was last scaffolded
+  // under (mullion-scaffold.ts's `slug`, which names
+  // `.claude/skills/<slug>/SKILL.md` and `.claude/agents/<slug>-reviewer.md`
+  // — see that module's own `ScaffoldOptions.slug` doc comment). Nullable:
+  // most projects have never been scaffolded. Set by
+  // routes/project-setup.ts's `/setup/apply` handler, at the point it
+  // actually commits the scaffold's files into a real worktree — never
+  // invented independently here, and never by a user PATCH: this column
+  // exists purely so session-lifecycle.ts's createSessionRecord can compute
+  // whether a committed scaffolded file already exists for THIS project
+  // before deciding whether to still inject the DB-authored
+  // project_tooling.skill/.reviewerAgent copy live (see that function's own
+  // comment on resolvedProjectSkill/resolvedProjectReviewerAgent) — once a
+  // committed file exists, re-injecting the DB copy on top of it is
+  // redundant. Overwritten (not merged) on every successful apply, so a
+  // project re-scaffolded under a different slug tracks whichever slug was
+  // MOST RECENTLY committed, matching what's actually on disk.
+  //
+  // Local-hosted projects only, transitively: `/setup/apply` requires a
+  // live preview record, and `/setup/preview`/`/setup/generate` both 501
+  // for any `hostId !== LOCAL_HOST_ID` (issue #895 hasn't lifted that yet).
+  // So a remote-hosted project's `slug` can only ever be null today — this
+  // is a consequence of that restriction, not a separate rule enforced
+  // here, and would need revisiting if #895 ever lifts it.
+  slug: text("slug"),
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
     .$defaultFn(() => new Date()),

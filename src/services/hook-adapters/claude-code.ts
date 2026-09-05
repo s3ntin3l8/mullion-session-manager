@@ -3,7 +3,7 @@ import path from "node:path";
 import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./types.js";
 import { resolveMcpServerPath, shellQuote, SHELL_METACHARACTERS_RE } from "./shared.js";
 import { resolveMullionBundleDir, composeClaudeSessionBundle } from "./mullion-bundle.js";
-import { isBundleSyncedFor } from "../bundle-sync.js";
+import { isBundleSyncedFor, removeBundleContentForCli } from "../bundle-sync.js";
 
 // Issue #470 — Claude Code's own bundle (2.1.220, verified statically by
 // locating `Akl()`/`fn()` and their callers in the installed binary) resolves
@@ -440,6 +440,22 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
     ],
     commandTransform: (command) =>
       `${command} --settings ${JSON.stringify(settingsPath)} --mcp-config ${JSON.stringify(mcpConfigPath)}${bundleFlag}`,
+    // Issue #1079 — the setting-off counterpart to the `--plugin-dir`
+    // branches above, which only ever SKIP adding a pointer. Codex's and
+    // agy's own managedInstall steps already actively uninstall their
+    // globally-synced content on every launch when the setting is off (see
+    // those adapters' own managedInstall); Claude Code and opencode never
+    // did, so a prior boot-time sync's content lingered under
+    // resolveClaudeConfigDir() until the next Mullion process restart. This
+    // closes that gap the same way codex/agy already do: fire-and-forget,
+    // scoped to Claude Code's own two roots only (removeBundleContentForCli's
+    // own doc comment — never the whole-host removeBundleContent()). A
+    // no-op call when nothing was ever synced for this CLI.
+    managedInstall: ctx.injectMullionBundle
+      ? undefined
+      : async () => {
+          await removeBundleContentForCli("claude-code");
+        },
   };
 }
 

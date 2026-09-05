@@ -661,6 +661,145 @@ export function uninstallBundleContent(): Promise<BundleContentRemovalResult> {
   });
 }
 
+// Shared by removeBundleContentForCli and statusForRoot below — a bare
+// directory-prefix match must never treat `~/.claude/skills-extra` as being
+// under `~/.claude/skills`. isBundleSyncedFor above keeps its own identical
+// inline copy of this same expression rather than being refactored to call
+// this helper: this module's own ownership note (added for issue #1079)
+// says not to touch an existing EXPORTED function's body beyond what's
+// required, and deduplicating a correct, already-reviewed expression isn't.
+function withTrailingSep(dir: string): string {
+  return dir.endsWith(path.sep) ? dir : `${dir}${path.sep}`;
+}
+
+/**
+ * Issue #1079 — Claude Code's and opencode's own per-CLI counterpart to
+ * codex's/agy's `uninstallBundleSkills(destRoot)` call in their
+ * `managedInstall` steps (codex.ts/agy.ts), run on EVERY session spawn when
+ * `sessions.injectMullionBundle` is off: removes exactly what THIS ONE CLI
+ * has synced/installed, both its skill root (`SKILL_TARGETS`) and its agent
+ * root (`AGENT_TARGETS`) — so turning the setting off takes effect on the
+ * very next session spawn for these two CLIs too, instead of only once
+ * `plugins/bundle-sync.ts`'s `onReady` hook next runs (a Mullion process
+ * restart).
+ *
+ * Deliberately NOT `removeBundleContent()` above: that function is
+ * whole-host, all-four-CLIs — calling it from claude-code.ts's prepareLaunch
+ * would also wipe codex's and agy's own installed content, which has
+ * nothing to do with a Claude Code session's own launch. This is scoped to
+ * exactly one CLI's own two roots instead.
+ *
+ * Skill root: reuses `uninstallBundleSkills` (itself `pruneOrphanManagedDirs`
+ * with an empty keep-set — see that function's own doc comment), the EXACT
+ * SAME marker-gated ownership check (`isCurrentMullionManagedDir`) every
+ * other removal path in this module already uses. Never a same-prefixed
+ * `mullion-*` directory a user created themselves without the marker.
+ *
+ * Agent root: `AGENT_TARGETS` installs FLAT `mullion-<name>.md` files,
+ * which (unlike a skill directory) have no "inside" to carry a
+ * `.mullion-managed` marker — see `uninstallBundleContent`'s own doc
+ * comment on this exact gap, which is why its own legacy sweep already
+ * refuses to touch agent files at all beyond what the manifest tracks. The
+ * sync manifest IS the ownership record for a file-kind entry, so this
+ * removes precisely (and only) the manifest-tracked file entries under this
+ * CLI's agent root — mirroring `removeBundleContent()`'s own manifest-
+ * driven, per-entry removal — never a same-prefixed `mullion-*.md` file a
+ * user created that the manifest never recorded.
+ *
+ * Both kinds of entry for this CLI are also dropped from the manifest once
+ * actually gone from disk (not just deleted from disk): leaving a removed
+ * skill/agent entry in the manifest would make a later `isBundleSyncedFor(cli)`
+ * call keep reporting "synced" even though the content is gone, which would
+ * make claude-code.ts's/opencode.ts's own
+ * `else if (!isBundleSyncedFor(cli))` branch wrongly skip re-emitting the
+ * per-session fallback pointer the next time the setting is turned back on
+ * before this host's next full resync. The skill-dir side is checked with a
+ * fresh `existsSync`, not just a path-prefix match: `uninstallBundleSkills`
+ * (`pruneOrphanManagedDirs`) skips a directory that fails the ownership-
+ * marker check and best-effort swallows an `rmSync` failure, so a
+ * prefix-matched manifest entry isn't proof the directory is actually gone
+ * — dropping it anyway would make `isBundleSyncedFor(cli)` lie in the
+ * other direction.
+ *
+ * Runs through the SAME `runSerialized` queue as `syncBundleContent`/
+ * `removeBundleContent`/`uninstallBundleContent` above: unlike codex's/agy's
+ * `uninstallBundleSkills` calls (which never touch the manifest file at
+ * all), this DOES write `bundle-sync.json`, so it must not interleave its
+ * read-modify-write with a concurrent boot-time sync or a manual
+ * `POST /api/bundle-sync/resync`.
+ *
+ * A no-op, safely, for a CLI with nothing installed (an absent skill root,
+ * no manifest, or no matching entries) — same "safe to call speculatively"
+ * posture as `uninstallBundleSkills` itself.
+ */
+export function removeBundleContentForCli(
+  cli: "claude-code" | "opencode",
+): Promise<{ skillsRemoved: number; agentsRemoved: number }> {
+  return runSerialized(() => {
+    const skillTarget = SKILL_TARGETS.find((target) => target.cli === cli);
+    const agentTarget = AGENT_TARGETS.find((target) => target.cli === cli);
+
+    const skillsRemoved = skillTarget ? uninstallBundleSkills(skillTarget.root()) : 0;
+
+    let agentsRemoved = 0;
+    const manifest = readManifest();
+    if (manifest) {
+      const skillPrefix = skillTarget ? withTrailingSep(skillTarget.root()) : null;
+      const agentPrefix = agentTarget ? withTrailingSep(agentTarget.root()) : null;
+      const remaining: BundleSyncManifestEntry[] = [];
+      for (const entry of manifest.entries) {
+        if (agentPrefix && entry.kind === "file" && entry.path.startsWith(agentPrefix)) {
+          try {
+            unlinkSync(entry.path);
+          } catch (err) {
+            // ENOENT means it was already gone — fine, same best-effort
+            // posture as removeBundleContent()'s own per-entry removal. Any
+            // OTHER failure (EACCES/EBUSY) means the file is still really
+            // there, so — mirroring the skill-dir branch's own `!existsSync`
+            // gate below — this entry must stay in the manifest rather than
+            // being dropped: doing otherwise would both orphan the file
+            // (unreachable by any future removal pass until the next full
+            // syncBundleContent resync re-adopts it) and over-report
+            // agentsRemoved for a file that never actually left disk.
+            if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+              remaining.push(entry);
+              continue;
+            }
+          }
+          agentsRemoved++;
+          continue;
+        }
+        // Skill-dir entries under this CLI's own root were just handled by
+        // uninstallBundleSkills above (disk-side); dropped from the
+        // manifest here too so isBundleSyncedFor(cli) doesn't keep claiming
+        // they're still there — see this function's own doc comment. Only
+        // when the directory is ACTUALLY gone, not just prefix-matched:
+        // uninstallBundleSkills (pruneOrphanManagedDirs) skips a directory
+        // that fails the ownership-marker check, and best-effort swallows
+        // an rmSync failure (EACCES/EBUSY) — in either case the directory
+        // is still really there, and dropping its manifest entry anyway
+        // would make isBundleSyncedFor(cli) falsely report "not synced" for
+        // content that never actually left disk. Same self-healing
+        // `!existsSync` check `manifestEntryStillValid` already uses above.
+        if (
+          skillPrefix &&
+          entry.kind === "dir" &&
+          entry.path.startsWith(skillPrefix) &&
+          !existsSync(entry.path)
+        ) {
+          continue;
+        }
+        remaining.push(entry);
+      }
+      if (remaining.length !== manifest.entries.length) {
+        writeManifestAtomic({ ...manifest, entries: remaining });
+      }
+    }
+
+    return { skillsRemoved, agentsRemoved };
+  });
+}
+
 export type BundleSyncStatus = "synced" | "not-synced" | "stale" | "n-a" | "disabled";
 
 export interface BundleSyncCliStatus {
@@ -693,7 +832,7 @@ function statusForRoot(
   kind: BundleSyncManifestEntry["kind"],
 ): { status: BundleSyncStatus; count: number } {
   if (!manifest) return { status: "not-synced", count: 0 };
-  const prefix = root.endsWith(path.sep) ? root : `${root}${path.sep}`;
+  const prefix = withTrailingSep(root);
   const entries = manifest.entries.filter(
     (entry) => entry.kind === kind && entry.path.startsWith(prefix),
   );

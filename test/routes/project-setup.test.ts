@@ -253,6 +253,16 @@ describe("project-setup route", () => {
       .trim();
     expect(log).toContain("scaffold Mullion integration");
 
+    // Issue #1082(a) — apply stamps `projects.slug` at the point the
+    // scaffold's files are actually committed, sourced from the preview's
+    // own `record.slug` (never re-read from a request body this route
+    // doesn't have one for) — see schema.ts's own doc comment on this
+    // column and session-lifecycle.ts's consumer of it.
+    const { projects } = await import("../../src/db/schema.js");
+    const { eq } = await import("drizzle-orm");
+    const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+    expect(project?.slug).toBe("demo");
+
     await app.close();
   });
 

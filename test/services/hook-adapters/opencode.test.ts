@@ -10,8 +10,16 @@ import path from "node:path";
 // Mocked (rather than exercising the real manifest file) so this suite
 // never touches the real developer/CI-runner's own ~/.mullion/.
 const mockIsBundleSyncedFor = vi.fn((_cli: string): boolean => false);
+// Issue #1079 — resolves to a distinguishable value per call so a test can
+// assert the adapter awaited it (rather than fired-and-forgot a promise no
+// one checked) without depending on bundle-sync.ts's own internals.
+const mockRemoveBundleContentForCli = vi.fn((_cli: string) =>
+  Promise.resolve({ skillsRemoved: 1, agentsRemoved: 1 }),
+);
 vi.mock("../../../src/services/bundle-sync.js", () => ({
   isBundleSyncedFor: (cli: string) => mockIsBundleSyncedFor(cli),
+  removeBundleContentForCli: (cli: "claude-code" | "opencode") =>
+    mockRemoveBundleContentForCli(cli),
 }));
 
 const { openCodeAdapter, buildOpenCodeMcpConfig } =
@@ -116,6 +124,14 @@ describe("openCodeAdapter.prepareLaunch (issue #175)", () => {
     forwarderPath: "/abs/path/forwarder.mjs",
     injectAgentGuide: false,
     injectProjectBriefing: false,
+    // Issue #1079 — explicitly false (not just omitted/undefined) to match
+    // this describe block's pre-existing "shipped bundle off" expectations
+    // (e.g. no `skills` key in OPENCODE_CONFIG_CONTENT below) byte-for-byte
+    // — an explicit `false` and an omitted value behave identically for
+    // every other gate in this file, but now also means `managedInstall`
+    // is set (see its own dedicated describe block below, which is the
+    // only place in this file that actually calls it).
+    injectMullionBundle: false,
   };
 
   it("writes the plugin file under a per-session ephemeral plugins/ subdirectory", () => {
@@ -135,7 +151,6 @@ describe("openCodeAdapter.prepareLaunch (issue #175)", () => {
   it("never rewrites the command — OPENCODE_CONFIG_DIR/OPENCODE_CONFIG_CONTENT are env-only", () => {
     const plan = openCodeAdapter.prepareLaunch(ctx);
     expect(plan.commandTransform).toBeUndefined();
-    expect(plan.managedInstall).toBeUndefined();
   });
 
   // Issue #881 — the Mullion MCP server is registered unconditionally,
@@ -149,6 +164,42 @@ describe("openCodeAdapter.prepareLaunch (issue #175)", () => {
     expect(JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT)).toEqual({
       mcp: expectedMcp(ctx),
     });
+  });
+});
+
+// Issue #1079 — opencode's own counterpart to codex's/agy's managedInstall
+// uninstall step: actively removes this CLI's globally-synced bundle content
+// the moment a session launches with the setting off, rather than waiting
+// for the next Mullion process restart.
+describe("openCodeAdapter.prepareLaunch — managedInstall bundle removal (issue #1079)", () => {
+  const ctx = {
+    sessionId: "42",
+    sessionsDir: "/tmp/mullion-sessions",
+    hookSocketPath: "/tmp/mullion-sessions/hooks.sock",
+    hookToken: "token123",
+    controlSocketPath: "/tmp/mullion-sessions/mullion.sock",
+    forwarderPath: "/abs/path/forwarder.mjs",
+    injectAgentGuide: false,
+    injectProjectBriefing: false,
+    injectMullionBundle: false,
+  };
+
+  beforeEach(() => {
+    mockRemoveBundleContentForCli.mockClear();
+  });
+
+  it("sets managedInstall when injectMullionBundle is off, and it calls removeBundleContentForCli('opencode')", async () => {
+    const plan = openCodeAdapter.prepareLaunch(ctx);
+    expect(plan.managedInstall).toBeInstanceOf(Function);
+    await plan.managedInstall?.();
+    expect(mockRemoveBundleContentForCli).toHaveBeenCalledWith("opencode");
+    expect(mockRemoveBundleContentForCli).toHaveBeenCalledTimes(1);
+  });
+
+  it("never sets managedInstall when injectMullionBundle is on — leaves everything alone, no accidental deletion", () => {
+    const plan = openCodeAdapter.prepareLaunch({ ...ctx, injectMullionBundle: true });
+    expect(plan.managedInstall).toBeUndefined();
+    expect(mockRemoveBundleContentForCli).not.toHaveBeenCalled();
   });
 });
 

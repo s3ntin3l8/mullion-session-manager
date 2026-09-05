@@ -20,8 +20,16 @@ vi.mock("../../../src/services/hook-adapters/mullion-bundle.js", () => ({
 // per-session --plugin-dir behavior; the dedicated describe block below
 // flips this to exercise the new fallback-skip path.
 const mockIsBundleSyncedFor = vi.fn((_cli: string): boolean => false);
+// Issue #1079 — resolves to a distinguishable value per call so a test can
+// assert the adapter awaited it (rather than fired-and-forgot a promise no
+// one checked) without depending on bundle-sync.ts's own internals.
+const mockRemoveBundleContentForCli = vi.fn((_cli: string) =>
+  Promise.resolve({ skillsRemoved: 1, agentsRemoved: 1 }),
+);
 vi.mock("../../../src/services/bundle-sync.js", () => ({
   isBundleSyncedFor: (cli: string) => mockIsBundleSyncedFor(cli),
+  removeBundleContentForCli: (cli: "claude-code" | "opencode") =>
+    mockRemoveBundleContentForCli(cli),
 }));
 
 const {
@@ -187,10 +195,44 @@ describe("claudeCodeAdapter.prepareLaunch (issue #174)", () => {
     );
   });
 
-  it("never sets envAdditions or managedInstall — fully ephemeral, no other launch requirements", () => {
+  it("never sets envAdditions — fully ephemeral, no host-level env requirements", () => {
     const plan = claudeCodeAdapter.prepareLaunch(ctx);
     expect(plan.envAdditions).toBeUndefined();
+  });
+});
+
+// Issue #1079 — Claude Code's own counterpart to codex's/agy's managedInstall
+// uninstall step: actively removes this CLI's globally-synced bundle content
+// the moment a session launches with the setting off, rather than waiting
+// for the next Mullion process restart.
+describe("claudeCodeAdapter.prepareLaunch — managedInstall bundle removal (issue #1079)", () => {
+  const ctx: HookAdapterContext = {
+    sessionId: "42",
+    sessionsDir: "/tmp/mullion-sessions",
+    hookSocketPath: "/tmp/mullion-sessions/hooks.sock",
+    hookToken: "token123",
+    controlSocketPath: "/tmp/mullion-sessions/mullion.sock",
+    forwarderPath: "/abs/path/forwarder.mjs",
+    injectAgentGuide: false,
+    injectMullionBundle: false,
+  };
+
+  beforeEach(() => {
+    mockRemoveBundleContentForCli.mockClear();
+  });
+
+  it("sets managedInstall when injectMullionBundle is off, and it calls removeBundleContentForCli('claude-code')", async () => {
+    const plan = claudeCodeAdapter.prepareLaunch(ctx);
+    expect(plan.managedInstall).toBeInstanceOf(Function);
+    await plan.managedInstall?.();
+    expect(mockRemoveBundleContentForCli).toHaveBeenCalledWith("claude-code");
+    expect(mockRemoveBundleContentForCli).toHaveBeenCalledTimes(1);
+  });
+
+  it("never sets managedInstall when injectMullionBundle is on — leaves everything alone, no accidental deletion", () => {
+    const plan = claudeCodeAdapter.prepareLaunch({ ...ctx, injectMullionBundle: true });
     expect(plan.managedInstall).toBeUndefined();
+    expect(mockRemoveBundleContentForCli).not.toHaveBeenCalled();
   });
 });
 
