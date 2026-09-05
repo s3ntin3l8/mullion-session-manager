@@ -70,14 +70,18 @@
 // wiring up that coarser, riskier operation.
 //
 // Issue #885 — this module also discovers two more kinds alongside skills:
-// Claude Code/opencode SUBAGENTS and Claude Code slash COMMANDS
-// (`SkillInfo.kind`). Both are pure discovery, no writer of any kind exists
-// or is planned here — `attachEnabledByAgent` forces `enabledByAgent[agent]
-// = null` for every non-"skill" row unconditionally, same posture as agy's
-// permanent read-only status above. Codex and agy have no subagent/command
-// concept at all (confirmed against both CLIs' own docs — see
-// docs/project-briefing.md's coverage table), so neither ever contributes an
-// "agent"/"command" row. Unlike a skill (`<dir>/<name>/SKILL.md`), an
+// SUBAGENTS (Claude Code, opencode, and — issue #1080 — agy) and Claude Code
+// slash COMMANDS (`SkillInfo.kind`). All are pure discovery, no writer of any
+// kind exists or is planned here — `attachEnabledByAgent` forces
+// `enabledByAgent[agent] = null` for every non-"skill" row unconditionally,
+// same posture as agy's permanent read-only status above (so agy's own
+// agent row is discovery-only too, not a special case). Codex has no
+// subagent/command concept at all (confirmed against its own docs — see
+// docs/project-briefing.md's coverage table), so it never contributes an
+// "agent"/"command" row; agy's own exception (a real, flat-file subagent
+// convention at `resolveAgyGlobalAgentsDir()`) is documented at
+// `globalAgentAndCommandDirs()`'s own entry for it below. Unlike a skill
+// (`<dir>/<name>/SKILL.md`), an
 // agent/command is a single loose `.md` FILE directly inside its directory
 // (`<dir>/<name>.md`) — scanned by the sibling `scanFileDirs`/
 // `readMdFilesSafe`, never `scanSkillDirs`/`readDirSafe`. A command file's
@@ -111,7 +115,7 @@ import {
   OpenCodeConfigParseError,
   OpenCodeSkillUserAuthoredError,
 } from "./hook-adapters/opencode-skills.js";
-import { resolveAgyGlobalSkillsDir } from "./hook-adapters/agy.js";
+import { resolveAgyGlobalSkillsDir, resolveAgyGlobalAgentsDir } from "./hook-adapters/agy.js";
 import {
   readClaudeCodeSkillEnabledMap,
   writeClaudeCodeSkillEnabled,
@@ -558,7 +562,22 @@ function projectAgentAndCommandDirs(cwd: string): FileSourceDir[] {
  * unverified inference, not a repeated spike. Fails closed if wrong — the
  * directory simply won't exist and this scan finds nothing, same as any
  * other absent directory in this file. opencode has no slash-command
- * concept Mullion discovers here. */
+ * concept Mullion discovers here.
+ *
+ * Issue #1080 — agy's global agent root (`resolveAgyGlobalAgentsDir()`,
+ * `~/.gemini/config/agents`, hook-adapters/agy.ts) was added to
+ * bundle-sync.ts's `AGENT_TARGETS` (issue #941/#950) without ever being
+ * added here, so anything bundle-sync installed there — or a user's own
+ * hand-authored agent file placed there directly, agy's real native
+ * discovery dir — was completely invisible to this module and therefore to
+ * the Skills Manager UI. No special-casing needed to add it: every
+ * `kind !== "skill"` row (agent/command) is discovery-only regardless of
+ * `agent` — `attachEnabledByAgent` below forces `enabledByAgent[agent] =
+ * null` for ALL of them unconditionally (issue #885), the exact same
+ * treatment Claude Code's own global agents dir above already gets. agy has
+ * no per-skill disabled bit at all (see this file's header on why agy stays
+ * permanently read-only for the "skill" kind too), so this row can never
+ * regress into a broken toggle — there was never a toggle to begin with. */
 function globalAgentAndCommandDirs(): FileSourceDir[] {
   const claudeConfigDir = resolveClaudeConfigDir();
   return [
@@ -577,6 +596,12 @@ function globalAgentAndCommandDirs(): FileSourceDir[] {
     {
       dir: path.join(resolveOpenCodeConfigHome(), "agent"),
       agent: "opencode",
+      scope: "global",
+      kind: "agent",
+    },
+    {
+      dir: resolveAgyGlobalAgentsDir(),
+      agent: "agy",
       scope: "global",
       kind: "agent",
     },
