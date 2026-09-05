@@ -314,7 +314,22 @@ function buildInvocation(agentCommand: string, prompt: string): { bin: string; a
  * quoting it correctly). Overridable via `generateScaffoldContent`'s own
  * `spawn` parameter so tests never actually invoke a real CLI/LLM call —
  * same "inject the one seam that does real I/O" shape as this codebase's
- * other externally-mockable service boundaries. */
+ * other externally-mockable service boundaries.
+ *
+ * CodeQL's js/path-injection flags `cwd` here, the same "real mitigation,
+ * not a CodeQL-recognized sanitizer shape" pattern this repo already
+ * documents at opencode-session-transfer.ts:240-252 / git-worktree.ts /
+ * git-branch-delete.ts. `cwd` is `worktreeResult.path` from
+ * `createWorktree` (which itself runs `isSafeAbsolutePath` on the project
+ * cwd and gates the seed through `sanitizeRefComponent`, which collapses
+ * anything outside `[A-Za-z0-9_.-]` to `-` and rejects empty-after-sanitize);
+ * `baseDir` is hardcoded server-side to `path.join(os.tmpdir(),
+ * "mullion-scaffold-generate")` — never user-controlled; the only
+ * request-derived input is `slug`, gated by `isValidScaffoldSlug` at the
+ * route boundary. Dismissed in GHAS as a false positive via the Security
+ * API rather than reshaping already-verified-safe code to chase a query
+ * that doesn't model manual containment checks as sanitizers (see
+ * opencode-session-transfer.ts:240-252 for the longer rationale). */
 export const defaultSpawnGenerationTurn: SpawnGenerationTurn = ({
   agentCommand,
   cwd,
