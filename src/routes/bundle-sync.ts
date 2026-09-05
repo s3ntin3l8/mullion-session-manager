@@ -81,13 +81,19 @@ export async function bundleSyncRoute(app: FastifyInstance) {
   // Issue #945 — "remove Mullion bundle content from a host." Flips
   // sessions.injectMullionBundle off FIRST, through the exact same write
   // path PATCH /api/settings itself uses (applySettingsPatch), so this is
-  // durable: without this, the next boot (or the next codex/agy session's
-  // own per-launch managedInstall) would silently reinstall everything,
-  // since both fall back to re-syncing/re-installing whenever this setting
-  // reads true (its default). Removal itself runs AFTER the flip, via
-  // uninstallBundleContent's manifest-driven removal plus its legacy sweep
-  // (mullion-bundle.ts's marker-checked uninstallBundleSkills) and agy's
-  // own MCP-entry removal.
+  // durable ON THE PRIMARY: without this, the next boot (or the next
+  // codex/agy session's own per-launch managedInstall) would silently
+  // reinstall everything, since both fall back to re-syncing/re-installing
+  // whenever this setting reads true (its default). Removal itself runs
+  // AFTER the flip, via uninstallBundleContent's manifest-driven removal
+  // plus its legacy sweep (mullion-bundle.ts's marker-checked
+  // uninstallBundleSkills) and agy's own MCP-entry removal.
+  //
+  // Primary-host-only: unlike injectAgentGuide/injectProjectBriefing
+  // (threaded from primary to agent hosts per issue #884), this setting
+  // isn't threaded to remote agent hosts, so this route has no effect on
+  // them — they keep re-syncing on their own boot cycle regardless (see
+  // issue #1089).
   app.post("/api/bundle-sync/remove", async (_request, reply) => {
     applySettingsPatch(app, { sessions: { injectMullionBundle: false } });
     const result = await uninstallBundleContent();
