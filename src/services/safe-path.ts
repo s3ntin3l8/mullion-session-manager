@@ -35,3 +35,33 @@ export function resolveWithin(root: string, relPath: string): string {
   }
   return target;
 }
+
+/** Resolves a symlink's `target` (interpreted, as the OS does, relative to
+ * the symlink's OWN directory — not `root`) and verifies the result still
+ * lands inside `root` — mullion-reviewer review, PR #1102: the naive
+ * `resolveWithin(root, path.join(path.dirname(symlinkRelPath), target))`
+ * this replaces is unsound for an ABSOLUTE `target`. `path.join`, unlike
+ * `path.resolve`, does not reset on an absolute second argument —
+ * `path.join("a", "/etc/passwd")` silently produces `"a/etc/passwd"` — so
+ * the pre-join approach validated a mangled, always-safe-looking relative
+ * string while `symlinkSync` itself would still receive and honor the real,
+ * unmangled absolute `target` verbatim. This function instead resolves
+ * `target` with `path.resolve` (which correctly discards the base and
+ * anchors at `target` itself when `target` is absolute), so an absolute
+ * escape attempt is checked as what it actually is and rejected the same
+ * way a relative `../` escape already is. `symlinkRelPath` itself is
+ * assumed already validated (e.g. via `resolveWithin`) — this function only
+ * checks where the link POINTS, not where it LIVES. */
+export function resolveSymlinkTargetWithin(
+  root: string,
+  symlinkRelPath: string,
+  target: string,
+): string {
+  const resolvedRoot = path.resolve(root);
+  const symlinkDir = path.dirname(path.resolve(resolvedRoot, symlinkRelPath));
+  const resolvedTarget = path.resolve(symlinkDir, target);
+  if (resolvedTarget !== resolvedRoot && !resolvedTarget.startsWith(resolvedRoot + path.sep)) {
+    throw new PathEscapeError(resolvedRoot, target);
+  }
+  return resolvedTarget;
+}

@@ -22,7 +22,7 @@ import path from "node:path";
 import { gitEnv } from "./git-env.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { viaRemote, type HostGitResult } from "./host-git.js";
-import { resolveWithin } from "./safe-path.js";
+import { resolveSymlinkTargetWithin, resolveWithin } from "./safe-path.js";
 import type { ScaffoldEntry } from "./mullion-scaffold.js";
 
 export type HostFileMap = Record<string, string | undefined>;
@@ -127,8 +127,11 @@ export function writeEntriesLocally(
     const targetPath = resolveWithin(cwd, entry.path);
     if (entry.kind === "symlink") {
       // Validation only — `entry.target` itself is never rewritten, see
-      // this function's own doc comment above.
-      resolveWithin(cwd, path.join(path.dirname(entry.path), entry.target));
+      // this function's own doc comment above. resolveSymlinkTargetWithin
+      // (not a plain resolveWithin(cwd, path.join(...))) — see that
+      // function's own doc comment for why an absolute `target` needs
+      // `path.resolve`'s reset-on-absolute semantics, not `path.join`'s.
+      resolveSymlinkTargetWithin(cwd, entry.path, entry.target);
       mkdirSync(path.dirname(targetPath), { recursive: true });
       // Hermes review, PR #896 round 1 — only skip the create when what's
       // already there is a symlink pointing at the EXACT target we'd

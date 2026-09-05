@@ -138,6 +138,29 @@ describe("host-files.ts", () => {
       ).toThrow(PathEscapeError);
     });
 
+    it("throws PathEscapeError for an ABSOLUTE symlink target, not silently mangled into an in-bounds one", () => {
+      // mullion-reviewer review, PR #1102 — `path.join` (unlike
+      // `path.resolve`) does not reset on an absolute second argument, so a
+      // naive `resolveWithin(cwd, path.join(dir, target))` containment check
+      // would validate "/etc/passwd" as if it were the harmless relative
+      // string "etc/passwd" while `symlinkSync` itself still received and
+      // honored the real, unmangled absolute target — a containment bypass
+      // for exactly the wire-reachable input this check exists to guard.
+      expect(() =>
+        writeEntriesLocally(cwd, [
+          {
+            path: path.join(".agents", "skills", "demo"),
+            kind: "symlink",
+            target: "/etc/passwd",
+          },
+        ]),
+      ).toThrow(PathEscapeError);
+
+      expect(
+        lstatSync(path.join(cwd, ".agents", "skills", "demo"), { throwIfNoEntry: false }),
+      ).toBe(undefined);
+    });
+
     it("replaces a stale symlink pointing at a different target", () => {
       mkdirSync(path.join(cwd, ".agents", "skills"), { recursive: true });
       symlinkSync("old-target", path.join(cwd, ".agents", "skills", "demo"));
