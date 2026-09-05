@@ -23,6 +23,16 @@ describe("Settings -> Sessions -> Stale error timeout", () => {
       if (url === "/api/settings" && method === "PATCH") {
         return Promise.resolve(jsonResponse(200, DEFAULT_SETTINGS));
       }
+      if (url === "/api/bundle-sync/status" && method === "GET") {
+        return Promise.resolve(
+          jsonResponse(200, {
+            enabled: true,
+            bundleHash: "stub-hash",
+            manifestPath: "/home/user/.mullion/sync-manifest.json",
+            clis: [],
+          }),
+        );
+      }
       return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -91,6 +101,16 @@ describe("Settings -> Sessions -> Stale busy timeout", () => {
       if (url === "/api/settings" && method === "PATCH") {
         return Promise.resolve(jsonResponse(200, DEFAULT_SETTINGS));
       }
+      if (url === "/api/bundle-sync/status" && method === "GET") {
+        return Promise.resolve(
+          jsonResponse(200, {
+            enabled: true,
+            bundleHash: "stub-hash",
+            manifestPath: "/home/user/.mullion/sync-manifest.json",
+            clis: [],
+          }),
+        );
+      }
       return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -155,6 +175,16 @@ describe("Settings -> Sessions -> Persist session event history", () => {
       if (url === "/api/settings" && method === "PATCH") {
         return Promise.resolve(jsonResponse(200, DEFAULT_SETTINGS));
       }
+      if (url === "/api/bundle-sync/status" && method === "GET") {
+        return Promise.resolve(
+          jsonResponse(200, {
+            enabled: true,
+            bundleHash: "stub-hash",
+            manifestPath: "/home/user/.mullion/sync-manifest.json",
+            clis: [],
+          }),
+        );
+      }
       return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -211,6 +241,16 @@ describe("Settings -> Sessions -> Event history retention", () => {
       if (url === "/api/settings" && method === "PATCH") {
         return Promise.resolve(jsonResponse(200, DEFAULT_SETTINGS));
       }
+      if (url === "/api/bundle-sync/status" && method === "GET") {
+        return Promise.resolve(
+          jsonResponse(200, {
+            enabled: true,
+            bundleHash: "stub-hash",
+            manifestPath: "/home/user/.mullion/sync-manifest.json",
+            clis: [],
+          }),
+        );
+      }
       return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -239,7 +279,14 @@ describe("Settings -> Sessions -> Event history retention", () => {
     expect(useDashboardStore.getState().settings.sessions.eventRetentionDays).toBe(
       DEFAULT_SETTINGS.sessions.eventRetentionDays,
     );
-    expect(fetchMock).not.toHaveBeenCalled();
+    // Narrowed from a blanket not.toHaveBeenCalled() (which the bundle-sync
+    // status GET this section now fires on mount would trip): the invariant
+    // this test guards is "no destructive PATCH mid-typing" (see the long
+    // comment above this describe block), not "no network activity at all".
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      "/api/settings",
+      expect.objectContaining({ method: "PATCH" }),
+    );
   });
 
   it("commits and PATCHes /api/settings only once the field loses focus (blur/tab)", async () => {
@@ -280,6 +327,16 @@ describe("Settings -> Sessions -> Event history cap per session", () => {
       if (url === "/api/settings" && method === "PATCH") {
         return Promise.resolve(jsonResponse(200, DEFAULT_SETTINGS));
       }
+      if (url === "/api/bundle-sync/status" && method === "GET") {
+        return Promise.resolve(
+          jsonResponse(200, {
+            enabled: true,
+            bundleHash: "stub-hash",
+            manifestPath: "/home/user/.mullion/sync-manifest.json",
+            clis: [],
+          }),
+        );
+      }
       return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -308,7 +365,14 @@ describe("Settings -> Sessions -> Event history cap per session", () => {
     expect(useDashboardStore.getState().settings.sessions.eventRetentionPerSession).toBe(
       DEFAULT_SETTINGS.sessions.eventRetentionPerSession,
     );
-    expect(fetchMock).not.toHaveBeenCalled();
+    // Narrowed from a blanket not.toHaveBeenCalled() (which the bundle-sync
+    // status GET this section now fires on mount would trip): the invariant
+    // this test guards is "no destructive PATCH mid-typing" (see the long
+    // comment above this describe block), not "no network activity at all".
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      "/api/settings",
+      expect.objectContaining({ method: "PATCH" }),
+    );
   });
 
   it("commits and PATCHes /api/settings only once the field loses focus (blur/tab) — this is the field a mid-typing PATCH would have been most destructive for", async () => {
@@ -350,6 +414,16 @@ describe("Settings -> Sessions -> Inject agent guide", () => {
       const method = init?.method ?? "GET";
       if (url === "/api/settings" && method === "PATCH") {
         return Promise.resolve(jsonResponse(200, DEFAULT_SETTINGS));
+      }
+      if (url === "/api/bundle-sync/status" && method === "GET") {
+        return Promise.resolve(
+          jsonResponse(200, {
+            enabled: true,
+            bundleHash: "stub-hash",
+            manifestPath: "/home/user/.mullion/sync-manifest.json",
+            clis: [],
+          }),
+        );
       }
       return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
     });
@@ -401,6 +475,16 @@ describe("Settings -> Sessions -> Inject Mullion tooling bundle", () => {
       const method = init?.method ?? "GET";
       if (url === "/api/settings" && method === "PATCH") {
         return Promise.resolve(jsonResponse(200, DEFAULT_SETTINGS));
+      }
+      if (url === "/api/bundle-sync/status" && method === "GET") {
+        return Promise.resolve(
+          jsonResponse(200, {
+            enabled: true,
+            bundleHash: "stub-hash",
+            manifestPath: "/home/user/.mullion/sync-manifest.json",
+            clis: [],
+          }),
+        );
       }
       return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
     });
@@ -457,6 +541,16 @@ describe("Settings -> Sessions -> Inject project briefing", () => {
       if (url === "/api/settings" && method === "PATCH") {
         return Promise.resolve(jsonResponse(200, DEFAULT_SETTINGS));
       }
+      if (url === "/api/bundle-sync/status" && method === "GET") {
+        return Promise.resolve(
+          jsonResponse(200, {
+            enabled: true,
+            bundleHash: "stub-hash",
+            manifestPath: "/home/user/.mullion/sync-manifest.json",
+            clis: [],
+          }),
+        );
+      }
       return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -510,6 +604,16 @@ describe("Settings -> Sessions -> Auto-open child session panels", () => {
       if (url === "/api/settings" && method === "PATCH") {
         return Promise.resolve(jsonResponse(200, DEFAULT_SETTINGS));
       }
+      if (url === "/api/bundle-sync/status" && method === "GET") {
+        return Promise.resolve(
+          jsonResponse(200, {
+            enabled: true,
+            bundleHash: "stub-hash",
+            manifestPath: "/home/user/.mullion/sync-manifest.json",
+            clis: [],
+          }),
+        );
+      }
       return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -557,6 +661,16 @@ describe("Settings -> Sessions -> Max child sessions per parent", () => {
       const method = init?.method ?? "GET";
       if (url === "/api/settings" && method === "PATCH") {
         return Promise.resolve(jsonResponse(200, DEFAULT_SETTINGS));
+      }
+      if (url === "/api/bundle-sync/status" && method === "GET") {
+        return Promise.resolve(
+          jsonResponse(200, {
+            enabled: true,
+            bundleHash: "stub-hash",
+            manifestPath: "/home/user/.mullion/sync-manifest.json",
+            clis: [],
+          }),
+        );
       }
       return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
     });
