@@ -267,6 +267,95 @@ describe("pickBridge", () => {
     const picked = pickBridge(app);
     expect(picked?.bridgeId).toBe("bridge-old");
   });
+
+  // Issue #1051 — a bridge whose laptop has gone to sleep reports OPEN
+  // indefinitely until the mux's own ping/pong timeout fires; prefer a
+  // bridge with a recent PONG so this pick isn't the thing that
+  // introduces a multi-second stall. Health window mirrors the mux's
+  // own PONG_TIMEOUT_MS = 10s — anything we wouldn't have torn down
+  // ourselves yet is still "trustworthy".
+  const now = Date.now();
+
+  it("prefers a bridge with a recent PONG over one without, regardless of connectedAt", () => {
+    const app = fakeApp(0);
+    // Stale-by-construction: never seen a PONG, so lastPongAt is
+    // undefined / null. This simulates a brand-new bridge that hasn't
+    // completed its first PING/PONG round trip yet (PING_INTERVAL_MS =
+    // 15s), or any bridge that just connected within the last 15s.
+    app.connectedBridges.set("bridge-stale", { socket: {}, mux: {}, connectedAt: 100 });
+    // Recent PONG: bridge-saw-pong is the one we should pick, even
+    // though it's NOT the most-recently-connected.
+    app.connectedBridges.set("bridge-saw-pong", {
+      socket: {},
+      mux: {},
+      connectedAt: 50, // older than bridge-stale
+      lastPongAt: now, // but answered a PONG just now
+    });
+
+    const picked = pickBridge(app);
+    expect(picked?.bridgeId).toBe("bridge-saw-pong");
+  });
+
+  it("prefers the bridge with the MORE RECENT PONG between two bridges that both have PONG timestamps", () => {
+    const app = fakeApp(0);
+    app.connectedBridges.set("bridge-older-pong", {
+      socket: {},
+      mux: {},
+      connectedAt: 100,
+      lastPongAt: now - 3_000,
+    });
+    app.connectedBridges.set("bridge-newer-pong", {
+      socket: {},
+      mux: {},
+      connectedAt: 100, // same connectedAt
+      lastPongAt: now - 1_000, // but PONG'd more recently
+    });
+
+    const picked = pickBridge(app);
+    expect(picked?.bridgeId).toBe("bridge-newer-pong");
+  });
+
+  it("falls back to connectedAt ordering when no bridge has a recent PONG — must still pick a bridge rather than return null", () => {
+    const app = fakeApp(0);
+    // Neither bridge has answered a PONG in the health window — both
+    // lastPongAt values are older than PONG_TIMEOUT_MS. The pre-#1051
+    // behavior (most-recently connected wins) must still apply so the
+    // call site is never blocked on a bridge that exists.
+    app.connectedBridges.set("bridge-stale-a", {
+      socket: {},
+      mux: {},
+      connectedAt: 1,
+      lastPongAt: now - 30_000, // well past the 10s window
+    });
+    app.connectedBridges.set("bridge-stale-b", {
+      socket: {},
+      mux: {},
+      connectedAt: 2,
+      lastPongAt: now - 20_000, // also stale
+    });
+
+    const picked = pickBridge(app);
+    expect(picked?.bridgeId).toBe("bridge-stale-b");
+  });
+
+  it("prefers the SOLE healthy bridge over multiple stale ones — does not require staleness ties to be broken by connectedAt", () => {
+    const app = fakeApp(0);
+    app.connectedBridges.set("bridge-stale", {
+      socket: {},
+      mux: {},
+      connectedAt: 999, // most-recently connected — but stale
+      lastPongAt: now - 30_000,
+    });
+    app.connectedBridges.set("bridge-healthy", {
+      socket: {},
+      mux: {},
+      connectedAt: 1, // ancient connection
+      lastPongAt: now, // just answered a PONG
+    });
+
+    const picked = pickBridge(app);
+    expect(picked?.bridgeId).toBe("bridge-healthy");
+  });
 });
 
 // --- channel fan-out: real MuxConnections on every leg ---

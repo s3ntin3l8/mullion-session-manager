@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import type { WebSocket as NodeWebSocket } from "ws";
 import { listHosts } from "./host-registry.js";
 import { getRemoteHostClient } from "./remote-host-client.js";
-import { createMuxConnection, type MuxConnection } from "./ssh-agent-mux.js";
+import { createMuxConnection, PONG_TIMEOUT_MS, type MuxConnection } from "./ssh-agent-mux.js";
 import { pipeFilteredChannelToChannel } from "./ssh-agent-relay.js";
 
 // Issue #820 — the primary-side subscriber that finally CONNECTS the two
@@ -69,14 +69,23 @@ export interface SshAgentFanoutHandle {
  * Picks which connected bridge a freshly-opened agent channel should be
  * routed to. The `bridges` table has no `hostId` (bridge-registry.ts) — a
  * bridge isn't scoped to one agent host, so ANY live bridge serves EVERY
- * enrolled agent host. When more than one is connected (a user pairing a
- * second machine, or a stale entry mid-teardown), the most recently
- * connected one wins — not a configurable policy; `connectedAt`
- * (plugins/agent-bridge.ts), not `Map` iteration order, is what makes
- * "most recent" well-defined (`Map.set` on an existing key does not move
- * it to the end). Returns `null` when no bridge is connected at all — the
- * caller must close the agent channel immediately in that case rather
- * than leave it open (see onChannel below).
+ * enrolled agent host.
+ *
+ * Issue #1051 — selection is now health-aware: a bridge whose underlying
+ * WebSocket has gone half-open (laptop sleep, network drop without a
+ * clean FIN) reports OPEN until the mux's own PING/PONG timeout fires up
+ * to `PONG_TIMEOUT_MS` after the next ping. Without a health check here,
+ * pickBridge could choose such a bridge, the `openChannel()` call below
+ * would stall against it, and the SSH client on the far end would hang
+ * for the same window — defeating the no-bridge-reachable fail-fast path
+ * in routes/internal.ts's `/internal/ws/ssh-agent` handler. So we
+ * partition the candidates into "healthy" (lastPongAt within
+ * `PONG_TIMEOUT_MS` of now) and "stale" (no PONG yet, or last PONG older
+ * than the window), prefer any healthy bridge (most-recently-PONG'd
+ * within that set, with `connectedAt` as the tiebreaker), and fall back
+ * to the most-recently-connected among ALL bridges when no healthy
+ * bridge is connected — never return `null` when at least one bridge
+ * entry exists, even if every entry is stale.
  *
  * Deliberately pure/stateless — no logging here. The ambiguous-pick log
  * (onChannel below) is throttled per-fanout-instance, which needs state
@@ -84,13 +93,42 @@ export interface SshAgentFanoutHandle {
  * singleton every caller (including this module's own tests) would share.
  */
 export function pickBridge(app: FastifyInstance): { bridgeId: string; mux: MuxConnection } | null {
-  let best: { bridgeId: string; connectedAt: number; mux: MuxConnection } | null = null;
+  const healthCutoff = Date.now() - PONG_TIMEOUT_MS;
+  let bestHealthy: {
+    bridgeId: string;
+    connectedAt: number;
+    mux: MuxConnection;
+    lastPongAt: number;
+  } | null = null;
+  let bestAny: { bridgeId: string; connectedAt: number; mux: MuxConnection } | null = null;
   for (const [bridgeId, bridge] of app.connectedBridges) {
-    if (best === null || bridge.connectedAt > best.connectedAt) {
-      best = { bridgeId, connectedAt: bridge.connectedAt, mux: bridge.mux };
+    // A PONG within the health window makes the bridge demonstrably live;
+    // an undefined lastPongAt (just tracked, first PING not yet due) or a
+    // PONG older than the window leaves it in the "stale" partition.
+    const lastPongAt = bridge.lastPongAt;
+    if (bestAny === null || bridge.connectedAt > bestAny.connectedAt) {
+      bestAny = { bridgeId, connectedAt: bridge.connectedAt, mux: bridge.mux };
+    }
+    if (lastPongAt !== undefined && lastPongAt >= healthCutoff) {
+      // Within the healthy set, prefer the bridge with the most-recent
+      // PONG (the actual liveness signal — "most recently connected" is
+      // only meaningful when no bridge has any PONG yet). Tie on
+      // lastPongAt falls back to connectedAt for a deterministic choice.
+      if (
+        bestHealthy === null ||
+        lastPongAt > bestHealthy.lastPongAt ||
+        (lastPongAt === bestHealthy.lastPongAt && bridge.connectedAt > bestHealthy.connectedAt)
+      ) {
+        bestHealthy = { bridgeId, connectedAt: bridge.connectedAt, mux: bridge.mux, lastPongAt };
+      }
     }
   }
-  return best;
+  // Healthy wins; otherwise fall back to the most-recently-connected
+  // among ALL bridges (never return null when a bridge entry exists —
+  // ssh hangs on SSH_AUTH_SOCK until either this resolves or the
+  // connection drops, so a "no good options, give up" outcome is the
+  // exact stall we're trying to avoid).
+  return bestHealthy ?? bestAny;
 }
 
 export function startSshAgentFanout(app: FastifyInstance): SshAgentFanoutHandle {

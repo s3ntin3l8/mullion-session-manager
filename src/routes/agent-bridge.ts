@@ -184,7 +184,25 @@ function trackBridge(app: FastifyInstance, bridgeId: string, socket: NodeWebSock
   // "odd" on THAT connection — a different connection, no collision risk,
   // but PR5c's fan-out logic must not confuse the two).
   const mux = createMuxConnection(socket, { channelIdParity: "even" });
-  app.connectedBridges.set(bridgeId, { socket, mux, connectedAt: Date.now() });
+  app.connectedBridges.set(bridgeId, {
+    socket,
+    mux,
+    connectedAt: Date.now(),
+    lastPongAt: undefined,
+  });
+  // Issue #1051 — wire mux.onPong to stamp lastPongAt on the live entry
+  // so ssh-agent-fanout.ts's pickBridge can prefer bridges with
+  // demonstrably-recent liveness. Reads app.connectedBridges on every
+  // PONG rather than capturing a local ref: a re-trackBridge (supersede
+  // path above) replaces the entry, and the new closure captures the
+  // same app, so the lookup lands on whichever entry is currently live.
+  // Reading on each PONG (not at register-time) also sidesteps any
+  // need to clear the listener on supersede — a PONG for the OLD mux
+  // arrives on the OLD socket's handler chain, not this one's.
+  mux.onPong((at) => {
+    const entry = app.connectedBridges.get(bridgeId);
+    if (entry && entry.mux === mux) entry.lastPongAt = at;
+  });
   // A bridge going from zero-connected to one-connected (or a genuinely
   // new bridge arriving) changes ssh-agent-fanout.ts's own desired set —
   // see its own reconcile() doc comment for why this can't wait for that
