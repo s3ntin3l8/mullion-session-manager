@@ -298,6 +298,97 @@ describe("syncBundleContent — prune", () => {
     expect(existsSync(legacyDir)).toBe(false);
     expect(existsSync(path.join(resolveClaudeConfigDir(), "skills", "mullion-host"))).toBe(true);
   });
+
+  // Issue #947 — the core regression test. Unlike the "legacy
+  // mullion-mullion-host-shaped manifest entry" test above (which hand-writes
+  // a manifest entry FIRST, so it only proves the pre-existing manifest-diff
+  // prune), this test never creates a manifest at all before the orphan
+  // directory is planted: it reproduces BOTH real-world triggers at once —
+  // (a) the very first sync on a host after an upgrade that renamed a
+  // shipped skill (no manifest has ever been written yet), and (b) a
+  // manifest that's been deleted out from under an otherwise-synced host.
+  // Before the fix in bundle-sync.ts (pruneOrphanSkillDirs), syncBundleContent
+  // never scanned its target roots at all — it only iterated shipped skill
+  // names to install, and pruned whatever the (here, nonexistent) previous
+  // manifest happened to list — so this orphan survived untouched. Verified
+  // by running this test against the pre-fix source: it failed with
+  // `existsSync(legacyDir)` still `true`.
+  it("issue #947: discovers and removes a marker-carrying orphan directory with NO manifest entry at all (first-sync-after-upgrade / manifest-deleted case)", () => {
+    writeSkill("host");
+
+    // Plant the orphan directly on disk, exactly as a past
+    // mullion-mullion-host -> mullion-host rename would leave behind on a
+    // host that had already installed the OLD double-prefixed shape — with
+    // no manifest ever written (this is the very first sync call).
+    const legacyDir = path.join(resolveClaudeConfigDir(), "skills", "mullion-mullion-host");
+    mkdirSync(legacyDir, { recursive: true });
+    writeFileSync(path.join(legacyDir, "SKILL.md"), "stale pre-rename content");
+    writeFileSync(path.join(legacyDir, INSTALLED_MARKER_NAME), INSTALLED_MARKER_CONTENT);
+    expect(existsSync(resolveBundleSyncManifestPath())).toBe(false);
+
+    const result = syncBundleContent();
+
+    expect(result.changed).toBe(true);
+    expect(existsSync(legacyDir)).toBe(false);
+    const hostDir = path.join(resolveClaudeConfigDir(), "skills", "mullion-host");
+    expect(existsSync(hostDir)).toBe(true);
+    expect(readFileSync(path.join(hostDir, "SKILL.md"), "utf8")).toContain("name: mullion-host");
+  });
+
+  // Mirrors the existing "PR #891 regression" test for uninstallBundleContent
+  // above (same file) — a `mullion-`-prefixed directory that does NOT carry
+  // the ownership marker must never be touched by the new orphan scan,
+  // even with no manifest present at all. The prefix alone is only a naming
+  // convention; the marker is the actual ownership test.
+  it("issue #947 non-regression: never deletes a mullion-prefixed directory lacking the ownership marker, even with no manifest", () => {
+    writeSkill("host");
+    const userOwnedDir = path.join(resolveClaudeConfigDir(), "skills", "mullion-helper");
+    mkdirSync(userOwnedDir, { recursive: true });
+    writeFileSync(path.join(userOwnedDir, "SKILL.md"), "---\nname: mullion-helper\n---\nMine.\n");
+    // Deliberately no INSTALLED_MARKER_NAME file.
+    expect(existsSync(resolveBundleSyncManifestPath())).toBe(false);
+
+    const result = syncBundleContent();
+
+    expect(result.changed).toBe(true);
+    expect(existsSync(userOwnedDir)).toBe(true);
+    expect(readFileSync(path.join(userOwnedDir, "SKILL.md"), "utf8")).toBe(
+      "---\nname: mullion-helper\n---\nMine.\n",
+    );
+  });
+
+  // Codex's and agy's skill roots are targets of BOTH this module's own
+  // orphan scan (pruneOrphanSkillDirs) AND installBundleSkills' pre-existing
+  // orphan scan (their per-launch managedInstall step) — the two must never
+  // fight over the same directory. This plants an orphan, runs
+  // syncBundleContent's prune first, then immediately runs
+  // installBundleSkills against the SAME root and asserts the second pass
+  // finds nothing further to remove and the shipped skill stays intact.
+  it("issue #947: syncBundleContent's orphan-prune and installBundleSkills' own orphan-prune agree and don't fight on the same root", () => {
+    writeSkill("host");
+    const codexRoot = resolveCodexAgentsSkillsDir();
+    const legacyDir = path.join(codexRoot, "mullion-mullion-host");
+    mkdirSync(legacyDir, { recursive: true });
+    writeFileSync(path.join(legacyDir, "SKILL.md"), "stale pre-rename content");
+    writeFileSync(path.join(legacyDir, INSTALLED_MARKER_NAME), INSTALLED_MARKER_CONTENT);
+
+    const result = syncBundleContent();
+    expect(result.changed).toBe(true);
+    expect(existsSync(legacyDir)).toBe(false);
+    const hostDir = path.join(codexRoot, "mullion-host");
+    expect(existsSync(hostDir)).toBe(true);
+
+    // Second, independent pass (simulating codex's own per-launch
+    // managedInstall step) over the exact same root: must be a pure no-op
+    // for the already-correct, already-pruned state above.
+    const beforeEntries = readdirSync(codexRoot).sort();
+    installBundleSkills(codexRoot);
+    const afterEntries = readdirSync(codexRoot).sort();
+
+    expect(afterEntries).toEqual(beforeEntries);
+    expect(existsSync(hostDir)).toBe(true);
+    expect(existsSync(legacyDir)).toBe(false);
+  });
 });
 
 describe("syncBundleContent — manifest atomicity and corruption", () => {

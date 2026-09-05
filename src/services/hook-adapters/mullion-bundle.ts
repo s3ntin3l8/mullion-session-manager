@@ -183,12 +183,68 @@ export function installSkillDirWithNameRewrite(
   }
 }
 
+/**
+ * The shared orphan-scan loop: removes every marker-carrying `mullion-*`
+ * directory directly under `destRoot` whose name is NOT in `currentNames` —
+ * i.e. not part of what the caller just (re)installed or is about to
+ * install this pass. Extracted (issue #947) so `installBundleSkills`' own
+ * orphan scan below and `bundle-sync.ts`'s `syncBundleContent` share this
+ * EXACT loop rather than each maintaining its own copy: both can run
+ * against the very same root for codex/agy (this file's per-launch
+ * managedInstall step, and the boot-time sync), so a future change to this
+ * loop's ownership/race handling that only landed in one copy would
+ * silently reintroduce drift between the two — the same class of bug this
+ * issue fixes for bundle-sync.ts's own missing orphan scan.
+ *
+ * A no-op (not an error) when `destRoot` doesn't exist yet. Each removal is
+ * independently best-effort — the same "already gone, or some other benign
+ * race" tolerance `bundle-sync.ts`'s `pruneRemovedEntries` already applies
+ * to its own manifest-diff prune, since this scan can run concurrently with
+ * another process's install/uninstall pass over the same root.
+ *
+ * Returns the number of directories actually removed.
+ */
+export function pruneOrphanManagedDirs(
+  destRoot: string,
+  currentNames: ReadonlySet<string>,
+): number {
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(destRoot, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+  let removed = 0;
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !entry.name.startsWith(INSTALLED_SKILL_PREFIX)) continue;
+    if (currentNames.has(entry.name)) continue;
+    const dir = path.join(destRoot, entry.name);
+    if (!isCurrentMullionManagedDir(dir)) continue;
+    try {
+      rmSync(dir, { recursive: true, force: true });
+      removed++;
+    } catch {
+      // Already gone, or some other benign race — nothing left to prune.
+    }
+  }
+  return removed;
+}
+
 /** Whether `dir` carries the ownership marker installBundleSkills writes —
  * the actual "did Mullion install this" test, not just the `mullion-`
  * prefix on its name. Used both to decide whether install needs to
  * (re)write the marker and, more importantly, by uninstallBundleSkills to
- * decide whether it's safe to delete. */
-function isCurrentMullionManagedDir(dir: string): boolean {
+ * decide whether it's safe to delete.
+ *
+ * Exported for bundle-sync.ts (issue #947) — its own orphan-scan pass over
+ * SKILL_TARGETS needs the SAME ownership test installBundleSkills' orphan
+ * scan (below) already uses, so the two independent prune passes that can
+ * both run against codex's/agy's skill roots (this file's per-launch
+ * managedInstall step, and bundle-sync.ts's boot-time sync) never drift on
+ * what counts as "safe to remove." Reused, not reimplemented — see this
+ * repo's own "one validity check, several callers" posture (mirrors
+ * manifestEntryStillValid's own doc comment in bundle-sync.ts). */
+export function isCurrentMullionManagedDir(dir: string): boolean {
   return existsSync(path.join(dir, INSTALLED_MARKER_NAME));
 }
 
@@ -265,21 +321,13 @@ export function installBundleSkills(destRoot: string): void {
   // identical to what an empty-bundle `uninstallBundleSkills` call would
   // do. Deliberate, not a bug: an install that ships no skills at all has
   // nothing legitimate left to keep installed.
+  //
+  // Issue #947 — this is now `pruneOrphanManagedDirs` (above), the SAME
+  // shared loop `bundle-sync.ts`'s `syncBundleContent` calls against
+  // codex's/agy's own skill roots, rather than a second hand-maintained
+  // copy of it.
   const currentDestNames = new Set(skillNames.map((name) => `${INSTALLED_SKILL_PREFIX}${name}`));
-  let existingEntries: Dirent[];
-  try {
-    existingEntries = readdirSync(destRoot, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  for (const entry of existingEntries) {
-    if (!entry.isDirectory() || !entry.name.startsWith(INSTALLED_SKILL_PREFIX)) continue;
-    if (currentDestNames.has(entry.name)) continue;
-    const dir = path.join(destRoot, entry.name);
-    if (isCurrentMullionManagedDir(dir)) {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  }
+  pruneOrphanManagedDirs(destRoot, currentDestNames);
 }
 
 /**
@@ -306,24 +354,13 @@ export function installBundleSkills(destRoot: string): void {
  * manifest existed. Existing callers (agy.ts's/codex.ts's own
  * managedInstall steps) ignore the return value, so this is a
  * backward-compatible addition, not a behavior change for them.
+ *
+ * Issue #947 — this is now `pruneOrphanManagedDirs` (above) called with an
+ * empty `currentNames` set (nothing to keep), the SAME marker-gated scan
+ * loop rather than a third hand-maintained copy of it.
  */
 export function uninstallBundleSkills(destRoot: string): number {
-  let entries: Dirent[];
-  try {
-    entries = readdirSync(destRoot, { withFileTypes: true });
-  } catch {
-    return 0;
-  }
-  let removed = 0;
-  for (const entry of entries) {
-    if (!entry.isDirectory() || !entry.name.startsWith(INSTALLED_SKILL_PREFIX)) continue;
-    const dir = path.join(destRoot, entry.name);
-    if (isCurrentMullionManagedDir(dir)) {
-      rmSync(dir, { recursive: true, force: true });
-      removed++;
-    }
-  }
-  return removed;
+  return pruneOrphanManagedDirs(destRoot, new Set());
 }
 
 // PR-5 (per-project skills/reviewer, "apply Mullion tooling to other repos")
