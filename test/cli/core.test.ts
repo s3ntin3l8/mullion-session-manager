@@ -1300,6 +1300,42 @@ describe("runCommand", () => {
     });
   });
 
+  describe("bundle commands (issue #944/#945)", () => {
+    it("bundle status requests bundle.status with no arguments", async () => {
+      const client = fakeClient();
+      const io = fakeIo();
+      await runCommand(["bundle", "status"], { client, io });
+      expect(client.request).toHaveBeenCalledWith("bundle.status", {});
+    });
+
+    it("bundle resync requests bundle.resync with no arguments", async () => {
+      const client = fakeClient();
+      const io = fakeIo();
+      await runCommand(["bundle", "resync"], { client, io });
+      expect(client.request).toHaveBeenCalledWith("bundle.resync", {});
+    });
+
+    it("bundle remove requests bundle.remove with no arguments and no confirmation prompt", async () => {
+      const client = fakeClient();
+      const io = fakeIo();
+      await runCommand(["bundle", "remove"], { client, io });
+      expect(client.request).toHaveBeenCalledWith("bundle.remove", {});
+    });
+
+    it("bundle with no verb is a usage error (exit 2)", async () => {
+      const io = fakeIo();
+      expect(await runCommand(["bundle"], { client: fakeClient(), io })).toBe(2);
+      expect(io.stderr.write).toHaveBeenCalledWith(
+        expect.stringContaining("requires a subcommand"),
+      );
+    });
+
+    it("bundle with an unknown verb is a usage error (exit 2)", async () => {
+      const io = fakeIo();
+      expect(await runCommand(["bundle", "bogus"], { client: fakeClient(), io })).toBe(2);
+    });
+  });
+
   describe("project tooling (issue #938)", () => {
     let tmpDir: string;
     beforeEach(() => {

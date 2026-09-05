@@ -1,4 +1,5 @@
 import { eq } from "drizzle-orm";
+import type { FastifyInstance } from "fastify";
 import { settings as settingsTable } from "../db/schema.js";
 import type { getDb } from "../db/client.js";
 // Theme/CursorStyle/SidebarDensity/SoundName (AppSettings's leaf unions)
@@ -894,4 +895,66 @@ export function getStoredSettings(db: ReturnType<typeof getDb>): AppSettings {
   } catch {
     return DEFAULT_SETTINGS;
   }
+}
+
+/**
+ * Applies a partial settings patch via the EXACT same deep-merge + upsert +
+ * live-reconfigure sequence `PATCH /api/settings` uses (routes/settings.ts's
+ * handler now just calls this) — reused by routes/bundle-sync.ts's
+ * `POST /api/bundle-sync/remove` (issue #945) to flip
+ * `sessions.injectMullionBundle` off as part of removal. Sharing this one
+ * write path, rather than a hand-rolled second upsert, is what keeps the
+ * two callers from silently drifting apart — e.g. if this function ever
+ * gains another live-reconfigure call for a new setting, both callers pick
+ * it up automatically.
+ *
+ * The explicit third `deepMerge` argument matters here specifically:
+ * `previous` has already drifted from DEFAULT_SETTINGS (that's the whole
+ * point of reading it), so deepMerge can't infer a field's nullability from
+ * `previous` alone once it's been set once — DEFAULT_SETTINGS is the one
+ * reference that never drifts. See deepMerge's own doc comment.
+ */
+export function applySettingsPatch(
+  app: FastifyInstance,
+  patch: Record<string, unknown>,
+): AppSettings {
+  const previous = getStoredSettings(app.db);
+  const next: AppSettings = sanitizeSettings(deepMerge(previous, patch, DEFAULT_SETTINGS));
+  const data = JSON.stringify(next);
+
+  // Upsert the singleton row — SQLite's ON CONFLICT DO UPDATE, matching how
+  // a settings row simply doesn't exist until the first write.
+  app.db
+    .insert(settingsTable)
+    .values({ id: SETTINGS_ROW_ID, data })
+    .onConflictDoUpdate({ target: settingsTable.id, set: { data, updatedAt: new Date() } })
+    .run();
+
+  // Live-reconfigure the reconciler timer (see plugins/pty.ts) rather than
+  // only picking up the new interval on next process restart.
+  if (next.sessions.reconcileIntervalSeconds !== previous.sessions.reconcileIntervalSeconds) {
+    app.reconfigureReconciler(next.sessions.reconcileIntervalSeconds);
+  }
+  // Live-reconfigure the git fetcher (see plugins/git-fetcher.ts) when its
+  // interval changes — same immediate-effect pattern.
+  if (next.sessions.gitAutoFetchIntervalSeconds !== previous.sessions.gitAutoFetchIntervalSeconds) {
+    app.reconfigureGitFetcher(next.sessions.gitAutoFetchIntervalSeconds);
+  }
+  // Live-reconfigure the event-history retention sweep (see
+  // plugins/event-store.ts) when any setting it depends on changes — runs
+  // one sweep immediately against the just-persisted value rather than
+  // waiting for its next fixed-cadence tick. This sweep's own onTick also
+  // reconciles remote-event-subscriber.ts's per-host subscriptions (issue
+  // #213 hazard 6), so an eventPersistence flip opens/closes upstreams
+  // through this same call — no separate reconfigureRemoteEventSubscriptions()
+  // wiring needed here.
+  if (
+    next.sessions.eventRetentionDays !== previous.sessions.eventRetentionDays ||
+    next.sessions.eventRetentionPerSession !== previous.sessions.eventRetentionPerSession ||
+    next.sessions.eventPersistence !== previous.sessions.eventPersistence
+  ) {
+    app.reconfigureEventRetention();
+  }
+
+  return next;
 }

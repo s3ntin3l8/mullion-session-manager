@@ -258,7 +258,12 @@ function mergeAgyTrustedWorkspace(
   writeFileSync(settingsPath, `${JSON.stringify(merged, null, 2)}\n`);
 }
 
-function resolveAgyMcpConfigPath(): string {
+// Exported (issue #945) — bundle-sync.ts's uninstallBundleContent needs
+// this to remove the `mullion` MCP entry when a user turns
+// sessions.injectMullionBundle off entirely, without duplicating agy's own
+// config-path resolution. Also still re-exported via __testing below for
+// this file's own tests, unchanged.
+export function resolveAgyMcpConfigPath(): string {
   return path.join(os.homedir(), ".gemini", "config", "mcp_config.json");
 }
 
@@ -325,6 +330,53 @@ function mergeAgyMcpConfig(
 
   mkdirSync(path.dirname(mcpConfigPath), { recursive: true });
   writeFileSync(mcpConfigPath, `${JSON.stringify(merged, null, 2)}\n`);
+}
+
+/**
+ * Removes ONLY the `mullion` entry from agy's own mcp_config.json, leaving
+ * the rest of the file (including any other MCP servers a user configured)
+ * untouched — the reversal of mergeAgyMcpConfig, called by bundle-sync.ts's
+ * `uninstallBundleContent` (issue #945) when a user turns
+ * `sessions.injectMullionBundle` off entirely. Gracefully no-ops (returns
+ * `false`) when the file doesn't exist at all, is unparseable (same
+ * "a file we can't parse is a file we must not blindly overwrite" posture
+ * as mergeAgyMcpConfig's own readAgyJsonConfig), or has no `mullion` entry
+ * to begin with.
+ *
+ * Deliberately NOT wired into agy.ts's own per-launch `managedInstall`
+ * (unlike installBundleSkills/uninstallBundleSkills there, which ARE gated
+ * on `ctx.injectMullionBundle`) — mergeAgyMcpConfig itself is ungated core
+ * hook/MCP wiring, re-added on every agy launch regardless of that setting
+ * (see prepareLaunch's own steps list above). This function is one-shot,
+ * called only from the explicit "remove Mullion content from this host"
+ * action, and is non-durable by design: the next agy launch's
+ * mergeAgyMcpConfig re-adds the entry, exactly like every other piece of
+ * ungated per-launch config agy.ts already writes.
+ */
+export function removeAgyMcpMullionEntry(mcpConfigPath = resolveAgyMcpConfigPath()): boolean {
+  let existing: AgyMcpConfigFile;
+  try {
+    existing = readAgyJsonConfig<AgyMcpConfigFile>(mcpConfigPath);
+  } catch {
+    return false;
+  }
+  const servers = existing.mcpServers;
+  // A malformed `mcpServers` (not a plain object — e.g. a stray string or
+  // array some other tool wrote) is the same class of "file we can't
+  // safely operate on" readAgyJsonConfig's own doc comment describes for a
+  // 0-byte file: `"mullion" in servers` would throw a TypeError for
+  // anything that isn't an object, and that must never propagate out of
+  // uninstallBundleContent AFTER applySettingsPatch has already flipped
+  // the setting off (routes/bundle-sync.ts's POST /remove) — a half-
+  // applied removal with an opaque 500 is worse than leaving this one
+  // legacy entry behind.
+  if (typeof servers !== "object" || servers === null || Array.isArray(servers)) return false;
+  if (!("mullion" in servers)) return false;
+  const remainingServers = { ...servers };
+  delete remainingServers.mullion;
+  const merged: AgyMcpConfigFile = { ...existing, mcpServers: remainingServers };
+  writeFileSync(mcpConfigPath, `${JSON.stringify(merged, null, 2)}\n`);
+  return true;
 }
 
 function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {

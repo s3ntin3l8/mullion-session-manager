@@ -1,13 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { settings } from "../db/schema.js";
-import {
-  DEFAULT_SETTINGS,
-  deepMerge,
-  getStoredSettings,
-  sanitizeSettings,
-  SETTINGS_ROW_ID,
-  type AppSettings,
-} from "../services/settings.js";
+import { applySettingsPatch, getStoredSettings } from "../services/settings.js";
 
 // The whole preferences blob is one JSON body — additionalProperties: true
 // (rather than a strict per-field schema) because `mergeSettings` already
@@ -48,61 +40,19 @@ export async function settingsRoute(app: FastifyInstance) {
     "/api/settings",
     { schema: patchSettingsSchema },
     async (request, reply) => {
-      // Merge the partial patch onto the *current* stored settings (already
-      // fully-defaulted by getStoredSettings) — deepMerge is the same helper
-      // mergeSettings uses to layer a stored blob over DEFAULT_SETTINGS.
-      // The explicit third argument matters here specifically: `previous`
-      // has already drifted from DEFAULT_SETTINGS (that's the whole point of
-      // reading it), so deepMerge can't infer a field's nullability from
-      // `previous` alone once it's been set once — DEFAULT_SETTINGS is the
-      // one reference that never drifts. See deepMerge's own doc comment.
-      const previous = getStoredSettings(app.db);
-      const next: AppSettings = sanitizeSettings(
-        deepMerge(previous, request.body, DEFAULT_SETTINGS),
-      );
-      const data = JSON.stringify(next);
+      // Deep-merge + upsert + live-reconfigure — see applySettingsPatch's
+      // own doc comment (services/settings.ts). Shared with
+      // routes/bundle-sync.ts's POST /remove (issue #945), which flips
+      // sessions.injectMullionBundle off through this exact same path.
+      applySettingsPatch(app, request.body);
 
-      // Upsert the singleton row — SQLite's ON CONFLICT DO UPDATE, matching
-      // how a settings row simply doesn't exist until the first write.
-      app.db
-        .insert(settings)
-        .values({ id: SETTINGS_ROW_ID, data })
-        .onConflictDoUpdate({ target: settings.id, set: { data, updatedAt: new Date() } })
-        .run();
-
-      // Live-reconfigure the reconciler timer (see plugins/pty.ts) rather
-      // than only picking up the new interval on next process restart.
-      if (next.sessions.reconcileIntervalSeconds !== previous.sessions.reconcileIntervalSeconds) {
-        app.reconfigureReconciler(next.sessions.reconcileIntervalSeconds);
-      }
-      // Live-reconfigure the git fetcher (see plugins/git-fetcher.ts) when
-      // its interval changes — same immediate-effect pattern.
-      if (
-        next.sessions.gitAutoFetchIntervalSeconds !== previous.sessions.gitAutoFetchIntervalSeconds
-      ) {
-        app.reconfigureGitFetcher(next.sessions.gitAutoFetchIntervalSeconds);
-      }
-      // Live-reconfigure the event-history retention sweep (see
-      // plugins/event-store.ts) when any setting it depends on changes —
-      // runs one sweep immediately against the just-persisted value rather
-      // than waiting for its next fixed-cadence tick. This sweep's own
-      // onTick also reconciles remote-event-subscriber.ts's per-host
-      // subscriptions (issue #213 hazard 6), so an eventPersistence flip
-      // opens/closes upstreams through this same call — no separate
-      // reconfigureRemoteEventSubscriptions() wiring needed here.
-      if (
-        next.sessions.eventRetentionDays !== previous.sessions.eventRetentionDays ||
-        next.sessions.eventRetentionPerSession !== previous.sessions.eventRetentionPerSession ||
-        next.sessions.eventPersistence !== previous.sessions.eventPersistence
-      ) {
-        app.reconfigureEventRetention();
-      }
-
-      // Explicit content-type — see the GET handler's comment above.
+      // Explicit content-type: this is a JSON API response, not an HTML
+      // page — settings values (e.g. a stored session-name pattern) must
+      // never be interpreted as markup by a client.
       reply.type("application/json");
-      // Re-read rather than returning `next` directly: same persisted
-      // value, but the response no longer flows straight from
-      // request.body through this function's return.
+      // Re-read rather than returning applySettingsPatch's own return value
+      // directly: same persisted value, but the response no longer flows
+      // straight from request.body through this function's return.
       return getStoredSettings(app.db);
     },
   );

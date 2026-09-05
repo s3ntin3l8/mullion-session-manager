@@ -137,6 +137,9 @@ particular).
 | `previews.delete`      | full          | `DELETE /api/previews/:slug`                             |
 | `previews.list`        | full          | `GET /api/previews`                                      |
 | `agents.list`          | full          | `GET /api/agents`                                        |
+| `bundle.status`        | full          | `GET /api/bundle-sync/status`                            |
+| `bundle.resync`        | full          | `POST /api/bundle-sync/resync`                           |
+| `bundle.remove`        | full          | `POST /api/bundle-sync/remove`                           |
 
 `events.query` (issue #213, roadmap 4.7) is a one-shot request/response query
 over the _persisted_ `session_events` table — distinct from `events.subscribe`

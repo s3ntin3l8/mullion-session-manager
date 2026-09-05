@@ -125,7 +125,16 @@ const STANDALONE_COMMANDS = new Set(["notify", "mcp", "config", "history"]);
 // see ssh-agent-helper.mjs), but is dispatched by mullion.mjs BEFORE
 // runCommand/COMMANDS below, the same way "mcp" already is — it never
 // touches the control socket, so it has no entry in COMMANDS either.
-const NOUNS = new Set(["session", "browser", "project", "preview", "dock", "events", "helper"]);
+const NOUNS = new Set([
+  "session",
+  "browser",
+  "project",
+  "preview",
+  "dock",
+  "events",
+  "helper",
+  "bundle",
+]);
 
 /** Resolves the leading tokens of a (post-global-flag-extraction) argv into
  * `{noun, verb, args}`, expanding the `ps`/`kill`/`logs`/`exec` top-level
@@ -959,6 +968,22 @@ const dockCommands = {
   },
 };
 
+// Issue #944/#945 — thin passthroughs to the bundle.status/resync/remove
+// control-socket ops (see plugins/control-socket.ts), same shape as
+// previewCommands' own list/get/delete/create above: no client-side
+// validation of its own, since these ops take no meaningful body.
+const bundleCommands = {
+  async status(client) {
+    return { json: await client.request("bundle.status", {}) };
+  },
+  async resync(client) {
+    return { json: await client.request("bundle.resync", {}) };
+  },
+  async remove(client) {
+    return { json: await client.request("bundle.remove", {}) };
+  },
+};
+
 const eventsCommands = {
   async tail(client, _args, _opts, io) {
     await runEventsTail(client, io);
@@ -1039,6 +1064,7 @@ export const COMMANDS = {
   project: projectCommands,
   preview: previewCommands,
   dock: dockCommands,
+  bundle: bundleCommands,
   events: eventsCommands,
   notify: runNotify,
   config: runConfig,
@@ -1055,6 +1081,7 @@ Commands:
   project list|actions|dock
   preview create|get|delete|list
   dock start|stop|list
+  bundle status|resync|remove
   events tail
   history [--session <id>] [--kind <k>] [--since <ms>] [--until <ms>]
           [--limit <n>] [--cursor <c>]

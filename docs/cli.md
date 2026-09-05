@@ -46,6 +46,7 @@ mullion browser navigate|click|fill|type|press|select|check|uncheck|hover|
 mullion project list|actions|dock
 mullion preview create|get|delete|list
 mullion dock start|stop|list
+mullion bundle status|resync|remove
 mullion events tail
 mullion history [--session <id>] [--kind <k>] [--since <ms>] [--until <ms>]
                 [--limit <n>] [--cursor <c>]
@@ -201,6 +202,34 @@ servers, log tails — distinct from one-shot launchers).
 - `dock start <projectId> <dockControlId>` — looks up the control via
   `project dock`, then creates a session from its command/cwd.
 - `dock stop <sessionId>`
+
+### bundle
+
+Issue #944/#945 — status/troubleshooting for the host-local, boot-time sync
+of Mullion's own shipped skill/agent bundle into every detected CLI's global
+config root (see [`architecture.md`](architecture.md) and
+`src/services/bundle-sync.ts`). Never a precondition for the integration
+working — the boot-time sync already runs automatically with no user action.
+
+- `bundle status` — per-CLI sync status (`synced`/`not-synced`/`stale`/`n-a`/
+  `disabled`) for skills and agents, plus whether each CLI's binary was
+  detected on this host at all.
+- `bundle resync` — re-runs the same sync the boot-time hook performs, for
+  troubleshooting ("I deleted something, bring it back") or
+  immediately-after-upgrade impatience. Returns `409` if
+  `sessions.injectMullionBundle` is off.
+- `bundle remove` — removes Mullion's bundle content from this host
+  entirely (manifest-tracked paths, a legacy sweep for pre-manifest
+  installs, and agy's own `mullion` MCP entry) and turns
+  `sessions.injectMullionBundle` off so it stays removed **on the
+  primary** (this command only runs there). A remote agent host
+  registered to this primary is unaffected and keeps re-syncing on its
+  own boot cycle regardless, since `injectMullionBundle` isn't threaded
+  from primary to agent hosts the way `injectAgentGuide`/
+  `injectProjectBriefing` are (see
+  issue #1089). No confirmation prompt at the CLI layer, same as
+  `session kill`/`preview delete` — a confirming UI is the dashboard
+  panel's job, not this command's.
 
 ### events
 

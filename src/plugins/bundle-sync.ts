@@ -1,7 +1,7 @@
 import fp from "fastify-plugin";
 import type { FastifyInstance } from "fastify";
 import { DEFAULT_SETTINGS, getStoredSettings } from "../services/settings.js";
-import { syncBundleContent, removeBundleContent } from "../services/bundle-sync.js";
+import { runBundleSyncExclusive } from "../services/bundle-sync.js";
 
 // Mirrors pty.ts's readInjectAgentGuide/readInjectMullionBundle exactly —
 // same db-absent-safe closure shape, same multi-host "agent" role fallback
@@ -13,13 +13,15 @@ function readInjectMullionBundle(app: FastifyInstance): boolean {
     : DEFAULT_SETTINGS.sessions.injectMullionBundle;
 }
 
+// Issue #944 — dispatch itself now lives in bundle-sync.ts's own
+// runBundleSyncExclusive (sync-vs-remove, single-source, serialized against
+// the new HTTP re-sync/remove routes) rather than being duplicated here;
+// this function is just the "what's the current setting, and log the
+// result" wrapper around it.
 async function runBundleSync(app: FastifyInstance): Promise<void> {
-  if (readInjectMullionBundle(app)) {
-    const result = syncBundleContent();
-    app.log.info({ changed: result.changed }, "bundle-sync: boot sync complete");
-  } else {
-    removeBundleContent();
-  }
+  const enabled = readInjectMullionBundle(app);
+  const result = await runBundleSyncExclusive(enabled);
+  app.log.info({ enabled, changed: result.changed }, "bundle-sync: boot sync complete");
 }
 
 // Issue #941 — boots the host-local bundle sync ONCE per process start,

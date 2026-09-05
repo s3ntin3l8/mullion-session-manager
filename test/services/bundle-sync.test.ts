@@ -17,15 +17,25 @@ import {
   isBundleSyncedFor,
   computeBundleContentHash,
   resolveBundleSyncManifestPath,
+  readBundleSyncManifest,
+  getBundleSyncStatus,
+  uninstallBundleContent,
+  runBundleSyncExclusive,
+  type BundleSyncCli,
 } from "../../src/services/bundle-sync.js";
 import { resolveClaudeConfigDir } from "../../src/services/hook-adapters/claude-code.js";
 import { resolveCodexAgentsSkillsDir } from "../../src/services/hook-adapters/codex.js";
 import {
   resolveAgyGlobalSkillsDir,
   resolveAgyGlobalAgentsDir,
+  resolveAgyMcpConfigPath,
 } from "../../src/services/hook-adapters/agy.js";
 import { resolveOpenCodeConfigHome } from "../../src/services/hook-adapters/opencode-skills.js";
-import { installBundleSkills } from "../../src/services/hook-adapters/mullion-bundle.js";
+import {
+  installBundleSkills,
+  INSTALLED_MARKER_NAME,
+  INSTALLED_MARKER_CONTENT,
+} from "../../src/services/hook-adapters/mullion-bundle.js";
 
 // This whole suite exercises real filesystem paths derived from
 // os.homedir() (the manifest, and all four CLIs' skill/agent roots) and
@@ -436,5 +446,331 @@ describe("isBundleSyncedFor", () => {
     syncBundleContent();
     removeBundleContent();
     expect(isBundleSyncedFor("claude-code")).toBe(false);
+  });
+});
+
+describe("readBundleSyncManifest", () => {
+  it("is null before any sync has run", () => {
+    expect(readBundleSyncManifest()).toBeNull();
+  });
+
+  it("returns the same manifest syncBundleContent wrote", () => {
+    writeSkill("host");
+    syncBundleContent();
+    const manifest = readBundleSyncManifest();
+    expect(manifest?.version).toBe(1);
+    expect(manifest?.entries.length).toBeGreaterThan(0);
+  });
+});
+
+describe("getBundleSyncStatus", () => {
+  const NO_DETECTED = new Set<BundleSyncCli>();
+
+  it("marks every CLI's skills and agents rows 'disabled' when the setting is off, with no manifest read at all", () => {
+    writeSkill("host");
+    writeAgent("reviewer");
+    syncBundleContent(); // populate a manifest that a disabled read must ignore
+    const status = getBundleSyncStatus({ enabled: false, detectedClis: NO_DETECTED });
+    expect(status.enabled).toBe(false);
+    expect(status.bundleHash).toBeNull();
+    expect(status.clis).toHaveLength(4);
+    for (const cli of status.clis) {
+      expect(cli.skills.status).toBe("disabled");
+      expect(cli.skills.count).toBe(0);
+      expect(cli.agents.status).toBe("disabled");
+      expect(cli.agents.count).toBe(0);
+      expect(cli.detected).toBe(false);
+    }
+  });
+
+  it("is 'not-synced' for every CLI when enabled but nothing has ever synced", () => {
+    const status = getBundleSyncStatus({ enabled: true, detectedClis: NO_DETECTED });
+    expect(status.bundleHash).toBeNull();
+    for (const cli of status.clis) {
+      expect(cli.skills.status).toBe("not-synced");
+      if (cli.cli === "codex") {
+        expect(cli.agents.status).toBe("n-a");
+      } else {
+        expect(cli.agents.status).toBe("not-synced");
+      }
+    }
+  });
+
+  it("today's shipped bundle ships no agents/ directory at all, so a real sync still leaves every agent-capable CLI's agents row 'not-synced' with count 0", () => {
+    // Deliberately no writeAgent() call — src/bundle/agents/ doesn't exist
+    // in this repo yet (#943/#953's job), and getBundleSyncStatus must not
+    // be surprised by that once it ships: skills sync fine, agents stay
+    // untouched everywhere except codex's unconditional "n-a".
+    writeSkill("host");
+    syncBundleContent();
+    const status = getBundleSyncStatus({ enabled: true, detectedClis: NO_DETECTED });
+    for (const cli of status.clis) {
+      expect(cli.skills.status).toBe("synced");
+      if (cli.cli === "codex") {
+        expect(cli.agents.status).toBe("n-a");
+      } else {
+        expect(cli.agents.status).toBe("not-synced");
+        expect(cli.agents.count).toBe(0);
+      }
+    }
+  });
+
+  it("is 'synced' with a count once skills and agents have synced cleanly", () => {
+    writeSkill("host");
+    writeAgent("reviewer");
+    syncBundleContent();
+    const status = getBundleSyncStatus({ enabled: true, detectedClis: NO_DETECTED });
+    const claude = status.clis.find((c) => c.cli === "claude-code")!;
+    expect(claude.skills).toEqual({
+      status: "synced",
+      root: path.join(resolveClaudeConfigDir(), "skills"),
+      count: 1,
+    });
+    expect(claude.agents).toEqual({
+      status: "synced",
+      root: path.join(resolveClaudeConfigDir(), "agents"),
+      count: 1,
+    });
+    expect(status.bundleHash).toBe(computeBundleContentHash(bundleDir()));
+  });
+
+  it("codex's agents row is always 'n-a', never derived from manifest content", () => {
+    writeSkill("host");
+    writeAgent("reviewer");
+    syncBundleContent();
+    const status = getBundleSyncStatus({ enabled: true, detectedClis: NO_DETECTED });
+    const codex = status.clis.find((c) => c.cli === "codex")!;
+    expect(codex.agents).toEqual({ status: "n-a", root: null, count: 0 });
+    // codex DOES get skills synced, unlike agents.
+    expect(codex.skills.status).toBe("synced");
+  });
+
+  it("is 'stale' when an installed skill was hand-deleted after a sync", () => {
+    writeSkill("host");
+    syncBundleContent();
+    rmSync(path.join(resolveClaudeConfigDir(), "skills", "mullion-host"), {
+      recursive: true,
+      force: true,
+    });
+    const status = getBundleSyncStatus({ enabled: true, detectedClis: NO_DETECTED });
+    const claude = status.clis.find((c) => c.cli === "claude-code")!;
+    expect(claude.skills.status).toBe("stale");
+  });
+
+  it("passes detected through from the caller's own set, matched per CLI", () => {
+    const status = getBundleSyncStatus({
+      enabled: true,
+      detectedClis: new Set<BundleSyncCli>(["claude-code", "codex"]),
+    });
+    const byCli = Object.fromEntries(status.clis.map((c) => [c.cli, c.detected]));
+    expect(byCli["claude-code"]).toBe(true);
+    expect(byCli.codex).toBe(true);
+    expect(byCli.agy).toBe(false);
+    expect(byCli.opencode).toBe(false);
+  });
+});
+
+describe("uninstallBundleContent", () => {
+  it("is a no-op with a clear zero result when nothing is installed at all", async () => {
+    const result = await uninstallBundleContent();
+    expect(result).toEqual({ removed: 0, legacySwept: 0 });
+  });
+
+  it("removes every manifest-tracked path, same as removeBundleContent alone", async () => {
+    writeSkill("host");
+    writeAgent("reviewer");
+    syncBundleContent();
+    const result = await uninstallBundleContent();
+    expect(result.removed).toBeGreaterThan(0);
+    expect(existsSync(path.join(resolveClaudeConfigDir(), "skills", "mullion-host"))).toBe(false);
+    expect(existsSync(resolveBundleSyncManifestPath())).toBe(false);
+  });
+
+  it("legacy sweep: removes a marker-carrying mullion-* directory the manifest never knew about", async () => {
+    // Simulates a pre-#941 host: content installed by the old per-launch
+    // installBundleSkills, with no boot-time sync manifest ever written.
+    const legacyRoot = resolveAgyGlobalSkillsDir();
+    const legacyDir = path.join(legacyRoot, "mullion-legacy-skill");
+    mkdirSync(legacyDir, { recursive: true });
+    writeFileSync(path.join(legacyDir, "SKILL.md"), "---\nname: legacy-skill\n---\nBody.\n");
+    writeFileSync(path.join(legacyDir, INSTALLED_MARKER_NAME), INSTALLED_MARKER_CONTENT);
+
+    const result = await uninstallBundleContent();
+    expect(result.removed).toBe(0);
+    expect(result.legacySwept).toBeGreaterThan(0);
+    expect(existsSync(legacyDir)).toBe(false);
+  });
+
+  it("PR #891 regression: never deletes a mullion-prefixed directory lacking the ownership marker", async () => {
+    const userOwnedDir = path.join(resolveClaudeConfigDir(), "skills", "mullion-helper");
+    mkdirSync(userOwnedDir, { recursive: true });
+    writeFileSync(path.join(userOwnedDir, "SKILL.md"), "---\nname: mullion-helper\n---\nMine.\n");
+    // Deliberately no INSTALLED_MARKER_NAME file — this is a user's own
+    // skill that happens to collide with Mullion's naming convention.
+
+    const result = await uninstallBundleContent();
+    expect(result.legacySwept).toBe(0);
+    expect(existsSync(userOwnedDir)).toBe(true);
+    expect(existsSync(path.join(userOwnedDir, "SKILL.md"))).toBe(true);
+  });
+
+  it("agent-file prune is manifest-only: a stray pre-manifest mullion-<name>.md agent file is a known, accepted gap and is left alone", async () => {
+    writeSkill("host");
+    writeAgent("reviewer");
+    syncBundleContent();
+
+    const strayAgentPath = path.join(resolveClaudeConfigDir(), "agents", "mullion-orphan.md");
+    writeFileSync(strayAgentPath, "---\nname: orphan\ndescription: stray\n---\nBody.\n");
+
+    const result = await uninstallBundleContent();
+    // The manifest-tracked reviewer agent IS removed...
+    expect(existsSync(path.join(resolveClaudeConfigDir(), "agents", "mullion-reviewer.md"))).toBe(
+      false,
+    );
+    // ...but the untracked stray flat file is NOT touched by the legacy
+    // sweep — flat agent files have no marker to check, so only
+    // manifest-tracked ones are ever removed (documented gap, not a bug).
+    expect(existsSync(strayAgentPath)).toBe(true);
+    expect(result.removed).toBeGreaterThan(0);
+  });
+
+  it("removes agy's mullion MCP entry, leaving other entries and the rest of the file untouched", async () => {
+    const mcpConfigPath = resolveAgyMcpConfigPath();
+    mkdirSync(path.dirname(mcpConfigPath), { recursive: true });
+    writeFileSync(
+      mcpConfigPath,
+      JSON.stringify(
+        {
+          mcpServers: {
+            mullion: { type: "stdio", command: "node", args: ["mcp-server.js"] },
+            other: { type: "stdio", command: "other-tool" },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+
+    const result = await uninstallBundleContent();
+    expect(result.legacySwept).toBeGreaterThan(0);
+    const written = JSON.parse(readFileSync(mcpConfigPath, "utf8"));
+    expect(written.mcpServers.mullion).toBeUndefined();
+    expect(written.mcpServers.other).toEqual({ type: "stdio", command: "other-tool" });
+  });
+
+  it("is a graceful no-op when agy's mcp_config.json doesn't exist at all", async () => {
+    expect(existsSync(resolveAgyMcpConfigPath())).toBe(false);
+    await expect(uninstallBundleContent()).resolves.toEqual({ removed: 0, legacySwept: 0 });
+  });
+
+  it("leaves a genuinely unparseable (non-empty, invalid JSON) mcp_config.json byte-identical", async () => {
+    const mcpConfigPath = resolveAgyMcpConfigPath();
+    mkdirSync(path.dirname(mcpConfigPath), { recursive: true });
+    const garbage = "{ not: valid json at all";
+    writeFileSync(mcpConfigPath, garbage);
+
+    const result = await uninstallBundleContent();
+    expect(result.legacySwept).toBe(0);
+    expect(readFileSync(mcpConfigPath, "utf8")).toBe(garbage);
+  });
+
+  it("leaves a malformed non-object mcpServers value alone rather than throwing", async () => {
+    const mcpConfigPath = resolveAgyMcpConfigPath();
+    mkdirSync(path.dirname(mcpConfigPath), { recursive: true });
+    const malformed = JSON.stringify({ mcpServers: "not-an-object" });
+    writeFileSync(mcpConfigPath, malformed);
+
+    await expect(uninstallBundleContent()).resolves.toEqual({ removed: 0, legacySwept: 0 });
+    expect(readFileSync(mcpConfigPath, "utf8")).toBe(malformed);
+  });
+
+  it("returns without rewriting when mcpServers has other entries but no mullion key", async () => {
+    const mcpConfigPath = resolveAgyMcpConfigPath();
+    mkdirSync(path.dirname(mcpConfigPath), { recursive: true });
+    const content = JSON.stringify({ mcpServers: { other: { type: "stdio", command: "x" } } });
+    writeFileSync(mcpConfigPath, content);
+
+    const result = await uninstallBundleContent();
+    expect(result.legacySwept).toBe(0);
+    expect(readFileSync(mcpConfigPath, "utf8")).toBe(content);
+  });
+});
+
+describe("runBundleSyncExclusive — serialization", () => {
+  it("enabled dispatches to syncBundleContent's own result shape", async () => {
+    writeSkill("host");
+    const result = await runBundleSyncExclusive(true);
+    expect(result).toEqual({ changed: true });
+    expect(isBundleSyncedFor("claude-code")).toBe(true);
+  });
+
+  it("a rejected run doesn't poison the queue for the next caller", async () => {
+    writeSkill("host");
+    // Forces writeManifestAtomic's own mkdirSync(dirname(target), {
+    // recursive: true }) to throw: ~/.mullion needs to be a directory, but
+    // a plain FILE already sits there. Every skill-install step ahead of
+    // that in syncBundleContent still succeeds (they write under
+    // ~/.claude, ~/.agents, etc., untouched by this obstruction) — only
+    // the final manifest write blows up.
+    writeFileSync(path.join(homeDir, ".mullion"), "not a directory");
+
+    await expect(runBundleSyncExclusive(true)).rejects.toThrow();
+
+    // The actual regression this guards: runSerialized's own doc comment
+    // says a failed run must not poison pendingBundleSyncOp for the NEXT
+    // caller. Without that swallow-catch, this second call would sit
+    // chained behind a permanently-rejected promise and never even
+    // execute its own `fn` — 500ing every future resync forever.
+    rmSync(path.join(homeDir, ".mullion"), { force: true });
+    const result = await runBundleSyncExclusive(true);
+    expect(result).toEqual({ changed: true });
+    expect(readBundleSyncManifest()?.entries.length).toBeGreaterThan(0);
+  });
+
+  it("disabled dispatches to removeBundleContent", async () => {
+    writeSkill("host");
+    syncBundleContent();
+    const result = await runBundleSyncExclusive(false);
+    expect(result).toEqual({ changed: true });
+    expect(isBundleSyncedFor("claude-code")).toBe(false);
+  });
+
+  it("two racing calls never interleave their filesystem work — both resolve cleanly, and the manifest is left in a consistent, uncorrupted state", async () => {
+    writeSkill("host");
+    writeSkill("second");
+    const [first, second] = await Promise.all([
+      runBundleSyncExclusive(true),
+      runBundleSyncExclusive(true),
+    ]);
+    expect(first.changed || second.changed).toBe(true);
+
+    // No leftover writeManifestAtomic .tmp file — the exact hazard this
+    // serialization guards against (a PID-named temp path two overlapping
+    // writers would otherwise collide on).
+    const manifestDir = path.dirname(resolveBundleSyncManifestPath());
+    const leftoverTmp = readdirSync(manifestDir).filter((name) => name.endsWith(".tmp"));
+    expect(leftoverTmp).toEqual([]);
+
+    const manifest = readBundleSyncManifest();
+    expect(manifest?.entries.length).toBeGreaterThan(0);
+    expect(isBundleSyncedFor("claude-code")).toBe(true);
+  });
+
+  it("a resync racing a remove still serializes cleanly (opposite operations, not just identical ones)", async () => {
+    writeSkill("host");
+    syncBundleContent();
+    const [syncResult, removeResult] = await Promise.all([
+      runBundleSyncExclusive(true),
+      uninstallBundleContent(),
+    ]);
+    expect(syncResult).toBeDefined();
+    expect(removeResult).toBeDefined();
+    // Whichever order they actually ran in, no leftover temp file and no
+    // thrown error from either side.
+    const manifestDir = path.dirname(resolveBundleSyncManifestPath());
+    const leftoverTmp = existsSync(manifestDir)
+      ? readdirSync(manifestDir).filter((name) => name.endsWith(".tmp"))
+      : [];
+    expect(leftoverTmp).toEqual([]);
   });
 });
