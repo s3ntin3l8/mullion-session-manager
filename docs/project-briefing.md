@@ -180,10 +180,18 @@ an ephemeral-overlay mechanism:
   it down to `description`/`mode: subagent` plus the body before writing it.
 - **codex and agy**: neither has an ephemeral per-project overlay — their
   own project-scope skill discovery is a fixed, workspace-relative
-  `.agents/skills/<name>/SKILL.md` path in the repo itself, and neither has
-  any subagent concept at all. There's no way to deliver a project skill to
-  either without writing into the project's own repo — see the next
-  section — and no way to deliver a reviewer subagent to either at all.
+  `.agents/skills/<name>/SKILL.md` path in the repo itself. Codex has no
+  subagent concept at all (`bundle-sync.ts`'s own comment: "Codex has no
+  static per-agent file format at all," confirmed by spike #946 — it invokes
+  a skill by name at runtime instead of loading a static agent file). agy
+  _does_ have one — a single flat `<name>.md` file under its host-global
+  agents directory (`resolveAgyGlobalAgentsDir()`, spike #950) — but that
+  path only ever carries Mullion's own shipped bundle agent
+  (`bundle-sync.ts`'s `AGENT_TARGETS`), never a project-specific one; nothing
+  routes a project's own reviewer content there today. There's no way to
+  deliver a project skill to either without writing into the project's own
+  repo — see the next section — and no way to deliver a _project-specific_
+  reviewer subagent to either at all.
   **The absence of a _live_ DB delivery channel is a permanent, structural
   gap, not a "not implemented yet" one**
   ([issue #1083](https://github.com/s3ntin3l8/mullion-session-manager/issues/1083)):

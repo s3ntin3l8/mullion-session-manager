@@ -121,16 +121,26 @@ const SKILL_SCAFFOLD_STALENESS_NOTICE_REMOTE =
 
 // Issue #1083 — unlike the skill, the reviewer has no committed mirror for
 // codex/agy at all: Scaffold Mullion's reviewer file only ever lands at
-// `.claude/agents/<slug>-reviewer.md`, a Claude-Code-only subagent location,
-// and neither codex nor agy has a subagent concept in the first place. So
-// this isn't a staleness gap that re-scaffolding closes — it's permanently
-// inert for those two CLIs regardless of what's saved here or scaffolded.
-// No remote-project variant needed: this is already true independent of
-// local vs. remote hosting.
+// `.claude/agents/<slug>-reviewer.md`, a Claude-Code-only subagent location.
+// Codex genuinely has no subagent concept at all (bundle-sync.ts's own
+// comment: "Codex has no static per-agent file format at all," confirmed by
+// spike #946 — it invokes a skill by name at runtime instead). agy DOES have
+// one — a single flat `<name>.md` file under its host-global agents
+// directory (`resolveAgyGlobalAgentsDir()`, spike #950) — but nothing routes
+// a PROJECT's own reviewer content there today: bundle-sync.ts's
+// AGENT_TARGETS only ever installs Mullion's own shipped bundle agent to
+// that path, not a per-project one, and Scaffold Mullion's reviewer file
+// (above) never targets it either. So the practical effect is the same for
+// both CLIs today (this field never reaches either one), even though the
+// underlying reason differs — codex structurally can't, agy currently has
+// nothing wired to its otherwise-real subagent mechanism. No remote-project
+// variant needed: this is already true independent of local vs. remote
+// hosting.
 const REVIEWER_SCAFFOLD_STALENESS_NOTICE =
-  "codex and agy have no reviewer-subagent concept, and Scaffold Mullion's reviewer file " +
-  "only ever lands in a Claude-Code-specific location — this field never reaches codex or " +
-  "agy, scaffolded or not.";
+  "codex has no subagent concept at all, and while agy does, nothing routes a project's " +
+  "own reviewer content to it — Scaffold Mullion's reviewer file only ever lands in a " +
+  "Claude-Code-specific location. Either way, this field never reaches codex or agy, " +
+  "scaffolded or not.";
 
 type ToolingFieldKey = "briefing" | "skill" | "reviewerAgent";
 
@@ -198,7 +208,8 @@ const FIELD_CONFIGS: ToolingFieldConfig[] = [
       "mullion-reviewer.md. Composed into Claude Code's plugin bundle verbatim; translated " +
       "automatically for opencode (its own agent format can't carry the tools:/model: fields " +
       "here, so those are stripped for that one CLI only — the description and body still " +
-      "apply everywhere). codex and agy have no subagent concept.",
+      "apply everywhere). codex has no subagent concept at all; agy has one, but nothing " +
+      "delivers this project-specific field to it today (see the notice below).",
     deleteConfirmTitle: "Delete this project's reviewer agent? This can't be undone.",
     template: REVIEWER_AGENT_TEMPLATE,
     maxBytes: MAX_TOOLING_FIELD_BYTES,

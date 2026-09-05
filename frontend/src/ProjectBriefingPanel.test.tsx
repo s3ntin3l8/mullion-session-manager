@@ -501,7 +501,7 @@ describe("ProjectBriefingPanel", () => {
       ).toBeInTheDocument();
     });
 
-    it("shows the permanently-inert reviewer warning when the reviewer field has a saved value", async () => {
+    it("shows the reviewer-inert warning when the reviewer field has a saved value", async () => {
       vi.stubGlobal(
         "fetch",
         mockFetch({
@@ -519,7 +519,7 @@ describe("ProjectBriefingPanel", () => {
       await screen.findByPlaceholderText(/No pinned note set/);
       await user.click(screen.getByText("Reviewer agent"));
       expect(
-        await screen.findByText(/codex and agy have no reviewer-subagent concept/),
+        await screen.findByText(/this field never reaches codex or agy, scaffolded or not/),
       ).toBeInTheDocument();
     });
 
@@ -534,7 +534,9 @@ describe("ProjectBriefingPanel", () => {
 
       await screen.findByDisplayValue("some note");
       expect(screen.queryByText(/never read this field live/)).not.toBeInTheDocument();
-      expect(screen.queryByText(/no reviewer-subagent concept/)).not.toBeInTheDocument();
+      expect(
+        screen.queryByText(/this field never reaches codex or agy, scaffolded or not/),
+      ).not.toBeInTheDocument();
     });
 
     it("disables switching to another field while the current one has unsaved changes", async () => {
