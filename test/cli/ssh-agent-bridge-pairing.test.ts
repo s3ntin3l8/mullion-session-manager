@@ -36,4 +36,32 @@ describe("ssh-agent-bridge-pairing.mjs decodePairingPayload vs. the real bridge-
     );
     expect(decodePairingPayload(encoded)).toBeNull();
   });
+
+  // Issue #1055 — a very large base64url payload must be rejected up
+  // front, not decoded to a multi-MB UTF-8 string and parsed by JSON.parse.
+  it("returns null for an oversized payload (defense-in-depth, max 8KB)", () => {
+    const oversized = "A".repeat(16_000);
+    expect(decodePairingPayload(oversized)).toBeNull();
+  });
+
+  // Issue #1055 — defense-in-depth: baseUrl must be a well-formed HTTP(S)
+  // URL at decode time, not just at the helper's later isValidHttpBaseUrl
+  // check. Catches the failure class earlier.
+  it("returns null when baseUrl isn't a well-formed HTTP(S) URL", () => {
+    const encoded = Buffer.from(
+      JSON.stringify({ baseUrl: "not a url", code: "abc" }),
+      "utf8",
+    ).toString("base64url");
+    expect(decodePairingPayload(encoded)).toBeNull();
+  });
+
+  it("returns null when baseUrl uses a non-http scheme (file://, ssh://, javascript:)", () => {
+    for (const scheme of ["file:///etc/passwd", "ssh://example.com", "javascript:alert(1)"]) {
+      const encoded = Buffer.from(
+        JSON.stringify({ baseUrl: scheme, code: "abc" }),
+        "utf8",
+      ).toString("base64url");
+      expect(decodePairingPayload(encoded)).toBeNull();
+    }
+  });
 });

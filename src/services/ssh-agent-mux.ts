@@ -70,6 +70,30 @@ const WINDOW_ADJUST_THRESHOLD_BYTES = CHANNEL_WINDOW_BYTES / 2;
  * memory. Overridable per connection (`MuxConnectionOptions.maxChannels`). */
 export const DEFAULT_MAX_CHANNELS = 256;
 
+/** Returns the first id >= `start` (stepping by 2 to preserve parity) that
+ * isn't in `occupied`. Bounded: if every candidate up to and including
+ * `start + 2 * maxChecks` is taken, throws rather than wrapping the parity
+ * space — Issue #1056, defense-in-depth against a caller that loosens (or
+ * bypasses) the `MuxConnection`'s own cap check. Exported so the bound can
+ * be unit-tested directly without going through the private closure. */
+export function pickFreeChannelId(
+  occupied: ReadonlySet<number>,
+  start: number,
+  maxChecks: number,
+): number {
+  let id = start;
+  let checks = 0;
+  while (occupied.has(id)) {
+    if (++checks > maxChecks) {
+      throw new Error(
+        `ssh-agent-mux: channel id allocator exhausted after ${maxChecks} checks — parity space saturated`,
+      );
+    }
+    id = id >= 0xfffffffe ? start : id + 2;
+  }
+  return id;
+}
+
 const PING_INTERVAL_MS = 15_000;
 /** A missed PONG within this window after a PING tears the connection down
  * — mirrors the liveness contract `remote-event-subscriber.ts`'s own
@@ -525,12 +549,31 @@ export function createMuxConnection(
     // and every allocation skipped one value. Caught in review; verified
     // the fix with five sequential allocations producing 1, 3, 5, 7, 9
     // (odd parity) rather than 3, 5, 7, 9, 11.
-    let id = nextChannelId;
-    while (channels.has(id) || pendingOpens.has(id)) {
-      id = id >= 0xfffffffe ? startChannelId : id + 2;
-    }
+    //
+    // Issue #1056 — under normal operation `openChannel()`'s own
+    // `size >= maxChannels` cap rejects before the loop ever spins more
+    // than `maxChannels - 1` times, so this guard is purely defense in
+    // depth: if a future caller ever loosened that cap (or bypassed it
+    // entirely) and the parity space did become genuinely saturated, the
+    // loop would otherwise scan ~2 billion ids before wrapping and
+    // returning the start — stall the process. `maxChannels` is the right
+    // ceiling because any legitimate allocator must free a slot within
+    // `maxChannels` opens; more than that means the connection is in a
+    // state from which no allocation can recover, and the caller deserves
+    // a real error rather than a silent hang.
+    const id = pickFreeChannelId(combinedOccupiedIds(), nextChannelId, maxChannels);
     nextChannelId = id >= 0xfffffffe ? startChannelId : id + 2;
     return id;
+  }
+
+  // Combined view of both maps `allocateChannelId` consults — kept as a
+  // local helper so the closure's maps don't leak into a module-level
+  // function's signature (the helper itself is the only thing exported,
+  // and it's parameterized over its inputs).
+  function combinedOccupiedIds(): Set<number> {
+    const out = new Set<number>(channels.keys());
+    for (const id of pendingOpens.keys()) out.add(id);
+    return out;
   }
 
   function openChannel(): Promise<MuxChannel> {

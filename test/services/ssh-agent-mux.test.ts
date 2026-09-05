@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   createMuxConnection,
+  pickFreeChannelId,
   pipeChannelToChannel,
   pipeNetSocketToChannel,
   CHANNEL_WINDOW_BYTES,
@@ -434,6 +435,42 @@ describe("ssh-agent-mux", () => {
       // already have failed — this proves the budget doesn't deplete.
       const stillOpen = await connA.openChannel();
       expect(stillOpen.closed).toBe(false);
+    });
+  });
+
+  describe("pickFreeChannelId (Issue #1056 — loop bound)", () => {
+    it("returns the start id when nothing is occupied", () => {
+      expect(pickFreeChannelId(new Set(), 1, 256)).toBe(1);
+    });
+
+    it("skips occupied ids in steps of 2 (parity-preserving)", () => {
+      const occupied = new Set([1]);
+      expect(pickFreeChannelId(occupied, 1, 256)).toBe(3);
+    });
+
+    it("skips a run of occupied ids and returns the first free one", () => {
+      const occupied = new Set([1, 3, 5, 7]);
+      expect(pickFreeChannelId(occupied, 1, 256)).toBe(9);
+    });
+
+    it("throws when every parity id up to maxChecks has been checked and all were occupied (regression: without the bound, a caller passing maxChannels: Infinity with all odd ids occupied would loop ~2 billion times before wrapping)", () => {
+      // 6 consecutive odd ids occupied starting from start=1 — strictly
+      // more than maxChecks (5), so the allocator must give up after the
+      // 6th occupied check rather than wrapping the parity space.
+      const occupied = new Set([1, 3, 5, 7, 9, 11]);
+      expect(() => pickFreeChannelId(occupied, 1, 5)).toThrow(/channel id/i);
+    });
+
+    it("does NOT throw if a free id is found within maxChecks iterations", () => {
+      // Only the first two parity slots are occupied — the allocator must
+      // find 5 well within the 256-check budget.
+      const occupied = new Set([1, 3]);
+      expect(pickFreeChannelId(occupied, 1, 256)).toBe(5);
+    });
+
+    it("with maxChecks: 0 and start id occupied, throws immediately rather than looping forever", () => {
+      const occupied = new Set([1]);
+      expect(() => pickFreeChannelId(occupied, 1, 0)).toThrow(/channel id/i);
     });
   });
 

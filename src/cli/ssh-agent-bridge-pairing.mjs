@@ -9,10 +9,21 @@
 // encodePairingPayload() is the side that changes first, and this must be
 // updated to match by hand.
 
+/** A paste from Settings is at most one short line of base64url — there's
+ * no legitimate payload anywhere near this size, and a very large string
+ * would otherwise be decoded to a multi-MB UTF-8 buffer and parsed by
+ * `JSON.parse` (Issue #1055). 8 KiB is generous for `{ baseUrl, code }`
+ * (both short strings) and small enough to make the attack cost
+ * meaningless. */
+const MAX_PAIRING_PAYLOAD_BYTES = 8 * 1024;
+
 /** Returns `null` for anything that isn't a well-formed payload — a
  * mistyped/truncated paste is this CLI's own input-validation concern, not
  * something to throw over. */
 export function decodePairingPayload(encoded) {
+  if (typeof encoded !== "string" || encoded.length > MAX_PAIRING_PAYLOAD_BYTES) {
+    return null;
+  }
   let parsed;
   try {
     parsed = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
@@ -23,5 +34,19 @@ export function decodePairingPayload(encoded) {
   const { baseUrl, code } = parsed;
   if (typeof baseUrl !== "string" || typeof code !== "string") return null;
   if (baseUrl === "" || code === "") return null;
+  if (!isValidHttpUrl(baseUrl)) return null;
   return { baseUrl, code };
+}
+
+/** Mirrors ssh-agent-bridge-helper.mjs's own `isValidHttpBaseUrl` — kept
+ * local here so this module has no other source dependency. If either
+ * side ever changes the rule, the other must be updated by hand (see the
+ * file header above). */
+function isValidHttpUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
