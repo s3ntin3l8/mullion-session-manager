@@ -38,17 +38,20 @@ replays what it's given.
   duplicating their logic — see [`socket-api.md`](socket-api.md)), `browser`
   (Playwright browser-control lifecycle backing the routes below),
   `event-store` (wires the persisted-history query surface behind
-  `GET /api/events`), `push` (web-push subscription lifecycle), `agent-enrollment`,
+  `GET /api/events`), `push` (web-push subscription lifecycle),
   `host-heartbeat`, `github-pr-poller`, `webhook-reconciler`, `task-watcher`,
-  `bundle-sync` (issue #941 — a boot-time `onReady` hook, registered on both
-  the primary and an `agent`-role host, that syncs the shipped
-  `src/bundle/skills/` bundle into each CLI's own global skill/agent
-  directory once per process start, tracked by a manifest at
-  `~/.mullion/bundle-sync.json`; see `src/services/bundle-sync.ts` and
-  [`agent-guide.md`](agent-guide.md#where-your-skills-actually-come-from)),
-  `git-fetcher`, `request-nonce` — the last several are the always-on
-  primary-side pollers/reconcilers for multi-host, GitHub, Task Master, and
-  webhook registration; see those subsystems' own docs for what each does.
+  `git-fetcher` — these are the always-on primary-side pollers/reconcilers
+  for multi-host, GitHub, Task Master, and webhook registration; see those
+  subsystems' own docs for what each does. `agent-enrollment` and
+  `request-nonce` are the mirror image: registered only on an `agent`-role
+  host, not the primary, for enrolling with and verifying signed requests
+  from its primary. `bundle-sync` is the one plugin that runs on both roles
+  (issue #941 — a boot-time `onReady` hook, registered on both the primary
+  and an `agent`-role host, that syncs the shipped `src/bundle/skills/`
+  bundle into each CLI's own global skill/agent directory once per process
+  start, tracked by a manifest at `~/.mullion/bundle-sync.json`; see
+  `src/services/bundle-sync.ts` and
+  [`agent-guide.md`](agent-guide.md#where-your-skills-actually-come-from)).
 - `src/routes/` — `health` (`/health`, `/ready`), `auth` (`/api/auth/login`,
   `/logout`, `/me`, and `/oidc/login`, `/oidc/callback` — see
   [`auth.md`](auth.md)), `root` (placeholder `/`, disabled once the

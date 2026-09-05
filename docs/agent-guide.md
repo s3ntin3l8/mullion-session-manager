@@ -430,12 +430,12 @@ manifest-driven sync** (`src/services/bundle-sync.ts`, wired in by
   right after a Mullion upgrade, before the next boot. Codex and agy keep
   their existing per-launch install step too, as the same kind of cheap
   fallback.
-- **Status and manual control, from the UI.** Settings → Sessions surfaces
-  live per-CLI sync status with a manual re-sync/remove action, for
-  troubleshooting ("I deleted something, bring it back" or "I just
-  upgraded and want it now") — this is never a precondition for the
-  integration working; the sync above runs whether or not anyone ever
-  opens that panel.
+- **Status and manual control, from the UI (issues #944/#945).** Mullion's
+  Settings UI can also surface live per-CLI sync status with manual
+  re-sync/remove actions, for troubleshooting ("I deleted something, bring
+  it back" or "I just upgraded and want it now"). That panel is a
+  troubleshooting affordance, never a precondition — the sync above runs
+  whether or not anyone opens it.
 
 A project's own skill/reviewer subagent (the pinned-note/skill/reviewer
 feature — see [`project-briefing.md`](project-briefing.md)) is unrelated to
