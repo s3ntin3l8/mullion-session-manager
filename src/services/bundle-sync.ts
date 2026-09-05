@@ -60,6 +60,7 @@ import {
   deriveOpenCodeReviewerAgentFile,
   deriveAgyAgentFile,
   uninstallBundleSkills,
+  pruneOrphanManagedDirs,
   INSTALLED_SKILL_PREFIX,
   INSTALLED_MARKER_NAME,
   INSTALLED_MARKER_CONTENT,
@@ -329,6 +330,39 @@ function pruneRemovedEntries(oldEntries: BundleSyncManifestEntry[], keepPaths: S
   }
 }
 
+// Issue #947 — `pruneRemovedEntries` above only catches a stale installed
+// directory that the PREVIOUS manifest actually recorded. It does nothing
+// for a marker-carrying `mullion-*` directory that's on disk but was never
+// in any manifest at all — either because there is no manifest yet (first
+// sync on this host after an upgrade that renamed a shipped skill, e.g. the
+// past `mullion-mullion-host` -> `mullion-host` migration), or because the
+// manifest file was deleted/corrupted out from under an otherwise-synced
+// host. `installBundleSkills`'s own orphan-scan pass (mullion-bundle.ts)
+// already handles exactly this for codex/agy by scanning the real target
+// directory's contents on every call — but that function is only ever
+// invoked for codex/agy's per-launch managedInstall step, never for Claude
+// Code or opencode, which are synced ONLY through this module's
+// manifest-diff prune. So Claude Code's and opencode's skill roots had no
+// orphan-discovery mechanism at all.
+//
+// This closes that gap by giving `syncBundleContent` a call into
+// `pruneOrphanManagedDirs` (mullion-bundle.ts) against each SKILL_TARGETS
+// root, below — the EXACT SAME shared scan `installBundleSkills`'s own
+// orphan-scan pass now also calls, rather than a second, separately
+// maintained copy of that loop (and its marker check) living in this file.
+// Marker-gated only: a `mullion-`-prefixed directory that does NOT carry
+// `.mullion-managed` is left completely untouched, no matter what — that's
+// the exact "don't delete a user's own same-prefixed content" rule Hermes
+// review PR #891 established for `uninstallBundleSkills`, and
+// `pruneOrphanManagedDirs` must not regress it (see its own doc comment).
+//
+// Idempotent alongside `installBundleSkills`'s own call to the SAME shared
+// function on the SAME root (codex/agy): both compute "shipped installed
+// names" from the identical shipped bundle and pass them into the identical
+// scan, so running one right after the other never finds anything left for
+// the second pass to disagree about — the first pass to run removes the
+// orphan, and the second finds nothing there to reconsider.
+
 /**
  * Boot-time, idempotent sync of the shipped bundle into all four CLIs'
  * global config roots. Returns `{ changed: false }` on every no-op path
@@ -362,6 +396,7 @@ export function syncBundleContent(): { changed: boolean } {
   const agentNames = listBundleAgentNames(bundleDir);
 
   const newEntries: BundleSyncManifestEntry[] = [];
+  const installedSkillNames = new Set(skillNames.map((name) => `${INSTALLED_SKILL_PREFIX}${name}`));
 
   for (const target of SKILL_TARGETS) {
     const root = target.root();
@@ -408,6 +443,34 @@ export function syncBundleContent(): { changed: boolean } {
         writeFileSync(markerPath, INSTALLED_MARKER_CONTENT);
       }
       newEntries.push({ path: destDir, kind: "dir", hash: hashInstalledDir(destDir) });
+    }
+    // Issue #947 — orphan-scan this root for any OTHER marker-carrying
+    // `mullion-*` directory not among the names just (re)installed above,
+    // regardless of whether the (possibly missing/stale) manifest ever knew
+    // about it. See the comment above this loop for the full rationale and
+    // the idempotency argument against installBundleSkills' own call to
+    // this SAME shared function on this same root for codex/agy.
+    //
+    // Skipped when `skillNames` is empty: unlike installBundleSkills' own
+    // per-launch, single-root, single-CLI call to this same function (where
+    // a genuinely empty shipped bundle deliberately wipes that one root —
+    // see that function's own "Hermes review, PR #1011" comment), this
+    // path runs against all four CLIs' roots at once, from a boot-time or
+    // HTTP-triggered resync, with no per-launch retry to self-correct a
+    // transient miss. `listBundleSkillNames` returns `[]` both for a truly
+    // empty/malformed bundle AND for a transient readdirSync failure (e.g.
+    // racing an upgrade's atomic `current` symlink swap against this
+    // function's own earlier, separate `computeBundleContentHash` read of
+    // the same `bundleDir` — the two can observe different symlink
+    // targets). Since a wipe here also gets written into the manifest with
+    // no skill entries, and `manifestEntriesStillValid` is vacuously true
+    // on an empty entries array, a spurious wipe wouldn't just delete
+    // everything once — it would permanently look "synced" on every future
+    // call until the shipped bundle's content hash next changes. Skipping
+    // the prune on an empty listing trades "a stale orphan lingers one
+    // extra resync" for avoiding that unrecoverable false-empty state.
+    if (skillNames.length > 0) {
+      pruneOrphanManagedDirs(root, installedSkillNames);
     }
   }
 
