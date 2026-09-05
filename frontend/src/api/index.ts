@@ -163,6 +163,13 @@ export type {
   ReleaseRunResult,
   ReleaseMergeReason,
   ReleaseMergeResult,
+  SyncStatus,
+  BundleSyncCliFieldStatus,
+  BundleSyncCliAgentsStatus,
+  BundleSyncCliStatus,
+  BundleSyncStatus,
+  BundleSyncResyncResult,
+  BundleSyncRemoveResult,
 } from "./types.js";
 
 export { ApiError, AuthExpiredError, RateLimitedError } from "./client.js";
@@ -183,6 +190,7 @@ import { dockerApi } from "./docker.js";
 import { skillsApi } from "./skills.js";
 import { browserApi } from "./browser.js";
 import { systemApi } from "./system.js";
+import { bundleSyncApi } from "./bundleSync.js";
 
 // The single flat namespace object every call site in the frontend calls
 // through (`api.listProjects()`, `api.createSession(...)`, etc.) — assembled
@@ -204,4 +212,5 @@ export const api = {
   ...skillsApi,
   ...browserApi,
   ...systemApi,
+  ...bundleSyncApi,
 };

@@ -3,6 +3,7 @@ import { useDashboardStore } from "../../store/index.js";
 import { resolveAgentLogo } from "../../cliLogos.js";
 import { NumberField, Row, Toggle } from "../../ui/primitives.js";
 import { clampNumberFieldOnCommit } from "../clamp.js";
+import { BundleSyncPanel } from "../BundleSyncPanel.js";
 import { WorkflowConventionsWizardModal } from "../WorkflowConventionsWizardModal.js";
 
 export function SessionsSection() {
@@ -271,16 +272,21 @@ export function SessionsSection() {
       <Row
         label="Inject Mullion tooling bundle"
         desc={
-          "Ship Mullion's own agent-facing skills (and, once shipped," +
-          " subagents) into Claude Code, Codex, opencode, and agy, in any" +
-          " project — not just this repo's own checkout. A host-local sync" +
-          " installs them once, globally, for each of those tools (under" +
-          " each tool's own skills/agents directory) at Mullion boot, and" +
-          " keeps them in sync across Mullion updates; turning this off" +
-          " removes them on the next restart (codex and agy also remove" +
-          " their own copy immediately, on the next session they launch)." +
-          " Not currently toggleable per-skill in the Skills Manager below" +
-          " — this setting is the toggle."
+          "Ship Mullion's own agent-facing skills and subagents into Claude" +
+          " Code, Codex, opencode, and agy, in any project — not just this" +
+          " repo's own checkout. A host-local sync installs them once," +
+          " globally, into each tool's own skills/agents directory at" +
+          " Mullion boot, and keeps them in sync across Mullion updates." +
+          " Claude Code and opencode also get a per-session fallback" +
+          " delivery mechanism, so those two keep working even between" +
+          " syncs; Codex and agy have no such fallback and rely on the" +
+          " global install alone. Turning this off" +
+          " removes the global install on the next restart (Codex and agy" +
+          " also remove their own copy immediately, on the next session" +
+          " they launch). Not currently toggleable per-skill in the Skills" +
+          " Manager below — this setting is the toggle. The status/re-sync/" +
+          "remove panel just below reports on this without gating it — the" +
+          " sync itself runs whether or not that panel is ever opened."
         }
       >
         <Toggle
@@ -288,6 +294,7 @@ export function SessionsSection() {
           onChange={(v) => updateSettings({ sessions: { injectMullionBundle: v } })}
         />
       </Row>
+      <BundleSyncPanel />
       <Row
         label="Auto-open child session panels"
         desc={

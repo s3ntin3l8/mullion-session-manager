@@ -785,6 +785,59 @@ export interface AgentRuleTarget {
   isSymlink: boolean;
 }
 
+// Mirrors S4's (#941) host-local bundle sync, surfaced by issues #944
+// (status/re-sync) and #945 (remove). "disabled" means the whole feature is
+// off (sessions.injectMullionBundle=false) — every CLI's skills/agents read
+// "disabled" in that case, not "not-synced"; render that as one top-level
+// state, not four rows implying breakage. "n-a" is codex's `agents` row
+// specifically — codex has no static per-agent file format. "not-synced"
+// means two different things depending on `cli`: for claude-code/opencode
+// it's "not yet using the more efficient global install, but this CLI still
+// gets the content via a per-session fallback" (not broken); for codex/agy
+// (no fallback) it means nothing is currently delivered. "stale" means a
+// synced file/dir drifted (hand-edited/deleted) since the last sync — Re-sync
+// now fixes it.
+export type SyncStatus = "synced" | "not-synced" | "stale" | "n-a" | "disabled";
+
+export interface BundleSyncCliFieldStatus {
+  status: SyncStatus;
+  root: string;
+  count: number;
+}
+
+export interface BundleSyncCliAgentsStatus {
+  status: SyncStatus;
+  // null for codex ("n-a" — no per-agent file format, so there's no root to
+  // report either).
+  root: string | null;
+  count: number;
+}
+
+export interface BundleSyncCliStatus {
+  cli: AgentRuleAgent;
+  detected: boolean;
+  skills: BundleSyncCliFieldStatus;
+  agents: BundleSyncCliAgentsStatus;
+}
+
+export interface BundleSyncStatus {
+  enabled: boolean;
+  // null when enabled=false.
+  bundleHash: string | null;
+  manifestPath: string;
+  clis: BundleSyncCliStatus[];
+}
+
+export interface BundleSyncResyncResult {
+  changed: boolean;
+}
+
+export interface BundleSyncRemoveResult {
+  removed: number;
+  legacySwept: number;
+  settingDisabled: true;
+}
+
 // Mirrors GET /api/projects/git-file-diff's response (issue #262) — the raw
 // unified diff patch for a single file in a session's working tree, or null
 // when there's no change to show (clean file, not a repo, not found).

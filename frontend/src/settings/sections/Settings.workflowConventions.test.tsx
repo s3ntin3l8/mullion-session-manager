@@ -22,6 +22,16 @@ describe("Settings -> Sessions -> Workflow conventions textarea", () => {
       if (url === "/api/settings" && method === "PATCH") {
         return Promise.resolve(jsonResponse(200, DEFAULT_SETTINGS));
       }
+      if (url === "/api/bundle-sync/status" && method === "GET") {
+        return Promise.resolve(
+          jsonResponse(200, {
+            enabled: true,
+            bundleHash: "stub-hash",
+            manifestPath: "/home/user/.mullion/sync-manifest.json",
+            clis: [],
+          }),
+        );
+      }
       return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -97,6 +107,16 @@ describe("Settings -> Sessions -> workflow-conventions wizard", () => {
       if (url === "/api/workflow-conventions/preview" && method === "POST") {
         return Promise.resolve(jsonResponse(200, { text: "Always branch and open a PR." }));
       }
+      if (url === "/api/bundle-sync/status" && method === "GET") {
+        return Promise.resolve(
+          jsonResponse(200, {
+            enabled: true,
+            bundleHash: "stub-hash",
+            manifestPath: "/home/user/.mullion/sync-manifest.json",
+            clis: [],
+          }),
+        );
+      }
       return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -171,6 +191,16 @@ describe("Settings -> Sessions -> workflow-conventions wizard", () => {
         return previewCalls === 1
           ? Promise.resolve(jsonResponse(500, { message: "boom" }))
           : Promise.resolve(jsonResponse(200, { text: "Always branch and open a PR." }));
+      }
+      if (url === "/api/bundle-sync/status" && method === "GET") {
+        return Promise.resolve(
+          jsonResponse(200, {
+            enabled: true,
+            bundleHash: "stub-hash",
+            manifestPath: "/home/user/.mullion/sync-manifest.json",
+            clis: [],
+          }),
+        );
       }
       return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
     });
