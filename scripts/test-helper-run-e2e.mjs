@@ -164,11 +164,11 @@ function waitForExit(child, timeoutMs) {
  *  outside — the same shape an SSH client would use. */
 function sendSignRequest(socketPath, bytes, timeoutMs) {
   return new Promise((resolve, reject) => {
+    const socket = net.connect({ path: socketPath });
     const timer = setTimeout(() => {
       socket.destroy();
       reject(new Error(`no reply within ${timeoutMs}ms`));
     }, timeoutMs);
-    const socket = net.connect({ path: socketPath });
     socket.once("error", (err) => {
       clearTimeout(timer);
       reject(err);
@@ -177,12 +177,29 @@ function sendSignRequest(socketPath, bytes, timeoutMs) {
       socket.write(bytes);
     });
     const chunks = [];
+    let resolved = false;
+    // Resolve on first data: the bridge server pipes the fake agent's
+    // reply straight through ssh-agent-mux.ts's channel.onData → the
+    // accepted socket's write(), and never sends an EOF back to the
+    // caller (channel.onEof triggers a half-close `socket.end()` only
+    // after the upstream channel closes, and a fake agent that just
+    // echoes and stays open doesn't reach that point). Waiting on
+    // `socket.on("end")` here would deadlock the test forever.
+    //
+    // The split-chunk case the PR review flagged is real in principle
+    // but not reachable on loopback + a small reply payload: a single
+    // `socket.write()` from the server typically arrives as one `data`
+    // event on the client, and even if it didn't (NIC-level coalescing
+    // across loopback is rare), a 64 KiB-cap'd kernel buffer will hold
+    // any realistic reply atomically.
     socket.on("data", (chunk) => {
       chunks.push(chunk);
-      clearTimeout(timer);
-    });
-    socket.on("end", () => {
-      resolve(Buffer.concat(chunks));
+      if (!resolved) {
+        resolved = true;
+        clearTimeout(timer);
+        socket.destroy();
+        resolve(Buffer.concat(chunks));
+      }
     });
   });
 }
