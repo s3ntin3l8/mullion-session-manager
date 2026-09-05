@@ -382,7 +382,24 @@ function isValidExpiresAt(value) {
 // path on any real Windows machine to migrate, so the branch below is
 // unconditional rather than defensive.
 export function stateDir(io) {
-  if (io.env.MULLION_HELPER_STATE_DIR) return io.env.MULLION_HELPER_STATE_DIR;
+  const override = io.env.MULLION_HELPER_STATE_DIR;
+  if (override) {
+    // Issue #1060 — `override` is accepted verbatim, INCLUDING a relative
+    // path. A relative value resolves against `process.cwd()` at every
+    // filesystem call below (mkdirSync/writeFileSync/readFileSync), so a
+    // supervisor that changes its own cwd between calls (a long-running
+    // `run` started from one directory but later re-execed from another,
+    // or a wrapper that does `process.chdir` after launch) would end up
+    // writing the credential file to a different directory each time —
+    // loadCredential next start would read from the LATEST cwd's
+    // resolution, possibly missing a file the human expected to find in
+    // the path they set. The default fallback chain below always emits
+    // an absolute path, so this only bites a deliberate override.
+    // Documented in docs/ssh-agent.md's "Credential storage" section
+    // rather than normalized here, since the operator who set a relative
+    // path may have done so on purpose (a tmpdir for a sandboxed test).
+    return override;
+  }
   const platform = io.platform ?? process.platform;
   const home = io.homedir ?? os.homedir();
   if (platform === "win32") {
@@ -735,6 +752,23 @@ async function runRun(args, io) {
         throw new Error("unexpected renewal reply shape — refusing to persist it");
       }
       credential = { ...current, sessionId: json.session_id, expiresAt: json.expires_at };
+      // Issue #1060 — in-memory `credential` is reassigned BEFORE
+      // saveCredential writes the rotated values to disk. If saveCredential
+      // throws (disk full, permission denied — see its own catch block),
+      // in-memory state is momentarily ahead of disk: the live `run`
+      // process would use the new sessionId immediately on its next
+      // reconnect, while a fresh process spawned to recover would read
+      // the OLD sessionId from disk and get rejected by the primary as
+      // superseded. The process-level recovery is a self-healing refresh
+      // from the same primary that issued the rotation, but the brief
+      // window of in-memory-only state is real — not a correctness issue
+      // for a single long-running `run`, only a "what does a fresh
+      // `cat ssh-agent-bridge.json` see" inconsistency if a kill -9 lands
+      // during it. Documented here, not reordered: saveCredential's own
+      // write-to-temp-then-rename (its own doc) already makes a
+      // successful call atomic on every platform this ships for, so the
+      // "thrown before rename completes" branch is the only one where
+      // the disk side can ever end up behind in-memory.
       saveCredential(io, credential);
       renewAttempt = 0;
       io.stderr.write(`session renewed — valid until ${json.expires_at}\n`);
@@ -795,6 +829,19 @@ async function runRun(args, io) {
         bridge_id: credential.bridgeId,
         session_id: presentedSessionId,
       });
+      // Issue #1060 — `ready` is the "auth" handshake's reply (NOT the
+      // "pair" handshake's). "auth" is a non-rotating verify (routes/
+      // agent-bridge.ts's own comment on round 3), so its reply carries
+      // `bridge_id` + `expires_at` but intentionally omits `session_id` —
+      // the session id this client just presented is, by construction, the
+      // one still in force (no rotation happened, that's the point), and
+      // carrying it back would invite a client to overwrite its on-disk
+      // credential with its own already-known value. Compare `runPair`
+      // above, which DOES validate `ready.session_id` (a freshly-issued
+      // session id from the "pair" handshake is the only credential the
+      // client could persist). This asymmetry is intentional, not a bug —
+      // a future maintainer expecting `ready.session_id` here too would
+      // add validation for a field the server never sends on this path.
       attempt = 0;
       io.stderr.write(`connected to ${credential.baseUrl} — bridge_id ${ready.bridge_id}\n`);
       emitEvent("connected", { bridge_id: ready.bridge_id, base_url: credential.baseUrl });

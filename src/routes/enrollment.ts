@@ -173,6 +173,8 @@ export async function enrollmentRoute(app: FastifyInstance) {
       }
 
       const enrollmentSecret = app.config.MULLION_ENROLLMENT_SECRET;
+      // Issue #1059 — both fixed-length (server-configured secret vs
+      // inbound bearer); same assumption as auth.ts / internal.ts.
       if (enrollmentSecret && timingSafeTokenMatch(token, enrollmentSecret)) {
         const allowedCidrs = app.config.MULLION_ENROLLMENT_ALLOWED_CIDRS;
         // request.raw.socket.remoteAddress, not request.ip — see

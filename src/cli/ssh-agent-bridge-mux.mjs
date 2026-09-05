@@ -45,6 +45,11 @@ export const FrameType = Object.freeze({
 // for why these values were chosen. A mismatch here wouldn't break
 // correctness (each side clamps to what IT was granted), just make this
 // side needlessly send WINDOW_ADJUST more or less often than intended.
+// Issue #1059 — this value is also pinned in
+// test/fixtures/ssh-agent-filter-vectors.json (`muxTransport.channelWindowBytes`),
+// and test/cli/ssh-agent-filter-constants.test.ts asserts this export
+// matches the fixture AND the TS twin's matching export — a hand-edit
+// that changes only one side fails the test instead of silently drifting.
 export const CHANNEL_WINDOW_BYTES = 256 * 1024;
 const WINDOW_ADJUST_THRESHOLD_BYTES = CHANNEL_WINDOW_BYTES / 2;
 

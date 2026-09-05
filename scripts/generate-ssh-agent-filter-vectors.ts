@@ -30,6 +30,7 @@ import {
   LENGTH_PREFIX_BYTES,
   MAX_FRAME_BYTES,
 } from "../src/services/ssh-agent-filter.js";
+import { CHANNEL_WINDOW_BYTES } from "../src/services/ssh-agent-mux.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 // Overridable so tests can point this at a tmpdir fixture instead of the
@@ -65,6 +66,14 @@ export interface SshAgentFilterFixture {
      * this same 5-byte frame regardless of which request it's replying to. */
     frameHex: string;
   };
+  /** Issue #1059 — constants that come from this repo's own mux frame
+   * format (ssh-agent-mux.ts's CHANNEL_WINDOW_BYTES), NOT the SSH agent
+   * wire protocol `wireFormat` describes. Pinned here so the same hand-
+   * edit drift risk the filter twins face has a single source of truth
+   * this script's --check guard catches. */
+  muxTransport: {
+    channelWindowBytes: number;
+  };
   vectors: { type: number; name: string; allowed: boolean }[];
   /** Behaviors that aren't representable in the {type,name,allowed} shape
    * alone — each one already has a discriminating test in
@@ -96,6 +105,17 @@ export function buildFixture(): SshAgentFilterFixture {
     sshAgentFailure: {
       type: SSH_AGENT_FAILURE,
       frameHex: SSH_AGENT_FAILURE_FRAME.toString("hex"),
+    },
+    /** Issue #1059 — the mux twins' CHANNEL_WINDOW_BYTES, extracted here so
+     * a hand-edit to either twin's source that drifts from the other fails
+     * this script's --check guard, the same way a hand-edit to
+     * SSH_AGENT_REQUEST_TYPE_VECTORS already does. NOT under wireFormat:
+     * wireFormat describes the SSH agent protocol this filter parses, while
+     * channelWindowBytes describes this repo's own mux frame format
+     * (different protocol, see ssh-agent-mux.ts's own header comment) — the
+     * two deliberately aren't conflated. */
+    muxTransport: {
+      channelWindowBytes: CHANNEL_WINDOW_BYTES,
     },
     vectors: SSH_AGENT_REQUEST_TYPE_VECTORS.map((v) => ({
       type: v.type,

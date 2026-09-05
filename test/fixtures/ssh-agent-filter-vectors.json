@@ -12,6 +12,9 @@
     "type": 5,
     "frameHex": "0000000105"
   },
+  "muxTransport": {
+    "channelWindowBytes": 262144
+  },
   "vectors": [
     {
       "type": 1,

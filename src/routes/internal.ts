@@ -561,6 +561,10 @@ export async function internalRoutes(app: FastifyInstance) {
     const provided = header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : "";
     const matchesStaticToken =
       app.config.MULLION_AGENT_TOKEN.trim() !== "" &&
+      // Issue #1059 — both fixed-length tokens (MULLION_AGENT_TOKEN is
+      // server-configured; the inbound bearer is the same value);
+      // timingSafeTokenMatch's length-side-channel is fine here. See
+      // crypto-utils.ts for the full constraint.
       timingSafeTokenMatch(provided, app.config.MULLION_AGENT_TOKEN);
     // Hermes review, PR #528: the TTL must actually bound a leaked session
     // credential on THIS (accepting) side too, not just on the issuing
@@ -572,6 +576,9 @@ export async function internalRoutes(app: FastifyInstance) {
     const matchesSession =
       app.agentSession !== undefined &&
       app.agentSession.expiresAt.getTime() > Date.now() &&
+      // Issue #1059 — both fixed-length (server-minted sessionId vs
+      // inbound bearer), same fixed-length-token assumption as the static
+      // check above.
       timingSafeTokenMatch(provided, app.agentSession.sessionId);
     if (!matchesStaticToken && !matchesSession) {
       return reply.unauthorized("invalid or missing agent token");

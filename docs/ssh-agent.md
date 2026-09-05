@@ -313,9 +313,25 @@ mullion helper run --ssh-auth-sock "$SSH_AUTH_SOCK" --json-events | jq .
 file `0600`. `mullion helper run` reads it to reconnect without re-pairing;
 `mullion helper uninstall` removes it along with whatever `install` set up
 (delete it by hand to forget the pairing locally without uninstalling
-anything else). Revoking from Settings, see below, is the primary-side
-equivalent — it takes effect immediately, where a local delete alone leaves
-the session valid server-side until its own TTL or renewal budget runs out.
+anything else — this is the **local** revocation: it takes the credential
+out of your hands but leaves the bridge row on the primary valid until
+its own TTL or a Settings-side revoke clears the server-side state). On
+the other end, revoking from Settings, see below, is the **primary-side**
+revocation — it deletes the row server-side and closes any live
+connection immediately, but the credential file stays on the laptop until
+you delete it or run `mullion helper uninstall`. A bridge that's been
+revoked from Settings but not deleted locally will simply never reconnect
+again: `run` keeps trying, the primary keeps rejecting, and nothing
+cleans the file up for you. Delete it (or `helper uninstall`) as soon as
+you've revoked from Settings.
+
+`$MULLION_HELPER_STATE_DIR`, when set, is taken **verbatim** — relative
+paths included. A relative value resolves against `process.cwd()` at
+every read/write, so a `run` started from one directory but later
+re-execed from another (or any wrapper that `chdir`s after launch) would
+end up looking for the credential file in a different directory on
+successive restarts. The default fallback chain above always emits an
+absolute path; if you override, prefer one too.
 
 **A freshly paired session is valid for 24h, but `run` renews it on its own
 at roughly half that TTL** (a plain HTTP call to the primary,
@@ -325,6 +341,22 @@ actually forwarding traffic — renewing never disrupts a session mid-signing)
 another 24h. A helper that's continuously connected, or one that's
 disconnected-and-reconnecting, both keep renewing this way as long as `run`
 is running and can reach the primary at all; there's no daily chore anymore.
+
+**If the primary becomes completely unreachable (network partition, DNS
+down, host down)** — meaning both the WS handshake AND every renewal POST
+fail at the transport layer — `run` does **not** give up. It keeps
+re-trying the handshake with the same still-on-disk credential forever,
+backing off from 1s to 30s between attempts. That's deliberate: a laptop
+that wakes from sleep, comes back to a network that took a minute to
+re-associate, or returns from a long VPN outage is expected to resume
+forwarding without a manual restart, and the credential itself is
+unchanged across the partition (the primary never saw a reason to
+revoke it). The session id does keep counting down toward its 24h
+deadline while the partition lasts, though — `run` can't renew what it
+can't reach — and once the partition outlasts the 24h budget, the
+primary's own check rejects the now-expired session id and `run` exits 1.
+The rule of thumb: a brief partition is normal, a multi-day partition
+with no opportunity to renew will silently expire the credential.
 The 24h deadline still matters as a hard backstop: if `run` isn't running,
 or the primary is unreachable for longer than renewal's own retry budget, or
 the bridge is revoked from Settings, the session eventually (or immediately,
