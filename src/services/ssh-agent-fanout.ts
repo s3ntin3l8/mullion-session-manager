@@ -107,13 +107,23 @@ export function pickBridge(app: FastifyInstance): { bridgeId: string; mux: MuxCo
     // PONG older than the window leaves it in the "stale" partition.
     const lastPongAt = bridge.lastPongAt;
     if (bestAny === null || bridge.connectedAt > bestAny.connectedAt) {
+      // connectedAt is the only signal we have for the all-stale fallback
+      // (lastPongAt is either undefined or older than the health window
+      // for every entry in that partition), so it's what we sort on here.
       bestAny = { bridgeId, connectedAt: bridge.connectedAt, mux: bridge.mux };
     }
     if (lastPongAt !== undefined && lastPongAt >= healthCutoff) {
       // Within the healthy set, prefer the bridge with the most-recent
-      // PONG (the actual liveness signal — "most recently connected" is
-      // only meaningful when no bridge has any PONG yet). Tie on
+      // PONG (the actual liveness signal — a bridge that just responded
+      // to our last PING is the best bet that the next channel open will
+      // round-trip, which is exactly what we want to optimize). Tie on
       // lastPongAt falls back to connectedAt for a deterministic choice.
+      //
+      // Note the asymmetry with bestAny above: the healthy partition sorts
+      // on PONG freshness because we have one; the all-stale fallback
+      // sorts on connectedAt because it doesn't, and connectedAt is the
+      // best available signal there (more recent = more likely to recover
+      // than a long-idle bridge). This is intentional, not an oversight.
       if (
         bestHealthy === null ||
         lastPongAt > bestHealthy.lastPongAt ||
