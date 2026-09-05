@@ -729,6 +729,83 @@ describe("ssh-agent-mux", () => {
       expect(a.sent).toHaveLength(1);
       expect(frameType(a.sent[0])).toBe(9); // Pong
     });
+
+    // Issue #1051 — the producer side of the lastPongAt health check.
+    // The fan-out consumer (pickBridge) is already covered with hand-stamped
+    // lastPongAt values; this test exercises the OTHER half: a real PONG
+    // frame arriving on the wire must fire mux.onPong listeners with
+    // Date.now() at receive time. Without this, the route-side listener
+    // attached in trackBridge is dead code from the test's perspective.
+    it("fires onPong listeners with Date.now() when a real PONG frame is received", () => {
+      const a = new FakeSocket();
+      const conn = createMuxConnection(a as never, { channelIdParity: "odd" });
+
+      const pongAts: number[] = [];
+      conn.onPong((at) => pongAts.push(at));
+
+      const before = Date.now();
+      a.receive(Buffer.from([9, 0, 0, 0, 0])); // peer's Pong, channelId 0
+      const after = Date.now();
+
+      expect(pongAts).toHaveLength(1);
+      expect(pongAts[0]).toBeGreaterThanOrEqual(before);
+      expect(pongAts[0]).toBeLessThanOrEqual(after);
+    });
+
+    // End-to-end: the exact wiring routes/agent-bridge.ts's trackBridge
+    // installs — onPong stamps lastPongAt on a ConnectedBridge entry. Drives
+    // a real PONG through a linked mux pair so both the codec (frame
+    // dispatch) and the listener fan-out are exercised together.
+    it("a peer-initiated PONG through a linked mux pair updates lastPongAt on the receiver's ConnectedBridge entry", () => {
+      const a = new FakeSocket();
+      const b = new FakeSocket();
+      link(a, b);
+      // B is the "accept" side (the bridge helper dials into a listener, but
+      // for the frame protocol parity doesn't matter — PONG is channelId 0,
+      // no allocator touched).
+      const connB = createMuxConnection(b as never, { channelIdParity: "even" });
+
+      // Mimic routes/agent-bridge.ts's trackBridge wiring verbatim — a real
+      // map entry with a `lastPongAt: undefined` slot, and an onPong listener
+      // that stamps it on every PONG. (The route reads app.connectedBridges
+      // on every PONG so a re-trackBridge supersede picks up the new entry;
+      // this test only covers the single-track case.)
+      const entry: { lastPongAt: number | undefined; mux: typeof connB } = {
+        lastPongAt: undefined,
+        mux: connB,
+      };
+      connB.onPong((at) => {
+        entry.lastPongAt = at;
+      });
+
+      // A is the peer — a real PONG frame sent from A arrives on B's side.
+      a.send(Buffer.from([9, 0, 0, 0, 0]));
+
+      expect(entry.lastPongAt).toBeTypeOf("number");
+      expect(entry.lastPongAt).toBeGreaterThan(0);
+      // And the entry is now in the state pickBridge prefers — the next
+      // pickBridge call would see a fresh lastPongAt and pick it over a
+      // peer that hasn't completed a PING/PONG round trip yet.
+      expect(Date.now() - entry.lastPongAt!).toBeLessThan(1_000);
+    });
+
+    // Multiple onPong listeners must all fire — pickBridge reads the entry
+    // directly, but other call sites may register their own listeners and
+    // a regression that only fired the first would silently break them.
+    it("fires every registered onPong listener on a single PONG frame", () => {
+      const a = new FakeSocket();
+      const conn = createMuxConnection(a as never, { channelIdParity: "odd" });
+
+      const spy1 = vi.fn();
+      const spy2 = vi.fn();
+      conn.onPong(spy1);
+      conn.onPong(spy2);
+
+      a.receive(Buffer.from([9, 0, 0, 0, 0]));
+
+      expect(spy1).toHaveBeenCalledOnce();
+      expect(spy2).toHaveBeenCalledOnce();
+    });
   });
 
   describe("pipeChannelToChannel", () => {
