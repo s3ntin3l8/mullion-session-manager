@@ -119,6 +119,20 @@ const generateSchema = {
       includeContributingPointer: { type: "boolean" },
       symlinkAgentsSkills: { type: "boolean" },
       includeDockConfig: { type: "boolean" },
+      // Issue #1082(c) — diff-aware refresh. Absent/empty means today's
+      // conservative default (never overwrite an already-committed file);
+      // naming a target here is the caller's explicit opt-in to discarding
+      // whatever hand-edits it carries past the original scaffold. Same
+      // "explicit opt-in to a destructive-ish action" shape as this repo's
+      // own git-branch-delete/git-worktree-remove `force?: boolean` body
+      // flags (projects.ts) — a plain, named, defaulted-off field, not a
+      // new confirmation protocol invented for this one route.
+      refresh: {
+        type: "array",
+        items: { type: "string", enum: ["skill", "reviewer"] },
+        maxItems: 2,
+        uniqueItems: true,
+      },
     },
   },
 };
@@ -242,6 +256,33 @@ function readExistingFiles(cwd: string, relPaths: string[]): Record<string, stri
     }
   }
   return existingFiles;
+}
+
+/** Issue #1082(c) — the ONLY mechanism that makes a refresh actually
+ * overwrite an already-committed file: computeScaffold's own "create once,
+ * never overwrite" rule (mullion-scaffold.ts) keys entirely off whether
+ * `existingFiles[path] !== undefined`, so the sole way to make it emit a
+ * fresh entry for a path it would otherwise treat as "leave alone" is to
+ * make that path look absent to it — without touching computeScaffold's
+ * own rule (which every non-refresh caller, preview included, still
+ * depends on staying conservative by default). Returns a NEW null-prototype
+ * record (same defensive posture as readExistingFiles above, for the same
+ * CodeQL js/remote-property-injection reasoning — `refreshedPaths` here are
+ * always scaffoldSkillPath/scaffoldReviewerPath's own slug-derived output,
+ * but cloning this way costs nothing and keeps the guard uniform) rather
+ * than mutating the caller's own `existingFiles`, which
+ * generateScaffoldContent's hasSkill/hasReviewer/hasBriefingRegion
+ * parameters must keep reading unmodified (see the route's own comment on
+ * why those booleans are computed BEFORE this function ever runs). */
+function withoutRefreshedPaths(
+  existingFiles: Record<string, string | undefined>,
+  refreshedPaths: string[],
+): Record<string, string | undefined> {
+  const result: Record<string, string | undefined> = Object.create(null);
+  for (const key of Object.keys(existingFiles)) {
+    if (!refreshedPaths.includes(key)) result[key] = existingFiles[key];
+  }
+  return result;
 }
 
 /** Ensures `dirPath` is a real directory before a plain file write into it
@@ -561,7 +602,7 @@ export async function projectSetupRoute(app: FastifyInstance) {
 
   app.post<{
     Params: { id: string };
-    Body: { slug: string } & Omit<ScaffoldOptions, "slug">;
+    Body: { slug: string; refresh?: Array<"skill" | "reviewer"> } & Omit<ScaffoldOptions, "slug">;
   }>(
     "/api/projects/:id/setup/generate",
     { ...GENERATE_RATE_LIMIT, schema: generateSchema },
@@ -607,24 +648,39 @@ export async function projectSetupRoute(app: FastifyInstance) {
       const hasReviewer = existingFiles[scaffoldReviewerPath(options.slug)] !== undefined;
       const hasBriefingRegion = (existingFiles["AGENTS.md"] ?? "").includes(MARKER_START);
 
-      // Issue #956 review follow-up — computeScaffold's own "create once,
-      // never overwrite" rule (mullion-scaffold.ts) means that once BOTH
-      // the skill and reviewer files are already committed, generation's
-      // entire output for them is thrown away silently: the agent turn
-      // still runs (real tokens, real time, real spend), but
-      // computeScaffold omits both entries regardless of what `generated`
-      // contains. Only the AGENTS.md region would still change. Rather
-      // than burn a turn for that, refuse up front — a diff-aware refresh
-      // path (issue's own "Update/refresh path" section) is the right
-      // tool once both files exist, and is deliberately out of this
-      // issue's own narrowed scope (see the PR description's filed-issues
-      // list).
-      if (hasSkill && hasReviewer) {
+      // Issue #1082(c) — `refresh` is the caller's explicit, per-target
+      // opt-in to regenerating an already-committed file (see the schema's
+      // own doc comment above). Computed from the RAW request body, not
+      // re-derived from hasSkill/hasReviewer, so naming a target that
+      // doesn't exist yet is simply a no-op (computeScaffold already
+      // creates a missing file unconditionally — nothing left to "refresh"
+      // there).
+      const refreshTargets = new Set(request.body.refresh ?? []);
+      const refreshSkill = refreshTargets.has("skill");
+      const refreshReviewer = refreshTargets.has("reviewer");
+
+      // Issue #956 review follow-up, narrowed by issue #1082(c) — this used
+      // to be an unconditional 409 whenever both files already existed,
+      // since computeScaffold's own "create once, never overwrite" rule
+      // (mullion-scaffold.ts) would silently throw away generation's entire
+      // output for them, wasting a real agent turn (real tokens, real time,
+      // real spend) for nothing but the AGENTS.md region. Naming either
+      // target in `refresh` is the caller's explicit signal that THIS turn
+      // is worth spending on — the short-circuit below now only fires when
+      // nothing was asked to change, which is the one case a real refresh
+      // path doesn't need to touch at all.
+      if (hasSkill && hasReviewer && !refreshSkill && !refreshReviewer) {
         return reply.conflict(
           `.claude/skills/${options.slug}/SKILL.md and .claude/agents/${options.slug}-reviewer.md ` +
-            "are already committed — generation only replaces placeholder content, it never " +
-            "overwrites an existing file. A refresh action for already-committed content is " +
-            "tracked as follow-up work, not yet built.",
+            // "already exist" — NOT "are already committed": `hasSkill`/
+            // `hasReviewer` come from the scratch worktree's OWN working
+            // tree (readExistingFiles), which a reused, still-uncommitted
+            // preview window (reuseOrCreateWorktree's own doc comment) can
+            // already show as present even before `/setup/apply` ever
+            // commits anything — mullion-reviewer review, issue #1082(c).
+            "already exist — generation only replaces placeholder content, it never " +
+            'overwrites an existing file by default. Pass refresh: ["skill"] and/or ' +
+            '["reviewer"] in the request body to explicitly regenerate one or both.',
         );
       }
 
@@ -663,11 +719,27 @@ export async function projectSetupRoute(app: FastifyInstance) {
         throw err;
       }
 
+      // Issue #1082(c) — the refreshed target(s), and ONLY those, are
+      // stripped from the view computeScaffold's write pass sees; every
+      // other path (including a non-refreshed skill/reviewer that already
+      // exists) is left exactly as `existingFiles` reported it, so
+      // computeScaffold's own "create once, never overwrite" rule leaves it
+      // untouched. `hasSkill`/`hasReviewer` above were already computed off
+      // the UNMODIFIED `existingFiles` — generateScaffoldContent's seed
+      // logic (does a DB draft still apply?) must reflect what's actually
+      // PRESENT right now (committed, or just an uncommitted write from a
+      // reused preview window — see the 409 message's own comment above),
+      // not what this request is about to overwrite.
+      const refreshedPaths: string[] = [];
+      if (refreshSkill) refreshedPaths.push(scaffoldSkillPath(options.slug));
+      if (refreshReviewer) refreshedPaths.push(scaffoldReviewerPath(options.slug));
+      const writeExistingFiles = withoutRefreshedPaths(existingFiles, refreshedPaths);
+
       const result = await finishPreview(
         projectId,
         { ...options, generated },
         ensured.worktree,
-        existingFiles,
+        writeExistingFiles,
       );
       return sendPreviewComputation(reply, result);
     },

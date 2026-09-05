@@ -59,20 +59,52 @@ import { scaffoldSkillPath, scaffoldReviewerPath } from "./mullion-scaffold.js";
 // `project.cwd`'s absolute path from writing there directly (e.g. `echo x
 // > /abs/path/to/project/file`), and only `claude`'s `--allowedTools`
 // below is a CONFIRMED write-blocking flag among the four agents this
-// module supports (`codex`'s `--sandbox read-only` is plausible but
-// unverified here; `opencode run` and `agy -p` carry no write-restriction
-// flag at all in this repo's own knowledge — see `buildInvocation`'s
-// per-agent comments). What IS structurally guaranteed, regardless of
-// whether any of those flags actually hold: the diff/PR pipeline
-// (computeScaffold → writeScaffoldEntries → the `setup-<slug>` worktree)
-// never reads from, stages, or diffs anywhere the generation agent could
-// have written — the only channel between the two is this function's own
-// parsed stdout, feeding three hardcoded target paths. A write the agent
-// makes ANYWHERE ELSE on disk is real (this design cannot prevent that),
-// but it is never picked up by the machinery that produces the PR a human
-// reviews. Real process-level sandboxing is real, valuable follow-up work
-// (see the PR description's own filed-issues list), not something this
-// issue's own scope covers.
+// module supports. Issue #1081 re-checked the other three empirically
+// (2026-09-05, this repo's own dev sandbox — see that issue's own comments
+// for the exact commands): `codex exec --sandbox read-only` is a REAL,
+// accepted flag (`codex exec`'s own startup banner echoes back
+// `sandbox: read-only`), but whether it actually blocks a write is still
+// UNVERIFIED — this account's codex usage was rate-limited (quota resets
+// 2026-09-28) before a real model turn could be driven far enough to try
+// one. `agy -p` DOES now carry a `--sandbox` flag (agy 1.1.27; it did not
+// when this comment was first written) but it is NOT usable here: without
+// `--dangerously-skip-permissions` it auto-denies every tool call in
+// headless/print mode (including the read-only ones this module needs),
+// and WITH that flag it blocks nothing — a live `echo pwned >
+// /outside/path` under `agy -p --sandbox --dangerously-skip-permissions`
+// wrote the file. agy's own denial message points at a `permissions.allow`
+// allow-list in `settings.json` (`command(<target>)` rules) as the
+// closer analogue to `claude`'s `--allowedTools` — untried here, real
+// follow-up work. `opencode run` (1.18.29) still has no write-restriction
+// flag at all, confirmed against its own `--help` — only `--auto`, which
+// does the opposite (auto-approves everything). What IS structurally
+// guaranteed, regardless of whether any of those flags actually hold: the
+// diff/PR pipeline (computeScaffold → writeScaffoldEntries → the
+// `setup-<slug>` worktree) never reads from, stages, or diffs anywhere the
+// generation agent could have written — the only channel between the two
+// is this function's own parsed stdout, feeding three hardcoded target
+// paths. A write the agent makes ANYWHERE ELSE on disk is real (this
+// design cannot prevent that), but it is never picked up by the machinery
+// that produces the PR a human reviews. Real process-level sandboxing
+// (e.g. `bwrap --ro-bind / / --dev /dev --proc /proc --bind <scratch
+// worktree> <scratch worktree> --die-with-parent`, deliberately NOT
+// `--unshare-net` since the agent CLI itself needs network access to reach
+// its own model API) was spiked and empirically confirmed to work in this
+// repo's own dev sandbox — it blocks a write outside the bound path
+// (EROFS), permits the punched-out scratch worktree, tolerates a git
+// worktree's `.git` file pointing back into the real repo's `.git/
+// worktrees/` for read-only `git log`/`diff`/`show`, and — the load-bearing
+// one — still lets `execFile`'s own `timeout` kill the sandboxed process
+// via SIGTERM with no orphaned children. It is NOT wired in here: `bwrap`
+// is not on `deploy/install.sh`'s host-prerequisite list (`node npm dtach
+// systemd-run systemctl curl tar timeout sha256sum`), and this dev
+// sandbox's `unprivileged_userns_clone=1` is a fact about THIS box, not
+// about an arbitrary self-hosted production host — making it a real
+// guarantee needs `install.sh`/`deploy/README.md` changes (a hard prereq,
+// or a documented degrade-with-warning when absent) that are a different
+// issue's/PR's scope than this module's own file ownership. Tracked as
+// concrete follow-up work, not something this issue's own scope forces
+// through here (see the PR description's own filed-issues list).
 //
 // ## Why a direct one-shot subprocess call, not PtyManager/createSessionRecord
 //
@@ -270,9 +302,14 @@ export type SpawnGenerationTurn = (opts: SpawnGenerationTurnOptions) => Promise<
  * header). What is NOT independently verified against a live binary for
  * every one of these four CLIs is that the tool-restriction flag actually
  * blocks every write path (`--allowedTools` is confirmed Claude Code
- * surface; codex's `--sandbox read-only`, opencode's plain `run`, and
- * agy's `-p` carry no confirmed write-blocking flag in this repo — flagged
- * plainly rather than asserted). The worktree-isolation design above is
+ * surface). Issue #1081's own re-check (this module's header has the full
+ * detail): codex's `--sandbox read-only` is a real, accepted flag but its
+ * write-blocking behavior is unverified (usage-limited account, quota
+ * resets 2026-09-28); agy DOES have a `--sandbox` flag as of 1.1.27 but it
+ * isn't used here — it's unusable non-interactively (auto-denies
+ * everything in headless mode without `--dangerously-skip-permissions`,
+ * blocks nothing with it); opencode's plain `run` still has no
+ * write-restriction flag at all. The worktree-isolation design above is
  * what the actual "never reaches disk" guarantee rests on regardless of
  * whether any of these flags hold in practice. */
 function buildInvocation(agentCommand: string, prompt: string): { bin: string; args: string[] } {
