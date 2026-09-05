@@ -221,11 +221,12 @@ working — the boot-time sync already runs automatically with no user action.
 - `bundle remove` — removes Mullion's bundle content from this host
   entirely (manifest-tracked paths, a legacy sweep for pre-manifest
   installs, and agy's own `mullion` MCP entry) and turns
-  `sessions.injectMullionBundle` off so it stays removed **on this host**.
-  On the primary that's durable; a remote agent host registered to this
-  primary is unaffected and keeps re-syncing on its own boot cycle
-  regardless, since `injectMullionBundle` isn't threaded from primary to
-  agent hosts the way `injectAgentGuide`/`injectProjectBriefing` are (see
+  `sessions.injectMullionBundle` off so it stays removed **on the
+  primary** (this command only runs there). A remote agent host
+  registered to this primary is unaffected and keeps re-syncing on its
+  own boot cycle regardless, since `injectMullionBundle` isn't threaded
+  from primary to agent hosts the way `injectAgentGuide`/
+  `injectProjectBriefing` are (see
   issue #1089). No confirmation prompt at the CLI layer, same as
   `session kill`/`preview delete` — a confirming UI is the dashboard
   panel's job, not this command's.
