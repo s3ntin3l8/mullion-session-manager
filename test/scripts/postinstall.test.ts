@@ -391,4 +391,69 @@ exit 1
     const argv = fs.existsSync(argvLog) ? fs.readFileSync(argvLog, "utf8") : "";
     expect(argv).toBe("");
   });
+
+  // Regression guard for the load-bearing bash line-continuation + inline
+  // comment bug that this whole test file was originally written to catch.
+  //
+  // The ambient-detection probe runs `launchctl asuser ... sudo -u ... -H
+  // bash -c '<script>'` as a single `$(...)` substitution. If a future
+  // maintainer "tidies" that one long line by inserting `\<newline># some
+  // comment` after a backslash, bash treats the `# comment` as terminating
+  // the line-continuation chain — leaving the trailing `bash -c '...'` as
+  // a SEPARATE statement that hangs on empty stdin (a .pkg script stdin
+  // is /dev/null). The "uses the ambient SSH_AUTH_SOCK when set" test
+  // above catches this only as a side-effect of the probe returning empty;
+  // a dedicated static check fails fast at the source level regardless of
+  // how the shimmed launchctl happens to behave.
+  //
+  // What we assert:
+  //   1. The full `$(launchctl asuser ...)` body lives on a single
+  //      physical line in the source file (no line-continuation at all).
+  //   2. A load-bearing comment near the assignment still warns about the
+  //      trap, so the next maintainer sees it.
+  it("keeps the launchctl asuser ambient probe on a single physical line", () => {
+    const source = fs.readFileSync(POSTINSTALL_SCRIPT, "utf8");
+    const lines = source.split("\n");
+
+    // Find the assignment line — the ambient probe's marker is unique to
+    // the script. The full body of the `$(...)` substitution must be on
+    // THIS line and no other.
+    const probeLineIdx = lines.findIndex((l) =>
+      l.includes('SSH_AUTH_SOCK_AMBIENT="$(launchctl asuser'),
+    );
+    expect(
+      probeLineIdx,
+      `could not find a single-line SSH_AUTH_SOCK_AMBIENT assignment in ${POSTINSTALL_SCRIPT}`,
+    ).toBeGreaterThanOrEqual(0);
+
+    const probeLine = lines[probeLineIdx] ?? "";
+    expect(
+      probeLine,
+      `SSH_AUTH_SOCK_AMBIENT must not end with a line-continuation backslash (would let a future comment silently terminate the chain). Offending line:\n${probeLine}`,
+    ).not.toMatch(/\\\s*$/);
+
+    // The `$(...)` substitution must not span multiple physical lines.
+    // Count opening and closing parens on the line — for the actual
+    // ambient probe there is exactly one of each.
+    const opens = (probeLine.match(/\(/g) ?? []).length;
+    const closes = (probeLine.match(/\)/g) ?? []).length;
+    expect(
+      { opens, closes, probeLine },
+      "ambient probe `$(launchctl asuser ...)` must open and close on the same physical line",
+    ).toEqual({ opens: 1, closes: 1, probeLine });
+
+    // The load-bearing comment warning future maintainers must still be
+    // present (a few lines above the assignment). The exact phrasing
+    // doesn't matter — we look for the key terms that signal "don't
+    // reformat this": "single physical line" (the load-bearing
+    // invariant), and a pointer to the line-continuation / inline-comment
+    // trap. Whitespace-normalize the joined comment so the check survives
+    // cosmetic rewraps that put "single" and "physical line" on different
+    // physical lines of the comment itself.
+    const windowStart = Math.max(0, probeLineIdx - 20);
+    const precedingComment = lines.slice(windowStart, probeLineIdx).join(" ").replace(/\s+/g, " ");
+    expect(precedingComment).toMatch(/single.*physical line/i);
+    expect(precedingComment).toMatch(/inline.*comment/i);
+    expect(precedingComment).toMatch(/terminates.*line continuation/i);
+  });
 });

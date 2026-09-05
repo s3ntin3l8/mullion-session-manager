@@ -8,8 +8,13 @@
 # to a printed warning with the exact retry command, never a failed .pkg.
 set -u
 
-# MULLION_HELPER_BIN is a test-only override (test/scripts/postinstall.test.ts)
-# — production always uses the .pkg-installed /usr/local/bin/mullion-helper.
+# EXE: path to the mullion-helper binary. MULLION_HELPER_BIN, when set,
+# overrides the default; this is a TEST-ONLY hook used by
+# test/scripts/postinstall.test.ts to point the script at a staged fake
+# binary in an isolated PATH. Production .pkg installs never set it —
+# the default below is what runs on a real machine. If you ever expose
+# this to production, treat it as a security boundary: it changes which
+# binary the postinstall script invokes as root.
 EXE="${MULLION_HELPER_BIN:-/usr/local/bin/mullion-helper}"
 
 if [ ! -x "$EXE" ]; then
@@ -129,12 +134,8 @@ fi
 # hardened sudoers file (requiretty, listpw, or simply NOPASSWD disabled)
 # would otherwise make `sudo -u` hang waiting for a password — wedging the
 # .pkg install, the worst possible failure mode. `sudo -n` (non-interactive)
-# rejects immediately if a password would be required.
-#
-# SC2034: $SUDO_UID is referenced purely to suppress the unused-variable
-# warning from `set -u`; the script doesn't actually need it. The real
-# sentinel is the exit status of `sudo -n ... true`.
-SUDO_UID="${SUDO_UID:-}"
+# rejects immediately if a password would be required; that's our only
+# sentinel, no shell variables are needed for it.
 if ! launchctl asuser "$CONSOLE_UID" sudo -n -u "$CONSOLE_USER" true 2>/dev/null; then
   echo "mullion-helper: sudo -u '$CONSOLE_USER' requires a password in this sudoers config — skipping 'helper install' rather than hanging the .pkg install."
   echo "Re-run this yourself once logged in:"
