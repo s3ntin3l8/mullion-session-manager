@@ -121,10 +121,22 @@ this reference installer's job. The `.pkg`:
   your own home directory — this is a packaging-format constraint, not a
   privilege the helper process itself needs at runtime);
 - runs `helper install` for you afterward, registering the launchd job as
-  **your own login user**, not root, guessing 1Password's own fixed macOS
-  agent socket path (see [macOS (launchd)](#macos-launchd) below) as
-  `--ssh-auth-sock` — if you use a different agent, re-run it yourself
-  afterward with the real path:
+  **your own login user**, not root, with `--ssh-auth-sock` resolved in
+  this order (issue
+  [#1069](https://github.com/s3ntin3l8/mullion-session-manager/issues/1069)):
+
+  1. your own login session's `$SSH_AUTH_SOCK` (the value whatever agent
+     you actually run — 1Password, `gpg-agent`, plain `ssh-agent` —
+     exports). Most non-1Password agents land here.
+  2. 1Password's fixed macOS agent socket path (see
+     [macOS (launchd)](#macos-launchd) below) — the historic default for
+     1Password users.
+  3. a printed manual command, if neither of the above resolves and the
+     install step can't proceed on its own.
+
+  If your agent is unusual enough that neither (1) nor (2) finds it, or
+  the auto-detection otherwise picks the wrong path, re-run it yourself
+  with the real path:
 
   ```sh
   mullion-helper helper install --ssh-auth-sock <path>

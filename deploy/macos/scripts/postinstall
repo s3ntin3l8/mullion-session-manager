@@ -8,7 +8,14 @@
 # to a printed warning with the exact retry command, never a failed .pkg.
 set -u
 
-EXE="/usr/local/bin/mullion-helper"
+# EXE: path to the mullion-helper binary. MULLION_HELPER_BIN, when set,
+# overrides the default; this is a TEST-ONLY hook used by
+# test/scripts/postinstall.test.ts to point the script at a staged fake
+# binary in an isolated PATH. Production .pkg installs never set it —
+# the default below is what runs on a real machine. If you ever expose
+# this to production, treat it as a security boundary: it changes which
+# binary the postinstall script invokes as root.
+EXE="${MULLION_HELPER_BIN:-/usr/local/bin/mullion-helper}"
 
 if [ ! -x "$EXE" ]; then
   echo "mullion-helper: binary not found at $EXE — pkg payload may have failed to install."
@@ -33,18 +40,114 @@ if [ -z "$CONSOLE_UID" ]; then
   exit 0
 fi
 
-# 1Password's fixed macOS agent socket path — the common default.
-# resolveSshAuthSock WARNS (never fails) if this path doesn't exist yet.
-CONSOLE_HOME="$(dscl . -read "/Users/$CONSOLE_USER" NFSHomeDirectory 2>/dev/null | awk '{print $2}')"
+# Issue #1069: detect the user's actual SSH_AUTH_SOCK first, then fall back
+# to 1Password's fixed macOS path (the historic default), then to manual
+# instructions.
+#
+# launchctl asuser gives us the login-session environment of $CONSOLE_USER,
+# which is where whatever agent the user actually runs (1Password running,
+# gpg-agent, plain ssh-agent, ...) sets SSH_AUTH_SOCK. installer(8) runs
+# this script as root, so $SSH_AUTH_SOCK from THIS process is irrelevant —
+# only the console user's matters. The probe below is warn-only: a missing
+# agent (or one that didn't set the var) returns empty, and we fall through
+# to the 1Password default.
+#
+# SC2155 ("Declare and assign separately to avoid masking return values"):
+# we're deliberately capturing stdout, not exit status here — `$(...)`
+# already discards the exit code, and a failure to reach the user's session
+# should NOT fail the install (degrades to the 1Password default).
+#
+# The inner `bash -c 'printf "%s" "${SSH_AUTH_SOCK:-}"'` is intentionally
+# single-quoted so neither the outer bash nor shellcheck sees anything to
+# expand locally — the `${SSH_AUTH_SOCK:-}` only ever expands inside the
+# inner bash, where it's read from the user's actual login-session env.
+#
+# SC2016 is misleading here — `${SSH_AUTH_SOCK:-}` must NOT expand at the
+# outer-bash level (the user's login session env hasn't been entered yet
+# at this point); it expands inside the inner bash, which is exactly what
+# we want. The single quotes around the entire `bash -c` argument are the
+# mechanism that makes this work, and shellcheck's "use double quotes"
+# advice would break that.
+#
+# Note: the entire `launchctl ... bash -c '...'` MUST stay on a single
+# physical line below — a `\<newline>` followed by an inline `# comment`
+# silently terminates the line continuation in bash (the comment line
+# ends the chain), which would leave `bash -c '...'` as a SEPARATE
+# statement (and a hang, since stdin is /dev/null inside pkg scripts).
+# Earlier rounds had inline comments here; tests/scripts/postinstall.test.ts's
+# "uses the ambient SSH_AUTH_SOCK when set" case exercises this exact
+# regression — keep this note if you ever want to "tidy" the formatting.
+# shellcheck disable=SC2016
+SSH_AUTH_SOCK_AMBIENT="$(launchctl asuser "$CONSOLE_UID" sudo -u "$CONSOLE_USER" -H bash -c 'printf "%s" "${SSH_AUTH_SOCK:-}"' 2>/dev/null || true)"
+
+# Resolve the console user's home directory. `dscl . -read` is local-only
+# and fails for Active Directory / LDAP / network-home users (issue #1069
+# deferred from #1050): try dscl first, then dscacheutil (OpenDirectory,
+# which DOES see LDAP/network sources), then getent (NSS — most portable),
+# and only as a last resort fall back to the local /Users/$USER layout.
+# Never errors: always prints a path (possibly the worst-case default), and
+# the consumer's later `helper install` warn-only socket-existence check
+# handles the case where the resolved home is wrong.
+CONSOLE_HOME=""
+if [ -n "$CONSOLE_USER" ]; then
+  CONSOLE_HOME="$(dscl . -read "/Users/$CONSOLE_USER" NFSHomeDirectory 2>/dev/null | awk 'NR==2{print $2; exit}')"
+  if [ -z "$CONSOLE_HOME" ]; then
+    # dscacheutil emits "dir: <path>" on success for -q user -name <user>.
+    CONSOLE_HOME="$(dscacheutil -q user -name "$CONSOLE_USER" 2>/dev/null | awk '/^dir:[[:space:]]/{print $2; exit}')"
+  fi
+  if [ -z "$CONSOLE_HOME" ]; then
+    # getent passwd emits "<name>:<pw>:<uid>:<gid>:<gecos>:<home>:<shell>".
+    CONSOLE_HOME="$(getent passwd "$CONSOLE_USER" 2>/dev/null | awk -F: '{print $6; exit}')"
+  fi
+fi
 if [ -z "$CONSOLE_HOME" ]; then
+  # Worst-case default — same posture the pre-#1069 script had. Anything
+  # we resolve here gets the warn-only socket-existence check downstream
+  # at helper install, so a wrong-but-non-empty home just degrades to a
+  # warning, not a hang.
   CONSOLE_HOME="/Users/$CONSOLE_USER"
 fi
 SSH_AUTH_SOCK_DEFAULT="$CONSOLE_HOME/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
 
+# Pick the actual --ssh-auth-sock value to pass to `helper install`, in
+# precedence order:
+#   1. The console user's own ambient SSH_AUTH_SOCK (most agents).
+#   2. 1Password's fixed macOS path (the historic default).
+# Neither: print manual instructions and skip — `helper install` would
+# otherwise refuse with its own "no SSH_AUTH_SOCK" error, which is correct
+# but unhelpful here (this script is the place to give the user an actual
+# path forward).
+if [ -n "$SSH_AUTH_SOCK_AMBIENT" ]; then
+  SSH_AUTH_SOCK_RESOLVED="$SSH_AUTH_SOCK_AMBIENT"
+  SSH_AUTH_SOCK_SOURCE="ambient"
+elif [ -n "$SSH_AUTH_SOCK_DEFAULT" ]; then
+  SSH_AUTH_SOCK_RESOLVED="$SSH_AUTH_SOCK_DEFAULT"
+  SSH_AUTH_SOCK_SOURCE="1password-default"
+else
+  echo "mullion-helper: could not determine SSH_AUTH_SOCK for $CONSOLE_USER — no agent is exporting one, and 1Password's default path is unavailable."
+  echo "Either start 1Password, or run this yourself once logged in:"
+  echo "  $EXE helper install --ssh-auth-sock <path>"
+  exit 0
+fi
+
+# Check sudoers before invoking `sudo -u $CONSOLE_USER` for real. A
+# hardened sudoers file (requiretty, listpw, or simply NOPASSWD disabled)
+# would otherwise make `sudo -u` hang waiting for a password — wedging the
+# .pkg install, the worst possible failure mode. `sudo -n` (non-interactive)
+# rejects immediately if a password would be required; that's our only
+# sentinel, no shell variables are needed for it.
+if ! launchctl asuser "$CONSOLE_UID" sudo -n -u "$CONSOLE_USER" true 2>/dev/null; then
+  echo "mullion-helper: sudo -u '$CONSOLE_USER' requires a password in this sudoers config — skipping 'helper install' rather than hanging the .pkg install."
+  echo "Re-run this yourself once logged in:"
+  echo "  $EXE helper install --ssh-auth-sock $SSH_AUTH_SOCK_RESOLVED"
+  echo "(or, to make postinstall run unattended, add a NOPASSWD line for $CONSOLE_USER to /etc/sudoers.)"
+  exit 0
+fi
+
 # Try to run helper install as the console user.
 # -H pins $HOME to CONSOLE_USER's home directory.
 # Capture stderr to a temp file so we can surface the real error to the user.
-STDERR_FILE="$(mktemp -t mullion-helper)"
+STDERR_FILE="$(mktemp -t mullion-helper.XXXXXXXX)"
 trap 'rm -f "$STDERR_FILE"' EXIT
 # CI marker (test-macos job in .github/workflows/ci-cd.yml greps install.log
 # for "mullion-helper: resolved console user" — the only signal that this
@@ -52,11 +155,11 @@ trap 'rm -f "$STDERR_FILE"' EXIT
 # determine" fallback above). Don't rename without also updating the grep.
 echo "mullion-helper: resolved console user via /dev/console: $CONSOLE_USER"
 if launchctl asuser "$CONSOLE_UID" sudo -u "$CONSOLE_USER" -H \
-     "$EXE" helper install --ssh-auth-sock "$SSH_AUTH_SOCK_DEFAULT" 2>"$STDERR_FILE"; then
+     "$EXE" helper install --ssh-auth-sock "$SSH_AUTH_SOCK_RESOLVED" 2>"$STDERR_FILE"; then
   rm -f "$STDERR_FILE"
   trap - EXIT
   echo "mullion-helper: installed successfully for $CONSOLE_USER."
-  echo "  SSH_AUTH_SOCK = $SSH_AUTH_SOCK_DEFAULT"
+  echo "  SSH_AUTH_SOCK = $SSH_AUTH_SOCK_RESOLVED (source: $SSH_AUTH_SOCK_SOURCE)"
   # Launchd label below MUST match LAUNCHD_LABEL in src/cli/ssh-agent-helper-install.mjs
   # (currently "de.s3ntin3l8.mullion-helper" — keep both in sync if it ever changes).
   echo "  Launchd job: gui/$CONSOLE_UID/de.s3ntin3l8.mullion-helper"
