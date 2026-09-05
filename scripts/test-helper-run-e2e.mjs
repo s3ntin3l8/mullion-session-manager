@@ -138,8 +138,8 @@ function trackHelperEvents(child) {
   return events;
 }
 
-function spawnHelper(args, env) {
-  const child = spawn(helperBin, args, {
+function spawnHelper(args, env, binPath = helperBin) {
+  const child = spawn(binPath, args, {
     env: { ...process.env, ...env },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -180,8 +180,9 @@ function sendSignRequest(socketPath, bytes, timeoutMs) {
     socket.on("data", (chunk) => {
       chunks.push(chunk);
       clearTimeout(timer);
-      const reply = Buffer.concat(chunks);
-      socket.end(() => resolve(reply));
+    });
+    socket.on("end", () => {
+      resolve(Buffer.concat(chunks));
     });
   });
 }
@@ -242,7 +243,7 @@ async function main() {
     const { pairing_payload } = await pairRes.json();
 
     const pairEnv = { MULLION_HELPER_STATE_DIR: stateDir };
-    const pairChild = spawnHelper(["helper", "pair", pairing_payload, "--name", "ci-mac"], pairEnv);
+    const pairChild = spawnHelper(["helper", "pair", pairing_payload, "--name", "ci-mac"], pairEnv, opts.helperPath);
     const pairStderr = [];
     pairChild.stderr.on("data", (chunk) => pairStderr.push(chunk));
     await waitForExit(pairChild, 15000)
@@ -280,7 +281,7 @@ async function main() {
       MULLION_HELPER_STATE_DIR: stateDir,
       SSH_AUTH_SOCK: fakeAgentSock,
     };
-    const helper = spawnHelper(["helper", "run", "--json-events"], runEnv);
+    const helper = spawnHelper(["helper", "run", "--json-events"], runEnv, opts.helperPath);
     // Capture helper stderr to the test's own stderr stream. Echoing
     // it (vs swallowing it) keeps a CI failure informative: a missing
     // event that should have fired surfaces as a 30s waitFor timeout
