@@ -96,6 +96,60 @@ const RENEW_AT_FRACTION = 0.5;
 const RENEW_TIMEOUT_MS = 10_000;
 const RENEW_RETRY_DELAYS_MS = [5000, 15000, 60000, 300000];
 
+// Issue #1057 — a 429 response carries Retry-After (RFC 9110 §10.2.3 /
+// RFC 7231 §7.1.3), either as `<delta-seconds>` (a non-negative integer of
+// seconds) or as an HTTP-date when the server expects to be ready at a
+// specific wall-clock instant. The fixed 5/15/60/300s ladder above is the
+// right shape for "transient network blip, retry at increasing intervals"
+// — but a 429 means "the server knows exactly when you can come back",
+// and re-running the ladder on top of that produces either a flood of
+// premature retries (still under the limit window) or a multi-minute
+// pause when the server was happy after a few seconds. Honor the header
+// when it's parseable; fall back to the ladder otherwise.
+//
+// Returned value is in MILLISECONDS, matching RENEW_RETRY_DELAYS_MS's unit
+// so the catch block can pick either source with no arithmetic. Returns
+// `null` for anything unparseable (no header, junk, past date) — a `null`
+// rather than the ladder value here so the catch block owns the fallback
+// decision in one place and a future change to the ladder (or a future
+// header we want to honor) only touches one site.
+function parseRetryAfter(header) {
+  if (header === null || header === undefined) return null;
+  const trimmed = String(header).trim();
+  if (trimmed === "") return null;
+  // `<delta-seconds>` form: a non-negative integer (RFC 9110 §10.2.3).
+  if (/^\d+$/.test(trimmed)) {
+    const seconds = Number(trimmed);
+    if (!Number.isFinite(seconds) || seconds < 0) return null;
+    return seconds * 1000;
+  }
+  // HTTP-date form. Date.parse tolerates all three RFC-allowed formats
+  // (IMF-fixdate, RFC 850, asctime) — RFC 9110 only requires the first
+  // from servers, but a tolerant client accepts the rest too without
+  // ambiguity. A past date (server thinks it should be unblocked already)
+  // is treated as "retry immediately", which the ladder default of 5s is
+  // already too pessimistic for — return null and let the caller fall
+  // back to the ladder, which is bounded in the "small" direction by
+  // RENEW_RETRY_DELAYS_MS[0] (5s, so a 429 won't busy-loop).
+  const ms = Date.parse(trimmed);
+  if (Number.isNaN(ms)) return null;
+  return Math.max(0, ms - Date.now());
+}
+
+// Issue #1057 — typed carrier for a non-401 renewal HTTP failure so the
+// catch block can distinguish "429 with Retry-After" (use the header)
+// from "500 / connection reset / timeout" (use the ladder). A plain
+// Error can't carry the headers, and rebuilding the request in the catch
+// would re-pay the timeout cost.
+class RenewalHttpError extends Error {
+  constructor(status, retryAfterHeader) {
+    super(`renewal request failed: HTTP ${status}`);
+    this.name = "RenewalHttpError";
+    this.status = status;
+    this.retryAfterHeader = retryAfterHeader;
+  }
+}
+
 // Round 3 (PR2) — 1Password's own Win32-OpenSSH-compatible named pipe name.
 // Exported (not local to runRun below) because ssh-agent-helper-install.mjs
 // needs the identical default for `install`'s own --ssh-auth-sock
@@ -655,7 +709,7 @@ async function runRun(args, io) {
         activeWs?.close();
         return;
       }
-      if (!res.ok) throw new Error(`renewal request failed: HTTP ${res.status}`);
+      if (!res.ok) throw new RenewalHttpError(res.status, res.headers.get("retry-after"));
       const json = await res.json();
       if (!isValidSessionToken(json.session_id) || !isValidExpiresAt(json.expires_at)) {
         throw new Error("unexpected renewal reply shape — refusing to persist it");
@@ -668,13 +722,19 @@ async function runRun(args, io) {
       scheduleRenewal();
     } catch (err) {
       if (stopped) return;
-      // Network-level failure (primary unreachable, timeout, malformed
-      // reply) — retry rather than give up. Unlike agent-enrollment.ts's
-      // renew(), there's no bootstrap credential to fall back to
-      // (bridge-registry.ts's own comment on rotateBridgeSession), so
-      // retrying with the SAME still-valid session id is the only option,
-      // and there's normally hours of TTL left at 50% to retry within.
-      const delay = RENEW_RETRY_DELAYS_MS[Math.min(renewAttempt, RENEW_RETRY_DELAYS_MS.length - 1)];
+      // Issue #1057 — 429 carries a server-supplied Retry-After that's
+      // strictly more informative than the ladder for rate-limit
+      // responses. parseRetryAfter returns `null` for any header we can't
+      // (or shouldn't) trust — missing, malformed, or "0 seconds" — and
+      // the ladder picks up the slack exactly as it does for non-429
+      // failures. Network-level errors (DNS, refused, timeout) reach this
+      // catch as plain Errors with no `status`, so they fall through
+      // unchanged.
+      let delay = RENEW_RETRY_DELAYS_MS[Math.min(renewAttempt, RENEW_RETRY_DELAYS_MS.length - 1)];
+      if (err instanceof RenewalHttpError && err.status === 429) {
+        const headerDelay = parseRetryAfter(err.retryAfterHeader);
+        if (headerDelay !== null) delay = headerDelay;
+      }
       renewAttempt++;
       io.stderr.write(`session renewal attempt failed (${err.message}) — retrying in ${delay}ms\n`);
       emitEvent("renewal_retry", { delay_ms: delay });

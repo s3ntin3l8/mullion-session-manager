@@ -812,6 +812,247 @@ describe("mullion helper run()'s session renewal (round 3)", () => {
   }, 20000);
 });
 
+// Issue #1057 — a 429 renewal response carries `Retry-After`. The server's
+// RENEW_RATE_LIMIT is 20/minute (routes/agent-bridge.ts), well above normal
+// renewal traffic, so this fires only on edge cases (timer drift after a
+// long sleep/wakeup producing a burst). When it does fire, the helper must
+// respect the header rather than blindly re-running the fixed 5/15/60/300s
+// ladder — same contract as a browser fetching a rate-limited API.
+//
+// Each test below stands up a hand-rolled HTTP+WS server (same pattern as
+// the "racing in-flight renewal" test above) so we can pin both the
+// response shape and the exact set of POSTs the helper makes. The
+// discriminating assertion is `renewal_retry`'s `delay_ms` event payload,
+// not wall-clock wait — the helper is supposed to wait the full header
+// value (e.g. 60s), but the value the event reports must be the parsed
+// header, never the ladder default of 5000.
+describe("mullion helper run()'s renewal honors 429 Retry-After (issue #1057)", () => {
+  const bridgeId = "11111111-2222-3333-4444-555555555555";
+  const sessionId = "9".repeat(64);
+
+  // Minimal HTTP+WS server: every WS "auth" succeeds (so `run` reaches the
+  // renewal-schedule path), and every renewal POST hits the per-test
+  // response handler `respondToRenew`.
+  async function bootServer(
+    respondToRenew: (req: http.IncomingMessage, res: http.ServerResponse) => void,
+  ): Promise<{ baseUrl: string; close: () => Promise<void> }> {
+    const httpServer = http.createServer((req, res) => {
+      if (req.method === "POST" && req.url === "/api/bridges/renew") {
+        respondToRenew(req, res);
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    const wss = new WebSocketServer({ noServer: true });
+    httpServer.on("upgrade", (req, socket, head) => {
+      if (req.url !== "/ws/agent-bridge") {
+        socket.destroy();
+        return;
+      }
+      wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws));
+    });
+    wss.on("connection", (ws: NodeWebSocket) => {
+      ws.once("message", (data: Buffer) => {
+        const parsed = JSON.parse(data.toString()) as { session_id: string };
+        if (!parsed.session_id) {
+          ws.close();
+          return;
+        }
+        ws.send(
+          JSON.stringify({
+            type: "ready",
+            bridge_id: bridgeId,
+            expires_at: new Date(Date.now() + 2000).toISOString(),
+          }),
+        );
+      });
+    });
+    await new Promise<void>((resolve) => httpServer.listen(0, "127.0.0.1", resolve));
+    const address = httpServer.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("expected a real bound address");
+    }
+    return {
+      baseUrl: `http://127.0.0.1:${address.port}`,
+      close: () => new Promise<void>((resolve) => httpServer.close(() => resolve())),
+    };
+  }
+
+  function bootRun(baseUrl: string, runIo: ReturnType<typeof fakeIo>) {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-helper-retry-after-"));
+    fs.writeFileSync(
+      path.join(stateDir, "ssh-agent-bridge.json"),
+      JSON.stringify({
+        baseUrl,
+        bridgeId,
+        sessionId,
+        expiresAt: new Date(Date.now() + 2000).toISOString(),
+      }),
+      { mode: 0o600 },
+    );
+    runIo.env.MULLION_HELPER_STATE_DIR = stateDir;
+    return { stateDir, runPromise: runHelper("run", ["--json-events"], runIo) };
+  }
+
+  it("a 429 with Retry-After: <seconds> uses that delay instead of the fixed backoff ladder", async () => {
+    let renewCalls = 0;
+    const runIo = fakeIo({
+      SSH_AUTH_SOCK: "/tmp/whatever-unused.sock",
+    });
+    const { baseUrl, close } = await bootServer((req, res) => {
+      renewCalls++;
+      if (renewCalls === 1) {
+        res.writeHead(429, {
+          "retry-after": "60",
+          "content-type": "application/json",
+        });
+        res.end(JSON.stringify({ error: "rate limited" }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          session_id: "8".repeat(64),
+          expires_at: new Date(Date.now() + 60_000).toISOString(),
+        }),
+      );
+    });
+    const { runPromise } = bootRun(baseUrl, runIo);
+
+    await waitUntil(() => jsonEvents(runIo).some((e) => e.type === "renewal_retry"), 5000);
+    const retry = jsonEvents(runIo).find((e) => e.type === "renewal_retry");
+    expect(retry).toBeDefined();
+    // The discriminating assertion: 60 from the header, NOT 5000 from the
+    // fixed ladder. Waiting the full 60s wall-clock here would slow the
+    // suite for nothing — the helper is supposed to honor it on the wall
+    // clock too, but the event payload is the authoritative signal that
+    // it parsed the header correctly.
+    expect(retry!.delay_ms).toBe(60_000);
+
+    runIo.triggerInterrupt();
+    expect(await runPromise).toBe(0);
+    await close();
+  }, 10000);
+
+  it("a 429 with no Retry-After header falls back to the existing backoff ladder", async () => {
+    let renewCalls = 0;
+    const runIo = fakeIo({ SSH_AUTH_SOCK: "/tmp/whatever-unused.sock" });
+    const { baseUrl, close } = await bootServer((req, res) => {
+      renewCalls++;
+      if (renewCalls === 1) {
+        res.writeHead(429, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "rate limited" }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          session_id: "7".repeat(64),
+          expires_at: new Date(Date.now() + 60_000).toISOString(),
+        }),
+      );
+    });
+    const { runPromise } = bootRun(baseUrl, runIo);
+
+    await waitUntil(() => jsonEvents(runIo).some((e) => e.type === "renewal_retry"), 5000);
+    const retry = jsonEvents(runIo).find((e) => e.type === "renewal_retry");
+    expect(retry).toBeDefined();
+    // First attempt → RENEW_RETRY_DELAYS_MS[0] = 5000. The fix MUST fall
+    // back cleanly (no crash, no NaN) when the header is missing — proving
+    // it does by observing the same 5000 we'd get for any other non-401,
+    // non-429 failure.
+    expect(retry!.delay_ms).toBe(5000);
+
+    runIo.triggerInterrupt();
+    expect(await runPromise).toBe(0);
+    await close();
+  }, 10000);
+
+  it("a 429 with an unparseable Retry-After header falls back to the existing backoff ladder", async () => {
+    let renewCalls = 0;
+    const runIo = fakeIo({ SSH_AUTH_SOCK: "/tmp/whatever-unused.sock" });
+    const { baseUrl, close } = await bootServer((req, res) => {
+      renewCalls++;
+      if (renewCalls === 1) {
+        res.writeHead(429, {
+          "retry-after": "soon-ish",
+          "content-type": "application/json",
+        });
+        res.end(JSON.stringify({ error: "rate limited" }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          session_id: "6".repeat(64),
+          expires_at: new Date(Date.now() + 60_000).toISOString(),
+        }),
+      );
+    });
+    const { runPromise } = bootRun(baseUrl, runIo);
+
+    await waitUntil(() => jsonEvents(runIo).some((e) => e.type === "renewal_retry"), 5000);
+    const retry = jsonEvents(runIo).find((e) => e.type === "renewal_retry");
+    expect(retry).toBeDefined();
+    // Garbage in the header must NOT crash the helper, must NOT produce
+    // NaN/Infinity delay_ms, and must use the ladder instead. 5000 is
+    // RENEW_RETRY_DELAYS_MS[0].
+    expect(retry!.delay_ms).toBe(5000);
+    expect(Number.isFinite(retry!.delay_ms)).toBe(true);
+
+    runIo.triggerInterrupt();
+    expect(await runPromise).toBe(0);
+    await close();
+  }, 10000);
+
+  it("a 429 with Retry-After as an HTTP-date is parsed (seconds form also covered above)", async () => {
+    let renewCalls = 0;
+    const runIo = fakeIo({ SSH_AUTH_SOCK: "/tmp/whatever-unused.sock" });
+    // HTTP-date form is RFC 7231 / RFC 9110: either IMF-fixdate
+    // ("Sun, 06 Nov 1994 08:49:37 GMT") or RFC 850 / asctime. RFC 7231
+    // requires IMF-fixdate from servers, but a tolerant parser (Date.UTC
+    // + Date.parse) handles all three the same way — pick one 60s in the
+    // future so the math is unambiguous.
+    const retryAfterDate = new Date(Date.now() + 60_000).toUTCString();
+    const { baseUrl, close } = await bootServer((req, res) => {
+      renewCalls++;
+      if (renewCalls === 1) {
+        res.writeHead(429, {
+          "retry-after": retryAfterDate,
+          "content-type": "application/json",
+        });
+        res.end(JSON.stringify({ error: "rate limited" }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          session_id: "5".repeat(64),
+          expires_at: new Date(Date.now() + 60_000).toISOString(),
+        }),
+      );
+    });
+    const { runPromise } = bootRun(baseUrl, runIo);
+
+    await waitUntil(() => jsonEvents(runIo).some((e) => e.type === "renewal_retry"), 5000);
+    const retry = jsonEvents(runIo).find((e) => e.type === "renewal_retry");
+    expect(retry).toBeDefined();
+    // The HTTP-date was 60s in the future → ~60000ms delay (allow a wide
+    // tolerance: clock skew between the test runner's wall clock and the
+    // server's Date.now() is on the order of milliseconds here, but a
+    // generous window keeps the test honest about what it actually
+    // verifies — "the header was parsed, not the ladder" — without
+    // becoming a flake hunt).
+    expect(retry!.delay_ms).toBeGreaterThan(50_000);
+    expect(retry!.delay_ms).toBeLessThan(70_000);
+
+    runIo.triggerInterrupt();
+    expect(await runPromise).toBe(0);
+    await close();
+  }, 10000);
+});
+
 describe("mullion helper run() — missing prerequisites", () => {
   it("fails with a clear message when SSH_AUTH_SOCK is unset and no --ssh-auth-sock given", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-helper-state-"));
