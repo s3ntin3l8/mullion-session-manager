@@ -1,9 +1,11 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import net from "node:net";
 import http from "node:http";
+import https from "node:https";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import { execSync } from "node:child_process";
 import { WebSocketServer, type WebSocket as NodeWebSocket } from "ws";
 import { buildTestApp } from "../helpers/app.js";
 import { decodePairingPayload, encodePairingPayload } from "../../src/services/bridge-registry.js";
@@ -873,5 +875,98 @@ describe("decodePairingPayload / real bridge-registry.ts", () => {
     const decoded = decodePairingPayload(pairing_payload);
     expect(decoded).not.toBeNull();
     await app.close();
+  });
+});
+
+// Issue #1049 (Task 4) — `mullion helper pair` and `run` connect HTTPS/WSS,
+// and a deployment behind a self-signed reverse proxy (Caddy/nginx in dev,
+// Cloudflare origin-pinned, anything behind an internal CA) rejects with
+// "self-signed certificate" / "unable to verify the first certificate"
+// unless the user passes `--insecure`. Verified here against a real, real-
+// port HTTPS server with a freshly-generated self-signed cert: --insecure
+// off must reject the cert (proving today's behavior is broken against
+// such a primary), --insecure on must complete the handshake (proving the
+// flag actually reaches the WebSocket constructor's TLS path).
+describe("mullion helper — --insecure flag bypasses self-signed TLS (issue #1049)", () => {
+  let certDir: string;
+  let httpsServer: https.Server;
+  let wss: WebSocketServer;
+  let httpsPort: number;
+
+  beforeAll(async () => {
+    // `openssl req -x509 ... -subj /CN=... -addext subjectAltName=IP:...`
+    // generates a self-signed cert in-process tests can pin via IP, no
+    // dependency cost. Two assertions this works: `key.pem`/`cert.pem` are
+    // both non-empty after the shell-out (a failure here is the harness
+    // itself being broken on this OS, not the SUT).
+    certDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-self-signed-cert-"));
+    const keyPath = path.join(certDir, "key.pem");
+    const certPath = path.join(certDir, "cert.pem");
+    execSync(
+      `openssl req -x509 -newkey rsa:2048 -nodes ` +
+        `-keyout "${keyPath}" -out "${certPath}" ` +
+        `-days 1 -subj "/CN=127.0.0.1" -addext "subjectAltName=IP:127.0.0.1"`,
+      { stdio: "ignore" },
+    );
+    expect(fs.readFileSync(keyPath).length).toBeGreaterThan(0);
+    expect(fs.readFileSync(certPath).length).toBeGreaterThan(0);
+
+    httpsServer = https.createServer({
+      key: fs.readFileSync(keyPath),
+      cert: fs.readFileSync(certPath),
+    });
+    wss = new WebSocketServer({ server: httpsServer });
+    wss.on("connection", (socket: NodeWebSocket) => {
+      socket.once("message", () => {
+        socket.send(
+          JSON.stringify({
+            type: "ready",
+            bridge_id: "00000000-0000-4000-8000-000000000000",
+            session_id: "a".repeat(64),
+            expires_at: new Date(Date.now() + 86400_000).toISOString(),
+          }),
+        );
+      });
+    });
+    await new Promise<void>((resolve) => httpsServer.listen(0, "127.0.0.1", resolve));
+    const addr = httpsServer.address();
+    if (addr === null || typeof addr === "string") {
+      throw new Error("expected a real bound address for the HTTPS test server");
+    }
+    httpsPort = addr.port;
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((resolve) => wss.close(() => resolve()));
+    await new Promise<void>((resolve) => httpsServer.close(() => resolve()));
+    fs.rmSync(certDir, { recursive: true, force: true });
+  });
+
+  it("pair() against a self-signed HTTPS primary FAILS without --insecure (proves today's behavior)", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-helper-state-"));
+    const payload = encodePairingPayload({
+      baseUrl: `https://127.0.0.1:${httpsPort}`,
+      code: "irrelevant",
+    });
+    const io = fakeIo({ MULLION_HELPER_STATE_DIR: stateDir });
+    const code = await runHelper("pair", [payload], io);
+    // fail-fast: runHelper's error catch returns 1 (not 0, not 2/CliUsageError)
+    expect(code).toBe(1);
+    expect(fs.existsSync(path.join(stateDir, "ssh-agent-bridge.json"))).toBe(false);
+  });
+
+  it("pair() against a self-signed HTTPS primary SUCCEEDS with --insecure", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-helper-state-"));
+    const payload = encodePairingPayload({
+      baseUrl: `https://127.0.0.1:${httpsPort}`,
+      code: "irrelevant",
+    });
+    const io = fakeIo({ MULLION_HELPER_STATE_DIR: stateDir });
+    const code = await runHelper("pair", [payload, "--insecure"], io);
+    expect(code).toBe(0);
+    const credential = JSON.parse(
+      fs.readFileSync(path.join(stateDir, "ssh-agent-bridge.json"), "utf8"),
+    );
+    expect(credential.baseUrl).toBe(`https://127.0.0.1:${httpsPort}`);
   });
 });
