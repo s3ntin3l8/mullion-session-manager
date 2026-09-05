@@ -585,6 +585,17 @@ export async function createSessionRecord(
   const resolvedInjectProjectBriefing =
     project.injectProjectBriefing ?? globalSessionSettings.injectProjectBriefing;
 
+  // Issue #1089 — sessions.injectMullionBundle (settings.ts), resolved HERE
+  // on the primary for the identical multi-host reason resolvedInjectAgentGuide
+  // above is: an agent-role host has no settings DB of its own to read this
+  // from (plugins/hooks.ts's own comment), so it must already be a definite
+  // boolean by the time it reaches spawn(). Unlike injectAgentGuide/
+  // injectProjectBriefing above, there is no per-project override to merge —
+  // schema.ts's own comment on `projects.injectAgentGuide` explains why
+  // injectMullionBundle deliberately doesn't get one — so this is just the
+  // global setting, straight through.
+  const resolvedInjectMullionBundle = globalSessionSettings.injectMullionBundle;
+
   // Issue #937 — the install-wide workflow-conventions text, gated the same
   // way the boolean's own doc comment (schema.ts) describes: inject only
   // when this project hasn't explicitly opted out AND there's actually a
@@ -635,6 +646,7 @@ export async function createSessionRecord(
       smallModel,
       injectAgentGuide: resolvedInjectAgentGuide,
       injectProjectBriefing: resolvedInjectProjectBriefing,
+      injectMullionBundle: resolvedInjectMullionBundle,
       workflowConventionsText: resolvedWorkflowConventionsText,
       env,
       taskId,

@@ -201,6 +201,20 @@ export interface CreateSessionOptions {
    * when set" posture as `injectAgentGuide` immediately above, for the
    * independent sessions.injectProjectBriefing setting. */
   injectProjectBriefing?: boolean;
+  /** Issue #1089 — same producer/multi-host reasoning as `injectAgentGuide`
+   * immediately above, for the independent sessions.injectMullionBundle
+   * setting (settings.ts). Unlike injectAgentGuide/injectProjectBriefing,
+   * there is no per-project override to merge (schema.ts's own comment on
+   * `projects.injectAgentGuide` explains why injectMullionBundle
+   * deliberately doesn't get one) — session-lifecycle.ts's
+   * createSessionRecord resolves this straight from the global setting and
+   * threads it through the spawn body exactly like briefingOverride
+   * already is. When set, wins over the live `getInjectMullionBundle()`
+   * closure below (see getOrCreate()) — a caller that omits this (any
+   * getOrCreate() call outside session-lifecycle.ts's producer, e.g. a
+   * dock/reconciler respawn) keeps today's global-settings-only behavior
+   * exactly as before. */
+  injectMullionBundle?: boolean;
   /** Issue #937 — the install-wide workflow-conventions text, already fully
    * resolved (gated on both the global text being non-empty AND this
    * project's own injectWorkflowConventions column) by
@@ -1066,8 +1080,15 @@ export class Session {
   // Same spawn-time-snapshot posture as injectAgentGuide above, for the
   // independent sessions.injectMullionBundle setting (see settings.ts's own
   // doc comment for why this gates a different mechanism entirely — Claude
-  // Code's `--plugin-dir`, not a SessionStart text injection).
-  private readonly injectMullionBundle: boolean;
+  // Code's `--plugin-dir`, not a SessionStart text injection). Issue #1089 —
+  // public `readonly` (not `private`), same posture as injectAgentGuide/
+  // injectProjectBriefing above: an external reader now exists (this
+  // field is the only way to prove, from outside bootstrapMaster, that the
+  // primary's resolved sessions.injectMullionBundle value — or an explicit
+  // per-call opts override — actually reached this Session, the same proof
+  // injectAgentGuide's own public visibility exists for). Not part of
+  // SessionInfo/toInfo()'s public surface, same as injectAgentGuide.
+  readonly injectMullionBundle: boolean;
   private readonly skipPermissions: boolean;
   // Task Master's initial-turn prompt (see CreateSessionOptions.initialPrompt
   // above) — consumed once, in bootstrapMaster() below, to build finalCommand;
@@ -3932,7 +3953,14 @@ export class PtyManager {
         // global-settings-only closure exactly as before.
         injectAgentGuide: opts.injectAgentGuide ?? this.getInjectAgentGuide(),
         injectProjectBriefing: opts.injectProjectBriefing ?? this.getInjectProjectBriefing(),
-        injectMullionBundle: this.getInjectMullionBundle(),
+        // Issue #1089 — same "explicit opt wins, else the live closure"
+        // posture as injectAgentGuide/injectProjectBriefing immediately
+        // above. Before this fix, this line ignored `opts.injectMullionBundle`
+        // entirely, which meant a remote agent host (routes/internal.ts's
+        // /internal/sessions -> here) always fell back to its own
+        // DB-less getInjectMullionBundle() closure — always `true` — no
+        // matter what the primary's actual stored setting was.
+        injectMullionBundle: opts.injectMullionBundle ?? this.getInjectMullionBundle(),
         skipPermissions: opts.skipPermissions,
         initialPrompt: opts.initialPrompt,
         seedPrompt: opts.seedPrompt,

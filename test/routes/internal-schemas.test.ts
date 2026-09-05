@@ -89,6 +89,9 @@ describe("internal-schemas.ts — byte-identical output regression guard", () =>
           // injectProjectBriefing's own doc comments (pty-manager.ts).
           injectAgentGuide: { type: "boolean" },
           injectProjectBriefing: { type: "boolean" },
+          // Issue #1089 — see CreateSessionOptions.injectMullionBundle's
+          // own doc comment (pty-manager.ts).
+          injectMullionBundle: { type: "boolean" },
           // Hermes review, PR #966 — Task Master marker, see
           // CreateSessionOptions.taskId's own doc comment (pty-manager.ts).
           taskId: { type: "integer" },

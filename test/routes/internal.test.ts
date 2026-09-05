@@ -2897,6 +2897,54 @@ describe("internal routes (agent role, issue #26)", () => {
     await app.close();
   });
 
+  // Issue #1089 — the agent-side counterpart of session-lifecycle.ts's
+  // resolvedInjectMullionBundle (resolved from the primary's own
+  // sessions.injectMullionBundle setting, which an agent-role process has
+  // no DB of its own to read — see readInjectMullionBundle's own comment,
+  // src/plugins/pty.ts). Proves the actual HTTP round trip (request body ->
+  // schema validation -> app.pty.getOrCreate) threads a `false` value all
+  // the way to the resulting Session, rather than silently falling back to
+  // this agent's own DB-less getInjectMullionBundle() closure (always
+  // `true`) the way it did before this fix — this is the exact bug #1089
+  // reports: an agent host always boot-syncing the bundle back in
+  // regardless of what the primary's setting said.
+  it("threads injectMullionBundle: false from the spawn body into the resulting Session, instead of falling back to this agent's own (always-true) default", async () => {
+    const app = await buildApp();
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/internal/sessions",
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: {
+        id: "509",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+        injectMullionBundle: false,
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(app.pty.get("509")?.injectMullionBundle).toBe(false);
+
+    await app.close();
+  });
+
+  it("defaults injectMullionBundle to true when the spawn body omits it (unchanged pre-#1089 behavior)", async () => {
+    const app = await buildApp();
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/internal/sessions",
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: { id: "510", cwd: "/tmp", command: "bash", cols: 80, rows: 24 },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(app.pty.get("510")?.injectMullionBundle).toBe(true);
+
+    await app.close();
+  });
+
   // Issue: per-project briefing storage (a follow-up PR) — this PR only
   // wires the spawn-body channel through; no producer sets briefingOverride
   // yet, but the agent-side route must already thread whatever a future
