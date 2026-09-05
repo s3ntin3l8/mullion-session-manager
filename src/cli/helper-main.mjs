@@ -21,6 +21,22 @@ import { runHelper, buildHelperIo } from "./ssh-agent-helper.mjs";
 // has no top-level await at all — an async IIFE is the plain-JS
 // equivalent that survives that bundle.
 (async () => {
+  // Issue #1061: defense-in-depth. runHelper() already catches every
+  // rejection and translates it to an exit code (see ssh-agent-helper.mjs's
+  // own runHelper), so a real escape from this IIFE is unlikely today —
+  // but Node 22+'s default is to terminate the process on an unhandled
+  // rejection, and the supervisor would just restart the helper without
+  // surfacing the root cause. Catching it here logs the rejection to
+  // stderr and exits 1, which the supervisor already treats as "retryable
+  // crash", and gives an operator reading the helper log something
+  // diagnosable.
+  process.on("unhandledRejection", (reason) => {
+    process.stderr.write(
+      `unhandledRejection in helper main: ${reason instanceof Error ? reason.stack : String(reason)}\n`,
+    );
+    process.exit(1);
+  });
+
   const [noun, verb, ...args] = process.argv.slice(2);
   if (noun !== "helper") {
     process.stderr.write(
