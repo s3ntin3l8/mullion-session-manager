@@ -153,15 +153,31 @@ export function BundleSyncPanel() {
   // same shape as LaunchersSection's own mount effect (which gets away with
   // not calling setLoading(true) at all by relying on useState(true)'s
   // initial value instead).
-  const loadStatus = () =>
+  //
+  // `isCancelled` is only ever supplied by the toggle-driven effect below —
+  // same "let cancelled = false" idiom as BrowserPanel.tsx's and
+  // WorkflowConventionsWizardModal.tsx's own fetch effects, guarding against
+  // an out-of-order response (a fast ON->OFF->ON toggle sequence can fire
+  // more than one of these concurrently) pinning a stale snapshot. The
+  // manual Refresh/Re-sync/Remove call sites below don't pass one: they're
+  // plain event handlers, not effects, so there's no superseding re-run to
+  // race against.
+  const loadStatus = (isCancelled: () => boolean = () => false) =>
     api
       .getBundleSyncStatus()
       .then((data) => {
+        if (isCancelled()) return;
         setStatus(data);
         setFetchError(null);
       })
-      .catch((err: unknown) => setFetchError(err instanceof Error ? err.message : String(err)))
-      .finally(() => setLoading(false));
+      .catch((err: unknown) => {
+        if (isCancelled()) return;
+        setFetchError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (isCancelled()) return;
+        setLoading(false);
+      });
 
   // Manual "Refresh" click — a plain event handler, so synchronously
   // resetting loading/error state here (unlike inside the effect below) is
@@ -181,7 +197,11 @@ export function BundleSyncPanel() {
   // manual way to reconcile the per-CLI rows once the PATCH has actually
   // landed.
   useEffect(() => {
-    void loadStatus();
+    let cancelled = false;
+    void loadStatus(() => cancelled);
+    return () => {
+      cancelled = true;
+    };
   }, [s.injectMullionBundle]);
 
   const handleResync = () => {
