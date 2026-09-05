@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import crypto from "node:crypto";
-import { and, eq, gt, isNotNull } from "drizzle-orm";
+import { and, eq, gt, isNotNull, isNull, lt, or } from "drizzle-orm";
 import { bridges } from "../db/schema.js";
 import { timingSafeTokenMatch } from "./crypto-utils.js";
 
@@ -53,6 +53,50 @@ export function getBridgeRow(app: FastifyInstance, id: string): BridgeRow | unde
 
 export function deleteBridge(app: FastifyInstance, id: string): void {
   app.db.delete(bridges).where(eq(bridges.id, id)).run();
+}
+
+// Issue #1052 — `issuePairingCode()` inserts a brand-new row every call, and
+// expired-but-never-redeemed pairing codes are invisible to redeemPairingCode
+// (its `pairingExpiresAt > NOW()` filter drops them) but still sit in the
+// table carrying encrypted `pairing_secret_enc` payloads. Same shape for
+// paired rows whose `sessionExpiresAt` has lapsed — once a session is past
+// expiry there's no bootstrap credential left to bring the bridge back (a
+// helper that needs to reconnect after session loss needs a fresh pairing
+// code, not a retry), so the row is dead weight.
+//
+// Cleanup runs periodically from src/plugins/bridge-cleanup.ts (primary
+// role only — an agent has no `bridges` table, see src/app.ts's role split),
+// so a deployment with frequent Settings interactions doesn't accumulate
+// abandoned rows unboundedly over months.
+const SESSION_EXPIRED_BUFFER_MS = 60 * 60 * 1000;
+
+export function cleanupExpiredPairingCodes(app: FastifyInstance): void {
+  const now = new Date();
+  const sessionExpiredCutoff = new Date(now.getTime() - SESSION_EXPIRED_BUFFER_MS);
+  app.db
+    .delete(bridges)
+    .where(
+      or(
+        // Unpaired + pairing-code-expired: a fresh pairing code that was
+        // never redeemed and is now past its 10-minute TTL.
+        and(
+          isNotNull(bridges.pairingExpiresAt),
+          lt(bridges.pairingExpiresAt, now),
+          isNull(bridges.sessionExpiresAt),
+        ),
+        // Paired + session-expired past the buffer: the bridge's last
+        // session renewal lapsed more than the buffer ago. `findLiveSession`
+        // already rejects these at verify time, but the row sits here until
+        // something actively removes it — the buffer protects a session
+        // that's only just lapsed (e.g. clock skew, a brief renewal gap)
+        // from being wiped while the helper is about to renew.
+        and(
+          isNotNull(bridges.sessionExpiresAt),
+          lt(bridges.sessionExpiresAt, sessionExpiredCutoff),
+        ),
+      ),
+    )
+    .run();
 }
 
 // A pairing code is deliberately short-lived — it's meant to be generated

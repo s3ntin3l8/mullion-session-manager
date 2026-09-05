@@ -18,6 +18,7 @@ import { gitFetcherPlugin } from "./plugins/git-fetcher.js";
 import { hostHeartbeatPlugin } from "./plugins/host-heartbeat.js";
 import { agentEnrollmentPlugin } from "./plugins/agent-enrollment.js";
 import { requestNoncePlugin } from "./plugins/request-nonce.js";
+import { bridgeCleanupPlugin } from "./plugins/bridge-cleanup.js";
 import { eventStorePlugin } from "./plugins/event-store.js";
 import { pushPlugin } from "./plugins/push.js";
 import { websocketPlugin } from "./plugins/websocket.js";
@@ -400,6 +401,13 @@ export async function buildApp() {
   await app.register(webhookReconcilerPlugin);
   await app.register(gitFetcherPlugin);
   await app.register(hostHeartbeatPlugin);
+  // Issue #1052 — primary-only periodic cleanup of expired `bridges` rows
+  // (issuePairingCode creates a new row per Settings interaction; rows
+  // past their pairing TTL or, post-redeem, past their session TTL + buffer
+  // accumulate otherwise). Inert on the agent role (no `bridges` table to
+  // sweep). No ordering dependency — only needs app.db, which dbPlugin
+  // above has already registered.
+  await app.register(bridgeCleanupPlugin);
   await app.register(websocketPlugin);
   // authPlugin must register before previewProxyPlugin: both install a
   // global onRequest hook, and onRequest hooks run in registration order —
