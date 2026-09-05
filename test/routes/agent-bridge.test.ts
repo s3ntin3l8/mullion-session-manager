@@ -832,6 +832,71 @@ describe("agent-bridge routes (POST/GET/DELETE /api/bridges, GET /ws/agent-bridg
       );
       expect(entry).toBeUndefined();
     });
+
+    // Issue #1053 — the TOCTOU gap the OLD order left open: a reconnecting
+    // helper's "auth" handshake landing between mux.close() and
+    // deleteBridge() would verify successfully (the row still existed),
+    // get tracked under that bridgeId, and then have its row deleted out
+    // from under it — silently orphaned until its own close fires. The
+    // fix flips the order to delete-then-close, so the row is gone
+    // before any concurrent verifyBridgeSession can run, and the
+    // reconnect is rejected with "invalid session credential" instead of
+    // succeeding against a row that's then immediately deleted.
+    it("rejects an auth handshake that lands after DELETE — the row is gone before any concurrent verify can read it (issue #1053)", async () => {
+      const { app, port } = await buildAndListen();
+      const pairRes = await app.inject({ method: "POST", url: "/api/bridges" });
+      const { code } = decodePairingPayload(pairRes.json().pairing_payload)!;
+
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/agent-bridge`);
+      await waitForOpen(ws);
+      const replyPromise = waitForMessage(ws);
+      ws.send(JSON.stringify({ type: "pair", code }));
+      const reply = await replyPromise;
+      expect(app.connectedBridges.has(reply.bridge_id!)).toBe(true);
+      // Set up a close listener BEFORE the DELETE so we don't miss the
+      // close event that mux.close() fires below.
+      const originalClosePromise = waitForClose(ws);
+
+      // The "second connection" is a fresh WebSocket holding the SAME
+      // (still-valid, pre-revoke) session credential — exactly the shape
+      // of a helper that lost its TCP connection and is reconnecting at
+      // the precise moment its operator hits "Revoke."
+      const { bridge_id, session_id } = reply as Required<
+        Pick<HandshakeReply, "bridge_id" | "session_id">
+      >;
+
+      // Issue the DELETE — the row MUST be deleted first (fix for the
+      // TOCTOU gap), then the live mux close. With the OLD close-then-
+      // delete order, a reconnect arriving in the window between the two
+      // synchronous calls would verify against the still-present row and
+      // end up tracked under a bridgeId with no DB row behind it.
+      const delRes = await app.inject({
+        method: "DELETE",
+        url: `/api/bridges/${bridge_id}`,
+      });
+      expect(delRes.statusCode).toBe(204);
+
+      // The reconnect attempt, with the credentials that WERE valid until
+      // the DELETE ran above, must now be rejected — verifyBridgeSession
+      // sees no row, returns false, the route sends an error, and the
+      // socket is closed.
+      const reconnectWs = new WebSocket(`ws://127.0.0.1:${port}/ws/agent-bridge`);
+      await waitForOpen(reconnectWs);
+      const reconnectReplyPromise = waitForMessage(reconnectWs);
+      const reconnectClosePromise = waitForClose(reconnectWs);
+      reconnectWs.send(JSON.stringify({ type: "auth", bridge_id, session_id }));
+
+      const reconnectReply = await reconnectReplyPromise;
+      expect(reconnectReply.type).toBe("error");
+      expect(reconnectReply.message).toMatch(/invalid session credential/);
+      await reconnectClosePromise;
+
+      // The original connection's own close must have fired too.
+      await originalClosePromise;
+
+      // No phantom tracking entry behind an absent row.
+      expect(app.connectedBridges.has(bridge_id)).toBe(false);
+    });
   });
 
   describe("auth gate exemption (issue #820)", () => {
