@@ -1,7 +1,13 @@
 import type { FastifyInstance } from "fastify";
 import path from "node:path";
+import { existsSync } from "node:fs";
 import { and, eq } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
+import {
+  scaffoldSkillPath,
+  scaffoldReviewerPath,
+  isValidScaffoldSlug,
+} from "./mullion-scaffold.js";
 import {
   isDockPreviewWorktree,
   trackPreviewWorktree,
@@ -557,16 +563,85 @@ export async function createSessionRecord(
   // session" (unlinking any stale per-session copy from a previous spawn).
   const resolvedBriefingOverride =
     briefingOverride ?? readProjectBriefing(app.db, project.id) ?? undefined;
+  // Issue #1082(a) — once a project has been scaffolded (routes/
+  // project-setup.ts's `/setup/apply`, which stamps `projects.slug` at the
+  // point it actually commits the scaffold's files), a committed
+  // `.claude/skills/<slug>/SKILL.md`/`.claude/agents/<slug>-reviewer.md`
+  // already reaches Claude Code/opencode via each CLI's own native
+  // discovery — re-injecting the DB-authored `project_tooling.skill`/
+  // `.reviewerAgent` copy live on top of that would just double-deliver the
+  // same content. Checked HERE, on the primary, not adapter-side: `project`
+  // (fetched above) already carries both `slug` and `cwd`, so there is no
+  // separate multi-host channel to build — and `projects.slug` can only
+  // ever be non-null for a LOCAL-hosted project in the first place (see
+  // that column's own schema.ts comment: `/setup/apply` requires a live
+  // preview record, and `/setup/preview`/`/setup/generate` both 501 for a
+  // remote-hosted project), so this `existsSync` always reads the same
+  // filesystem the check is meant to describe.
+  //
+  // `cwd ?? project.cwd`, NOT `project.cwd` alone — same fallback `cwd`
+  // itself already resolves to a few lines below (`path.resolve(cwd ??
+  // project.cwd)`): by this point `cwd` may have been reassigned above to a
+  // `.mullion-worktrees/<name>` checkout (checkoutBranchWorktree/
+  // resolveWorktreeCwd, when `worktree` was requested) — a SEPARATE git
+  // working tree from `project.cwd`'s own checkout, not a subdirectory of
+  // it, and possibly cut from a ref that predates (or never gets) the
+  // scaffold commit. Claude Code's own project-scope discovery is
+  // cwd-scoped, not an upward walk to the git root (see
+  // claude-code-skills.ts's own live-verified finding), so this session
+  // actually launches with `<cwd>/.claude/skills`, never
+  // `<project.cwd>/.claude/skills` once `cwd` differs — the check must
+  // describe the SAME directory the CLI will actually search, which is
+  // `cwd` whenever the caller (or the worktree resolution above) set one,
+  // falling back to `project.cwd` only for the ordinary case where no
+  // override exists at all.
+  // CodeQL (js/path-injection) flags the two existsSync calls below.
+  // Re-validating `project.slug` right here with `isValidScaffoldSlug` (see
+  // that function's own doc comment: rejects path separators/`.`/`..`/
+  // control characters) is real defense in depth regardless of what the
+  // scanner does with it — `projects.slug`'s only current writer
+  // (routes/project-setup.ts's `/setup/apply`) already validates it before
+  // ever stamping the column, but nothing at the type level stops a future
+  // writer from skipping that, and this check is cheap. It does NOT clear
+  // the alert, though: this repo has hit this exact class of false positive
+  // — CodeQL's js/path-injection query genuinely does not model a manual
+  // validation call as a sanitizer, independent of whether it's a guard
+  // clause, a ternary, or anything else — several times already
+  // (git-worktree.ts's/git-branch-delete.ts's isSafeAbsolutePath-gated
+  // calls, dock-config.ts's isSymlinkPath, routes/projects.ts's own
+  // near-identical case for a project's own `cwd`), each resolved by
+  // dismissing the specific alert in GHAS with a documented justification
+  // rather than reshaping already-correct code to chase the query — see
+  // dock-config.ts's `readDockConfig` for the fullest write-up of exactly
+  // this reasoning, including why an inline `codeql[...]` suppression
+  // comment wouldn't flip the Security tab's alert state on its own (this
+  // repo's codeql.yml has no follow-up dismiss-alerts step to read it).
+  const validScaffoldSlug = project.slug && isValidScaffoldSlug(project.slug) ? project.slug : null;
+  const scaffoldCwd = cwd ?? project.cwd;
+  const scaffoldSkillCommitted = validScaffoldSlug
+    ? existsSync(path.join(scaffoldCwd, scaffoldSkillPath(validScaffoldSlug)))
+    : false;
+  const scaffoldReviewerCommitted = validScaffoldSlug
+    ? existsSync(path.join(scaffoldCwd, scaffoldReviewerPath(validScaffoldSlug)))
+    : false;
+
   // PR-5 — same producer posture as resolvedBriefingOverride immediately
   // above: an explicit caller-supplied value (currently unused by any
   // public route, same as briefingOverride) wins, otherwise this project's
   // own DB row wins. `null`/absent falls through to `undefined`, which
   // every adapter's prepareLaunch already treats as "no project content" —
   // see HookAdapterContext.projectSkill/projectReviewerAgent's own doc
-  // comments.
-  const resolvedProjectSkill = projectSkill ?? readProjectSkill(app.db, project.id) ?? undefined;
-  const resolvedProjectReviewerAgent =
-    projectReviewerAgent ?? readProjectReviewerAgent(app.db, project.id) ?? undefined;
+  // comments. Issue #1082(a) — gated to `undefined` outright when the
+  // committed scaffold file above already exists, regardless of what an
+  // explicit caller value or the DB row would otherwise resolve to: a
+  // committed file always wins over the ephemeral DB copy for that same
+  // content, never the other way around.
+  const resolvedProjectSkill = scaffoldSkillCommitted
+    ? undefined
+    : (projectSkill ?? readProjectSkill(app.db, project.id) ?? undefined);
+  const resolvedProjectReviewerAgent = scaffoldReviewerCommitted
+    ? undefined
+    : (projectReviewerAgent ?? readProjectReviewerAgent(app.db, project.id) ?? undefined);
 
   // Issue #884 — per-project override of sessions.injectAgentGuide/
   // injectProjectBriefing (settings.ts), resolved HERE on the primary for

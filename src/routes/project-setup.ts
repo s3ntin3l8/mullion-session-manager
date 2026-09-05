@@ -767,6 +767,16 @@ export async function projectSetupRoute(app: FastifyInstance) {
         return reply.internalServerError(commitResult.error);
       }
 
+      // Issue #1082(a) — stamped here, not earlier: this is the point the
+      // scaffold's files actually get committed (to the scratch worktree,
+      // pushed as a PR or left as a local branch below — see
+      // schema.ts's own doc comment on `projects.slug` for why that's still
+      // "actually writes files" for this column's purposes even before a
+      // PR merges). Sourced from `record.slug` (the previewed/applied
+      // slug), never re-read from the request body, since this route has no
+      // body field of its own beyond `previewId`.
+      app.db.update(projects).set({ slug: record.slug }).where(eq(projects.id, projectId)).run();
+
       const repoRef = await resolveRepoRef(app, project);
       if (!repoRef) {
         previews.delete(request.body.previewId);
