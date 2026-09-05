@@ -7,6 +7,7 @@ import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import {
   clearBridgeSession,
+  cleanupExpiredPairingCodes,
   deleteBridge,
   decodePairingPayload,
   encodePairingPayload,
@@ -291,6 +292,143 @@ describe("bridge-registry", () => {
     it("returns null when the decoded JSON isn't an object", () => {
       const malformed = Buffer.from(JSON.stringify("just a string"), "utf8").toString("base64url");
       expect(decodePairingPayload(malformed)).toBeNull();
+    });
+  });
+
+  describe("cleanupExpiredPairingCodes (issue #1052)", () => {
+    // Each row used in this block was issuePairingCode()-ed inside the test
+    // itself (no shared state across tests — the same DB is shared, but every
+    // row has its own random UUID id, so scoping by id is sound, mirroring
+    // the listBridges test above).
+    //
+    // Two categories of expired row the cleanup deletes:
+    //   1. Unpaired + pairing-code-expired (issuePairingCode rows that were
+    //      never redeemed and now lie past their 10-minute TTL).
+    //   2. Paired + session-expired past a buffer (a bridge whose last
+    //      session renewal lapsed more than the buffer ago — it can't come
+    //      back to life without a fresh pairing code, since there's no
+    //      bootstrap credential to fall back to).
+
+    it("deletes an unpaired row whose pairing code has already expired", async () => {
+      const app = await buildApp();
+      const pairing = issuePairingCode(app);
+      const { bridges } = await import("../../src/db/schema.js");
+      const { eq } = await import("drizzle-orm");
+      app.db
+        .update(bridges)
+        .set({ pairingExpiresAt: new Date(Date.now() - 1000) })
+        .where(eq(bridges.id, pairing.bridgeId))
+        .run();
+
+      cleanupExpiredPairingCodes(app);
+
+      expect(getBridgeRow(app, pairing.bridgeId)).toBeUndefined();
+      await app.close();
+    });
+
+    it("leaves an unpaired row whose pairing code is still in the future", async () => {
+      const app = await buildApp();
+      const pairing = issuePairingCode(app);
+
+      cleanupExpiredPairingCodes(app);
+
+      expect(getBridgeRow(app, pairing.bridgeId)).toBeDefined();
+      expect(getBridgeRow(app, pairing.bridgeId)!.pairingSecretEnc).not.toBeNull();
+      await app.close();
+    });
+
+    it("deletes a paired row whose session expired more than the buffer ago", async () => {
+      const app = await buildApp();
+      const pairing = issuePairingCode(app);
+      redeemPairingCode(app, pairing.code, { name: "stale" });
+      const { bridges } = await import("../../src/db/schema.js");
+      const { eq, lt, sql } = await import("drizzle-orm");
+      // 2 hours in the past — well past the 1-hour buffer the cleanup uses.
+      app.db
+        .update(bridges)
+        .set({ sessionExpiresAt: new Date(Date.now() - 2 * 60 * 60 * 1000) })
+        .where(eq(bridges.id, pairing.bridgeId))
+        .run();
+      expect(
+        app.db
+          .select({ c: sql<number>`count(*)` })
+          .from(bridges)
+          .where(lt(bridges.sessionExpiresAt, new Date(Date.now() - 60 * 60 * 1000)))
+          .all()[0].c,
+      ).toBeGreaterThanOrEqual(1);
+
+      cleanupExpiredPairingCodes(app);
+
+      expect(getBridgeRow(app, pairing.bridgeId)).toBeUndefined();
+      await app.close();
+    });
+
+    it("leaves a paired row whose session is still in the future", async () => {
+      const app = await buildApp();
+      const pairing = issuePairingCode(app);
+      redeemPairingCode(app, pairing.code, { name: "active" });
+
+      cleanupExpiredPairingCodes(app);
+
+      const row = getBridgeRow(app, pairing.bridgeId)!;
+      expect(row).toBeDefined();
+      expect(row.sessionIdEnc).not.toBeNull();
+      expect(row.sessionExpiresAt!.getTime()).toBeGreaterThan(Date.now());
+      await app.close();
+    });
+
+    it("leaves a paired row whose session only just expired — within the buffer", async () => {
+      const app = await buildApp();
+      const pairing = issuePairingCode(app);
+      redeemPairingCode(app, pairing.code, { name: "freshly-expired" });
+      const { bridges } = await import("../../src/db/schema.js");
+      const { eq } = await import("drizzle-orm");
+      // 5 minutes in the past — well within the 1-hour buffer.
+      app.db
+        .update(bridges)
+        .set({ sessionExpiresAt: new Date(Date.now() - 5 * 60 * 1000) })
+        .where(eq(bridges.id, pairing.bridgeId))
+        .run();
+
+      cleanupExpiredPairingCodes(app);
+
+      expect(getBridgeRow(app, pairing.bridgeId)).toBeDefined();
+      await app.close();
+    });
+
+    it("is idempotent — running cleanup twice doesn't throw or change the second-pass outcome", async () => {
+      const app = await buildApp();
+      const pairing = issuePairingCode(app);
+      const { bridges } = await import("../../src/db/schema.js");
+      const { eq } = await import("drizzle-orm");
+      app.db
+        .update(bridges)
+        .set({ pairingExpiresAt: new Date(Date.now() - 1000) })
+        .where(eq(bridges.id, pairing.bridgeId))
+        .run();
+
+      expect(() => {
+        cleanupExpiredPairingCodes(app);
+        cleanupExpiredPairingCodes(app);
+      }).not.toThrow();
+
+      expect(getBridgeRow(app, pairing.bridgeId)).toBeUndefined();
+      await app.close();
+    });
+
+    it("does nothing — and does not throw — when there are no rows at all", async () => {
+      // Use a fresh DB to guarantee an empty bridges table — the shared
+      // test DB has rows left over from earlier tests in this file.
+      const isolatedDb = path.join(os.tmpdir(), `bridge-cleanup-empty-${process.pid}.db`);
+      fs.rmSync(isolatedDb, { force: true });
+      const savedDbUrl = process.env.DATABASE_URL;
+      process.env.DATABASE_URL = `file:${isolatedDb}`;
+      const app = await buildApp();
+      expect(() => cleanupExpiredPairingCodes(app)).not.toThrow();
+      expect(listBridges(app)).toEqual([]);
+      await app.close();
+      process.env.DATABASE_URL = savedDbUrl;
+      fs.rmSync(isolatedDb, { force: true });
     });
   });
 });
