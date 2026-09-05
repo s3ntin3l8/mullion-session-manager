@@ -430,6 +430,14 @@ manifest-driven sync** (`src/services/bundle-sync.ts`, wired in by
   right after a Mullion upgrade, before the next boot. Codex and agy keep
   their existing per-launch install step too, as the same kind of cheap
   fallback.
+- **All four CLIs converge on "off" at the very next launch, not just at the
+  next restart (issue #1079).** Codex's and agy's per-launch step already
+  actively removed their own synced content whenever
+  `sessions.injectMullionBundle` was off; Claude Code and opencode now do
+  the same (`removeBundleContentForCli`, `bundle-sync.ts`) instead of only
+  skipping the pointer they'd otherwise add. Flipping the setting off no
+  longer needs a Mullion process restart before all four CLIs actually stop
+  seeing the bundle — the very next session for any of them is enough.
 - **Status and manual control, from the UI (issues #944/#945).** Mullion's
   Settings UI can also surface live per-CLI sync status with manual
   re-sync/remove actions, for troubleshooting ("I deleted something, bring
