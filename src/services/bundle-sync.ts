@@ -352,6 +352,16 @@ export function syncBundleContent(): { changed: boolean } {
       // checked, not written unconditionally, so an already-marked
       // directory doesn't get its mtime touched on every re-sync (same
       // posture as installBundleSkills' own marker write).
+      //
+      // CodeQL js/file-system-race flags the existsSync+writeFileSync
+      // shape here. Safe to ignore: `syncBundleContent` has no concurrent
+      // callers within one process (it's the boot-time singleton), the
+      // write target was just populated by installSkillDirWithNameRewrite
+      // in this same sequential loop iteration, and INSTALLED_MARKER_CONTENT
+      // is a process-lifetime constant — a hypothetical sibling-process
+      // race produces byte-identical content either way. This is the same
+      // shape as the pre-existing, reviewed-and-merged marker write at
+      // hook-adapters/mullion-bundle.ts:256-257.
       const markerPath = path.join(destDir, INSTALLED_MARKER_NAME);
       if (!existsSync(markerPath)) {
         writeFileSync(markerPath, INSTALLED_MARKER_CONTENT);
@@ -436,5 +446,5 @@ export function isBundleSyncedFor(cli: BundleSyncCli): boolean {
   if (!target) return false;
   const root = target.root();
   const prefix = root.endsWith(path.sep) ? root : `${root}${path.sep}`;
-  return manifest.entries.some((entry) => entry.path === root || entry.path.startsWith(prefix));
+  return manifest.entries.some((entry) => entry.path.startsWith(prefix));
 }
