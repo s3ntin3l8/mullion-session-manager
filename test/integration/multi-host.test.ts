@@ -875,7 +875,7 @@ describe("agent-initiated registration (issue #245 / roadmap 7.1)", () => {
     fs.rmSync(enrollmentPrimaryDb, { force: true });
   });
 
-  it("an agent with MULLION_PRIMARY_URL + MULLION_ENROLLMENT_TOKEN self-registers on boot, with zero manual steps", async () => {
+  it("an agent with MULLION_PRIMARY_URL + MULLION_ENROLLMENT_TOKEN self-registers on boot, with zero manual steps", { timeout: 30_000 }, async () => {
     const agentPort = await reserveFreePort();
     const agent = await buildAndListen(
       {
@@ -888,13 +888,24 @@ describe("agent-initiated registration (issue #245 / roadmap 7.1)", () => {
       agentPort,
     );
     try {
+      // waitUntil's file-local default is 1s — fast on a warm dev laptop,
+      // but the agent's full boot + enrollment handshake can blow past that
+      // on a cold CI runner (vitest's own 20s default then trips before
+      // waitUntil's "condition never became true" error ever surfaces,
+      // making the failure look like a vitest timeout rather than the
+      // real "registration took too long" signal). 10s here is a
+      // deliberate trade-off: registerWithRetry is unbounded (loops until
+      // the `stopped` flag fires, see src/plugins/agent-enrollment.ts),
+      // so this is just "long enough for the happy path on a slow CI
+      // runner" — anything beyond 10s is a real bug, not a flake. Stays
+      // well under the 30s per-test timeout above.
       await waitUntil(async () => {
         const res = await primary.app.inject({ method: "GET", url: "/api/hosts" });
         const hosts = res.json() as Array<{ origin: string; baseUrl: string | null }>;
         return hosts.some(
           (h) => h.origin === "enrolled" && h.baseUrl === `http://127.0.0.1:${agentPort}`,
         );
-      });
+      }, 10_000);
 
       // No manual token was ever configured — the enrolled host's ONLY
       // credential is the session the primary just issued it. Proxying a
