@@ -20,7 +20,8 @@ const { resolveMcpServerPath } = await import("../../../src/services/hook-adapte
 const { buildAgentGuideBlock, sessionAgentGuidePath } =
   await import("../../../src/services/agent-guide.js");
 const { sessionBriefingPath } = await import("../../../src/services/project-briefing.js");
-const { sessionWorkflowConventionsPath } = await import("../../../src/services/workflow-conventions.js");
+const { sessionWorkflowConventionsPath } =
+  await import("../../../src/services/workflow-conventions.js");
 const { resolveMullionBundleDir } =
   await import("../../../src/services/hook-adapters/mullion-bundle.js");
 
