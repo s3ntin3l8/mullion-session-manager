@@ -56,6 +56,7 @@ import {
 import {
   checkoutBranchWorktree,
   clearOrphanedTaskWorktree,
+  commitWipChanges,
   createWorktree,
   listTaskWorktreeDirs,
   pruneWorktrees,
@@ -67,6 +68,8 @@ import {
   syncWorktree,
 } from "../services/git-worktree.js";
 import { deleteBranch } from "../services/git-branch-delete.js";
+import { readFilesLocally, writeEntriesLocally } from "../services/host-files.js";
+import { PathEscapeError } from "../services/safe-path.js";
 import { runGitFetch } from "../services/git-fetch.js";
 import { runGitPull } from "../services/git-pull.js";
 import { pushBranch } from "../services/git-push.js";
@@ -139,6 +142,9 @@ import {
   gitPullSchema,
   gitPushSchema,
   gitWorktreeResumeSchema,
+  readFilesSchema,
+  writeFilesSchema,
+  gitCommitWipSchema,
   promoteDecisionSchema,
   writeDockConfigBodySchema,
   agentRuleWriteBodySchema,
@@ -162,6 +168,9 @@ import type {
   GitPullBody,
   GitPushBody,
   GitWorktreeResumeBody,
+  ReadFilesBody,
+  WriteFilesBody,
+  GitCommitWipBody,
   PromoteDecisionBody,
 } from "./internal-schemas.js";
 
@@ -1278,6 +1287,97 @@ export async function internalRoutes(app: FastifyInstance) {
       const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
       if (resolvedCwd === null) return;
       return await pushBranch(resolvedCwd, branch, token);
+    },
+  );
+
+  // Issue #895 — reads `paths`' current content directly off this agent's
+  // own filesystem, for a remote-hosted project's scaffold preview/apply
+  // (routes/project-setup.ts's readHostFiles, via
+  // RemoteHostClient.readFiles). Delegates to the SAME readFilesLocally
+  // (host-files.ts) the LOCAL_HOST_ID caller uses directly — see that
+  // function's own doc comment for the EISDIR-as-empty-string sentinel and
+  // "missing key = doesn't exist yet" conventions this preserves over the
+  // wire unchanged. `cwd` gets this file's usual PROJECTS_ROOTS containment;
+  // each individual path in `paths` gets its OWN containment check inside
+  // readFilesLocally (resolveWithin, safe-path.ts) — a PathEscapeError there
+  // means a caller asked for a path outside `cwd` itself, which is a
+  // malformed request (400), not a filesystem error.
+  app.post<{ Body: ReadFilesBody }>(
+    "/internal/read-files",
+    { ...INTERNAL_RATE_LIMIT, schema: readFilesSchema },
+    async (request, reply) => {
+      const { cwd, paths } = request.body;
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
+      try {
+        return { files: readFilesLocally(resolvedCwd, paths) };
+      } catch (err) {
+        if (err instanceof PathEscapeError) return reply.badRequest(err.message);
+        throw err;
+      }
+    },
+  );
+
+  // Issue #895 — writes `entries` (files and/or symlinks) directly onto
+  // this agent's own filesystem, optionally staging every change afterward
+  // (`stage`, `git add -A`) — the agent-side counterpart of writeHostFiles
+  // (host-files.ts), for a remote-hosted project's scaffold preview/apply.
+  // Delegates to the SAME writeEntriesLocally the LOCAL_HOST_ID caller uses
+  // directly; see that function's own doc comment for why BOTH ScaffoldEntry
+  // variants (file and symlink) are handled identically here, not rejected
+  // or no-op'd for a remote host. Each entry's `kind`-specific required
+  // field (`contents` for "file", `target` for "symlink") is checked here
+  // rather than in the JSON Schema (kept deliberately loose — see
+  // internal-schemas.ts's own comment on `entries`) since ajv has no clean
+  // way to express "required field depends on a sibling's value" without a
+  // verbose `if`/`then` per branch.
+  app.post<{ Body: WriteFilesBody }>(
+    "/internal/write-files",
+    { ...INTERNAL_RATE_LIMIT, schema: writeFilesSchema },
+    async (request, reply) => {
+      const { cwd, entries, stage } = request.body;
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
+      for (const entry of entries) {
+        if (entry.kind === "file" && typeof entry.contents !== "string") {
+          return reply.badRequest(`entry "${entry.path}" has kind "file" but no contents`);
+        }
+        if (entry.kind === "symlink" && typeof entry.target !== "string") {
+          return reply.badRequest(`entry "${entry.path}" has kind "symlink" but no target`);
+        }
+      }
+      try {
+        writeEntriesLocally(
+          resolvedCwd,
+          entries as Array<
+            | { path: string; kind: "file"; contents: string }
+            | { path: string; kind: "symlink"; target: string }
+          >,
+          { stage },
+        );
+        return { ok: true };
+      } catch (err) {
+        if (err instanceof PathEscapeError) return reply.badRequest(err.message);
+        throw err;
+      }
+    },
+  );
+
+  // Issue #895 — salvages uncommitted work in `cwd` on this agent's own
+  // filesystem into a single commit — the agent-side counterpart of
+  // commitHostWipChanges (host-git.ts), for a remote-hosted project's
+  // scaffold apply (routes/project-setup.ts). Wraps the SAME
+  // commitWipChanges (git-worktree.ts) the LOCAL_HOST_ID caller uses
+  // directly — see that function's own doc comment for its staging/no-op/
+  // never-throws contract, preserved unchanged over the wire.
+  app.post<{ Body: GitCommitWipBody }>(
+    "/internal/git-commit-wip",
+    { ...INTERNAL_RATE_LIMIT, schema: gitCommitWipSchema },
+    async (request, reply) => {
+      const { cwd, message } = request.body;
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
+      return await commitWipChanges(resolvedCwd, message);
     },
   );
 

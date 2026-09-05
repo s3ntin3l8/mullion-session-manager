@@ -1,21 +1,10 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
-import {
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readFileSync,
-  readlinkSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
-import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { projects } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
-import { gitEnv } from "../services/git-env.js";
 import {
   computeScaffold,
   isValidScaffoldSlug,
@@ -25,16 +14,19 @@ import {
   type ScaffoldOptions,
 } from "../services/mullion-scaffold.js";
 import { MARKER_START } from "../services/project-briefing.js";
+import { deriveWorktreePath, type CreateWorktreeResult } from "../services/git-worktree.js";
+import { resolveBackend } from "../services/session-backend.js";
 import {
-  createWorktree,
-  deriveWorktreePath,
-  commitWipChanges,
-  removeWorktree,
-  type CreateWorktreeResult,
-} from "../services/git-worktree.js";
-import { getFileDiff } from "../services/git-diff.js";
-import { deleteBranch } from "../services/git-branch-delete.js";
-import { resolveHostBaseRef, resolveRepoRef, pushHostBranch } from "../services/host-git.js";
+  resolveHostBaseRef,
+  resolveHostGitStatus,
+  resolveHostFileDiff,
+  commitHostWipChanges,
+  resolveRepoRef,
+  pushHostBranch,
+} from "../services/host-git.js";
+import { readHostFiles, writeHostFiles } from "../services/host-files.js";
+import { HostRequestError } from "../services/remote-host-client.js";
+import { PathEscapeError, resolveWithin } from "../services/safe-path.js";
 import { resolveGitHubToken } from "../services/github-integration.js";
 import { createPullRequest, findPullRequestByHead } from "../services/github-write.js";
 import { GitHubApiError } from "../services/github.js";
@@ -60,20 +52,29 @@ import {
 // discoverable by codex/agy which have no ephemeral overlay — see the
 // plan's per-CLI coverage table) needs those files scaffolded into its own
 // repo. This route reuses the Task Master promote path end to end
-// (git-worktree.ts's createWorktree -> write -> commitWipChanges ->
-// git-push.ts's pushBranch -> github-write.ts's createPullRequest, with
-// task-promote.ts's 422-then-findPullRequestByHead recovery) rather than
-// inventing a second "write files to a repo and open a PR" pipeline —
-// github-write.ts has no content-write API at all, so local-worktree-then-
-// push is the only route, and it happens to be the one that yields a real,
-// reviewable diff for free.
+// (createWorktree -> write -> commit -> push (git-push.ts) ->
+// github-write.ts's createPullRequest, with task-promote.ts's
+// 422-then-findPullRequestByHead recovery) rather than inventing a second
+// "write files to a repo and open a PR" pipeline — github-write.ts has no
+// content-write API at all, so local-worktree-then-push is the only route,
+// and it happens to be the one that yields a real, reviewable diff for free.
 //
-// Scoped to hostId === LOCAL_HOST_ID projects for now — host-git.ts has no
-// primitive to write arbitrary file content onto a REMOTE host's own
-// filesystem (only status/base-ref/push/repo-ref, all read-or-push, never
-// "put these new files there"). Filed as issue #895 rather than guessed at
-// here; a remote-hosted project's setup request gets a clear 501, not a
-// silent no-op or (worse) a write against the wrong filesystem.
+// `/setup/preview` and `/setup/apply` work for both local AND remote-hosted
+// projects (issue #895) — worktree creation/removal/branch-deletion already
+// dispatched per host via SessionBackend (session-backend.ts, issue #271/
+// #484); #895 added the missing piece host-git.ts's own header used to flag
+// as absent: reading/writing arbitrary scaffold file content, diffing a
+// written file, and committing it, all on whichever host actually owns the
+// project's checkout (host-files.ts's readHostFiles/writeHostFiles,
+// host-git.ts's resolveHostFileDiff/commitHostWipChanges).
+//
+// `/setup/generate` KEEPS its own `hostId !== LOCAL_HOST_ID` 501 guard —
+// unlike preview/apply, it doesn't just read/write file content, it spawns
+// a real agent CLI turn (scaffold-generate.ts's generateScaffoldContent),
+// and that spawn currently always runs in THIS process's own filesystem
+// regardless of `hostId`. Lifting #895's read/write/diff/commit guard does
+// nothing for that separate blocker — see issue #1101 for the follow-up
+// (running the generation turn on the owning host itself).
 //
 // Preview and apply are split, per the plan's own "pure function, current
 // contents in, target contents out" framing: preview creates (or reuses) a
@@ -164,32 +165,13 @@ const applySchema = {
   },
 };
 
-export class PathEscapeError extends Error {
-  constructor(root: string, relPath: string) {
-    super(`Refusing to resolve "${relPath}" outside of "${root}"`);
-    this.name = "PathEscapeError";
-  }
-}
-
-/** Joins `root` and `relPath`, then verifies the result is still inside
- * `root` before returning it — CodeQL (js/path-injection), PR #896: every
- * path here is built from a project's own `cwd`/worktree path plus a
- * `slug` already validated by isValidScaffoldSlug (no separators, no `..`,
- * no dangerous property names), so this is defense-in-depth rather than
- * the only guard — but a manual containment check right at the join, not
- * just an earlier regex check three call frames away, is the shape CodeQL
- * (and a future reader) can actually verify by looking at THIS line alone.
- * Throws PathEscapeError rather than silently truncating or refusing —
- * every current caller already only ever calls this with slug-validated
- * inputs, so reaching the throw means something upstream regressed. */
-function resolveWithin(root: string, relPath: string): string {
-  const resolvedRoot = path.resolve(root);
-  const target = path.resolve(resolvedRoot, relPath);
-  if (target !== resolvedRoot && !target.startsWith(resolvedRoot + path.sep)) {
-    throw new PathEscapeError(resolvedRoot, relPath);
-  }
-  return target;
-}
+// Issue #895 — PathEscapeError/resolveWithin moved to services/safe-path.ts
+// so routes/internal.ts's own /internal/read-files and /internal/write-files
+// handlers (the agent-side implementation of a remote host's own local
+// read/write) can apply the identical containment guard. Re-exported here
+// so test/routes/project-setup.test.ts's existing import path
+// (`../../src/routes/project-setup.js`) keeps working unchanged.
+export { PathEscapeError };
 
 // Every path computeScaffold can ever emit, read up front so preview always
 // sees the CURRENT on-disk content (a previous scaffold's own output,
@@ -204,7 +186,7 @@ function scaffoldableRelPaths(slug: string, options: ScaffoldOptions): string[] 
     "AGENTS.md",
     // Issue #942 (this restructure) — CLAUDE.md is unconditional, same
     // reasoning as AGENTS.md above (not opt-in like CONTRIBUTING.md below):
-    // without this, readExistingFiles below never sees a real repo's own
+    // without this, readScaffoldableFiles below never sees a real repo's own
     // CLAUDE.md, computeScaffold treats it as absent, and the apply path
     // would silently OVERWRITE a real, possibly 200-line CLAUDE.md with a
     // scaffold-only `@AGENTS.md` import file instead of upserting into it.
@@ -216,7 +198,7 @@ function scaffoldableRelPaths(slug: string, options: ScaffoldOptions): string[] 
       : path.join(".agents", "skills", slug, "SKILL.md"),
   ];
   if (options.includeDockConfig) paths.push(path.join(".crs", "dock.json"));
-  // Issue #942 — without this, readExistingFiles below never sees a real
+  // Issue #942 — without this, readScaffoldableFiles below never sees a real
   // repo's CONTRIBUTING.md, computeScaffold treats it as absent, and the
   // apply path would silently OVERWRITE a real Code-of-Conduct/dev-setup
   // file with a pointer-only one instead of upserting into it.
@@ -224,38 +206,34 @@ function scaffoldableRelPaths(slug: string, options: ScaffoldOptions): string[] 
   return paths;
 }
 
-function readExistingFiles(cwd: string, relPaths: string[]): Record<string, string | undefined> {
-  // CodeQL (js/remote-property-injection), PR #896 — `relPath` is a
-  // slug-derived string used as an object key below; `Object.create(null)`
-  // removes the prototype entirely, so even a (currently unreachable,
-  // isValidScaffoldSlug already rejects it) `__proto__`/`constructor`/
-  // `prototype` value would land as an ordinary own property with no
-  // special behavior, rather than relying solely on the upstream slug
-  // check to keep this safe — same "guard the sink too, not just the
-  // caller" posture skill-name.ts's own header documents for the identical
-  // class of finding.
-  const existingFiles: Record<string, string | undefined> = Object.create(null);
-  for (const relPath of relPaths) {
-    const resolved = resolveWithin(cwd, relPath);
-    try {
-      existingFiles[relPath] = readFileSync(resolved, "utf8");
-    } catch (err) {
-      // A directory (or a symlink to one — e.g. a previously-scaffolded
-      // `.agents/skills/<slug>` in symlink mode) can't be read as text,
-      // but computeScaffold still needs to know it EXISTS so a
-      // re-scaffold doesn't clobber it (Hermes review, PR #896 round 2).
-      // Empty string is a safe existence-only sentinel: computeScaffold
-      // never actually reads this path's text content, only checks
-      // `!== undefined`.
-      if ((err as NodeJS.ErrnoException).code === "EISDIR") {
-        existingFiles[relPath] = "";
-      }
-      // Otherwise absent/unreadable — computeScaffold treats a missing
-      // key as "doesn't exist yet" and creates it fresh, same posture as
-      // every other soft-failure read in this codebase.
-    }
+/** Reads `relPaths`' current content off whichever host owns `cwd` —
+ * `readHostFiles` (host-files.ts, issue #895) directly for both local AND
+ * remote-hosted projects now, replacing this route's own former
+ * local-only `readFileSync` loop. `ok: false` here means the HOST itself
+ * couldn't be read at all (unreachable, or an old agent build predating
+ * #895's `/internal/read-files` route) — a real error the caller must
+ * surface, distinct from any individual path being absent (which
+ * `readHostFiles`'s own `HostFileMap` already represents as a missing key,
+ * per mullion-scaffold.ts's "missing key = doesn't exist yet" convention). */
+async function readScaffoldableFiles(
+  app: FastifyInstance,
+  hostId: string,
+  cwd: string,
+  relPaths: string[],
+): Promise<
+  { ok: true; files: Record<string, string | undefined> } | { ok: false; message: string }
+> {
+  const result = await readHostFiles(app, hostId, cwd, relPaths);
+  if (!result.ok) {
+    return {
+      ok: false,
+      message:
+        result.reason === "unsupported"
+          ? "This host's agent build doesn't support reading scaffold files yet — update the agent build (see issue #895)."
+          : `Could not read scaffold files from this host: ${result.detail}`,
+    };
   }
-  return existingFiles;
+  return { ok: true, files: result.value };
 }
 
 /** Issue #1082(c) — the ONLY mechanism that makes a refresh actually
@@ -266,7 +244,7 @@ function readExistingFiles(cwd: string, relPaths: string[]): Record<string, stri
  * make that path look absent to it — without touching computeScaffold's
  * own rule (which every non-refresh caller, preview included, still
  * depends on staying conservative by default). Returns a NEW null-prototype
- * record (same defensive posture as readExistingFiles above, for the same
+ * record (same defensive posture as readScaffoldableFiles above, for the same
  * CodeQL js/remote-property-injection reasoning — `refreshedPaths` here are
  * always scaffoldSkillPath/scaffoldReviewerPath's own slug-derived output,
  * but cloning this way costs nothing and keeps the guard uniform) rather
@@ -283,63 +261,6 @@ function withoutRefreshedPaths(
     if (!refreshedPaths.includes(key)) result[key] = existingFiles[key];
   }
   return result;
-}
-
-/** Ensures `dirPath` is a real directory before a plain file write into it
- * — Hermes review, PR #896 round 2: a same-slug re-preview that switches
- * OFF `symlinkAgentsSkills` leaves a stale symlink at exactly this path
- * (from the earlier symlink-mode preview); `mkdirSync(dirPath,
- * {recursive:true})` on a path that already exists as a symlink throws
- * (reproduced: ENOENT), so the plain-file write below never even got a
- * chance to run. Removing a stale symlink first mirrors the reverse fix
- * writeScaffoldEntries' own symlink branch already applies. */
-function ensureRealDir(dirPath: string): void {
-  try {
-    if (lstatSync(dirPath).isSymbolicLink()) {
-      rmSync(dirPath, { recursive: true, force: true });
-    }
-  } catch {
-    // ENOENT — nothing there yet, mkdirSync below creates it fresh.
-  }
-  mkdirSync(dirPath, { recursive: true });
-}
-
-function writeScaffoldEntries(
-  worktreePath: string,
-  entries: ReturnType<typeof computeScaffold>,
-): void {
-  for (const entry of entries) {
-    const targetPath = resolveWithin(worktreePath, entry.path);
-    if (entry.kind === "symlink") {
-      mkdirSync(path.dirname(targetPath), { recursive: true });
-      // Hermes review, PR #896 round 1 — the old code swallowed EVERY
-      // EEXIST, assuming whatever was already there was a matching
-      // symlink from a previous preview. That's wrong on a same-slug
-      // re-preview that switches FROM the plain-file variant TO the
-      // symlink variant (or vice versa, or after a hand-edit): the
-      // existing entry can be a directory or a stale symlink to a
-      // different target, and silently leaving it in place means apply
-      // commits content the user didn't actually opt into. Only skip the
-      // create when what's already there is a symlink pointing at the
-      // EXACT target we'd create anyway (content-compare-then-skip, same
-      // posture as mullion-bundle.ts's syncSkillDir); anything else is
-      // removed and replaced.
-      let alreadyCorrect = false;
-      try {
-        alreadyCorrect = readlinkSync(targetPath) === entry.target;
-      } catch {
-        // Not a symlink (ENOENT: nothing there yet; EINVAL: a real file/
-        // directory sits there instead) — fall through to remove+create.
-      }
-      if (!alreadyCorrect) {
-        rmSync(targetPath, { recursive: true, force: true });
-        symlinkSync(entry.target, targetPath);
-      }
-    } else {
-      ensureRealDir(path.dirname(targetPath));
-      writeFileSync(targetPath, entry.contents);
-    }
-  }
 }
 
 /** Reuses a previous preview's own scratch worktree ONLY when `liveSlugPreview`
@@ -359,7 +280,26 @@ function writeScaffoldEntries(
  * (`git worktree add -b <branch> ...`, never reusing an existing one), so
  * leaving the old branch behind would make that call fail with "a branch
  * named ... already exists" the very next time this runs. Hermes review,
- * PR #896, round 1. */
+ * PR #896, round 1.
+ *
+ * Issue #895 — worktree create/remove/branch-delete now go through
+ * `resolveBackend(app, hostId)` (session-backend.ts) instead of calling
+ * git-worktree.ts's local-only functions directly, so this works for a
+ * remote-hosted project's own filesystem the same way it always has for
+ * local ones (SessionBackend already dispatched these three per host,
+ * issue #271/#484 — #895 is what makes the REST of this route's own
+ * read/write/diff/commit steps catch up to that).
+ *
+ * Unlike host-git.ts's dispatchers, SessionBackend's remote methods don't
+ * wrap a network/protocol failure into a result value — they let
+ * HostUnreachableError/HostRequestError propagate (session-lifecycle.ts's
+ * resolveWorktreeCwd has the identical gap and the identical fix; mirrored
+ * here rather than imported since that function's own `WorktreeIntent`
+ * shape and "baseRef already known present" precondition don't fit this
+ * call site's reuse-or-create flow). Without this try/catch, an unreachable
+ * remote host during `createWorktree` would throw all the way out of this
+ * route as a bare 500 instead of the same `{created:false, reason, detail}`
+ * shape every OTHER creation failure here already produces. */
 async function reuseOrCreateWorktree(
   app: FastifyInstance,
   hostId: string,
@@ -368,21 +308,56 @@ async function reuseOrCreateWorktree(
   liveSlugPreview: PreviewRecord | null,
 ): Promise<CreateWorktreeResult> {
   const predictedPath = deriveWorktreePath(cwd, seed);
-  if (
-    liveSlugPreview &&
-    liveSlugPreview.worktreePath === predictedPath &&
-    existsSync(predictedPath)
-  ) {
-    return { created: true, path: predictedPath, branch: `mullion/${seed}` };
+  const backend = resolveBackend(app, hostId);
+  try {
+    const pathExists = await pathExistsOnHost(app, hostId, predictedPath);
+    if (liveSlugPreview && liveSlugPreview.worktreePath === predictedPath && pathExists) {
+      return { created: true, path: predictedPath, branch: `mullion/${seed}` };
+    }
+    if (pathExists) {
+      await backend.removeWorktree(predictedPath, cwd);
+      await backend.deleteBranch(cwd, `mullion/${seed}`, { force: true });
+    }
+    const baseRefResult = await resolveHostBaseRef(app, hostId, cwd);
+    const baseRef =
+      baseRefResult.ok && baseRefResult.value.baseRef ? baseRefResult.value.baseRef : "HEAD";
+    return await backend.createWorktree(cwd, baseRef, seed);
+  } catch (err) {
+    // Same HostRequestError/other-throw split as resolveWorktreeCwd's own
+    // doc comment: a rejection (the agent is up and refused the request)
+    // is a persistent condition, not a transient network blip.
+    if (err instanceof HostRequestError) {
+      app.log.warn({ hostId, err }, "reuseOrCreateWorktree: host rejected the request");
+      return { created: false, reason: "host-rejected", detail: err.message };
+    }
+    app.log.warn({ hostId, err }, "reuseOrCreateWorktree: host unreachable");
+    return {
+      created: false,
+      reason: "host-unreachable",
+      detail: err instanceof Error ? err.message : String(err),
+    };
   }
-  if (existsSync(predictedPath)) {
-    await removeWorktree(predictedPath, cwd);
-    await deleteBranch(cwd, `mullion/${seed}`, { force: true });
-  }
-  const baseRefResult = await resolveHostBaseRef(app, hostId, cwd);
-  const baseRef =
-    baseRefResult.ok && baseRefResult.value.baseRef ? baseRefResult.value.baseRef : "HEAD";
-  return createWorktree({ cwd, baseRef, seed });
+}
+
+/** Whether `p` already exists on whichever host owns it — `existsSync`
+ * directly for `LOCAL_HOST_ID` (byte-identical to this route's own
+ * pre-#895 behavior), or, for a remote host, whether `resolveHostGitStatus`
+ * reports it as a git repo. The two aren't perfectly equivalent (a stray
+ * non-repo directory at `p` reads `true` locally but `false` remotely — see
+ * this function's own review note) but `p` here is always a predicted
+ * `setup-<slug>` scratch-worktree path this route itself creates via
+ * `git worktree add`, never an arbitrary caller-supplied path — the only
+ * thing that can ever legitimately exist there is a worktree (hence a git
+ * repo, `isGitRepo`'s own `.git` check succeeds for a worktree's `.git`
+ * FILE just as it does for a real checkout's `.git` directory), so this
+ * divergence is not expected to matter in practice. There's no cheap,
+ * already-dispatched "does this path exist" primitive to use instead — this
+ * reuses resolveHostGitStatus rather than adding a new host-git.ts
+ * primitive just for an existence check. */
+async function pathExistsOnHost(app: FastifyInstance, hostId: string, p: string): Promise<boolean> {
+  if (hostId === LOCAL_HOST_ID) return existsSync(p);
+  const result = await resolveHostGitStatus(app, hostId, p);
+  return result.ok && result.value.isRepo;
 }
 
 interface PreviewRecord {
@@ -491,8 +466,14 @@ async function ensureSetupWorktree(
 // generate`: given an already-standing `setup-<slug>` worktree and the
 // `existingFiles` read from it, run computeScaffold, write the resulting
 // entries, diff them, and stash a PreviewRecord so `/setup/apply` can
-// commit/push/PR it completely unchanged.
+// commit/push/PR it completely unchanged. Issue #895 — write and diff now
+// go through host-files.ts/host-git.ts's dispatchers instead of this
+// route's own local-only fs/git calls, so this works for a remote-hosted
+// `worktree.path` (an agent's own filesystem) the same way it always has
+// for a local one.
 async function finishPreview(
+  app: FastifyInstance,
+  hostId: string,
   projectId: number,
   options: ScaffoldOptions,
   worktree: ReadyWorktree,
@@ -506,23 +487,34 @@ async function finishPreview(
       return { ok: false, status: 400, message: err.message };
     throw err;
   }
-  writeScaffoldEntries(worktree.path, entries);
-  // `git diff HEAD` never shows an untracked file, staged or not — every
-  // entry here is brand new (or a mirror the target repo never had
-  // before), so without staging them first getFileDiff below would
+  // `stage: true` — `git diff HEAD` never shows an untracked file, staged
+  // or not — every entry here is brand new (or a mirror the target repo
+  // never had before), so without staging them first the diff below would
   // silently return null for every single one and the preview would show
-  // an empty diff. `git add -A` here is purely to make the upcoming diff/
-  // preview complete; commitWipChanges (apply) does its own equivalent
+  // an empty diff. commitWipChanges (apply) does its own equivalent
   // staging pass regardless of what's already staged.
-  execFileSync("git", ["-C", worktree.path, "add", "-A"], {
-    stdio: "pipe",
-    env: gitEnv(),
-  });
+  const writeResult = await writeHostFiles(app, hostId, worktree.path, entries, { stage: true });
+  if (!writeResult.ok) {
+    return {
+      ok: false,
+      status: 500,
+      message:
+        writeResult.reason === "unsupported"
+          ? "This host's agent build doesn't support writing scaffold files yet — update the agent build (see issue #895)."
+          : `Could not write scaffold files to this host: ${writeResult.detail}`,
+    };
+  }
 
   const diffs = await Promise.all(
     entries.map(async (entry) => {
       if (entry.kind === "symlink") return null;
-      return getFileDiff(worktree.path, entry.path);
+      const diffResult = await resolveHostFileDiff(app, hostId, worktree.path, entry.path);
+      // Best-effort, same as getFileDiff's own never-throws contract — a
+      // diff that couldn't be fetched (host went unreachable between the
+      // write above and this read) degrades to "no diff shown for this
+      // file" rather than failing the whole preview; the write itself
+      // already succeeded and is what apply will actually commit.
+      return diffResult.ok ? diffResult.value : null;
     }),
   );
   const diff = diffs.filter((d): d is string => Boolean(d)).join("\n");
@@ -548,8 +540,9 @@ async function computeAndStorePreview(
   const ensured = await ensureSetupWorktree(app, project, projectId, options.slug);
   if (!ensured.ok) return { ok: false, status: 500, message: ensured.message };
   const relPaths = scaffoldableRelPaths(options.slug, options);
-  const existingFiles = readExistingFiles(ensured.worktree.path, relPaths);
-  return finishPreview(projectId, options, ensured.worktree, existingFiles);
+  const read = await readScaffoldableFiles(app, project.hostId, ensured.worktree.path, relPaths);
+  if (!read.ok) return { ok: false, status: 500, message: read.message };
+  return finishPreview(app, project.hostId, projectId, options, ensured.worktree, read.files);
 }
 
 function sendPreviewComputation(reply: FastifyReply, result: PreviewComputation) {
@@ -578,12 +571,10 @@ export async function projectSetupRoute(app: FastifyInstance) {
       if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
       const project = getProjectOr404(projectId);
       if (!project) return reply.notFound();
-      if (project.hostId !== LOCAL_HOST_ID) {
-        return reply.code(501).send({
-          message:
-            "Scaffolding Mullion integration into a remote-hosted project isn't supported yet — see issue #895",
-        });
-      }
+      // Issue #895 — no longer gated to LOCAL_HOST_ID: computeAndStorePreview
+      // reads/writes/diffs scaffold content on whichever host owns
+      // `project.cwd` via host-files.ts/host-git.ts's dispatchers, which
+      // work identically for a local or remote-hosted project.
 
       const options: ScaffoldOptions = {
         slug: request.body.slug,
@@ -611,14 +602,17 @@ export async function projectSetupRoute(app: FastifyInstance) {
       if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
       const project = getProjectOr404(projectId);
       if (!project) return reply.notFound();
-      // Issue #956 — identical shape to `/setup/preview`'s own 501 above
-      // (pre-existing precedent): the generation pass needs to read the
-      // ACTUAL codebase, which only exists on the host that owns it.
-      // Lifting this is issue #895's job, not this one's.
+      // Issue #895 — KEPT for this route only (preview/apply's own 501 was
+      // lifted): generateScaffoldContent doesn't just read/write scaffold
+      // file content, it spawns a real agent CLI turn
+      // (scaffold-generate.ts), and that spawn currently always runs in
+      // THIS process regardless of `hostId` — #895's read/write/diff/commit
+      // primitives don't touch that. See issue #1101 for the follow-up
+      // (running the generation turn itself on the owning host).
       if (project.hostId !== LOCAL_HOST_ID) {
         return reply.code(501).send({
           message:
-            "Scaffolding Mullion integration into a remote-hosted project isn't supported yet — see issue #895",
+            "Generating scaffold content for a remote-hosted project isn't supported yet — see issue #1101",
         });
       }
 
@@ -643,7 +637,14 @@ export async function projectSetupRoute(app: FastifyInstance) {
       const ensured = await ensureSetupWorktree(app, project, projectId, options.slug);
       if (!ensured.ok) return reply.internalServerError(ensured.message);
       const relPaths = scaffoldableRelPaths(options.slug, options);
-      const existingFiles = readExistingFiles(ensured.worktree.path, relPaths);
+      const read = await readScaffoldableFiles(
+        app,
+        project.hostId,
+        ensured.worktree.path,
+        relPaths,
+      );
+      if (!read.ok) return reply.internalServerError(read.message);
+      const existingFiles = read.files;
       const hasSkill = existingFiles[scaffoldSkillPath(options.slug)] !== undefined;
       const hasReviewer = existingFiles[scaffoldReviewerPath(options.slug)] !== undefined;
       const hasBriefingRegion = (existingFiles["AGENTS.md"] ?? "").includes(MARKER_START);
@@ -674,7 +675,7 @@ export async function projectSetupRoute(app: FastifyInstance) {
           `.claude/skills/${options.slug}/SKILL.md and .claude/agents/${options.slug}-reviewer.md ` +
             // "already exist" — NOT "are already committed": `hasSkill`/
             // `hasReviewer` come from the scratch worktree's OWN working
-            // tree (readExistingFiles), which a reused, still-uncommitted
+            // tree (readScaffoldableFiles), which a reused, still-uncommitted
             // preview window (reuseOrCreateWorktree's own doc comment) can
             // already show as present even before `/setup/apply` ever
             // commits anything — mullion-reviewer review, issue #1082(c).
@@ -736,6 +737,8 @@ export async function projectSetupRoute(app: FastifyInstance) {
       const writeExistingFiles = withoutRefreshedPaths(existingFiles, refreshedPaths);
 
       const result = await finishPreview(
+        app,
+        project.hostId,
         projectId,
         { ...options, generated },
         ensured.worktree,
@@ -759,12 +762,29 @@ export async function projectSetupRoute(app: FastifyInstance) {
         return reply.badRequest("This preview has expired or doesn't exist — run preview again");
       }
 
-      const commitResult = await commitWipChanges(
+      // Issue #895 — routed through commitHostWipChanges (host-git.ts)
+      // instead of calling git-worktree.ts's local-only commitWipChanges
+      // directly: `record.worktreePath` lives on whichever host actually
+      // owns `project.cwd`, which this route's own preview/generate steps
+      // already write scaffold content to via host-files.ts's
+      // writeHostFiles — committing it must run on that SAME host, not
+      // unconditionally against this process's own local filesystem (where
+      // a remote project's worktree path wouldn't even exist).
+      const commitResult = await commitHostWipChanges(
+        app,
+        project.hostId,
         record.worktreePath,
         `chore: scaffold Mullion integration (${record.slug})`,
       );
-      if (!commitResult.committed && commitResult.error) {
-        return reply.internalServerError(commitResult.error);
+      if (!commitResult.ok) {
+        return reply.internalServerError(
+          commitResult.reason === "unsupported"
+            ? "This host's agent build doesn't support committing scaffold changes yet — update the agent build (see issue #895)."
+            : `Could not commit the scaffold branch: ${commitResult.detail}`,
+        );
+      }
+      if (!commitResult.value.committed && commitResult.value.error) {
+        return reply.internalServerError(commitResult.value.error);
       }
 
       // Issue #1082(a) — stamped here, not earlier: this is the point the

@@ -100,7 +100,13 @@ replays what it's given.
   no host branching — see [`project-briefing.md`](project-briefing.md)),
   `project-setup` (`POST /api/projects/:id/setup/preview`/`apply` — scaffold
   a committed briefing region + starter skill/reviewer into a project's own
-  repo as a real pull request, local-host projects only for now — see
+  repo as a real pull request; works for local AND remote-hosted projects
+  (issue #895 — `host-files.ts`'s `readHostFiles`/`writeHostFiles`,
+  `host-git.ts`'s `resolveHostFileDiff`/`commitHostWipChanges`).
+  `POST /api/projects/:id/setup/generate` (real agent-generated content
+  instead of placeholder text) is still local-host only — it spawns an
+  agent CLI turn in-process rather than just reading/writing file content,
+  so #895's primitives don't cover it; see issue #1101 — see
   [`project-briefing.md`](project-briefing.md#scaffolding-it-into-the-repo-instead)),
   `workflow-conventions` (`GET /api/workflow-conventions/questions`, `POST
 /api/workflow-conventions/preview` — the two read-only endpoints backing

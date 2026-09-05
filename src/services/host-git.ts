@@ -17,6 +17,8 @@ import { getGitStatus, isGitRepo, type GitStatus } from "./git-status.js";
 import { resolveDefaultBaseRef, resolveCommitSha } from "./git-refs.js";
 import { pushBranch, type PushResult } from "./git-push.js";
 import { parseGitRemote, type GitHubRepoRef } from "./git-remote.js";
+import { getFileDiff } from "./git-diff.js";
+import { commitWipChanges, type CommitWipChangesResult } from "./git-worktree.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import {
   getRemoteHostClient,
@@ -75,7 +77,13 @@ export type HostGitResult<T> =
  * matters to the caller — instead of propagating as an uncaught throw that
  * would otherwise surface as a raw 500, contradicting this module's own
  * "never a 500" contract. */
-async function viaRemote<T>(
+// Exported (unlike the rest of this module's internals) so host-files.ts's
+// readHostFiles/writeHostFiles — a sibling dispatcher for a distinct concern
+// (arbitrary file content, not git plumbing) that still needs the exact
+// same HostGitResult error-mapping — can reuse it rather than duplicating
+// it. See host-files.ts's own header comment for why that primitive lives
+// in its own file instead of being added directly below.
+export async function viaRemote<T>(
   app: FastifyInstance,
   hostId: string,
   fn: (client: ReturnType<typeof getRemoteHostClient>) => Promise<T>,
@@ -160,6 +168,61 @@ export async function pushHostBranch(
     return { ok: true, value };
   }
   return viaRemote(app, hostId, (client) => client.resolvePushBranch(cwd, branch, token));
+}
+
+/**
+ * Best-effort unified diff for a single file against HEAD, on whichever
+ * host owns `cwd` — `getFileDiff` locally, the ALREADY-EXISTING
+ * `/internal/git-file-diff` route (issue #262, via
+ * `client.resolveGitFileDiff`) remotely. Unlike this module's other
+ * dispatchers, the remote route/client pair here predates issue #895 — this
+ * just adds the missing `host-git.ts`-shaped wrapper so
+ * routes/project-setup.ts's scaffold preview can get a per-file diff
+ * without reaching into `RemoteHostClient` directly, the same as every
+ * other caller in this file. `value: null` means "no diff" (matches HEAD,
+ * not a repo, or the git call failed) — never itself a `HostGitResult`
+ * failure; `ok: false` is reserved for "couldn't ask this host at all".
+ */
+export async function resolveHostFileDiff(
+  app: FastifyInstance,
+  hostId: string,
+  cwd: string,
+  filePath: string,
+): Promise<HostGitResult<string | null>> {
+  if (hostId === LOCAL_HOST_ID) {
+    return { ok: true, value: await getFileDiff(cwd, filePath) };
+  }
+  return viaRemote(app, hostId, async (client) => {
+    const { patch } = await client.resolveGitFileDiff(cwd, filePath);
+    return patch;
+  });
+}
+
+/**
+ * Salvages uncommitted work in `cwd` into a single commit, on whichever
+ * host owns it — `commitWipChanges` locally, a new `/internal/git-commit-wip`
+ * route remotely (issue #895: routes/project-setup.ts's `/setup/apply` is
+ * the first caller that needs this off the local filesystem — see that
+ * route's own comment on why `commitWipChanges` alone was silently wrong
+ * for a remote-hosted project's scaffold branch before this existed).
+ *
+ * Deliberately NOT wired into task-reconciler.ts's own local-only
+ * `commitWipChanges(task.worktreePath)` call (gated there behind an
+ * explicit `hostId === LOCAL_HOST_ID` check) — that is the SAME class of
+ * gap this primitive would fix, but changing Task Master's own WIP-salvage
+ * behavior is out of scope for issue #895 and deserves its own review —
+ * see issue #1100.
+ */
+export async function commitHostWipChanges(
+  app: FastifyInstance,
+  hostId: string,
+  cwd: string,
+  message?: string,
+): Promise<HostGitResult<CommitWipChangesResult>> {
+  if (hostId === LOCAL_HOST_ID) {
+    return { ok: true, value: await commitWipChanges(cwd, message) };
+  }
+  return viaRemote(app, hostId, (client) => client.resolveCommitWipChanges(cwd, message));
 }
 
 /**

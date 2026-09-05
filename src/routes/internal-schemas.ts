@@ -279,6 +279,56 @@ const GIT_FIELD_DEFS = {
     // sweep is unusual enough to warrant investigation, not a bigger cap.
     maxItems: 200,
   },
+  // Issue #895 — repo-relative paths to read scaffold-tracked content from
+  // (routes/project-setup.ts's readExistingFiles). Bounded the same way
+  // orphanPaths above is: mullion-scaffold.ts's own scaffoldableRelPaths
+  // never emits more than a handful of paths per slug, so 200 is generous
+  // headroom, not a real limit any caller approaches.
+  paths: {
+    type: "array",
+    items: { type: "string", minLength: 1 },
+    maxItems: 200,
+  },
+  // Issue #895 — the ScaffoldEntry[] shape mullion-scaffold.ts's
+  // computeScaffold produces (`{path, kind: "file", contents} | {path,
+  // kind: "symlink", target}`), duplicated here rather than imported: this
+  // file is the agent's own DB-less schema module (see its header comment)
+  // and mullion-scaffold.ts pulls in project-config.ts/skill-name.ts, which
+  // this module has no business depending on just to reuse one type. Kept
+  // deliberately loose (`contents`/`target` both optional strings, not a
+  // schema-level oneOf keyed on `kind`) — the route handler itself validates
+  // the kind-specific field is actually present before touching disk, the
+  // same "ajv shape is a first filter, not the whole guard" posture this
+  // file's other array-of-object fields (orphanPaths) already take.
+  entries: {
+    type: "array",
+    items: {
+      type: "object",
+      required: ["path", "kind"],
+      additionalProperties: false,
+      properties: {
+        path: { type: "string", minLength: 1 },
+        kind: { type: "string", enum: ["file", "symlink"] },
+        contents: { type: "string" },
+        target: { type: "string" },
+      },
+    },
+    // mullion-scaffold.ts's computeScaffold emits at most ~8 entries per
+    // slug (AGENTS.md/CLAUDE.md/CONTRIBUTING.md/skill/reviewer/mirror/dock
+    // config) — 50 is generous headroom, not a real limit any caller
+    // approaches.
+    maxItems: 50,
+  },
+  // Issue #895 — commitWipChanges' own optional commit message override
+  // (git-worktree.ts); left unbounded like every other free-text field in
+  // this file (briefingOverride is the one exception, bounded because it's
+  // OPERATOR-authored persistent config — this is a one-shot commit
+  // message, not stored config).
+  message: { type: "string" },
+  // Issue #895 — writeHostFiles' explicit opt-in to staging every change in
+  // `cwd` via `git add -A` after writing (host-files.ts's own doc comment
+  // on why this is a named, explicit flag rather than baked in unconditionally).
+  stage: { type: "boolean" },
 } satisfies Record<string, FieldSchema>;
 
 type GitFieldName = keyof typeof GIT_FIELD_DEFS;
@@ -465,6 +515,49 @@ export interface GitWorktreeResumeBody {
 // (#483) on a remote-hosted task.
 export const gitWorktreeResumeSchema = schemaFor({
   required: ["cwd", "branchName"],
+});
+
+export interface ReadFilesBody {
+  cwd: string;
+  paths: string[];
+}
+
+// Issue #895 — the agent-side counterpart of readHostFiles (host-files.ts),
+// for a remote-hosted project's scaffold preview/apply (routes/project-
+// setup.ts).
+export const readFilesSchema = schemaFor({
+  required: ["cwd", "paths"],
+});
+
+export interface ScaffoldEntryBody {
+  path: string;
+  kind: "file" | "symlink";
+  contents?: string;
+  target?: string;
+}
+
+export interface WriteFilesBody {
+  cwd: string;
+  entries: ScaffoldEntryBody[];
+  stage?: boolean;
+}
+
+// Issue #895 — the agent-side counterpart of writeHostFiles (host-files.ts).
+export const writeFilesSchema = schemaFor({
+  required: ["cwd", "entries"],
+  optional: ["stage"],
+});
+
+export interface GitCommitWipBody {
+  cwd: string;
+  message?: string;
+}
+
+// Issue #895 — the agent-side counterpart of commitWipChanges
+// (git-worktree.ts), for a remote-hosted project's scaffold apply.
+export const gitCommitWipSchema = schemaFor({
+  required: ["cwd"],
+  optional: ["message"],
 });
 
 export type PromoteDecisionBody = PromoteDecision;

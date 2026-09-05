@@ -34,6 +34,7 @@ import type { UrlGuardPolicy } from "./url-guard.js";
 import type { PromoteDecision } from "../plugins/hooks.js";
 import type {
   ClearOrphanedTaskWorktreeResult,
+  CommitWipChangesResult,
   CreateWorktreeResult,
   PruneWorktreesResult,
   RemoveIfCleanResult,
@@ -43,6 +44,7 @@ import type {
 import type { DeleteBranchResult } from "./git-branch-delete.js";
 import type { GitPullResult } from "./git-pull.js";
 import type { PushResult } from "./git-push.js";
+import type { ScaffoldEntry } from "./mullion-scaffold.js";
 
 // One HTTP+WS client per remote "agent" host (issue #26), talking to its
 // token-gated /internal/* API (src/routes/internal.ts). Every request sets
@@ -925,6 +927,53 @@ export class RemoteHostClient {
       },
       GIT_PUSH_REQUEST_TIMEOUT_MS,
     );
+  }
+
+  /** Reads `paths`' current content directly off this agent's own
+   * filesystem (#895) — mirrors /internal/read-files' `{cwd, paths}` ->
+   * `{files: Record<string, string|undefined>}` shape. A path absent from
+   * the returned record (or mapped to `undefined`) means "doesn't exist on
+   * this host yet" — the same "missing key = absent" convention
+   * computeScaffold's own `existingFiles` parameter already uses locally
+   * (mullion-scaffold.ts). */
+  async readFiles(cwd: string, paths: string[]): Promise<Record<string, string | undefined>> {
+    const result = await this.request<{ files: Record<string, string | undefined> }>(
+      "/internal/read-files",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ cwd, paths }),
+      },
+    );
+    return result.files;
+  }
+
+  /** Writes `entries` (files and/or symlinks) onto this agent's own
+   * filesystem, optionally staging every change afterward via `git add -A`
+   * (#895) — mirrors /internal/write-files' `{cwd, entries, stage?}` ->
+   * `{ok: true}` shape. See host-files.ts's writeHostFiles doc comment for
+   * why `stage` is a named, explicit opt-in rather than baked in
+   * unconditionally, and for why BOTH ScaffoldEntry variants (file and
+   * symlink) are supported remotely, not rejected. */
+  async writeFiles(cwd: string, entries: ScaffoldEntry[], stage?: boolean): Promise<void> {
+    await this.request("/internal/write-files", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ cwd, entries, stage }),
+    });
+  }
+
+  /** Salvages uncommitted work in `cwd` on this agent's own filesystem into
+   * a single commit (#895) — mirrors /internal/git-commit-wip's `{cwd,
+   * message?}` -> `CommitWipChangesResult` shape. See git-worktree.ts's
+   * commitWipChanges doc comment for the staging/no-op/never-throws
+   * contract this preserves over the wire. */
+  resolveCommitWipChanges(cwd: string, message?: string): Promise<CommitWipChangesResult> {
+    return this.request("/internal/git-commit-wip", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ cwd, message }),
+    });
   }
 
   /** Lists this agent's own on-disk task-worktree directories (#484) — for

@@ -379,11 +379,20 @@ export function computeScaffold(
     entries.push({
       path: path.join(".agents", "skills", slug),
       kind: "symlink",
-      // Relative from `.agents/skills/<slug>` (three path segments deep)
-      // back up to the repo root, then down into `.claude/skills/<slug>` —
-      // relative, not absolute, so the symlink resolves correctly
-      // regardless of where the repo is checked out.
-      target: path.join("..", "..", "..", ".claude", "skills", slug),
+      // Issue #895 (fixed pre-existing bug) — a relative symlink target is
+      // resolved by the OS relative to the LINK'S OWN DIRECTORY
+      // (`.agents/skills`, two segments deep), not the link's own full path
+      // including its own name. The previous three-".." target instead
+      // landed one level ABOVE the repo root (verified: a real symlink
+      // created with the old target failed to resolve at all in a repro —
+      // `symlinkAgentsSkills` mode was silently producing a dangling link
+      // for every project that used it, never caught by any existing test,
+      // none of which checked whether the link actually resolved to real
+      // content). This repo's own hand-made
+      // `.agents/skills/mullion-review-invariants` symlink is the ground
+      // truth this now matches: `../../.claude/skills/<slug>`, two levels
+      // up from `.agents/skills`, then down into `.claude/skills/<slug>`.
+      target: path.join("..", "..", ".claude", "skills", slug),
     });
   } else {
     // Always (re-)written, regardless of skillAlreadyExists — this mirror

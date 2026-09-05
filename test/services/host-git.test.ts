@@ -15,6 +15,8 @@ const mockResolveCommitSha = vi.fn();
 const mockPushBranch = vi.fn();
 const mockParseGitRemote = vi.fn();
 const mockGetRemoteHostClient = vi.fn();
+const mockGetFileDiff = vi.fn();
+const mockCommitWipChanges = vi.fn();
 
 vi.mock("../../src/services/git-status.js", () => ({
   getGitStatus: mockGetGitStatus,
@@ -29,6 +31,12 @@ vi.mock("../../src/services/git-push.js", () => ({
 }));
 vi.mock("../../src/services/git-remote.js", () => ({
   parseGitRemote: mockParseGitRemote,
+}));
+vi.mock("../../src/services/git-diff.js", () => ({
+  getFileDiff: mockGetFileDiff,
+}));
+vi.mock("../../src/services/git-worktree.js", () => ({
+  commitWipChanges: mockCommitWipChanges,
 }));
 vi.mock("../../src/services/remote-host-client.js", () => ({
   getRemoteHostClient: mockGetRemoteHostClient,
@@ -54,6 +62,8 @@ const {
   resolveHostGitStatus,
   resolveHostBaseRef,
   pushHostBranch,
+  resolveHostFileDiff,
+  commitHostWipChanges,
   resolveRepoRefResult,
   resolveRepoRef,
 } = await import("../../src/services/host-git.js");
@@ -266,6 +276,106 @@ describe("host-git.ts", () => {
         "mullion/task-1",
         "ghp_x",
       );
+
+      expect(result).toEqual({ ok: false, reason: "unsupported" });
+    });
+  });
+
+  // Issue #895
+  describe("resolveHostFileDiff", () => {
+    it("local: diffs via the real getFileDiff", async () => {
+      mockGetFileDiff.mockResolvedValue("--- a/AGENTS.md\n+++ b/AGENTS.md\n");
+
+      const result = await resolveHostFileDiff(fakeApp, "local", "/worktree", "AGENTS.md");
+
+      expect(mockGetFileDiff).toHaveBeenCalledWith("/worktree", "AGENTS.md");
+      expect(result).toEqual({ ok: true, value: "--- a/AGENTS.md\n+++ b/AGENTS.md\n" });
+    });
+
+    it("local: value:null when there's no diff — not an error", async () => {
+      mockGetFileDiff.mockResolvedValue(null);
+
+      const result = await resolveHostFileDiff(fakeApp, "local", "/worktree", "AGENTS.md");
+
+      expect(result).toEqual({ ok: true, value: null });
+    });
+
+    it("remote: proxies to the remote client's own per-file diff route, unwrapping {patch}", async () => {
+      const mockResolveGitFileDiff = vi.fn().mockResolvedValue({ patch: "diff text" });
+      mockGetRemoteHostClient.mockReturnValue({ resolveGitFileDiff: mockResolveGitFileDiff });
+
+      const result = await resolveHostFileDiff(
+        fakeApp,
+        "remote-host-1",
+        "/remote/worktree",
+        "AGENTS.md",
+      );
+
+      expect(mockResolveGitFileDiff).toHaveBeenCalledWith("/remote/worktree", "AGENTS.md");
+      expect(result).toEqual({ ok: true, value: "diff text" });
+    });
+
+    it("remote: an unreachable host maps to reason 'unreachable'", async () => {
+      mockGetRemoteHostClient.mockReturnValue({
+        resolveGitFileDiff: vi
+          .fn()
+          .mockRejectedValue(new HostUnreachableError("h1", new Error("timeout"))),
+      });
+
+      const result = await resolveHostFileDiff(fakeApp, "remote-host-1", "/x", "AGENTS.md");
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toBe("unreachable");
+    });
+  });
+
+  // Issue #895
+  describe("commitHostWipChanges", () => {
+    it("local: commits via the real commitWipChanges, passing the message through", async () => {
+      mockCommitWipChanges.mockResolvedValue({ committed: true });
+
+      const result = await commitHostWipChanges(fakeApp, "local", "/worktree", "chore: scaffold");
+
+      expect(mockCommitWipChanges).toHaveBeenCalledWith("/worktree", "chore: scaffold");
+      expect(result).toEqual({ ok: true, value: { committed: true } });
+    });
+
+    it("remote: proxies the message to the remote client's own commit-wip route", async () => {
+      const mockResolveCommitWipChanges = vi.fn().mockResolvedValue({ committed: true });
+      mockGetRemoteHostClient.mockReturnValue({
+        resolveCommitWipChanges: mockResolveCommitWipChanges,
+      });
+
+      const result = await commitHostWipChanges(
+        fakeApp,
+        "remote-host-1",
+        "/remote/worktree",
+        "chore: scaffold",
+      );
+
+      expect(mockResolveCommitWipChanges).toHaveBeenCalledWith(
+        "/remote/worktree",
+        "chore: scaffold",
+      );
+      expect(result).toEqual({ ok: true, value: { committed: true } });
+    });
+
+    it("remote: a git-level 'nothing to commit' no-op surfaces as ok:true with the inner committed:false — not conflated with a transport failure", async () => {
+      mockGetRemoteHostClient.mockReturnValue({
+        resolveCommitWipChanges: vi.fn().mockResolvedValue({ committed: false }),
+      });
+
+      const result = await commitHostWipChanges(fakeApp, "remote-host-1", "/remote/worktree");
+
+      expect(result).toEqual({ ok: true, value: { committed: false } });
+    });
+
+    it("remote: an old agent build (404) maps to reason 'unsupported'", async () => {
+      mockGetRemoteHostClient.mockReturnValue({
+        resolveCommitWipChanges: vi.fn().mockRejectedValue(new HostRequestError("h1", 404, "")),
+      });
+
+      const result = await commitHostWipChanges(fakeApp, "remote-host-1", "/remote/worktree");
 
       expect(result).toEqual({ ok: false, reason: "unsupported" });
     });
