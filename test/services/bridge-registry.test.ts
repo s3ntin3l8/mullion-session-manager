@@ -293,6 +293,28 @@ describe("bridge-registry", () => {
       const malformed = Buffer.from(JSON.stringify("just a string"), "utf8").toString("base64url");
       expect(decodePairingPayload(malformed)).toBeNull();
     });
+
+    // Issue #1055 — defense-in-depth: a corrupted/tampered payload must
+    // not produce a baseUrl that isn't a valid HTTP(S) URL, even though
+    // the helper CLI's own isValidHttpBaseUrl would catch it later. Catch
+    // it at the source so a corrupted paste can never reach the helper.
+    it("returns null when baseUrl isn't a well-formed HTTP(S) URL", () => {
+      const malformed = Buffer.from(
+        JSON.stringify({ baseUrl: "not a url", code: "abc" }),
+        "utf8",
+      ).toString("base64url");
+      expect(decodePairingPayload(malformed)).toBeNull();
+    });
+
+    it("returns null when baseUrl uses a non-http scheme (file://, ssh://, javascript:)", () => {
+      for (const scheme of ["file:///etc/passwd", "ssh://example.com", "javascript:alert(1)"]) {
+        const malformed = Buffer.from(
+          JSON.stringify({ baseUrl: scheme, code: "abc" }),
+          "utf8",
+        ).toString("base64url");
+        expect(decodePairingPayload(malformed)).toBeNull();
+      }
+    });
   });
 
   describe("cleanupExpiredPairingCodes (issue #1052)", () => {

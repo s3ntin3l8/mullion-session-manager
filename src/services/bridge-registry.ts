@@ -348,7 +348,13 @@ export function encodePairingPayload(payload: PairingPayload): string {
 
 /** Returns `null` for anything that isn't a well-formed payload — a
  * mistyped/truncated paste is a user-input-validation concern for the
- * caller (the CLI), not something this function throws over. */
+ * caller (the CLI), not something this function throws over.
+ *
+ * Issue #1055: also rejects payloads whose `baseUrl` isn't a well-formed
+ * HTTP(S) URL — defense-in-depth, since the helper CLI's later
+ * `isValidHttpBaseUrl` would catch it anyway, but catching it here means
+ * a corrupted or tampered payload never reaches the helper's connection
+ * code at all. */
 export function decodePairingPayload(encoded: string): PairingPayload | null {
   let parsed: unknown;
   try {
@@ -360,5 +366,22 @@ export function decodePairingPayload(encoded: string): PairingPayload | null {
   const { baseUrl, code } = parsed as Record<string, unknown>;
   if (typeof baseUrl !== "string" || typeof code !== "string") return null;
   if (baseUrl === "" || code === "") return null;
+  if (!isValidHttpUrl(baseUrl)) return null;
   return { baseUrl, code };
+}
+
+/** Mirrors the helper CLI's own `isValidHttpBaseUrl` — kept local here
+ * because this module is loaded in the backend process and the helper
+ * file is `.mjs` (ESM, no TS, deliberately separate so it doesn't pull
+ * in drizzle-orm). If either side ever changes the rule, the other must
+ * be updated by hand (same deliberate-duplication rationale as
+ * `decodePairingPayload` itself, called out at the top of the helper
+ * file). */
+function isValidHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
