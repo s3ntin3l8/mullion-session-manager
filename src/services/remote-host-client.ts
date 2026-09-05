@@ -223,6 +223,10 @@ export interface SessionTarget {
   // comments (pty-manager.ts) for the full multi-host reasoning.
   injectAgentGuide?: boolean;
   injectProjectBriefing?: boolean;
+  // Issue #1089 — for spawn() only, same posture as injectAgentGuide/
+  // injectProjectBriefing above. See CreateSessionOptions.injectMullionBundle's
+  // own doc comment (pty-manager.ts) for the full multi-host reasoning.
+  injectMullionBundle?: boolean;
   // See CreateSessionOptions.taskId's own doc comment (pty-manager.ts) —
   // Task Master spawn sites set this to flag an unattended worker
   // session, which the opencode adapter uses to deny superpowers skills

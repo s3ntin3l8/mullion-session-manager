@@ -60,12 +60,28 @@ async function runBundleSync(app: FastifyInstance): Promise<void> {
 // removeBundleContent themselves stay fully testable directly, against a
 // HOME redirected the same way agy.test.ts/codex.test.ts already do for
 // their own os.homedir()-derived paths.
-export const bundleSyncPlugin = fp(async (app: FastifyInstance) => {
-  if (process.env.NODE_ENV === "test") return;
+// Issue #1089 (A9) — named explicitly (unlike this repo's other `fp(...)`
+// plugins) so `app.hasPlugin("bundle-sync")` works: Fastify's own plugin
+// registry keys off this name, not the wrapped function's (anonymous, here)
+// `.name`. This exists purely for buildApp()-level registration tests (see
+// test/plugins/bundle-sync-registration.test.ts) — this plugin's own onReady
+// dispatch is gated behind the NODE_ENV=test guard below specifically so a
+// buildApp()-level test never does real filesystem I/O (see that guard's own
+// comment), which means a test going through buildApp() can't observe
+// registration via a fired dispatch the way test/plugins/bundle-sync.test.ts's
+// bare-Fastify unit tests do. `hasPlugin` sidesteps that entirely: it reflects
+// registration itself, independent of NODE_ENV, so a test can prove BOTH of
+// src/app.ts's registration call sites (primary and agent role) are actually
+// reached with no I/O risk at all.
+export const bundleSyncPlugin = fp(
+  async (app: FastifyInstance) => {
+    if (process.env.NODE_ENV === "test") return;
 
-  app.addHook("onReady", () => {
-    void runBundleSync(app).catch((err) => {
-      app.log.warn({ err }, "bundle-sync: boot sync threw");
+    app.addHook("onReady", () => {
+      void runBundleSync(app).catch((err) => {
+        app.log.warn({ err }, "bundle-sync: boot sync threw");
+      });
     });
-  });
-});
+  },
+  { name: "bundle-sync" },
+);

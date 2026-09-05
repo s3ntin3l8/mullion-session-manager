@@ -91,6 +91,11 @@ export interface SpawnSessionBody {
   // just a boolean type below.
   injectAgentGuide?: boolean;
   injectProjectBriefing?: boolean;
+  // Issue #1089 — see CreateSessionOptions.injectMullionBundle's own doc
+  // comment (pty-manager.ts). Already resolved to a definite boolean on the
+  // primary; no maxLength needed, just a boolean type below, same as
+  // injectAgentGuide/injectProjectBriefing above.
+  injectMullionBundle?: boolean;
   // Set ONLY by Task Master spawn sites (task-claim.ts /
   // task-reconciler.ts / task-reseed.ts) to flag an unattended worker
   // session, which the opencode adapter uses to deny superpowers skills
@@ -166,6 +171,8 @@ export const spawnSessionSchema = {
       projectReviewerAgent: { type: "string", maxLength: 8192 },
       injectAgentGuide: { type: "boolean" },
       injectProjectBriefing: { type: "boolean" },
+      // Issue #1089 — see the interface's own doc comment above.
+      injectMullionBundle: { type: "boolean" },
       // Spawn-time-only Task Master marker, forwarded verbatim from
       // SessionTarget (remote-host-client.ts) on the wire. See
       // CreateSessionOptions.taskId's own doc comment (pty-manager.ts) for

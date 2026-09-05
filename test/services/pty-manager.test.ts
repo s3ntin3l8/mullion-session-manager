@@ -6626,6 +6626,46 @@ describe("PtyManager", () => {
       fallbackManager.killAll();
     });
 
+    // Issue #1089 — same direct, adapter-independent proof as the
+    // injectAgentGuide/injectProjectBriefing test immediately above, for the
+    // independent sessions.injectMullionBundle setting: before this fix,
+    // getOrCreate() ignored `opts.injectMullionBundle` entirely and always
+    // used the manager's own live getInjectMullionBundle() closure, which is
+    // exactly the bug that let a remote agent host silently always inject
+    // the bundle regardless of what the primary's stored setting said.
+    it("getOrCreate()'s explicit injectMullionBundle opt wins over the manager's own live getInjectMullionBundle() closure", async () => {
+      const overrideManager = new PtyManager({
+        sessionsDir,
+        getInjectMullionBundle: () => true,
+      });
+      const session = overrideManager.getOrCreate({
+        id: "9003",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+        injectMullionBundle: false,
+      });
+      expect(session.injectMullionBundle).toBe(false);
+      overrideManager.killAll();
+    });
+
+    it("getOrCreate() falls back to the manager's live getInjectMullionBundle() closure when the opt is omitted (unchanged pre-#1089 behavior)", async () => {
+      const fallbackManager = new PtyManager({
+        sessionsDir,
+        getInjectMullionBundle: () => false,
+      });
+      const session = fallbackManager.getOrCreate({
+        id: "9004",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      expect(session.injectMullionBundle).toBe(false);
+      fallbackManager.killAll();
+    });
+
     it("injects OPENCODE_CONFIG_CONTENT pointing at this session's own tier-0 guide push when injectAgentGuide is on (issue #949, formerly #437c; default manager — getInjectAgentGuide defaults to () => true)", async () => {
       const session = manager.getOrCreate({
         id: "1",

@@ -222,14 +222,19 @@ working — the boot-time sync already runs automatically with no user action.
   entirely (manifest-tracked paths, a legacy sweep for pre-manifest
   installs, and agy's own `mullion` MCP entry) and turns
   `sessions.injectMullionBundle` off so it stays removed **on the
-  primary** (this command only runs there). A remote agent host
-  registered to this primary is unaffected and keeps re-syncing on its
-  own boot cycle regardless, since `injectMullionBundle` isn't threaded
-  from primary to agent hosts the way `injectAgentGuide`/
-  `injectProjectBriefing` are (see
-  issue #1089). No confirmation prompt at the CLI layer, same as
-  `session kill`/`preview delete` — a confirming UI is the dashboard
-  panel's job, not this command's.
+  primary** (this command only runs there). Issue #884-style threading
+  now propagates this setting to a new _session's_ own ephemeral
+  per-launch gate on a remote agent host (the `--plugin-dir`/
+  `skills.paths`/`installBundleSkills` decision each CLI adapter makes at
+  launch time). It does **not** reach that agent host's own **boot-time**
+  global sync (`src/plugins/bundle-sync.ts`'s `onReady` hook, which has no
+  per-session moment to thread a value through) — an agent host still
+  re-syncs the bundle into its own CLI config roots on its own boot cycle
+  regardless of what the primary's setting says, until that separate
+  mechanism gap closes (see issue #1089's own tracking of this remainder).
+  No confirmation prompt at the CLI layer, same as `session kill`/
+  `preview delete` — a confirming UI is the dashboard panel's job, not
+  this command's.
 
 ### events
 

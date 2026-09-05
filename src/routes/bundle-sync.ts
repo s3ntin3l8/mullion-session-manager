@@ -89,11 +89,15 @@ export async function bundleSyncRoute(app: FastifyInstance) {
   // plus its legacy sweep (mullion-bundle.ts's marker-checked
   // uninstallBundleSkills) and agy's own MCP-entry removal.
   //
-  // Primary-host-only: unlike injectAgentGuide/injectProjectBriefing
-  // (threaded from primary to agent hosts per issue #884), this setting
-  // isn't threaded to remote agent hosts, so this route has no effect on
-  // them — they keep re-syncing on their own boot cycle regardless (see
-  // issue #1089).
+  // Primary-host-only, still: issue #1089 threaded this setting to a new
+  // session's own ephemeral per-launch gate on a remote agent host
+  // (mirroring injectAgentGuide/injectProjectBriefing per issue #884), but
+  // that thread only exists at session-spawn time. An agent host's own
+  // boot-time global sync (bundle-sync.ts's plugin, onReady) has no
+  // per-session moment to receive it, so this route still has no effect on
+  // that mechanism — an agent host keeps re-syncing its own CLI config
+  // roots on its own boot cycle regardless (see #1089's own tracking of
+  // this remaining gap).
   app.post("/api/bundle-sync/remove", async (_request, reply) => {
     applySettingsPatch(app, { sessions: { injectMullionBundle: false } });
     const result = await uninstallBundleContent();

@@ -91,6 +91,12 @@ export interface SessionBackend {
     // re-derived" posture as briefingOverride above.
     injectAgentGuide?: boolean;
     injectProjectBriefing?: boolean;
+    // Issue #1089 — see CreateSessionOptions.injectMullionBundle's own doc
+    // comment (pty-manager.ts). Already resolved to a definite boolean by
+    // session-lifecycle.ts before this is ever called — same "forwarded to
+    // a remote host verbatim, never re-derived" posture as
+    // injectAgentGuide/injectProjectBriefing above.
+    injectMullionBundle?: boolean;
     // See CreateSessionOptions.taskId's own doc comment (pty-manager.ts) —
     // Task Master spawn sites set this to flag an unattended worker
     // session, which the opencode adapter uses to deny superpowers skills
@@ -305,6 +311,10 @@ class LocalBackend implements SessionBackend {
     smallModel?: string;
     injectAgentGuide?: boolean;
     injectProjectBriefing?: boolean;
+    // Issue #1089 — see SessionBackend.spawn's own doc comment on this
+    // field above. Forwarded to PtyManager.getOrCreate() verbatim, same as
+    // injectAgentGuide/injectProjectBriefing.
+    injectMullionBundle?: boolean;
     taskId?: number;
   }): Promise<SpawnResult> {
     // B6 fix — PtyManager.getOrCreate()/Session.spawn() themselves never
@@ -532,6 +542,11 @@ class RemoteBackend implements SessionBackend {
     smallModel?: string;
     injectAgentGuide?: boolean;
     injectProjectBriefing?: boolean;
+    // Issue #1089 — see SessionBackend.spawn's own doc comment on this
+    // field above. Forwarded to the remote agent verbatim over the wire
+    // (this.client.spawn below), same as injectAgentGuide/
+    // injectProjectBriefing.
+    injectMullionBundle?: boolean;
     taskId?: number;
   }): Promise<SpawnResult> {
     // Issue #271 follow-up — `resumeAgentSessionId` is deliberately dropped

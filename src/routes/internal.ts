@@ -1613,6 +1613,14 @@ export async function internalRoutes(app: FastifyInstance) {
         projectReviewerAgent,
         injectAgentGuide,
         injectProjectBriefing,
+        // Issue #1089 — see CreateSessionOptions.injectMullionBundle's own
+        // doc comment (pty-manager.ts). Forwarded verbatim to getOrCreate
+        // below, same as injectAgentGuide/injectProjectBriefing — this is
+        // the fix: before it, getOrCreate() ignored an explicit
+        // opts.injectMullionBundle entirely and always fell back to this
+        // agent's own DB-less getInjectMullionBundle() closure (always
+        // `true`), no matter what the primary's actual stored setting was.
+        injectMullionBundle,
         // Task Master marker — see CreateSessionOptions.taskId's own doc
         // comment (pty-manager.ts). Forwarded verbatim to getOrCreate
         // below; the opencode adapter reads it back off the resulting
@@ -1646,6 +1654,7 @@ export async function internalRoutes(app: FastifyInstance) {
         projectReviewerAgent,
         injectAgentGuide,
         injectProjectBriefing,
+        injectMullionBundle,
         taskId,
       });
       reply.code(201);
