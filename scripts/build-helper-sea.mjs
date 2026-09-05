@@ -47,6 +47,15 @@ const entryPoint = path.join(repoRoot, "src", "cli", "helper-main.mjs");
 // Issue #1058: a hand-typed `target` here was a maintenance footgun — a
 // future contributor who adds a Node 23+ API call would otherwise get a
 // silent transpile instead of a build failure.
+//
+// The parser above intentionally only handles the `>=X` shape (one regex
+// strips the prefix). A more permissive parser (ranges like `^X || ^Y`,
+// OR-ed version specifiers, etc.) would be unnecessary complexity:
+// engines.node is a single value the package itself controls, and an
+// invalid target — empty string, garbage, a range form esbuild can't
+// lower to a target — fails the build loudly inside esbuild with a clear
+// error pointing right at this line, which is a much better signal than
+// silently accepting whatever this parser happened to produce.
 const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
 const enginesNode = String(pkg.engines?.node ?? "").replace(/^>=/, "");
 const ESBUILD_TARGET = `node${enginesNode}`;
