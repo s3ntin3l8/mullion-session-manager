@@ -155,6 +155,13 @@
   color: var(--r);
   background: color-mix(in srgb, var(--r) 12%, transparent);
 }
+/* ProjectBriefingPanel.tsx's codex/agy scaffold-staleness notice (issue
+   #1083) — a caution, not a failed action, so it gets its own amber tone
+   rather than reusing .error's red. */
+.agent-rules-panel-notice.warning {
+  color: var(--y);
+  background: color-mix(in srgb, var(--y) 12%, transparent);
+}
 .agent-rules-panel-textarea {
   flex: 1;
   resize: none;

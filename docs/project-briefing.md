@@ -73,6 +73,17 @@ note, a skill, and a reviewer subagent per project, stored as one row in the
 `project_tooling` table (`src/services/project-tooling.ts`), with **no repo
 write**:
 
+**For skill/reviewer specifically, prefer Scaffold Mullion instead**
+(issue #1082(b)) — since #956 shipped agent-assisted scaffold-content
+generation (a real agent turn analyzing the actual codebase), free-text
+authoring here produces lower-quality, generic content by comparison, and
+the ProjectBriefingPanel UI itself now leads with a "use Scaffold Mullion"
+recommendation on those two fields. These two fields remain fully
+functional and are not deprecated — a manual override still has real uses
+(a repo Scaffold Mullion can't reach, or content the generated version
+doesn't quite get right) — they're just no longer the first thing to reach
+for. See "Scaffolding it into the repo instead" below.
+
 - **Pinned note** — a short, plain-text note, capped at 512 bytes
   (`MAX_PROJECT_BRIEFING_FIELD_BYTES`) — deliberately small: this is a
   live "pay attention to this" note, not a document. Deleting the row (not
@@ -144,10 +155,10 @@ entries.
 Delivery is per-CLI, since none of the four agents share a config format or
 an ephemeral-overlay mechanism:
 
-|                   | Claude Code                                       | opencode                                   | codex                | agy                  |
-| ----------------- | ------------------------------------------------- | ------------------------------------------ | -------------------- | -------------------- |
-| Project skill     | composed into a per-session `--plugin-dir` bundle | `skills.paths` config key, ephemeral       | no ephemeral overlay | no ephemeral overlay |
-| Reviewer subagent | same composed bundle, `agents/<name>.md`          | translated, `<CONFIG_DIR>/agent/<name>.md` | none                 | none                 |
+|                   | Claude Code                                       | opencode                                   | codex                                         | agy                                           |
+| ----------------- | ------------------------------------------------- | ------------------------------------------ | --------------------------------------------- | --------------------------------------------- |
+| Project skill     | composed into a per-session `--plugin-dir` bundle | `skills.paths` config key, ephemeral       | committed scaffold mirror only, never live    | committed scaffold mirror only, never live    |
+| Reviewer subagent | same composed bundle, `agents/<name>.md`          | translated, `<CONFIG_DIR>/agent/<name>.md` | none — no committed path exists for it either | none — no committed path exists for it either |
 
 - **Claude Code**: `hook-adapters/mullion-bundle.ts`'s
   `composeClaudeSessionBundle` materializes a per-session plugin directory —
@@ -173,6 +184,34 @@ an ephemeral-overlay mechanism:
   any subagent concept at all. There's no way to deliver a project skill to
   either without writing into the project's own repo — see the next
   section — and no way to deliver a reviewer subagent to either at all.
+  **The absence of a _live_ DB delivery channel is a permanent, structural
+  gap, not a "not implemented yet" one**
+  ([issue #1083](https://github.com/s3ntin3l8/mullion-session-manager/issues/1083)):
+  agy has no documented env var to relocate its config directory at all
+  (unlike Codex's `CODEX_HOME`, itself an all-or-nothing relocation, not a
+  surgical one — see `codex.ts`'s own comment), and the only writable
+  target for agy content, its host-global directory, is shared across
+  every project on the host — writing one project's live DB content there
+  would leak it into every other repo a session on that host opens agy in.
+  So for **skill** content specifically, the scaffold's committed
+  `.agents/skills/<slug>/SKILL.md` mirror (see "Scaffolding it into the
+  repo instead" below) is the _only_ path that ever reaches codex or agy —
+  editing the `project_tooling.skill` DB row after scaffolding changes
+  nothing those two CLIs actually see until the scaffold is re-run (or,
+  once a diff-aware refresh path lands, until someone explicitly triggers
+  one). For **reviewer** content, there is no committed path to codex/agy
+  at all _today_ — the scaffold's reviewer file only ever lands at
+  `.claude/agents/<slug>-reviewer.md`, a Claude-Code-only subagent
+  location — so the Mullion Briefing panel's reviewer field is inert for
+  codex and agy regardless of whether the project has been scaffolded.
+  Unlike the live-DB-channel gap above, this specific committed-path gap is
+  not claimed to be permanent — #1083 itself notes a scaffold-side agy
+  reviewer path is being worked on separately as its own follow-on track;
+  until that lands, though, there is no committed reviewer path to codex/agy
+  either, so the practical effect today is the same. This whole bullet is
+  deliberately scoped as documentation only: no code change to
+  `agy.ts`/`mullion-bundle.ts` is implied here, and the live-channel gap is
+  only worth revisiting if agy ever gains a real per-session config channel.
 
 The Mullion Briefing panel shows codex/agy as "requires repo setup" for the
 skill field for exactly this reason.
