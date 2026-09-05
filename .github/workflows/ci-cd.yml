@@ -379,7 +379,39 @@ jobs:
             exit 1
           fi
 
-      # Round 4 (PR5) — the macOS counterpart to test-windows's own Inno
+      # Issue #1054 — the round-trip the SSH-agent bridge fixes from rounds
+      # 1–3 (Retry-After renewal, bound sockets, health checks, TOCTOU
+      # revocation, validation, sign-only filter, ...) actually need: a
+      # full `mullion helper run` exercise against a real primary, with a
+      # real sign request round-tripped through the materialized bridge
+      # socket AND a real reconnect-ladder cycle after a simulated drop.
+      # Without this, every prior CI round on macOS verified the
+      # `install`/`uninstall` round trip and a `bogus` smoke test only —
+      # the actual bridge flow had NO end-to-end coverage here, even
+      # though it's the whole reason the .pkg ships.
+      #
+      # scripts/test-helper-run-e2e.mjs boots a real primary in-process
+      # (binding to a chosen loopback port, isolated SESSIONS_DIR so the
+      # sign request's materialized bridge socket doesn't collide with
+      # anything else on this runner), pairs via the spawned binary,
+      # runs the spawned binary with `--json-events`, drives a real
+      # SSH_AGENTC_SIGN_REQUEST through the primary's materialized
+      # ssh-agent.sock, asserts the bytes reach the helper's fake local
+      # agent AND the reply echoes back, then closes the bridge from
+      # the server side and asserts the helper's `disconnected` →
+      # `connected` cycle through the reconnect ladder fires. npx tsx
+      # (not a separate build step) keeps this isolated to a single
+      # CI step that finishes in seconds, same posture the other
+      # macOS-specific jobs take with their own ad-hoc shell scripts.
+      #
+      # 14321 is a real, unprivileged, ephemeral TCP port outside the
+      # `ephemeral port range` so the kernel will never auto-allocate it
+      # to another service mid-run. Anything in the dynamic range would
+      # race against the runner's own sockets.
+      - name: "mullion helper run end-to-end against a real primary"
+        run: npx tsx scripts/test-helper-run-e2e.mjs --port 14321 --timeout-ms 30000
+
+      # Round 4 (PR5, issue #820) — the macOS counterpart to test-windows's own Inno
       # Setup install/uninstall verification: build the real .pkg
       # (deploy/macos/build-pkg.sh, the SAME mullion-helper binary built
       # above), install it silently exactly the way an enterprise

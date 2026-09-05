@@ -226,8 +226,80 @@ jobs:
       - name: Smoke test the built binary
         run: |
           set -e
-          output=$(./build/helper-sea/mullion-helper bogus 2>&1) && code=0 || code=$?
-          if [ "$code" -ne 2 ]; then echo "expected exit code 2, got $code"; exit 1; fi
+          EXE=./build/helper-sea/mullion-helper
+
+          # Issue #1054 — the original `bogus` smoke test only proved the
+          # argv parser recognizes an unknown noun and returns 2. That's
+          # real but minimal — a regression in the `helper install`
+          # generator, the launchd plist generator, or the bundled
+          # SEA's own argv router would slip past a single `bogus`
+          # assertion. Augment with three more checks the build
+          # artifact has to pass before it ships:
+
+          # 1. Argv shape: `bogus` still returns 2 with the documented
+          #    message — the contract ssh-agent-helper.mjs's own
+          #    `runHelper` path returns for an unrecognized verb.
+          output=$("$EXE" bogus 2>&1) && code=0 || code=$?
+          echo "$output"
+          if [ "$code" -ne 2 ]; then echo "expected exit code 2 from bogus, got $code"; exit 1; fi
+          case "$output" in
+            *"unknown command: bogus"*) ;;
+            *) echo "unexpected bogus output: $output"; exit 1 ;;
+          esac
+
+          # 2. CLI intact: `helper run` without a credential file exits 1
+          #    with a clear "not paired yet" message — proving the verb
+          #    router (helper-main.mjs's `noun !== "helper"` branch +
+          #    runRun's own loadCredential-missing path) is wired. This
+          #    is the CLI's documented behavior for an unpaired helper,
+          #    and it's what a fresh macOS install sees before the user
+          #    runs `helper pair`.
+          #
+          # Two gotchas, both verified empirically rather than
+          # theoretically: (a) runRun's own SSH_AUTH_SOCK check (line 616
+          # of ssh-agent-helper.mjs) runs BEFORE loadCredential — so a
+          # bare `SSH_AUTH_SOCK=` is NOT enough to reach the
+          # "not paired yet" branch, it'd return at the SSH_AUTH_SOCK
+          # check first. Pass --ssh-auth-sock explicitly to bypass that
+          # gate. (b) MULLION_HELPER_STATE_DIR must point at a directory
+          # the runner user owns (and that loadCredential can read) —
+          # $RUNNER_TEMP is owned by the runner user and writable, so
+          # naming it directly works.
+          output=$(MULLION_HELPER_STATE_DIR="$RUNNER_TEMP/mullion-helper-empty" \
+            "$EXE" helper run --ssh-auth-sock /tmp/fake-agent.sock 2>&1) && code=0 || code=$?
+          echo "$output"
+          if [ "$code" -ne 1 ]; then echo "expected exit code 1 from unpaired helper run, got $code"; exit 1; fi
+          case "$output" in
+            *"not paired yet"*) ;;
+            *) echo "unexpected helper run output: $output"; exit 1 ;;
+          esac
+
+          # 3. Launchd round trip with the BUILT binary — a real
+          #    `launchctl bootstrap` / `launchctl bootout` against the
+          #    launchd job plist this build's own install generator
+          #    produces. Skips the actual `launchctl kickstart -k` (a CI
+          #    runner's non-interactive launchd session may not honor
+          #    the kickstart the same way a real interactive logon does;
+          #    test-macos's own "launchctl round trip" step explicitly
+          #    makes the same trade-off). MULLION_HELPER_STATE_DIR
+          #    isolates stateDir() consumers only — launchdPlistPath()
+          #    is hardcoded to ~/Library/LaunchAgents (ssh-agent-helper-
+          #    install.mjs's own doc), same as test-macos. Fine on the
+          #    single-use ephemeral macos-latest runner; not something to
+          #    copy to a persistent/self-hosted runner as-is.
+          MULLION_HELPER_STATE_DIR="$RUNNER_TEMP/mullion-helper-state" \
+            "$EXE" helper install --ssh-auth-sock /tmp/fake-agent.sock
+          LABEL="gui/$(id -u)/de.s3ntin3l8.mullion-helper"
+          if ! launchctl print "$LABEL" >/dev/null 2>&1; then
+            echo "release-please smoke: launchctl did not register $LABEL after install"
+            exit 1
+          fi
+          MULLION_HELPER_STATE_DIR="$RUNNER_TEMP/mullion-helper-state" \
+            "$EXE" helper uninstall
+          if launchctl print "$LABEL" >/dev/null 2>&1; then
+            echo "release-please smoke: $LABEL still registered after uninstall"
+            exit 1
+          fi
 
       - name: Build, checksum, and upload the macOS installer
         run: |
