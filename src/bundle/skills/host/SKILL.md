@@ -63,3 +63,13 @@ Full-scope-only MCP tools (`list_sessions`, `start_dock_session`,
 `stop_dock_session`, `list_projects`, `create_preview`, `delete_preview`)
 reply with a scope error from inside a session, same as the CLI's own —
 they're for an operator running `mullion mcp` directly, not for you.
+
+## If this project hasn't been scaffolded
+
+If the repo you're in has no Mullion-authored skill, reviewer subagent, or
+`AGENTS.md` briefing region, that's not a bug — it just means nobody has run
+Mullion's "Scaffold Mullion" flow here yet. Mention to the user that they
+can set this up from the Mullion dashboard rather than treating it as
+missing tooling; you have no scoped way to check this directly (`agents
+list` is full-scope only), so this is a nudge, not something to verify
+first.

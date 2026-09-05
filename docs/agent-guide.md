@@ -398,6 +398,50 @@ injection: check `~/.codex/hooks.json` / `~/.gemini/config/hooks.json`'s
 `SessionStart` command path against the currently-deployed
 `dist/hooks/forwarder.mjs` before assuming a code regression.
 
+## Where your skills actually come from
+
+The tier-0 push above (and the `host`/`browser`/`troubleshooting`/
+`session-ops`/`taskmaster-issues` skills it points you at) isn't delivered
+fresh per session anymore. Since issue #941, getting the shipped bundle
+(`src/bundle/skills/`) onto a host is a **host-local, boot-time,
+manifest-driven sync** (`src/services/bundle-sync.ts`, wired in by
+`src/plugins/bundle-sync.ts`), separate from anything a session spawn does:
+
+- **Runs automatically at boot.** A single `onReady` hook fires once per
+  Mullion process start — on the primary and on an `agent`-role host alike,
+  since both spawn sessions and own a filesystem — and installs the shipped
+  bundle into each of the four CLIs' own native global skill/agent
+  directories (or removes a prior install, if
+  `sessions.injectMullionBundle` is off).
+- **Self-healing.** The sync writes a manifest (`~/.mullion/bundle-sync.json`)
+  recording exactly which files/directories it owns and their hashes. If
+  you delete an installed skill by hand, the next boot's sync notices the
+  on-disk state no longer matches the manifest and reinstalls it — nobody
+  has to remember to re-run anything.
+- **Content-hash-gated.** The whole bundle is hashed as one unit, and that
+  hash is compared against the manifest's own `bundleHash` on every boot;
+  the (cheap, but non-zero) reinstall work only runs when the shipped
+  bundle's actual content changed — a Mullion upgrade that touched
+  `src/bundle/`, not every ordinary restart.
+- **A per-session fallback still exists for Claude Code and opencode.**
+  Their adapters check the manifest at launch time and only fall back to
+  their own ephemeral per-session delivery (`--plugin-dir`, `skills.paths`)
+  when boot-time sync hasn't installed the bundle on this host yet — e.g.
+  right after a Mullion upgrade, before the next boot. Codex and agy keep
+  their existing per-launch install step too, as the same kind of cheap
+  fallback.
+- **Status and manual control, from the UI.** Settings → Sessions surfaces
+  live per-CLI sync status with a manual re-sync/remove action, for
+  troubleshooting ("I deleted something, bring it back" or "I just
+  upgraded and want it now") — this is never a precondition for the
+  integration working; the sync above runs whether or not anyone ever
+  opens that panel.
+
+A project's own skill/reviewer subagent (the pinned-note/skill/reviewer
+feature — see [`project-briefing.md`](project-briefing.md)) is unrelated to
+this mechanism and still rides its own per-session, per-CLI channel exactly
+as described earlier in this doc.
+
 ## If something 403s
 
 You named a full-scope-only op, or a session id you're not pinned to. This

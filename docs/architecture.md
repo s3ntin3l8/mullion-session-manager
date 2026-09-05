@@ -40,6 +40,12 @@ replays what it's given.
   `event-store` (wires the persisted-history query surface behind
   `GET /api/events`), `push` (web-push subscription lifecycle), `agent-enrollment`,
   `host-heartbeat`, `github-pr-poller`, `webhook-reconciler`, `task-watcher`,
+  `bundle-sync` (issue #941 — a boot-time `onReady` hook, registered on both
+  the primary and an `agent`-role host, that syncs the shipped
+  `src/bundle/skills/` bundle into each CLI's own global skill/agent
+  directory once per process start, tracked by a manifest at
+  `~/.mullion/bundle-sync.json`; see `src/services/bundle-sync.ts` and
+  [`agent-guide.md`](agent-guide.md#where-your-skills-actually-come-from)),
   `git-fetcher`, `request-nonce` — the last several are the always-on
   primary-side pollers/reconcilers for multi-host, GitHub, Task Master, and
   webhook registration; see those subsystems' own docs for what each does.
