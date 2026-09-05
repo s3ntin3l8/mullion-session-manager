@@ -55,7 +55,12 @@ import type { WebSocket as NodeWebSocket, RawData } from "ws";
  * leak, but well past `WS_BACKPRESSURE_MAX_BUFFERED_BYTES`'s own 4 MiB
  * figure despite this module's design intent. Flagged rather than fixed
  * here, per Hermes's own recommendation to revisit once PR2+ actually
- * wires this module up to a real WebSocket in routes. */
+ * wires this module up to a real WebSocket in routes. Issue #1059 — this
+ * value is also pinned in test/fixtures/ssh-agent-filter-vectors.json
+ * (`muxTransport.channelWindowBytes`), and
+ * test/cli/ssh-agent-filter-constants.test.ts asserts this export matches
+ * the fixture AND the .mjs twin's matching export — a hand-edit that
+ * changes only one side fails the test instead of silently drifting. */
 export const CHANNEL_WINDOW_BYTES = 256 * 1024;
 
 /** A WINDOW_ADJUST is sent as soon as the consumed-since-last-adjust total

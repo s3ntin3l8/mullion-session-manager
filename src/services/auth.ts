@@ -157,6 +157,11 @@ export function hasValidBearerToken(
   const provided = authorizationHeader?.startsWith("Bearer ")
     ? authorizationHeader.slice("Bearer ".length)
     : "";
+  // Issue #1059 — both sides are fixed-length (server-minted token vs
+  // server-minted token, no user input on either side), so the
+  // length-short-circuit side channel is bounded to "are these both the
+  // same shape of credential" — see crypto-utils.ts's timingSafeTokenMatch
+  // own doc.
   return timingSafeTokenMatch(provided, trimmedExpected);
 }
 
@@ -164,6 +169,9 @@ export function hasValidBearerToken(
 export function isValidLoginToken(provided: string, config: AuthConfig): boolean {
   const expected = configuredToken(config);
   if (expected === "") return false;
+  // Issue #1059 — see crypto-utils.ts's timingSafeTokenMatch own doc;
+  // same fixed-length assumption applies (server-minted token on both
+  // sides).
   return timingSafeTokenMatch(provided, expected);
 }
 

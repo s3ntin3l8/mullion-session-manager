@@ -1263,6 +1263,9 @@ function resolveHandshake(
   // (untrimmed), a third inconsistent reading of "the configured token"
   // alongside the two AS2 already unified.
   const expected = configuredToken(app.config);
+  // Issue #1059 — both sides are fixed-length (operator-configured
+  // MULLION_AUTH_TOKEN vs inbound bearer); same fixed-length assumption as
+  // auth.ts / internal.ts — see crypto-utils.ts for the full constraint.
   if (expected !== "" && timingSafeTokenMatch(token, expected)) {
     return { scope: "full", sessionId: null };
   }

@@ -57,7 +57,11 @@ export const LENGTH_PREFIX_BYTES = 4;
  * `CHANNEL_WINDOW_BYTES` (ssh-agent-mux.ts) as a sensible, generous
  * ceiling — this bounds how much of an unterminated/hostile length prefix
  * this module will buffer before refusing to continue, not a tuned
- * protocol limit. */
+ * protocol limit. Issue #1059 — this value is also pinned in
+ * test/fixtures/ssh-agent-filter-vectors.json (`wireFormat.maxFrameBytes`),
+ * and test/cli/ssh-agent-filter-constants.test.ts asserts this export
+ * matches the fixture AND the .mjs twin's matching export — a hand-edit
+ * that changes only one side fails the test instead of silently drifting. */
 export const MAX_FRAME_BYTES = 256 * 1024;
 
 // SSH_AGENTC_* — client REQUEST message types this filter classifies.

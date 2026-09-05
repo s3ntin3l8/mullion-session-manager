@@ -3892,6 +3892,10 @@ export class PtyManager {
    * rather than Map.get(token) — see the hookTokens field doc comment. */
   resolveToken(token: string): string | undefined {
     for (const [candidate, id] of this.hookTokens) {
+      // Issue #1059 — both sides are fixed-length (server-minted
+      // Session.hookToken vs inbound bearer); same fixed-length
+      // assumption as auth.ts / internal.ts — see crypto-utils.ts for the
+      // full constraint.
       if (timingSafeTokenMatch(token, candidate)) return id;
     }
     return undefined;

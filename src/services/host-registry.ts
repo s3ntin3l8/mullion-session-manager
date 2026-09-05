@@ -275,6 +275,10 @@ export function claimHost(
     let isMatch = false;
     try {
       const decrypted = app.encryption.decryptString(row.authTokenEnc!);
+      // Issue #1059 — both sides are server-minted fixed-length secrets
+      // (see host-registry.ts's authToken issuer), so
+      // timingSafeTokenMatch's length-side-channel is bounded — see
+      // crypto-utils.ts for the full constraint.
       isMatch = timingSafeTokenMatch(presentedToken, decrypted);
     } catch (err) {
       app.log.warn(
@@ -386,6 +390,9 @@ function findLiveSession(
   const row = getHostRow(app, hostId);
   if (!row || !row.sessionIdEnc) return null;
   const decrypted = app.encryption.decryptString(row.sessionIdEnc);
+  // Issue #1059 — both sides are fixed-length (server-issued sessionId vs
+  // inbound bearer); same assumption as the authToken check in claimHost
+  // above — see crypto-utils.ts for the full constraint.
   if (!timingSafeTokenMatch(presentedSessionId, decrypted)) return null;
   if (!row.sessionExpiresAt || row.sessionExpiresAt.getTime() <= Date.now()) return null;
   return row;

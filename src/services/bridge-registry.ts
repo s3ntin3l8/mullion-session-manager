@@ -229,6 +229,10 @@ export function redeemPairingCode(
     let isMatch = false;
     try {
       const decrypted = app.encryption.decryptString(row.pairingSecretEnc!);
+      // Issue #1059 — both sides are server-minted fixed-length secrets
+      // (see bridge-registry.ts's pairingSecret issuer), so
+      // timingSafeTokenMatch's length-side-channel is bounded — see
+      // crypto-utils.ts for the full constraint.
       isMatch = timingSafeTokenMatch(presentedCode, decrypted);
     } catch (err) {
       app.log.warn(
@@ -269,6 +273,8 @@ function findLiveSession(
   const row = getBridgeRow(app, bridgeId);
   if (!row || !row.sessionIdEnc) return null;
   const decrypted = app.encryption.decryptString(row.sessionIdEnc);
+  // Issue #1059 — both sides are fixed-length (server-issued sessionId vs
+  // inbound bearer); same assumption as the pairing-secret check above.
   if (!timingSafeTokenMatch(presentedSessionId, decrypted)) return null;
   if (!row.sessionExpiresAt || row.sessionExpiresAt.getTime() <= Date.now()) return null;
   return row;

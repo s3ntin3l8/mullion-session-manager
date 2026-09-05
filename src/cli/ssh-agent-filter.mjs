@@ -48,6 +48,11 @@ export const LENGTH_PREFIX_BYTES = 4;
 
 // Matches CHANNEL_WINDOW_BYTES in ssh-agent-bridge-mux.mjs — see
 // ssh-agent-filter.ts's own doc comment for why this ceiling was chosen.
+// Issue #1059 — this value is also pinned in
+// test/fixtures/ssh-agent-filter-vectors.json (`wireFormat.maxFrameBytes`),
+// and test/cli/ssh-agent-filter-constants.test.ts asserts this export
+// matches the fixture AND the TS twin's matching export — a hand-edit
+// that changes only one side fails the test instead of silently drifting.
 export const MAX_FRAME_BYTES = 256 * 1024;
 
 // SSH_AGENTC_* — client REQUEST message types this filter classifies.
