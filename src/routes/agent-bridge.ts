@@ -238,13 +238,24 @@ export async function agentBridgeRoute(app: FastifyInstance) {
   });
 
   // PR7b — revokes a bridge from Settings. Closes the live connection (if
-  // any) BEFORE deleting the row: a revoked helper must stop being able to
+  // any) AND deletes the row: a revoked helper must stop being able to
   // serve signatures immediately, not whenever its socket happens to drop
   // on its own — deleting the row alone would leave an already-open
   // MuxConnection (and any channels ssh-agent-fanout.ts has paired through
   // it) completely unaffected, since nothing on that live connection's own
   // path re-checks the `bridges` table once a session is established
   // (verifyBridgeSession only runs at handshake time).
+  //
+  // Order — DELETE the row FIRST, THEN close the mux (issue #1053, the
+  // TOCTOU gap fix). The two calls are both synchronous against the
+  // better-sqlite3 driver, so a reconnecting helper's auth handshake
+  // (`verifyBridgeSession`, reading the row) cannot land between them:
+  // any concurrent verify that runs after this DELETE returns sees no
+  // row and rejects the credential, instead of succeeding against a row
+  // that is then immediately deleted out from under it and silently
+  // orphaning a freshly-tracked, freshly-rowless connection. The live
+  // mux close still fires from this route, so the helper's still-open
+  // socket tears down regardless of the ordering.
   app.delete<{ Params: { id: string } }>("/api/bridges/:id", async (request, reply) => {
     const { id } = request.params;
     if (getBridgeRow(app, id) === undefined) return reply.notFound();
@@ -258,13 +269,13 @@ export async function agentBridgeRoute(app: FastifyInstance) {
     // shrinks listHosts(), which reconcile() (ssh-agent-fanout.ts) reads
     // directly — but reconcile()'s desired set never reads the `bridges`
     // table at all, only app.connectedBridges.size (as a bare "is anything
-    // connected" gate) and listHosts(). deleteBridge() below changes
+    // connected" gate) and listHosts(). deleteBridge() above changes
     // neither of those, so a call right here would be a guaranteed no-op
     // in both branches (bridge was connected / wasn't) — the close
     // handler's own guarded call is the only one that actually needs to
     // fire, once connectedBridges genuinely shrinks.
-    app.connectedBridges.get(id)?.mux.close();
     deleteBridge(app, id);
+    app.connectedBridges.get(id)?.mux.close();
     return reply.code(204).send();
   });
 
