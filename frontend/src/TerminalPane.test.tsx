@@ -492,6 +492,7 @@ function renderPane(extra: { active?: boolean } = {}) {
         injectAgentGuide: true,
         injectProjectBriefing: true,
         injectMullionBundle: true,
+        workflowConventionsText: "",
         maxChildSessionsPerParent: 5,
         autoOpenChildPanels: false,
       },

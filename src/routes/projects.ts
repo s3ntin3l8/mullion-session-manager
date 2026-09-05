@@ -151,6 +151,15 @@ interface UpdateProjectBody {
   // setting) — same nullable-override shape as autoFetch above.
   injectAgentGuide?: boolean | null;
   injectProjectBriefing?: boolean | null;
+  // Issue #937 — per-project override of whether the GLOBAL
+  // settings.sessions.workflowConventionsText text gets injected into this
+  // project's sessions. `null` clears it (falls back to `true`, i.e.
+  // inject) — same nullable-override shape as injectAgentGuide/
+  // injectProjectBriefing above. Unlike those two, there is no matching
+  // global BOOLEAN setting to fall back to — the global tier here is the
+  // text itself (settings.ts), which has its own independent "empty means
+  // nothing to inject" gate.
+  injectWorkflowConventions?: boolean | null;
   // Same confirm-first contract as CreateProjectBody, above.
   createDir?: boolean;
   gitInit?: boolean;
@@ -194,6 +203,7 @@ const updateProjectSchema = {
       autoTagRelease: { type: ["boolean", "null"] },
       injectAgentGuide: { type: ["boolean", "null"] },
       injectProjectBriefing: { type: ["boolean", "null"] },
+      injectWorkflowConventions: { type: ["boolean", "null"] },
       createDir: { type: "boolean" },
       gitInit: { type: "boolean" },
     },
@@ -2682,6 +2692,7 @@ export async function projectsRoute(app: FastifyInstance) {
         autoTagRelease,
         injectAgentGuide,
         injectProjectBriefing,
+        injectWorkflowConventions,
         createDir,
         gitInit,
       } = request.body;
@@ -2739,10 +2750,11 @@ export async function projectsRoute(app: FastifyInstance) {
         conventionalCommitTitles === undefined &&
         autoTagRelease === undefined &&
         injectAgentGuide === undefined &&
-        injectProjectBriefing === undefined
+        injectProjectBriefing === undefined &&
+        injectWorkflowConventions === undefined
       ) {
         return reply.badRequest(
-          "At least one of name, cwd, devServerUrl, autoFetch, defaultAgent, defaultReviewAgent, mergeOnApprove, autoApprove, maxAutoReturnRounds, conventionalCommitTitles, autoTagRelease, injectAgentGuide, or injectProjectBriefing must be provided.",
+          "At least one of name, cwd, devServerUrl, autoFetch, defaultAgent, defaultReviewAgent, mergeOnApprove, autoApprove, maxAutoReturnRounds, conventionalCommitTitles, autoTagRelease, injectAgentGuide, injectProjectBriefing, or injectWorkflowConventions must be provided.",
         );
       }
 
@@ -2814,6 +2826,7 @@ export async function projectsRoute(app: FastifyInstance) {
           ...(autoTagRelease !== undefined ? { autoTagRelease } : {}),
           ...(injectAgentGuide !== undefined ? { injectAgentGuide } : {}),
           ...(injectProjectBriefing !== undefined ? { injectProjectBriefing } : {}),
+          ...(injectWorkflowConventions !== undefined ? { injectWorkflowConventions } : {}),
         })
         .where(eq(projects.id, projectId))
         .returning()

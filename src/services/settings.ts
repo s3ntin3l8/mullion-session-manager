@@ -280,6 +280,25 @@ export interface AppSettings {
     // comment for how claude-code.ts/opencode.ts reconcile the two once the
     // host-level sync has covered a given CLI.
     injectMullionBundle: boolean;
+    // Issue #937 — a single, install-wide, free-text "how we work" policy
+    // (branching, merge strategy, review process, ... — see
+    // workflow-conventions.ts's WORKFLOW_CONVENTION_QUESTIONS for the
+    // starter axes), injected into `additionalContext` for every session
+    // whose project hasn't opted out (projects.injectWorkflowConventions,
+    // schema.ts). Deliberately NOT written into the user's own global CLI
+    // config files (~/.claude/CLAUDE.md etc.) — those are the user's own,
+    // used identically with or without Mullion; this is Mullion's own
+    // opinionated default for Mullion-orchestrated work specifically, kept
+    // in its own lane. Default "": an empty value is its own independent
+    // "nothing to inject" gate (see session-lifecycle.ts's
+    // createSessionRecord and writeSessionWorkflowConventions's own doc
+    // comment) — distinct from injectAgentGuide/injectProjectBriefing
+    // above, which default to `true` because THEY gate a boolean, not a
+    // value. Populated by the structured wizard
+    // (buildWorkflowConventionsText) rather than hand-typed from a blank
+    // starter template, but ordinary free text from that point on — no
+    // separate wizard-answers state is stored alongside it.
+    workflowConventionsText: string;
     // Phase 5 (Track B, issue #193 5.3b) — hard cap on how many LIVE
     // (status "active") children a single session may have spawned via the
     // sessions.spawn_child control-socket op. Enforced in
@@ -511,6 +530,12 @@ export const DEFAULT_SETTINGS: AppSettings = {
     injectAgentGuide: true,
     injectProjectBriefing: true,
     injectMullionBundle: true,
+    // Empty by design — a fresh install has no opinion yet; Settings ->
+    // Sessions surfaces the wizard specifically so nobody has to hand-type
+    // this from a blank starter template. See this field's own doc comment
+    // above for why "" is itself the gate, not just an uninteresting
+    // default.
+    workflowConventionsText: "",
     maxChildSessionsPerParent: 5,
     autoOpenChildPanels: false,
   },

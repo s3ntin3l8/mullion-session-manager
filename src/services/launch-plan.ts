@@ -23,6 +23,7 @@ import { buildSessionEnv } from "./session-env.js";
 import { applyShellIntegrationEnv } from "./shell-integration.js";
 import { writeSessionAgentGuide } from "./agent-guide.js";
 import { writeSessionBriefing } from "./project-briefing.js";
+import { writeSessionWorkflowConventions } from "./workflow-conventions.js";
 import {
   applyHookAdapters,
   getAdapterInitialPromptArgs,
@@ -132,6 +133,11 @@ export interface LaunchPlanSession {
    * straight through to writeSessionBriefing below — `undefined` means "no
    * pinned note for this project", nothing else to decide. */
   readonly briefingOverride: string | undefined;
+  /** Issue #937 — see CreateSessionOptions.workflowConventionsText's own
+   * doc comment (pty-manager.ts). Passed straight through to
+   * writeSessionWorkflowConventions below — `undefined` means "nothing to
+   * inject for this session", nothing else to decide. */
+  readonly workflowConventionsText: string | undefined;
   /** See HookAdapterContext.projectSkill's own doc comment
    * (hook-adapters/types.ts) — passed straight through to applyHookAdapters
    * below, nothing here decides anything about it. */
@@ -310,6 +316,26 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
     session.id,
     console,
     session.briefingOverride,
+  );
+
+  // Issue #937 — same unconditional-write / must-precede-applyHookAdapters
+  // posture as writeSessionAgentGuide/writeSessionBriefing immediately
+  // above, and for the identical reason: the opencode adapter's
+  // prepareLaunch does its own existsSync check on this exact per-session
+  // path. Unlike writeSessionBriefing, `session.workflowConventionsText` is
+  // ALREADY fully gated (session-lifecycle.ts resolved both the project's
+  // injectWorkflowConventions column and the global text's non-emptiness
+  // before this ever ran) — there is no separate boolean for hooks.ts/
+  // opencode.ts to re-check, so an existsSync/read on this file alone
+  // faithfully reflects both gates at once. See
+  // writeSessionWorkflowConventions's own doc comment (workflow-conventions.ts)
+  // for why an empty string is treated the same as `undefined` here, unlike
+  // writeSessionBriefing's own deliberately-different posture.
+  writeSessionWorkflowConventions(
+    path.dirname(session.hookSocketPath),
+    session.id,
+    console,
+    session.workflowConventionsText,
   );
 
   // Phase 2 (issue #174): if `session.command` matches a known agent with a

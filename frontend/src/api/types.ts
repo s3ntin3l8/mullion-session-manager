@@ -127,6 +127,13 @@ export interface Project {
   // src/db/schema.ts's projects.injectAgentGuide/injectProjectBriefing.
   injectAgentGuide: boolean | null;
   injectProjectBriefing: boolean | null;
+  // Issue #937 — per-project override of whether the GLOBAL
+  // settings.sessions.workflowConventionsText text gets injected. Null
+  // means "inherit `true` (inject)" — same nullable-override shape as
+  // injectAgentGuide/injectProjectBriefing above, but with no matching
+  // global BOOLEAN setting to inherit from (the global tier here is the
+  // text itself). Mirrors src/db/schema.ts's projects.injectWorkflowConventions.
+  injectWorkflowConventions: boolean | null;
 }
 
 // Mirrors src/services/host-registry.ts's HostSummary, plus the live
@@ -1358,6 +1365,15 @@ export interface AppSettings {
     // above (a different mechanism entirely, not a SessionStart injection).
     // Surfaced in Settings.tsx's Sessions section.
     injectMullionBundle: boolean;
+    // Issue #937 — mirrors src/services/settings.ts 1:1. A single,
+    // install-wide, free-text "how we work" policy, injected into
+    // additionalContext for every session whose project hasn't opted out
+    // (projects.injectWorkflowConventions). Default "" (nothing configured
+    // yet) — surfaced in Settings.tsx's Sessions section, populated by the
+    // structured wizard (GET /api/workflow-conventions/questions, POST
+    // /api/workflow-conventions/preview) rather than hand-typed from a
+    // blank starter template.
+    workflowConventionsText: string;
     // Phase 5 (Track B, issue #193 5.3b) — mirrors src/services/settings.ts
     // 1:1. Surfaced in Settings.tsx's Sessions section ("Max child sessions
     // per parent").
@@ -1414,6 +1430,23 @@ type DeepPartial<T> =
   T extends Array<unknown> ? T : T extends object ? { [K in keyof T]?: DeepPartial<T[K]> } : T;
 
 export type SettingsPatch = DeepPartial<AppSettings>;
+
+// Issue #937 — mirrors src/services/workflow-conventions.ts's
+// WorkflowConventionOption/WorkflowConventionQuestion 1:1. Fetched via GET
+// /api/workflow-conventions/questions rather than duplicated by hand here,
+// so the frontend's wizard can never drift from the actual assembly table
+// buildWorkflowConventionsText reads server-side.
+export interface WorkflowConventionOption {
+  id: string;
+  label: string;
+  fragment: string;
+}
+
+export interface WorkflowConventionQuestion {
+  id: string;
+  question: string;
+  options: WorkflowConventionOption[];
+}
 
 // #95 — matches the standard PushSubscription.toJSON() shape and
 // src/routes/push.ts's subscribeSchema exactly (additionalProperties:

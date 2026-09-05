@@ -217,4 +217,55 @@ describe("settings route", () => {
 
     await app.close();
   });
+
+  // Issue #937 — get/set round trip for the new global text setting.
+  // Defaults to "" (an install with no configured convention text yet).
+  it("defaults sessions.workflowConventionsText to an empty string", async () => {
+    const app = await buildApp();
+
+    const res = await app.inject({ method: "GET", url: "/api/settings" });
+    expect(res.json().sessions.workflowConventionsText).toBe("");
+    expect(DEFAULT_SETTINGS.sessions.workflowConventionsText).toBe("");
+
+    await app.close();
+  });
+
+  it("round-trips sessions.workflowConventionsText through PATCH and a subsequent GET", async () => {
+    const app = await buildApp();
+
+    const patched = await app.inject({
+      method: "PATCH",
+      url: "/api/settings",
+      payload: { sessions: { workflowConventionsText: "Always branch, never commit to main." } },
+    });
+    expect(patched.statusCode).toBe(200);
+    expect(patched.json().sessions.workflowConventionsText).toBe(
+      "Always branch, never commit to main.",
+    );
+
+    const fetched = await app.inject({ method: "GET", url: "/api/settings" });
+    expect(fetched.json().sessions.workflowConventionsText).toBe(
+      "Always branch, never commit to main.",
+    );
+
+    await app.close();
+  });
+
+  it("clearing sessions.workflowConventionsText back to an empty string round-trips too", async () => {
+    const app = await buildApp();
+
+    await app.inject({
+      method: "PATCH",
+      url: "/api/settings",
+      payload: { sessions: { workflowConventionsText: "some text" } },
+    });
+    const cleared = await app.inject({
+      method: "PATCH",
+      url: "/api/settings",
+      payload: { sessions: { workflowConventionsText: "" } },
+    });
+    expect(cleared.json().sessions.workflowConventionsText).toBe("");
+
+    await app.close();
+  });
 });

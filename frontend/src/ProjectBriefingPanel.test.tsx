@@ -441,8 +441,9 @@ describe("ProjectBriefingPanel", () => {
       render(<ProjectBriefingPanel params={{ projectId: 1 }} />);
 
       await screen.findByText("Agent guide");
-      // Two inherited chips — one per field — since neither is overridden.
-      expect(screen.getAllByTitle("Inherited from the global setting")).toHaveLength(2);
+      // Three inherited chips — one per field (including issue #937's
+      // Workflow conventions row) — since none is overridden.
+      expect(screen.getAllByTitle("Inherited from the global setting")).toHaveLength(3);
     });
 
     it("shows an explicit override with a reset button, not the inherited chip", async () => {
@@ -458,8 +459,9 @@ describe("ProjectBriefingPanel", () => {
       render(<ProjectBriefingPanel params={{ projectId: 1 }} />);
 
       await screen.findByText("Agent guide");
-      // Only the OTHER field (injectProjectBriefing, still null) is inherited.
-      expect(screen.getAllByTitle("Inherited from the global setting")).toHaveLength(1);
+      // Only the two OTHER fields (injectProjectBriefing/
+      // injectWorkflowConventions, still null) are inherited.
+      expect(screen.getAllByTitle("Inherited from the global setting")).toHaveLength(2);
       expect(screen.getByTitle("Reset to the global default")).toBeInTheDocument();
     });
 
@@ -504,6 +506,50 @@ describe("ProjectBriefingPanel", () => {
       await user.click(screen.getByTitle("Reset to the global default"));
 
       expect(updateProject).toHaveBeenCalledWith(1, { injectProjectBriefing: null });
+    });
+
+    // Issue #937 — same pattern as the injectAgentGuide/injectProjectBriefing
+    // rows above, but with no global boolean setting to read (see
+    // ProjectBriefingPanel.tsx's own comment: `null` always inherits `true`).
+    it("shows the Workflow conventions row and toggles it to an explicit value", async () => {
+      useDashboardStore.setState({ projects: [makeProject({ id: 1 })] });
+      const updateProject = vi.fn().mockResolvedValue({});
+      useDashboardStore.setState({ updateProject });
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({
+          get: () => jsonResponse(200, { briefing: null, skill: null, reviewerAgent: null }),
+        }),
+      );
+      const user = userEvent.setup();
+      render(<ProjectBriefingPanel params={{ projectId: 1 }} />);
+
+      await screen.findByText("Workflow conventions");
+      const toggle = screen.getByRole("button", { name: "Workflow conventions" });
+      await user.click(toggle);
+
+      expect(updateProject).toHaveBeenCalledWith(1, { injectWorkflowConventions: false });
+    });
+
+    it("clicking the Workflow conventions reset button calls updateProject with null", async () => {
+      useDashboardStore.setState({
+        projects: [makeProject({ id: 1, injectWorkflowConventions: true })],
+      });
+      const updateProject = vi.fn().mockResolvedValue({});
+      useDashboardStore.setState({ updateProject });
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({
+          get: () => jsonResponse(200, { briefing: null, skill: null, reviewerAgent: null }),
+        }),
+      );
+      const user = userEvent.setup();
+      render(<ProjectBriefingPanel params={{ projectId: 1 }} />);
+
+      await screen.findByText("Workflow conventions");
+      await user.click(screen.getByTitle("Reset to the global default"));
+
+      expect(updateProject).toHaveBeenCalledWith(1, { injectWorkflowConventions: null });
     });
   });
 });
