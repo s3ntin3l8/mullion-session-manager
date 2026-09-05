@@ -56,6 +56,19 @@ export function isValidScaffoldSlug(slug: string): boolean {
   return slug.length > 0 && !isDangerousSkillName(slug);
 }
 
+/** Issue #956 — the two committed-file paths computeScaffold itself
+ * hardcodes below, exported so scaffold-generate.ts's generation prompt and
+ * output validation (the reviewer file must reference the skill's actual
+ * path) and project-setup.ts's own existing-file probing never
+ * independently re-derive the same join and risk drifting from it. */
+export function scaffoldSkillPath(slug: string): string {
+  return path.join(".claude", "skills", slug, "SKILL.md");
+}
+
+export function scaffoldReviewerPath(slug: string): string {
+  return path.join(".claude", "agents", `${slug}-reviewer.md`);
+}
+
 export interface ScaffoldOptions {
   /** Names the project's own skill (`.claude/skills/<slug>/SKILL.md`,
    * `.agents/skills/<slug>/SKILL.md`) and reviewer subagent
@@ -97,6 +110,24 @@ export interface ScaffoldOptions {
    * actually useful for an arbitrary target repo; guessing wrong would be
    * worse than an empty file the project can hand-edit. */
   includeDockConfig?: boolean;
+  /** Issue #956 — real, codebase-specific content produced by a generation
+   * agent turn (routes/project-setup.ts's `/setup/generate`), rather than
+   * this module's own static placeholder text. Optional and per-field: any
+   * field left unset falls back to the placeholder generator it replaces,
+   * so every existing preview/apply call site (and every existing test)
+   * that never sets `generated` keeps producing EXACTLY the same bytes as
+   * before this issue — computeScaffold itself stays pure and agent-free,
+   * generation happens entirely upstream in the route, and its OUTPUT is
+   * just more `ScaffoldOptions` data flowing into the same pure function.
+   * This is deliberate: computeScaffold's whole reason for existing is the
+   * "preview and apply are provably the same bytes" argument in this
+   * module's own header, which only holds if it never has an I/O- or
+   * agent-turn-shaped side effect of its own. */
+  generated?: {
+    skill?: string;
+    reviewer?: string;
+    briefingRegion?: string;
+  };
 }
 
 export type ScaffoldEntry =
@@ -258,7 +289,7 @@ export function computeScaffold(
   const { slug } = options;
   const entries: ScaffoldEntry[] = [];
 
-  const region = briefingRegionBody(slug);
+  const region = options.generated?.briefingRegion ?? briefingRegionBody(slug);
   entries.push({
     path: "AGENTS.md",
     kind: "file",
@@ -322,24 +353,25 @@ export function computeScaffold(
   // there — real content for a text file, or an empty-string existence
   // sentinel for a directory/symlink it can't read as text (see that
   // function's own doc comment).
-  const skillPath = path.join(".claude", "skills", slug, "SKILL.md");
+  const skillPath = scaffoldSkillPath(slug);
   const skillAlreadyExists = existingFiles[skillPath] !== undefined;
   // Whatever the skill's FINAL content is (freshly generated, or the
   // existing repo's own content preserved) is what the `.agents/skills`
   // mirror below copies — never its own independently-regenerated starter
   // text, which would silently diverge from a preserved `.claude/skills`
   // copy the moment a re-scaffold ran.
-  const skillContent = existingFiles[skillPath] ?? skillFileContents(slug);
+  const skillContent =
+    existingFiles[skillPath] ?? options.generated?.skill ?? skillFileContents(slug);
   if (!skillAlreadyExists) {
     entries.push({ path: skillPath, kind: "file", contents: skillContent });
   }
 
-  const reviewerPath = path.join(".claude", "agents", `${slug}-reviewer.md`);
+  const reviewerPath = scaffoldReviewerPath(slug);
   if (existingFiles[reviewerPath] === undefined) {
     entries.push({
       path: reviewerPath,
       kind: "file",
-      contents: reviewerAgentFileContents(slug),
+      contents: options.generated?.reviewer ?? reviewerAgentFileContents(slug),
     });
   }
 

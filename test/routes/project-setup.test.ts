@@ -7,7 +7,9 @@ import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { gitEnv } from "../../src/services/git-env.js";
 import { PathEscapeError, __testing } from "../../src/routes/project-setup.js";
+import { writeProjectSkill } from "../../src/services/project-tooling.js";
 import type * as GithubIntegration from "../../src/services/github-integration.js";
+import type * as ScaffoldGenerate from "../../src/services/scaffold-generate.js";
 
 vi.mock("../../src/services/github-integration.js", async (importOriginal) => {
   const actual = await importOriginal<typeof GithubIntegration>();
@@ -15,6 +17,27 @@ vi.mock("../../src/services/github-integration.js", async (importOriginal) => {
 });
 
 const { resolveGitHubToken } = await import("../../src/services/github-integration.js");
+
+// Issue #956 — every `/setup/generate` test below mocks this module's own
+// `generateScaffoldContent` rather than letting the route invoke a real
+// CLI/LLM turn (the task brief's own instruction: mock the agent-turn
+// spawn in tests). `importOriginal` keeps the real error classes
+// (`UnsupportedGenerationAgentError` etc.) intact, since project-setup.ts
+// imports and `instanceof`-checks those directly.
+vi.mock("../../src/services/scaffold-generate.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof ScaffoldGenerate>();
+  return { ...actual, generateScaffoldContent: vi.fn() };
+});
+
+const { generateScaffoldContent } = await import("../../src/services/scaffold-generate.js");
+
+function mockValidGeneration(slug: string) {
+  vi.mocked(generateScaffoldContent).mockResolvedValue({
+    skill: `---\nname: ${slug}\n---\nGenerated: real invariant about ${slug}.\n`,
+    reviewer: `---\nname: ${slug}-reviewer\n---\nRead .claude/skills/${slug}/SKILL.md first.\n`,
+    briefingRegion: `The generated skill lives at .claude/skills/${slug}/SKILL.md.`,
+  });
+}
 
 function git(cwd: string, args: string[]) {
   execFileSync("git", args, { cwd, stdio: "pipe", env: gitEnv() });
@@ -76,6 +99,7 @@ describe("project-setup route", () => {
     repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "project-setup-repo-"));
     initRepo(repoDir);
     vi.mocked(resolveGitHubToken).mockResolvedValue(null);
+    vi.mocked(generateScaffoldContent).mockReset();
   });
 
   afterEach(() => {
@@ -457,6 +481,247 @@ describe("project-setup route", () => {
     expect(onDisk).toContain("## Architecture");
     expect(onDisk).toContain("Some hand-written architecture notes nobody wants clobbered.");
     expect(onDisk).toContain("@AGENTS.md");
+
+    await app.close();
+  });
+});
+
+// Issue #956 — `/setup/generate`: extends the same preview/apply worktree
+// machinery above with a real (here, mocked) generation pass ahead of it.
+describe("project-setup route — /setup/generate (issue #956)", () => {
+  beforeAll(() => {
+    fs.rmSync(tmpDb, { force: true });
+    process.env.DATABASE_URL = `file:${tmpDb}`;
+  });
+
+  afterAll(() => {
+    closeDb();
+    fs.rmSync(tmpDb, { force: true });
+    delete process.env.DATABASE_URL;
+  });
+
+  beforeEach(() => {
+    repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "project-setup-generate-repo-"));
+    initRepo(repoDir);
+    vi.mocked(generateScaffoldContent).mockReset();
+  });
+
+  afterEach(() => {
+    fs.rmSync(repoDir, { recursive: true, force: true });
+  });
+
+  it("404s for an unknown project id", async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/projects/999999/setup/generate",
+      payload: { slug: "demo" },
+    });
+    expect(res.statusCode).toBe(404);
+    expect(generateScaffoldContent).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  // Gap #1 (issue #956) — identical shape to /setup/preview's own 501.
+  it("rejects a remote-hosted project with 501, matching /setup/preview's own precedent — never calls the generation agent", async () => {
+    const app = await buildApp();
+    const host = await app.inject({
+      method: "POST",
+      url: "/api/hosts",
+      payload: { name: "remote-generate-test", baseUrl: "http://127.0.0.1:59998", token: "t" },
+    });
+    const hostId = host.json().id as string;
+    const projectRes = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { name: "remote-generate", cwd: "/remote/path", hostId },
+    });
+    const projectId = projectRes.json().id as number;
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/projects/${projectId}/setup/generate`,
+      payload: { slug: "demo" },
+    });
+    expect(res.statusCode).toBe(501);
+    expect(generateScaffoldContent).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("rejects an unsafe slug with 400 without calling the generation agent", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app, repoDir);
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/projects/${projectId}/setup/generate`,
+      payload: { slug: "../evil" },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(generateScaffoldContent).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("uses the generated content — not the static placeholder — for the skill, reviewer, and AGENTS.md region", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app, repoDir);
+    mockValidGeneration("demo");
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/projects/${projectId}/setup/generate`,
+      payload: { slug: "demo" },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.previewId).toBeTypeOf("string");
+    expect(body.files).toEqual(
+      expect.arrayContaining([
+        "AGENTS.md",
+        ".claude/skills/demo/SKILL.md",
+        ".claude/agents/demo-reviewer.md",
+      ]),
+    );
+
+    const worktreeDir = path.join(repoDir, ".mullion-worktrees", "setup-demo");
+    const skill = fs.readFileSync(
+      path.join(worktreeDir, ".claude", "skills", "demo", "SKILL.md"),
+      "utf8",
+    );
+    const reviewer = fs.readFileSync(
+      path.join(worktreeDir, ".claude", "agents", "demo-reviewer.md"),
+      "utf8",
+    );
+    const agentsMd = fs.readFileSync(path.join(worktreeDir, "AGENTS.md"), "utf8");
+
+    expect(skill).toContain("Generated: real invariant about demo.");
+    expect(skill).not.toContain("Replace this section");
+    expect(reviewer).toContain("Read .claude/skills/demo/SKILL.md first.");
+    expect(agentsMd).toContain("The generated skill lives at");
+
+    // The apply route works completely unchanged off this previewId.
+    const applyRes = await app.inject({
+      method: "POST",
+      url: `/api/projects/${projectId}/setup/apply`,
+      payload: { previewId: body.previewId },
+    });
+    expect(applyRes.statusCode).toBe(200);
+
+    await app.close();
+  });
+
+  it("resolves the generating agent via project.defaultAgent, falling back to settings.launchers.defaultAgent", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app, repoDir);
+    mockValidGeneration("demo");
+
+    await app.inject({
+      method: "POST",
+      url: `/api/projects/${projectId}/setup/generate`,
+      payload: { slug: "demo" },
+    });
+
+    expect(generateScaffoldContent).toHaveBeenCalledTimes(1);
+    const call = vi.mocked(generateScaffoldContent).mock.calls[0][0];
+    // No project.defaultAgent was set, so this must be
+    // settings.launchers.defaultAgent's own default ("claude").
+    expect(call.agentCommand).toBe("claude");
+
+    await app.close();
+  });
+
+  it("computes hasSkill/hasReviewer/hasBriefingRegion from the project's real checkout, not the scratch worktree", async () => {
+    const app = await buildApp();
+    fs.mkdirSync(path.join(repoDir, ".claude", "skills", "demo"), { recursive: true });
+    fs.writeFileSync(
+      path.join(repoDir, ".claude", "skills", "demo", "SKILL.md"),
+      "hand-written already\n",
+    );
+    execFileSync("git", ["add", "-A"], { cwd: repoDir, env: gitEnv() });
+    execFileSync("git", ["commit", "-m", "pre-existing skill", "--no-verify"], {
+      cwd: repoDir,
+      env: gitEnv(),
+    });
+    const projectId = await createProject(app, repoDir);
+    mockValidGeneration("demo");
+
+    await app.inject({
+      method: "POST",
+      url: `/api/projects/${projectId}/setup/generate`,
+      payload: { slug: "demo" },
+    });
+
+    const call = vi.mocked(generateScaffoldContent).mock.calls[0][0];
+    expect(call.hasSkill).toBe(true);
+    expect(call.hasReviewer).toBe(false);
+    expect(call.hasBriefingRegion).toBe(false);
+
+    await app.close();
+  });
+
+  it("threads the project_tooling DB draft into the generation seed", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app, repoDir);
+    writeProjectSkill(app.db, projectId, "a DB-authored draft skill description");
+    mockValidGeneration("demo");
+
+    await app.inject({
+      method: "POST",
+      url: `/api/projects/${projectId}/setup/generate`,
+      payload: { slug: "demo" },
+    });
+
+    const call = vi.mocked(generateScaffoldContent).mock.calls[0][0];
+    expect(call.seed.skill).toBe("a DB-authored draft skill description");
+
+    await app.close();
+  });
+
+  it("maps a generation-agent failure to a 502, never partially writing a preview", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app, repoDir);
+    const { GenerationOutputError } = await import("../../src/services/scaffold-generate.js");
+    vi.mocked(generateScaffoldContent).mockRejectedValue(
+      new GenerationOutputError("reviewer never referenced the skill path"),
+    );
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/projects/${projectId}/setup/generate`,
+      payload: { slug: "demo" },
+    });
+    expect(res.statusCode).toBe(502);
+
+    await app.close();
+  });
+
+  // Gap #3 (issue #956) — a separate, stricter bucket from SETUP_RATE_LIMIT
+  // (10/min). Hammering /setup/generate to its own limit must not affect
+  // /setup/preview's independent budget.
+  it("rate-limits /setup/generate far below /setup/preview's own budget, in a separate bucket", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app, repoDir);
+    mockValidGeneration("demo");
+
+    const results: number[] = [];
+    // GENERATE_RATE_LIMIT's own max (project-setup.ts) — one more than the
+    // limit to actually trip it, not just reach it.
+    for (let i = 0; i < 6; i++) {
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/setup/generate`,
+        payload: { slug: `demo${i}` },
+      });
+      results.push(res.statusCode);
+    }
+    expect(results).toContain(429);
+    // The unrelated /setup/preview route is completely unaffected — a
+    // shared bucket would already be exhausted by the loop above.
+    const previewRes = await app.inject({
+      method: "POST",
+      url: `/api/projects/${projectId}/setup/preview`,
+      payload: { slug: "demo-preview-check" },
+    });
+    expect(previewRes.statusCode).toBe(200);
 
     await app.close();
   });

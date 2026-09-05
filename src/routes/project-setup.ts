@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import {
   existsSync,
   lstatSync,
@@ -20,8 +20,11 @@ import {
   computeScaffold,
   isValidScaffoldSlug,
   InvalidScaffoldSlugError,
+  scaffoldSkillPath,
+  scaffoldReviewerPath,
   type ScaffoldOptions,
 } from "../services/mullion-scaffold.js";
+import { MARKER_START } from "../services/project-briefing.js";
 import {
   createWorktree,
   deriveWorktreePath,
@@ -35,6 +38,20 @@ import { resolveHostBaseRef, resolveRepoRef, pushHostBranch } from "../services/
 import { resolveGitHubToken } from "../services/github-integration.js";
 import { createPullRequest, findPullRequestByHead } from "../services/github-write.js";
 import { GitHubApiError } from "../services/github.js";
+import { getStoredSettings } from "../services/settings.js";
+import {
+  readProjectSkill,
+  readProjectReviewerAgent,
+  readProjectBriefing,
+} from "../services/project-tooling.js";
+import {
+  generateScaffoldContent,
+  UnsupportedGenerationAgentError,
+  GenerationWorktreeError,
+  GenerationSpawnError,
+  GenerationOutputError,
+  type GeneratedScaffoldContent,
+} from "../services/scaffold-generate.js";
 
 // Issue: apply Mullion tooling to other repos, Layer 3 (PR-6) — the
 // zero-repo-change delivery mechanisms PR-1 through PR-5 built only ever
@@ -71,6 +88,40 @@ import { GitHubApiError } from "../services/github.js";
 // apply) can't be blindly re-applied — see PREVIEW_TTL_MS below.
 
 const SETUP_RATE_LIMIT = { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } };
+
+// Issue #956 — deliberately its OWN, much stricter bucket, not a share of
+// SETUP_RATE_LIMIT above. Preview/apply are a cheap, pure-function
+// worktree-diff pass; `/setup/generate` spawns a real agent turn (real
+// tokens, real time, real spend) — a different cost class entirely, and
+// one where 10/min would let a single confused client burn a lot of money
+// before anyone notices. `@fastify/rate-limit` scopes a per-route `config.
+// rateLimit` override to that route alone by default (verified against
+// this route file's own preview/apply, which already run two independent
+// 10/min buckets off the exact same SETUP_RATE_LIMIT object with no
+// cross-talk), so a distinct config object here is sufficient for a
+// genuinely separate bucket — no custom keyGenerator needed. `max: 5` is
+// one of the values app.ts's own assertNoRateLimitMaxCollision comment
+// already enumerates as a per-route limiter's max elsewhere in this repo
+// ("5/10/20/30/60/90/120/200/1000") — reusing a documented value here
+// rather than introducing a new one that comment would need updating for.
+// Sharing that number with another route's own limiter is fine regardless
+// (that check only compares a per-route max against `RATE_LIMIT_MAX`, the
+// global default, never between two different routes' own limiters).
+const GENERATE_RATE_LIMIT = { config: { rateLimit: { max: 5, timeWindow: "10 minutes" } } };
+
+const generateSchema = {
+  body: {
+    type: "object",
+    required: ["slug"],
+    additionalProperties: false,
+    properties: {
+      slug: { type: "string", minLength: 1, maxLength: 64 },
+      includeContributingPointer: { type: "boolean" },
+      symlinkAgentsSkills: { type: "boolean" },
+      includeDockConfig: { type: "boolean" },
+    },
+  },
+};
 
 const previewSchema = {
   body: {
@@ -339,6 +390,136 @@ function findLiveSlugPreview(projectId: number, slug: string): PreviewRecord | n
   return null;
 }
 
+// Issue #956 — `/setup/preview` and the new `/setup/generate` (which is,
+// per the issue's own framing, "extending the apply step's existing
+// worktree/diff/PR machinery, not replacing it") share the exact same
+// tail: stand up (or reuse) the `setup-<slug>` scratch worktree, run
+// computeScaffold against its current contents, write the resulting
+// entries, diff them, and stash a PreviewRecord so the existing `/setup/
+// apply` route can commit/push/PR it completely unchanged. The only thing
+// `/setup/generate` does differently is pass a non-empty `options.generated`
+// through — computeScaffold and everything below it neither knows nor
+// cares where that content came from (see mullion-scaffold.ts's own doc
+// comment on why that has to stay true). Split into `ensureSetupWorktree`
+// + `finishPreview` (rather than one function) so `/setup/generate` can
+// read `existingFiles` — hence hasSkill/hasReviewer/hasBriefingRegion —
+// from the SAME worktree instance that goes on to decide computeScaffold's
+// entries, instead of a second, independent read against `project.cwd`
+// that could answer a different question (a feature branch checked out,
+// an uncommitted local edit, ...) than the one the scratch worktree's own
+// resolved base ref actually reflects.
+type PreviewComputation =
+  | { ok: true; previewId: string; diff: string; files: string[] }
+  | { ok: false; status: 400 | 500; message: string };
+
+interface ReadyWorktree {
+  path: string;
+  branch: string;
+}
+
+// Also avoids standing up two worktrees for one `/setup/generate` call:
+// `reuseOrCreateWorktree` would otherwise see a path that exists but isn't
+// a KNOWN live preview (no PreviewRecord registered yet on a first call)
+// and remove+recreate it.
+async function ensureSetupWorktree(
+  app: FastifyInstance,
+  project: { cwd: string; hostId: string },
+  projectId: number,
+  slug: string,
+): Promise<{ ok: true; worktree: ReadyWorktree } | { ok: false; message: string }> {
+  const seed = `setup-${slug}`;
+  const liveSlugPreview = findLiveSlugPreview(projectId, slug);
+  const worktreeResult = await reuseOrCreateWorktree(
+    app,
+    project.hostId,
+    project.cwd,
+    seed,
+    liveSlugPreview,
+  );
+  if (!worktreeResult.created || !worktreeResult.path || !worktreeResult.branch) {
+    return {
+      ok: false,
+      message:
+        worktreeResult.detail ?? `Could not create a scratch worktree (${worktreeResult.reason})`,
+    };
+  }
+  return { ok: true, worktree: { path: worktreeResult.path, branch: worktreeResult.branch } };
+}
+
+// Issue #956 — the shared tail of both `/setup/preview` and `/setup/
+// generate`: given an already-standing `setup-<slug>` worktree and the
+// `existingFiles` read from it, run computeScaffold, write the resulting
+// entries, diff them, and stash a PreviewRecord so `/setup/apply` can
+// commit/push/PR it completely unchanged.
+async function finishPreview(
+  projectId: number,
+  options: ScaffoldOptions,
+  worktree: ReadyWorktree,
+  existingFiles: Record<string, string | undefined>,
+): Promise<PreviewComputation> {
+  let entries;
+  try {
+    entries = computeScaffold(existingFiles, options);
+  } catch (err) {
+    if (err instanceof InvalidScaffoldSlugError)
+      return { ok: false, status: 400, message: err.message };
+    throw err;
+  }
+  writeScaffoldEntries(worktree.path, entries);
+  // `git diff HEAD` never shows an untracked file, staged or not — every
+  // entry here is brand new (or a mirror the target repo never had
+  // before), so without staging them first getFileDiff below would
+  // silently return null for every single one and the preview would show
+  // an empty diff. `git add -A` here is purely to make the upcoming diff/
+  // preview complete; commitWipChanges (apply) does its own equivalent
+  // staging pass regardless of what's already staged.
+  execFileSync("git", ["-C", worktree.path, "add", "-A"], {
+    stdio: "pipe",
+    env: gitEnv(),
+  });
+
+  const diffs = await Promise.all(
+    entries.map(async (entry) => {
+      if (entry.kind === "symlink") return null;
+      return getFileDiff(worktree.path, entry.path);
+    }),
+  );
+  const diff = diffs.filter((d): d is string => Boolean(d)).join("\n");
+
+  const previewId = randomUUID();
+  previews.set(previewId, {
+    projectId,
+    worktreePath: worktree.path,
+    branch: worktree.branch,
+    slug: options.slug,
+    createdAt: Date.now(),
+  });
+
+  return { ok: true, previewId, diff, files: entries.map((entry) => entry.path) };
+}
+
+async function computeAndStorePreview(
+  app: FastifyInstance,
+  project: { cwd: string; hostId: string },
+  projectId: number,
+  options: ScaffoldOptions,
+): Promise<PreviewComputation> {
+  const ensured = await ensureSetupWorktree(app, project, projectId, options.slug);
+  if (!ensured.ok) return { ok: false, status: 500, message: ensured.message };
+  const relPaths = scaffoldableRelPaths(options.slug, options);
+  const existingFiles = readExistingFiles(ensured.worktree.path, relPaths);
+  return finishPreview(projectId, options, ensured.worktree, existingFiles);
+}
+
+function sendPreviewComputation(reply: FastifyReply, result: PreviewComputation) {
+  if (!result.ok) {
+    return result.status === 400
+      ? reply.badRequest(result.message)
+      : reply.internalServerError(result.message);
+  }
+  return { previewId: result.previewId, diff: result.diff, files: result.files };
+}
+
 export async function projectSetupRoute(app: FastifyInstance) {
   function getProjectOr404(projectId: number) {
     const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
@@ -373,65 +554,122 @@ export async function projectSetupRoute(app: FastifyInstance) {
         return reply.badRequest(`"${options.slug}" is not a safe slug`);
       }
 
-      const seed = `setup-${options.slug}`;
-      const liveSlugPreview = findLiveSlugPreview(projectId, options.slug);
-      const worktreeResult = await reuseOrCreateWorktree(
-        app,
-        project.hostId,
-        project.cwd,
-        seed,
-        liveSlugPreview,
-      );
-      if (!worktreeResult.created || !worktreeResult.path || !worktreeResult.branch) {
-        return reply.internalServerError(
-          worktreeResult.detail ?? `Could not create a scratch worktree (${worktreeResult.reason})`,
+      const result = await computeAndStorePreview(app, project, projectId, options);
+      return sendPreviewComputation(reply, result);
+    },
+  );
+
+  app.post<{
+    Params: { id: string };
+    Body: { slug: string } & Omit<ScaffoldOptions, "slug">;
+  }>(
+    "/api/projects/:id/setup/generate",
+    { ...GENERATE_RATE_LIMIT, schema: generateSchema },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+      const project = getProjectOr404(projectId);
+      if (!project) return reply.notFound();
+      // Issue #956 — identical shape to `/setup/preview`'s own 501 above
+      // (pre-existing precedent): the generation pass needs to read the
+      // ACTUAL codebase, which only exists on the host that owns it.
+      // Lifting this is issue #895's job, not this one's.
+      if (project.hostId !== LOCAL_HOST_ID) {
+        return reply.code(501).send({
+          message:
+            "Scaffolding Mullion integration into a remote-hosted project isn't supported yet — see issue #895",
+        });
+      }
+
+      const options: ScaffoldOptions = {
+        slug: request.body.slug,
+        includeContributingPointer: request.body.includeContributingPointer,
+        symlinkAgentsSkills: request.body.symlinkAgentsSkills,
+        includeDockConfig: request.body.includeDockConfig,
+      };
+      if (!isValidScaffoldSlug(options.slug)) {
+        return reply.badRequest(`"${options.slug}" is not a safe slug`);
+      }
+
+      // Stood up (or reused) FIRST, and its own `existingFiles` read used
+      // for both the hasSkill/hasReviewer/hasBriefingRegion decision below
+      // AND, later, computeScaffold's own entries — one worktree, one
+      // read, one consistent answer to "does a committed file already
+      // exist" (see ensureSetupWorktree's own doc comment: a second,
+      // independent read against `project.cwd` could answer a DIFFERENT
+      // question if the live checkout and the scratch worktree's resolved
+      // base ref ever disagree).
+      const ensured = await ensureSetupWorktree(app, project, projectId, options.slug);
+      if (!ensured.ok) return reply.internalServerError(ensured.message);
+      const relPaths = scaffoldableRelPaths(options.slug, options);
+      const existingFiles = readExistingFiles(ensured.worktree.path, relPaths);
+      const hasSkill = existingFiles[scaffoldSkillPath(options.slug)] !== undefined;
+      const hasReviewer = existingFiles[scaffoldReviewerPath(options.slug)] !== undefined;
+      const hasBriefingRegion = (existingFiles["AGENTS.md"] ?? "").includes(MARKER_START);
+
+      // Issue #956 review follow-up — computeScaffold's own "create once,
+      // never overwrite" rule (mullion-scaffold.ts) means that once BOTH
+      // the skill and reviewer files are already committed, generation's
+      // entire output for them is thrown away silently: the agent turn
+      // still runs (real tokens, real time, real spend), but
+      // computeScaffold omits both entries regardless of what `generated`
+      // contains. Only the AGENTS.md region would still change. Rather
+      // than burn a turn for that, refuse up front — a diff-aware refresh
+      // path (issue's own "Update/refresh path" section) is the right
+      // tool once both files exist, and is deliberately out of this
+      // issue's own narrowed scope (see the PR description's filed-issues
+      // list).
+      if (hasSkill && hasReviewer) {
+        return reply.conflict(
+          `.claude/skills/${options.slug}/SKILL.md and .claude/agents/${options.slug}-reviewer.md ` +
+            "are already committed — generation only replaces placeholder content, it never " +
+            "overwrites an existing file. A refresh action for already-committed content is " +
+            "tracked as follow-up work, not yet built.",
         );
       }
 
-      const relPaths = scaffoldableRelPaths(options.slug, options);
-      const existingFiles = readExistingFiles(worktreeResult.path, relPaths);
-      let entries;
+      // Issue #956 — "resolve via the existing chain, project.defaultAgent
+      // ?? settings.launchers.defaultAgent". Deliberately NOT
+      // task-agent-resolve.ts's resolveAgentCommand: that helper also
+      // parses an issue body's `Agent:` directive (meaningless here, there
+      // is no issue) and falls back to `settings.taskMaster.defaultAgent`
+      // — a DIFFERENT install-wide tier (settings.ts) than the one this
+      // issue explicitly names.
+      const agentCommand = project.defaultAgent ?? getStoredSettings(app.db).launchers.defaultAgent;
+
+      let generated: GeneratedScaffoldContent;
       try {
-        entries = computeScaffold(existingFiles, options);
+        generated = await generateScaffoldContent({
+          app,
+          hostId: project.hostId,
+          cwd: project.cwd,
+          slug: options.slug,
+          agentCommand,
+          seed: {
+            skill: readProjectSkill(app.db, project.id),
+            reviewerAgent: readProjectReviewerAgent(app.db, project.id),
+            briefing: readProjectBriefing(app.db, project.id),
+          },
+          hasSkill,
+          hasReviewer,
+          hasBriefingRegion,
+        });
       } catch (err) {
-        if (err instanceof InvalidScaffoldSlugError) return reply.badRequest(err.message);
+        if (err instanceof UnsupportedGenerationAgentError) return reply.badRequest(err.message);
+        if (err instanceof GenerationWorktreeError) return reply.internalServerError(err.message);
+        if (err instanceof GenerationSpawnError || err instanceof GenerationOutputError) {
+          return reply.badGateway(err.message);
+        }
         throw err;
       }
-      writeScaffoldEntries(worktreeResult.path, entries);
-      // `git diff HEAD` never shows an untracked file, staged or not —
-      // every entry here is brand new (or a mirror the target repo never
-      // had before), so without staging them first getFileDiff below would
-      // silently return null for every single one and the preview would
-      // show an empty diff. `git add -A` here is purely to make the
-      // upcoming diff/preview complete; commitWipChanges (apply) does its
-      // own equivalent staging pass regardless of what's already staged.
-      execFileSync("git", ["-C", worktreeResult.path, "add", "-A"], {
-        stdio: "pipe",
-        env: gitEnv(),
-      });
 
-      const diffs = await Promise.all(
-        entries.map(async (entry) => {
-          if (entry.kind === "symlink") return null;
-          return getFileDiff(worktreeResult.path!, entry.path);
-        }),
-      );
-      const diff = diffs.filter((d): d is string => Boolean(d)).join("\n");
-
-      const previewId = randomUUID();
-      previews.set(previewId, {
+      const result = await finishPreview(
         projectId,
-        worktreePath: worktreeResult.path,
-        branch: worktreeResult.branch,
-        slug: options.slug,
-        createdAt: Date.now(),
-      });
-
-      return {
-        previewId,
-        diff,
-        files: entries.map((entry) => entry.path),
-      };
+        { ...options, generated },
+        ensured.worktree,
+        existingFiles,
+      );
+      return sendPreviewComputation(reply, result);
     },
   );
 
