@@ -300,10 +300,14 @@ all three, except workflow conventions' own text default of ""):
   SessionStart channel is told to look at it.
 - **Inject Mullion tooling bundle** — gates the whole `--plugin-dir`/
   `skills.paths` delivery mechanism for both the shipped bundle skills
-  and any project skill/reviewer subagent. Unlike the briefing
-  toggle, there's no separate per-skill toggle to reconcile this with — a
-  plugin-sourced Claude Code skill is invisible to Mullion's own Skills
-  Manager, so this one setting really does govern the whole thing.
+  and any project skill/reviewer subagent, and — since issue #941 — the
+  boot-time host-local sync that installs the shipped bundle skills into
+  each CLI's own global skill directory (see
+  [`agent-guide.md`](agent-guide.md#where-your-skills-actually-come-from)).
+  Unlike the briefing toggle, there's no separate per-skill toggle to
+  reconcile this with — a plugin-sourced Claude Code skill is invisible to
+  Mullion's own Skills Manager, so this one setting really does govern the
+  whole thing.
 - **Workflow conventions** (issue #937, above) — a free-text field, not a
   boolean toggle: injection is gated on that text being non-empty (and the
   per-project toggle not being explicitly off), not on a separate on/off
