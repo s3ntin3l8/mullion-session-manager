@@ -705,7 +705,7 @@ describe("skills service", () => {
       expect(commandRow?.name).toBe("plugin-cmd");
     });
 
-    it("never emits a codex or agy agent/command row — neither CLI has the concept", async () => {
+    it("never attributes a Claude Code agent/command row to codex or agy — neither scans .claude/agents", async () => {
       writeAgentOrCommandFile(
         path.join(projectCwd, ".claude", "agents"),
         "reviewer.md",
@@ -715,6 +715,63 @@ describe("skills service", () => {
       const found = skills.find((s) => s.name === "reviewer");
       expect(found?.agents).not.toContain("codex");
       expect(found?.agents).not.toContain("agy");
+    });
+
+    it("never emits a codex agent/command row at all — codex has no subagent/command concept", async () => {
+      writeAgentOrCommandFile(
+        path.join(projectCwd, ".claude", "agents"),
+        "reviewer.md",
+        "name: reviewer\ndescription: reviews PRs",
+      );
+      const skills = await listProjectSkills(projectCwd);
+      expect(skills.some((s) => s.kind !== "skill" && s.agents.includes("codex"))).toBe(false);
+    });
+
+    // Issue #1080 — resolveAgyGlobalAgentsDir() (~/.gemini/config/agents,
+    // agy's own real global agent-discovery dir, also the destination
+    // bundle-sync.ts's AGENT_TARGETS installs into) was previously absent
+    // from globalAgentAndCommandDirs entirely, making anything placed there
+    // — Mullion-installed or hand-authored — invisible to the Skills
+    // Manager. Verifies discovery AND the enable/disable posture: every
+    // kind-"agent" row is discovery-only regardless of which CLI it belongs
+    // to (issue #885's `attachEnabledByAgent` early branch), so this must
+    // come back `null` here exactly like the "discovers a global Claude Code
+    // subagent under CLAUDE_CONFIG_DIR/agents" case above (same file's own
+    // globalAgentAndCommandDirs claude-code entry) — never a functioning
+    // toggle, but also never a silently-broken one, since none ever existed
+    // for this kind.
+    it("discovers a global agy subagent under ~/.gemini/config/agents (issue #1080)", async () => {
+      writeAgentOrCommandFile(
+        path.join(fakeHome, ".gemini", "config", "agents"),
+        "mullion-reviewer.md",
+        "name: reviewer\ndescription: an agy subagent",
+      );
+      const skills = await listProjectSkills(projectCwd);
+      const found = skills.find(
+        (s) => s.kind === "agent" && s.agents.includes("agy") && s.name === "reviewer",
+      );
+      expect(found).toBeDefined();
+      expect(found?.scope).toBe("global");
+      expect(found?.sourceDir).toBe(
+        path.join(fakeHome, ".gemini", "config", "agents", "mullion-reviewer.md"),
+      );
+      // Discovery-only, same as every other agent/command row — not a
+      // regression, since kind "agent" has never had a working toggle for
+      // any CLI (see attachEnabledByAgent's own doc comment, issue #885).
+      expect(found?.enabledByAgent.agy).toBeNull();
+    });
+
+    it("also surfaces the same global agy subagent from listGlobalSkills (no project cwd)", async () => {
+      writeAgentOrCommandFile(
+        path.join(fakeHome, ".gemini", "config", "agents"),
+        "mullion-reviewer.md",
+        "name: reviewer\ndescription: an agy subagent",
+      );
+      const skills = await listGlobalSkills();
+      const found = skills.find((s) => s.kind === "agent" && s.agents.includes("agy"));
+      expect(found).toBeDefined();
+      expect(found?.name).toBe("reviewer");
+      expect(found?.enabledByAgent.agy).toBeNull();
     });
 
     // Regression guard for the exact hazard the plan calls out: without

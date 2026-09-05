@@ -286,7 +286,24 @@ export function resolveAgyGlobalSkillsDir(): string {
 // `.md` file directly under this directory — no per-agent subdirectory.
 // Used only by bundle-sync.ts today; codex has no equivalent (no static
 // per-agent file format at all, confirmed by spike #946 — see the plan
-// doc's Track A section).
+// doc's Track A section). Also now scanned by skills.ts's own
+// globalAgentAndCommandDirs() (issue #1080), for Skills Manager discovery.
+//
+// Issue #1080 investigation, NOT fixed here (out of this file's scope,
+// this file's job is Skills Manager DISCOVERY, not bundle-sync.ts's
+// install-time naming) — bundle-sync.ts's AGENT_TARGETS installs this CLI's
+// agent file under a PREFIXED filename (`mullion-<name>.md`) but
+// mullion-bundle.ts's deriveAgyAgentFile preserves the shipped, UNPREFIXED
+// frontmatter `name:` field verbatim inside it, unlike SKILL_TARGETS' own
+// installSkillDirWithNameRewrite, which rewrites a skill's frontmatter
+// `name:` to match. Verified this is NOT an agy-specific requirement (no
+// comment anywhere claims agy's loader needs an unprefixed name) and NOT
+// agy-specific at all — claude-code's own AGENT_TARGETS entry has the exact
+// same gap (installed verbatim, no rewrite). Likely an unaddressed design
+// gap rather than a considered decision, currently inert since
+// src/bundle/agents/ ships no real content yet (fixture-only in tests).
+// Flagged for bundle-sync.ts's owner to weigh / file as its own issue, not
+// this file's decision to make.
 export function resolveAgyGlobalAgentsDir(): string {
   return path.join(os.homedir(), ".gemini", "config", "agents");
 }
