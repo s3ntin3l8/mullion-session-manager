@@ -176,7 +176,20 @@ async function spawnReviewAgentNow(
     // the fix: whatever this fresh spawn's own agent writes is now
     // guaranteed to be the only thing this path can ever contain.
     await unlinkFindingsFileIfPresent(app, backend, task.id, task.autoReturnRounds);
-    const prompt = buildReviewPrompt({ task, worktreePath: task.worktreePath, findingsPath, ci });
+    // Both operands already live here — no new lookup. Clamped to 0 rather
+    // than allowed to go negative: a project's own cap can be lowered after
+    // a task has already spent more rounds than the new cap allows.
+    const roundsRemaining = Math.max(
+      0,
+      resolveMaxAutoReturnRounds(project) - task.autoReturnRounds,
+    );
+    const prompt = buildReviewPrompt({
+      task,
+      worktreePath: task.worktreePath,
+      findingsPath,
+      ci,
+      roundsRemaining,
+    });
     const result = await createSessionRecord(app, {
       projectId: project.id,
       command: reviewCommand,
@@ -2734,11 +2747,16 @@ async function processAutoApprovals(app: FastifyInstance): Promise<void> {
 // This constant is the fix's other half: for a MISSING file specifically
 // (`parsed === null`), "finished" alone is no longer enough — the review
 // session's own age (`sessions.createdAt`, already joined into this query,
-// so no schema change) must also have crossed this grace window. The
-// review prompt (`buildReviewPrompt`, task-prompt.ts) now asks the agent to
-// run the repo's WHOLE verification gate before writing its findings file,
-// so several minutes of silence with no file yet is the ordinary case, not
-// evidence of a crash. `derived.status === "exited"` still ingests
+// so no schema change) must also have crossed this grace window. A real
+// review commonly involves running the repo's own verification gate before
+// writing findings — task-reviewer's own bundle skill (src/bundle/skills/,
+// #955) covers this, but `buildReviewPrompt` (task-prompt.ts) itself never
+// instructs it, deliberately: a bare "run the gate" line there would be
+// unsafe, since the obvious way to satisfy it (a formatter's write mode,
+// `--fix`, a snapshot update) dirties the WORKER's own worktree this
+// session is forbidden to modify. Either way, several minutes of silence
+// with no file yet is the ordinary case, not evidence of a crash.
+// `derived.status === "exited"` still ingests
 // immediately regardless of this window — a session that has genuinely
 // exited can't write anything more no matter how long is waited.
 //

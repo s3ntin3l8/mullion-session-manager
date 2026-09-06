@@ -796,6 +796,37 @@ export function renderCiSummary(ci: ReviewCiInfo): string {
   return lines.join("\n");
 }
 
+/** Renders `buildReviewPrompt`'s `roundsRemaining` option into the paragraph
+ * that follows the findings-shape instructions. Two deliberate wording
+ * choices, both load-bearing:
+ *
+ * - Never calls this a "review budget" — `tasks.autoReturnRounds` is shared
+ *   with the red-CI and PR-comment-review auto-return triggers
+ *   (task-reconciler.ts), so it may already be partly spent for reasons
+ *   this review had nothing to do with.
+ * - The zero case is worded to guard against the obvious misreading ("no
+ *   rounds left, so the verdict doesn't matter"). It's the opposite: at
+ *   zero, a "changes-requested" verdict still posts as a gating
+ *   REQUEST_CHANGES a human reads (docs/tasks.md's Task -> PR promotion
+ *   section), so under-reporting here has no automatic fix-up round to
+ *   fall back on.
+ */
+export function renderRoundsRemaining(roundsRemaining: number): string {
+  if (roundsRemaining > 0) {
+    return [
+      `This task has ${roundsRemaining} automatic fix-up round(s) left — a shared`,
+      "budget, also spent by a red CI check or an unresolved PR review comment,",
+      'and never reset. A "changes-requested" verdict spends one of them regardless',
+      "of how severe your findings are.",
+    ].join("\n");
+  }
+  return [
+    "This task has no automatic fix-up rounds left, so nothing you write goes",
+    "back to the worker — a human reads it instead. That is a reason to report",
+    "everything you found, not to soften the verdict.",
+  ].join("\n");
+}
+
 /**
  * The review agent's prompt (`task-reconciler.ts`).
  *
@@ -829,6 +860,17 @@ export function buildReviewPrompt(opts: {
    * reconciler couldn't resolve one before its wait deadline — see
    * `ReviewCiInfo`'s own doc comment. */
   ci?: ReviewCiInfo;
+  /** `resolveMaxAutoReturnRounds(project) - task.autoReturnRounds`, clamped
+   * to a minimum of 0 — computed once by `spawnReviewAgentNow` at spawn
+   * time, since that's where both operands already live. Optional so every
+   * existing call site keeps compiling; omit only for a caller with no
+   * access to the task/project rows (there are none today, but nothing
+   * requires this to be threaded through everywhere at once). Deliberately
+   * NOT called a "review budget" in the rendered text below —
+   * `autoReturnRounds` is shared with the red-CI and PR-comment auto-return
+   * triggers (task-reconciler.ts), so it may already be partly spent for
+   * reasons this review had nothing to do with. */
+  roundsRemaining?: number;
 }): string {
   const preamble = [
     "Review this task's diff. You are not expected to make changes.",
@@ -873,9 +915,12 @@ export function buildReviewPrompt(opts: {
     '"summary" or "notes" fields.',
     "",
     "Write findings as clear, actionable instructions, not just observations: a",
-    '"changes-requested" verdict may be sent back to the worker automatically,',
-    "once, to act on before a human reviews again.",
+    '"changes-requested" verdict may be sent back to the worker automatically',
+    "to act on before a human reviews again.",
     "",
+    ...(opts.roundsRemaining !== undefined
+      ? [renderRoundsRemaining(opts.roundsRemaining), ""]
+      : []),
     "Report your findings in this session too, in plain language — the JSON file",
     "is what Mullion reads; this is for a human reading your transcript.",
     "",

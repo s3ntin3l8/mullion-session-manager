@@ -481,6 +481,71 @@ describe("buildReviewPrompt", () => {
     expect(out).toContain("CI on this PR's head commit d2cc8f9 is FAILURE");
     expect(out.indexOf("CI on this PR")).toBeLessThan(out.indexOf(`Task: ${TASK.title}`));
   });
+
+  // Issue #955 — spawnReviewAgentNow (task-reconciler.ts) threads this
+  // through from resolveMaxAutoReturnRounds(project) - task.autoReturnRounds.
+  it("omits any rounds-remaining line when roundsRemaining is not given", () => {
+    const out = buildReviewPrompt({
+      task: TASK,
+      worktreePath: BASE.worktreePath,
+      findingsPath: FINDINGS_PATH,
+    });
+    expect(out).not.toContain("automatic fix-up round");
+  });
+
+  it("states the shared, never-reset round budget when roundsRemaining is positive", () => {
+    const out = buildReviewPrompt({
+      task: TASK,
+      worktreePath: BASE.worktreePath,
+      findingsPath: FINDINGS_PATH,
+      roundsRemaining: 2,
+    });
+    expect(out).toContain("2 automatic fix-up round(s) left");
+    expect(out).toContain("shared");
+    expect(out).toContain("never reset");
+    // Not gated on severity — an all-nits verdict spends the same round a
+    // blocker would (task-reconciler.ts's wantsAutoReturn checks only the
+    // verdict, never a finding's severity).
+    expect(out).toContain("regardless");
+    expect(out).toContain("of how severe your findings are");
+  });
+
+  // The zero case must not read as "so the verdict doesn't matter" — the
+  // opposite is true: nothing goes back to the worker, a human reads it.
+  it("guards the zero-rounds-remaining inversion", () => {
+    const out = buildReviewPrompt({
+      task: TASK,
+      worktreePath: BASE.worktreePath,
+      findingsPath: FINDINGS_PATH,
+      roundsRemaining: 0,
+    });
+    expect(out).toContain("no automatic fix-up rounds left");
+    expect(out).toContain("a human reads it instead");
+    expect(out).toContain("report");
+    expect(out).not.toContain("doesn't matter");
+  });
+
+  it("never calls it a review budget — the rounds are shared with other auto-return triggers", () => {
+    const out = buildReviewPrompt({
+      task: TASK,
+      worktreePath: BASE.worktreePath,
+      findingsPath: FINDINGS_PATH,
+      roundsRemaining: 1,
+    });
+    expect(out).not.toContain("review budget");
+  });
+
+  // #756 raised the cap from a hardcoded 1 to DEFAULT_MAX_AUTO_RETURN_ROUNDS
+  // = 2 — the old "once" phrasing became stale at that point regardless of
+  // whether roundsRemaining is threaded for a given call site.
+  it("no longer claims a changes-requested verdict returns to the worker only once", () => {
+    const out = buildReviewPrompt({
+      task: TASK,
+      worktreePath: BASE.worktreePath,
+      findingsPath: FINDINGS_PATH,
+    });
+    expect(out).not.toMatch(/automatically,?\s*\n?once/);
+  });
 });
 
 const CLEAN_JSON = JSON.stringify({
@@ -1005,6 +1070,12 @@ describe("directive-line collisions", () => {
       task: { ...TASK, body: null },
       worktreePath: "/w",
       findingsPath: "/w-findings/task-42.review.0.md",
+    }),
+    "review preamble (rounds remaining)": buildReviewPrompt({
+      task: { ...TASK, body: null },
+      worktreePath: "/w",
+      findingsPath: "/w-findings/task-42.review.0.md",
+      roundsRemaining: 1,
     }),
     "review-feedback prompt": buildReviewFeedbackPrompt({ ...BASE, findings: "fix the thing" }),
   };
