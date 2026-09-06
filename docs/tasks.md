@@ -865,9 +865,11 @@ side, severity, body}], verified?, notes?, looksGood?}` — `summary` is one
   `task-reconciler.ts`'s `processReviewingTasks` only accepts a missing file
   as genuinely absent once the review session has either `exited` (nothing
   more can ever be written) or been alive past `REVIEW_FINDINGS_GRACE_MS`
-  (30 minutes, since the reviewer now runs the repo's own verification gate
-  before writing anything — several minutes of silence is normal, not
-  evidence of a crash). Before this fix
+  (30 minutes — a real review commonly runs the repo's own verification
+  gate before writing anything, so several minutes of silence with no file
+  yet is normal, not evidence of a crash; `buildReviewPrompt` itself never
+  instructs this, deliberately — see the `task-reviewer` skill below).
+  Before this fix
   (Task Master trial 220921 / PR #743's incident), a `finished` turn-end
   with no file yet was ingested as inconclusive immediately, and durably —
   `reviewFindingsIngestedSessionId` latched permanently, so a real verdict
@@ -1083,6 +1085,22 @@ It gates itself on the opening line of the worker's own prompt rather than
 an env var, since nothing marks a Task Master session in the process
 environment, and explicitly excludes the review agent's own prompt shape.
 It deliberately does not restate anything already in this preamble.
+
+The review agent's own counterpart, `task-reviewer`
+(`src/bundle/skills/task-reviewer/`, issue #955, same delivery mechanism),
+elaborates on `buildReviewPrompt` the same way: what actually earns a
+`findings` entry (a verdict of `changes-requested` spends one of the round
+budget above regardless of finding severity — nothing in the code gates on
+severity, so an all-nits verdict costs exactly the same round a blocker
+would), what a `clean` verdict should mean, and the constraint of verifying
+a diff from inside the worker's own live worktree without dirtying it. It
+gates on the review prompt's own opening line, excludes the worker's prompt
+shape, and is deliberately self-contained: it does not depend on or
+reference a project's own custom reviewer subagent (`project_tooling.
+reviewerAgent`) or any externally-installed review-methodology skill,
+since neither is guaranteed present on an arbitrary target repo or CLI —
+those remain separate, optional layers on top, not something this skill
+leans on.
 
 ## Configuring Task Master
 

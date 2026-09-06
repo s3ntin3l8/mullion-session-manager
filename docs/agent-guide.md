@@ -39,23 +39,24 @@ pulled into context automatically at startup, one way or another (see
 [Auto-injection](#auto-injection) below).
 
 Claude Code sessions also get this content as a set of discoverable
-skills — `host`, `browser`, `troubleshooting`, `session-ops`, plus two that
-aren't a copy of anything here: `taskmaster-issues` and `task-worker`
-(issue #964) — shipped as a session-scoped `--plugin-dir` bundle
-(`src/bundle/skills/`, see `hook-adapters/mullion-bundle.ts`), not a file in
-any particular project's checkout, so it's available in every repo Mullion
-hosts a session in, not just this one. Codex and agy get the same content
-installed into their own global skills directory instead, each named with a
-`mullion-` prefix (e.g. `mullion-host`) to avoid colliding with a user's own
-skill — see `installBundleSkills` in `hook-adapters/mullion-bundle.ts`. Each
-skill is self-contained, not a pointer back to this file, and
-self-identifies as inert when it doesn't apply — most check for a Mullion
-env var, but `task-worker` (delivered to every session, not just Task
-Master ones, since there is no per-session gate that works identically on
-all four CLIs — see the skill's own header for why) instead checks the
-opening line of its own prompt, since `ctx.taskId` never reaches the
-process environment. Gated by the `sessions.injectMullionBundle` setting
-(default on).
+skills — `host`, `browser`, `troubleshooting`, `session-ops`, plus three
+that aren't a copy of anything here: `taskmaster-issues`, `task-worker`
+(issue #964), and `task-reviewer` (issue #955) — shipped as a
+session-scoped `--plugin-dir` bundle (`src/bundle/skills/`, see
+`hook-adapters/mullion-bundle.ts`), not a file in any particular project's
+checkout, so it's available in every repo Mullion hosts a session in, not
+just this one. Codex and agy get the same content installed into their own
+global skills directory instead, each named with a `mullion-` prefix (e.g.
+`mullion-host`) to avoid colliding with a user's own skill — see
+`installBundleSkills` in `hook-adapters/mullion-bundle.ts`. Each skill is
+self-contained, not a pointer back to this file, and self-identifies as
+inert when it doesn't apply — most check for a Mullion env var, but
+`task-worker` and `task-reviewer` (each delivered to every session, not
+just their own half of Task Master, since there is no per-session gate
+that works identically on all four CLIs — see either skill's own header
+for why) instead check the opening line of their own prompt, since
+`ctx.taskId` never reaches the process environment. Gated by the
+`sessions.injectMullionBundle` setting (default on).
 
 If the PROJECT you're running against has its own skill and/or reviewer
 subagent authored (either from Mullion's UI or scaffolded into the repo
@@ -406,9 +407,9 @@ injection: check `~/.codex/hooks.json` / `~/.gemini/config/hooks.json`'s
 ## Where your skills actually come from
 
 The tier-0 push above (and the `host`/`browser`/`troubleshooting`/
-`session-ops`/`taskmaster-issues`/`task-worker` skills it points you at)
-isn't delivered
-fresh per session anymore. Since issue #941, getting the shipped bundle
+`session-ops`/`taskmaster-issues`/`task-worker`/`task-reviewer` skills it
+points you at) isn't delivered fresh per session anymore. Since issue #941,
+getting the shipped bundle
 (`src/bundle/skills/`) onto a host is a **host-local, boot-time,
 manifest-driven sync** (`src/services/bundle-sync.ts`, wired in by
 `src/plugins/bundle-sync.ts`), separate from anything a session spawn does:
