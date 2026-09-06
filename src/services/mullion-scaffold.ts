@@ -3,6 +3,12 @@ import { upsertMarkedRegion } from "./marked-region.js";
 import { MARKER_START, MARKER_END } from "./project-briefing.js";
 import { isDangerousSkillName } from "./hook-adapters/skill-name.js";
 import type { DockControl } from "./project-config.js";
+// Issue #1036 — only the PURE assembly helper and its static question data,
+// never the I/O-bearing session-file helpers workflow-conventions.ts also
+// exports (writeSessionWorkflowConventions et al., which do touch
+// node:fs) — this module's own header comment on computeScaffold's "no
+// filesystem access of its own" purity still holds.
+import { buildWorkflowConventionsText } from "./workflow-conventions.js";
 
 // Issue #942 — a SEPARATE marker pair from MARKER_START/MARKER_END above:
 // those wrap a full mirrored copy of AGENTS.md's own briefing region (the
@@ -188,14 +194,46 @@ function reviewerAgentFileContents(slug: string): string {
   );
 }
 
+// Issue #1036 — before this, a scaffolded repo's AGENTS.md said nothing
+// about commit/PR-title/branch/merge conventions at all, and
+// contributingPointerBody below already claimed a "Workflow Conventions"
+// section existed to point at — a claim that was false until now. Reuses
+// workflow-conventions.ts's own question/fragment data (built for issue
+// #937's separate per-install Settings wizard) rather than hand-writing
+// parallel prose here, via a fixed, explicit default answer set reasoned
+// out for what a FRESH scaffolded repo (no other maintainers yet, but
+// wanting good defaults from day one) should start with: always branch +
+// PR (never direct-commit), branch off the latest remote default branch,
+// Conventional Commits titles required (this repo's own AGENTS.md requires
+// exactly this), squash merge, green CI required before merging
+// (deliberately NOT also requiring review — a fresh repo may have no other
+// maintainers yet), and the full lint/typecheck/test/format gate before
+// every push. The other questions in the file (codeReview, reviewFeedback,
+// deferredWork, postMergeCleanup) are left unanswered on purpose: the
+// existing paragraph below already covers code review (the reviewer
+// subagent / `/code-review`), and reviewFeedback's GitHub-API-reply-and-
+// GraphQL-resolveReviewThread recipe is Mullion-repo-specific, not a
+// reasonable default to impose on an arbitrary scaffolded project.
+const SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS: Record<string, string> = {
+  branching: "branch-pr",
+  branchBase: "remote",
+  titleConvention: "conventional-commits",
+  mergeStrategy: "squash",
+  preMergeRequirements: "green-ci",
+  prePushChecks: "full-gate",
+};
+
 function briefingRegionBody(slug: string): string {
+  const workflowConventions = buildWorkflowConventionsText(SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS);
   return (
     `This repository uses [Mullion](https://github.com/s3ntin3l8/mullion-session-manager)\n` +
     `to run AI coding agents. A project-specific skill and reviewer subagent for\n` +
     `this repo live at \`.claude/skills/${slug}/SKILL.md\` and\n` +
     `\`.claude/agents/${slug}-reviewer.md\` — read the skill before making\n` +
     `changes, and use the reviewer subagent (or \`/code-review\`) before\n` +
-    `declaring a change done.`
+    `declaring a change done.\n\n` +
+    `## Workflow Conventions\n\n` +
+    workflowConventions
   );
 }
 
