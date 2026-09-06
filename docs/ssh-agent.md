@@ -146,6 +146,14 @@ this reference installer's job. The `.pkg`:
   blank: `mullion-helper helper pair <payload>` in Terminal once you have a
   payload from **Settings → Hosts → SSH agent bridges**.
 
+If `mullion-helper helper pair` fails with a redirect/302 instead of pairing
+(a `curl -i` against the primary's `/ws/agent-bridge` shows a `location:`
+header pointing at an SSO login page), your deployment is likely sitting
+behind a forwardAuth gateway (Traefik + Authentik/Authelia/etc.) that's
+intercepting the helper's connection before it reaches Mullion — see
+[`deploy/README.md`](../deploy/README.md)'s "Optional: SSH-agent bridge
+behind a forwardAuth gateway" section for the exemption the gateway needs.
+
 The download is currently **unsigned**, same stated limitation as the
 Windows installer — Gatekeeper will refuse to open it from Finder ("Apple
 could not verify..."); right-click → **Open** once to bypass that for an
