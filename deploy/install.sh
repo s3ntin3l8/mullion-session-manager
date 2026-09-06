@@ -97,6 +97,19 @@ if [ "${#missing[@]}" -gt 0 ]; then
   exit 1
 fi
 
+# `bwrap` (bubblewrap) is OPTIONAL, not required — issue #1081. When
+# present (and actually usable; scaffold-generate.ts's own runtime probe is
+# what decides that, not this check) it lets `/setup/generate`'s agent turn
+# run inside a real process-level sandbox instead of relying solely on the
+# structural PR-pipeline guarantee. Absent, generation degrades gracefully
+# to that structural-only guarantee, with a warning logged at generation
+# time — so this is a heads-up, not a hard prerequisite failure.
+if ! command -v bwrap >/dev/null 2>&1; then
+  echo "NOTE: 'bwrap' (bubblewrap) not found — optional; see deploy/README.md's" >&2
+  echo "Host prerequisites section. Without it, scaffold-generate's agent turn" >&2
+  echo "runs without process-level sandboxing (structural guarantee only)." >&2
+fi
+
 NODE_PATH="$(command -v node)"
 echo "    node: $NODE_PATH ($("$NODE_PATH" --version))"
 

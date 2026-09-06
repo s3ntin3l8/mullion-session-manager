@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { FastifyInstance } from "fastify";
@@ -54,57 +55,104 @@ import { scaffoldSkillPath, scaffoldReviewerPath } from "./mullion-scaffold.js";
 // the scratch worktree in a wholly unrelated part of the filesystem means
 // a relative-path escape no longer lands anywhere that matters.
 //
-// Be honest about what this is NOT: this process is not sandboxed
-// (chroot/container/seccomp) — nothing stops an agent that already knows
-// `project.cwd`'s absolute path from writing there directly (e.g. `echo x
-// > /abs/path/to/project/file`), and only `claude`'s `--allowedTools`
-// below is a CONFIRMED write-blocking flag among the four agents this
-// module supports. Issue #1081 re-checked the other three empirically
-// (2026-09-05, this repo's own dev sandbox — see that issue's own comments
-// for the exact commands): `codex exec --sandbox read-only` is a REAL,
-// accepted flag (`codex exec`'s own startup banner echoes back
-// `sandbox: read-only`), but whether it actually blocks a write is still
-// UNVERIFIED — this account's codex usage was rate-limited (quota resets
-// 2026-09-28) before a real model turn could be driven far enough to try
-// one. `agy -p` DOES now carry a `--sandbox` flag (agy 1.1.27; it did not
-// when this comment was first written) but it is NOT usable here: without
-// `--dangerously-skip-permissions` it auto-denies every tool call in
-// headless/print mode (including the read-only ones this module needs),
-// and WITH that flag it blocks nothing — a live `echo pwned >
-// /outside/path` under `agy -p --sandbox --dangerously-skip-permissions`
-// wrote the file. agy's own denial message points at a `permissions.allow`
-// allow-list in `settings.json` (`command(<target>)` rules) as the
-// closer analogue to `claude`'s `--allowedTools` — untried here, real
-// follow-up work. `opencode run` (1.18.29) still has no write-restriction
-// flag at all, confirmed against its own `--help` — only `--auto`, which
-// does the opposite (auto-approves everything). What IS structurally
-// guaranteed, regardless of whether any of those flags actually hold: the
-// diff/PR pipeline (computeScaffold → writeScaffoldEntries → the
-// `setup-<slug>` worktree) never reads from, stages, or diffs anywhere the
-// generation agent could have written — the only channel between the two
-// is this function's own parsed stdout, feeding three hardcoded target
-// paths. A write the agent makes ANYWHERE ELSE on disk is real (this
-// design cannot prevent that), but it is never picked up by the machinery
-// that produces the PR a human reviews. Real process-level sandboxing
-// (e.g. `bwrap --ro-bind / / --dev /dev --proc /proc --bind <scratch
-// worktree> <scratch worktree> --die-with-parent`, deliberately NOT
-// `--unshare-net` since the agent CLI itself needs network access to reach
-// its own model API) was spiked and empirically confirmed to work in this
-// repo's own dev sandbox — it blocks a write outside the bound path
-// (EROFS), permits the punched-out scratch worktree, tolerates a git
-// worktree's `.git` file pointing back into the real repo's `.git/
-// worktrees/` for read-only `git log`/`diff`/`show`, and — the load-bearing
-// one — still lets `execFile`'s own `timeout` kill the sandboxed process
-// via SIGTERM with no orphaned children. It is NOT wired in here: `bwrap`
-// is not on `deploy/install.sh`'s host-prerequisite list (`node npm dtach
-// systemd-run systemctl curl tar timeout sha256sum`), and this dev
-// sandbox's `unprivileged_userns_clone=1` is a fact about THIS box, not
-// about an arbitrary self-hosted production host — making it a real
-// guarantee needs `install.sh`/`deploy/README.md` changes (a hard prereq,
-// or a documented degrade-with-warning when absent) that are a different
-// issue's/PR's scope than this module's own file ownership. Tracked as
-// concrete follow-up work, not something this issue's own scope forces
-// through here (see the PR description's own filed-issues list).
+// Be honest about what this is and isn't: real process-level sandboxing IS
+// now wired in here, WHEN `bwrap` (bubblewrap) is present and actually
+// usable on this host — see `wrapWithSandbox` and `isSandboxCapable` below.
+// The confirmed-working invocation (unchanged from the original spike,
+// issue #1081, 2026-09-05, this repo's own dev sandbox):
+//
+//   bwrap --ro-bind / / --dev /dev --proc /proc --bind <scratch worktree>
+//     <scratch worktree> --die-with-parent -- <agent bin> <agent args...>
+//
+// — deliberately NOT `--unshare-net`, since the agent CLI itself needs
+// network access to reach its own model API. This blocks a write outside
+// the bound path (EROFS — re-confirmed live on this box as part of this
+// issue's own test suite), permits the punched-out scratch worktree (the
+// more specific `--bind` for that path is listed AFTER the broader
+// `--ro-bind /`, which is what lets it override the read-only mount for
+// that one path — reordering those two flags would silently make the
+// worktree read-only too, though today's read-only `git log`/`diff`/
+// `show` commands would still work fine even then, since they never write
+// anything; the writable bind exists for the agent CLI's own use of its
+// cwd, not for git's benefit), and — the load-bearing property — still
+// lets `execFile`'s own `timeout` kill the sandboxed process via SIGTERM
+// with no orphaned children, because `--die-with-parent` ties bwrap's own
+// lifetime (and therefore everything it launched) to its immediate
+// parent.
+//
+// A second live re-check (2026-09-06, same box) found the worktree bind
+// ALONE is not enough for every agent this module supports: `codex` and
+// `opencode` both write to their own state/log directories under `$HOME`
+// on every invocation (a session-rollout file under `~/.codex`, a log file
+// under `~/.local/share/opencode`) and hard-fail with EROFS if they can't,
+// even for a read-only generation turn — `claude` needed no such extra
+// bind. `wrapWithSandbox`'s `extraWritablePaths` parameter and
+// `agentSandboxWritablePaths` (see their own comments) close that gap with
+// an additional `--bind-try` per agent, re-verified live afterward: both
+// agents proceeded past the filesystem error to a real model-turn attempt.
+// `agy`'s own pre-existing argument-parsing bug (unrelated to this sandbox
+// — reproduces identically unsandboxed) blocked doing the same live check
+// for it; no extra bind is added for it here, so that remains a real,
+// openly-undiscovered gap rather than a silently-assumed one.
+//
+// Presence of the `bwrap` binary on `PATH` is NOT treated as sufficient —
+// the real gate is the kernel's `unprivileged_userns_clone` sysctl, which
+// varies by host and can't be read reliably (some kernels expose it under
+// a different path, or via AppArmor policy instead of sysctl). So instead
+// of `command -v bwrap`, `isSandboxCapable` runs an actual smoke probe
+// (`bwrap --ro-bind / / --dev /dev --proc /proc --bind <tmpdir> <tmpdir>
+// --die-with-parent -- /bin/true` — the same base flags as the real
+// invocation, minus any per-agent extra binds, which are checked
+// separately by re-verifying live per agent as described above) once per
+// process and caches the boolean result — see that function's own comment
+// for the caching/reset seam. When the probe fails, generation falls back
+// to exactly today's unsandboxed `execFile` call, with a one-time
+// `console.warn` naming what protection is being skipped — a graceful
+// degrade, not a hard failure, since plenty of self-hosted production
+// hosts (containers/LXC without unprivileged user namespaces, hardened
+// kernels) genuinely can't run bwrap. `deploy/install.sh`/
+// `deploy/README.md` list it as an OPTIONAL prerequisite, not a hard one,
+// for exactly that reason.
+//
+// What sandboxing does NOT change: only `claude`'s `--allowedTools` below
+// is a CONFIRMED write-blocking flag among the four agents' own CLI
+// surfaces (independent of the process-level sandbox). Issue #1081's
+// earlier re-check of the other three (2026-09-05, this repo's own dev
+// sandbox — see that issue's own comments for the exact commands) still
+// holds and is worth keeping as documented context: `codex exec --sandbox
+// read-only` is a REAL, accepted flag (`codex exec`'s own startup banner
+// echoes back `sandbox: read-only`), but whether it actually blocks a
+// write is still UNVERIFIED — this account's codex usage was rate-limited
+// (quota resets 2026-09-28) before a real model turn could be driven far
+// enough to try one. `agy -p` DOES now carry a `--sandbox` flag (agy
+// 1.1.27; it did not when this comment was first written) but it is NOT
+// usable here: without `--dangerously-skip-permissions` it auto-denies
+// every tool call in headless/print mode (including the read-only ones
+// this module needs), and WITH that flag it blocks nothing — a live `echo
+// pwned > /outside/path` under `agy -p --sandbox
+// --dangerously-skip-permissions` wrote the file. agy's own denial message
+// points at a `permissions.allow` allow-list in `settings.json`
+// (`command(<target>)` rules) as the closer analogue to `claude`'s
+// `--allowedTools` — untried here, real follow-up work. `opencode run`
+// (1.18.29) still has no write-restriction flag at all, confirmed against
+// its own `--help` — only `--auto`, which does the opposite (auto-approves
+// everything). Now that process-level sandboxing is wired in, none of that
+// CLI-level unverified-ness matters for containment on a host where bwrap
+// is usable — bwrap blocks the write at the kernel/mount-namespace level
+// regardless of which CLI flag was or wasn't passed.
+//
+// What IS still structurally guaranteed regardless of whether bwrap is
+// available on a given host, and regardless of whether any of those
+// per-CLI flags hold: the diff/PR pipeline (computeScaffold →
+// writeScaffoldEntries → the `setup-<slug>` worktree) never reads from,
+// stages, or diffs anywhere the generation agent could have written — the
+// only channel between the two is this function's own parsed stdout,
+// feeding three hardcoded target paths. On a host without a usable bwrap,
+// a write the agent makes ANYWHERE ELSE on disk is real (this design
+// cannot prevent that on such a host), but it is never picked up by the
+// machinery that produces the PR a human reviews. This structural
+// guarantee is the backstop; bwrap, where available, is now real
+// belt-and-suspenders on top of it, not a replacement for it.
 //
 // ## Why a direct one-shot subprocess call, not PtyManager/createSessionRecord
 //
@@ -345,6 +393,261 @@ function buildInvocation(agentCommand: string, prompt: string): { bin: string; a
   }
 }
 
+/** Result shape for `wrapWithSandbox` — deliberately the same `{ bin, args
+ * }` shape `buildInvocation` returns, so a caller can treat "wrapped" and
+ * "unwrapped" invocations identically. Issue #1101 (a later, stacked PR)
+ * reuses this exact function for a new agent-side remote-generation-turn
+ * handler — keep the first three parameters (`bin`, `args`, `worktreePath`
+ * — no dependency on this module's own types) stable for that reuse; the
+ * fourth (`extraWritablePaths`) is additive and defaults to empty, so a
+ * caller with none can still invoke this exactly as before. */
+export interface SandboxedInvocation {
+  bin: string;
+  args: string[];
+}
+
+/** Shared by `wrapWithSandbox` (real invocations) and
+ * `buildBwrapSmokeTestInvocation` (the capability probe, and the test
+ * suite's own sync gate for the live tests — see that test file) so the
+ * two can never silently drift apart: a future flag change only has to
+ * happen in this one place. `worktreePath` is bound with a hard `--bind`
+ * (it is guaranteed to exist — `generateScaffoldContent` only ever calls
+ * this after `createWorktree` succeeds — so a missing path here SHOULD be
+ * a loud failure, not a silent skip). `extraWritablePaths` are bound with
+ * `--bind-try` instead: these are optional, may not exist on a given host
+ * (e.g. an agent CLI that has never run there yet), and a missing one
+ * should never turn into a sandbox failure. Bind order matters and must
+ * not be changed casually: the more specific, writable binds only
+ * override the broader `--ro-bind / /` because they are listed after it —
+ * bwrap applies bind mounts in argument order. Reordering would silently
+ * make every bound-writable path read-only again. */
+function buildBwrapBaseArgs(worktreePath: string, extraWritablePaths: string[]): string[] {
+  return [
+    "--ro-bind",
+    "/",
+    "/",
+    "--dev",
+    "/dev",
+    "--proc",
+    "/proc",
+    "--bind",
+    worktreePath,
+    worktreePath,
+    ...extraWritablePaths.flatMap((p) => ["--bind-try", p, p]),
+    "--die-with-parent",
+  ];
+}
+
+/** Per-agent extra writable binds, additive to the scratch worktree bind.
+ * Issue #1081's live re-check (this module's own header) found the bare
+ * worktree bind is NOT sufficient for every agent this module supports —
+ * `codex` and `opencode` both write to their own state/log directories
+ * under `$HOME` on every invocation and hard-fail (EROFS) if they can't,
+ * even for a read-only generation turn. Verified live on a real dev
+ * sandbox (2026-09-06): `codex exec` fails with "failed to initialize
+ * in-process app-server client: Read-only file system" unless `~/.codex`
+ * is writable; `opencode run` fails with "Unknown: FileSystem.open
+ * (~/.local/share/opencode/log/opencode.log)" unless that directory is
+ * writable. Both were re-verified live after adding the corresponding
+ * bind below — codex proceeded to a real (rate-limited, no-cost) turn,
+ * opencode proceeded to a real model call. `claude -p` needed no extra
+ * bind to complete successfully (confirmed live, no `--bind-try`
+ * entries) — but it is not silent about it: `strace` on that same live
+ * run shows Claude Code repeatedly attempting several housekeeping
+ * writes under `$HOME` (plugin-cache `.in_use` lock files, MCP
+ * auth-cache, a per-run `session-env/<uuid>` directory,
+ * `.claude.json`/`.claude.json.lock` atomic-rename writes) that all fail
+ * silently with EROFS and are tolerated — this is "doesn't need to
+ * write," not "doesn't try to." `agy -p`'s own
+ * PRE-EXISTING argument-parsing quirk (`-p` swallows the next arg as its
+ * own prompt, reproduces identically with or without this sandbox —
+ * unrelated to issue #1081, out of scope for it) blocked verifying its
+ * filesystem needs the same way here; no extra bind is added for it, so if
+ * it turns out to need one, that is a real, currently undiscovered gap —
+ * not a silently assumed one.
+ *
+ * Be honest about the tradeoff this makes: these are directory-level binds
+ * (`~/.codex`, `~/.local/share/opencode`), not narrowed to just the one
+ * file each agent was observed writing — which means each agent's own
+ * credential file (`~/.codex/auth.json`, `~/.local/share/opencode/
+ * auth.json`) is writable inside the sandbox too, not just its log/session
+ * state. A compromised or badly-behaved generation turn could corrupt the
+ * operator's real, non-sandboxed codex/opencode auth on this host — a
+ * genuinely smaller but real mutation surface than "the entire
+ * filesystem" (the pre-#1081 baseline), not a zero one. Narrowing this
+ * further (e.g. bind-mounting only the exact session/log file each CLI
+ * needs) was deliberately not attempted: opencode's own session state
+ * lives in `opencode.db` (confirmed via file mtime, not just the log
+ * directory the first error message named), so a log-only bind would
+ * likely just move the EROFS failure rather than remove it, and codex's
+ * mid-turn (not just startup) write behavior can't be verified further
+ * until its rate limit resets (2026-09-28, see this module's header) —
+ * so a narrower bind can't be verified either. Tracked as real follow-up
+ * work, not silently accepted scope creep. */
+export function agentSandboxWritablePaths(agentCommand: string): string[] {
+  const home = os.homedir();
+  switch (agentCommand) {
+    case "codex":
+      return [path.join(home, ".codex")];
+    case "opencode":
+      return [path.join(home, ".local", "share", "opencode")];
+    default:
+      return [];
+  }
+}
+
+/** `wrapWithSandbox`'s `extraWritablePaths` are bound with `--bind-try`
+ * (see `buildBwrapBaseArgs`'s own comment), which bwrap defines as
+ * skipping the bind ENTIRELY when the source is missing — it does not
+ * create anything. That is correct for a path that has never existed and
+ * never will, but WRONG for these specific per-agent state directories: a
+ * freshly provisioned host (or one where this particular agent has simply
+ * never run before) genuinely has no `~/.codex`/`~/.local/share/opencode`
+ * yet, `--bind-try` would then silently skip the bind, and the directory
+ * would stay read-only under the broader `--ro-bind / /` — so the very
+ * first `mkdir`/write codex or opencode does there fails with EROFS all
+ * over again, on exactly the hosts where the fix in
+ * `agentSandboxWritablePaths` was supposed to help most. Called before
+ * `wrapWithSandbox` so the path is guaranteed to exist by the time bwrap's
+ * `--bind-try` runs. Best-effort (`mkdirSync`'s own error is swallowed,
+ * not surfaced) — if directory creation somehow still fails (e.g. a
+ * permissions oddity unrelated to sandboxing), the behavior degrades to
+ * exactly the pre-existing `--bind-try`-skips-a-missing-path case, not a
+ * new failure mode.
+ *
+ * `mkdirSync` here is a new filesystem-write sink in a module that already
+ * carries a documented CodeQL js/path-injection dismissal (see
+ * `defaultSpawnGenerationTurn`'s own comment on `cwd`) — worth a quick
+ * mental check if GHAS flags it fresh, though it should not: every path
+ * this is ever called with comes from `agentSandboxWritablePaths`, which
+ * only ever returns `os.homedir()` joined with a hardcoded literal
+ * subpath, never anything request- or agent-output-derived. */
+export function ensureSandboxWritablePathsExist(paths: string[]): void {
+  for (const p of paths) {
+    try {
+      fs.mkdirSync(p, { recursive: true });
+    } catch {
+      // Best-effort — see this function's own comment.
+    }
+  }
+}
+
+/** Given the resolved binary, its args, and the scratch worktree's
+ * absolute path, returns the `bwrap`-wrapped invocation to hand to
+ * `execFile` in place of the original. This is the EXACT confirmed
+ * invocation from this module's own header comment:
+ *
+ *   bwrap --ro-bind / / --dev /dev --proc /proc --bind <worktreePath>
+ *     <worktreePath> [--bind-try <extra> <extra> ...] --die-with-parent
+ *     -- <bin> <args...>
+ *
+ * `extraWritablePaths` defaults to empty so a caller that has none (e.g.
+ * issue #1101's later, stacked reuse of this same function for a new
+ * agent-side remote-generation-turn handler) can still call this with
+ * just the original three arguments — see `SandboxedInvocation`'s own
+ * comment on why that reuse matters. `--die-with-parent` is what lets
+ * `execFile`'s own `timeout` kill the whole sandboxed subtree via SIGTERM
+ * with no orphaned children (verified live as part of issue #1081) —
+ * never drop it. Deliberately no `--unshare-net`: the agent CLI itself
+ * needs network access to reach its own model API. */
+export function wrapWithSandbox(
+  bin: string,
+  args: string[],
+  worktreePath: string,
+  extraWritablePaths: string[] = [],
+): SandboxedInvocation {
+  return {
+    bin: "bwrap",
+    args: [...buildBwrapBaseArgs(worktreePath, extraWritablePaths), "--", bin, ...args],
+  };
+}
+
+/** Injectable probe seam — production uses `probeBwrapSmokeTest` below;
+ * tests inject a fake so the cached-capability behavior can be exercised
+ * without depending on this exact machine's `bwrap` availability. */
+export type SandboxCapabilityProbe = () => Promise<boolean>;
+
+/** Exported purely so the test suite's own synchronous `describeIfBwrap`
+ * gate (see test/services/scaffold-generate.test.ts) can run the IDENTICAL
+ * invocation this probe uses, rather than hand-duplicating a second,
+ * possibly-divergent flag list that could pass or fail differently from
+ * the real thing. There is no real scratch worktree at probe time, so
+ * `os.tmpdir()` stands in for it — the same directory family
+ * `generateScaffoldContent` already uses as `baseDir` for every scratch
+ * worktree, so it is guaranteed to exist and be writable by this process
+ * on every host this runs on. No `extraWritablePaths` here deliberately —
+ * this probe proves the base bwrap/kernel mechanics work (bind mounts,
+ * `--dev`/`--proc`, `--die-with-parent`, unprivileged user namespaces),
+ * not that every per-agent path a specific CLI needs is covered; that is
+ * what `agentSandboxWritablePaths` above is for, checked against reality
+ * (not merely presence) the same live way — see its own comment. */
+export function buildBwrapSmokeTestInvocation(): SandboxedInvocation {
+  const probeBindPath = os.tmpdir();
+  return {
+    bin: "bwrap",
+    args: [...buildBwrapBaseArgs(probeBindPath, []), "--", "/bin/true"],
+  };
+}
+
+/** The real probe: actually runs a trivial no-op `bwrap` invocation and
+ * treats a clean exit as "usable." Deliberately NOT `command -v bwrap` —
+ * the real blocker in practice is the kernel's `unprivileged_userns_clone`
+ * sysctl (or an equivalent AppArmor/kernel-hardening restriction), which
+ * presence-on-PATH says nothing about; only actually running it proves
+ * anything. */
+function probeBwrapSmokeTest(): Promise<boolean> {
+  const { bin, args } = buildBwrapSmokeTestInvocation();
+  return new Promise((resolve) => {
+    execFile(bin, args, { timeout: 5000 }, (err) => {
+      resolve(!err);
+    });
+  });
+}
+
+/** Module-scope cache — the probe above is a real subprocess spawn, so
+ * re-running it on every single `generateScaffoldContent` call would add
+ * real latency to every scaffold generation turn for no benefit: bwrap's
+ * usability on a given host does not change during a process's lifetime.
+ * Cached as a lazily-created promise (not a plain boolean) so concurrent
+ * callers during the very first check all await the same in-flight probe
+ * rather than each kicking off their own. `resetSandboxCapabilityCache`
+ * exists purely for tests — production code never calls it. */
+let cachedCapability: Promise<boolean> | null = null;
+
+export function resetSandboxCapabilityCache(): void {
+  cachedCapability = null;
+}
+
+/** Returns whether sandboxing via `bwrap` is usable on this host, running
+ * the (real or injected) smoke probe at most once per process — see the
+ * module-scope cache above. On a failed probe, logs a warning naming
+ * exactly what protection is being skipped and returns `false`; callers
+ * are expected to fall back to today's unsandboxed `execFile` behavior
+ * (graceful degrade, not a hard failure — see this module's own header for
+ * why an arbitrary self-hosted host may genuinely lack a usable bwrap). */
+export function isSandboxCapable(
+  probe: SandboxCapabilityProbe = probeBwrapSmokeTest,
+): Promise<boolean> {
+  if (cachedCapability === null) {
+    cachedCapability = probe()
+      .catch(() => false)
+      .then((usable) => {
+        if (!usable) {
+          console.warn(
+            "[scaffold-generate] bwrap is not usable on this host (binary missing, or the " +
+              "kernel/policy does not permit unprivileged user namespaces) — scaffold " +
+              "generation turns will run WITHOUT process-level sandboxing; the structural " +
+              "guarantee (the scratch worktree never feeds the PR pipeline directly) is the " +
+              "only protection in effect until this is resolved. See scaffold-generate.ts's " +
+              "own header comment for detail.",
+          );
+        }
+        return usable;
+      });
+  }
+  return cachedCapability;
+}
+
 /** The real, production spawn — a bare, argv-array `execFile` (never a
  * shell string: the prompt embeds arbitrary repo-derived and DB-seed text,
  * so this avoids shell-injection risk entirely rather than relying on
@@ -367,17 +670,37 @@ function buildInvocation(agentCommand: string, prompt: string): { bin: string; a
  * API rather than reshaping already-verified-safe code to chase a query
  * that doesn't model manual containment checks as sanitizers (see
  * opencode-session-transfer.ts:240-252 for the longer rationale). */
-export const defaultSpawnGenerationTurn: SpawnGenerationTurn = ({
+export const defaultSpawnGenerationTurn: SpawnGenerationTurn = async ({
   agentCommand,
   cwd,
   prompt,
   timeoutMs,
 }) => {
   const { bin, args } = buildInvocation(agentCommand, prompt);
+  // `cwd` here is always the scratch generation worktree (see
+  // `generateScaffoldContent` below) — never the real project checkout —
+  // so it is exactly the path `wrapWithSandbox` should punch a writable
+  // hole for.
+  // `isSandboxCapable` only gates on whether bwrap/the kernel mechanics it
+  // needs work AT ALL (see that function's own comment) — it does not
+  // predict whether THIS call's specific bind set will succeed. If a
+  // wrapped invocation fails for a bwrap-specific reason `isSandboxCapable`
+  // didn't cover, it surfaces as an ordinary `GenerationSpawnError` rather
+  // than transparently retrying unsandboxed: distinguishing "bwrap itself
+  // failed to mount something" from "the agent CLI genuinely errored" isn't
+  // reliably decidable from an exit code/stderr alone, so no such retry is
+  // attempted here — a known, accepted limitation, not an oversight.
+  const sandboxUsable = await isSandboxCapable();
+  let invocation = { bin, args };
+  if (sandboxUsable) {
+    const extraWritablePaths = agentSandboxWritablePaths(agentCommand);
+    ensureSandboxWritablePathsExist(extraWritablePaths);
+    invocation = wrapWithSandbox(bin, args, cwd, extraWritablePaths);
+  }
   return new Promise<string>((resolve, reject) => {
     execFile(
-      bin,
-      args,
+      invocation.bin,
+      invocation.args,
       { cwd, env: gitEnv(), timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 },
       (err, stdout, stderr) => {
         if (err) {

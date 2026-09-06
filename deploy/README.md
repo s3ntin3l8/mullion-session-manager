@@ -122,6 +122,21 @@ bindings against this host's exact Node build — a C build toolchain
 `systemd-run`, `systemctl`, `curl`, `tar`, `timeout`, and `sha256sum` up
 front and fails fast with a clear message if any are missing.
 
+**`bwrap` (bubblewrap) — OPTIONAL (issue #1081):** not checked as a hard
+requirement, unlike the binaries above. When `bwrap` is present AND
+actually usable (`src/services/scaffold-generate.ts`'s own runtime smoke
+probe decides that at generation time — presence on `PATH` alone isn't
+enough, since the real gate is the kernel's `unprivileged_userns_clone`
+sysctl or an equivalent policy restriction), `/setup/generate`'s agent
+turn runs inside a real process-level sandbox (`bwrap --ro-bind / /
+--dev /dev --proc /proc --bind <scratch worktree> <scratch worktree>
+--die-with-parent`) in addition to the structural guarantee described in
+that file's own header comment. When `bwrap` is absent, or present but not
+usable, generation degrades gracefully to that structural-only guarantee
+(the scratch worktree never feeds the PR pipeline directly), logging a
+one-time warning naming the gap. `install.sh` prints a heads-up note (not
+a failure) when `bwrap` is missing.
+
 **Playwright / Chromium (Phase 3, issue #179):** `install.sh` and
 `scripts/self-update.sh` both run `npx playwright install chromium` after
 `npm ci --omit=dev`, unconditionally — regardless of whether you ever turn
