@@ -4,6 +4,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  unlinkSync,
   writeFileSync,
   type Dirent,
 } from "node:fs";
@@ -246,6 +247,115 @@ export function pruneOrphanManagedDirs(
  * manifestEntryStillValid's own doc comment in bundle-sync.ts). */
 export function isCurrentMullionManagedDir(dir: string): boolean {
   return existsSync(path.join(dir, INSTALLED_MARKER_NAME));
+}
+
+// Issue #1090 — the file-level counterpart to INSTALLED_MARKER_NAME above.
+// AGENT_TARGETS (bundle-sync.ts) installs flat `mullion-<name>.md` files, not
+// directories, so there's no "inside" to carry a sibling sentinel file the
+// way a skill directory does. This repo's own established convention for
+// exactly this shape of problem is marked-region.ts's HTML-comment markers
+// (agent-guide.ts/project-briefing.ts/mullion-scaffold.ts use
+// `<!-- mullion:*:start/end -->` pairs) — HTML comments are inert to every
+// consuming CLI's Markdown/frontmatter parser. Deliberately NOT a new
+// frontmatter key: deriveOpenCodeReviewerAgentFile's own doc comment above
+// explains why an unexpected frontmatter shape can HARD-FAIL opencode's
+// config loader, and adding a marker key would be exactly that risk for zero
+// benefit (the marker only needs to be legible to Node's own string search,
+// never to any CLI's parser). A single sentinel line, not a start/end pair —
+// unlike marked-region.ts's callers, there is no surrounding user content to
+// preserve here: this module owns the ENTIRE installed file, so there is
+// nothing to delimit a region within.
+export const INSTALLED_AGENT_MARKER = "<!-- mullion:managed -->";
+
+/**
+ * Appends `INSTALLED_AGENT_MARKER` as the installed file's own last line.
+ * bundle-sync.ts's AGENT_TARGETS install loop MUST call this exactly once
+ * per file, on the transform's output, and then use THAT SAME string for
+ * both the disk write and the manifest hash — never hash the pre-marker
+ * transform output. Mirrors hashInstalledDir's own doc comment
+ * (bundle-sync.ts) on this exact "the check must agree with itself on both
+ * write and read" requirement for directories; the same requirement applies
+ * here, file-shaped: if the write and the hash ever disagree on whether the
+ * marker is included, `manifestEntryStillValid`'s later re-read-and-rehash
+ * permanently mismatches, and every sync reports `changed: true` forever.
+ *
+ * Placed at the very end of the file (after all frontmatter and body
+ * content), not as the body's first line — so it never reads as the first
+ * thing a CLI's own prompt construction sees.
+ */
+export function withInstalledAgentMarker(contents: string): string {
+  return `${contents.replace(/\n+$/, "")}\n${INSTALLED_AGENT_MARKER}\n`;
+}
+
+/**
+ * Whether `filePath` carries `INSTALLED_AGENT_MARKER` as its own trailing
+ * line — the file-kind counterpart to `isCurrentMullionManagedDir`'s
+ * directory-marker check. Used by `pruneOrphanManagedFiles` to decide
+ * whether it's safe to delete: a `mullion-`-prefixed `.md` file WITHOUT this
+ * marker is left completely untouched, no matter what — the exact same
+ * "prefix alone isn't proof of ownership" rule Hermes review PR #891
+ * established for directories.
+ *
+ * Deliberately checks `endsWith` (matching exactly where
+ * `withInstalledAgentMarker` places it) rather than a bare `.includes()`
+ * anywhere in the file: `isCurrentMullionManagedDir`'s sibling-file check is
+ * something a user can't produce by accident, and a substring search would
+ * be a materially weaker bar than that — a user's own `mullion-*.md` file
+ * that merely quotes or documents this exact marker string in its body
+ * (plausible: this very module's own doc comments, or this repo's docs,
+ * contain the literal string) would otherwise be misidentified as
+ * Mullion-owned and become deletable. Requiring it as the file's own last
+ * line closes that gap while still matching every file this module itself
+ * ever writes.
+ *
+ * `false` (never throws) for a file that no longer exists or can't be
+ * read — same soft-failure posture as `isCurrentMullionManagedDir`, which
+ * relies on `existsSync` rather than a try/catch for the same reason.
+ */
+export function isCurrentMullionManagedFile(filePath: string): boolean {
+  try {
+    return readFileSync(filePath, "utf8").trimEnd().endsWith(INSTALLED_AGENT_MARKER);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The file-kind counterpart to `pruneOrphanManagedDirs` (issue #1090):
+ * removes every marker-carrying `mullion-*.md` file directly under
+ * `destRoot` whose name is NOT in `currentNames`. Same contract as its
+ * directory sibling in every respect — a no-op (not an error) when
+ * `destRoot` doesn't exist yet, each removal independently best-effort, and
+ * marker-gated only: a same-prefixed `.md` file lacking
+ * `INSTALLED_AGENT_MARKER` is never touched, no matter what.
+ *
+ * Returns the number of files actually removed.
+ */
+export function pruneOrphanManagedFiles(
+  destRoot: string,
+  currentNames: ReadonlySet<string>,
+): number {
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(destRoot, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+  let removed = 0;
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    if (!entry.name.startsWith(INSTALLED_SKILL_PREFIX) || !entry.name.endsWith(".md")) continue;
+    if (currentNames.has(entry.name)) continue;
+    const filePath = path.join(destRoot, entry.name);
+    if (!isCurrentMullionManagedFile(filePath)) continue;
+    try {
+      unlinkSync(filePath);
+      removed++;
+    } catch {
+      // Already gone, or some other benign race — nothing left to prune.
+    }
+  }
+  return removed;
 }
 
 /**
