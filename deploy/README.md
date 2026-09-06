@@ -240,7 +240,7 @@ turned on. The preview router still needs its own forwardAuth middleware
 (point 4 in that section below) regardless of whether in-process auth is
 enabled for the main dashboard.
 
-## Optional: SSH-agent bridge behind a forwardAuth gateway (issue #820)
+## Optional: SSH-agent bridge behind a forwardAuth gateway (issues #820, #1072)
 
 See [`docs/ssh-agent.md`](../docs/ssh-agent.md) for the feature itself; this
 section covers only what a Traefik + forwardAuth (Authentik/Authelia/etc.)
@@ -297,7 +297,7 @@ around lines 220-227); `isProtectedPath` simply never runs. In that
 configuration — the one this whole section exists for — the router below
 **is** the entire security boundary for `/ws/agent-bridge` and
 `POST /api/bridges/renew`, not defense-in-depth on top of an in-app check
-(contrast `src/app.ts` around lines 181-196, which is what forces the
+(contrast `src/app.ts` around lines 184-198, which is what forces the
 `MULLION_TRUST_GATEWAY` acknowledgment in the first place). Any
 IP-allowlisting or rate-limiting you want on these two paths belongs on this
 router — there is nothing else in front of them.
@@ -325,10 +325,15 @@ method-blind — the rule matches every HTTP method on those paths, same as
 helper's own credential is the auth check for this surface. Unlike
 `mullion-webhooks`, which sidesteps any overlap by using its own
 `CHANGEME_WEBHOOK_HOSTNAME`, this router shares `CHANGEME_HOSTNAME` with the
-main router, so both match the same two paths — the explicit `priority: 100`
-is what makes this router win over the main (auth-middleware'd) router for
-those paths, rather than relying on Traefik's default longest-rule-wins
-tiebreak, which a future edit to either rule could silently flip.
+main router, so both match the same two paths. Because this router's rule is
+the main router's rule plus the `&& (Path(...) || Path(...))` suffix,
+Traefik's default longest-rule-wins tiebreak would already resolve this
+correctly on its own — the bridge rule is always the longer string,
+regardless of what hostname you fill in. The explicit `priority: 100` is set
+anyway so precedence doesn't depend on that implicit character-count
+computation; if you ever extend the main router's own `rule` (more `Host()`
+alternatives, a long hostname list), keep `priority` comfortably above its
+computed length so it doesn't creep past this static ceiling.
 
 **nginx / Caddy / Cloudflare Tunnel:** not covered here — this repo only has
 a live Traefik deployment to verify config shape against. See the issue
