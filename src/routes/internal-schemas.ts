@@ -560,6 +560,27 @@ export const gitCommitWipSchema = schemaFor({
   optional: ["message"],
 });
 
+export interface BundleSyncRemoveBody {
+  disabled: boolean;
+}
+
+// Issue #1089 — the agent-side counterpart of routes/bundle-sync.ts's own
+// POST /api/bundle-sync/remove fan-out (via agent-bundle-state.ts's
+// removeHostBundle/RemoteHostClient.removeAgentBundle). Not built via
+// schemaFor above (that helper's field family is the cwd/path-shaped git
+// primitives; this is a single, unrelated boolean) — a plain literal
+// schema instead, same posture as promoteDecisionSchema just below.
+export const bundleSyncRemoveSchema = {
+  body: {
+    type: "object",
+    required: ["disabled"],
+    additionalProperties: false,
+    properties: {
+      disabled: { type: "boolean" },
+    },
+  },
+} as const;
+
 export type PromoteDecisionBody = PromoteDecision;
 
 // Issue #271 — mirrors reviewGateSchema's shape for the accepted/declined

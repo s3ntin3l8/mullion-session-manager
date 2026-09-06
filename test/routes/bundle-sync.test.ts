@@ -9,6 +9,33 @@ import type * as AgentDetectModule from "../../src/services/agent-detect.js";
 const tmpDb = path.join(os.tmpdir(), `bundle-sync-route-test-${process.pid}.db`);
 process.env.DATABASE_URL = `file:${tmpDb}`;
 
+// Issue #1089 — POST /api/bundle-sync/remove's fan-out to every registered
+// agent host (agent-bundle-state.ts's removeHostBundle, over
+// RemoteHostClient). Mocked at the module boundary, same shape as
+// test/services/host-files.test.ts's own mock of this module — nothing in
+// this suite needs a real network call, only the dispatch/best-effort
+// behavior.
+const mockGetRemoteHostClient = vi.fn();
+vi.mock("../../src/services/remote-host-client.js", () => ({
+  getRemoteHostClient: (...args: unknown[]) => mockGetRemoteHostClient(...args),
+  HostRequestError: class extends Error {
+    statusCode: number;
+    constructor(hostId: string, statusCode: number, body: string) {
+      super(`Host ${hostId} rejected the request: HTTP ${statusCode}${body ? ` — ${body}` : ""}`);
+      this.name = "HostRequestError";
+      this.statusCode = statusCode;
+    }
+  },
+  HostUnreachableError: class extends Error {
+    constructor(hostId: string, cause: unknown) {
+      super(
+        `Host ${hostId} is unreachable: ${cause instanceof Error ? cause.message : String(cause)}`,
+      );
+      this.name = "HostUnreachableError";
+    }
+  },
+}));
+
 // GET /api/bundle-sync/status calls getCachedAgents() under the hood
 // (agent-detect.ts), which shells out to probe every known binary — faked
 // directly at that module boundary (rather than child_process, like
@@ -91,6 +118,7 @@ beforeEach(() => {
   process.env.MULLION_HOME = mullionHomeDir;
   delete process.env.XDG_CONFIG_HOME;
   delete process.env.CLAUDE_CONFIG_DIR;
+  mockGetRemoteHostClient.mockReset();
 });
 
 afterEach(() => {
@@ -249,5 +277,126 @@ describe("POST /api/bundle-sync/remove", () => {
     const res = await app.inject({ method: "POST", url: "/api/bundle-sync/remove" });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ removed: 0, legacySwept: 0, settingDisabled: true });
+  });
+
+  // Issue #1089 — the fan-out to every registered agent host. Each test
+  // deletes the host row it creates (host-registry.ts's deleteHost) — this
+  // suite's DB (tmpDb, module scope) persists across every test in this
+  // file, so a row left behind here would leak into later tests' own
+  // fan-out expectations (and, first-run, break "never dispatches to the
+  // local host" below if it happened to run after one of these).
+  describe("fan-out to registered agent hosts", () => {
+    it("calls removeAgentBundle on a registered agent host, and the primary's own removal still succeeds", async () => {
+      const app = await buildTestApp();
+      const { createHost, deleteHost } = await import("../../src/services/host-registry.js");
+      const host = createHost(app, {
+        name: "agent-1",
+        baseUrl: "http://agent-1.example:4000",
+        token: "tok",
+      });
+      const removeAgentBundleMock = vi.fn().mockResolvedValue({ removed: 2, legacySwept: 0 });
+      mockGetRemoteHostClient.mockReturnValue({ removeAgentBundle: removeAgentBundleMock });
+
+      try {
+        const res = await app.inject({ method: "POST", url: "/api/bundle-sync/remove" });
+
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toEqual({ removed: 0, legacySwept: 0, settingDisabled: true });
+        // Not `toHaveBeenCalledWith(app, host.id)` — a deep-equal match
+        // against the full FastifyInstance (app) drags in live server/
+        // socket getters that throw outside a real listening request.
+        expect(mockGetRemoteHostClient).toHaveBeenCalledWith(expect.anything(), host.id);
+        expect(removeAgentBundleMock).toHaveBeenCalledWith(true);
+      } finally {
+        deleteHost(app, host.id);
+      }
+    });
+
+    it("an unreachable agent host is logged and skipped — never blocks the primary's own removal", async () => {
+      writeSkill("host");
+      const app = await buildTestApp();
+      await setInjectMullionBundle(app, true);
+      await app.inject({ method: "POST", url: "/api/bundle-sync/resync" });
+
+      const { createHost, deleteHost } = await import("../../src/services/host-registry.js");
+      const host = createHost(app, {
+        name: "unreachable-agent",
+        baseUrl: "http://nope.example:4000",
+        token: "tok",
+      });
+      const { HostUnreachableError } = await import("../../src/services/remote-host-client.js");
+      mockGetRemoteHostClient.mockReturnValue({
+        removeAgentBundle: vi
+          .fn()
+          .mockRejectedValue(new HostUnreachableError(host.id, new Error("timeout"))),
+      });
+      const warnSpy = vi.spyOn(app.log, "warn");
+
+      try {
+        const res = await app.inject({ method: "POST", url: "/api/bundle-sync/remove" });
+
+        expect(res.statusCode).toBe(200);
+        const body = res.json();
+        expect(body.settingDisabled).toBe(true);
+        expect(body.removed).toBeGreaterThan(0);
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.objectContaining({ hostId: host.id }),
+          expect.stringContaining("could not reach agent host"),
+        );
+      } finally {
+        deleteHost(app, host.id);
+      }
+    });
+
+    it("never dispatches to the local host itself, only to remote registered agent hosts", async () => {
+      const app = await buildTestApp();
+
+      await app.inject({ method: "POST", url: "/api/bundle-sync/remove" });
+
+      expect(mockGetRemoteHostClient).not.toHaveBeenCalled();
+    });
+
+    it("with TWO registered agent hosts, one unreachable does not prevent the other from being dispatched to", async () => {
+      const app = await buildTestApp();
+      const { createHost, deleteHost } = await import("../../src/services/host-registry.js");
+      const badHost = createHost(app, {
+        name: "bad-agent",
+        baseUrl: "http://nope.example:4000",
+        token: "tok",
+      });
+      const goodHost = createHost(app, {
+        name: "good-agent",
+        baseUrl: "http://good-agent.example:4000",
+        token: "tok",
+      });
+      const { HostUnreachableError } = await import("../../src/services/remote-host-client.js");
+      const removeAgentBundleMock = vi.fn().mockResolvedValue({ removed: 1, legacySwept: 0 });
+      mockGetRemoteHostClient.mockImplementation((_app: unknown, hostId: string) => {
+        if (hostId === badHost.id) {
+          return {
+            removeAgentBundle: vi
+              .fn()
+              .mockRejectedValue(new HostUnreachableError(badHost.id, new Error("timeout"))),
+          };
+        }
+        return { removeAgentBundle: removeAgentBundleMock };
+      });
+
+      try {
+        const res = await app.inject({ method: "POST", url: "/api/bundle-sync/remove" });
+
+        expect(res.statusCode).toBe(200);
+        expect(res.json().settingDisabled).toBe(true);
+        // The unreachable host doesn't short-circuit the Promise.all — the
+        // reachable one is still dispatched to, proving multi-host
+        // isolation rather than just single-host best-effort.
+        expect(removeAgentBundleMock).toHaveBeenCalledWith(true);
+        expect(mockGetRemoteHostClient).toHaveBeenCalledWith(expect.anything(), badHost.id);
+        expect(mockGetRemoteHostClient).toHaveBeenCalledWith(expect.anything(), goodHost.id);
+      } finally {
+        deleteHost(app, badHost.id);
+        deleteHost(app, goodHost.id);
+      }
+    });
   });
 });

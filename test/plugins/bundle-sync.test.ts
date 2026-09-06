@@ -31,6 +31,17 @@ vi.mock("../../src/services/settings.js", async (importOriginal) => {
   };
 });
 
+// Issue #1089 — the agent-role (no app.db) branch now consults this
+// module's own persisted flag instead of blindly falling back to
+// DEFAULT_SETTINGS (always `true`) — see plugins/bundle-sync.ts's own
+// readInjectMullionBundle comment. Mocked at the module boundary for the
+// same reason bundle-sync.ts itself is: this module's real read function
+// does os.homedir()-based filesystem I/O.
+const readAgentBundleDisabledMock = vi.fn(() => false);
+vi.mock("../../src/services/agent-bundle-state.js", () => ({
+  readAgentBundleDisabled: () => readAgentBundleDisabledMock(),
+}));
+
 const { bundleSyncPlugin } = await import("../../src/plugins/bundle-sync.js");
 
 const originalNodeEnv = process.env.NODE_ENV;
@@ -50,6 +61,8 @@ describe("bundleSyncPlugin", () => {
   beforeEach(() => {
     runBundleSyncExclusiveMock.mockClear();
     getStoredSettingsMock.mockReset();
+    readAgentBundleDisabledMock.mockClear();
+    readAgentBundleDisabledMock.mockReturnValue(false);
     app = Fastify();
   });
 
@@ -67,14 +80,31 @@ describe("bundleSyncPlugin", () => {
     expect(runBundleSyncExclusiveMock).not.toHaveBeenCalled();
   });
 
-  it("agent-role shape (no app.db): falls back to DEFAULT_SETTINGS and syncs (enabled)", async () => {
+  it("agent-role shape (no app.db): consults its own persisted flag (not disabled) and syncs (enabled)", async () => {
     process.env.NODE_ENV = "production";
+    readAgentBundleDisabledMock.mockReturnValue(false);
     // No app.db decoration at all — mirrors an agent-role process, which
     // never registers dbPlugin (see app.ts's own comment on that branch).
     await app.register(bundleSyncPlugin);
     await app.ready();
     await settleMicrotasks();
     expect(runBundleSyncExclusiveMock).toHaveBeenCalledWith(true);
+    expect(getStoredSettingsMock).not.toHaveBeenCalled();
+    expect(readAgentBundleDisabledMock).toHaveBeenCalled();
+  });
+
+  // Issue #1089 — the exact bug this fix closes: before it, this branch
+  // fell back to DEFAULT_SETTINGS.sessions.injectMullionBundle (always
+  // `true`), so an agent host that had just been told to remove bundle
+  // content (routes/bundle-sync.ts's `/remove` fan-out) would silently
+  // reinstall it all again on its very next boot.
+  it("agent-role shape (no app.db): consults its own persisted flag (disabled) and dispatches to removal", async () => {
+    process.env.NODE_ENV = "production";
+    readAgentBundleDisabledMock.mockReturnValue(true);
+    await app.register(bundleSyncPlugin);
+    await app.ready();
+    await settleMicrotasks();
+    expect(runBundleSyncExclusiveMock).toHaveBeenCalledWith(false);
     expect(getStoredSettingsMock).not.toHaveBeenCalled();
   });
 
