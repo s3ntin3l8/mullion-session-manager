@@ -30,7 +30,10 @@ applied by anything in this repo or its CI. `install.sh` and
 - `traefik-dynamic.yml` — Traefik dynamic (file provider) router + service
   pointing at the app's local port. Also includes a commented-out webhook
   router for GitHub webhook delivery — see
-  [`docs/github-integration.md`](../docs/github-integration.md).
+  [`docs/github-integration.md`](../docs/github-integration.md) — and a
+  commented-out router exempting the SSH-agent bridge helper's two paths
+  from forwardAuth — see "Optional: SSH-agent bridge behind a forwardAuth
+  gateway" below.
 - `authentik-middleware-example.yml` — reference only; you almost certainly
   already have a forwardAuth middleware defined and just need to reference
   its existing name in `traefik-dynamic.yml`, not create a new one.
@@ -236,6 +239,107 @@ surface with this mechanism would just break every preview once auth is
 turned on. The preview router still needs its own forwardAuth middleware
 (point 4 in that section below) regardless of whether in-process auth is
 enabled for the main dashboard.
+
+## Optional: SSH-agent bridge behind a forwardAuth gateway (issues #820, #1072)
+
+See [`docs/ssh-agent.md`](../docs/ssh-agent.md) for the feature itself; this
+section covers only what a Traefik + forwardAuth (Authentik/Authelia/etc.)
+deployment needs on top.
+
+**The problem.** The SSH-agent bridge helper
+(`src/cli/ssh-agent-helper.mjs`) is a plain Node `WebSocket` client — it has
+no cookie jar and runs no OIDC flow. It authenticates by presenting its own
+credential directly in the first handshake frame of the
+`/ws/agent-bridge` connection, or in the body of its periodic
+`POST /api/bridges/renew` renewal call — never a browser session cookie or a
+`MULLION_AUTH_TOKEN` bearer header, since a laptop/PC running the helper has
+no way to obtain either. When Mullion sits behind a forwardAuth gateway, the
+gateway's SSO middleware intercepts every request before it reaches Mullion
+at all and 302s it to the SSO challenge, so the helper's handshake and its
+renewal call never get a chance to present that credential:
+
+```
+$ curl -i https://mullion.example.com/ws/agent-bridge
+HTTP/2 302
+location: https://authentik.example.com/application/o/authorize/?client_id=...&redirect_uri=...&state=...
+```
+
+**The two paths that need a gateway-level exemption** — exactly these, and
+only these:
+
+- `/ws/agent-bridge`
+- `POST /api/bridges/renew`
+
+These match `isProtectedPath`'s own exemptions in `src/plugins/auth.ts`
+(around lines 108 and 116) exactly — both are exact-path matches there, not
+prefix matches — so a router-level exemption that drifts from that in-app
+list either reopens a path the app still expects to gate, or leaves the
+helper unable to reach a path the app already treats as self-authenticating.
+Keep the two lists in sync.
+
+**Explicitly NOT exempt, and why the shape matters.** `POST /api/bridges`
+(minting a _new_ pairing code) is a Settings-side admin action and stays
+behind the normal gate, same as `POST /api/hosts` — see the comment
+immediately above `isProtectedPath`'s `/ws/agent-bridge` case in
+`src/plugins/auth.ts`. And `/ws/terminal` — a live, interactive PTY — must
+never be reachable through this exemption. That's why the router below
+matches the two exact paths above, not a `PathPrefix('/ws/')` bypass: a
+prefix match on `/ws/` would be the wrong shape precisely because it would
+also expose `/ws/terminal` to the same forwardAuth bypass (see
+`src/plugins/auth.ts` around lines 117-118 for the same exact-match-vs-prefix
+contrast in the in-app gate).
+
+**The security implication.** When `MULLION_TRUST_GATEWAY=true` and neither
+in-process auth mechanism is configured (`MULLION_AUTH_TOKEN`/OIDC — see
+"Optional: in-process auth" above), `isAuthEnabled` returns false and
+`authPlugin` never registers its `onRequest` hook at all (`src/plugins/auth.ts`
+around lines 220-227); `isProtectedPath` simply never runs. In that
+configuration — the one this whole section exists for — the router below
+**is** the entire security boundary for `/ws/agent-bridge` and
+`POST /api/bridges/renew`, not defense-in-depth on top of an in-app check
+(contrast `src/app.ts` around lines 184-198, which is what forces the
+`MULLION_TRUST_GATEWAY` acknowledgment in the first place). Any
+IP-allowlisting or rate-limiting you want on these two paths belongs on this
+router — there is nothing else in front of them.
+
+**Traefik router.** `deploy/traefik-dynamic.yml` has a commented-out
+`mullion-agent-bridge` router, in the same style and commented-out-by-default
+posture as its `mullion-webhooks` router — copy it, uncomment it, and fill in
+the same `CHANGEME_HOSTNAME`/`CHANGEME_CERTRESOLVER` placeholders as the main
+router:
+
+```yaml
+mullion-agent-bridge:
+  rule: "Host(`CHANGEME_HOSTNAME`) && (Path(`/ws/agent-bridge`) || Path(`/api/bridges/renew`))"
+  priority: 100
+  entryPoints:
+    - websecure
+  service: claude-remote-session
+  tls:
+    certResolver: CHANGEME_CERTRESOLVER
+```
+
+It matches only the two exact paths above (`Path()`, not `PathPrefix`, and
+method-blind — the rule matches every HTTP method on those paths, same as
+`isProtectedPath`'s own check) and carries no auth middleware, since the
+helper's own credential is the auth check for this surface. Unlike
+`mullion-webhooks`, which sidesteps any overlap by using its own
+`CHANGEME_WEBHOOK_HOSTNAME`, this router shares `CHANGEME_HOSTNAME` with the
+main router, so both match the same two paths. Because this router's rule is
+the main router's rule plus the `&& (Path(...) || Path(...))` suffix,
+Traefik's default longest-rule-wins tiebreak would already resolve this
+correctly on its own — the bridge rule is always the longer string,
+regardless of what hostname you fill in. The explicit `priority: 100` is set
+anyway so precedence doesn't depend on that implicit character-count
+computation; if you ever extend the main router's own `rule` (more `Host()`
+alternatives, a long hostname list), keep `priority` comfortably above its
+computed length so it doesn't creep past this static ceiling.
+
+**nginx / Caddy / Cloudflare Tunnel:** not covered here — this repo only has
+a live Traefik deployment to verify config shape against. See the issue
+tracker for a follow-up once one of those is actually verified against a
+real deployment, rather than speculatively authoring untested config for a
+platform nobody here runs.
 
 ## Optional: in-dashboard previews (issue #28)
 

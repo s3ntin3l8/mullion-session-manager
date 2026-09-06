@@ -119,6 +119,52 @@ http:
     #   tls:
     #     certResolver: CHANGEME_CERTRESOLVER
 
+    # --- optional SSH-agent bridge helper router (issue #820, #1072) ---
+    # Uncomment this only if Mullion sits behind a forwardAuth gateway (this
+    # router's whole reason to exist) — a bare deployment with no gateway,
+    # or one relying solely on in-process auth (MULLION_AUTH_TOKEN/OIDC),
+    # doesn't need it. See deploy/README.md's "Optional: SSH-agent bridge
+    # behind a forwardAuth gateway" section before uncommenting.
+    #
+    # The helper (src/cli/ssh-agent-helper.mjs) authenticates with its own
+    # credential in the WS handshake / renew body, never a gateway session —
+    # so forwardAuth's SSO redirect must never intercept these two exact
+    # paths. Deliberately Path(), not PathPrefix(`/ws/`): a prefix match
+    # would also expose /ws/terminal (a live, interactive PTY) to this same
+    # bypass. Keep this path set exactly aligned with isProtectedPath's own
+    # /ws/agent-bridge and /api/bridges/renew exemptions in
+    # src/plugins/auth.ts — POST /api/bridges (pairing-code generation)
+    # stays deliberately unexempted, both here and there.
+    #
+    # No auth middleware here — when MULLION_TRUST_GATEWAY=true and no
+    # in-process auth is configured, this router IS the entire security
+    # boundary for these two paths, not defense-in-depth. Add an IP
+    # allowlist or rate-limit middleware here if you want hardening beyond
+    # the helper's own credential check. Note the rule is Path(), which
+    # matches every HTTP method on that exact path (not just POST) — same
+    # as isProtectedPath's own method-blind check in src/plugins/auth.ts.
+    #
+    # Unlike mullion-webhooks above, this router shares CHANGEME_HOSTNAME
+    # with the main router rather than using its own hostname, so both
+    # routers match requests to /ws/agent-bridge and /api/bridges/renew.
+    # This rule is the main router's rule plus the && (Path(...) || Path(...))
+    # suffix, so Traefik's default longest-rule-wins tiebreak would already
+    # resolve this correctly on its own — the bridge rule is always the
+    # longer string, regardless of hostname. The explicit `priority` below
+    # is set anyway so precedence doesn't depend on that implicit
+    # character-count computation; if the main router's own `rule` ever
+    # grows (more Host() alternatives, a long hostname list), keep this
+    # comfortably above its computed length.
+    #
+    # mullion-agent-bridge:
+    #   rule: "Host(`CHANGEME_HOSTNAME`) && (Path(`/ws/agent-bridge`) || Path(`/api/bridges/renew`))"
+    #   priority: 100
+    #   entryPoints:
+    #     - websecure
+    #   service: claude-remote-session
+    #   tls:
+    #     certResolver: CHANGEME_CERTRESOLVER
+
   services:
     claude-remote-session:
       loadBalancer:
