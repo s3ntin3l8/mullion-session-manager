@@ -4930,6 +4930,51 @@ describe("reconcileTasks", () => {
       await app.close();
     });
 
+    it("still fails the task (best-effort posture) for a remote-hosted task whose WIP salvage commit itself fails", async () => {
+      // Mirrors the local-host "still fails...when the WIP salvage commit
+      // itself fails" test above: commitHostWipChanges resolves ok: true
+      // (the capability probe succeeded — this host DOES support the
+      // route), but value.error is set (a real salvage failure on that
+      // host, e.g. a lock file or an isSafeAbsolutePath rejection). This is
+      // NOT the fail-open case — ok: true means the CAS still proceeds,
+      // same as it always has for a local host with a failed salvage.
+      const app = await buildApp();
+      const { hostId, workerSession, taskRow, worktreePath } = await seedRemoteInProgressTask(
+        app,
+        "salvage-error",
+      );
+
+      const sessionBackendModule = await import("../../src/services/session-backend.js");
+      const fakeBackend = buildFakeRemoteBackend(workerSession.id);
+      const resolveBackendSpy = vi
+        .spyOn(sessionBackendModule, "resolveBackend")
+        .mockReturnValue(fakeBackend);
+      mockResolveHostGitStatus.mockResolvedValue(gitStatus("0000000", true));
+      mockCommitHostWipChanges.mockResolvedValue({
+        ok: true,
+        value: { committed: false, error: "git add -u failed" },
+      });
+
+      await reconcileTasks(app);
+
+      const updated = await getTask(app, taskRow.id);
+      expect(updated.status).toBe("failed");
+      expect(updated.failureReason).toContain("no commits");
+      expect(mockCommitHostWipChanges).toHaveBeenCalledTimes(1);
+      expect(mockCommitHostWipChanges.mock.calls[0][0]).toBe(app);
+      expect(mockCommitHostWipChanges.mock.calls[0][1]).toBe(hostId);
+      expect(mockCommitHostWipChanges.mock.calls[0][2]).toBe(worktreePath);
+      const [sessionRow] = app.db
+        .select()
+        .from(sessions)
+        .where(eq(sessions.id, workerSession.id))
+        .all();
+      expect(sessionRow.status).toBe("killed");
+
+      resolveBackendSpy.mockRestore();
+      await app.close();
+    });
+
     // Fails open here means failReviewingGate returns WITHOUT touching the
     // task's status at all (no CAS to "failed") — not the old pre-#1100
     // posture of blindly promoting straight to "reviewing" without ever

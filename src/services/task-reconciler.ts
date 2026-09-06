@@ -793,8 +793,13 @@ async function hasCommitsPastBase(
  * `removeWorktreeIfClean` then refuses (dirty is its one real refusal
  * condition), permanently stranding the task exactly like the harm the
  * original local-only guards existed to avoid. Probing first accepts the
- * rare concurrent-transition race in exchange for never permanently
- * stranding a task behind a remote host's version skew.
+ * rare concurrent-transition race in exchange for not stranding a task
+ * behind a remote host's version skew ON THIS PATH SPECIFICALLY — the
+ * unconditional budget-exceeded check earlier in the reconcile loop fails a
+ * task with no salvage attempt at all, host-independent and pre-existing,
+ * so a remote host stuck behind version skew can still eventually strand
+ * once/if its task budget expires (same as a local host today). This
+ * function's own guard only ever protected the no-commits-gate path.
  */
 async function failReviewingGate(
   app: FastifyInstance,
