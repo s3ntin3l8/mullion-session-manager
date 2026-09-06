@@ -345,6 +345,15 @@ class LocalBackend implements SessionBackend {
         opts.initialPrompt !== undefined && adapterHasInitialPromptArgs(opts.command),
       injectAgentGuide: session.injectAgentGuide,
       injectProjectBriefing: session.injectProjectBriefing,
+      // Issue #1089 — same "echoed back, not assumed" posture as the two
+      // injectAgentGuide fields above, read straight off the resulting
+      // Session for the identical reattach-keeps-original-values reason.
+      // Previously missing here, which meant a LOCAL spawn's SpawnResult
+      // never carried this field at all — session-lifecycle.ts's
+      // version-skew warning loop had nothing to compare against even
+      // though there is no actual skew risk on this path (same process,
+      // same build as the caller).
+      injectMullionBundle: session.injectMullionBundle,
       // Hermes review, PR #966 — same "echoed back, not assumed" posture
       // as the two injectAgentGuide fields above, but for taskId: read
       // straight off the resulting Session rather than echoing `opts.taskId`

@@ -7,6 +7,8 @@ import {
   type BundleSyncCli,
 } from "../services/bundle-sync.js";
 import { applySettingsPatch, getStoredSettings } from "../services/settings.js";
+import { removeHostBundle } from "../services/agent-bundle-state.js";
+import { listHosts } from "../services/host-registry.js";
 
 // Issue #944 — this whole route file is host-local functionality: it
 // reports/mutates THIS process's own boot-time bundle sync (bundle-sync.ts,
@@ -19,9 +21,11 @@ import { applySettingsPatch, getStoredSettings } from "../services/settings.js";
 // decision, made explicit per #944's own "don't leave it implicit" ask:
 // this surface answers "is MY OWN host's bundle synced," not "is some
 // remote agent host's." Querying a remote agent host's own sync status is
-// a real, separate future capability (RemoteHostClient/`/internal/agents`
-// is the existing precedent for that shape) — not built here, and tracked
-// as a documented gap rather than silently dropped.
+// a real, separate capability now (RemoteHostClient/`/internal/agents` was
+// the existing precedent for the shape) — see /api/bundle-sync/remove's own
+// doc comment below for the one action (#1089) actually wired to fan out to
+// every registered agent host; status/resync above remain local-only, still
+// a real, documented gap rather than a silently dropped one.
 //
 // Registered only under MULLION_ROLE === "primary" (see app.ts, right
 // alongside agentsRoute/projectSetupRoute) — an agent-role process returns
@@ -89,18 +93,49 @@ export async function bundleSyncRoute(app: FastifyInstance) {
   // plus its legacy sweep (mullion-bundle.ts's marker-checked
   // uninstallBundleSkills) and agy's own MCP-entry removal.
   //
-  // Primary-host-only, still: issue #1089 threaded this setting to a new
-  // session's own ephemeral per-launch gate on a remote agent host
-  // (mirroring injectAgentGuide/injectProjectBriefing per issue #884), but
-  // that thread only exists at session-spawn time. An agent host's own
-  // boot-time global sync (bundle-sync.ts's plugin, onReady) has no
-  // per-session moment to receive it, so this route still has no effect on
-  // that mechanism — an agent host keeps re-syncing its own CLI config
-  // roots on its own boot cycle regardless (see #1089's own tracking of
-  // this remaining gap).
+  // Issue #1089 — no longer primary-host-only: this now ALSO fans out to
+  // every registered agent host (agent-bundle-state.ts's removeHostBundle,
+  // over RemoteHostClient), since an agent host's own boot-time global sync
+  // (bundle-sync.ts's plugin, onReady) has no per-session moment to receive
+  // a settings-DB flip the way a session-spawn-time gate does — it needs
+  // its OWN persisted flag (agent-bundle-state.ts) instead, and this is
+  // what writes it. Best-effort per host: an unreachable/version-skewed
+  // agent is logged and skipped, never lets a bad host block the primary's
+  // own removal (which has already happened by the time the fan-out below
+  // even starts) or block any OTHER host in the loop.
   app.post("/api/bundle-sync/remove", async (_request, reply) => {
     applySettingsPatch(app, { sessions: { injectMullionBundle: false } });
     const result = await uninstallBundleContent();
+
+    // Same `!h.isLocal && h.baseUrl !== null` filter as ssh-agent-fanout.ts's
+    // own reconcile() — every registered host except the primary itself
+    // (which this route just handled directly, above) and any legacy row
+    // with no baseUrl at all (pre-#245, never actually reachable).
+    const agentHosts = listHosts(app).filter((h) => !h.isLocal && h.baseUrl !== null);
+    await Promise.all(
+      agentHosts.map(async (host) => {
+        const hostResult = await removeHostBundle(app, host.id, true);
+        if (hostResult.ok) {
+          app.log.info(
+            { hostId: host.id, removed: hostResult.value.removed },
+            "bundle-sync: removed bundle content on registered agent host",
+          );
+          return;
+        }
+        if (hostResult.reason === "unsupported") {
+          app.log.warn(
+            { hostId: host.id },
+            "bundle-sync: agent host predates the /internal/bundle-sync/remove route — its bundle will silently resync on its own next boot",
+          );
+        } else {
+          app.log.warn(
+            { hostId: host.id, detail: hostResult.detail },
+            "bundle-sync: could not reach agent host to remove bundle content — its own next boot-time sync will retry",
+          );
+        }
+      }),
+    );
+
     reply.type("application/json");
     return {
       removed: result.removed,

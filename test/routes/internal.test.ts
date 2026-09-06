@@ -175,6 +175,19 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
+// Issue #1089 — /internal/bundle-sync/remove's real handler calls
+// uninstallBundleContent (bundle-sync.ts), which does a manifest-driven
+// removal PLUS a legacy sweep across ~/.claude/skills, ~/.agents,
+// ~/.gemini, ~/.config/opencode on the real test-runner's own home
+// directory if left unmocked — same hazard test/services/bundle-sync.test.ts's
+// own header comment describes. Mocked at the module boundary for every
+// test in this file (nothing else here calls it), same posture as
+// test/plugins/bundle-sync.test.ts's own mock.
+const uninstallBundleContentMock = vi.fn(async () => ({ removed: 0, legacySwept: 0 }));
+vi.mock("../../src/services/bundle-sync.js", () => ({
+  uninstallBundleContent: () => uninstallBundleContentMock(),
+}));
+
 const { buildApp } = await import("../../src/app.js");
 const { clearAgentsCacheForTests } = await import("../../src/services/agent-detect.js");
 
@@ -3003,6 +3016,7 @@ describe("internal routes (agent role, issue #26)", () => {
       initialPromptApplied: true,
       injectAgentGuide: true,
       injectProjectBriefing: true,
+      injectMullionBundle: true,
       // No taskId in the payload, so the echo is `false` (the Session
       // was created without a taskId, the value echoed is the
       // post-creation state, not the absent request field). See
@@ -3037,6 +3051,7 @@ describe("internal routes (agent role, issue #26)", () => {
       initialPromptApplied: false,
       injectAgentGuide: true,
       injectProjectBriefing: true,
+      injectMullionBundle: true,
       // Same `false` echo as the no-initialPrompt test below — neither
       // payload carries taskId, so the resulting Session's `taskId`
       // stays `undefined` and the echo reflects that.
@@ -3059,6 +3074,7 @@ describe("internal routes (agent role, issue #26)", () => {
       initialPromptApplied: false,
       injectAgentGuide: true,
       injectProjectBriefing: true,
+      injectMullionBundle: true,
       // No taskId in the payload — same `false` echo as the `true` /
       // `false` initialPromptApplied tests above.
       taskIdApplied: false,
@@ -3097,6 +3113,7 @@ describe("internal routes (agent role, issue #26)", () => {
       initialPromptApplied: false,
       injectAgentGuide: true,
       injectProjectBriefing: true,
+      injectMullionBundle: true,
       taskIdApplied: true,
     });
 
@@ -3137,6 +3154,7 @@ describe("internal routes (agent role, issue #26)", () => {
       initialPromptApplied: false,
       injectAgentGuide: true,
       injectProjectBriefing: true,
+      injectMullionBundle: true,
       taskIdApplied: false,
     });
     expect(app.pty.get("506507")?.taskId).toBeUndefined();
@@ -3189,6 +3207,101 @@ describe("internal routes (agent role, issue #26)", () => {
     expect(app.pty.get("510")?.injectMullionBundle).toBe(true);
 
     await app.close();
+  });
+
+  // Issue #1089 — the agent-side query/remove surface routes/bundle-sync.ts's
+  // primary-side fan-out talks to (via agent-bundle-state.ts's
+  // getHostBundleDisabled/removeHostBundle, RemoteHostClient.
+  // getAgentBundleState/removeAgentBundle). readAgentBundleDisabled/
+  // writeAgentBundleDisabled resolve off os.homedir(), redirected here the
+  // same way the /internal/agent-rules describe block above does, so this
+  // never touches the real test-runner's own ~/.mullion. uninstallBundleContent
+  // itself is mocked at the top of this file (see that mock's own comment).
+  describe("/internal/bundle-sync/status and /remove (issue #1089)", () => {
+    let fakeHome: string;
+    const originalHome = process.env.HOME;
+
+    beforeEach(() => {
+      fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), "internal-bundle-sync-home-"));
+      process.env.HOME = fakeHome;
+      uninstallBundleContentMock.mockClear();
+      uninstallBundleContentMock.mockResolvedValue({ removed: 3, legacySwept: 1 });
+    });
+
+    afterEach(() => {
+      fs.rmSync(fakeHome, { recursive: true, force: true });
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+    });
+
+    it("GET /internal/bundle-sync/status reports disabled: false when no state file exists yet", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: "/internal/bundle-sync/status",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ disabled: false });
+      await app.close();
+    });
+
+    it("POST /internal/bundle-sync/remove with disabled: true writes the flag and runs removal", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/internal/bundle-sync/remove",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { disabled: true },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ removed: 3, legacySwept: 1, disabled: true });
+      expect(uninstallBundleContentMock).toHaveBeenCalledTimes(1);
+
+      const statusRes = await app.inject({
+        method: "GET",
+        url: "/internal/bundle-sync/status",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(statusRes.json()).toEqual({ disabled: true });
+
+      await app.close();
+    });
+
+    it("POST /internal/bundle-sync/remove with disabled: false only clears the flag, without running removal", async () => {
+      const app = await buildApp();
+      await app.inject({
+        method: "POST",
+        url: "/internal/bundle-sync/remove",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { disabled: true },
+      });
+      uninstallBundleContentMock.mockClear();
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/internal/bundle-sync/remove",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { disabled: false },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ removed: 0, legacySwept: 0, disabled: false });
+      expect(uninstallBundleContentMock).not.toHaveBeenCalled();
+
+      await app.close();
+    });
+
+    it("POST /internal/bundle-sync/remove rejects a body missing disabled", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/internal/bundle-sync/remove",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: {},
+      });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
   });
 
   // Issue: per-project briefing storage (a follow-up PR) — this PR only

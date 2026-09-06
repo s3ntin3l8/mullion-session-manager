@@ -69,6 +69,11 @@ import {
 } from "../services/git-worktree.js";
 import { deleteBranch } from "../services/git-branch-delete.js";
 import { readFilesLocally, writeEntriesLocally } from "../services/host-files.js";
+import {
+  readAgentBundleDisabled,
+  writeAgentBundleDisabled,
+} from "../services/agent-bundle-state.js";
+import { uninstallBundleContent } from "../services/bundle-sync.js";
 import { PathEscapeError } from "../services/safe-path.js";
 import { runGitFetch } from "../services/git-fetch.js";
 import { runGitPull } from "../services/git-pull.js";
@@ -145,6 +150,7 @@ import {
   readFilesSchema,
   writeFilesSchema,
   gitCommitWipSchema,
+  bundleSyncRemoveSchema,
   promoteDecisionSchema,
   writeDockConfigBodySchema,
   agentRuleWriteBodySchema,
@@ -171,6 +177,7 @@ import type {
   ReadFilesBody,
   WriteFilesBody,
   GitCommitWipBody,
+  BundleSyncRemoveBody,
   PromoteDecisionBody,
 } from "./internal-schemas.js";
 
@@ -1381,6 +1388,42 @@ export async function internalRoutes(app: FastifyInstance) {
     },
   );
 
+  // Issue #1089 — reads this agent's own persisted "bundle disabled" flag
+  // (agent-bundle-state.ts), for routes/bundle-sync.ts's primary-side
+  // per-host query (via agent-bundle-state.ts's getHostBundleDisabled /
+  // RemoteHostClient.getAgentBundleState). No `cwd`/PROJECTS_ROOTS
+  // containment to apply here — unlike /internal/read-files and friends,
+  // this reads a single fixed, host-local state file, not caller-supplied
+  // paths under a project checkout.
+  app.get("/internal/bundle-sync/status", INTERNAL_RATE_LIMIT, async () => {
+    return { disabled: readAgentBundleDisabled() };
+  });
+
+  // Issue #1089 — the agent-side counterpart of routes/bundle-sync.ts's
+  // own POST /api/bundle-sync/remove: disables (or re-enables) bundle sync
+  // on THIS agent's own filesystem and, when disabling, removes previously
+  // installed bundle content. Writes the local flag FIRST (same ordering
+  // as the primary's own /remove route, which flips its settings-DB value
+  // before running the removal) so a killed process mid-removal still
+  // leaves the flag set — this host's next boot-time sync
+  // (plugins/bundle-sync.ts) will simply retry the removal branch rather
+  // than silently reinstalling. `disabled: false` only clears the flag; it
+  // deliberately does NOT trigger a resync here — see agent-bundle-
+  // state.ts's removeHostBundle doc comment for why, and for why this
+  // repo's only current caller (the primary's own fan-out) always sends
+  // `disabled: true`.
+  app.post<{ Body: BundleSyncRemoveBody }>(
+    "/internal/bundle-sync/remove",
+    { ...INTERNAL_RATE_LIMIT, schema: bundleSyncRemoveSchema },
+    async (request) => {
+      const { disabled } = request.body;
+      writeAgentBundleDisabled(disabled);
+      if (!disabled) return { removed: 0, legacySwept: 0, disabled: false };
+      const result = await uninstallBundleContent();
+      return { removed: result.removed, legacySwept: result.legacySwept, disabled: true };
+    },
+  );
+
   // #484 — lists this agent's own on-disk task-worktree directories, for
   // the primary's boot-time orphan sweep (plugins/task-watcher.ts). Mirrors
   // listTaskWorktreeDirs's own pure-filesystem-read contract exactly — see
@@ -1796,6 +1839,11 @@ export async function internalRoutes(app: FastifyInstance) {
         initialPromptApplied: initialPrompt !== undefined && adapterHasInitialPromptArgs(command),
         injectAgentGuide: session.injectAgentGuide,
         injectProjectBriefing: session.injectProjectBriefing,
+        // Issue #1089 — same "echoed back, not assumed" posture as
+        // injectAgentGuide/injectProjectBriefing immediately above, read
+        // straight off the resulting Session for the same reattach-keeps-
+        // original-values reason those two are.
+        injectMullionBundle: session.injectMullionBundle,
         taskIdApplied: taskId !== undefined && session.taskId === taskId,
       };
     },

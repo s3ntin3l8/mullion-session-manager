@@ -221,17 +221,27 @@ working — the boot-time sync already runs automatically with no user action.
 - `bundle remove` — removes Mullion's bundle content from this host
   entirely (manifest-tracked paths, a legacy sweep for pre-manifest
   installs, and agy's own `mullion` MCP entry) and turns
-  `sessions.injectMullionBundle` off so it stays removed **on the
-  primary** (this command only runs there). Issue #884-style threading
-  now propagates this setting to a new _session's_ own ephemeral
-  per-launch gate on a remote agent host (the `--plugin-dir`/
-  `skills.paths`/`installBundleSkills` decision each CLI adapter makes at
-  launch time). It does **not** reach that agent host's own **boot-time**
-  global sync (`src/plugins/bundle-sync.ts`'s `onReady` hook, which has no
-  per-session moment to thread a value through) — an agent host still
-  re-syncs the bundle into its own CLI config roots on its own boot cycle
-  regardless of what the primary's setting says, until that separate
-  mechanism gap closes (see issue #1089's own tracking of this remainder).
+  `sessions.injectMullionBundle` off so it stays removed on the primary.
+  Issue #884-style threading propagates this setting to a new _session's_
+  own ephemeral per-launch gate on a remote agent host (the
+  `--plugin-dir`/`skills.paths`/`installBundleSkills` decision each CLI
+  adapter makes at launch time). Issue #1089 closed the boot-time-reinstall
+  half of the remaining gap this used to have: this command now ALSO fans
+  out to every registered agent host, removing bundle content there too
+  and persisting a durable "disabled" flag on that host's own filesystem
+  (`src/services/agent-bundle-state.ts` — an agent host has no settings DB
+  of its own to read `sessions.injectMullionBundle` from) so its own
+  **boot-time** global sync (`src/plugins/bundle-sync.ts`'s `onReady` hook)
+  takes the removal branch on its next restart instead of silently
+  reinstalling everything. Best-effort per agent host: an unreachable or
+  version-skewed one is logged and skipped, never blocks the primary's own
+  removal.
+  **Known remaining gap, tracked separately:** there is currently no path
+  that clears an agent host's persisted "disabled" flag once set — turning
+  `sessions.injectMullionBundle` back on (Settings panel, or the primary's
+  own `bundle resync`) only re-syncs the **primary**; it does not fan out
+  to registered agent hosts, so each one stays uninstalled until that flag
+  is cleared by hand (or a fan-out for the "re-enable" direction is built).
   No confirmation prompt at the CLI layer, same as `session kill`/
   `preview delete` — a confirming UI is the dashboard panel's job, not
   this command's.

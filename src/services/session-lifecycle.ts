@@ -803,6 +803,9 @@ export async function createSessionRecord(
     initialPromptApplied?: boolean;
     injectAgentGuide?: boolean;
     injectProjectBriefing?: boolean;
+    // Issue #1089 — same "echoed back, not assumed" posture as the two
+    // injectAgentGuide-style fields immediately above.
+    injectMullionBundle?: boolean;
     // Hermes review, PR #966 — Task Master marker echo, same posture as
     // the two injectAgentGuide-style fields above: a remote agent build
     // that pre-dates this field never echoes the key, LocalBackend.spawn
@@ -849,6 +852,9 @@ export async function createSessionRecord(
     for (const [field, requested, applied] of [
       ["injectAgentGuide", resolvedInjectAgentGuide, spawnResult.injectAgentGuide],
       ["injectProjectBriefing", resolvedInjectProjectBriefing, spawnResult.injectProjectBriefing],
+      // Issue #1089 — same version-skew safety net as the two fields
+      // above, for sessions.injectMullionBundle.
+      ["injectMullionBundle", resolvedInjectMullionBundle, spawnResult.injectMullionBundle],
     ] as const) {
       if (applied !== undefined && applied !== requested) {
         app.log.warn(
