@@ -43,10 +43,27 @@ export interface KebabMenuItem {
   section?: string;
 }
 
-export function KebabMenu({ items, title = "More…" }: { items: KebabMenuItem[]; title?: string }) {
+export function KebabMenu({
+  items,
+  title = "More…",
+  menuPlacement = "bottom",
+}: {
+  items: KebabMenuItem[];
+  title?: string;
+  // "top" grows the portaled menu upward from the trigger instead of
+  // dropping it down — for a trigger pinned near the bottom of the
+  // viewport (the Dock), a downward menu can run off-screen with no way to
+  // scroll to its lower items. Same union/default as CustomSelect's own
+  // menuPlacement; deliberately no measured auto-flip (see getMenuStyle
+  // below) — a caller in that position simply always wants "top".
+  menuPlacement?: "bottom" | "top";
+}) {
   const theme = useDashboardStore((s) => s.theme);
   const [open, setOpen] = useState(false);
-  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
+  // DOMRect (not just {top,right}) to mirror CustomSelect's own triggerRect
+  // — getMenuStyle below needs rect.top for the "top" placement's `bottom:`
+  // calc, which the old {top,right} shape didn't carry.
+  const [triggerRect, setTriggerRect] = useState<DOMRect | null>(null);
   const [armedKey, setArmedKey] = useState<string | null>(null);
   // Ticks 3 -> 2 -> 1 in the "3s"-style hint below rather than sitting static
   // for the whole arm window — a countdown that doesn't move reads as stuck.
@@ -118,6 +135,27 @@ export function KebabMenu({ items, title = "More…" }: { items: KebabMenuItem[]
     item.onClick();
   };
 
+  // Matches CustomSelect.tsx's own getMenuStyle: always right-aligned to the
+  // trigger (KebabMenu never offers a menuAlign), and — the one branch that
+  // matters here — "top" sets only `bottom`, never also `top`, since fixed
+  // positioning with just `bottom` set is what makes the menu grow upward
+  // from the trigger instead of down past it.
+  const getMenuStyle = (): React.CSSProperties | null => {
+    const rect = triggerRect;
+    if (!rect) return null;
+    const style: React.CSSProperties = {
+      position: "fixed",
+      right: window.innerWidth - rect.right,
+    };
+    if (menuPlacement === "top") {
+      style.bottom = window.innerHeight - rect.top + 4;
+    } else {
+      style.top = rect.bottom + 4;
+    }
+    return style;
+  };
+  const menuStyle = getMenuStyle();
+
   return (
     <>
       <button
@@ -127,8 +165,7 @@ export function KebabMenu({ items, title = "More…" }: { items: KebabMenuItem[]
         onClick={(e) => {
           e.stopPropagation();
           if (!open && btnRef.current) {
-            const rect = btnRef.current.getBoundingClientRect();
-            setPos({ top: rect.bottom + 4, right: window.innerWidth - rect.right });
+            setTriggerRect(btnRef.current.getBoundingClientRect());
           }
           setOpen((v) => !v);
           clearArmTimer();
@@ -138,12 +175,12 @@ export function KebabMenu({ items, title = "More…" }: { items: KebabMenuItem[]
         <OverflowIcon size={15} />
       </button>
       {open &&
-        pos &&
+        menuStyle &&
         createPortal(
           <div
             ref={menuRef}
             className={`cmux-root${theme === "light" ? " light" : ""} pane-tab-overflow-menu`}
-            style={{ position: "fixed", top: pos.top, right: pos.right }}
+            style={menuStyle}
             onClick={(e) => e.stopPropagation()}
           >
             {items.map((item, index) => (

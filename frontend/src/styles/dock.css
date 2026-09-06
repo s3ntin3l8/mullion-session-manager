@@ -275,12 +275,17 @@
 .dock-column-remove:hover {
   color: var(--fg);
 }
-/* The per-column monitors row (unchanged shape from before the split). */
+/* The per-column monitors row (unchanged shape from before the split).
+   Monitors sit side by side here, so a column with several discovered
+   services can squeeze each one below its header's min-content (see
+   .dock-monitor-header's own comment in empty-states.css) — scroll
+   horizontally instead of clipping, mirroring .dock-columns above. */
 .dock-body {
   flex: 1;
   display: flex;
   gap: 6px;
   min-height: 0;
+  overflow-x: auto;
 }
 .dock-empty {
   height: 88px;

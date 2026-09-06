@@ -174,6 +174,15 @@ describe("Dock", () => {
       expect(screen.getByText("web")).toBeInTheDocument();
       expect(screen.getByText("edge")).toBeInTheDocument();
       expect(document.querySelector(".kebab-trigger-btn")).toBeInTheDocument();
+      // The kebab wrapper carries .dock-monitor-kebab (pinned flex-shrink:0
+      // in CSS) so a squeezed header never clips it. jsdom does no layout —
+      // this only proves the class is wired up, not that the kebab stays
+      // visible at a real narrow width. That's a manual check (see this
+      // repo's dock kebab plan / PR description), not something a jsdom
+      // test can assert.
+      expect(document.querySelector(".kebab-trigger-btn")?.parentElement).toHaveClass(
+        "dock-monitor-kebab",
+      );
     });
 
     it("clicking the kebab trigger does not toggle the monitor on/off", async () => {
