@@ -1,16 +1,30 @@
 import fp from "fastify-plugin";
 import type { FastifyInstance } from "fastify";
-import { DEFAULT_SETTINGS, getStoredSettings } from "../services/settings.js";
+import { getStoredSettings } from "../services/settings.js";
 import { runBundleSyncExclusive } from "../services/bundle-sync.js";
+import { readAgentBundleDisabled } from "../services/agent-bundle-state.js";
 
-// Mirrors pty.ts's readInjectAgentGuide/readInjectMullionBundle exactly —
-// same db-absent-safe closure shape, same multi-host "agent" role fallback
-// (no settings DB on an agent host, so DEFAULT_SETTINGS is the only
-// sensible answer).
+// Issue #1089 — used to mirror pty.ts's readInjectAgentGuide/
+// readInjectMullionBundle exactly (same db-absent-safe closure shape,
+// same multi-host "agent" role fallback to DEFAULT_SETTINGS). That
+// fallback was wrong HERE specifically: DEFAULT_SETTINGS.sessions.
+// injectMullionBundle is unconditionally `true`, so an agent host had no
+// way to remember "stay uninstalled" across a restart — the very next
+// boot-time sync (this plugin's own onReady, below) would silently
+// reinstall everything /api/bundle-sync/remove's fan-out had just removed.
+// An agent host now consults its own persisted flag (agent-bundle-state.ts)
+// instead — see that module's own header comment for the file it reads and
+// why it's a SEPARATE file from bundle-sync.ts's own manifest. pty.ts's
+// identically-shaped closure (feeding a per-session spawn-time default,
+// not this boot-time sync) is deliberately left alone: session-lifecycle.ts
+// always sends an explicit resolved value on every spawn now, so that
+// closure's DEFAULT_SETTINGS fallback is only ever a version-skew backstop,
+// not a live path — see this PR's own notes for why splitting that one out
+// was left as a follow-up rather than folded in here.
 function readInjectMullionBundle(app: FastifyInstance): boolean {
   return app.db
     ? getStoredSettings(app.db).sessions.injectMullionBundle
-    : DEFAULT_SETTINGS.sessions.injectMullionBundle;
+    : !readAgentBundleDisabled();
 }
 
 // Issue #944 — dispatch itself now lives in bundle-sync.ts's own

@@ -269,6 +269,14 @@ export interface SpawnResult {
   // against what it requested.
   injectAgentGuide?: boolean;
   injectProjectBriefing?: boolean;
+  // Issue #1089 — same "echoed back, not assumed" posture as
+  // injectAgentGuide/injectProjectBriefing immediately above, for the
+  // independent sessions.injectMullionBundle setting. Previously missing
+  // entirely, which meant a version-skewed agent build silently dropping
+  // this field (Fastify's `removeAdditional`, same mechanism the other two
+  // fields' own doc comments describe) was undetectable by the primary —
+  // session-lifecycle.ts's warning loop had nothing to compare against.
+  injectMullionBundle?: boolean;
   // Hermes review, PR #966 — same "echoed back, not assumed" posture for
   // `taskId`. The remote `/internal/sessions` handler echoes this so
   // the primary can detect a version-skewed agent (an old build strips
@@ -960,6 +968,30 @@ export class RemoteHostClient {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ cwd, entries, stage }),
+    });
+  }
+
+  /** Reads this agent's own persisted "bundle disabled" flag (#1089) —
+   * mirrors /internal/bundle-sync/status' `{disabled}` shape. A single
+   * local JSON-file read on the agent side, so the default timeout is
+   * fine. Named distinctly from bundle-sync.ts's own (unrelated, local-only)
+   * `getBundleSyncStatus` to avoid confusion between the two. */
+  async getAgentBundleState(): Promise<{ disabled: boolean }> {
+    return this.request("/internal/bundle-sync/status");
+  }
+
+  /** Disables (or re-enables) bundle sync on this agent's own filesystem
+   * and, when disabling, removes previously-installed bundle content
+   * (#1089) — mirrors /internal/bundle-sync/remove's `{disabled}` ->
+   * `{removed, legacySwept}` shape. See agent-bundle-state.ts's
+   * removeHostBundle for the caller-side dispatch this backs. Fast/cheap
+   * (a JSON-file write plus a manifest-driven filesystem sweep, same order
+   * of cost as writeFiles above), so the default timeout is fine. */
+  async removeAgentBundle(disabled = true): Promise<{ removed: number; legacySwept: number }> {
+    return this.request("/internal/bundle-sync/remove", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ disabled }),
     });
   }
 
