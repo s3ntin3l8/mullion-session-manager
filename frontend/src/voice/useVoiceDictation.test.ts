@@ -259,4 +259,173 @@ describe("useVoiceDictation", () => {
     expect(() => session.end()).not.toThrow();
     expect(onInsert).not.toHaveBeenCalled();
   });
+
+  it("a permission-denied error auto-dismisses after ERROR_DISPLAY_MS", () => {
+    vi.useFakeTimers();
+    const { result } = setup();
+    act(() => result.current.press());
+    const session = provider.startCalls[0];
+
+    act(() => session.error("permission-denied"));
+    expect(result.current.error).toMatch(/microphone access denied/i);
+
+    act(() => vi.advanceTimersByTime(4_000));
+    expect(result.current.error).toBeNull();
+  });
+
+  it("the insecure-context error is not permanently stuck — it clears on its own timer, since press() can never reach the idle-branch reset while isSecureContext stays false", () => {
+    // Regression test: isSecureContext is captured once at mount and never
+    // changes, so every press() while insecure hits the SAME early-return
+    // branch forever — the only thing that can ever clear this error is
+    // setErrorWithTimer's own timeout, not a later press() reaching the
+    // idle branch's clearError().
+    vi.useFakeTimers();
+    Object.defineProperty(window, "isSecureContext", { value: false, configurable: true });
+    try {
+      const { result } = setup();
+      act(() => result.current.press());
+      expect(result.current.error).toMatch(/https/i);
+
+      act(() => vi.advanceTimersByTime(4_000));
+      expect(result.current.error).toBeNull();
+    } finally {
+      Object.defineProperty(window, "isSecureContext", { value: true, configurable: true });
+    }
+  });
+
+  it("recovers to idle if provider.start() throws synchronously (e.g. InvalidStateError on a double-start)", () => {
+    provider.start = () => {
+      throw new Error("InvalidStateError");
+    };
+    const { result } = setup();
+
+    expect(() => act(() => result.current.press())).not.toThrow();
+    expect(result.current.phase).toBe("idle");
+    expect(onInsert).not.toHaveBeenCalled();
+
+    // Recovers fully — a subsequent press() with a working provider still
+    // works, proving press() isn't left in some half-broken state.
+    provider.start = new FakeProvider().start.bind(provider);
+    act(() => result.current.press());
+    expect(provider.startCalls).toHaveLength(1);
+  });
+
+  it("a stop watchdog forces finalize() if onEnd never arrives after stop()/abort()", () => {
+    vi.useFakeTimers();
+    const { result } = setup();
+    act(() => result.current.press());
+    const session = provider.startCalls[0];
+    act(() => session.final("said before it wedged"));
+
+    act(() => vi.advanceTimersByTime(HOLD_THRESHOLD_MS + 1));
+    act(() => result.current.release());
+    expect(result.current.phase).toBe("stopping");
+
+    // The engine wedges: stop() was called, but onEnd never fires. Without
+    // the watchdog this dictation would be stuck in "stopping" forever.
+    act(() => vi.advanceTimersByTime(5_000));
+
+    expect(result.current.phase).toBe("idle");
+    expect(onInsert).toHaveBeenCalledWith("said before it wedged ");
+  });
+
+  it("a real onEnd arriving before the watchdog fires cancels the watchdog (no double-insert)", () => {
+    vi.useFakeTimers();
+    const { result } = setup();
+    act(() => result.current.press());
+    const session = provider.startCalls[0];
+    act(() => session.final("hello"));
+    act(() => vi.advanceTimersByTime(HOLD_THRESHOLD_MS + 1));
+    act(() => result.current.release());
+
+    act(() => session.end());
+    expect(onInsert).toHaveBeenCalledTimes(1);
+
+    // If the watchdog weren't cancelled, it would fire 5s later and call
+    // finalize() a second time — onInsert must still have been called
+    // exactly once.
+    act(() => vi.advanceTimersByTime(5_000));
+    expect(onInsert).toHaveBeenCalledTimes(1);
+  });
+
+  it("more than MAX_RESTARTS_PER_WINDOW auto-restarts in RESTART_WINDOW_MS gives up instead of looping forever", () => {
+    const { result } = setup();
+    act(() => result.current.press());
+
+    // Four rapid auto-restarts (Chrome's own silence-timeout onEnd firing
+    // with no error, well within the 1s window) — the fourth must trip the
+    // flood guard rather than starting a fifth session.
+    for (let i = 0; i < 3; i++) {
+      const session = provider.startCalls[provider.startCalls.length - 1]!;
+      act(() => session.end());
+    }
+    expect(provider.startCalls).toHaveLength(4);
+
+    const fourthSession = provider.startCalls[3]!;
+    act(() => fourthSession.end());
+
+    expect(provider.startCalls).toHaveLength(4); // no fifth start()
+    expect(result.current.phase).toBe("idle");
+    expect(result.current.error).toBe("Dictation failed.");
+  });
+
+  it("MAX_SESSION_MS force-stops and inserts whatever was captured, rather than running forever", () => {
+    vi.useFakeTimers();
+    const { result } = setup();
+    act(() => result.current.press());
+    const session = provider.startCalls[0];
+    act(() => session.final("a very long dictation"));
+
+    act(() => vi.advanceTimersByTime(120_000));
+    expect(result.current.phase).toBe("stopping");
+    expect(session.stopped).toBe(true);
+
+    act(() => session.end());
+    expect(onInsert).toHaveBeenCalledWith("a very long dictation ");
+  });
+
+  it("forceStop() stops and inserts a LATCHED (tapped, not held) dictation — release() alone cannot, since it only acts on the exact press/release gesture that started the dictation", () => {
+    const { result } = setup();
+    act(() => result.current.press());
+    const session = provider.startCalls[0];
+    // Quick release latches (tap-to-latch), same as the dedicated
+    // tap-to-latch test above.
+    act(() => result.current.release());
+    expect(result.current.phase).toBe("listening");
+
+    act(() => session.final("dictated while backgrounded"));
+    act(() => result.current.forceStop());
+    expect(session.stopped).toBe(true);
+
+    act(() => session.end());
+    expect(onInsert).toHaveBeenCalledWith("dictated while backgrounded ");
+  });
+
+  it("turning `enabled` off mid-dictation cancels it (discards) rather than leaving it to run until MAX_SESSION_MS", () => {
+    const { result, rerender } = renderHook(
+      ({ enabled }) => useVoiceDictation({ enabled, lang: "", onInsert, provider }),
+      { initialProps: { enabled: true } },
+    );
+    act(() => result.current.press());
+    const session = provider.startCalls[0];
+    act(() => session.final("mid dictation"));
+    expect(result.current.phase).not.toBe("idle");
+
+    rerender({ enabled: false });
+    expect(session.aborted).toBe(true);
+
+    act(() => session.end());
+    expect(onInsert).not.toHaveBeenCalled();
+    expect(result.current.phase).toBe("idle");
+  });
+
+  it("does not touch an already-idle dictation when `enabled` toggles off", () => {
+    const { result, rerender } = renderHook(
+      ({ enabled }) => useVoiceDictation({ enabled, lang: "", onInsert, provider }),
+      { initialProps: { enabled: true } },
+    );
+    rerender({ enabled: false });
+    expect(provider.startCalls).toHaveLength(0);
+    expect(result.current.phase).toBe("idle");
+  });
 });

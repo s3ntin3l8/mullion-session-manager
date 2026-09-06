@@ -3195,4 +3195,68 @@ describe("TerminalPane voice dictation", () => {
     expect(term.input).not.toHaveBeenCalledWith("add a test for the parser ");
     expect(term.focus).toHaveBeenCalled();
   });
+
+  it("backgrounding the tab force-stops a TAPPED (latched) dictation and still inserts it — release() alone can't reach a latched dictation", async () => {
+    // The gap this covers: a tap-to-latch dictation (started from the mic
+    // button, not a held hotkey) has no "hold" for a keyup/blur pair tied
+    // to the hotkey wiring to ever see — TerminalPane's own phase-driven
+    // blur/visibilitychange/pagehide effect (not the hotkey-hold-specific
+    // keyup listener) is what has to catch this, regardless of which
+    // gesture started the dictation. Driven via the hotkey here purely
+    // because pressVoiceHotkey()/releaseVoiceHotkey() are the test
+    // helpers already in this file; the mic button reaches the same
+    // press()/release() calls on the same controller.
+    stubFakeWebSocket(true);
+    renderPane();
+    const term = getLatestTermInstance();
+
+    pressVoiceHotkey();
+    const recognition = latestRecognition();
+    releaseVoiceHotkey(); // quick release -> latches, does not stop
+    expect(recognition.stop).not.toHaveBeenCalled();
+
+    fireFinal(recognition, "dictated while the tab was backgrounded");
+
+    act(() => window.dispatchEvent(new Event("blur")));
+    expect(recognition.stop).toHaveBeenCalledTimes(1);
+    expect(recognition.abort).not.toHaveBeenCalled(); // force-stop inserts, never discards
+
+    act(() => recognition.onend?.());
+
+    await waitFor(() => {
+      expect(term.paste).toHaveBeenCalledWith("dictated while the tab was backgrounded ");
+    });
+  });
+
+  it("turning off 'Enable dictation' mid-hold aborts the recognizer and discards the buffer — never inserts", async () => {
+    stubFakeWebSocket(true);
+    renderPane();
+    const term = getLatestTermInstance();
+
+    pressVoiceHotkey();
+    const recognition = latestRecognition();
+    fireFinal(recognition, "should never reach the prompt");
+
+    act(() => {
+      useDashboardStore.setState((s) => ({
+        settings: {
+          ...s.settings,
+          terminal: {
+            ...s.settings.terminal,
+            voice: { ...s.settings.terminal.voice, enabled: false },
+          },
+        },
+      }));
+    });
+
+    expect(recognition.abort).toHaveBeenCalledTimes(1);
+    act(() => recognition.onend?.());
+
+    expect(term.paste).not.toHaveBeenCalledWith(
+      expect.stringContaining("should never reach the prompt"),
+    );
+    // The mic button unmounts along with it — nothing left visible to
+    // interact with.
+    expect(screen.queryByRole("button", { name: /dictation/i })).not.toBeInTheDocument();
+  });
 });

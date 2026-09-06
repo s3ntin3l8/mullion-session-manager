@@ -26,6 +26,22 @@ const MAX_RESTARTS_PER_WINDOW = 3;
 // whatever was said so far) rather than discarding.
 const MAX_SESSION_MS = 120_000;
 
+// How long a user-visible error toast stays up before clearing itself —
+// mirrors TerminalPane.tsx's own uploadState === "error" toast timer.
+const ERROR_DISPLAY_MS = 4_000;
+
+// finalizeStop()/cancel() both transition to "stopping" and then wait for
+// the provider's onEnd to actually confirm the session is done before
+// finalize() runs — there is no other path back to "idle". If onEnd never
+// fires (a browser bug, or the recognizer wedging after stop()/abort()),
+// nothing else in this hook would ever recover, leaving the mic
+// permanently in its "stopping"/pulsing-red state. Same class of hazard as
+// pushClient.ts's SERVICE_WORKER_READY_TIMEOUT_MS ("has no built-in
+// timeout — if registration failed, the promise never settles, and the
+// toggle would stay stuck 'busy' forever"); this is that same fix applied
+// to onEnd.
+const STOP_WATCHDOG_MS = 5_000;
+
 export type VoiceDictationPhase = "idle" | "listening" | "stopping";
 
 export interface UseVoiceDictationOptions {
@@ -60,6 +76,12 @@ export interface VoiceDictationController {
   release: () => void;
   /** Discards the in-progress dictation instead of inserting it. */
   cancel: () => void;
+  /** Stops and inserts regardless of hold/latch state — for callers outside
+   * the press/release gesture entirely (TerminalPane's blur/visibility
+   * force-stop, armed whenever phase !== "idle"). Unlike release(), this
+   * has no "only the matching gesture's release" guard: it's a safety net,
+   * not part of the gesture protocol. No-ops when already idle. */
+  forceStop: () => void;
 }
 
 export function useVoiceDictation(opts: UseVoiceDictationOptions): VoiceDictationController {
@@ -97,6 +119,8 @@ export function useVoiceDictation(opts: UseVoiceDictationOptions): VoiceDictatio
   const pressStartedAtRef = useRef(0);
   const restartTimestampsRef = useRef<number[]>([]);
   const maxSessionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stopWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const langRef = useRef(opts.lang);
   const onInsertRef = useRef(opts.onInsert);
   const enabledRef = useRef(opts.enabled);
@@ -123,6 +147,41 @@ export function useVoiceDictation(opts: UseVoiceDictationOptions): VoiceDictatio
     }
   }, []);
 
+  const clearStopWatchdog = useCallback(() => {
+    if (stopWatchdogRef.current !== null) {
+      clearTimeout(stopWatchdogRef.current);
+      stopWatchdogRef.current = null;
+    }
+  }, []);
+
+  // Sets a user-visible error and auto-dismisses it after ERROR_DISPLAY_MS
+  // — same treatment as TerminalPane.tsx's own uploadState === "error"
+  // toast. The permission-denied/no-microphone/network messages this is
+  // used for are sticky in the sense that nothing else clears them sooner
+  // (unlike a plain `no-speech`/`aborted`, which never call this at all —
+  // see handleError below), but they still shouldn't sit forever once the
+  // user has seen them.
+  const setErrorWithTimer = useCallback((message: string) => {
+    if (errorTimerRef.current !== null) clearTimeout(errorTimerRef.current);
+    setError(message);
+    errorTimerRef.current = setTimeout(() => {
+      errorTimerRef.current = null;
+      setError(null);
+    }, ERROR_DISPLAY_MS);
+  }, []);
+
+  // Clears an error immediately (a fresh press() starting a new dictation)
+  // rather than waiting out ERROR_DISPLAY_MS — also cancels any pending
+  // auto-dismiss timer so it can't later fire and clear a DIFFERENT error
+  // this same press() might go on to set.
+  const clearError = useCallback(() => {
+    if (errorTimerRef.current !== null) {
+      clearTimeout(errorTimerRef.current);
+      errorTimerRef.current = null;
+    }
+    setError(null);
+  }, []);
+
   const resolveLang = useCallback((): string => {
     const configured = langRef.current.trim();
     if (configured) return configured;
@@ -134,9 +193,13 @@ export function useVoiceDictation(opts: UseVoiceDictationOptions): VoiceDictatio
   // unless discarded via cancel() — inserts whatever was buffered. Called
   // from the provider's onEnd handler, never directly by press/release
   // (see finalizeStop, which only asks the session to stop; insertion
-  // happens here once onEnd actually confirms it has).
+  // happens here once onEnd actually confirms it has). Also the recovery
+  // path when provider.start() throws synchronously (see startSession) and
+  // when the stop watchdog below fires — both cases where onEnd will never
+  // arrive on its own.
   const finalize = useCallback(() => {
     clearMaxSessionTimer();
+    clearStopWatchdog();
     sessionRef.current = null;
     const discard = discardRef.current;
     discardRef.current = false;
@@ -149,16 +212,33 @@ export function useVoiceDictation(opts: UseVoiceDictationOptions): VoiceDictatio
     if (discard) return;
     const text = formatForPaste(segments);
     if (text) onInsertRef.current(text);
-  }, [clearMaxSessionTimer, setPhaseBoth]);
+  }, [clearMaxSessionTimer, clearStopWatchdog, setPhaseBoth]);
 
-  const handleError = useCallback((code: VoiceErrorCode) => {
-    const message = voiceErrorMessage(code);
-    if (message) setError(message);
-    if (!shouldRestartAfterError(code)) {
-      terminalErrorRef.current = true;
-      wantActiveRef.current = false;
-    }
-  }, []);
+  // Arms a watchdog so a "stopping" phase (finalizeStop/cancel below) can't
+  // get stuck forever if the provider's onEnd never fires — see
+  // STOP_WATCHDOG_MS's own comment for why this exists at all. Cleared by
+  // onEnd itself (the normal path) or by finalize() directly (belt and
+  // suspenders — finalize() clears it unconditionally, whether reached via
+  // onEnd or via this watchdog firing).
+  const armStopWatchdog = useCallback(() => {
+    clearStopWatchdog();
+    stopWatchdogRef.current = setTimeout(() => {
+      stopWatchdogRef.current = null;
+      finalize();
+    }, STOP_WATCHDOG_MS);
+  }, [clearStopWatchdog, finalize]);
+
+  const handleError = useCallback(
+    (code: VoiceErrorCode) => {
+      const message = voiceErrorMessage(code);
+      if (message) setErrorWithTimer(message);
+      if (!shouldRestartAfterError(code)) {
+        terminalErrorRef.current = true;
+        wantActiveRef.current = false;
+      }
+    },
+    [setErrorWithTimer],
+  );
 
   // Holds the latest startSession identity so onEnd below can restart
   // recursively without referencing the `const startSession` binding
@@ -173,38 +253,69 @@ export function useVoiceDictation(opts: UseVoiceDictationOptions): VoiceDictatio
 
   const startSession = useCallback(() => {
     setPhaseBoth("listening");
-    sessionRef.current = provider.start({
-      lang: resolveLang(),
-      onFinal: (segment) => {
-        bufferRef.current.push(segment);
-      },
-      onInterim: (text) => setInterimText(text),
-      onError: handleError,
-      onEnd: () => {
-        sessionRef.current = null;
-        if (discardRef.current) {
-          finalize();
-          return;
-        }
-        if (wantActiveRef.current && !terminalErrorRef.current) {
-          const now = Date.now();
-          restartTimestampsRef.current = restartTimestampsRef.current.filter(
-            (t) => now - t < RESTART_WINDOW_MS,
-          );
-          restartTimestampsRef.current.push(now);
-          if (restartTimestampsRef.current.length > MAX_RESTARTS_PER_WINDOW) {
-            terminalErrorRef.current = true;
-            setError(voiceErrorMessage("unknown"));
+    // provider.start() can throw synchronously — InvalidStateError on a
+    // double-start, or an invalid `lang` value reaching the engine are both
+    // real Web Speech failure modes, not hypothetical. Without this
+    // try/catch, a throw here left phase stuck at "listening" with
+    // sessionRef.current still null: every subsequent press()/release()/
+    // cancel() call hits a guard that only acts on a phase transition (none
+    // of which "listening with no session" is), and finalizeStop()'s own
+    // `sessionRef.current?.stop()` is a silent no-op against null — nothing
+    // would ever fire onEnd to bring it back to "idle". Route a throw
+    // through the same handleError/finalize path as any other terminal
+    // error instead.
+    try {
+      sessionRef.current = provider.start({
+        lang: resolveLang(),
+        onFinal: (segment) => {
+          bufferRef.current.push(segment);
+        },
+        onInterim: (text) => setInterimText(text),
+        onError: handleError,
+        onEnd: () => {
+          sessionRef.current = null;
+          clearStopWatchdog();
+          if (discardRef.current) {
             finalize();
             return;
           }
-          startSessionRef.current();
-          return;
-        }
-        finalize();
-      },
-    });
-  }, [provider, resolveLang, handleError, finalize, setPhaseBoth]);
+          if (wantActiveRef.current && !terminalErrorRef.current) {
+            const now = Date.now();
+            restartTimestampsRef.current = restartTimestampsRef.current.filter(
+              (t) => now - t < RESTART_WINDOW_MS,
+            );
+            restartTimestampsRef.current.push(now);
+            if (restartTimestampsRef.current.length > MAX_RESTARTS_PER_WINDOW) {
+              terminalErrorRef.current = true;
+              setErrorWithTimer(voiceErrorMessage("unknown"));
+              finalize();
+              return;
+            }
+            // Clears any interim text left over from the ending session —
+            // the new engine instance's own onresult hasn't fired yet, so
+            // without this a stale "hello wor…" chip would sit there,
+            // unrelated to the fresh recognizer that's about to start,
+            // until the first new result event overwrites it.
+            setInterimText("");
+            startSessionRef.current();
+            return;
+          }
+          finalize();
+        },
+      });
+    } catch {
+      handleError("unknown");
+      finalize();
+    }
+  }, [
+    provider,
+    resolveLang,
+    handleError,
+    finalize,
+    setPhaseBoth,
+    clearStopWatchdog,
+    setErrorWithTimer,
+  ]);
 
   useEffect(() => {
     startSessionRef.current = startSession;
@@ -219,14 +330,20 @@ export function useVoiceDictation(opts: UseVoiceDictationOptions): VoiceDictatio
     if (phaseRef.current !== "listening") return;
     wantActiveRef.current = false;
     setPhaseBoth("stopping");
+    // The utterance in progress is being cut off here, not finalized — any
+    // interim text describing it is about to be stale for as long as
+    // "stopping" lasts (VoiceMicButton's chip stays visible for any
+    // phase !== "idle", not just "listening").
+    setInterimText("");
     clearMaxSessionTimer();
+    armStopWatchdog();
     sessionRef.current?.stop();
-  }, [clearMaxSessionTimer, setPhaseBoth]);
+  }, [clearMaxSessionTimer, armStopWatchdog, setPhaseBoth]);
 
   const press = useCallback(() => {
     if (!enabledRef.current || !isSupported) return;
     if (!isSecureContext) {
-      setError(voiceErrorMessage("insecure-context"));
+      setErrorWithTimer(voiceErrorMessage("insecure-context"));
       return;
     }
     if (phaseRef.current === "idle") {
@@ -234,7 +351,7 @@ export function useVoiceDictation(opts: UseVoiceDictationOptions): VoiceDictatio
       discardRef.current = false;
       terminalErrorRef.current = false;
       restartTimestampsRef.current = [];
-      setError(null);
+      clearError();
       setInterimText("");
       pressStartedAtRef.current = Date.now();
       latchedRef.current = false;
@@ -249,7 +366,15 @@ export function useVoiceDictation(opts: UseVoiceDictationOptions): VoiceDictatio
       finalizeStop();
     }
     // Otherwise (mid-hold repeat, or already stopping): ignore.
-  }, [isSupported, isSecureContext, clearMaxSessionTimer, finalizeStop, startSession]);
+  }, [
+    isSupported,
+    isSecureContext,
+    clearMaxSessionTimer,
+    clearError,
+    setErrorWithTimer,
+    finalizeStop,
+    startSession,
+  ]);
 
   const release = useCallback(() => {
     // Only the release that matches the initial press-and-hold gesture
@@ -271,14 +396,51 @@ export function useVoiceDictation(opts: UseVoiceDictationOptions): VoiceDictatio
     discardRef.current = true;
     setPhaseBoth("stopping");
     clearMaxSessionTimer();
+    armStopWatchdog();
     sessionRef.current?.abort();
-  }, [clearMaxSessionTimer, setPhaseBoth]);
+  }, [clearMaxSessionTimer, armStopWatchdog, setPhaseBoth]);
+
+  // Stops and inserts regardless of hold/latch state — see the controller
+  // interface's own doc comment on why this exists as a THIRD entry point
+  // alongside press/release: release() only ever acts on the exact gesture
+  // that started the current dictation (its own guard requires
+  // phase === "listening" && !latched — see that function's comment), so a
+  // TAPPED (latched) dictation has no way back to idle through release()
+  // at all. finalizeStop() itself has no such restriction (it only checks
+  // phase), which is what makes reusing it here — rather than duplicating
+  // its logic — correct for both the held and the latched case.
+  const forceStop = useCallback(() => {
+    finalizeStop();
+  }, [finalizeStop]);
+
+  // Turning the feature off mid-dictation (Settings -> Terminal -> "Enable
+  // dictation") must not leave a session running silently in the
+  // background. `enabledRef` alone only gates the NEXT press()/release()
+  // call (see those functions' own guards) — it does nothing to a
+  // dictation that's already in progress, and the mic button unmounts the
+  // instant `enabled` goes false (TerminalPane.tsx only renders it when
+  // `terminal.voice.enabled` is true), removing the one remaining way to
+  // stop or cancel it by hand. Left alone, MAX_SESSION_MS would eventually
+  // force a *graceful* stop-and-insert up to two minutes later — a
+  // surprise paste into the terminal for a feature the user just turned
+  // off, the exact "misheard/interrupted dictation should never
+  // surprise-insert" hazard VoiceMicButton.tsx's own pointercancel handler
+  // is written to avoid. cancel() (discard), not forceStop() (insert): the
+  // user disabled the feature, not merely stepped away from it.
+  useEffect(() => {
+    if (!opts.enabled && phaseRef.current !== "idle") cancel();
+  }, [opts.enabled, cancel]);
 
   // Unmount: never leave a live recognizer running against an unmounted
-  // pane, and never let its onEnd fire into stale refs afterward.
+  // pane, and never let its onEnd fire into stale refs afterward. Also
+  // clears the stop watchdog and error-dismiss timer — both harmless if
+  // they fired after unmount (they only ever touch refs/state on this
+  // hook instance), but there's no reason to let them fire at all.
   useEffect(() => {
     return () => {
       clearMaxSessionTimer();
+      clearStopWatchdog();
+      if (errorTimerRef.current !== null) clearTimeout(errorTimerRef.current);
       discardRef.current = true;
       wantActiveRef.current = false;
       sessionRef.current?.abort();
@@ -296,5 +458,6 @@ export function useVoiceDictation(opts: UseVoiceDictationOptions): VoiceDictatio
     press,
     release,
     cancel,
+    forceStop,
   };
 }

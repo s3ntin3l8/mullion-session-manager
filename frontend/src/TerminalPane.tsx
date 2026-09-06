@@ -381,6 +381,41 @@ export function TerminalPane(props: {
   useEffect(() => {
     voiceControllerRef.current = voiceController;
   });
+  // Force-stops (never discards — see forceStop's own doc comment on
+  // useVoiceDictation) an active dictation if the tab loses focus or is
+  // backgrounded, regardless of how it was started. Deliberately keyed on
+  // `voiceController.phase`, not on the hotkey-hold state the mount
+  // effect's own keyup wiring tracks below — a tap-to-latch dictation
+  // started from the mic button has no "hold" at all to lose focus during,
+  // but is exactly as capable of being left running silently while the
+  // user switches tabs (a genuine hazard: MAX_SESSION_MS would otherwise
+  // let it run for up to two more minutes and insert whatever the room
+  // said into the terminal once the user comes back). Only installed while
+  // there's actually something to stop, not for the pane's whole lifetime.
+  useEffect(() => {
+    if (voiceController.phase === "idle") return;
+    const forceStop = () => voiceController.forceStop();
+    const onVisibilityChange = () => {
+      if (document.hidden) forceStop();
+    };
+    window.addEventListener("blur", forceStop);
+    window.addEventListener("pagehide", forceStop);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.removeEventListener("blur", forceStop);
+      window.removeEventListener("pagehide", forceStop);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+    // Deliberately narrow: `voiceController.phase` (a primitive) and
+    // `.forceStop` (a useCallback, stable across renders per its own dep
+    // array in useVoiceDictation.ts) are the only two members this effect
+    // actually reads — the linter can't see through the hook boundary to
+    // confirm that stability, and depending on the whole `voiceController`
+    // object instead would re-subscribe these listeners on every render
+    // (a fresh object literal every call), not just on an actual
+    // phase/forceStop change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [voiceController.phase, voiceController.forceStop]);
 
   // INTENTIONALLY MONOLITHIC — do not split this effect up.
   //
@@ -477,7 +512,10 @@ export function TerminalPane(props: {
       captureCtrlC: captureCtrlCRef.current,
       getClipboardKeys: () => prefsRef.current.clipboardKeys,
       onToggleFind: openFind,
-      getVoiceHotkey: () => prefsRef.current.voice.enabled && prefsRef.current.voice.hotkeyEnabled,
+      getVoiceHotkey: () =>
+        voiceControllerRef.current.isSupported &&
+        prefsRef.current.voice.enabled &&
+        prefsRef.current.voice.hotkeyEnabled,
       onVoicePress: () => voiceHotkeyPressRef.current(),
     });
     // Note: no separate "wait for the web font to load, then re-fit" step
@@ -915,20 +953,21 @@ export function TerminalPane(props: {
     // deliberately NOT handled there. attachCustomKeyEventHandler only ever
     // sees the FOCUSED terminal's own keydown/keyup, but a physical hold can
     // outlast that focus (the user alt-tabs away, or a browser dialog steals
-    // it mid-hold), which would otherwise leave the mic listening forever
-    // with no way to stop it short of the mic button itself. A `window`
-    // listener, installed only for the duration of an actual hold (not left
-    // attached permanently), catches the keyup — or, if the key is never
-    // released because focus left first, blur/visibilitychange/pagehide —
-    // regardless of which element currently has focus.
+    // it mid-hold), which would otherwise leave the mic listening with no
+    // way to stop it via the keyboard. A `window` listener, installed only
+    // for the duration of an actual hold, catches the keyup regardless of
+    // which element currently has focus. (A hold that outlasts focus loss
+    // ENTIRELY — no keyup ever arrives at all, e.g. the tab itself is
+    // backgrounded — is covered separately by the phase-driven blur/
+    // visibility/pagehide effect further below, which applies uniformly to
+    // a hotkey hold AND a tap-latched mic-button dictation alike; this
+    // handler only needs to cover the ordinary "keyup arrives somewhere
+    // other than the terminal" case.)
     let voiceHotkeyHeld = false;
     function stopVoiceHotkeyHold(): void {
       if (!voiceHotkeyHeld) return;
       voiceHotkeyHeld = false;
       window.removeEventListener("keyup", onVoiceHotkeyKeyup);
-      window.removeEventListener("blur", onVoiceHotkeyForceRelease);
-      window.removeEventListener("pagehide", onVoiceHotkeyForceRelease);
-      document.removeEventListener("visibilitychange", onVoiceHotkeyVisibilityChange);
     }
     function onVoiceHotkeyKeyup(event: KeyboardEvent): void {
       // event.code alone, deliberately not the full chord — see
@@ -939,13 +978,6 @@ export function TerminalPane(props: {
       stopVoiceHotkeyHold();
       voiceControllerRef.current.release();
     }
-    function onVoiceHotkeyForceRelease(): void {
-      stopVoiceHotkeyHold();
-      voiceControllerRef.current.release();
-    }
-    function onVoiceHotkeyVisibilityChange(): void {
-      if (document.hidden) onVoiceHotkeyForceRelease();
-    }
     voiceHotkeyPressRef.current = () => {
       // Idempotent: terminalKeys.ts already filters event.repeat, but a
       // guard here too means a duplicate press (e.g. two attach sites
@@ -955,9 +987,6 @@ export function TerminalPane(props: {
       voiceHotkeyHeld = true;
       voiceControllerRef.current.press();
       window.addEventListener("keyup", onVoiceHotkeyKeyup);
-      window.addEventListener("blur", onVoiceHotkeyForceRelease);
-      window.addEventListener("pagehide", onVoiceHotkeyForceRelease);
-      document.addEventListener("visibilitychange", onVoiceHotkeyVisibilityChange);
     };
 
     // Issue #68: the CLI running in this PTY is a host process — it can't
@@ -1372,7 +1401,10 @@ export function TerminalPane(props: {
       captureCtrlC: props.captureCtrlC,
       getClipboardKeys: () => prefsRef.current.clipboardKeys,
       onToggleFind: openFind,
-      getVoiceHotkey: () => prefsRef.current.voice.enabled && prefsRef.current.voice.hotkeyEnabled,
+      getVoiceHotkey: () =>
+        voiceControllerRef.current.isSupported &&
+        prefsRef.current.voice.enabled &&
+        prefsRef.current.voice.hotkeyEnabled,
       onVoicePress: () => voiceHotkeyPressRef.current(),
     });
     // `openFind` (from useTerminalSearch) only closes over stable refs/
@@ -1441,7 +1473,10 @@ export function TerminalPane(props: {
       captureCtrlC: captureCtrlCRef.current,
       getClipboardKeys: () => prefsRef.current.clipboardKeys,
       onToggleFind: openFind,
-      getVoiceHotkey: () => prefsRef.current.voice.enabled && prefsRef.current.voice.hotkeyEnabled,
+      getVoiceHotkey: () =>
+        voiceControllerRef.current.isSupported &&
+        prefsRef.current.voice.enabled &&
+        prefsRef.current.voice.hotkeyEnabled,
       onVoicePress: () => voiceHotkeyPressRef.current(),
     });
 

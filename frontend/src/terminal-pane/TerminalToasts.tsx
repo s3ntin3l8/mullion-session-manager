@@ -25,10 +25,13 @@ export interface TerminalToastsProps {
   // Voice dictation error message (see voice/support.ts's voiceErrorMessage),
   // or null/undefined when there is none to show. Optional — this component
   // predates dictation and every other caller (e.g. Dock.tsx's terminal, if
-  // any exists without voice wired up) shouldn't need to pass it. Same
-  // auto-dismiss-on-a-timer treatment as uploadState === "error" — the
-  // timer itself lives in TerminalPane (the same place uploadState's timer
-  // does), not here; this component only renders whatever it's given.
+  // any exists without voice wired up) shouldn't need to pass it. Unlike
+  // uploadState === "error" below (whose auto-dismiss timer lives in
+  // TerminalPane), this one's auto-dismiss lives inside
+  // useVoiceDictation.ts itself (setErrorWithTimer) — the hook owns the
+  // error's whole lifecycle, including clearing it early on the next
+  // press(), so TerminalPane needs no timer of its own; this component
+  // only renders whatever it's given, same as every other prop here.
   voiceError?: string | null;
 }
 
