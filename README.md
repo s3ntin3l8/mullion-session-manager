@@ -46,6 +46,19 @@ CI/CD. Frontend: React + [dockview](https://dockview.dev/) (tiled splits/tabs)
   overflow menu or the session row's `…` menu; the preference is saved in
   this browser and survives reload/reconnect (timeline history and the
   notification feed are kept). Web-push to other devices is unaffected.
+- **Voice dictation.** Hold or tap the mic button in a terminal pane (or the
+  Ctrl+Shift+Space hotkey on desktop) to dictate into the CLI's prompt via
+  your browser's speech engine — the transcript is inserted for you to
+  review, never sent automatically. Requires a secure (`https://`) origin,
+  and only works in browsers that expose the Web Speech API (Chrome and
+  Safari today; the mic button is hidden automatically in Firefox, which
+  doesn't). In Chrome, recognition audio is sent to Google's servers for
+  transcription — worth knowing if you're self-hosting Mullion specifically
+  to keep everything on your own infrastructure. This is distinct from, and
+  doesn't require, any dictation feature built into the CLI itself (Claude
+  Code's and Google Antigravity's own `/voice` can't reach a Mullion
+  session's PTY — the microphone is on your device, the CLI runs on the
+  Mullion host).
 - **Multi-host.** Run sessions on more than one machine from a single
   dashboard — every other machine runs the same Mullion build, just started
   as an `agent` instead of the `primary`. See

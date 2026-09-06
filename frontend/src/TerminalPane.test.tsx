@@ -436,6 +436,7 @@ function renderPane(extra: { active?: boolean } = {}) {
         reconnect: { enabled: false, maxAttempts: 0 },
         keyCapture: { ctrlR: true, ctrlL: true, ctrlK: true },
         clipboardKeys: { ctrlV: false, ctrlC: false },
+        voice: { enabled: true, hotkeyEnabled: true, lang: "" },
       },
       sidebarDensity: "comfortable",
       layoutMode: "auto",
@@ -3004,5 +3005,194 @@ describe("TerminalPane deferred initial connect (issue #676 frontend follow-up)"
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("TerminalPane voice dictation", () => {
+  // Minimal fake, tracked by instance so a test can drive its
+  // onresult/onend callbacks directly — the full restart/error/timing
+  // state machine is exercised exhaustively at the hook level
+  // (voice/useVoiceDictation.test.ts); what's worth covering here is only
+  // the WIRING: the hotkey reaches useVoiceDictation's press()/release(),
+  // and a completed dictation reaches term.paste (not term.input), with a
+  // refocus.
+  class FakeSpeechRecognition {
+    continuous = false;
+    interimResults = false;
+    lang = "";
+    onresult: ((event: unknown) => void) | null = null;
+    onerror: ((event: unknown) => void) | null = null;
+    onend: (() => void) | null = null;
+    start = vi.fn();
+    stop = vi.fn();
+    abort = vi.fn();
+    constructor() {
+      fakeRecognitionInstances.push(this);
+    }
+  }
+  let fakeRecognitionInstances: FakeSpeechRecognition[];
+
+  beforeEach(() => {
+    fakeRecognitionInstances = [];
+    (window as unknown as { SpeechRecognition: unknown }).SpeechRecognition = FakeSpeechRecognition;
+  });
+
+  afterEach(() => {
+    delete (window as { SpeechRecognition?: unknown }).SpeechRecognition;
+  });
+
+  function latestRecognition(): FakeSpeechRecognition {
+    return fakeRecognitionInstances[fakeRecognitionInstances.length - 1]!;
+  }
+
+  // A single final SpeechRecognitionResult-shaped entry: an array whose
+  // index [0] is the top alternative (webSpeechProvider.ts reads
+  // result[0]?.transcript) with an extra own `isFinal` property
+  // (result.isFinal) — mirroring the real SpeechRecognitionResult shape
+  // closely enough for the provider's own reader to work unmodified.
+  function makeFinalResult(transcript: string) {
+    return Object.assign([{ transcript }], { isFinal: true });
+  }
+
+  function fireFinal(recognition: FakeSpeechRecognition, transcript: string) {
+    act(() => {
+      recognition.onresult?.({
+        resultIndex: 0,
+        results: [makeFinalResult(transcript)],
+      });
+    });
+  }
+
+  // Fires the Ctrl+Shift+Space keydown/keyup pair attachKeyConflictHandler
+  // and TerminalPane's own window keyup listener are wired to — see
+  // terminalKeys.ts's chord branch and TerminalPane.tsx's
+  // voiceHotkeyPressRef/onVoiceHotkeyKeyup for the two halves.
+  function pressVoiceHotkey() {
+    const term = getLatestTermInstance();
+    const calls = term.attachCustomKeyEventHandler.mock.calls;
+    const handler = calls[calls.length - 1]![0] as (event: unknown) => boolean;
+    act(() => {
+      handler({
+        type: "keydown",
+        key: " ",
+        code: "Space",
+        ctrlKey: true,
+        shiftKey: true,
+        metaKey: false,
+        altKey: false,
+        repeat: false,
+        preventDefault: vi.fn(),
+      });
+    });
+  }
+
+  function releaseVoiceHotkey() {
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keyup", { code: "Space" }));
+    });
+  }
+
+  it("swallows Ctrl+Shift+Space and starts recognition when the voice hotkey is enabled", () => {
+    stubFakeWebSocket(true);
+    renderPane();
+
+    const term = getLatestTermInstance();
+    const calls = term.attachCustomKeyEventHandler.mock.calls;
+    const handler = calls[calls.length - 1]![0] as (event: unknown) => boolean;
+    const preventDefault = vi.fn();
+    let result = true;
+    act(() => {
+      result = handler({
+        type: "keydown",
+        key: " ",
+        code: "Space",
+        ctrlKey: true,
+        shiftKey: true,
+        metaKey: false,
+        altKey: false,
+        repeat: false,
+        preventDefault,
+      }) as boolean;
+    });
+
+    expect(result).toBe(false);
+    expect(preventDefault).toHaveBeenCalled();
+    expect(fakeRecognitionInstances).toHaveLength(1);
+    expect(latestRecognition().start).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not start recognition on Ctrl+Shift+Space when the hotkey setting is off", () => {
+    stubFakeWebSocket(true);
+    renderPane();
+    // Patched AFTER renderPane() (not before) since renderPane() itself
+    // unconditionally overwrites the whole settings object — the
+    // settings-sync effect's own [terminalSettings] dep is what re-attaches
+    // the key handler with the updated getVoiceHotkey getter.
+    act(() => {
+      useDashboardStore.setState((s) => ({
+        settings: {
+          ...s.settings,
+          terminal: {
+            ...s.settings.terminal,
+            voice: { ...s.settings.terminal.voice, hotkeyEnabled: false },
+          },
+        },
+      }));
+    });
+
+    const term = getLatestTermInstance();
+    const calls = term.attachCustomKeyEventHandler.mock.calls;
+    const handler = calls[calls.length - 1]![0] as (event: unknown) => boolean;
+    act(() =>
+      handler({
+        type: "keydown",
+        key: " ",
+        code: "Space",
+        ctrlKey: true,
+        shiftKey: true,
+        metaKey: false,
+        altKey: false,
+        repeat: false,
+        preventDefault: vi.fn(),
+      }),
+    );
+
+    expect(fakeRecognitionInstances).toHaveLength(0);
+  });
+
+  it("a completed tap-to-latch dictation calls term.paste once (not term.input), and refocuses the terminal", async () => {
+    // Deliberately tap-to-latch, not hold-then-release: a real hold's
+    // release is classified by elapsed wall-clock time against
+    // pushToTalk.ts's HOLD_THRESHOLD_MS, which a synchronous test can't
+    // reliably land on either side of without fake timers (and fake timers
+    // don't mix cleanly with this file's real waitFor below). A quick
+    // keydown->keyup->keydown sequence exercises the same
+    // press/release/finalize wiring deterministically: two real-time-close
+    // events always classify as "latch," so the SECOND press is what stops
+    // and inserts, exactly like a physical tap-tap.
+    stubFakeWebSocket(true);
+    renderPane();
+    const term = getLatestTermInstance();
+    term.focus.mockClear();
+
+    pressVoiceHotkey();
+    expect(fakeRecognitionInstances).toHaveLength(1);
+    const recognition = latestRecognition();
+
+    releaseVoiceHotkey();
+    expect(recognition.stop).not.toHaveBeenCalled(); // latched, not stopped
+
+    fireFinal(recognition, "add a test for the parser");
+
+    pressVoiceHotkey(); // second tap: stops and inserts
+    expect(recognition.stop).toHaveBeenCalledTimes(1);
+
+    act(() => recognition.onend?.());
+
+    await waitFor(() => {
+      expect(term.paste).toHaveBeenCalledWith("add a test for the parser ");
+    });
+    expect(term.input).not.toHaveBeenCalledWith("add a test for the parser ");
+    expect(term.focus).toHaveBeenCalled();
   });
 });

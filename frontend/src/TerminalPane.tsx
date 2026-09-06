@@ -33,6 +33,8 @@ import { useCoarsePointer } from "./lib/layoutTier.js";
 import { useTerminalSearch } from "./hooks/useTerminalSearch.js";
 import { TerminalFindBar } from "./terminal-pane/TerminalFindBar.js";
 import { TerminalToasts } from "./terminal-pane/TerminalToasts.js";
+import { VoiceMicButton } from "./terminal-pane/VoiceMicButton.js";
+import { useVoiceDictation } from "./voice/useVoiceDictation.js";
 // ResizeMessage/GeometryMessage physically live in src/shared/ws-protocol.ts
 // (repo root, NOT this frontend workspace — see src/routes/terminal.ts's own
 // re-export) as two arms of TerminalWSMessage; the third arm, ExitedMessage,
@@ -337,6 +339,15 @@ export function TerminalPane(props: {
   const prefsRef = useRef(terminalSettings);
   const pasteHandlerRef = useRef<() => void>(() => {});
   const copyHandlerRef = useRef<() => Promise<boolean>>(() => Promise.resolve(false));
+  // Implementation lives in the mount effect (it owns the window
+  // keyup/blur/visibilitychange listeners that make the hold outlast the
+  // terminal's own focus — see terminalKeys.ts's own comment on why
+  // keydown/keyup are asymmetric); indirected through a ref, same
+  // onPaste/onCopy -> pasteHandlerRef/copyHandlerRef pattern, so the OTHER
+  // two attachKeyConflictHandler call sites (captureCtrlC-sync,
+  // settings-sync effects below) can reuse it without re-declaring the
+  // hold-tracking state machine.
+  const voiceHotkeyPressRef = useRef<() => void>(() => {});
   const captureCtrlCRef = useRef(props.captureCtrlC);
   // Mirrors `props.onTitleChange` for the same reason as prefsRef above — the
   // mount effect's term.onTitleChange subscription (below) is created once
@@ -344,6 +355,31 @@ export function TerminalPane(props: {
   const onTitleChangeRef = useRef(props.onTitleChange);
   useEffect(() => {
     onTitleChangeRef.current = props.onTitleChange;
+  });
+
+  // Voice dictation (push-to-talk) — see .claude/plans/
+  // i-want-to-enable-structured-sutherland.md and voice/useVoiceDictation.ts
+  // for the full design. useVoiceDictation owns the Web Speech state
+  // machine; it has no reference to the live xterm Terminal instance, so
+  // insertion goes through voiceInsertRef, same mount-effect-private-
+  // closure pattern as uploadImageRef above (see that ref's own comment).
+  const voiceInsertRef = useRef<(text: string) => void>(() => {});
+  const voiceController = useVoiceDictation({
+    enabled: terminalSettings.voice.enabled,
+    lang: terminalSettings.voice.lang,
+    onInsert: (text) => voiceInsertRef.current(text),
+  });
+  // Exposes the latest press/release/cancel to the mount effect's hotkey
+  // keydown/keyup wiring below, which is attached once ([sessionId]-only
+  // deps, same as the rest of that effect) and would otherwise close over
+  // whichever controller identity existed at the initial mount — same
+  // "read live through a ref, don't capture" reasoning as prefsRef above.
+  // Assigned via a dep-less effect, same pattern as onTitleChangeRef just
+  // above (not a plain assignment during render — the react-hooks/refs
+  // rule this repo lints under forbids writing ref.current during render).
+  const voiceControllerRef = useRef(voiceController);
+  useEffect(() => {
+    voiceControllerRef.current = voiceController;
   });
 
   // INTENTIONALLY MONOLITHIC — do not split this effect up.
@@ -441,6 +477,8 @@ export function TerminalPane(props: {
       captureCtrlC: captureCtrlCRef.current,
       getClipboardKeys: () => prefsRef.current.clipboardKeys,
       onToggleFind: openFind,
+      getVoiceHotkey: () => prefsRef.current.voice.enabled && prefsRef.current.voice.hotkeyEnabled,
+      onVoicePress: () => voiceHotkeyPressRef.current(),
     });
     // Note: no separate "wait for the web font to load, then re-fit" step
     // here — the settings-sync effect below runs immediately after this
@@ -852,6 +890,76 @@ export function TerminalPane(props: {
       if (trimmed) term.paste(trimmed);
     }
 
+    // Voice dictation (push-to-talk) — useVoiceDictation.ts's onInsert
+    // hands back the already-joined, trailing-spaced transcript (see
+    // voice/transcript.ts's formatForPaste); this routes it through the
+    // exact same bracketed-paste/newline-strip path as an ordinary paste or
+    // the image-attach button, then refocuses the terminal. The refocus is
+    // not optional: the mic button lives outside the terminal's own DOM
+    // node, so clicking it blurs the terminal, and without this an
+    // insert-only feature whose entire point is "press Enter yourself"
+    // would leave Enter silently going nowhere — same "every send focuses
+    // first" reasoning as focusThenInput below (registered for
+    // MobileKeyBar), and the same Hermes review (PR #616 round 2) that
+    // established it: preventDefault() on the mic button's own pointerdown
+    // (VoiceMicButton.tsx) only ever *keeps* focus that was already there,
+    // it can't bring focus TO the terminal if it had already left.
+    voiceInsertRef.current = (text: string) => {
+      term.focus();
+      pasteToTerminal(text);
+    };
+
+    // Voice dictation hotkey (Ctrl+Shift+Space) hold-tracking. Keydown is
+    // handled by attachKeyConflictHandler above (all three call sites route
+    // onVoicePress through voiceHotkeyPressRef, assigned here) — release is
+    // deliberately NOT handled there. attachCustomKeyEventHandler only ever
+    // sees the FOCUSED terminal's own keydown/keyup, but a physical hold can
+    // outlast that focus (the user alt-tabs away, or a browser dialog steals
+    // it mid-hold), which would otherwise leave the mic listening forever
+    // with no way to stop it short of the mic button itself. A `window`
+    // listener, installed only for the duration of an actual hold (not left
+    // attached permanently), catches the keyup — or, if the key is never
+    // released because focus left first, blur/visibilitychange/pagehide —
+    // regardless of which element currently has focus.
+    let voiceHotkeyHeld = false;
+    function stopVoiceHotkeyHold(): void {
+      if (!voiceHotkeyHeld) return;
+      voiceHotkeyHeld = false;
+      window.removeEventListener("keyup", onVoiceHotkeyKeyup);
+      window.removeEventListener("blur", onVoiceHotkeyForceRelease);
+      window.removeEventListener("pagehide", onVoiceHotkeyForceRelease);
+      document.removeEventListener("visibilitychange", onVoiceHotkeyVisibilityChange);
+    }
+    function onVoiceHotkeyKeyup(event: KeyboardEvent): void {
+      // event.code alone, deliberately not the full chord — see
+      // pushToTalk.ts's own comment: a user can lift Ctrl before Space, at
+      // which point this keyup event reports ctrlKey: false, and
+      // re-testing the chord here would miss the release entirely.
+      if (event.code !== "Space") return;
+      stopVoiceHotkeyHold();
+      voiceControllerRef.current.release();
+    }
+    function onVoiceHotkeyForceRelease(): void {
+      stopVoiceHotkeyHold();
+      voiceControllerRef.current.release();
+    }
+    function onVoiceHotkeyVisibilityChange(): void {
+      if (document.hidden) onVoiceHotkeyForceRelease();
+    }
+    voiceHotkeyPressRef.current = () => {
+      // Idempotent: terminalKeys.ts already filters event.repeat, but a
+      // guard here too means a duplicate press (e.g. two attach sites
+      // somehow both firing for one physical keydown) can never register a
+      // second press() on top of an already-listening dictation.
+      if (voiceHotkeyHeld) return;
+      voiceHotkeyHeld = true;
+      voiceControllerRef.current.press();
+      window.addEventListener("keyup", onVoiceHotkeyKeyup);
+      window.addEventListener("blur", onVoiceHotkeyForceRelease);
+      window.addEventListener("pagehide", onVoiceHotkeyForceRelease);
+      document.addEventListener("visibilitychange", onVoiceHotkeyVisibilityChange);
+    };
+
     // Issue #68: the CLI running in this PTY is a host process — it can't
     // read the browser's clipboard, and even if raw image bytes reached it
     // over the WS/PTY byte stream there's no terminal image protocol (Sixel/
@@ -1231,6 +1339,18 @@ export function TerminalPane(props: {
       unregisterTerminalRepaint(props.params.sessionId);
       unregisterTerminalInput(props.params.sessionId, inputHandle);
       uploadImageRef.current = () => {};
+      voiceInsertRef.current = () => {};
+      // Drops any window/document listeners left by an in-progress hold —
+      // without this, unmounting mid-hold (e.g. closing the pane while
+      // still holding Ctrl+Shift+Space) would leak a keyup/blur/
+      // visibilitychange/pagehide listener referencing this closure's own
+      // (now-stale) `term`/voiceControllerRef forever. Deliberately does
+      // NOT call voiceControllerRef.current.release() — useVoiceDictation's
+      // own unmount effect (in the hook itself) already aborts any live
+      // session and discards its buffer, so there is nothing left to
+      // release by the time this runs.
+      stopVoiceHotkeyHold();
+      voiceHotkeyPressRef.current = () => {};
     };
     // theme intentionally excluded — mount effect must not recreate the
     // terminal on theme toggle; theme updates flow through the settings-sync
@@ -1252,6 +1372,8 @@ export function TerminalPane(props: {
       captureCtrlC: props.captureCtrlC,
       getClipboardKeys: () => prefsRef.current.clipboardKeys,
       onToggleFind: openFind,
+      getVoiceHotkey: () => prefsRef.current.voice.enabled && prefsRef.current.voice.hotkeyEnabled,
+      onVoicePress: () => voiceHotkeyPressRef.current(),
     });
     // `openFind` (from useTerminalSearch) only closes over stable refs/
     // setState identities, same as the plain in-component function it was
@@ -1319,6 +1441,8 @@ export function TerminalPane(props: {
       captureCtrlC: captureCtrlCRef.current,
       getClipboardKeys: () => prefsRef.current.clipboardKeys,
       onToggleFind: openFind,
+      getVoiceHotkey: () => prefsRef.current.voice.enabled && prefsRef.current.voice.hotkeyEnabled,
+      onVoicePress: () => voiceHotkeyPressRef.current(),
     });
 
     // The WebGL renderer caches glyphs (size and color both) in a texture
@@ -1584,6 +1708,29 @@ export function TerminalPane(props: {
         <ImageIcon size={14} />
       </button>
       {
+        // Voice dictation mic button — hidden entirely (not just disabled)
+        // when the browser has no SpeechRecognition constructor at all
+        // (Firefox today), so there's no dead button to notice; the
+        // settings toggle (terminal.voice.enabled) hides it the same way.
+        // `disabled` (insecure-context) is a DIFFERENT case from "hidden" —
+        // the constructor is present there, it would just fail at start()
+        // with a confusing "not-allowed", so the button stays visible but
+        // inert with an explanatory title (VoiceMicButton.tsx). See
+        // voice/support.ts's isSpeechDictationSupported/
+        // isSecureContextForDictation for why these are two separate checks.
+      }
+      {terminalSettings.voice.enabled && voiceController.isSupported && (
+        <VoiceMicButton
+          phase={voiceController.phase}
+          interimText={voiceController.interimText}
+          disabled={!voiceController.isSecureContext}
+          coarsePointer={isCoarsePointer}
+          onPress={voiceController.press}
+          onRelease={voiceController.release}
+          onCancel={voiceController.cancel}
+        />
+      )}
+      {
         // Scrollback find bar (U1) — opened via Ctrl+Shift+F, see
         // attachKeyConflictHandler (lib/terminalKeys.ts) for why that chord.
         // Positioned top-left rather than sharing the attach-image button's
@@ -1651,6 +1798,7 @@ export function TerminalPane(props: {
         copyToastKey={copyToastKey}
         uploadState={uploadState}
         paneTooSmall={paneTooSmall}
+        voiceError={voiceController.error}
       />
     </div>
   );

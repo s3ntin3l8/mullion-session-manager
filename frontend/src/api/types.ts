@@ -1307,6 +1307,13 @@ export interface AppSettings {
       ctrlV: boolean;
       ctrlC: boolean;
     };
+    // Mirrors settings.ts's DEFAULT_SETTINGS — voice dictation (push-to-talk).
+    // See voice/useVoiceDictation.ts and TerminalPane.tsx's VoiceMicButton.
+    voice: {
+      enabled: boolean;
+      hotkeyEnabled: boolean;
+      lang: string;
+    };
   };
   sidebarDensity: SidebarDensity;
   // Tablet tier plan (.claude/plans/another-thing-to-investigate-lively-

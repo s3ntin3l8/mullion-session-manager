@@ -59,4 +59,31 @@ describe("TerminalToasts", () => {
     );
     expect(screen.queryByText("Pane too small")).not.toBeInTheDocument();
   });
+
+  it("renders a voice error toast, styled the same as an upload error", () => {
+    render(
+      <TerminalToasts
+        copied={false}
+        copyToastKey={0}
+        uploadState="idle"
+        paneTooSmall={false}
+        voiceError="Microphone access denied — allow it in your browser's site settings."
+      />,
+    );
+    const toast = screen.getByText(/microphone access denied/i);
+    expect(toast).toHaveClass("error");
+  });
+
+  it("renders nothing extra when voiceError is null/undefined", () => {
+    const { container } = render(
+      <TerminalToasts
+        copied={false}
+        copyToastKey={0}
+        uploadState="idle"
+        paneTooSmall={false}
+        voiceError={null}
+      />,
+    );
+    expect(container).toBeEmptyDOMElement();
+  });
 });

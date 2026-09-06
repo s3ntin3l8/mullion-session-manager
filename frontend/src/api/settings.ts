@@ -118,6 +118,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
       ctrlV: false,
       ctrlC: false,
     },
+    voice: {
+      enabled: true,
+      hotkeyEnabled: true,
+      lang: "",
+    },
   },
   sidebarDensity: "comfortable",
   layoutMode: "auto",

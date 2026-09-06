@@ -94,9 +94,37 @@ export function attachKeyConflictHandler(opts: {
   // Opens (and focuses) the scrollback find bar on Ctrl+Shift+F — see the
   // handler branch below for why that chord and not bare Ctrl+F.
   onToggleFind?: () => void;
+  // Voice dictation (push-to-talk) settings gate — a live getter for the
+  // same reason getClipboardKeys above is one: this handler is re-attached
+  // from three separate effects (mount, captureCtrlC sync, settings sync),
+  // and a captured boolean would go stale the moment the user toggled
+  // Settings -> Terminal -> "Dictation hotkey" without a full remount.
+  // Deliberately its own toggle, not folded into `reservedKeys` above:
+  // reservedKeys is "take this browser-reserved key away from the browser
+  // and give it to the terminal program," voice dictation is an opt-in
+  // Mullion-level feature with nothing to do with what the foreground CLI
+  // itself would otherwise receive.
+  getVoiceHotkey?: () => boolean;
+  // Fires on the hotkey's keydown (Ctrl+Shift+Space) — see the branch below
+  // for the chord rationale. Deliberately keydown-only: this handler only
+  // ever sees the FOCUSED terminal's own keydown, but a push-to-talk hold
+  // can outlast that focus (the user tabs away, or a dialog steals it), so
+  // the matching release is TerminalPane's own responsibility via a
+  // `window` keyup listener installed only for the duration of the hold —
+  // see that file's own comment for why keydown/keyup are asymmetric here.
+  onVoicePress?: () => void;
 }): void {
-  const { term, reservedKeys, onPaste, onCopy, captureCtrlC, getClipboardKeys, onToggleFind } =
-    opts;
+  const {
+    term,
+    reservedKeys,
+    onPaste,
+    onCopy,
+    captureCtrlC,
+    getClipboardKeys,
+    onToggleFind,
+    getVoiceHotkey,
+    onVoicePress,
+  } = opts;
   term.attachCustomKeyEventHandler((event) => {
     if (event.type === "keydown") {
       const key = event.key.toLowerCase();
@@ -124,6 +152,32 @@ export function attachKeyConflictHandler(opts: {
       if (isPasteChord) {
         event.preventDefault();
         onPaste?.();
+        return false;
+      }
+      // Voice dictation push-to-talk — Ctrl+Shift+Space. No shell or TUI
+      // binds this combination (plain Ctrl+Space / emacs set-mark both stay
+      // reachable unshifted), and it isn't claimed by any major browser at
+      // the chrome level either, the same two properties Ctrl+Shift+F below
+      // was chosen for. event.code, not event.key, so this still matches
+      // regardless of keyboard layout or IME state. event.repeat is
+      // excluded so a physically-held key doesn't call onVoicePress on
+      // every OS key-repeat tick — TerminalPane's own idempotent
+      // press-while-already-held guard would no-op those anyway, but
+      // filtering here keeps the intent explicit at the source. Gated by
+      // its own settings toggle (getVoiceHotkey), not folded into the
+      // shared `reservedKeys` set above — see that param's own doc comment
+      // for why.
+      if (
+        event.ctrlKey &&
+        event.shiftKey &&
+        !event.metaKey &&
+        !event.altKey &&
+        event.code === "Space" &&
+        !event.repeat &&
+        getVoiceHotkey?.()
+      ) {
+        event.preventDefault();
+        onVoicePress?.();
         return false;
       }
       // Terminal scrollback search (U1) — deliberately NOT bare Ctrl+F: that
