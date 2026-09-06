@@ -197,12 +197,6 @@ export interface WorkerPreambleOptions {
   /** `settings.taskMaster.budgetMinutes`; `0` means unlimited, in which
    * case the budget line is omitted rather than promising "0 minutes". */
   budgetMinutes: number;
-  /** `enqueueTask`'s own `opts.auto`. Gates ONE bullet: the instruction not
-   * to stop and ask. A human who clicked Claim is sitting right there, and
-   * telling that agent to decide unilaterally suppresses exactly the
-   * check-in a manual claim wants. Everything else in the preamble applies
-   * identically either way. */
-  auto: boolean;
   /** #761 — set (via `taskCommitTitlePath`) only when the project has
    * `conventionalCommitTitles` on; omitted entirely otherwise, which is
    * what gates the title-file instruction below. Every caller of this
@@ -236,9 +230,20 @@ export interface WorkerPreambleOptions {
  * `buildReviewPrompt` and `docs/tasks.md`'s "The round budget") — so a
  * defect the worker catches itself is free, and the same defect caught
  * downstream is not.
+ *
+ * The "nobody may be watching" bullet below used to be conditional on an
+ * `auto` flag, on the theory that a human who clicked Claim is sitting
+ * right there to answer a question. It isn't anymore: `checkReviewingGate`
+ * (task-reconciler.ts) fails a task with "agent ended its turn with no
+ * commits" with no reference to how the task was claimed, so a
+ * manually-claimed worker that stops to ask dies exactly the same death as
+ * an auto-claimed one. Worse, every RE-SEED spawn (retry, reject, red CI,
+ * review feedback, rebase) hands a fresh session to nobody, regardless of
+ * who originated the original claim — `buildRejectPrompt`'s old `auto:
+ * false` was flatly wrong on this point. The bullet is unconditional now.
  */
 export function buildTaskMasterPreamble(opts: WorkerPreambleOptions): string {
-  const { task, branchName, worktreePath, budgetMinutes, auto, commitTitlePath } = opts;
+  const { task, branchName, worktreePath, budgetMinutes, commitTitlePath } = opts;
 
   const lines = [
     `You are working ${taskLabel(task)} as a Mullion Task Master worker.`,
@@ -270,6 +275,10 @@ export function buildTaskMasterPreamble(opts: WorkerPreambleOptions): string {
     "- Finish or cancel any background job before you end your turn. An outstanding",
     "  one suppresses the completion signal, and the task will sit until its budget",
     "  runs out.",
+    "- Nobody may be watching this session. Never block on a question or a",
+    "  permission prompt — a question you ask instead of answering yourself ends",
+    "  your turn with no commits, which fails the task outright. Decide, and record",
+    "  the decision and why in your commit message.",
   ];
 
   if (commitTitlePath) {
@@ -283,14 +292,6 @@ export function buildTaskMasterPreamble(opts: WorkerPreambleOptions): string {
       "  for a bug fix even if the underlying task description says otherwise. If you",
       "  are re-seeded for another round, rewrite this file only if the type should",
       "  change; otherwise leave the existing one in place.",
-    );
-  }
-
-  if (auto) {
-    lines.push(
-      "- Nobody is watching this session. Do not stop to ask a question or wait on a",
-      "  permission prompt — make a reasonable decision and record it in your commit",
-      "  message.",
     );
   }
 
