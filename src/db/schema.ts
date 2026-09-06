@@ -258,16 +258,22 @@ export const projects = sqliteTable("projects", {
   // most projects have never been scaffolded. Set by
   // routes/project-setup.ts's `/setup/apply` handler, at the point it
   // actually commits the scaffold's files into a real worktree — never
-  // invented independently here, and never by a user PATCH: this column
-  // exists purely so session-lifecycle.ts's createSessionRecord can compute
-  // whether a committed scaffolded file already exists for THIS project
-  // before deciding whether to still inject the DB-authored
-  // project_tooling.skill/.reviewerAgent copy live (see that function's own
-  // comment on resolvedProjectSkill/resolvedProjectReviewerAgent) — once a
-  // committed file exists, re-injecting the DB copy on top of it is
-  // redundant. Overwritten (not merged) on every successful apply, so a
-  // project re-scaffolded under a different slug tracks whichever slug was
-  // MOST RECENTLY committed, matching what's actually on disk.
+  // invented independently here, and never by a user PATCH. Historically
+  // (pre-issue #1098) this column was also what session-lifecycle.ts's
+  // createSessionRecord read to decide whether a committed scaffold file
+  // already exists for THIS project, before deciding whether to still
+  // inject the DB-authored project_tooling.skill/.reviewerAgent copy live.
+  // As of #1098, createSessionRecord no longer reads this column at all —
+  // it scans `.claude/skills/*/SKILL.md` on disk directly (see that
+  // function's own comment on discoverCommittedScaffold), because a
+  // single stamped slug can desync from which slug's files are actually
+  // committed under concurrent re-scaffolds. This column is now write-only:
+  // still stamped on every `/setup/apply`, as an audit trail of the most
+  // recently applied scaffold slug, but nothing reads it back. Overwritten
+  // (not merged) on every successful apply, so a project re-scaffolded
+  // under a different slug tracks whichever slug was MOST RECENTLY
+  // committed — which is exactly the value that's no longer trustworthy
+  // enough to gate injection on alone.
   //
   // `/setup/apply` requires a live preview record, and (as of PR #1102)
   // `/setup/preview` no longer 501s for a remote-hosted project — only
