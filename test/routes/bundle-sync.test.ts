@@ -355,5 +355,48 @@ describe("POST /api/bundle-sync/remove", () => {
 
       expect(mockGetRemoteHostClient).not.toHaveBeenCalled();
     });
+
+    it("with TWO registered agent hosts, one unreachable does not prevent the other from being dispatched to", async () => {
+      const app = await buildTestApp();
+      const { createHost, deleteHost } = await import("../../src/services/host-registry.js");
+      const badHost = createHost(app, {
+        name: "bad-agent",
+        baseUrl: "http://nope.example:4000",
+        token: "tok",
+      });
+      const goodHost = createHost(app, {
+        name: "good-agent",
+        baseUrl: "http://good-agent.example:4000",
+        token: "tok",
+      });
+      const { HostUnreachableError } = await import("../../src/services/remote-host-client.js");
+      const removeAgentBundleMock = vi.fn().mockResolvedValue({ removed: 1, legacySwept: 0 });
+      mockGetRemoteHostClient.mockImplementation((_app: unknown, hostId: string) => {
+        if (hostId === badHost.id) {
+          return {
+            removeAgentBundle: vi
+              .fn()
+              .mockRejectedValue(new HostUnreachableError(badHost.id, new Error("timeout"))),
+          };
+        }
+        return { removeAgentBundle: removeAgentBundleMock };
+      });
+
+      try {
+        const res = await app.inject({ method: "POST", url: "/api/bundle-sync/remove" });
+
+        expect(res.statusCode).toBe(200);
+        expect(res.json().settingDisabled).toBe(true);
+        // The unreachable host doesn't short-circuit the Promise.all — the
+        // reachable one is still dispatched to, proving multi-host
+        // isolation rather than just single-host best-effort.
+        expect(removeAgentBundleMock).toHaveBeenCalledWith(true);
+        expect(mockGetRemoteHostClient).toHaveBeenCalledWith(expect.anything(), badHost.id);
+        expect(mockGetRemoteHostClient).toHaveBeenCalledWith(expect.anything(), goodHost.id);
+      } finally {
+        deleteHost(app, badHost.id);
+        deleteHost(app, goodHost.id);
+      }
+    });
   });
 });
