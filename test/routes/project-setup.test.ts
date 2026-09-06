@@ -117,7 +117,13 @@ describe("project-setup route", () => {
     await app.close();
   });
 
-  it("rejects a remote-hosted project's preview with 501 — issue #895 tracks the fix", async () => {
+  // Issue #895 — preview's own 501 guard was lifted (a real remote-hosted
+  // preview/apply round trip is covered end-to-end against a real second
+  // agent in test/integration/multi-host-scaffold-setup.test.ts); this
+  // route still needs to degrade cleanly, not crash, when the remote host
+  // it's asked to talk to is genuinely unreachable — see
+  // reuseOrCreateWorktree's own HostRequestError/other-throw split.
+  it("surfaces a clean 500 (not a crash) when a remote-hosted project's own host is unreachable", async () => {
     const app = await buildApp();
     const host = await app.inject({
       method: "POST",
@@ -137,7 +143,7 @@ describe("project-setup route", () => {
       url: `/api/projects/${projectId}/setup/preview`,
       payload: { slug: "demo" },
     });
-    expect(res.statusCode).toBe(501);
+    expect(res.statusCode).toBe(500);
 
     await app.close();
   });

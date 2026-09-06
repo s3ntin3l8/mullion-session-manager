@@ -2065,6 +2065,252 @@ describe("internal routes (agent role, issue #26)", () => {
     });
   });
 
+  describe("scaffold read/write/commit remote-hosted proxy routes (#895)", () => {
+    async function makeScaffoldRepo() {
+      const { execFileSync } = await import("node:child_process");
+      const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "internal-895-root-"));
+      const cwd = path.join(repoRoot, "real-repo");
+      fs.mkdirSync(cwd, { recursive: true });
+      const run = (args: string[]) =>
+        execFileSync("git", args, { cwd, stdio: "pipe", env: gitEnv() });
+      run(["init", "-b", "main"]);
+      run(["config", "user.email", "test@example.com"]);
+      run(["config", "user.name", "Test"]);
+      fs.writeFileSync(path.join(cwd, "README.md"), "# real repo\n");
+      run(["add", "-A"]);
+      run(["commit", "-m", "initial", "--no-verify"]);
+      return { repoRoot, cwd };
+    }
+
+    it("POST /internal/read-files reads existing content off this host's own filesystem, and omits an absent path", async () => {
+      const { repoRoot, cwd } = await makeScaffoldRepo();
+      const previousRoots = process.env.PROJECTS_ROOTS;
+      process.env.PROJECTS_ROOTS = repoRoot;
+      const app = await buildApp();
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/internal/read-files",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { cwd, paths: ["README.md", "MISSING.md"] },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.files["README.md"]).toBe("# real repo\n");
+      expect("MISSING.md" in body.files).toBe(false);
+
+      process.env.PROJECTS_ROOTS = previousRoots;
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("requires a cwd/paths body for read-files, and rejects a cwd outside PROJECTS_ROOTS", async () => {
+      const app = await buildApp();
+      const missing = await app.inject({
+        method: "POST",
+        url: "/internal/read-files",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: {},
+      });
+      expect(missing.statusCode).toBe(400);
+
+      const outsideRoots = fs.mkdtempSync(path.join(os.tmpdir(), "internal-read-files-outside-"));
+      const outside = await app.inject({
+        method: "POST",
+        url: "/internal/read-files",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { cwd: outsideRoots, paths: ["a"] },
+      });
+      expect(outside.statusCode).toBe(400);
+
+      fs.rmSync(outsideRoots, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("POST /internal/write-files writes a file entry onto this host's own filesystem, then stages it when stage:true", async () => {
+      const { repoRoot, cwd } = await makeScaffoldRepo();
+      const previousRoots = process.env.PROJECTS_ROOTS;
+      process.env.PROJECTS_ROOTS = repoRoot;
+      const app = await buildApp();
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/internal/write-files",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: {
+          cwd,
+          entries: [{ path: "AGENTS.md", kind: "file", contents: "hi\n" }],
+          stage: true,
+        },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ ok: true });
+      expect(fs.readFileSync(path.join(cwd, "AGENTS.md"), "utf8")).toBe("hi\n");
+
+      const { execFileSync } = await import("node:child_process");
+      const status = execFileSync("git", ["status", "--porcelain"], { cwd, env: gitEnv() })
+        .toString()
+        .trim();
+      expect(status).toBe("A  AGENTS.md");
+
+      process.env.PROJECTS_ROOTS = previousRoots;
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("POST /internal/write-files creates a symlink entry with its target verbatim", async () => {
+      const { repoRoot, cwd } = await makeScaffoldRepo();
+      const previousRoots = process.env.PROJECTS_ROOTS;
+      process.env.PROJECTS_ROOTS = repoRoot;
+      const app = await buildApp();
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/internal/write-files",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: {
+          cwd,
+          entries: [
+            {
+              path: path.join(".agents", "skills", "demo"),
+              kind: "symlink",
+              target: "../../.claude/skills/demo",
+            },
+          ],
+        },
+      });
+      expect(res.statusCode).toBe(200);
+      const linkPath = path.join(cwd, ".agents", "skills", "demo");
+      expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
+      expect(fs.readlinkSync(linkPath)).toBe("../../.claude/skills/demo");
+
+      process.env.PROJECTS_ROOTS = previousRoots;
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("rejects a write-files entry missing its kind-specific required field", async () => {
+      const { repoRoot, cwd } = await makeScaffoldRepo();
+      const previousRoots = process.env.PROJECTS_ROOTS;
+      process.env.PROJECTS_ROOTS = repoRoot;
+      const app = await buildApp();
+
+      const noContents = await app.inject({
+        method: "POST",
+        url: "/internal/write-files",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { cwd, entries: [{ path: "AGENTS.md", kind: "file" }] },
+      });
+      expect(noContents.statusCode).toBe(400);
+
+      const noTarget = await app.inject({
+        method: "POST",
+        url: "/internal/write-files",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { cwd, entries: [{ path: "a-link", kind: "symlink" }] },
+      });
+      expect(noTarget.statusCode).toBe(400);
+
+      process.env.PROJECTS_ROOTS = previousRoots;
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("requires a cwd/entries body for write-files, and rejects a cwd outside PROJECTS_ROOTS", async () => {
+      const app = await buildApp();
+      const missing = await app.inject({
+        method: "POST",
+        url: "/internal/write-files",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: {},
+      });
+      expect(missing.statusCode).toBe(400);
+
+      const outsideRoots = fs.mkdtempSync(path.join(os.tmpdir(), "internal-write-files-outside-"));
+      const outside = await app.inject({
+        method: "POST",
+        url: "/internal/write-files",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { cwd: outsideRoots, entries: [{ path: "a", kind: "file", contents: "x" }] },
+      });
+      expect(outside.statusCode).toBe(400);
+
+      fs.rmSync(outsideRoots, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("POST /internal/git-commit-wip commits uncommitted work on this host's own filesystem", async () => {
+      const { repoRoot, cwd } = await makeScaffoldRepo();
+      fs.writeFileSync(path.join(cwd, "AGENTS.md"), "hi\n");
+      const previousRoots = process.env.PROJECTS_ROOTS;
+      process.env.PROJECTS_ROOTS = repoRoot;
+      const app = await buildApp();
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/internal/git-commit-wip",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { cwd, message: "chore: scaffold Mullion integration (demo)" },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ committed: true });
+
+      const { execFileSync } = await import("node:child_process");
+      const log = execFileSync("git", ["log", "--oneline", "-1"], {
+        cwd,
+        env: gitEnv(),
+      }).toString();
+      expect(log).toContain("chore: scaffold Mullion integration (demo)");
+
+      process.env.PROJECTS_ROOTS = previousRoots;
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("POST /internal/git-commit-wip is a clean no-op when there's nothing to commit", async () => {
+      const { repoRoot, cwd } = await makeScaffoldRepo();
+      const previousRoots = process.env.PROJECTS_ROOTS;
+      process.env.PROJECTS_ROOTS = repoRoot;
+      const app = await buildApp();
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/internal/git-commit-wip",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { cwd },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ committed: false });
+
+      process.env.PROJECTS_ROOTS = previousRoots;
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("requires a cwd body for git-commit-wip, and rejects a cwd outside PROJECTS_ROOTS", async () => {
+      const app = await buildApp();
+      const missing = await app.inject({
+        method: "POST",
+        url: "/internal/git-commit-wip",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: {},
+      });
+      expect(missing.statusCode).toBe(400);
+
+      const outsideRoots = fs.mkdtempSync(path.join(os.tmpdir(), "internal-commit-wip-outside-"));
+      const outside = await app.inject({
+        method: "POST",
+        url: "/internal/git-commit-wip",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { cwd: outsideRoots },
+      });
+      expect(outside.statusCode).toBe(400);
+
+      fs.rmSync(outsideRoots, { recursive: true, force: true });
+      await app.close();
+    });
+  });
+
   describe("GET/DELETE /internal/task-review-findings (#760)", () => {
     it("GET returns { content: null } (200, not 404) for a genuinely absent file", async () => {
       const app = await buildApp();

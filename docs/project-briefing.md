@@ -282,12 +282,25 @@ Mullion's own repo symlinks itself deliberately; imposing that choice on
 someone else's repo is a different decision, so it's offered as an explicit
 opt-in in the Scaffold panel instead.
 
-Scaffolding is currently **local-host projects only** — there's no primitive
-yet for writing arbitrary file content onto a _remote_-hosted project's
-filesystem (`host-git.ts` only has status/base-ref/push/repo-ref today); a
-remote-hosted project's scaffold request gets a clear `501`, not a silent
-no-op. Tracked in
-[issue #895](https://github.com/s3ntin3l8/mullion-session-manager/issues/895).
+**Preview and apply work for both local and remote-hosted projects**
+(issue #895). `host-git.ts` gained `resolveHostFileDiff`/
+`commitHostWipChanges`, and a new sibling `host-files.ts` gained
+`readHostFiles`/`writeHostFiles` — the same `(app, hostId, cwd, ...)`
+local-vs-remote dispatch shape as `host-git.ts`'s existing
+status/base-ref/push/repo-ref primitives, routed to a remote host's own
+filesystem via new `/internal/read-files`, `/internal/write-files`, and
+`/internal/git-commit-wip` routes (mirroring the existing `/internal/git-push`
+precedent). Worktree creation/removal/branch-deletion were already
+host-dispatched via `SessionBackend` (issues #271/#484); #895 is what makes
+the rest of this route's own read/write/diff/commit steps catch up to that.
+
+`POST /api/projects/:id/setup/generate` (real agent-generated content) is
+**still local-host only** — unlike preview/apply, it spawns a real agent CLI
+turn in-process (`scaffold-generate.ts`), which currently always runs on
+whichever host the PRIMARY happens to be, not the project's own host; #895's
+read/write/diff/commit primitives don't address that. A remote-hosted
+project's `/setup/generate` request still gets a clear `501`. Tracked in
+[issue #1101](https://github.com/s3ntin3l8/mullion-session-manager/issues/1101).
 
 ## Workflow conventions (issue #937)
 

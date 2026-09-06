@@ -20,6 +20,9 @@ import {
   gitWorktreePruneMetadataSchema,
   gitPushSchema,
   gitWorktreeResumeSchema,
+  readFilesSchema,
+  writeFilesSchema,
+  gitCommitWipSchema,
   promoteDecisionSchema,
   writeDockConfigBodySchema,
   agentRuleWriteBodySchema,
@@ -333,6 +336,64 @@ describe("internal-schemas.ts — byte-identical output regression guard", () =>
         properties: {
           cwd: { type: "string", minLength: 1 },
           branchName: { type: "string", minLength: 1 },
+        },
+      },
+    });
+  });
+
+  // Issue #895
+  it("readFilesSchema", () => {
+    expect(readFilesSchema).toEqual({
+      body: {
+        type: "object",
+        required: ["cwd", "paths"],
+        additionalProperties: false,
+        properties: {
+          cwd: { type: "string", minLength: 1 },
+          paths: { type: "array", items: { type: "string", minLength: 1 }, maxItems: 200 },
+        },
+      },
+    });
+  });
+
+  it("writeFilesSchema", () => {
+    expect(writeFilesSchema).toEqual({
+      body: {
+        type: "object",
+        required: ["cwd", "entries"],
+        additionalProperties: false,
+        properties: {
+          cwd: { type: "string", minLength: 1 },
+          entries: {
+            type: "array",
+            items: {
+              type: "object",
+              required: ["path", "kind"],
+              additionalProperties: false,
+              properties: {
+                path: { type: "string", minLength: 1 },
+                kind: { type: "string", enum: ["file", "symlink"] },
+                contents: { type: "string" },
+                target: { type: "string" },
+              },
+            },
+            maxItems: 50,
+          },
+          stage: { type: "boolean" },
+        },
+      },
+    });
+  });
+
+  it("gitCommitWipSchema", () => {
+    expect(gitCommitWipSchema).toEqual({
+      body: {
+        type: "object",
+        required: ["cwd"],
+        additionalProperties: false,
+        properties: {
+          cwd: { type: "string", minLength: 1 },
+          message: { type: "string" },
         },
       },
     });

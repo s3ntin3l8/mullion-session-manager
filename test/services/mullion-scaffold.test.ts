@@ -1,4 +1,7 @@
 import { describe, it, expect } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
   computeScaffold,
   isValidScaffoldSlug,
@@ -264,9 +267,42 @@ describe("computeScaffold", () => {
     const link = entries.find((e) => e.path === ".agents/skills/demo");
     expect(link).toBeDefined();
     expect(link!.kind).toBe("symlink");
-    expect((link as { target: string }).target).toBe("../../../.claude/skills/demo");
+    // Two ".." segments — a relative symlink target resolves relative to
+    // the LINK'S OWN DIRECTORY (`.agents/skills`, two levels deep), not its
+    // full path including its own name. A previous three-segment target
+    // (fixed as part of issue #895) landed one level ABOVE the repo root
+    // instead — see the regression test below, which actually follows the
+    // link, unlike this one (kept for the exact-string assertion).
+    expect((link as { target: string }).target).toBe("../../.claude/skills/demo");
     // No separate regular-file duplicate when symlinked.
     expect(entries.some((e) => e.path === ".agents/skills/demo/SKILL.md")).toBe(false);
+  });
+
+  // Regression test for a real bug (fixed as part of issue #895): the
+  // target above used to be off by one ".." segment, so the symlink never
+  // actually resolved to real content — every existing test before this one
+  // only checked `isSymbolicLink()`/the target STRING, never that the link
+  // actually follows to the skill file. Verified against this repo's own
+  // hand-made `.agents/skills/mullion-review-invariants` symlink as ground
+  // truth (two ".." segments, not three).
+  it("the symlink target actually resolves to the real skill file when followed", () => {
+    const entries = computeScaffold({}, { slug: "demo", symlinkAgentsSkills: true });
+    const link = entries.find((e) => e.path === ".agents/skills/demo") as {
+      path: string;
+      kind: "symlink";
+      target: string;
+    };
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "scaffold-symlink-resolve-"));
+    try {
+      fs.mkdirSync(path.join(dir, ".claude", "skills", "demo"), { recursive: true });
+      fs.writeFileSync(path.join(dir, ".claude", "skills", "demo", "SKILL.md"), "real content\n");
+      const linkPath = path.join(dir, link.path);
+      fs.mkdirSync(path.dirname(linkPath), { recursive: true });
+      fs.symlinkSync(link.target, linkPath);
+      expect(fs.readFileSync(path.join(linkPath, "SKILL.md"), "utf8")).toBe("real content\n");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("includes an empty, valid .crs/dock.json when opted in", () => {
