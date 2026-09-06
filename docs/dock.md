@@ -221,44 +221,64 @@ Each discovered monitor:
   stream stays off until the container's state actually changes (or the
   setting is toggled), not merely re-polled.
 - Shows an **image tag** pill (hover for the full image reference).
-- Has a **⋯ menu**, split into a **Service** group (this one container) and
-  a **Stack** group (the whole Compose project):
+- Has its own **⋯ menu with only that container's own actions**:
   - **Restart service** / **Stop service** — `docker compose restart|stop
-<service>`. Stop arms for 3 seconds before firing (matching the
-    stack-wide actions below); restart doesn't.
+<service>`. Stop arms for 3 seconds before firing; restart doesn't.
   - **Start service** — `docker compose start <service>`, only offered when
     the status dot shows the container isn't already `running`.
   - **Check for update** — runs a quiet `docker compose pull` for that one
     service and compares the resulting local image id against the running
     container's own image, without pulling or restarting it. Disabled for
-    a `build:`-only service (no registry image to compare).
-  - **Pull & restart stack** _or_ **Rebuild & restart stack** — exactly one
-    of the two renders, based on whether the service has a registry image
-    to pull (`build:`-only services get the rebuild variant instead of a
-    permanently-disabled pull action). Pull-restart runs `docker compose
-pull && docker compose up -d`; rebuild-restart runs `docker compose
-build --pull && docker compose up -d`. Both act on the **whole**
-    Compose stack, not just the one service, so it isn't left internally
-    inconsistent, and both require two clicks (arm for 3 seconds after the
-    first).
-  - **Restart stack** / **Apply config** — `docker compose restart` / `up
--d` for the whole stack, no confirmation needed.
-  - **Stop stack** — `docker compose stop` for the whole stack. Arms for 3
-    seconds before firing.
+    a `build:`-only service (no registry image to compare). Stays
+    per-service rather than moving to the stack header below: `build:`-only
+    is a per-service property, and the image pill this re-tints on an
+    available update belongs to this one container specifically.
+
+Every compose project discovered in a column also gets its own **stack
+header**, above that project's monitors, labelled with the compose project
+name — a column can host more than one compose project at once (e.g. a dev
+`docker-compose.yml` and a separate prod `docker-compose.prod.yml`), so this
+is one header per project rather than one label for the whole column. Its
+own **⋯ menu** carries the actions that apply to the **whole** stack, not
+just one service — these used to repeat identically on every service row of
+the same stack; they're hoisted here instead so a two-service stack doesn't
+offer "Restart stack" twice with no indication they're the same button:
+
+- **Restart stack** / **Apply config** — `docker compose restart` / `up -d`
+  for the whole stack, no confirmation needed.
+- **Pull & restart stack** — `docker compose pull && docker compose up -d`,
+  offered when at least one service in the stack has a registry image to
+  pull. Requires two clicks (arm for 3 seconds after the first).
+- **Rebuild & restart stack** — `docker compose build --pull && docker
+compose up -d`, offered when at least one service in the stack is
+  `build:`-only. Requires two clicks.
+- **Stop stack** — `docker compose stop` for the whole stack. Arms for 3
+  seconds before firing.
+
+Pull and Rebuild are **independently gated**, not either/or: a **mixed**
+stack (one service with a registry image, one `build:`-only) shows **both**
+items in this one menu — exactly the two actions that would have appeared,
+spread across two different rows, before this menu was hoisted. Whichever
+one you click runs against a representative service for the whole stack
+(preferring a currently-`running` one, since a dead container's own labels
+are what reconstructing the stack's `-f`/`--project-directory`/`--env-file`
+flags reads) — the pull path always picks a non-`build:`-only service, the
+rebuild path always picks a `build:`-only one, so neither can ever hit the
+backend's own mirror-image 400 guard for the other case.
 
 Every stack-wide action (pull-restart, rebuild-restart, restart, apply,
 stop) runs as its own `kind: "dock"` session, same as the log stream, so
 its output streams live and a slow operation can't time out the request —
-it appears as its own temporary monitor in the same column until it exits.
-The per-service actions (restart/stop/start) run synchronously instead,
-since `restart`/`stop`/`start` are all bounded operations with nothing
-worth streaming.
+it appears as its own temporary monitor in that stack's own group until it
+exits. The per-service actions (restart/stop/start) run synchronously
+instead, since `restart`/`stop`/`start` are all bounded operations with
+nothing worth streaming.
 
 An action that can recreate the container(s) (`up -d`, either restart
 variant of pull/rebuild) checks the on-disk compose config against what the
 running container was actually created from, and surfaces a "will
-recreate" note if they've drifted — advisory only, it never blocks the
-action.
+recreate" note on the stack header if they've drifted — advisory only, it
+never blocks the action.
 
 Discovered monitor ids are `docker:<compose-project>:<service>` — put a
 `.crs/dock.json` control at that same id to replace one (e.g. to point its
@@ -266,7 +286,9 @@ log command at extra flags), or `docker-update:<compose-project>` (also
 `docker-restart:`, `docker-apply:`, `docker-rebuild:`, `docker-stop:`) if
 you ever need to collide with one of the ephemeral stack-action monitors
 (unlikely; none of those ids are ever emitted by discovery, only by a live
-run of the matching action).
+run of the matching action). These same id prefixes are also how the
+frontend groups an ephemeral stack-action monitor under the right stack
+header — see `frontend/src/dock/dockHelpers.ts`'s `composeProjectForControl`.
 
 Turn this off entirely in **Settings → Dock → "Docker Compose services"**;
 discovered monitors are still just monitors, so switching it off/on never

@@ -1,4 +1,4 @@
-import type { DockControl, Session } from "../api/index.js";
+import type { DockControl, DockerServiceInfo, Session } from "../api/index.js";
 
 // Pure helpers for Dock.tsx's monitor rendering — split out (Wave 5 / PR 28
 // of .claude/plans/can-we-do-a-warm-cocke.md) for the same
@@ -136,4 +136,140 @@ export function runningSessionFor(
     if (byIdentity) return byIdentity;
   }
   return dockSessions.find((s) => s.command === control.command);
+}
+
+// A stack-wide action's own ephemeral DockControl (POST .../docker/{update,
+// stack/restart,stack/apply,stack/rebuild,stack/stop}'s response — see
+// startStackSession/the docker/update route in src/routes/projects.ts) has
+// no `docker` field, only an id of `<actionId>:<composeProject>`. This is
+// the fixed set of actionId prefixes those five routes ever emit — kept in
+// sync with them by hand, not derived, since the frontend has no other
+// reachable source of truth for it.
+const EPHEMERAL_STACK_ACTION_PREFIXES: readonly string[] = [
+  "docker-update",
+  "docker-restart",
+  "docker-apply",
+  "docker-rebuild",
+  "docker-stop",
+];
+
+/**
+ * The compose project a Dock control belongs to, for grouping every
+ * service/ephemeral belonging to the same `docker compose` stack under one
+ * header (issue #73 follow-up — "one stack action menu per stack" rather
+ * than the stack-wide actions repeating on every service row). A
+ * `docker`-bearing control (a discovered service) answers directly; an
+ * ephemeral stack-action control is parsed against the known id prefixes
+ * above. Returns `null` for anything else — a plain dock.json control, or
+ * an ephemeral control this function doesn't recognize — which callers
+ * must NOT fold into a group (see groupDockerControls's `ungrouped`).
+ */
+export function composeProjectForControl(control: DockControl): string | null {
+  if (control.docker) return control.docker.composeProject;
+  const colonIndex = control.id.indexOf(":");
+  if (colonIndex === -1) return null;
+  const prefix = control.id.slice(0, colonIndex);
+  if (!EPHEMERAL_STACK_ACTION_PREFIXES.includes(prefix)) return null;
+  const composeProject = control.id.slice(colonIndex + 1);
+  return composeProject.length > 0 ? composeProject : null;
+}
+
+export interface DockerStackGroup {
+  composeProject: string;
+  /** Render order within the group: ephemerals first (their own arrival
+   * order), then discovered services — same order groupDockerControls's
+   * caller passed in. */
+  controls: DockControl[];
+  /** Representative control for the stack-wide actions that apply to ANY
+   * service regardless of registry-vs-build (restart/apply/stop) — every
+   * stack-wide route resolves its compose context from whichever
+   * controlId it's given (composeContextArgs in
+   * src/services/docker-service-detect.ts), so any member works. `null`
+   * only when the group has no docker-bearing control at all (ephemerals
+   * only) — a group in that state renders its label with no kebab. */
+  anyRep: DockControl | null;
+  /** Representative for POST .../docker/update — that route 400s on a
+   * build-only service (src/routes/projects.ts), so this is `null` unless
+   * at least one service in the group has a registry image. */
+  pullRep: DockControl | null;
+  /** Representative for POST .../docker/stack/rebuild — the mirror-image
+   * guard requires buildOnly === true, so this is `null` unless at least
+   * one service in the group is build-only. A MIXED stack (one registry
+   * image, one build-only) gets both pullRep and rebuildRep non-null,
+   * which is intentional — see the group's own PR description: this is a
+   * pure regrouping, not a new aggregate policy, so a shape that offered
+   * both actions per-row before still offers both after, just once. */
+  rebuildRep: DockControl | null;
+}
+
+/**
+ * From a group's docker-bearing controls, the ones a hoisted stack kebab
+ * fires against. Prefers a RUNNING container — a dead one's own labels are
+ * what composeContextArgs reads to reconstruct compose's `-f`/
+ * `--project-directory` flags, so a stopped container is a worse source of
+ * truth than a running sibling in the same stack — then breaks ties by
+ * service name for a deterministic pick across polls/reorders.
+ */
+function selectRepresentatives(controls: readonly DockControl[]): {
+  anyRep: DockControl | null;
+  pullRep: DockControl | null;
+  rebuildRep: DockControl | null;
+} {
+  const withDocker = controls.filter(
+    (c): c is DockControl & { docker: DockerServiceInfo } => c.docker !== undefined,
+  );
+  const sorted = [...withDocker].sort((a, b) => {
+    const aRunning = a.docker.state === "running" ? 0 : 1;
+    const bRunning = b.docker.state === "running" ? 0 : 1;
+    if (aRunning !== bRunning) return aRunning - bRunning;
+    // Plain ordinal comparison, not localeCompare — this pick must be
+    // deterministic across polls/reorders (see this function's own doc
+    // comment), and localeCompare's result can vary by the runtime's
+    // default locale/ICU data for names differing only in case/punctuation.
+    return a.docker.service < b.docker.service ? -1 : a.docker.service > b.docker.service ? 1 : 0;
+  });
+  return {
+    anyRep: sorted[0] ?? null,
+    pullRep: sorted.find((c) => !c.docker.buildOnly) ?? null,
+    rebuildRep: sorted.find((c) => c.docker.buildOnly) ?? null,
+  };
+}
+
+/**
+ * Splits Dock's docker-sourced controls (discovered services + any live
+ * ephemeral stack-action monitors) into one `DockerStackGroup` per compose
+ * project — sorted by project name so a poll reordering the underlying
+ * array can't visually reorder the columns — plus an `ungrouped` list for
+ * anything composeProjectForControl can't place. Derived fresh from
+ * whatever `controls` the caller currently has on every call; never
+ * memoized across polls, so a container that disappears or a group that
+ * empties out just stops appearing on the next render.
+ */
+export function groupDockerControls(controls: readonly DockControl[]): {
+  groups: DockerStackGroup[];
+  ungrouped: DockControl[];
+} {
+  const byProject = new Map<string, DockControl[]>();
+  const ungrouped: DockControl[] = [];
+  for (const control of controls) {
+    const composeProject = composeProjectForControl(control);
+    if (composeProject === null) {
+      ungrouped.push(control);
+      continue;
+    }
+    const existing = byProject.get(composeProject);
+    if (existing) existing.push(control);
+    else byProject.set(composeProject, [control]);
+  }
+  const groups = [...byProject.entries()]
+    // Plain ordinal comparison, not localeCompare — see selectRepresentatives'
+    // own comment above for why: this order must be stable across polls
+    // regardless of the runtime's default locale.
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([composeProject, groupControls]) => ({
+      composeProject,
+      controls: groupControls,
+      ...selectRepresentatives(groupControls),
+    }));
+  return { groups, ungrouped };
 }

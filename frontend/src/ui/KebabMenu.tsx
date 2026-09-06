@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useDashboardStore } from "../store/index.js";
@@ -35,12 +35,6 @@ export interface KebabMenuItem {
   // ConfirmButton's own 3s arm window) before a second click fires it.
   confirm?: boolean;
   disabled?: boolean;
-  // Groups items visually: a `.pane-tab-overflow-divider` (PaneActionsMenu's
-  // own class) is inserted whenever this differs from the PRECEDING item's
-  // `section` — items with no `section` at all render as one flat group,
-  // same as before this field existed. Purely a rendering hint; items are
-  // never reordered or filtered by section.
-  section?: string;
 }
 
 export function KebabMenu({
@@ -183,29 +177,25 @@ export function KebabMenu({
             style={menuStyle}
             onClick={(e) => e.stopPropagation()}
           >
-            {items.map((item, index) => (
-              <Fragment key={item.key}>
-                {index > 0 && item.section !== items[index - 1]?.section && (
-                  <div className="pane-tab-overflow-divider" />
-                )}
-                <button
-                  className={`pane-tab-overflow-item${item.danger ? " danger" : ""}${
-                    armedKey === item.key ? " armed" : ""
-                  }`}
-                  disabled={item.disabled}
-                  onClick={() => handleItemClick(item)}
-                >
-                  {item.icon}
-                  <span style={{ flex: 1 }}>
-                    {armedKey === item.key && item.armLabel ? item.armLabel : item.label}
+            {items.map((item) => (
+              <button
+                key={item.key}
+                className={`pane-tab-overflow-item${item.danger ? " danger" : ""}${
+                  armedKey === item.key ? " armed" : ""
+                }`}
+                disabled={item.disabled}
+                onClick={() => handleItemClick(item)}
+              >
+                {item.icon}
+                <span style={{ flex: 1 }}>
+                  {armedKey === item.key && item.armLabel ? item.armLabel : item.label}
+                </span>
+                {armedKey === item.key && (
+                  <span className="pane-tab-overflow-hint" style={{ color: "var(--o)" }}>
+                    {armSecondsLeft}s
                   </span>
-                  {armedKey === item.key && (
-                    <span className="pane-tab-overflow-hint" style={{ color: "var(--o)" }}>
-                      {armSecondsLeft}s
-                    </span>
-                  )}
-                </button>
-              </Fragment>
+                )}
+              </button>
             ))}
           </div>,
           document.body,
