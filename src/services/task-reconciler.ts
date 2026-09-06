@@ -15,7 +15,6 @@ import {
   resolveSessionsDirWithFallback,
   type SessionBackend,
 } from "./session-backend.js";
-import { LOCAL_HOST_ID } from "./host-registry.js";
 import { defaultDeriveStatusInfo, deriveSessionStatus } from "./session-status.js";
 import { getStoredSettings } from "./settings.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
@@ -52,8 +51,8 @@ import { openDraftPRForTask } from "./task-promote.js";
 import { maybeAutoEnableConventionalTitles } from "./project-release-please.js";
 import { approveTask, cleanupTaskWorktree, cleanupTaskSessions } from "./task-approve.js";
 import { reseedTaskIfSessionExited } from "./task-reseed.js";
-import { resolveHostGitStatus, resolveRepoRef } from "./host-git.js";
-import { commitWipChanges, deriveTaskBranchName, deriveWorktreePath } from "./git-worktree.js";
+import { commitHostWipChanges, resolveHostGitStatus, resolveRepoRef } from "./host-git.js";
+import { deriveTaskBranchName, deriveWorktreePath } from "./git-worktree.js";
 import type { GitHubRepoRef } from "./git-remote.js";
 import {
   resolveGitHubToken,
@@ -650,18 +649,15 @@ function turnFinishedSinceClaim(
  * (#484) — this check must never itself be the reason a healthy task gets
  * stuck.
  *
- * LOCAL_HOST_ID only (independent review, PR #726) — `resolveHostGitStatus`
- * itself is fully proxied for a #484-capable remote host, so this gate
- * WOULD fire there too, but `failReviewingGate` below only salvages a WIP
- * commit on the local host (no proxied git-commit route exists yet — see
- * that function's own doc comment). Firing the gate without the salvage
- * would fail the task, terminate its session, and leave the tree dirty —
- * `removeWorktreeIfClean` then refuses (dirty is its one real refusal
- * condition), permanently blocking Retry's `resumeTaskWorktree` at the
- * deterministic path. That's strictly worse than the pre-#722 behavior for
- * a remote-hosted task, which at least reached "reviewing" with a live
- * session and its uncommitted work still in place. Stays fail-open for
- * remote hosts until a remote salvage-commit proxy exists.
+ * Runs for every host now, not just LOCAL_HOST_ID (issue #1100 — the
+ * previous local-only restriction existed solely because
+ * `failReviewingGate` below could only salvage a WIP commit on the local
+ * host; that proxied git-commit route now exists — see `commitHostWipChanges`
+ * in host-git.ts). `failReviewingGate` itself is what decides whether a
+ * remote host's version skew or unreachability should fail this gate open —
+ * it probes `commitHostWipChanges` BEFORE its status CAS lands, so an
+ * unsupported/unreachable remote host still can't get stranded with a
+ * dirty worktree and a task stuck in "failed".
  */
 async function checkReviewingGate(
   app: FastifyInstance,
@@ -669,7 +665,6 @@ async function checkReviewingGate(
   project: typeof projects.$inferSelect,
   info: SessionInfo | null,
 ): Promise<{ ok: true } | { ok: false; failureReason: string }> {
-  if (project.hostId !== LOCAL_HOST_ID) return { ok: true };
   if (!task.baseSha || !task.worktreePath) return { ok: true };
 
   const statusResult = await resolveHostGitStatus(app, project.hostId, task.worktreePath);
@@ -745,13 +740,13 @@ async function hasCommitsPastBase(
   task: typeof tasks.$inferSelect,
 ): Promise<boolean> {
   if (!task.baseSha || !task.worktreePath) return false;
-  // Skip the git-status proxy for non-local hosts — same posture as
-  // checkReviewingGate's own remote-host fail-open (no proxied git-commit
-  // route exists yet, so the gate's eventual fail-open fires for the same
-  // reason). Defaulting to false here means grace MAY apply — same
-  // "failing the task is worse than keeping it alive" fail-safe as the
-  // try/catch below.
-  if (project.hostId !== LOCAL_HOST_ID) return false;
+  // No more host restriction here (issue #1100 — resolveHostGitStatus is
+  // already fully proxied for a remote host; the old local-only guard
+  // existed only to mirror checkReviewingGate's, which is gone for the same
+  // reason). The try/catch below still defaults to false — meaning grace
+  // MAY apply — on any error, including a remote host that can't be
+  // reached: "failing the task is worse than keeping it alive" is the same
+  // fail-safe regardless of host.
   try {
     const statusResult = await resolveHostGitStatus(app, project.hostId, task.worktreePath);
     if (!statusResult.ok || !statusResult.value.isRepo || statusResult.value.status === null) {
@@ -767,27 +762,39 @@ async function hasCommitsPastBase(
 
 /**
  * Executes the #722 "no commits ahead of base" failure found by
- * `checkReviewingGate`: claims the task via the same CAS `.where(status =
- * fromStatus)` every other automatic transition in this file uses, THEN
- * attempts a machine-made salvage commit, then cleans up exactly like the
- * budget-exceeded branch above: terminate the session, sync the failure to
- * GitHub, remove the worktree if (now) clean. This is what makes Retry able
- * to recover the work — before this, a dirty leftover worktree at the
- * deterministic path permanently blocked `resumeTaskWorktree`'s own
- * `git worktree add`.
+ * `checkReviewingGate`: probes `commitHostWipChanges` FIRST (issue #1100),
+ * THEN — only if that probe succeeds — claims the task via the same CAS
+ * `.where(status = fromStatus)` every other automatic transition in this
+ * file uses, then cleans up exactly like the budget-exceeded branch above:
+ * terminate the session, sync the failure to GitHub, remove the worktree if
+ * (now) clean. This is what makes Retry able to recover the work — before
+ * this, a dirty leftover worktree at the deterministic path permanently
+ * blocked `resumeTaskWorktree`'s own `git worktree add`.
  *
- * The `LOCAL_HOST_ID` guard on the salvage commit below is redundant in
- * practice — `checkReviewingGate` itself is scoped to local hosts, so this
- * function is never called for a remote-hosted task at all — but kept as
- * defense in depth rather than trusted to that caller alone.
+ * `commitHostWipChanges` (host-git.ts) IS the capability probe here — no
+ * separate probe/capability-check endpoint exists or is needed. It's
+ * idempotent for this purpose: a clean tree returns `{ committed: false }`,
+ * a no-op; a dirty tree does the useful salvage work anyway. `ok: false`
+ * (`"unsupported"` — an agent build predating that route — or
+ * `"unreachable"`) means this host can't even be asked, so this function
+ * logs a warning naming the reason and returns WITHOUT touching the task's
+ * status — the same fail-open posture `checkReviewingGate` used to apply
+ * unconditionally to every remote host, now correctly scoped to only the
+ * version-skew/unreachable case.
  *
- * CAS BEFORE the salvage commit, not after (Hermes review, PR #726) — a
- * git commit is a real, visible mutation of the branch. Committing first and
- * checking the CAS second meant a task that lost a race with a concurrent
- * transition (e.g. a human Reject landing mid-flight) still got a stray wip
- * commit pushed onto a branch this function no longer owned. Claiming the
- * transition first means the commit only ever happens once this call is the
- * sole owner of what happens to the task next.
+ * Salvage BEFORE the CAS, reversing PR #726's own fix (which moved the CAS
+ * before the salvage commit specifically so a task that lost a race with a
+ * concurrent transition — e.g. a human Reject landing mid-flight — couldn't
+ * still get a stray wip commit pushed onto a branch this function no longer
+ * owned). That race is real, but narrower than the harm of keeping CAS
+ * first here: CAS-first means an `"unsupported"`/`"unreachable"` remote
+ * host's task gets marked "failed" BEFORE the salvage is even attempted,
+ * and that transition can never be backed out — the session is killed and
+ * `removeWorktreeIfClean` then refuses (dirty is its one real refusal
+ * condition), permanently stranding the task exactly like the harm the
+ * original local-only guards existed to avoid. Probing first accepts the
+ * rare concurrent-transition race in exchange for never permanently
+ * stranding a task behind a remote host's version skew.
  */
 async function failReviewingGate(
   app: FastifyInstance,
@@ -799,24 +806,39 @@ async function failReviewingGate(
   failureReason: string,
   now: Date,
 ): Promise<void> {
+  if (task.worktreePath) {
+    const commitResult = await commitHostWipChanges(app, project.hostId, task.worktreePath);
+    if (!commitResult.ok) {
+      app.log.warn(
+        {
+          taskId: task.id,
+          hostId: project.hostId,
+          worktreePath: task.worktreePath,
+          reason: commitResult.reason,
+          ...(commitResult.reason === "unreachable" ? { detail: commitResult.detail } : {}),
+        },
+        commitResult.reason === "unsupported"
+          ? "task reconcile: WIP salvage skipped — this host's agent build doesn't support committing WIP changes yet (see issue #1100), failing the reviewing gate open"
+          : "task reconcile: WIP salvage skipped — host unreachable, failing the reviewing gate open",
+      );
+      return;
+    }
+    if (commitResult.value.error) {
+      app.log.warn(
+        { taskId: task.id, worktreePath: task.worktreePath, error: commitResult.value.error },
+        "task reconcile: WIP salvage commit failed",
+      );
+    } else if (commitResult.value.committed) {
+      app.log.info({ taskId: task.id }, "task reconcile: committed a WIP salvage commit");
+    }
+  }
+
   const updated = app.db
     .update(tasks)
     .set({ status: "failed", failureReason, completedAt: now })
     .where(and(eq(tasks.id, task.id), eq(tasks.status, fromStatus)))
     .run();
   if (updated.changes === 0) return;
-
-  if (project.hostId === LOCAL_HOST_ID && task.worktreePath) {
-    const commitResult = await commitWipChanges(task.worktreePath);
-    if (commitResult.error) {
-      app.log.warn(
-        { taskId: task.id, worktreePath: task.worktreePath, error: commitResult.error },
-        "task reconcile: WIP salvage commit failed",
-      );
-    } else if (commitResult.committed) {
-      app.log.info({ taskId: task.id }, "task reconcile: committed a WIP salvage commit");
-    }
-  }
 
   recordTaskTransition(app, {
     taskId: task.id,

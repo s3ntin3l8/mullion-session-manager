@@ -110,7 +110,7 @@ vi.mock("../../src/services/task-reseed.js", async (importOriginal) => {
 // top of the module sidesteps the ordering question entirely.
 const {
   mockResolveHostGitStatus,
-  mockCommitWipChanges,
+  mockCommitHostWipChanges,
   mockResolveRepoRef,
   mockResolveGitHubToken,
   mockResolveReviewerToken,
@@ -136,7 +136,7 @@ const {
   mockDetectReleasePleaseConfig,
 } = vi.hoisted(() => ({
   mockResolveHostGitStatus: vi.fn(),
-  mockCommitWipChanges: vi.fn(),
+  mockCommitHostWipChanges: vi.fn(),
   mockResolveRepoRef: vi.fn(),
   mockResolveGitHubToken: vi.fn(),
   // #737 — no pass-through default (unlike mockResolveGitHubToken below):
@@ -226,17 +226,29 @@ vi.mock("../../src/services/host-git.js", async (importOriginal) => {
     // makes; pass-through wired in below (once the real modules can be
     // imported), overridden only in the dedicated CI-gating tests.
     resolveRepoRef: mockResolveRepoRef,
+    // Issue #1100 — failReviewingGate's WIP-salvage probe. Mocked at this
+    // level (not left to fall through to the real dispatch, which for a
+    // local host would in turn shell out to git-worktree.js's real
+    // commitWipChanges) so tests can assert the exact `(app, hostId, cwd)`
+    // triple it was called with, and simulate a remote host's
+    // "unsupported"/"unreachable" probe failure without needing a real
+    // remote-host client.
+    commitHostWipChanges: mockCommitHostWipChanges,
   };
 });
 
-// Same reasoning — the #722 "no commits ahead of base" failure path's WIP
-// salvage commit also shells out to real git, mocked here so tests can
-// assert it was (or wasn't) invoked without needing a real worktree.
+// resumeTaskWorktree/removeWorktree shell out to real git — mocked here so
+// the stranded-task retry sweep's tests can assert they were (or weren't)
+// invoked without needing a real worktree. commitWipChanges itself is left
+// un-overridden (real implementation, via `...actual`) now that
+// task-reconciler.ts no longer calls it directly — its only other real
+// caller in this codebase is routes/internal.ts's `/internal/git-commit-wip`
+// handler (the agent-side counterpart this file never exercises), so
+// mocking it here is unnecessary; kept out to avoid a stale double-mock.
 vi.mock("../../src/services/git-worktree.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return {
     ...actual,
-    commitWipChanges: mockCommitWipChanges,
     resumeTaskWorktree: mockResumeTaskWorktree,
     removeWorktree: mockRemoveWorktree,
   };
@@ -476,7 +488,9 @@ describe("reconcileTasks", () => {
     // checkReviewingGate never actually calls this; reset only so a leaked
     // .mockResolvedValueOnce from one #722 test can't bleed into the next.
     mockResolveHostGitStatus.mockReset();
-    mockCommitWipChanges.mockReset().mockResolvedValue({ committed: false });
+    mockCommitHostWipChanges
+      .mockReset()
+      .mockResolvedValue({ ok: true, value: { committed: false } });
     // #738 follow-up — `.mockClear()`, NOT `.mockReset()`: these four keep
     // their pass-through-to-the-real-implementation default (wired once,
     // above, via `.mockImplementation`) across every test; only a leaked
@@ -4698,7 +4712,7 @@ describe("reconcileTasks", () => {
       } as never);
       // "0000000" is a prefix of BASE_SHA — HEAD hasn't moved since claim.
       mockResolveHostGitStatus.mockResolvedValue(gitStatus("0000000", false, [{ path: "x" }]));
-      mockCommitWipChanges.mockResolvedValue({ committed: true });
+      mockCommitHostWipChanges.mockResolvedValue({ ok: true, value: { committed: true } });
 
       await reconcileTasks(app);
 
@@ -4706,7 +4720,18 @@ describe("reconcileTasks", () => {
       expect(row.status).toBe("failed");
       expect(row.failureReason).toContain("no commits");
       expect(row.failureReason).toContain("mullion/task-999");
-      expect(mockCommitWipChanges).toHaveBeenCalledWith("/tmp/mullion-task-worktree");
+      // Not asserting the `app` arg's deep equality via toHaveBeenCalledWith
+      // — Fastify's real instance has a `listeningOrigin` getter that
+      // throws when the server was never actually .listen()ed (this suite
+      // only ever .inject()s), and vitest's call-matcher does a structural
+      // comparison that would trip it (same pitfall documented in
+      // task-github-sync.test.ts and task-watcher-dependencies.test.ts).
+      // `toBe` (reference identity) on the individual call args sidesteps
+      // that safely.
+      expect(mockCommitHostWipChanges).toHaveBeenCalledTimes(1);
+      expect(mockCommitHostWipChanges.mock.calls[0][0]).toBe(app);
+      expect(mockCommitHostWipChanges.mock.calls[0][1]).toBe("local");
+      expect(mockCommitHostWipChanges.mock.calls[0][2]).toBe("/tmp/mullion-task-worktree");
       expect(terminateSpy).toHaveBeenCalledWith(String(sessionId));
       // #772 — killSession, not a bare backend.terminate: the session row
       // itself must flip to "killed", not linger "active" until the 30s
@@ -4726,7 +4751,10 @@ describe("reconcileTasks", () => {
         toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
       } as never);
       mockResolveHostGitStatus.mockResolvedValue(gitStatus("0000000", false, [{ path: "x" }]));
-      mockCommitWipChanges.mockResolvedValue({ committed: false, error: "git add -u failed" });
+      mockCommitHostWipChanges.mockResolvedValue({
+        ok: true,
+        value: { committed: false, error: "git add -u failed" },
+      });
 
       await reconcileTasks(app);
 
@@ -4753,7 +4781,7 @@ describe("reconcileTasks", () => {
 
       const row = await getTask(app, taskId);
       expect(row.status).toBe("reviewing");
-      expect(mockCommitWipChanges).not.toHaveBeenCalled();
+      expect(mockCommitHostWipChanges).not.toHaveBeenCalled();
 
       await app.close();
     });
@@ -4786,56 +4814,24 @@ describe("reconcileTasks", () => {
       await app.close();
     });
 
-    // Independent review, PR #726 — checkReviewingGate itself IS proxied for
-    // a #484-capable remote host (resolveHostGitStatus works there), but
-    // failReviewingGate's salvage commit is local-only. Firing the gate
-    // without the salvage would fail the task, terminate its session, and
-    // leave the tree dirty — worse than pre-#722 behavior for a
-    // remote-hosted task. The whole gate stays fail-open for remote hosts
-    // until a remote salvage-commit proxy exists.
-    it("fails open (advances to reviewing) for a remote-hosted task, without even checking git status", async () => {
-      const app = await buildApp();
-      const host = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "Remote", baseUrl: "http://127.0.0.1:1", token: "t" },
-      });
-      const hostId = host.json().id as string;
-      const project = await app.inject({
-        method: "POST",
-        url: "/api/projects",
-        payload: { name: "p-remote-gate", cwd: "/remote/project", hostId },
-      });
-      const projectId = project.json().id;
-      // Inserted directly, not via POST /api/sessions (same reasoning as
-      // the "does not trust reviewSeedDelivered:true..." test above — this
-      // fake host isn't actually reachable, so a real spawn attempt 502s).
-      const [workerSession] = app.db
-        .insert(sessions)
-        .values({ projectId, command: "bash", status: "active" })
-        .returning()
-        .all();
-      const [row] = app.db
-        .insert(tasks)
-        .values({
-          projectId,
-          title: "t",
-          status: "in_progress",
-          sessionId: workerSession.id,
-          claimedAt: new Date(),
-          startedAt: new Date(),
-          worktreePath: "/remote/project",
-          branchName: "mullion/task-999",
-          baseSha: BASE_SHA,
-        })
-        .returning()
-        .all();
-
-      const sessionBackendModule = await import("../../src/services/session-backend.js");
-      const fakeBackend = {
+    // Issue #1100 inverts the old PR #726 posture: checkReviewingGate is no
+    // longer scoped to LOCAL_HOST_ID (resolveHostGitStatus is already fully
+    // proxied for a remote host), and failReviewingGate now probes
+    // commitHostWipChanges itself as the capability check — a remote host
+    // that CAN service the salvage goes through the exact same
+    // fail/salvage/terminate flow as a local one; only a genuine
+    // "unsupported"/"unreachable" probe result still falls open. Both
+    // sub-cases get their own test below.
+    function buildFakeRemoteBackend(workerSessionId: number) {
+      // Mirrors the fake SessionBackend used elsewhere in this file for a
+      // remote host (e.g. the CI-gated review spawn tests) — a fake
+      // unreachable host would 502 on a real spawn, so the task/session
+      // rows are inserted directly via app.db rather than through the HTTP
+      // API, and resolveBackend is stubbed rather than actually dialing out.
+      return {
         spawn: vi.fn().mockResolvedValue({}),
         liveStatus: vi.fn().mockResolvedValue({
-          [String(workerSession.id)]: fakeInfo({ lastTurnEndedAt: Date.now() }),
+          [String(workerSessionId)]: fakeInfo({ lastTurnEndedAt: Date.now() }),
         }),
         isMasterAlive: vi.fn().mockResolvedValue({}),
         terminate: vi.fn().mockResolvedValue(undefined),
@@ -4851,21 +4847,155 @@ describe("reconcileTasks", () => {
         pruneWorktrees: vi.fn().mockResolvedValue({ removed: [], skipped: [] }),
         clearOrphanedTaskWorktree: vi.fn().mockResolvedValue({ cleared: true }),
       };
+    }
+
+    async function seedRemoteInProgressTask(
+      app: Awaited<ReturnType<typeof buildApp>>,
+      name: string,
+    ) {
+      const host = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: `Remote-${name}`, baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      const hostId = host.json().id as string;
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: `p-remote-gate-${name}`, cwd: `/remote/project-${name}`, hostId },
+      });
+      const projectId = project.json().id;
+      const [workerSession] = app.db
+        .insert(sessions)
+        .values({ projectId, command: "bash", status: "active" })
+        .returning()
+        .all();
+      const [row] = app.db
+        .insert(tasks)
+        .values({
+          projectId,
+          title: "t",
+          status: "in_progress",
+          sessionId: workerSession.id,
+          claimedAt: new Date(),
+          startedAt: new Date(),
+          worktreePath: `/remote/project-${name}`,
+          branchName: "mullion/task-999",
+          baseSha: BASE_SHA,
+        })
+        .returning()
+        .all();
+      return { hostId, workerSession, taskRow: row, worktreePath: `/remote/project-${name}` };
+    }
+
+    it("fails, salvages the WIP commit, and terminates the session for a remote-hosted task whose commit-wip capability works", async () => {
+      const app = await buildApp();
+      const { hostId, workerSession, taskRow, worktreePath } = await seedRemoteInProgressTask(
+        app,
+        "works",
+      );
+
+      const sessionBackendModule = await import("../../src/services/session-backend.js");
+      const fakeBackend = buildFakeRemoteBackend(workerSession.id);
       const resolveBackendSpy = vi
         .spyOn(sessionBackendModule, "resolveBackend")
         .mockReturnValue(fakeBackend);
-      // Would trigger the no-commits failure if the gate actually ran.
+      // HEAD still at baseSha — would trigger the no-commits failure, same
+      // as the local-host test above, now that the gate isn't skipped.
       mockResolveHostGitStatus.mockResolvedValue(gitStatus("0000000", true));
+      mockCommitHostWipChanges.mockResolvedValue({ ok: true, value: { committed: true } });
 
       await reconcileTasks(app);
 
-      const updated = await getTask(app, row.id);
-      expect(updated.status).toBe("reviewing");
-      expect(mockResolveHostGitStatus).not.toHaveBeenCalled();
+      const updated = await getTask(app, taskRow.id);
+      expect(updated.status).toBe("failed");
+      expect(updated.failureReason).toContain("no commits");
+      expect(mockResolveHostGitStatus).toHaveBeenCalled();
+      // toBe, not toHaveBeenCalledWith(app, ...) — see the matching comment
+      // on the local-host test above (the real `app`'s `listeningOrigin`
+      // getter throws under a structural equality check on an app that was
+      // never actually .listen()ed).
+      expect(mockCommitHostWipChanges).toHaveBeenCalledTimes(1);
+      expect(mockCommitHostWipChanges.mock.calls[0][0]).toBe(app);
+      expect(mockCommitHostWipChanges.mock.calls[0][1]).toBe(hostId);
+      expect(mockCommitHostWipChanges.mock.calls[0][2]).toBe(worktreePath);
+      const [sessionRow] = app.db
+        .select()
+        .from(sessions)
+        .where(eq(sessions.id, workerSession.id))
+        .all();
+      expect(sessionRow.status).toBe("killed");
 
       resolveBackendSpy.mockRestore();
       await app.close();
     });
+
+    // Fails open here means failReviewingGate returns WITHOUT touching the
+    // task's status at all (no CAS to "failed") — not the old pre-#1100
+    // posture of blindly promoting straight to "reviewing" without ever
+    // checking git status. checkReviewingGate now genuinely determines
+    // there are no commits past base (resolveHostGitStatus succeeds), so
+    // silently promoting to "reviewing" here would reintroduce the exact
+    // #722 zero-diff-PR bug for a remote host; leaving the task
+    // "in_progress" is what lets it get re-evaluated (and either recover or
+    // still be retried by a human) once the host issue clears, without ever
+    // being permanently stuck in "failed" behind a dirty, un-salvageable
+    // worktree.
+    it.each(["unsupported", "unreachable"] as const)(
+      'leaves the task in_progress (fails open, no CAS) for a remote-hosted task whose commit-wip capability probe reports "%s"',
+      async (reason) => {
+        const app = await buildApp();
+        const { workerSession, taskRow } = await seedRemoteInProgressTask(app, reason);
+
+        const sessionBackendModule = await import("../../src/services/session-backend.js");
+        const fakeBackend = buildFakeRemoteBackend(workerSession.id);
+        const resolveBackendSpy = vi
+          .spyOn(sessionBackendModule, "resolveBackend")
+          .mockReturnValue(fakeBackend);
+        // Would trigger the no-commits failure path (HEAD still at
+        // baseSha) — the salvage probe result below is what decides
+        // whether that path can actually run to completion.
+        mockResolveHostGitStatus.mockResolvedValue(gitStatus("0000000", true));
+        mockCommitHostWipChanges.mockResolvedValue(
+          reason === "unsupported"
+            ? { ok: false, reason: "unsupported" }
+            : { ok: false, reason: "unreachable", detail: "connect ECONNREFUSED" },
+        );
+
+        await reconcileTasks(app);
+
+        const updated = await getTask(app, taskRow.id);
+        expect(updated.status).toBe("in_progress");
+        expect(updated.failureReason).toBeNull();
+        // The session stays alive — fail-open means failReviewingGate never
+        // reached its CAS/kill/sync steps at all.
+        const [sessionRow] = app.db
+          .select()
+          .from(sessions)
+          .where(eq(sessions.id, workerSession.id))
+          .all();
+        expect(sessionRow.status).toBe("active");
+
+        // Clean up: same reasoning as the grace-window tests above — this
+        // file shares one DB across its whole run with no per-test reset,
+        // and the worker-path loop processes every in_progress task on
+        // every tick. Left alone, this leftover REMOTE in_progress task
+        // (still carrying baseSha/worktreePath) would reach
+        // checkReviewingGate on a LATER test's own reconcileTasks() call —
+        // and unlike a leftover local-host task, it no longer gets
+        // short-circuited by a host check first (issue #1100 removed that
+        // guard), so it would hit whatever mockResolveHostGitStatus/
+        // mockCommitHostWipChanges happen to be set to by then.
+        app.db
+          .update(tasks)
+          .set({ status: "failed", failureReason: "test cleanup" })
+          .where(eq(tasks.id, taskRow.id))
+          .run();
+
+        resolveBackendSpy.mockRestore();
+        await app.close();
+      },
+    );
 
     // The former "applies the same no-commits gate on the claimed ->
     // reviewing edge" sibling of this describe block was deleted (task-claim
@@ -4954,7 +5084,7 @@ describe("reconcileTasks", () => {
       const row = await getTask(app, taskId);
       expect(row.status).toBe("in_progress");
       // Grace skips the gate entirely — no WIP salvage, no terminate.
-      expect(mockCommitWipChanges).not.toHaveBeenCalled();
+      expect(mockCommitHostWipChanges).not.toHaveBeenCalled();
       // The capture MUST have written lastRateLimitAt to the task row
       // (Hermes review, round 2) — otherwise a session-level errorState
       // TTL clear would strand the task in_progress on the next tick.
@@ -5008,7 +5138,7 @@ describe("reconcileTasks", () => {
           }),
       } as never);
       mockResolveHostGitStatus.mockResolvedValue(gitStatus("0000000", false, [{ path: "x" }]));
-      mockCommitWipChanges.mockResolvedValue({ committed: true });
+      mockCommitHostWipChanges.mockResolvedValue({ ok: true, value: { committed: true } });
 
       await reconcileTasks(app);
 
@@ -5039,7 +5169,7 @@ describe("reconcileTasks", () => {
           }),
       } as never);
       mockResolveHostGitStatus.mockResolvedValue(gitStatus("0000000", false, [{ path: "x" }]));
-      mockCommitWipChanges.mockResolvedValue({ committed: true });
+      mockCommitHostWipChanges.mockResolvedValue({ ok: true, value: { committed: true } });
 
       await reconcileTasks(app);
 
@@ -5128,7 +5258,7 @@ describe("reconcileTasks", () => {
       const row = await getTask(app, taskId);
       // Grace active — task stays in_progress, no WIP salvage, no terminate.
       expect(row.status).toBe("in_progress");
-      expect(mockCommitWipChanges).not.toHaveBeenCalled();
+      expect(mockCommitHostWipChanges).not.toHaveBeenCalled();
 
       // Clean up: see the matching comment in the "keeps an in_progress
       // task alive" test above. The durable lastRateLimitAt on this
@@ -5180,7 +5310,7 @@ describe("reconcileTasks", () => {
           }),
       } as never);
       mockResolveHostGitStatus.mockResolvedValue(gitStatus("0000000", false, [{ path: "x" }]));
-      mockCommitWipChanges.mockResolvedValue({ committed: true });
+      mockCommitHostWipChanges.mockResolvedValue({ ok: true, value: { committed: true } });
 
       await reconcileTasks(app);
 
