@@ -206,12 +206,15 @@ export async function resolveHostFileDiff(
  * route's own comment on why `commitWipChanges` alone was silently wrong
  * for a remote-hosted project's scaffold branch before this existed).
  *
- * Deliberately NOT wired into task-reconciler.ts's own local-only
- * `commitWipChanges(task.worktreePath)` call (gated there behind an
- * explicit `hostId === LOCAL_HOST_ID` check) — that is the SAME class of
- * gap this primitive would fix, but changing Task Master's own WIP-salvage
- * behavior is out of scope for issue #895 and deserves its own review —
- * see issue #1100.
+ * Also the WIP-salvage entry point for task-reconciler.ts's
+ * `failReviewingGate` (issue #1100) — that caller runs this FIRST, before
+ * its own status CAS, and treats it as the capability probe too: `ok: true`
+ * (whether or not anything was actually dirty — a clean tree just returns
+ * `{ committed: false }`) means the host can service the salvage, so the
+ * caller proceeds with failing the task; `ok: false` (`"unsupported"` — an
+ * agent build predating this route — or `"unreachable"`) means it can't
+ * find out either way, so it fails open instead of stranding the task with
+ * a dirty worktree and no salvage commit.
  */
 export async function commitHostWipChanges(
   app: FastifyInstance,
