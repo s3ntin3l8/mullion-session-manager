@@ -120,8 +120,12 @@ describe("task-worker skill — stays CLI-neutral and names no superpowers skill
   const FORBIDDEN_NAME_RE =
     /claude code|claude-code|codex|opencode|\bagy\b|superpowers|brainstorming|writing-plans|finishing-a-development-branch/i;
 
+  // Checked against the FULL body, frontmatter included: the `description`
+  // field is itself the discoverability gate a CLI reads to decide whether
+  // to open this skill at all, so a forbidden reference planted there would
+  // slip past a check scoped to skillBodyNoFrontmatter alone (issue #1107).
   it("names no CLI and no superpowers skill", () => {
-    expect(skillBodyNoFrontmatter).not.toMatch(FORBIDDEN_NAME_RE);
+    expect(skillBody).not.toMatch(FORBIDDEN_NAME_RE);
   });
 
   // The installed name differs per CLI (task-worker under --plugin-dir/
