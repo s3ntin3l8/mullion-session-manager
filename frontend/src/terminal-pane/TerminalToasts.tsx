@@ -22,6 +22,17 @@ export interface TerminalToastsProps {
   // standing condition, not a one-shot event — it stays up for as long as
   // the mismatch does, rather than auto-dismissing on a timer.
   paneTooSmall: boolean;
+  // Voice dictation error message (see voice/support.ts's voiceErrorMessage),
+  // or null/undefined when there is none to show. Optional — this component
+  // predates dictation and every other caller (e.g. Dock.tsx's terminal, if
+  // any exists without voice wired up) shouldn't need to pass it. Unlike
+  // uploadState === "error" below (whose auto-dismiss timer lives in
+  // TerminalPane), this one's auto-dismiss lives inside
+  // useVoiceDictation.ts itself (setErrorWithTimer) — the hook owns the
+  // error's whole lifecycle, including clearing it early on the next
+  // press(), so TerminalPane needs no timer of its own; this component
+  // only renders whatever it's given, same as every other prop here.
+  voiceError?: string | null;
 }
 
 export function TerminalToasts({
@@ -29,6 +40,7 @@ export function TerminalToasts({
   copyToastKey,
   uploadState,
   paneTooSmall,
+  voiceError,
 }: TerminalToastsProps) {
   return (
     <>
@@ -42,6 +54,7 @@ export function TerminalToasts({
           {uploadState === "uploading" ? "Uploading image…" : "Image upload failed"}
         </div>
       )}
+      {voiceError && <div className="terminal-upload-indicator error">{voiceError}</div>}
       {paneTooSmall && (
         <div className="terminal-too-small-indicator" title="Enlarge this pane to use it normally">
           Pane too small
