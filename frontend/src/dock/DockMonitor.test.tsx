@@ -786,6 +786,60 @@ describe("Dock", () => {
       });
     });
 
+    it("a hoisted stack action's outcome reports on ITS OWN group's stack header, not the other group's or any service row", async () => {
+      // Guards the statusKey override Dock.tsx's handleStackAction/
+      // handlePullAndRestart/handleRebuildAndRestart all take: without it,
+      // a hoisted action's transient message would key off the
+      // REPRESENTATIVE service's own control.id (like the old per-row
+      // handlers did) and surface on that arbitrary row instead of the
+      // group header the button that was actually clicked lives on.
+      const web = dockerControl();
+      const api = dockerControl({
+        id: "docker:pocket-dev:api",
+        title: "api",
+        docker: { ...dockerControl().docker, composeProject: "pocket-dev", service: "api" },
+      });
+      dockByProject[1] = [web, api];
+      stackActionByProject[1] = {
+        sessionId: 55,
+        control: {
+          id: "docker-apply:sanctuary",
+          title: "Apply config sanctuary",
+          source: "docker",
+        },
+        willRecreate: true,
+      };
+      useDashboardStore.setState({
+        projects: [PROJECT],
+        sessions: [],
+        refreshSessions: vi.fn().mockResolvedValue(undefined),
+      });
+      const user = userEvent.setup();
+      render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+      await screen.findByText("web");
+      await screen.findByText("api");
+      const groups = document.querySelectorAll(".dock-stack-group");
+      expect(groups).toHaveLength(2);
+      // Sorted by compose project name: pocket-dev first, sanctuary second.
+      const [pocketDevGroup, sanctuaryGroup] = Array.from(groups);
+      expect(sanctuaryGroup.querySelector(".dock-stack-header-label")?.textContent).toBe(
+        "sanctuary",
+      );
+
+      await user.click(sanctuaryGroup.querySelector(".kebab-trigger-btn")!);
+      await user.click(await screen.findByText("Apply config"));
+
+      const status = await screen.findByText("Applying — will recreate");
+      // Lands inside sanctuary's own stack header...
+      expect(sanctuaryGroup.contains(status)).toBe(true);
+      // ...not in the OTHER group's header...
+      expect(pocketDevGroup.contains(status)).toBe(false);
+      // ...and not on either service's own row (checkStatusById[control.id],
+      // the per-row mechanism this one is deliberately NOT using).
+      expect(status.closest(".dock-monitor-header")).toBeNull();
+    });
+
     it("a mixed stack (one registry-image service, one build-only) offers BOTH Pull and Rebuild in one stack menu, each hitting the correct service", async () => {
       const registryService = dockerControl({
         id: "docker:sanctuary:web",

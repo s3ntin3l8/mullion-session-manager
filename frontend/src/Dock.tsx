@@ -960,11 +960,12 @@ function DockColumn({
           const statusKey = `stack:${group.composeProject}`;
           // anyRep is only null for a group of live ephemerals whose
           // originating service has since dropped out of discovery
-          // (dockHelpers.ts's own doc comment) — the non-null assertions
-          // below are exactly as safe as the `hasActions` check
-          // DockStackHeader itself gates its kebab on: every handler
-          // they're attached to is unreachable unless anyRep (and, per the
-          // same derivation, pullRep/rebuildRep when relevant) is set.
+          // (dockHelpers.ts's own doc comment) — the `rep &&`/`group.xRep &&`
+          // short-circuit guards below are exactly as safe as the
+          // `hasActions` check DockStackHeader itself gates its kebab on:
+          // every handler they're attached to is unreachable unless anyRep
+          // (and, per the same derivation, pullRep/rebuildRep when
+          // relevant) is set.
           const rep = group.anyRep;
           return (
             <div
