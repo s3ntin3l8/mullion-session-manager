@@ -45,6 +45,7 @@ import type { DeleteBranchResult } from "./git-branch-delete.js";
 import type { GitPullResult } from "./git-pull.js";
 import type { PushResult } from "./git-push.js";
 import type { ScaffoldEntry } from "./mullion-scaffold.js";
+import type { GenerationTurnResult } from "./scaffold-generate.js";
 
 // One HTTP+WS client per remote "agent" host (issue #26), talking to its
 // token-gated /internal/* API (src/routes/internal.ts). Every request sets
@@ -166,6 +167,23 @@ const GIT_STATUS_FRESH_REQUEST_TIMEOUT_MS = 10_000;
 // dev-server proxy, an unrelated "preview" — dock-preview worktrees are a
 // different feature despite the name collision).
 const GIT_WORKTREE_REQUEST_TIMEOUT_MS = 45_000;
+
+// Issue #1101 — deliberately its OWN constant, NOT a reuse of
+// GIT_PUSH_REQUEST_TIMEOUT_MS or any other neighbor above: every existing
+// timeout constant in this file tops out at GIT_PUSH_REQUEST_TIMEOUT_MS's
+// 140s (one `git push`), nowhere near enough for a real, non-interactive
+// agent CLI turn. scaffold-generate.ts's own DEFAULT_GENERATION_TIMEOUT_MS
+// is 5 minutes (300_000ms) — the agent-side execFile budget for the turn
+// itself — and /internal/run-generation-turn's own handler ALSO runs a
+// worktree create (`git worktree add`) and a worktree remove + branch
+// delete (`git worktree remove` + `git worktree prune` + a branch delete)
+// around that turn, each its own `runGit` call at GIT_TIMEOUT_MS (15s,
+// git-worktree.ts) — up to ~60s of additional, real, non-error time before
+// and after the 5-minute turn itself. Sized as 300s (the turn) + 60s (the
+// worktree lifecycle either side of it) + 60s of network/HTTP round-trip
+// margin = 420s, the same "agent-side budget plus headroom" reasoning as
+// GIT_PUSH_REQUEST_TIMEOUT_MS's own comment.
+const GENERATION_TURN_REQUEST_TIMEOUT_MS = 420_000;
 
 // Connection-time SSRF pinning policy for host connections (issue #250).
 // Identical to what hosts.ts and enrollment.ts accepted when the baseUrl was
@@ -1006,6 +1024,42 @@ export class RemoteHostClient {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ cwd, message }),
     });
+  }
+
+  /** Runs one non-interactive generation-agent CLI turn end-to-end
+   * (scratch-worktree create -> sandboxed spawn -> teardown) on this
+   * agent's own filesystem (#1101) — mirrors
+   * /internal/run-generation-turn's `{cwd, slug, baseRef, agentCommand,
+   * prompt, timeoutMs}` -> `GenerationTurnResult` shape. Unlike this file's
+   * other RPCs, an agent-side APPLICATION-level failure (an unsupported
+   * agent CLI, the scratch worktree failing to create, the spawn itself
+   * failing) is never reported via HTTP status — the whole response is
+   * always 200 with a discriminated `outcome` field instead (see
+   * GenerationTurnResult's own doc comment, scaffold-generate.ts, for why:
+   * `viaRemote`'s HostRequestError mapping only distinguishes a 404 from
+   * "everything else", which would collapse those three distinguishable
+   * error classes into one indistinguishable bucket if they were carried
+   * as HTTP status here instead). `GENERATION_TURN_REQUEST_TIMEOUT_MS` (see
+   * that constant's own comment) is this call's own, independently-sized
+   * network timeout — always well above whatever `timeoutMs` this call
+   * forwards in the body, which only bounds the AGENT's own execFile. */
+  resolveRunGenerationTurn(
+    cwd: string,
+    slug: string,
+    baseRef: string,
+    agentCommand: string,
+    prompt: string,
+    timeoutMs: number,
+  ): Promise<GenerationTurnResult> {
+    return this.request(
+      "/internal/run-generation-turn",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ cwd, slug, baseRef, agentCommand, prompt, timeoutMs }),
+      },
+      GENERATION_TURN_REQUEST_TIMEOUT_MS,
+    );
   }
 
   /** Lists this agent's own on-disk task-worktree directories (#484) — for

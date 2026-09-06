@@ -115,15 +115,17 @@ replays what it's given.
   (`GET`/`PUT`/`DELETE /api/projects/:id/tooling[/skill|/reviewer-agent]` —
   a project's DB-authored pinned note/skill/reviewer subagent, primary-only,
   no host branching — see [`project-briefing.md`](project-briefing.md)),
-  `project-setup` (`POST /api/projects/:id/setup/preview`/`apply` — scaffold
-  a committed briefing region + starter skill/reviewer into a project's own
-  repo as a real pull request; works for local AND remote-hosted projects
-  (issue #895 — `host-files.ts`'s `readHostFiles`/`writeHostFiles`,
-  `host-git.ts`'s `resolveHostFileDiff`/`commitHostWipChanges`).
-  `POST /api/projects/:id/setup/generate` (real agent-generated content
-  instead of placeholder text) is still local-host only — it spawns an
-  agent CLI turn in-process rather than just reading/writing file content,
-  so #895's primitives don't cover it; see issue #1101 — see
+  `project-setup` (`POST /api/projects/:id/setup/preview`/`apply`/`generate` —
+  scaffold a committed briefing region + starter skill/reviewer into a
+  project's own repo as a real pull request; all three work for local AND
+  remote-hosted projects. `preview`/`apply` (issue #895) use
+  `host-files.ts`'s `readHostFiles`/`writeHostFiles`, `host-git.ts`'s
+  `resolveHostFileDiff`/`commitHostWipChanges`. `generate` (real
+  agent-generated content instead of placeholder text) needed a separate
+  fix on top (issue #1101): it spawns a real agent CLI turn
+  (`scaffold-generate.ts`'s `generateScaffoldContent`), which now runs on
+  whichever host owns the project's checkout via a new
+  `POST /internal/run-generation-turn` route — see
   [`project-briefing.md`](project-briefing.md#scaffolding-it-into-the-repo-instead)),
   `workflow-conventions` (`GET /api/workflow-conventions/questions`, `POST
 /api/workflow-conventions/preview` — the two read-only endpoints backing
