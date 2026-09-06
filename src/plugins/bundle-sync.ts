@@ -15,12 +15,15 @@ import { readAgentBundleDisabled } from "../services/agent-bundle-state.js";
 // An agent host now consults its own persisted flag (agent-bundle-state.ts)
 // instead — see that module's own header comment for the file it reads and
 // why it's a SEPARATE file from bundle-sync.ts's own manifest. pty.ts's
-// identically-shaped closure (feeding a per-session spawn-time default,
-// not this boot-time sync) is deliberately left alone: session-lifecycle.ts
-// always sends an explicit resolved value on every spawn now, so that
-// closure's DEFAULT_SETTINGS fallback is only ever a version-skew backstop,
-// not a live path — see this PR's own notes for why splitting that one out
-// was left as a follow-up rather than folded in here.
+// identically-shaped closure (feeding a per-session spawn-time default, not
+// this boot-time sync) gets the SAME fix, for a related but distinct
+// reason: it was originally assumed to be a version-skew-only backstop
+// since session-lifecycle.ts sends an explicit resolved value on every
+// ordinary spawn — but a dtach-master-died respawn (routes/terminal.ts's
+// attachSocketToSession, reached via the primary's own /ws/terminal or the
+// agent's /internal/ws/attach) never sets opts.injectMullionBundle, making
+// that closure a real, live path too. See pty.ts's own comment on
+// readInjectMullionBundle for the fuller writeup.
 function readInjectMullionBundle(app: FastifyInstance): boolean {
   return app.db
     ? getStoredSettings(app.db).sessions.injectMullionBundle
