@@ -12,6 +12,23 @@ import {
 import { extractMarkedRegion } from "../../src/services/marked-region.js";
 import { MARKER_START, MARKER_END } from "../../src/services/project-briefing.js";
 import { parseSkillFrontmatter } from "../../src/services/skills.js";
+import { WORKFLOW_CONVENTION_QUESTIONS } from "../../src/services/workflow-conventions.js";
+
+/** Looks up a single option's fragment by (questionId, optionId) directly
+ * against workflow-conventions.ts's own static question data — deliberately
+ * NOT a copy of mullion-scaffold.ts's own default-answers map (that would
+ * make the assertion tautological: it would still pass even if the scaffold
+ * silently flipped a default, e.g. "branch-pr" to "direct-commit", since
+ * both sides would change together). Hardcoding the (questionId, optionId)
+ * pairs here means the test independently pins down which options the
+ * scaffold's defaults are supposed to select. */
+function workflowFragment(questionId: string, optionId: string): string {
+  const question = WORKFLOW_CONVENTION_QUESTIONS.find((q) => q.id === questionId);
+  if (!question) throw new Error(`no such workflow-conventions question: ${questionId}`);
+  const option = question.options.find((o) => o.id === optionId);
+  if (!option) throw new Error(`no such option ${optionId} on question ${questionId}`);
+  return option.fragment;
+}
 
 describe("isValidScaffoldSlug", () => {
   it("accepts an ordinary slug", () => {
@@ -68,6 +85,86 @@ describe("computeScaffold", () => {
     expect(agentsMd.contents).toContain("# My Project");
     expect(agentsMd.contents).toContain("more prose");
     expect(agentsMd.contents).not.toContain("old region");
+  });
+
+  // Issue #1036 — the AGENTS.md briefing region used to say nothing about
+  // commit/PR-title/branch/merge conventions at all, which also left
+  // contributingPointerBody's "See AGENTS.md's Workflow Conventions
+  // section..." pointer referring to a section that didn't exist. These
+  // assertions would break if someone accidentally reverted that feature or
+  // silently changed one of the scaffold's chosen defaults.
+  describe("Workflow Conventions section in the briefing region (issue #1036)", () => {
+    it("includes a literal '## Workflow Conventions' heading, matching contributingPointerBody's pointer text", () => {
+      const entries = computeScaffold({}, { slug: "demo" });
+      const agentsMd = entries.find((e) => e.path === "AGENTS.md") as { contents: string };
+      const region = extractMarkedRegion(agentsMd.contents, MARKER_START, MARKER_END)!;
+      expect(region).toContain("## Workflow Conventions");
+    });
+
+    it("selects always-branch-and-PR, never direct-commit", () => {
+      const entries = computeScaffold({}, { slug: "demo" });
+      const agentsMd = entries.find((e) => e.path === "AGENTS.md") as { contents: string };
+      const region = extractMarkedRegion(agentsMd.contents, MARKER_START, MARKER_END)!;
+      expect(region).toContain(workflowFragment("branching", "branch-pr"));
+      expect(region).not.toContain(workflowFragment("branching", "direct-commit"));
+    });
+
+    it("selects branching off the latest remote default branch, not the local one", () => {
+      const entries = computeScaffold({}, { slug: "demo" });
+      const agentsMd = entries.find((e) => e.path === "AGENTS.md") as { contents: string };
+      const region = extractMarkedRegion(agentsMd.contents, MARKER_START, MARKER_END)!;
+      expect(region).toContain(workflowFragment("branchBase", "remote"));
+      expect(region).not.toContain(workflowFragment("branchBase", "local"));
+    });
+
+    it("selects Conventional Commits titles required, not freeform", () => {
+      const entries = computeScaffold({}, { slug: "demo" });
+      const agentsMd = entries.find((e) => e.path === "AGENTS.md") as { contents: string };
+      const region = extractMarkedRegion(agentsMd.contents, MARKER_START, MARKER_END)!;
+      expect(region).toContain(workflowFragment("titleConvention", "conventional-commits"));
+      expect(region).not.toContain(workflowFragment("titleConvention", "freeform"));
+    });
+
+    it("selects squash merge, not merge-commit or rebase", () => {
+      const entries = computeScaffold({}, { slug: "demo" });
+      const agentsMd = entries.find((e) => e.path === "AGENTS.md") as { contents: string };
+      const region = extractMarkedRegion(agentsMd.contents, MARKER_START, MARKER_END)!;
+      expect(region).toContain(workflowFragment("mergeStrategy", "squash"));
+      expect(region).not.toContain(workflowFragment("mergeStrategy", "merge-commit"));
+      expect(region).not.toContain(workflowFragment("mergeStrategy", "rebase"));
+    });
+
+    it("requires green CI before merging, but does NOT also require a review approval by default", () => {
+      const entries = computeScaffold({}, { slug: "demo" });
+      const agentsMd = entries.find((e) => e.path === "AGENTS.md") as { contents: string };
+      const region = extractMarkedRegion(agentsMd.contents, MARKER_START, MARKER_END)!;
+      expect(region).toContain(workflowFragment("preMergeRequirements", "green-ci"));
+      expect(region).not.toContain(workflowFragment("preMergeRequirements", "green-ci-and-review"));
+    });
+
+    it("requires the full lint/typecheck/test/format gate before pushing", () => {
+      const entries = computeScaffold({}, { slug: "demo" });
+      const agentsMd = entries.find((e) => e.path === "AGENTS.md") as { contents: string };
+      const region = extractMarkedRegion(agentsMd.contents, MARKER_START, MARKER_END)!;
+      expect(region).toContain(workflowFragment("prePushChecks", "full-gate"));
+    });
+
+    it("an agent-generated override (issue #956) replaces the whole region, including the Workflow Conventions section", () => {
+      // Documenting existing, deliberate behavior (see computeScaffold's own
+      // `options.generated?.briefingRegion ?? briefingRegionBody(slug)`
+      // short-circuit) rather than asserting a new requirement: when
+      // scaffold-generate.ts supplies its own briefingRegion, it wins
+      // wholesale and the Workflow Conventions section this issue adds is
+      // NOT present. That's the same trade-off issue #956 already made for
+      // the rest of the region's content.
+      const entries = computeScaffold(
+        {},
+        { slug: "demo", generated: { briefingRegion: "Custom generated region." } },
+      );
+      const agentsMd = entries.find((e) => e.path === "AGENTS.md") as { contents: string };
+      const region = extractMarkedRegion(agentsMd.contents, MARKER_START, MARKER_END)!;
+      expect(region).not.toContain("## Workflow Conventions");
+    });
   });
 
   it("the scaffolded skill's frontmatter parses under skills.ts's own parseSkillFrontmatter", () => {

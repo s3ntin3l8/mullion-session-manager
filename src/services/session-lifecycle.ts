@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import path from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { and, eq } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import {
@@ -350,6 +350,129 @@ export type CreateSessionResult =
   // enforcement point, not a redundant one.
   | { ok: false; reason: "reserved-env-key"; detail: string };
 
+const SCAFFOLD_SKILLS_DIRNAME = path.join(".claude", "skills");
+const SCAFFOLD_AGENTS_DIRNAME = path.join(".claude", "agents");
+const SCAFFOLD_REVIEWER_SUFFIX = "-reviewer.md";
+
+/**
+ * Issue #1098 — `projects.slug` only ever reflects whichever slug was most
+ * recently STAMPED by `/setup/apply` (at the moment it commits scaffold
+ * files into a worktree checkout), not necessarily whichever slug's PR
+ * actually MERGED into the branch a real session checks out. Under
+ * concurrent re-scaffolds (a project renamed, or Scaffold-Mullion re-run
+ * under a different slug — each slug gets its own independent
+ * branch/worktree/PR, `project-setup.ts`'s `ensureSetupWorktree` has no
+ * cross-slug guard), the committed files actually on disk can carry a
+ * DIFFERENT slug than `projects.slug` — e.g. the stamped slug's PR never
+ * merged (or hasn't yet) while a DIFFERENT slug's PR did. Gating on the
+ * single stamped `project.slug` alone can then miss a real committed
+ * scaffold entirely and silently double-inject the DB-authored copy — the
+ * exact double-delivery bug this whole gate exists to prevent.
+ *
+ * Fix: scan disk for ANY scaffold-shaped slug rather than trusting the one
+ * stamped column. Candidate slugs are gathered from BOTH
+ * `.claude/skills/<slug>/` subdirectory names AND
+ * `.claude/agents/<slug>-reviewer.md` filenames — deliberately not
+ * `.claude/skills/` alone — because a partial scaffold (see this repo's own
+ * "keeps composing the skill (only) when the reviewer's scaffold file is
+ * committed but the skill's isn't" test in
+ * test/services/session-lifecycle-scaffold-gate.test.ts) can commit a
+ * reviewer file for a slug that never got a `.claude/skills/<slug>`
+ * directory at all, or vice versa — sourcing candidates from only one of
+ * the two directories would miss that slug's file living in the other.
+ * Note the `.claude/agents/` side of this is NOT an independent
+ * cross-check of anything: a candidate sourced from an
+ * `<slug>-reviewer.md` filename and then existsSync-verified against
+ * `scaffoldReviewerPath(slug)` is checking the exact same file it just
+ * listed — that step exists only to keep both directories going through
+ * one shared "is this candidate actually present as a real file" shape,
+ * not to add real evidence. The genuine two-step check is the SKILL side:
+ * a `.claude/skills/<slug>` directory can exist without a `SKILL.md`
+ * inside it, so `skillCommitted` still has to existsSync the file itself,
+ * not just the directory listing.
+ *
+ * Every discovered name still runs through `isValidScaffoldSlug` before
+ * it's ever joined into a path — the scan changes WHERE candidate slugs
+ * come from, not the path-traversal safety boundary itself (defense in
+ * depth: a real directory entry can never literally be `..`, but
+ * `isDangerousSkillName`'s `DANGEROUS_PROPERTY_NAMES` set, e.g.
+ * `__proto__`, names a perfectly legal POSIX directory/file name that IS
+ * reachable this way — see this file's own "treats a directory-listed slug
+ * that fails isValidScaffoldSlug..." test).
+ *
+ * `skillCommitted`/`reviewerCommitted` are each true if ANY valid candidate
+ * slug has that specific file committed — evaluated independently of one
+ * another (deliberately NOT "the same candidate slug needs both its skill
+ * AND its reviewer file present"). This is what keeps the existing
+ * skill-committed-but-reviewer-isn't (and reviewer-committed-but-skill-
+ * isn't) partial-scaffold cases suppressing exactly the one DB-authored
+ * copy that's actually redundant — never both, never neither — the same
+ * independent-suppression behavior the original single-slug gate had, now
+ * preserved across however many candidate slugs the scan turns up.
+ *
+ * Deliberate widening vs. the original gate, worth flagging explicitly:
+ * the old check only ever fired for a `project.slug` that `/setup/apply`
+ * itself had stamped — i.e. a project this repo's own scaffold feature had
+ * actually run against. This scan has no such precondition: ANY
+ * `.claude/skills/<validslug>/SKILL.md` (+ matching reviewer file,
+ * independently) suppresses the DB copy, even for a project whose
+ * `.claude/skills`/`.claude/agents` content was hand-authored or came from
+ * something other than Mullion's own scaffold feature — this repo's own
+ * checkout (`.claude/skills/mullion-review-invariants`,
+ * `.claude/agents/mullion-reviewer.md`) is itself an example. That's the
+ * correct posture for the bug this issue fixes (the gate's whole job is to
+ * describe what's really on disk, not what a DB column claims), but it is
+ * a real behavior change from the pre-#1098 gate, not just a bugfix that
+ * leaves every other case byte-identical.
+ */
+function discoverCommittedScaffold(scaffoldCwd: string): {
+  skillCommitted: boolean;
+  reviewerCommitted: boolean;
+} {
+  const candidateSlugs = new Set<string>();
+
+  try {
+    for (const entry of readdirSync(path.join(scaffoldCwd, SCAFFOLD_SKILLS_DIRNAME))) {
+      candidateSlugs.add(entry);
+    }
+  } catch {
+    // No .claude/skills directory at all (or unreadable) — no candidates
+    // from this source, same as an empty directory.
+  }
+
+  try {
+    for (const entry of readdirSync(path.join(scaffoldCwd, SCAFFOLD_AGENTS_DIRNAME))) {
+      if (entry.endsWith(SCAFFOLD_REVIEWER_SUFFIX)) {
+        candidateSlugs.add(entry.slice(0, -SCAFFOLD_REVIEWER_SUFFIX.length));
+      }
+    }
+  } catch {
+    // No .claude/agents directory at all (or unreadable) — same as above.
+  }
+
+  let skillCommitted = false;
+  let reviewerCommitted = false;
+  for (const candidate of candidateSlugs) {
+    if (!isValidScaffoldSlug(candidate)) continue;
+    // CodeQL (js/path-injection) flags these two existsSync calls, same as
+    // it did the original project.slug-keyed pair this replaces — see
+    // createSessionRecord's own comment on scaffoldSkillCommitted/
+    // scaffoldReviewerCommitted for the fuller "not a sanitizer, dismissed
+    // as a documented false positive" writeup. Same reasoning applies here
+    // unchanged; only the candidate's source changed (a directory listing,
+    // not a DB column).
+    if (!skillCommitted && existsSync(path.join(scaffoldCwd, scaffoldSkillPath(candidate)))) {
+      skillCommitted = true;
+    }
+    if (!reviewerCommitted && existsSync(path.join(scaffoldCwd, scaffoldReviewerPath(candidate)))) {
+      reviewerCommitted = true;
+    }
+    if (skillCommitted && reviewerCommitted) break;
+  }
+
+  return { skillCommitted, reviewerCommitted };
+}
+
 // Shared by POST /api/sessions (the launcher's worktree toggle, option 1),
 // POST /api/sessions/:id/promote (option 2), and POST /api/tasks/:id/claim
 // (Phase 2.5's 2.5.2 — issue #216) — all three ultimately need "insert a
@@ -563,21 +686,32 @@ export async function createSessionRecord(
   // session" (unlinking any stale per-session copy from a previous spawn).
   const resolvedBriefingOverride =
     briefingOverride ?? readProjectBriefing(app.db, project.id) ?? undefined;
-  // Issue #1082(a) — once a project has been scaffolded (routes/
-  // project-setup.ts's `/setup/apply`, which stamps `projects.slug` at the
-  // point it actually commits the scaffold's files), a committed
+  // Issue #1082(a), rescoped by issue #1098 — once a project has been
+  // scaffolded (routes/project-setup.ts's `/setup/apply`, which commits the
+  // scaffold's files into a real worktree checkout), a committed
   // `.claude/skills/<slug>/SKILL.md`/`.claude/agents/<slug>-reviewer.md`
   // already reaches Claude Code/opencode via each CLI's own native
   // discovery — re-injecting the DB-authored `project_tooling.skill`/
   // `.reviewerAgent` copy live on top of that would just double-deliver the
   // same content. Checked HERE, on the primary, not adapter-side: `project`
-  // (fetched above) already carries both `slug` and `cwd`, so there is no
-  // separate multi-host channel to build — and `projects.slug` can only
-  // ever be non-null for a LOCAL-hosted project in the first place (see
-  // that column's own schema.ts comment: `/setup/apply` requires a live
-  // preview record, and `/setup/preview`/`/setup/generate` both 501 for a
-  // remote-hosted project), so this `existsSync` always reads the same
-  // filesystem the check is meant to describe.
+  // (fetched above) already carries `cwd`, so there is no separate
+  // multi-host channel to build.
+  //
+  // #1098 — this USED to key off `project.slug` alone (the slug most
+  // recently STAMPED by `/setup/apply` at commit time). That drifts from
+  // reality under concurrent re-scaffolds: a project re-scaffolded under a
+  // DIFFERENT slug gets its own independent branch/worktree/PR, and
+  // `project.slug` only ever reflects whichever slug was stamped LAST — not
+  // whichever slug's PR actually MERGED into the branch this session
+  // checks out. If the stamped slug's PR never merged while a DIFFERENT
+  // slug's PR did, a single-slug gate misses the files that are actually
+  // on disk and silently falls through to re-injecting the DB copy — the
+  // exact double-delivery bug this gate exists to prevent. Fixed by
+  // `discoverCommittedScaffold` (above): it scans `scaffoldCwd` for ANY
+  // scaffold-shaped slug instead of trusting the one stamped column — see
+  // its own doc comment for the full reasoning, including why candidate
+  // slugs are sourced from both `.claude/skills/` and `.claude/agents/`,
+  // and why skill/reviewer suppression stay independent of each other.
   //
   // `cwd ?? project.cwd`, NOT `project.cwd` alone — same fallback `cwd`
   // itself already resolves to a few lines below (`path.resolve(cwd ??
@@ -595,35 +729,9 @@ export async function createSessionRecord(
   // `cwd` whenever the caller (or the worktree resolution above) set one,
   // falling back to `project.cwd` only for the ordinary case where no
   // override exists at all.
-  // CodeQL (js/path-injection) flags the two existsSync calls below.
-  // Re-validating `project.slug` right here with `isValidScaffoldSlug` (see
-  // that function's own doc comment: rejects path separators/`.`/`..`/
-  // control characters) is real defense in depth regardless of what the
-  // scanner does with it — `projects.slug`'s only current writer
-  // (routes/project-setup.ts's `/setup/apply`) already validates it before
-  // ever stamping the column, but nothing at the type level stops a future
-  // writer from skipping that, and this check is cheap. It does NOT clear
-  // the alert, though: this repo has hit this exact class of false positive
-  // — CodeQL's js/path-injection query genuinely does not model a manual
-  // validation call as a sanitizer, independent of whether it's a guard
-  // clause, a ternary, or anything else — several times already
-  // (git-worktree.ts's/git-branch-delete.ts's isSafeAbsolutePath-gated
-  // calls, dock-config.ts's isSymlinkPath, routes/projects.ts's own
-  // near-identical case for a project's own `cwd`), each resolved by
-  // dismissing the specific alert in GHAS with a documented justification
-  // rather than reshaping already-correct code to chase the query — see
-  // dock-config.ts's `readDockConfig` for the fullest write-up of exactly
-  // this reasoning, including why an inline `codeql[...]` suppression
-  // comment wouldn't flip the Security tab's alert state on its own (this
-  // repo's codeql.yml has no follow-up dismiss-alerts step to read it).
-  const validScaffoldSlug = project.slug && isValidScaffoldSlug(project.slug) ? project.slug : null;
   const scaffoldCwd = cwd ?? project.cwd;
-  const scaffoldSkillCommitted = validScaffoldSlug
-    ? existsSync(path.join(scaffoldCwd, scaffoldSkillPath(validScaffoldSlug)))
-    : false;
-  const scaffoldReviewerCommitted = validScaffoldSlug
-    ? existsSync(path.join(scaffoldCwd, scaffoldReviewerPath(validScaffoldSlug)))
-    : false;
+  const { skillCommitted: scaffoldSkillCommitted, reviewerCommitted: scaffoldReviewerCommitted } =
+    discoverCommittedScaffold(scaffoldCwd);
 
   // PR-5 — same producer posture as resolvedBriefingOverride immediately
   // above: an explicit caller-supplied value (currently unused by any
