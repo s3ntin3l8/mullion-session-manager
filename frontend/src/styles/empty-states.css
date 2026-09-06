@@ -1291,13 +1291,14 @@
    min-content has no effect; the browser's own intrinsic-size floor still
    holds and .dock-body's overflow-x absorbs the difference), but a
    maintainer re-deriving this number should start from the corrected total,
-   not the original one. The .dock-monitor min-width above is set to that
-   corrected floor rather than under a minimum-width .dock-column's content
-   box (188px) — a Docker row already needs more room than that box gives,
-   so it scrolls even alone (see .dock-group-label's own comment below for
-   why any Docker row in a minimum-width column scrolls regardless). Above
-   the floor, yield order is: .dock-monitor-name (already flex:1 1 0%, so
-   it's first to hit zero) → .dock-monitor-url/.dock-monitor-image/
+   not the original one. A compose project's own .dock-stack-group (below)
+   adds its .dock-stack-header on top of that (in its own column, not this
+   row — see that rule's comment), so a minimum-width column with any Docker
+   services still scrolls horizontally in practice regardless of this floor
+   — expected, not a bug: the point of this floor is that .dock-body scrolls
+   rather than clips the kebab, not that scrolling never happens. Above the
+   floor, yield order is: .dock-monitor-name (already flex:1 1 0%, so it's
+   first to hit zero) → .dock-monitor-url/.dock-monitor-image/
    .dock-monitor-check-status (ellipsize instead of vanishing) → nothing
    else shrinks. */
 .dock-monitor-header {
@@ -1428,16 +1429,63 @@
   border-color: color-mix(in srgb, var(--o) 30%, transparent);
   color: var(--o);
 }
-/* A small section label ahead of the first discovered Docker control in a
-   column (issue #73) — configured dock.json controls render above it with
-   no label of their own, so this only needs to mark where the auto-
-   discovered group begins. */
+/* Base label styling, shared by two contexts: bare text (unused today, kept
+   for any future non-stack caller) and — the current use, via
+   .dock-stack-header-label below — the compose-project name inside
+   DockStackHeader.tsx's own per-stack header. Originally a one-shot
+   "Docker" label ahead of the whole discovered-services group (issue #73);
+   superseded by one header per compose project (dockHelpers.ts's
+   groupDockerControls — a column can host more than one compose project,
+   e.g. a dev and a prod stack, so a single flat label could no longer say
+   which stack a hoisted action would hit). */
 .dock-group-label {
   font-size: 9.5px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--dim);
   padding: 4px 2px 0;
+}
+/* Overrides .dock-group-label's block-level padding/display for its use as
+   a flex item inside .dock-stack-header (below) — sits between the leading
+   icon and the kebab, ellipsizing rather than pushing the kebab out when a
+   compose project name is long. */
+.dock-stack-header-label {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* One box per compose project (DockStackHeader.tsx) inside .dock-body's row
+   — column layout so the header sits above that stack's own monitors.
+   flex-basis:0 + the caller's own inline flexGrow (the group's monitor
+   count) is what keeps monitor widths uniform across groups of different
+   sizes in the same column; deliberately no min-width override here, so
+   its automatic minimum stays its children's own min-content and
+   .dock-monitor's floor (see that rule's own comment) propagates up to
+   this box, which is what lets .dock-body's overflow-x actually kick in. */
+.dock-stack-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex-basis: 0;
+  flex-shrink: 1;
+}
+.dock-stack-monitors {
+  flex: 1;
+  display: flex;
+  gap: 6px;
+  min-height: 0;
+}
+.dock-stack-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 16px;
+  flex-shrink: 0;
+  padding: 0 2px;
+  color: var(--dim);
 }
 /* Transient "Check for update" outcome (issue #73, Hermes review) — reuses
    .dock-monitor-tag's sizing. "Up to date" stays neutral (--dim, the same

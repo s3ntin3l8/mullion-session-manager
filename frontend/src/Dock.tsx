@@ -20,6 +20,7 @@ import {
 import {
   clamp,
   dockerSessionIdentity,
+  groupDockerControls,
   isDockPreviewPath,
   resolveSelectedValue,
   runningSessionFor,
@@ -29,6 +30,7 @@ import { DockGithubRow } from "./dock/DockGithubRow.js";
 import { useArmedKill } from "./dock/useArmedKill.js";
 import { useTransientStatus } from "./dock/useTransientStatus.js";
 import { DockMonitor } from "./dock/DockMonitor.js";
+import { DockStackHeader } from "./dock/DockStackHeader.js";
 import { AddColumnControl } from "./dock/AddColumnControl.js";
 import { useCoarsePointer } from "./lib/layoutTier.js";
 
@@ -482,7 +484,18 @@ function DockColumn({
   const liveEphemeralControls = ephemeralControls.filter((c) => runningFor(c));
   const configuredControls = controls.filter((c) => c.source !== "docker");
   const discoveredControls = controls.filter((c) => c.source === "docker");
-  const dockerGroupControls = [...liveEphemeralControls, ...discoveredControls];
+  // One DockerStackGroup per compose project (dockHelpers.ts's own doc
+  // comment on groupDockerControls has the full rationale — a column can
+  // host more than one compose project, e.g. a dev + a prod stack, so a
+  // single hoisted kebab next to the column title would be ambiguous).
+  // `ungrouped` is a fallback for a control composeProjectForControl can't
+  // place — none in practice today, but real rather than theoretical: an
+  // ephemeral stack-action id this frontend doesn't recognize lands here
+  // instead of being silently dropped.
+  const { groups: dockerStackGroups, ungrouped: ungroupedDockerControls } = groupDockerControls([
+    ...liveEphemeralControls,
+    ...discoveredControls,
+  ]);
 
   // Hermes review, round 2 — a transient failure (backend blip, briefly out
   // of PTY slots) otherwise recorded `eligible: true` right alongside
@@ -601,7 +614,14 @@ function DockColumn({
     }
   };
 
-  const handlePullAndRestart = async (control: DockControl) => {
+  // `statusKey` defaults to `control.id` for the plain per-service call
+  // sites that predate stack grouping; DockColumn's group rendering below
+  // passes `stack:<composeProject>` instead, so a hoisted action's outcome
+  // reports on the GROUP header rather than on whichever service happened
+  // to be the representative — a failure keyed to the rep's own id would
+  // otherwise surface on an arbitrary row with no connection to the button
+  // that was actually clicked.
+  const handlePullAndRestart = async (control: DockControl, statusKey = control.id) => {
     try {
       const result = await api.updateDockerStack(projectId, control.id);
       addEphemeralControl(result.control);
@@ -610,22 +630,22 @@ function DockColumn({
       // force one now so the monitor renders immediately instead of after
       // whatever's left of store.ts's live-refresh interval.
       await useDashboardStore.getState().refreshSessions();
-      if (result.willRecreate === true) showCheckStatus(control.id, "Pulling — will recreate");
+      if (result.willRecreate === true) showCheckStatus(statusKey, "Pulling — will recreate");
     } catch {
       console.warn("[dock] docker pull & restart failed", control.id);
-      showCheckStatus(control.id, "Failed to start update", true);
+      showCheckStatus(statusKey, "Failed to start update", true);
     }
   };
 
-  const handleRebuildAndRestart = async (control: DockControl) => {
+  const handleRebuildAndRestart = async (control: DockControl, statusKey = control.id) => {
     try {
       const result = await api.rebuildDockerStack(projectId, control.id);
       addEphemeralControl(result.control);
       await useDashboardStore.getState().refreshSessions();
-      if (result.willRecreate === true) showCheckStatus(control.id, "Rebuilding — will recreate");
+      if (result.willRecreate === true) showCheckStatus(statusKey, "Rebuilding — will recreate");
     } catch {
       console.warn("[dock] docker rebuild & restart failed", control.id);
-      showCheckStatus(control.id, "Failed to start rebuild", true);
+      showCheckStatus(statusKey, "Failed to start rebuild", true);
     }
   };
 
@@ -662,21 +682,239 @@ function DockColumn({
   };
 
   // Stack-wide restart/apply/stop — same ephemeral-session shape as
-  // handlePullAndRestart/handleRebuildAndRestart above.
+  // handlePullAndRestart/handleRebuildAndRestart above, same statusKey
+  // override reasoning as those two.
   const handleStackAction = async (
     control: DockControl,
     action: (projectId: number, controlId: string) => ReturnType<typeof api.restartDockerStack>,
     failureMessage: string,
+    statusKey = control.id,
   ) => {
     try {
       const result = await action(projectId, control.id);
       addEphemeralControl(result.control);
       await useDashboardStore.getState().refreshSessions();
-      if (result.willRecreate === true) showCheckStatus(control.id, "Applying — will recreate");
+      if (result.willRecreate === true) showCheckStatus(statusKey, "Applying — will recreate");
     } catch {
       console.warn("[dock] docker stack action failed", control.id);
-      showCheckStatus(control.id, failureMessage, true);
+      showCheckStatus(statusKey, failureMessage, true);
     }
+  };
+
+  // A single monitor row's render — closes over this render's own
+  // worktreePaths/toggleGenRef/allOptions/runningFor/etc., same as the
+  // handlers above it. Called for configured controls, ungrouped docker
+  // controls, and each compose-project group's own controls below; a group
+  // needs to wrap several calls to this in its own
+  // .dock-stack-group/.dock-stack-monitors box, which a flat `.map` alone
+  // can't express (a per-group header can't be produced by mapping a flat
+  // control list one at a time).
+  const renderMonitor = (control: DockControl) => {
+    const running = runningFor(control);
+    // A docker-sourced control's worktree/branch is meaningless — it's
+    // a host-level `docker` command, not something running inside this
+    // project's git checkout — so it never gets the selector, even
+    // when the column otherwise has multiple worktrees/branches.
+    const controlShowSelector = showSelector && control.source !== "docker";
+    // Determine effective worktreeRefresh: control config > settings default
+    const effectiveWorktreeRefresh =
+      control.worktreeRefresh ?? settings.dock?.defaultWorktreeRefresh ?? false;
+
+    // Resolve the currently selected option value — see
+    // dock/dockHelpers.ts's resolveSelectedValue doc comment for the
+    // full precedence.
+    const optionValues = new Set(allOptions.map((o) => o.value));
+    const selectedValue = resolveSelectedValue({
+      running,
+      storedValue: worktreePaths[control.id],
+      optionValues,
+      mainCheckoutPath: mainCheckout?.path,
+      controlCwd: control.cwd,
+    });
+
+    // Helper: create or restart a session for a given option value.
+    // Falls back to control.cwd when value is empty or unset. Returns
+    // the create promise (rather than voiding it internally) so the
+    // worktree-switch handler below can actually observe a failed
+    // relaunch instead of it disappearing into an unhandled rejection
+    // — the exact P9 class of bug, previously sitting inside the very
+    // restart path U5 fixes.
+    // PR3 — a docker-sourced control's session is named with its
+    // stable dockerSessionIdentity (and locked) so a manual header
+    // click matches the same way an auto-attached session does; see
+    // dockHelpers.ts's own doc comment for why command-string
+    // matching alone isn't reliable for these.
+    const dockIdentity = dockerSessionIdentity(control);
+    const identityOpts = dockIdentity ? { name: dockIdentity, nameLocked: true } : {};
+    const launchForValue = (value: string) => {
+      const effectiveCwd = value.length > 0 ? value : control.cwd;
+      if (effectiveCwd && effectiveCwd.startsWith("branch:")) {
+        const branchName = effectiveCwd.slice("branch:".length);
+        return useDashboardStore.getState().createSession(projectId, control.command, {
+          kind: "dock",
+          worktree: { branch: branchName },
+          worktreeRefresh: effectiveWorktreeRefresh,
+          ...identityOpts,
+          ...(control.env ? { env: control.env } : {}),
+        });
+      }
+      return useDashboardStore.getState().createSession(projectId, control.command, {
+        ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+        kind: "dock",
+        ...identityOpts,
+        ...(control.env ? { env: control.env } : {}),
+      });
+    };
+
+    // isUpdateStillAvailable re-derives against the control's CURRENT
+    // imageId rather than trusting the stored check result on its own
+    // — see that function's doc comment for why (updateChecks is
+    // never proactively invalidated).
+    const updateAvailable = isUpdateStillAvailable(
+      updateChecks[control.id],
+      control.docker?.imageId,
+    );
+    const dockerStatus = control.docker ? dockerServiceStatus(control.docker.state) : null;
+
+    // P10 — named so the header's onKeyDown (Enter/Space) can call
+    // the exact same action as a click, rather than dispatching a
+    // synthetic `.click()` at the DOM node — matching how
+    // unified-board/TaskCard.tsx and NotificationBell.tsx's EventRow
+    // both call a plain function from both handlers.
+    const handleHeaderActivate = () => {
+      if (running) {
+        // U8 — only the KILL half of this header needs
+        // arm-then-confirm; the header doubles as the START
+        // affordance when nothing is running (the `else`
+        // branch below), and starting a session is never
+        // destructive, so it always fires on the first click
+        // regardless of confirmBeforeKill.
+        if (!confirmBeforeKill || killArmedIds.has(control.id)) {
+          disarmKill(control.id);
+          bumpToggleGen(control.id);
+          void useDashboardStore.getState().deleteSession(running.id);
+        } else {
+          armKill(control.id);
+        }
+      } else {
+        bumpToggleGen(control.id);
+        // Hermes review — this discarded the promise outright:
+        // a failed createSession (dead remote host, a bad
+        // worktree path, ...) became an unhandled rejection
+        // with nothing on screen, the exact P9 silent-failure
+        // class this PR fixes everywhere else. Reuses this
+        // file's own showCheckStatus transient-message infra
+        // (already rendered next to this same tag for
+        // "Check for update"/"Pull & restart") rather than
+        // introducing a new error-state shape.
+        launchForValue(selectedValue).catch(() => {
+          showCheckStatus(control.id, "Failed to start — try again", true);
+        });
+      }
+    };
+
+    // The worktree/branch select's own onChange — stays here rather
+    // than moving into dock/DockMonitor.tsx along with the rest of
+    // the header markup: it needs worktreePaths/toggleGenRef state,
+    // launchForValue, and the deleteSession/showCheckStatus calls
+    // above, all of which are this column's own CRUD state, not a
+    // single monitor row's presentation.
+    const onWorktreeChange = (newValue: string) => {
+      setWorktreePaths((prev) => ({ ...prev, [control.id]: newValue }));
+      // If a monitor is running and the user switches, kill and
+      // restart in the new location.
+      if (running) {
+        // A stale armed kill from before the switch (the user armed
+        // the header, then picked a different worktree instead of
+        // confirming) must not go on reading "confirm?" for up to
+        // KILL_ARM_DISARM_MS after this delete+relaunch — this
+        // delete is a restart, not the armed kill.
+        disarmKill(control.id);
+        // Hermes review — bumped here too, BEFORE capturing
+        // genAtStart below: two rapid worktree switches on the same
+        // control each start their own delete-then-relaunch IIFE,
+        // and previously only a header click bumped this counter —
+        // so if both deletes happened to resolve, the FIRST switch's
+        // relaunch could still fire (with its now-stale path) after
+        // the SECOND switch had already moved the select on to a
+        // newer value. Bumping unconditionally on every switch means
+        // each one invalidates any still-in-flight predecessor's
+        // pending relaunch, the same way an explicit header click
+        // already did.
+        bumpToggleGen(control.id);
+        // U5 — capture the restart intent BEFORE the delete, not by
+        // re-deriving it from post-delete session state.
+        // `store.deleteSession` itself awaits `refreshSessions()`
+        // before resolving, so by the time an `await` on it here
+        // returns, this exact row already reads "killed" in the
+        // store — re-checking "is a matching session still active"
+        // at that point would always read false, making the
+        // relaunch below permanently unreachable (verified live;
+        // the original bug). `shouldRestart` is just
+        // `Boolean(running)`, read from this render's own closure,
+        // so it can't be corrupted by the delete it's about to
+        // trigger.
+        //
+        // The two cases that still have to suppress the relaunch —
+        // the user manually toggling THIS monitor (start or kill)
+        // from the header while this switch is in flight, OR a
+        // second, newer switch superseding this one — are both
+        // tracked via toggleGenRef instead of session status: any
+        // of the header's onClick, or this onChange itself (see the
+        // bump right above), bumps that counter on an actual
+        // toggle, so comparing it before/after the await detects an
+        // intervening action without depending on state the delete
+        // call itself mutates.
+        const shouldRestart = Boolean(running);
+        const genAtStart = toggleGenRef.current.get(control.id) ?? 0;
+        void (async () => {
+          try {
+            await useDashboardStore.getState().deleteSession(running.id);
+            const genUnchanged = (toggleGenRef.current.get(control.id) ?? 0) === genAtStart;
+            if (shouldRestart && genUnchanged) {
+              await launchForValue(newValue);
+            }
+          } catch {
+            // Hermes review (suggestion) — reuses the same
+            // showCheckStatus transient-message infra as the
+            // header's own start-affordance catch above, instead of
+            // a console-only warning, so a failed switch is visible
+            // in the UI too.
+            showCheckStatus(control.id, "Failed to switch — try again", true);
+          }
+        })();
+      }
+    };
+
+    return (
+      <DockMonitor
+        key={control.id}
+        control={control}
+        running={running}
+        showSelector={controlShowSelector}
+        selectedValue={selectedValue}
+        worktreeOptions={allOptions}
+        onWorktreeChange={onWorktreeChange}
+        devServerUrl={project?.devServerUrl}
+        onOpenBrowser={() => onOpenBrowser(projectId)}
+        updateAvailable={updateAvailable}
+        dockerStatus={dockerStatus}
+        checkStatus={checkStatusById[control.id]}
+        armed={killArmedIds.has(control.id)}
+        confirmBeforeKill={confirmBeforeKill}
+        onHeaderActivate={handleHeaderActivate}
+        onCheckUpdate={() => void handleCheckUpdate(control)}
+        onServiceRestart={() =>
+          void handleServiceAction(control, api.restartDockerService, "Restart failed")
+        }
+        onServiceStop={() =>
+          void handleServiceAction(control, api.stopDockerService, "Stop failed")
+        }
+        onServiceStart={() =>
+          void handleServiceAction(control, api.startDockerService, "Start failed")
+        }
+      />
+    );
   };
 
   return (
@@ -697,249 +935,85 @@ function DockColumn({
         />
       )}
       <div className="dock-body cmux-scroll">
-        {configuredControls.length === 0 && dockerGroupControls.length === 0 && (
-          <div className="dock-empty">
-            {project?.devServerUrl ? (
-              <button
-                className="dock-monitor-url"
-                onClick={() => onOpenBrowser(projectId)}
-                title={`Open preview for ${project.devServerUrl}`}
-                type="button"
-              >
-                <GlobeIcon size={11} />
-                <span className="dock-monitor-url-text">{project.devServerUrl}</span>
-              </button>
-            ) : (
-              "No monitors configured for this project"
-            )}
-          </div>
-        )}
-        {[...configuredControls, ...dockerGroupControls].map((control, index) => {
-          const running = runningFor(control);
-          // A docker-sourced control's worktree/branch is meaningless — it's
-          // a host-level `docker` command, not something running inside this
-          // project's git checkout — so it never gets the selector, even
-          // when the column otherwise has multiple worktrees/branches.
-          const controlShowSelector = showSelector && control.source !== "docker";
-          // Determine effective worktreeRefresh: control config > settings default
-          const effectiveWorktreeRefresh =
-            control.worktreeRefresh ?? settings.dock?.defaultWorktreeRefresh ?? false;
-
-          // Resolve the currently selected option value — see
-          // dock/dockHelpers.ts's resolveSelectedValue doc comment for the
-          // full precedence.
-          const optionValues = new Set(allOptions.map((o) => o.value));
-          const selectedValue = resolveSelectedValue({
-            running,
-            storedValue: worktreePaths[control.id],
-            optionValues,
-            mainCheckoutPath: mainCheckout?.path,
-            controlCwd: control.cwd,
-          });
-
-          // Helper: create or restart a session for a given option value.
-          // Falls back to control.cwd when value is empty or unset. Returns
-          // the create promise (rather than voiding it internally) so the
-          // worktree-switch handler below can actually observe a failed
-          // relaunch instead of it disappearing into an unhandled rejection
-          // — the exact P9 class of bug, previously sitting inside the very
-          // restart path U5 fixes.
-          // PR3 — a docker-sourced control's session is named with its
-          // stable dockerSessionIdentity (and locked) so a manual header
-          // click matches the same way an auto-attached session does; see
-          // dockHelpers.ts's own doc comment for why command-string
-          // matching alone isn't reliable for these.
-          const dockIdentity = dockerSessionIdentity(control);
-          const identityOpts = dockIdentity ? { name: dockIdentity, nameLocked: true } : {};
-          const launchForValue = (value: string) => {
-            const effectiveCwd = value.length > 0 ? value : control.cwd;
-            if (effectiveCwd && effectiveCwd.startsWith("branch:")) {
-              const branchName = effectiveCwd.slice("branch:".length);
-              return useDashboardStore.getState().createSession(projectId, control.command, {
-                kind: "dock",
-                worktree: { branch: branchName },
-                worktreeRefresh: effectiveWorktreeRefresh,
-                ...identityOpts,
-                ...(control.env ? { env: control.env } : {}),
-              });
-            }
-            return useDashboardStore.getState().createSession(projectId, control.command, {
-              ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
-              kind: "dock",
-              ...identityOpts,
-              ...(control.env ? { env: control.env } : {}),
-            });
-          };
-
-          // Issue #73 — a small "Docker" group label ahead of the first
-          // discovered/ephemeral control, mirroring the plan's "configured
-          // controls first, then a Docker divider, then docker-sourced
-          // controls" order. `index` is over the CONCATENATED
-          // [...configuredControls, ...dockerGroupControls] array, so this
-          // fires exactly once, right where the group actually starts.
-          const isFirstDockerControl =
-            dockerGroupControls.length > 0 && index === configuredControls.length;
-
-          // isUpdateStillAvailable re-derives against the control's CURRENT
-          // imageId rather than trusting the stored check result on its own
-          // — see that function's doc comment for why (updateChecks is
-          // never proactively invalidated).
-          const updateAvailable = isUpdateStillAvailable(
-            updateChecks[control.id],
-            control.docker?.imageId,
-          );
-          const dockerStatus = control.docker ? dockerServiceStatus(control.docker.state) : null;
-
-          // P10 — named so the header's onKeyDown (Enter/Space) can call
-          // the exact same action as a click, rather than dispatching a
-          // synthetic `.click()` at the DOM node — matching how
-          // unified-board/TaskCard.tsx and NotificationBell.tsx's EventRow
-          // both call a plain function from both handlers.
-          const handleHeaderActivate = () => {
-            if (running) {
-              // U8 — only the KILL half of this header needs
-              // arm-then-confirm; the header doubles as the START
-              // affordance when nothing is running (the `else`
-              // branch below), and starting a session is never
-              // destructive, so it always fires on the first click
-              // regardless of confirmBeforeKill.
-              if (!confirmBeforeKill || killArmedIds.has(control.id)) {
-                disarmKill(control.id);
-                bumpToggleGen(control.id);
-                void useDashboardStore.getState().deleteSession(running.id);
-              } else {
-                armKill(control.id);
-              }
-            } else {
-              bumpToggleGen(control.id);
-              // Hermes review — this discarded the promise outright:
-              // a failed createSession (dead remote host, a bad
-              // worktree path, ...) became an unhandled rejection
-              // with nothing on screen, the exact P9 silent-failure
-              // class this PR fixes everywhere else. Reuses this
-              // file's own showCheckStatus transient-message infra
-              // (already rendered next to this same tag for
-              // "Check for update"/"Pull & restart") rather than
-              // introducing a new error-state shape.
-              launchForValue(selectedValue).catch(() => {
-                showCheckStatus(control.id, "Failed to start — try again", true);
-              });
-            }
-          };
-
-          // The worktree/branch select's own onChange — stays here rather
-          // than moving into dock/DockMonitor.tsx along with the rest of
-          // the header markup: it needs worktreePaths/toggleGenRef state,
-          // launchForValue, and the deleteSession/showCheckStatus calls
-          // above, all of which are this column's own CRUD state, not a
-          // single monitor row's presentation.
-          const onWorktreeChange = (newValue: string) => {
-            setWorktreePaths((prev) => ({ ...prev, [control.id]: newValue }));
-            // If a monitor is running and the user switches, kill and
-            // restart in the new location.
-            if (running) {
-              // A stale armed kill from before the switch (the user armed
-              // the header, then picked a different worktree instead of
-              // confirming) must not go on reading "confirm?" for up to
-              // KILL_ARM_DISARM_MS after this delete+relaunch — this
-              // delete is a restart, not the armed kill.
-              disarmKill(control.id);
-              // Hermes review — bumped here too, BEFORE capturing
-              // genAtStart below: two rapid worktree switches on the same
-              // control each start their own delete-then-relaunch IIFE,
-              // and previously only a header click bumped this counter —
-              // so if both deletes happened to resolve, the FIRST switch's
-              // relaunch could still fire (with its now-stale path) after
-              // the SECOND switch had already moved the select on to a
-              // newer value. Bumping unconditionally on every switch means
-              // each one invalidates any still-in-flight predecessor's
-              // pending relaunch, the same way an explicit header click
-              // already did.
-              bumpToggleGen(control.id);
-              // U5 — capture the restart intent BEFORE the delete, not by
-              // re-deriving it from post-delete session state.
-              // `store.deleteSession` itself awaits `refreshSessions()`
-              // before resolving, so by the time an `await` on it here
-              // returns, this exact row already reads "killed" in the
-              // store — re-checking "is a matching session still active"
-              // at that point would always read false, making the
-              // relaunch below permanently unreachable (verified live;
-              // the original bug). `shouldRestart` is just
-              // `Boolean(running)`, read from this render's own closure,
-              // so it can't be corrupted by the delete it's about to
-              // trigger.
-              //
-              // The two cases that still have to suppress the relaunch —
-              // the user manually toggling THIS monitor (start or kill)
-              // from the header while this switch is in flight, OR a
-              // second, newer switch superseding this one — are both
-              // tracked via toggleGenRef instead of session status: any
-              // of the header's onClick, or this onChange itself (see the
-              // bump right above), bumps that counter on an actual
-              // toggle, so comparing it before/after the await detects an
-              // intervening action without depending on state the delete
-              // call itself mutates.
-              const shouldRestart = Boolean(running);
-              const genAtStart = toggleGenRef.current.get(control.id) ?? 0;
-              void (async () => {
-                try {
-                  await useDashboardStore.getState().deleteSession(running.id);
-                  const genUnchanged = (toggleGenRef.current.get(control.id) ?? 0) === genAtStart;
-                  if (shouldRestart && genUnchanged) {
-                    await launchForValue(newValue);
-                  }
-                } catch {
-                  // Hermes review (suggestion) — reuses the same
-                  // showCheckStatus transient-message infra as the
-                  // header's own start-affordance catch above, instead of
-                  // a console-only warning, so a failed switch is visible
-                  // in the UI too.
-                  showCheckStatus(control.id, "Failed to switch — try again", true);
-                }
-              })();
-            }
-          };
-
+        {configuredControls.length === 0 &&
+          dockerStackGroups.length === 0 &&
+          ungroupedDockerControls.length === 0 && (
+            <div className="dock-empty">
+              {project?.devServerUrl ? (
+                <button
+                  className="dock-monitor-url"
+                  onClick={() => onOpenBrowser(projectId)}
+                  title={`Open preview for ${project.devServerUrl}`}
+                  type="button"
+                >
+                  <GlobeIcon size={11} />
+                  <span className="dock-monitor-url-text">{project.devServerUrl}</span>
+                </button>
+              ) : (
+                "No monitors configured for this project"
+              )}
+            </div>
+          )}
+        {configuredControls.map(renderMonitor)}
+        {ungroupedDockerControls.map(renderMonitor)}
+        {dockerStackGroups.map((group) => {
+          const statusKey = `stack:${group.composeProject}`;
+          // anyRep is only null for a group of live ephemerals whose
+          // originating service has since dropped out of discovery
+          // (dockHelpers.ts's own doc comment) — the non-null assertions
+          // below are exactly as safe as the `hasActions` check
+          // DockStackHeader itself gates its kebab on: every handler
+          // they're attached to is unreachable unless anyRep (and, per the
+          // same derivation, pullRep/rebuildRep when relevant) is set.
+          const rep = group.anyRep;
           return (
-            <DockMonitor
-              key={control.id}
-              control={control}
-              running={running}
-              isFirstDockerControl={isFirstDockerControl}
-              showSelector={controlShowSelector}
-              selectedValue={selectedValue}
-              worktreeOptions={allOptions}
-              onWorktreeChange={onWorktreeChange}
-              devServerUrl={project?.devServerUrl}
-              onOpenBrowser={() => onOpenBrowser(projectId)}
-              updateAvailable={updateAvailable}
-              dockerStatus={dockerStatus}
-              checkStatus={checkStatusById[control.id]}
-              armed={killArmedIds.has(control.id)}
-              confirmBeforeKill={confirmBeforeKill}
-              onHeaderActivate={handleHeaderActivate}
-              onCheckUpdate={() => void handleCheckUpdate(control)}
-              onPullAndRestart={() => void handlePullAndRestart(control)}
-              onRebuildAndRestart={() => void handleRebuildAndRestart(control)}
-              onServiceRestart={() =>
-                void handleServiceAction(control, api.restartDockerService, "Restart failed")
-              }
-              onServiceStop={() =>
-                void handleServiceAction(control, api.stopDockerService, "Stop failed")
-              }
-              onServiceStart={() =>
-                void handleServiceAction(control, api.startDockerService, "Start failed")
-              }
-              onStackRestart={() =>
-                void handleStackAction(control, api.restartDockerStack, "Failed to start restart")
-              }
-              onStackApply={() =>
-                void handleStackAction(control, api.applyDockerStack, "Failed to apply config")
-              }
-              onStackStop={() =>
-                void handleStackAction(control, api.stopDockerStack, "Failed to start stop")
-              }
-            />
+            <div
+              key={group.composeProject}
+              className="dock-stack-group"
+              style={{ flexGrow: group.controls.length }}
+            >
+              <DockStackHeader
+                composeProject={group.composeProject}
+                hasActions={rep !== null}
+                canPull={group.pullRep !== null}
+                canRebuild={group.rebuildRep !== null}
+                status={checkStatusById[statusKey]}
+                onStackRestart={() =>
+                  rep &&
+                  void handleStackAction(
+                    rep,
+                    api.restartDockerStack,
+                    "Failed to start restart",
+                    statusKey,
+                  )
+                }
+                onStackApply={() =>
+                  rep &&
+                  void handleStackAction(
+                    rep,
+                    api.applyDockerStack,
+                    "Failed to apply config",
+                    statusKey,
+                  )
+                }
+                onPullAndRestart={() =>
+                  group.pullRep && void handlePullAndRestart(group.pullRep, statusKey)
+                }
+                onRebuildAndRestart={() =>
+                  group.rebuildRep && void handleRebuildAndRestart(group.rebuildRep, statusKey)
+                }
+                onStackStop={() =>
+                  rep &&
+                  void handleStackAction(
+                    rep,
+                    api.stopDockerStack,
+                    "Failed to start stop",
+                    statusKey,
+                  )
+                }
+              />
+              <div className="dock-stack-monitors">{group.controls.map(renderMonitor)}</div>
+            </div>
           );
         })}
       </div>

@@ -22,7 +22,6 @@ import { imageTag } from "./dockHelpers.js";
 export function DockMonitor({
   control,
   running,
-  isFirstDockerControl,
   showSelector,
   selectedValue,
   worktreeOptions,
@@ -36,18 +35,12 @@ export function DockMonitor({
   confirmBeforeKill,
   onHeaderActivate,
   onCheckUpdate,
-  onPullAndRestart,
-  onRebuildAndRestart,
   onServiceRestart,
   onServiceStop,
   onServiceStart,
-  onStackRestart,
-  onStackApply,
-  onStackStop,
 }: {
   control: DockControl;
   running: Session | undefined;
-  isFirstDockerControl: boolean;
   showSelector: boolean;
   selectedValue: string;
   worktreeOptions: CustomSelectOption[];
@@ -61,20 +54,12 @@ export function DockMonitor({
   confirmBeforeKill: boolean;
   onHeaderActivate: () => void;
   onCheckUpdate: () => void;
-  onPullAndRestart: () => void;
-  // build-only counterpart of onPullAndRestart — see DockColumn's own
-  // buildOnly branch for why exactly one of the two ever renders.
-  onRebuildAndRestart: () => void;
   onServiceRestart: () => void;
   onServiceStop: () => void;
   onServiceStart: () => void;
-  onStackRestart: () => void;
-  onStackApply: () => void;
-  onStackStop: () => void;
 }) {
   return (
     <Fragment>
-      {isFirstDockerControl && <div className="dock-group-label">Docker</div>}
       <div className="dock-monitor">
         <div
           className="dock-monitor-header"
@@ -184,7 +169,6 @@ export function DockMonitor({
                     key: "service-restart",
                     label: "Restart service",
                     icon: <RefreshIcon size={12} />,
-                    section: "service",
                     onClick: onServiceRestart,
                   },
                   {
@@ -194,7 +178,6 @@ export function DockMonitor({
                     icon: <KillIcon size={12} />,
                     danger: true,
                     confirm: true,
-                    section: "service",
                     onClick: onServiceStop,
                   },
                   // "only offered when startable" (issue #73 follow-up plan,
@@ -208,68 +191,25 @@ export function DockMonitor({
                           key: "service-start",
                           label: "Start service",
                           icon: <PlayTriangleIcon size={12} />,
-                          section: "service",
                           onClick: onServiceStart,
                         },
                       ]
                     : []),
-                  {
-                    key: "stack-restart",
-                    label: "Restart stack",
-                    icon: <RefreshIcon size={12} />,
-                    section: "stack",
-                    onClick: onStackRestart,
-                  },
-                  {
-                    key: "stack-apply",
-                    label: "Apply config",
-                    icon: <ContainerIcon size={12} />,
-                    section: "stack",
-                    onClick: onStackApply,
-                  },
+                  // The stack-wide actions (restart/apply/pull-or-rebuild/
+                  // stop) used to repeat here, identically, on every
+                  // service row of the same stack — hoisted to a single
+                  // per-compose-project DockStackHeader kebab instead (see
+                  // Dock.tsx's DockColumn). check-update stays per-service:
+                  // buildOnly is per-service, the route short-circuits per
+                  // service, and updateAvailable drives THIS row's own
+                  // image-pill tint — hoisting it would either lose that
+                  // tint or lie about which service was actually checked.
                   {
                     key: "check-update",
                     label: "Check for update",
                     icon: <RefreshIcon size={12} />,
                     disabled: control.docker.buildOnly,
-                    section: "stack",
                     onClick: onCheckUpdate,
-                  },
-                  // Exactly one of pull-restart / rebuild-restart renders —
-                  // a build-only service (no registry image) gets the
-                  // rebuild variant instead of a permanently-disabled pull
-                  // action (the bug this PR fixes: previously BOTH menu
-                  // items were disabled for a build-only stack).
-                  control.docker.buildOnly
-                    ? {
-                        key: "stack-rebuild",
-                        label: "Rebuild & restart stack",
-                        armLabel: "Click again — rebuilds and restarts the whole stack",
-                        icon: <ContainerIcon size={12} />,
-                        danger: true,
-                        confirm: true,
-                        section: "stack",
-                        onClick: onRebuildAndRestart,
-                      }
-                    : {
-                        key: "stack-pull-restart",
-                        label: "Pull & restart stack",
-                        armLabel: "Click again — restarts the whole stack",
-                        icon: <ContainerIcon size={12} />,
-                        danger: true,
-                        confirm: true,
-                        section: "stack",
-                        onClick: onPullAndRestart,
-                      },
-                  {
-                    key: "stack-stop",
-                    label: "Stop stack",
-                    armLabel: "Click again — stops the whole stack",
-                    icon: <KillIcon size={12} />,
-                    danger: true,
-                    confirm: true,
-                    section: "stack",
-                    onClick: onStackStop,
                   },
                 ]}
               />

@@ -162,7 +162,22 @@ describe("Dock", () => {
       };
     }
 
-    it("renders a discovered control under a Docker group label, with a status dot, image pill, and kebab", async () => {
+    // Two DIFFERENT kebabs now coexist for a single discovered service: the
+    // per-service one inside .dock-monitor-header (Restart/Stop/Start
+    // service, Check for update) and the per-compose-project one inside
+    // .dock-stack-header (Restart/Apply/Pull-or-Rebuild/Stop stack) —
+    // hoisted out of the row so it stops repeating once per service in the
+    // same stack. A plain `document.querySelector(".kebab-trigger-btn")`
+    // would silently grab whichever renders first in the DOM, so every test
+    // below picks the one it actually means to exercise.
+    function serviceKebab(): HTMLElement {
+      return document.querySelector(".dock-monitor-header .kebab-trigger-btn") as HTMLElement;
+    }
+    function stackKebab(): HTMLElement {
+      return document.querySelector(".dock-stack-header .kebab-trigger-btn") as HTMLElement;
+    }
+
+    it("renders a discovered control under its compose-project stack header, with a status dot, image pill, and kebab", async () => {
       dockByProject[1] = [
         { id: "dev", title: "Dev server", command: "npm run dev" },
         dockerControl(),
@@ -170,22 +185,22 @@ describe("Dock", () => {
       render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
 
       expect(await screen.findByText("Dev server")).toBeInTheDocument();
-      expect(screen.getByText("Docker")).toHaveClass("dock-group-label");
+      expect(screen.getByText("sanctuary")).toHaveClass("dock-group-label");
       expect(screen.getByText("web")).toBeInTheDocument();
       expect(screen.getByText("edge")).toBeInTheDocument();
-      expect(document.querySelector(".kebab-trigger-btn")).toBeInTheDocument();
+      expect(serviceKebab()).toBeInTheDocument();
+      expect(stackKebab()).toBeInTheDocument();
       // The kebab wrapper carries .dock-monitor-kebab (pinned flex-shrink:0
       // in CSS) so a squeezed header never clips it. jsdom does no layout —
       // this only proves the class is wired up, not that the kebab stays
       // visible at a real narrow width. That's a manual check (see this
       // repo's dock kebab plan / PR description), not something a jsdom
       // test can assert.
-      expect(document.querySelector(".kebab-trigger-btn")?.parentElement).toHaveClass(
-        "dock-monitor-kebab",
-      );
+      expect(serviceKebab().parentElement).toHaveClass("dock-monitor-kebab");
+      expect(stackKebab().parentElement).toHaveClass("dock-monitor-kebab");
     });
 
-    it("clicking the kebab trigger does not toggle the monitor on/off", async () => {
+    it("clicking the service kebab trigger does not toggle the monitor on/off", async () => {
       dockByProject[1] = [dockerControl()];
       const createSession = vi.fn().mockResolvedValue({});
       useDashboardStore.setState({ projects: [PROJECT], sessions: [], createSession });
@@ -193,10 +208,27 @@ describe("Dock", () => {
       render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
 
       await screen.findByText("web");
-      await user.click(document.querySelector(".kebab-trigger-btn")!);
+      await user.click(serviceKebab());
 
       expect(await screen.findByText("Check for update")).toBeInTheDocument();
       expect(createSession).not.toHaveBeenCalled();
+    });
+
+    it("the service kebab no longer offers any stack-wide action — only service-scoped ones", async () => {
+      dockByProject[1] = [dockerControl()];
+      const user = userEvent.setup();
+      render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+      await screen.findByText("web");
+      await user.click(serviceKebab());
+
+      expect(await screen.findByText("Check for update")).toBeInTheDocument();
+      expect(screen.getByText("Restart service")).toBeInTheDocument();
+      expect(screen.getByText("Stop service")).toBeInTheDocument();
+      expect(screen.queryByText("Restart stack")).not.toBeInTheDocument();
+      expect(screen.queryByText("Apply config")).not.toBeInTheDocument();
+      expect(screen.queryByText("Pull & restart stack")).not.toBeInTheDocument();
+      expect(screen.queryByText("Stop stack")).not.toBeInTheDocument();
     });
 
     describe("auto-attach Docker logs (PR3, settings.dock.autoAttachDockerLogs)", () => {
@@ -411,7 +443,7 @@ describe("Dock", () => {
       render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
 
       await screen.findByText("web");
-      await user.click(document.querySelector(".kebab-trigger-btn")!);
+      await user.click(serviceKebab());
       await user.click(await screen.findByText("Check for update"));
 
       await waitFor(() => {
@@ -435,7 +467,7 @@ describe("Dock", () => {
       render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
 
       await screen.findByText("web");
-      await user.click(document.querySelector(".kebab-trigger-btn")!);
+      await user.click(serviceKebab());
       await user.click(await screen.findByText("Check for update"));
 
       const status = await screen.findByText("Up to date");
@@ -450,7 +482,7 @@ describe("Dock", () => {
       render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
 
       await screen.findByText("web");
-      await user.click(document.querySelector(".kebab-trigger-btn")!);
+      await user.click(serviceKebab());
       await user.click(await screen.findByText("Check for update"));
 
       const status = await screen.findByText("Check failed — pull error");
@@ -494,7 +526,7 @@ describe("Dock", () => {
       render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
 
       await screen.findByText("web");
-      await user.click(document.querySelector(".kebab-trigger-btn")!);
+      await user.click(stackKebab());
       const item = await screen.findByText("Pull & restart stack");
 
       await user.click(item);
@@ -523,17 +555,20 @@ describe("Dock", () => {
       render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
 
       await screen.findByText("web");
-      await user.click(document.querySelector(".kebab-trigger-btn")!);
+      await user.click(serviceKebab());
 
       await screen.findByText("Check for update");
       const checkBtn = screen.getByText("Check for update").closest("button");
       expect(checkBtn).toBeDisabled();
 
-      // The bug this PR fixes: previously BOTH menu items were disabled for
-      // a build-only stack, leaving no lifecycle action reachable at all.
+      // The bug #857 fixed: previously BOTH menu items were disabled for a
+      // build-only stack, leaving no lifecycle action reachable at all. Now
+      // on the stack kebab (hoisted out of the service row — see this
+      // describe block's own serviceKebab/stackKebab helpers).
+      await user.click(stackKebab());
       expect(screen.queryByText("Pull & restart stack")).not.toBeInTheDocument();
-      const rebuildBtn = screen.getByText("Rebuild & restart stack").closest("button");
-      expect(rebuildBtn).not.toBeDisabled();
+      const rebuildBtn = await screen.findByText("Rebuild & restart stack");
+      expect(rebuildBtn.closest("button")).not.toBeDisabled();
     });
 
     it("'Rebuild & restart stack' requires arming before it fires the rebuild route", async () => {
@@ -550,7 +585,7 @@ describe("Dock", () => {
       render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
 
       await screen.findByText("web");
-      await user.click(document.querySelector(".kebab-trigger-btn")!);
+      await user.click(stackKebab());
       await user.click(await screen.findByText("Rebuild & restart stack"));
 
       expect(fetchMock).not.toHaveBeenCalledWith(
@@ -578,7 +613,7 @@ describe("Dock", () => {
       render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
 
       await screen.findByText("web");
-      await user.click(document.querySelector(".kebab-trigger-btn")!);
+      await user.click(serviceKebab());
 
       await user.click(await screen.findByText("Restart service"));
       await waitFor(() => {
@@ -588,7 +623,7 @@ describe("Dock", () => {
         );
       });
 
-      await user.click(document.querySelector(".kebab-trigger-btn")!);
+      await user.click(serviceKebab());
       // state:"exited" (≠ running) — "Start service" must be offered.
       await user.click(await screen.findByText("Start service"));
       await waitFor(() => {
@@ -598,7 +633,7 @@ describe("Dock", () => {
         );
       });
 
-      await user.click(document.querySelector(".kebab-trigger-btn")!);
+      await user.click(serviceKebab());
       await user.click(await screen.findByText("Stop service"));
       expect(fetchMock).not.toHaveBeenCalledWith(
         "/api/projects/1/docker/service/stop",
@@ -619,7 +654,7 @@ describe("Dock", () => {
 
       const user = userEvent.setup();
       await screen.findByText("web");
-      await user.click(document.querySelector(".kebab-trigger-btn")!);
+      await user.click(serviceKebab());
 
       await screen.findByText("Restart service");
       expect(screen.queryByText("Start service")).not.toBeInTheDocument();
@@ -633,7 +668,7 @@ describe("Dock", () => {
 
         const user = userEvent.setup();
         await screen.findByText("web");
-        await user.click(document.querySelector(".kebab-trigger-btn")!);
+        await user.click(serviceKebab());
 
         await screen.findByText("Restart service");
         expect(screen.queryByText("Start service")).not.toBeInTheDocument();
@@ -647,7 +682,7 @@ describe("Dock", () => {
       render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
 
       await screen.findByText("web");
-      await user.click(document.querySelector(".kebab-trigger-btn")!);
+      await user.click(serviceKebab());
       await user.click(await screen.findByText("Restart service"));
 
       const status = await screen.findByText("Restart failed");
@@ -666,7 +701,7 @@ describe("Dock", () => {
       render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
 
       await screen.findByText("web");
-      await user.click(document.querySelector(".kebab-trigger-btn")!);
+      await user.click(stackKebab());
       await user.click(await screen.findByText("Restart stack"));
       await waitFor(() => {
         expect(fetchMock).toHaveBeenCalledWith(
@@ -676,7 +711,7 @@ describe("Dock", () => {
       });
       expect(refreshSessions).toHaveBeenCalled();
 
-      await user.click(document.querySelector(".kebab-trigger-btn")!);
+      await user.click(stackKebab());
       await user.click(await screen.findByText("Apply config"));
       await waitFor(() => {
         expect(fetchMock).toHaveBeenCalledWith(
@@ -685,7 +720,7 @@ describe("Dock", () => {
         );
       });
 
-      await user.click(document.querySelector(".kebab-trigger-btn")!);
+      await user.click(stackKebab());
       await user.click(await screen.findByText("Stop stack"));
       expect(fetchMock).not.toHaveBeenCalledWith(
         "/api/projects/1/docker/stack/stop",
@@ -700,13 +735,123 @@ describe("Dock", () => {
       });
     });
 
-    it("a manual dock.json control (no `docker` field) never renders a kebab", async () => {
+    it("a manual dock.json control (no `docker` field) never renders a kebab or a stack header", async () => {
       dockByProject[1] = [{ id: "dev", title: "Dev server", command: "npm run dev" }];
       render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
 
       await screen.findByText("Dev server");
       expect(document.querySelector(".kebab-trigger-btn")).not.toBeInTheDocument();
-      expect(screen.queryByText("Docker")).not.toBeInTheDocument();
+      expect(document.querySelector(".dock-stack-header")).not.toBeInTheDocument();
+    });
+
+    it("two compose projects in one column each get their own stack header, acting on their own stack", async () => {
+      // Mirrors a real setup this repo's own dock plan calls out: a project
+      // with a dev compose file (project name X) and a prod one (project
+      // name Y) both discovered in the same column at once.
+      const web = dockerControl();
+      const api = dockerControl({
+        id: "docker:pocket-dev:api",
+        title: "api",
+        docker: { ...dockerControl().docker, composeProject: "pocket-dev", service: "api" },
+      });
+      dockByProject[1] = [web, api];
+      stackActionByProject[1] = {
+        sessionId: 50,
+        control: { id: "docker-restart:sanctuary", title: "Restart sanctuary", source: "docker" },
+      };
+      const user = userEvent.setup();
+      render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+      await screen.findByText("web");
+      await screen.findByText("api");
+      // Sorted by compose project name (dockHelpers.ts's groupDockerControls).
+      const headers = document.querySelectorAll(".dock-stack-header-label");
+      expect(Array.from(headers).map((h) => h.textContent)).toEqual(["pocket-dev", "sanctuary"]);
+
+      const stackHeaders = document.querySelectorAll(".dock-stack-header .kebab-trigger-btn");
+      expect(stackHeaders).toHaveLength(2);
+      // The SECOND header is "sanctuary" (alphabetically after "pocket-dev")
+      // — fire its Restart stack and confirm the request carries THAT
+      // stack's own controlId, not the other group's.
+      await user.click(stackHeaders[1]);
+      await user.click(await screen.findByText("Restart stack"));
+      await waitFor(() => {
+        expect(fetchMock).toHaveBeenCalledWith(
+          "/api/projects/1/docker/stack/restart",
+          expect.objectContaining({
+            method: "POST",
+            body: JSON.stringify({ controlId: "docker:sanctuary:web" }),
+          }),
+        );
+      });
+    });
+
+    it("a mixed stack (one registry-image service, one build-only) offers BOTH Pull and Rebuild in one stack menu, each hitting the correct service", async () => {
+      const registryService = dockerControl({
+        id: "docker:sanctuary:web",
+        title: "web",
+        docker: { ...dockerControl().docker, service: "web", buildOnly: false },
+      });
+      const buildOnlyService = dockerControl({
+        id: "docker:sanctuary:api",
+        title: "api",
+        docker: { ...dockerControl().docker, service: "api", buildOnly: true },
+      });
+      dockByProject[1] = [registryService, buildOnlyService];
+      updateByProject[1] = {
+        sessionId: 51,
+        control: { id: "docker-update:sanctuary", title: "Update sanctuary", source: "docker" },
+      };
+      rebuildByProject[1] = {
+        sessionId: 52,
+        control: { id: "docker-rebuild:sanctuary", title: "Rebuild sanctuary", source: "docker" },
+      };
+      const refreshSessions = vi.fn().mockResolvedValue(undefined);
+      useDashboardStore.setState({ projects: [PROJECT], sessions: [], refreshSessions });
+      const user = userEvent.setup();
+      render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+      await screen.findByText("web");
+      await screen.findByText("api");
+      await user.click(stackKebab());
+
+      // Both present in the SAME menu — not an either/or like the old
+      // per-row menu.
+      expect(await screen.findByText("Pull & restart stack")).toBeInTheDocument();
+      expect(screen.getByText("Rebuild & restart stack")).toBeInTheDocument();
+
+      await user.click(screen.getByText("Pull & restart stack"));
+      await user.click(await screen.findByText("Click again — restarts the whole stack"));
+      // The exact 400 this test guards against: /docker/update rejects a
+      // build-only controlId (src/routes/projects.ts), so the request MUST
+      // carry the registry-image service's id, not the build-only one's.
+      await waitFor(() => {
+        expect(fetchMock).toHaveBeenCalledWith(
+          "/api/projects/1/docker/update",
+          expect.objectContaining({
+            method: "POST",
+            body: JSON.stringify({ controlId: "docker:sanctuary:web" }),
+          }),
+        );
+      });
+      expect(refreshSessions).toHaveBeenCalled();
+
+      await user.click(stackKebab());
+      await user.click(await screen.findByText("Rebuild & restart stack"));
+      await user.click(
+        await screen.findByText("Click again — rebuilds and restarts the whole stack"),
+      );
+      // Mirror-image guard: /docker/stack/rebuild rejects a NON-build-only
+      // controlId, so this one must carry the build-only service's id.
+      await waitFor(() => {
+        expect(fetchMock).toHaveBeenCalledWith(
+          "/api/projects/1/docker/stack/rebuild",
+          expect.objectContaining({
+            method: "POST",
+            body: JSON.stringify({ controlId: "docker:sanctuary:api" }),
+          }),
+        );
+      });
     });
   });
 
