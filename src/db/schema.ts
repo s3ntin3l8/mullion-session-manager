@@ -269,12 +269,14 @@ export const projects = sqliteTable("projects", {
   // project re-scaffolded under a different slug tracks whichever slug was
   // MOST RECENTLY committed, matching what's actually on disk.
   //
-  // Local-hosted projects only, transitively: `/setup/apply` requires a
-  // live preview record, and `/setup/preview`/`/setup/generate` both 501
-  // for any `hostId !== LOCAL_HOST_ID` (issue #895 hasn't lifted that yet).
-  // So a remote-hosted project's `slug` can only ever be null today — this
-  // is a consequence of that restriction, not a separate rule enforced
-  // here, and would need revisiting if #895 ever lifts it.
+  // `/setup/apply` requires a live preview record, and (as of PR #1102)
+  // `/setup/preview` no longer 501s for a remote-hosted project — only
+  // `/setup/generate` still keeps its own `hostId !== LOCAL_HOST_ID` 501
+  // guard (issue #895's read/write/diff/commit path was lifted repo-wide,
+  // but `/setup/generate`'s own agent-turn spawn deliberately was not — see
+  // routes/project-setup.ts's own comment on that route). So a remote-hosted
+  // project CAN now reach `/setup/apply` and get a non-null `slug` stamped,
+  // same as a local-hosted one.
   slug: text("slug"),
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()

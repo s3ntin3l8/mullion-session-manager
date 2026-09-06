@@ -145,27 +145,30 @@ describe("session-lifecycle.ts — scaffold-committed-file gate on projectSkill/
     await app.close();
   });
 
-  // CodeQL js/path-injection review finding on this PR — `projects.slug`'s
-  // only current writer (routes/project-setup.ts's `/setup/apply`) already
-  // runs every slug through `isValidScaffoldSlug` before it's ever stamped,
-  // but that guarantee lives in a different file/request entirely, which a
-  // purely local dataflow scanner can't see. This test bypasses that writer
-  // entirely (writing straight to the DB, the same way a future buggy
-  // writer could) to prove the gate itself, not just today's one producer,
-  // refuses to build a path out of an unsafe slug — and actually
-  // demonstrates the traversal, rather than merely asserting a file that
-  // wouldn't exist either way stays missing: a naive `existsSync(false)`
-  // check here would pass regardless of whether the fix is present, since
-  // `path.join` silently normalizes `..` segments before `existsSync` ever
-  // runs (an arbitrary nonexistent target proves nothing). Instead, a real
-  // marker file is planted at the EXACT location the traversal would
-  // resolve to (`.claude/skills/../../../marker/SKILL.md`, from
-  // `<projectDir>`, normalizes to `<projectDir>/../marker/SKILL.md` —
-  // verified by hand: two `..` segments cancel `.claude/skills`, landing
-  // back at `projectDir`, and the third steps one level above it) — so an
-  // unfixed sink would find it (falsely reporting the scaffold as
-  // committed) while the fixed one refuses to construct that path at all.
-  it("treats a path-traversal-shaped slug as no-scaffold, never joins it into a filesystem path (defense in depth)", async () => {
+  // CodeQL js/path-injection review finding, pre-#1098 — originally written
+  // against the `project.slug`-keyed gate: `projects.slug`'s only writer
+  // (routes/project-setup.ts's `/setup/apply`) already ran every slug
+  // through `isValidScaffoldSlug` before stamping it, but that guarantee
+  // lived in a different file/request entirely, invisible to a purely
+  // local dataflow scanner, so this test bypassed the writer (writing
+  // straight to the DB) to prove the gate itself refused an unsafe slug.
+  //
+  // Issue #1098 — `discoverCommittedScaffold` no longer reads `project.slug`
+  // AT ALL (candidate slugs come from a directory scan instead — see that
+  // function's own doc comment), so this specific traversal vector
+  // (`projects.slug` written directly, table row -> path join) no longer
+  // exists as a concrete sink to hit: the DB column configured below is
+  // now inert as far as the gate is concerned, and this test would pass
+  // identically even with `isValidScaffoldSlug` deleted from
+  // `discoverCommittedScaffold` entirely. It's kept as a narrower
+  // regression guard — a stale/malicious `projects.slug`, on its own, with
+  // no real files anywhere on disk, must never be mistaken for a committed
+  // scaffold — but the ACTUAL surviving safety boundary (rejecting a
+  // dangerous name reached via a real directory entry) is exercised by
+  // "treats a directory-listed slug that fails isValidScaffoldSlug..."
+  // below instead; see that test for the one that fails if
+  // `isValidScaffoldSlug` is ever dropped from the new scan.
+  it("treats a path-traversal-shaped projects.slug as inert — the gate no longer reads that column at all (issue #1098)", async () => {
     const scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "scaffold-gate-traversal-scratch-"));
     const projectDir = path.join(scratchRoot, "project");
     fs.mkdirSync(projectDir);
@@ -224,6 +227,55 @@ describe("session-lifecycle.ts — scaffold-committed-file gate on projectSkill/
     }
   });
 
+  // Issue #1098 — the real safety boundary for discoverCommittedScaffold's
+  // directory scan: `.`/`..`/a path separator can never literally be a real
+  // directory entry, but `isValidScaffoldSlug` (mullion-scaffold.ts) also
+  // delegates to `isDangerousSkillName` (hook-adapters/skill-name.ts),
+  // whose `DANGEROUS_PROPERTY_NAMES` set (`__proto__`, `constructor`,
+  // `prototype`) names ordinary, perfectly legal POSIX filenames — those
+  // ARE reachable via a real `.claude/skills/<name>` directory or
+  // `.claude/agents/<name>-reviewer.md` file. This test plants real,
+  // scaffold-shaped files under "__proto__" and asserts the gate still
+  // does NOT suppress the DB-authored content — i.e. `isValidScaffoldSlug`
+  // is still being called on every discovered candidate, not just on the
+  // old `project.slug` column this issue's fix stopped reading. This is
+  // the test that actually fails if `isValidScaffoldSlug`'s call is ever
+  // dropped from `discoverCommittedScaffold` (unlike the traversal test
+  // above, which no longer exercises that function at all).
+  it("treats a directory-listed slug that fails isValidScaffoldSlug as no-scaffold, even though real files exist under it (defense in depth)", async () => {
+    const app = await buildApp();
+    const { projectId, projectDir } = await createProject(app, "scaffold-gate-dangerous-slug");
+    const dangerousSlug = "__proto__";
+
+    writeProjectSkill(app.db, projectId, SKILL_CONTENT);
+    writeProjectReviewerAgent(app.db, projectId, REVIEWER_CONTENT);
+
+    const skillPath = path.join(projectDir, scaffoldSkillPath(dangerousSlug));
+    const reviewerPath = path.join(projectDir, scaffoldReviewerPath(dangerousSlug));
+    fs.mkdirSync(path.dirname(skillPath), { recursive: true });
+    fs.writeFileSync(skillPath, SKILL_CONTENT);
+    fs.mkdirSync(path.dirname(reviewerPath), { recursive: true });
+    fs.writeFileSync(reviewerPath, REVIEWER_CONTENT);
+    // Deliberately no `projects.slug` stamped at all — this test is about
+    // the directory-scan's OWN validation, independent of the DB column.
+
+    const sessionId = await spawnClaudeSession(app, projectId);
+
+    // Sanity check the test's own premise: the dangerous-named files really
+    // are sitting on disk, exactly where a legitimate "__proto__"-slugged
+    // scaffold would have put them.
+    expect(fs.existsSync(skillPath)).toBe(true);
+    expect(fs.existsSync(reviewerPath)).toBe(true);
+
+    const bundleDir = composedBundleDir(app, sessionId);
+    expect(fs.existsSync(path.join(bundleDir, "skills", "my-project-skill", "SKILL.md"))).toBe(
+      true,
+    );
+    expect(fs.existsSync(path.join(bundleDir, "agents", "my-project-reviewer.md"))).toBe(true);
+
+    await app.close();
+  });
+
   it("keeps composing the per-session bundle when no committed scaffold file exists (regression guard)", async () => {
     const app = await buildApp();
     const { projectId } = await createProject(app, "scaffold-gate-no-scaffold");
@@ -265,6 +317,68 @@ describe("session-lifecycle.ts — scaffold-committed-file gate on projectSkill/
       true,
     );
     expect(fs.existsSync(path.join(bundleDir, "agents", "my-project-reviewer.md"))).toBe(false);
+
+    await app.close();
+  });
+
+  // Issue #1098 — projects.slug is stamped by /setup/apply at COMMIT time
+  // (the moment a scaffold's files are committed into a
+  // `.mullion-worktrees/setup-<slug>` checkout), not at MERGE time. Under a
+  // concurrent re-scaffold — e.g. a project renamed, or Scaffold-Mullion
+  // re-run under a different slug — each slug gets its own independent
+  // branch/worktree/PR, and `projects.slug` only ever reflects whichever
+  // slug was stamped MOST RECENTLY, regardless of which slug's PR actually
+  // merged into the branch a real session checks out.
+  //
+  // This reproduces exactly that desync: `projects.slug` is stamped to
+  // "bar" (simulating "bar" being scaffolded/committed most recently,
+  // perhaps via a re-run that hasn't merged yet), but the session's
+  // resolved worktree cwd on disk only carries "foo"'s committed scaffold
+  // files (simulating "foo"'s PR having actually merged into the branch
+  // this session checks out, while "bar"'s never did). Before the #1098
+  // fix, the gate looked ONLY at `scaffoldSkillPath("bar")`/
+  // `scaffoldReviewerPath("bar")` — neither exists on disk — so it would
+  // NOT suppress, and the DB-authored skill/reviewer would be silently
+  // re-injected even though "foo"'s scaffold is genuinely committed right
+  // there in the same worktree. After the fix, the gate scans
+  // `.claude/skills/`/`.claude/agents/` for ANY committed scaffold slug
+  // rather than trusting the single stamped column, discovers "foo", and
+  // correctly suppresses both injections.
+  it("discovers a committed scaffold under a DIFFERENT slug than the one stamped on projects.slug (issue #1098)", async () => {
+    const app = await buildApp();
+    const { projectId, projectDir } = await createProject(app, "scaffold-gate-slug-desync");
+    const mergedSlug = "foo";
+    const staleStampedSlug = "bar";
+
+    writeProjectSkill(app.db, projectId, SKILL_CONTENT);
+    writeProjectReviewerAgent(app.db, projectId, REVIEWER_CONTENT);
+
+    // Only "foo"'s scaffold files are actually committed on disk — "bar"
+    // has no files anywhere in this worktree, even though it's the slug
+    // projects.slug ends up carrying below.
+    const skillPath = path.join(projectDir, scaffoldSkillPath(mergedSlug));
+    const reviewerPath = path.join(projectDir, scaffoldReviewerPath(mergedSlug));
+    fs.mkdirSync(path.dirname(skillPath), { recursive: true });
+    fs.writeFileSync(skillPath, SKILL_CONTENT);
+    fs.mkdirSync(path.dirname(reviewerPath), { recursive: true });
+    fs.writeFileSync(reviewerPath, REVIEWER_CONTENT);
+
+    // Simulates: "bar" was the most recently scaffolded/stamped slug, but
+    // its PR never merged into this branch.
+    app.db.update(projects).set({ slug: staleStampedSlug }).where(eq(projects.id, projectId)).run();
+
+    const sessionId = await spawnClaudeSession(app, projectId);
+
+    // Sanity check the test's own premise: "bar"'s scaffold files (the
+    // stamped slug) genuinely don't exist anywhere in this worktree.
+    expect(fs.existsSync(path.join(projectDir, scaffoldSkillPath(staleStampedSlug)))).toBe(false);
+    expect(fs.existsSync(path.join(projectDir, scaffoldReviewerPath(staleStampedSlug)))).toBe(
+      false,
+    );
+
+    // "foo"'s committed scaffold must still suppress the DB-authored
+    // content — no composed per-session bundle at all.
+    expect(fs.existsSync(composedBundleDir(app, sessionId))).toBe(false);
 
     await app.close();
   });
