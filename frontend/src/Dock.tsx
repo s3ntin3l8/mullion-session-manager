@@ -696,7 +696,7 @@ function DockColumn({
           onOpen={() => onOpenGitHub(projectId)}
         />
       )}
-      <div className="dock-body">
+      <div className="dock-body cmux-scroll">
         {configuredControls.length === 0 && dockerGroupControls.length === 0 && (
           <div className="dock-empty">
             {project?.devServerUrl ? (

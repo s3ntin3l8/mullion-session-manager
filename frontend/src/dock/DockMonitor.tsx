@@ -175,9 +175,10 @@ export function DockMonitor({
             </span>
           )}
           {control.docker && (
-            <span onClick={(e) => e.stopPropagation()}>
+            <span className="dock-monitor-kebab" onClick={(e) => e.stopPropagation()}>
               <KebabMenu
                 title={`${control.title} actions`}
+                menuPlacement="top"
                 items={[
                   {
                     key: "service-restart",
