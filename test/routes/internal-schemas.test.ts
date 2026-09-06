@@ -23,6 +23,7 @@ import {
   readFilesSchema,
   writeFilesSchema,
   gitCommitWipSchema,
+  bundleSyncRemoveSchema,
   promoteDecisionSchema,
   writeDockConfigBodySchema,
   agentRuleWriteBodySchema,
@@ -394,6 +395,24 @@ describe("internal-schemas.ts — byte-identical output regression guard", () =>
         properties: {
           cwd: { type: "string", minLength: 1 },
           message: { type: "string" },
+        },
+      },
+    });
+  });
+
+  // Issue #1089 — the agent-side counterpart of routes/bundle-sync.ts's
+  // POST /api/bundle-sync/remove fan-out. Not a byte-identical-extraction
+  // guard like most of this file's other cases (this schema is new, not
+  // moved out of internal.ts) — just a plain shape assertion, same style
+  // as promoteDecisionSchema just below.
+  it("bundleSyncRemoveSchema", () => {
+    expect(bundleSyncRemoveSchema).toEqual({
+      body: {
+        type: "object",
+        required: ["disabled"],
+        additionalProperties: false,
+        properties: {
+          disabled: { type: "boolean" },
         },
       },
     });

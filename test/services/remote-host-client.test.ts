@@ -314,6 +314,45 @@ describe("RemoteHostClient", () => {
     );
   });
 
+  // Issue #1089 — the client half of the agent-side bundle-disabled query/
+  // remove surface (agent-bundle-state.ts's getHostBundleDisabled/
+  // removeHostBundle).
+  it("resolves this agent's own persisted bundle-disabled flag via /internal/bundle-sync/status", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, { disabled: true }));
+    await expect(client().getAgentBundleState()).resolves.toEqual({ disabled: true });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://example.invalid:1234/internal/bundle-sync/status",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer tok" }),
+      }),
+    );
+  });
+
+  it("removes bundle content on this agent via POST /internal/bundle-sync/remove, defaulting disabled to true", async () => {
+    const result = { removed: 3, legacySwept: 1 };
+    fetchMock.mockResolvedValue(jsonResponse(200, result));
+    await expect(client().removeAgentBundle()).resolves.toEqual(result);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://example.invalid:1234/internal/bundle-sync/remove",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ Authorization: "Bearer tok" }),
+        body: JSON.stringify({ disabled: true }),
+      }),
+    );
+  });
+
+  it("removeAgentBundle(false) sends disabled: false, to only clear the flag", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, { removed: 0, legacySwept: 0 }));
+    await client().removeAgentBundle(false);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://example.invalid:1234/internal/bundle-sync/remove",
+      expect.objectContaining({
+        body: JSON.stringify({ disabled: false }),
+      }),
+    );
+  });
+
   // Issue #431 — the client half of the agent-rules triple.
   it("resolves a remote project's agent-rules targets via /internal/agent-rules", async () => {
     const targets = [{ id: "claude-code:project", exists: false }];

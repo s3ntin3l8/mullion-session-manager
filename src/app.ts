@@ -327,9 +327,15 @@ export async function buildApp() {
     await app.register(hooksPlugin);
     // Issue #941 — an agent host spawns sessions and owns a filesystem
     // exactly like the primary does, so it needs its own boot-time bundle
-    // sync too (its `app.db` is absent, but bundleSyncPlugin's own
-    // readInjectMullionBundle falls back to DEFAULT_SETTINGS for that case,
-    // same as hooksPlugin's own settings reads on this branch).
+    // sync too (its `app.db` is absent). Issue #1089 — bundleSyncPlugin's own
+    // readInjectMullionBundle no longer falls back to DEFAULT_SETTINGS
+    // (unconditionally `true`) for that case: it consults this host's own
+    // persisted flag instead (services/agent-bundle-state.ts), so a prior
+    // `/api/bundle-sync/remove` fan-out actually stays removed across this
+    // process's own restarts. hooksPlugin's own settings reads on this
+    // branch are unrelated and still fall back to DEFAULT_SETTINGS (a
+    // per-session, spawn-time default with an explicit-value override on
+    // every current spawn path — see plugins/pty.ts's own comment).
     await app.register(bundleSyncPlugin);
     await app.register(websocketPlugin);
     // After ptyPlugin (reads app.pty.hookSocketPath to place the local

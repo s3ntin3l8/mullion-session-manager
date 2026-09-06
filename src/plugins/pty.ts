@@ -7,6 +7,7 @@ import { and, eq, isNull } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { DEFAULT_SETTINGS, getStoredSettings } from "../services/settings.js";
+import { readAgentBundleDisabled } from "../services/agent-bundle-state.js";
 import { isAuthEnabled } from "../services/auth.js";
 import { PtyManager } from "../services/pty-manager.js";
 import {
@@ -52,13 +53,29 @@ function readInjectProjectBriefing(app: FastifyInstance): boolean {
     : DEFAULT_SETTINGS.sessions.injectProjectBriefing;
 }
 
-// Mirrors readInjectAgentGuide immediately above, exactly — same closure
-// shape, same multi-host "agent" role app.db-absent fallback — for the
-// independent sessions.injectMullionBundle setting.
+// Mirrors readInjectAgentGuide immediately above in the app.db-present
+// branch, but NOT in the app.db-absent (multi-host "agent" role) branch —
+// unlike injectAgentGuide/injectProjectBriefing, injectMullionBundle has a
+// durable per-agent-host "stay uninstalled" flag (agent-bundle-state.ts,
+// issue #1089) that must survive across sessions, not just a live DB
+// setting. Falling back to DEFAULT_SETTINGS.sessions.injectMullionBundle
+// (unconditionally true) here would silently reinstall bundle content an
+// operator explicitly removed via /api/bundle-sync/remove's fan-out, the
+// next time PtyManager.getOrCreate() constructs a fresh Session for this
+// closure's caller (getInjectMullionBundle) rather than reusing an
+// in-memory one — this is a real, live path, not just a version-skew
+// backstop: routes/terminal.ts's attachSocketToSession (the primary's own
+// /ws/terminal and the agent's /internal/ws/attach) never sets
+// opts.injectMullionBundle, so a dtach-master-died respawn (host reboot,
+// dtach crash — not an ordinary redeploy) falls straight through to this
+// closure. plugins/bundle-sync.ts's identically-shaped readInjectMullionBundle
+// hits the same class of bug for its own (separate) boot-time-sync purpose
+// and takes the identical fix; see that file's own comment for why the two
+// call sites can't share one function despite reading the same flag.
 function readInjectMullionBundle(app: FastifyInstance): boolean {
   return app.db
     ? getStoredSettings(app.db).sessions.injectMullionBundle
-    : DEFAULT_SETTINGS.sessions.injectMullionBundle;
+    : !readAgentBundleDisabled();
 }
 
 // Rich statuses — the errorState TTL backstop reads its own threshold fresh
