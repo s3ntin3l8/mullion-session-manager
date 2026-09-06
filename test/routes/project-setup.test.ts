@@ -538,8 +538,15 @@ describe("project-setup route — /setup/generate (issue #956)", () => {
     await app.close();
   });
 
-  // Gap #1 (issue #956) — identical shape to /setup/preview's own 501.
-  it("rejects a remote-hosted project with 501, matching /setup/preview's own precedent — never calls the generation agent", async () => {
+  // Issue #1101 — the 501 guard was lifted (a real remote-hosted generate
+  // round trip is covered end-to-end against a real second agent in
+  // test/integration/multi-host-scaffold-setup.test.ts); this route still
+  // needs to degrade cleanly, not crash, when the remote host it's asked to
+  // talk to is genuinely unreachable — same precedent as /setup/preview's
+  // own "surfaces a clean 500" test above. `ensureSetupWorktree` fails
+  // before generateScaffoldContent is ever reached, so the mock is still
+  // never called.
+  it("surfaces a clean 500 (not a crash) when a remote-hosted project's own host is unreachable — never calls the generation agent", async () => {
     const app = await buildApp();
     const host = await app.inject({
       method: "POST",
@@ -559,7 +566,7 @@ describe("project-setup route — /setup/generate (issue #956)", () => {
       url: `/api/projects/${projectId}/setup/generate`,
       payload: { slug: "demo" },
     });
-    expect(res.statusCode).toBe(501);
+    expect(res.statusCode).toBe(500);
     expect(generateScaffoldContent).not.toHaveBeenCalled();
     await app.close();
   });
