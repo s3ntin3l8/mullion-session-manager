@@ -139,9 +139,7 @@ describe("computeScaffold", () => {
       const agentsMd = entries.find((e) => e.path === "AGENTS.md") as { contents: string };
       const region = extractMarkedRegion(agentsMd.contents, MARKER_START, MARKER_END)!;
       expect(region).toContain(workflowFragment("preMergeRequirements", "green-ci"));
-      expect(region).not.toContain(
-        workflowFragment("preMergeRequirements", "green-ci-and-review"),
-      );
+      expect(region).not.toContain(workflowFragment("preMergeRequirements", "green-ci-and-review"));
     });
 
     it("requires the full lint/typecheck/test/format gate before pushing", () => {
