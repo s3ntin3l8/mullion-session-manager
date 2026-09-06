@@ -355,14 +355,6 @@ export async function dispatchClaimedTask(
       branchName,
       worktreePath: predictedWorktreePath,
       budgetMinutes: taskMasterConfig.budgetMinutes,
-      // `auto` no longer distinguishes anything at dispatch time (the
-      // no-seed-channel refusal already happened at enqueue) — always
-      // false here just means the prompt's "don't stop to ask" framing
-      // matches a human having originated this claim. An auto-claimed
-      // task's prompt got that framing from enqueueTask's own opts.auto,
-      // which this function has no way to recover — a cosmetic prompt
-      // difference, not a correctness gate the way no-seed-channel is.
-      auto: false,
       mode: "claim",
       // #778 — resolved against the OWNING host's own sessionsDir; see
       // task-reconciler.ts's spawnReviewAgentNow for the full rationale.
@@ -771,11 +763,6 @@ export async function retryTask(
       branchName,
       worktreePath: worktree.path,
       budgetMinutes: taskMasterConfig.budgetMinutes,
-      // Always false: `retryTask` has no `auto` parameter because there is
-      // no autonomous retry — its only caller is POST /api/tasks/:id/retry
-      // (routes/tasks.ts), i.e. the human-clicked Retry button. A human is
-      // therefore watching, so the "don't stop to ask" bullet stays off.
-      auto: false,
       mode: "retry",
       // #778 — resolved against the OWNING host's own sessionsDir; see
       // task-reconciler.ts's spawnReviewAgentNow for the full rationale.

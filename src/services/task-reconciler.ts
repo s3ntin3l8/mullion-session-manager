@@ -1347,7 +1347,6 @@ async function attemptAutoRebase(
     branchName: worktree.branch,
     worktreePath: worktree.path,
     budgetMinutes: taskMasterConfig.budgetMinutes,
-    auto: true,
     commitTitlePath,
     baseRef,
   });
@@ -2356,7 +2355,6 @@ async function attemptReturnRedCiToWorker(
     branchName: task.branchName ?? deriveTaskBranchName(task),
     worktreePath: task.worktreePath,
     budgetMinutes: resolvedTaskMaster.budgetMinutes,
-    auto: true,
     ci: { headSha: current.headSha, status: current.status, runs: current.runs },
     commitTitlePath,
   });
@@ -2535,7 +2533,6 @@ async function attemptReturnPrCommentsToWorker(
     branchName: task.branchName ?? deriveTaskBranchName(task),
     worktreePath: task.worktreePath,
     budgetMinutes: resolvedTaskMaster.budgetMinutes,
-    auto: true,
     commitTitlePath,
     comments: newComments.map((c): PrReviewCommentInfo => ({
       author: c.author,
@@ -3615,8 +3612,6 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
           branchName: task.branchName ?? deriveTaskBranchName(task),
           worktreePath: task.worktreePath!,
           budgetMinutes: resolvedTaskMaster.budgetMinutes,
-          // Nobody is watching an automated review-feedback round.
-          auto: true,
           // Rendered, not the raw findings-file content — `shouldAutoReturn`
           // guarantees `parsed !== null` here, but `parsed` may be JSON; the
           // worker should read prose, not the wire format Mullion parses.

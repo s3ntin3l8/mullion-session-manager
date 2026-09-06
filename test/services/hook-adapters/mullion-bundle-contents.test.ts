@@ -48,16 +48,23 @@ describe("src/bundle — the shipped Mullion tooling bundle", () => {
   // install; a prefixed source produced a double-`mullion-mullion-host`
   // installed name). Named explicitly, not just "however many dirs exist
   // today", so a regression that re-adds the prefix — or silently drops
-  // one of these five — fails loudly here instead of only showing up in a
+  // one of these six — fails loudly here instead of only showing up in a
   // live codex/agy install.
-  it("ships exactly the five expected, unprefixed skill source directories", () => {
+  it("ships exactly the six expected, unprefixed skill source directories", () => {
     const skillsDir = path.join(bundleDir, "skills");
     const skillNames = readdirSync(skillsDir, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name)
       .sort();
     expect(skillNames).toEqual(
-      ["browser", "host", "session-ops", "taskmaster-issues", "troubleshooting"].sort(),
+      [
+        "browser",
+        "host",
+        "session-ops",
+        "task-worker",
+        "taskmaster-issues",
+        "troubleshooting",
+      ].sort(),
     );
   });
 

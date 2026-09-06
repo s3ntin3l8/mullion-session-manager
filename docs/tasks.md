@@ -1017,8 +1017,10 @@ the primary, so there's nothing to skew).
 
 Every Task Master spawn is prompted with a standing preamble ahead of the
 issue text, built in one place (`src/services/task-prompt.ts`) and shared by
-all four spawn sites — claim, retry, the reject re-seed, and the review
-agent. Before it, a worker received literally the issue title and body and
+every worker spawn site — claim, retry, the reject re-seed, and the
+reconciler's automated re-seeds (red CI, PR review comments, review
+feedback, rebase); the review agent gets its own shorter preamble instead
+(below). Before it, a worker received literally the issue title and body and
 nothing else, which left it to guess a completion contract it can't see from
 inside the worktree. The rules it states, and why each is unguessable:
 
@@ -1050,18 +1052,37 @@ reviewing`. There is no marker to write, tool to call, or endpoint to hit.
 - **Don't push, open the PR, or touch the issue.** Mullion does all of that
   on human approve.
 - **Budget**, when one is configured, stated explicitly.
+- **Never block on a question or a permission prompt.** This used to be
+  conditional on an `auto` flag — a claim a human made was assumed to have
+  someone watching to answer. It doesn't anymore (issue #964): the
+  `in_progress → reviewing` gate's "no commits ahead of base" failure (its
+  own `checkReviewingGate`, described above) doesn't care how the task was
+  claimed, so a manually-claimed worker that stops to ask dies exactly the
+  same death as an autonomously-claimed one, and every re-seed (retry,
+  reject, red CI, review feedback, rebase) hands a fresh session to nobody
+  regardless of who made the original claim. branchdam-mobile tasks #66/#67
+  are the concrete case this closed: an opencode worker invoked the
+  superpowers `brainstorming` skill, asked a clarifying question nobody
+  answered, and failed with no commits.
 
-One line is conditional: an **autonomous** claim is additionally told nobody
-is watching and not to stop and ask, which a manual claim (a human clicked
-Claim, and is sitting right there) deliberately omits. The review agent gets
-its own shorter preamble instead — it keeps the advisory "you are not
-expected to make changes" framing and adds the hazard that it runs in the
-worker's _own_ worktree, so any file it writes there blocks the human's
-approve.
+The review agent gets its own shorter preamble instead — it keeps the
+advisory "you are not expected to make changes" framing and adds the hazard
+that it runs in the worker's _own_ worktree, so any file it writes there
+blocks the human's approve.
 
 The preamble is prose in the prompt, not a parsed protocol; nothing reads it
 back. Editing the wording is safe as long as no line becomes a whole-line
 `Manual:`/`Agent:`/`ReviewAgent:` directive — there's a test guarding that.
+
+The bundle's `task-worker` skill (`src/bundle/skills/task-worker/`, shipped
+to every CLI the same way `host`/`browser`/etc. are — see
+[`agent-guide.md`](agent-guide.md)'s "Where your skills actually come from")
+elaborates on the last bullet: what to actually do instead of asking, and
+how to split a worker's own self-review pass from the separate reviewer's.
+It gates itself on the opening line of the worker's own prompt rather than
+an env var, since nothing marks a Task Master session in the process
+environment, and explicitly excludes the review agent's own prompt shape.
+It deliberately does not restate anything already in this preamble.
 
 ## Configuring Task Master
 

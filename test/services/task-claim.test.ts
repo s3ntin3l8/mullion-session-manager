@@ -237,9 +237,10 @@ describe("claimTask", () => {
     // prompt, so this asserts the tail rather than the full quoted string.
     expect(spawnedArg).toContain("t\n\nsome details'");
     expect(spawnedArg).toContain("as a Mullion Task Master worker");
-    // Claimed with auto:false — a human is watching, so the "don't stop to
-    // ask" instruction must be absent. See task-prompt.ts's `auto` doc.
-    expect(spawnedArg).not.toContain("Nobody is watching this session");
+    // The "nobody may be watching" bullet is unconditional now (task-prompt.ts) —
+    // checkReviewingGate fails a task the same way regardless of how it was
+    // claimed, so even a human-claimed worker gets it.
+    expect(spawnedArg).toContain("Nobody may be watching this session");
 
     fs.rmSync(cwd, { recursive: true, force: true });
     await app.close();
@@ -1447,9 +1448,9 @@ describe("retryTask (#483)", () => {
     expect(spawnedArg).toContain("as a Mullion Task Master worker");
     // Retry-specific: the branch already carries the earlier attempt.
     expect(spawnedArg).toContain("This is a retry");
-    // retryTask has no `auto` parameter — it's only reachable from the
-    // human Retry button, so the unattended bullet stays off.
-    expect(spawnedArg).not.toContain("Nobody is watching this session");
+    // Unconditional now, same as the claim path above — a retried worker
+    // that stops to ask fails the same "no commits" gate as any other.
+    expect(spawnedArg).toContain("Nobody may be watching this session");
 
     fs.rmSync(cwd, { recursive: true, force: true });
     await app.close();

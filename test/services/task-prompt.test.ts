@@ -29,7 +29,6 @@ const BASE = {
   branchName: "mullion/task-42",
   worktreePath: "/srv/repo/.mullion-worktrees/mullion-task-42",
   budgetMinutes: 120,
-  auto: true,
 };
 
 describe("buildTaskMasterPreamble", () => {
@@ -118,18 +117,18 @@ describe("buildTaskMasterPreamble", () => {
     expect(out).not.toContain("minutes from when this task was claimed");
   });
 
-  it("tells an autonomous worker not to stop and ask", () => {
-    expect(buildTaskMasterPreamble({ ...BASE, auto: true })).toContain(
-      "Nobody is watching this session",
-    );
-  });
-
-  // A human who clicked Claim IS watching; suppressing the check-in would
-  // make a manual claim strictly worse.
-  it("does NOT tell a manually-claimed worker to skip asking questions", () => {
-    const out = buildTaskMasterPreamble({ ...BASE, auto: false });
-    expect(out).not.toContain("Nobody is watching this session");
-    // ...but every other rule still applies to a manual claim.
+  // Used to be conditional on an `auto` flag — a human who clicked Claim
+  // was assumed to be watching. It isn't anymore: checkReviewingGate
+  // (task-reconciler.ts) fails a task with "agent ended its turn with no
+  // commits" regardless of how it was claimed, so a manually-claimed
+  // worker that stops to ask dies exactly the same death as an
+  // auto-claimed one. Every re-seed (retry, reject, red CI, review
+  // feedback, rebase) also spawns a fresh session nobody is sitting in.
+  it("tells every worker not to block on a question, unconditionally", () => {
+    const out = buildTaskMasterPreamble(BASE);
+    expect(out).toContain("Nobody may be watching this session");
+    expect(out).toContain("Never block on a question or a");
+    // ...alongside every other rule.
     expect(out).toContain("End your turn and stay running");
   });
 
@@ -1000,8 +999,7 @@ describe("directive-line collisions", () => {
   const REVIEW_AGENT_LINE_RE = /^\s*ReviewAgent:\s*(\S+)\s*$/im;
 
   const preambles = {
-    "worker preamble (auto)": buildTaskMasterPreamble({ ...BASE, auto: true }),
-    "worker preamble (manual)": buildTaskMasterPreamble({ ...BASE, auto: false }),
+    "worker preamble": buildTaskMasterPreamble(BASE),
     "worker preamble (unlimited budget)": buildTaskMasterPreamble({ ...BASE, budgetMinutes: 0 }),
     "review preamble": buildReviewPrompt({
       task: { ...TASK, body: null },

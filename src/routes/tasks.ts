@@ -490,8 +490,6 @@ export async function tasksRoute(app: FastifyInstance) {
       branchName: task.branchName ?? deriveTaskBranchName(task),
       worktreePath: task.worktreePath,
       budgetMinutes: resolveTaskMasterConfig(app).budgetMinutes,
-      // A reject is always a human's action, so someone is watching.
-      auto: false,
       feedback,
       // #778 — resolved against the OWNING host's own sessionsDir; see
       // task-reconciler.ts's spawnReviewAgentNow for the full rationale.
