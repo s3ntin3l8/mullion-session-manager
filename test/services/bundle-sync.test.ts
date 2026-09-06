@@ -184,6 +184,25 @@ describe("syncBundleContent — idempotence and change detection", () => {
     expect(statSync(skillPath).mtimeMs).toBe(mtimeBefore);
   });
 
+  // Issue #1090's own marker-before-hash ordering invariant: the marker
+  // must be folded into the content BEFORE both the disk write and the
+  // manifest hash, or manifestEntryStillValid's later re-read-and-rehash
+  // permanently mismatches and every sync reports changed forever. This
+  // is the direct regression guard for that failure mode, mirroring the
+  // skill-file mtime check above but for an agent file.
+  it("a second sync with an unchanged agent file doesn't touch its mtime (marker/hash ordering)", async () => {
+    writeAgent("reviewer");
+    syncBundleContent();
+    const agentPath = path.join(resolveClaudeConfigDir(), "agents", "mullion-reviewer.md");
+    const mtimeBefore = statSync(agentPath).mtimeMs;
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const second = syncBundleContent();
+
+    expect(second.changed).toBe(false);
+    expect(statSync(agentPath).mtimeMs).toBe(mtimeBefore);
+  });
+
   it("a bundle content change (different hash) triggers re-sync on the next call with no force flag", async () => {
     writeSkill("host");
     syncBundleContent();
