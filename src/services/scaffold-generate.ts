@@ -451,7 +451,14 @@ function buildBwrapBaseArgs(worktreePath: string, extraWritablePaths: string[]):
  * writable. Both were re-verified live after adding the corresponding
  * bind below — codex proceeded to a real (rate-limited, no-cost) turn,
  * opencode proceeded to a real model call. `claude -p` needed no extra
- * bind (confirmed live, no `--bind-try` entries). `agy -p`'s own
+ * bind to complete successfully (confirmed live, no `--bind-try`
+ * entries) — but it is not silent about it: `strace` on that same live
+ * run shows Claude Code repeatedly attempting several housekeeping
+ * writes under `$HOME` (plugin-cache `.in_use` lock files, MCP
+ * auth-cache, a per-run `session-env/<uuid>` directory,
+ * `.claude.json`/`.claude.json.lock` atomic-rename writes) that all fail
+ * silently with EROFS and are tolerated — this is "doesn't need to
+ * write," not "doesn't try to." `agy -p`'s own
  * PRE-EXISTING argument-parsing quirk (`-p` swallows the next arg as its
  * own prompt, reproduces identically with or without this sandbox —
  * unrelated to issue #1081, out of scope for it) blocked verifying its
