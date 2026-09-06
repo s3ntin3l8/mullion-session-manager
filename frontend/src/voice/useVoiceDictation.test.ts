@@ -428,4 +428,73 @@ describe("useVoiceDictation", () => {
     expect(provider.startCalls).toHaveLength(0);
     expect(result.current.phase).toBe("idle");
   });
+
+  // Review finding: the stop watchdog forces finalize() without any
+  // confirmation the underlying engine actually stopped — if it was only
+  // SLOW, not dead, its real onEnd/onFinal can still fire afterward. If a
+  // new dictation has since started, that stale callback must not be able
+  // to touch it: not steal sessionRef (orphaning the new, still-live
+  // recognizer with no UI control able to reach it), not push into the new
+  // session's bufferRef (bleeding unrelated text between dictations), and
+  // not trigger a spurious extra provider.start() via the restart branch.
+  it("a session the watchdog already gave up on cannot corrupt a NEW dictation started afterward", () => {
+    vi.useFakeTimers();
+    const { result } = setup();
+
+    act(() => result.current.press());
+    const session1 = provider.startCalls[0]!;
+    act(() => result.current.forceStop()); // -> "stopping", watchdog armed
+    act(() => vi.advanceTimersByTime(5_000)); // watchdog fires: finalize(), phase -> idle
+    expect(result.current.phase).toBe("idle");
+    expect(provider.startCalls).toHaveLength(1); // no restart from the watchdog itself
+
+    // The user starts a brand-new dictation before session1's real engine
+    // ever reports back.
+    act(() => result.current.press());
+    expect(provider.startCalls).toHaveLength(2);
+    const session2 = provider.startCalls[1]!;
+
+    // session1's engine was only slow, not dead — its real callbacks
+    // arrive late, after session2 is already the one the user is talking
+    // to.
+    act(() => session1.final("stray text from the abandoned session"));
+    act(() => session1.end());
+
+    // None of it reached session2's world: no spurious restart, session2
+    // itself was never stopped/aborted (still fully controllable), and its
+    // buffer holds only what IT captured.
+    expect(provider.startCalls).toHaveLength(2); // no spurious 3rd start
+    expect(session2.stopped).toBe(false);
+    expect(session2.aborted).toBe(false);
+    expect(result.current.phase).toBe("listening"); // session2 still live
+
+    act(() => session2.final("this is what the user actually said"));
+    act(() => vi.advanceTimersByTime(HOLD_THRESHOLD_MS + 1));
+    act(() => result.current.release());
+    act(() => session2.end());
+
+    expect(onInsert).toHaveBeenCalledTimes(1);
+    expect(onInsert).toHaveBeenCalledWith("this is what the user actually said ");
+  });
+
+  it("a stale session's late onFinal+onEnd (no new dictation started) does not surprise-insert stray text", () => {
+    vi.useFakeTimers();
+    const { result } = setup();
+
+    act(() => result.current.press());
+    const session = provider.startCalls[0]!;
+    act(() => result.current.forceStop());
+    act(() => vi.advanceTimersByTime(5_000)); // watchdog fires, finalize() with an empty buffer
+    expect(onInsert).not.toHaveBeenCalled();
+
+    // The abandoned session's engine reports back after all, with nothing
+    // new started in the meantime — this must stay inert, not silently
+    // insert text days-old-dictation-style into whatever the user is
+    // looking at now.
+    act(() => session.final("said after the watchdog already gave up"));
+    act(() => session.end());
+
+    expect(onInsert).not.toHaveBeenCalled();
+    expect(result.current.phase).toBe("idle");
+  });
 });

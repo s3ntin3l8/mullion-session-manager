@@ -118,6 +118,24 @@ export function useVoiceDictation(opts: UseVoiceDictationOptions): VoiceDictatio
   const terminalErrorRef = useRef(false);
   const pressStartedAtRef = useRef(0);
   const restartTimestampsRef = useRef<number[]>([]);
+  // Every startSession() call bumps this and captures the new value in its
+  // own closure (see myGeneration below) — every one of that session's
+  // onFinal/onInterim/onError/onEnd callbacks bails immediately if this no
+  // longer matches, rather than acting on refs (sessionRef, bufferRef,
+  // wantActiveRef, ...) that may by then belong to a DIFFERENT session.
+  // Without this, a session the stop watchdog gave up on for being slow —
+  // not dead, just slow — could still fire its real onEnd/onFinal
+  // afterward: at best that's a harmless no-op against an idle hook, but if
+  // a new dictation has since started, that stale onEnd stomps on the new
+  // session's state (overwriting sessionRef with null, orphaning the new
+  // recognizer with no UI control able to reach it anymore), and a stale
+  // onFinal keeps appending into the shared bufferRef, interleaving
+  // unrelated transcript text into whatever the new session captures.
+  // Bumped in two places: startSession() (a genuinely new session
+  // starting) and the stop watchdog (a session being given up on) — never
+  // in cancel()/finalizeStop() themselves, which deliberately wait for
+  // that SAME generation's real onEnd to arrive and finalize normally.
+  const sessionGenerationRef = useRef(0);
   const maxSessionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stopWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -224,6 +242,14 @@ export function useVoiceDictation(opts: UseVoiceDictationOptions): VoiceDictatio
     clearStopWatchdog();
     stopWatchdogRef.current = setTimeout(() => {
       stopWatchdogRef.current = null;
+      // Giving up on ever hearing back from this session — bump the
+      // generation so its onEnd/onFinal/onError, if the engine was merely
+      // slow rather than actually dead and they arrive after all, are
+      // recognized as stale by the closures in startSession() below and
+      // ignored, rather than corrupting whatever comes next (or, if
+      // nothing comes next, spuriously inserting stray text the user has
+      // already moved on from).
+      sessionGenerationRef.current++;
       finalize();
     }, STOP_WATCHDOG_MS);
   }, [clearStopWatchdog, finalize]);
@@ -253,6 +279,14 @@ export function useVoiceDictation(opts: UseVoiceDictationOptions): VoiceDictatio
 
   const startSession = useCallback(() => {
     setPhaseBoth("listening");
+    // Captured by every callback below so each can recognize when it no
+    // longer belongs to the session useVoiceDictation is currently
+    // tracking — see sessionGenerationRef's own comment for why this
+    // exists at all (a watchdog-abandoned session's real callbacks firing
+    // late must never touch state that may by then belong to a different
+    // session).
+    const myGeneration = ++sessionGenerationRef.current;
+    const isCurrent = () => sessionGenerationRef.current === myGeneration;
     // provider.start() can throw synchronously — InvalidStateError on a
     // double-start, or an invalid `lang` value reaching the engine are both
     // real Web Speech failure modes, not hypothetical. Without this
@@ -268,11 +302,19 @@ export function useVoiceDictation(opts: UseVoiceDictationOptions): VoiceDictatio
       sessionRef.current = provider.start({
         lang: resolveLang(),
         onFinal: (segment) => {
+          if (!isCurrent()) return;
           bufferRef.current.push(segment);
         },
-        onInterim: (text) => setInterimText(text),
-        onError: handleError,
+        onInterim: (text) => {
+          if (!isCurrent()) return;
+          setInterimText(text);
+        },
+        onError: (code) => {
+          if (!isCurrent()) return;
+          handleError(code);
+        },
         onEnd: () => {
+          if (!isCurrent()) return;
           sessionRef.current = null;
           clearStopWatchdog();
           if (discardRef.current) {
@@ -438,6 +480,16 @@ export function useVoiceDictation(opts: UseVoiceDictationOptions): VoiceDictatio
   // hook instance), but there's no reason to let them fire at all.
   useEffect(() => {
     return () => {
+      // Invalidates the outgoing session's callbacks the same way the stop
+      // watchdog does — an onFinal firing after unmount has no discardRef
+      // guard of its own (only onEnd checks it), so without this it would
+      // keep pushing into bufferRef on a hook instance nothing will ever
+      // read from again. A deliberate read-and-increment of the CURRENT
+      // ref value at cleanup time, not a captured one — the lint rule's
+      // "stale by cleanup time" warning is for refs holding a rendered
+      // node, not a plain mutable counter meant to be read live.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      sessionGenerationRef.current++;
       clearMaxSessionTimer();
       clearStopWatchdog();
       if (errorTimerRef.current !== null) clearTimeout(errorTimerRef.current);
