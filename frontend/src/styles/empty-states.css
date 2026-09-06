@@ -1272,23 +1272,34 @@
   border: 1px solid var(--border-soft);
   border-radius: 9px;
   overflow: hidden;
-  min-width: 184px;
+  min-width: 216px;
 }
-/* Min-content invariant this header must never be squeezed below: padding +
-   border + status dot + .dock-monitor-container-state ("restarting", its
-   longest value) + .dock-monitor-kebab + trailing .dock-monitor-tag ("logs
-   off") + 4 gaps ≈ 181px — the .dock-monitor min-width above is set just
-   under a minimum-width .dock-column's content box (188px), so a single
-   monitor with no .dock-group-label ahead of it fits without scrolling.
-   .dock-group-label (a flex sibling in the same .dock-body row, rendered
-   once ahead of the first Docker-discovered monitor) adds its own
-   min-content on top of that, so a minimum-width column with any Docker
-   services always scrolls horizontally — expected, not a bug: the point of
-   this floor is that .dock-body scrolls rather than clips the kebab, not
-   that scrolling never happens. Above the floor, yield order is:
-   .dock-monitor-name (already flex:1 1 0%, so it's first to hit zero) →
-   .dock-monitor-url/.dock-monitor-image/.dock-monitor-check-status
-   (ellipsize instead of vanishing) → nothing else shrinks. */
+/* Min-content invariant this header must never be squeezed below, for a
+   Docker-backed row (the case this floor exists for — .dock-monitor-image
+   and .dock-monitor-kebab share the identical `control.docker &&` guard, so
+   whenever the kebab is present the image pill unconditionally is too):
+   padding 20 + border 2 + status dot 6 + .dock-monitor-container-state
+   ("restarting", its longest value) 57 + .dock-monitor-image's OWN fixed
+   floor 27 (icon 11 + its padding 10 + border 2 + internal gap 4 — its text
+   span has `overflow: hidden`, so per the flex spec its own automatic
+   minimum is 0, but the icon itself is pinned flex-shrink:0 and can't
+   shrink away) + .dock-monitor-kebab 22 + trailing .dock-monitor-tag ("logs
+   off") 46 + 5 gaps (6 direct children in this minimal case: dot, state,
+   name, image, kebab, tag) × 7 = 35 ≈ 215px, rounded up to 216. A prior
+   version of this estimate omitted the image pill and undercounted gaps at
+   4 instead of 5 — harmless in practice (a CSS min-width below the true
+   min-content has no effect; the browser's own intrinsic-size floor still
+   holds and .dock-body's overflow-x absorbs the difference), but a
+   maintainer re-deriving this number should start from the corrected total,
+   not the original one. The .dock-monitor min-width above is set to that
+   corrected floor rather than under a minimum-width .dock-column's content
+   box (188px) — a Docker row already needs more room than that box gives,
+   so it scrolls even alone (see .dock-group-label's own comment below for
+   why any Docker row in a minimum-width column scrolls regardless). Above
+   the floor, yield order is: .dock-monitor-name (already flex:1 1 0%, so
+   it's first to hit zero) → .dock-monitor-url/.dock-monitor-image/
+   .dock-monitor-check-status (ellipsize instead of vanishing) → nothing
+   else shrinks. */
 .dock-monitor-header {
   height: 28px;
   flex-shrink: 0;
@@ -1433,7 +1444,12 @@
    tone as the "off" tag beside it); only a genuine failure (.error) tints
    orange — "update available" never renders here at all, since the image
    pill's own tint already covers that case. */
-.dock-monitor-check-status {
+/* .dock-monitor-tag.dock-monitor-check-status, not .dock-monitor-check-status
+   alone — this element always carries both classes (DockMonitor.tsx), and
+   the compound selector's higher specificity makes the flex-shrink override
+   explicit rather than relying on this rule happening to come after
+   .dock-monitor-tag's own flex-shrink:0 in source order. */
+.dock-monitor-tag.dock-monitor-check-status {
   color: var(--dim);
   white-space: nowrap;
   flex-shrink: 1;
