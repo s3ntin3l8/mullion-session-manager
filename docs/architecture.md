@@ -52,6 +52,23 @@ replays what it's given.
   start, tracked by a manifest at `~/.mullion/bundle-sync.json`; see
   `src/services/bundle-sync.ts` and
   [`agent-guide.md`](agent-guide.md#where-your-skills-actually-come-from)).
+  Ownership of installed content the manifest didn't (yet) track — e.g. the
+  first sync after a shipped skill/agent gets renamed, or a
+  deleted/corrupted manifest — is settled by two orphan-scan-safe markers,
+  not the manifest: an installed skill directory carries a sibling
+  `.mullion-managed` sentinel file (`INSTALLED_MARKER_NAME`,
+  `mullion-bundle.ts`), and an installed flat agent `.md` file (which has no
+  "inside" to carry a sibling file) instead carries an in-body HTML-comment
+  marker, `<!-- mullion:managed -->` (`INSTALLED_AGENT_MARKER`) — the same
+  inert-to-every-parser convention as `marked-region.ts`'s own
+  `<!-- mullion:*:start/end -->` markers below, just a single sentinel line
+  rather than a delimited region, since these files have no surrounding
+  user content to preserve. `pruneOrphanManagedDirs`/`pruneOrphanManagedFiles`
+  (mullion-bundle.ts) are the marker-gated scans both `syncBundleContent`
+  and the legacy per-launch `installBundleSkills`/`uninstallBundleSkills`
+  share — issues #947/#1090 — and neither ever removes a same-prefixed
+  `mullion-*` skill directory or agent file that lacks its marker, even with
+  no manifest at all (PR #891's ownership-safety rule).
 - `src/routes/` — `health` (`/health`, `/ready`), `auth` (`/api/auth/login`,
   `/logout`, `/me`, and `/oidc/login`, `/oidc/callback` — see
   [`auth.md`](auth.md)), `root` (placeholder `/`, disabled once the
