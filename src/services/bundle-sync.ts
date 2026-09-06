@@ -61,6 +61,8 @@ import {
   deriveAgyAgentFile,
   uninstallBundleSkills,
   pruneOrphanManagedDirs,
+  pruneOrphanManagedFiles,
+  withInstalledAgentMarker,
   INSTALLED_SKILL_PREFIX,
   INSTALLED_MARKER_NAME,
   INSTALLED_MARKER_CONTENT,
@@ -362,6 +364,17 @@ function pruneRemovedEntries(oldEntries: BundleSyncManifestEntry[], keepPaths: S
 // scan, so running one right after the other never finds anything left for
 // the second pass to disagree about — the first pass to run removes the
 // orphan, and the second finds nothing there to reconsider.
+//
+// Issue #1090 — the AGENT_TARGETS loop below had the IDENTICAL gap and never
+// got this fix: a stale `mullion-<oldname>.md` agent file just sits there
+// forever unless a manifest-diff prune happens to catch it, which it can't
+// in the same two trigger cases (no manifest yet, or manifest gone). Closed
+// the same way, via `pruneOrphanManagedFiles` (mullion-bundle.ts) — the
+// file-kind counterpart to `pruneOrphanManagedDirs` — gated on a new
+// in-body HTML-comment marker (`INSTALLED_AGENT_MARKER`) rather than a
+// sibling sentinel file, since a flat `.md` file has no "inside" to carry
+// one. See `withInstalledAgentMarker`'s own doc comment for why that marker
+// must be folded into the content BEFORE it's hashed for the manifest.
 
 /**
  * Boot-time, idempotent sync of the shipped bundle into all four CLIs'
@@ -476,12 +489,33 @@ export function syncBundleContent(): { changed: boolean } {
 
   for (const target of AGENT_TARGETS) {
     const root = target.root();
+    // Issue #1090 — this target's own "names actually (re)installed THIS
+    // pass" protect-set for pruneOrphanManagedFiles below. Built per-target,
+    // not once from `agentNames` for all three targets: `target.transform`
+    // can return `null` per name independently for agy/opencode (unparseable/
+    // unsafe frontmatter — see AGENT_TARGETS' own doc comment), so a name
+    // that installed fine for claude-code but was skipped for opencode must
+    // NOT protect a same-named orphan file under opencode's own root — that
+    // file was never (re)installed by opencode this pass, so it has nothing
+    // legitimate protecting it there.
+    const installedAgentFileNamesForTarget = new Set<string>();
     for (const name of agentNames) {
       const raw = readFileSync(path.join(agentsDir, `${name}.md`), "utf8");
-      const contents = target.transform(raw);
-      if (contents === null) continue;
+      const transformed = target.transform(raw);
+      if (transformed === null) continue;
+      // Issue #1090 — the marker MUST be folded into `contents` before
+      // either the write-vs-existing compare or the manifest hash below:
+      // hashing `transformed` (pre-marker) while writing/comparing
+      // `contents` (post-marker), or vice versa, would make
+      // manifestEntryStillValid's later re-read-and-rehash permanently
+      // disagree with what's actually on disk — see
+      // withInstalledAgentMarker's own doc comment (mullion-bundle.ts) for
+      // the full "write and read must agree" rationale, same requirement
+      // hashInstalledDir's doc comment states for directories.
+      const contents = withInstalledAgentMarker(transformed);
       const installedName = `${INSTALLED_SKILL_PREFIX}${name}`;
       const destPath = path.join(root, `${installedName}.md`);
+      installedAgentFileNamesForTarget.add(`${installedName}.md`);
       mkdirSync(path.dirname(destPath), { recursive: true });
       let existingContents: string | null;
       try {
@@ -493,6 +527,53 @@ export function syncBundleContent(): { changed: boolean } {
         writeFileSync(destPath, contents);
       }
       newEntries.push({ path: destPath, kind: "file", hash: hashInstalledFile(contents) });
+    }
+    // Issue #1090 — the AGENT_TARGETS counterpart to the SKILL_TARGETS
+    // loop's own pruneOrphanManagedDirs call above: discovers and removes a
+    // marker-carrying `mullion-*.md` agent file that's on disk but wasn't
+    // just (re)installed above, regardless of whether the (possibly
+    // missing/stale) manifest ever knew about it — e.g. the first sync after
+    // a shipped agent gets renamed, or a manifest that's been deleted out
+    // from under an otherwise-synced host. `pruneRemovedEntries` below only
+    // catches a stale entry the PREVIOUS manifest actually recorded, which
+    // is exactly the gap this closes for agent files, mirroring #947's fix
+    // for skill directories.
+    //
+    // Same empty-guard as the skill loop, and for the identical reason: a
+    // genuinely empty/malformed `agentNames` listing is indistinguishable
+    // from a transient readdirSync race against an upgrade's atomic
+    // `current` symlink swap, and skipping the prune trades "a stale orphan
+    // lingers one extra resync" for avoiding a false-empty wipe that would
+    // then look permanently "synced" until the bundle's content hash next
+    // changes.
+    //
+    // Transition property, not a bug: a host that already synced agent
+    // files BEFORE this marker existed has a manifest whose recorded hash
+    // was computed over the pre-marker content, and that pre-marker content
+    // is still exactly what's on disk — so `manifestEntryStillValid` still
+    // agrees with itself and `syncBundleContent` early-returns at this
+    // function's own top-of-function check without ever reaching this loop.
+    // Those markerless files only get adopted (rewritten with the marker)
+    // the next time a REAL resync actually runs — i.e. the shipped bundle's
+    // own content hash changes, or the manifest goes missing/corrupt, both
+    // of which are exactly the two triggers this issue's orphan-scan targets
+    // in the first place. Until then they remain invisible to this scan,
+    // exactly like any other manifest-tracked entry — no different from the
+    // pre-#1090 behavior for them. Deliberately not solved by bumping
+    // `MANIFEST_VERSION` to force a full re-adopt: that would drop the
+    // manifest's record of every OTHER already-installed path too, making
+    // `statusForRoot` report every row "stale" on every upgraded host for no
+    // reason connected to this fix.
+    //
+    // Also: `agentNames` is `[]` in production today — `src/bundle/agents/`
+    // doesn't ship yet (issues #943/#953) — so this guard (and
+    // `pruneOrphanManagedFiles` itself) is currently exercised only by this
+    // file's own fixture-based tests, not by a real release. Not dead code:
+    // the guard is what keeps a genuinely empty/malformed listing from being
+    // misread as "nothing to protect, sweep it all" the moment an
+    // agents/ directory does ship.
+    if (agentNames.length > 0) {
+      pruneOrphanManagedFiles(root, installedAgentFileNamesForTarget);
     }
   }
 
@@ -634,11 +715,20 @@ export interface BundleContentRemovalResult {
  * the ownership-marker check (`isCurrentMullionManagedDir`) that keeps this
  * from ever deleting a same-prefixed directory a user created themselves
  * (the PR #891 regression class). Agent files are deliberately NOT swept
- * this way: they're flat `.md` files with no "inside" to carry a marker, so
- * a prefix-only rule is the ONLY possible legacy check for them — and
- * that's exactly the unsafe shortcut this function must not take. A stray
- * pre-manifest `mullion-<name>.md` agent file is therefore a known,
- * accepted gap here; only manifest-tracked agent files are ever removed.
+ * this way, even though issue #1090 gave them their own marker
+ * (`INSTALLED_AGENT_MARKER`, mullion-bundle.ts) that a marker-gated scan
+ * COULD now safely use: this function's own legacy sweep stays
+ * manifest-only by scope, not by necessity — #1090's fix is
+ * `syncBundleContent`'s AGENT_TARGETS install loop calling
+ * `pruneOrphanManagedFiles` on every (re)sync, which already reaches every
+ * host that matters (see that call site's own doc comment on which hosts
+ * this covers and why). Extending the same marker-gated scan to THIS
+ * legacy-uninstall path too is a reasonable follow-up, not a safety
+ * requirement this function is currently missing — it was deliberately left
+ * out of #1090's scope to avoid changing removal semantics on a path the
+ * issue didn't ask about. A stray pre-manifest `mullion-<name>.md` agent
+ * file is therefore still left alone here; only manifest-tracked agent
+ * files are ever removed by this function.
  *
  * Also removes agy's `mullion` MCP entry (`removeAgyMcpMullionEntry`) —
  * non-durable by design, since agy's own `mergeAgyMcpConfig` is ungated and
@@ -695,16 +785,18 @@ function withTrailingSep(dir: string): string {
  * other removal path in this module already uses. Never a same-prefixed
  * `mullion-*` directory a user created themselves without the marker.
  *
- * Agent root: `AGENT_TARGETS` installs FLAT `mullion-<name>.md` files,
- * which (unlike a skill directory) have no "inside" to carry a
- * `.mullion-managed` marker — see `uninstallBundleContent`'s own doc
- * comment on this exact gap, which is why its own legacy sweep already
- * refuses to touch agent files at all beyond what the manifest tracks. The
- * sync manifest IS the ownership record for a file-kind entry, so this
- * removes precisely (and only) the manifest-tracked file entries under this
- * CLI's agent root — mirroring `removeBundleContent()`'s own manifest-
- * driven, per-entry removal — never a same-prefixed `mullion-*.md` file a
- * user created that the manifest never recorded.
+ * Agent root: `AGENT_TARGETS` installs FLAT `mullion-<name>.md` files.
+ * Since issue #1090 they DO carry an in-body ownership marker
+ * (`INSTALLED_AGENT_MARKER`, mullion-bundle.ts), but this function stays
+ * manifest-only for them by scope, not by necessity — see
+ * `uninstallBundleContent`'s own doc comment for why its legacy sweep makes
+ * the same choice, and where the marker-gated scan actually lives instead
+ * (`syncBundleContent`'s AGENT_TARGETS install loop). The sync manifest IS
+ * still a perfectly valid ownership record for a file-kind entry on its own,
+ * so this removes precisely (and only) the manifest-tracked file entries
+ * under this CLI's agent root — mirroring `removeBundleContent()`'s own
+ * manifest-driven, per-entry removal — never a same-prefixed `mullion-*.md`
+ * file a user created that the manifest never recorded.
  *
  * Both kinds of entry for this CLI are also dropped from the manifest once
  * actually gone from disk (not just deleted from disk): leaving a removed

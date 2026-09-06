@@ -37,6 +37,7 @@ import {
   installBundleSkills,
   INSTALLED_MARKER_NAME,
   INSTALLED_MARKER_CONTENT,
+  INSTALLED_AGENT_MARKER,
 } from "../../src/services/hook-adapters/mullion-bundle.js";
 
 // This whole suite exercises real filesystem paths derived from
@@ -391,6 +392,145 @@ describe("syncBundleContent — prune", () => {
     expect(existsSync(hostDir)).toBe(true);
     expect(existsSync(legacyDir)).toBe(false);
   });
+
+  // Issue #1090 — the AGENT_TARGETS counterpart to the #947 test above:
+  // AGENT_TARGETS had the IDENTICAL structural gap (no orphan-discovery at
+  // all, only ever a manifest-diff prune), for the same two real-world
+  // triggers — no manifest has ever been written yet (first sync after an
+  // upgrade that renamed a shipped agent), or the manifest was
+  // deleted/corrupted out from under an otherwise-synced host. Plants the
+  // orphan directly on disk, WITH the ownership marker, and never creates a
+  // manifest before syncing.
+  it("issue #1090: discovers and removes a marker-carrying orphan agent file with NO manifest entry at all (first-sync-after-rename / manifest-deleted case)", () => {
+    writeSkill("host");
+    writeAgent("reviewer");
+
+    const claudeAgentsDir = path.join(resolveClaudeConfigDir(), "agents");
+    mkdirSync(claudeAgentsDir, { recursive: true });
+    const orphanPath = path.join(claudeAgentsDir, "mullion-orphan.md");
+    writeFileSync(
+      orphanPath,
+      `---\nname: orphan\ndescription: "Stale renamed agent."\n---\n\nStale body.\n${INSTALLED_AGENT_MARKER}\n`,
+    );
+    expect(existsSync(resolveBundleSyncManifestPath())).toBe(false);
+
+    const result = syncBundleContent();
+
+    expect(result.changed).toBe(true);
+    expect(existsSync(orphanPath)).toBe(false);
+    const reviewerPath = path.join(claudeAgentsDir, "mullion-reviewer.md");
+    expect(existsSync(reviewerPath)).toBe(true);
+  });
+
+  // Mirrors the skill-directory non-regression test above — a
+  // `mullion-`-prefixed `.md` file that does NOT carry
+  // `INSTALLED_AGENT_MARKER` must never be touched by the new orphan scan,
+  // even with no manifest present at all. The prefix alone is only a naming
+  // convention; the in-body marker is the actual ownership test.
+  it("issue #1090 non-regression: never deletes a mullion-prefixed agent file lacking the ownership marker, even with no manifest", () => {
+    writeSkill("host");
+    writeAgent("reviewer");
+
+    const claudeAgentsDir = path.join(resolveClaudeConfigDir(), "agents");
+    mkdirSync(claudeAgentsDir, { recursive: true });
+    const userOwnedPath = path.join(claudeAgentsDir, "mullion-helper.md");
+    writeFileSync(userOwnedPath, "---\nname: mullion-helper\n---\nMine.\n");
+    // Deliberately no INSTALLED_AGENT_MARKER line.
+    expect(existsSync(resolveBundleSyncManifestPath())).toBe(false);
+
+    const result = syncBundleContent();
+
+    expect(result.changed).toBe(true);
+    expect(existsSync(userOwnedPath)).toBe(true);
+    expect(readFileSync(userOwnedPath, "utf8")).toBe("---\nname: mullion-helper\n---\nMine.\n");
+  });
+
+  // Regression test for a review finding on this same issue's own PR: the
+  // orphan scan's "names just (re)installed" protect-set must be computed
+  // PER TARGET, from what THAT target actually installed this pass — never
+  // a single set shared across all of AGENT_TARGETS. `target.transform` can
+  // reject a name independently per CLI (unparseable/unsafe frontmatter —
+  // opencode/agy both do via parseSkillFrontmatter/isDangerousSkillName),
+  // so a name that installs fine for claude-code but is rejected by
+  // opencode's own transform must NOT protect a stale same-named file under
+  // opencode's root just because claude-code's protect-set happens to
+  // include it.
+  it("issue #1090: a name installed for one target does not protect a same-named orphan under a target whose own transform declined it", () => {
+    writeSkill("host");
+    // "broken" has unparseable frontmatter: claude-code's transform is
+    // verbatim passthrough (installs it regardless), but opencode's/agy's
+    // transforms both reject it via parseSkillFrontmatter, returning null.
+    writeAgent("broken", "not frontmatter at all");
+
+    // A stale marker-carrying mullion-broken.md sitting under opencode's
+    // own agent root — left over from some earlier state where it WAS
+    // installable there — that opencode's transform does NOT reinstall
+    // this pass.
+    const opencodeAgentDir = path.join(resolveOpenCodeConfigHome(), "agent");
+    mkdirSync(opencodeAgentDir, { recursive: true });
+    const staleOpencodePath = path.join(opencodeAgentDir, "mullion-broken.md");
+    writeFileSync(
+      staleOpencodePath,
+      `---\ndescription: "stale"\nmode: subagent\n---\n\nStale.\n${INSTALLED_AGENT_MARKER}\n`,
+    );
+
+    const result = syncBundleContent();
+
+    expect(result.changed).toBe(true);
+    // claude-code DID (re)install "broken" verbatim this exact pass.
+    expect(existsSync(path.join(resolveClaudeConfigDir(), "agents", "mullion-broken.md"))).toBe(
+      true,
+    );
+    // ...but opencode's own stale copy must still be pruned: opencode's own
+    // transform rejected "broken" THIS pass, so nothing legitimately
+    // protects it there, regardless of what any other target installed.
+    expect(existsSync(staleOpencodePath)).toBe(false);
+  });
+
+  // isCurrentMullionManagedFile requires the marker as the file's own
+  // TRAILING line, not merely present anywhere in the body — a bare
+  // `.includes()` would misidentify a user's own file that happens to
+  // quote/document the marker string (e.g. this very module's own doc
+  // comments, or this repo's docs, contain the literal string) as
+  // Mullion-owned. Same "prefix alone isn't ownership" caution as PR #891,
+  // applied to the marker itself.
+  it("issue #1090: never deletes a mullion-prefixed agent file that only quotes the marker string mid-body, without it as the trailing line", () => {
+    writeSkill("host");
+    writeAgent("reviewer");
+
+    const claudeAgentsDir = path.join(resolveClaudeConfigDir(), "agents");
+    mkdirSync(claudeAgentsDir, { recursive: true });
+    const quotingPath = path.join(claudeAgentsDir, "mullion-quoting.md");
+    writeFileSync(
+      quotingPath,
+      `---\nname: mullion-quoting\n---\n\nDocumenting Mullion's own marker: ${INSTALLED_AGENT_MARKER}\n\nMore of my own content after it.\n`,
+    );
+
+    const result = syncBundleContent();
+
+    expect(result.changed).toBe(true);
+    expect(existsSync(quotingPath)).toBe(true);
+  });
+
+  // pruneOrphanManagedFiles' `entry.isFile()` guard — a directory that
+  // happens to be named like a `mullion-*.md` agent file (however
+  // implausible) must never be treated as a candidate for the file-kind
+  // scan, symmetric with pruneOrphanManagedDirs' own `entry.isDirectory()`
+  // guard for skill directories.
+  it("issue #1090: never touches a directory that happens to be named like a mullion-*.md agent file", () => {
+    writeSkill("host");
+    writeAgent("reviewer");
+
+    const claudeAgentsDir = path.join(resolveClaudeConfigDir(), "agents");
+    const lookalikeDir = path.join(claudeAgentsDir, "mullion-lookalike.md");
+    mkdirSync(lookalikeDir, { recursive: true });
+    writeFileSync(path.join(lookalikeDir, "inner.txt"), INSTALLED_AGENT_MARKER);
+
+    const result = syncBundleContent();
+
+    expect(result.changed).toBe(true);
+    expect(existsSync(lookalikeDir)).toBe(true);
+  });
 });
 
 describe("syncBundleContent — manifest atomicity and corruption", () => {
@@ -436,14 +576,20 @@ describe("syncBundleContent — agent install (fixture-based, src/bundle/agents/
     expect(existsSync(path.join(resolveClaudeConfigDir(), "agents"))).toBe(false);
   });
 
-  it("installs a verbatim copy for claude-code", () => {
+  it("installs a verbatim copy for claude-code, plus the installed-agent ownership marker", () => {
     writeSkill("host");
     writeAgent("reviewer");
     syncBundleContent();
     const destPath = path.join(resolveClaudeConfigDir(), "agents", "mullion-reviewer.md");
     expect(existsSync(destPath)).toBe(true);
     const raw = readFileSync(path.join(bundleDir(), "agents", "reviewer.md"), "utf8");
-    expect(readFileSync(destPath, "utf8")).toBe(raw);
+    const installed = readFileSync(destPath, "utf8");
+    // Issue #1090 — claude-code's transform is still verbatim passthrough,
+    // but the installed file also carries the ownership marker every
+    // AGENT_TARGETS install now appends, so it's no longer byte-identical
+    // to the shipped source.
+    expect(installed).toBe(`${raw.replace(/\n+$/, "")}\n${INSTALLED_AGENT_MARKER}\n`);
+    expect(installed).toContain(INSTALLED_AGENT_MARKER);
   });
 
   it("applies the opencode transform (description/mode only, tools/model dropped) under agent/ (singular)", () => {
@@ -637,7 +783,16 @@ describe("removeBundleContentForCli (issue #1079)", () => {
     expect(existsSync(userOwnedDir)).toBe(true);
   });
 
-  it("agent-file removal is manifest-only: a stray pre-manifest mullion-<name>.md agent file is left alone", async () => {
+  // removeBundleContentForCli only ever removes manifest-tracked file
+  // entries for this one CLI (see its own doc comment) — it does NOT run
+  // the orphan-marker scan issue #1090 added to syncBundleContent's own
+  // AGENT_TARGETS loop. A markerless stray genuinely should survive this
+  // path regardless: that's the correct, deliberate non-regression
+  // guarantee (a marker-carrying stray is now discoverable too, but only by
+  // a real sync pass — see the "issue #1090" tests in the
+  // "syncBundleContent — prune" describe block above) — not a gap this test
+  // is settling for.
+  it("agent-file removal is manifest-only: a stray markerless mullion-<name>.md agent file is left alone", async () => {
     writeSkill("host");
     writeAgent("reviewer");
     syncBundleContent();
@@ -853,7 +1008,16 @@ describe("uninstallBundleContent", () => {
     expect(existsSync(path.join(userOwnedDir, "SKILL.md"))).toBe(true);
   });
 
-  it("agent-file prune is manifest-only: a stray pre-manifest mullion-<name>.md agent file is a known, accepted gap and is left alone", async () => {
+  // uninstallBundleContent's legacy sweep (uninstallBundleSkills) only ever
+  // walks SKILL_TARGETS' roots — it deliberately never touches agent files
+  // at all (see this function's own doc comment on why a prefix-only check
+  // would be unsafe for a flat file), so a markerless stray `.md` file
+  // predictably survives it regardless of issue #1090's marker. That fix
+  // lives entirely in syncBundleContent's own AGENT_TARGETS orphan-scan
+  // (see the "issue #1090" tests above), which this path never calls — so
+  // this remains a correct, deliberate non-regression guarantee for the
+  // markerless case, not an unaddressed gap.
+  it("agent-file prune is manifest-only: a stray markerless mullion-<name>.md agent file is left alone by the legacy sweep", async () => {
     writeSkill("host");
     writeAgent("reviewer");
     syncBundleContent();
@@ -866,9 +1030,9 @@ describe("uninstallBundleContent", () => {
     expect(existsSync(path.join(resolveClaudeConfigDir(), "agents", "mullion-reviewer.md"))).toBe(
       false,
     );
-    // ...but the untracked stray flat file is NOT touched by the legacy
-    // sweep — flat agent files have no marker to check, so only
-    // manifest-tracked ones are ever removed (documented gap, not a bug).
+    // ...but the untracked, markerless stray flat file is NOT touched by
+    // the legacy sweep — that sweep only ever walks skill directories, and
+    // never runs the (issue #1090) agent-file orphan scan at all.
     expect(existsSync(strayAgentPath)).toBe(true);
     expect(result.removed).toBeGreaterThan(0);
   });
