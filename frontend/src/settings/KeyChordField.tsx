@@ -90,7 +90,16 @@ export function KeyChordField({
   }, [capturing, disabled]);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
+    // maxWidth matters here, not just for tidiness: .settings-row-control
+    // (modals.css) is `flex-shrink: 0` while .settings-row-text is `flex: 1;
+    // min-width: 0` — an unbounded-width hint/error line here forces this
+    // column to its full intrinsic (unwrapped) text width, and flexbox then
+    // steals that space from the row's own label/desc column, collapsing it
+    // into a vertical one-word-per-line stack. Bounding this column's width
+    // is what makes the hint/error text wrap instead of stealing space.
+    <div
+      style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end", maxWidth: 240 }}
+    >
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <button
           className="settings-secondary-btn"
@@ -124,12 +133,12 @@ export function KeyChordField({
         )}
       </div>
       {capturing && !error && (
-        <span style={{ fontSize: 11.5, color: "var(--muted)" }}>
+        <span style={{ fontSize: 11.5, color: "var(--muted)", textAlign: "right" }}>
           Nothing captured? Another app may have claimed this combo globally — 1Password's Quick
           Access defaults to Ctrl+Shift+Space on Windows and Linux. Escape to cancel.
         </span>
       )}
-      {error && <ErrorText style={{ fontSize: 11.5 }}>{error}</ErrorText>}
+      {error && <ErrorText style={{ fontSize: 11.5, textAlign: "right" }}>{error}</ErrorText>}
     </div>
   );
 }
