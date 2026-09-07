@@ -75,6 +75,7 @@ import {
   UnsupportedGenerationAgentError,
   GenerationWorktreeError,
   GenerationSpawnError,
+  isSandboxCapable,
 } from "../services/scaffold-generate.js";
 import {
   readAgentBundleDisabled,
@@ -1472,7 +1473,13 @@ export async function internalRoutes(app: FastifyInstance) {
           // the sandboxing this handler's own spawn step applies.
           sandbox: app.config.MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED,
         });
-        return { outcome: "ok", stdout };
+        // Issue #1144, #1159 — surface whether the turn actually ran inside
+        // a bwrap sandbox. Same logic as generateScaffoldContent's own
+        // LOCAL_HOST_ID path: config opt-out short-circuits before
+        // isSandboxCapable() in defaultSpawnGenerationTurn.
+        const sandboxRequested = app.config.MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED !== false;
+        const sandboxed = sandboxRequested && (await isSandboxCapable());
+        return { outcome: "ok", stdout, sandboxed };
       } catch (err) {
         if (err instanceof UnsupportedGenerationAgentError) {
           return { outcome: "unsupported-agent", detail: err.message };
