@@ -2397,7 +2397,7 @@ describe("internal routes (agent role, issue #26)", () => {
           payload: { cwd },
         });
         expect(res.statusCode).toBe(200);
-        expect(res.json()).toEqual({ skillCommitted: true, reviewerCommitted: true });
+        expect(res.json()).toEqual({ skillCommitted: true, reviewerCommitted: true, warnings: [] });
 
         process.env.PROJECTS_ROOTS = previousRoots;
         fs.rmSync(repoRoot, { recursive: true, force: true });
@@ -2417,7 +2417,11 @@ describe("internal routes (agent role, issue #26)", () => {
           payload: { cwd },
         });
         expect(res.statusCode).toBe(200);
-        expect(res.json()).toEqual({ skillCommitted: false, reviewerCommitted: false });
+        expect(res.json()).toEqual({
+          skillCommitted: false,
+          reviewerCommitted: false,
+          warnings: [],
+        });
 
         process.env.PROJECTS_ROOTS = previousRoots;
         fs.rmSync(repoRoot, { recursive: true, force: true });

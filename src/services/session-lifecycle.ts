@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import path from "node:path";
-import { existsSync, readdirSync, openSync, readSync, closeSync, statSync } from "node:fs";
+import { readdirSync, openSync, readSync, closeSync, statSync } from "node:fs";
 import { and, eq } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import {
@@ -427,37 +427,28 @@ const SCAFFOLD_REVIEWER_SUFFIX = "-reviewer.md";
  * a real behavior change from the pre-#1098 gate, not just a bugfix that
  * leaves every other case byte-identical.
  *
- * Issue #1123 — two passes, not one, over the SAME candidate set above.
- * Pass 1 (identity) reads each candidate's file and checks for
- * `mullion-scaffold.ts`'s own stamp (`scaffoldStampLine`) naming that exact
- * slug — proof this repo's own `computeScaffold` actually wrote it, not
- * just something shape-compatible living at the same path. Pass 2 (shape
- * fallback) is the ORIGINAL, unconditional existsSync check, run only for
- * whichever flag(s) pass 1 didn't already confirm: today's false-positive
- * behavior (documented above) is a deliberately KEPT, not removed, because
- * `computeScaffold`'s skill/reviewer entries are create-once-never-
- * overwrite — a repo scaffolded before this stamp existed never gains one
- * retroactively, so the fallback has to stay until every scaffolded repo
- * has been re-scaffolded (tracked separately — issue #1143). The two
- * passes produce the IDENTICAL final `skillCommitted`/`reviewerCommitted`
- * value pass 2 alone always did; splitting them is what gives #1143 a real
- * toggle point later, and what this file's own tests can observe directly
- * (a stamped file is confirmed without ever reaching pass 2; an unstamped
- * shape match only is).
+ * Issue #1123 — stamp-based identity check. Reads each candidate's file
+ * and checks for `mullion-scaffold.ts`'s own stamp (`scaffoldStampLine`)
+ * naming that exact slug — proof this repo's own `computeScaffold` actually
+ * wrote it, not just something shape-compatible living at the same path.
+ *
+ * The shape-based fallback (pass-2) that previously ran for unstamped
+ * candidates was retired in #1143 — pre-release, all repos are expected to
+ * be re-scaffolded with stamps. The mullion:scaffold:<slug> stamp is now
+ * the sole identity signal.
  */
-// Hermes review, PR #1150 — pass 1 below used a full, unbounded
-// `readFileSync` per candidate, on `createSessionRecord`'s own hot path
-// (every session create). A single large vendored SKILL.md (or a
-// candidate slug that happens to resolve to a symlinked huge file) would
-// block the event loop for the whole process just to check for a marker
-// line `computeScaffold` always places within a few hundred bytes of the
+// Hermes review, PR #1150 — the original per-candidate read used a full,
+// unbounded `readFileSync` on `createSessionRecord`'s own hot path (every
+// session create). A single large vendored SKILL.md (or a candidate slug
+// that happens to resolve to a symlinked huge file) would block the event
+// loop for the whole process just to check for a marker line
+// `computeScaffold` always places within a few hundred bytes of the
 // frontmatter. Bounded to a head read instead — enough headroom for any
 // real stamped file's frontmatter + stamp line, while capping the worst
-// case. A stamp that happens to fall outside this window (implausible
-// given where `stampScaffoldBody` places it, but not impossible for a
-// hand-edited file) simply falls through to pass 2's unconditional
-// existsSync fallback below, same as any other unstamped candidate —
-// never a correctness loss, only a possible extra pass-2 hit.
+// case. A stamp that happens to fall outside this window (implausible given
+// where `stampScaffoldBody` places it, but not impossible for a hand-edited
+// file) simply results in a false negative — the candidate is treated as
+// unstamped and not counted as committed.
 const STAMP_SCAN_HEAD_BYTES = 16 * 1024;
 
 function readFileHeadSync(filePath: string, maxBytes: number): string | undefined {
@@ -500,6 +491,7 @@ function readFileHeadSync(filePath: string, maxBytes: number): string | undefine
 export function discoverCommittedScaffold(scaffoldCwd: string): {
   skillCommitted: boolean;
   reviewerCommitted: boolean;
+  warnings: string[];
 } {
   const candidateSlugs = new Set<string>();
 
@@ -529,6 +521,7 @@ export function discoverCommittedScaffold(scaffoldCwd: string): {
 
   let skillCommitted = false;
   let reviewerCommitted = false;
+  const warnings: string[] = [];
 
   // Pass 1 — identity. CodeQL (js/path-injection) flags these path.join
   // calls, same as it did the original existsSync pair this extends — see
@@ -539,45 +532,35 @@ export function discoverCommittedScaffold(scaffoldCwd: string): {
   // boundary against a dangerous-but-legal name like `__proto__`.
   for (const candidate of validCandidates) {
     if (!skillCommitted) {
-      const contents = readFileHeadSync(
-        path.join(scaffoldCwd, scaffoldSkillPath(candidate)),
-        STAMP_SCAN_HEAD_BYTES,
-      );
+      const skillFile = path.join(scaffoldCwd, scaffoldSkillPath(candidate));
+      const contents = readFileHeadSync(skillFile, STAMP_SCAN_HEAD_BYTES);
       if (contents !== undefined && hasScaffoldStamp(contents, candidate)) {
         skillCommitted = true;
+      } else if (contents !== undefined) {
+        warnings.push(
+          `candidate skill "${candidate}" exists at ${skillFile} but lacks a scaffold stamp — unre-scaffolded pre-#1123 repo?`,
+        );
       }
     }
     if (!reviewerCommitted) {
-      const contents = readFileHeadSync(
-        path.join(scaffoldCwd, scaffoldReviewerPath(candidate)),
-        STAMP_SCAN_HEAD_BYTES,
-      );
+      const reviewerFile = path.join(scaffoldCwd, scaffoldReviewerPath(candidate));
+      const contents = readFileHeadSync(reviewerFile, STAMP_SCAN_HEAD_BYTES);
       if (contents !== undefined && hasScaffoldStamp(contents, candidate)) {
         reviewerCommitted = true;
+      } else if (contents !== undefined) {
+        warnings.push(
+          `candidate reviewer "${candidate}" exists at ${reviewerFile} but lacks a scaffold stamp — unre-scaffolded pre-#1123 repo?`,
+        );
       }
     }
     if (skillCommitted && reviewerCommitted) break;
   }
 
-  // Pass 2 — shape fallback, only for whichever flag(s) pass 1 left
-  // unconfirmed. Identical to the pre-#1123 check: existsSync alone, no
-  // stamp required.
-  if (!skillCommitted || !reviewerCommitted) {
-    for (const candidate of validCandidates) {
-      if (!skillCommitted && existsSync(path.join(scaffoldCwd, scaffoldSkillPath(candidate)))) {
-        skillCommitted = true;
-      }
-      if (
-        !reviewerCommitted &&
-        existsSync(path.join(scaffoldCwd, scaffoldReviewerPath(candidate)))
-      ) {
-        reviewerCommitted = true;
-      }
-      if (skillCommitted && reviewerCommitted) break;
-    }
-  }
+  // Pass 2 (shape-based fallback) retired in #1143 — pre-release, all repos
+  // are expected to be re-scaffolded with stamps. The mullion:scaffold:<slug>
+  // stamp is now the sole identity signal.
 
-  return { skillCommitted, reviewerCommitted };
+  return { skillCommitted, reviewerCommitted, warnings };
 }
 
 /**
@@ -616,7 +599,7 @@ export async function discoverCommittedScaffoldOnHost(
   app: FastifyInstance,
   hostId: string,
   scaffoldCwd: string,
-): Promise<{ skillCommitted: boolean; reviewerCommitted: boolean }> {
+): Promise<{ skillCommitted: boolean; reviewerCommitted: boolean; warnings: string[] }> {
   if (hostId === LOCAL_HOST_ID) {
     return discoverCommittedScaffold(scaffoldCwd);
   }
@@ -664,7 +647,7 @@ export async function discoverCommittedScaffoldOnHost(
       ? "scaffold-scan: agent host predates the /internal/scaffold-scan route (update the agent build) — treating as committed (fail closed, suppressing DB-draft injection)"
       : "scaffold-scan: could not reach agent host to check committed scaffold state — treating as committed (fail closed, suppressing DB-draft injection)",
   );
-  return { skillCommitted: true, reviewerCommitted: true };
+  return { skillCommitted: true, reviewerCommitted: true, warnings: [] };
 }
 
 // Shared by POST /api/sessions (the launcher's worktree toggle, option 1),
@@ -926,8 +909,14 @@ export async function createSessionRecord(
   // falling back to `project.cwd` only for the ordinary case where no
   // override exists at all.
   const scaffoldCwd = cwd ?? project.cwd;
-  const { skillCommitted: scaffoldSkillCommitted, reviewerCommitted: scaffoldReviewerCommitted } =
-    await discoverCommittedScaffoldOnHost(app, project.hostId, scaffoldCwd);
+  const {
+    skillCommitted: scaffoldSkillCommitted,
+    reviewerCommitted: scaffoldReviewerCommitted,
+    warnings: scaffoldWarnings,
+  } = await discoverCommittedScaffoldOnHost(app, project.hostId, scaffoldCwd);
+  if (scaffoldWarnings.length > 0) {
+    app.log.warn({ warnings: scaffoldWarnings, scaffoldCwd }, "scaffold scan warnings");
+  }
 
   // PR-5 — same producer posture as resolvedBriefingOverride immediately
   // above: an explicit caller-supplied value (currently unused by any
