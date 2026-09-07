@@ -906,17 +906,16 @@ describe("defaultSpawnGenerationTurn — agy fails closed without a usable sandb
     ).rejects.toThrow(/requires a usable bwrap sandbox/);
   });
 
-  it("does NOT fail closed for the other three agents — this guard is agy-specific", async () => {
+  it("does NOT fail closed for claude and codex — this guard is agy/opencode-specific", async () => {
     await isSandboxCapable(async () => false);
 
     // A bogus cwd/bin means these DO still reach execFile and fail there
-    // (a real spawn ENOENT, not agy's own pre-flight guard) — asserted on
-    // the SAME caught error by checking its message doesn't match the
-    // guard's own wording, which is what would actually distinguish
-    // "rejected before any spawn was attempted" from "the spawn itself
-    // failed" if this guard's `agentCommand` check were ever accidentally
-    // broadened.
-    for (const agentCommand of ["claude", "codex", "opencode"]) {
+    // (a real spawn ENOENT, not a pre-flight guard) — asserted on the
+    // SAME caught error by checking its message doesn't match the guard's
+    // own wording, which is what would actually distinguish "rejected
+    // before any spawn was attempted" from "the spawn itself failed" if
+    // this guard's `agentCommand` check were ever accidentally broadened.
+    for (const agentCommand of ["claude", "codex"]) {
       const err: unknown = await defaultSpawnGenerationTurn({
         agentCommand,
         cwd: "/nonexistent/scratch-worktree",
@@ -926,6 +925,42 @@ describe("defaultSpawnGenerationTurn — agy fails closed without a usable sandb
       expect(err).toBeInstanceOf(GenerationSpawnError);
       expect((err as Error).message).not.toMatch(/requires a usable bwrap sandbox/);
     }
+  });
+
+  // Issue #1153 — opencode has no CLI-level write-restriction flag, so it
+  // must fail closed on the no-bwrap fallback, same as agy.
+  it("fails closed for opencode when bwrap is not usable", async () => {
+    await isSandboxCapable(async () => false);
+
+    await expect(
+      defaultSpawnGenerationTurn({
+        agentCommand: "opencode",
+        cwd: "/nonexistent/scratch-worktree",
+        prompt: "irrelevant — this must fail before any spawn is attempted",
+        timeoutMs: 5000,
+      }),
+    ).rejects.toThrow(/requires a usable bwrap sandbox/);
+  });
+
+  // Issue #1153/1164 — opt-out parity: sandbox: false must ALSO fail
+  // closed for opencode, same as agy (issue #1133). The guard must fire
+  // identically whether bwrap is merely unusable (above) or sandboxing
+  // was explicitly opted out, since opencode has no CLI-level write-
+  // restriction flag to fall back on either way.
+  it("still fails closed for opencode when the sandbox opt-out is set, even though bwrap IS capable", async () => {
+    await isSandboxCapable(async () => true);
+
+    const err: unknown = await defaultSpawnGenerationTurn({
+      agentCommand: "opencode",
+      cwd: "/nonexistent/scratch-worktree",
+      prompt: "irrelevant — this must fail before any spawn is attempted",
+      timeoutMs: 5000,
+      sandbox: false,
+    }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(GenerationSpawnError);
+    expect((err as Error).message).toMatch(/requires a usable bwrap sandbox/);
+    expect((err as Error).message).toMatch(/explicitly disabled/);
   });
 
   // Issue #1133 — MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED=false is NOT an
