@@ -100,6 +100,15 @@ const isActiveReplies: Record<string, string> = {};
 // convention above.
 let listUnitsReply: string[] = [];
 
+// Issue #1137 — the fake `systemctl --user show <unit> -p Description -p
+// ActiveState` reply describeScope() should see, keyed by unit name.
+// Defaults (unit absent from this map) to systemd's own real fallback for a
+// unit that never existed (Description equal to the bare unit name,
+// ActiveState "inactive") — see session-process.test.ts's identical
+// showReplies convention — so tests unrelated to the bootstrap-collision
+// diagnostic don't need to care about it.
+const showReplies: Record<string, { description: string; activeState: string }> = {};
+
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof ChildProcess>();
   return {
@@ -132,6 +141,22 @@ vi.mock("node:child_process", async (importOriginal) => {
               .map((unit) => `${unit} loaded active running ${unit}`)
               .join("\n");
             ee.stdout?.emit("data", Buffer.from(lines ? `${lines}\n` : ""));
+            ee.emit("close", 0);
+          });
+        });
+        return ee;
+      }
+      if (file === "systemctl" && args[1] === "show") {
+        ee.stdout = new EventEmitter();
+        const unit = args[2];
+        const reply = showReplies[unit] ?? { description: unit, activeState: "inactive" };
+        setImmediate(() => {
+          ee.emit("exit", 0);
+          setImmediate(() => {
+            ee.stdout?.emit(
+              "data",
+              Buffer.from(`Description=${reply.description}\nActiveState=${reply.activeState}\n`),
+            );
             ee.emit("close", 0);
           });
         });
@@ -200,6 +225,7 @@ describe("PtyManager", () => {
   beforeEach(() => {
     fakePtyChildren.length = 0;
     for (const key of Object.keys(isActiveReplies)) delete isActiveReplies[key];
+    for (const key of Object.keys(showReplies)) delete showReplies[key];
     listUnitsReply = [];
     // mkdtempSync, not a hand-rolled random suffix: the OS's own atomic,
     // exclusive directory creation is what CodeQL's js/insecure-temporary-
@@ -417,6 +443,74 @@ describe("PtyManager", () => {
       });
 
       await expect(session.spawnOutcome()).rejects.toThrow(`cwd does not exist: ${fileCwd}`);
+    });
+  });
+
+  // Issue #1137's investigation: a leaked scope from an earlier process (a
+  // crashed test run, a stale scratch dev instance) squatting on a
+  // low-numbered id made a fresh backend's own bootstrap fail with nothing
+  // but `master bootstrap exited with code 1 (unit crs-session-1)` — no
+  // hint that a name collision, not a genuine systemd-run/dtach problem,
+  // was the cause. bootstrapMaster() now probes describeScope() on any
+  // non-zero exit and names the squatter when one is actually occupying the
+  // name.
+  describe("bootstrapMaster scope-collision diagnostic (issue #1137)", () => {
+    it("names the squatting unit's Description when the scope name is already active", async () => {
+      showReplies["crs-session-1.scope"] = {
+        description:
+          "/usr/bin/dtach -n /tmp/pty-manager-filechange-test-abc123/1.sock /bin/zsh -lc bash",
+        activeState: "active",
+      };
+      vi.mocked(spawnChildProcess).mockImplementationOnce((file: string) => {
+        const ee = new EventEmitter();
+        expect(file).toBe("systemd-run");
+        setImmediate(() => ee.emit("exit", 1));
+        return ee as unknown as ReturnType<typeof spawnChildProcess>;
+      });
+
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+
+      await expect(session.spawnOutcome()).rejects.toThrow(
+        /already exists and is running "\/usr\/bin\/dtach -n \/tmp\/pty-manager-filechange-test-abc123\/1\.sock \/bin\/zsh -lc bash"/,
+      );
+      // The original plain message survives too — describeScope augments
+      // it, it doesn't replace it — so anything grepping logs for the old
+      // shape still matches.
+      await expect(session.spawnOutcome()).rejects.toThrow(
+        "master bootstrap exited with code 1 (unit crs-session-1)",
+      );
+    });
+
+    it("falls back to the plain message unchanged when the scope name isn't actually occupied", async () => {
+      // showReplies has no "crs-session-1.scope" entry — the shared mock's
+      // default (systemd's own real fallback for a unit that never
+      // existed: ActiveState "inactive") — so describeScope() resolves
+      // null and the non-zero exit must be some other, non-collision
+      // cause.
+      vi.mocked(spawnChildProcess).mockImplementationOnce((file: string) => {
+        const ee = new EventEmitter();
+        expect(file).toBe("systemd-run");
+        setImmediate(() => ee.emit("exit", 1));
+        return ee as unknown as ReturnType<typeof spawnChildProcess>;
+      });
+
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+
+      await expect(session.spawnOutcome()).rejects.toThrow(
+        "master bootstrap exited with code 1 (unit crs-session-1)",
+      );
     });
   });
 

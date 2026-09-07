@@ -35,6 +35,7 @@
     "check:briefing-sync": "node scripts/check-briefing-sync.mjs",
     "check:ssh-agent-filter-vectors": "tsx scripts/generate-ssh-agent-filter-vectors.ts --check",
     "generate:ssh-agent-filter-vectors": "tsx scripts/generate-ssh-agent-filter-vectors.ts",
+    "check:scope-leaks": "tsx scripts/check-scope-leaks.ts",
     "build:helper-sea": "node scripts/build-helper-sea.mjs"
   },
   "dependencies": {

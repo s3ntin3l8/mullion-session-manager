@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help install install-hooks dev test test-backend test-coverage test-e2e lint typecheck format format-check build clean wt review
+.PHONY: help install install-hooks dev test test-backend test-coverage test-e2e lint typecheck format format-check build clean wt review check-scope-leaks
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -26,6 +26,9 @@ test-coverage: ## Run tests with coverage (backend only)
 
 test-e2e: ## Run the opt-in Phase 4 socket API e2e suite (real browser/sockets, not part of `make test`)
 	npm run test:e2e
+
+check-scope-leaks: ## Scan crs-session-* systemd scopes for leaks (issue #1137; standalone, not part of `make test`/lint)
+	npm run check:scope-leaks
 
 lint: ## Run linter (backend + frontend)
 	npm run lint:all

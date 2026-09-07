@@ -1,25 +1,71 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterAll, afterEach, vi } from "vitest";
+// These three helper imports must come before any import of "node-pty" or
+// "node:child_process" below (including transitively, e.g. via
+// "node:child_process"'s own `execFileSync` import) — Vitest intercepts a
+// mocked module at the position of its FIRST static import in the file's
+// (transformed, sequential) evaluation order, and the mock factories below
+// close over these helpers. If a "node:child_process" import appeared
+// first, the factory would run before this binding was initialized
+// (`ReferenceError: Cannot access '...' before initialization`) — see
+// test/routes/ws-tasks.test.ts's identical header comment, the file this
+// one's fix was modeled on.
+import { plainNodePtyMock } from "../helpers/mock-pty.js";
+import { mockChildProcessSpawn } from "../helpers/mock-spawn.js";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
-import crypto from "node:crypto";
+import type * as ChildProcess from "node:child_process";
 import { execFileSync } from "node:child_process";
-import { PtyManager } from "../../src/services/pty-manager.js";
 import { gitEnv } from "../../src/services/git-env.js";
+import { uniqueDir } from "../helpers/tmpdir.js";
+import { isSystemctlUserAvailable } from "../../src/services/session-process.js";
 
-// Deliberately does NOT mock node-pty or node:child_process, unlike
-// pty-manager.test.ts and test/routes/sessions.test.ts — this file's whole
-// point is exercising a REAL `git check-ignore` shell-out (Part B's
-// isPathGitIgnored, wired into Session.emitHookEvent's file_change case).
-// Those other files' child_process mock intercepts every spawn() call
-// unconditionally (only special-casing `systemctl is-active`), which would
-// make a real "is this path ignored" check hang until its own timeout rather
-// than ever seeing genuine git output. A real dtach/systemd-run PTY spawn
-// isn't needed for this: emitHookEvent's file_change filtering only reads
-// Session's own in-memory cwd/liveCwd state and shells out to `git`
-// directly — it doesn't touch the underlying pty process at all, so this
-// test doesn't wait for (or depend on) the spawn succeeding, only on
-// `manager.getOrCreate` returning a constructed Session.
+// This file's whole point is exercising a REAL `git check-ignore` shell-out
+// (Part B's isPathGitIgnored, wired into Session.emitHookEvent's file_change
+// case). It used to run with NO mocks at all, reasoning that
+// pty-manager.test.ts/sessions.test.ts's unconditional node:child_process
+// mock would make a real "is this path ignored" check hang rather than ever
+// seeing genuine git output, and that a real PTY spawn "isn't needed" since
+// emitHookEvent's file_change filtering never touches the underlying pty
+// process.
+//
+// That reasoning covered whether the test NEEDS a real spawn, not whether
+// leaving one unmocked is safe. `manager.getOrCreate()` below unconditionally
+// fires `session.spawn()`, which — with node:child_process/node-pty left
+// unmocked — bootstraps a REAL `systemd-run --user --scope --collect`
+// (pty-manager.ts's bootstrapMaster()) and a real `dtach -a` attach. Every
+// run of this file left one or two genuine `crs-session-1.scope` units
+// running forever: dtach never exits because the spawned `bash` never
+// exits, and `--collect` only reaps a scope once its whole process tree is
+// gone — see issue #1137, which traced a scratch dev instance's spawn
+// failure to exactly one of these surviving for hours and squatting on the
+// low session id a fresh SQLite DB reuses.
+//
+// This file's own `afterEach` (below) can't fix that by also stopping the
+// scope: `killAll()` only kills the tracked attach-client and explicitly
+// leaves the dtach master + scope running (PtyManager.kill()'s own doc
+// comment) — only `PtyManager.terminate()` calls `stopScope()`, and calling
+// terminate() here would trade one bug for a worse one. Scope names are a
+// single Unix-user-global namespace (session-process.ts's
+// scopeUnitName(id) doc comment) while `sessions.id` is per-database, so
+// terminate()-ing this file's fixed test ids could stop a **different,
+// real** Mullion instance's own low-numbered session on the same host.
+//
+// The actual fix is not creating the scope at all: `mockChildProcessSpawn`'s
+// `passthrough` option (see its own header for this exact worked example,
+// and test/routes/ws-tasks.test.ts for a working file that already combines
+// it with a real git shell-out) fakes every command except `git`, so the
+// real `git check-ignore` this file exists to test still runs, but the
+// `systemd-run`/`dtach` spawns bootstrapMaster() and attachClient() make
+// resolve instantly against a fake instead of touching the real OS.
+vi.mock("node-pty", () => plainNodePtyMock());
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof ChildProcess>();
+  return mockChildProcessSpawn(actual, { passthrough: ["git"] });
+});
+
+const { PtyManager } = await import("../../src/services/pty-manager.js");
 
 function git(cwd: string, args: string[]) {
   execFileSync("git", args, { cwd, stdio: "pipe", env: gitEnv() });
@@ -32,12 +78,6 @@ function initRepo(cwd: string) {
   git(cwd, ["config", "user.name", "Test"]);
 }
 
-// Each check may be waiting on a genuine `git` subprocess (isPathGitIgnored
-// is a real spawn, not mocked in this file — see the file-level comment) —
-// a plain setImmediate-loop poll doesn't give the OS enough real wall-clock
-// time to complete more than one or two of those, so this uses a short real
-// delay per iteration instead, generous enough for a handful of real `git
-// check-ignore` invocations.
 async function waitUntil(check: () => boolean) {
   const deadline = Date.now() + 3_000;
   while (Date.now() < deadline) {
@@ -46,6 +86,15 @@ async function waitUntil(check: () => boolean) {
   }
   throw new Error("condition never became true");
 }
+
+// A single source of truth for the tmp-dir prefix, used by BOTH mkManager()
+// (below) and the leak-detection afterAll() at the end of this file — issue
+// #1137's fix would go silently vacuous if a future rename touched one
+// without the other, since the afterAll assertion greps systemd unit
+// descriptions for this exact string.
+const SESSIONS_DIR_PREFIX = "pty-manager-filechange-test-";
+
+let nextId = 1;
 
 const tmpDirs: string[] = [];
 const managers: InstanceType<typeof PtyManager>[] = [];
@@ -56,14 +105,57 @@ afterEach(() => {
 });
 
 function mkManager(): InstanceType<typeof PtyManager> {
-  const sessionsDir = path.join(
-    os.tmpdir(),
-    `pty-manager-filechange-test-${crypto.randomBytes(4).toString("hex")}`,
-  );
+  const sessionsDir = uniqueDir(SESSIONS_DIR_PREFIX);
   tmpDirs.push(sessionsDir);
   const manager = new PtyManager({ sessionsDir });
   managers.push(manager);
   return manager;
+}
+
+// Regression guard for issue #1137: with node-pty/node:child_process mocked
+// above, this file's spawns should never reach a real `systemd-run`, so no
+// `crs-session-*.scope` unit should ever exist whose description names this
+// file's own tmp-dir prefix. Skipped (not failed) when `systemctl --user`
+// itself isn't available (isSystemctlUserAvailable — shared with
+// scripts/check-scope-leaks.ts rather than a second, hand-rolled copy of
+// this same probe), matching this repo's existing
+// `cond ? describe : describe.skip` idiom
+// (test/e2e/opencode-permission-merge.e2e.test.ts) rather than the
+// `describe.skipIf` form — CI's stock ubuntu-latest runners have no user
+// systemd/dtach at all (see ci-cd.yml's own comment on this), so this must
+// degrade to a no-op there rather than fail or hang.
+//
+// File-scoped (not nested in a describe), so it runs once after every test
+// below has finished, regardless of which describe block they're in.
+if (isSystemctlUserAvailable()) {
+  afterAll(() => {
+    // Defense-in-depth alongside the outer isSystemctlUserAvailable() gate
+    // (Hermes review, PR #1142) — that gate runs once when this file loads,
+    // while this afterAll fires only after every test below has finished;
+    // a bus that goes away in between (a logind/systemd-user-session
+    // teardown racing this file) must not fail this whole suite over an
+    // infrastructure hiccup unrelated to what this guard exists to catch.
+    let listing: string;
+    try {
+      listing = execFileSync(
+        "systemctl",
+        [
+          "--user",
+          "list-units",
+          "--type=scope",
+          "--all",
+          "--no-legend",
+          "--plain",
+          "crs-session-*.scope",
+        ],
+        { encoding: "utf8" },
+      );
+    } catch {
+      return;
+    }
+    const leaked = listing.split("\n").filter((line) => line.includes(SESSIONS_DIR_PREFIX));
+    expect(leaked).toEqual([]);
+  });
 }
 
 describe("Session.emitHookEvent file_change git-ignore filtering (issue: sidebar worktree display, Part B)", () => {
@@ -76,7 +168,7 @@ describe("Session.emitHookEvent file_change git-ignore filtering (issue: sidebar
 
     const manager = mkManager();
     const session = manager.getOrCreate({
-      id: "1",
+      id: String(nextId++),
       cwd: projectCwd,
       command: "bash",
       cols: 80,
@@ -106,7 +198,7 @@ describe("Session.emitHookEvent file_change git-ignore filtering (issue: sidebar
 
     const manager = mkManager();
     const session = manager.getOrCreate({
-      id: "1",
+      id: String(nextId++),
       cwd: projectCwd,
       command: "bash",
       cols: 80,
@@ -138,7 +230,7 @@ describe("Session.emitHookEvent file_change git-ignore filtering (issue: sidebar
 
     const manager = mkManager();
     const session = manager.getOrCreate({
-      id: "1",
+      id: String(nextId++),
       cwd: projectCwd,
       command: "bash",
       cols: 80,
@@ -159,7 +251,7 @@ describe("Session.emitHookEvent file_change git-ignore filtering (issue: sidebar
 
     const manager = mkManager();
     const session = manager.getOrCreate({
-      id: "1",
+      id: String(nextId++),
       cwd: nonRepoCwd,
       command: "bash",
       cols: 80,
@@ -187,7 +279,7 @@ describe("Session.emitHookEvent file_change git-ignore filtering (issue: sidebar
 
     const manager = mkManager();
     const session = manager.getOrCreate({
-      id: "1",
+      id: String(nextId++),
       cwd: projectCwd,
       command: "bash",
       cols: 80,
@@ -219,7 +311,7 @@ describe("Session.emitHookEvent file_change git-ignore filtering (issue: sidebar
 
     const manager = mkManager();
     const session = manager.getOrCreate({
-      id: "1",
+      id: String(nextId++),
       cwd: projectCwd,
       command: "bash",
       cols: 80,

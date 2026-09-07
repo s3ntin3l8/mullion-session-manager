@@ -41,7 +41,7 @@
 // state. bootstrapMaster() still calls this module's scopeUnitName(id) for
 // the unit name it passes to systemd-run.
 
-import { spawn as spawnChild } from "node:child_process";
+import { spawn as spawnChild, execFileSync } from "node:child_process";
 import { listScopeProcesses } from "./cgroup-inventory.js";
 import type { CgroupProcess } from "./cgroup-inventory.js";
 
@@ -51,6 +51,117 @@ import type { CgroupProcess } from "./cgroup-inventory.js";
 // PtyManager.terminate() in pty-manager.ts.
 export function scopeUnitName(id: string): string {
   return `crs-session-${id}`;
+}
+
+/**
+ * Whether this host has a real `systemd --user` session — a live user bus —
+ * to talk to at all. A stock CI runner (this repo's own backend tests run on
+ * plain `ubuntu-latest`, no user D-Bus session, no `dtach`) or a plain
+ * container commonly has the `systemctl` binary but no bus. Shared by the
+ * two callers that need to no-op rather than fail/hang without one:
+ * scripts/check-scope-leaks.ts (issue #1137) and
+ * test/services/pty-manager-file-change-ignore.test.ts's own regression
+ * guard — a single source of truth for "how do we detect this," rather than
+ * two copies of the same probe drifting apart if that detection ever needs
+ * to change.
+ *
+ * Hermes review, PR #1142 — `systemctl --user --version` is NOT a valid
+ * probe: it "print[s] a short version string and exit[s]" (systemctl(1))
+ * without ever contacting the bus, so it exits 0 on any host with the
+ * binary present regardless of whether a user session exists. Reproduced:
+ * `env -i ... systemctl --user --version` exits 0 while
+ * `systemctl --user list-units` in that same shell fails with "Failed to
+ * connect to bus." `show-environment` is a real, minimal round-trip to the
+ * user manager instead — unlike `is-system-running` (the other obvious
+ * candidate), its exit code isn't affected by unit health, so a host with
+ * one failed unit elsewhere ("degraded") doesn't false-negative here.
+ */
+export function isSystemctlUserAvailable(): boolean {
+  try {
+    execFileSync("systemctl", ["--user", "show-environment"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Best-effort description of whatever is CURRENTLY occupying `id`'s scope
+ * name, for diagnosing a `systemd-run --user --scope --collect -u
+ * crs-session-<id>` bootstrap failure (pty-manager.ts's bootstrapMaster()).
+ * `systemd-run --collect` refuses to create a transient scope whose unit
+ * name already exists — issue #1137: a scope leaked by an earlier process
+ * (a crashed test run, a stale scratch dev instance) can squat on a
+ * low-numbered id that a later, unrelated backend's own fresh session then
+ * collides with. Before this, that collision surfaced only as
+ * `master bootstrap exited with code 1 (unit crs-session-1)` — sending the
+ * investigation that traced #1137 looking at the wrong file for a long
+ * time, the same "misleading raw error" failure mode bootstrapMaster's own
+ * ENOENT-vs-vanished-cwd classification already exists to prevent for a
+ * different case.
+ *
+ * Returns the squatting unit's `Description` (systemd's own rendering of
+ * its `dtach -n <socket> ...` command line — see stopScope's own unit
+ * naming) when it is genuinely occupying the name (`ActiveState` is
+ * "active" or "deactivating" — same trust window as isMasterAlive()'s doc
+ * comment on that pair, a scope Mullion itself just asked to stop is not
+ * yet gone). Returns `null` for every other case — no such unit, a
+ * `systemctl` spawn error, or an unparseable reply — so a caller can always
+ * fall back to today's plain message with no special-casing. Deliberately
+ * never rejects/hangs: a bootstrap failure must still surface promptly even
+ * if this diagnostic probe itself can't complete — bounded by
+ * DESCRIBE_SCOPE_TIMEOUT_MS below the same way git-ignore.ts's
+ * isPathGitIgnored bounds its own best-effort subprocess (a wedged/slow
+ * `systemctl` must not turn an already-failed bootstrap into a hang).
+ */
+const DESCRIBE_SCOPE_TIMEOUT_MS = 2_000;
+
+export function describeScope(id: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    let stdout = "";
+    let settled = false;
+    const child = spawnChild(
+      "systemctl",
+      ["--user", "show", `${scopeUnitName(id)}.scope`, "-p", "Description", "-p", "ActiveState"],
+      { stdio: ["ignore", "pipe", "ignore"] },
+    );
+
+    const finish = (value: string | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+
+    const timer = setTimeout(() => {
+      try {
+        child.kill();
+      } catch {
+        // Best-effort — this probe already never rejects/hangs (see this
+        // function's own doc comment); a kill() failure on an already-dead
+        // or non-standard child must not turn into an unhandled throw here.
+      }
+      finish(null);
+    }, DESCRIBE_SCOPE_TIMEOUT_MS);
+    timer.unref();
+
+    child.stdout?.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.on("error", () => finish(null));
+    // 'close', not 'exit' — same stdout-delivery race isMasterAlive() and
+    // isMasterAliveBatch() above already guard against.
+    child.on("close", () => {
+      const fields = Object.create(null) as Record<string, string>;
+      for (const line of stdout.split("\n")) {
+        const eq = line.indexOf("=");
+        if (eq === -1) continue;
+        fields[line.slice(0, eq)] = line.slice(eq + 1);
+      }
+      const active = fields.ActiveState === "active" || fields.ActiveState === "deactivating";
+      finish(active && fields.Description ? fields.Description : null);
+    });
+  });
 }
 
 /** Stop a session's systemd scope, killing its dtach master + program. Safe
@@ -123,6 +234,61 @@ export function isMasterAlive(id: string): Promise<boolean> {
  */
 export function listSessionProcesses(id: string): Promise<CgroupProcess[]> {
   return listScopeProcesses(`${scopeUnitName(id)}.scope`);
+}
+
+/**
+ * Parses `systemctl --user list-units --type=scope --all --no-legend
+ * --plain 'crs-session-*.scope'`-shaped output (one unit per line: "UNIT
+ * LOAD ACTIVE SUB DESCRIPTION", whitespace-separated) into structured rows —
+ * the same shape isMasterAliveBatch() below parses inline for its own
+ * narrower need (just the unit name). Exported (unlike that inline parse)
+ * for scripts/check-scope-leaks.ts, which needs the DESCRIPTION field too
+ * (to recover a scope's dtach socket path via extractDtachSocketPath()
+ * below) — a second, hand-rolled copy of this same line-splitting in a
+ * standalone script would drift from this one silently over time. Pure and
+ * synchronous: callers own getting the actual `systemctl` output.
+ */
+export function parseScopeUnitsListing(
+  stdout: string,
+): Array<{ unit: string; description: string }> {
+  const rows: Array<{ unit: string; description: string }> = [];
+  for (const line of stdout.split("\n")) {
+    if (!line.trim()) continue;
+    // UNIT, LOAD, ACTIVE, SUB, then DESCRIPTION (the remainder of the line,
+    // which may itself contain arbitrary whitespace — e.g. a quoted command
+    // line with multiple flags — so it is not itself split on whitespace).
+    const match = /^(\S+)\s+\S+\s+\S+\s+\S+\s*(.*)$/.exec(line);
+    if (!match) continue;
+    rows.push({ unit: match[1], description: match[2] });
+  }
+  return rows;
+}
+
+// Every `crs-session-*` scope's Description is systemd's own rendering of
+// the exact argv bootstrapMaster() (pty-manager.ts) passed it: `dtach -n
+// <socketPath> <shell> -lc <command>` — see launch-plan.ts's own argv
+// comment. The socket path is always the first `-n` argument and is always
+// itself an absolute path (PtyManager derives it from sessionsDir), so a
+// small anchored regex is enough; this deliberately does not try to parse
+// the rest of the command line. Three alternatives, tried in order —
+// verified empirically against a real systemd --user: an argument
+// containing a space is rendered double-quoted (`-n "/path with
+// space/x.sock"`), so a bare `\S+` alone would silently truncate at the
+// first space and recover the wrong (truncated) path. Single-quoted is
+// handled the same way for symmetry, though not observed in practice.
+const DTACH_SOCKET_PATTERN = /dtach\s+-n\s+(?:"([^"]+)"|'([^']+)'|(\S+))/;
+
+/**
+ * Recovers the dtach socket path a `crs-session-*` scope's Description
+ * names, or `null` if the description doesn't match the expected shape at
+ * all (a scope this app didn't create, or a systemd rendering quirk this
+ * hasn't seen). Used by scripts/check-scope-leaks.ts to decide whether a
+ * given scope's backing session still plausibly exists.
+ */
+export function extractDtachSocketPath(description: string): string | null {
+  const match = DTACH_SOCKET_PATTERN.exec(description);
+  if (!match) return null;
+  return match[1] ?? match[2] ?? match[3] ?? null;
 }
 
 /**
