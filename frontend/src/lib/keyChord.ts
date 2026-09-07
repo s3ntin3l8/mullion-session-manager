@@ -58,10 +58,18 @@ export function formatChord(chord: KeyChord): string {
   return parts.join("+");
 }
 
-/** Inverse of formatChord. Returns null for an unparseable string (empty,
- * no key token, or a duplicate/unknown modifier name) rather than throwing
- * — callers fall back to a default chord, matching voice.lang's existing
- * "" -> navigator.language convention rather than a hard schema rejection. */
+/** Inverse of formatChord. Returns null for an unparseable string (empty, no
+ * key token, a duplicate/unknown modifier name, or no modifier at all)
+ * rather than throwing — callers fall back to a default chord, matching
+ * voice.lang's existing "" -> navigator.language convention rather than a
+ * hard schema rejection. The no-modifier rejection matters beyond the UI:
+ * validateChord enforces it too, but that only gates the settings UI's own
+ * capture path — the backend deliberately doesn't validate the stored
+ * `terminal.voice.hotkey` string (see that field's own doc comment), so a
+ * hand-edited or API-set value of e.g. "Space" must still fail to parse
+ * here, or matchesChord (which has no modifier requirement of its own)
+ * would match every bare Spacebar press in a focused terminal and toggle
+ * dictation on each keystroke. */
 export function parseChord(s: string): KeyChord | null {
   const tokens = s
     .split("+")
@@ -70,6 +78,7 @@ export function parseChord(s: string): KeyChord | null {
   if (tokens.length === 0) return null;
   const keyToken = tokens[tokens.length - 1];
   const modifierTokens = tokens.slice(0, -1);
+  if (modifierTokens.length === 0) return null; // no modifier at all
   const chord: KeyChord = { ctrl: false, shift: false, alt: false, meta: false, code: "" };
   for (const token of modifierTokens) {
     const match = MODIFIER_LABELS.find(([, label]) => label.toLowerCase() === token.toLowerCase());
@@ -155,22 +164,25 @@ const BROWSER_RESERVED = [
   "Ctrl+Shift+C",
 ];
 
-// Chords attachKeyConflictHandler already claims unconditionally, regardless
-// of any settings toggle — see terminalKeys.ts's own paste/find/copy
-// branches for the rationale behind each. Ctrl+V is here even though its
-// terminal-paste use is itself opt-in (settings.terminal.clipboardKeys.
-// ctrlV, default off): attachKeyConflictHandler's isPasteChord branch runs
-// BEFORE the voice branch, so if a user later turns that setting on while
-// voice happens to be bound to Ctrl+V, the voice hotkey would silently stop
+// Chords attachKeyConflictHandler claims in a way that would make a voice
+// binding silently stop firing — see terminalKeys.ts's own paste/find
+// branches for the rationale behind each. The determining question for
+// every entry here is branch ORDER, not merely "is this chord used for
+// something else": the voice branch runs after paste (isPasteChord) but
+// before find/copy/Ctrl+C/reserved-keys, so a chord claimed by a
+// LATER-running branch just means voice wins when bound there, not that it
+// dies — Ctrl+C, Ctrl+R/L/K, and Ctrl+Insert (copy, which runs after voice)
+// are all deliberately absent from this list for exactly that reason, even
+// though they're each "claimed" by something else. Ctrl+V IS listed here
+// despite its terminal-paste use being itself opt-in
+// (settings.terminal.clipboardKeys.ctrlV, default off): isPasteChord runs
+// BEFORE voice, so if a user later turns that setting on while voice
+// happens to be bound to Ctrl+V, the voice hotkey would silently stop
 // firing with no indication why — the exact silently-dead-hotkey failure
 // class #1119 exists to eliminate, just moved from "collides with an
-// OS-level app" to "collides with Mullion's own paste handling". Ctrl+C and
-// Ctrl+R/L/K are NOT listed here even though they're also conditionally
-// claimed: their branches run AFTER voice, so binding voice to one of them
-// means voice wins, not that it silently dies.
+// OS-level app" to "collides with Mullion's own paste handling".
 const ALWAYS_CLAIMED: Array<[string, string]> = [
   ["Ctrl+Shift+F", "the scrollback find bar"],
-  ["Ctrl+Insert", "copy"],
   ["Shift+Insert", "paste"],
   ["Meta+V", "paste"],
   ["Ctrl+V", 'paste (if the opt-in "Ctrl+V paste" setting is ever turned on)'],
@@ -180,7 +192,7 @@ const ALWAYS_CLAIMED: Array<[string, string]> = [
  * something attachKeyConflictHandler already owns unconditionally — either
  * always (ALWAYS_CLAIMED) or at the browser-chrome level, where
  * preventDefault() in page JS is a silent no-op (BROWSER_RESERVED).
- * Ctrl+C/Ctrl+R/L/K are conditionally claimed by other settings but
+ * Ctrl+C/Ctrl+R/L/K/Insert are conditionally claimed by other settings but
  * deliberately still allowed through — see ALWAYS_CLAIMED's own comment. */
 export function validateChord(chord: KeyChord): ChordValidation {
   if (!chord.ctrl && !chord.shift && !chord.alt && !chord.meta) {

@@ -62,6 +62,11 @@ describe("parseChord / formatChord round-trip", () => {
   it("returns null for an unrecognized modifier token", () => {
     expect(parseChord("Cmd+Space")).toBeNull();
   });
+
+  it("returns null for a chord with no modifier at all — a stored 'Space' must not become a bare-Spacebar-toggles-dictation footgun", () => {
+    expect(parseChord("Space")).toBeNull();
+    expect(parseChord("V")).toBeNull();
+  });
 });
 
 describe("chordLabel", () => {
@@ -148,9 +153,8 @@ describe("validateChord", () => {
     expect(validateChord(parseChord("Ctrl+Shift+C")!).ok).toBe(false);
   });
 
-  it("rejects combos attachKeyConflictHandler already claims unconditionally", () => {
+  it("rejects combos claimed by a branch that runs BEFORE voice in attachKeyConflictHandler", () => {
     expect(validateChord(parseChord("Ctrl+Shift+F")!).ok).toBe(false);
-    expect(validateChord(parseChord("Ctrl+Insert")!).ok).toBe(false);
     expect(validateChord(parseChord("Shift+Insert")!).ok).toBe(false);
     expect(validateChord(parseChord("Meta+V")!).ok).toBe(false);
     // Ctrl+V's terminal-paste use is itself opt-in (clipboardKeys.ctrlV,
@@ -167,10 +171,11 @@ describe("validateChord", () => {
     expect(validateChord(parseChord("Ctrl+Shift+Comma")!).ok).toBe(true);
   });
 
-  it("allows Ctrl+C and Ctrl+R/L/K — conditionally claimed, but their branches run AFTER voice, so voice wins rather than silently dying", () => {
+  it("allows Ctrl+C, Ctrl+R/L/K, and Ctrl+Insert — conditionally claimed, but their branches run AFTER voice, so voice wins rather than silently dying", () => {
     expect(validateChord(parseChord("Ctrl+C")!).ok).toBe(true);
     expect(validateChord(parseChord("Ctrl+R")!).ok).toBe(true);
     expect(validateChord(parseChord("Ctrl+L")!).ok).toBe(true);
     expect(validateChord(parseChord("Ctrl+K")!).ok).toBe(true);
+    expect(validateChord(parseChord("Ctrl+Insert")!).ok).toBe(true);
   });
 });

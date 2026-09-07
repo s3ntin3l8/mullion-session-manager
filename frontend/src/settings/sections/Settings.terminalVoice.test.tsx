@@ -113,6 +113,42 @@ describe("Settings -> Terminal -> Voice dictation", () => {
     );
   });
 
+  it("clicking away while armed cancels capture instead of leaving it swallowing keys modal-wide", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="terminal" />);
+
+    await screen.findByText("Hotkey combo");
+    await user.click(screen.getByRole("button", { name: "Record dictation hotkey" }));
+    expect(screen.getByText("Press a combo…")).toBeInTheDocument();
+
+    // "Enable dictation" isn't gated by hotkeyEnabled, so this exercises
+    // the NEW blur-driven cancel specifically, not the pre-existing
+    // disabled-prop cancel path (that one already has its own test above).
+    await user.click(screen.getByRole("button", { name: "Enable dictation" }));
+
+    expect(screen.queryByText("Press a combo…")).not.toBeInTheDocument();
+    expect(screen.getByText("Ctrl + Shift + Space")).toBeInTheDocument();
+
+    // A keydown fired after the blur-cancel must not be captured — without
+    // the fix, the capture-phase window listener stayed armed and would
+    // have swallowed this (and any other) keydown modal-wide.
+    fireEvent.keyDown(window, { code: "Comma", ctrlKey: true, shiftKey: true, key: "," });
+    expect(useDashboardStore.getState().settings.terminal.voice.hotkey).toBe("Ctrl+Shift+Space");
+
+    // Waited out, same reason as the other toggle tests in this file — an
+    // unflushed debounced PATCH here would otherwise bleed into the next
+    // test's own PATCH body assertion.
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/settings",
+        expect.objectContaining({
+          method: "PATCH",
+          body: JSON.stringify({ terminal: { voice: { enabled: false } } }),
+        }),
+      ),
+    );
+  });
+
   it("rejects a chord already claimed by the find bar and shows why, without patching", async () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="terminal" />);

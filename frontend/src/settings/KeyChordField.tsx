@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   chordFromEvent,
   chordLabel,
@@ -33,6 +33,7 @@ export function KeyChordField({
 }) {
   const [capturing, setCapturing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
 
   // Adjusting state during render (React's own documented pattern for this,
   // https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes)
@@ -89,6 +90,17 @@ export function KeyChordField({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- onChange identity churn shouldn't re-arm capture
   }, [capturing, disabled]);
 
+  // Focuses the record button the moment it's armed, so a click/tap
+  // anywhere else in the settings modal (another row's text input, a
+  // dropdown, the close button) blurs it and the onBlur handler below
+  // disarms capture — without this, the capture-phase keydown listener
+  // above stays armed and swallows every non-modifier keydown modal-wide
+  // (any typed character, dropdown arrow keys) until the user happens to
+  // press Escape or land on a valid chord.
+  useEffect(() => {
+    if (capturing) buttonRef.current?.focus();
+  }, [capturing]);
+
   return (
     // maxWidth matters here, not just for tidiness: .settings-row-control
     // (modals.css) is `flex-shrink: 0` while .settings-row-text is `flex: 1;
@@ -108,12 +120,18 @@ export function KeyChordField({
     >
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <button
+          ref={buttonRef}
           className="settings-secondary-btn"
           aria-label="Record dictation hotkey"
           disabled={disabled}
           onClick={() => {
             setError(null);
             setCapturing(true);
+          }}
+          onBlur={() => {
+            if (!capturing) return;
+            setCapturing(false);
+            setError(null);
           }}
         >
           <span className="settings-kbd-chip">
