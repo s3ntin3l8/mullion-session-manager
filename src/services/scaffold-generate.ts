@@ -229,6 +229,19 @@ export interface GeneratedScaffoldContent {
    * reaching this point unsandboxed). Surfaced in the /setup/generate
    * response so the primary/UI can warn the user. */
   sandboxed: boolean;
+  /** Issue #1145 — post-generation heuristic: when the generated content
+   * references concrete file paths but none of them appear to be real
+   * repo-specific paths, this is `true`. A signal, not a hard failure —
+   * the caller surfaces it as a warning; tightening to a failure is a
+   * follow-up once confidence is high. Absent (undefined) when validation
+   * was not run.
+   *
+   * Currently only surfaced via `/setup/generate`'s response. The
+   * frontend's scaffold flow (`ProjectSetupPanel` →
+   * `api.previewProjectSetup`) calls `/setup/preview`, whose client type
+   * is `{previewId, diff, files}` and never reads this — the preview
+   * step runs before generation, so it can't know the output yet. */
+  possiblyGeneric?: boolean;
 }
 
 /** `project_tooling.skill`/`.reviewerAgent`/`.briefing` DB drafts (see
@@ -355,7 +368,80 @@ export function parseGeneratedOutput(raw: string, slug: string): GeneratedScaffo
     );
   }
 
-  return { skill, reviewer, briefingRegion, sandboxed: false };
+  return { skill, reviewer, briefingRegion, sandboxed: false, possiblyGeneric: false };
+}
+
+/**
+ * Post-generation heuristic (issue #1145): checks whether the generated
+ * content references concrete file paths from the repo. A turn that read
+ * nothing from the repo (e.g. agy with all tool calls denied, or a
+ * misconfigured permission set) produces plausible-looking but generic
+ * content with no real file references.
+ *
+ * Returns `{ possiblyGeneric: true }` when the content references paths
+ * (embedded in the text) but none of them appear to be real
+ * repo-specific paths — a signal that the agent may have fabricated
+ * plausible-sounding paths rather than reading real files. Content that
+ * references no paths at all (pure prose with zero path tokens) is NOT
+ * flagged — that's a different problem (missing specificity) this
+ * heuristic does not cover.
+ *
+ * On first-time generates the scaffold files don't exist yet, so this
+ * checks whether paths look plausible (have real extensions, follow
+ * reasonable conventions) rather than checking physical existence —
+ * otherwise valid content that references `.claude/skills/<slug>/SKILL.md`
+ * would false-positive as generic before it's committed.
+ *
+ * A signal, not a hard failure. The caller surfaces it as a warning;
+ * tightening to a failure is a follow-up once confidence is high.
+ */
+export function validateGenerationOutput(
+  content: GeneratedScaffoldContent,
+  _cwd: string,
+): { possiblyGeneric: boolean; referencedPaths: string[] } {
+  // Match file path references: src/foo.ts, lib/bar.js, test/baz.test.ts, etc.
+  const pathPattern =
+    /(?:^|\s|`|\()([A-Za-z0-9_/.-]+\.(?:ts|js|mjs|tsx|jsx|json|md|yaml|yml|toml|sh))\b/g;
+  const allText = `${content.skill}\n${content.reviewer}\n${content.briefingRegion}`;
+  const referencedPaths = new Set<string>();
+  let match;
+  while ((match = pathPattern.exec(allText)) !== null) {
+    referencedPaths.add(match[1]);
+  }
+
+  if (referencedPaths.size === 0) {
+    // No path tokens at all — a different problem (missing specificity)
+    // this heuristic does not cover.
+    return { possiblyGeneric: false, referencedPaths: [] };
+  }
+
+  // Instead of checking filesystem existence (which false-positives on
+  // first-time generates when the scaffold files don't exist yet), check
+  // whether the referenced paths look like real repo-specific files.
+  const plausiblePaths = [...referencedPaths].filter((p) => {
+    if (p.includes("..") || path.isAbsolute(p)) return false;
+    // Reject obviously generic / placeholder patterns
+    const segments = p.split("/");
+    if (segments.length === 1) return false; // bare filename like `file.ts`
+    if (segments.some((s) => /^(example|sample|placeholder|foo|bar|baz)$/i.test(s))) return false;
+    if (/^src\/example\//i.test(p)) return false;
+    // Deeper nesting is a strong signal of real content (generic templates
+    // tend to produce shallow paths like `src/index.ts`)
+    if (segments.length >= 3) return true;
+    // Two-segment paths with reasonable dir names are plausible
+    if (segments.length === 2) {
+      const dir = segments[0];
+      // Reject generic directory names
+      if (/^(src|lib|test|tests|docs|config)$/i.test(dir)) return true;
+      return false;
+    }
+    return false;
+  });
+
+  return {
+    possiblyGeneric: plausiblePaths.length === 0,
+    referencedPaths: plausiblePaths,
+  };
 }
 
 export interface SpawnGenerationTurnOptions {
@@ -1191,5 +1277,7 @@ export async function generateScaffoldContent(
     sandboxed = turn.sandboxed ?? false;
   }
 
-  return { ...parseGeneratedOutput(raw, opts.slug), sandboxed };
+  const parsed = parseGeneratedOutput(raw, opts.slug);
+  const validation = validateGenerationOutput(parsed, opts.cwd);
+  return { ...parsed, sandboxed, possiblyGeneric: validation.possiblyGeneric };
 }

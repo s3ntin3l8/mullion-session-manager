@@ -19,6 +19,7 @@ import {
   isSandboxCapable,
   resetSandboxCapabilityCache,
   buildBwrapSmokeTestInvocation,
+  validateGenerationOutput,
   DEFAULT_GENERATION_TIMEOUT_MS,
   GenerationOutputError,
   GenerationWorktreeError,
@@ -1233,3 +1234,111 @@ describeIfBwrap(
     });
   },
 );
+
+describe("validateGenerationOutput", () => {
+  const content = (text: string) => ({
+    skill: text,
+    reviewer: "",
+    briefingRegion: "",
+    sandboxed: true,
+  });
+
+  it("returns possiblyGeneric: false when no file paths are referenced", () => {
+    const result = validateGenerationOutput(
+      content("This is a pure prose description with no file references."),
+      "/tmp/work",
+    );
+    expect(result.possiblyGeneric).toBe(false);
+    expect(result.referencedPaths).toEqual([]);
+  });
+
+  it("flags content with only bare filenames as possiblyGeneric", () => {
+    const result = validateGenerationOutput(
+      content("Create index.ts and util.js for the scaffold."),
+      "/tmp/work",
+    );
+    expect(result.possiblyGeneric).toBe(true);
+    expect(result.referencedPaths).toEqual([]);
+  });
+
+  it("passes content with deep multi-segment paths", () => {
+    const result = validateGenerationOutput(
+      content("Edit src/services/scaffold-generate.ts and test/routes/internal.test.ts."),
+      "/tmp/work",
+    );
+    expect(result.possiblyGeneric).toBe(false);
+    expect(result.referencedPaths).toEqual(
+      expect.arrayContaining(["src/services/scaffold-generate.ts", "test/routes/internal.test.ts"]),
+    );
+  });
+
+  it("passes two-segment paths under standard directories", () => {
+    const result = validateGenerationOutput(
+      content("Update src/config.ts and docs/README.md."),
+      "/tmp/work",
+    );
+    expect(result.possiblyGeneric).toBe(false);
+    expect(result.referencedPaths).toEqual(
+      expect.arrayContaining(["src/config.ts", "docs/README.md"]),
+    );
+  });
+
+  it("filters out absolute paths", () => {
+    const result = validateGenerationOutput(
+      content("Referenced /etc/passwd and src/services/app.ts."),
+      "/tmp/work",
+    );
+    expect(result.referencedPaths).not.toContain("/etc/passwd");
+    expect(result.referencedPaths).toContain("src/services/app.ts");
+  });
+
+  it("filters out paths with parent-directory traversal", () => {
+    const result = validateGenerationOutput(
+      content("Used ../secret.ts and src/util.ts."),
+      "/tmp/work",
+    );
+    expect(result.referencedPaths).not.toContain("../secret.ts");
+    expect(result.referencedPaths).toContain("src/util.ts");
+  });
+
+  it("filters out bare filenames", () => {
+    const result = validateGenerationOutput(
+      content("Used index.ts in the description."),
+      "/tmp/work",
+    );
+    expect(result.referencedPaths).toEqual([]);
+    expect(result.possiblyGeneric).toBe(true);
+  });
+
+  it("filters out paths with generic placeholder segments", () => {
+    const result = validateGenerationOutput(
+      content("Created src/example/foo.ts and lib/sample/bar.js."),
+      "/tmp/work",
+    );
+    expect(result.referencedPaths).toEqual([]);
+    expect(result.possiblyGeneric).toBe(true);
+  });
+
+  it("filters out src/example/ prefixed paths", () => {
+    const result = validateGenerationOutput(
+      content("Copied src/example/scaffold.ts to the project."),
+      "/tmp/work",
+    );
+    expect(result.referencedPaths).toEqual([]);
+    expect(result.possiblyGeneric).toBe(true);
+  });
+
+  it("marks possiblyGeneric false when at least one plausible path survives filtering", () => {
+    const result = validateGenerationOutput(
+      content(
+        "The file src/services/app.ts references config.json, and also mentions placeholder.ts.",
+      ),
+      "/tmp/work",
+    );
+    expect(result.possiblyGeneric).toBe(false);
+    expect(result.referencedPaths).toContain("src/services/app.ts");
+    // config.json and placeholder.ts are bare filenames — filtered out
+    expect(result.referencedPaths).not.toContain("config.json");
+    expect(result.referencedPaths).not.toContain("placeholder.ts");
+  });
+});

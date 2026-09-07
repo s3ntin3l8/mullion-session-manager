@@ -743,14 +743,23 @@ export async function projectSetupRoute(app: FastifyInstance) {
         ensured.worktree,
         writeExistingFiles,
       );
-      // Issue #1144, #1159 — surface sandboxed status in the response.
-      // `generated.sandboxed` is computed by generateScaffoldContent above;
-      // finishPreview doesn't use it (it only cares about the scaffold
-      // content itself), so we spread it onto the response directly.
-      if (result.ok) {
-        return { ...sendPreviewComputation(reply, result), sandboxed: generated.sandboxed };
+      if (!result.ok) return sendPreviewComputation(reply, result);
+      const response: {
+        previewId: string;
+        diff: string;
+        files: string[];
+        sandboxed: boolean;
+        possiblyGeneric?: boolean;
+      } = {
+        previewId: result.previewId,
+        diff: result.diff,
+        files: result.files,
+        sandboxed: generated.sandboxed,
+      };
+      if (generated.possiblyGeneric) {
+        response.possiblyGeneric = true;
       }
-      return sendPreviewComputation(reply, result);
+      return response;
     },
   );
 
