@@ -532,9 +532,9 @@ function cleanUpLegacyScheduledTask(io) {
   if (fs.existsSync(xmlPath)) fs.rmSync(xmlPath, { force: true });
 }
 
-// Root cause of issue #871's test-windows silent exit-1 (found only once
-// [install-trace] checkpoints pinpointed the exact statement): `helper
-// install`/`helper uninstall` ARE THEMSELVES a running mullion-helper.exe
+// Root cause of issue #871's test-windows silent exit-1 (found via
+// temporary stdout checkpoints added, then removed, while diagnosing this):
+// `helper install`/`helper uninstall` ARE THEMSELVES a running mullion-helper.exe
 // process — `taskkill /IM mullion-helper.exe /F` matches by image name,
 // with no notion of "not this one", so the very first real run of either
 // verb killed its own CLI invocation mid-execution. Windows reports a
@@ -558,18 +558,8 @@ function killOtherHelperProcesses(io) {
 // REG_SZ value either replaces the previous one atomically or the add
 // fails outright with nothing written, unlike a multi-step file write.
 async function installWindows(io, { execPath, scriptPath, sshAuthSock }) {
-  // TEMPORARY (issue #871 CI diagnostic, remove once test-windows's silent
-  // exit-1 is root-caused): `helper install` exits 1 on windows-latest CI
-  // with zero output from anywhere in this function, despite every return
-  // path below writing a message first. These checkpoints go to stdout
-  // (not stderr) specifically to rule out PowerShell's native-stderr
-  // handling as the thing eating the output, and fire unconditionally so
-  // the next CI run pinpoints exactly which statement stops producing them.
-  io.stdout.write("[install-trace] start\n");
   fs.mkdirSync(stateDir(io), { recursive: true, mode: 0o700 });
-  io.stdout.write("[install-trace] mkdirSync done\n");
   cleanUpLegacyScheduledTask(io);
-  io.stdout.write("[install-trace] cleanUpLegacyScheduledTask done\n");
 
   const command = buildWindowsRunCommand({ execPath, scriptPath, sshAuthSock });
   const result = runSpawnSync(io, "reg", [
@@ -583,9 +573,6 @@ async function installWindows(io, { execPath, scriptPath, sshAuthSock }) {
     command,
     "/f",
   ]);
-  io.stdout.write(
-    `[install-trace] reg add status=${result.status} error=${result.error ? result.error.message : "none"}\n`,
-  );
   if (result.status !== 0) {
     io.stderr.write(
       `reg add failed: ${(result.stderr || result.error?.message || "unknown error").trim()}\n`,
@@ -610,7 +597,6 @@ async function installWindows(io, { execPath, scriptPath, sshAuthSock }) {
   // — see that function's own comment for why: this CLI invocation is
   // itself a running mullion-helper.exe.
   killOtherHelperProcesses(io);
-  io.stdout.write("[install-trace] taskkill done\n");
 
   // `reg add` only *registers* the autostart entry; Windows launches it at
   // the NEXT logon, same gap `/Run` used to close for the Scheduled Task
@@ -641,12 +627,9 @@ async function installWindows(io, { execPath, scriptPath, sshAuthSock }) {
   try {
     logFd = fs.openSync(logPath, "a");
   } catch (err) {
-    io.stdout.write(`[install-trace] openSync threw: ${err.message}\n`);
     return degradeToWarning(err.message);
   }
-  io.stdout.write("[install-trace] logFd opened, spawning\n");
   const spawnResult = await spawnDetachedHelper(io, execPath, runArgv, logFd);
-  io.stdout.write(`[install-trace] spawn result ok=${spawnResult.ok}\n`);
   if (!spawnResult.ok) {
     return degradeToWarning(spawnResult.error.message);
   }

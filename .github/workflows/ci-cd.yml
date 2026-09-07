@@ -227,22 +227,10 @@ jobs:
           # installer. The smoke-test step above already uses this pattern
           # for exactly this reason; this step now matches it everywhere a
           # native command's output matters for diagnosis.
-          # Diagnostic (issue #871): if `helper install` still exits non-zero
-          # with no useful message above, dump the log the DETACHED CHILD
-          # (not the CLI process this step just ran) writes to — a crash
-          # inside that child, after the parent CLI already reported
-          # success, would be invisible in $installOutput but land here.
-          $helperRunLog = "$env:MULLION_HELPER_STATE_DIR\helper-run.log"
           $exe = "build\helper-sea\mullion-helper.exe"
           $installOutput = & $exe helper install --ssh-auth-sock "\\.\pipe\openssh-ssh-agent" 2>&1
           Write-Host ($installOutput -join "`n")
-          if ($LASTEXITCODE -ne 0) {
-            if (Test-Path $helperRunLog) {
-              Write-Host "--- $helperRunLog ---"
-              Get-Content $helperRunLog -Raw
-            }
-            throw "helper install failed with exit code $LASTEXITCODE"
-          }
+          if ($LASTEXITCODE -ne 0) { throw "helper install failed with exit code $LASTEXITCODE" }
 
           # Round 4 (issue #871, mullion-reviewer round) — the registered
           # command line crosses TWO real argv parsers before it's actually
