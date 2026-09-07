@@ -31,20 +31,15 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import os from "node:os";
-import { parseScopeUnitsListing, extractDtachSocketPath } from "../src/services/session-process.js";
+import {
+  parseScopeUnitsListing,
+  extractDtachSocketPath,
+  isSystemctlUserAvailable,
+} from "../src/services/session-process.js";
 
 const SCOPE_PATTERN = "crs-session-*.scope";
 
-function systemctlUserAvailable(): boolean {
-  try {
-    execFileSync("systemctl", ["--user", "--version"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-if (!systemctlUserAvailable()) {
+if (!isSystemctlUserAvailable()) {
   console.log(
     "OK — `systemctl --user` isn't available here (e.g. a CI runner with no user systemd " +
       "session, or a plain container). Nothing to check.",

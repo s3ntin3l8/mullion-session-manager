@@ -18,6 +18,7 @@ import type * as ChildProcess from "node:child_process";
 import { execFileSync } from "node:child_process";
 import { gitEnv } from "../../src/services/git-env.js";
 import { uniqueDir } from "../helpers/tmpdir.js";
+import { isSystemctlUserAvailable } from "../../src/services/session-process.js";
 
 // This file's whole point is exercising a REAL `git check-ignore` shell-out
 // (Part B's isPathGitIgnored, wired into Session.emitHookEvent's file_change
@@ -115,24 +116,18 @@ function mkManager(): InstanceType<typeof PtyManager> {
 // above, this file's spawns should never reach a real `systemd-run`, so no
 // `crs-session-*.scope` unit should ever exist whose description names this
 // file's own tmp-dir prefix. Skipped (not failed) when `systemctl --user`
-// itself isn't available, matching this repo's existing
+// itself isn't available (isSystemctlUserAvailable — shared with
+// scripts/check-scope-leaks.ts rather than a second, hand-rolled copy of
+// this same probe), matching this repo's existing
 // `cond ? describe : describe.skip` idiom
 // (test/e2e/opencode-permission-merge.e2e.test.ts) rather than the
 // `describe.skipIf` form — CI's stock ubuntu-latest runners have no user
 // systemd/dtach at all (see ci-cd.yml's own comment on this), so this must
 // degrade to a no-op there rather than fail or hang.
-function systemctlUserAvailable(): boolean {
-  try {
-    execFileSync("systemctl", ["--user", "--version"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
+//
 // File-scoped (not nested in a describe), so it runs once after every test
 // below has finished, regardless of which describe block they're in.
-if (systemctlUserAvailable()) {
+if (isSystemctlUserAvailable()) {
   afterAll(() => {
     const listing = execFileSync(
       "systemctl",

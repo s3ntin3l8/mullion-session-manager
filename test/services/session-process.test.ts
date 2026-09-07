@@ -395,6 +395,16 @@ describe("extractDtachSocketPath", () => {
   it("returns null for a description that isn't a dtach invocation", () => {
     expect(extractDtachSocketPath("crs-session-999999999.scope")).toBeNull();
   });
+
+  // Verified empirically against a real systemd --user: an argument
+  // containing a space renders double-quoted in the unit's Description. A
+  // bare `\S+` match would truncate at the first space and silently recover
+  // the wrong (truncated) path.
+  it("extracts the full socket path when SESSIONS_DIR itself contains a space", () => {
+    expect(extractDtachSocketPath('/usr/bin/dtach -n "/tmp/space test dir/x.sock" sleep 300')).toBe(
+      "/tmp/space test dir/x.sock",
+    );
+  });
 });
 
 describe("listSessionProcesses", () => {

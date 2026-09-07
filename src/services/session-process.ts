@@ -41,7 +41,7 @@
 // state. bootstrapMaster() still calls this module's scopeUnitName(id) for
 // the unit name it passes to systemd-run.
 
-import { spawn as spawnChild } from "node:child_process";
+import { spawn as spawnChild, execFileSync } from "node:child_process";
 import { listScopeProcesses } from "./cgroup-inventory.js";
 import type { CgroupProcess } from "./cgroup-inventory.js";
 
@@ -51,6 +51,26 @@ import type { CgroupProcess } from "./cgroup-inventory.js";
 // PtyManager.terminate() in pty-manager.ts.
 export function scopeUnitName(id: string): string {
   return `crs-session-${id}`;
+}
+
+/**
+ * Whether this host has a real `systemd --user` session to talk to at all —
+ * a stock CI runner (this repo's own backend tests run on plain
+ * `ubuntu-latest`, no user D-Bus session, no `dtach`) or a plain container
+ * has neither. Shared by the two callers that need to no-op rather than
+ * fail/hang without one: scripts/check-scope-leaks.ts (issue #1137) and
+ * test/services/pty-manager-file-change-ignore.test.ts's own regression
+ * guard — a single source of truth for "how do we detect this," rather
+ * than two copies of the same `systemctl --user --version` probe drifting
+ * apart if that detection ever needs to change.
+ */
+export function isSystemctlUserAvailable(): boolean {
+  try {
+    execFileSync("systemctl", ["--user", "--version"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -238,8 +258,13 @@ export function parseScopeUnitsListing(
 // comment. The socket path is always the first `-n` argument and is always
 // itself an absolute path (PtyManager derives it from sessionsDir), so a
 // small anchored regex is enough; this deliberately does not try to parse
-// the rest of the command line.
-const DTACH_SOCKET_PATTERN = /dtach\s+-n\s+(\S+)/;
+// the rest of the command line. Three alternatives, tried in order —
+// verified empirically against a real systemd --user: an argument
+// containing a space is rendered double-quoted (`-n "/path with
+// space/x.sock"`), so a bare `\S+` alone would silently truncate at the
+// first space and recover the wrong (truncated) path. Single-quoted is
+// handled the same way for symmetry, though not observed in practice.
+const DTACH_SOCKET_PATTERN = /dtach\s+-n\s+(?:"([^"]+)"|'([^']+)'|(\S+))/;
 
 /**
  * Recovers the dtach socket path a `crs-session-*` scope's Description
@@ -249,7 +274,9 @@ const DTACH_SOCKET_PATTERN = /dtach\s+-n\s+(\S+)/;
  * given scope's backing session still plausibly exists.
  */
 export function extractDtachSocketPath(description: string): string | null {
-  return DTACH_SOCKET_PATTERN.exec(description)?.[1] ?? null;
+  const match = DTACH_SOCKET_PATTERN.exec(description);
+  if (!match) return null;
+  return match[1] ?? match[2] ?? match[3] ?? null;
 }
 
 /**
