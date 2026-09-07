@@ -305,6 +305,19 @@ begin
         Paired := True
       else
       begin
+        // Hermes review — the 1/2 split below is an implicit contract with
+        // ssh-agent-helper.mjs's own runHelper, not derived from anything
+        // this file can check itself: `decodePairingPayload` failing (a
+        // payload that passed THIS file's own looser IsValidPairingPayload
+        // regex but doesn't decode to well-formed JSON) throws
+        // CliUsageError, which runHelper's catch maps to exit 2; every
+        // OTHER failure inside runPair (HandshakeRejectedError for an
+        // expired/already-used/rejected code, a connect timeout, a
+        // malformed handshake reply, a saveCredential write failure) is a
+        // plain Error, mapped to exit 1. If runHelper's own exit-code
+        // mapping ever changes, this dialog's text goes stale silently —
+        // AppendDiagnostics's own captured stderr (surfaced right below)
+        // is the real safety net if that ever happens, not this sentence.
         StdErrText := JoinStdErr(Output);
         ShowMsg(
           'Pairing did not succeed (exit code ' + IntToStr(ResultCode) + ').' + #13#10 + #13#10 +
