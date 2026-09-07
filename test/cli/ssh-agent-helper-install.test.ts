@@ -448,7 +448,7 @@ describe("runInstall / runUninstall", () => {
   // empirically-confirmed default (issue #874) neither macOS nor Linux has
   // an equivalent for.
   it("win32: installs with no --ssh-auth-sock or ambient SSH_AUTH_SOCK, defaulting to the named pipe", async () => {
-    const { io, calls, dir: d } = baseIo({ platform: "win32" });
+    const { io, calls, dir: d } = baseIo({ platform: "win32", isSea: true });
     (io as { homedir?: string }).homedir = path.join(d, "home");
     // Real MULLION_HELPER_STATE_DIR from baseIo's own defaults, SSH_AUTH_SOCK
     // deliberately dropped — the same "no flag, no ambient env" case as the
@@ -585,7 +585,7 @@ describe("runInstall / runUninstall", () => {
   });
 
   it("win32: writes an HKCU Run value with the exact command and starts the helper immediately", async () => {
-    const { io, calls, dir: d } = baseIo({ platform: "win32" });
+    const { io, calls, dir: d } = baseIo({ platform: "win32", isSea: true });
     (io as { homedir?: string }).homedir = path.join(d, "home");
     const code = await runInstall([], io);
     expect(code).toBe(0);
@@ -616,7 +616,7 @@ describe("runInstall / runUninstall", () => {
   // into the XML, this assertion on "no mullion.mjs anywhere" would catch
   // it).
   it("win32 SEA: omits the script path and never falls back to defaultScriptPath()", async () => {
-    const { io, calls, dir: d } = baseIo({ platform: "win32" });
+    const { io, calls, dir: d } = baseIo({ platform: "win32", isSea: true });
     (io as { homedir?: string }).homedir = path.join(d, "home");
     (io as { isSea?: boolean }).isSea = true;
     delete (io as { scriptPath?: string }).scriptPath;
@@ -689,12 +689,37 @@ describe("runInstall / runUninstall", () => {
     expect(stderrLines.join("")).toMatch(/not supported on 'linux'/);
   });
 
+  it("win32: refuses to install when isSea is falsy (non-SEA path not supported on Windows)", async () => {
+    const { io, dir: d } = baseIo({ platform: "win32" });
+    (io as { homedir?: string }).homedir = path.join(d, "home");
+    (io as { isSea?: boolean }).isSea = false;
+    const stderrLines: string[] = [];
+    io.stderr = { write: (s: string) => stderrLines.push(s) };
+    const code = await runInstall([], io);
+    expect(code).toBe(1);
+    expect(stderrLines.join("")).toMatch(/non-SEA .* path is not supported on Windows/);
+  });
+
+  it("--insecure: threads the flag through to the spawned command and reg value", async () => {
+    const { io, calls, dir: d } = baseIo({ platform: "win32", isSea: true });
+    (io as { homedir?: string }).homedir = path.join(d, "home");
+    const code = await runInstall(["--insecure"], io);
+    expect(code).toBe(0);
+    const regAdd = findCall(calls, "reg", "add");
+    expect(regAdd).toBeDefined();
+    const command = regAdd![regAdd!.indexOf("/d") + 1];
+    expect(command).toContain("--insecure");
+    const spawnCall = findCall(calls, "SPAWN");
+    expect(spawnCall).toBeDefined();
+    expect(spawnCall).toContain("--insecure");
+  });
+
   // Hermes review, PR #879, on the mechanism this replaces (`schtasks
   // /Run`) — the invariant carries over: registering the autostart entry
   // must not by itself mean "running now". A failed immediate start must
   // not undo the successful registration.
   it("win32: a failed spawn degrades to a warning — the Run value is still registered", async () => {
-    const { io, calls, dir: d } = baseIo({ platform: "win32" });
+    const { io, calls, dir: d } = baseIo({ platform: "win32", isSea: true });
     (io as { homedir?: string }).homedir = path.join(d, "home");
     io.spawn = () => {
       throw new Error("EPERM: spawn C:\\...\\mullion-helper.exe");
@@ -715,7 +740,7 @@ describe("runInstall / runUninstall", () => {
   // spawnDetachedHelper awaited this event, nothing observed it at all —
   // the install reported success while the helper silently never started.
   it("win32: an async spawn 'error' event (the realistic failure shape) also degrades to a warning, not silent success", async () => {
-    const { io, calls, dir: d } = baseIo({ platform: "win32" });
+    const { io, calls, dir: d } = baseIo({ platform: "win32", isSea: true });
     (io as { homedir?: string }).homedir = path.join(d, "home");
     io.spawn = (cmd: string, args: string[]) =>
       fakeChildProcess(calls, cmd, args, {
@@ -738,7 +763,7 @@ describe("runInstall / runUninstall", () => {
   // racing the new one on the same credential file. `reg add` alone only
   // ever replaces the registry entry, never the already-running process.
   it("win32: re-install kills a previously-running helper process before starting the new one", async () => {
-    const { io, calls, dir: d } = baseIo({ platform: "win32" });
+    const { io, calls, dir: d } = baseIo({ platform: "win32", isSea: true });
     (io as { homedir?: string }).homedir = path.join(d, "home");
     await runInstall(["--ssh-auth-sock", "\\\\.\\pipe\\first"], io);
     calls.length = 0;
@@ -768,7 +793,7 @@ describe("runInstall / runUninstall", () => {
   // laptop that once ran an older Mullion Helper version never ends up
   // with both mechanisms launching `helper run`.
   it("win32: each install best-effort cleans up a legacy Scheduled Task before registering the Run value", async () => {
-    const { io, calls, dir: d } = baseIo({ platform: "win32" });
+    const { io, calls, dir: d } = baseIo({ platform: "win32", isSea: true });
     (io as { homedir?: string }).homedir = path.join(d, "home");
     const code = await runInstall([], io);
     expect(code).toBe(0);
@@ -793,7 +818,7 @@ describe("runInstall / runUninstall", () => {
   });
 
   it("win32: surfaces a non-zero reg add exit as a failure", async () => {
-    const { io, dir: d } = baseIo({ platform: "win32" });
+    const { io, dir: d } = baseIo({ platform: "win32", isSea: true });
     (io as { homedir?: string }).homedir = path.join(d, "home");
     io.spawnSync = (cmd: string, args: string[]) => {
       if (cmd === "reg" && args[0] === "add")
@@ -808,7 +833,7 @@ describe("runInstall / runUninstall", () => {
   });
 
   it("win32: does not warn about a missing --ssh-auth-sock path — named pipes aren't statSync-able files", async () => {
-    const { io, dir: d } = baseIo({ platform: "win32" });
+    const { io, dir: d } = baseIo({ platform: "win32", isSea: true });
     (io as { homedir?: string }).homedir = path.join(d, "home");
     io.env = {
       ...(io.env as Record<string, string>),
@@ -927,7 +952,7 @@ describe("runInstall / runUninstall", () => {
   });
 
   it("win32: uninstall removes the Run value and kills the running process; a no-op is not an error", async () => {
-    const { io, calls, dir: d } = baseIo({ platform: "win32" });
+    const { io, calls, dir: d } = baseIo({ platform: "win32", isSea: true });
     (io as { homedir?: string }).homedir = path.join(d, "home");
     const credFile = writeCredential(io);
     await runInstall([], io);
@@ -965,7 +990,7 @@ describe("runInstall / runUninstall", () => {
   // no legacy XML present either must report "nothing installed" and skip
   // straight past taskkill/reg delete, not just happen to also return 0.
   it("win32: uninstall reports nothing installed when the Run value was never registered", async () => {
-    const { io, calls, dir: d } = baseIo({ platform: "win32" });
+    const { io, calls, dir: d } = baseIo({ platform: "win32", isSea: true });
     (io as { homedir?: string }).homedir = path.join(d, "home");
     io.spawnSync = (cmd: string, args: string[]) => {
       if (cmd === "reg" && args[0] === "query") return { status: 1, stdout: "", stderr: "" };
@@ -986,7 +1011,7 @@ describe("runInstall / runUninstall", () => {
   // was "removed" — none ever existed for this install. This used to print
   // unconditionally regardless of `hadRunValue`.
   it("win32: uninstall with only a legacy XML present does not claim a Run value was removed", async () => {
-    const { io, dir: d } = baseIo({ platform: "win32" });
+    const { io, dir: d } = baseIo({ platform: "win32", isSea: true });
     (io as { homedir?: string }).homedir = path.join(d, "home");
     io.spawnSync = (cmd: string, args: string[]) => {
       if (cmd === "reg" && args[0] === "query") return { status: 1, stdout: "", stderr: "" };
@@ -1011,7 +1036,7 @@ describe("runInstall / runUninstall", () => {
   // session_id — the same bearer credential under a different name, so
   // uninstall needs to sweep it too, not just the canonical filename.
   it("win32: uninstall also removes a stray write-to-temp-then-rename credential sibling", async () => {
-    const { io, dir: d } = baseIo({ platform: "win32" });
+    const { io, dir: d } = baseIo({ platform: "win32", isSea: true });
     (io as { homedir?: string }).homedir = path.join(d, "home");
     const credFile = writeCredential(io);
     const staleTmp = `${credFile}.48291.tmp`;
@@ -1030,7 +1055,7 @@ describe("runInstall / runUninstall", () => {
   // <canonical path>" — that path never existed. The message must name
   // whatever was actually removed.
   it("win32: uninstall reports the stray tmp path, not the canonical filename, when the main credential never existed", async () => {
-    const { io, dir: d } = baseIo({ platform: "win32" });
+    const { io, dir: d } = baseIo({ platform: "win32", isSea: true });
     (io as { homedir?: string }).homedir = path.join(d, "home");
     const stateDir = path.join(d, "state");
     mkdirSync(stateDir, { recursive: true });
@@ -1061,7 +1086,7 @@ describe("runInstall / runUninstall", () => {
   // on OS permission semantics that can behave differently across CI
   // runners.
   it("win32: a failed credential delete is reported, not thrown — the successful autostart teardown still counts", async () => {
-    const { io, dir: d } = baseIo({ platform: "win32" });
+    const { io, dir: d } = baseIo({ platform: "win32", isSea: true });
     (io as { homedir?: string }).homedir = path.join(d, "home");
     await runInstall([], io);
     mkdirSync(credentialPath(io), { recursive: true });
@@ -1104,7 +1129,7 @@ describe("runInstall / runUninstall", () => {
   });
 
   it("win32: a failed taskkill (nothing running) does not block uninstall", async () => {
-    const { io, dir: d } = baseIo({ platform: "win32" });
+    const { io, dir: d } = baseIo({ platform: "win32", isSea: true });
     (io as { homedir?: string }).homedir = path.join(d, "home");
     await runInstall([], io);
 
@@ -1122,7 +1147,7 @@ describe("runInstall / runUninstall", () => {
   });
 
   it("win32: a failed reg delete is surfaced, not swallowed", async () => {
-    const { io, dir: d } = baseIo({ platform: "win32" });
+    const { io, dir: d } = baseIo({ platform: "win32", isSea: true });
     (io as { homedir?: string }).homedir = path.join(d, "home");
     const credFile = writeCredential(io);
     await runInstall([], io);

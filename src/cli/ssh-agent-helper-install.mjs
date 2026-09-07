@@ -303,7 +303,7 @@ WantedBy=default.target
 // copies/finds the exe IS the permanent path — no "extracted the tarball to
 // Downloads, cleaned it up later, autostart entry silently breaks" failure
 // mode.
-export function buildWindowsRunCommand({ execPath, scriptPath, sshAuthSock }) {
+export function buildWindowsRunCommand({ execPath, scriptPath, sshAuthSock, insecure }) {
   const argv = [
     execPath,
     ...(scriptPath !== null && scriptPath !== undefined ? [scriptPath] : []),
@@ -311,6 +311,7 @@ export function buildWindowsRunCommand({ execPath, scriptPath, sshAuthSock }) {
     "run",
     "--ssh-auth-sock",
     sshAuthSock,
+    ...(insecure ? ["--insecure"] : []),
   ];
   return argv.map((value) => `"${windowsArgEscape(value)}"`).join(" ");
 }
@@ -557,11 +558,11 @@ function killOtherHelperProcesses(io) {
 // needs no separate pre-teardown step and no XML-style rollback dance: a
 // REG_SZ value either replaces the previous one atomically or the add
 // fails outright with nothing written, unlike a multi-step file write.
-async function installWindows(io, { execPath, scriptPath, sshAuthSock }) {
+async function installWindows(io, { execPath, scriptPath, sshAuthSock, insecure }) {
   fs.mkdirSync(stateDir(io), { recursive: true, mode: 0o700 });
   cleanUpLegacyScheduledTask(io);
 
-  const command = buildWindowsRunCommand({ execPath, scriptPath, sshAuthSock });
+  const command = buildWindowsRunCommand({ execPath, scriptPath, sshAuthSock, insecure });
   const result = runSpawnSync(io, "reg", [
     "add",
     WINDOWS_RUN_KEY,
@@ -613,6 +614,7 @@ async function installWindows(io, { execPath, scriptPath, sshAuthSock }) {
     "run",
     "--ssh-auth-sock",
     sshAuthSock,
+    ...(insecure ? ["--insecure"] : []),
   ];
   const degradeToWarning = (reason) => {
     io.stderr.write(
@@ -648,8 +650,9 @@ export async function runInstall(args, io) {
     io.stderr.write(`mullion helper install isn't supported on '${platform}'.\n`);
     return 1;
   }
-  const { flags } = extractFlags(args, { "ssh-auth-sock": "string" });
+  const { flags } = extractFlags(args, { "ssh-auth-sock": "string", insecure: "boolean" });
   const sshAuthSock = resolveSshAuthSock(flags, io, platform);
+  const insecure = flags.insecure === true;
   const execPath = io.execPath ?? process.execPath;
   // Round 3 (PR2) — `io.isSea` is the same injected-seam convention as
   // `io.platform`/`io.homedir` above, letting tests exercise the SEA
@@ -676,6 +679,19 @@ export async function runInstall(args, io) {
     );
     return 1;
   }
+  // Issue #1147 — the non-SEA (tarball/checkout) path on Windows is not the
+  // supported install path. The SEA installer is the only tested and
+  // documented way to install on Windows; the non-SEA path has untested
+  // edge cases (e.g. the `node.exe` process image vs `mullion-helper.exe`
+  // in taskkill). Refusing cleanly here is far better than letting a user
+  // hit a subtle failure later.
+  if (!isSea && platform === "win32") {
+    io.stderr.write(
+      "mullion helper install: the non-SEA (tarball/checkout) path is not supported on Windows. " +
+        "Use the SEA installer (mullion-helper-setup.exe) instead.\n",
+    );
+    return 1;
+  }
   // `isSea` implies win32 or darwin here — the guard above already
   // rejected linux — so `null` (not `defaultScriptPath()`) is safe on
   // both: `buildWindowsRunCommand` and `buildLaunchdPlist` both have a
@@ -690,7 +706,7 @@ export async function runInstall(args, io) {
     io.scriptPath !== undefined ? io.scriptPath : isSea ? null : await defaultScriptPath();
   warnIfNotPaired(io);
 
-  const opts = { execPath, scriptPath, sshAuthSock };
+  const opts = { execPath, scriptPath, sshAuthSock, insecure };
   if (platform === "darwin") return installLaunchd(io, opts);
   if (platform === "win32") return installWindows(io, opts);
   return installSystemd(io, opts);
