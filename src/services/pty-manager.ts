@@ -908,6 +908,16 @@ const TITLE_CHANGE_EVENT_DEBOUNCE_MS = 3_000;
 // retitling.
 const TITLE_CHANGE_EVENT_CEILING_MS = 15_000;
 
+// Terminal-transport mode state (issue #93 one layer deeper — see
+// inAltScreen's and mouseTracking's own field docs below for the full
+// rationale). Deliberately NOT part of the `Pick<SessionInfo, ...>` below:
+// these bytes are scrollback-replay plumbing, not UI-facing session state, so
+// they must never leak into the `SessionInfo` API payload. Intersected onto
+// StoredStateFields instead, and optional, so a `.state.json` written before
+// this field existed still parses at schema `v: 1` and falls back to today's
+// in-memory defaults (same posture as `subagents`'s
+// `Array.isArray(s.subagents)` guard in readStateFile() below) — no version
+// bump needed.
 type StoredStateFields = Pick<
   SessionInfo,
   | "permissionState"
@@ -932,7 +942,9 @@ type StoredStateFields = Pick<
   | "lastTurnEndedAt"
   | "lastAssistantMessage"
   | "backgroundTasks"
->;
+> & {
+  termModes?: { inAltScreen: boolean; mouseTracking: MouseTrackingState };
+};
 
 // Issue: worktree/branch detection — a session's hookToken used to be
 // minted fresh on every `Session` construction and never persisted, which
@@ -1174,6 +1186,20 @@ export class Session {
   // where the true state actually is alt-screen. Tracking mode explicitly
   // instead of inferring it from stream balance is what makes replay correct
   // in both directions (see issue #83).
+  //
+  // Also restored from `.state.json` on a fresh Session (readStateFile(),
+  // "Issue: opencode/Claude Code TUI sessions..." comment) so a backend
+  // restart doesn't reset this to `false` out from under a still-running
+  // dtach master — see that comment for the full mechanism. That restore
+  // does introduce one new drift direction worth naming explicitly: if the
+  // real program leaves alt-screen while the backend is down, a restored
+  // `true` now replays the HARMFUL direction this paragraph describes
+  // (hiding the scrollbar) rather than the harmless one. Accepted
+  // deliberately — dtach keeps the program running across a restart and
+  // redeploy downtime is on the order of seconds, so a real mode change
+  // landing inside that narrow window is far less likely than the bug this
+  // restore fixes, and the live detector above self-corrects on the very
+  // next real mode change either way.
   private inAltScreen = false;
   // Tracked mouse-tracking-mode truth, the same deliberate way inAltScreen
   // above tracks screen mode — see MouseTrackingState's docstring in
@@ -1696,6 +1722,36 @@ export class Session {
     // all until some unrelated turn_start/keystroke/hook event happened to
     // touch it (Hermes review, PR #453).
     if (Array.isArray(s.backgroundTasks)) this.attention.setBackgroundTasks(s.backgroundTasks);
+    // Issue: opencode/Claude Code TUI sessions surviving a backend restart
+    // (dtach master lives on, but the in-memory Session doesn't) replayed a
+    // stale scrollback preamble to the next attaching client — inAltScreen
+    // and mouseTracking are learned only from bytes actually observed by
+    // THIS process, so a brand-new Session always restarted them at their
+    // defaults regardless of the real, ongoing screen/mouse mode. This is
+    // issue #93 ("opencode sometimes cycles prompt history instead of
+    // scrolling on mouse wheel") one lifetime boundary deeper: #93 fixed the
+    // scrollback-ring-eviction case by tracking these in memory; that
+    // tracked state itself was never persisted. See inAltScreen's and
+    // mouseTracking's own field docs for the full mechanism, and
+    // StoredStateFields's `termModes` doc for why this is intersected onto
+    // (not part of) SessionInfo.
+    //
+    // Validated rather than trusted, matching this method's own posture for
+    // every other field above (skip an unexpected shape, don't throw): a
+    // restored `protocol`/`encoding` outside the enum xterm.js itself
+    // supports would otherwise poison getScrollback()'s preamble synthesis
+    // (MOUSE_PROTOCOL_ENABLE/MOUSE_ENCODING_ENABLE index lookups) rather than
+    // just falling back to "no tracking".
+    if (s.termModes != null && typeof s.termModes.inAltScreen === "boolean") {
+      this.inAltScreen = s.termModes.inAltScreen;
+      const { protocol, encoding } = s.termModes.mouseTracking ?? INITIAL_MOUSE_TRACKING_STATE;
+      const validProtocol = protocol === "NONE" || Object.hasOwn(MOUSE_PROTOCOL_ENABLE, protocol);
+      const validEncoding =
+        encoding === "DEFAULT" || Object.hasOwn(MOUSE_ENCODING_ENABLE, encoding);
+      if (validProtocol && validEncoding) {
+        this.mouseTracking = { protocol, encoding };
+      }
+    }
     // Fresh-review finding — `turnEndPingSent` itself isn't persisted (it's
     // not in StoredStateFields, same as backgroundTasksAt), so it would
     // otherwise always restore to its class-field default of `false`. That's
@@ -1749,6 +1805,7 @@ export class Session {
       lastTurnEndedAt: this.attention.lastTurnEndedAt,
       lastAssistantMessage: this.lastAssistantMessage,
       backgroundTasks: this.attention.backgroundTasks,
+      termModes: { inAltScreen: this.inAltScreen, mouseTracking: this.mouseTracking },
     };
   }
 
