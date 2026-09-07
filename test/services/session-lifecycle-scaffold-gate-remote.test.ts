@@ -77,7 +77,7 @@ describe("discoverCommittedScaffoldOnHost (issue #1124)", () => {
 
     const result = await discoverCommittedScaffoldOnHost(fakeApp(), "local", cwd);
 
-    expect(result).toEqual({ skillCommitted: true, reviewerCommitted: true });
+    expect(result).toEqual({ skillCommitted: true, reviewerCommitted: true, warnings: [] });
     // A local dispatch never touches the remote client at all.
     expect(mockGetRemoteHostClient).not.toHaveBeenCalled();
   });
@@ -85,13 +85,13 @@ describe("discoverCommittedScaffoldOnHost (issue #1124)", () => {
   it("remote: proxies to RemoteHostClient.scaffoldScan and returns its value verbatim", async () => {
     const mockScaffoldScan = vi
       .fn()
-      .mockResolvedValue({ skillCommitted: true, reviewerCommitted: false });
+      .mockResolvedValue({ skillCommitted: true, reviewerCommitted: false, warnings: [] });
     mockGetRemoteHostClient.mockReturnValue({ scaffoldScan: mockScaffoldScan });
 
     const result = await discoverCommittedScaffoldOnHost(fakeApp(), "remote-host-1", "/remote/cwd");
 
     expect(mockScaffoldScan).toHaveBeenCalledWith("/remote/cwd");
-    expect(result).toEqual({ skillCommitted: true, reviewerCommitted: false });
+    expect(result).toEqual({ skillCommitted: true, reviewerCommitted: false, warnings: [] });
   });
 
   // Hermes review round 2, PR #1150 — reversed from an earlier "degrades to
@@ -112,7 +112,7 @@ describe("discoverCommittedScaffoldOnHost (issue #1124)", () => {
 
     const result = await discoverCommittedScaffoldOnHost(app, "remote-host-1", "/remote/cwd");
 
-    expect(result).toEqual({ skillCommitted: true, reviewerCommitted: true });
+    expect(result).toEqual({ skillCommitted: true, reviewerCommitted: true, warnings: [] });
     expect(app.log.warn).toHaveBeenCalledWith(
       expect.objectContaining({
         hostId: "remote-host-1",
@@ -139,7 +139,7 @@ describe("discoverCommittedScaffoldOnHost (issue #1124)", () => {
 
     const result = await discoverCommittedScaffoldOnHost(app, "remote-host-1", "/remote/cwd");
 
-    expect(result).toEqual({ skillCommitted: true, reviewerCommitted: true });
+    expect(result).toEqual({ skillCommitted: true, reviewerCommitted: true, warnings: [] });
     expect(app.log.warn).toHaveBeenCalledWith(
       expect.objectContaining({
         hostId: "remote-host-1",
@@ -158,7 +158,7 @@ describe("discoverCommittedScaffoldOnHost (issue #1124)", () => {
 
     const result = await discoverCommittedScaffoldOnHost(app, "remote-host-1", "/remote/cwd");
 
-    expect(result).toEqual({ skillCommitted: true, reviewerCommitted: true });
+    expect(result).toEqual({ skillCommitted: true, reviewerCommitted: true, warnings: [] });
     expect(app.log.warn).toHaveBeenCalledWith(
       expect.objectContaining({ hostId: "remote-host-1", reason: "unsupported" }),
       expect.stringContaining("update the agent build"),

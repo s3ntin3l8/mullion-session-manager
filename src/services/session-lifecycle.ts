@@ -909,8 +909,14 @@ export async function createSessionRecord(
   // falling back to `project.cwd` only for the ordinary case where no
   // override exists at all.
   const scaffoldCwd = cwd ?? project.cwd;
-  const { skillCommitted: scaffoldSkillCommitted, reviewerCommitted: scaffoldReviewerCommitted } =
-    await discoverCommittedScaffoldOnHost(app, project.hostId, scaffoldCwd);
+  const {
+    skillCommitted: scaffoldSkillCommitted,
+    reviewerCommitted: scaffoldReviewerCommitted,
+    warnings: scaffoldWarnings,
+  } = await discoverCommittedScaffoldOnHost(app, project.hostId, scaffoldCwd);
+  if (scaffoldWarnings.length > 0) {
+    app.log.warn({ warnings: scaffoldWarnings, scaffoldCwd }, "scaffold scan warnings");
+  }
 
   // PR-5 — same producer posture as resolvedBriefingOverride immediately
   // above: an explicit caller-supplied value (currently unused by any
