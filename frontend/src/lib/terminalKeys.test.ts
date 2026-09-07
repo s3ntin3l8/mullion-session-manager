@@ -243,6 +243,67 @@ describe("attachKeyConflictHandler", () => {
     }
   });
 
+  it("routes Ctrl+Shift+Space to onVoicePress when the voice hotkey is enabled", () => {
+    const { term, fire } = makeFakeTerm();
+    const onVoicePress = vi.fn();
+    attachKeyConflictHandler({
+      term,
+      reservedKeys: new Set(),
+      getClipboardKeys: () => ({ ctrlV: false, ctrlC: false }),
+      getVoiceHotkey: () => true,
+      onVoicePress,
+    });
+    const result = fire({ key: " ", code: "Space", ctrlKey: true, shiftKey: true });
+    expect(onVoicePress).toHaveBeenCalledTimes(1);
+    expect(result).toBe(false);
+  });
+
+  it("does not route Ctrl+Shift+Space when the voice hotkey getter returns false", () => {
+    const { term, fire } = makeFakeTerm();
+    const onVoicePress = vi.fn();
+    attachKeyConflictHandler({
+      term,
+      reservedKeys: new Set(),
+      getClipboardKeys: () => ({ ctrlV: false, ctrlC: false }),
+      getVoiceHotkey: () => false,
+      onVoicePress,
+    });
+    fire({ key: " ", code: "Space", ctrlKey: true, shiftKey: true });
+    expect(onVoicePress).not.toHaveBeenCalled();
+  });
+
+  it("ignores a key-repeat Ctrl+Shift+Space so a physically-held key doesn't re-fire onVoicePress", () => {
+    const { term, fire } = makeFakeTerm();
+    const onVoicePress = vi.fn();
+    attachKeyConflictHandler({
+      term,
+      reservedKeys: new Set(),
+      getClipboardKeys: () => ({ ctrlV: false, ctrlC: false }),
+      getVoiceHotkey: () => true,
+      onVoicePress,
+    });
+    fire({ key: " ", code: "Space", ctrlKey: true, shiftKey: true, repeat: true });
+    expect(onVoicePress).not.toHaveBeenCalled();
+  });
+
+  it("reads getVoiceHotkey live, not captured, on every keydown", () => {
+    const { term, fire } = makeFakeTerm();
+    const onVoicePress = vi.fn();
+    let enabled = false;
+    attachKeyConflictHandler({
+      term,
+      reservedKeys: new Set(),
+      getClipboardKeys: () => ({ ctrlV: false, ctrlC: false }),
+      getVoiceHotkey: () => enabled,
+      onVoicePress,
+    });
+    fire({ key: " ", code: "Space", ctrlKey: true, shiftKey: true });
+    expect(onVoicePress).not.toHaveBeenCalled();
+    enabled = true;
+    fire({ key: " ", code: "Space", ctrlKey: true, shiftKey: true });
+    expect(onVoicePress).toHaveBeenCalledTimes(1);
+  });
+
   it("preventDefault-only path for reserved browser chords (Ctrl+R/L/K)", () => {
     const { term, fire } = makeFakeTerm();
     attachKeyConflictHandler({

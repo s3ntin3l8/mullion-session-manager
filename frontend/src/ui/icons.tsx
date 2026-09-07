@@ -491,6 +491,20 @@ export function ImageIcon(props: IconProps) {
   );
 }
 
+// Voice dictation mic button (terminal-pane/VoiceMicButton.tsx) — the
+// classic capsule-mic-on-a-stand glyph, same generic-line-glyph convention
+// as ImageIcon above (no design-file source; a new small utility affordance).
+export function MicIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <rect x="9" y="2" width="6" height="12" rx="3" />
+      <path d="M5 10a7 7 0 0 0 14 0" />
+      <line x1="12" y1="17" x2="12" y2="21" />
+      <line x1="8" y1="21" x2="16" y2="21" />
+    </Svg>
+  );
+}
+
 export function StarIcon(props: IconProps) {
   return (
     <Svg {...props}>

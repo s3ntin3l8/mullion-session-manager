@@ -65,3 +65,19 @@ if (typeof window !== "undefined" && !window.matchMedia) {
     dispatchEvent: () => false,
   })) as unknown as typeof window.matchMedia;
 }
+
+// jsdom leaves window.isSecureContext as `undefined` even for its default
+// http://localhost/ test URL, unlike a real browser (localhost is always a
+// secure context) — another real gap in the test environment, same
+// category as matchMedia above, not something voice/support.ts's own
+// isSecureContextForDictation() should special-case. A plain assignment,
+// not vi.stubGlobal, for the same reason as matchMedia: it must survive
+// every individual test file's own vi.unstubAllGlobals() so a component
+// re-rendering after that cleanup doesn't suddenly see a falsy value it
+// never asked to test. Tests that specifically exercise the insecure-
+// context path (frontend/src/voice/useVoiceDictation.test.ts) override it
+// directly via Object.defineProperty, which this plain assignment doesn't
+// interfere with.
+if (typeof window !== "undefined" && window.isSecureContext === undefined) {
+  Object.defineProperty(window, "isSecureContext", { value: true, configurable: true });
+}

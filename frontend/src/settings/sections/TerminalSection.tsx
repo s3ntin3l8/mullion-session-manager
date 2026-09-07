@@ -1,5 +1,29 @@
 import { useDashboardStore } from "../../store/index.js";
-import { Eyebrow, ListRow, NumberField, Row, StyledList, Toggle } from "../../ui/primitives.js";
+import {
+  Dropdown,
+  Eyebrow,
+  ListRow,
+  NumberField,
+  Row,
+  StyledList,
+  Toggle,
+} from "../../ui/primitives.js";
+
+// Voice dictation language options — a short curated list (the languages
+// Claude Code's own /voice dictation documents supporting), plus "Browser
+// default" (empty string, falls back to navigator.language at dictation
+// start — see voice/useVoiceDictation.ts's resolveLang). Not exhaustive:
+// the underlying Web Speech engine accepts any BCP-47 tag, this is just
+// what's worth a menu entry rather than free text.
+const DICTATION_LANGUAGES: Array<{ value: string; label: string }> = [
+  { value: "", label: "Browser default" },
+  { value: "en-US", label: "English (US)" },
+  { value: "en-GB", label: "English (UK)" },
+  { value: "de-DE", label: "German" },
+  { value: "es-ES", label: "Spanish" },
+  { value: "fr-FR", label: "French" },
+  { value: "ja-JP", label: "Japanese" },
+];
 
 export function TerminalSection() {
   const { settings, updateSettings } = useDashboardStore();
@@ -51,6 +75,35 @@ export function TerminalSection() {
             onChange={(v) => updateSettings({ terminal: { reconnect: { enabled: v } } })}
           />
         </div>
+      </Row>
+
+      <Eyebrow
+        title="Voice dictation"
+        desc="Push-to-talk into the prompt via the browser's speech engine — transcribed text is inserted, never sent automatically. Needs an https:// origin; hidden automatically in browsers without speech recognition support (Firefox today)."
+      />
+      <Row label="Enable dictation" desc="Shows the mic button in the terminal pane.">
+        <Toggle
+          on={t.voice.enabled}
+          onChange={(v) => updateSettings({ terminal: { voice: { enabled: v } } })}
+          ariaLabel="Enable dictation"
+        />
+      </Row>
+      <Row
+        label="Dictation hotkey"
+        desc="Hold Ctrl+Shift+Space to talk, as an alternative to the mic button."
+      >
+        <Toggle
+          on={t.voice.hotkeyEnabled}
+          onChange={(v) => updateSettings({ terminal: { voice: { hotkeyEnabled: v } } })}
+          ariaLabel="Dictation hotkey"
+        />
+      </Row>
+      <Row label="Dictation language" desc="What language you're speaking.">
+        <Dropdown
+          options={DICTATION_LANGUAGES}
+          value={t.voice.lang}
+          onChange={(v) => updateSettings({ terminal: { voice: { lang: v } } })}
+        />
       </Row>
 
       <Eyebrow

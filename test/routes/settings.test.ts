@@ -268,4 +268,40 @@ describe("settings route", () => {
 
     await app.close();
   });
+
+  // Catches exactly the failure mode settings.ts's own comment on
+  // autoFocusOnAttention warns about: a new nested field present in the
+  // TypeScript interface but missing from DEFAULT_SETTINGS's object
+  // literal silently fails to persist across a PATCH + GET round-trip,
+  // because deepMerge only ever merges keys the base/defaults object
+  // already has. This exercises the actual GET path, not just a POST's
+  // .returning() (see the memory note this bit both #816 and #818).
+  it("round-trips terminal.voice through PATCH and a subsequent GET", async () => {
+    const app = await buildApp();
+
+    const patched = await app.inject({
+      method: "PATCH",
+      url: "/api/settings",
+      payload: {
+        terminal: { voice: { enabled: false, hotkeyEnabled: false, lang: "de-DE" } },
+      },
+    });
+    expect(patched.statusCode).toBe(200);
+    expect(patched.json().terminal.voice).toEqual({
+      enabled: false,
+      hotkeyEnabled: false,
+      lang: "de-DE",
+    });
+    // Siblings of `voice` inside `terminal` must survive untouched.
+    expect(patched.json().terminal.clipboardKeys).toEqual(DEFAULT_SETTINGS.terminal.clipboardKeys);
+
+    const fetched = await app.inject({ method: "GET", url: "/api/settings" });
+    expect(fetched.json().terminal.voice).toEqual({
+      enabled: false,
+      hotkeyEnabled: false,
+      lang: "de-DE",
+    });
+
+    await app.close();
+  });
 });

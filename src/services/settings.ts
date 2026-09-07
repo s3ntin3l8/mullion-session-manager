@@ -80,6 +80,26 @@ export interface AppSettings {
       ctrlV: boolean;
       ctrlC: boolean;
     };
+    // Voice dictation (push-to-talk) — see frontend/src/voice/ and
+    // TerminalPane.tsx's VoiceMicButton. Browser-only feature (Web Speech
+    // API); nothing here reaches this backend beyond persisting the toggle.
+    voice: {
+      // Shows the mic button and, when hotkeyEnabled is also true, arms the
+      // Ctrl+Shift+Space chord. Off hides the button entirely, same as an
+      // unsupported browser (frontend/src/voice/support.ts).
+      enabled: boolean;
+      // Independent of `enabled` above so a user can keep the button but
+      // opt out of the desktop chord specifically — see terminalKeys.ts's
+      // getVoiceHotkey getter.
+      hotkeyEnabled: boolean;
+      // BCP-47 tag (e.g. "en-US"), or "" to fall back to navigator.language
+      // at dictation start. A free string like fontFamily above — no
+      // enum/leaf-union in shared/types.ts, and sanitizeSettings below
+      // doesn't validate it for the same reason fontFamily isn't validated
+      // there: an unrecognized tag is the Web Speech engine's own problem
+      // to reject or fall back on, not this backend's to police.
+      lang: string;
+    };
   };
   sidebarDensity: SidebarDensity;
   // Tablet tier plan, PR 4 — "auto" resolves from live window width
@@ -446,6 +466,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
     clipboardKeys: {
       ctrlV: false,
       ctrlC: false,
+    },
+    voice: {
+      enabled: true,
+      hotkeyEnabled: true,
+      lang: "",
     },
   },
   sidebarDensity: "comfortable",

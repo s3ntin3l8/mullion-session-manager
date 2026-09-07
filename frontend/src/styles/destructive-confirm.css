@@ -183,6 +183,66 @@
   z-index: 10;
 }
 
+/* Voice dictation mic button. Overlay collision map for this pane (see
+   TerminalPane.tsx's own render comment for the full list): top-left = find
+   bar; top-centre = copy/upload/voice-error toasts; top-right =
+   attach-image + this button, on a fine pointer, placed immediately to its
+   left (24px button + 6px gap = 38px). On a coarse pointer (.coarse
+   modifier, driven by TerminalPane's isCoarsePointer, the same signal that
+   already gates WebGL) this becomes a 44px bottom-right FAB instead — a
+   fine-pointer-sized target is too small to reliably hold with a finger,
+   and bottom-right leaves bottom-centre free for the interim-text chip
+   below, which only ever shows while this button is actively listening. */
+.terminal-voice-btn {
+  position: absolute;
+  top: 8px;
+  right: 38px;
+  z-index: 10;
+}
+.terminal-voice-btn.listening {
+  color: var(--r);
+  animation: cmuxAttn 1.4s ease-out infinite;
+}
+.terminal-voice-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.terminal-voice-btn.coarse {
+  top: auto;
+  right: 12px;
+  bottom: 12px;
+  width: 44px;
+  height: 44px;
+  background: color-mix(in srgb, var(--term) 92%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  backdrop-filter: blur(1px);
+}
+
+/* Live interim transcript while dictating — bottom-centre, so it never
+   competes with the top-anchored toasts/find-bar above, or with the
+   coarse-pointer mic FAB in the opposite bottom corner. */
+.terminal-voice-interim {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  translate: -50% 0;
+  max-width: 80%;
+  padding: 4px 12px;
+  background: color-mix(in srgb, var(--term) 82%, transparent);
+  backdrop-filter: blur(1px);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 11.5px;
+  color: var(--dim);
+  font-style: italic;
+  z-index: 10;
+  pointer-events: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Scrollback find bar (U1) — top-left, so it never collides with the
    always-visible attach-image button in the opposite corner (above). Same
    translucent/blurred "floating over the terminal" treatment as

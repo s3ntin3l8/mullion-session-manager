@@ -157,6 +157,10 @@ const SEARCH_INDEX: Array<{ section: SettingsSection; text: string }> = [
     section: "terminal",
     text: "clipboard shortcuts ctrl v paste ctrl c copy selection sigint insert",
   },
+  {
+    section: "terminal",
+    text: "voice dictation microphone push to talk speech hotkey language",
+  },
   { section: "projects", text: "project roots add root directory" },
   { section: "projects", text: "discover now rescan" },
   { section: "projects", text: "global config directory" },
