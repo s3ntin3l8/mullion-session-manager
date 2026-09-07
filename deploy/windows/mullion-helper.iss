@@ -78,6 +78,7 @@ Filename: "{app}\mullion-helper.exe"; Parameters: "helper uninstall"; Flags: run
 [Code]
 var
   PairingPage: TInputQueryWizardPage;
+  InsecurePage: TNewCheckBox;
 
 // Always logged (Log() is a harmless no-op unless /LOG was passed — this is
 // what makes a scripted `/VERYSILENT /LOG=...` CI run diagnosable without
@@ -118,6 +119,19 @@ begin
     'You can leave this blank and pair later by running:' + #13#10 +
     '& "%LOCALAPPDATA%\Mullion\mullion-helper.exe" helper pair <payload>');
   PairingPage.Add('Pairing payload:', False);
+
+  // Issue #1147 — --insecure lets the helper talk to a Mullion primary over
+  // plain HTTP instead of requiring a valid TLS certificate. For development
+  // servers or self-signed setups. Parented to PairingPage's surface (not
+  // WizardForm.InnerPage, which is the common parent of ALL pages and would
+  // make the checkbox appear on every wizard page).
+  InsecurePage := TNewCheckBox.Create(WizardForm);
+  InsecurePage.Parent := PairingPage.Surface;
+  InsecurePage.Left := ScaleX(16);
+  InsecurePage.Top := PairingPage.SurfaceHeight - ScaleY(24);
+  InsecurePage.Width := PairingPage.SurfaceWidth - ScaleX(32);
+  InsecurePage.Caption := '&Allow insecure (HTTP) connection to primary';
+  InsecurePage.Checked := False;
 end;
 
 // encodePairingPayload's (src/services/bridge-registry.ts) own output
@@ -282,7 +296,10 @@ begin
       // the fallback branch below for why the distinction matters on a
       // reinstall over an ALREADY-paired laptop.
       HadCredentialBefore := FileExists(CredentialPath);
-      ExecAndCaptureOutput(ExePath, 'helper pair "' + Payload + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode, Output);
+      if InsecurePage.Checked then
+        ExecAndCaptureOutput(ExePath, 'helper pair "' + Payload + '" --insecure', '', SW_HIDE, ewWaitUntilTerminated, ResultCode, Output)
+      else
+        ExecAndCaptureOutput(ExePath, 'helper pair "' + Payload + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode, Output);
       AppendDiagnostics('pair', ResultCode, Output);
       if ResultCode = 0 then
         Paired := True
@@ -338,7 +355,10 @@ begin
     // the right outcome even for an unpaired helper (it'll just sit
     // waiting, same as running `mullion helper install` by hand always
     // has).
-    ExecAndCaptureOutput(ExePath, 'helper install', '', SW_HIDE, ewWaitUntilTerminated, ResultCode, Output);
+    if InsecurePage.Checked then
+      ExecAndCaptureOutput(ExePath, 'helper install --insecure', '', SW_HIDE, ewWaitUntilTerminated, ResultCode, Output)
+    else
+      ExecAndCaptureOutput(ExePath, 'helper install', '', SW_HIDE, ewWaitUntilTerminated, ResultCode, Output);
     AppendDiagnostics('install', ResultCode, Output);
     if ResultCode <> 0 then
     begin
