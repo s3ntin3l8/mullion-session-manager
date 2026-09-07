@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.10](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.9...v0.3.10) (2026-09-07)
+
+
+### Bug Fixes
+
+* guard SourceControlSection against a render-phase infinite loop ([#1136](https://github.com/s3ntin3l8/mullion-session-manager/issues/1136)) ([#1139](https://github.com/s3ntin3l8/mullion-session-manager/issues/1139)) ([cd1b70d](https://github.com/s3ntin3l8/mullion-session-manager/commit/cd1b70d419b234af3bf1eadb00dd3488bddb3589))
+* **test:** stop pty-manager-file-change-ignore.test.ts leaking real systemd scopes ([#1142](https://github.com/s3ntin3l8/mullion-session-manager/issues/1142)) ([a0abad4](https://github.com/s3ntin3l8/mullion-session-manager/commit/a0abad48178c43179e3022acd63169a9cbf411df))
+
 ## [0.3.9](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.8...v0.3.9) (2026-09-07)
 
 
