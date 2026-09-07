@@ -532,6 +532,25 @@ function cleanUpLegacyScheduledTask(io) {
   if (fs.existsSync(xmlPath)) fs.rmSync(xmlPath, { force: true });
 }
 
+// Root cause of issue #871's test-windows silent exit-1 (found only once
+// [install-trace] checkpoints pinpointed the exact statement): `helper
+// install`/`helper uninstall` ARE THEMSELVES a running mullion-helper.exe
+// process — `taskkill /IM mullion-helper.exe /F` matches by image name,
+// with no notion of "not this one", so the very first real run of either
+// verb killed its own CLI invocation mid-execution. Windows reports a
+// forcibly-terminated process's exit code as 1 — indistinguishable from a
+// normal failure — and nothing after the kill ever runs, which is why
+// zero diagnostic output ever reached the CI log no matter what this file
+// or helper-main.mjs's exit/flush handling did: there was no exception to
+// catch or message to flush, the process was gone. `/FI "PID ne <self>"`
+// excludes the current process from the match while still catching every
+// OTHER mullion-helper.exe (a stale detached `helper run`, or another
+// concurrent install/uninstall) by image name, same as before.
+function killOtherHelperProcesses(io) {
+  const pid = io.pid ?? process.pid;
+  runSpawnSync(io, "taskkill", ["/F", "/FI", `PID ne ${pid}`, "/IM", WINDOWS_HELPER_EXE_NAME]);
+}
+
 // Round 4 (issue #871) — HKCU Run key, not a Scheduled Task; see this
 // file's own header comment for why. `reg add ... /f` is unconditionally
 // idempotent the same way `schtasks /Create /F` was, so a re-install still
@@ -587,8 +606,10 @@ async function installWindows(io, { execPath, scriptPath, sshAuthSock }) {
   // process killed and nothing running in its place. Best-effort and
   // unconditional, same as uninstallWindows's own taskkill — "no matching
   // process" is the common, expected outcome on a genuinely first-ever
-  // install.
-  runSpawnSync(io, "taskkill", ["/IM", WINDOWS_HELPER_EXE_NAME, "/F"]);
+  // install. Must exclude THIS process's own PID (killOtherHelperProcesses)
+  // — see that function's own comment for why: this CLI invocation is
+  // itself a running mullion-helper.exe.
+  killOtherHelperProcesses(io);
   io.stdout.write("[install-trace] taskkill done\n");
 
   // `reg add` only *registers* the autostart entry; Windows launches it at
@@ -790,10 +811,15 @@ function uninstallWindows(io) {
   // #905) caught against the Scheduled Task mechanism this replaces; it's
   // unchanged here. By image name, not a tracked PID: nothing records one
   // (installWindows's own spawn is detached and unref()'d, deliberately
-  // untracked), and killing every mullion-helper.exe is also the right
-  // behavior if more than one somehow ended up running. Best-effort — "no
-  // matching process" is the common, expected outcome when nothing is
-  // running right now, not a failure worth surfacing.
+  // untracked), and killing every OTHER mullion-helper.exe is also the
+  // right behavior if more than one somehow ended up running. Best-effort
+  // — "no matching process" is the common, expected outcome when nothing
+  // is running right now, not a failure worth surfacing. Excluding THIS
+  // process's own PID is not optional, though — see
+  // killOtherHelperProcesses's own comment: `helper uninstall` is itself a
+  // running mullion-helper.exe, so an unfiltered `/IM` match self-kills
+  // the CLI invocation before it reaches the `reg delete` below (issue
+  // #871's actual root cause, found via test-windows).
   //
   // Known gap, not fixed here: a laptop running the non-SEA (tarball/
   // checkout) path on win32 — `node.exe mullion.mjs helper run ...`,
@@ -804,7 +830,7 @@ function uninstallWindows(io) {
   // instructions are scoped to "macOS (without the installer) or Linux"),
   // so this is a narrow, undocumented corner case, not the supported path
   // — worth knowing about, not worth a PID-tracking mechanism to close.
-  runSpawnSync(io, "taskkill", ["/IM", WINDOWS_HELPER_EXE_NAME, "/F"]);
+  killOtherHelperProcesses(io);
   cleanUpLegacyScheduledTask(io);
 
   if (hadRunValue) {

@@ -343,6 +343,11 @@ describe("runInstall / runUninstall", () => {
       stderr: { write: () => true },
       execPath: "/usr/bin/node",
       scriptPath: "/opt/mullion/dist/cli/mullion.mjs",
+      // killOtherHelperProcesses (ssh-agent-helper-install.mjs) filters
+      // taskkill's /IM match to exclude this PID — a fixed stub value, not
+      // the real test-runner's process.pid, so assertions on the exact
+      // taskkill argv are deterministic across runs.
+      pid: 4242,
       spawnSync: (cmd: string, args: string[]) => {
         calls.push([cmd, ...args]);
         return { status: 0, stdout: "", stderr: "" };
@@ -743,7 +748,14 @@ describe("runInstall / runUninstall", () => {
     const taskkillIndex = calls.findIndex((c) => c[0] === "taskkill");
     const regAddIndex = calls.findIndex((c) => c[0] === "reg" && c[1] === "add");
     const spawnIndex = calls.findIndex((c) => c[0] === "SPAWN");
-    expect(findCall(calls, "taskkill")).toEqual(["taskkill", "/IM", WINDOWS_HELPER_EXE_NAME, "/F"]);
+    expect(findCall(calls, "taskkill")).toEqual([
+      "taskkill",
+      "/F",
+      "/FI",
+      "PID ne 4242",
+      "/IM",
+      WINDOWS_HELPER_EXE_NAME,
+    ]);
     // Kill-old happens after the new registration succeeds (so a failed
     // re-registration never leaves the old, working process killed with
     // nothing in its place) and before the new process starts.
@@ -925,7 +937,14 @@ describe("runInstall / runUninstall", () => {
     expect(code).toBe(0);
     expect(existsSync(credFile)).toBe(false);
     expect(findCall(calls, "reg", "query")).toBeDefined();
-    expect(findCall(calls, "taskkill")).toEqual(["taskkill", "/IM", WINDOWS_HELPER_EXE_NAME, "/F"]);
+    expect(findCall(calls, "taskkill")).toEqual([
+      "taskkill",
+      "/F",
+      "/FI",
+      "PID ne 4242",
+      "/IM",
+      WINDOWS_HELPER_EXE_NAME,
+    ]);
     expect(findCall(calls, "reg", "delete")).toEqual([
       "reg",
       "delete",
