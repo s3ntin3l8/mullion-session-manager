@@ -2651,37 +2651,40 @@ describe("internal routes (agent role, issue #26)", () => {
       const previousRoots = process.env.PROJECTS_ROOTS;
       const previousSandboxEnabled = process.env.MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED;
       const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "internal-gen-turn-sandbox-"));
-      process.env.PROJECTS_ROOTS = cwd;
-      process.env.MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED = "false";
-      const app = await buildApp();
+      try {
+        process.env.PROJECTS_ROOTS = cwd;
+        process.env.MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED = "false";
+        const app = await buildApp();
 
-      vi.mocked(runGenerationTurnInScratchWorktree).mockResolvedValue("stdout");
-      const res = await app.inject({
-        method: "POST",
-        url: "/internal/run-generation-turn",
-        headers: { authorization: `Bearer ${TOKEN}` },
-        payload: {
-          cwd,
-          slug: "demo",
-          baseRef: "HEAD",
-          agentCommand: "claude",
-          prompt: "do the thing",
-          timeoutMs: 300_000,
-        },
-      });
-      expect(res.statusCode).toBe(200);
-      expect(runGenerationTurnInScratchWorktree).toHaveBeenCalledWith(
-        expect.objectContaining({ sandbox: false }),
-      );
+        vi.mocked(runGenerationTurnInScratchWorktree).mockResolvedValue("stdout");
+        const res = await app.inject({
+          method: "POST",
+          url: "/internal/run-generation-turn",
+          headers: { authorization: `Bearer ${TOKEN}` },
+          payload: {
+            cwd,
+            slug: "demo",
+            baseRef: "HEAD",
+            agentCommand: "claude",
+            prompt: "do the thing",
+            timeoutMs: 300_000,
+          },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(runGenerationTurnInScratchWorktree).toHaveBeenCalledWith(
+          expect.objectContaining({ sandbox: false }),
+        );
 
-      process.env.PROJECTS_ROOTS = previousRoots;
-      if (previousSandboxEnabled === undefined) {
-        delete process.env.MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED;
-      } else {
-        process.env.MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED = previousSandboxEnabled;
+        await app.close();
+      } finally {
+        process.env.PROJECTS_ROOTS = previousRoots;
+        if (previousSandboxEnabled === undefined) {
+          delete process.env.MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED;
+        } else {
+          process.env.MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED = previousSandboxEnabled;
+        }
+        fs.rmSync(cwd, { recursive: true, force: true });
       }
-      fs.rmSync(cwd, { recursive: true, force: true });
-      await app.close();
     });
   });
 

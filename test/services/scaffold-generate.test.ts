@@ -970,6 +970,57 @@ describe("defaultSpawnGenerationTurn — agy fails closed without a usable sandb
   });
 });
 
+// Issue #1133 — the actual payload of the sandbox opt-out for the three
+// non-agy agents: `sandbox: false` must skip `wrapWithSandbox` entirely
+// (not just avoid re-probing), even when bwrap IS capable. Node's own
+// execFile ENOENT error message names the exact binary it tried to spawn
+// ("spawn <bin> ENOENT" — confirmed against a live `execFile` call, not
+// assumed), which is a reliable, mock-free way to observe whether
+// `defaultSpawnGenerationTurn` resolved to the bare agent binary or to
+// `bwrap` wrapping it, without needing to intercept `node:child_process`
+// itself. `cwd` stays nonexistent (as in the describe block above) so this
+// never reaches a real spawn — `execFile` fails on `cwd` before ever
+// touching the network.
+describe("defaultSpawnGenerationTurn — sandbox opt-out actually skips wrapWithSandbox for non-agy agents (issue #1133)", () => {
+  beforeEach(() => {
+    resetSandboxCapabilityCache();
+  });
+
+  afterEach(() => {
+    resetSandboxCapabilityCache();
+  });
+
+  it("sandbox: false runs the bare agent binary, not bwrap, even though bwrap is capable", async () => {
+    await isSandboxCapable(async () => true);
+
+    const err: unknown = await defaultSpawnGenerationTurn({
+      agentCommand: "claude",
+      cwd: "/nonexistent/scratch-worktree",
+      prompt: "x",
+      timeoutMs: 1000,
+      sandbox: false,
+    }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(GenerationSpawnError);
+    expect((err as Error).message).toMatch(/spawn claude ENOENT/);
+    expect((err as Error).message).not.toMatch(/bwrap/);
+  });
+
+  it("sandbox omitted (default true) wraps with bwrap when bwrap is capable", async () => {
+    await isSandboxCapable(async () => true);
+
+    const err: unknown = await defaultSpawnGenerationTurn({
+      agentCommand: "claude",
+      cwd: "/nonexistent/scratch-worktree",
+      prompt: "x",
+      timeoutMs: 1000,
+    }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(GenerationSpawnError);
+    expect((err as Error).message).toMatch(/spawn bwrap ENOENT/);
+  });
+});
+
 // Live/integration: actually runs the real default probe (no injected
 // fake) against this machine's real `bwrap`. This machine genuinely has
 // `bwrap` at /usr/bin/bwrap with unprivileged_userns_clone=1 (confirmed via

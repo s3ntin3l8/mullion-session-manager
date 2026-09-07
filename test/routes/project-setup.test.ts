@@ -652,6 +652,37 @@ describe("project-setup route — /setup/generate (issue #956)", () => {
     await app.close();
   });
 
+  // Issue #1133 — this route resolves the primary's own sandbox opt-out
+  // from app.config and passes it into generateScaffoldContent's own
+  // `sandbox` option (only ever consulted for a LOCAL_HOST_ID project — see
+  // that function's own doc comment). Mirrors
+  // test/routes/internal.test.ts's own "honors this agent's own
+  // MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED" test for the remote-agent
+  // side of the same split.
+  it("threads MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED into generateScaffoldContent's sandbox option", async () => {
+    const previous = process.env.MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED;
+    process.env.MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED = "false";
+    try {
+      const app = await buildApp();
+      const projectId = await createProject(app, repoDir);
+      mockValidGeneration("demo");
+
+      await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/setup/generate`,
+        payload: { slug: "demo" },
+      });
+
+      const call = vi.mocked(generateScaffoldContent).mock.calls[0][0];
+      expect(call.sandbox).toBe(false);
+
+      await app.close();
+    } finally {
+      if (previous === undefined) delete process.env.MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED;
+      else process.env.MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED = previous;
+    }
+  });
+
   it("computes hasSkill/hasReviewer/hasBriefingRegion from the project's real checkout, not the scratch worktree", async () => {
     const app = await buildApp();
     fs.mkdirSync(path.join(repoDir, ".claude", "skills", "demo"), { recursive: true });
