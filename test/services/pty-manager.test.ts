@@ -7405,6 +7405,162 @@ describe("Session state file persistence (issue #323)", () => {
     ]);
   });
 
+  // Issue: opencode/Claude Code TUI sessions became unscrollable/frozen
+  // after a Mullion backend restart — this is issue #93 one lifetime
+  // boundary deeper. #93 taught getScrollback() to synthesize its
+  // alt-screen/mouse-tracking preamble from tracked Session state rather
+  // than trusting the raw ring buffer, but that tracked state itself was
+  // in-memory only. A dtach master survives a backend restart; the Session
+  // object doesn't — so a freshly-constructed Session replayed a
+  // known-stale "primary buffer, no mouse tracking" preamble to the next
+  // attaching client while the real, still-running TUI stayed in alt-screen
+  // with mouse tracking on. These three tests exercise readStateFile()'s
+  // restore of `termModes` by checking the one thing a reattaching client
+  // actually observes: the synthesized getScrollback() preamble.
+  it("restores tracked alt-screen/mouse-tracking state from state file into the scrollback preamble", () => {
+    const state = {
+      v: 1,
+      launchedAtVersion: "0.0.0",
+      state: {
+        permissionState: "idle",
+        planState: "idle",
+        errorState: "idle",
+        errorAt: null,
+        errorDetail: null,
+        gateState: "idle",
+        gatePrompt: null,
+        promoteState: "idle",
+        promoteSummary: null,
+        promoteSuggestedBaseRef: null,
+        attentionKind: null,
+        compactState: "idle",
+        subagentCount: 0,
+        elicitationState: "idle",
+        elicitationServer: null,
+        lastTurnEndedAt: null,
+        lastAssistantMessage: null,
+        termModes: { inAltScreen: true, mouseTracking: { protocol: "ANY", encoding: "SGR" } },
+      },
+    };
+    fs.writeFileSync(stateFilePath("1"), JSON.stringify(state));
+
+    const session = makeSession("1");
+
+    // Empty ring buffer (nothing has streamed through onData yet) — the
+    // entire replay is the restored preamble itself.
+    expect(session.getScrollback().toString("utf8")).toBe("\x1b[?1049h\x1b[?1003h\x1b[?1006h");
+  });
+
+  it("falls back to today's defaults when a pre-existing state file has no termModes key (upgrade, not corruption)", () => {
+    const state = {
+      v: 1,
+      launchedAtVersion: "0.0.0",
+      state: {
+        permissionState: "idle",
+        planState: "idle",
+        errorState: "idle",
+        errorAt: null,
+        errorDetail: null,
+        gateState: "idle",
+        gatePrompt: null,
+        promoteState: "idle",
+        promoteSummary: null,
+        promoteSuggestedBaseRef: null,
+        attentionKind: null,
+        compactState: "idle",
+        subagentCount: 0,
+        elicitationState: "idle",
+        elicitationServer: null,
+        lastTurnEndedAt: null,
+        lastAssistantMessage: null,
+        // No `termModes` key at all — a state file written before this fix.
+      },
+    };
+    fs.writeFileSync(stateFilePath("1"), JSON.stringify(state));
+
+    const session = makeSession("1");
+
+    expect(session.getScrollback().toString("utf8")).toBe("\x1b[?1049l");
+  });
+
+  it("skips a malformed mouseTracking value instead of throwing, while still restoring a valid inAltScreen", () => {
+    const state = {
+      v: 1,
+      launchedAtVersion: "0.0.0",
+      state: {
+        permissionState: "idle",
+        planState: "idle",
+        errorState: "idle",
+        errorAt: null,
+        errorDetail: null,
+        gateState: "idle",
+        gatePrompt: null,
+        promoteState: "idle",
+        promoteSummary: null,
+        promoteSuggestedBaseRef: null,
+        attentionKind: null,
+        compactState: "idle",
+        subagentCount: 0,
+        elicitationState: "idle",
+        elicitationServer: null,
+        lastTurnEndedAt: null,
+        lastAssistantMessage: null,
+        // A protocol/encoding outside xterm.js's own enum would otherwise
+        // poison getScrollback()'s MOUSE_PROTOCOL_ENABLE/MOUSE_ENCODING_ENABLE
+        // lookups rather than just falling back to "no tracking".
+        termModes: { inAltScreen: true, mouseTracking: { protocol: "BOGUS", encoding: "SGR" } },
+      },
+    };
+    fs.writeFileSync(stateFilePath("1"), JSON.stringify(state));
+
+    const session = makeSession("1");
+
+    // inAltScreen restores independently of the sibling mouseTracking
+    // validation failing — only the mouse half falls back to the default.
+    expect(session.getScrollback().toString("utf8")).toBe("\x1b[?1049h");
+  });
+
+  // Own-review finding — `s.termModes !== undefined` alone lets a literal
+  // `null` (JSON-serializable, unlike `undefined`) slip past the guard and
+  // into `s.termModes.inAltScreen`, throwing a TypeError synchronously
+  // inside the Session constructor instead of falling back to defaults like
+  // every other field in readStateFile(). `!= null` (loose) rejects both
+  // `undefined` and `null` in one check, matching this method's own
+  // documented "skip an unexpected shape, don't throw" posture.
+  it("does not throw when a state file has a literal `termModes: null` — falls back to defaults", () => {
+    const state = {
+      v: 1,
+      launchedAtVersion: "0.0.0",
+      state: {
+        permissionState: "idle",
+        planState: "idle",
+        errorState: "idle",
+        errorAt: null,
+        errorDetail: null,
+        gateState: "idle",
+        gatePrompt: null,
+        promoteState: "idle",
+        promoteSummary: null,
+        promoteSuggestedBaseRef: null,
+        attentionKind: null,
+        compactState: "idle",
+        subagentCount: 0,
+        elicitationState: "idle",
+        elicitationServer: null,
+        lastTurnEndedAt: null,
+        lastAssistantMessage: null,
+        termModes: null,
+      },
+    };
+    fs.writeFileSync(stateFilePath("1"), JSON.stringify(state));
+
+    let session: ReturnType<typeof makeSession> | undefined;
+    expect(() => {
+      session = makeSession("1");
+    }).not.toThrow();
+    expect(session?.getScrollback().toString("utf8")).toBe("\x1b[?1049l");
+  });
+
   // Issue #428 — backgroundTasks is part of StoredStateFields (unlike the
   // PERSISTED backgroundTasksAt value, deliberately not saved — see
   // collectState()'s own comment). The restore path still re-stamps
