@@ -12,6 +12,7 @@ import {
   parseGeneratedOutput,
   generateScaffoldContent,
   defaultSpawnGenerationTurn,
+  buildInvocation,
   wrapWithSandbox,
   agentSandboxWritablePaths,
   ensureSandboxWritablePathsExist,
@@ -153,6 +154,47 @@ describe("parseGeneratedOutput", () => {
     expect(result.skill).not.toContain("etc/passwd");
     expect(result.reviewer).not.toContain("etc/passwd");
     expect(result.briefingRegion).not.toContain("etc/passwd");
+  });
+});
+
+// Hermes review, PR #1152 — issue #1130's own bug was a subtle argv
+// mistake (`-p` followed by a SEPARATE `-i=<prompt>` token, which agy's
+// own parser drops in favor of an unrelated positional) that no mocked-
+// spawn test in this file would have caught, since none of them inspect
+// the actual argv `buildInvocation` produces. Pinned here as a plain
+// equality assertion — CI-enforced, unlike the agy-gated e2e test, which
+// skips wherever agy isn't installed (including CI's own test-e2e job).
+describe("buildInvocation", () => {
+  it("pins agy's exact argv — -p=<prompt> as ONE token, plus --dangerously-skip-permissions (issue #1130)", () => {
+    expect(buildInvocation("agy", "analyze this repo")).toEqual({
+      bin: "agy",
+      args: ["-p=analyze this repo", "--dangerously-skip-permissions"],
+    });
+  });
+
+  it("pins the other three agents' argv too, so a future edit to this function can't silently move agy's own shape", () => {
+    expect(buildInvocation("claude", "analyze this repo")).toEqual({
+      bin: "claude",
+      args: [
+        "-p",
+        "--allowedTools",
+        "Read,Grep,Glob,Bash(git log:*),Bash(git diff:*),Bash(git show:*),Bash(find:*),Bash(ls:*)",
+        "--",
+        "analyze this repo",
+      ],
+    });
+    expect(buildInvocation("codex", "analyze this repo")).toEqual({
+      bin: "codex",
+      args: ["exec", "--sandbox", "read-only", "--", "analyze this repo"],
+    });
+    expect(buildInvocation("opencode", "analyze this repo")).toEqual({
+      bin: "opencode",
+      args: ["run", "--", "analyze this repo"],
+    });
+  });
+
+  it("throws UnsupportedGenerationAgentError for an unknown agent command", () => {
+    expect(() => buildInvocation("aider", "x")).toThrow(UnsupportedGenerationAgentError);
   });
 });
 

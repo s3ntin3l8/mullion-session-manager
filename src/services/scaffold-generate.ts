@@ -410,7 +410,19 @@ export type SpawnGenerationTurn = (opts: SpawnGenerationTurnOptions) => Promise<
  * a future change to this module's own prompt ever asks the agent to
  * write anything, this reasoning no longer holds and `--mode accept-edits`
  * would need to be re-evaluated the same way. */
-function buildInvocation(agentCommand: string, prompt: string): { bin: string; args: string[] } {
+// Hermes review, PR #1152 — exported (was module-private) so the exact
+// argv can be pinned by a real, CI-enforced unit test rather than relying
+// solely on the agy-gated e2e (test/e2e/scaffold-generate-agy.e2e.test.ts),
+// which skips wherever agy isn't installed, including CI's own test-e2e
+// job. Issue #1130's whole bug was a subtle argv mistake (a bare `-p`
+// swallowing the next token as its own prompt) that this module's own
+// mocked-spawn tests couldn't have caught either — a plain equality
+// assertion on this function's return value closes that gap for any
+// future accidental reorder/typo.
+export function buildInvocation(
+  agentCommand: string,
+  prompt: string,
+): { bin: string; args: string[] } {
   switch (agentCommand) {
     case "claude":
       return {
