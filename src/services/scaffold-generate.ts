@@ -353,6 +353,17 @@ export interface SpawnGenerationTurnOptions {
   cwd: string;
   prompt: string;
   timeoutMs: number;
+  /** Issue #1133 — whether bwrap sandboxing may be applied at all, from
+   * `MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED` on whichever host actually
+   * spawns this turn. Optional and defaults to `true` (sandboxing stays
+   * mandatory unless a caller explicitly opts out) so every existing
+   * caller/test that predates this field keeps its current behavior
+   * unchanged. `false` does NOT mean "bwrap is unusable" — it means the
+   * wrap is skipped even when bwrap IS usable; `defaultSpawnGenerationTurn`
+   * treats the two as the same "not sandboxed" outcome for the agy
+   * fail-closed guard below, but keeps the two apart in its own error
+   * message. */
+  sandbox?: boolean;
 }
 
 export type SpawnGenerationTurn = (opts: SpawnGenerationTurnOptions) => Promise<string>;
@@ -771,6 +782,7 @@ export const defaultSpawnGenerationTurn: SpawnGenerationTurn = async ({
   cwd,
   prompt,
   timeoutMs,
+  sandbox,
 }) => {
   const { bin, args } = buildInvocation(agentCommand, prompt);
   // `cwd` here is always the scratch generation worktree (see
@@ -786,7 +798,16 @@ export const defaultSpawnGenerationTurn: SpawnGenerationTurn = async ({
   // failed to mount something" from "the agent CLI genuinely errored" isn't
   // reliably decidable from an exit code/stderr alone, so no such retry is
   // attempted here — a known, accepted limitation, not an oversight.
-  const sandboxUsable = await isSandboxCapable();
+  //
+  // Issue #1133 — `sandbox ?? true` is the config opt-out
+  // (MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED). Short-circuits BEFORE
+  // calling `isSandboxCapable()` when explicitly disabled: there is no
+  // reason to pay for a real bwrap smoke-test probe (and no reason to log
+  // its "bwrap is not usable" warning, which would be misleading here —
+  // bwrap may well be usable, sandboxing was just turned off) when the
+  // result would be discarded either way.
+  const sandboxRequested = sandbox ?? true;
+  const sandboxUsable = sandboxRequested ? await isSandboxCapable() : false;
   // Hermes review, PR #1152 — `--dangerously-skip-permissions` (added to
   // agy's own argv above, issue #1130) is the only flag here that GRANTS
   // tool access rather than restricting it; claude's `--allowedTools` and
@@ -805,12 +826,26 @@ export const defaultSpawnGenerationTurn: SpawnGenerationTurn = async ({
   // header — but that is pre-existing and untouched by #1130; tracked
   // separately rather than folded into this fix.)
   if (!sandboxUsable && agentCommand === "agy") {
+    // Issue #1133 — this guard fires identically whether bwrap is merely
+    // unusable OR sandboxing was explicitly opted out via
+    // MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED=false: the opt-out is not
+    // an escape hatch for agy specifically, since bwrap is its only
+    // containment once --dangerously-skip-permissions is set (this
+    // module's own header). The message is reason-aware purely so an
+    // operator who deliberately set the opt-out isn't told to go install
+    // bwrap.
+    const reason = sandboxRequested
+      ? "bwrap is not usable on this host"
+      : "sandboxing was explicitly disabled (MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED=false)";
     throw new GenerationSpawnError(
       agentCommand,
-      "agy requires a usable bwrap sandbox for scaffold generation — without it, " +
-        "--dangerously-skip-permissions (needed for agy to read the repo at all) would " +
+      `agy requires a usable bwrap sandbox for scaffold generation — ${reason}, and without ` +
+        "it, --dangerously-skip-permissions (needed for agy to read the repo at all) would " +
         "leave it with full write/exec access as the server user and no CLI-level " +
-        "restriction to fall back on. Install/enable bwrap on this host to use agy here.",
+        "restriction to fall back on. " +
+        (sandboxRequested
+          ? "Install/enable bwrap on this host to use agy here."
+          : "Re-enable sandboxing on this host (or use a different agent) to use agy here."),
     );
   }
   let invocation = { bin, args };
@@ -865,6 +900,13 @@ export interface RunGenerationTurnInScratchWorktreeOptions {
   agentCommand: string;
   prompt: string;
   timeoutMs: number;
+  /** Issue #1133 — forwarded verbatim to `spawn`'s own `sandbox` option;
+   * see `SpawnGenerationTurnOptions.sandbox`'s doc comment. Each caller
+   * (the primary for a LOCAL_HOST_ID project, `/internal/run-generation-turn`'s
+   * agent-side handler for a remote one) resolves this from ITS OWN
+   * `app.config.MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED` before calling
+   * in — this function has no `app` to read that from itself. */
+  sandbox?: boolean;
   /** Test-only seam — production always omits this and gets
    * `defaultSpawnGenerationTurn`. Never settable over the wire: the new
    * `/internal/run-generation-turn` route (issue #1101) always omits it
@@ -943,6 +985,7 @@ export async function runGenerationTurnInScratchWorktree(
       cwd: worktreePath,
       prompt: opts.prompt,
       timeoutMs: opts.timeoutMs,
+      sandbox: opts.sandbox,
     });
   } finally {
     await removeWorktree(worktreePath, opts.cwd);
@@ -969,6 +1012,17 @@ export interface GenerateScaffoldContentOptions {
   hasReviewer: boolean;
   hasBriefingRegion: boolean;
   timeoutMs?: number;
+  /** Issue #1133 — LOCAL_HOST_ID only. The route resolves this from ITS
+   * OWN `app.config.MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED` and passes
+   * it in (`opts.app` here is only ever used for `resolveHostBaseRef`/
+   * `viaRemote`, never read directly by this function — see the
+   * `fakeApp`/"never touched on the LOCAL_HOST_ID path" comment on this
+   * function's own test suite). For a remote host, this is deliberately
+   * NOT forwarded — `/internal/run-generation-turn`'s agent-side handler
+   * reads the REMOTE agent's own config instead, the same "each host reads
+   * its own app.config" split `RunGenerationTurnInScratchWorktreeOptions.sandbox`'s
+   * doc comment describes. */
+  sandbox?: boolean;
   /** Test-only seam, and LOCAL_HOST_ID only (see
    * `RunGenerationTurnInScratchWorktreeOptions.spawn`'s own doc comment for
    * why it can't and doesn't extend to a remote host) — production always
@@ -1021,6 +1075,7 @@ export async function generateScaffoldContent(
       agentCommand: opts.agentCommand,
       prompt,
       timeoutMs,
+      sandbox: opts.sandbox,
       spawn: opts.spawn,
     });
   } else {

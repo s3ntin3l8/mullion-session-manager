@@ -927,6 +927,47 @@ describe("defaultSpawnGenerationTurn — agy fails closed without a usable sandb
       expect((err as Error).message).not.toMatch(/requires a usable bwrap sandbox/);
     }
   });
+
+  // Issue #1133 — MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED=false is NOT an
+  // escape hatch for agy: this guard must fire identically whether bwrap is
+  // merely unusable (above) or sandboxing was explicitly opted out, since
+  // bwrap is agy's only containment once --dangerously-skip-permissions is
+  // set (this module's own header). `cwd` stays nonexistent so this never
+  // reaches a real spawn, the same way the tests above do.
+  it("still fails closed for agy when the sandbox opt-out is set, even though bwrap IS capable", async () => {
+    await isSandboxCapable(async () => true);
+
+    const err: unknown = await defaultSpawnGenerationTurn({
+      agentCommand: "agy",
+      cwd: "/nonexistent/scratch-worktree",
+      prompt: "irrelevant — this must fail before any spawn is attempted",
+      timeoutMs: 5000,
+      sandbox: false,
+    }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(GenerationSpawnError);
+    expect((err as Error).message).toMatch(/requires a usable bwrap sandbox/);
+    expect((err as Error).message).toMatch(/explicitly disabled/);
+  });
+
+  // The inverse: when sandbox is left at its default (true) and bwrap IS
+  // capable, agy must proceed PAST this guard — it reaches a real
+  // bwrap-wrapped execFile call instead, which fails for the unrelated
+  // reason of a nonexistent cwd (same signal the "does NOT fail closed"
+  // test above uses), never this guard's own message.
+  it("does NOT fail closed for agy when sandbox defaults to enabled and bwrap IS capable", async () => {
+    await isSandboxCapable(async () => true);
+
+    const err: unknown = await defaultSpawnGenerationTurn({
+      agentCommand: "agy",
+      cwd: "/nonexistent/scratch-worktree",
+      prompt: "x",
+      timeoutMs: 1000,
+    }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(GenerationSpawnError);
+    expect((err as Error).message).not.toMatch(/requires a usable bwrap sandbox/);
+  });
 });
 
 // Live/integration: actually runs the real default probe (no injected
