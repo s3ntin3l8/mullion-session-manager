@@ -1,5 +1,6 @@
 import type { Terminal } from "@xterm/xterm";
 import type { AppSettings } from "../api/index.js";
+import { matchesChord, type KeyChord } from "./keyChord.js";
 
 // Extracted verbatim from TerminalPane.tsx (PR 35, Wave 6 of
 // .claude/plans/can-we-do-a-warm-cocke.md) — the key-conflict handler,
@@ -94,24 +95,29 @@ export function attachKeyConflictHandler(opts: {
   // Opens (and focuses) the scrollback find bar on Ctrl+Shift+F — see the
   // handler branch below for why that chord and not bare Ctrl+F.
   onToggleFind?: () => void;
-  // Voice dictation (push-to-talk) settings gate — a live getter for the
-  // same reason getClipboardKeys above is one: this handler is re-attached
-  // from three separate effects (mount, captureCtrlC sync, settings sync),
-  // and a captured boolean would go stale the moment the user toggled
-  // Settings -> Terminal -> "Dictation hotkey" without a full remount.
-  // Deliberately its own toggle, not folded into `reservedKeys` above:
-  // reservedKeys is "take this browser-reserved key away from the browser
-  // and give it to the terminal program," voice dictation is an opt-in
-  // Mullion-level feature with nothing to do with what the foreground CLI
-  // itself would otherwise receive.
-  getVoiceHotkey?: () => boolean;
-  // Fires on the hotkey's keydown (Ctrl+Shift+Space) — see the branch below
-  // for the chord rationale. Deliberately keydown-only: this handler only
-  // ever sees the FOCUSED terminal's own keydown, but a push-to-talk hold
-  // can outlast that focus (the user tabs away, or a dialog steals it), so
-  // the matching release is TerminalPane's own responsibility via a
-  // `window` keyup listener installed only for the duration of the hold —
-  // see that file's own comment for why keydown/keyup are asymmetric here.
+  // Voice dictation (push-to-talk) chord gate — a live getter for the same
+  // reason getClipboardKeys above is one: this handler is re-attached from
+  // three separate effects (mount, captureCtrlC sync, settings sync), and a
+  // captured value would go stale the moment the user toggled Settings ->
+  // Terminal -> "Dictation hotkey" (or rebound the combo itself) without a
+  // full remount. Returns null when voice dictation or the hotkey toggle is
+  // off — the getter itself is the enablement gate, not a separate boolean,
+  // so there's exactly one thing to go stale instead of two that could
+  // disagree. Deliberately its own toggle, not folded into `reservedKeys`
+  // above: reservedKeys is "take this browser-reserved key away from the
+  // browser and give it to the terminal program," voice dictation is an
+  // opt-in Mullion-level feature with nothing to do with what the
+  // foreground CLI itself would otherwise receive. The caller (TerminalPane)
+  // is expected to parse the stored chord string once, not on every call —
+  // see its own comment on why this is on xterm's hot path.
+  getVoiceChord?: () => KeyChord | null;
+  // Fires on the chord's keydown — see the branch below for why matching
+  // happens here. Deliberately keydown-only: this handler only ever sees
+  // the FOCUSED terminal's own keydown, but a push-to-talk hold can outlast
+  // that focus (the user tabs away, or a dialog steals it), so the matching
+  // release is TerminalPane's own responsibility via a `window` keyup
+  // listener installed only for the duration of the hold — see that file's
+  // own comment for why keydown/keyup are asymmetric here.
   onVoicePress?: () => void;
 }): void {
   const {
@@ -122,7 +128,7 @@ export function attachKeyConflictHandler(opts: {
     captureCtrlC,
     getClipboardKeys,
     onToggleFind,
-    getVoiceHotkey,
+    getVoiceChord,
     onVoicePress,
   } = opts;
   term.attachCustomKeyEventHandler((event) => {
@@ -154,28 +160,21 @@ export function attachKeyConflictHandler(opts: {
         onPaste?.();
         return false;
       }
-      // Voice dictation push-to-talk — Ctrl+Shift+Space. No shell or TUI
-      // binds this combination (plain Ctrl+Space / emacs set-mark both stay
-      // reachable unshifted), and it isn't claimed by any major browser at
-      // the chrome level either, the same two properties Ctrl+Shift+F below
-      // was chosen for. event.code, not event.key, so this still matches
-      // regardless of keyboard layout or IME state. event.repeat is
+      // Voice dictation push-to-talk. The chord is user-configurable
+      // (#1119 — the shipped default, Ctrl+Shift+Space, turned out to
+      // collide with 1Password's Quick Access default on Windows/Linux),
+      // via keyChord.ts's matchesChord using exact modifier equality —
+      // matching how every other chord in this file spells out its negated
+      // modifiers rather than accepting "at least these". event.repeat is
       // excluded so a physically-held key doesn't call onVoicePress on
       // every OS key-repeat tick — TerminalPane's own idempotent
       // press-while-already-held guard would no-op those anyway, but
-      // filtering here keeps the intent explicit at the source. Gated by
-      // its own settings toggle (getVoiceHotkey), not folded into the
-      // shared `reservedKeys` set above — see that param's own doc comment
-      // for why.
-      if (
-        event.ctrlKey &&
-        event.shiftKey &&
-        !event.metaKey &&
-        !event.altKey &&
-        event.code === "Space" &&
-        !event.repeat &&
-        getVoiceHotkey?.()
-      ) {
+      // filtering here keeps the intent explicit at the source. getVoiceChord
+      // returning null (voice or the hotkey toggle off) is the enablement
+      // gate; not folded into the shared `reservedKeys` set above — see that
+      // param's own doc comment for why.
+      const voiceChord = getVoiceChord?.();
+      if (voiceChord && !event.repeat && matchesChord(event, voiceChord)) {
         event.preventDefault();
         onVoicePress?.();
         return false;

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Settings } from "../../Settings.js";
 import { useDashboardStore } from "../../store/index.js";
@@ -78,6 +78,91 @@ describe("Settings -> Terminal -> Voice dictation", () => {
     // (store/slices/ui.ts) merges an in-flight pendingPatch across calls,
     // so an unflushed patch left behind here would otherwise bleed into
     // the next test's own PATCH body assertion.
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/settings",
+        expect.objectContaining({
+          method: "PATCH",
+          body: JSON.stringify({ terminal: { voice: { hotkeyEnabled: false } } }),
+        }),
+      ),
+    );
+  });
+
+  it("renders the current hotkey chord and captures a new one into a PATCH (#1119)", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="terminal" />);
+
+    await screen.findByText("Hotkey combo");
+    expect(screen.getByText("Ctrl + Shift + Space")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Record dictation hotkey" }));
+    expect(screen.getByText("Press a combo…")).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { code: "Comma", ctrlKey: true, shiftKey: true, key: "," });
+
+    expect(useDashboardStore.getState().settings.terminal.voice.hotkey).toBe("Ctrl+Shift+Comma");
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/settings",
+        expect.objectContaining({
+          method: "PATCH",
+          body: JSON.stringify({ terminal: { voice: { hotkey: "Ctrl+Shift+Comma" } } }),
+        }),
+      ),
+    );
+  });
+
+  it("rejects a chord already claimed by the find bar and shows why, without patching", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="terminal" />);
+
+    await screen.findByText("Hotkey combo");
+    await user.click(screen.getByRole("button", { name: "Record dictation hotkey" }));
+
+    fireEvent.keyDown(window, { code: "KeyF", ctrlKey: true, shiftKey: true, key: "f" });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("scrollback find bar");
+    expect(useDashboardStore.getState().settings.terminal.voice.hotkey).toBe("Ctrl+Shift+Space");
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      "/api/settings",
+      expect.objectContaining({ method: "PATCH" }),
+    );
+  });
+
+  it("Escape after a rejected combo clears the stale error, not just the capture state", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="terminal" />);
+
+    await screen.findByText("Hotkey combo");
+    await user.click(screen.getByRole("button", { name: "Record dictation hotkey" }));
+    fireEvent.keyDown(window, { code: "KeyF", ctrlKey: true, shiftKey: true, key: "f" });
+    expect(await screen.findByRole("alert")).toHaveTextContent("scrollback find bar");
+
+    fireEvent.keyDown(window, { code: "Escape", key: "Escape" });
+
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    // Back to showing the unchanged stored chord, not stuck on "Press a combo…".
+    expect(screen.getByText("Ctrl + Shift + Space")).toBeInTheDocument();
+  });
+
+  it("turning off the hotkey toggle mid-error clears the stale error under the now-disabled field", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="terminal" />);
+
+    await screen.findByText("Hotkey combo");
+    await user.click(screen.getByRole("button", { name: "Record dictation hotkey" }));
+    fireEvent.keyDown(window, { code: "KeyF", ctrlKey: true, shiftKey: true, key: "f" });
+    expect(await screen.findByRole("alert")).toHaveTextContent("scrollback find bar");
+
+    await user.click(screen.getByRole("button", { name: "Dictation hotkey" }));
+
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Record dictation hotkey" })).toBeDisabled();
+
+    // Waited out, same reason as the "toggling the hotkey off" test above —
+    // an unflushed debounced PATCH here would otherwise bleed into the next
+    // test's own PATCH body assertion.
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
         "/api/settings",

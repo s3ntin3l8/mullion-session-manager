@@ -12,7 +12,7 @@ import { ImageIcon, KillIcon, RefreshIcon, WifiOffIcon } from "./ui/icons.js";
 import { Spinner } from "./ui/Spinner.js";
 import { useDashboardStore } from "./store/index.js";
 import { buildXtermTheme, getSchemeBackground } from "./terminalTheme.js";
-import { api } from "./api/index.js";
+import { api, DEFAULT_VOICE_CHORD } from "./api/index.js";
 import {
   registerTerminalRepaint,
   repaintAllTerminals,
@@ -28,6 +28,7 @@ import {
   SEARCH_HIGHLIGHT_LIMIT,
 } from "./lib/terminalKeys.js";
 import { attachTerminalTouchScroll } from "./lib/terminalTouchScroll.js";
+import { parseChord, type KeyChord } from "./lib/keyChord.js";
 import { computeFitFontSize } from "./lib/terminalFontFit.js";
 import { useCoarsePointer } from "./lib/layoutTier.js";
 import { useTerminalSearch } from "./hooks/useTerminalSearch.js";
@@ -337,6 +338,16 @@ export function TerminalPane(props: {
   // construction, so e.g. a reconnect that happens minutes into a session
   // uses whatever maxAttempts is current, not whatever was true at mount.
   const prefsRef = useRef(terminalSettings);
+  // The voice hotkey chord, parsed once (not on every keystroke —
+  // attachKeyConflictHandler's getVoiceChord getter is called from
+  // xterm's attachCustomKeyEventHandler hot path, so re-parsing
+  // prefsRef.current.voice.hotkey there would mean parsing a string on
+  // every key typed into every terminal pane). Re-parsed only where
+  // prefsRef.current itself is reassigned — see the settings-sync effect
+  // below.
+  const voiceChordRef = useRef<KeyChord>(
+    parseChord(terminalSettings.voice.hotkey) ?? DEFAULT_VOICE_CHORD,
+  );
   const pasteHandlerRef = useRef<() => void>(() => {});
   const copyHandlerRef = useRef<() => Promise<boolean>>(() => Promise.resolve(false));
   // Implementation lives in the mount effect (it owns the window
@@ -512,10 +523,12 @@ export function TerminalPane(props: {
       captureCtrlC: captureCtrlCRef.current,
       getClipboardKeys: () => prefsRef.current.clipboardKeys,
       onToggleFind: openFind,
-      getVoiceHotkey: () =>
+      getVoiceChord: () =>
         voiceControllerRef.current.isSupported &&
         prefsRef.current.voice.enabled &&
-        prefsRef.current.voice.hotkeyEnabled,
+        prefsRef.current.voice.hotkeyEnabled
+          ? voiceChordRef.current
+          : null,
       onVoicePress: () => voiceHotkeyPressRef.current(),
     });
     // Note: no separate "wait for the web font to load, then re-fit" step
@@ -947,8 +960,8 @@ export function TerminalPane(props: {
       pasteToTerminal(text);
     };
 
-    // Voice dictation hotkey (Ctrl+Shift+Space) hold-tracking. Keydown is
-    // handled by attachKeyConflictHandler above (all three call sites route
+    // Voice dictation hotkey hold-tracking. Keydown is handled by
+    // attachKeyConflictHandler above (all three call sites route
     // onVoicePress through voiceHotkeyPressRef, assigned here) — release is
     // deliberately NOT handled there. attachCustomKeyEventHandler only ever
     // sees the FOCUSED terminal's own keydown/keyup, but a physical hold can
@@ -963,18 +976,24 @@ export function TerminalPane(props: {
     // a hotkey hold AND a tap-latched mic-button dictation alike; this
     // handler only needs to cover the ordinary "keyup arrives somewhere
     // other than the terminal" case.)
-    let voiceHotkeyHeld = false;
+    //
+    // Tracks the held key's *code*, not a boolean, and captures it at press
+    // time (#1119 — the chord is now user-configurable). The keyup listener
+    // deliberately can't re-test the full chord — see pushToTalk.ts's own
+    // comment: a user can lift Ctrl before the key, at which point this
+    // keyup event reports ctrlKey: false, and re-testing the chord here
+    // would miss the release entirely. Capturing the code at press (rather
+    // than re-reading voiceChordRef.current on every keyup) means a settings
+    // edit mid-hold can't strand a listening session waiting for a keyup
+    // that will now never match.
+    let voiceHotkeyHeldCode: string | null = null;
     function stopVoiceHotkeyHold(): void {
-      if (!voiceHotkeyHeld) return;
-      voiceHotkeyHeld = false;
+      if (voiceHotkeyHeldCode === null) return;
+      voiceHotkeyHeldCode = null;
       window.removeEventListener("keyup", onVoiceHotkeyKeyup);
     }
     function onVoiceHotkeyKeyup(event: KeyboardEvent): void {
-      // event.code alone, deliberately not the full chord — see
-      // pushToTalk.ts's own comment: a user can lift Ctrl before Space, at
-      // which point this keyup event reports ctrlKey: false, and
-      // re-testing the chord here would miss the release entirely.
-      if (event.code !== "Space") return;
+      if (event.code !== voiceHotkeyHeldCode) return;
       stopVoiceHotkeyHold();
       voiceControllerRef.current.release();
     }
@@ -983,8 +1002,8 @@ export function TerminalPane(props: {
       // guard here too means a duplicate press (e.g. two attach sites
       // somehow both firing for one physical keydown) can never register a
       // second press() on top of an already-listening dictation.
-      if (voiceHotkeyHeld) return;
-      voiceHotkeyHeld = true;
+      if (voiceHotkeyHeldCode !== null) return;
+      voiceHotkeyHeldCode = voiceChordRef.current.code;
       voiceControllerRef.current.press();
       window.addEventListener("keyup", onVoiceHotkeyKeyup);
     };
@@ -1371,7 +1390,7 @@ export function TerminalPane(props: {
       voiceInsertRef.current = () => {};
       // Drops any window/document listeners left by an in-progress hold —
       // without this, unmounting mid-hold (e.g. closing the pane while
-      // still holding Ctrl+Shift+Space) would leak a keyup/blur/
+      // still holding the voice hotkey) would leak a keyup/blur/
       // visibilitychange/pagehide listener referencing this closure's own
       // (now-stale) `term`/voiceControllerRef forever. Deliberately does
       // NOT call voiceControllerRef.current.release() — useVoiceDictation's
@@ -1401,10 +1420,12 @@ export function TerminalPane(props: {
       captureCtrlC: props.captureCtrlC,
       getClipboardKeys: () => prefsRef.current.clipboardKeys,
       onToggleFind: openFind,
-      getVoiceHotkey: () =>
+      getVoiceChord: () =>
         voiceControllerRef.current.isSupported &&
         prefsRef.current.voice.enabled &&
-        prefsRef.current.voice.hotkeyEnabled,
+        prefsRef.current.voice.hotkeyEnabled
+          ? voiceChordRef.current
+          : null,
       onVoicePress: () => voiceHotkeyPressRef.current(),
     });
     // `openFind` (from useTerminalSearch) only closes over stable refs/
@@ -1427,6 +1448,10 @@ export function TerminalPane(props: {
   // against it.
   useEffect(() => {
     prefsRef.current = terminalSettings;
+    // Re-parsed here, not in getVoiceChord itself — see voiceChordRef's own
+    // comment on why that getter must stay a cheap ref read on xterm's
+    // per-keystroke hot path.
+    voiceChordRef.current = parseChord(terminalSettings.voice.hotkey) ?? DEFAULT_VOICE_CHORD;
     const term = termRef.current;
     if (!term) return;
 
@@ -1473,10 +1498,12 @@ export function TerminalPane(props: {
       captureCtrlC: captureCtrlCRef.current,
       getClipboardKeys: () => prefsRef.current.clipboardKeys,
       onToggleFind: openFind,
-      getVoiceHotkey: () =>
+      getVoiceChord: () =>
         voiceControllerRef.current.isSupported &&
         prefsRef.current.voice.enabled &&
-        prefsRef.current.voice.hotkeyEnabled,
+        prefsRef.current.voice.hotkeyEnabled
+          ? voiceChordRef.current
+          : null,
       onVoicePress: () => voiceHotkeyPressRef.current(),
     });
 
