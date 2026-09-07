@@ -70,8 +70,35 @@ export function mockChildProcessSpawn(
       return actual.spawn(command, args as string[], options as ChildProcess.SpawnOptions);
     }
 
-    const ee = new EventEmitter();
-    setImmediate(() => ee.emit(event, exitCode));
+    // Assigned synchronously, not inside the setImmediate below — a real
+    // child_process's `.stdout` is available immediately at construction,
+    // before any data ever arrives on it; a caller reading `child.stdout`
+    // synchronously right after this returns must see a real EventEmitter
+    // here too, not `undefined` (Hermes review, this PR).
+    const ee = new EventEmitter() as EventEmitter & { stdout?: EventEmitter };
+    ee.stdout = new EventEmitter();
+    setImmediate(() => {
+      ee.emit(event, exitCode);
+      // Issue #1140 — a real child_process always eventually fires 'close'
+      // (once its stdio streams end) whether or not something also fired
+      // 'exit', and session-process.ts's list-units-based calls
+      // (listOwnedScopes, used by stopScope/isMasterAlive/
+      // isMasterAliveBatch/listSessionProcesses) deliberately wait on
+      // 'close', not 'exit' — the exact stdout-delivery race their own doc
+      // comments describe. Before this, this generic fake only ever fired
+      // ONE configurable event (`event`, default "exit") and never a
+      // `stdout` stream at all, so any command routed through here that a
+      // caller expected to resolve via 'close' hung forever until this
+      // suite's 20s testTimeout. Firing 'close' too (with an empty, valid
+      // stdout stream — "no output" is itself a legitimate, safely-parsed
+      // reply for a list-units-shaped call) fixes that unconditionally,
+      // without changing when/whether `event` itself fires for any
+      // existing assertion built around it. Guarded so a caller that
+      // explicitly asked for `event: "close"` doesn't get it fired twice.
+      if (event !== "close") {
+        setImmediate(() => ee.emit("close", exitCode));
+      }
+    });
     return ee;
   });
 

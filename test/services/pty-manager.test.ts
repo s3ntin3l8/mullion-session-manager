@@ -86,19 +86,32 @@ vi.mock("../../src/services/bundle-sync.js", () => ({
   isBundleSyncedFor: () => false,
 }));
 
-// Maps a scope unit name (e.g. "crs-session-1.scope") to the `systemctl
-// is-active` reply isMasterAlive() should see for it; defaults to "active"
-// for units not explicitly configured, so tests unrelated to isMasterAlive
-// don't need to care about it.
-const isActiveReplies: Record<string, string> = {};
-
-// Perf audit finding B8(2) — the fake `systemctl --user list-units` reply
-// isMasterAliveBatch() should see: a list of unit names to report as
-// active, in the real `--plain --no-legend` output shape. Defaults to
-// empty (nothing active) so tests unrelated to isMasterAliveBatch don't
-// need to care about it, mirroring isActiveReplies' own default-fallback
-// convention above.
+// Issue #1140 (PR 1) — the fake `systemctl --user list-units` reply every
+// session-process.ts function now goes through (isMasterAlive/
+// isMasterAliveBatch, and terminate()'s stopScope): raw `--plain
+// --no-legend` output LINES, not just unit names — ownership is resolved
+// from each row's Description (the dtach socket path), not from the unit
+// name alone, so a fixture has to render a real-shaped Description. Defaults
+// to empty (nothing owned/active) so tests unrelated to this don't need to
+// care about it. See ownedLine() below, this file's own equivalent of
+// session-process.test.ts's identical helper.
 let listUnitsReply: string[] = [];
+
+// "UNIT LOAD ACTIVE SUB DESCRIPTION" — the real `--plain --no-legend` shape.
+function scopeLine(unit: string, description: string, state = "active"): string {
+  return `${unit} loaded ${state} running ${description}`;
+}
+
+// A row for `id`'s scope whose socket resolves under `dir` (defaults to
+// this suite's own per-test sessionsDir) — the shape stopScope/
+// isMasterAlive/isMasterAliveBatch now require to treat a unit as this
+// instance's own.
+function ownedLine(id: string, dir: string): string {
+  return scopeLine(
+    `crs-session-${id}.scope`,
+    `/usr/bin/dtach -n ${dir}/${id}.sock /usr/bin/zsh -lc bash`,
+  );
+}
 
 // Issue #1137 — the fake `systemctl --user show <unit> -p Description -p
 // ActiveState` reply describeScope() should see, keyed by unit name.
@@ -115,31 +128,16 @@ vi.mock("node:child_process", async (importOriginal) => {
     ...actual,
     spawn: vi.fn((file: string, args: string[]) => {
       const ee = new EventEmitter() as EventEmitter & { stdout?: EventEmitter };
-      if (file === "systemctl" && args[1] === "is-active") {
-        ee.stdout = new EventEmitter();
-        const unit = args[2];
-        const reply = isActiveReplies[unit] ?? "active";
-        // 'exit' fires before 'data'/'close' — the exact real race
-        // isMasterAlive() must resolve off 'close' to survive; see its own
-        // doc comment and agent-detect.ts's probe() for the live bug this
-        // guards against.
-        setImmediate(() => {
-          ee.emit("exit", 0);
-          setImmediate(() => {
-            ee.stdout?.emit("data", Buffer.from(`${reply}\n`));
-            ee.emit("close", 0);
-          });
-        });
-        return ee;
-      }
       if (file === "systemctl" && args[1] === "list-units") {
         ee.stdout = new EventEmitter();
+        // 'exit' fires before 'data'/'close' — the exact real race
+        // isMasterAlive()/isMasterAliveBatch() must resolve off 'close' to
+        // survive; see their own doc comments and agent-detect.ts's
+        // probe() for the live bug this guards against.
         setImmediate(() => {
           ee.emit("exit", 0);
           setImmediate(() => {
-            const lines = listUnitsReply
-              .map((unit) => `${unit} loaded active running ${unit}`)
-              .join("\n");
+            const lines = listUnitsReply.join("\n");
             ee.stdout?.emit("data", Buffer.from(lines ? `${lines}\n` : ""));
             ee.emit("close", 0);
           });
@@ -224,7 +222,6 @@ describe("PtyManager", () => {
 
   beforeEach(() => {
     fakePtyChildren.length = 0;
-    for (const key of Object.keys(isActiveReplies)) delete isActiveReplies[key];
     for (const key of Object.keys(showReplies)) delete showReplies[key];
     listUnitsReply = [];
     // mkdtempSync, not a hand-rolled random suffix: the OS's own atomic,
@@ -284,7 +281,7 @@ describe("PtyManager", () => {
     // "unknown" outcome directly and assert on spawnInternal()'s reaction to
     // it — the same "assert on the SUT's behavior, not on OS plumbing"
     // approach the rest of this file already uses for `systemctl` replies
-    // via isActiveReplies.
+    // via listUnitsReply.
     const unixSocketModule = await import("../../src/services/unix-socket.js");
     const socketFilePath = path.join(sessionsDir, "1.sock");
     fs.writeFileSync(socketFilePath, "");
@@ -1789,6 +1786,12 @@ describe("PtyManager", () => {
     });
     await waitForSpawn(session);
 
+    // Issue #1140 (PR 1) — terminate()'s stopScope() now confirms ownership
+    // via a listing before stopping anything; without a matching row here it
+    // would correctly no-op (see the "never stops another instance's scope"
+    // coverage in session-process.test.ts) rather than stop blindly.
+    listUnitsReply = [ownedLine("1", sessionsDir)];
+
     await manager.terminate("1");
 
     expect(fakePtyChildren[0].killed).toBe(true);
@@ -1806,6 +1809,8 @@ describe("PtyManager", () => {
   it("terminate() stops the scope even when the session was never tracked in this process", async () => {
     // Simulates deleting a session in a fresh process that hasn't re-attached
     // to it yet — the real gap found during M2's E2E verification.
+    listUnitsReply = [ownedLine("42", sessionsDir)];
+
     await manager.terminate("42");
 
     expect(vi.mocked(spawnChildProcess)).toHaveBeenCalledWith(
@@ -1813,6 +1818,31 @@ describe("PtyManager", () => {
       ["--user", "stop", "crs-session-42.scope"],
       expect.objectContaining({ stdio: "ignore" }),
     );
+  });
+
+  // Issue #1140 (PR 1) — the OTHER half of #1137: terminate() must never
+  // stop a scope it hasn't confirmed this instance owns, even when the
+  // legacy unit name matches — that would kill a live session belonging to
+  // a DIFFERENT Mullion instance on the same host.
+  it("terminate() does not stop a same-named scope owned by a different instance's sessionsDir", async () => {
+    listUnitsReply = [ownedLine("1", "/some/other/instances/sessions")];
+
+    // spawnChildProcess is a module-level mock shared across this whole
+    // test file (not reset per-test — see the A10 test above's identical
+    // note) — snapshot the call count first and only inspect calls made by
+    // THIS test, since an earlier test's own legitimate
+    // `systemctl stop crs-session-1.scope` call would otherwise still be
+    // sitting in the full cross-test history and produce a false pass here.
+    const callsBefore = vi.mocked(spawnChildProcess).mock.calls.length;
+
+    await manager.terminate("1");
+
+    const callsDuringThisTest = vi.mocked(spawnChildProcess).mock.calls.slice(callsBefore);
+    expect(callsDuringThisTest).not.toContainEqual([
+      "systemctl",
+      ["--user", "stop", "crs-session-1.scope"],
+      expect.anything(),
+    ]);
   });
 
   // A8 — state-file lifecycle: lost on restart, resurrected on delete.
@@ -2016,25 +2046,37 @@ describe("PtyManager", () => {
   });
 
   describe("isMasterAlive", () => {
-    it("resolves true when the scope is active", async () => {
-      isActiveReplies["crs-session-1.scope"] = "active";
+    it("resolves true when this instance's scope for the id is owned and listed", async () => {
+      listUnitsReply = [ownedLine("1", sessionsDir)];
       await expect(manager.isMasterAlive("1")).resolves.toBe(true);
+      // A single list-units spawn, not a per-unit is-active spawn — issue
+      // #1140 (PR 1): isMasterAlive is now a thin wrapper over
+      // isMasterAliveBatch, which needs the same ownership-by-socket-path
+      // listing either way. See session-process.test.ts for the dedicated,
+      // exhaustive coverage of this; these tests just confirm PtyManager's
+      // own delegating method threads sessionsDir/instanceId through.
       expect(vi.mocked(spawnChildProcess)).toHaveBeenCalledWith(
         "systemctl",
-        ["--user", "is-active", "crs-session-1.scope"],
+        [
+          "--user",
+          "list-units",
+          "--type=scope",
+          "--state=active,deactivating",
+          "--no-legend",
+          "--plain",
+          "crs-session-*.scope",
+        ],
         expect.objectContaining({ stdio: ["ignore", "pipe", "ignore"] }),
       );
     });
 
-    it("resolves false when the scope is inactive (program exited on its own)", async () => {
-      isActiveReplies["crs-session-1.scope"] = "inactive";
+    it("resolves false when nothing in the listing claims this id", async () => {
+      listUnitsReply = [];
       await expect(manager.isMasterAlive("1")).resolves.toBe(false);
     });
 
-    it("resolves false when the scope failed or never existed", async () => {
-      isActiveReplies["crs-session-1.scope"] = "failed";
-      await expect(manager.isMasterAlive("1")).resolves.toBe(false);
-      isActiveReplies["crs-session-1.scope"] = "unknown";
+    it("resolves false when a same-named scope belongs to a different instance's sessionsDir", async () => {
+      listUnitsReply = [ownedLine("1", "/some/other/instances/sessions")];
       await expect(manager.isMasterAlive("1")).resolves.toBe(false);
     });
 
@@ -2052,8 +2094,8 @@ describe("PtyManager", () => {
   // a single `systemctl --user list-units` spawn for the whole id batch,
   // instead of one `is-active` spawn per id.
   describe("isMasterAliveBatch", () => {
-    it("resolves true only for ids whose scope unit is in the active list", async () => {
-      listUnitsReply = ["crs-session-1.scope", "crs-session-3.scope"];
+    it("resolves true only for ids whose scope this instance owns", async () => {
+      listUnitsReply = [ownedLine("1", sessionsDir), ownedLine("3", sessionsDir)];
       await expect(manager.isMasterAliveBatch(["1", "2", "3"])).resolves.toEqual({
         "1": true,
         "2": false,
@@ -2062,7 +2104,7 @@ describe("PtyManager", () => {
     });
 
     it("spawns exactly one systemctl call for the whole batch, not one per id", async () => {
-      listUnitsReply = ["crs-session-1.scope", "crs-session-2.scope"];
+      listUnitsReply = [ownedLine("1", sessionsDir), ownedLine("2", sessionsDir)];
       vi.mocked(spawnChildProcess).mockClear();
       await manager.isMasterAliveBatch(["1", "2", "3", "4", "5"]);
       expect(vi.mocked(spawnChildProcess)).toHaveBeenCalledTimes(1);
