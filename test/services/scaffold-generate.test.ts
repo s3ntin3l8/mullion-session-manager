@@ -963,6 +963,7 @@ describe("defaultSpawnGenerationTurn — agy fails closed without a usable sandb
     expect((err as Error).message).toMatch(/explicitly disabled/);
   });
 
+
   // Issue #1133 — MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED=false is NOT an
   // escape hatch for agy: this guard must fire identically whether bwrap is
   // merely unusable (above) or sandboxing was explicitly opted out, since
