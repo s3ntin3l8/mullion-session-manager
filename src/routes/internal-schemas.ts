@@ -1,4 +1,5 @@
 import type { PromoteDecision } from "../plugins/hooks.js";
+import { DEFAULT_GENERATION_TIMEOUT_MS } from "../services/scaffold-generate.js";
 
 // The JSON Schema bodies/params for `internalRoutes` (internal.ts) — the
 // DB-less agent's own token-gated API. Extracted from internal.ts, which
@@ -559,6 +560,61 @@ export const gitCommitWipSchema = schemaFor({
   required: ["cwd"],
   optional: ["message"],
 });
+
+export interface RunGenerationTurnBody {
+  cwd: string;
+  slug: string;
+  baseRef: string;
+  agentCommand: string;
+  prompt: string;
+  timeoutMs: number;
+}
+
+// Issue #1101 — the agent-side counterpart of scaffold-generate.ts's
+// generateScaffoldContent/runGenerationTurnInScratchWorktree, for a
+// remote-hosted project's `/setup/generate`. Not built via schemaFor above
+// (a distinct field set from the cwd/path-shaped git primitives) — a plain
+// literal schema, same posture as bundleSyncRemoveSchema/
+// promoteDecisionSchema below.
+//
+// `prompt` maxLength: buildGenerationPrompt's own output (scaffold-
+// generate.ts) is dominated by a few KB of fixed instruction text plus up
+// to three DB-seed sections (skill/reviewerAgent/briefing), each already
+// capped at MAX_PROJECT_TOOLING_FIELD_BYTES/legacy-briefing size (8192
+// bytes — see spawnSessionSchema's own projectSkill/projectReviewerAgent/
+// briefingOverride fields above, the same save-time caps these seed values
+// were read from) — so a realistic worst case is ~3*8192 plus a few KB of
+// fixed text, comfortably under 32768. 65536 (64KiB) gives roughly 2x
+// headroom above that realistic worst case without being unbounded.
+//
+// `timeoutMs` maximum: bounded at DEFAULT_GENERATION_TIMEOUT_MS (5 minutes)
+// — the same value every current production caller already sends
+// (generateScaffoldContent's own `opts.timeoutMs ?? DEFAULT_GENERATION_TIMEOUT_MS`).
+// Without this, nothing would stop a future caller from forwarding a larger
+// value here while RemoteHostClient.resolveRunGenerationTurn's own network
+// timeout (GENERATION_TURN_REQUEST_TIMEOUT_MS, remote-host-client.ts — a
+// FIXED 420s, sized off this same 5-minute constant plus a fixed worktree/
+// network margin) stays put — the primary's own HTTP request could then
+// abort and report the host unreachable/the turn failed while the agent's
+// execFile call for THIS request was still legitimately running under its
+// own, larger budget. Capping the wire value at the same constant the
+// client's own timeout budget is derived from keeps that relationship
+// enforced structurally rather than by convention alone.
+export const runGenerationTurnSchema = {
+  body: {
+    type: "object",
+    required: ["cwd", "slug", "baseRef", "agentCommand", "prompt", "timeoutMs"],
+    additionalProperties: false,
+    properties: {
+      cwd: { type: "string", minLength: 1 },
+      slug: { type: "string", minLength: 1, maxLength: 64 },
+      baseRef: { type: "string", minLength: 1 },
+      agentCommand: { type: "string", minLength: 1 },
+      prompt: { type: "string", minLength: 1, maxLength: 65536 },
+      timeoutMs: { type: "integer", minimum: 1, maximum: DEFAULT_GENERATION_TIMEOUT_MS },
+    },
+  },
+};
 
 export interface BundleSyncRemoveBody {
   disabled: boolean;

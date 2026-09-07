@@ -5,6 +5,7 @@ import fs from "node:fs";
 import http from "node:http";
 import net from "node:net";
 import type { AddressInfo } from "node:net";
+import type * as ScaffoldGenerateModule from "../../src/services/scaffold-generate.js";
 import { vi } from "vitest";
 import { EventEmitter } from "node:events";
 import { spawn as childProcessSpawn } from "node:child_process";
@@ -187,6 +188,29 @@ const uninstallBundleContentMock = vi.fn(async () => ({ removed: 0, legacySwept:
 vi.mock("../../src/services/bundle-sync.js", () => ({
   uninstallBundleContent: () => uninstallBundleContentMock(),
 }));
+
+// Issue #1101 — POST /internal/run-generation-turn's own handler calls
+// runGenerationTurnInScratchWorktree (scaffold-generate.ts), which shells
+// out to a REAL generation-agent CLI (and, when bwrap is usable, wraps that
+// in a real bwrap invocation) — exactly the kind of real/costly subprocess
+// this file's own node:child_process mock above deliberately does NOT fake
+// (it only fakes `spawn`, used by systemctl/systemd-run/agent-detect;
+// scaffold-generate.ts uses `execFile`, untouched by that mock). Mocked at
+// the module boundary instead — same `importOriginal` + override-one-export
+// shape as test/routes/project-setup.test.ts's own scaffold-generate.js
+// mock — so this suite can assert on the route's own request/response/
+// error-taxonomy plumbing without ever invoking a real CLI/LLM call. This
+// means this suite does NOT itself prove sandboxing is actually applied —
+// that's scaffold-generate.test.ts's own job (its wrapWithSandbox/
+// isSandboxCapable/describeIfBwrap suites), and is true by construction
+// here: the route calls the SAME exported runGenerationTurnInScratchWorktree
+// scaffold-generate.test.ts already exercises, not a duplicated copy.
+vi.mock("../../src/services/scaffold-generate.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof ScaffoldGenerateModule>();
+  return { ...actual, runGenerationTurnInScratchWorktree: vi.fn() };
+});
+const { runGenerationTurnInScratchWorktree } =
+  await import("../../src/services/scaffold-generate.js");
 
 const { buildApp } = await import("../../src/app.js");
 const { clearAgentsCacheForTests } = await import("../../src/services/agent-detect.js");
@@ -2320,6 +2344,183 @@ describe("internal routes (agent role, issue #26)", () => {
       expect(outside.statusCode).toBe(400);
 
       fs.rmSync(outsideRoots, { recursive: true, force: true });
+      await app.close();
+    });
+  });
+
+  describe("POST /internal/run-generation-turn (#1101)", () => {
+    beforeEach(() => {
+      vi.mocked(runGenerationTurnInScratchWorktree).mockReset();
+    });
+
+    it("runs a generation turn and returns { outcome: 'ok', stdout }", async () => {
+      vi.mocked(runGenerationTurnInScratchWorktree).mockResolvedValue("some generated stdout");
+      const previousRoots = process.env.PROJECTS_ROOTS;
+      const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "internal-gen-turn-"));
+      process.env.PROJECTS_ROOTS = cwd;
+      const app = await buildApp();
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/internal/run-generation-turn",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: {
+          cwd,
+          slug: "demo",
+          baseRef: "origin/main",
+          agentCommand: "claude",
+          prompt: "do the thing",
+          timeoutMs: 300_000,
+        },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ outcome: "ok", stdout: "some generated stdout" });
+      expect(runGenerationTurnInScratchWorktree).toHaveBeenCalledWith({
+        cwd,
+        slug: "demo",
+        baseRef: "origin/main",
+        agentCommand: "claude",
+        prompt: "do the thing",
+        timeoutMs: 300_000,
+      });
+
+      process.env.PROJECTS_ROOTS = previousRoots;
+      fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("maps each error taxonomy — unsupported agent, worktree failure, spawn failure — to its own outcome, still HTTP 200", async () => {
+      const { UnsupportedGenerationAgentError, GenerationWorktreeError, GenerationSpawnError } =
+        await import("../../src/services/scaffold-generate.js");
+      const previousRoots = process.env.PROJECTS_ROOTS;
+      const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "internal-gen-turn-errors-"));
+      process.env.PROJECTS_ROOTS = cwd;
+      const app = await buildApp();
+
+      const body = {
+        cwd,
+        slug: "demo",
+        baseRef: "HEAD",
+        agentCommand: "claude",
+        prompt: "do the thing",
+        timeoutMs: 300_000,
+      };
+
+      vi.mocked(runGenerationTurnInScratchWorktree).mockRejectedValueOnce(
+        new UnsupportedGenerationAgentError("aider"),
+      );
+      const unsupported = await app.inject({
+        method: "POST",
+        url: "/internal/run-generation-turn",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: body,
+      });
+      expect(unsupported.statusCode).toBe(200);
+      expect(unsupported.json().outcome).toBe("unsupported-agent");
+
+      vi.mocked(runGenerationTurnInScratchWorktree).mockRejectedValueOnce(
+        new GenerationWorktreeError("could not create a scratch worktree"),
+      );
+      const worktreeFailed = await app.inject({
+        method: "POST",
+        url: "/internal/run-generation-turn",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: body,
+      });
+      expect(worktreeFailed.statusCode).toBe(200);
+      expect(worktreeFailed.json().outcome).toBe("worktree-error");
+
+      vi.mocked(runGenerationTurnInScratchWorktree).mockRejectedValueOnce(
+        new GenerationSpawnError("claude", "exit code 1: boom"),
+      );
+      const spawnFailed = await app.inject({
+        method: "POST",
+        url: "/internal/run-generation-turn",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: body,
+      });
+      expect(spawnFailed.statusCode).toBe(200);
+      expect(spawnFailed.json().outcome).toBe("spawn-error");
+
+      process.env.PROJECTS_ROOTS = previousRoots;
+      fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("requires a cwd/slug/baseRef/agentCommand/prompt/timeoutMs body, and rejects a cwd outside PROJECTS_ROOTS", async () => {
+      const app = await buildApp();
+      const missing = await app.inject({
+        method: "POST",
+        url: "/internal/run-generation-turn",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: {},
+      });
+      expect(missing.statusCode).toBe(400);
+      expect(runGenerationTurnInScratchWorktree).not.toHaveBeenCalled();
+
+      const outsideRoots = fs.mkdtempSync(path.join(os.tmpdir(), "internal-gen-turn-outside-"));
+      const outside = await app.inject({
+        method: "POST",
+        url: "/internal/run-generation-turn",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: {
+          cwd: outsideRoots,
+          slug: "demo",
+          baseRef: "HEAD",
+          agentCommand: "claude",
+          prompt: "do the thing",
+          timeoutMs: 300_000,
+        },
+      });
+      expect(outside.statusCode).toBe(400);
+      expect(runGenerationTurnInScratchWorktree).not.toHaveBeenCalled();
+
+      fs.rmSync(outsideRoots, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("rejects a timeoutMs above DEFAULT_GENERATION_TIMEOUT_MS — the client's own network timeout is fixed above that constant, not above whatever a caller sends", async () => {
+      const { DEFAULT_GENERATION_TIMEOUT_MS } =
+        await import("../../src/services/scaffold-generate.js");
+      const previousRoots = process.env.PROJECTS_ROOTS;
+      const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "internal-gen-turn-timeout-"));
+      process.env.PROJECTS_ROOTS = cwd;
+      const app = await buildApp();
+
+      const tooLarge = await app.inject({
+        method: "POST",
+        url: "/internal/run-generation-turn",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: {
+          cwd,
+          slug: "demo",
+          baseRef: "HEAD",
+          agentCommand: "claude",
+          prompt: "do the thing",
+          timeoutMs: DEFAULT_GENERATION_TIMEOUT_MS + 1,
+        },
+      });
+      expect(tooLarge.statusCode).toBe(400);
+      expect(runGenerationTurnInScratchWorktree).not.toHaveBeenCalled();
+
+      vi.mocked(runGenerationTurnInScratchWorktree).mockResolvedValue("stdout");
+      const atLimit = await app.inject({
+        method: "POST",
+        url: "/internal/run-generation-turn",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: {
+          cwd,
+          slug: "demo",
+          baseRef: "HEAD",
+          agentCommand: "claude",
+          prompt: "do the thing",
+          timeoutMs: DEFAULT_GENERATION_TIMEOUT_MS,
+        },
+      });
+      expect(atLimit.statusCode).toBe(200);
+
+      process.env.PROJECTS_ROOTS = previousRoots;
+      fs.rmSync(cwd, { recursive: true, force: true });
       await app.close();
     });
   });

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
@@ -17,7 +17,9 @@ import {
   isSandboxCapable,
   resetSandboxCapabilityCache,
   buildBwrapSmokeTestInvocation,
+  DEFAULT_GENERATION_TIMEOUT_MS,
   GenerationOutputError,
+  GenerationWorktreeError,
   UnsupportedGenerationAgentError,
   GenerationSpawnError,
   type SpawnGenerationTurn,
@@ -313,6 +315,193 @@ describe("generateScaffoldContent", () => {
       .toString()
       .trim();
     expect(status).toBe("");
+  });
+});
+
+// Issue #1101 — generateScaffoldContent's worktree/spawn lifecycle now
+// dispatches per host (LOCAL_HOST_ID above vs. a remote host below) instead
+// of always running in this process. Mirrors
+// test/integration/multi-host-scaffold-setup.test.ts's own "spy on
+// RemoteHostClient.prototype, alongside a real registered host row" pattern
+// — a real buildApp() + POST /api/hosts row is needed for
+// getRemoteHostClient(app, hostId) to resolve a client at all, but the
+// client's own network calls are mocked so no real HTTP round trip (or
+// worktree creation) has to happen for this unit-level suite.
+describe("generateScaffoldContent — remote-hosted project (issue #1101)", () => {
+  async function makeRemoteHost() {
+    const { buildApp } = await import("../../src/app.js");
+    const app = await buildApp();
+    const hostRes = await app.inject({
+      method: "POST",
+      url: "/api/hosts",
+      // Deliberately unreachable — every test in this describe block either
+      // mocks RemoteHostClient.prototype's methods directly, or (for the
+      // "host genuinely unreachable" case) relies on THIS being unreachable
+      // on purpose.
+      payload: { name: "gen-remote-test", baseUrl: "http://127.0.0.1:1", token: "t" },
+    });
+    const hostId = hostRes.json().id as string;
+    return { app, hostId };
+  }
+
+  it("dispatches the worktree/spawn lifecycle to the remote host via RemoteHostClient, never touching this process's own filesystem", async () => {
+    const remoteHostClientModule = await import("../../src/services/remote-host-client.js");
+    const { app, hostId } = await makeRemoteHost();
+
+    const baseRefSpy = vi
+      .spyOn(remoteHostClientModule.RemoteHostClient.prototype, "resolveHostBaseRef")
+      .mockResolvedValue({ baseRef: "origin/main", sha: "deadbeef" });
+    const turnSpy = vi
+      .spyOn(remoteHostClientModule.RemoteHostClient.prototype, "resolveRunGenerationTurn")
+      .mockResolvedValue({ outcome: "ok", stdout: validOutput("demo") });
+
+    // A path that genuinely doesn't exist on THIS machine — if
+    // generateScaffoldContent's remote branch ever fell through to the
+    // LOCAL createWorktree/removeWorktree/deleteBranch functions (the bug
+    // this test guards against), it would throw trying to operate against
+    // a nonexistent directory, not resolve cleanly with parsed content.
+    const fakeRemoteCwd = "/this/path/does/not/exist/on/this/machine";
+
+    const result = await generateScaffoldContent({
+      app,
+      hostId,
+      cwd: fakeRemoteCwd,
+      slug: "demo",
+      agentCommand: "claude",
+      seed: {},
+      hasSkill: false,
+      hasReviewer: false,
+      hasBriefingRegion: false,
+    });
+
+    expect(result.skill).toContain("Real invariant.");
+    expect(result.reviewer).toContain("Read .claude/skills/demo/SKILL.md first.");
+    expect(turnSpy).toHaveBeenCalledWith(
+      fakeRemoteCwd,
+      "demo",
+      "origin/main",
+      "claude",
+      expect.stringContaining("READ-ONLY"),
+      DEFAULT_GENERATION_TIMEOUT_MS,
+    );
+
+    baseRefSpy.mockRestore();
+    turnSpy.mockRestore();
+    await app.close();
+  });
+
+  it("maps a worktree-error outcome from the remote agent to GenerationWorktreeError", async () => {
+    const remoteHostClientModule = await import("../../src/services/remote-host-client.js");
+    const { app, hostId } = await makeRemoteHost();
+
+    const baseRefSpy = vi
+      .spyOn(remoteHostClientModule.RemoteHostClient.prototype, "resolveHostBaseRef")
+      .mockResolvedValue({ baseRef: "HEAD", sha: null });
+    const turnSpy = vi
+      .spyOn(remoteHostClientModule.RemoteHostClient.prototype, "resolveRunGenerationTurn")
+      .mockResolvedValue({ outcome: "worktree-error", detail: "not a git repository" });
+
+    await expect(
+      generateScaffoldContent({
+        app,
+        hostId,
+        cwd: "/remote/path",
+        slug: "demo",
+        agentCommand: "claude",
+        seed: {},
+        hasSkill: false,
+        hasReviewer: false,
+        hasBriefingRegion: false,
+      }),
+    ).rejects.toThrow(GenerationWorktreeError);
+
+    baseRefSpy.mockRestore();
+    turnSpy.mockRestore();
+    await app.close();
+  });
+
+  it("maps a spawn-error outcome from the remote agent to GenerationSpawnError", async () => {
+    const remoteHostClientModule = await import("../../src/services/remote-host-client.js");
+    const { app, hostId } = await makeRemoteHost();
+
+    const baseRefSpy = vi
+      .spyOn(remoteHostClientModule.RemoteHostClient.prototype, "resolveHostBaseRef")
+      .mockResolvedValue({ baseRef: "HEAD", sha: null });
+    const turnSpy = vi
+      .spyOn(remoteHostClientModule.RemoteHostClient.prototype, "resolveRunGenerationTurn")
+      .mockResolvedValue({ outcome: "spawn-error", detail: "exit code 1: boom" });
+
+    await expect(
+      generateScaffoldContent({
+        app,
+        hostId,
+        cwd: "/remote/path",
+        slug: "demo",
+        agentCommand: "claude",
+        seed: {},
+        hasSkill: false,
+        hasReviewer: false,
+        hasBriefingRegion: false,
+      }),
+    ).rejects.toThrow(GenerationSpawnError);
+
+    baseRefSpy.mockRestore();
+    turnSpy.mockRestore();
+    await app.close();
+  });
+
+  it("maps an unsupported-agent outcome from the remote agent to UnsupportedGenerationAgentError", async () => {
+    const remoteHostClientModule = await import("../../src/services/remote-host-client.js");
+    const { app, hostId } = await makeRemoteHost();
+
+    const baseRefSpy = vi
+      .spyOn(remoteHostClientModule.RemoteHostClient.prototype, "resolveHostBaseRef")
+      .mockResolvedValue({ baseRef: "HEAD", sha: null });
+    const turnSpy = vi
+      .spyOn(remoteHostClientModule.RemoteHostClient.prototype, "resolveRunGenerationTurn")
+      .mockResolvedValue({ outcome: "unsupported-agent", detail: "nope" });
+
+    await expect(
+      generateScaffoldContent({
+        app,
+        hostId,
+        cwd: "/remote/path",
+        slug: "demo",
+        agentCommand: "claude",
+        seed: {},
+        hasSkill: false,
+        hasReviewer: false,
+        hasBriefingRegion: false,
+      }),
+    ).rejects.toThrow(UnsupportedGenerationAgentError);
+
+    baseRefSpy.mockRestore();
+    turnSpy.mockRestore();
+    await app.close();
+  });
+
+  it("maps a genuinely unreachable remote host to GenerationSpawnError, not a raw network exception", async () => {
+    // No mocking at all here — hostId's own baseUrl (http://127.0.0.1:1) is
+    // unreachable by construction, so both resolveHostBaseRef (falls back to
+    // "HEAD", never throws) and resolveRunGenerationTurn (genuinely fails)
+    // exercise the real RemoteHostClient/viaRemote network-failure path.
+    const { app, hostId } = await makeRemoteHost();
+
+    await expect(
+      generateScaffoldContent({
+        app,
+        hostId,
+        cwd: "/remote/path",
+        slug: "demo",
+        agentCommand: "claude",
+        seed: {},
+        hasSkill: false,
+        hasReviewer: false,
+        hasBriefingRegion: false,
+      }),
+    ).rejects.toThrow(GenerationSpawnError);
+
+    await app.close();
   });
 });
 

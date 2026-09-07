@@ -70,6 +70,12 @@ import {
 import { deleteBranch } from "../services/git-branch-delete.js";
 import { readFilesLocally, writeEntriesLocally } from "../services/host-files.js";
 import {
+  runGenerationTurnInScratchWorktree,
+  UnsupportedGenerationAgentError,
+  GenerationWorktreeError,
+  GenerationSpawnError,
+} from "../services/scaffold-generate.js";
+import {
   readAgentBundleDisabled,
   writeAgentBundleDisabled,
 } from "../services/agent-bundle-state.js";
@@ -150,6 +156,7 @@ import {
   readFilesSchema,
   writeFilesSchema,
   gitCommitWipSchema,
+  runGenerationTurnSchema,
   bundleSyncRemoveSchema,
   promoteDecisionSchema,
   writeDockConfigBodySchema,
@@ -177,6 +184,7 @@ import type {
   ReadFilesBody,
   WriteFilesBody,
   GitCommitWipBody,
+  RunGenerationTurnBody,
   BundleSyncRemoveBody,
   PromoteDecisionBody,
 } from "./internal-schemas.js";
@@ -188,6 +196,18 @@ import type {
 // tuned for a browser). Still bounded, since the token alone doesn't prove
 // the caller is well-behaved.
 const INTERNAL_RATE_LIMIT = { config: { rateLimit: { max: 1000, timeWindow: "1 minute" } } };
+
+// Issue #1101 — mirrors routes/project-setup.ts's own GENERATE_RATE_LIMIT
+// reasoning: POST /internal/run-generation-turn spawns a real, costly agent
+// CLI turn on THIS agent's own filesystem, a different cost class than the
+// rest of this file's cheap filesystem/git-plumbing routes
+// (INTERNAL_RATE_LIMIT's 1000/min above). A confused or malicious primary
+// hammering this route could otherwise burn real tokens/time on this host
+// with no independent guard beyond whatever the primary's own route
+// enforces. Module-scope, same as INTERNAL_RATE_LIMIT above — every other
+// per-route rate-limit const in this file lives here, not inside
+// internalRoutes() itself.
+const GENERATION_TURN_RATE_LIMIT = { config: { rateLimit: { max: 5, timeWindow: "10 minutes" } } };
 
 /**
  * A symlink-tolerant realpath: resolves every symlink in the deepest
@@ -1385,6 +1405,57 @@ export async function internalRoutes(app: FastifyInstance) {
       const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
       if (resolvedCwd === null) return;
       return await commitWipChanges(resolvedCwd, message);
+    },
+  );
+
+  // Issue #1101 — the agent-side handler for a remote-hosted project's
+  // scaffold-generation turn: runs the IDENTICAL worktree-create ->
+  // sandboxed-spawn -> teardown logic scaffold-generate.ts's
+  // generateScaffoldContent already runs for a LOCAL_HOST_ID project
+  // (runGenerationTurnInScratchWorktree, reused unchanged — including its
+  // own reuse of wrapWithSandbox/isSandboxCapable/agentSandboxWritablePaths/
+  // ensureSandboxWritablePathsExist internally via defaultSpawnGenerationTurn),
+  // just on THIS agent's own filesystem instead of the primary's.
+  //
+  // Always 200 with a discriminated `outcome` field for an
+  // application-level failure (unsupported agent CLI, worktree-create
+  // failure, spawn failure) — never a 4xx/5xx for those, since viaRemote's
+  // HostRequestError mapping (host-git.ts) only distinguishes a 404 from
+  // "everything else" and would otherwise collapse three distinguishable
+  // error classes into one indistinguishable bucket on the primary side.
+  // See scaffold-generate.ts's own GenerationTurnResult doc comment. A
+  // genuine connectivity failure (host unreachable, or an old agent build
+  // predating this route entirely) still surfaces the ordinary way — this
+  // handler never gets a chance to run for either of those.
+  app.post<{ Body: RunGenerationTurnBody }>(
+    "/internal/run-generation-turn",
+    { ...GENERATION_TURN_RATE_LIMIT, schema: runGenerationTurnSchema },
+    async (request, reply) => {
+      const { cwd, slug, baseRef, agentCommand, prompt, timeoutMs } = request.body;
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
+      try {
+        const stdout = await runGenerationTurnInScratchWorktree({
+          cwd: resolvedCwd,
+          slug,
+          baseRef,
+          agentCommand,
+          prompt,
+          timeoutMs,
+        });
+        return { outcome: "ok", stdout };
+      } catch (err) {
+        if (err instanceof UnsupportedGenerationAgentError) {
+          return { outcome: "unsupported-agent", detail: err.message };
+        }
+        if (err instanceof GenerationWorktreeError) {
+          return { outcome: "worktree-error", detail: err.message };
+        }
+        if (err instanceof GenerationSpawnError) {
+          return { outcome: "spawn-error", detail: err.message };
+        }
+        throw err;
+      }
     },
   );
 

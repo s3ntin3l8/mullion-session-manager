@@ -6,7 +6,8 @@ import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import { createWorktree, removeWorktree } from "./git-worktree.js";
 import { deleteBranch } from "./git-branch-delete.js";
-import { resolveHostBaseRef } from "./host-git.js";
+import { resolveHostBaseRef, viaRemote } from "./host-git.js";
+import { LOCAL_HOST_ID } from "./host-registry.js";
 import { gitEnv } from "./git-env.js";
 import { scaffoldSkillPath, scaffoldReviewerPath } from "./mullion-scaffold.js";
 
@@ -713,6 +714,125 @@ export const defaultSpawnGenerationTurn: SpawnGenerationTurn = async ({
   });
 };
 
+/** The `outcome`-discriminated result `/internal/run-generation-turn`
+ * returns (issue #1101) — ALWAYS a 200, never an HTTP status for an
+ * application-level failure (unsupported agent CLI, scratch-worktree
+ * creation failure, the spawn itself failing). Same "200 + reason
+ * envelope, never a git-level refusal as a 5xx" convention as
+ * `DeleteBranchResult`/`CreateWorktreeResult` elsewhere in this codebase —
+ * chosen deliberately here because `host-git.ts`'s `viaRemote` (which this
+ * module's own remote dispatch reuses for the outer HTTP-level
+ * unreachable/version-skew split) only distinguishes a 404 from
+ * "everything else": carrying these three distinguishable local error
+ * classes as HTTP status instead would collapse them into one
+ * indistinguishable `"unreachable"` bucket by the time they reached
+ * `generateScaffoldContent`'s remote branch below. */
+export type GenerationTurnResult =
+  | { outcome: "ok"; stdout: string }
+  | { outcome: "unsupported-agent"; detail: string }
+  | { outcome: "worktree-error"; detail: string }
+  | { outcome: "spawn-error"; detail: string };
+
+export interface RunGenerationTurnInScratchWorktreeOptions {
+  /** The REAL project checkout — the generation worktree is branched off
+   * `baseRef`, exactly like preview/apply's own scratch worktree, but is a
+   * separate `git worktree add` (own path, own branch), never the same
+   * directory as the `setup-<slug>` one preview/apply use. */
+  cwd: string;
+  slug: string;
+  baseRef: string;
+  agentCommand: string;
+  prompt: string;
+  timeoutMs: number;
+  /** Test-only seam — production always omits this and gets
+   * `defaultSpawnGenerationTurn`. Never settable over the wire: the new
+   * `/internal/run-generation-turn` route (issue #1101) always omits it
+   * too, for the same reason — letting a caller choose what actually
+   * executes here would defeat the sandboxing this function's own spawn
+   * step applies. */
+  spawn?: SpawnGenerationTurn;
+}
+
+/**
+ * The worktree-lifecycle + sandboxed-spawn core this module's header
+ * describes: stands up a disposable scratch worktree OUTSIDE `cwd`'s own
+ * directory tree, runs one generation turn inside it, and always tears the
+ * worktree (and its branch) down again before returning or throwing — see
+ * this module's header for why that's the actual write-scope enforcement,
+ * not just tidiness.
+ *
+ * Issue #1101 factors this out of `generateScaffoldContent` (which still
+ * calls it directly, unchanged, for a `LOCAL_HOST_ID` project) so
+ * `/internal/run-generation-turn`'s own agent-side handler — which runs
+ * this SAME logic on a remote-hosted project's own filesystem — calls the
+ * IDENTICAL create -> sandboxed-spawn -> teardown implementation rather
+ * than a hand-duplicated copy. That reuse is what carries `wrapWithSandbox`/
+ * `isSandboxCapable`/`agentSandboxWritablePaths`/
+ * `ensureSandboxWritablePathsExist` to the remote path too — every one of
+ * them already runs unconditionally inside `defaultSpawnGenerationTurn`,
+ * which this function calls via the same `spawn` seam
+ * `generateScaffoldContent` always used.
+ */
+export async function runGenerationTurnInScratchWorktree(
+  opts: RunGenerationTurnInScratchWorktreeOptions,
+): Promise<string> {
+  const spawn = opts.spawn ?? defaultSpawnGenerationTurn;
+
+  // Unique per call, not `gen-<slug>` — unlike preview/apply's own
+  // `setup-<slug>` worktree (deliberately STABLE so a re-preview reuses
+  // it), this scratch worktree is torn down in the `finally` below before
+  // this function ever returns, so there is no "reuse the live one"
+  // concept here at all. A stable seed would instead risk a leftover
+  // directory from a crashed/killed prior run colliding with the next
+  // `createWorktree` call ("a branch/path already exists") — a random
+  // suffix sidesteps that entirely rather than adding stale-worktree
+  // detection for a path nothing is ever meant to reuse.
+  const seed = `gen-${opts.slug}-${randomUUID().slice(0, 8)}`;
+  // `baseDir` deliberately outside `opts.cwd` entirely — see this module's
+  // header for why placement (not just teardown) is part of gap #2's
+  // enforcement. `os.tmpdir()` rather than a fixed repo-relative path: no
+  // relationship to `opts.cwd` at all, so there is nothing for a relative
+  // `cd ../..` inside the generation worktree to walk back into. This
+  // holds identically for a remote-hosted project too (issue #1101):
+  // `os.tmpdir()` here resolves against whichever process actually runs
+  // this function — this module's own process for `LOCAL_HOST_ID`, or the
+  // remote agent's own process when called from
+  // `/internal/run-generation-turn`'s handler — so the "wholly unrelated
+  // part of the filesystem" property is never diluted by threading a
+  // caller-supplied `baseDir` across the wire (which would also have
+  // reopened the exact PROJECTS_ROOTS-containment question every other
+  // `/internal/*` path argument in this codebase is deliberately held to).
+  const baseDir = path.join(os.tmpdir(), "mullion-scaffold-generate");
+  const worktreeResult = await createWorktree({
+    cwd: opts.cwd,
+    baseRef: opts.baseRef,
+    seed,
+    baseDir,
+  });
+  if (!worktreeResult.created || !worktreeResult.path || !worktreeResult.branch) {
+    throw new GenerationWorktreeError(
+      worktreeResult.detail ?? `could not create a scratch worktree (${worktreeResult.reason})`,
+    );
+  }
+  const { path: worktreePath, branch } = worktreeResult;
+
+  try {
+    return await spawn({
+      agentCommand: opts.agentCommand,
+      cwd: worktreePath,
+      prompt: opts.prompt,
+      timeoutMs: opts.timeoutMs,
+    });
+  } finally {
+    await removeWorktree(worktreePath, opts.cwd);
+    await deleteBranch(opts.cwd, branch, { force: true }).catch(() => {
+      // Best-effort — a leftover disposable branch from a scratch
+      // generation worktree is untidy, never unsafe: the random suffix
+      // above means it never collides with a later `/setup/generate` call.
+    });
+  }
+}
+
 export interface GenerateScaffoldContentOptions {
   app: FastifyInstance;
   hostId: string;
@@ -728,77 +848,96 @@ export interface GenerateScaffoldContentOptions {
   hasReviewer: boolean;
   hasBriefingRegion: boolean;
   timeoutMs?: number;
-  /** Test-only seam — production always omits this and gets
-   * `defaultSpawnGenerationTurn`. */
+  /** Test-only seam, and LOCAL_HOST_ID only (see
+   * `RunGenerationTurnInScratchWorktreeOptions.spawn`'s own doc comment for
+   * why it can't and doesn't extend to a remote host) — production always
+   * omits this and gets `defaultSpawnGenerationTurn`. */
   spawn?: SpawnGenerationTurn;
 }
 
 /**
- * Runs one read-only generation turn in its own disposable worktree and
- * returns the parsed skill/reviewer/briefing-region content. Always tears
- * the scratch worktree (and its branch) down before returning or throwing
- * — see this module's header for why that's the actual write-scope
- * enforcement, not just tidiness.
+ * Runs one read-only generation turn and returns the parsed
+ * skill/reviewer/briefing-region content — on whichever host owns
+ * `opts.cwd` (issue #1101). For `LOCAL_HOST_ID`, calls
+ * `runGenerationTurnInScratchWorktree` directly, in this process. For a
+ * remote host, dispatches to the new `/internal/run-generation-turn` route
+ * (via `RemoteHostClient.resolveRunGenerationTurn`), which runs the
+ * IDENTICAL `runGenerationTurnInScratchWorktree` on the agent's own
+ * filesystem instead — see that function's own doc comment for why this is
+ * genuine reuse, not a parallel implementation. Always tears the scratch
+ * worktree (and its branch) down on whichever host actually created it
+ * before returning or throwing — see this module's header for why that's
+ * the actual write-scope enforcement, not just tidiness.
  */
 export async function generateScaffoldContent(
   opts: GenerateScaffoldContentOptions,
 ): Promise<GeneratedScaffoldContent> {
-  const spawn = opts.spawn ?? defaultSpawnGenerationTurn;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_GENERATION_TIMEOUT_MS;
 
-  // Validate before paying for a worktree at all — an unsupported agent
-  // should fail fast, not after standing up (and then tearing down) a
-  // scratch checkout for nothing.
+  // Validate before paying for a worktree (or, for a remote host, a network
+  // round trip) at all — an unsupported agent should fail fast, not after
+  // standing up (and then tearing down) a scratch checkout for nothing.
   buildInvocation(opts.agentCommand, "");
 
-  // Unique per call, not `gen-<slug>` — unlike preview/apply's own
-  // `setup-<slug>` worktree (deliberately STABLE so a re-preview reuses
-  // it), this scratch worktree is torn down in the `finally` below before
-  // this function ever returns, so there is no "reuse the live one"
-  // concept here at all. A stable seed would instead risk a leftover
-  // directory from a crashed/killed prior run colliding with the next
-  // `createWorktree` call ("a branch/path already exists") — a random
-  // suffix sidesteps that entirely rather than adding stale-worktree
-  // detection for a path nothing is ever meant to reuse.
-  const seed = `gen-${opts.slug}-${randomUUID().slice(0, 8)}`;
   const baseRefResult = await resolveHostBaseRef(opts.app, opts.hostId, opts.cwd);
   const baseRef =
     baseRefResult.ok && baseRefResult.value.baseRef ? baseRefResult.value.baseRef : "HEAD";
-  // `baseDir` deliberately outside `opts.cwd` entirely — see this module's
-  // header for why placement (not just teardown) is part of gap #2's
-  // enforcement. `os.tmpdir()` rather than a fixed repo-relative path: no
-  // relationship to `opts.cwd` at all, so there is nothing for a relative
-  // `cd ../..` inside the generation worktree to walk back into.
-  const baseDir = path.join(os.tmpdir(), "mullion-scaffold-generate");
-  const worktreeResult = await createWorktree({ cwd: opts.cwd, baseRef, seed, baseDir });
-  if (!worktreeResult.created || !worktreeResult.path || !worktreeResult.branch) {
-    throw new GenerationWorktreeError(
-      worktreeResult.detail ?? `could not create a scratch worktree (${worktreeResult.reason})`,
-    );
-  }
-  const { path: worktreePath, branch } = worktreeResult;
 
-  try {
-    const prompt = buildGenerationPrompt({
+  const prompt = buildGenerationPrompt({
+    slug: opts.slug,
+    seed: opts.seed,
+    hasSkill: opts.hasSkill,
+    hasReviewer: opts.hasReviewer,
+    hasBriefingRegion: opts.hasBriefingRegion,
+  });
+
+  let raw: string;
+  if (!opts.hostId || opts.hostId === LOCAL_HOST_ID) {
+    raw = await runGenerationTurnInScratchWorktree({
+      cwd: opts.cwd,
       slug: opts.slug,
-      seed: opts.seed,
-      hasSkill: opts.hasSkill,
-      hasReviewer: opts.hasReviewer,
-      hasBriefingRegion: opts.hasBriefingRegion,
-    });
-    const raw = await spawn({
+      baseRef,
       agentCommand: opts.agentCommand,
-      cwd: worktreePath,
       prompt,
       timeoutMs,
+      spawn: opts.spawn,
     });
-    return parseGeneratedOutput(raw, opts.slug);
-  } finally {
-    await removeWorktree(worktreePath, opts.cwd);
-    await deleteBranch(opts.cwd, branch, { force: true }).catch(() => {
-      // Best-effort — a leftover disposable branch from a scratch
-      // generation worktree is untidy, never unsafe: the random suffix
-      // above means it never collides with a later `/setup/generate` call.
-    });
+  } else {
+    // `viaRemote` (host-git.ts) — same HostRequestError/HostUnreachableError
+    // mapping every other host-aware primitive in this codebase reuses. Its
+    // `"unsupported"` reason here means a 404 from the agent — an old build
+    // predating this route entirely (version skew), not "this agentCommand
+    // isn't supported" (that's `GenerationTurnResult`'s own
+    // `"unsupported-agent"` outcome below, carried inside a successful
+    // `ok: true` response instead — see that type's own doc comment for
+    // why).
+    const result = await viaRemote(opts.app, opts.hostId, (client) =>
+      client.resolveRunGenerationTurn(
+        opts.cwd,
+        opts.slug,
+        baseRef,
+        opts.agentCommand,
+        prompt,
+        timeoutMs,
+      ),
+    );
+    if (!result.ok) {
+      throw new GenerationSpawnError(
+        opts.agentCommand,
+        result.reason === "unsupported"
+          ? "This host's agent build doesn't support generating scaffold content remotely yet — update the agent build (see issue #1101)."
+          : result.detail,
+      );
+    }
+    const turn = result.value;
+    if (turn.outcome === "unsupported-agent") {
+      throw new UnsupportedGenerationAgentError(opts.agentCommand);
+    }
+    if (turn.outcome === "worktree-error") throw new GenerationWorktreeError(turn.detail);
+    if (turn.outcome === "spawn-error")
+      throw new GenerationSpawnError(opts.agentCommand, turn.detail);
+    raw = turn.stdout;
   }
+
+  return parseGeneratedOutput(raw, opts.slug);
 }

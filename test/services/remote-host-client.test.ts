@@ -636,6 +636,64 @@ describe("RemoteHostClient", () => {
       timeoutSpy.mockRestore();
     });
 
+    it("resolveRunGenerationTurn posts the full {cwd, slug, baseRef, agentCommand, prompt, timeoutMs} body and returns the outcome-discriminated result verbatim", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, { outcome: "ok", stdout: "generated text" }));
+
+      await expect(
+        client().resolveRunGenerationTurn(
+          "/x",
+          "demo",
+          "origin/main",
+          "claude",
+          "the prompt",
+          300_000,
+        ),
+      ).resolves.toEqual({ outcome: "ok", stdout: "generated text" });
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://example.invalid:1234/internal/run-generation-turn",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({
+            cwd: "/x",
+            slug: "demo",
+            baseRef: "origin/main",
+            agentCommand: "claude",
+            prompt: "the prompt",
+            timeoutMs: 300_000,
+          }),
+        }),
+      );
+    });
+
+    // Issue #1101 — scaffold-generate.ts's own DEFAULT_GENERATION_TIMEOUT_MS
+    // is 5 minutes (one real, non-interactive agent CLI turn), well above
+    // every other timeout constant in this file (GIT_PUSH_REQUEST_TIMEOUT_MS
+    // tops out at 140s) — resolveRunGenerationTurn needs its own,
+    // independently-sized network timeout that stays comfortably above that
+    // 5-minute agent-side budget, not a reuse of a neighboring constant sized
+    // for a single git shell-out.
+    it("sizes resolveRunGenerationTurn's own timeout well above scaffold-generate.ts's DEFAULT_GENERATION_TIMEOUT_MS", async () => {
+      const { DEFAULT_GENERATION_TIMEOUT_MS } =
+        await import("../../src/services/scaffold-generate.js");
+      const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+      fetchMock.mockImplementation(() =>
+        Promise.resolve(jsonResponse(200, { outcome: "ok", stdout: "done" })),
+      );
+
+      await client().resolveRunGenerationTurn("/x", "demo", "HEAD", "claude", "prompt", 300_000);
+      const generationTurnTimeout = timeoutSpy.mock.calls.at(-1)?.[0] as number;
+
+      // Exact margin, not just "greater than" — a mullion-reviewer pass on
+      // PR #1134 noted a bare ">" check would still pass even if a future
+      // bump to DEFAULT_GENERATION_TIMEOUT_MS silently ate into the 120s
+      // (60s worktree lifecycle + 60s network) margin the constant's own
+      // comment documents. This pins that margin exactly.
+      expect(generationTurnTimeout).toBe(DEFAULT_GENERATION_TIMEOUT_MS + 120_000);
+
+      timeoutSpy.mockRestore();
+    });
+
     it("a plain (non-fresh) resolveGitStatus call keeps the default timeout, unlike its fresh:true sibling", async () => {
       const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
       fetchMock.mockImplementation(() =>

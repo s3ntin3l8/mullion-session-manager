@@ -59,22 +59,24 @@ import {
 // content-write API at all, so local-worktree-then-push is the only route,
 // and it happens to be the one that yields a real, reviewable diff for free.
 //
-// `/setup/preview` and `/setup/apply` work for both local AND remote-hosted
-// projects (issue #895) — worktree creation/removal/branch-deletion already
-// dispatched per host via SessionBackend (session-backend.ts, issue #271/
-// #484); #895 added the missing piece host-git.ts's own header used to flag
-// as absent: reading/writing arbitrary scaffold file content, diffing a
-// written file, and committing it, all on whichever host actually owns the
-// project's checkout (host-files.ts's readHostFiles/writeHostFiles,
-// host-git.ts's resolveHostFileDiff/commitHostWipChanges).
+// `/setup/preview`, `/setup/apply`, AND `/setup/generate` all work for both
+// local AND remote-hosted projects now (issue #895, then #1101) — worktree
+// creation/removal/branch-deletion already dispatched per host via
+// SessionBackend (session-backend.ts, issue #271/#484); #895 added the
+// missing piece host-git.ts's own header used to flag as absent:
+// reading/writing arbitrary scaffold file content, diffing a written file,
+// and committing it, all on whichever host actually owns the project's
+// checkout (host-files.ts's readHostFiles/writeHostFiles, host-git.ts's
+// resolveHostFileDiff/commitHostWipChanges).
 //
-// `/setup/generate` KEEPS its own `hostId !== LOCAL_HOST_ID` 501 guard —
+// `/setup/generate` needed a SEPARATE fix on top of #895's (issue #1101):
 // unlike preview/apply, it doesn't just read/write file content, it spawns
-// a real agent CLI turn (scaffold-generate.ts's generateScaffoldContent),
-// and that spawn currently always runs in THIS process's own filesystem
-// regardless of `hostId`. Lifting #895's read/write/diff/commit guard does
-// nothing for that separate blocker — see issue #1101 for the follow-up
-// (running the generation turn on the owning host itself).
+// a real agent CLI turn (scaffold-generate.ts's generateScaffoldContent).
+// That spawn now runs on whichever host actually owns the project's
+// checkout too — a new `/internal/run-generation-turn` route
+// (routes/internal.ts) runs the SAME sandboxed create-worktree/spawn/
+// teardown logic (scaffold-generate.ts's runGenerationTurnInScratchWorktree)
+// on the remote agent's own filesystem instead of the primary's.
 //
 // Preview and apply are split, per the plan's own "pure function, current
 // contents in, target contents out" framing: preview creates (or reuses) a
@@ -602,19 +604,10 @@ export async function projectSetupRoute(app: FastifyInstance) {
       if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
       const project = getProjectOr404(projectId);
       if (!project) return reply.notFound();
-      // Issue #895 — KEPT for this route only (preview/apply's own 501 was
-      // lifted): generateScaffoldContent doesn't just read/write scaffold
-      // file content, it spawns a real agent CLI turn
-      // (scaffold-generate.ts), and that spawn currently always runs in
-      // THIS process regardless of `hostId` — #895's read/write/diff/commit
-      // primitives don't touch that. See issue #1101 for the follow-up
-      // (running the generation turn itself on the owning host).
-      if (project.hostId !== LOCAL_HOST_ID) {
-        return reply.code(501).send({
-          message:
-            "Generating scaffold content for a remote-hosted project isn't supported yet — see issue #1101",
-        });
-      }
+      // Issue #1101 — no longer gated to LOCAL_HOST_ID: generateScaffoldContent
+      // now spawns the generation agent's CLI turn on whichever host owns
+      // `project.cwd`, the same way preview/apply's read/write/diff/commit
+      // steps already do (issue #895).
 
       const options: ScaffoldOptions = {
         slug: request.body.slug,

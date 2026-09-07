@@ -9,23 +9,34 @@ import type * as ChildProcess from "node:child_process";
 // Issue #895 — end-to-end proof that `/setup/preview` and `/setup/apply`
 // actually work for a remote-hosted project, against two real buildApp()
 // instances (same two-app harness as test/integration/multi-host.test.ts's
-// own "multi-host dock-preview worktrees" describe block). `/setup/generate`
-// is deliberately NOT covered here — its own 501 guard stays in place (see
-// project-setup.ts's own header comment and issue #1101).
+// own "multi-host dock-preview worktrees" describe block). Issue #1101 adds
+// `/setup/generate` coverage to this same harness — its own 501 guard is
+// gone now, and generateScaffoldContent's worktree-create/spawn/teardown
+// lifecycle runs on the AGENT app via the new
+// POST /internal/run-generation-turn route.
 //
 // Same "filesystem assertions alone can't prove the HTTP hop happened"
 // caveat as multi-host.test.ts's dock-preview suite: both apps here share
 // this process's own temp filesystem, so a file appearing under the agent's
 // PROJECTS_ROOTS doesn't by itself prove routes/internal.ts's new
-// /internal/read-files, /internal/write-files, /internal/git-file-diff, and
-// /internal/git-commit-wip actually ran — this suite spies on
-// RemoteHostClient.prototype's corresponding methods alongside the
-// filesystem outcome, mirroring that suite's own established pattern.
+// /internal/read-files, /internal/write-files, /internal/git-file-diff,
+// /internal/git-commit-wip, and /internal/run-generation-turn actually
+// ran — this suite spies on RemoteHostClient.prototype's corresponding
+// methods alongside the filesystem outcome, mirroring that suite's own
+// established pattern.
 vi.mock("node-pty", () => ({
   spawn: vi.fn(() => {
     throw new Error("not used by this suite");
   }),
 }));
+
+// A well-formed generation-turn stdout (scaffold-generate.ts's own
+// SKILL/REVIEWER/BRIEFING marker format) — returned by the `execFile` fake
+// below in place of a real agent CLI/LLM call.
+const GENERATE_STDOUT =
+  `<<<MULLION_SKILL_START>>>\n---\nname: gendemo\n---\nReal invariant.\n<<<MULLION_SKILL_END>>>\n` +
+  `<<<MULLION_REVIEWER_START>>>\n---\nname: gendemo-reviewer\n---\nRead .claude/skills/gendemo/SKILL.md first.\n<<<MULLION_REVIEWER_END>>>\n` +
+  `<<<MULLION_BRIEFING_START>>>\nThe skill lives at .claude/skills/gendemo/SKILL.md.\n<<<MULLION_BRIEFING_END>>>\n`;
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof ChildProcess>();
@@ -43,6 +54,33 @@ vi.mock("node:child_process", async (importOriginal) => {
       setImmediate(() => ee.emit("close", 0));
       return ee;
     }),
+    // Issue #1101 — scaffold-generate.ts's own defaultSpawnGenerationTurn
+    // (called by the new /internal/run-generation-turn route on the AGENT
+    // app) uses `execFile`, not `spawn` — untouched by the fake above, so
+    // without this it would try to invoke a REAL `bwrap`/generation-agent
+    // CLI binary, exactly the "no real, costly LLM call" hazard this
+    // module's own test suite (scaffold-generate.test.ts) documents
+    // avoiding. `bwrap` itself always fails here (simulating a host without
+    // a usable bwrap) so isSandboxCapable() resolves false and
+    // defaultSpawnGenerationTurn falls back to its plain, unsandboxed
+    // execFile call — sandboxing itself is scaffold-generate.test.ts's own
+    // job, not this integration suite's. Any OTHER bin (the generation
+    // agent's own CLI, e.g. "claude") returns a well-formed generation-turn
+    // stdout instead of ever actually running.
+    execFile: vi.fn(
+      (
+        file: string,
+        _args: string[],
+        _options: unknown,
+        callback: (err: Error | null, stdout: string, stderr: string) => void,
+      ) => {
+        if (file === "bwrap") {
+          setImmediate(() => callback(new Error("bwrap not available (test double)"), "", ""));
+          return;
+        }
+        setImmediate(() => callback(null, GENERATE_STDOUT, ""));
+      },
+    ),
   };
 });
 
@@ -207,5 +245,54 @@ describe("multi-host scaffold setup (issue #895)", () => {
     expect(log).toContain("chore: scaffold Mullion integration (demo2)");
 
     commitWipSpy.mockRestore();
+  });
+
+  // Issue #1101 — /setup/generate's own 501 guard is gone; this is the
+  // end-to-end proof it now genuinely works for a remote-hosted project,
+  // reaching the AGENT app's own POST /internal/run-generation-turn (via
+  // RemoteHostClient.resolveRunGenerationTurn), which runs the
+  // create-worktree/spawn/teardown lifecycle on the AGENT's own filesystem
+  // — never on the primary's.
+  it("/setup/generate succeeds for a remote-hosted project — the generation turn runs on the AGENT, not locally", async () => {
+    const remoteHostClientModule = await import("../../src/services/remote-host-client.js");
+    const turnSpy = vi.spyOn(
+      remoteHostClientModule.RemoteHostClient.prototype,
+      "resolveRunGenerationTurn",
+    );
+
+    const res = await primary.app.inject({
+      method: "POST",
+      url: `/api/projects/${projectId}/setup/generate`,
+      payload: { slug: "gendemo" },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.previewId).toBeTypeOf("string");
+    expect(body.files).toEqual(
+      expect.arrayContaining([
+        "AGENTS.md",
+        ".claude/skills/gendemo/SKILL.md",
+        ".claude/agents/gendemo-reviewer.md",
+      ]),
+    );
+
+    expect(turnSpy).toHaveBeenCalled();
+    // Every argument came from THIS project's own real cwd/resolved baseRef
+    // — never a hardcoded/local stand-in.
+    const [turnCwd, turnSlug] = turnSpy.mock.calls[0];
+    expect(turnCwd).toBe(cwd);
+    expect(turnSlug).toBe("gendemo");
+
+    // The generated content actually landed in the scratch preview
+    // worktree, sourced from the (faked) agent turn's stdout, not the
+    // static placeholder computeScaffold falls back to without it.
+    const worktreePath = path.join(cwd, ".mullion-worktrees", "setup-gendemo");
+    const skill = fs.readFileSync(
+      path.join(worktreePath, ".claude", "skills", "gendemo", "SKILL.md"),
+      "utf8",
+    );
+    expect(skill).toContain("Real invariant.");
+
+    turnSpy.mockRestore();
   });
 });
