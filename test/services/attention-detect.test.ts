@@ -3,6 +3,7 @@ import {
   detectAttentionSignals,
   classifyActivityFromTitle,
   detectAltScreenSwitch,
+  detectBracketedPaste,
   applyMouseModeChanges,
   carryPartialEscape,
   detectCwdChange,
@@ -844,5 +845,31 @@ describe("advanceAttention — output-immune confirmed kinds (attention-hook har
     expect(pending.confirmedKind).toBeNull();
     const cancelled = advanceAttention(pending, { type: "output", now: T0 + 100 }).next;
     expect(cancelled.confirmedKind).toBeNull();
+  });
+});
+
+describe("detectBracketedPaste", () => {
+  it("returns null when no bracketed-paste sequence is present", () => {
+    expect(detectBracketedPaste("just some output\n")).toBeNull();
+  });
+
+  it("returns true for a bracketed-paste enable sequence", () => {
+    expect(detectBracketedPaste(`${ESC}[?2004h`)).toBe(true);
+  });
+
+  it("returns false for a bracketed-paste disable sequence", () => {
+    expect(detectBracketedPaste(`${ESC}[?2004l`)).toBe(false);
+  });
+
+  it("last match wins when both enable and disable appear in one chunk", () => {
+    expect(detectBracketedPaste(`${ESC}[?2004h${ESC}[?2004l`)).toBe(false);
+  });
+
+  it("does not match a partial sequence (split across reads)", () => {
+    expect(detectBracketedPaste(`${ESC}[?200`)).toBeNull();
+  });
+
+  it("matches when the full sequence arrives after a carry", () => {
+    expect(detectBracketedPaste(`${ESC}[?2004h`)).toBe(true);
   });
 });

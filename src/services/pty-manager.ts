@@ -1763,8 +1763,15 @@ export class Session {
     // Issue #1155 — bracketed paste mode: same "persist across reattach"
     // rationale as inAltScreen/mouseTracking above. Restored from termModes
     // alongside the other two, validated as boolean.
+    //
+    // HOWEVER: unlike alt-screen (a cosmetic no-op if stale) or mouse-
+    // tracking (a benign no-op for most programs), a stale bracketedPaste
+    //=true causes the next client paste to be wrapped in ESC[200~..ESC[201~
+    // bytes that a program NOT in bracketed-paste mode won't strip — the
+    // user sees literal wrapper bytes in the buffer. Reset to false on
+    // respawn so the new process's shell/program can re-enable it cleanly.
     if (s.termModes != null && typeof s.termModes.bracketedPaste === "boolean") {
-      this.bracketedPaste = s.termModes.bracketedPaste;
+      this.bracketedPaste = false;
     }
     // Fresh-review finding — `turnEndPingSent` itself isn't persisted (it's
     // not in StoredStateFields, same as backgroundTasksAt), so it would
