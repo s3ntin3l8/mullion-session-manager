@@ -980,6 +980,17 @@ export function applySettingsPatch(
   ) {
     app.reconfigureEventRetention();
   }
+  // Issue #1128 — fans out a re-enable to every registered agent host on
+  // the injectMullionBundle false->true edge — see plugins/bundle-sync.ts's
+  // reenableAgentBundles for the full reasoning (including why this does
+  // NOT also resync the primary here). Checked as the false->true edge
+  // specifically, not just "next is true": every other PATCH that leaves
+  // injectMullionBundle unchanged at `true` (an unrelated settings field,
+  // or a redundant re-write of the same value) must not re-trigger a full
+  // agent-host network fan-out on every request.
+  if (next.sessions.injectMullionBundle && !previous.sessions.injectMullionBundle) {
+    app.reenableAgentBundles();
+  }
 
   return next;
 }
