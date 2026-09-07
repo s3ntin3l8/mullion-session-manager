@@ -45,8 +45,9 @@ const { closeDb } = await import("../../src/db/client.js");
 const { projects } = await import("../../src/db/schema.js");
 const { writeProjectSkill, writeProjectReviewerAgent } =
   await import("../../src/services/project-tooling.js");
-const { scaffoldSkillPath, scaffoldReviewerPath } =
+const { scaffoldSkillPath, scaffoldReviewerPath, scaffoldStampLine } =
   await import("../../src/services/mullion-scaffold.js");
+const { discoverCommittedScaffold } = await import("../../src/services/session-lifecycle.js");
 const { gitEnv } = await import("../../src/services/git-env.js");
 
 const tmpDb = path.join(os.tmpdir(), `session-lifecycle-scaffold-gate-test-${process.pid}.db`);
@@ -381,6 +382,77 @@ describe("session-lifecycle.ts — scaffold-committed-file gate on projectSkill/
     expect(fs.existsSync(composedBundleDir(app, sessionId))).toBe(false);
 
     await app.close();
+  });
+});
+
+// Issue #1123 — discoverCommittedScaffold now runs two passes over the
+// same candidate set: identity (a file carrying its own slug's stamp,
+// mullion-scaffold.ts's scaffoldStampLine) first, then the original shape
+// fallback (a file simply existing, stamped or not) only for whichever
+// flag(s) identity didn't already confirm. Both passes converge on the same
+// final `skillCommitted`/`reviewerCommitted` value — this exercises
+// discoverCommittedScaffold DIRECTLY (not through a full session spawn) so
+// each pass is independently provable, since the composed-bundle-level
+// observation the other tests in this file use can't distinguish "true via
+// pass 1" from "true via pass 2" — both look identical from outside.
+describe("discoverCommittedScaffold — identity stamp vs shape fallback (issue #1123)", () => {
+  it("confirms via the identity pass (stamp) alone", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "scaffold-gate-stamp-identity-"));
+    try {
+      const slug = "acme-widgets";
+      const skillPath = path.join(dir, scaffoldSkillPath(slug));
+      const reviewerPath = path.join(dir, scaffoldReviewerPath(slug));
+      fs.mkdirSync(path.dirname(skillPath), { recursive: true });
+      fs.writeFileSync(
+        skillPath,
+        `---\nname: ${slug}\ndescription: "x"\n---\n\n${scaffoldStampLine(slug)}\n\nBody.\n`,
+      );
+      fs.mkdirSync(path.dirname(reviewerPath), { recursive: true });
+      fs.writeFileSync(
+        reviewerPath,
+        `---\nname: ${slug}-reviewer\ndescription: "x"\n---\n\n${scaffoldStampLine(slug)}\n\nBody.\n`,
+      );
+
+      expect(discoverCommittedScaffold(dir)).toEqual({
+        skillCommitted: true,
+        reviewerCommitted: true,
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // The accepted #1123 false positive, kept deliberately (see issue #1143
+  // for retiring it once every scaffolded repo has been re-scaffolded and
+  // so carries a stamp) — an unrelated skill/reviewer pair with no stamp at
+  // all still suppresses, via pass 2 only. Named after this repo's own
+  // `.claude/skills/mullion-review-invariants` +
+  // `.claude/agents/mullion-reviewer.md`, the real example that motivated
+  // this issue.
+  it("still confirms via the shape fallback (pass 2) when the file exists but carries no stamp", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "scaffold-gate-stamp-fallback-"));
+    try {
+      const slug = "mullion-review-invariants";
+      const reviewerSlug = "mullion-reviewer";
+      const skillPath = path.join(dir, scaffoldSkillPath(slug));
+      const reviewerPath = path.join(dir, scaffoldReviewerPath(reviewerSlug));
+      fs.mkdirSync(path.dirname(skillPath), { recursive: true });
+      fs.writeFileSync(skillPath, SKILL_CONTENT);
+      fs.mkdirSync(path.dirname(reviewerPath), { recursive: true });
+      fs.writeFileSync(reviewerPath, REVIEWER_CONTENT);
+
+      // Sanity check the test's own premise: neither file carries a stamp
+      // for its own slug — if it did, this wouldn't be exercising pass 2.
+      expect(fs.readFileSync(skillPath, "utf8")).not.toContain(scaffoldStampLine(slug));
+      expect(fs.readFileSync(reviewerPath, "utf8")).not.toContain(scaffoldStampLine(reviewerSlug));
+
+      expect(discoverCommittedScaffold(dir)).toEqual({
+        skillCommitted: true,
+        reviewerCommitted: true,
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

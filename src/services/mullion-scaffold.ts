@@ -24,6 +24,90 @@ import { buildWorkflowConventionsText } from "./workflow-conventions.js";
 export const POINTER_MARKER_START = "<!-- mullion:pointer:start -->";
 export const POINTER_MARKER_END = "<!-- mullion:pointer:end -->";
 
+// Issue #1123 — session-lifecycle.ts's committed-scaffold gate used to match
+// purely on SHAPE (a `.claude/skills/<slug>/SKILL.md` +
+// `.claude/agents/<slug>-reviewer.md` pair, any slug), which false-positives
+// on any repo that happens to carry an unrelated skill/reviewer pair with no
+// connection to Mullion's own scaffold feature — this repo's own
+// `.claude/skills/mullion-review-invariants` + `.claude/agents/
+// mullion-reviewer.md` is a real example. This single-line marker gives the
+// gate an identity signal to check FIRST, before falling back to the shape
+// match: a file this exact function wrote carries this exact line for its
+// own slug, so the gate can tell "Mullion actually scaffolded this" apart
+// from "something shape-compatible happens to live here."
+//
+// Lives in the file's BODY, never its YAML frontmatter — every generated
+// skill/reviewer file already promises frontmatter with exactly `name`/
+// `description` (skill) or `name`/`description`/`tools`/`model` (reviewer),
+// consumed by CLI-specific parsers (deriveContentName in
+// hook-adapters/mullion-bundle.ts, each CLI's own skill/subagent loader). A
+// stray extra frontmatter key risks one of those parsers in a way a body
+// comment — inert markdown/prose to every one of them — never does.
+export function scaffoldStampLine(slug: string): string {
+  return `<!-- mullion:scaffold:${slug} -->`;
+}
+
+/** Whether `contents` carries `slug`'s own stamp — deliberately a plain
+ * substring check, not position-sensitive: `stampScaffoldBody` below always
+ * places it right after the frontmatter, but detection (the gate's only use
+ * of this) shouldn't break if a human moves it while hand-editing. Safe
+ * against slug-prefix collisions (`"foo"` vs `"foobar"`) because the full
+ * stamp line's trailing ` -->` is part of the match. */
+export function hasScaffoldStamp(contents: string, slug: string): boolean {
+  return contents.includes(scaffoldStampLine(slug));
+}
+
+/**
+ * Inserts `slug`'s own stamp as the first line of BODY content, immediately
+ * after the file's YAML frontmatter block. Idempotent by construction for
+ * computeScaffold's own use (below): every input this is ever called with
+ * (the static template, or `options.generated`) is raw, unstamped content —
+ * this only guards against a generation agent's own output happening to
+ * already contain the literal marker text, not against computeScaffold
+ * calling this twice on its own prior output (it never does — see
+ * `computeScaffold`'s own "create once, never overwrite" comment: a file
+ * that already exists is preserved verbatim and this function is never
+ * called on it again).
+ */
+function stampScaffoldBody(contents: string, slug: string): string {
+  const stamp = scaffoldStampLine(slug);
+  // mullion-reviewer, this PR's own review pass — the frontmatter-detection
+  // boundary here MUST stay at least as lenient as skills.ts's own
+  // `parseFlatFrontmatterFields` (`/^---\r?\n([\s\S]*?)\r?\n---/`), the
+  // real parser both CLI-native discovery and deriveContentName
+  // (hook-adapters/mullion-bundle.ts) rely on to recognize this file's
+  // frontmatter at all. That parser only requires finding `\n---` — it
+  // does not require the closing delimiter to be immediately followed by
+  // a newline, so a file with e.g. trailing whitespace after the closing
+  // `---` still parses there. An earlier version of this regex REQUIRED
+  // `\r?\n` right after the closing `---`, which is a real, narrower
+  // requirement — feeding that mismatch a file that skills.ts would parse
+  // fine (trailing whitespace on the closing line) fell into the "no
+  // frontmatter found" branch below, which prepends the stamp BEFORE the
+  // `---`, corrupting a file that otherwise loads correctly. `[^\n]*\r?\n?`
+  // additionally consumes whatever else trails the delimiter on its own
+  // line (skills.ts's parser doesn't care what that is), so the stamp
+  // always lands on its own fresh line after the WHOLE closing-delimiter
+  // line, not glued onto the end of it.
+  const frontmatterMatch = /^---\r?\n[\s\S]*?\r?\n---[^\n]*\r?\n?/.exec(contents);
+  if (!frontmatterMatch) {
+    // Defensive fallback — every caller of this function always produces
+    // frontmatter (the static template above and the generation prompt
+    // both require it), so this branch is not expected to be exercised in
+    // production.
+    return contents.startsWith(`${stamp}\n`) ? contents : `${stamp}\n\n${contents}`;
+  }
+  // The match itself may not end in a newline (a closing `---` with
+  // nothing after it at all, e.g. no trailing newline in the source) —
+  // padded here, AFTER slicing `rest` against the real match length below,
+  // so the stamp is never glued directly onto the same line as `---`.
+  let frontmatter = frontmatterMatch[0];
+  const rest = contents.slice(frontmatterMatch[0].length);
+  if (!frontmatter.endsWith("\n")) frontmatter += "\n";
+  if (rest.startsWith(`${stamp}\n`)) return contents;
+  return `${frontmatter}${stamp}\n\n${rest.replace(/^\n+/, "")}`;
+}
+
 // PR-6 (scaffold Mullion integration as a PR) — the zero-repo-change
 // delivery mechanisms PR-1 through PR-5 built (the shipped bundle,
 // per-project skills/reviewer authored from the UI) only ever apply
@@ -397,9 +481,13 @@ export function computeScaffold(
   // existing repo's own content preserved) is what the `.agents/skills`
   // mirror below copies — never its own independently-regenerated starter
   // text, which would silently diverge from a preserved `.claude/skills`
-  // copy the moment a re-scaffold ran.
+  // copy the moment a re-scaffold ran. The stamp is only ever added to
+  // FRESH content (generated or template) — an already-existing file is
+  // preserved byte-for-byte, unstamped or not, same as every other field
+  // this function refuses to silently rewrite.
   const skillContent =
-    existingFiles[skillPath] ?? options.generated?.skill ?? skillFileContents(slug);
+    existingFiles[skillPath] ??
+    stampScaffoldBody(options.generated?.skill ?? skillFileContents(slug), slug);
   if (!skillAlreadyExists) {
     entries.push({ path: skillPath, kind: "file", contents: skillContent });
   }
@@ -409,7 +497,10 @@ export function computeScaffold(
     entries.push({
       path: reviewerPath,
       kind: "file",
-      contents: options.generated?.reviewer ?? reviewerAgentFileContents(slug),
+      contents: stampScaffoldBody(
+        options.generated?.reviewer ?? reviewerAgentFileContents(slug),
+        slug,
+      ),
     });
   }
 

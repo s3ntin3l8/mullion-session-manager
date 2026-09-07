@@ -2346,6 +2346,113 @@ describe("internal routes (agent role, issue #26)", () => {
       fs.rmSync(outsideRoots, { recursive: true, force: true });
       await app.close();
     });
+
+    // Issue #1124 — mullion-reviewer, this PR's own review pass: this
+    // route's siblings above (/internal/read-files, /internal/write-files)
+    // are each directly exercised via app.inject() here; this one was
+    // originally only reached indirectly
+    // (session-lifecycle-scaffold-gate-remote.test.ts mocks
+    // remote-host-client.js entirely, so it never runs this handler). These
+    // tests are the actual proof that RemoteHostClient.scaffoldScan's
+    // hardcoded "/internal/scaffold-scan" path string, its request/response
+    // shape, and this route's registration all genuinely agree with each
+    // other — a drift on either side would pass every other test in this
+    // PR. Nested inside this describe block (not a sibling) because it
+    // reuses makeScaffoldRepo, which is scoped here.
+    describe("POST /internal/scaffold-scan (#1124)", () => {
+      it("reports a committed scaffold found on this host's own filesystem", async () => {
+        const { scaffoldSkillPath, scaffoldReviewerPath, scaffoldStampLine } =
+          await import("../../src/services/mullion-scaffold.js");
+        const { repoRoot, cwd } = await makeScaffoldRepo();
+        const previousRoots = process.env.PROJECTS_ROOTS;
+        process.env.PROJECTS_ROOTS = repoRoot;
+        const app = await buildApp();
+
+        const slug = "acme-widgets";
+        const skillPath = path.join(cwd, scaffoldSkillPath(slug));
+        const reviewerPath = path.join(cwd, scaffoldReviewerPath(slug));
+        fs.mkdirSync(path.dirname(skillPath), { recursive: true });
+        fs.writeFileSync(
+          skillPath,
+          `---\nname: ${slug}\ndescription: "x"\n---\n\n${scaffoldStampLine(slug)}\n\nBody.\n`,
+        );
+        fs.mkdirSync(path.dirname(reviewerPath), { recursive: true });
+        fs.writeFileSync(
+          reviewerPath,
+          `---\nname: ${slug}-reviewer\ndescription: "x"\n---\n\n${scaffoldStampLine(slug)}\n\nBody.\n`,
+        );
+
+        const res = await app.inject({
+          method: "POST",
+          url: "/internal/scaffold-scan",
+          headers: { authorization: `Bearer ${TOKEN}` },
+          payload: { cwd },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toEqual({ skillCommitted: true, reviewerCommitted: true });
+
+        process.env.PROJECTS_ROOTS = previousRoots;
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+        await app.close();
+      });
+
+      it("reports no committed scaffold when none exists", async () => {
+        const { repoRoot, cwd } = await makeScaffoldRepo();
+        const previousRoots = process.env.PROJECTS_ROOTS;
+        process.env.PROJECTS_ROOTS = repoRoot;
+        const app = await buildApp();
+
+        const res = await app.inject({
+          method: "POST",
+          url: "/internal/scaffold-scan",
+          headers: { authorization: `Bearer ${TOKEN}` },
+          payload: { cwd },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toEqual({ skillCommitted: false, reviewerCommitted: false });
+
+        process.env.PROJECTS_ROOTS = previousRoots;
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+        await app.close();
+      });
+
+      it("requires a cwd body, and rejects a cwd outside PROJECTS_ROOTS", async () => {
+        const app = await buildApp();
+        const missing = await app.inject({
+          method: "POST",
+          url: "/internal/scaffold-scan",
+          headers: { authorization: `Bearer ${TOKEN}` },
+          payload: {},
+        });
+        expect(missing.statusCode).toBe(400);
+
+        const outsideRoots = fs.mkdtempSync(
+          path.join(os.tmpdir(), "internal-scaffold-scan-outside-"),
+        );
+        const outside = await app.inject({
+          method: "POST",
+          url: "/internal/scaffold-scan",
+          headers: { authorization: `Bearer ${TOKEN}` },
+          payload: { cwd: outsideRoots },
+        });
+        expect(outside.statusCode).toBe(400);
+
+        fs.rmSync(outsideRoots, { recursive: true, force: true });
+        await app.close();
+      });
+
+      it("rejects a body with an unexpected extra property (additionalProperties: false)", async () => {
+        const app = await buildApp();
+        const res = await app.inject({
+          method: "POST",
+          url: "/internal/scaffold-scan",
+          headers: { authorization: `Bearer ${TOKEN}` },
+          payload: { cwd: "/tmp/whatever", slug: "not-a-real-field" },
+        });
+        expect(res.statusCode).toBe(400);
+        await app.close();
+      });
+    });
   });
 
   describe("POST /internal/run-generation-turn (#1101)", () => {

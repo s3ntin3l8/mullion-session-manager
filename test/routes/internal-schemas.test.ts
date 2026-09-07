@@ -22,6 +22,7 @@ import {
   gitWorktreeResumeSchema,
   readFilesSchema,
   writeFilesSchema,
+  scaffoldScanSchema,
   gitCommitWipSchema,
   bundleSyncRemoveSchema,
   promoteDecisionSchema,
@@ -352,6 +353,20 @@ describe("internal-schemas.ts — byte-identical output regression guard", () =>
         properties: {
           cwd: { type: "string", minLength: 1 },
           paths: { type: "array", items: { type: "string", minLength: 1 }, maxItems: 200 },
+        },
+      },
+    });
+  });
+
+  // Issue #1124
+  it("scaffoldScanSchema", () => {
+    expect(scaffoldScanSchema).toEqual({
+      body: {
+        type: "object",
+        required: ["cwd"],
+        additionalProperties: false,
+        properties: {
+          cwd: { type: "string", minLength: 1 },
         },
       },
     });

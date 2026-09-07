@@ -1000,6 +1000,22 @@ export class RemoteHostClient {
     });
   }
 
+  /** Reports whether a Mullion scaffold is actually committed under `cwd`
+   * on this agent's own filesystem (#1124) — mirrors
+   * /internal/scaffold-scan's `{cwd}` -> `{skillCommitted, reviewerCommitted}`
+   * shape. See session-lifecycle.ts's discoverCommittedScaffoldOnHost for
+   * the caller-side dispatch this backs, and discoverCommittedScaffold's own
+   * doc comment for what "committed" means here. */
+  async scaffoldScan(
+    cwd: string,
+  ): Promise<{ skillCommitted: boolean; reviewerCommitted: boolean }> {
+    return this.request("/internal/scaffold-scan", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ cwd }),
+    });
+  }
+
   /** Reads this agent's own persisted "bundle disabled" flag (#1089) —
    * mirrors /internal/bundle-sync/status' `{disabled}` shape. A single
    * local JSON-file read on the agent side, so the default timeout is
