@@ -372,10 +372,10 @@ export function listOwnedScopes(
  * Resolves which unit — if any — THIS instance should treat as `id`'s own
  * scope, per listOwnedScopes()'s ownership rule above. Shared by stopScope
  * and listSessionProcesses below, both of which need the identical
- * confirmed-owner-else-legacy-fallback-else-nothing resolution — see
- * stopScope's own doc comment for the full reasoning behind each branch,
- * repeated here only in brief so a future change to this policy has one
- * place to change instead of two silently drifting copies:
+ * confirmed-owner-else-nothing resolution — see stopScope's own doc comment
+ * for the full reasoning behind each branch, repeated here only in brief so
+ * a future change to this policy has one place to change instead of two
+ * silently drifting copies:
  *
  *   - a listing row resolves `id` to an owned unit -> that unit.
  *   - the listing succeeded and does not claim `id` at all -> `undefined`
@@ -390,10 +390,9 @@ export function listOwnedScopes(
  *     — both expected to be rare, and both still caught by
  *     scripts/check-scope-leaks.ts as an orphaned-looking unit rather than
  *     failing louder here.
- *   - the listing itself failed (systemctl/D-Bus problem) -> the legacy
- *     `scopeUnitName(id)`, this function's own un-namespaced pre-PR-1
- *     behaviour — the one fallback that can act on an id this instance
- *     hasn't actually confirmed owning.
+ *   - the listing itself failed (systemctl/D-Bus problem) -> `undefined` if
+ *     `fallbackOnListingFailure` is false, else the legacy `scopeUnitName(id)`
+ *     — see the two call sites below for why they disagree on this one case.
  *
  * Residual race, accepted: the listing and whatever the caller does with
  * the resolved unit are two separate spawns, so a scope could in principle
@@ -407,9 +406,13 @@ async function resolveOwningUnit(
   sessionsDir: string,
   instanceId: string,
   id: string,
+  opts: { fallbackOnListingFailure: boolean },
 ): Promise<string | undefined> {
   const listing = await listOwnedScopes(sessionsDir, instanceId, { all: true });
-  return listing.failed ? `${scopeUnitName(id)}.scope` : listing.owned.get(id);
+  if (listing.failed) {
+    return opts.fallbackOnListingFailure ? `${scopeUnitName(id)}.scope` : undefined;
+  }
+  return listing.owned.get(id);
 }
 
 /**
@@ -420,22 +423,31 @@ async function resolveOwningUnit(
  * above first; stopping a unit this instance hasn't confirmed it owns is
  * #1137 inverted (killing a live session belonging to a DIFFERENT instance
  * on the same host). See that function's own doc comment for the full
- * per-case breakdown (owned / not-ours / unverifiable / listing-failed) —
- * only the listing-failure fallback can ever act on an unconfirmed id, and
- * that's accepted there as the one case where a session could in principle
- * leak instead of stopping (`terminate()` racing a transient systemctl
- * failure): scripts/check-scope-leaks.ts is the tool that catches a leak,
- * and that's a better failure mode than risking a different instance's
- * live session on the same host. This function now costs two sequential
- * spawns (the listing, then the stop itself) instead of one — `terminate()`
- * is rare enough that the added latency doesn't matter in practice.
+ * per-case breakdown (owned / not-ours / unverifiable / listing-failed).
+ *
+ * Hermes review, this PR — `fallbackOnListingFailure: false` here, unlike
+ * listSessionProcesses below: falling back to the un-confirmed legacy
+ * `scopeUnitName(id)` on a listing failure would be the one path left where
+ * this function could still stop a unit it never actually confirmed owning
+ * — precisely under the same degraded-bus conditions where
+ * isMasterAlive/isMasterAliveBatch deliberately refuse to answer (fail
+ * open to "unknown"). Mirroring that posture here instead: a listing
+ * failure means stopScope does nothing, and the session leaks (keeps
+ * running) rather than risks killing a different instance's live one.
+ * scripts/check-scope-leaks.ts is the tool that catches that leak, and
+ * that's a better failure mode than the alternative. This function now
+ * costs two sequential spawns (the listing, then the stop itself) instead
+ * of one — `terminate()` is rare enough that the added latency doesn't
+ * matter in practice.
  */
 export async function stopScope(
   sessionsDir: string,
   instanceId: string,
   id: string,
 ): Promise<void> {
-  const unit = await resolveOwningUnit(sessionsDir, instanceId, id);
+  const unit = await resolveOwningUnit(sessionsDir, instanceId, id, {
+    fallbackOnListingFailure: false,
+  });
   if (unit === undefined) return;
   return new Promise((resolve) => {
     const child = spawnChild("systemctl", ["--user", "stop", unit], {
@@ -467,7 +479,17 @@ export async function stopScope(
  *
  *   - `listing.owned.has(id)` -> `true`.
  *   - neither owned nor unverifiable -> `false` (a confident negative — no
- *     row anywhere plausibly names this id as active).
+ *     row anywhere plausibly names this id as active). This includes a row
+ *     whose socket parses CLEANLY but resolves under a DIFFERENT instance's
+ *     sessionsDir (Hermes review, this PR): since systemd forbids two units
+ *     sharing a name, if THIS instance's own session `id` were still alive
+ *     it would hold that exact unit name itself — a foreign-owned
+ *     `crs-session-<id>` scope existing at all means this instance's own
+ *     same-id session has already ended (or, pre-any-namespacing, raced a
+ *     genuine #1137 collision at creation and never held the name to begin
+ *     with). `false` is the correct, confident answer here, not
+ *     "unverifiable" — see the dedicated test coverage in
+ *     session-process.test.ts locking this outcome in.
  *   - `listing.unverifiable.has(id)` -> id OMITTED from the result. A row
  *     could name `id`, but this instance can't confirm ownership, so it
  *     must not assert either answer.
@@ -543,28 +565,33 @@ export async function isMasterAlive(
  * in-process with no PID of their own (see agent-detect.ts).
  *
  * Issue #1140 (PR 1) — same resolveOwningUnit() resolution stopScope() uses
- * above (see its doc comment for the full per-case breakdown), for the same
- * reason: this is a best-effort inventory, not a security boundary, and a
- * transient systemctl failure here should degrade to this function's pre-PR
- * behaviour rather than silently reporting no processes for a session that
- * may well be alive. Returns `[]` for a scope that isn't owned/active, same
- * as isMasterAlive() would report — listScopeProcesses() itself already
- * returns `[]` for a unit with no live cgroup. Like stopScope, this now
- * costs two sequential spawns (the ownership listing, then
- * listScopeProcesses' own cgroup query) instead of one — unlike stopScope
- * (rare, terminate()-only), this is reachable from a route
- * (GET /api/sessions/:id/processes, src/routes/sessions.ts) that a client
- * could poll, so the added latency is more visible here; still accepted for
- * PR 1, since correctness (never attributing another instance's processes
- * to this one) matters more than shaving one spawn off a best-effort
- * inventory call.
+ * above (see its doc comment for the full per-case breakdown), EXCEPT with
+ * `fallbackOnListingFailure: true` — unlike stopScope, a wrong attribution
+ * here is harmless (this is a best-effort inventory, not a security
+ * boundary: reporting the legacy name's processes when the listing itself
+ * failed is no worse than this function's pre-PR-1 behaviour), so a
+ * transient systemctl failure degrades gracefully instead of silently
+ * reporting no processes for a session that may well be alive. Returns
+ * `[]` for a scope that isn't owned/active, same as isMasterAlive() would
+ * report — listScopeProcesses() itself already returns `[]` for a unit
+ * with no live cgroup. Like stopScope, this now costs two sequential
+ * spawns (the ownership listing, then listScopeProcesses' own cgroup
+ * query) instead of one — unlike stopScope (rare, terminate()-only), this
+ * is reachable from a route (GET /api/sessions/:id/processes,
+ * src/routes/sessions.ts) that a client could poll, so the added latency
+ * is more visible here; still accepted for PR 1, since correctness (never
+ * attributing another instance's processes to this one on the success
+ * path) matters more than shaving one spawn off a best-effort inventory
+ * call.
  */
 export async function listSessionProcesses(
   sessionsDir: string,
   instanceId: string,
   id: string,
 ): Promise<CgroupProcess[]> {
-  const unit = await resolveOwningUnit(sessionsDir, instanceId, id);
+  const unit = await resolveOwningUnit(sessionsDir, instanceId, id, {
+    fallbackOnListingFailure: true,
+  });
   if (unit === undefined) return [];
   return listScopeProcesses(unit);
 }

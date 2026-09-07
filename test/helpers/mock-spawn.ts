@@ -70,7 +70,13 @@ export function mockChildProcessSpawn(
       return actual.spawn(command, args as string[], options as ChildProcess.SpawnOptions);
     }
 
+    // Assigned synchronously, not inside the setImmediate below — a real
+    // child_process's `.stdout` is available immediately at construction,
+    // before any data ever arrives on it; a caller reading `child.stdout`
+    // synchronously right after this returns must see a real EventEmitter
+    // here too, not `undefined` (Hermes review, this PR).
     const ee = new EventEmitter() as EventEmitter & { stdout?: EventEmitter };
+    ee.stdout = new EventEmitter();
     setImmediate(() => {
       ee.emit(event, exitCode);
       // Issue #1140 — a real child_process always eventually fires 'close'
@@ -90,7 +96,6 @@ export function mockChildProcessSpawn(
       // existing assertion built around it. Guarded so a caller that
       // explicitly asked for `event: "close"` doesn't get it fired twice.
       if (event !== "close") {
-        ee.stdout = new EventEmitter();
         setImmediate(() => ee.emit("close", exitCode));
       }
     });

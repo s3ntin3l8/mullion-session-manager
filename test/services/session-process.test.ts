@@ -320,15 +320,18 @@ describe("stopScope", () => {
     expect(stopCalls).toEqual([]);
   });
 
-  // The one accepted regression-shaped exception, documented on stopScope
-  // itself: a total listing failure falls back to today's (pre-#1140)
-  // unconditional stop, rather than leaking the scope. Only safe because
-  // PR1 doesn't rename anything yet — `scopeUnitName(id)` is still THIS
-  // instance's own name for `id` with no namespacing collision risk.
-  it("falls back to stopping the legacy unit name outright when the listing itself fails", async () => {
+  // Hermes review, this PR — the read path (isMasterAlive/isMasterAliveBatch)
+  // already fails open to "unknown" on a listing failure; stopScope must
+  // mirror that instead of falling back to an un-confirmed unit name, or it
+  // becomes the one path that can still stop a DIFFERENT instance's session
+  // under the exact degraded-bus conditions the read path refuses to answer
+  // under. The session leaks (keeps running) instead — accepted, since
+  // scripts/check-scope-leaks.ts is the tool that catches a leak, and
+  // that's a better failure mode than risking a cross-instance kill.
+  it("does nothing (does not fall back to the legacy name) when the listing itself fails", async () => {
     listUnitsShouldError = true;
     await expect(stopScope(SESSIONS_DIR, INSTANCE_ID, "1")).resolves.toBeUndefined();
-    expect(stopCalls).toEqual([["--user", "stop", "crs-session-1.scope"]]);
+    expect(stopCalls).toEqual([]);
   });
 
   it("resolves (does not reject) even when the stop spawn itself errors", async () => {
@@ -474,6 +477,21 @@ describe("isMasterAliveBatch", () => {
   it("resolves an empty record for an empty id list without spawning anything", async () => {
     await expect(isMasterAliveBatch(SESSIONS_DIR, INSTANCE_ID, [])).resolves.toEqual({});
     expect(vi.mocked(spawnChildProcess)).not.toHaveBeenCalled();
+  });
+
+  // Hermes review, this PR — locking in a deliberate outcome: a row whose
+  // socket parses CLEANLY (unlike the "unverifiable" case below) but
+  // resolves under a DIFFERENT instance's sessionsDir is neither owned nor
+  // unverifiable, so it resolves to a confident `false`, not omitted. This
+  // is correct, not a collision mishandled: systemd forbids two units
+  // sharing a name, so if this instance's own session "1" were still
+  // alive, it would hold this exact unit name itself — a foreign-owned
+  // crs-session-1.scope existing at all means this instance's own session
+  // "1" has already ended.
+  it("resolves a confident false (not omitted) for a same-named unit owned by a different instance", async () => {
+    listUnitsReply = [ownedLine("1", "/some/other/instances/sessions")];
+    const result = await isMasterAliveBatch(SESSIONS_DIR, INSTANCE_ID, ["1"]);
+    expect(result).toEqual({ "1": false });
   });
 
   it("resolves every id false when nothing is owned", async () => {
