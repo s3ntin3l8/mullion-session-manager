@@ -85,6 +85,14 @@ async function waitUntil(check: () => boolean | Promise<boolean>) {
 const SKILL_CONTENT = `---\nname: my-project-skill\ndescription: "A project skill."\n---\n\nBody.\n`;
 const REVIEWER_CONTENT = `---\nname: my-project-reviewer\ndescription: "A reviewer subagent."\ntools: Read\nmodel: inherit\n---\n\nBody.\n`;
 
+function stampedSkillContent(slug: string): string {
+  return `---\nname: ${slug}\ndescription: "x"\n---\n\n${scaffoldStampLine(slug)}\n\nBody.\n`;
+}
+
+function stampedReviewerContent(slug: string): string {
+  return `---\nname: ${slug}-reviewer\ndescription: "x"\ntools: Read\nmodel: inherit\n---\n\n${scaffoldStampLine(slug)}\n\nBody.\n`;
+}
+
 function git(cwd: string, args: string[]) {
   execFileSync("git", args, { cwd, stdio: "pipe", env: gitEnv() });
 }
@@ -129,9 +137,9 @@ describe("session-lifecycle.ts — scaffold-committed-file gate on projectSkill/
     const skillPath = path.join(projectDir, scaffoldSkillPath(slug));
     const reviewerPath = path.join(projectDir, scaffoldReviewerPath(slug));
     fs.mkdirSync(path.dirname(skillPath), { recursive: true });
-    fs.writeFileSync(skillPath, SKILL_CONTENT);
+    fs.writeFileSync(skillPath, stampedSkillContent(slug));
     fs.mkdirSync(path.dirname(reviewerPath), { recursive: true });
-    fs.writeFileSync(reviewerPath, REVIEWER_CONTENT);
+    fs.writeFileSync(reviewerPath, stampedReviewerContent(slug));
 
     app.db.update(projects).set({ slug }).where(eq(projects.id, projectId)).run();
 
@@ -307,7 +315,7 @@ describe("session-lifecycle.ts — scaffold-committed-file gate on projectSkill/
 
     const reviewerPath = path.join(projectDir, scaffoldReviewerPath(slug));
     fs.mkdirSync(path.dirname(reviewerPath), { recursive: true });
-    fs.writeFileSync(reviewerPath, REVIEWER_CONTENT);
+    fs.writeFileSync(reviewerPath, stampedReviewerContent(slug));
 
     app.db.update(projects).set({ slug }).where(eq(projects.id, projectId)).run();
 
@@ -360,9 +368,9 @@ describe("session-lifecycle.ts — scaffold-committed-file gate on projectSkill/
     const skillPath = path.join(projectDir, scaffoldSkillPath(mergedSlug));
     const reviewerPath = path.join(projectDir, scaffoldReviewerPath(mergedSlug));
     fs.mkdirSync(path.dirname(skillPath), { recursive: true });
-    fs.writeFileSync(skillPath, SKILL_CONTENT);
+    fs.writeFileSync(skillPath, stampedSkillContent(mergedSlug));
     fs.mkdirSync(path.dirname(reviewerPath), { recursive: true });
-    fs.writeFileSync(reviewerPath, REVIEWER_CONTENT);
+    fs.writeFileSync(reviewerPath, stampedReviewerContent(mergedSlug));
 
     // Simulates: "bar" was the most recently scaffolded/stamped slug, but
     // its PR never merged into this branch.
@@ -395,7 +403,7 @@ describe("session-lifecycle.ts — scaffold-committed-file gate on projectSkill/
 // each pass is independently provable, since the composed-bundle-level
 // observation the other tests in this file use can't distinguish "true via
 // pass 1" from "true via pass 2" — both look identical from outside.
-describe("discoverCommittedScaffold — identity stamp vs shape fallback (issue #1123)", () => {
+describe("discoverCommittedScaffold — stamp-based identity (issue #1123, pass-2 retired #1143)", () => {
   it("confirms via the identity pass (stamp) alone", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "scaffold-gate-stamp-identity-"));
     try {
@@ -416,20 +424,17 @@ describe("discoverCommittedScaffold — identity stamp vs shape fallback (issue 
       expect(discoverCommittedScaffold(dir)).toEqual({
         skillCommitted: true,
         reviewerCommitted: true,
+        warnings: [],
       });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  // The accepted #1123 false positive, kept deliberately (see issue #1143
-  // for retiring it once every scaffolded repo has been re-scaffolded and
-  // so carries a stamp) — an unrelated skill/reviewer pair with no stamp at
-  // all still suppresses, via pass 2 only. Named after this repo's own
-  // `.claude/skills/mullion-review-invariants` +
-  // `.claude/agents/mullion-reviewer.md`, the real example that motivated
-  // this issue.
-  it("still confirms via the shape fallback (pass 2) when the file exists but carries no stamp", () => {
+  // Issue #1143 — the shape-based fallback (pass 2) was retired. An
+  // unrelated skill/reviewer pair with no stamp is now correctly NOT
+  // detected as a committed scaffold — the stamp is the sole identity signal.
+  it("does NOT confirm an unstamped file — shape fallback retired (#1143)", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "scaffold-gate-stamp-fallback-"));
     try {
       const slug = "mullion-review-invariants";
@@ -441,15 +446,75 @@ describe("discoverCommittedScaffold — identity stamp vs shape fallback (issue 
       fs.mkdirSync(path.dirname(reviewerPath), { recursive: true });
       fs.writeFileSync(reviewerPath, REVIEWER_CONTENT);
 
-      // Sanity check the test's own premise: neither file carries a stamp
-      // for its own slug — if it did, this wouldn't be exercising pass 2.
+      // Sanity check: neither file carries a stamp for its own slug.
       expect(fs.readFileSync(skillPath, "utf8")).not.toContain(scaffoldStampLine(slug));
       expect(fs.readFileSync(reviewerPath, "utf8")).not.toContain(scaffoldStampLine(reviewerSlug));
 
-      expect(discoverCommittedScaffold(dir)).toEqual({
-        skillCommitted: true,
-        reviewerCommitted: true,
+      // Without a stamp, the gate now returns false for both.
+      const result = discoverCommittedScaffold(dir);
+      expect(result).toEqual({
+        skillCommitted: false,
+        reviewerCommitted: false,
+        warnings: expect.arrayContaining([
+          expect.stringContaining('candidate skill "mullion-review-invariants"'),
+          expect.stringContaining('candidate reviewer "mullion-reviewer"'),
+        ]),
       });
+      expect(result.warnings).toHaveLength(2);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Hermes review, PR #1165 — the gate must warn (not fail) when a candidate
+  // path exists on disk but lacks a scaffold stamp. This covers pre-#1123
+  // repos where scaffold files were committed without stamps, and
+  // stampScaffoldBody never rewrites existing content.
+  it("warns when a candidate exists but lacks a stamp — no backfill for pre-#1123 repos", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "scaffold-gate-unstamped-warn-"));
+    try {
+      const slug = "acme-widgets";
+      const skillPath = path.join(dir, scaffoldSkillPath(slug));
+      const reviewerPath = path.join(dir, scaffoldReviewerPath(slug));
+      fs.mkdirSync(path.dirname(skillPath), { recursive: true });
+      fs.writeFileSync(skillPath, SKILL_CONTENT);
+      fs.mkdirSync(path.dirname(reviewerPath), { recursive: true });
+      fs.writeFileSync(reviewerPath, REVIEWER_CONTENT);
+
+      const result = discoverCommittedScaffold(dir);
+      expect(result.skillCommitted).toBe(false);
+      expect(result.reviewerCommitted).toBe(false);
+      expect(result.warnings).toHaveLength(2);
+      expect(result.warnings[0]).toContain(`candidate skill "${slug}"`);
+      expect(result.warnings[0]).toContain("lacks a scaffold stamp");
+      expect(result.warnings[1]).toContain(`candidate reviewer "${slug}"`);
+      expect(result.warnings[1]).toContain("lacks a scaffold stamp");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns empty warnings when all candidates are properly stamped", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "scaffold-gate-stamped-nowarn-"));
+    try {
+      const slug = "acme-widgets";
+      const skillPath = path.join(dir, scaffoldSkillPath(slug));
+      const reviewerPath = path.join(dir, scaffoldReviewerPath(slug));
+      fs.mkdirSync(path.dirname(skillPath), { recursive: true });
+      fs.writeFileSync(
+        skillPath,
+        `---\nname: ${slug}\ndescription: "x"\n---\n\n${scaffoldStampLine(slug)}\n\nBody.\n`,
+      );
+      fs.mkdirSync(path.dirname(reviewerPath), { recursive: true });
+      fs.writeFileSync(
+        reviewerPath,
+        `---\nname: ${slug}-reviewer\ndescription: "x"\n---\n\n${scaffoldStampLine(slug)}\n\nBody.\n`,
+      );
+
+      const result = discoverCommittedScaffold(dir);
+      expect(result.skillCommitted).toBe(true);
+      expect(result.reviewerCommitted).toBe(true);
+      expect(result.warnings).toEqual([]);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -457,13 +522,11 @@ describe("discoverCommittedScaffold — identity stamp vs shape fallback (issue 
 
   // Hermes review, PR #1150 — pass 1's identity read is bounded (a head
   // read, not the whole file) to keep this off the createSessionRecord hot
-  // path for a large file. Whether a stamp beyond that bound is actually
-  // found via pass 1 or falls through to pass 2's shape fallback isn't
-  // observable from `discoverCommittedScaffold`'s own return value (pass 2
-  // is unconditional existsSync, so an existing file always confirms
-  // either way) — what this guards is the invariant that actually matters:
+  // path for a large file. With the shape fallback retired (#1143), a stamp
+  // beyond that bound is simply not detected — the candidate is treated as
+  // unstamped. What this test guards is the invariant that actually matters:
   // a file far larger than the bound never breaks the gate's correctness.
-  it("stays correct for a file whose stamp sits well past the bounded head read", () => {
+  it("does NOT confirm a file whose stamp sits past the bounded head read (#1143)", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "scaffold-gate-stamp-bound-"));
     try {
       const slug = "acme-widgets";
@@ -476,9 +539,14 @@ describe("discoverCommittedScaffold — identity stamp vs shape fallback (issue 
         skillPath,
         `---\nname: ${slug}\ndescription: "x"\n---\n\n<!-- ${padding} -->\n\n${scaffoldStampLine(slug)}\n\nBody.\n`,
       );
-      expect(discoverCommittedScaffold(dir)).toEqual({
-        skillCommitted: true,
+      // Stamp is past the bound — not detected without the shape fallback.
+      const result = discoverCommittedScaffold(dir);
+      expect(result).toEqual({
+        skillCommitted: false,
         reviewerCommitted: false,
+        warnings: expect.arrayContaining([
+          expect.stringContaining('candidate skill "acme-widgets"'),
+        ]),
       });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -488,16 +556,15 @@ describe("discoverCommittedScaffold — identity stamp vs shape fallback (issue 
   // Hermes review round 2, PR #1150 — verified empirically that opening a
   // FIFO with no writer via `openSync` blocks forever. Pass 1's own
   // `statSync().isFile()` guard keeps that FIFO out of `openSync`
-  // entirely — it still ends up "committed" via pass 2's ordinary
-  // existsSync fallback, same as any other unstamped candidate; what this
-  // test actually proves is the absence of a hang, not a different
-  // result. `mkfifo` has no Windows equivalent, so this is gated the same
+  // entirely. With the shape fallback retired (#1143), the FIFO is simply
+  // not detected — it doesn't carry a stamp, so it's treated as unstamped.
+  // `mkfifo` has no Windows equivalent, so this is gated the same
   // "not win32" way as symlink-dependent tests elsewhere in this
   // codebase. A real hang here (if the fix regressed) would show up as
   // this test timing out, not a normal assertion failure.
   const describeIfMkfifo = process.platform !== "win32" ? describe : describe.skip;
   describeIfMkfifo("a candidate path that is a FIFO, not a regular file", () => {
-    it("pass 1 skips it without ever blocking on openSync — pass 2's plain existsSync still finds it, same as any other unstamped candidate", () => {
+    it("pass 1 skips it without blocking on openSync — unstamped, so not confirmed (#1143)", () => {
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), "scaffold-gate-stamp-fifo-"));
       try {
         const slug = "acme-widgets";
@@ -507,14 +574,12 @@ describe("discoverCommittedScaffold — identity stamp vs shape fallback (issue 
 
         // No writer ever opens the other end — if readFileHeadSync's
         // openSync guard regressed, this call hangs until the test's own
-        // timeout kills it instead of returning. The result itself is
-        // `true` via pass 2's unconditional existsSync (a FIFO existing
-        // at the expected path is still "something is there", same shape
-        // fallback as any other unstamped candidate) — this test's whole
-        // point is the absence of a hang, not a different result.
+        // timeout kills it instead of returning. With the shape fallback
+        // retired, the FIFO is unstamped and not detected.
         expect(discoverCommittedScaffold(dir)).toEqual({
-          skillCommitted: true,
+          skillCommitted: false,
           reviewerCommitted: false,
+          warnings: [],
         });
       } finally {
         fs.rmSync(dir, { recursive: true, force: true });
@@ -547,7 +612,7 @@ describe("session-lifecycle.ts — scaffold gate checks the session's own worktr
 
     const skillPath = path.join(repoDir, scaffoldSkillPath(slug));
     fs.mkdirSync(path.dirname(skillPath), { recursive: true });
-    fs.writeFileSync(skillPath, SKILL_CONTENT);
+    fs.writeFileSync(skillPath, stampedSkillContent(slug));
     git(repoDir, ["add", "-A"]);
     git(repoDir, ["commit", "-m", "scaffold Mullion integration (acme-widgets)", "--no-verify"]);
   });

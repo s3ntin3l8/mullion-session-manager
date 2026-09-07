@@ -1002,13 +1002,13 @@ export class RemoteHostClient {
 
   /** Reports whether a Mullion scaffold is actually committed under `cwd`
    * on this agent's own filesystem (#1124) — mirrors
-   * /internal/scaffold-scan's `{cwd}` -> `{skillCommitted, reviewerCommitted}`
+   * /internal/scaffold-scan's `{cwd}` -> `{skillCommitted, reviewerCommitted, warnings}`
    * shape. See session-lifecycle.ts's discoverCommittedScaffoldOnHost for
    * the caller-side dispatch this backs, and discoverCommittedScaffold's own
    * doc comment for what "committed" means here. */
   async scaffoldScan(
     cwd: string,
-  ): Promise<{ skillCommitted: boolean; reviewerCommitted: boolean }> {
+  ): Promise<{ skillCommitted: boolean; reviewerCommitted: boolean; warnings: string[] }> {
     return this.request("/internal/scaffold-scan", {
       method: "POST",
       headers: { "content-type": "application/json" },
