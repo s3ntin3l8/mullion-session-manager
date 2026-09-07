@@ -463,18 +463,6 @@ export interface ComputedLink {
 }
 
 /**
- * Compute the links intersecting buffer row `y` (0-indexed), clipped to
- * that row. Never returns a link for a *different* row, even when the
- * match spans several: xterm's `Linkifier._removeIntersectingLinks` shares
- * one column `Set` across every provider's reply and maps any link whose
- * range crosses the queried row onto a bogus full-width span on that row
- * (`start.y < y → column 0`, `end.y > y → cols`), and it only ever
- * decorates a single `_currentLink` — so returning sibling-row segments
- * could only cannibalize the real link, never usefully render as more than
- * one. Each row of a multi-row match gets its own link when *it* is
- * queried instead.
- */
-/**
  * Scheme allowlist shared by the link provider's `activate` and the
  * `linkHandler` used for OSC 8 hyperlinks. Required, not defense-in-depth,
  * for the OSC 8 path: xterm core's `Linkifier._handleMouseUp` calls
@@ -494,6 +482,18 @@ export function isSafeLinkUrl(text: string): boolean {
   }
 }
 
+/**
+ * Compute the links intersecting buffer row `y` (0-indexed), clipped to
+ * that row. Never returns a link for a *different* row, even when the
+ * match spans several: xterm's `Linkifier._removeIntersectingLinks` shares
+ * one column `Set` across every provider's reply and maps any link whose
+ * range crosses the queried row onto a bogus full-width span on that row
+ * (`start.y < y → column 0`, `end.y > y → cols`), and it only ever
+ * decorates a single `_currentLink` — so returning sibling-row segments
+ * could only cannibalize the real link, never usefully render as more than
+ * one. Each row of a multi-row match gets its own link when *it* is
+ * queried instead.
+ */
 export function computeLinksForRow(buf: LinkBufferSource, y: number): ComputedLink[] {
   const { text, segments } = buildWindow(buf, y);
   if (!text) return [];
