@@ -276,13 +276,16 @@ export const projects = sqliteTable("projects", {
   // enough to gate injection on alone.
   //
   // `/setup/apply` requires a live preview record, and (as of PR #1102)
-  // `/setup/preview` no longer 501s for a remote-hosted project — only
-  // `/setup/generate` still keeps its own `hostId !== LOCAL_HOST_ID` 501
-  // guard (issue #895's read/write/diff/commit path was lifted repo-wide,
-  // but `/setup/generate`'s own agent-turn spawn deliberately was not — see
-  // routes/project-setup.ts's own comment on that route). So a remote-hosted
-  // project CAN now reach `/setup/apply` and get a non-null `slug` stamped,
-  // same as a local-hosted one.
+  // `/setup/preview` no longer 501s for a remote-hosted project. PR #1134
+  // (issue #1101) then removed `/setup/generate`'s own `hostId !==
+  // LOCAL_HOST_ID` 501 guard too, routing its agent-turn spawn to the
+  // owning host the same way #895's read/write/diff/commit path already
+  // was — so none of the three `/setup/*` routes 501 for a remote-hosted
+  // project anymore. A remote-hosted project CAN now reach `/setup/apply`
+  // and get a non-null `slug` stamped, same as a local-hosted one — and its
+  // committed scaffold files live on ITS OWN filesystem, not the primary's
+  // (see session-lifecycle.ts's discoverCommittedScaffoldOnHost, issue
+  // #1124).
   slug: text("slug"),
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()

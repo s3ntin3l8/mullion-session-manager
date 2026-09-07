@@ -530,6 +530,22 @@ export const readFilesSchema = schemaFor({
   required: ["cwd", "paths"],
 });
 
+export interface ScaffoldScanBody {
+  cwd: string;
+}
+
+// Issue #1124 — the agent-side counterpart of session-lifecycle.ts's
+// discoverCommittedScaffoldOnHost, for a remote-hosted project's committed-
+// scaffold gate (createSessionRecord). Deliberately not a general
+// directory-listing primitive (that would be a directory-listing oracle
+// reachable over the wire) — `cwd` is the only input; the route always runs
+// the SAME discoverCommittedScaffold local scan session-lifecycle.ts's own
+// LOCAL_HOST_ID path calls directly, just against this agent's own
+// filesystem.
+export const scaffoldScanSchema = schemaFor({
+  required: ["cwd"],
+});
+
 export interface ScaffoldEntryBody {
   path: string;
   kind: "file" | "symlink";

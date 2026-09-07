@@ -256,7 +256,19 @@ three artifacts into a real, reviewable pull request:
    merging; the skill, reviewer, and an optional starter `.crs/dock.json`
    (see [`dock.md`](dock.md)) are each "create once, never overwrite" — a
    re-scaffold over a repo that already committed or hand-edited them
-   leaves that content alone.
+   leaves that content alone. Every freshly-written skill/reviewer file
+   also carries a one-line `<!-- mullion:scaffold:<slug> -->` stamp right
+   after its frontmatter (issue #1123) — a different marker family from
+   `mullion:pointer:`/`mullion:briefing:` above, since it identifies a
+   whole FILE as Mullion's own scaffold output rather than delimiting a
+   region within one. It's what lets `createSessionRecord`'s
+   committed-scaffold gate (see "How the skill and reviewer actually reach
+   a session" above) tell "this repo's own scaffold wrote this file" apart
+   from an unrelated skill/reviewer pair that merely happens to sit at the
+   same path — falling back to presence alone (any file at that path,
+   stamped or not) only when no stamped candidate is found, since a repo
+   scaffolded before this stamp existed never gains one retroactively on
+   its own.
 2. **Apply** commits the previewed worktree and either opens a pull
    request (reusing Task Master's own promote path — push the branch,
    `createPullRequest`, with the same 422-then-recover-the-existing-PR

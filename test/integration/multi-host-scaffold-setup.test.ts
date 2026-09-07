@@ -190,6 +190,16 @@ describe("multi-host scaffold setup (issue #895)", () => {
     expect(body.previewId).toBeTypeOf("string");
     expect(body.files).toEqual(expect.arrayContaining(["AGENTS.md", "CLAUDE.md"]));
     expect(body.diff).toContain("AGENTS.md");
+    // Issue #1123 — the stamp is added inside computeScaffold itself (never
+    // downstream, in writeScaffoldEntries or the route), which is exactly
+    // what makes preview and apply "provably the same bytes" — see this
+    // module's own header comment on that invariant. Asserted here at the
+    // PREVIEW response's own diff, not just against a file on disk after
+    // apply (that's the "/setup/apply" test below), so a regression that
+    // moved the stamp downstream — breaking preview/apply parity — would
+    // fail HERE first.
+    const { scaffoldStampLine } = await import("../../src/services/mullion-scaffold.js");
+    expect(body.diff).toContain(scaffoldStampLine("demo"));
 
     expect(readFilesSpy).toHaveBeenCalled();
     expect(writeFilesSpy).toHaveBeenCalled();
@@ -243,6 +253,19 @@ describe("multi-host scaffold setup (issue #895)", () => {
       env: gitEnv(),
     }).toString();
     expect(log).toContain("chore: scaffold Mullion integration (demo2)");
+
+    // Issue #1123 — the committed skill file on the AGENT's own filesystem
+    // carries the stamp preview already computed (see the "/setup/preview"
+    // test above's own assertion on `body.diff`), proving it round-trips
+    // through commit unchanged, not just through the in-memory preview
+    // response.
+    const { scaffoldSkillPath, scaffoldStampLine } =
+      await import("../../src/services/mullion-scaffold.js");
+    const committedSkill = fs.readFileSync(
+      path.join(worktreePath, scaffoldSkillPath("demo2")),
+      "utf8",
+    );
+    expect(committedSkill).toContain(scaffoldStampLine("demo2"));
 
     commitWipSpy.mockRestore();
   });

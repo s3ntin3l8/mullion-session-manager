@@ -1,12 +1,13 @@
 import type { FastifyInstance } from "fastify";
 import path from "node:path";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, openSync, readSync, closeSync, statSync } from "node:fs";
 import { and, eq } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import {
   scaffoldSkillPath,
   scaffoldReviewerPath,
   isValidScaffoldSlug,
+  hasScaffoldStamp,
 } from "./mullion-scaffold.js";
 import {
   isDockPreviewWorktree,
@@ -18,6 +19,7 @@ import { getStoredSettings } from "./settings.js";
 import { resolveBackend } from "./session-backend.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { HostRequestError } from "./remote-host-client.js";
+import { viaRemote } from "./host-git.js";
 import { closeSessionBrowserBindings } from "./session-browsers.js";
 import { resolveProjectHostId } from "./session-live-info.js";
 import { isReservedSessionEnvKey } from "./session-env-keys.js";
@@ -424,8 +426,78 @@ const SCAFFOLD_REVIEWER_SUFFIX = "-reviewer.md";
  * describe what's really on disk, not what a DB column claims), but it is
  * a real behavior change from the pre-#1098 gate, not just a bugfix that
  * leaves every other case byte-identical.
+ *
+ * Issue #1123 — two passes, not one, over the SAME candidate set above.
+ * Pass 1 (identity) reads each candidate's file and checks for
+ * `mullion-scaffold.ts`'s own stamp (`scaffoldStampLine`) naming that exact
+ * slug — proof this repo's own `computeScaffold` actually wrote it, not
+ * just something shape-compatible living at the same path. Pass 2 (shape
+ * fallback) is the ORIGINAL, unconditional existsSync check, run only for
+ * whichever flag(s) pass 1 didn't already confirm: today's false-positive
+ * behavior (documented above) is a deliberately KEPT, not removed, because
+ * `computeScaffold`'s skill/reviewer entries are create-once-never-
+ * overwrite — a repo scaffolded before this stamp existed never gains one
+ * retroactively, so the fallback has to stay until every scaffolded repo
+ * has been re-scaffolded (tracked separately — issue #1143). The two
+ * passes produce the IDENTICAL final `skillCommitted`/`reviewerCommitted`
+ * value pass 2 alone always did; splitting them is what gives #1143 a real
+ * toggle point later, and what this file's own tests can observe directly
+ * (a stamped file is confirmed without ever reaching pass 2; an unstamped
+ * shape match only is).
  */
-function discoverCommittedScaffold(scaffoldCwd: string): {
+// Hermes review, PR #1150 — pass 1 below used a full, unbounded
+// `readFileSync` per candidate, on `createSessionRecord`'s own hot path
+// (every session create). A single large vendored SKILL.md (or a
+// candidate slug that happens to resolve to a symlinked huge file) would
+// block the event loop for the whole process just to check for a marker
+// line `computeScaffold` always places within a few hundred bytes of the
+// frontmatter. Bounded to a head read instead — enough headroom for any
+// real stamped file's frontmatter + stamp line, while capping the worst
+// case. A stamp that happens to fall outside this window (implausible
+// given where `stampScaffoldBody` places it, but not impossible for a
+// hand-edited file) simply falls through to pass 2's unconditional
+// existsSync fallback below, same as any other unstamped candidate —
+// never a correctness loss, only a possible extra pass-2 hit.
+const STAMP_SCAN_HEAD_BYTES = 16 * 1024;
+
+function readFileHeadSync(filePath: string, maxBytes: number): string | undefined {
+  // Hermes review round 2, PR #1150 — `statSync` follows symlinks and
+  // reports the REAL target's type without opening it, so a committed
+  // SKILL.md/reviewer path that's actually a symlink to a FIFO (or a
+  // socket, char/block device) is skipped here instead of ever reaching
+  // `openSync` below — verified empirically that `openSync` on a FIFO with
+  // no writer BLOCKS FOREVER, which would hang every future session
+  // create for that project, not just slow this one read down. `isFile()`
+  // rejects every non-regular-file type at once. A statSync-then-openSync
+  // TOCTOU race (something swaps the path for a FIFO between the two
+  // calls) is a real but far narrower threat than the unconditional hang
+  // this guards against — it would require an actively malicious,
+  // concurrently-writing process with access to this exact path.
+  let stat;
+  try {
+    stat = statSync(filePath);
+  } catch {
+    return undefined;
+  }
+  if (!stat.isFile()) return undefined;
+  let fd: number;
+  try {
+    fd = openSync(filePath, "r");
+  } catch {
+    return undefined;
+  }
+  try {
+    const buffer = Buffer.alloc(maxBytes);
+    const bytesRead = readSync(fd, buffer, 0, maxBytes, 0);
+    return buffer.subarray(0, bytesRead).toString("utf8");
+  } catch {
+    return undefined;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+export function discoverCommittedScaffold(scaffoldCwd: string): {
   skillCommitted: boolean;
   reviewerCommitted: boolean;
 } {
@@ -450,27 +522,149 @@ function discoverCommittedScaffold(scaffoldCwd: string): {
     // No .claude/agents directory at all (or unreadable) — same as above.
   }
 
+  // Validated once, up front, rather than inline per pass — both passes
+  // below iterate the identical validated set, and re-validating per pass
+  // would just be redundant work against the same Set.
+  const validCandidates = [...candidateSlugs].filter(isValidScaffoldSlug);
+
   let skillCommitted = false;
   let reviewerCommitted = false;
-  for (const candidate of candidateSlugs) {
-    if (!isValidScaffoldSlug(candidate)) continue;
-    // CodeQL (js/path-injection) flags these two existsSync calls, same as
-    // it did the original project.slug-keyed pair this replaces — see
-    // createSessionRecord's own comment on scaffoldSkillCommitted/
-    // scaffoldReviewerCommitted for the fuller "not a sanitizer, dismissed
-    // as a documented false positive" writeup. Same reasoning applies here
-    // unchanged; only the candidate's source changed (a directory listing,
-    // not a DB column).
-    if (!skillCommitted && existsSync(path.join(scaffoldCwd, scaffoldSkillPath(candidate)))) {
-      skillCommitted = true;
+
+  // Pass 1 — identity. CodeQL (js/path-injection) flags these path.join
+  // calls, same as it did the original existsSync pair this extends — see
+  // this function's own header for the fuller "not a sanitizer, dismissed
+  // as a documented false positive" reasoning: a real directory entry can
+  // never literally be `..`, but `isValidScaffoldSlug` (applied above,
+  // before any candidate reaches here) is still the actual containment
+  // boundary against a dangerous-but-legal name like `__proto__`.
+  for (const candidate of validCandidates) {
+    if (!skillCommitted) {
+      const contents = readFileHeadSync(
+        path.join(scaffoldCwd, scaffoldSkillPath(candidate)),
+        STAMP_SCAN_HEAD_BYTES,
+      );
+      if (contents !== undefined && hasScaffoldStamp(contents, candidate)) {
+        skillCommitted = true;
+      }
     }
-    if (!reviewerCommitted && existsSync(path.join(scaffoldCwd, scaffoldReviewerPath(candidate)))) {
-      reviewerCommitted = true;
+    if (!reviewerCommitted) {
+      const contents = readFileHeadSync(
+        path.join(scaffoldCwd, scaffoldReviewerPath(candidate)),
+        STAMP_SCAN_HEAD_BYTES,
+      );
+      if (contents !== undefined && hasScaffoldStamp(contents, candidate)) {
+        reviewerCommitted = true;
+      }
     }
     if (skillCommitted && reviewerCommitted) break;
   }
 
+  // Pass 2 — shape fallback, only for whichever flag(s) pass 1 left
+  // unconfirmed. Identical to the pre-#1123 check: existsSync alone, no
+  // stamp required.
+  if (!skillCommitted || !reviewerCommitted) {
+    for (const candidate of validCandidates) {
+      if (!skillCommitted && existsSync(path.join(scaffoldCwd, scaffoldSkillPath(candidate)))) {
+        skillCommitted = true;
+      }
+      if (
+        !reviewerCommitted &&
+        existsSync(path.join(scaffoldCwd, scaffoldReviewerPath(candidate)))
+      ) {
+        reviewerCommitted = true;
+      }
+      if (skillCommitted && reviewerCommitted) break;
+    }
+  }
+
   return { skillCommitted, reviewerCommitted };
+}
+
+/**
+ * Issue #1124 — `discoverCommittedScaffold` above does local, synchronous
+ * `readFileSync`/`existsSync` calls against `scaffoldCwd`. That's correct
+ * for a local-hosted project, but silently wrong for a remote-hosted one:
+ * issue #895/#1102 made `/setup/apply` reachable for a remote-hosted
+ * project (so `projects.slug` — and real committed scaffold files — can now
+ * live on that project's OWNING host, not the primary's own filesystem),
+ * and #1101/#1134 moved `/setup/generate` there too. A local-only read
+ * against a remote project's `scaffoldCwd` always finds nothing, so the
+ * gate always reports "not committed" and the DB-authored copy gets
+ * re-injected ON TOP of the real committed scaffold — the exact
+ * double-delivery bug this whole gate exists to prevent, reopened for
+ * remote hosts by #1102 rather than by #1098 itself.
+ *
+ * Dispatches to the SAME `discoverCommittedScaffold` either way — directly,
+ * in-process, for `LOCAL_HOST_ID`; over `/internal/scaffold-scan` (via
+ * `RemoteHostClient.scaffoldScan`) for a remote host, where that route
+ * handler calls this exact function again, now running on the agent's own
+ * process against its own filesystem. Sharing the function (not
+ * re-implementing an equivalent scan agent-side) is what stops the two
+ * ever drifting apart — the same posture #1134's
+ * `runGenerationTurnInScratchWorktree` already established for
+ * `/setup/generate`.
+ *
+ * A directory-LISTING primitive can't serve this: `discoverCommittedScaffold`
+ * discovers UNKNOWN candidate slugs from `.claude/skills`/`.claude/agents`
+ * directory entries, then reads each candidate's file content to check its
+ * stamp — `readHostFiles` (host-files.ts) takes an explicit `relPaths` list,
+ * which doesn't compose with "enumerate whatever's actually there." Running
+ * the whole scan on the owning host, instead, is what host-files.ts's own
+ * design would otherwise have to become to serve this case.
+ */
+export async function discoverCommittedScaffoldOnHost(
+  app: FastifyInstance,
+  hostId: string,
+  scaffoldCwd: string,
+): Promise<{ skillCommitted: boolean; reviewerCommitted: boolean }> {
+  if (hostId === LOCAL_HOST_ID) {
+    return discoverCommittedScaffold(scaffoldCwd);
+  }
+  const result = await viaRemote(app, hostId, (client) => client.scaffoldScan(scaffoldCwd));
+  if (result.ok) return result.value;
+  // Hermes review round 2, PR #1150 — a transient blip (host unreachable)
+  // or a version-skewed agent build predating this route (unsupported)
+  // used to degrade to "not committed", which re-opens the EXACT
+  // double-delivery this whole gate exists to prevent: a remote host that
+  // genuinely HAS a committed scaffold, but is briefly unreachable at the
+  // wrong moment, would get the DB-authored copy re-injected on top of it.
+  // Flipped to fail CLOSED instead: "couldn't determine" now suppresses
+  // injection the same way "confirmed committed" does, rather than the
+  // same way "confirmed not committed" does. The tradeoff this accepts is
+  // the opposite failure mode — a session that transiently lacks the
+  // DB-authored draft content on a genuinely un-scaffolded, but momentarily
+  // unreachable, remote host — which is strictly preferable: a missing
+  // ephemeral draft self-heals on the next session launch once the host
+  // answers again, but a double-delivered scaffold file does not self-heal
+  // at all (it is committed, real content, sitting duplicated in the
+  // session's own composed bundle). Still warns loudly either way, so a
+  // human can tell the two failure reasons apart in the logs even though
+  // the session-create behavior converges.
+  // Hermes review round 3, PR #1150 — `viaRemote`'s own two-reason shape
+  // folds ANY non-404 failure into `reason: "unreachable"`, including a
+  // real HostRequestError the agent actively rejected (e.g.
+  // requireWithinRoots refusing `scaffoldCwd`) — the exact "rejected" vs
+  // "actually unreachable" conflation `resolveWorktreeCwd` above splits
+  // apart for its own call (it doesn't go through `viaRemote` at all).
+  // Not resplit here: `viaRemote` is shared, widely-used infrastructure —
+  // changing its own two-bucket taxonomy is a bigger, separate decision
+  // than this gate's fail-closed fix. `result.detail` (only present on the
+  // `unreachable` branch) still carries the real underlying message either
+  // way — a rejection's own detail text names the HTTP status, a genuine
+  // network failure's does not — so it's logged here even though the
+  // `reason` field itself can't distinguish the two.
+  app.log.warn(
+    {
+      hostId,
+      scaffoldCwd,
+      reason: result.reason,
+      detail: result.reason === "unreachable" ? result.detail : undefined,
+    },
+    result.reason === "unsupported"
+      ? "scaffold-scan: agent host predates the /internal/scaffold-scan route (update the agent build) — treating as committed (fail closed, suppressing DB-draft injection)"
+      : "scaffold-scan: could not reach agent host to check committed scaffold state — treating as committed (fail closed, suppressing DB-draft injection)",
+  );
+  return { skillCommitted: true, reviewerCommitted: true };
 }
 
 // Shared by POST /api/sessions (the launcher's worktree toggle, option 1),
@@ -693,9 +887,11 @@ export async function createSessionRecord(
   // already reaches Claude Code/opencode via each CLI's own native
   // discovery — re-injecting the DB-authored `project_tooling.skill`/
   // `.reviewerAgent` copy live on top of that would just double-deliver the
-  // same content. Checked HERE, on the primary, not adapter-side: `project`
-  // (fetched above) already carries `cwd`, so there is no separate
-  // multi-host channel to build.
+  // same content. Checked HERE, on the primary, not adapter-side — but
+  // (issue #1124) the actual scan is routed to whichever host owns
+  // `project.hostId` via `discoverCommittedScaffoldOnHost`, since a
+  // remote-hosted project's committed scaffold lives on ITS filesystem, not
+  // necessarily the primary's — see that function's own doc comment.
   //
   // #1098 — this USED to key off `project.slug` alone (the slug most
   // recently STAMPED by `/setup/apply` at commit time). That drifts from
@@ -731,7 +927,7 @@ export async function createSessionRecord(
   // override exists at all.
   const scaffoldCwd = cwd ?? project.cwd;
   const { skillCommitted: scaffoldSkillCommitted, reviewerCommitted: scaffoldReviewerCommitted } =
-    discoverCommittedScaffold(scaffoldCwd);
+    await discoverCommittedScaffoldOnHost(app, project.hostId, scaffoldCwd);
 
   // PR-5 — same producer posture as resolvedBriefingOverride immediately
   // above: an explicit caller-supplied value (currently unused by any

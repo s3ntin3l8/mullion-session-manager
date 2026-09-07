@@ -8,6 +8,7 @@ import {
   InvalidScaffoldSlugError,
   POINTER_MARKER_START,
   POINTER_MARKER_END,
+  scaffoldStampLine,
 } from "../../src/services/mullion-scaffold.js";
 import { extractMarkedRegion } from "../../src/services/marked-region.js";
 import { MARKER_START, MARKER_END } from "../../src/services/project-briefing.js";
@@ -442,7 +443,16 @@ describe("computeScaffold — generated content (issue #956)", () => {
     };
     const agentsMd = entries.find((e) => e.path === "AGENTS.md") as { contents: string };
 
-    expect(skill.contents).toBe("---\nname: demo\n---\nReal invariant: X.\n");
+    // Issue #1123 — computeScaffold now inserts its own identity stamp
+    // right after the frontmatter of any FRESH (non-preserved) skill/
+    // reviewer content, generated or templated alike — see the dedicated
+    // "computeScaffold — scaffold stamp" describe block below for the full
+    // stamp-specific coverage; asserted here too since this test's own
+    // exact-equality check would otherwise silently pass against stale
+    // expectations.
+    expect(skill.contents).toBe(
+      `---\nname: demo\n---\n${scaffoldStampLine("demo")}\n\nReal invariant: X.\n`,
+    );
     expect(skill.contents).not.toContain("Replace this section");
     expect(reviewer.contents).toContain("Read .claude/skills/demo/SKILL.md first.");
     expect(reviewer.contents).not.toContain("Replace this with your repo's own invariants");
@@ -455,6 +465,7 @@ describe("computeScaffold — generated content (issue #956)", () => {
       contents: string;
     };
     expect(skill.contents).toContain("Replace this section");
+    expect(skill.contents).toContain(scaffoldStampLine("demo"));
   });
 
   it("never clobbers an already-committed skill/reviewer file just because generated content was supplied — 'create once, never overwrite' still applies", () => {
@@ -499,5 +510,162 @@ describe("computeScaffold — generated content (issue #956)", () => {
         ".claude/skills/demo/SKILL.md",
       ].sort(),
     );
+  });
+});
+
+// Issue #1123 — session-lifecycle.ts's committed-scaffold gate needs an
+// identity signal to tell "Mullion's own scaffold wrote this" apart from
+// "something shape-compatible happens to live here" (see that file's own
+// header comment). computeScaffold is the ONLY place that identity signal
+// can be written — the caller (routes/project-setup.ts) just writes
+// whatever ScaffoldEntry[] this function returns.
+describe("computeScaffold — scaffold stamp (issue #1123)", () => {
+  it("stamps freshly-templated skill/reviewer content (no generated content supplied)", () => {
+    const entries = computeScaffold({}, { slug: "demo" });
+    const skill = entries.find((e) => e.path === ".claude/skills/demo/SKILL.md") as {
+      contents: string;
+    };
+    const reviewer = entries.find((e) => e.path === ".claude/agents/demo-reviewer.md") as {
+      contents: string;
+    };
+    expect(skill.contents).toContain(scaffoldStampLine("demo"));
+    expect(reviewer.contents).toContain(scaffoldStampLine("demo"));
+  });
+
+  it("stamps freshly-generated skill/reviewer content", () => {
+    const entries = computeScaffold(
+      {},
+      {
+        slug: "demo",
+        generated: {
+          skill: "---\nname: demo\n---\nReal invariant.\n",
+          reviewer: "---\nname: demo-reviewer\n---\nRead .claude/skills/demo/SKILL.md first.\n",
+        },
+      },
+    );
+    const skill = entries.find((e) => e.path === ".claude/skills/demo/SKILL.md") as {
+      contents: string;
+    };
+    const reviewer = entries.find((e) => e.path === ".claude/agents/demo-reviewer.md") as {
+      contents: string;
+    };
+    expect(skill.contents).toContain(scaffoldStampLine("demo"));
+    expect(reviewer.contents).toContain(scaffoldStampLine("demo"));
+  });
+
+  it("places the stamp right after the frontmatter, before any real body content", () => {
+    const entries = computeScaffold(
+      {},
+      { slug: "demo", generated: { skill: "---\nname: demo\n---\nReal invariant.\n" } },
+    );
+    const skill = entries.find((e) => e.path === ".claude/skills/demo/SKILL.md") as {
+      contents: string;
+    };
+    expect(skill.contents).toBe(
+      `---\nname: demo\n---\n${scaffoldStampLine("demo")}\n\nReal invariant.\n`,
+    );
+  });
+
+  it("the .agents/skills mirror carries the SAME stamped content as .claude/skills, for fresh content", () => {
+    const entries = computeScaffold({}, { slug: "demo" });
+    const skill = entries.find((e) => e.path === ".claude/skills/demo/SKILL.md") as {
+      contents: string;
+    };
+    const mirror = entries.find((e) => e.path === ".agents/skills/demo/SKILL.md") as {
+      contents: string;
+    };
+    expect(mirror.contents).toBe(skill.contents);
+    expect(mirror.contents).toContain(scaffoldStampLine("demo"));
+  });
+
+  // "create once, never overwrite" (Hermes review, PR #896 round 2, see
+  // computeScaffold's own doc comment) applies to the stamp too — an
+  // already-existing file (hand-authored, or scaffolded before this stamp
+  // existed) is preserved byte-for-byte, never retroactively stamped. This
+  // is what keeps issue #1143 (retiring the shape fallback once stamps have
+  // propagated) an honest problem: a pre-existing scaffolded repo genuinely
+  // never gains one on its own.
+  it("never adds a stamp to an already-existing file", () => {
+    const existingSkill = "---\nname: demo\ndescription: hand-authored\n---\ncustom body";
+    const entries = computeScaffold(
+      { ".claude/skills/demo/SKILL.md": existingSkill },
+      { slug: "demo" },
+    );
+    expect(entries.some((e) => e.path === ".claude/skills/demo/SKILL.md")).toBe(false);
+    // The .agents/skills mirror still carries the PRESERVED (unstamped)
+    // content verbatim, same as the pre-#1123 "never clobbers" tests above
+    // already establish for content in general.
+    const mirror = entries.find((e) => e.path === ".agents/skills/demo/SKILL.md") as {
+      contents: string;
+    };
+    expect(mirror.contents).toBe(existingSkill);
+    expect(mirror.contents).not.toContain("mullion:scaffold:demo");
+  });
+
+  // The double-stamp risk this guards against: `options.generated.skill`
+  // (fresh LLM output) happening to already contain the literal marker
+  // text — computeScaffold's own "create once" rule can't protect against
+  // this the way it protects re-stamping an EXISTING file, because this
+  // content is fresh by definition (no existingFiles entry at all).
+  it("does not double-stamp when the generated content already carries the marker", () => {
+    const alreadyStamped = `---\nname: demo\n---\n${scaffoldStampLine("demo")}\n\nReal invariant.\n`;
+    const entries = computeScaffold({}, { slug: "demo", generated: { skill: alreadyStamped } });
+    const skill = entries.find((e) => e.path === ".claude/skills/demo/SKILL.md") as {
+      contents: string;
+    };
+    const occurrences = skill.contents.split(scaffoldStampLine("demo")).length - 1;
+    expect(occurrences).toBe(1);
+  });
+
+  // mullion-reviewer, this PR's own review pass — skills.ts's own
+  // parseFlatFrontmatterFields (the real parser CLI-native discovery and
+  // deriveContentName rely on) only requires finding `\n---`; it does NOT
+  // require the closing delimiter to be immediately followed by a newline.
+  // A stamp-insertion regex that's STRICTER than that (requires `\r?\n`
+  // right after the closing `---`) would misclassify this as "no
+  // frontmatter found" and prepend the stamp BEFORE the `---` instead —
+  // corrupting a file skills.ts's own parser would otherwise load fine.
+  it("still lands the stamp AFTER the frontmatter when the closing delimiter has trailing whitespace on its own line", () => {
+    const generated = `---\nname: demo\ndescription: x\n---   \nBody\n`;
+    const entries = computeScaffold({}, { slug: "demo", generated: { skill: generated } });
+    const skill = entries.find((e) => e.path === ".claude/skills/demo/SKILL.md") as {
+      contents: string;
+    };
+    expect(skill.contents.startsWith(`---\nname: demo\ndescription: x\n---   \n`)).toBe(true);
+    expect(skill.contents).toContain(`\n${scaffoldStampLine("demo")}\n\nBody\n`);
+    // The frontmatter-parseable part of the file is untouched by the
+    // insertion — this is the actual regression the stricter regex caused.
+    const parsed = parseSkillFrontmatter(skill.contents);
+    expect(parsed).not.toBeNull();
+    expect(parsed!.name).toBe("demo");
+  });
+
+  it("still lands the stamp on its own line when the closing delimiter has no trailing newline at all", () => {
+    const generated = `---\nname: demo\ndescription: x\n---`;
+    const entries = computeScaffold({}, { slug: "demo", generated: { skill: generated } });
+    const skill = entries.find((e) => e.path === ".claude/skills/demo/SKILL.md") as {
+      contents: string;
+    };
+    expect(skill.contents).toBe(
+      `---\nname: demo\ndescription: x\n---\n${scaffoldStampLine("demo")}\n\n`,
+    );
+  });
+
+  // Hermes review, PR #1150 — a CRLF-authored file (agent-generated
+  // content from a Windows checkout) used to get an LF-only `\n\n`
+  // separator injected, and only leading `\n`s stripped from `rest` (never
+  // a leading `\r`), producing hybrid EOLs and a doubled blank line. The
+  // stamp insertion must mirror the file's own EOL style instead.
+  it("mirrors the file's own CRLF line endings instead of injecting a mixed-EOL separator", () => {
+    const generated = "---\r\nname: demo\r\ndescription: x\r\n---\r\nBody\r\n";
+    const entries = computeScaffold({}, { slug: "demo", generated: { skill: generated } });
+    const skill = entries.find((e) => e.path === ".claude/skills/demo/SKILL.md") as {
+      contents: string;
+    };
+    expect(skill.contents).toBe(
+      `---\r\nname: demo\r\ndescription: x\r\n---\r\n${scaffoldStampLine("demo")}\r\n\r\nBody\r\n`,
+    );
+    // No bare, unpaired \n anywhere — every line ending is \r\n.
+    expect(skill.contents).not.toMatch(/[^\r]\n/);
   });
 });

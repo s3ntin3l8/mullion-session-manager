@@ -69,6 +69,7 @@ import {
 } from "../services/git-worktree.js";
 import { deleteBranch } from "../services/git-branch-delete.js";
 import { readFilesLocally, writeEntriesLocally } from "../services/host-files.js";
+import { discoverCommittedScaffold } from "../services/session-lifecycle.js";
 import {
   runGenerationTurnInScratchWorktree,
   UnsupportedGenerationAgentError,
@@ -155,6 +156,7 @@ import {
   gitWorktreeResumeSchema,
   readFilesSchema,
   writeFilesSchema,
+  scaffoldScanSchema,
   gitCommitWipSchema,
   runGenerationTurnSchema,
   bundleSyncRemoveSchema,
@@ -183,6 +185,7 @@ import type {
   GitWorktreeResumeBody,
   ReadFilesBody,
   WriteFilesBody,
+  ScaffoldScanBody,
   GitCommitWipBody,
   RunGenerationTurnBody,
   BundleSyncRemoveBody,
@@ -1387,6 +1390,26 @@ export async function internalRoutes(app: FastifyInstance) {
         if (err instanceof PathEscapeError) return reply.badRequest(err.message);
         throw err;
       }
+    },
+  );
+
+  // Issue #1124 — reports whether a Mullion scaffold is actually committed
+  // under `cwd` on THIS agent's own filesystem — the agent-side counterpart
+  // of session-lifecycle.ts's discoverCommittedScaffoldOnHost, for a
+  // remote-hosted project's committed-scaffold gate (createSessionRecord).
+  // Deliberately NOT a general directory-listing primitive: it calls the
+  // exact SAME discoverCommittedScaffold the LOCAL_HOST_ID caller uses
+  // directly, so the two can never independently drift — see that
+  // function's own doc comment for the two-pass identity/shape scan this
+  // runs.
+  app.post<{ Body: ScaffoldScanBody }>(
+    "/internal/scaffold-scan",
+    { ...INTERNAL_RATE_LIMIT, schema: scaffoldScanSchema },
+    async (request, reply) => {
+      const { cwd } = request.body;
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
+      return discoverCommittedScaffold(resolvedCwd);
     },
   );
 
