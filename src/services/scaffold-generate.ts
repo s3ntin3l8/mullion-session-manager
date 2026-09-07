@@ -150,10 +150,11 @@ import { scaffoldSkillPath, scaffoldReviewerPath } from "./mullion-scaffold.js";
 // work. `opencode run`
 // (1.18.29) still has no write-restriction flag at all, confirmed against
 // its own `--help` — only `--auto`, which does the opposite (auto-approves
-// everything). Now that process-level sandboxing is wired in, none of that
-// CLI-level unverified-ness matters for containment on a host where bwrap
-// is usable — bwrap blocks the write at the kernel/mount-namespace level
-// regardless of which CLI flag was or wasn't passed.
+// everything). opencode is now fail-closed on the no-bwrap fallback (#1153),
+// same as agy — running unsandboxed would provide full write/exec access as
+// the server user with no CLI-level restriction to fall back on. On a host
+// where bwrap is usable, bwrap blocks the write at the kernel/mount-namespace
+// level regardless of which CLI flag was or wasn't passed.
 //
 // What IS still structurally guaranteed regardless of whether bwrap is
 // available on a given host, and regardless of whether any of those
@@ -819,18 +820,42 @@ export const defaultSpawnGenerationTurn: SpawnGenerationTurn = async ({
   // has full write+exec as the server user, with only the prompt's own
   // advisory "do not create/edit/delete" instruction as a stop — on
   // arbitrary repo/seed content, a real prompt-injection surface. Fail
-  // closed here rather than silently degrade the way the other three
-  // agents do: this specific exposure is new as of #1130's own fix, so it
-  // gets a guard scoped to it. (opencode's plain `run` has the identical
-  // no-restriction-flag gap on this same fallback — see this module's own
-  // header — but that is pre-existing and untouched by #1130; tracked
-  // separately rather than folded into this fix.)
-  if (!sandboxUsable && agentCommand === "agy") {
+  // closed here rather than silently degrade the way the other two agents
+  // (claude, codex) do: this specific exposure is new as of #1130's own
+  // fix, so it gets a guard scoped to it. opencode's plain `run` has the
+  // identical no-restriction-flag gap (this module's own header) and is
+  // now also fail-closed (#1153).
+  // Hermes review, PR #1152/#1164 — shared per-agent fail-closed guard for
+  // agents that lack CLI-level write-restriction flags. agy's
+  // --dangerously-skip-permissions (#1130) GRANTS tool access rather than
+  // restricting it; opencode's plain `run` has the identical no-restriction-
+  // flag gap (this module's header). Both must fail closed when bwrap is
+  // unavailable or sandboxing was explicitly opted out, rather than silently
+  // degrading the way claude/codex do. The map keeps the two blocks'
+  // wording in one place so they can't drift apart — the only per-agent
+  // param is the agent name and the reason-specific explanation.
+  const SANDBOX_REQUIRED_AGENTS: Record<string, { prefix: string; fallback: string }> = {
+    agy: {
+      prefix: "agy requires a usable bwrap sandbox for scaffold generation",
+      fallback:
+        "--dangerously-skip-permissions (needed for agy to read the repo at all) would " +
+        "leave it with full write/exec access as the server user and no CLI-level " +
+        "restriction to fall back on. ",
+    },
+    opencode: {
+      prefix: "opencode requires a usable bwrap sandbox for scaffold generation",
+      fallback:
+        "opencode run has no CLI-level write-restriction flag to fall back on, " +
+        "leaving it with full write/exec access as the server user. ",
+    },
+  };
+  const agentSandboxGuard = SANDBOX_REQUIRED_AGENTS[agentCommand];
+  if (!sandboxUsable && agentSandboxGuard) {
     // Issue #1133 — this guard fires identically whether bwrap is merely
     // unusable OR sandboxing was explicitly opted out via
     // MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED=false: the opt-out is not
-    // an escape hatch for agy specifically, since bwrap is its only
-    // containment once --dangerously-skip-permissions is set (this
+    // an escape hatch for these agents, since bwrap is their only
+    // containment once their respective unrestricted flags are in play (this
     // module's own header). The message is reason-aware purely so an
     // operator who deliberately set the opt-out isn't told to go install
     // bwrap.
@@ -839,13 +864,10 @@ export const defaultSpawnGenerationTurn: SpawnGenerationTurn = async ({
       : "sandboxing was explicitly disabled (MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED=false)";
     throw new GenerationSpawnError(
       agentCommand,
-      `agy requires a usable bwrap sandbox for scaffold generation — ${reason}, and without ` +
-        "it, --dangerously-skip-permissions (needed for agy to read the repo at all) would " +
-        "leave it with full write/exec access as the server user and no CLI-level " +
-        "restriction to fall back on. " +
+      `${agentSandboxGuard.prefix} — ${reason}, and without it, ${agentSandboxGuard.fallback}` +
         (sandboxRequested
-          ? "Install/enable bwrap on this host to use agy here."
-          : "Re-enable sandboxing on this host (or use a different agent) to use agy here."),
+          ? "Install/enable bwrap on this host to use this agent here."
+          : "Re-enable sandboxing on this host (or use a different agent) to use this agent here."),
     );
   }
   let invocation = { bin, args };
