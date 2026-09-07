@@ -222,6 +222,13 @@ export interface GeneratedScaffoldContent {
   skill: string;
   reviewer: string;
   briefingRegion: string;
+  /** Issue #1144, #1159 — whether the generation turn actually ran inside a
+   * bwrap sandbox. `false` when sandboxing was opted out via
+   * MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED or when bwrap is unusable and
+   * the agent is claude/codex (agy/opencode fail-closed instead, never
+   * reaching this point unsandboxed). Surfaced in the /setup/generate
+   * response so the primary/UI can warn the user. */
+  sandboxed: boolean;
 }
 
 /** `project_tooling.skill`/`.reviewerAgent`/`.briefing` DB drafts (see
@@ -300,7 +307,9 @@ export function buildGenerationPrompt(opts: {
     `invent invariants independently of what you wrote in the skill — the reviewer's checklist ` +
     `IS the skill's content, applied.\n` +
     `3. A short AGENTS.md briefing-region paragraph naming where the skill and reviewer live ` +
-    `and when to use them.${seedSection}\n\n` +
+    `and when to use them. Include a "## Workflow Conventions" section with this repo's ` +
+    `branching, review, and commit conventions (look at CONTRIBUTING.md, existing AGENTS.md, ` +
+    `and recent git history for specifics).${seedSection}\n\n` +
     `Report back EXACTLY this shape and nothing else outside these markers — no preamble, no ` +
     `commentary, no markdown fences around the markers themselves:\n\n` +
     `${SKILL_START}\n(full skill file contents, including YAML frontmatter with name/description)\n${SKILL_END}\n` +
@@ -346,7 +355,7 @@ export function parseGeneratedOutput(raw: string, slug: string): GeneratedScaffo
     );
   }
 
-  return { skill, reviewer, briefingRegion };
+  return { skill, reviewer, briefingRegion, sandboxed: false };
 }
 
 export interface SpawnGenerationTurnOptions {
@@ -925,7 +934,7 @@ export const defaultSpawnGenerationTurn: SpawnGenerationTurn = async ({
  * indistinguishable `"unreachable"` bucket by the time they reached
  * `generateScaffoldContent`'s remote branch below. */
 export type GenerationTurnResult =
-  | { outcome: "ok"; stdout: string }
+  | { outcome: "ok"; stdout: string; sandboxed: boolean }
   | { outcome: "unsupported-agent"; detail: string }
   | { outcome: "worktree-error"; detail: string }
   | { outcome: "spawn-error"; detail: string };
@@ -1108,6 +1117,7 @@ export async function generateScaffoldContent(
   });
 
   let raw: string;
+  let sandboxed: boolean;
   if (!opts.hostId || opts.hostId === LOCAL_HOST_ID) {
     raw = await runGenerationTurnInScratchWorktree({
       cwd: opts.cwd,
@@ -1119,6 +1129,11 @@ export async function generateScaffoldContent(
       sandbox: opts.sandbox,
       spawn: opts.spawn,
     });
+    // Issue #1144, #1159 — determine sandboxed status for the local path.
+    // The config opt-out short-circuits before isSandboxCapable() in
+    // defaultSpawnGenerationTurn, so the same logic applies here.
+    const sandboxRequested = opts.sandbox !== false;
+    sandboxed = sandboxRequested && (await isSandboxCapable());
   } else {
     // `viaRemote` (host-git.ts) — same HostRequestError/HostUnreachableError
     // mapping every other host-aware primitive in this codebase reuses. Its
@@ -1154,7 +1169,8 @@ export async function generateScaffoldContent(
     if (turn.outcome === "spawn-error")
       throw new GenerationSpawnError(opts.agentCommand, turn.detail);
     raw = turn.stdout;
+    sandboxed = turn.sandboxed ?? false;
   }
 
-  return parseGeneratedOutput(raw, opts.slug);
+  return { ...parseGeneratedOutput(raw, opts.slug), sandboxed };
 }
