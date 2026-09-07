@@ -114,7 +114,38 @@ describe("discoverCommittedScaffoldOnHost (issue #1124)", () => {
 
     expect(result).toEqual({ skillCommitted: true, reviewerCommitted: true });
     expect(app.log.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ hostId: "remote-host-1", reason: "unreachable" }),
+      expect.objectContaining({
+        hostId: "remote-host-1",
+        reason: "unreachable",
+        detail: expect.stringContaining("timeout"),
+      }),
+      expect.stringContaining("could not reach agent host"),
+    );
+  });
+
+  // Hermes review round 3, PR #1150 — viaRemote folds a real host
+  // REJECTION (agent up, refused the request) into the SAME `reason:
+  // "unreachable"` bucket as a genuine network failure — result.detail is
+  // what actually distinguishes them (a rejection's own message names the
+  // HTTP status), so it must reach the log even though `reason` alone
+  // can't.
+  it("remote: a host that actively rejected the request (not merely unreachable) still logs its own detail", async () => {
+    mockGetRemoteHostClient.mockReturnValue({
+      scaffoldScan: vi
+        .fn()
+        .mockRejectedValue(new HostRequestError("remote-host-1", 400, "cwd outside roots")),
+    });
+    const app = fakeApp();
+
+    const result = await discoverCommittedScaffoldOnHost(app, "remote-host-1", "/remote/cwd");
+
+    expect(result).toEqual({ skillCommitted: true, reviewerCommitted: true });
+    expect(app.log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        hostId: "remote-host-1",
+        reason: "unreachable",
+        detail: expect.stringContaining("HTTP 400"),
+      }),
       expect.stringContaining("could not reach agent host"),
     );
   });

@@ -640,8 +640,26 @@ export async function discoverCommittedScaffoldOnHost(
   // session's own composed bundle). Still warns loudly either way, so a
   // human can tell the two failure reasons apart in the logs even though
   // the session-create behavior converges.
+  // Hermes review round 3, PR #1150 — `viaRemote`'s own two-reason shape
+  // folds ANY non-404 failure into `reason: "unreachable"`, including a
+  // real HostRequestError the agent actively rejected (e.g.
+  // requireWithinRoots refusing `scaffoldCwd`) — the exact "rejected" vs
+  // "actually unreachable" conflation `resolveWorktreeCwd` above splits
+  // apart for its own call (it doesn't go through `viaRemote` at all).
+  // Not resplit here: `viaRemote` is shared, widely-used infrastructure —
+  // changing its own two-bucket taxonomy is a bigger, separate decision
+  // than this gate's fail-closed fix. `result.detail` (only present on the
+  // `unreachable` branch) still carries the real underlying message either
+  // way — a rejection's own detail text names the HTTP status, a genuine
+  // network failure's does not — so it's logged here even though the
+  // `reason` field itself can't distinguish the two.
   app.log.warn(
-    { hostId, scaffoldCwd, reason: result.reason },
+    {
+      hostId,
+      scaffoldCwd,
+      reason: result.reason,
+      detail: result.reason === "unreachable" ? result.detail : undefined,
+    },
     result.reason === "unsupported"
       ? "scaffold-scan: agent host predates the /internal/scaffold-scan route (update the agent build) — treating as committed (fail closed, suppressing DB-draft injection)"
       : "scaffold-scan: could not reach agent host to check committed scaffold state — treating as committed (fail closed, suppressing DB-draft injection)",
