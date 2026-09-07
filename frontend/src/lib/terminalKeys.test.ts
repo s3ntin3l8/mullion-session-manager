@@ -9,6 +9,9 @@ import {
   readClipboard,
   reservedKeysFromSettings,
 } from "./terminalKeys.js";
+import { parseChord } from "./keyChord.js";
+
+const CTRL_SHIFT_SPACE = parseChord("Ctrl+Shift+Space")!;
 
 describe("reservedKeysFromSettings", () => {
   it("includes only the keys enabled in keyCapture", () => {
@@ -243,14 +246,14 @@ describe("attachKeyConflictHandler", () => {
     }
   });
 
-  it("routes Ctrl+Shift+Space to onVoicePress when the voice hotkey is enabled", () => {
+  it("routes the voice chord to onVoicePress when getVoiceChord returns it", () => {
     const { term, fire } = makeFakeTerm();
     const onVoicePress = vi.fn();
     attachKeyConflictHandler({
       term,
       reservedKeys: new Set(),
       getClipboardKeys: () => ({ ctrlV: false, ctrlC: false }),
-      getVoiceHotkey: () => true,
+      getVoiceChord: () => CTRL_SHIFT_SPACE,
       onVoicePress,
     });
     const result = fire({ key: " ", code: "Space", ctrlKey: true, shiftKey: true });
@@ -258,49 +261,66 @@ describe("attachKeyConflictHandler", () => {
     expect(result).toBe(false);
   });
 
-  it("does not route Ctrl+Shift+Space when the voice hotkey getter returns false", () => {
+  it("does not route the chord when getVoiceChord returns null (hotkey off)", () => {
     const { term, fire } = makeFakeTerm();
     const onVoicePress = vi.fn();
     attachKeyConflictHandler({
       term,
       reservedKeys: new Set(),
       getClipboardKeys: () => ({ ctrlV: false, ctrlC: false }),
-      getVoiceHotkey: () => false,
+      getVoiceChord: () => null,
       onVoicePress,
     });
     fire({ key: " ", code: "Space", ctrlKey: true, shiftKey: true });
     expect(onVoicePress).not.toHaveBeenCalled();
   });
 
-  it("ignores a key-repeat Ctrl+Shift+Space so a physically-held key doesn't re-fire onVoicePress", () => {
+  it("ignores a key-repeat of the voice chord so a physically-held key doesn't re-fire onVoicePress", () => {
     const { term, fire } = makeFakeTerm();
     const onVoicePress = vi.fn();
     attachKeyConflictHandler({
       term,
       reservedKeys: new Set(),
       getClipboardKeys: () => ({ ctrlV: false, ctrlC: false }),
-      getVoiceHotkey: () => true,
+      getVoiceChord: () => CTRL_SHIFT_SPACE,
       onVoicePress,
     });
     fire({ key: " ", code: "Space", ctrlKey: true, shiftKey: true, repeat: true });
     expect(onVoicePress).not.toHaveBeenCalled();
   });
 
-  it("reads getVoiceHotkey live, not captured, on every keydown", () => {
+  it("reads getVoiceChord live, not captured, on every keydown", () => {
     const { term, fire } = makeFakeTerm();
     const onVoicePress = vi.fn();
-    let enabled = false;
+    let chord: ReturnType<typeof parseChord> = null;
     attachKeyConflictHandler({
       term,
       reservedKeys: new Set(),
       getClipboardKeys: () => ({ ctrlV: false, ctrlC: false }),
-      getVoiceHotkey: () => enabled,
+      getVoiceChord: () => chord,
       onVoicePress,
     });
     fire({ key: " ", code: "Space", ctrlKey: true, shiftKey: true });
     expect(onVoicePress).not.toHaveBeenCalled();
-    enabled = true;
+    chord = CTRL_SHIFT_SPACE;
     fire({ key: " ", code: "Space", ctrlKey: true, shiftKey: true });
+    expect(onVoicePress).toHaveBeenCalledTimes(1);
+  });
+
+  it("matches a rebound, non-default chord and no longer matches the old default", () => {
+    const { term, fire } = makeFakeTerm();
+    const onVoicePress = vi.fn();
+    const rebound = parseChord("Ctrl+Shift+Comma")!;
+    attachKeyConflictHandler({
+      term,
+      reservedKeys: new Set(),
+      getClipboardKeys: () => ({ ctrlV: false, ctrlC: false }),
+      getVoiceChord: () => rebound,
+      onVoicePress,
+    });
+    fire({ key: " ", code: "Space", ctrlKey: true, shiftKey: true });
+    expect(onVoicePress).not.toHaveBeenCalled();
+    fire({ key: ",", code: "Comma", ctrlKey: true, shiftKey: true });
     expect(onVoicePress).toHaveBeenCalledTimes(1);
   });
 

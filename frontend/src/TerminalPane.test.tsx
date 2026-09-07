@@ -436,7 +436,7 @@ function renderPane(extra: { active?: boolean } = {}) {
         reconnect: { enabled: false, maxAttempts: 0 },
         keyCapture: { ctrlR: true, ctrlL: true, ctrlK: true },
         clipboardKeys: { ctrlV: false, ctrlC: false },
-        voice: { enabled: true, hotkeyEnabled: true, lang: "" },
+        voice: { enabled: true, hotkeyEnabled: true, lang: "", hotkey: "Ctrl+Shift+Space" },
       },
       sidebarDensity: "comfortable",
       layoutMode: "auto",
@@ -3063,32 +3063,46 @@ describe("TerminalPane voice dictation", () => {
     });
   }
 
-  // Fires the Ctrl+Shift+Space keydown/keyup pair attachKeyConflictHandler
-  // and TerminalPane's own window keyup listener are wired to — see
+  // Fires the voice chord's keydown/keyup pair attachKeyConflictHandler and
+  // TerminalPane's own window keyup listener are wired to — see
   // terminalKeys.ts's chord branch and TerminalPane.tsx's
-  // voiceHotkeyPressRef/onVoiceHotkeyKeyup for the two halves.
-  function pressVoiceHotkey() {
+  // voiceHotkeyPressRef/onVoiceHotkeyKeyup for the two halves. Defaults to
+  // the shipped Ctrl+Shift+Space chord; a test that rebinds the hotkey via
+  // settings passes the new one explicitly (#1119).
+  function pressVoiceHotkey(
+    chord: {
+      code: string;
+      ctrlKey?: boolean;
+      shiftKey?: boolean;
+      altKey?: boolean;
+      metaKey?: boolean;
+    } = {
+      code: "Space",
+      ctrlKey: true,
+      shiftKey: true,
+    },
+  ) {
     const term = getLatestTermInstance();
     const calls = term.attachCustomKeyEventHandler.mock.calls;
     const handler = calls[calls.length - 1]![0] as (event: unknown) => boolean;
     act(() => {
       handler({
         type: "keydown",
-        key: " ",
-        code: "Space",
-        ctrlKey: true,
-        shiftKey: true,
-        metaKey: false,
-        altKey: false,
+        key: chord.code,
+        code: chord.code,
+        ctrlKey: chord.ctrlKey ?? false,
+        shiftKey: chord.shiftKey ?? false,
+        metaKey: chord.metaKey ?? false,
+        altKey: chord.altKey ?? false,
         repeat: false,
         preventDefault: vi.fn(),
       });
     });
   }
 
-  function releaseVoiceHotkey() {
+  function releaseVoiceHotkey(code = "Space") {
     act(() => {
-      window.dispatchEvent(new KeyboardEvent("keyup", { code: "Space" }));
+      window.dispatchEvent(new KeyboardEvent("keyup", { code }));
     });
   }
 
@@ -3127,7 +3141,7 @@ describe("TerminalPane voice dictation", () => {
     // Patched AFTER renderPane() (not before) since renderPane() itself
     // unconditionally overwrites the whole settings object — the
     // settings-sync effect's own [terminalSettings] dep is what re-attaches
-    // the key handler with the updated getVoiceHotkey getter.
+    // the key handler with the updated getVoiceChord getter.
     act(() => {
       useDashboardStore.setState((s) => ({
         settings: {
@@ -3158,6 +3172,54 @@ describe("TerminalPane voice dictation", () => {
     );
 
     expect(fakeRecognitionInstances).toHaveLength(0);
+  });
+
+  it("a rebound hotkey (#1119) starts on its own chord and releases on its own code, not the old default's", () => {
+    stubFakeWebSocket(true);
+    renderPane();
+    // Patched AFTER renderPane() for the same reason as the test above —
+    // the settings-sync effect's [terminalSettings] dep is what re-attaches
+    // the key handler (and re-parses voiceChordRef) with the new chord.
+    act(() => {
+      useDashboardStore.setState((s) => ({
+        settings: {
+          ...s.settings,
+          terminal: {
+            ...s.settings.terminal,
+            voice: { ...s.settings.terminal.voice, hotkey: "Ctrl+Shift+Comma" },
+          },
+        },
+      }));
+    });
+
+    // The OLD default chord must no longer start dictation at all.
+    pressVoiceHotkey({ code: "Space", ctrlKey: true, shiftKey: true });
+    expect(fakeRecognitionInstances).toHaveLength(0);
+
+    // The rebound chord starts it.
+    pressVoiceHotkey({ code: "Comma", ctrlKey: true, shiftKey: true });
+    expect(fakeRecognitionInstances).toHaveLength(1);
+    const recognition = latestRecognition();
+    expect(recognition.start).toHaveBeenCalledTimes(1);
+
+    // A keyup for the OLD default's code must be a complete no-op — the
+    // held code is captured at press time (TerminalPane.tsx's
+    // voiceHotkeyHeldCode) and stays armed only for "Comma", so this must
+    // not even count as the release that lets a later real release fire.
+    releaseVoiceHotkey("Space");
+    expect(recognition.stop).not.toHaveBeenCalled();
+
+    // The configured code's keyup IS the real release — quick, so it
+    // latches rather than stops (same threshold classification as the
+    // tap-to-latch test below), proving onVoiceHotkeyKeyup matched it.
+    releaseVoiceHotkey("Comma");
+    expect(recognition.stop).not.toHaveBeenCalled(); // latched, not stopped
+
+    // Second press on the same rebound chord is what actually stops a
+    // latched dictation — confirms the tap-tap wiring still works with a
+    // non-default chord end to end.
+    pressVoiceHotkey({ code: "Comma", ctrlKey: true, shiftKey: true });
+    expect(recognition.stop).toHaveBeenCalledTimes(1);
   });
 
   it("a completed tap-to-latch dictation calls term.paste once (not term.input), and refocuses the terminal", async () => {

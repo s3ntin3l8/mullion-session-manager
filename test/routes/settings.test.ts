@@ -291,6 +291,9 @@ describe("settings route", () => {
       enabled: false,
       hotkeyEnabled: false,
       lang: "de-DE",
+      // Untouched by this PATCH — a leaf-level merge, not a whole-object
+      // replace, so the sibling leaf keeps its default (#1119).
+      hotkey: DEFAULT_SETTINGS.terminal.voice.hotkey,
     });
     // Siblings of `voice` inside `terminal` must survive untouched.
     expect(patched.json().terminal.clipboardKeys).toEqual(DEFAULT_SETTINGS.terminal.clipboardKeys);
@@ -300,7 +303,39 @@ describe("settings route", () => {
       enabled: false,
       hotkeyEnabled: false,
       lang: "de-DE",
+      hotkey: DEFAULT_SETTINGS.terminal.voice.hotkey,
     });
+
+    await app.close();
+  });
+
+  // #1119 — the push-to-talk chord became user-configurable after the
+  // default (Ctrl+Shift+Space) turned out to collide with 1Password's
+  // Quick Access default on Windows/Linux. Same round-trip shape as the
+  // test above, isolated to just the new leaf.
+  it("round-trips terminal.voice.hotkey through PATCH and a subsequent GET", async () => {
+    const app = await buildApp();
+
+    // This describe block shares one DB across its `it`s (see the top-level
+    // beforeAll), so `voice.enabled` may already have been flipped by an
+    // earlier test — read it fresh rather than assuming DEFAULT_SETTINGS.
+    const before = await app.inject({ method: "GET", url: "/api/settings" });
+    const enabledBefore = before.json().terminal.voice.enabled;
+
+    const patched = await app.inject({
+      method: "PATCH",
+      url: "/api/settings",
+      payload: {
+        terminal: { voice: { hotkey: "Ctrl+Shift+Comma" } },
+      },
+    });
+    expect(patched.statusCode).toBe(200);
+    expect(patched.json().terminal.voice.hotkey).toBe("Ctrl+Shift+Comma");
+    // Siblings of `hotkey` inside `voice` must survive untouched.
+    expect(patched.json().terminal.voice.enabled).toBe(enabledBefore);
+
+    const fetched = await app.inject({ method: "GET", url: "/api/settings" });
+    expect(fetched.json().terminal.voice.hotkey).toBe("Ctrl+Shift+Comma");
 
     await app.close();
   });

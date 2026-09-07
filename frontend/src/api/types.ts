@@ -1313,6 +1313,13 @@ export interface AppSettings {
       enabled: boolean;
       hotkeyEnabled: boolean;
       lang: string;
+      // A keyChord.ts-parseable chord string, e.g. "Ctrl+Shift+Space" (the
+      // default — see settings.ts's DEFAULT_SETTINGS for why it stays the
+      // default despite colliding with 1Password's Quick Access on
+      // Windows/Linux, #1119). Unvalidated here for the same reason
+      // `lang` above is: an unparseable value is keyChord.ts's own
+      // fallback-to-default problem, not this backend's to police.
+      hotkey: string;
     };
   };
   sidebarDensity: SidebarDensity;

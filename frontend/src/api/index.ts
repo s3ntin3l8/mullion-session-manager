@@ -175,7 +175,7 @@ export type {
 export { ApiError, AuthExpiredError, RateLimitedError } from "./client.js";
 
 export { normalizeAgentId } from "./system.js";
-export { DEFAULT_SETTINGS } from "./settings.js";
+export { DEFAULT_SETTINGS, DEFAULT_VOICE_CHORD } from "./settings.js";
 
 import { projectsApi } from "./projects.js";
 import { sessionsApi } from "./sessions.js";

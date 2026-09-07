@@ -13,6 +13,7 @@ import type {
   BrowserCookieProfile,
   WorkflowConventionQuestion,
 } from "./types.js";
+import { parseChord, type KeyChord } from "../lib/keyChord.js";
 
 export const settingsApi = {
   getSettings: () => request<AppSettings>("/api/settings"),
@@ -122,6 +123,13 @@ export const DEFAULT_SETTINGS: AppSettings = {
       enabled: true,
       hotkeyEnabled: true,
       lang: "",
+      // Kept as the default despite colliding with 1Password's Quick
+      // Access default on Windows/Linux (#1119) — see DEFAULT_VOICE_CHORD
+      // below and this field's own doc comment in types.ts. Still the most
+      // natural push-to-talk chord: free in every browser, free in every
+      // shell/TUI, and free on macOS (1Password uses Cmd+Shift+Space
+      // there). Now user-rebindable in Settings -> Terminal.
+      hotkey: "Ctrl+Shift+Space",
     },
   },
   sidebarDensity: "comfortable",
@@ -215,3 +223,12 @@ export const DEFAULT_SETTINGS: AppSettings = {
     defaultReviewAgent: "none",
   },
 };
+
+// The one home for the parsed default voice hotkey (#1119) — derived from
+// DEFAULT_SETTINGS.terminal.voice.hotkey above rather than a second literal,
+// since nothing guards the two strings staying in sync (deepMerge only
+// proves the backend and frontend DEFAULT_SETTINGS trees have matching
+// *shapes*, not matching values, and there's no test asserting the values
+// themselves match either). parseChord can't fail on this literal — the
+// non-null assertion documents that, it isn't a runtime guess.
+export const DEFAULT_VOICE_CHORD: KeyChord = parseChord(DEFAULT_SETTINGS.terminal.voice.hotkey)!;

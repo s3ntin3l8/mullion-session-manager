@@ -85,12 +85,12 @@ export interface AppSettings {
     // API); nothing here reaches this backend beyond persisting the toggle.
     voice: {
       // Shows the mic button and, when hotkeyEnabled is also true, arms the
-      // Ctrl+Shift+Space chord. Off hides the button entirely, same as an
+      // desktop chord below. Off hides the button entirely, same as an
       // unsupported browser (frontend/src/voice/support.ts).
       enabled: boolean;
       // Independent of `enabled` above so a user can keep the button but
       // opt out of the desktop chord specifically — see terminalKeys.ts's
-      // getVoiceHotkey getter.
+      // getVoiceChord getter.
       hotkeyEnabled: boolean;
       // BCP-47 tag (e.g. "en-US"), or "" to fall back to navigator.language
       // at dictation start. A free string like fontFamily above — no
@@ -99,6 +99,15 @@ export interface AppSettings {
       // there: an unrecognized tag is the Web Speech engine's own problem
       // to reject or fall back on, not this backend's to police.
       lang: string;
+      // The push-to-talk chord, a frontend/src/lib/keyChord.ts-parseable
+      // string (e.g. "Ctrl+Shift+Space", the default — kept as the default
+      // despite colliding with 1Password's Quick Access default on
+      // Windows/Linux, #1119: it's still the most natural push-to-talk
+      // chord, free in every browser/shell/TUI and on macOS, and now
+      // user-rebindable). A free string for the same reason `lang` above is
+      // one: an unparseable value is keyChord.ts's own fallback-to-default
+      // problem, not this backend's to police.
+      hotkey: string;
     };
   };
   sidebarDensity: SidebarDensity;
@@ -471,6 +480,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
       enabled: true,
       hotkeyEnabled: true,
       lang: "",
+      hotkey: "Ctrl+Shift+Space",
     },
   },
   sidebarDensity: "comfortable",

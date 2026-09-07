@@ -1,3 +1,4 @@
+import { DEFAULT_VOICE_CHORD } from "../../api/index.js";
 import { useDashboardStore } from "../../store/index.js";
 import {
   Dropdown,
@@ -8,6 +9,7 @@ import {
   StyledList,
   Toggle,
 } from "../../ui/primitives.js";
+import { KeyChordField } from "../KeyChordField.js";
 
 // Voice dictation language options — a short curated list (the languages
 // Claude Code's own /voice dictation documents supporting), plus "Browser
@@ -90,12 +92,23 @@ export function TerminalSection() {
       </Row>
       <Row
         label="Dictation hotkey"
-        desc="Hold Ctrl+Shift+Space to talk, as an alternative to the mic button."
+        desc="Hold the combo below to talk, as an alternative to the mic button."
       >
         <Toggle
           on={t.voice.hotkeyEnabled}
           onChange={(v) => updateSettings({ terminal: { voice: { hotkeyEnabled: v } } })}
           ariaLabel="Dictation hotkey"
+        />
+      </Row>
+      <Row
+        label="Hotkey combo"
+        desc="Click, then press the combo you want. Rebind if it's already claimed by another app — see #1119."
+      >
+        <KeyChordField
+          value={t.voice.hotkey}
+          defaultValue={DEFAULT_VOICE_CHORD}
+          onChange={(hotkey) => updateSettings({ terminal: { voice: { hotkey } } })}
+          disabled={!t.voice.hotkeyEnabled}
         />
       </Row>
       <Row label="Dictation language" desc="What language you're speaking.">
