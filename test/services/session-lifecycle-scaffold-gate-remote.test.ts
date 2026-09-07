@@ -5,9 +5,10 @@ import path from "node:path";
 
 // Issue #1124 — discoverCommittedScaffoldOnHost's whole job is dispatching
 // (app, hostId, cwd) to either the real local discoverCommittedScaffold scan
-// or RemoteHostClient.scaffoldScan, degrading to "not committed" (with a
-// warn log, never silently) on a host that can't answer. Same "mock the one
-// collaborator (remote-host-client.js), test dispatch/mapping only" posture
+// or RemoteHostClient.scaffoldScan, failing CLOSED (treated as committed,
+// with a warn log, never silently) on a host that can't answer. Same
+// "mock the one collaborator (remote-host-client.js), test dispatch/mapping
+// only" posture
 // as test/services/host-files.test.ts and test/services/host-git.test.ts —
 // discoverCommittedScaffold's OWN local scan logic (identity stamp vs shape
 // fallback) is covered directly by
@@ -93,7 +94,15 @@ describe("discoverCommittedScaffoldOnHost (issue #1124)", () => {
     expect(result).toEqual({ skillCommitted: true, reviewerCommitted: false });
   });
 
-  it("remote: an unreachable host degrades to not-committed and warns, never silently double-delivers", async () => {
+  // Hermes review round 2, PR #1150 — reversed from an earlier "degrades to
+  // not-committed" version of this test: that behavior re-opened the exact
+  // double-delivery this gate exists to prevent (a genuinely committed but
+  // momentarily-unreachable remote host would get the DB draft re-injected
+  // on top of its real committed files). "Couldn't determine" now fails
+  // CLOSED — treated the same as "confirmed committed" (suppress
+  // injection), not the same as "confirmed not committed" (inject) — see
+  // discoverCommittedScaffoldOnHost's own comment for the full tradeoff.
+  it("remote: an unreachable host fails closed (treated as committed) and warns, never silently double-delivers", async () => {
     mockGetRemoteHostClient.mockReturnValue({
       scaffoldScan: vi
         .fn()
@@ -103,14 +112,14 @@ describe("discoverCommittedScaffoldOnHost (issue #1124)", () => {
 
     const result = await discoverCommittedScaffoldOnHost(app, "remote-host-1", "/remote/cwd");
 
-    expect(result).toEqual({ skillCommitted: false, reviewerCommitted: false });
+    expect(result).toEqual({ skillCommitted: true, reviewerCommitted: true });
     expect(app.log.warn).toHaveBeenCalledWith(
       expect.objectContaining({ hostId: "remote-host-1", reason: "unreachable" }),
       expect.stringContaining("could not reach agent host"),
     );
   });
 
-  it("remote: an old agent build (404) degrades to not-committed and warns to update the agent build", async () => {
+  it("remote: an old agent build (404) fails closed (treated as committed) and warns to update the agent build", async () => {
     mockGetRemoteHostClient.mockReturnValue({
       scaffoldScan: vi.fn().mockRejectedValue(new HostRequestError("remote-host-1", 404, "")),
     });
@@ -118,7 +127,7 @@ describe("discoverCommittedScaffoldOnHost (issue #1124)", () => {
 
     const result = await discoverCommittedScaffoldOnHost(app, "remote-host-1", "/remote/cwd");
 
-    expect(result).toEqual({ skillCommitted: false, reviewerCommitted: false });
+    expect(result).toEqual({ skillCommitted: true, reviewerCommitted: true });
     expect(app.log.warn).toHaveBeenCalledWith(
       expect.objectContaining({ hostId: "remote-host-1", reason: "unsupported" }),
       expect.stringContaining("update the agent build"),

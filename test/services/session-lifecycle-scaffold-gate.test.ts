@@ -484,6 +484,43 @@ describe("discoverCommittedScaffold — identity stamp vs shape fallback (issue 
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  // Hermes review round 2, PR #1150 — verified empirically that opening a
+  // FIFO with no writer via `openSync` blocks forever. Pass 1's own
+  // `statSync().isFile()` guard keeps that FIFO out of `openSync`
+  // entirely — it still ends up "committed" via pass 2's ordinary
+  // existsSync fallback, same as any other unstamped candidate; what this
+  // test actually proves is the absence of a hang, not a different
+  // result. `mkfifo` has no Windows equivalent, so this is gated the same
+  // "not win32" way as symlink-dependent tests elsewhere in this
+  // codebase. A real hang here (if the fix regressed) would show up as
+  // this test timing out, not a normal assertion failure.
+  const describeIfMkfifo = process.platform !== "win32" ? describe : describe.skip;
+  describeIfMkfifo("a candidate path that is a FIFO, not a regular file", () => {
+    it("pass 1 skips it without ever blocking on openSync — pass 2's plain existsSync still finds it, same as any other unstamped candidate", () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "scaffold-gate-stamp-fifo-"));
+      try {
+        const slug = "acme-widgets";
+        const skillPath = path.join(dir, scaffoldSkillPath(slug));
+        fs.mkdirSync(path.dirname(skillPath), { recursive: true });
+        execFileSync("mkfifo", [skillPath]);
+
+        // No writer ever opens the other end — if readFileHeadSync's
+        // openSync guard regressed, this call hangs until the test's own
+        // timeout kills it instead of returning. The result itself is
+        // `true` via pass 2's unconditional existsSync (a FIFO existing
+        // at the expected path is still "something is there", same shape
+        // fallback as any other unstamped candidate) — this test's whole
+        // point is the absence of a hang, not a different result.
+        expect(discoverCommittedScaffold(dir)).toEqual({
+          skillCommitted: true,
+          reviewerCommitted: false,
+        });
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  });
 });
 
 // mullion-reviewer, this PR's own review pass — the gate must check whatever

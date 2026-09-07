@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import path from "node:path";
-import { existsSync, readdirSync, openSync, readSync, closeSync } from "node:fs";
+import { existsSync, readdirSync, openSync, readSync, closeSync, statSync } from "node:fs";
 import { and, eq } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import {
@@ -461,6 +461,25 @@ const SCAFFOLD_REVIEWER_SUFFIX = "-reviewer.md";
 const STAMP_SCAN_HEAD_BYTES = 16 * 1024;
 
 function readFileHeadSync(filePath: string, maxBytes: number): string | undefined {
+  // Hermes review round 2, PR #1150 — `statSync` follows symlinks and
+  // reports the REAL target's type without opening it, so a committed
+  // SKILL.md/reviewer path that's actually a symlink to a FIFO (or a
+  // socket, char/block device) is skipped here instead of ever reaching
+  // `openSync` below — verified empirically that `openSync` on a FIFO with
+  // no writer BLOCKS FOREVER, which would hang every future session
+  // create for that project, not just slow this one read down. `isFile()`
+  // rejects every non-regular-file type at once. A statSync-then-openSync
+  // TOCTOU race (something swaps the path for a FIFO between the two
+  // calls) is a real but far narrower threat than the unconditional hang
+  // this guards against — it would require an actively malicious,
+  // concurrently-writing process with access to this exact path.
+  let stat;
+  try {
+    stat = statSync(filePath);
+  } catch {
+    return undefined;
+  }
+  if (!stat.isFile()) return undefined;
   let fd: number;
   try {
     fd = openSync(filePath, "r");
@@ -603,21 +622,31 @@ export async function discoverCommittedScaffoldOnHost(
   }
   const result = await viaRemote(app, hostId, (client) => client.scaffoldScan(scaffoldCwd));
   if (result.ok) return result.value;
-  // A transient blip (host unreachable) or a version-skewed agent build
-  // predating this route (unsupported) must never turn into a SILENT
-  // double-delivery — degrade to "not committed" (today's pre-#1124
-  // behavior for every remote-hosted project, so no regression for a host
-  // that genuinely can't answer) and warn loudly instead, the same
-  // "log, don't 500, don't silently succeed" posture
-  // routes/project-setup.ts's readScaffoldableFiles already takes for the
-  // identical `result.reason === "unsupported"` case on `/setup/preview`.
+  // Hermes review round 2, PR #1150 — a transient blip (host unreachable)
+  // or a version-skewed agent build predating this route (unsupported)
+  // used to degrade to "not committed", which re-opens the EXACT
+  // double-delivery this whole gate exists to prevent: a remote host that
+  // genuinely HAS a committed scaffold, but is briefly unreachable at the
+  // wrong moment, would get the DB-authored copy re-injected on top of it.
+  // Flipped to fail CLOSED instead: "couldn't determine" now suppresses
+  // injection the same way "confirmed committed" does, rather than the
+  // same way "confirmed not committed" does. The tradeoff this accepts is
+  // the opposite failure mode — a session that transiently lacks the
+  // DB-authored draft content on a genuinely un-scaffolded, but momentarily
+  // unreachable, remote host — which is strictly preferable: a missing
+  // ephemeral draft self-heals on the next session launch once the host
+  // answers again, but a double-delivered scaffold file does not self-heal
+  // at all (it is committed, real content, sitting duplicated in the
+  // session's own composed bundle). Still warns loudly either way, so a
+  // human can tell the two failure reasons apart in the logs even though
+  // the session-create behavior converges.
   app.log.warn(
     { hostId, scaffoldCwd, reason: result.reason },
     result.reason === "unsupported"
-      ? "scaffold-scan: agent host predates the /internal/scaffold-scan route (update the agent build) — treating as not committed"
-      : "scaffold-scan: could not reach agent host to check committed scaffold state — treating as not committed",
+      ? "scaffold-scan: agent host predates the /internal/scaffold-scan route (update the agent build) — treating as committed (fail closed, suppressing DB-draft injection)"
+      : "scaffold-scan: could not reach agent host to check committed scaffold state — treating as committed (fail closed, suppressing DB-draft injection)",
   );
-  return { skillCommitted: false, reviewerCommitted: false };
+  return { skillCommitted: true, reviewerCommitted: true };
 }
 
 // Shared by POST /api/sessions (the launcher's worktree toggle, option 1),
