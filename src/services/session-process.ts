@@ -277,6 +277,16 @@ export function deriveInstanceId(sessionsDir: string): string {
 // doesn't recognize at all. Not used for a row whose socket path DID parse
 // — listOwnedScopes recovers the real id from the socket basename in that
 // case instead, per this module's own naming-vs-ownership split.
+//
+// Hermes review, this PR — not ground truth for id identity: a legacy id
+// that itself happens to begin with `<instanceId>-` (e.g. a literal id
+// "aaaaaaaa-7" when this instance's own instanceId is "aaaaaaaa") would be
+// misread as the namespaced form for id "7". Harmless today (this only
+// feeds the `unverifiable` guess for a row whose Description failed to
+// parse at all — never the ownership path itself, which always reads the
+// real id from the socket basename), but the follow-up rename PR must not
+// start trusting this split as authoritative once real namespaced units
+// exist.
 function candidateIdForUnit(unit: string, instanceId: string): string | null {
   const match = /^crs-session-(.+)\.scope$/.exec(unit);
   if (!match) return null;

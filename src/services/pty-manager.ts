@@ -4418,6 +4418,20 @@ export class PtyManager {
    * reasoning makes this the right place for discardPendingSeed(id) (B9) —
    * stopScope() below actually ends the process, so no SessionStart hook
    * for `id` will ever fire again.
+   *
+   * Hermes review, issue #1140 — stopScope() below now fails CLOSED on a
+   * degraded `--user` bus (a listing failure leaves the scope running
+   * rather than risk stopping a unit this instance never confirmed owning;
+   * see stopScope's own doc comment). kill() above only covers the
+   * in-memory (already-tracked) half of "fully end a session," so for the
+   * *never-tracked-in-this-process* case this method's own header comment
+   * describes (a restart, then an explicit delete with nothing re-attached
+   * yet), stopScope() is the ONLY thing that can actually end the program —
+   * and on a degraded bus it now silently no-ops instead. The dtach master
+   * and program keep running, caught later only by
+   * scripts/check-scope-leaks.ts. Deliberate: do not "fix" this by flipping
+   * stopScope's `fallbackOnListingFailure` back to true — that reopens the
+   * exact cross-instance kill #1140 exists to close.
    */
   async terminate(id: string): Promise<void> {
     this.kill(id);
