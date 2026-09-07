@@ -11,7 +11,7 @@
 //
 // Same argv shape as the tarball route (`node mullion.mjs helper <verb>
 // ...`) and the same shape ssh-agent-helper-install.mjs's generators embed
-// in every supervisor job on every platform — so `buildWindowsTaskXml`
+// in every supervisor job on every platform — so `buildWindowsRunCommand`
 // needs no SEA-specific verb/noun handling beyond dropping the scriptPath
 // token (see that file's own comment).
 import { runHelper, buildHelperIo } from "./ssh-agent-helper.mjs";

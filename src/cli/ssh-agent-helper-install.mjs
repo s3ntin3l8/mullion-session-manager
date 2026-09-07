@@ -1,27 +1,67 @@
 // Issue #820 (PR6b) — `mullion helper install`/`uninstall`: generates and
-// (de)registers a launchd job (macOS), systemd --user unit (Linux), or
-// Windows Scheduled Task (issue #873 Phase 3) that supervises
-// `mullion helper run`, so a laptop user doesn't have to hand-write one
-// from docs/ssh-agent.md's manual-tunnel examples. The Windows generator
-// has no local verification path either (no way to run `schtasks.exe` from
-// this Linux-only CI/dev environment) — same caveat the macOS/Linux
-// generators already carried before their own first real-machine test; see
-// docs/ssh-agent.md for status and the tracking issue.
+// (de)registers a launchd job (macOS), systemd --user unit (Linux), or a
+// per-user autostart entry (Windows) that supervises `mullion helper run`,
+// so a laptop user doesn't have to hand-write one from docs/ssh-agent.md's
+// manual-tunnel examples.
 //
-// The builder functions (buildLaunchdPlist/buildSystemdUnit) and the path
-// resolvers below are pure — no fs/process/child_process access — so
-// they're unit-testable without a real launchd or systemd. runInstall/
-// runUninstall are the thin orchestration layer that actually writes files
-// and shells out to launchctl/systemctl; the `io.spawnSync`/`io.platform`/
-// `io.homedir`/`io.uid`/`io.execPath`/`io.scriptPath` overrides exist only
-// so tests can stub those without mocking node:child_process/node:os/
-// process globally (same "take io as an injected seam" convention
-// core.mjs's other exports already use).
+// Windows round 4 (issue #871) — this used to register a Scheduled Task
+// (`schtasks /Create`, `LogonTrigger` + `RestartOnFailure`). Live
+// verification on a real, non-elevated Administrator account (the default
+// account type on a personal Windows machine) found `schtasks /Create`
+// unconditionally fails there with "Access is denied": an Administrator
+// account running unelevated holds its own `Administrators` SID as
+// deny-only (confirmed with `whoami /groups` and a minimal `schtasks
+// /Create` with no XML at all — not a bug in the generated XML). This is
+// not a permissions gap to patch; it made `helper install` unable to work
+// at all for that entire class of user, on the exact
+// `PrivilegesRequired=lowest` account the installer (deploy/windows/
+// mullion-helper.iss) deliberately never elevates. Windows now instead
+// writes a value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
+// — no elevation needed for either account type, and the same mechanism
+// essentially every comparable Windows tray app uses (Discord, Slack,
+// Dropbox, and 1Password itself, the agent this bridge fronts), unlike
+// Scheduled Tasks, which are the pattern per-machine ELEVATED installers
+// use (Google Update, browser updaters). It's also the mechanism the
+// future `mullion-helper` tray app is expected to use regardless (Tauri's
+// `tauri-plugin-autostart` is the same Run key underneath) — this is that
+// mechanism arriving early, not throwaway work. `installWindows` and
+// `uninstallWindows` below best-effort clean up a Scheduled Task/XML file
+// left behind by a pre-round-4 install (a true standard user, or someone
+// who happened to run install elevated) so nothing launches `helper run`
+// twice.
+//
+// Known, accepted gap versus the mechanism this replaces (mullion-reviewer
+// round): the Scheduled Task's `RestartOnFailure`/`ExecutionTimeLimit`
+// gave Windows crash-restart supervision equivalent to launchd's
+// `KeepAlive`+`ThrottleInterval` and systemd's `Restart=always`+
+// `RestartSec`, both of which macOS/Linux still have unchanged. The HKCU
+// Run key has no restart-on-crash concept at all — if `mullion-helper.exe`
+// itself crashes (not a network drop or a dead credential, both of which
+// `runRun`'s own reconnect/renewal loop already self-heals; an actual
+// process exit), nothing restarts it until the next logon. Accepted here
+// because the alternative (the Scheduled Task) could not register at all
+// for the account type this fix targets — no restart supervision beats no
+// installed helper — but this is a real, currently-unclosed gap, not a
+// non-issue; a future fix needs its own lightweight supervisor (a second,
+// minimal watcher process, plausibly the eventual tray app) rather than
+// reaching back for Scheduled Tasks.
+//
+// The builder functions (buildLaunchdPlist/buildSystemdUnit/
+// buildWindowsRunCommand) and the path resolvers below are pure — no
+// fs/process/child_process access — so they're unit-testable without a
+// real launchd, systemd, or registry. runInstall/runUninstall are the thin
+// orchestration layer that actually writes files/registry values and
+// shells out to launchctl/systemctl/reg.exe; the
+// `io.spawnSync`/`io.spawn`/`io.platform`/`io.homedir`/`io.uid`/
+// `io.execPath`/`io.scriptPath` overrides exist only so tests can stub
+// those without mocking node:child_process/node:os/process globally (same
+// "take io as an injected seam" convention core.mjs's other exports
+// already use).
 
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync as nodeSpawnSync } from "node:child_process";
+import { spawnSync as nodeSpawnSync, spawn as nodeSpawn } from "node:child_process";
 import { isSea as nodeIsSea } from "node:sea";
 import { extractFlags, CliUsageError } from "./core.mjs";
 import {
@@ -36,7 +76,17 @@ import {
 // enrolled agent host, so there's nothing to template per-host here.
 export const LAUNCHD_LABEL = "de.s3ntin3l8.mullion-helper";
 export const SYSTEMD_UNIT_NAME = "mullion-helper.service";
+// Doubles as the Scheduled Task name (legacy, pre-round-4 installs only —
+// see this file's own header comment) and the HKCU Run value name (current
+// mechanism) — deliberately the same string across both so a human
+// inspecting either mechanism recognizes it as the same install.
 export const WINDOWS_TASK_NAME = "MullionHelper";
+// scripts/build-helper-sea.mjs's own `exeName` for win32 — fixed, not
+// derived per-install, so uninstallWindows (which has no execPath to work
+// from; unlike installWindows, nothing hands it one) can still find and
+// stop a running helper by image name.
+export const WINDOWS_HELPER_EXE_NAME = "mullion-helper.exe";
+export const WINDOWS_RUN_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 
 // Round 3 (PR2) — `defaultScriptPath()` lives in its own file, imported
 // dynamically and ONLY on the non-SEA path (runInstall below), rather than
@@ -72,17 +122,10 @@ export function systemdUnitPath(io) {
   return path.join(configHome, "systemd", "user", SYSTEMD_UNIT_NAME);
 }
 
-// `schtasks /Create /XML <path>` reads the task definition from a file on
-// disk (there's no stdin form), so — unlike launchd/systemd, which register
-// directly against a well-known filesystem location the OS itself expects —
-// this file's location is Mullion's own choice. Same directory convention
-// as launchd's log file (installLaunchd's own `logPath`): stateDir(io),
-// this platform's equivalent of `~/Library/Application Support` /
-// `$XDG_STATE_HOME`. Kept on disk (not a temp file deleted after
-// registration) so uninstallWindows can use the same "check the file first"
-// pattern uninstallLaunchd/uninstallSystemd already use, without needing to
-// shell out to `schtasks /Query` just to find out whether anything's
-// installed.
+// Legacy only (round 3 Scheduled Task mechanism, retired in round 4 — see
+// this file's own header comment). No longer written by installWindows;
+// kept only so install/uninstall can find and remove a leftover file from
+// a pre-round-4 install (a true standard user, or someone who elevated).
 export function windowsTaskXmlPath(io) {
   return path.join(stateDir(io), "mullion-helper-task.xml");
 }
@@ -175,7 +218,7 @@ const EXPIRY_COMMENT_LINES = [
 
 export function buildLaunchdPlist({ execPath, scriptPath, sshAuthSock, logPath }) {
   // Round 4 (issue #820, macOS SEA support) — scriptPath-optional, same
-  // shape as buildWindowsTaskXml's own argv construction: a SEA's execPath
+  // shape as buildWindowsRunCommand's own argv construction: a SEA's execPath
   // IS the whole program, so there is no separate script to name. Before
   // this, a null scriptPath crashed here (xmlEscape(null).replace is not a
   // function) the moment installLaunchd ever ran under a SEA — which
@@ -236,104 +279,40 @@ WantedBy=default.target
 `;
 }
 
-// Task Scheduler XML (schema: http://schemas.microsoft.com/windows/2004/02/mit/task)
-// rather than a long `schtasks /Create` flag list — same reasoning as the
-// launchd/systemd generators above: a file on disk a user (or a future
-// uninstaller) can actually read, not an opaque one-liner. Element-by-
-// element mapping to the other two platforms' equivalents:
-//   - LogonTrigger                    <-> launchd RunAtLoad / systemd WantedBy=default.target
-//   - RestartOnFailure (PT1M, x999)   <-> launchd KeepAlive+ThrottleInterval / systemd Restart=always+RestartSec
-//     — 1-minute floor is Task Scheduler's own minimum granularity for this
-//     element (Microsoft's schema docs), which happens to land in the same
-//     "calm, not tight" territory EXPIRY_COMMENT_LINES above explains the
-//     other two platforms' own interval choices with. Count capped at 999,
-//     not an arbitrarily larger number: two independent reviews (self-
-//     review and Hermes, PR #879) flagged that Task Scheduler's own
-//     RestartCount element is documented with a 999 upper bound elsewhere
-//     in Microsoft's schema docs, and this environment can't confirm the
-//     exact figure against a real `schtasks /Create` — staying at or under
-//     any plausible cap costs nothing here regardless of the exact number,
-//     since a genuinely dead credential (EXPIRY_COMMENT_LINES above) needs
-//     a human to re-pair either way, not more restart attempts.
-//   - ExecutionTimeLimit PT0S (unlimited) — the default is PT72H (3 days),
-//     which would silently kill this long-running foreground process out
-//     from under itself; every other platform's job here runs indefinitely
-//     by default, so this is a correctness fix, not a preference.
-//   - LogonType InteractiveToken + RunLevel LeastPrivilege <-> launchd/
-//     systemd both run as the inviting user with no privilege escalation.
-// Round 3 (PR2, Windows SEA) — `scriptPath` is now optional: a Node SEA
-// binary (helper-main.mjs, bundled by scripts/build-helper-sea.mjs) IS
-// `execPath` itself and takes no separate script argument at all, unlike
-// today's `node.exe mullion.mjs helper run ...` shape. Passing `null` here
+// The full command line for the HKCU Run value — everything CreateProcess
+// needs in one string, unlike Task Scheduler's XML which split this into a
+// separate <Command>/<Arguments> pair. Every token (execPath included, on
+// the theory that a future install location could contain a space even
+// though today's `%LOCALAPPDATA%\Mullion\mullion-helper.exe` never does)
+// is quoted uniformly and passed through windowsArgEscape — the value
+// Windows hands to CreateProcess when running an autostart entry is parsed
+// by the same CommandLineToArgvW rules as a command typed at a prompt, the
+// exact hazard windowsArgEscape exists for (see its own comment). No XML
+// escaping layer needed here — a REG_SZ value is a plain string, not XML
+// content.
+//
+// Round 3 (PR2, Windows SEA) — `scriptPath` is optional: a Node SEA binary
+// (helper-main.mjs, bundled by scripts/build-helper-sea.mjs) IS `execPath`
+// itself and takes no separate script argument at all, unlike the tarball
+// route's `node.exe mullion.mjs helper run ...` shape. Passing `null` here
 // (never `undefined` — see runInstall's own comment on why the two must
 // stay distinct) collapses the argv to `[execPath, "helper", "run",
-// --ssh-auth-sock, sshAuthSock]`. This also incidentally fixes the
+// --ssh-auth-sock, sshAuthSock]`. This also incidentally avoids the
 // path-permanence trap `defaultScriptPath()` had: under a SEA there's no
 // sibling file location for the argv to hard-code, so wherever `install`
 // copies/finds the exe IS the permanent path — no "extracted the tarball to
-// Downloads, cleaned it up later, task silently breaks" failure mode.
-export function buildWindowsTaskXml({ execPath, scriptPath, sshAuthSock }) {
-  // Every token quoted uniformly (scriptPath included — a very plausible
-  // "C:\Program Files\..." space, unlike execPath which Windows itself
-  // never puts a space in for a bare `node.exe`), matching <Arguments>'s
-  // own documented shell-like tokenizing (Microsoft's Task Scheduler docs:
-  // this string is parsed the same way a command line typed at a prompt
-  // would be — i.e. CommandLineToArgvW rules, not just "valid XML"). Two
-  // escaping layers, applied in this order and not the reverse:
-  //   1. windowsArgEscape — makes the raw value safe as CommandLineToArgvW-
-  //      quoted argv text (backslash-escapes an embedded `"` so it doesn't
-  //      prematurely close the quoted argument). Self-review (mullion-
-  //      reviewer) caught that XML-escaping alone doesn't provide this: an
-  //      embedded `"` decoded from a bare `&quot;` would still be parsed by
-  //      Windows as closing the argument early, silently truncating/
-  //      corrupting the value rather than embedding it.
-  //   2. xmlEscape — makes THAT text safe as XML element content. Must run
-  //      second: windowsArgEscape's own output can itself contain literal
-  //      `"` characters (from its `\"` escaping) that still need `&quot;`.
+// Downloads, cleaned it up later, autostart entry silently breaks" failure
+// mode.
+export function buildWindowsRunCommand({ execPath, scriptPath, sshAuthSock }) {
   const argv = [
+    execPath,
     ...(scriptPath !== null && scriptPath !== undefined ? [scriptPath] : []),
     "helper",
     "run",
     "--ssh-auth-sock",
     sshAuthSock,
   ];
-  const args = argv.map((value) => `"${xmlEscape(windowsArgEscape(value))}"`).join(" ");
-  const comment = xmlEscape(EXPIRY_COMMENT_LINES.join(" "));
-  return `<?xml version="1.0" encoding="UTF-16"?>
-<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
-  <RegistrationInfo>
-    <Description>Mullion SSH agent bridge helper. ${comment}</Description>
-  </RegistrationInfo>
-  <Triggers>
-    <LogonTrigger>
-      <Enabled>true</Enabled>
-    </LogonTrigger>
-  </Triggers>
-  <Principals>
-    <Principal id="Author">
-      <LogonType>InteractiveToken</LogonType>
-      <RunLevel>LeastPrivilege</RunLevel>
-    </Principal>
-  </Principals>
-  <Settings>
-    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
-    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
-    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
-    <StartWhenAvailable>true</StartWhenAvailable>
-    <RestartOnFailure>
-      <Interval>PT1M</Interval>
-      <Count>999</Count>
-    </RestartOnFailure>
-    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
-  </Settings>
-  <Actions Context="Author">
-    <Exec>
-      <Command>${xmlEscape(execPath)}</Command>
-      <Arguments>${args}</Arguments>
-    </Exec>
-  </Actions>
-</Task>
-`;
+  return argv.map((value) => `"${windowsArgEscape(value)}"`).join(" ");
 }
 
 function resolveSshAuthSock(flags, io, platform) {
@@ -466,75 +445,161 @@ function installSystemd(io, { execPath, scriptPath, sshAuthSock }) {
   return 0;
 }
 
-// Unlike launchd/systemd, `schtasks /Create /F` is unconditionally
-// idempotent — it silently overwrites an existing task with the same name
-// rather than erroring, so there's no separate pre-teardown step, and none
-// of the "was preTeardown itself ambiguous" rollback judgment call
-// installLaunchd's own comment works through. But a create failure is
-// still not unconditionally safe to roll back the same way regardless of
-// prior state (self-review, PR #879): a FIRST-ever install failing leaves
-// nothing to restore, so deleting the just-written file is correct — but a
-// RE-install failing must NOT delete it. `schtasks /Create` either
-// replaces the previously-registered task atomically or leaves it running
-// untouched; either way that old task survives a failed `/Create`, so
-// deleting the XML would make uninstallWindows's own "check the file
-// first" gate silently report "nothing installed" forever, with no way for
-// this tool to find and stop the still-running task again. Capture and
-// restore the prior content instead, mirroring what a real rollback would
-// need to do.
-function installWindows(io, { execPath, scriptPath, sshAuthSock }) {
-  const xmlPath = windowsTaskXmlPath(io);
-  fs.mkdirSync(path.dirname(xmlPath), { recursive: true });
-  const previousXml = fs.existsSync(xmlPath) ? fs.readFileSync(xmlPath) : null;
-  // Task Scheduler XML declares `encoding="UTF-16"` and XML 1.0 §4.3.3
-  // requires a UTF-16 entity to begin with a byte-order mark — Node's own
-  // `utf16le` encoding never emits one (confirmed: writeFileSync with this
-  // encoding starts directly with the first character's bytes), so without
-  // the explicit \uFEFF prefix this file would be non-conforming for the
-  // encoding it declares (self-review, PR #879). Written as an escape
-  // sequence, not a literal invisible character, so it can't be silently
-  // stripped or mangled by an editor/git.
-  fs.writeFileSync(xmlPath, "\uFEFF" + buildWindowsTaskXml({ execPath, scriptPath, sshAuthSock }), {
-    encoding: "utf16le",
+// `spawn()` itself never throws for a failure to actually start the child
+// (ENOENT, EACCES, an AV/EDR product transiently locking the just-written
+// exe) — that class of failure only ever surfaces asynchronously, as an
+// `'error'` event on the returned ChildProcess (self-review, mullion-
+// reviewer round: a bare `try { spawn(...) } catch {}` around this call
+// cannot catch it, and this file's own immediate `process.exit()` right
+// after `runInstall` returns leaves no window for an unlistened-for
+// `'error'` to be observed later — worse, EventEmitter's default behavior
+// for an 'error' event with NO listener attached is to throw, which could
+// crash this process with an unrelated stack trace instead of the success
+// message it was about to print). `'spawn'` is the documented counterpart
+// — Node guarantees exactly one of the two fires for a real spawn attempt,
+// never neither — so awaiting whichever comes first turns an
+// unobservable async failure into a synchronously reportable one, at the
+// cost of a spawn() round trip's worth of async time before `install`
+// returns. `unref()` only once spawn is confirmed successful — unref'ing
+// a child that's about to fail doesn't change anything, but doing it
+// before we know keeps the intent ("we manage this process's own runtime
+// lifetime, not our exit") tied to the branch where it actually applies.
+function spawnDetachedHelper(io, execPath, argv, logFd) {
+  return new Promise((resolve) => {
+    // A real Node spawn() call itself is not expected to throw
+    // synchronously for a runtime failure (see the function's own header
+    // comment) — but this catch keeps a genuinely unexpected synchronous
+    // throw (a malformed argv, for instance) degrading to the same
+    // "warning, not a failed install" outcome as the documented async
+    // 'error' path below, rather than escaping uncaught.
+    let child;
+    try {
+      child = runDetachedSpawn(io, execPath, argv, {
+        detached: true,
+        stdio: ["ignore", logFd, logFd],
+      });
+    } catch (err) {
+      resolve({ ok: false, error: err });
+      return;
+    }
+    let settled = false;
+    child.once("error", (err) => {
+      if (settled) return;
+      settled = true;
+      resolve({ ok: false, error: err });
+    });
+    child.once("spawn", () => {
+      if (settled) return;
+      settled = true;
+      child.unref();
+      resolve({ ok: true });
+    });
   });
-  const result = runSpawnSync(io, "schtasks", [
-    "/Create",
-    "/TN",
+}
+
+function runDetachedSpawn(io, command, args, options) {
+  return (io.spawn ?? nodeSpawn)(command, args, options);
+}
+
+// Best-effort teardown of a pre-round-4 install (a true standard user, or
+// someone who ran `helper install` elevated, could have successfully
+// registered the old Scheduled Task) — shared by installWindows (so a
+// re-install never ends up with BOTH mechanisms launching `helper run`)
+// and uninstallWindows. `/End`/`/Delete`/`/F` failing here is the expected,
+// silent case for the vast majority of installs (no such task was ever
+// registered, so this is just Access-denied again, or "task not found") —
+// not worth surfacing as an error on top of whatever this function's own
+// caller is already reporting.
+function cleanUpLegacyScheduledTask(io) {
+  runSpawnSync(io, "schtasks", ["/End", "/TN", WINDOWS_TASK_NAME]);
+  runSpawnSync(io, "schtasks", ["/Delete", "/TN", WINDOWS_TASK_NAME, "/F"]);
+  const xmlPath = windowsTaskXmlPath(io);
+  if (fs.existsSync(xmlPath)) fs.rmSync(xmlPath, { force: true });
+}
+
+// Round 4 (issue #871) — HKCU Run key, not a Scheduled Task; see this
+// file's own header comment for why. `reg add ... /f` is unconditionally
+// idempotent the same way `schtasks /Create /F` was, so a re-install still
+// needs no separate pre-teardown step and no XML-style rollback dance: a
+// REG_SZ value either replaces the previous one atomically or the add
+// fails outright with nothing written, unlike a multi-step file write.
+async function installWindows(io, { execPath, scriptPath, sshAuthSock }) {
+  fs.mkdirSync(stateDir(io), { recursive: true, mode: 0o700 });
+  cleanUpLegacyScheduledTask(io);
+
+  const command = buildWindowsRunCommand({ execPath, scriptPath, sshAuthSock });
+  const result = runSpawnSync(io, "reg", [
+    "add",
+    WINDOWS_RUN_KEY,
+    "/v",
     WINDOWS_TASK_NAME,
-    "/XML",
-    xmlPath,
-    "/F",
+    "/t",
+    "REG_SZ",
+    "/d",
+    command,
+    "/f",
   ]);
   if (result.status !== 0) {
-    if (previousXml === null) fs.rmSync(xmlPath, { force: true });
-    else fs.writeFileSync(xmlPath, previousXml);
     io.stderr.write(
-      `schtasks /Create failed: ${(result.stderr || result.error?.message || "unknown error").trim()}\n`,
+      `reg add failed: ${(result.stderr || result.error?.message || "unknown error").trim()}\n`,
     );
     return 1;
   }
-  // Hermes review, PR #879 — `/Create` only *registers* the task; its
-  // `LogonTrigger` won't fire the process until the next interactive
-  // logon, unlike launchd `bootstrap`/systemd `enable --now`, which both
-  // start their job immediately. Explicitly start it too, so `install`
+
+  // Self-review (mullion-reviewer round) — the `reg add` above only ever
+  // replaces the AUTOSTART REGISTRATION atomically; it says nothing about
+  // a helper process spawned by a PRIOR install (a `--ssh-auth-sock`
+  // change, most plausibly) that's still running right now, bound to the
+  // old value. Without this, "re-running the command later cleanly
+  // replaces the previous install" (docs/ssh-agent.md) would be true only
+  // of the registry entry, while a stale process kept running against the
+  // old socket, racing the new one on the same credential file's renewal
+  // writes. Deliberately placed AFTER `reg add` succeeds, not before: a
+  // failed registration must not leave the user with the old (working)
+  // process killed and nothing running in its place. Best-effort and
+  // unconditional, same as uninstallWindows's own taskkill — "no matching
+  // process" is the common, expected outcome on a genuinely first-ever
+  // install.
+  runSpawnSync(io, "taskkill", ["/IM", WINDOWS_HELPER_EXE_NAME, "/F"]);
+
+  // `reg add` only *registers* the autostart entry; Windows launches it at
+  // the NEXT logon, same gap `/Run` used to close for the Scheduled Task
+  // (Hermes review, PR #879, on the mechanism this replaces — the
+  // invariant carries over unchanged). Start it now too, so `install`
   // means the same thing ("running now, and persists across
-  // reboots/logout") on every platform. A failed `/Run` doesn't undo the
-  // successful registration — the task is still correctly installed and
-  // will start at the next logon regardless — so this degrades to a
-  // warning, not a failed install.
-  const runResult = runSpawnSync(io, "schtasks", ["/Run", "/TN", WINDOWS_TASK_NAME]);
-  if (runResult.status !== 0) {
+  // reboots/logout") on every platform. A failed spawn doesn't undo the
+  // successful registration — same "warning, not a failed install"
+  // posture the old `/Run` failure had.
+  const logPath = path.join(stateDir(io), "helper-run.log");
+  const runArgv = [
+    ...(scriptPath !== null && scriptPath !== undefined ? [scriptPath] : []),
+    "helper",
+    "run",
+    "--ssh-auth-sock",
+    sshAuthSock,
+  ];
+  const degradeToWarning = (reason) => {
     io.stderr.write(
-      `installed — ${xmlPath}\n` +
-        `note: could not start it immediately (${(runResult.stderr || runResult.error?.message || "unknown error").trim()}) — ` +
-        "it will start at the next logon instead. Start it now with " +
-        `'schtasks /Run /TN ${WINDOWS_TASK_NAME}'.\n`,
+      `installed — ${WINDOWS_RUN_KEY}\\${WINDOWS_TASK_NAME}\n` +
+        `note: could not start it immediately (${reason}) — ` +
+        "it will start at your next logon instead. Start it now with " +
+        `'"${execPath}" ${runArgv.map((v) => `"${v}"`).join(" ")}'.\n`,
     );
-  } else {
-    io.stdout.write(`installed and started — ${xmlPath}\n`);
+    return 0;
+  };
+  let logFd;
+  try {
+    logFd = fs.openSync(logPath, "a");
+  } catch (err) {
+    return degradeToWarning(err.message);
+  }
+  const spawnResult = await spawnDetachedHelper(io, execPath, runArgv, logFd);
+  if (!spawnResult.ok) {
+    return degradeToWarning(spawnResult.error.message);
   }
   io.stdout.write(
-    `check status: schtasks /Query /TN ${WINDOWS_TASK_NAME} /V\n` +
+    `installed and started — ${WINDOWS_RUN_KEY}\\${WINDOWS_TASK_NAME}\n` +
+      `logs: ${logPath}\n` +
       "this session renews itself automatically — no need to re-run 'mullion helper pair' " +
       "unless it's revoked from Settings or unreachable long enough to expire outright.\n",
   );
@@ -558,8 +623,8 @@ export async function runInstall(args, io) {
   const isSea = io.isSea !== undefined ? io.isSea : nodeIsSea();
   // Round 2/3 shipped Windows; round 4 (issue #820) adds macOS —
   // `buildLaunchdPlist` now has the same scriptPath-optional handling
-  // `buildWindowsTaskXml` already did. Linux stays refused: no SEA is ever
-  // built for Linux (scripts/build-helper-sea.mjs targets win32/darwin
+  // `buildWindowsRunCommand` already has. Linux stays refused: no SEA is
+  // ever built for Linux (scripts/build-helper-sea.mjs targets win32/darwin
   // only), so `helper install` on Linux is always the Node-from-source
   // path, and `buildSystemdUnit` has never needed (and still doesn't have)
   // null-scriptPath handling. Refusing cleanly here is far better than the
@@ -577,13 +642,13 @@ export async function runInstall(args, io) {
   }
   // `isSea` implies win32 or darwin here — the guard above already
   // rejected linux — so `null` (not `defaultScriptPath()`) is safe on
-  // both: `buildWindowsTaskXml` and `buildLaunchdPlist` both have a
+  // both: `buildWindowsRunCommand` and `buildLaunchdPlist` both have a
   // scriptPath-optional mode now (`buildSystemdUnit` doesn't, but isSea
   // can no longer reach it).
   //
   // Deliberately `!== undefined`, not `??`, for `io.scriptPath` itself: a
   // caller passing `scriptPath: null` explicitly must stay `null` all the
-  // way to buildWindowsTaskXml — `??` would treat `null` the same as
+  // way to buildWindowsRunCommand — `??` would treat `null` the same as
   // `undefined` and fall through to `defaultScriptPath()` instead.
   const scriptPath =
     io.scriptPath !== undefined ? io.scriptPath : isSea ? null : await defaultScriptPath();
@@ -645,38 +710,95 @@ function uninstallSystemd(io) {
   return 0;
 }
 
-// Same "check the file first, then treat a genuine teardown failure as
-// real, not swallowed" shape as uninstallLaunchd/uninstallSystemd above.
+// Same "check first, then treat a genuine teardown failure as real, not
+// swallowed" shape as uninstallLaunchd/uninstallSystemd above — but two
+// artifacts to check now, not one: the current Run-key mechanism and a
+// possible leftover from a pre-round-4 (Scheduled Task) install.
 function uninstallWindows(io) {
-  const xmlPath = windowsTaskXmlPath(io);
-  if (!fs.existsSync(xmlPath)) {
+  const legacyXmlPath = windowsTaskXmlPath(io);
+  const hadLegacyXml = fs.existsSync(legacyXmlPath);
+  // Known, narrow gap (self-review, mullion-reviewer round): `status !==
+  // 0` is treated as "no such value" below, but it's also what a genuinely
+  // broken `reg.exe` invocation (a locked hive, a failed spawn of reg.exe
+  // itself) would produce — the same status:null-vs-clean-rejection
+  // ambiguity Step 0 of this fix's own investigation ran into with
+  // `schtasks`. Not resolved the same way that investigation resolved it
+  // (parsing reg.exe's own locale-dependent "not found" text), matching
+  // this file's existing posture elsewhere of not parsing that kind of
+  // text for logic decisions — accepted because, unlike `schtasks` (found
+  // via PATH, which a GUI-launched child isn't guaranteed to have), `reg`
+  // is a core, always-present System32 binary with no equivalent PATH
+  // risk, so this failure mode is far less likely in practice. Worst case:
+  // a real, still-running Run entry gets reported as "nothing installed"
+  // and left behind — recoverable by re-running uninstall once whatever
+  // broke `reg.exe` is fixed.
+  const queryResult = runSpawnSync(io, "reg", ["query", WINDOWS_RUN_KEY, "/v", WINDOWS_TASK_NAME]);
+  const hadRunValue = queryResult.status === 0;
+
+  if (!hadRunValue && !hadLegacyXml) {
+    // Still worth a best-effort legacy schtasks cleanup even when neither
+    // artifact this function itself checked for is present — a laptop that
+    // only ever got a hand-run `schtasks /Create` (never install's own XML
+    // under stateDir(io)) would otherwise survive uninstall silently.
+    // cleanUpLegacyScheduledTask's own calls are silent no-ops when there's
+    // genuinely nothing to remove.
+    cleanUpLegacyScheduledTask(io);
     io.stdout.write("nothing installed.\n");
     return 0;
   }
-  // Unlike uninstallLaunchd's `bootout` and uninstallSystemd's `--now`, which
-  // both stop the running job as part of unregistering it, `schtasks /Delete`
-  // only removes the task's registration — a currently-running instance of
-  // mullion-helper.exe (the steady state on a real, already-paired laptop:
-  // installWindows's own `/Run` starts it immediately) keeps running and
-  // keeps the exe file open. Left alone, that file lock makes the installer's
-  // own [Files] removal (which runs after [UninstallRun]) fail or defer on a
-  // real machine — Hermes review, PR #905, caught this: CI's uninstall step
-  // never sees it because a non-interactive runner's `/Run` degrades to a
-  // warning rather than actually starting a persistent process. `/End`'s own
-  // failure (e.g. the task was already stopped) is not fatal — only
-  // `/Delete` failing means uninstall genuinely didn't happen.
-  runSpawnSync(io, "schtasks", ["/End", "/TN", WINDOWS_TASK_NAME]);
-  const result = runSpawnSync(io, "schtasks", ["/Delete", "/TN", WINDOWS_TASK_NAME, "/F"]);
-  if (result.status !== 0) {
-    io.stderr.write(
-      `schtasks /Delete failed: ${(result.stderr || result.error?.message || "unknown error").trim()} — ` +
-        "leaving the task file in place; 'mullion helper run' may still be active. Investigate with " +
-        `'schtasks /Query /TN ${WINDOWS_TASK_NAME}' before retrying.\n`,
-    );
-    return 1;
+
+  // Unlike uninstallLaunchd's `bootout` and uninstallSystemd's `--now`,
+  // which both stop the running job as part of unregistering it, deleting
+  // the Run value only removes the AUTOSTART registration — a currently-
+  // running instance of mullion-helper.exe (the steady state on a real,
+  // already-paired laptop: installWindows starts it immediately) keeps
+  // running and keeps the exe file open. Left alone, that file lock makes
+  // the installer's own [Files] removal (which runs after [UninstallRun])
+  // fail or defer on a real machine — the exact hazard Hermes review (PR
+  // #905) caught against the Scheduled Task mechanism this replaces; it's
+  // unchanged here. By image name, not a tracked PID: nothing records one
+  // (installWindows's own spawn is detached and unref()'d, deliberately
+  // untracked), and killing every mullion-helper.exe is also the right
+  // behavior if more than one somehow ended up running. Best-effort — "no
+  // matching process" is the common, expected outcome when nothing is
+  // running right now, not a failure worth surfacing.
+  //
+  // Known gap, not fixed here: a laptop running the non-SEA (tarball/
+  // checkout) path on win32 — `node.exe mullion.mjs helper run ...`,
+  // reachable since `runInstall` only refuses `isSea && linux`, not every
+  // non-SEA combination — has its real process image named `node.exe`,
+  // which this misses entirely. docs/ssh-agent.md steers every Windows
+  // user at the SEA installer/exe exclusively (the tarball/checkout
+  // instructions are scoped to "macOS (without the installer) or Linux"),
+  // so this is a narrow, undocumented corner case, not the supported path
+  // — worth knowing about, not worth a PID-tracking mechanism to close.
+  runSpawnSync(io, "taskkill", ["/IM", WINDOWS_HELPER_EXE_NAME, "/F"]);
+  cleanUpLegacyScheduledTask(io);
+
+  if (hadRunValue) {
+    const result = runSpawnSync(io, "reg", [
+      "delete",
+      WINDOWS_RUN_KEY,
+      "/v",
+      WINDOWS_TASK_NAME,
+      "/f",
+    ]);
+    if (result.status !== 0) {
+      io.stderr.write(
+        `reg delete failed: ${(result.stderr || result.error?.message || "unknown error").trim()} — ` +
+          "leaving the autostart entry in place; 'mullion helper run' may still be active. Investigate with " +
+          `'reg query "${WINDOWS_RUN_KEY}" /v ${WINDOWS_TASK_NAME}' before retrying.\n`,
+      );
+      return 1;
+    }
+    // Only when a Run value genuinely existed and was just deleted — self-
+    // review, mullion-reviewer round: this message used to print
+    // unconditionally, including on a laptop whose ONLY artifact was a
+    // pre-round-4 Scheduled Task (hadLegacyXml true, hadRunValue false),
+    // falsely implying a registry value had been removed when none ever
+    // existed for this install.
+    io.stdout.write(`removed ${WINDOWS_RUN_KEY}\\${WINDOWS_TASK_NAME}\n`);
   }
-  fs.rmSync(xmlPath, { force: true });
-  io.stdout.write(`removed ${xmlPath}\n`);
   return 0;
 }
 
@@ -755,32 +877,33 @@ export async function runUninstall(_args, io) {
     io.stderr.write(`mullion helper uninstall isn't supported on '${platform}'.\n`);
     return 1;
   }
-  // Only on a SUCCESSFUL teardown: a genuine teardown failure (schtasks
-  // /Delete, systemctl disable, launchctl bootout all returning nonzero)
-  // means the platform function's own stderr message already warns
-  // "'mullion helper run' may still be active" — deleting the credential
-  // out from under a still-running, still-supervised process would leave it
-  // unable to reconnect on its next restart. That failure path returns
-  // early above (uninstallWindows etc. `return 1`), so `code === 0` here
-  // means the supervisor's OWN registration is genuinely gone.
+  // Only on a SUCCESSFUL teardown: a genuine teardown failure (reg delete,
+  // systemctl disable, launchctl bootout all returning nonzero) means the
+  // platform function's own stderr message already warns "'mullion helper
+  // run' may still be active" — deleting the credential out from under a
+  // still-running, still-supervised process would leave it unable to
+  // reconnect on its next restart. That failure path returns early above
+  // (uninstallWindows etc. `return 1`), so `code === 0` here means the
+  // supervisor's OWN registration is genuinely gone.
   //
   // Windows-only residual gap, not fully closed by that: uninstallWindows's
-  // own `code` comes from `/Delete` alone — a `/End` failure is swallowed
-  // there by design (its own comment: "e.g. the task was already stopped"
-  // is the common, benign case, and distinguishing it from a genuine
-  // termination failure would mean parsing schtasks' own locale-dependent
-  // error text). So `code === 0` on win32 does NOT guarantee the actual
-  // mullion-helper.exe process has exited, only that its Scheduled Task
-  // registration has. If it's still alive and renewing when this runs, the
-  // narrow way it could notice is removeCredential's own tmp-sibling sweep
-  // below racing that SAME process's own in-flight saveCredential call
-  // (ssh-agent-helper.mjs) — deleting its just-written `<pid>.tmp` out from
-  // under it before its own renameSync runs. That renameSync's ENOENT
-  // lands in renewSession's generic catch, which treats ANY save failure as
-  // transient and retries on its own backoff — not a crash, not a stranded
-  // session, just one missed renewal cycle before either a later renewal
-  // succeeds or the process eventually exits on "credential file missing".
-  // Not worth chasing further given that self-healing (self-review, PR #911).
+  // own `taskkill /IM` (round 4 — replaced `schtasks /End`, see this file's
+  // header comment) is best-effort and its result isn't checked at all —
+  // "no matching process" is the common, benign case, and distinguishing it
+  // from a genuine termination failure would mean parsing taskkill's own
+  // locale-dependent error text. So `code === 0` on win32 does NOT
+  // guarantee the actual mullion-helper.exe process has exited, only that
+  // its autostart registration has. If it's still alive and renewing when
+  // this runs, the narrow way it could notice is removeCredential's own
+  // tmp-sibling sweep below racing that SAME process's own in-flight
+  // saveCredential call (ssh-agent-helper.mjs) — deleting its just-written
+  // `<pid>.tmp` out from under it before its own renameSync runs. That
+  // renameSync's ENOENT lands in renewSession's generic catch, which treats
+  // ANY save failure as transient and retries on its own backoff — not a
+  // crash, not a stranded session, just one missed renewal cycle before
+  // either a later renewal succeeds or the process eventually exits on
+  // "credential file missing". Not worth chasing further given that
+  // self-healing (self-review, PR #911).
   if (code === 0) removeCredential(io);
   return code;
 }

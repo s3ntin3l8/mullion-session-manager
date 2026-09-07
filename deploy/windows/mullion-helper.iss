@@ -4,21 +4,25 @@
 ; CI invocation in .github/workflows/ci-cd.yml's test-windows job and
 ; release-please.yml's build-helper-exe job) with the one piece a laptop
 ; user genuinely cannot get from a bare downloaded exe: registering the
-; Windows Scheduled Task and collecting the one-paste pairing payload,
-; without ever opening a terminal.
+; autostart entry and collecting the one-paste pairing payload, without
+; ever opening a terminal.
 ;
 ; Per-user (PrivilegesRequired=lowest), deliberately NOT a per-machine/
 ; elevated install: src/cli/ssh-agent-helper-install.mjs's own
-; buildWindowsTaskXml already registers the Scheduled Task against
-; InteractiveToken/LeastPrivilege (the CURRENT interactive user, no
-; privilege escalation) — an elevated installer run as a different
-; principal (a UAC-prompted admin account) would both register the task
-; under the WRONG user and resolve {localappdata} to the ELEVATING user's
-; profile, not the person who's actually going to run this — splitting the
-; installed exe's location from src/cli/ssh-agent-helper.mjs's own
-; stateDir() (also %LOCALAPPDATA%\Mullion, unconditionally, since PR2).
-; Keeping the install non-elevated keeps both of those anchored to the
-; same real user throughout.
+; installWindows registers a per-user autostart entry under
+; HKCU\Software\Microsoft\Windows\CurrentVersion\Run (round 4, issue #871
+; — see that file's own header comment for why: `schtasks /Create`
+; unconditionally fails "Access is denied" for a real, non-elevated
+; Administrator account, confirmed on real hardware) for the CURRENT
+; interactive user, no privilege escalation. An elevated installer run as
+; a different principal (a UAC-prompted admin account) would both
+; register the autostart entry under the WRONG user and resolve
+; {localappdata} to the ELEVATING user's profile, not the person who's
+; actually going to run this — splitting the installed exe's location
+; from src/cli/ssh-agent-helper.mjs's own stateDir() (also
+; %LOCALAPPDATA%\Mullion, unconditionally, since PR2). Keeping the install
+; non-elevated keeps both of those anchored to the same real user
+; throughout.
 
 #ifndef AppVersion
   #define AppVersion "0.0.0-dev"
@@ -36,12 +40,12 @@ AppSupportURL=https://github.com/s3ntin3l8/mullion-session-manager/issues
 ; {localappdata}, never {pf}/{commonpf} — see the header comment above.
 ; This is also EXACTLY src/cli/ssh-agent-helper.mjs's own stateDir() win32
 ; resolution (%LOCALAPPDATA%\Mullion) — the exe and its own credential
-; file/task XML deliberately share one folder, not two. DisableDirPage
-; below is what actually ENFORCES that (self-review: without it, an
-; interactive install can freely relocate {app} via the standard Select
-; Destination page, and nothing here would notice the two locations had
-; split) — there's no real reason an end user of this reference installer
-; would want a different location anyway.
+; file deliberately share one folder, not two. DisableDirPage below is
+; what actually ENFORCES that (self-review: without it, an interactive
+; install can freely relocate {app} via the standard Select Destination
+; page, and nothing here would notice the two locations had split) —
+; there's no real reason an end user of this reference installer would
+; want a different location anyway.
 DefaultDirName={localappdata}\Mullion
 DisableDirPage=yes
 DisableProgramGroupPage=yes
@@ -64,10 +68,11 @@ Source: "..\..\build\helper-sea\mullion-helper.exe"; DestDir: "{app}"; Flags: ig
 
 [UninstallRun]
 ; Runs at usUninstall, BEFORE [Files] removal (Inno Setup's own documented
-; ordering) — the Scheduled Task must be torn down while mullion-helper.exe
-; still exists on disk for `helper uninstall` to invoke schtasks against
-; itself; the reverse order would delete the exe out from under a still-
-; registered task with nothing left to clean it up.
+; ordering) — the autostart entry must be torn down (and the running
+; process stopped) while mullion-helper.exe still exists on disk for
+; `helper uninstall` to invoke reg.exe/taskkill against itself; the reverse
+; order would delete the exe out from under a still-running process with
+; nothing left to clean it up.
 Filename: "{app}\mullion-helper.exe"; Parameters: "helper uninstall"; Flags: runhidden waituntilterminated; RunOnceId: "MullionHelperUninstall"
 
 [Code]
@@ -97,13 +102,21 @@ begin
   // (bridge-registry.ts's PAIRING_CODE_TTL_MS) only has to survive the
   // (fast) file-copy step, not any time the user might spend reading the
   // rest of the wizard.
+  //
+  // `& "..."` below, not a bare quoted path — PowerShell (Windows 11's
+  // default terminal) puts a leading quoted string in expression mode and
+  // refuses to run it as a command; only Command Prompt accepts a bare
+  // quoted path directly. `&` is the PowerShell call operator and works
+  // identically in Command Prompt too (it's just a no-op token there), so
+  // this one form is correct in both shells rather than needing to name
+  // which one to use.
   PairingPage := CreateInputQueryPage(wpSelectDir,
     'Pair with Mullion',
     'Connect this laptop to your Mullion primary',
     'Paste the pairing payload from Settings -> Hosts -> SSH agent bridges ' +
     'on your Mullion primary. It is valid for 10 minutes.' + #13#10 + #13#10 +
     'You can leave this blank and pair later by running:' + #13#10 +
-    '"%LOCALAPPDATA%\Mullion\mullion-helper.exe" helper pair <payload>');
+    '& "%LOCALAPPDATA%\Mullion\mullion-helper.exe" helper pair <payload>');
   PairingPage.Add('Pairing payload:', False);
 end;
 
@@ -145,62 +158,164 @@ begin
   end;
 end;
 
-// Pairs BEFORE installing/starting the Scheduled Task, not after:
+// Round 4 (issue #871, Hermes review round on the original silent-failure
+// bug) — every ExecAndCaptureOutput call below appends here, regardless of
+// success or failure, so a scripted install is diagnosable without
+// needing to reproduce the failure interactively. Per-user (under {app},
+// = stateDir() on Windows), not {tmp}, so it outlives the run the same way
+// the credential file does.
+//
+// Deliberately takes a fixed VERB LITERAL ("pair"/"install" — never the
+// actual argv passed to Exec) and the captured OUTPUT STREAMS only, never
+// the command line itself: for `helper pair`, that command line contains
+// the pairing payload, a live single-use bearer credential
+// (ssh-agent-helper.mjs's own saveCredential comment calls the persisted
+// form of this exact value a "signing-oracle bearer token"). This log file
+// gets default ACLs, sitting in the same folder as the 0600-permissioned
+// credential file that value becomes — logging the invocation would leak
+// it. The captured stdout/stderr streams are safe to log verbatim: neither
+// `helper pair` nor `helper install`'s own error paths ever echo the
+// payload back (confirmed by reading ssh-agent-helper.mjs and
+// ssh-agent-bridge-pairing.mjs before relying on that here — a
+// CliUsageError says only "paste it exactly as shown", and a handshake
+// failure names just the target URL).
+procedure AppendDiagnostics(const Verb: String; ResultCode: Integer; Output: TExecOutput);
+var
+  LogPath, Text: String;
+  I: Integer;
+begin
+  LogPath := ExpandConstant('{app}\install-diagnostics.log');
+  Text := GetDateTimeString('yyyy/mm/dd hh:nn:ss', #0, #0) +
+    '  helper ' + Verb + '  exit=' + IntToStr(ResultCode) + #13#10;
+  for I := 0 to GetArrayLength(Output.StdOut) - 1 do
+    Text := Text + '    stdout: ' + Output.StdOut[I] + #13#10;
+  for I := 0 to GetArrayLength(Output.StdErr) - 1 do
+    Text := Text + '    stderr: ' + Output.StdErr[I] + #13#10;
+  SaveStringToFile(LogPath, Text, True);
+end;
+
+// Joins captured stderr lines for embedding directly in a failure dialog —
+// "exit code 1" alone, with nothing pointing at the real reason, is what
+// made the original bug this responds to unreproducible from a bug report
+// alone.
+function JoinStdErr(Output: TExecOutput): String;
+var
+  I: Integer;
+begin
+  Result := '';
+  for I := 0 to GetArrayLength(Output.StdErr) - 1 do
+  begin
+    if I > 0 then Result := Result + #13#10;
+    Result := Result + Output.StdErr[I];
+  end;
+end;
+
+function FormatReason(const StdErrText: String): String;
+begin
+  if StdErrText <> '' then
+    Result := 'Reason: ' + StdErrText + #13#10 + #13#10
+  else
+    Result := '';
+end;
+
+// Pairs BEFORE installing/starting the autostart entry, not after:
 // installWindows() (ssh-agent-helper-install.mjs) ends its own `install`
-// verb by running `schtasks /Run` — the task starts immediately, not just
-// registers. Installing first would mean the very first `mullion helper
-// run` launch finds no credential yet, exits 1, and sits in
-// RestartOnFailure's PT1M interval (buildWindowsTaskXml) before the retry
-// picks up the credential this same wizard page just collected — a real,
-// avoidable ~1-minute dead period for anyone who filled in the payload.
-// Pairing first means install's own /Run launches into an
-// already-paired helper on the first try.
+// verb by starting the helper immediately, detached — not just
+// registering it. Installing first would mean the very first `mullion
+// helper run` launch finds no credential yet and exits 1, sitting idle
+// until the next logon (or a manual restart) before a later pairing would
+// even be picked up — a real, avoidable dead period for anyone who filled
+// in the payload. Pairing first means install's own immediate start
+// launches into an already-paired helper on the first try.
 //
 // Both mullion-helper.exe calls below are otherwise fire-and-forget from
 // the installer's own perspective: a failure at either step still leaves a
 // USABLE install (the exe is on disk either way) — never worth rolling
 // back or failing the whole setup over, matching installWindows()'s own
-// posture ("a failed /Run degrades to a warning, not a failed install").
-// Each failure mode gets its own clear message with the exact retry
-// command instead.
+// posture ("a failed immediate start degrades to a warning, not a failed
+// install"). Each failure mode gets its own clear message with the exact
+// retry command, the real reason from stderr, and a pointer to the full
+// diagnostics log instead.
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   ResultCode: Integer;
-  ExePath: String;
-  Payload: String;
-  Paired: Boolean;
+  ExePath, CredentialPath, Payload, StdErrText: String;
+  Paired, HadCredentialBefore: Boolean;
+  Output: TExecOutput;
 begin
   if CurStep = ssPostInstall then
   begin
     ExePath := ExpandConstant('{app}\mullion-helper.exe');
+    CredentialPath := ExpandConstant('{app}\ssh-agent-bridge.json');
     Paired := False;
 
     Payload := Trim(PairingPage.Values[0]);
-    if Payload = '' then
+    if (Payload = '') and FileExists(CredentialPath) then
+      // Re-running the installer (an upgrade, or a repair) over an
+      // already-paired laptop, with the pairing field deliberately left
+      // blank — the expected shape for that case, since the user has no
+      // new payload to give. Without this check, the branch below would
+      // tell them to pair anyway; following that instruction would
+      // register a SECOND bridge session on the primary while the
+      // original stays live and unrevoked, and the "installed and
+      // paired" success message further down would never fire for a run
+      // that in fact left this laptop correctly paired throughout.
+      Paired := True
+    else if Payload = '' then
     begin
       ShowMsg(
         'Mullion Helper will be installed but not yet paired.' + #13#10 + #13#10 +
         'When you are ready, generate a payload from Settings -> Hosts -> SSH agent bridges on your Mullion primary, then run:' + #13#10 + #13#10 +
-        '"' + ExePath + '" helper pair <payload>',
+        '& "' + ExePath + '" helper pair <payload>',
         mbInformation);
     end
     else if not IsValidPairingPayload(Payload) then
     begin
       ShowMsg(
         'That doesn''t look like a real pairing payload (it should be a single unbroken block of letters, digits, "-", and "_", nothing else) — skipping pairing rather than risk sending something wrong. Copy it fresh from Settings -> Hosts -> SSH agent bridges and run:' + #13#10 + #13#10 +
-        '"' + ExePath + '" helper pair <payload>',
-        mbError);
-    end
-    else if not (Exec(ExePath, 'helper pair "' + Payload + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0)) then
-    begin
-      ShowMsg(
-        'Pairing did not succeed (exit code ' + IntToStr(ResultCode) + ') — the payload may have expired (it is only valid for 10 minutes) or been mistyped.' + #13#10 + #13#10 +
-        'Generate a fresh payload from Settings -> Hosts -> SSH agent bridges on your Mullion primary, then run:' + #13#10 + #13#10 +
-        '"' + ExePath + '" helper pair <payload>',
+        '& "' + ExePath + '" helper pair <payload>',
         mbError);
     end
     else
-      Paired := True;
+    begin
+      // Captured BEFORE this attempt runs, not just checked after — see
+      // the fallback branch below for why the distinction matters on a
+      // reinstall over an ALREADY-paired laptop.
+      HadCredentialBefore := FileExists(CredentialPath);
+      ExecAndCaptureOutput(ExePath, 'helper pair "' + Payload + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode, Output);
+      AppendDiagnostics('pair', ResultCode, Output);
+      if ResultCode = 0 then
+        Paired := True
+      // runPair (ssh-agent-helper.mjs) persists the credential BEFORE its
+      // own final stdout write — a failure in that last write alone still
+      // reports this same non-zero exit code even though pairing genuinely
+      // succeeded. Trust the credential file over the exit code rather
+      // than sending someone to re-pair a bridge that's already paired.
+      //
+      // Gated on `not HadCredentialBefore` (self-review, mullion-reviewer
+      // round): without it, this would also fire on a reinstall over a
+      // laptop that was ALREADY paired from a genuinely earlier, unrelated
+      // install — the stale credential file predates THIS attempt and
+      // proves nothing about whether it succeeded, so a truly failed
+      // reinstall (an expired or already-used fresh payload) would be
+      // misreported as "installed and paired," hiding the real failure.
+      // Narrowed to exactly the race the comment above describes: a
+      // credential that did not exist before this attempt and does now.
+      else if (not HadCredentialBefore) and FileExists(CredentialPath) then
+        Paired := True
+      else
+      begin
+        StdErrText := JoinStdErr(Output);
+        ShowMsg(
+          'Pairing did not succeed (exit code ' + IntToStr(ResultCode) + ').' + #13#10 + #13#10 +
+          'Exit code 2 means the payload itself was invalid. Exit code 1 means it was valid but the primary rejected it — it may have expired (valid for 10 minutes) or already been used — or could not be reached.' + #13#10 + #13#10 +
+          FormatReason(StdErrText) +
+          'Generate a fresh payload from Settings -> Hosts -> SSH agent bridges on your Mullion primary, then run:' + #13#10 + #13#10 +
+          '& "' + ExePath + '" helper pair <payload>' + #13#10 + #13#10 +
+          'Full diagnostics: ' + ExpandConstant('{app}\install-diagnostics.log'),
+          mbError);
+      end;
+    end;
 
     // No --ssh-auth-sock passed — resolveSshAuthSock (ssh-agent-helper-
     // install.mjs) already defaults to \\.\pipe\openssh-ssh-agent on win32
@@ -210,19 +325,25 @@ begin
     // the right outcome even for an unpaired helper (it'll just sit
     // waiting, same as running `mullion helper install` by hand always
     // has).
-    if not (Exec(ExePath, 'helper install', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0)) then
+    ExecAndCaptureOutput(ExePath, 'helper install', '', SW_HIDE, ewWaitUntilTerminated, ResultCode, Output);
+    AppendDiagnostics('install', ResultCode, Output);
+    if ResultCode <> 0 then
     begin
+      StdErrText := JoinStdErr(Output);
       ShowMsg(
         'mullion-helper.exe helper install did not finish cleanly (exit code ' + IntToStr(ResultCode) + ').' + #13#10 + #13#10 +
-        'The helper is still installed at ' + ExePath + ' — you can retry the Scheduled Task registration yourself by running:' + #13#10 + #13#10 +
-        '"' + ExePath + '" helper install',
+        FormatReason(StdErrText) +
+        'The helper is still installed at ' + ExePath + ' — you can retry the autostart registration yourself by running:' + #13#10 + #13#10 +
+        '& "' + ExePath + '" helper install' + #13#10 + #13#10 +
+        'Full diagnostics: ' + ExpandConstant('{app}\install-diagnostics.log'),
         mbError);
     end
     else if Paired then
       // "installed and paired", not "...and running": helper install's own
-      // schtasks /Run is best-effort (installWindows treats a failed /Run as
-      // a non-fatal warning, not an install failure), so this exit code 0
-      // doesn't guarantee the task actually started — Hermes review, PR #905.
+      // immediate start is best-effort (installWindows treats a failed
+      // start as a non-fatal warning, not an install failure), so this
+      // exit code 0 doesn't guarantee the helper actually started —
+      // Hermes review, PR #905, on the mechanism this carries forward.
       ShowMsg('Mullion Helper is installed and paired.', mbInformation);
   end;
 end;

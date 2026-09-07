@@ -297,10 +297,13 @@
   border-radius: 9px;
   color: var(--fg);
 }
-/* SSH-agent bridge pairing command (PairBridgeModal.tsx, issue #820 PR7c) —
-   same dashed-box treatment as .device-flow-code above, but left-aligned
-   and wrapping: unlike GitHub's short user_code, this embeds a base64url
-   payload that can run to a couple hundred characters. */
+/* SSH-agent bridge pairing payload + per-platform command (PairBridgeModal.tsx,
+   issue #820 PR7c; platform selector added issue #871's own installer UX
+   cleanup) — same dashed-box treatment as .device-flow-code above, but
+   left-aligned and wrapping: unlike GitHub's short user_code, the payload
+   block can run to a couple hundred characters. Shared, not duplicated, by
+   both the bare-payload block and the platform-command block below it —
+   they're the same visual treatment, not two different things. */
 .bridge-pairing-command {
   font-family: "Geist Mono", monospace;
   font-size: 12.5px;
