@@ -194,33 +194,67 @@ jobs:
           # 2 asserted above would otherwise be re-surfaced as this step's
           # own (spurious) failure. Reset it now that success is confirmed.
           exit 0
-      # Real schtasks.exe round trip: install (registers a REAL Scheduled
-      # Task on this runner), query it, uninstall, confirm it's gone.
-      # Scoped to /Create + /Query round-tripping the XML this generates —
-      # NOT asserting /Run actually started the process, which a CI
-      # runner's non-interactive session may not support the same way a
-      # real interactive logon does (installWindows's own comment: a failed
-      # /Run degrades to a warning, not a failed install, for exactly this
-      # kind of environment).
-      - name: schtasks round trip — install, query, uninstall
+      # Round 4 (issue #871) — real reg.exe round trip against the HKCU Run
+      # key: install (registers the autostart entry AND starts the helper
+      # detached), query it, uninstall, confirm it's gone. This replaced a
+      # Scheduled Task round trip (`schtasks /Create`) that passed on this
+      # very runner while being unable to catch the actual production bug:
+      # windows-latest runs as `runneradmin`, an ELEVATED administrator, so
+      # `schtasks /Create` succeeding here proved nothing about a real,
+      # non-elevated end user — and on a real non-elevated Administrator
+      # account (confirmed on real hardware) it unconditionally fails
+      # "Access is denied" (a UAC filtered-token effect, not a bug in the
+      # generated task XML). `HKCU` has no equivalent elevation dependency
+      # — it's per-user and always writable by its owner regardless of
+      # admin/standard/elevated status — so this round trip has no
+      # privilege gap left for CI's own elevation to mask. See
+      # src/cli/ssh-agent-helper-install.mjs's header comment for the full
+      # story.
+      - name: reg round trip — install, query, uninstall
         shell: pwsh
         env:
           MULLION_HELPER_STATE_DIR: ${{ runner.temp }}\mullion-helper-state
         run: |
+          # `2>&1` + Write-Host on every native call, not a bare `& $exe ...`
+          # — self-review, this exact step's own failure: PowerShell 7.3+'s
+          # `$PSNativeCommandUseErrorActionPreference` (default true)
+          # intercepts a native command's stderr for its own error-record
+          # handling when a call isn't redirected, and a real failure here
+          # showed up as a bare "exit code 1" with the child's own stderr
+          # (the actual reason) never reaching the Actions log at all — the
+          # exact "exit code 1, zero diagnosis" failure mode this whole PR
+          # exists to fix, just relocated to this CI script instead of the
+          # installer. The smoke-test step above already uses this pattern
+          # for exactly this reason; this step now matches it everywhere a
+          # native command's output matters for diagnosis.
           $exe = "build\helper-sea\mullion-helper.exe"
-          & $exe helper install --ssh-auth-sock "\\.\pipe\openssh-ssh-agent"
+          $installOutput = & $exe helper install --ssh-auth-sock "\\.\pipe\openssh-ssh-agent" 2>&1
+          Write-Host ($installOutput -join "`n")
           if ($LASTEXITCODE -ne 0) { throw "helper install failed with exit code $LASTEXITCODE" }
 
-          schtasks /Query /TN MullionHelper /V /FO LIST
-          if ($LASTEXITCODE -ne 0) { throw "schtasks /Query found no registered task after install" }
+          # Round 4 (issue #871, mullion-reviewer round) — the registered
+          # command line crosses TWO real argv parsers before it's actually
+          # this string (Node's own child-process command-line construction,
+          # then reg.exe's own CommandLineToArgvW-based parsing of `/d`) —
+          # a hazard the retired Scheduled Task's XML file never had (it was
+          # written directly, never round-tripped through a second real
+          # parser). The unit tests can only assert what's handed to a
+          # STUBBED spawnSync; asserting exit code alone here would miss a
+          # value silently mangled by that second parse. Check the actual
+          # content a real `reg.exe` stored, not just that a value exists.
+          $regOutput = ((reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v MullionHelper 2>&1) -join "`n")
+          if ($LASTEXITCODE -ne 0) { throw "reg query found no registered autostart entry after install: $regOutput" }
+          if (-not $regOutput.Contains("\\.\pipe\openssh-ssh-agent")) { throw "registered autostart command lost the --ssh-auth-sock value: $regOutput" }
+          if (-not $regOutput.Contains("mullion-helper.exe")) { throw "registered autostart command does not reference mullion-helper.exe: $regOutput" }
 
-          & $exe helper uninstall
+          $uninstallOutput = & $exe helper uninstall 2>&1
+          Write-Host ($uninstallOutput -join "`n")
           if ($LASTEXITCODE -ne 0) { throw "helper uninstall failed with exit code $LASTEXITCODE" }
 
-          schtasks /Query /TN MullionHelper 2>$null
-          if ($LASTEXITCODE -eq 0) { throw "task still registered after uninstall" }
+          reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v MullionHelper 2>$null
+          if ($LASTEXITCODE -eq 0) { throw "autostart entry still registered after uninstall" }
           # Same reset as the smoke-test step above — the LAST native call
-          # here is EXPECTED to fail (proving the task is really gone), so
+          # here is EXPECTED to fail (proving the entry is really gone), so
           # $LASTEXITCODE is non-zero on the success path and would
           # otherwise fail this step despite every assertion having passed.
           exit 0
@@ -261,8 +295,22 @@ jobs:
           $exePath = "$env:LOCALAPPDATA\Mullion\mullion-helper.exe"
           if (-not (Test-Path $exePath)) { throw "mullion-helper.exe was not installed to $exePath" }
 
-          schtasks /Query /TN MullionHelper /V /FO LIST
-          if ($LASTEXITCODE -ne 0) { throw "installer did not register the MullionHelper Scheduled Task" }
+          reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v MullionHelper
+          if ($LASTEXITCODE -ne 0) { throw "installer did not register the MullionHelper autostart entry" }
+
+          # Round 4 (issue #871, Hermes review on the original silent-
+          # failure bug) — the installer's own [Code] now captures every
+          # `helper pair`/`helper install` invocation's stdout+stderr to
+          # this log, specifically so a failure like the one that shipped
+          # undiagnosable (both post-install steps failing with a bare
+          # "exit code 1" and nothing else) can't happen again silently.
+          # No pairing payload was supplied above, so this run exercises
+          # the "not yet paired" branch — only `helper install`'s own
+          # entry is expected here.
+          $diagLog = "$env:LOCALAPPDATA\Mullion\install-diagnostics.log"
+          if (-not (Test-Path $diagLog)) { throw "install-diagnostics.log was not written" }
+          $diagContent = Get-Content $diagLog -Raw
+          if ($diagContent -notmatch "helper install\s+exit=0") { throw "install-diagnostics.log missing a successful 'helper install' entry: $diagContent" }
 
           # Issue #904 — no pairing payload was supplied above, so nothing
           # real got written here; drop a dummy credential file in the same
@@ -271,6 +319,33 @@ jobs:
           # the real installer's [UninstallRun] -> `helper uninstall` really
           # forgets it, not just the unit-tested runUninstall() in isolation.
           "{}" | Out-File -Encoding ascii -NoNewline "$env:LOCALAPPDATA\Mullion\ssh-agent-bridge.json"
+
+      # Round 4 (issue #871, mullion-reviewer round) — re-running the
+      # installer silently over an ALREADY-paired laptop, still with no
+      # payload supplied, is the real shape of a version upgrade or repair
+      # install: the user has no new payload to give because they're
+      # already paired. Before this fix, CurStepChanged's blank-payload
+      # branch couldn't tell that apart from a genuinely fresh, unpaired
+      # install, and told the user to go pair anyway — silently registering
+      # a second bridge session if followed. Nothing above exercises a
+      # SECOND run against an existing credential file, so this regression
+      # had no coverage; this step is that coverage.
+      - name: Re-run the installer silently over an already-paired install
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem "build\installer\mullion-helper-setup-*.exe" | Select-Object -First 1
+          $logPath = Join-Path $env:RUNNER_TEMP "reinstall.log"
+          $proc = Start-Process -FilePath $installer.FullName -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/LOG=$logPath") -Wait -PassThru
+          if ($proc.ExitCode -ne 0) { throw "re-install exited $($proc.ExitCode)" }
+
+          $logContent = Get-Content $logPath -Raw
+          if ($logContent -match "will be installed but not yet paired") {
+            throw "re-install over an already-paired laptop showed the fresh-install pairing prompt — the credential-file check regressed"
+          }
+          if ($logContent -notmatch "installed and paired") {
+            throw "re-install over an already-paired laptop did not report itself as paired: $logContent"
+          }
+
       # Inno Setup's generated uninstaller copies ITSELF to a temp location
       # and re-executes before doing the actual work, specifically so it
       # can delete its own original exe — the parent process this step

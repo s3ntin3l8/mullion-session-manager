@@ -381,8 +381,9 @@ alternative, and how the two compose.
   needs; an older build degrades per-path rather than breaking (see
   [`tasks.md`](tasks.md)'s Known limitations).
 - **SSH agent bridge**: `mullion helper install`/`uninstall` generates a
-  Windows Scheduled Task too, but has no local verification path (see
-  [`ssh-agent.md`](ssh-agent.md#keeping-it-running)), and separately,
+  Windows autostart entry too (see
+  [`ssh-agent.md`](ssh-agent.md#keeping-it-running) for what's verified in
+  CI vs. still tracked as manual), and separately,
   whether 1Password's Windows named pipe accepts the mux's concurrent-
   channel shape at all hasn't been verified against a real agent (tracked
   at [issue #871](https://github.com/s3ntin3l8/mullion-session-manager/issues/871)

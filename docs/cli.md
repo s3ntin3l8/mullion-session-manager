@@ -357,14 +357,16 @@ socket-wide posture from `docs/socket-api.md`.
   event shapes. `--insecure` has the same meaning as on `pair` above, and
   must match what `pair` was run with against the same primary.
 - `mullion helper install [--ssh-auth-sock <path>]` — generates and
-  registers a launchd job (macOS), systemd `--user` unit (Linux), or
-  Windows Scheduled Task that supervises `run`, so you don't have to
-  hand-write one. Re-running it replaces a previous install (new
-  `--ssh-auth-sock`, moved checkout, ...). On Windows, this is what the
+  registers a launchd job (macOS), systemd `--user` unit (Linux), or a
+  per-user `HKCU\...\Run` autostart entry (Windows) that supervises `run`,
+  so you don't have to hand-write one. Re-running it replaces a previous
+  install (new `--ssh-auth-sock`, moved checkout, ...). On Windows, this is
+  what the
   [installer](ssh-agent.md#getting-mullion-helper-onto-your-laptop) runs on
   your behalf — see [`ssh-agent.md`](ssh-agent.md#keeping-it-running) for
-  what's verified in CI vs. still tracked as manual ([issue
-  #871](https://github.com/s3ntin3l8/mullion-session-manager/issues/871)).
+  the Scheduled Task → `HKCU` autostart entry history ([issue
+  #871](https://github.com/s3ntin3l8/mullion-session-manager/issues/871))
+  and what's verified in CI.
 - `mullion helper uninstall` — stops and removes whatever `install` set up,
   on whichever of the three supported platforms this is, and forgets the
   local pairing credential too. A no-op, not an error, if nothing is
