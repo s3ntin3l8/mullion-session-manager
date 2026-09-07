@@ -33,6 +33,7 @@ import {
   detectCwdChange,
   carryPartialOsc,
   advanceAttention,
+  detectBracketedPaste,
   INITIAL_MOUSE_TRACKING_STATE,
   INITIAL_ATTENTION_STATE,
   type MouseTrackingState,
@@ -943,7 +944,7 @@ type StoredStateFields = Pick<
   | "lastAssistantMessage"
   | "backgroundTasks"
 > & {
-  termModes?: { inAltScreen: boolean; mouseTracking: MouseTrackingState };
+  termModes?: { inAltScreen: boolean; mouseTracking: MouseTrackingState; bracketedPaste?: boolean };
 };
 
 // Issue: worktree/branch detection — a session's hookToken used to be
@@ -1209,6 +1210,13 @@ export class Session {
   // ring buffer, silently defaults to no tracking while the real process is
   // never told anything changed).
   private mouseTracking: MouseTrackingState = INITIAL_MOUSE_TRACKING_STATE;
+  // Tracked bracketed-paste mode (DECSET/DECRST 2004) — same "persist across
+  // reattach/restart" rationale as inAltScreen/mouseTracking above (issue #1155):
+  // a TUI enables bracketed paste once and expects it for the session's life;
+  // if lost across a restart, multi-line pastes are interpreted as individual
+  // keystrokes. Detected in onData alongside mouseTracking; synthesized into
+  // getScrollback()'s preamble.
+  private bracketedPaste = false;
   // Any unterminated escape-sequence prefix left dangling at the end of the
   // previous onData chunk (see carryPartialEscape's docstring) — prepended to
   // the next chunk before re-running detectAltScreenSwitch/
@@ -1752,6 +1760,19 @@ export class Session {
         this.mouseTracking = { protocol, encoding };
       }
     }
+    // Issue #1155 — bracketed paste mode: same "persist across reattach"
+    // rationale as inAltScreen/mouseTracking above. Restored from termModes
+    // alongside the other two, validated as boolean.
+    //
+    // HOWEVER: unlike alt-screen (a cosmetic no-op if stale) or mouse-
+    // tracking (a benign no-op for most programs), a stale bracketedPaste
+    //=true causes the next client paste to be wrapped in ESC[200~..ESC[201~
+    // bytes that a program NOT in bracketed-paste mode won't strip — the
+    // user sees literal wrapper bytes in the buffer. Reset to false on
+    // respawn so the new process's shell/program can re-enable it cleanly.
+    if (s.termModes != null && typeof s.termModes.bracketedPaste === "boolean") {
+      this.bracketedPaste = false;
+    }
     // Fresh-review finding — `turnEndPingSent` itself isn't persisted (it's
     // not in StoredStateFields, same as backgroundTasksAt), so it would
     // otherwise always restore to its class-field default of `false`. That's
@@ -1805,7 +1826,11 @@ export class Session {
       lastTurnEndedAt: this.attention.lastTurnEndedAt,
       lastAssistantMessage: this.lastAssistantMessage,
       backgroundTasks: this.attention.backgroundTasks,
-      termModes: { inAltScreen: this.inAltScreen, mouseTracking: this.mouseTracking },
+      termModes: {
+        inAltScreen: this.inAltScreen,
+        mouseTracking: this.mouseTracking,
+        bracketedPaste: this.bracketedPaste,
+      },
     };
   }
 
@@ -2317,6 +2342,8 @@ export class Session {
         }
       }
       this.mouseTracking = applyMouseModeChanges(detectChunk, this.mouseTracking);
+      const bpChange = detectBracketedPaste(detectChunk);
+      if (bpChange !== null) this.bracketedPaste = bpChange;
       this.detectCarry = carryPartialEscape(detectChunk);
 
       // Live cwd tracking (issue: sidebar worktree display) — its own carry
@@ -3210,13 +3237,14 @@ export class Session {
 
   /**
    * Everything currently buffered, oldest first, prefixed with a preamble
-   * synthesized from tracked alt-screen and mouse-tracking state — replay
-   * this to a newly-attaching client. The alt-screen half of the preamble is
-   * unconditional (even against an empty buffer) so a freshly-connecting
-   * xterm.js always lands in the correct mode rather than whatever it
-   * happened to default to; forcing primary when already in primary, or alt
-   * when already in alt, is a no-op escape sequence either way. See
-   * inAltScreen's docstring for why this can't just trust the buffered bytes
+   * synthesized from tracked alt-screen, mouse-tracking, and bracketed-paste
+   * state — replay this to a newly-attaching client. The alt-screen half of
+   * the preamble is unconditional (even against an empty buffer) so a
+   * freshly-connecting xterm.js always lands in the correct mode rather than
+   * whatever it happened to default to; forcing primary when already in
+   * primary, or alt when already in alt, is a no-op escape sequence either
+   * way. See inAltScreen's docstring for why this can't just trust the
+   * buffered bytes
    * themselves to be self-balanced.
    *
    * The mouse-tracking half is appended only when tracked state isn't the
@@ -3230,12 +3258,17 @@ export class Session {
    * order. See MouseTrackingState's docstring in attention-detect.ts for why
    * this exists (issue #93).
    *
+   * The bracketed-paste half (?2004h) is appended only when tracked state is
+   * active — same "keep the emitted bytes identical for the common off case"
+   * rationale as mouse-tracking above (issue #1155).
+   *
    * The preamble is synthesized here (not in ScrollbackBuffer) because it
-   * depends on inAltScreen/mouseTracking — Session-level state that's read
-   * and written by more than just scrollback replay (see this class's
-   * inAltScreen field doc, and scrollback-buffer.ts's own header comment,
-   * for why those two fields didn't move with the ring buffer itself).
-   * ScrollbackBuffer.toBuffer() does the actual concat over the raw,
+   * depends on inAltScreen/mouseTracking/bracketedPaste — Session-level
+   * state that's read and written by more than just scrollback replay (see
+   * this class's inAltScreen field doc, and scrollback-buffer.ts's own
+   * header comment, for why those fields didn't move with the ring buffer
+   * itself). ScrollbackBuffer.toBuffer() does the actual concat over the
+   * raw,
    * preamble-free bytes.
    */
   getScrollback(): Buffer {
@@ -3247,7 +3280,11 @@ export class Session {
     if (this.mouseTracking.encoding !== "DEFAULT") {
       mousePreamble += MOUSE_ENCODING_ENABLE[this.mouseTracking.encoding];
     }
-    const preamble = Buffer.from(altPreamble + mousePreamble, "utf8");
+    let bpPreamble = "";
+    if (this.bracketedPaste) {
+      bpPreamble = "\x1b[?2004h";
+    }
+    const preamble = Buffer.from(altPreamble + mousePreamble + bpPreamble, "utf8");
     return this.scrollbackBuffer.toBuffer(preamble);
   }
 

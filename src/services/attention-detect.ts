@@ -787,3 +787,21 @@ export function carryPartialEscape(chunk: string): string {
   const tail = chunk.slice(lastEsc);
   return PARTIAL_ESCAPE_TAIL.test(tail) ? tail : "";
 }
+
+// Bracketed paste mode (DECSET/DECRST 2004) — the same "mode a TUI enables
+// once and expects to persist" pattern as inAltScreen/mouseTracking above,
+// but tracked independently because its escape sequence is distinct
+// (\x1b[?2004h / \x1b[?2004l) and it has its own reattach semantics: if
+// the enabling escape ages out of the bounded scrollback ring or is lost
+// across a backend restart, a pasted multi-line block into a reattached
+// session is interpreted as individual keystrokes instead of a single paste.
+// eslint-disable-next-line no-control-regex
+const BRACKETED_PASTE_SWITCH = /\x1b\[\?2004([hl])/g;
+
+export function detectBracketedPaste(chunk: string): boolean | null {
+  let result: boolean | null = null;
+  for (const match of chunk.matchAll(BRACKETED_PASTE_SWITCH)) {
+    result = match[1] === "h";
+  }
+  return result;
+}
