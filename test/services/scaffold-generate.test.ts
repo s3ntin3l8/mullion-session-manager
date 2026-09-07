@@ -634,7 +634,7 @@ describe("agentSandboxWritablePaths", () => {
     expect(agentSandboxWritablePaths("claude")).toEqual([]);
   });
 
-  it("returns no extra paths for agy (its own pre-existing arg-parsing bug blocked live verification — see this module's header)", () => {
+  it("returns no extra paths for agy (confirmed live, issue #1130, to need none)", () => {
     expect(agentSandboxWritablePaths("agy")).toEqual([]);
   });
 
@@ -688,6 +688,27 @@ describe("ensureSandboxWritablePathsExist", () => {
     const impossibleTarget = path.join(blockingFile, "child");
 
     expect(() => ensureSandboxWritablePathsExist([impossibleTarget])).not.toThrow();
+  });
+
+  // Invariant for any future, narrower agentSandboxWritablePaths entry
+  // (issue #1131's eventual write-surface audit): every path handed to
+  // this function is assumed to be a DIRECTORY. `mkdirSync(p, { recursive:
+  // true })` on a path that doesn't exist yet creates a directory AT that
+  // exact path — so a future entry naming a specific FILE (e.g.
+  // opencode's own `opencode.db`, rather than its containing directory)
+  // would silently get a directory created in its place instead of the
+  // file's parent, corrupting the very state it was meant to preserve.
+  // agentSandboxWritablePaths only ever returns directory paths today, so
+  // this is not live — but the failure mode is not obvious from reading
+  // `ensureSandboxWritablePathsExist` alone, so it is demonstrated here
+  // rather than left to be rediscovered.
+  it("would wrongly create a directory at a path meant to be a file — any future file-shaped entry must route through a different call", () => {
+    const target = path.join(parentDir, "opencode.db");
+    expect(fs.existsSync(target)).toBe(false);
+
+    ensureSandboxWritablePathsExist([target]);
+
+    expect(fs.statSync(target).isDirectory()).toBe(true);
   });
 });
 
