@@ -11,6 +11,7 @@ import {
   buildGenerationPrompt,
   parseGeneratedOutput,
   generateScaffoldContent,
+  defaultSpawnGenerationTurn,
   wrapWithSandbox,
   agentSandboxWritablePaths,
   ensureSandboxWritablePathsExist,
@@ -831,6 +832,58 @@ describe("isSandboxCapable caching", () => {
     expect(await isSandboxCapable(unusableProbe)).toBe(false);
     expect(await isSandboxCapable(unusableProbe)).toBe(false);
     expect(calls).toBe(1);
+  });
+});
+
+// Hermes review, PR #1152 — `--dangerously-skip-permissions` (buildInvocation's
+// agy case, issue #1130) grants agy real tool access rather than restricting
+// it; on a host where bwrap isn't usable, an unsandboxed agy turn would have
+// full write/exec as the server user with no CLI-level restriction to fall
+// back on (unlike claude's --allowedTools or codex's --sandbox read-only).
+// defaultSpawnGenerationTurn fails closed for agy specifically in that case
+// rather than silently degrading like the other three agents.
+describe("defaultSpawnGenerationTurn — agy fails closed without a usable sandbox (issue #1130/#1152)", () => {
+  beforeEach(() => {
+    resetSandboxCapabilityCache();
+  });
+
+  afterEach(() => {
+    resetSandboxCapabilityCache();
+  });
+
+  it("throws GenerationSpawnError for agy when no usable bwrap is available, without ever spawning", async () => {
+    await isSandboxCapable(async () => false);
+
+    await expect(
+      defaultSpawnGenerationTurn({
+        agentCommand: "agy",
+        cwd: "/nonexistent/scratch-worktree",
+        prompt: "irrelevant — this must fail before any spawn is attempted",
+        timeoutMs: 5000,
+      }),
+    ).rejects.toThrow(/requires a usable bwrap sandbox/);
+  });
+
+  it("does NOT fail closed for the other three agents — this guard is agy-specific", async () => {
+    await isSandboxCapable(async () => false);
+
+    // A bogus cwd/bin means these DO still reach execFile and fail there
+    // (a real spawn ENOENT, not agy's own pre-flight guard) — asserted on
+    // the SAME caught error by checking its message doesn't match the
+    // guard's own wording, which is what would actually distinguish
+    // "rejected before any spawn was attempted" from "the spawn itself
+    // failed" if this guard's `agentCommand` check were ever accidentally
+    // broadened.
+    for (const agentCommand of ["claude", "codex", "opencode"]) {
+      const err: unknown = await defaultSpawnGenerationTurn({
+        agentCommand,
+        cwd: "/nonexistent/scratch-worktree",
+        prompt: "x",
+        timeoutMs: 1000,
+      }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(GenerationSpawnError);
+      expect((err as Error).message).not.toMatch(/requires a usable bwrap sandbox/);
+    }
   });
 });
 

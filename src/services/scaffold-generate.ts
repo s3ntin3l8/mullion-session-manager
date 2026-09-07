@@ -719,8 +719,11 @@ export function isSandboxCapable(
               "kernel/policy does not permit unprivileged user namespaces) — scaffold " +
               "generation turns will run WITHOUT process-level sandboxing; the structural " +
               "guarantee (the scratch worktree never feeds the PR pipeline directly) is the " +
-              "only protection in effect until this is resolved. See scaffold-generate.ts's " +
-              "own header comment for detail.",
+              "only protection in effect until this is resolved. claude and codex retain " +
+              "their own CLI-level tool restriction even unsandboxed; opencode has none " +
+              "(full write/exec as the server user) and agy now refuses to run at all on " +
+              "this fallback rather than doing the same (issue #1130). See " +
+              "scaffold-generate.ts's own header comment for detail.",
           );
         }
         return usable;
@@ -772,6 +775,32 @@ export const defaultSpawnGenerationTurn: SpawnGenerationTurn = async ({
   // reliably decidable from an exit code/stderr alone, so no such retry is
   // attempted here — a known, accepted limitation, not an oversight.
   const sandboxUsable = await isSandboxCapable();
+  // Hermes review, PR #1152 — `--dangerously-skip-permissions` (added to
+  // agy's own argv above, issue #1130) is the only flag here that GRANTS
+  // tool access rather than restricting it; claude's `--allowedTools` and
+  // codex's `--sandbox read-only` are real (if imperfectly verified) CLI-
+  // level restrictions that still apply on this exact no-bwrap fallback.
+  // Before #1130, agy was effectively inert on this fallback (it
+  // auto-denied every tool call without that flag) — safe by accident, not
+  // by design. Now that it has real tool access, an unsandboxed agy turn
+  // has full write+exec as the server user, with only the prompt's own
+  // advisory "do not create/edit/delete" instruction as a stop — on
+  // arbitrary repo/seed content, a real prompt-injection surface. Fail
+  // closed here rather than silently degrade the way the other three
+  // agents do: this specific exposure is new as of #1130's own fix, so it
+  // gets a guard scoped to it. (opencode's plain `run` has the identical
+  // no-restriction-flag gap on this same fallback — see this module's own
+  // header — but that is pre-existing and untouched by #1130; tracked
+  // separately rather than folded into this fix.)
+  if (!sandboxUsable && agentCommand === "agy") {
+    throw new GenerationSpawnError(
+      agentCommand,
+      "agy requires a usable bwrap sandbox for scaffold generation — without it, " +
+        "--dangerously-skip-permissions (needed for agy to read the repo at all) would " +
+        "leave it with full write/exec access as the server user and no CLI-level " +
+        "restriction to fall back on. Install/enable bwrap on this host to use agy here.",
+    );
+  }
   let invocation = { bin, args };
   if (sandboxUsable) {
     const extraWritablePaths = agentSandboxWritablePaths(agentCommand);
