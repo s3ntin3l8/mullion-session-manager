@@ -4017,6 +4017,7 @@ export class PtyManager {
    */
   getOrCreate(opts: CreateSessionOptions): Session {
     let session = this.sessions.get(opts.id);
+    const isNewSession = !session;
     if (!session) {
       session = new Session({
         id: opts.id,
@@ -4077,6 +4078,24 @@ export class PtyManager {
       this.hookTokens.set(session.hookToken, opts.id);
     }
     if (!session.isAlive) {
+      // Issue #1156 — apply the caller's requested size before spawn, but
+      // only when reattaching to a session that already existed (isNewSession
+      // false): a brand-new Session's constructor just clamped/assigned
+      // opts.cols/opts.rows to this.cols/this.rows moments ago, so calling
+      // resize() again here would be a redundant no-op re-clamp for that
+      // case. For the actual target case — an existing-but-dead Session (in
+      // the map, but its attach-client died; the dtach master is still
+      // alive) — spawn() -> attachClient() spawns the pty at the Session's
+      // own this.cols/this.rows, never at the opts it was handed, so without
+      // this the respawn would come back at whatever size it happened to be
+      // at when the previous client died, silently ignoring the new
+      // caller's size. resize() clamps via clampTerminalSize and, with
+      // ptyProcess null, does nothing beyond updating those two fields (the
+      // `ptyProcess?.resize()` call inside it no-ops) — exactly what
+      // attachClient() then reads.
+      if (!isNewSession) {
+        session.resize(opts.cols, opts.rows);
+      }
       // getOrCreate() itself stays synchronous (many callers rely on that),
       // so this fire-and-forget call is unchanged behavior even though
       // spawn() now returns a promise (B6) — see spawn()'s own doc comment.
