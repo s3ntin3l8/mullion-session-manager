@@ -394,4 +394,60 @@ describe("SourceControlSection (issue #433 scope B)", () => {
       await screen.findByText("Branch has diverged from upstream (cannot fast-forward)."),
     ).toBeTruthy();
   });
+
+  // Issue #1136 — a cold load whose restored dockview layout's active panel
+  // derives to a project id that `projects` doesn't (yet) contain. This is
+  // reachable in production whenever `sessions` populates before
+  // `projects` does (a WS-driven refreshSessions() racing the initial
+  // refreshProjects(), or a 429 leaving `projects` at `[]` until a later
+  // poll succeeds — see store/slices/projects.ts and events.ts). Before the
+  // fix, this threw synchronously out of render(): the "adopt derived id"
+  // and "release id no longer in projects" adjustments (lines ~141-158)
+  // both fire on every render because their predicates aren't disjoint when
+  // the derived id is absent from `projects`, and render-phase re-renders
+  // are synchronous so `projects` never has a chance to change — React
+  // eventually bails out with "Too many re-renders."
+  it("does not loop when the active panel derives to a project id missing from `projects` (session panel)", () => {
+    const orphanSession = makeSession({ id: 999, projectId: 12345 });
+    useDashboardStore.setState({
+      projects: [],
+      sessions: [orphanSession],
+      activePanelId: `session-${orphanSession.id}`,
+      gitStatuses: {},
+    });
+
+    expect(() => render(<SourceControlSection onOpenGit={vi.fn()} />)).not.toThrow();
+    // No projects at all yet — same empty render as the "no projects" case.
+    expect(screen.queryByText("Source Control")).toBeNull();
+  });
+
+  it("does not loop when the active panel derives to a project id missing from `projects` (project panel)", () => {
+    useDashboardStore.setState({
+      projects: [],
+      sessions: [],
+      activePanelId: "git-12345",
+      gitStatuses: {},
+    });
+
+    expect(() => render(<SourceControlSection onOpenGit={vi.fn()} />)).not.toThrow();
+    expect(screen.queryByText("Source Control")).toBeNull();
+  });
+
+  it("adopts the derived project once it actually appears in `projects`", () => {
+    const orphanSession = makeSession({ id: 999, projectId: PROJECT_A.id });
+    useDashboardStore.setState({
+      projects: [],
+      sessions: [orphanSession],
+      activePanelId: `session-${orphanSession.id}`,
+      gitStatuses: { [PROJECT_A.id]: statusWith({ branch: "branch-a" }) },
+    });
+    const { rerender } = render(<SourceControlSection onOpenGit={vi.fn()} />);
+    expect(screen.queryByText("Source Control")).toBeNull();
+
+    act(() => {
+      useDashboardStore.setState({ projects: [PROJECT_A] });
+    });
+    rerender(<SourceControlSection onOpenGit={vi.fn()} />);
+    expect(screen.getByText("Source Control")).toBeTruthy();
+  });
 });
