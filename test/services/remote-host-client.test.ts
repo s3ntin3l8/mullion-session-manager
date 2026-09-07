@@ -684,7 +684,12 @@ describe("RemoteHostClient", () => {
       await client().resolveRunGenerationTurn("/x", "demo", "HEAD", "claude", "prompt", 300_000);
       const generationTurnTimeout = timeoutSpy.mock.calls.at(-1)?.[0] as number;
 
-      expect(generationTurnTimeout).toBeGreaterThan(DEFAULT_GENERATION_TIMEOUT_MS);
+      // Exact margin, not just "greater than" — a mullion-reviewer pass on
+      // PR #1134 noted a bare ">" check would still pass even if a future
+      // bump to DEFAULT_GENERATION_TIMEOUT_MS silently ate into the 120s
+      // (60s worktree lifecycle + 60s network) margin the constant's own
+      // comment documents. This pins that margin exactly.
+      expect(generationTurnTimeout).toBe(DEFAULT_GENERATION_TIMEOUT_MS + 120_000);
 
       timeoutSpy.mockRestore();
     });

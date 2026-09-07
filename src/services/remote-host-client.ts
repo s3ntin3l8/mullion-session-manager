@@ -10,6 +10,7 @@ import {
   isUnsignedBodyPath,
   sign,
 } from "./request-signature.js";
+import { DEFAULT_GENERATION_TIMEOUT_MS } from "./scaffold-generate.js";
 import type { DiscoveredCandidate, Launcher, DockControl } from "./project-config.js";
 import type { AgentRuleTarget } from "./agent-rules.js";
 import type { DockConfigReadResult } from "./dock-config.js";
@@ -179,11 +180,21 @@ const GIT_WORKTREE_REQUEST_TIMEOUT_MS = 45_000;
 // delete (`git worktree remove` + `git worktree prune` + a branch delete)
 // around that turn, each its own `runGit` call at GIT_TIMEOUT_MS (15s,
 // git-worktree.ts) — up to ~60s of additional, real, non-error time before
-// and after the 5-minute turn itself. Sized as 300s (the turn) + 60s (the
-// worktree lifecycle either side of it) + 60s of network/HTTP round-trip
-// margin = 420s, the same "agent-side budget plus headroom" reasoning as
-// GIT_PUSH_REQUEST_TIMEOUT_MS's own comment.
-const GENERATION_TURN_REQUEST_TIMEOUT_MS = 420_000;
+// and after the 5-minute turn itself.
+//
+// Derived from DEFAULT_GENERATION_TIMEOUT_MS (not a bare literal) so a
+// future change to that constant can't silently shrink the margin below —
+// a mullion-reviewer pass on PR #1134 found the original literal 420_000
+// would have kept this margin fixed even if the turn budget it's meant to
+// cover changed. Sized as the turn budget + 60s worktree lifecycle + 60s
+// network/HTTP round-trip margin, the same "agent-side budget plus
+// headroom" reasoning as GIT_PUSH_REQUEST_TIMEOUT_MS's own comment.
+const GENERATION_TURN_WORKTREE_LIFECYCLE_MARGIN_MS = 60_000;
+const GENERATION_TURN_NETWORK_MARGIN_MS = 60_000;
+const GENERATION_TURN_REQUEST_TIMEOUT_MS =
+  DEFAULT_GENERATION_TIMEOUT_MS +
+  GENERATION_TURN_WORKTREE_LIFECYCLE_MARGIN_MS +
+  GENERATION_TURN_NETWORK_MARGIN_MS;
 
 // Connection-time SSRF pinning policy for host connections (issue #250).
 // Identical to what hosts.ts and enrollment.ts accepted when the baseUrl was
