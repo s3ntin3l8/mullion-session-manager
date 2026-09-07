@@ -131,16 +131,25 @@ if (import.meta.env.PROD) {
 // way to guarantee a clean slate (the count-down's auto-retry would
 // re-mount the subtree, but the breaker entry would still be live if
 // the user landed here mid-window).
-class RootErrorBoundary extends ErrorBoundary {}
-
+//
+// crashedTitle/crashedSubtitle/reloadLabel (issue #1009/#1022): a crash
+// here means the WHOLE app is down, not one pane among several — the
+// default "This pane crashed / other panes are unaffected / Reload pane"
+// copy is actively wrong at root. PR #1022 added these override props for
+// exactly this call site but never actually passed them here (see issue
+// #1136 investigation) — a root crash kept showing the pane-scoped copy
+// ever since, which is part of what made #1136 hard to read.
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <RootErrorBoundary
+    <ErrorBoundary
       onReset={() => {
         window.location.reload();
       }}
+      crashedTitle="Mullion crashed"
+      crashedSubtitle="reload to recover"
+      reloadLabel="Reload"
     >
       <AuthGate />
-    </RootErrorBoundary>
+    </ErrorBoundary>
   </StrictMode>,
 );
