@@ -133,19 +133,30 @@ export async function getHostBundleDisabled(
  * reinstalling on its next restart) then runs the real removal,
  * `uninstallBundleContent` (bundle-sync.ts) directly for `LOCAL_HOST_ID`,
  * `/internal/bundle-sync/remove` (via `RemoteHostClient.removeAgentBundle`)
- * otherwise. Re-enabling (`disabled: false`) only clears the flag on the
- * targeted host — it deliberately does NOT trigger a resync here (that's a
- * separate, existing concern: `POST /api/bundle-sync/resync`,
- * primary-host-only). This repo's only current caller
- * (routes/bundle-sync.ts's `/remove` fan-out) always passes
- * `disabled: true`; nothing in this repo currently calls this function (or
- * the matching internal route) with `disabled: false` for a remote host —
- * turning `sessions.injectMullionBundle` back on today only re-syncs the
- * PRIMARY. An agent host's own flag, once set to `disabled: true`, has no
- * built-in way to clear again short of hand-editing/deleting
- * resolveAgentBundleStatePath() on that host, or a future "re-enable"
- * fan-out calling this with `disabled: false`. Tracked as a known gap, not
- * silently dropped — see this repo's issue tracker for #1089's follow-up.
+ * otherwise.
+ *
+ * `disabled: false`'s LOCAL_HOST_ID branch only clears the flag — this
+ * function has no real, current caller with `hostId === LOCAL_HOST_ID` at
+ * all (both `routes/bundle-sync.ts`'s `/remove` fan-out and
+ * `plugins/bundle-sync.ts`'s `reenableAgentBundles`, #1128, filter to
+ * `!isLocal` hosts and handle the primary's own effect directly, without
+ * going through this dispatcher), so there is no live-process resync to
+ * trigger here for that branch to reach.
+ *
+ * Issue #1128 — the REMOTE branch's `disabled: false` used to only clear
+ * the flag and stop there ("re-enabling only clears the flag on the
+ * targeted host — it deliberately does NOT trigger a resync"), which meant
+ * flipping `sessions.injectMullionBundle` back on had no way to reach an
+ * already-disabled agent host at all: it never re-reads the primary's
+ * settings table (no DB of its own), so its next boot-time sync kept
+ * consulting its own stale, still-disabled flag until a process restart or
+ * a hand-edit of `resolveAgentBundleStatePath()`. `/internal/bundle-sync/remove`
+ * (routes/internal.ts, agent-side) now also kicks its own
+ * `runBundleSyncExclusive(true)` on that branch — see that route's own doc
+ * comment. `plugins/bundle-sync.ts`'s `reenableAgentBundles`
+ * (settings.ts's `applySettingsPatch`, on the `injectMullionBundle`
+ * false->true edge) is this repo's only current caller of `disabled: false`
+ * for a remote host.
  */
 export async function removeHostBundle(
   app: FastifyInstance,

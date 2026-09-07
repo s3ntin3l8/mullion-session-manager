@@ -79,7 +79,7 @@ import {
   readAgentBundleDisabled,
   writeAgentBundleDisabled,
 } from "../services/agent-bundle-state.js";
-import { uninstallBundleContent } from "../services/bundle-sync.js";
+import { uninstallBundleContent, runBundleSyncExclusive } from "../services/bundle-sync.js";
 import { PathEscapeError } from "../services/safe-path.js";
 import { runGitFetch } from "../services/git-fetch.js";
 import { runGitPull } from "../services/git-pull.js";
@@ -1478,18 +1478,29 @@ export async function internalRoutes(app: FastifyInstance) {
   // before running the removal) so a killed process mid-removal still
   // leaves the flag set — this host's next boot-time sync
   // (plugins/bundle-sync.ts) will simply retry the removal branch rather
-  // than silently reinstalling. `disabled: false` only clears the flag; it
-  // deliberately does NOT trigger a resync here — see agent-bundle-
-  // state.ts's removeHostBundle doc comment for why, and for why this
-  // repo's only current caller (the primary's own fan-out) always sends
-  // `disabled: true`.
+  // than silently reinstalling.
+  //
+  // Issue #1128 — `disabled: false` used to only clear the flag and stop
+  // there, leaving this host's own bundle uninstalled until its NEXT
+  // restart (or a hand-edit of agent-bundle-state.ts's own state file) —
+  // the primary's own re-enable fan-out
+  // (plugins/bundle-sync.ts's reenableAgentBundles) had nothing to call
+  // that would actually reconcile a currently-running agent process. Now
+  // also kicks this host's own runBundleSyncExclusive(true) — the SAME
+  // function this plugin's own boot-time onReady hook calls — so the flag
+  // clearing and the actual reinstall happen together, symmetric with the
+  // `disabled: true` branch below (which clears/sets the flag AND removes
+  // content in the same request, not just one or the other).
   app.post<{ Body: BundleSyncRemoveBody }>(
     "/internal/bundle-sync/remove",
     { ...INTERNAL_RATE_LIMIT, schema: bundleSyncRemoveSchema },
     async (request) => {
       const { disabled } = request.body;
       writeAgentBundleDisabled(disabled);
-      if (!disabled) return { removed: 0, legacySwept: 0, disabled: false };
+      if (!disabled) {
+        await runBundleSyncExclusive(true);
+        return { removed: 0, legacySwept: 0, disabled: false };
+      }
       const result = await uninstallBundleContent();
       return { removed: result.removed, legacySwept: result.legacySwept, disabled: true };
     },
