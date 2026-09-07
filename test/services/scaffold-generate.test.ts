@@ -323,6 +323,76 @@ describe("generateScaffoldContent", () => {
     expect(fs.existsSync(path.join(repoDir, ".mullion-worktrees"))).toBe(false);
   });
 
+  // Issue #1144, #1159 — the `sandboxed` field on GeneratedScaffoldContent
+  // must follow the injected capability probe, not a hardcoded value.
+  describe("sandboxed field follows isSandboxCapable", () => {
+    beforeEach(() => {
+      resetSandboxCapabilityCache();
+    });
+
+    afterEach(() => {
+      resetSandboxCapabilityCache();
+    });
+
+    it("result.sandboxed is true when isSandboxCapable returns true (and sandbox is not opted out)", async () => {
+      await isSandboxCapable(async () => true);
+
+      const result = await generateScaffoldContent({
+        app: fakeApp,
+        hostId: LOCAL_HOST_ID,
+        cwd: repoDir,
+        slug: "demo",
+        agentCommand: "claude",
+        seed: {},
+        hasSkill: false,
+        hasReviewer: false,
+        hasBriefingRegion: false,
+        spawn: async () => validOutput("demo"),
+      });
+
+      expect(result.sandboxed).toBe(true);
+    });
+
+    it("result.sandboxed is false when isSandboxCapable returns false", async () => {
+      await isSandboxCapable(async () => false);
+
+      const result = await generateScaffoldContent({
+        app: fakeApp,
+        hostId: LOCAL_HOST_ID,
+        cwd: repoDir,
+        slug: "demo",
+        agentCommand: "claude",
+        seed: {},
+        hasSkill: false,
+        hasReviewer: false,
+        hasBriefingRegion: false,
+        spawn: async () => validOutput("demo"),
+      });
+
+      expect(result.sandboxed).toBe(false);
+    });
+
+    it("result.sandboxed is false when sandbox is explicitly opted out, even though bwrap is capable", async () => {
+      await isSandboxCapable(async () => true);
+
+      const result = await generateScaffoldContent({
+        app: fakeApp,
+        hostId: LOCAL_HOST_ID,
+        cwd: repoDir,
+        slug: "demo",
+        agentCommand: "claude",
+        seed: {},
+        hasSkill: false,
+        hasReviewer: false,
+        hasBriefingRegion: false,
+        sandbox: false,
+        spawn: async () => validOutput("demo"),
+      });
+
+      expect(result.sandboxed).toBe(false);
+    });
+  });
+
   // NOTE on what this test does and doesn't prove: `fakeSpawn` here never
   // actually touches the filesystem — it just returns text — so this only
   // proves generateScaffoldContent's OWN code path never writes into
@@ -962,7 +1032,6 @@ describe("defaultSpawnGenerationTurn — agy fails closed without a usable sandb
     expect((err as Error).message).toMatch(/requires a usable bwrap sandbox/);
     expect((err as Error).message).toMatch(/explicitly disabled/);
   });
-
 
   // Issue #1133 — MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED=false is NOT an
   // escape hatch for agy: this guard must fire identically whether bwrap is
