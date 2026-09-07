@@ -215,8 +215,21 @@ jobs:
         env:
           MULLION_HELPER_STATE_DIR: ${{ runner.temp }}\mullion-helper-state
         run: |
+          # `2>&1` + Write-Host on every native call, not a bare `& $exe ...`
+          # — self-review, this exact step's own failure: PowerShell 7.3+'s
+          # `$PSNativeCommandUseErrorActionPreference` (default true)
+          # intercepts a native command's stderr for its own error-record
+          # handling when a call isn't redirected, and a real failure here
+          # showed up as a bare "exit code 1" with the child's own stderr
+          # (the actual reason) never reaching the Actions log at all — the
+          # exact "exit code 1, zero diagnosis" failure mode this whole PR
+          # exists to fix, just relocated to this CI script instead of the
+          # installer. The smoke-test step above already uses this pattern
+          # for exactly this reason; this step now matches it everywhere a
+          # native command's output matters for diagnosis.
           $exe = "build\helper-sea\mullion-helper.exe"
-          & $exe helper install --ssh-auth-sock "\\.\pipe\openssh-ssh-agent"
+          $installOutput = & $exe helper install --ssh-auth-sock "\\.\pipe\openssh-ssh-agent" 2>&1
+          Write-Host ($installOutput -join "`n")
           if ($LASTEXITCODE -ne 0) { throw "helper install failed with exit code $LASTEXITCODE" }
 
           # Round 4 (issue #871, mullion-reviewer round) — the registered
@@ -229,12 +242,13 @@ jobs:
           # STUBBED spawnSync; asserting exit code alone here would miss a
           # value silently mangled by that second parse. Check the actual
           # content a real `reg.exe` stored, not just that a value exists.
-          $regOutput = (reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v MullionHelper) -join "`n"
-          if ($LASTEXITCODE -ne 0) { throw "reg query found no registered autostart entry after install" }
+          $regOutput = ((reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v MullionHelper 2>&1) -join "`n")
+          if ($LASTEXITCODE -ne 0) { throw "reg query found no registered autostart entry after install: $regOutput" }
           if (-not $regOutput.Contains("\\.\pipe\openssh-ssh-agent")) { throw "registered autostart command lost the --ssh-auth-sock value: $regOutput" }
           if (-not $regOutput.Contains("mullion-helper.exe")) { throw "registered autostart command does not reference mullion-helper.exe: $regOutput" }
 
-          & $exe helper uninstall
+          $uninstallOutput = & $exe helper uninstall 2>&1
+          Write-Host ($uninstallOutput -join "`n")
           if ($LASTEXITCODE -ne 0) { throw "helper uninstall failed with exit code $LASTEXITCODE" }
 
           reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v MullionHelper 2>$null
