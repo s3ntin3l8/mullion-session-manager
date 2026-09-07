@@ -166,8 +166,13 @@ export function SourceControlSection({ onOpenGit }: SourceControlSectionProps) {
   // section (Hermes review, PR #506) — release it rather than let the
   // Dropdown's value keep pointing at an option that no longer exists and
   // the body keep showing a project that's gone. `derivedId` doesn't need
-  // this guard: it's recomputed fresh every render straight from
-  // activePanelId/sessions, never held as stale state.
+  // this guard: unlike `pinnedProjectId`/`lastDerivedId` (state, so it can
+  // go stale across renders), `derivedId` is validated against `projects`
+  // membership above (issue #1136) on every render it's computed — it is
+  // never held as stale state. Recomputing "fresh" alone is NOT why it's
+  // safe (that reasoning is exactly what issue #1136 disproved: a fresh
+  // recompute from `sessions` can still name a project that hasn't loaded
+  // into `projects` yet) — the membership check is load-bearing.
   if (pinnedProjectId != null && !projects.some((p) => p.id === pinnedProjectId)) {
     setPinnedProjectId(null);
   }
