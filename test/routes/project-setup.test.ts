@@ -36,6 +36,8 @@ function mockValidGeneration(slug: string) {
     skill: `---\nname: ${slug}\n---\nGenerated: real invariant about ${slug}.\n`,
     reviewer: `---\nname: ${slug}-reviewer\n---\nRead .claude/skills/${slug}/SKILL.md first.\n`,
     briefingRegion: `The generated skill lives at .claude/skills/${slug}/SKILL.md.`,
+    sandboxed: true,
+    possiblyGeneric: false,
   });
 }
 
@@ -629,6 +631,29 @@ describe("project-setup route — /setup/generate (issue #956)", () => {
     });
     expect(applyRes.statusCode).toBe(200);
 
+    await app.close();
+  });
+
+  it("surfaces possiblyGeneric in the response when the generation output is flagged", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app, repoDir);
+    vi.mocked(generateScaffoldContent).mockResolvedValue({
+      skill: "---\nname: generic-demo\n---\nCreate src/index.ts.\n",
+      reviewer: "---\nname: generic-demo-reviewer\n---\nRead the skill.\n",
+      briefingRegion: "Generic content.",
+      sandboxed: true,
+      possiblyGeneric: true,
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/projects/${projectId}/setup/generate`,
+      payload: { slug: "generic-demo" },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.possiblyGeneric).toBe(true);
+    expect(body.sandboxed).toBe(true);
     await app.close();
   });
 
