@@ -703,6 +703,12 @@ export async function projectSetupRoute(app: FastifyInstance) {
           hasSkill,
           hasReviewer,
           hasBriefingRegion,
+          // Issue #1133 — this primary's own opt-out; only takes effect for
+          // a LOCAL_HOST_ID project (generateScaffoldContent's own doc
+          // comment). A remote-hosted project's own
+          // /internal/run-generation-turn handler reads the REMOTE agent's
+          // config for this instead, independently.
+          sandbox: app.config.MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED,
         });
       } catch (err) {
         if (err instanceof UnsupportedGenerationAgentError) return reply.badRequest(err.message);

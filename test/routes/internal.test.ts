@@ -2497,6 +2497,8 @@ describe("internal routes (agent role, issue #26)", () => {
         agentCommand: "claude",
         prompt: "do the thing",
         timeoutMs: 300_000,
+        // Issue #1133 — this agent's own config default (sandboxing on).
+        sandbox: true,
       });
 
       process.env.PROJECTS_ROOTS = previousRoots;
@@ -2637,6 +2639,52 @@ describe("internal routes (agent role, issue #26)", () => {
       process.env.PROJECTS_ROOTS = previousRoots;
       fs.rmSync(cwd, { recursive: true, force: true });
       await app.close();
+    });
+
+    // Issue #1133 — this handler must read ITS OWN (this agent's)
+    // MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED, never a value carried over
+    // the wire from the primary (runGenerationTurnSchema has no such field
+    // at all — see that schema's own comment). Setting the env var before
+    // buildApp() is the same pattern this file's own MULLION_SSH_AUTH_SOCK/
+    // MULLION_HOME tests already use for an agent-local config value.
+    it("honors this agent's own MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED, not a value from the request body", async () => {
+      const previousRoots = process.env.PROJECTS_ROOTS;
+      const previousSandboxEnabled = process.env.MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED;
+      const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "internal-gen-turn-sandbox-"));
+      try {
+        process.env.PROJECTS_ROOTS = cwd;
+        process.env.MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED = "false";
+        const app = await buildApp();
+
+        vi.mocked(runGenerationTurnInScratchWorktree).mockResolvedValue("stdout");
+        const res = await app.inject({
+          method: "POST",
+          url: "/internal/run-generation-turn",
+          headers: { authorization: `Bearer ${TOKEN}` },
+          payload: {
+            cwd,
+            slug: "demo",
+            baseRef: "HEAD",
+            agentCommand: "claude",
+            prompt: "do the thing",
+            timeoutMs: 300_000,
+          },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(runGenerationTurnInScratchWorktree).toHaveBeenCalledWith(
+          expect.objectContaining({ sandbox: false }),
+        );
+
+        await app.close();
+      } finally {
+        process.env.PROJECTS_ROOTS = previousRoots;
+        if (previousSandboxEnabled === undefined) {
+          delete process.env.MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED;
+        } else {
+          process.env.MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED = previousSandboxEnabled;
+        }
+        fs.rmSync(cwd, { recursive: true, force: true });
+      }
     });
   });
 

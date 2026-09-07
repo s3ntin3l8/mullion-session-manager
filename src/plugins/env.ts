@@ -609,6 +609,38 @@ export const schema = {
       type: "string",
       default: "",
     },
+    // Issue #1133 — opt-out for scaffold-generate.ts's mandatory bwrap
+    // sandboxing of a generation turn. Default ON: when a usable bwrap is
+    // present, `defaultSpawnGenerationTurn` wraps the turn and does NOT
+    // retry unsandboxed on failure (scaffold-generate.ts's own comment on
+    // that deliberate choice) — an agent whose writable-path needs aren't
+    // covered by `agentSandboxWritablePaths` goes straight to a hard
+    // GenerationSpawnError with no runtime workaround short of uninstalling
+    // bwrap. Setting this to `false` restores that workaround by skipping
+    // the wrap entirely, regardless of whether bwrap is actually usable.
+    //
+    // This is materially more dangerous for `agy` than for the other three
+    // agents: `buildInvocation` passes agy `--dangerously-skip-permissions`
+    // (issue #1130), which — unlike claude's `--allowedTools` or codex's
+    // `--sandbox read-only` — GRANTS tool access rather than restricting
+    // it, and bwrap is agy's ONLY containment once that flag is set (see
+    // scaffold-generate.ts's own header). `defaultSpawnGenerationTurn`
+    // therefore still fails closed for agy specifically when this flag
+    // disables sandboxing, the same as it does when bwrap is merely
+    // unusable — this config does not create an escape hatch for that
+    // guard, only for the other three agents' already-accepted degraded
+    // posture (claude/codex retain their own CLI-level restriction even
+    // unsandboxed; opencode has none).
+    //
+    // Read directly from `app.config` by each host that actually spawns a
+    // generation turn — the primary for a LOCAL_HOST_ID project, and each
+    // remote agent's own `/internal/run-generation-turn` handler for a
+    // remote-hosted one — never threaded over the wire, so a caller can
+    // never choose what executes on a host it doesn't own.
+    MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED: {
+      type: "boolean",
+      default: true,
+    },
   },
 };
 
@@ -775,6 +807,7 @@ declare module "fastify" {
       BROWSER_DATA_DIR: string;
       MULLION_SOCKET_PATH: string;
       MULLION_SSH_AUTH_SOCK: string;
+      MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED: boolean;
       MULLION_WEBHOOK_BASE_URL: string;
       MULLION_WEBHOOK_SECRET: string;
       GITHUB_POLL_INTERVAL_ACTIVE: number;

@@ -1465,6 +1465,12 @@ export async function internalRoutes(app: FastifyInstance) {
           agentCommand,
           prompt,
           timeoutMs,
+          // Issue #1133 — THIS agent's own opt-out, never the primary's:
+          // deliberately not part of RunGenerationTurnBody/the wire schema
+          // (see runGenerationTurnSchema's own additionalProperties: false
+          // posture) — a caller choosing what executes here would defeat
+          // the sandboxing this handler's own spawn step applies.
+          sandbox: app.config.MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED,
         });
         return { outcome: "ok", stdout };
       } catch (err) {
