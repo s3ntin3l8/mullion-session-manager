@@ -54,19 +54,31 @@ export function scopeUnitName(id: string): string {
 }
 
 /**
- * Whether this host has a real `systemd --user` session to talk to at all —
- * a stock CI runner (this repo's own backend tests run on plain
- * `ubuntu-latest`, no user D-Bus session, no `dtach`) or a plain container
- * has neither. Shared by the two callers that need to no-op rather than
- * fail/hang without one: scripts/check-scope-leaks.ts (issue #1137) and
+ * Whether this host has a real `systemd --user` session — a live user bus —
+ * to talk to at all. A stock CI runner (this repo's own backend tests run on
+ * plain `ubuntu-latest`, no user D-Bus session, no `dtach`) or a plain
+ * container commonly has the `systemctl` binary but no bus. Shared by the
+ * two callers that need to no-op rather than fail/hang without one:
+ * scripts/check-scope-leaks.ts (issue #1137) and
  * test/services/pty-manager-file-change-ignore.test.ts's own regression
- * guard — a single source of truth for "how do we detect this," rather
- * than two copies of the same `systemctl --user --version` probe drifting
- * apart if that detection ever needs to change.
+ * guard — a single source of truth for "how do we detect this," rather than
+ * two copies of the same probe drifting apart if that detection ever needs
+ * to change.
+ *
+ * Hermes review, PR #1142 — `systemctl --user --version` is NOT a valid
+ * probe: it "print[s] a short version string and exit[s]" (systemctl(1))
+ * without ever contacting the bus, so it exits 0 on any host with the
+ * binary present regardless of whether a user session exists. Reproduced:
+ * `env -i ... systemctl --user --version` exits 0 while
+ * `systemctl --user list-units` in that same shell fails with "Failed to
+ * connect to bus." `show-environment` is a real, minimal round-trip to the
+ * user manager instead — unlike `is-system-running` (the other obvious
+ * candidate), its exit code isn't affected by unit health, so a host with
+ * one failed unit elsewhere ("degraded") doesn't false-negative here.
  */
 export function isSystemctlUserAvailable(): boolean {
   try {
-    execFileSync("systemctl", ["--user", "--version"], { stdio: "ignore" });
+    execFileSync("systemctl", ["--user", "show-environment"], { stdio: "ignore" });
     return true;
   } catch {
     return false;

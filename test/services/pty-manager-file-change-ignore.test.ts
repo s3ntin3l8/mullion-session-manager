@@ -129,19 +129,30 @@ function mkManager(): InstanceType<typeof PtyManager> {
 // below has finished, regardless of which describe block they're in.
 if (isSystemctlUserAvailable()) {
   afterAll(() => {
-    const listing = execFileSync(
-      "systemctl",
-      [
-        "--user",
-        "list-units",
-        "--type=scope",
-        "--all",
-        "--no-legend",
-        "--plain",
-        "crs-session-*.scope",
-      ],
-      { encoding: "utf8" },
-    );
+    // Defense-in-depth alongside the outer isSystemctlUserAvailable() gate
+    // (Hermes review, PR #1142) — that gate runs once when this file loads,
+    // while this afterAll fires only after every test below has finished;
+    // a bus that goes away in between (a logind/systemd-user-session
+    // teardown racing this file) must not fail this whole suite over an
+    // infrastructure hiccup unrelated to what this guard exists to catch.
+    let listing: string;
+    try {
+      listing = execFileSync(
+        "systemctl",
+        [
+          "--user",
+          "list-units",
+          "--type=scope",
+          "--all",
+          "--no-legend",
+          "--plain",
+          "crs-session-*.scope",
+        ],
+        { encoding: "utf8" },
+      );
+    } catch {
+      return;
+    }
     const leaked = listing.split("\n").filter((line) => line.includes(SESSIONS_DIR_PREFIX));
     expect(leaked).toEqual([]);
   });

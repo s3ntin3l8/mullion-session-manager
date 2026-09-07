@@ -42,16 +42,31 @@ const SCOPE_PATTERN = "crs-session-*.scope";
 if (!isSystemctlUserAvailable()) {
   console.log(
     "OK — `systemctl --user` isn't available here (e.g. a CI runner with no user systemd " +
-      "session, or a plain container). Nothing to check.",
+      "session, or a plain container with the binary but no bus). Nothing to check.",
   );
   process.exit(0);
 }
 
-const listing = execFileSync(
-  "systemctl",
-  ["--user", "list-units", "--type=scope", "--all", "--no-legend", "--plain", SCOPE_PATTERN],
-  { encoding: "utf8" },
-);
+// Defense-in-depth alongside the isSystemctlUserAvailable() gate above
+// (Hermes review, PR #1142) — a bus that answered `show-environment` a
+// moment ago disappearing before this call is unlikely but not impossible
+// (a logind/systemd-user-session teardown racing this script), and this is
+// a diagnostic tool, not a correctness-critical gate: it should report and
+// exit cleanly on any such failure rather than crash with an uncaught
+// exception.
+let listing: string;
+try {
+  listing = execFileSync(
+    "systemctl",
+    ["--user", "list-units", "--type=scope", "--all", "--no-legend", "--plain", SCOPE_PATTERN],
+    { encoding: "utf8" },
+  );
+} catch (err) {
+  console.log(
+    `OK — could not list ${SCOPE_PATTERN} units (${(err as Error).message}). Nothing to check.`,
+  );
+  process.exit(0);
+}
 
 const rows = parseScopeUnitsListing(listing);
 
