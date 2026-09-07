@@ -11,6 +11,8 @@ import {
   buildGenerationPrompt,
   parseGeneratedOutput,
   generateScaffoldContent,
+  defaultSpawnGenerationTurn,
+  buildInvocation,
   wrapWithSandbox,
   agentSandboxWritablePaths,
   ensureSandboxWritablePathsExist,
@@ -152,6 +154,47 @@ describe("parseGeneratedOutput", () => {
     expect(result.skill).not.toContain("etc/passwd");
     expect(result.reviewer).not.toContain("etc/passwd");
     expect(result.briefingRegion).not.toContain("etc/passwd");
+  });
+});
+
+// Hermes review, PR #1152 — issue #1130's own bug was a subtle argv
+// mistake (`-p` followed by a SEPARATE `-i=<prompt>` token, which agy's
+// own parser drops in favor of an unrelated positional) that no mocked-
+// spawn test in this file would have caught, since none of them inspect
+// the actual argv `buildInvocation` produces. Pinned here as a plain
+// equality assertion — CI-enforced, unlike the agy-gated e2e test, which
+// skips wherever agy isn't installed (including CI's own test-e2e job).
+describe("buildInvocation", () => {
+  it("pins agy's exact argv — -p=<prompt> as ONE token, plus --dangerously-skip-permissions (issue #1130)", () => {
+    expect(buildInvocation("agy", "analyze this repo")).toEqual({
+      bin: "agy",
+      args: ["-p=analyze this repo", "--dangerously-skip-permissions"],
+    });
+  });
+
+  it("pins the other three agents' argv too, so a future edit to this function can't silently move agy's own shape", () => {
+    expect(buildInvocation("claude", "analyze this repo")).toEqual({
+      bin: "claude",
+      args: [
+        "-p",
+        "--allowedTools",
+        "Read,Grep,Glob,Bash(git log:*),Bash(git diff:*),Bash(git show:*),Bash(find:*),Bash(ls:*)",
+        "--",
+        "analyze this repo",
+      ],
+    });
+    expect(buildInvocation("codex", "analyze this repo")).toEqual({
+      bin: "codex",
+      args: ["exec", "--sandbox", "read-only", "--", "analyze this repo"],
+    });
+    expect(buildInvocation("opencode", "analyze this repo")).toEqual({
+      bin: "opencode",
+      args: ["run", "--", "analyze this repo"],
+    });
+  });
+
+  it("throws UnsupportedGenerationAgentError for an unknown agent command", () => {
+    expect(() => buildInvocation("aider", "x")).toThrow(UnsupportedGenerationAgentError);
   });
 });
 
@@ -634,7 +677,7 @@ describe("agentSandboxWritablePaths", () => {
     expect(agentSandboxWritablePaths("claude")).toEqual([]);
   });
 
-  it("returns no extra paths for agy (its own pre-existing arg-parsing bug blocked live verification — see this module's header)", () => {
+  it("returns no extra paths for agy (confirmed live, issue #1130, to need none)", () => {
     expect(agentSandboxWritablePaths("agy")).toEqual([]);
   });
 
@@ -688,6 +731,27 @@ describe("ensureSandboxWritablePathsExist", () => {
     const impossibleTarget = path.join(blockingFile, "child");
 
     expect(() => ensureSandboxWritablePathsExist([impossibleTarget])).not.toThrow();
+  });
+
+  // Invariant for any future, narrower agentSandboxWritablePaths entry
+  // (issue #1131's eventual write-surface audit): every path handed to
+  // this function is assumed to be a DIRECTORY. `mkdirSync(p, { recursive:
+  // true })` on a path that doesn't exist yet creates a directory AT that
+  // exact path — so a future entry naming a specific FILE (e.g.
+  // opencode's own `opencode.db`, rather than its containing directory)
+  // would silently get a directory created in its place instead of the
+  // file's parent, corrupting the very state it was meant to preserve.
+  // agentSandboxWritablePaths only ever returns directory paths today, so
+  // this is not live — but the failure mode is not obvious from reading
+  // `ensureSandboxWritablePathsExist` alone, so it is demonstrated here
+  // rather than left to be rediscovered.
+  it("would wrongly create a directory at a path meant to be a file — any future file-shaped entry must route through a different call", () => {
+    const target = path.join(parentDir, "opencode.db");
+    expect(fs.existsSync(target)).toBe(false);
+
+    ensureSandboxWritablePathsExist([target]);
+
+    expect(fs.statSync(target).isDirectory()).toBe(true);
   });
 });
 
@@ -810,6 +874,58 @@ describe("isSandboxCapable caching", () => {
     expect(await isSandboxCapable(unusableProbe)).toBe(false);
     expect(await isSandboxCapable(unusableProbe)).toBe(false);
     expect(calls).toBe(1);
+  });
+});
+
+// Hermes review, PR #1152 — `--dangerously-skip-permissions` (buildInvocation's
+// agy case, issue #1130) grants agy real tool access rather than restricting
+// it; on a host where bwrap isn't usable, an unsandboxed agy turn would have
+// full write/exec as the server user with no CLI-level restriction to fall
+// back on (unlike claude's --allowedTools or codex's --sandbox read-only).
+// defaultSpawnGenerationTurn fails closed for agy specifically in that case
+// rather than silently degrading like the other three agents.
+describe("defaultSpawnGenerationTurn — agy fails closed without a usable sandbox (issue #1130/#1152)", () => {
+  beforeEach(() => {
+    resetSandboxCapabilityCache();
+  });
+
+  afterEach(() => {
+    resetSandboxCapabilityCache();
+  });
+
+  it("throws GenerationSpawnError for agy when no usable bwrap is available, without ever spawning", async () => {
+    await isSandboxCapable(async () => false);
+
+    await expect(
+      defaultSpawnGenerationTurn({
+        agentCommand: "agy",
+        cwd: "/nonexistent/scratch-worktree",
+        prompt: "irrelevant — this must fail before any spawn is attempted",
+        timeoutMs: 5000,
+      }),
+    ).rejects.toThrow(/requires a usable bwrap sandbox/);
+  });
+
+  it("does NOT fail closed for the other three agents — this guard is agy-specific", async () => {
+    await isSandboxCapable(async () => false);
+
+    // A bogus cwd/bin means these DO still reach execFile and fail there
+    // (a real spawn ENOENT, not agy's own pre-flight guard) — asserted on
+    // the SAME caught error by checking its message doesn't match the
+    // guard's own wording, which is what would actually distinguish
+    // "rejected before any spawn was attempted" from "the spawn itself
+    // failed" if this guard's `agentCommand` check were ever accidentally
+    // broadened.
+    for (const agentCommand of ["claude", "codex", "opencode"]) {
+      const err: unknown = await defaultSpawnGenerationTurn({
+        agentCommand,
+        cwd: "/nonexistent/scratch-worktree",
+        prompt: "x",
+        timeoutMs: 1000,
+      }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(GenerationSpawnError);
+      expect((err as Error).message).not.toMatch(/requires a usable bwrap sandbox/);
+    }
   });
 });
 

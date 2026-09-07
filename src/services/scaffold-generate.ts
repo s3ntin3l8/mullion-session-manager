@@ -92,9 +92,15 @@ import { scaffoldSkillPath, scaffoldReviewerPath } from "./mullion-scaffold.js";
 // an additional `--bind-try` per agent, re-verified live afterward: both
 // agents proceeded past the filesystem error to a real model-turn attempt.
 // `agy`'s own pre-existing argument-parsing bug (unrelated to this sandbox
-// — reproduces identically unsandboxed) blocked doing the same live check
-// for it; no extra bind is added for it here, so that remains a real,
-// openly-undiscovered gap rather than a silently-assumed one.
+// — reproduced identically unsandboxed, and separately fixed in
+// `buildInvocation` below, issue #1130) originally blocked doing the same
+// live check for it. Re-run after that fix (2026-09-07, same box): under
+// the exact production bwrap argv, agy completed cleanly (exit 0, correct
+// stdout) while emitting 22 tolerated EROFS events under
+// `~/.gemini/antigravity-cli/` (log, crashes, conversations, cache, mcp,
+// presence) — the same "tries but doesn't need to" class already
+// documented above for `claude`. No extra bind is added for it — see
+// `agentSandboxWritablePaths`'s own comment for the verified detail.
 //
 // Presence of the `bwrap` binary on `PATH` is NOT treated as sufficient —
 // the real gate is the kernel's `unprivileged_userns_clone` sysctl, which
@@ -129,12 +135,19 @@ import { scaffoldSkillPath, scaffoldReviewerPath } from "./mullion-scaffold.js";
 // 1.1.27; it did not when this comment was first written) but it is NOT
 // usable here: without `--dangerously-skip-permissions` it auto-denies
 // every tool call in headless/print mode (including the read-only ones
-// this module needs), and WITH that flag it blocks nothing — a live `echo
-// pwned > /outside/path` under `agy -p --sandbox
-// --dangerously-skip-permissions` wrote the file. agy's own denial message
-// points at a `permissions.allow` allow-list in `settings.json`
-// (`command(<target>)` rules) as the closer analogue to `claude`'s
-// `--allowedTools` — untried here, real follow-up work. `opencode run`
+// this module needs — confirmed live: a tool-using prompt returns empty
+// stdout, identical sandboxed and unsandboxed, i.e. this is agy's own
+// permission gate, not bwrap), and WITH that flag it blocks nothing — a
+// live `echo pwned > /outside/path` under `agy -p --sandbox
+// --dangerously-skip-permissions` wrote the file. `buildInvocation` below
+// therefore DOES pass `--dangerously-skip-permissions` (issue #1130) —
+// the tool access it buys is a hard requirement for this module's own
+// prompt ("your entire job is to READ the codebase"), not optional — and
+// relies entirely on bwrap for containment, same as this paragraph
+// describes. agy's own denial message points at a `permissions.allow`
+// allow-list in `settings.json` (`command(<target>)` rules) as the closer
+// analogue to `claude`'s `--allowedTools` — untried here, real follow-up
+// work. `opencode run`
 // (1.18.29) still has no write-restriction flag at all, confirmed against
 // its own `--help` — only `--auto`, which does the opposite (auto-approves
 // everything). Now that process-level sandboxing is wired in, none of that
@@ -354,14 +367,62 @@ export type SpawnGenerationTurn = (opts: SpawnGenerationTurnOptions) => Promise<
  * surface). Issue #1081's own re-check (this module's header has the full
  * detail): codex's `--sandbox read-only` is a real, accepted flag but its
  * write-blocking behavior is unverified (usage-limited account, quota
- * resets 2026-09-28); agy DOES have a `--sandbox` flag as of 1.1.27 but it
- * isn't used here — it's unusable non-interactively (auto-denies
- * everything in headless mode without `--dangerously-skip-permissions`,
- * blocks nothing with it); opencode's plain `run` still has no
- * write-restriction flag at all. The worktree-isolation design above is
- * what the actual "never reaches disk" guarantee rests on regardless of
- * whether any of these flags hold in practice. */
-function buildInvocation(agentCommand: string, prompt: string): { bin: string; args: string[] } {
+ * resets 2026-09-28); agy DOES have a `--sandbox` flag as of 1.1.27, but it
+ * blocks nothing once tool calls are enabled at all (this module's header
+ * has the live `echo pwned` detail) — containment for it rests entirely on
+ * `wrapWithSandbox`'s bwrap wrap, same as the other three; opencode's plain
+ * `run` still has no write-restriction flag at all. The worktree-isolation
+ * design above is what the actual "never reaches disk" guarantee rests on
+ * regardless of whether any of these flags hold in practice.
+ *
+ * `agy`'s own argv (issue #1130) needs two things together, not one:
+ * `-p=<prompt>` — NOT `-p <prompt>` or `-p -i=<prompt>` (a previous,
+ * shipped form of this function) — because agy's own flag parser treats
+ * whatever token immediately follows a bare `-p` as an unrelated
+ * positional, silently dropping the real prompt (agy's own error message,
+ * reproduced live: `-p took "-i=..." as its prompt, so the intended prompt
+ * was left as an argument and ignored`); and
+ * `--dangerously-skip-permissions`, because agy auto-denies every tool
+ * call in headless/print mode without it — including the read-only ones
+ * this module's prompt requires (`buildGenerationPrompt`: "your entire job
+ * is to READ the codebase") — confirmed live: a tool-using prompt without
+ * this flag returns empty stdout, sandboxed and unsandboxed alike, so a
+ * turn that merely stops erroring but still lacks this flag can complete
+ * having read nothing and silently author content blind.
+ *
+ * Deliberately does NOT also add `--mode accept-edits`, unlike
+ * `launch-plan.ts`'s SKIP_PERMISSION_FLAGS.agy entry for a different,
+ * interactive, write-capable spawn path. That entry's own comment records
+ * a real incident (Task Master trial 220921 / PR #743): agy has a
+ * SEPARATE, sticky, global `agentMode` setting
+ * (`~/.gemini/antigravity-cli/settings.json`) that
+ * `--dangerously-skip-permissions` alone does NOT override, and a host
+ * left in `agentMode: "plan"` silently refuses every `write_to_file` even
+ * with that flag set. This module's own turn is read-only by prompt
+ * design (`buildGenerationPrompt`: "Do not create, edit, or delete any
+ * file"), so that failure mode should not apply here — and this was
+ * checked, not merely assumed: this repo's own dev box had
+ * `agentMode: "plan"` at verification time (2026-09-07,
+ * test/e2e/scaffold-generate-agy.e2e.test.ts's own live run), and agy's
+ * READ tool calls still succeeded under `-p=<prompt>
+ * --dangerously-skip-permissions` alone — the write-refusal in the
+ * `launch-plan.ts` incident is specific to write tool calls, not reads. If
+ * a future change to this module's own prompt ever asks the agent to
+ * write anything, this reasoning no longer holds and `--mode accept-edits`
+ * would need to be re-evaluated the same way. */
+// Hermes review, PR #1152 — exported (was module-private) so the exact
+// argv can be pinned by a real, CI-enforced unit test rather than relying
+// solely on the agy-gated e2e (test/e2e/scaffold-generate-agy.e2e.test.ts),
+// which skips wherever agy isn't installed, including CI's own test-e2e
+// job. Issue #1130's whole bug was a subtle argv mistake (a bare `-p`
+// swallowing the next token as its own prompt) that this module's own
+// mocked-spawn tests couldn't have caught either — a plain equality
+// assertion on this function's return value closes that gap for any
+// future accidental reorder/typo.
+export function buildInvocation(
+  agentCommand: string,
+  prompt: string,
+): { bin: string; args: string[] } {
   switch (agentCommand) {
     case "claude":
       return {
@@ -387,7 +448,7 @@ function buildInvocation(agentCommand: string, prompt: string): { bin: string; a
     case "agy":
       return {
         bin: "agy",
-        args: ["-p", `-i=${prompt}`],
+        args: [`-p=${prompt}`, "--dangerously-skip-permissions"],
       };
     default:
       throw new UnsupportedGenerationAgentError(agentCommand);
@@ -459,13 +520,16 @@ function buildBwrapBaseArgs(worktreePath: string, extraWritablePaths: string[]):
  * auth-cache, a per-run `session-env/<uuid>` directory,
  * `.claude.json`/`.claude.json.lock` atomic-rename writes) that all fail
  * silently with EROFS and are tolerated — this is "doesn't need to
- * write," not "doesn't try to." `agy -p`'s own
- * PRE-EXISTING argument-parsing quirk (`-p` swallows the next arg as its
- * own prompt, reproduces identically with or without this sandbox —
- * unrelated to issue #1081, out of scope for it) blocked verifying its
- * filesystem needs the same way here; no extra bind is added for it, so if
- * it turns out to need one, that is a real, currently undiscovered gap —
- * not a silently assumed one.
+ * write," not "doesn't try to." `agy`'s own PRE-EXISTING argument-parsing
+ * quirk (fixed in `buildInvocation`, issue #1130) originally blocked
+ * verifying its filesystem needs the same way here. Re-verified live after
+ * that fix (2026-09-07, same box, same production bwrap argv `agy` runs
+ * under today): `agy` also needs no extra bind — it completed cleanly
+ * (exit 0, correct stdout) with the bare worktree bind alone, same
+ * "doesn't need to write" class as `claude` above (22 tolerated EROFS
+ * events under `~/.gemini/antigravity-cli/`: log, crashes, conversations,
+ * cache, mcp, presence). This is now a verified result, not an
+ * undiscovered gap.
  *
  * Be honest about the tradeoff this makes: these are directory-level binds
  * (`~/.codex`, `~/.local/share/opencode`), not narrowed to just the one
@@ -484,7 +548,21 @@ function buildBwrapBaseArgs(worktreePath: string, extraWritablePaths: string[]):
  * mid-turn (not just startup) write behavior can't be verified further
  * until its rate limit resets (2026-09-28, see this module's header) —
  * so a narrower bind can't be verified either. Tracked as real follow-up
- * work, not silently accepted scope creep. */
+ * work, not silently accepted scope creep (issue #1131).
+ *
+ * Issue #1131's eventual write-surface audit must NOT narrow these binds
+ * by simply shadowing the credential file read-only (e.g. keeping the
+ * directory `--bind-try` and adding a later, more-specific `--ro-bind-try`
+ * over just the credential file). That was prototyped: it works
+ * mechanically (opencode completed a real turn with `auth.json`
+ * read-only), but both CLIs rotate their own credentials in place —
+ * `~/.codex/auth.json` carries `tokens.refresh_token` + `last_refresh`,
+ * and `~/.local/share/opencode/auth.json` carries an OAuth provider entry
+ * with `refresh`/`access`/`expires` — so a read-only credential file
+ * breaks the agent the first time its access token expires mid-turn: a
+ * "works for two weeks, then breaks for everyone at once" failure. Any
+ * narrower bind the audit lands on must leave the credential file
+ * writable. */
 export function agentSandboxWritablePaths(agentCommand: string): string[] {
   const home = os.homedir();
   switch (agentCommand) {
@@ -522,7 +600,21 @@ export function agentSandboxWritablePaths(agentCommand: string): string[] {
  * mental check if GHAS flags it fresh, though it should not: every path
  * this is ever called with comes from `agentSandboxWritablePaths`, which
  * only ever returns `os.homedir()` joined with a hardcoded literal
- * subpath, never anything request- or agent-output-derived. */
+ * subpath, never anything request- or agent-output-derived.
+ *
+ * Invariant every entry must satisfy: this function assumes every path is
+ * a DIRECTORY. `mkdirSync(p, { recursive: true })` on a path that doesn't
+ * exist yet creates a directory AT exactly that path — so a future,
+ * narrower `agentSandboxWritablePaths` entry that names a specific FILE
+ * (issue #1131's eventual write-surface audit; see that function's own
+ * comment on why bind-mounting only opencode's `opencode.db` was
+ * considered and deferred) must never be routed through this function
+ * unmodified — it would silently create a directory in place of the file
+ * it meant to preserve, which is worse than the EROFS failure it was
+ * trying to prevent. Demonstrated in
+ * test/services/scaffold-generate.test.ts's own
+ * `ensureSandboxWritablePathsExist` suite rather than left to be
+ * rediscovered. */
 export function ensureSandboxWritablePathsExist(paths: string[]): void {
   for (const p of paths) {
     try {
@@ -639,8 +731,11 @@ export function isSandboxCapable(
               "kernel/policy does not permit unprivileged user namespaces) — scaffold " +
               "generation turns will run WITHOUT process-level sandboxing; the structural " +
               "guarantee (the scratch worktree never feeds the PR pipeline directly) is the " +
-              "only protection in effect until this is resolved. See scaffold-generate.ts's " +
-              "own header comment for detail.",
+              "only protection in effect until this is resolved. claude and codex retain " +
+              "their own CLI-level tool restriction even unsandboxed; opencode has none " +
+              "(full write/exec as the server user) and agy now refuses to run at all on " +
+              "this fallback rather than doing the same (issue #1130). See " +
+              "scaffold-generate.ts's own header comment for detail.",
           );
         }
         return usable;
@@ -692,6 +787,32 @@ export const defaultSpawnGenerationTurn: SpawnGenerationTurn = async ({
   // reliably decidable from an exit code/stderr alone, so no such retry is
   // attempted here — a known, accepted limitation, not an oversight.
   const sandboxUsable = await isSandboxCapable();
+  // Hermes review, PR #1152 — `--dangerously-skip-permissions` (added to
+  // agy's own argv above, issue #1130) is the only flag here that GRANTS
+  // tool access rather than restricting it; claude's `--allowedTools` and
+  // codex's `--sandbox read-only` are real (if imperfectly verified) CLI-
+  // level restrictions that still apply on this exact no-bwrap fallback.
+  // Before #1130, agy was effectively inert on this fallback (it
+  // auto-denied every tool call without that flag) — safe by accident, not
+  // by design. Now that it has real tool access, an unsandboxed agy turn
+  // has full write+exec as the server user, with only the prompt's own
+  // advisory "do not create/edit/delete" instruction as a stop — on
+  // arbitrary repo/seed content, a real prompt-injection surface. Fail
+  // closed here rather than silently degrade the way the other three
+  // agents do: this specific exposure is new as of #1130's own fix, so it
+  // gets a guard scoped to it. (opencode's plain `run` has the identical
+  // no-restriction-flag gap on this same fallback — see this module's own
+  // header — but that is pre-existing and untouched by #1130; tracked
+  // separately rather than folded into this fix.)
+  if (!sandboxUsable && agentCommand === "agy") {
+    throw new GenerationSpawnError(
+      agentCommand,
+      "agy requires a usable bwrap sandbox for scaffold generation — without it, " +
+        "--dangerously-skip-permissions (needed for agy to read the repo at all) would " +
+        "leave it with full write/exec access as the server user and no CLI-level " +
+        "restriction to fall back on. Install/enable bwrap on this host to use agy here.",
+    );
+  }
   let invocation = { bin, args };
   if (sandboxUsable) {
     const extraWritablePaths = agentSandboxWritablePaths(agentCommand);
