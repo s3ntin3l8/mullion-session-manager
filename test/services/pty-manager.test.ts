@@ -559,6 +559,75 @@ describe("PtyManager", () => {
     expect(fakePtyChildren).toHaveLength(2);
   });
 
+  // Issue #1156 — getOrCreate() used to read opts.cols/opts.rows only in the
+  // `if (!session)` branch (brand-new Session). Reattaching to a
+  // Session that's still in the map but whose attach-client died (in the
+  // map, ptyProcess null — the dtach master is still alive) returned it
+  // unchanged, so the respawned pty inherited the stale size instead of the
+  // new caller's request.
+  it("applies the requested cols/rows when reattaching to a dead session", async () => {
+    const first = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "bash",
+      cols: 80,
+      rows: 24,
+    });
+    await waitForSpawn(first);
+    fakePtyChildren[0].kill();
+    expect(first.isAlive).toBe(false);
+
+    const session = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "bash",
+      cols: 120,
+      rows: 40,
+    });
+    await waitForSpawn(session);
+
+    expect(session).toBe(first);
+    // attachClient() spawns the pty at the Session's own this.cols/this.rows
+    // (never the opts it was handed), so this is what proves the new size
+    // was applied before spawn rather than the pty just happening to start
+    // that way.
+    expect(fakePtyChildren[1].cols).toBe(120);
+    expect(fakePtyChildren[1].rows).toBe(40);
+    expect(session.toInfo().cols).toBe(120);
+    expect(session.toInfo().rows).toBe(40);
+  });
+
+  // Same reattach path, but the requested size is below MIN_TERMINAL_COLS/
+  // ROWS. 80 (the stale pre-fix size), 10 (the raw request), and 40 (the
+  // clamped floor) are three distinct values, so this one assertion also
+  // discriminates "fix applies resize() but bypasses clampTerminalSize" from
+  // "fix applies the clamp correctly" — not a redundant clamp test.
+  it("clamps the requested cols/rows below the floor when reattaching to a dead session", async () => {
+    const first = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "bash",
+      cols: 80,
+      rows: 24,
+    });
+    await waitForSpawn(first);
+    fakePtyChildren[0].kill();
+
+    const session = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "bash",
+      cols: 10,
+      rows: 2,
+    });
+    await waitForSpawn(session);
+
+    expect(fakePtyChildren[1].cols).toBe(40);
+    expect(fakePtyChildren[1].rows).toBe(10);
+    expect(session.toInfo().cols).toBe(40);
+    expect(session.toInfo().rows).toBe(10);
+  });
+
   // getScrollback() always prepends a screen-mode preamble (see pty-manager.ts)
   // — "\x1b[?1049l" while tracked state is primary (the default), so a fresh
   // xterm.js is guaranteed to land with a scrollbar. Assert with a suffix
