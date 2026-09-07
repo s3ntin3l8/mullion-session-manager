@@ -29,8 +29,20 @@ vi.mock("node:child_process", async (importOriginal) => {
     ...actual,
     spawn: vi.fn((command: string, args?: readonly string[], options?: object) => {
       if (command === "git") return actual.spawn(command, args, options);
-      const ee = new EventEmitter();
-      setImmediate(() => ee.emit("exit", 0));
+      const ee = new EventEmitter() as EventEmitter & { stdout?: EventEmitter };
+      setImmediate(() => {
+        ee.emit("exit", 0);
+        // Issue #1140 — terminate()'s stopScope() now issues a list-units
+        // ownership-check spawn FIRST, which (like isMasterAliveBatch)
+        // deliberately waits on 'close', not 'exit' — the stdout-delivery
+        // race their own doc comments describe. This mock previously only
+        // ever fired 'exit', so that listing call hung forever (20s
+        // testTimeout) the moment any test here reached terminate(). See
+        // test/helpers/mock-spawn.ts's identical fix for the full
+        // reasoning.
+        ee.stdout = new EventEmitter();
+        setImmediate(() => ee.emit("close", 0));
+      });
       return ee;
     }),
   };

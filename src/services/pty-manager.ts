@@ -52,6 +52,7 @@ import type { CgroupProcess } from "./cgroup-inventory.js";
 import {
   stopScope,
   describeScope,
+  deriveInstanceId,
   isMasterAlive as isMasterAliveProcess,
   isMasterAliveBatch as isMasterAliveBatchProcess,
   listSessionProcesses as listSessionProcessesProcess,
@@ -3897,6 +3898,16 @@ export class Session {
 export class PtyManager {
   private sessions = new Map<string, Session>();
   private readonly sessionsDir: string;
+  // Issue #1140 (PR 1) — a short, deterministic id for THIS instance's own
+  // sessionsDir, derived once here (never from app.config.SESSIONS_DIR
+  // directly — see deriveInstanceId's own doc comment on why that could
+  // disagree with the possibly-redirected `this.sessionsDir` above).
+  // Threaded into every session-process.ts ownership check below
+  // (terminate()'s stopScope, isMasterAlive, isMasterAliveBatch,
+  // listSessionProcesses) so each can tell this instance's own
+  // `crs-session-*` scopes apart from another Mullion instance's on the
+  // same host by dtach socket path, not by unit name.
+  private readonly instanceId: string;
   // Issue #271 — see stashSeed()/consumeSeed() below.
   private pendingSeeds = new Map<string, string>();
   // Phase 2 (issue #172) — the ONE shared Unix socket every session in this
@@ -3988,6 +3999,7 @@ export class PtyManager {
     // dtach would look for the socket in the wrong place entirely.
     this.sessionsDir = path.resolve(opts.sessionsDir);
     mkdirSync(this.sessionsDir, { recursive: true });
+    this.instanceId = deriveInstanceId(this.sessionsDir);
     // Lives alongside the per-session dtach sockets in the same directory —
     // SESSIONS_DIR is already host-local, per-install storage with no other
     // sanctioned reader, and src/plugins/hooks.ts locks this file down to
@@ -4410,7 +4422,7 @@ export class PtyManager {
   async terminate(id: string): Promise<void> {
     this.kill(id);
     this.discardPendingSeed(id);
-    await stopScope(id);
+    await stopScope(this.sessionsDir, this.instanceId, id);
     try {
       unlinkSync(hookTokenPath(this.sessionsDir, id));
     } catch {
@@ -4486,7 +4498,7 @@ export class PtyManager {
    * use.
    */
   isMasterAlive(id: string): Promise<boolean> {
-    return isMasterAliveProcess(id);
+    return isMasterAliveProcess(this.sessionsDir, this.instanceId, id);
   }
 
   /**
@@ -4496,7 +4508,7 @@ export class PtyManager {
    * above — session-backend.ts calls `app.pty.listSessionProcesses(id)`.
    */
   listSessionProcesses(id: string): Promise<CgroupProcess[]> {
-    return listSessionProcessesProcess(id);
+    return listSessionProcessesProcess(this.sessionsDir, this.instanceId, id);
   }
 
   /**
@@ -4508,6 +4520,6 @@ export class PtyManager {
    * `app.pty.isMasterAliveBatch` directly.
    */
   isMasterAliveBatch(ids: string[]): Promise<Record<string, boolean>> {
-    return isMasterAliveBatchProcess(ids);
+    return isMasterAliveBatchProcess(this.sessionsDir, this.instanceId, ids);
   }
 }

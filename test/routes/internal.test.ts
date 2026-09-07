@@ -74,16 +74,28 @@ vi.mock("node-pty", () => ({
 
 // Perf audit finding B8(2) — PtyManager.isMasterAliveBatch replies with
 // `systemctl --user list-units ... crs-session-*.scope`, one call for the
-// whole batch, instead of one `is-active` spawn per id. Unlike is-active
-// (which the mock below always answers "active" for regardless of which
-// unit was asked about — "this suite asserts response shape, not
-// session-reconciler-style semantics"), list-units has no per-unit
-// argument to echo back: its answer is a real inventory of what's
-// currently active. Track that inventory here, populated by the same
-// `systemd-run -u <unit>` spawns bootstrapMaster makes below, so
+// whole batch (isMasterAlive, issue #1140, is now a thin wrapper over it —
+// there is no more separate `is-active` spawn to fake at all). list-units
+// has no per-unit argument to echo back: its answer is a real inventory of
+// what's currently active. Track that inventory here, populated by the
+// same `systemd-run -u <unit>` spawns bootstrapMaster makes below, so
 // list-units' fake reply matches whichever sessions this test file has
 // actually "spawned" so far.
 const activeScopeUnits = new Set<string>();
+
+// Issue #1140 (PR 1) — session-process.ts's ownership check now reads the
+// dtach socket path out of each unit's systemd Description, not just its
+// name (see session-process.ts's own header comment): a unit with no
+// real-shaped Description resolves as "unverifiable," not owned. Track the
+// real socket path each `systemd-run ... -- dtach -n <socketPath> ...` call
+// below actually used (captured straight from the real, unmocked
+// buildLaunchPlan()/PtyManager argv — only child_process.spawn is faked, so
+// this is the session's own real app.config.SESSIONS_DIR-derived path) so
+// the fake list-units reply can render it. Only set for units that launch
+// via dtach at all — self-update's own systemd-run call below doesn't, and
+// its unit stays a bare, non-dtach-shaped placeholder Description
+// (harmless: it doesn't match `crs-session-*` either way).
+const unitSocketPaths = new Map<string, string>();
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof ChildProcess>();
@@ -111,33 +123,26 @@ vi.mock("node:child_process", async (importOriginal) => {
       // this file.
       ee.unref = () => {};
 
-      // PtyManager.isMasterAlive: `systemctl --user is-active <unit>.scope`.
-      // Always replies "active" — this suite asserts response shape, not
-      // session-reconciler-style semantics (already covered elsewhere).
-      if (file === "systemctl" && args[1] === "is-active") {
-        ee.stdout = new EventEmitter();
-        setImmediate(() => {
-          ee.emit("exit", 0);
-          setImmediate(() => {
-            ee.stdout?.emit("data", Buffer.from("active\n"));
-            ee.emit("close", 0);
-          });
-        });
-        return ee;
-      }
-
       // PtyManager.isMasterAliveBatch: `systemctl --user list-units --type=scope
       // --state=active --no-legend --plain crs-session-*.scope`. Reports
       // exactly the units activeScopeUnits currently tracks (see its own
       // comment above), in the real `--plain --no-legend` UNIT LOAD ACTIVE
-      // SUB DESCRIPTION shape (only the first field is actually parsed).
+      // SUB DESCRIPTION shape — Description now matters, not just the unit
+      // name (issue #1140): a real dtach-shaped one when unitSocketPaths has
+      // an entry, else the old bare-unit-name placeholder.
       if (file === "systemctl" && args[1] === "list-units") {
         ee.stdout = new EventEmitter();
         setImmediate(() => {
           ee.emit("exit", 0);
           setImmediate(() => {
             const lines = [...activeScopeUnits]
-              .map((unit) => `${unit} loaded active running ${unit}`)
+              .map((unit) => {
+                const socketPath = unitSocketPaths.get(unit);
+                const description = socketPath
+                  ? `/usr/bin/dtach -n ${socketPath} /usr/bin/zsh -lc bash`
+                  : unit;
+                return `${unit} loaded active running ${description}`;
+              })
               .join("\n");
             ee.stdout?.emit("data", Buffer.from(lines ? `${lines}\n` : ""));
             ee.emit("close", 0);
@@ -147,19 +152,32 @@ vi.mock("node:child_process", async (importOriginal) => {
       }
 
       if (file === "systemd-run") {
-        // args: ["--user", "--scope", "--collect", "-u", unitName, "--", ...]
+        // args: ["--user", "--scope", "--collect", "-u", unitName, "--", ...,
+        // "dtach", "-n", socketPath, ...] for a real session launch (not
+        // self-update's own systemd-run call further below in this suite,
+        // which has no "-n" at all).
         const unitIndex = args.indexOf("-u");
         if (unitIndex !== -1 && args[unitIndex + 1]) {
-          activeScopeUnits.add(`${args[unitIndex + 1]}.scope`);
+          const unit = `${args[unitIndex + 1]}.scope`;
+          activeScopeUnits.add(unit);
+          const dtachNIndex = args.indexOf("-n");
+          if (dtachNIndex !== -1 && args[dtachNIndex + 1]) {
+            unitSocketPaths.set(unit, args[dtachNIndex + 1]);
+          }
         }
         setImmediate(() => ee.emit("exit", 0));
         return ee;
       }
 
-      // PtyManager.stopScope (terminate): only waits on 'exit'.
+      // PtyManager.stopScope (terminate): only waits on 'exit'. Issue #1140
+      // — terminate() now issues a list-units ownership check FIRST (see
+      // above), so this branch still receives the exact unit name to stop.
       if (file === "systemctl" && args[1] === "stop") {
         const unit = args[2];
-        if (unit) activeScopeUnits.delete(unit);
+        if (unit) {
+          activeScopeUnits.delete(unit);
+          unitSocketPaths.delete(unit);
+        }
         setImmediate(() => ee.emit("exit", 0));
         return ee;
       }
