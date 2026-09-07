@@ -400,6 +400,12 @@ describe("runInstall / runUninstall", () => {
       once: (event: string, cb: (...a: unknown[]) => void) => {
         listeners[event]?.push(cb);
       },
+      removeListener: (event: string, cb: (...a: unknown[]) => void) => {
+        const list = listeners[event];
+        if (!list) return;
+        const i = list.indexOf(cb);
+        if (i !== -1) list.splice(i, 1);
+      },
       unref: () => {},
     };
   }

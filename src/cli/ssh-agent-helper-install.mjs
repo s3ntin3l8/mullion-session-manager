@@ -482,18 +482,33 @@ function spawnDetachedHelper(io, execPath, argv, logFd) {
       resolve({ ok: false, error: err });
       return;
     }
+    // Round 4 diagnostic follow-up (issue #871) — whichever of these two
+    // fires first, remove the OTHER one too: `.once()` only self-removes
+    // the listener that actually fired, so the loser stayed registered on
+    // this `child` indefinitely after this Promise already settled. If
+    // that leftover listener's event (most plausibly a late `'error'`
+    // after a successful `'spawn'`, e.g. the detached child later failing
+    // to write to its inherited log fd) ever fired, there was nothing left
+    // to catch it — an unhandled exception inside an event listener
+    // becomes an `unhandledRejection`-equivalent crash of the *parent*
+    // process, well after `installWindows` had already returned 0 and
+    // `helper-main.mjs` may already be mid-exit.
     let settled = false;
-    child.once("error", (err) => {
+    const onError = (err) => {
       if (settled) return;
       settled = true;
+      child.removeListener("spawn", onSpawn);
       resolve({ ok: false, error: err });
-    });
-    child.once("spawn", () => {
+    };
+    const onSpawn = () => {
       if (settled) return;
       settled = true;
+      child.removeListener("error", onError);
       child.unref();
       resolve({ ok: true });
-    });
+    };
+    child.once("error", onError);
+    child.once("spawn", onSpawn);
   });
 }
 
@@ -524,8 +539,18 @@ function cleanUpLegacyScheduledTask(io) {
 // REG_SZ value either replaces the previous one atomically or the add
 // fails outright with nothing written, unlike a multi-step file write.
 async function installWindows(io, { execPath, scriptPath, sshAuthSock }) {
+  // TEMPORARY (issue #871 CI diagnostic, remove once test-windows's silent
+  // exit-1 is root-caused): `helper install` exits 1 on windows-latest CI
+  // with zero output from anywhere in this function, despite every return
+  // path below writing a message first. These checkpoints go to stdout
+  // (not stderr) specifically to rule out PowerShell's native-stderr
+  // handling as the thing eating the output, and fire unconditionally so
+  // the next CI run pinpoints exactly which statement stops producing them.
+  io.stdout.write("[install-trace] start\n");
   fs.mkdirSync(stateDir(io), { recursive: true, mode: 0o700 });
+  io.stdout.write("[install-trace] mkdirSync done\n");
   cleanUpLegacyScheduledTask(io);
+  io.stdout.write("[install-trace] cleanUpLegacyScheduledTask done\n");
 
   const command = buildWindowsRunCommand({ execPath, scriptPath, sshAuthSock });
   const result = runSpawnSync(io, "reg", [
@@ -539,6 +564,9 @@ async function installWindows(io, { execPath, scriptPath, sshAuthSock }) {
     command,
     "/f",
   ]);
+  io.stdout.write(
+    `[install-trace] reg add status=${result.status} error=${result.error ? result.error.message : "none"}\n`,
+  );
   if (result.status !== 0) {
     io.stderr.write(
       `reg add failed: ${(result.stderr || result.error?.message || "unknown error").trim()}\n`,
@@ -561,6 +589,7 @@ async function installWindows(io, { execPath, scriptPath, sshAuthSock }) {
   // process" is the common, expected outcome on a genuinely first-ever
   // install.
   runSpawnSync(io, "taskkill", ["/IM", WINDOWS_HELPER_EXE_NAME, "/F"]);
+  io.stdout.write("[install-trace] taskkill done\n");
 
   // `reg add` only *registers* the autostart entry; Windows launches it at
   // the NEXT logon, same gap `/Run` used to close for the Scheduled Task
@@ -591,9 +620,12 @@ async function installWindows(io, { execPath, scriptPath, sshAuthSock }) {
   try {
     logFd = fs.openSync(logPath, "a");
   } catch (err) {
+    io.stdout.write(`[install-trace] openSync threw: ${err.message}\n`);
     return degradeToWarning(err.message);
   }
+  io.stdout.write("[install-trace] logFd opened, spawning\n");
   const spawnResult = await spawnDetachedHelper(io, execPath, runArgv, logFd);
+  io.stdout.write(`[install-trace] spawn result ok=${spawnResult.ok}\n`);
   if (!spawnResult.ok) {
     return degradeToWarning(spawnResult.error.message);
   }
