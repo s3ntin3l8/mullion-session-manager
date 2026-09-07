@@ -689,6 +689,31 @@ describe("runInstall / runUninstall", () => {
     expect(stderrLines.join("")).toMatch(/not supported on 'linux'/);
   });
 
+  it("win32: refuses to install when isSea is falsy (non-SEA path not supported on Windows)", async () => {
+    const { io, dir: d } = baseIo({ platform: "win32" });
+    (io as { homedir?: string }).homedir = path.join(d, "home");
+    (io as { isSea?: boolean }).isSea = false;
+    const stderrLines: string[] = [];
+    io.stderr = { write: (s: string) => stderrLines.push(s) };
+    const code = await runInstall([], io);
+    expect(code).toBe(1);
+    expect(stderrLines.join("")).toMatch(/non-SEA .* path is not supported on Windows/);
+  });
+
+  it("--insecure: threads the flag through to the spawned command and reg value", async () => {
+    const { io, calls, dir: d } = baseIo({ platform: "win32", isSea: true });
+    (io as { homedir?: string }).homedir = path.join(d, "home");
+    const code = await runInstall(["--insecure"], io);
+    expect(code).toBe(0);
+    const regAdd = findCall(calls, "reg", "add");
+    expect(regAdd).toBeDefined();
+    const command = regAdd![regAdd!.indexOf("/d") + 1];
+    expect(command).toContain("--insecure");
+    const spawnCall = findCall(calls, "SPAWN");
+    expect(spawnCall).toBeDefined();
+    expect(spawnCall).toContain("--insecure");
+  });
+
   // Hermes review, PR #879, on the mechanism this replaces (`schtasks
   // /Run`) — the invariant carries over: registering the autostart entry
   // must not by itself mean "running now". A failed immediate start must

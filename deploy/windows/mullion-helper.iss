@@ -277,18 +277,31 @@ begin
       Paired := True
     else if Payload = '' then
     begin
-      ShowMsg(
-        'Mullion Helper will be installed but not yet paired.' + #13#10 + #13#10 +
-        'When you are ready, generate a payload from Settings -> Hosts -> SSH agent bridges on your Mullion primary, then run:' + #13#10 + #13#10 +
-        '& "' + ExePath + '" helper pair <payload>',
-        mbInformation);
+      if InsecurePage.Checked then
+        ShowMsg(
+          'Mullion Helper will be installed but not yet paired.' + #13#10 + #13#10 +
+          'When you are ready, generate a payload from Settings -> Hosts -> SSH agent bridges on your Mullion primary, then run:' + #13#10 + #13#10 +
+          '& "' + ExePath + '" helper pair <payload> --insecure',
+          mbInformation)
+      else
+        ShowMsg(
+          'Mullion Helper will be installed but not yet paired.' + #13#10 + #13#10 +
+          'When you are ready, generate a payload from Settings -> Hosts -> SSH agent bridges on your Mullion primary, then run:' + #13#10 + #13#10 +
+          '& "' + ExePath + '" helper pair <payload>',
+          mbInformation);
     end
     else if not IsValidPairingPayload(Payload) then
     begin
-      ShowMsg(
-        'That doesn''t look like a real pairing payload (it should be a single unbroken block of letters, digits, "-", and "_", nothing else) — skipping pairing rather than risk sending something wrong. Copy it fresh from Settings -> Hosts -> SSH agent bridges and run:' + #13#10 + #13#10 +
-        '& "' + ExePath + '" helper pair <payload>',
-        mbError);
+      if InsecurePage.Checked then
+        ShowMsg(
+          'That doesn''t look like a real pairing payload (it should be a single unbroken block of letters, digits, "-", and "_", nothing else) — skipping pairing rather than risk sending something wrong. Copy it fresh from Settings -> Hosts -> SSH agent bridges and run:' + #13#10 + #13#10 +
+          '& "' + ExePath + '" helper pair <payload> --insecure',
+          mbError)
+      else
+        ShowMsg(
+          'That doesn''t look like a real pairing payload (it should be a single unbroken block of letters, digits, "-", and "_", nothing else) — skipping pairing rather than risk sending something wrong. Copy it fresh from Settings -> Hosts -> SSH agent bridges and run:' + #13#10 + #13#10 +
+          '& "' + ExePath + '" helper pair <payload>',
+          mbError);
     end
     else
     begin
@@ -336,14 +349,24 @@ begin
         // AppendDiagnostics's own captured stderr (surfaced right below)
         // is the real safety net if that ever happens, not this sentence.
         StdErrText := JoinStdErr(Output);
-        ShowMsg(
-          'Pairing did not succeed (exit code ' + IntToStr(ResultCode) + ').' + #13#10 + #13#10 +
-          'Exit code 2 means the payload itself was invalid. Exit code 1 means it was valid but the primary rejected it — it may have expired (valid for 10 minutes) or already been used — or could not be reached.' + #13#10 + #13#10 +
-          FormatReason(StdErrText) +
-          'Generate a fresh payload from Settings -> Hosts -> SSH agent bridges on your Mullion primary, then run:' + #13#10 + #13#10 +
-          '& "' + ExePath + '" helper pair <payload>' + #13#10 + #13#10 +
-          'Full diagnostics: ' + ExpandConstant('{app}\install-diagnostics.log'),
-          mbError);
+        if InsecurePage.Checked then
+          ShowMsg(
+            'Pairing did not succeed (exit code ' + IntToStr(ResultCode) + ').' + #13#10 + #13#10 +
+            'Exit code 2 means the payload itself was invalid. Exit code 1 means it was valid but the primary rejected it — it may have expired (valid for 10 minutes) or already been used — or could not be reached.' + #13#10 + #13#10 +
+            FormatReason(StdErrText) +
+            'Generate a fresh payload from Settings -> Hosts -> SSH agent bridges on your Mullion primary, then run:' + #13#10 + #13#10 +
+            '& "' + ExePath + '" helper pair <payload> --insecure' + #13#10 + #13#10 +
+            'Full diagnostics: ' + ExpandConstant('{app}\install-diagnostics.log'),
+            mbError)
+        else
+          ShowMsg(
+            'Pairing did not succeed (exit code ' + IntToStr(ResultCode) + ').' + #13#10 + #13#10 +
+            'Exit code 2 means the payload itself was invalid. Exit code 1 means it was valid but the primary rejected it — it may have expired (valid for 10 minutes) or already been used — or could not be reached.' + #13#10 + #13#10 +
+            FormatReason(StdErrText) +
+            'Generate a fresh payload from Settings -> Hosts -> SSH agent bridges on your Mullion primary, then run:' + #13#10 + #13#10 +
+            '& "' + ExePath + '" helper pair <payload>' + #13#10 + #13#10 +
+            'Full diagnostics: ' + ExpandConstant('{app}\install-diagnostics.log'),
+            mbError);
       end;
     end;
 
@@ -363,13 +386,22 @@ begin
     if ResultCode <> 0 then
     begin
       StdErrText := JoinStdErr(Output);
-      ShowMsg(
-        'mullion-helper.exe helper install did not finish cleanly (exit code ' + IntToStr(ResultCode) + ').' + #13#10 + #13#10 +
-        FormatReason(StdErrText) +
-        'The helper is still installed at ' + ExePath + ' — you can retry the autostart registration yourself by running:' + #13#10 + #13#10 +
-        '& "' + ExePath + '" helper install' + #13#10 + #13#10 +
-        'Full diagnostics: ' + ExpandConstant('{app}\install-diagnostics.log'),
-        mbError);
+      if InsecurePage.Checked then
+        ShowMsg(
+          'mullion-helper.exe helper install did not finish cleanly (exit code ' + IntToStr(ResultCode) + ').' + #13#10 + #13#10 +
+          FormatReason(StdErrText) +
+          'The helper is still installed at ' + ExePath + ' — you can retry the autostart registration yourself by running:' + #13#10 + #13#10 +
+          '& "' + ExePath + '" helper install --insecure' + #13#10 + #13#10 +
+          'Full diagnostics: ' + ExpandConstant('{app}\install-diagnostics.log'),
+          mbError)
+      else
+        ShowMsg(
+          'mullion-helper.exe helper install did not finish cleanly (exit code ' + IntToStr(ResultCode) + ').' + #13#10 + #13#10 +
+          FormatReason(StdErrText) +
+          'The helper is still installed at ' + ExePath + ' — you can retry the autostart registration yourself by running:' + #13#10 + #13#10 +
+          '& "' + ExePath + '" helper install' + #13#10 + #13#10 +
+          'Full diagnostics: ' + ExpandConstant('{app}\install-diagnostics.log'),
+          mbError);
     end
     else if Paired then
       // "installed and paired", not "...and running": helper install's own
