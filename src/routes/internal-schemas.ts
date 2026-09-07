@@ -16,11 +16,12 @@ import { DEFAULT_GENERATION_TIMEOUT_MS } from "../services/scaffold-generate.js"
 // A session id is always the primary's stringified integer row id
 // (String(sessionId) — see terminal.ts/sessions.ts) by construction, but
 // this schema is the agent's only defense against a malformed one: it flows
-// straight into pty-manager.ts's scopeUnitName(id) -> `crs-session-<id>`,
-// naming a real systemd --user scope and dtach socket file. An id with
-// systemd- or filesystem-illegal characters (e.g. "/") wouldn't be an
-// injection (spawn/stop always use an argv array, never a shell string),
-// but would make bootstrap/terminate silently target the wrong unit/file.
+// straight into pty-manager.ts's scopeUnitName(instanceId, id) ->
+// `crs-session-<instanceId>-<id>`, naming a real systemd --user scope and
+// dtach socket file. An id with systemd- or filesystem-illegal characters
+// (e.g. "/") wouldn't be an injection (spawn/stop always use an argv
+// array, never a shell string), but would make bootstrap/terminate
+// silently target the wrong unit/file.
 export const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 export const SESSION_ID_SCHEMA = {
   type: "string",

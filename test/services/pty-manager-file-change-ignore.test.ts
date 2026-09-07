@@ -44,12 +44,21 @@ import { isSystemctlUserAvailable } from "../../src/services/session-process.js"
 // This file's own `afterEach` (below) can't fix that by also stopping the
 // scope: `killAll()` only kills the tracked attach-client and explicitly
 // leaves the dtach master + scope running (PtyManager.kill()'s own doc
-// comment) — only `PtyManager.terminate()` calls `stopScope()`, and calling
-// terminate() here would trade one bug for a worse one. Scope names are a
-// single Unix-user-global namespace (session-process.ts's
-// scopeUnitName(id) doc comment) while `sessions.id` is per-database, so
-// terminate()-ing this file's fixed test ids could stop a **different,
-// real** Mullion instance's own low-numbered session on the same host.
+// comment) — only `PtyManager.terminate()` calls `stopScope()`. Issue
+// #1140 (PR 2) namespaces scope unit names per Mullion instance
+// (`crs-session-<instanceId>-<id>`, instanceId derived from `sessionsDir`),
+// so calling terminate() here can no longer stop a DIFFERENT, real
+// Mullion instance's own low-numbered session the way it could before that
+// PR — this test's own throwaway `sessionsDir` derives a different
+// instanceId than any real deployed instance's, and stopScope() only ever
+// acts on a unit whose OWNERSHIP it confirmed via dtach socket path
+// (listOwnedScopes(), issue #1140 PR 1). That still doesn't make
+// terminate() the right cleanup call here, though: this file needs a real
+// `systemd-run`/`dtach` bootstrap to NOT happen at all (a leaked scope is
+// the bug under test, issue #1137), not a mechanism to clean one up after
+// the fact — see the "actual fix" paragraph below. AGENTS.md's own rule
+// still applies regardless of instance-scoping: a test/teardown must never
+// call `terminate()`/`stopScope()` on an id it didn't itself create.
 //
 // The actual fix is not creating the scope at all: `mockChildProcessSpawn`'s
 // `passthrough` option (see its own header for this exact worked example,

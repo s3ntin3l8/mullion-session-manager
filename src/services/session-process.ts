@@ -38,28 +38,37 @@
 // composition that is its own, larger, separately-planned extraction (the
 // roadmap's PR 32, buildLaunchPlan) — pulling it in here would mix a
 // stateless id->unit-name/liveness module with Session's per-instance launch
-// state. bootstrapMaster() still calls this module's scopeUnitName(id) for
-// the unit name it passes to systemd-run.
+// state. bootstrapMaster() still calls this module's
+// scopeUnitName(instanceId, id) for the unit name it passes to systemd-run.
 //
-// Issue #1140 (PR 1 of 2) — `scopeUnitName(id)` names a scope in a
-// Unix-user-global systemd namespace while `sessions.id` is per-database, so
-// two Mullion backends on one host can collide on a low id. #1137 already
-// covered the CREATION-time half of that collision (`systemd-run --collect`
-// refuses a unit name that already exists) with a diagnostic
-// (describeScope() below). This PR fixes the other half — a scope another
-// instance's session already legitimately owns getting misread as this
-// instance's own, or worse, stopped by mistake (`terminate("1")` from one
-// instance killing a different instance's real session "1") — by having
-// stopScope/isMasterAlive/isMasterAliveBatch/listSessionProcesses confirm
-// OWNERSHIP of a `crs-session-*` unit via its dtach socket path (always
-// `<sessionsDir>/<id>.sock`, systemd's own rendering of the launch argv —
-// see extractDtachSocketPath below) rather than trusting the unit name
-// alone. `scopeUnitName`/`describeScope` themselves are untouched by this
-// PR — the actual per-instance rename (`crs-session-<instanceId>-<id>`)
-// lands in a follow-up PR — but this ownership check is written to already
-// recognize that later, namespaced shape as well as today's bare
-// `crs-session-<id>`, so the rename PR needs no legacy-fallback logic of
-// its own. See deriveInstanceId()/listOwnedScopes() below.
+// Issue #1140 — `scopeUnitName` names a scope in a Unix-user-global systemd
+// namespace while `sessions.id` is per-database, so two Mullion backends on
+// one host can collide on a low id. #1137 already covered the CREATION-time
+// half of that collision (`systemd-run --collect` refuses a unit name that
+// already exists) with a diagnostic (describeScope() below). This landed in
+// two PRs:
+//
+//   PR 1 fixed the READ/STOP half first — a scope another instance's
+//   session already legitimately owns getting misread as this instance's
+//   own, or worse, stopped by mistake (`terminate("1")` from one instance
+//   killing a different instance's real session "1") — by having
+//   stopScope/isMasterAlive/isMasterAliveBatch/listSessionProcesses confirm
+//   OWNERSHIP of a `crs-session-*` unit via its dtach socket path (always
+//   `<sessionsDir>/<id>.sock`, systemd's own rendering of the launch argv —
+//   see extractDtachSocketPath below) rather than trusting the unit name
+//   alone. This is the PERMANENT ownership mechanism, not a transition
+//   shim — see listOwnedScopes()'s own doc comment.
+//
+//   PR 2 (this one) fixes the CREATION-time collision itself: `scopeUnitName`
+//   now folds `deriveInstanceId(sessionsDir)` into the unit name
+//   (`crs-session-<instanceId>-<id>`), so a fresh session's unit name can
+//   never collide with a different instance's. This is a near-pure rename —
+//   PR 1's ownership-by-socket-path check already recognized this namespaced
+//   shape as a candidate (candidateIdForUnit() below) before any namespaced
+//   unit existed, so it needed no changes here. A session already running
+//   under its legacy bare `crs-session-<id>` name at upgrade time keeps
+//   working unchanged (ownership is socket-path-derived, not name-derived);
+//   only sessions created after the upgrade get the namespaced name.
 
 import { spawn as spawnChild, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -71,8 +80,20 @@ import type { CgroupProcess } from "./cgroup-inventory.js";
 // tracked this session in memory at all, e.g. right after a restart — can
 // still reference the exact same scope to fully terminate it. See
 // PtyManager.terminate() in pty-manager.ts.
-export function scopeUnitName(id: string): string {
-  return `crs-session-${id}`;
+//
+// Issue #1140 (PR 2 of 2) — namespaced by `instanceId` (deriveInstanceId()
+// below) so two Mullion backends on one host never collide on the same
+// low-numbered `sessions.id` (issue #1137's creation-time failure mode: a
+// leaked or unrelated instance's scope squatting on a name `systemd-run
+// --collect` then refuses to recreate). This name is NOT what identifies a
+// scope as belonging to this instance, though — ownership is always
+// resolved by dtach socket path (listOwnedScopes()/resolveOwningUnit()
+// below, from PR 1), never by parsing this string back apart. Note:
+// SESSION_ID_PATTERN (routes/internal-schemas.ts) allows `-` in `id`
+// itself, so `crs-session-<instanceId>-<id>` is not unambiguously
+// re-splittable — nothing needs to re-split it.
+export function scopeUnitName(instanceId: string, id: string): string {
+  return `crs-session-${instanceId}-${id}`;
 }
 
 /**
@@ -138,13 +159,21 @@ export function isSystemctlUserAvailable(): boolean {
  */
 const DESCRIBE_SCOPE_TIMEOUT_MS = 2_000;
 
-export function describeScope(id: string): Promise<string | null> {
+export function describeScope(instanceId: string, id: string): Promise<string | null> {
   return new Promise((resolve) => {
     let stdout = "";
     let settled = false;
     const child = spawnChild(
       "systemctl",
-      ["--user", "show", `${scopeUnitName(id)}.scope`, "-p", "Description", "-p", "ActiveState"],
+      [
+        "--user",
+        "show",
+        `${scopeUnitName(instanceId, id)}.scope`,
+        "-p",
+        "Description",
+        "-p",
+        "ActiveState",
+      ],
       { stdio: ["ignore", "pipe", "ignore"] },
     );
 
@@ -244,8 +273,8 @@ export function extractDtachSocketPath(description: string): string | null {
 
 /**
  * A short, deterministic id for `sessionsDir`, folded into `crs-session-*`
- * unit names by the per-instance renaming that follows this PR — see this
- * module's own header comment. `path.resolve`, not `fs.realpathSync`:
+ * unit names by scopeUnitName() above (PR 2's per-instance rename) — see
+ * this module's own header comment. `path.resolve`, not `fs.realpathSync`:
  * production's `SESSIONS_DIR` is a real, persistent path OUTSIDE the
  * `current` release symlink (deploy/install.sh), but that symlink itself is
  * repointed on every deploy — resolving through it would change this id on
@@ -261,6 +290,15 @@ export function extractDtachSocketPath(description: string): string | null {
  * `ensureSessionsDir` — see src/plugins/pty.ts), not
  * `app.config.SESSIONS_DIR` directly — a host that hit that redirect would
  * otherwise derive a mismatched id from the two.
+ *
+ * Truncated to 8 hex characters (32 bits) of a sha256, not the full digest
+ * — short enough to keep unit names readable, at the cost of a real (if
+ * astronomically unlikely) collision space between two DIFFERENT
+ * `sessionsDir` values hashing to the same id. `stopScope`'s namespaced
+ * fallback (session-process.ts) and this module's header comment describe
+ * that as "cannot name a foreign unit," which holds only absent such a
+ * collision — worth knowing if a future change ever needs a stronger
+ * guarantee than "practically never."
  */
 export function deriveInstanceId(sessionsDir: string): string {
   return createHash("sha256").update(path.resolve(sessionsDir)).digest("hex").slice(0, 8);
@@ -269,24 +307,26 @@ export function deriveInstanceId(sessionsDir: string): string {
 // Recovers the id a `crs-session-*` unit NAME might refer to, for a row
 // whose Description didn't parse to a socket path at all (see
 // listOwnedScopes below) — the only place this module ever needs to reason
-// about a unit name's shape rather than its Description. Matches both
-// today's bare `crs-session-<id>` and the namespaced
-// `crs-session-<instanceId>-<id>` a future rename introduces, for THIS
-// instance's own instanceId only; a unit namespaced for some other
-// instance is left alone (not a candidate), same as a unit whose shape this
-// doesn't recognize at all. Not used for a row whose socket path DID parse
-// — listOwnedScopes recovers the real id from the socket basename in that
-// case instead, per this module's own naming-vs-ownership split.
+// about a unit name's shape rather than its Description. Matches both the
+// legacy bare `crs-session-<id>` (still possible post-PR-2: a session
+// created before the upgrade keeps running under its old name) and the
+// namespaced `crs-session-<instanceId>-<id>` PR 2 now actually produces,
+// for THIS instance's own instanceId only; a unit namespaced for some
+// other instance is left alone (not a candidate), same as a unit whose
+// shape this doesn't recognize at all. Not used for a row whose socket
+// path DID parse — listOwnedScopes recovers the real id from the socket
+// basename in that case instead, per this module's own naming-vs-ownership
+// split.
 //
-// Hermes review, this PR — not ground truth for id identity: a legacy id
-// that itself happens to begin with `<instanceId>-` (e.g. a literal id
+// Hermes review, PR 1 — not ground truth for id identity: a legacy id that
+// itself happens to begin with `<instanceId>-` (e.g. a literal id
 // "aaaaaaaa-7" when this instance's own instanceId is "aaaaaaaa") would be
-// misread as the namespaced form for id "7". Harmless today (this only
-// feeds the `unverifiable` guess for a row whose Description failed to
-// parse at all — never the ownership path itself, which always reads the
-// real id from the socket basename), but the follow-up rename PR must not
-// start trusting this split as authoritative once real namespaced units
-// exist.
+// misread as the namespaced form for id "7". Harmless (this only feeds the
+// `unverifiable` guess for a row whose Description failed to parse at all
+// — never the ownership path itself, which always reads the real id from
+// the socket basename), and still true now that PR 2 mints real namespaced
+// units: this split must stay a guess feeding `unverifiable`, never
+// authoritative.
 function candidateIdForUnit(unit: string, instanceId: string): string | null {
   const match = /^crs-session-(.+)\.scope$/.exec(unit);
   if (!match) return null;
@@ -395,14 +435,23 @@ export function listOwnedScopes(
  *     module is deliberately logger-free (plain, config-free functions —
  *     see this file's own header comment), and a genuinely-owned scope
  *     landing here at all would mean either a systemd Description-rendering
- *     quirk extractDtachSocketPath doesn't yet handle, or (once a later PR's
- *     per-instance rename ships) a bug in that new name/description shape
- *     — both expected to be rare, and both still caught by
+ *     quirk extractDtachSocketPath doesn't yet handle, or a bug in the
+ *     namespaced name/description shape PR 2 introduces — both expected to
+ *     be rare, and both still caught by
  *     scripts/check-scope-leaks.ts as an orphaned-looking unit rather than
  *     failing louder here.
  *   - the listing itself failed (systemctl/D-Bus problem) -> `undefined` if
- *     `fallbackOnListingFailure` is false, else the legacy `scopeUnitName(id)`
+ *     `fallbackOnListingFailure` is false, else `scopeUnitName(instanceId, id)`
  *     — see the two call sites below for why they disagree on this one case.
+ *     Issue #1140 (PR 2) — this fallback name is now namespaced, so unlike
+ *     PR 1 (where it was the legacy bare `crs-session-<id>`, ambiguous
+ *     across instances on every host with more than one) it cannot name a
+ *     different instance's scope absent an 8-hex-char `deriveInstanceId`
+ *     hash collision between two instances' `sessionsDir` values (see that
+ *     function's own doc comment) — astronomically unlikely, not
+ *     structurally impossible. A listing failure now degrades to "possibly
+ *     leaks this instance's own scope," never "possibly kills a foreign
+ *     one."
  *
  * Residual race, accepted: the listing and whatever the caller does with
  * the resolved unit are two separate spawns, so a scope could in principle
@@ -420,7 +469,7 @@ async function resolveOwningUnit(
 ): Promise<string | undefined> {
   const listing = await listOwnedScopes(sessionsDir, instanceId, { all: true });
   if (listing.failed) {
-    return opts.fallbackOnListingFailure ? `${scopeUnitName(id)}.scope` : undefined;
+    return opts.fallbackOnListingFailure ? `${scopeUnitName(instanceId, id)}.scope` : undefined;
   }
   return listing.owned.get(id);
 }
@@ -435,20 +484,33 @@ async function resolveOwningUnit(
  * on the same host). See that function's own doc comment for the full
  * per-case breakdown (owned / not-ours / unverifiable / listing-failed).
  *
- * Hermes review, this PR — `fallbackOnListingFailure: false` here, unlike
- * listSessionProcesses below: falling back to the un-confirmed legacy
- * `scopeUnitName(id)` on a listing failure would be the one path left where
- * this function could still stop a unit it never actually confirmed owning
- * — precisely under the same degraded-bus conditions where
- * isMasterAlive/isMasterAliveBatch deliberately refuse to answer (fail
- * open to "unknown"). Mirroring that posture here instead: a listing
- * failure means stopScope does nothing, and the session leaks (keeps
- * running) rather than risks killing a different instance's live one.
- * scripts/check-scope-leaks.ts is the tool that catches that leak, and
- * that's a better failure mode than the alternative. This function now
- * costs two sequential spawns (the listing, then the stop itself) instead
- * of one — `terminate()` is rare enough that the added latency doesn't
- * matter in practice.
+ * Issue #1140 (PR 2) — `fallbackOnListingFailure: true` here, using the now
+ * NAMESPACED `scopeUnitName(instanceId, id)` as the fallback. PR 1 shipped
+ * this as `false` (Hermes review, PR 1: falling back to the un-namespaced
+ * legacy `scopeUnitName(id)` on a listing failure could still stop a unit
+ * this instance never confirmed owning, since that bare name was ambiguous
+ * across instances on every host with more than one). The namespaced name
+ * doesn't have that problem the same way — `crs-session-<instanceId>-<id>`
+ * cannot name a unit a DIFFERENT instance created absent an 8-hex-char
+ * `deriveInstanceId` hash collision between the two instances'
+ * `sessionsDir` values (astronomically unlikely, not structurally
+ * impossible — see that function's own doc comment), so falling back to
+ * it on a listing failure is safe regardless of what's actually running
+ * under that name. This is a change in risk CLASS from PR 1, not degree:
+ * there, a collision on the derived instanceId only ever fed the
+ * `unverifiable` bucket (a fail-safe "do nothing" outcome); here, it feeds
+ * this destructive fallback directly. Accepted because the collision
+ * probability itself is unchanged and negligible either way. The residual
+ * gap this reopens is narrower than PR 1's, not the same one: a listing failure
+ * against a session that's still running under its pre-upgrade LEGACY name
+ * (`crs-session-<id>`, no instanceId) won't match this fallback string at
+ * all, so `systemctl stop` on it is a no-op and that scope leaks instead of
+ * stopping. `scripts/check-scope-leaks.ts` is the tool that catches that —
+ * same accepted trade as PR 1's leak-on-listing-failure case, just scoped
+ * down to legacy-named sessions during the upgrade window instead of every
+ * session. This function costs two sequential spawns (the listing, then
+ * the stop itself) instead of one — `terminate()` is rare enough that the
+ * added latency doesn't matter in practice.
  */
 export async function stopScope(
   sessionsDir: string,
@@ -456,7 +518,7 @@ export async function stopScope(
   id: string,
 ): Promise<void> {
   const unit = await resolveOwningUnit(sessionsDir, instanceId, id, {
-    fallbackOnListingFailure: false,
+    fallbackOnListingFailure: true,
   });
   if (unit === undefined) return;
   return new Promise((resolve) => {
@@ -574,25 +636,22 @@ export async function isMasterAlive(
  * dev servers). This is NOT subagent detection: Claude Code subagents run
  * in-process with no PID of their own (see agent-detect.ts).
  *
- * Issue #1140 (PR 1) — same resolveOwningUnit() resolution stopScope() uses
- * above (see its doc comment for the full per-case breakdown), EXCEPT with
- * `fallbackOnListingFailure: true` — unlike stopScope, a wrong attribution
- * here is harmless (this is a best-effort inventory, not a security
- * boundary: reporting the legacy name's processes when the listing itself
- * failed is no worse than this function's pre-PR-1 behaviour), so a
- * transient systemctl failure degrades gracefully instead of silently
- * reporting no processes for a session that may well be alive. Returns
- * `[]` for a scope that isn't owned/active, same as isMasterAlive() would
- * report — listScopeProcesses() itself already returns `[]` for a unit
- * with no live cgroup. Like stopScope, this now costs two sequential
- * spawns (the ownership listing, then listScopeProcesses' own cgroup
- * query) instead of one — unlike stopScope (rare, terminate()-only), this
- * is reachable from a route (GET /api/sessions/:id/processes,
+ * Issue #1140 — same resolveOwningUnit() resolution stopScope() uses above
+ * (see its doc comment for the full per-case breakdown), with
+ * `fallbackOnListingFailure: true` here too as of PR 2 — a wrong
+ * attribution is harmless (this is a best-effort inventory, not a security
+ * boundary), so a transient systemctl failure degrades gracefully instead
+ * of silently reporting no processes for a session that may well be alive.
+ * Returns `[]` for a scope that isn't owned/active, same as isMasterAlive()
+ * would report — listScopeProcesses() itself already returns `[]` for a
+ * unit with no live cgroup. This now costs two sequential spawns (the
+ * ownership listing, then listScopeProcesses' own cgroup query) instead of
+ * one — this is reachable from a route (GET /api/sessions/:id/processes,
  * src/routes/sessions.ts) that a client could poll, so the added latency
- * is more visible here; still accepted for PR 1, since correctness (never
- * attributing another instance's processes to this one on the success
- * path) matters more than shaving one spawn off a best-effort inventory
- * call.
+ * is more visible here than in stopScope (rare, terminate()-only); still
+ * accepted, since correctness (never attributing another instance's
+ * processes to this one on the success path) matters more than shaving one
+ * spawn off a best-effort inventory call.
  */
 export async function listSessionProcesses(
   sessionsDir: string,

@@ -11,6 +11,7 @@ import { resolveMullionBundleDir } from "../../src/services/hook-adapters/mullio
 import { buildOpenCodeMcpConfig } from "../../src/services/hook-adapters/opencode.js";
 import { buildCodexMcpFlags } from "../../src/services/hook-adapters/codex.js";
 import { resolveMcpServerPath } from "../../src/services/hook-adapters/shared.js";
+import { deriveInstanceId } from "../../src/services/session-process.js";
 
 // PtyManager spawns real OS processes (systemd-run, dtach) — see
 // src/services/pty-manager.ts. Milestone 1 already proved the real
@@ -453,7 +454,12 @@ describe("PtyManager", () => {
   // name.
   describe("bootstrapMaster scope-collision diagnostic (issue #1137)", () => {
     it("names the squatting unit's Description when the scope name is already active", async () => {
-      showReplies["crs-session-1.scope"] = {
+      // Issue #1140 (PR 2) — the unit name is namespaced by this
+      // PtyManager's own instanceId (derived from `sessionsDir`, fresh per
+      // test), so the squatting unit this test simulates must use that
+      // same computed name, not a bare `crs-session-1`.
+      const unit = `crs-session-${deriveInstanceId(sessionsDir)}-1.scope`;
+      showReplies[unit] = {
         description:
           "/usr/bin/dtach -n /tmp/pty-manager-filechange-test-abc123/1.sock /bin/zsh -lc bash",
         activeState: "active",
@@ -479,17 +485,15 @@ describe("PtyManager", () => {
       // The original plain message survives too — describeScope augments
       // it, it doesn't replace it — so anything grepping logs for the old
       // shape still matches.
-      await expect(session.spawnOutcome()).rejects.toThrow(
-        "master bootstrap exited with code 1 (unit crs-session-1)",
-      );
+      await expect(session.spawnOutcome()).rejects.toThrow(`unit ${unit.replace(/\.scope$/, "")}`);
     });
 
     it("falls back to the plain message unchanged when the scope name isn't actually occupied", async () => {
-      // showReplies has no "crs-session-1.scope" entry — the shared mock's
-      // default (systemd's own real fallback for a unit that never
-      // existed: ActiveState "inactive") — so describeScope() resolves
-      // null and the non-zero exit must be some other, non-collision
-      // cause.
+      // showReplies has no entry for this instance's own namespaced unit —
+      // the shared mock's default (systemd's own real fallback for a unit
+      // that never existed: ActiveState "inactive") — so describeScope()
+      // resolves null and the non-zero exit must be some other,
+      // non-collision cause.
       vi.mocked(spawnChildProcess).mockImplementationOnce((file: string) => {
         const ee = new EventEmitter();
         expect(file).toBe("systemd-run");
@@ -506,7 +510,7 @@ describe("PtyManager", () => {
       });
 
       await expect(session.spawnOutcome()).rejects.toThrow(
-        "master bootstrap exited with code 1 (unit crs-session-1)",
+        `master bootstrap exited with code 1 (unit crs-session-${deriveInstanceId(sessionsDir)}-1)`,
       );
     });
   });
@@ -7402,6 +7406,7 @@ describe("Session state file persistence (issue #323)", () => {
       hookSocketPath: path.join(sessionsDir, "hooks.sock"),
       controlSocketPath: path.join(sessionsDir, "mullion.sock"),
       sessionsDir,
+      instanceId: deriveInstanceId(sessionsDir),
     });
   }
 
@@ -8125,6 +8130,7 @@ describe("Session.hookEmits (issue #351)", () => {
       hookSocketPath: path.join(sessionsDir, "hooks.sock"),
       controlSocketPath: path.join(sessionsDir, "mullion.sock"),
       sessionsDir,
+      instanceId: deriveInstanceId(sessionsDir),
     });
   }
 

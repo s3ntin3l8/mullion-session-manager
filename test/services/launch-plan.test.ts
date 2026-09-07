@@ -61,7 +61,7 @@ vi.mock("../../src/services/hook-adapters/index.js", () => ({
 }));
 
 const { buildLaunchPlan } = await import("../../src/services/launch-plan.js");
-const { scopeUnitName } = await import("../../src/services/session-process.js");
+const { scopeUnitName, deriveInstanceId } = await import("../../src/services/session-process.js");
 const { SERVER_ENV_KEYS } = await import("../../src/services/session-env.js");
 
 const tmpDirs: string[] = [];
@@ -636,9 +636,18 @@ describe("buildLaunchPlan — shell/unitName/argv shape", () => {
     expect(buildLaunchPlan(baseSession()).shell).toBe("/bin/bash");
   });
 
-  it("unitName matches scopeUnitName(session.id)", () => {
-    const plan = buildLaunchPlan(baseSession({ id: "123" }));
-    expect(plan.unitName).toBe(scopeUnitName("123"));
+  it("unitName matches scopeUnitName(instanceId, session.id), instanceId derived from session.sessionsDir", () => {
+    const session = baseSession({ id: "123" });
+    const plan = buildLaunchPlan(session);
+    expect(plan.unitName).toBe(scopeUnitName(deriveInstanceId(session.sessionsDir), "123"));
+  });
+
+  // Issue #1140 — two sessions with the same id but different sessionsDir
+  // (i.e. different Mullion instances) must never collide on a unit name.
+  it("differs for the same id across two different sessionsDir values", () => {
+    const planA = buildLaunchPlan(baseSession({ id: "1", sessionsDir: "/tmp/sessions-a" }));
+    const planB = buildLaunchPlan(baseSession({ id: "1", sessionsDir: "/tmp/sessions-b" }));
+    expect(planA.unitName).not.toBe(planB.unitName);
   });
 
   it("argv is the exact systemd-run/dtach invocation bootstrapMaster used to build inline", () => {

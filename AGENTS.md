@@ -65,12 +65,18 @@ context if you're running inside a Mullion-hosted session.
   this been explicitly killed?); live process state lives only in
   `PtyManager`'s in-memory map, and routes merge the two rather than trusting
   the DB column alone. Read this before touching `src/services/pty-manager.ts`
-  or the terminal WS protocol. The scope's unit name (`crs-session-<id>`,
-  `session-process.ts`'s `scopeUnitName`) is a **Unix-user-global**
-  namespace, while `sessions.id` is per-database — two Mullion backends (or
-  a test run) on one host can collide on a low id. A test must never let a
-  real `systemd-run` fire for this (mock `node:child_process`'s `spawn`, not
-  just `node-pty` — issue #1137), and a teardown must never call
+  or the terminal WS protocol. The scope's unit name
+  (`crs-session-<instanceId>-<id>`, `session-process.ts`'s `scopeUnitName`)
+  lives in a **Unix-user-global** systemd namespace, so it's namespaced by a
+  per-Mullion-instance id (`deriveInstanceId`, a hash of `sessionsDir`) to
+  keep two backends (or a test run) on one host from colliding on a low
+  `sessions.id` (issue #1140). The unit name is **not** what identifies a
+  session as this instance's own, though — ownership is always resolved by
+  the scope's dtach socket path (`listOwnedScopes`/`resolveOwningUnit`),
+  which is what lets a session created before an instance's own unit-naming
+  scheme changed keep working unchanged. A test must never let a real
+  `systemd-run` fire for this (mock `node:child_process`'s `spawn`, not just
+  `node-pty` — issue #1137), and a teardown must never call
   `terminate()`/`stopScope()` on an id it didn't itself create.
 - **`sessions.command` and `workspaces.layout` are opaque blobs.** The
   backend never parses a shell command line or a dockview layout — it just

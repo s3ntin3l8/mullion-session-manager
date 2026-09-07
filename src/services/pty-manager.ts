@@ -1053,6 +1053,15 @@ export class Session {
   // re-derived, since PtyManager already resolved it once at its own
   // construction.
   private readonly sessionsDir: string;
+  // Issue #1140 (PR 2) — PtyManager's own `deriveInstanceId(sessionsDir)`
+  // result, passed down rather than re-derived here for the same reason
+  // sessionsDir itself is: PtyManager already computed it once at its own
+  // construction, and describeScope()'s bootstrap-collision diagnostic
+  // below needs the identical value bootstrapMaster's own buildLaunchPlan()
+  // call derives (inline, from this same sessionsDir) for `plan.unitName` —
+  // two independent derivations of the same input can't disagree, but
+  // computing it twice per session would still be pure waste.
+  private readonly instanceId: string;
   // Mirrors app.config.MULLION_SSH_AUTH_SOCK, passed down from PtyManager —
   // bootstrapMaster() below puts this into the LaunchPlanSession.sshAuthSock
   // field it hands to buildLaunchPlan(), which reads it back out and injects
@@ -1532,6 +1541,7 @@ export class Session {
     hookSocketPath: string;
     controlSocketPath: string;
     sessionsDir: string;
+    instanceId: string;
     sshAuthSock?: string;
     authEnabled?: boolean;
     injectAgentGuide?: boolean;
@@ -1565,6 +1575,7 @@ export class Session {
     this.hookSocketPath = opts.hookSocketPath;
     this.controlSocketPath = opts.controlSocketPath;
     this.sessionsDir = opts.sessionsDir;
+    this.instanceId = opts.instanceId;
     this.sshAuthSock = opts.sshAuthSock ?? "";
     this.authEnabled = opts.authEnabled ?? true;
     this.injectAgentGuide = opts.injectAgentGuide ?? true;
@@ -2243,26 +2254,40 @@ export class Session {
           return;
         }
         // Issue #1137's investigation: a plain "exited with code N (unit
-        // crs-session-<id>)" gives no hint that `systemd-run --collect`
-        // rejects a scope name that already exists — the far more likely
-        // cause on a non-zero exit here than a genuine `systemd-run`/`dtach`
-        // problem, since a fresh master's OWN scope name has never existed
-        // before. describeScope() below checks whether that name is
-        // currently squatted and, if so, names the squatter in the error
-        // instead of leaving the next investigation to rediscover this by
-        // hand. Best-effort: on any probe failure/timeout it resolves
-        // `null`, and the message below falls back to today's plain text
-        // verbatim, unchanged from before this diagnostic existed.
-        describeScope(this.id).then((squatter) => {
+        // crs-session-<instanceId>-<id>)" gives no hint that `systemd-run
+        // --collect` rejects a scope name that already exists — the far
+        // more likely cause on a non-zero exit here than a genuine
+        // `systemd-run`/`dtach` problem, since a fresh master's OWN scope
+        // name has never existed before. describeScope() below checks
+        // whether that name is currently squatted and, if so, names the
+        // squatter in the error instead of leaving the next investigation
+        // to rediscover this by hand. Best-effort: on any probe
+        // failure/timeout it resolves `null`, and the message below falls
+        // back to today's plain text verbatim, unchanged from before this
+        // diagnostic existed.
+        //
+        // Issue #1140 (PR 2) — the unit name is now namespaced by this
+        // instance's own instanceId (derived from sessionsDir), so a
+        // squatter here can only be a scope THIS SAME instance already
+        // created (a stale process from before a restart, still running
+        // under a session id this fresh boot happens to reuse) — never a
+        // different Mullion instance, which the pre-PR-2 message's
+        // "another Mullion instance" wording used to allow for. NOT "a
+        // leaked test run" — a test run's own throwaway sessionsDir
+        // derives a DIFFERENT instanceId, so it could never squat on this
+        // instance's namespaced name in the first place; that was the
+        // pre-PR-2 example, made stale by this same namespacing. The prose
+        // below reflects that.
+        describeScope(this.instanceId, this.id).then((squatter) => {
           if (squatter) {
             reject(
               new Error(
                 `master bootstrap exited with code ${code} (unit ${plan.unitName}): ` +
                   `a scope named ${plan.unitName}.scope already exists and is running "${squatter}". ` +
-                  `Scope names are global per Unix user while session ids are per-database, so a ` +
-                  `leftover scope (a leaked test run, another Mullion instance) with this same id ` +
-                  `blocks this one. Run \`systemctl --user stop ${plan.unitName}.scope\` if it's not ` +
-                  `a session you still need.`,
+                  `Scope names are namespaced per Mullion instance but not per session restart, so a ` +
+                  `leftover scope from this same instance (a stale process from before a restart) ` +
+                  `with this same id blocks this one. Run ` +
+                  `\`systemctl --user stop ${plan.unitName}.scope\` if it's not a session you still need.`,
               ),
             );
             return;
@@ -4078,6 +4103,7 @@ export class PtyManager {
         hookSocketPath: this.hookSocketPath,
         controlSocketPath: this.controlSocketPath,
         sessionsDir: this.sessionsDir,
+        instanceId: this.instanceId,
         sshAuthSock: this.sshAuthSock,
         authEnabled: this.authEnabled,
         // Called now, at this session's own creation — see getInjectAgentGuide's
@@ -4419,19 +4445,30 @@ export class PtyManager {
    * stopScope() below actually ends the process, so no SessionStart hook
    * for `id` will ever fire again.
    *
-   * Hermes review, issue #1140 — stopScope() below now fails CLOSED on a
-   * degraded `--user` bus (a listing failure leaves the scope running
-   * rather than risk stopping a unit this instance never confirmed owning;
-   * see stopScope's own doc comment). kill() above only covers the
-   * in-memory (already-tracked) half of "fully end a session," so for the
-   * *never-tracked-in-this-process* case this method's own header comment
-   * describes (a restart, then an explicit delete with nothing re-attached
-   * yet), stopScope() is the ONLY thing that can actually end the program —
-   * and on a degraded bus it now silently no-ops instead. The dtach master
-   * and program keep running, caught later only by
-   * scripts/check-scope-leaks.ts. Deliberate: do not "fix" this by flipping
-   * stopScope's `fallbackOnListingFailure` back to true — that reopens the
-   * exact cross-instance kill #1140 exists to close.
+   * Issue #1140 (PR 1) — stopScope() below failed CLOSED on a degraded
+   * `--user` bus: a listing failure left the scope running rather than
+   * risk stopping a unit this instance never confirmed owning, because the
+   * only fallback name available then (`crs-session-<id>`, no instanceId)
+   * could itself name a DIFFERENT instance's live scope.
+   *
+   * Issue #1140 (PR 2) — stopScope() now falls back to the NAMESPACED name
+   * (`crs-session-<instanceId>-<id>`) on a listing failure instead of
+   * no-oping. That fallback string cannot name a unit a DIFFERENT Mullion
+   * instance minted absent an 8-hex-char `deriveInstanceId` hash collision
+   * between the two instances' `sessionsDir` values (astronomically
+   * unlikely, not structurally impossible — see that function's own doc
+   * comment) — so, unlike PR 1's bare fallback, using it practically never
+   * stops a foreign instance's scope. This is a different fallback string,
+   * not the same flag flipped back for the same reasoning; do not read
+   * this as reopening PR 1's cross-instance-kill concern — it's a change
+   * in risk CLASS (a confirmed listing vs. a near-certain-but-not-provable
+   * name), not degree. What it does NOT close:
+   * a session still running under its pre-upgrade legacy bare name whose
+   * listing fails won't match this fallback string at all, so `systemctl
+   * stop` on it no-ops and that scope leaks instead of stopping — caught
+   * later only by scripts/check-scope-leaks.ts, same accepted trade as PR
+   * 1's leak-on-listing-failure case, just narrower (legacy-named sessions
+   * only, during the upgrade window).
    */
   async terminate(id: string): Promise<void> {
     this.kill(id);
