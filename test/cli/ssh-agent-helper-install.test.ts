@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync, readFileSync, existsSync, mkdirSync, writeFileSync
 import {
   buildLaunchdPlist,
   buildSystemdUnit,
-  buildWindowsTaskXml,
+  buildWindowsRunCommand,
   launchdPlistPath,
   systemdUnitPath,
   windowsTaskXmlPath,
@@ -13,6 +13,8 @@ import {
   LAUNCHD_LABEL,
   SYSTEMD_UNIT_NAME,
   WINDOWS_TASK_NAME,
+  WINDOWS_RUN_KEY,
+  WINDOWS_HELPER_EXE_NAME,
 } from "../../src/cli/ssh-agent-helper-install.mjs";
 // Dispatched through runHelper, not called directly — matches how
 // mullion.mjs actually invokes install/uninstall, and (like pair/run)
@@ -172,59 +174,35 @@ describe("buildSystemdUnit", () => {
   });
 });
 
-describe("buildWindowsTaskXml", () => {
-  it("embeds the exact argv run needs, in order, each token quoted", () => {
-    const xml = buildWindowsTaskXml({
+describe("buildWindowsRunCommand", () => {
+  it("embeds the exact argv run needs, in order, each token quoted, execPath included", () => {
+    const command = buildWindowsRunCommand({
       execPath: "C:\\Program Files\\nodejs\\node.exe",
       scriptPath: "C:\\Program Files\\Mullion\\dist\\cli\\mullion.mjs",
       sshAuthSock: "\\\\.\\pipe\\openssh-ssh-agent",
     });
-    const argsMatch = xml.match(/<Arguments>(.*?)<\/Arguments>/);
-    expect(argsMatch).not.toBeNull();
-    expect(argsMatch![1]).toBe(
-      '"C:\\Program Files\\Mullion\\dist\\cli\\mullion.mjs" "helper" "run" "--ssh-auth-sock" "\\\\.\\pipe\\openssh-ssh-agent"',
+    expect(command).toBe(
+      '"C:\\Program Files\\nodejs\\node.exe" "C:\\Program Files\\Mullion\\dist\\cli\\mullion.mjs" "helper" "run" "--ssh-auth-sock" "\\\\.\\pipe\\openssh-ssh-agent"',
     );
-    expect(xml).toContain("<Command>C:\\Program Files\\nodejs\\node.exe</Command>");
   });
 
-  it("XML-escapes a value containing special characters", () => {
-    const xml = buildWindowsTaskXml({
-      execPath: "C:\\node.exe",
-      scriptPath: "C:\\mullion.mjs",
-      sshAuthSock: "\\\\.\\pipe\\a & b",
-    });
-    expect(xml).toContain("a &amp; b");
-    expect(xml).not.toMatch(/a & b(?!amp)/);
-  });
-
-  // Self-review (mullion-reviewer) caught that XML-escaping an embedded `"`
-  // alone isn't enough: once a real XML parser decodes `&quot;` back to a
-  // literal `"`, Windows' own CommandLineToArgvW-style tokenizer treats an
-  // unescaped `\"` mid-argument as CLOSING the quoted argument early, not as
-  // an embedded quote -- silently truncating/corrupting the value. This test
-  // simulates both decode steps a real caller (Task Scheduler -> schtasks ->
-  // the spawned process's argv) would perform, to prove round-trip fidelity
-  // rather than just "the file is well-formed XML".
-  it("a value containing a literal double-quote round-trips through both XML-decode and Windows-argv-parsing", () => {
-    const xml = buildWindowsTaskXml({
+  // Self-review (mullion-reviewer, carried over from the retired Scheduled
+  // Task generator) — an embedded `"` must round-trip through
+  // CommandLineToArgvW-style parsing (what CreateProcess does with an HKCU
+  // Run value at logon) rather than being silently truncated/corrupted.
+  // Simpler than the XML generator's own version of this test: a REG_SZ
+  // value has no XML-decode step first, so this exercises windowsArgEscape
+  // directly against the real parsing rule.
+  it("a value containing a literal double-quote round-trips through Windows-argv-parsing", () => {
+    const command = buildWindowsRunCommand({
       execPath: "C:\\node.exe",
       scriptPath: "C:\\mullion.mjs",
       sshAuthSock: '\\\\.\\pipe\\foo"bar',
     });
-    const argsMatch = xml.match(/<Arguments>(.*?)<\/Arguments>/);
-    expect(argsMatch).not.toBeNull();
 
-    // Step 1: what a real XML parser produces from the <Arguments> text.
-    const xmlDecoded = argsMatch![1]
-      .replace(/&quot;/g, '"')
-      .replace(/&lt;/g, "<")
-      .replace(/&gt;/g, ">")
-      .replace(/&amp;/g, "&");
-
-    // Step 2: minimal CommandLineToArgvW-shaped tokenizer — splits on
-    // unquoted whitespace, treats `\"` inside a quoted run as an embedded
-    // quote (not a close), same rule windowsArgEscape's own doc comment
-    // describes.
+    // Minimal CommandLineToArgvW-shaped tokenizer — splits on unquoted
+    // whitespace, treats `\"` inside a quoted run as an embedded quote (not
+    // a close), same rule windowsArgEscape's own doc comment describes.
     function parseWindowsArgv(commandLine: string): string[] {
       const args: string[] = [];
       let current = "";
@@ -271,8 +249,9 @@ describe("buildWindowsTaskXml", () => {
       return args;
     }
 
-    const argv = parseWindowsArgv(xmlDecoded);
+    const argv = parseWindowsArgv(command);
     expect(argv).toEqual([
+      "C:\\node.exe",
       "C:\\mullion.mjs",
       "helper",
       "run",
@@ -281,64 +260,20 @@ describe("buildWindowsTaskXml", () => {
     ]);
   });
 
-  it("sets a LogonTrigger, RestartOnFailure with a calm (>=1 minute) interval, and an unlimited execution time", () => {
-    const xml = buildWindowsTaskXml({
-      execPath: "C:\\node.exe",
-      scriptPath: "C:\\mullion.mjs",
-      sshAuthSock: "\\\\.\\pipe\\openssh-ssh-agent",
-    });
-    expect(xml).toContain("<LogonTrigger>");
-    expect(xml).toMatch(/<RestartOnFailure>\s*<Interval>PT\d+M<\/Interval>/);
-    expect(xml).toContain("<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>");
-  });
-
-  it("runs with least-privilege, not elevated", () => {
-    const xml = buildWindowsTaskXml({
-      execPath: "C:\\node.exe",
-      scriptPath: "C:\\mullion.mjs",
-      sshAuthSock: "\\\\.\\pipe\\openssh-ssh-agent",
-    });
-    expect(xml).toContain("<RunLevel>LeastPrivilege</RunLevel>");
-  });
-
-  it("documents the 24h credential deadline in the task description", () => {
-    const xml = buildWindowsTaskXml({
-      execPath: "C:\\node.exe",
-      scriptPath: "C:\\mullion.mjs",
-      sshAuthSock: "\\\\.\\pipe\\openssh-ssh-agent",
-    });
-    expect(xml).toMatch(/<Description>[\s\S]*24h[\s\S]*<\/Description>/);
-  });
-
-  it("is valid, well-formed-enough XML (every opened tag closes)", () => {
-    const xml = buildWindowsTaskXml({
-      execPath: "C:\\node.exe",
-      scriptPath: "C:\\mullion.mjs",
-      sshAuthSock: "\\\\.\\pipe\\openssh-ssh-agent",
-    });
-    expect(xml.startsWith('<?xml version="1.0" encoding="UTF-16"?>')).toBe(true);
-    expect(xml.trim().endsWith("</Task>")).toBe(true);
-    for (const tag of ["Task", "Triggers", "Principals", "Settings", "Actions", "Exec"]) {
-      const opens = (xml.match(new RegExp(`<${tag}[ >]`, "g")) ?? []).length;
-      const closes = (xml.match(new RegExp(`</${tag}>`, "g")) ?? []).length;
-      expect(opens, `<${tag}> open/close mismatch`).toBe(closes);
-    }
-  });
-
   // Round 3 (PR2) — a SEA has no separate script file: `execPath` IS the
   // whole program. `scriptPath: null` (never `undefined` — see
   // runInstall's own comment) must collapse the argv, not embed a "null"
   // token or an empty quoted string.
   it("omits the script-path token entirely when scriptPath is null (SEA shape)", () => {
-    const xml = buildWindowsTaskXml({
+    const command = buildWindowsRunCommand({
       execPath: "C:\\Users\\me\\AppData\\Local\\Mullion\\mullion-helper.exe",
       scriptPath: null,
       sshAuthSock: "\\\\.\\pipe\\openssh-ssh-agent",
     });
-    const argsMatch = xml.match(/<Arguments>(.*?)<\/Arguments>/);
-    expect(argsMatch).not.toBeNull();
-    expect(argsMatch![1]).toBe('"helper" "run" "--ssh-auth-sock" "\\\\.\\pipe\\openssh-ssh-agent"');
-    expect(xml).not.toContain("null");
+    expect(command).toBe(
+      '"C:\\Users\\me\\AppData\\Local\\Mullion\\mullion-helper.exe" "helper" "run" "--ssh-auth-sock" "\\\\.\\pipe\\openssh-ssh-agent"',
+    );
+    expect(command).not.toContain("null");
   });
 });
 
@@ -387,9 +322,9 @@ describe("windowsTaskXmlPath", () => {
 
 // ---------------------------------------------------------------------------
 // runInstall / runUninstall — orchestration. Real fs writes to a throwaway
-// temp dir; launchctl/systemctl themselves are stubbed via io.spawnSync so
-// this suite runs the same on any CI platform without a real launchd or
-// systemd.
+// temp dir; launchctl/systemctl/reg/schtasks/taskkill themselves are
+// stubbed via io.spawnSync so this suite runs the same on any CI platform
+// without a real launchd, systemd, or Windows registry.
 // ---------------------------------------------------------------------------
 
 describe("runInstall / runUninstall", () => {
@@ -408,13 +343,76 @@ describe("runInstall / runUninstall", () => {
       stderr: { write: () => true },
       execPath: "/usr/bin/node",
       scriptPath: "/opt/mullion/dist/cli/mullion.mjs",
+      // killOtherHelperProcesses (ssh-agent-helper-install.mjs) filters
+      // taskkill's /IM match to exclude this PID — a fixed stub value, not
+      // the real test-runner's process.pid, so assertions on the exact
+      // taskkill argv are deterministic across runs.
+      pid: 4242,
       spawnSync: (cmd: string, args: string[]) => {
         calls.push([cmd, ...args]);
         return { status: 0, stdout: "", stderr: "" };
       },
+      // Round 4 (issue #871) — installWindows spawns the helper detached
+      // rather than relying on a Scheduled Task's own `/Run`. Stubbed the
+      // same way spawnSync is: without this, a win32 test with no override
+      // would fall through to the REAL node:child_process.spawn and launch
+      // an actual (if harmless, detached, unref'd) process against
+      // whatever `execPath` happens to be — never acceptable in a unit
+      // test, and exactly the kind of environment-dependent flake this
+      // seam convention exists to avoid.
+      //
+      // A minimal fake EventEmitter, not a plain object: spawnDetachedHelper
+      // (ssh-agent-helper-install.mjs) awaits a real 'spawn' or 'error'
+      // event — a stub with no `.once()` would throw the moment that code
+      // runs. Fires 'spawn' on a microtask by default (a real spawn's
+      // success signal is always asynchronous); override `io.spawn` per
+      // test to fire 'error' instead for the failure-path tests.
+      spawn: (cmd: string, args: string[]) => fakeChildProcess(calls, cmd, args, { fails: false }),
       ...overrides,
     };
     return { io, calls, dir };
+  }
+
+  // win32-only helper: installWindows/uninstallWindows issue several
+  // `reg`/`schtasks`/`taskkill` calls per run (legacy cleanup plus the
+  // real mechanism) — tests care about one specific one, not the exact
+  // sequence, so find it by argv[0]/argv[1] rather than asserting the
+  // whole `calls` array in order.
+  function findCall(calls: string[][], cmd: string, subcommand?: string) {
+    return calls.find((c) => c[0] === cmd && (subcommand === undefined || c[1] === subcommand));
+  }
+
+  // A minimal fake `child_process.ChildProcess` — just enough of the
+  // `EventEmitter` surface spawnDetachedHelper (ssh-agent-helper-install.mjs)
+  // actually calls (`.once()`, and `.unref()` once "spawned"). Fires its
+  // event on a microtask, not synchronously, to match how a real 'spawn'/
+  // 'error' event is always asynchronous — a synchronous stub would hide a
+  // bug where the production code assumed synchronous delivery.
+  function fakeChildProcess(
+    calls: string[][],
+    cmd: string,
+    args: string[],
+    opts: { fails: boolean; errorMessage?: string },
+  ) {
+    calls.push(["SPAWN", cmd, ...args]);
+    const listeners: Record<string, Array<(...a: unknown[]) => void>> = { spawn: [], error: [] };
+    queueMicrotask(() => {
+      const event = opts.fails ? "error" : "spawn";
+      const arg = opts.fails ? new Error(opts.errorMessage ?? "spawn failed") : undefined;
+      for (const cb of listeners[event]) cb(arg);
+    });
+    return {
+      once: (event: string, cb: (...a: unknown[]) => void) => {
+        listeners[event]?.push(cb);
+      },
+      removeListener: (event: string, cb: (...a: unknown[]) => void) => {
+        const list = listeners[event];
+        if (!list) return;
+        const i = list.indexOf(cb);
+        if (i !== -1) list.splice(i, 1);
+      },
+      unref: () => {},
+    };
   }
 
   // Same fixture shape as "does not warn when a valid credential is already
@@ -450,7 +448,7 @@ describe("runInstall / runUninstall", () => {
   // empirically-confirmed default (issue #874) neither macOS nor Linux has
   // an equivalent for.
   it("win32: installs with no --ssh-auth-sock or ambient SSH_AUTH_SOCK, defaulting to the named pipe", async () => {
-    const { io, dir: d } = baseIo({ platform: "win32" });
+    const { io, calls, dir: d } = baseIo({ platform: "win32" });
     (io as { homedir?: string }).homedir = path.join(d, "home");
     // Real MULLION_HELPER_STATE_DIR from baseIo's own defaults, SSH_AUTH_SOCK
     // deliberately dropped — the same "no flag, no ambient env" case as the
@@ -458,8 +456,9 @@ describe("runInstall / runUninstall", () => {
     io.env = { MULLION_HELPER_STATE_DIR: io.env.MULLION_HELPER_STATE_DIR };
     const code = await runInstall([], io);
     expect(code).toBe(0);
-    const contents = readFileSync(windowsTaskXmlPath(io), "utf16le").replace(/^\uFEFF/, "");
-    expect(contents).toContain("\\\\.\\pipe\\openssh-ssh-agent");
+    const regAdd = findCall(calls, "reg", "add");
+    expect(regAdd).toBeDefined();
+    expect(regAdd![regAdd!.indexOf("/d") + 1]).toContain("\\\\.\\pipe\\openssh-ssh-agent");
   });
 
   it("--ssh-auth-sock overrides the ambient env var", async () => {
@@ -585,17 +584,28 @@ describe("runInstall / runUninstall", () => {
     expect(existsSync(plistPath)).toBe(true);
   });
 
-  it("win32: writes a Scheduled Task XML, creates it with /F, and starts it immediately", async () => {
+  it("win32: writes an HKCU Run value with the exact command and starts the helper immediately", async () => {
     const { io, calls, dir: d } = baseIo({ platform: "win32" });
     (io as { homedir?: string }).homedir = path.join(d, "home");
     const code = await runInstall([], io);
     expect(code).toBe(0);
-    const xmlPath = windowsTaskXmlPath(io);
-    expect(existsSync(xmlPath)).toBe(true);
-    expect(calls.map((c) => c.join(" "))).toEqual([
-      `schtasks /Create /TN ${WINDOWS_TASK_NAME} /XML ${xmlPath} /F`,
-      `schtasks /Run /TN ${WINDOWS_TASK_NAME}`,
-    ]);
+    const regAdd = findCall(calls, "reg", "add");
+    expect(regAdd).toBeDefined();
+    expect(regAdd).toEqual(
+      expect.arrayContaining([
+        "reg",
+        "add",
+        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+        "/v",
+        WINDOWS_TASK_NAME,
+        "/t",
+        "REG_SZ",
+        "/f",
+      ]),
+    );
+    const spawnCall = findCall(calls, "SPAWN");
+    expect(spawnCall).toBeDefined();
+    expect(spawnCall![1]).toBe(io.execPath);
   });
 
   // Round 3 (PR2) — under a Node SEA, `execPath` IS the whole program: no
@@ -606,24 +616,33 @@ describe("runInstall / runUninstall", () => {
   // into the XML, this assertion on "no mullion.mjs anywhere" would catch
   // it).
   it("win32 SEA: omits the script path and never falls back to defaultScriptPath()", async () => {
-    const { io, dir: d } = baseIo({ platform: "win32" });
+    const { io, calls, dir: d } = baseIo({ platform: "win32" });
     (io as { homedir?: string }).homedir = path.join(d, "home");
     (io as { isSea?: boolean }).isSea = true;
     delete (io as { scriptPath?: string }).scriptPath;
     io.execPath = "C:\\Users\\me\\AppData\\Local\\Mullion\\mullion-helper.exe";
     const code = await runInstall([], io);
     expect(code).toBe(0);
-    const contents = readFileSync(windowsTaskXmlPath(io), "utf16le").replace(/^\uFEFF/, "");
-    expect(contents).not.toContain("mullion.mjs");
-    expect(contents).toContain(
-      "<Command>C:\\Users\\me\\AppData\\Local\\Mullion\\mullion-helper.exe</Command>",
+    const regAdd = findCall(calls, "reg", "add");
+    expect(regAdd).toBeDefined();
+    const command = regAdd![regAdd!.indexOf("/d") + 1];
+    expect(command).not.toContain("mullion.mjs");
+    expect(command).toBe(
+      '"C:\\Users\\me\\AppData\\Local\\Mullion\\mullion-helper.exe" "helper" "run" "--ssh-auth-sock" "/tmp/agent.sock"',
     );
-    const argsMatch = contents.match(/<Arguments>(.*?)<\/Arguments>/);
-    expect(argsMatch![1]).toBe('"helper" "run" "--ssh-auth-sock" "/tmp/agent.sock"');
+    const spawnCall = findCall(calls, "SPAWN");
+    expect(spawnCall).toEqual([
+      "SPAWN",
+      io.execPath,
+      "helper",
+      "run",
+      "--ssh-auth-sock",
+      "/tmp/agent.sock",
+    ]);
   });
 
   // Round 4 (issue #820, macOS SEA support) — buildLaunchdPlist now has the
-  // same scriptPath-optional handling buildWindowsTaskXml already had.
+  // same scriptPath-optional handling buildWindowsRunCommand already has.
   // Adapted from the win32 SEA test above: `execPath` IS the whole program
   // under a SEA, no sibling `mullion.mjs` to point a scriptPath at.
   it("darwin SEA: omits the script path and never falls back to defaultScriptPath()", async () => {
@@ -651,7 +670,7 @@ describe("runInstall / runUninstall", () => {
   // Self-review — found by actually building and running a Linux SEA smoke
   // binary: `isSea` on any platform OTHER than win32 used to fall through
   // to `scriptPath: null`, which `buildLaunchdPlist`/`buildSystemdUnit`
-  // (unlike buildWindowsTaskXml) had no null-handling for at all —
+  // (unlike buildWindowsRunCommand) had no null-handling for at all —
   // `systemdQuote(null)` threw "Cannot read properties of null" rather
   // than a clear error. Round 4 fixed buildLaunchdPlist and lifted the
   // refusal for darwin (test above); buildSystemdUnit still has no
@@ -670,99 +689,114 @@ describe("runInstall / runUninstall", () => {
     expect(stderrLines.join("")).toMatch(/not supported on 'linux'/);
   });
 
-  // Hermes review, PR #879 — /Create only registers the task; its
-  // LogonTrigger won't fire until the next interactive logon, unlike
-  // launchd bootstrap / systemd enable --now, which both start their job
-  // immediately. A failed /Run must not undo the successful registration.
-  it("win32: a failed /Run degrades to a warning — the task stays installed", async () => {
-    const { io, dir: d } = baseIo({ platform: "win32" });
+  // Hermes review, PR #879, on the mechanism this replaces (`schtasks
+  // /Run`) — the invariant carries over: registering the autostart entry
+  // must not by itself mean "running now". A failed immediate start must
+  // not undo the successful registration.
+  it("win32: a failed spawn degrades to a warning — the Run value is still registered", async () => {
+    const { io, calls, dir: d } = baseIo({ platform: "win32" });
     (io as { homedir?: string }).homedir = path.join(d, "home");
-    io.spawnSync = (cmd: string, args: string[]) => {
-      if (args.includes("/Run")) return { status: 1, stdout: "", stderr: "ERROR: cannot run now" };
-      return { status: 0, stdout: "", stderr: "" };
+    io.spawn = () => {
+      throw new Error("EPERM: spawn C:\\...\\mullion-helper.exe");
     };
     const stderrLines: string[] = [];
     io.stderr = { write: (s: string) => stderrLines.push(s) };
     const code = await runInstall([], io);
     expect(code).toBe(0);
-    expect(existsSync(windowsTaskXmlPath(io))).toBe(true);
+    expect(findCall(calls, "reg", "add")).toBeDefined();
     expect(stderrLines.join("")).toMatch(/could not start it immediately/);
   });
 
-  // Self-review (mullion-reviewer) — Task Scheduler XML declares
-  // encoding="UTF-16", and XML 1.0 requires a UTF-16 entity to begin with a
-  // byte-order mark. Node's own "utf16le" fs encoding never emits one, so
-  // this has to be added explicitly; without it, the file is non-conforming
-  // for the encoding it declares itself as.
-  it("win32: the written XML starts with a UTF-16LE byte-order mark (FF FE)", async () => {
-    const { io, dir: d } = baseIo({ platform: "win32" });
-    (io as { homedir?: string }).homedir = path.join(d, "home");
-    const code = await runInstall([], io);
-    expect(code).toBe(0);
-    const xmlPath = windowsTaskXmlPath(io);
-    const bytes = readFileSync(xmlPath);
-    expect(bytes[0]).toBe(0xff);
-    expect(bytes[1]).toBe(0xfe);
-  });
-
-  // Self-review (mullion-reviewer) — schtasks /Create /F either replaces the
-  // previously-registered task atomically or leaves it untouched; either way
-  // that OLD task survives a failed /Create. Deleting the XML on failure
-  // (correct for a first-ever install, where there's nothing to restore)
-  // would make uninstallWindows's own "check the file first" gate silently
-  // report "nothing installed" forever, orphaning a task that's still
-  // actually running with no way for this tool to find it again.
-  it("win32: a failed re-install restores the previous XML instead of deleting it", async () => {
-    const { io, dir: d } = baseIo({ platform: "win32" });
-    (io as { homedir?: string }).homedir = path.join(d, "home");
-    const first = await runInstall(["--ssh-auth-sock", "\\\\.\\pipe\\first"], io);
-    expect(first).toBe(0);
-    const xmlPath = windowsTaskXmlPath(io);
-    const previousContent = readFileSync(xmlPath);
-    expect(previousContent.toString("utf16le")).toContain("first");
-
-    io.spawnSync = (cmd: string, args: string[]) => {
-      if (args.includes("/Create"))
-        return { status: 1, stdout: "", stderr: "ERROR: Access is denied." };
-      return { status: 0, stdout: "", stderr: "" };
-    };
-    const second = await runInstall(["--ssh-auth-sock", "\\\\.\\pipe\\second"], io);
-    expect(second).toBe(1);
-
-    // Restored, not deleted, and restored to the exact previous bytes —
-    // not just "some file exists".
-    expect(existsSync(xmlPath)).toBe(true);
-    expect(readFileSync(xmlPath)).toEqual(previousContent);
-
-    // The still-registered old task must remain reachable by uninstall.
-    io.spawnSync = () => {
-      return { status: 0, stdout: "", stderr: "" };
-    };
-    const uninstallCode = await runUninstall([], io);
-    expect(uninstallCode).toBe(0);
-    expect(existsSync(xmlPath)).toBe(false);
-  });
-
-  it("win32: re-install overwrites the previous task via /F, no separate teardown call", async () => {
+  // Round 4 (issue #871, mullion-reviewer round) — the REAL shape a spawn
+  // failure takes (an AV/EDR product locking the just-written exe, a
+  // transient ENOENT/EACCES): asynchronous, via an 'error' event on the
+  // returned ChildProcess, never a synchronous throw from spawn() itself
+  // (the test above covers that separate, less realistic case). Before
+  // spawnDetachedHelper awaited this event, nothing observed it at all —
+  // the install reported success while the helper silently never started.
+  it("win32: an async spawn 'error' event (the realistic failure shape) also degrades to a warning, not silent success", async () => {
     const { io, calls, dir: d } = baseIo({ platform: "win32" });
     (io as { homedir?: string }).homedir = path.join(d, "home");
-    await runInstall([], io);
-    calls.length = 0;
+    io.spawn = (cmd: string, args: string[]) =>
+      fakeChildProcess(calls, cmd, args, {
+        fails: true,
+        errorMessage: "EACCES: permission denied",
+      });
+    const stderrLines: string[] = [];
+    io.stderr = { write: (s: string) => stderrLines.push(s) };
     const code = await runInstall([], io);
     expect(code).toBe(0);
-    // Unlike launchd/systemd, schtasks /Create /F is unconditionally
-    // idempotent — no pre-teardown call, no "was preTeardown ambiguous"
-    // rollback judgment needed. Two calls total: /Create, then /Run.
-    expect(calls.length).toBe(2);
-    expect(calls[0]).toContain("/F");
-    expect(calls[1]).toContain("/Run");
+    expect(findCall(calls, "reg", "add")).toBeDefined();
+    expect(stderrLines.join("")).toMatch(
+      /could not start it immediately \(EACCES: permission denied\)/,
+    );
   });
 
-  it("win32: surfaces a non-zero schtasks /Create exit as a failure and rolls back the XML", async () => {
+  // Round 4 (issue #871, mullion-reviewer round) — re-running `helper
+  // install` (a --ssh-auth-sock change, most plausibly) must not leave a
+  // process from the PRIOR install still running, bound to the old value,
+  // racing the new one on the same credential file. `reg add` alone only
+  // ever replaces the registry entry, never the already-running process.
+  it("win32: re-install kills a previously-running helper process before starting the new one", async () => {
+    const { io, calls, dir: d } = baseIo({ platform: "win32" });
+    (io as { homedir?: string }).homedir = path.join(d, "home");
+    await runInstall(["--ssh-auth-sock", "\\\\.\\pipe\\first"], io);
+    calls.length = 0;
+
+    const code = await runInstall(["--ssh-auth-sock", "\\\\.\\pipe\\second"], io);
+    expect(code).toBe(0);
+    const taskkillIndex = calls.findIndex((c) => c[0] === "taskkill");
+    const regAddIndex = calls.findIndex((c) => c[0] === "reg" && c[1] === "add");
+    const spawnIndex = calls.findIndex((c) => c[0] === "SPAWN");
+    expect(findCall(calls, "taskkill")).toEqual([
+      "taskkill",
+      "/F",
+      "/FI",
+      "PID ne 4242",
+      "/IM",
+      WINDOWS_HELPER_EXE_NAME,
+    ]);
+    // Kill-old happens after the new registration succeeds (so a failed
+    // re-registration never leaves the old, working process killed with
+    // nothing in its place) and before the new process starts.
+    expect(taskkillIndex).toBeGreaterThan(regAddIndex);
+    expect(taskkillIndex).toBeLessThan(spawnIndex);
+  });
+
+  // Round 4 (issue #871) — installWindows best-effort tears down a
+  // pre-round-4 Scheduled Task on EVERY install, not just the first, so a
+  // laptop that once ran an older Mullion Helper version never ends up
+  // with both mechanisms launching `helper run`.
+  it("win32: each install best-effort cleans up a legacy Scheduled Task before registering the Run value", async () => {
+    const { io, calls, dir: d } = baseIo({ platform: "win32" });
+    (io as { homedir?: string }).homedir = path.join(d, "home");
+    const code = await runInstall([], io);
+    expect(code).toBe(0);
+    expect(findCall(calls, "schtasks", "/End")).toEqual([
+      "schtasks",
+      "/End",
+      "/TN",
+      WINDOWS_TASK_NAME,
+    ]);
+    expect(findCall(calls, "schtasks", "/Delete")).toEqual([
+      "schtasks",
+      "/Delete",
+      "/TN",
+      WINDOWS_TASK_NAME,
+      "/F",
+    ]);
+    const regAddIndex = calls.findIndex((c) => c[0] === "reg" && c[1] === "add");
+    const scheduledTaskDeleteIndex = calls.findIndex(
+      (c) => c[0] === "schtasks" && c[1] === "/Delete",
+    );
+    expect(scheduledTaskDeleteIndex).toBeLessThan(regAddIndex);
+  });
+
+  it("win32: surfaces a non-zero reg add exit as a failure", async () => {
     const { io, dir: d } = baseIo({ platform: "win32" });
     (io as { homedir?: string }).homedir = path.join(d, "home");
     io.spawnSync = (cmd: string, args: string[]) => {
-      if (args.includes("/Create"))
+      if (cmd === "reg" && args[0] === "add")
         return { status: 1, stdout: "", stderr: "ERROR: Access is denied." };
       return { status: 0, stdout: "", stderr: "" };
     };
@@ -770,9 +804,7 @@ describe("runInstall / runUninstall", () => {
     io.stderr = { write: (s: string) => stderrLines.push(s) };
     const code = await runInstall([], io);
     expect(code).toBe(1);
-    expect(stderrLines.join("")).toMatch(/schtasks \/Create failed/);
-    const xmlPath = windowsTaskXmlPath(io);
-    expect(existsSync(xmlPath)).toBe(false);
+    expect(stderrLines.join("")).toMatch(/reg add failed/);
   });
 
   it("win32: does not warn about a missing --ssh-auth-sock path — named pipes aren't statSync-able files", async () => {
@@ -894,27 +926,82 @@ describe("runInstall / runUninstall", () => {
     expect(existsSync(credFile)).toBe(false);
   });
 
-  it("win32: uninstall removes the task XML and deletes it via schtasks; a no-op is not an error", async () => {
+  it("win32: uninstall removes the Run value and kills the running process; a no-op is not an error", async () => {
     const { io, calls, dir: d } = baseIo({ platform: "win32" });
     (io as { homedir?: string }).homedir = path.join(d, "home");
     const credFile = writeCredential(io);
     await runInstall([], io);
-    const xmlPath = windowsTaskXmlPath(io);
-    expect(existsSync(xmlPath)).toBe(true);
 
     calls.length = 0;
     const code = await runUninstall([], io);
     expect(code).toBe(0);
-    expect(existsSync(xmlPath)).toBe(false);
     expect(existsSync(credFile)).toBe(false);
-    expect(calls.map((c) => c.join(" "))).toEqual([
-      `schtasks /End /TN ${WINDOWS_TASK_NAME}`,
-      `schtasks /Delete /TN ${WINDOWS_TASK_NAME} /F`,
+    expect(findCall(calls, "reg", "query")).toBeDefined();
+    expect(findCall(calls, "taskkill")).toEqual([
+      "taskkill",
+      "/F",
+      "/FI",
+      "PID ne 4242",
+      "/IM",
+      WINDOWS_HELPER_EXE_NAME,
+    ]);
+    expect(findCall(calls, "reg", "delete")).toEqual([
+      "reg",
+      "delete",
+      WINDOWS_RUN_KEY,
+      "/v",
+      WINDOWS_TASK_NAME,
+      "/f",
     ]);
 
     // Uninstalling again (nothing installed) must not throw or fail.
     const second = await runUninstall([], io);
     expect(second).toBe(0);
+  });
+
+  // Round 4 (issue #871) — the "nothing installed" gate now checks the
+  // Run key via `reg query`, not a file's existence, since installWindows
+  // no longer writes one. A query returning non-zero (no such value) with
+  // no legacy XML present either must report "nothing installed" and skip
+  // straight past taskkill/reg delete, not just happen to also return 0.
+  it("win32: uninstall reports nothing installed when the Run value was never registered", async () => {
+    const { io, calls, dir: d } = baseIo({ platform: "win32" });
+    (io as { homedir?: string }).homedir = path.join(d, "home");
+    io.spawnSync = (cmd: string, args: string[]) => {
+      if (cmd === "reg" && args[0] === "query") return { status: 1, stdout: "", stderr: "" };
+      return { status: 0, stdout: "", stderr: "" };
+    };
+    const stdoutLines: string[] = [];
+    io.stdout = { write: (s: string) => stdoutLines.push(s) };
+    const code = await runUninstall([], io);
+    expect(code).toBe(0);
+    expect(stdoutLines.join("")).toMatch(/nothing installed/);
+    expect(findCall(calls, "reg", "delete")).toBeUndefined();
+    expect(findCall(calls, "taskkill")).toBeUndefined();
+  });
+
+  // Round 4 (issue #871, mullion-reviewer round) — a laptop whose ONLY
+  // artifact is a leftover pre-round-4 Scheduled Task/XML (no Run value
+  // ever registered under this mechanism) must not claim a registry value
+  // was "removed" — none ever existed for this install. This used to print
+  // unconditionally regardless of `hadRunValue`.
+  it("win32: uninstall with only a legacy XML present does not claim a Run value was removed", async () => {
+    const { io, dir: d } = baseIo({ platform: "win32" });
+    (io as { homedir?: string }).homedir = path.join(d, "home");
+    io.spawnSync = (cmd: string, args: string[]) => {
+      if (cmd === "reg" && args[0] === "query") return { status: 1, stdout: "", stderr: "" };
+      return { status: 0, stdout: "", stderr: "" };
+    };
+    const xmlPath = windowsTaskXmlPath(io);
+    mkdirSync(path.dirname(xmlPath), { recursive: true });
+    writeFileSync(xmlPath, "legacy task xml");
+
+    const stdoutLines: string[] = [];
+    io.stdout = { write: (s: string) => stdoutLines.push(s) };
+    const code = await runUninstall([], io);
+    expect(code).toBe(0);
+    expect(existsSync(xmlPath)).toBe(false);
+    expect(stdoutLines.join("")).not.toMatch(/removed .*MullionHelper/);
   });
 
   // Issue #904 — installWindows/runInstall never triggers this path (it
@@ -967,16 +1054,16 @@ describe("runInstall / runUninstall", () => {
   // just-renamed JSON file is ordinary) must be best-effort, like
   // saveCredential's own cleanup — reported to stderr, not thrown. An
   // uncaught throw here would turn an already-successful supervisor
-  // teardown (the task really is gone, already reported below) into a hard
-  // crash for a problem that isn't the teardown's fault. A directory where
-  // the credential file should be is a real, portable, deterministic way to
-  // force fs.rmSync to fail (EISDIR) without relying on OS permission
-  // semantics that can behave differently across CI runners.
-  it("win32: a failed credential delete is reported, not thrown — the successful task teardown still counts", async () => {
+  // teardown (the autostart entry really is gone, already reported below)
+  // into a hard crash for a problem that isn't the teardown's fault. A
+  // directory where the credential file should be is a real, portable,
+  // deterministic way to force fs.rmSync to fail (EISDIR) without relying
+  // on OS permission semantics that can behave differently across CI
+  // runners.
+  it("win32: a failed credential delete is reported, not thrown — the successful autostart teardown still counts", async () => {
     const { io, dir: d } = baseIo({ platform: "win32" });
     (io as { homedir?: string }).homedir = path.join(d, "home");
     await runInstall([], io);
-    const xmlPath = windowsTaskXmlPath(io);
     mkdirSync(credentialPath(io), { recursive: true });
 
     const stdoutLines: string[] = [];
@@ -985,9 +1072,8 @@ describe("runInstall / runUninstall", () => {
     io.stderr = { write: (s: string) => stderrLines.push(s) };
     const code = await runUninstall([], io);
     expect(code).toBe(0);
-    // The task teardown itself still succeeded and is still reported...
-    expect(existsSync(xmlPath)).toBe(false);
-    expect(stdoutLines.join("")).toMatch(/removed .*mullion-helper-task\.xml/);
+    // The autostart teardown itself still succeeded and is still reported...
+    expect(stdoutLines.join("")).toMatch(new RegExp(`removed .*${WINDOWS_TASK_NAME}`));
     // ...but the credential delete failure is reported as a warning, not a
     // "removed" claim, and definitely not an uncaught throw.
     expect(stderrLines.join("")).toMatch(/could not remove pairing credential/);
@@ -1017,31 +1103,32 @@ describe("runInstall / runUninstall", () => {
     expect(stdoutLines.join("")).not.toMatch(/removed/);
   });
 
-  it("win32: a failed schtasks /End (task wasn't running) does not block uninstall — /Delete still runs and succeeds", async () => {
+  it("win32: a failed taskkill (nothing running) does not block uninstall", async () => {
     const { io, dir: d } = baseIo({ platform: "win32" });
     (io as { homedir?: string }).homedir = path.join(d, "home");
     await runInstall([], io);
-    const xmlPath = windowsTaskXmlPath(io);
 
-    io.spawnSync = (cmd: string, args: string[]) => {
-      if (args.includes("/End"))
-        return { status: 1, stdout: "", stderr: "ERROR: The task is not currently running." };
+    io.spawnSync = (cmd: string) => {
+      if (cmd === "taskkill")
+        return {
+          status: 1,
+          stdout: "",
+          stderr: 'ERROR: The process "mullion-helper.exe" not found.',
+        };
       return { status: 0, stdout: "", stderr: "" };
     };
     const code = await runUninstall([], io);
     expect(code).toBe(0);
-    expect(existsSync(xmlPath)).toBe(false);
   });
 
-  it("win32: a failed schtasks /Delete is surfaced, not swallowed — the task XML is left in place", async () => {
+  it("win32: a failed reg delete is surfaced, not swallowed", async () => {
     const { io, dir: d } = baseIo({ platform: "win32" });
     (io as { homedir?: string }).homedir = path.join(d, "home");
     const credFile = writeCredential(io);
     await runInstall([], io);
-    const xmlPath = windowsTaskXmlPath(io);
 
     io.spawnSync = (cmd: string, args: string[]) => {
-      if (args.includes("/Delete"))
+      if (cmd === "reg" && args[0] === "delete")
         return { status: 1, stdout: "", stderr: "ERROR: Access is denied." };
       return { status: 0, stdout: "", stderr: "" };
     };
@@ -1049,13 +1136,11 @@ describe("runInstall / runUninstall", () => {
     io.stderr = { write: (s: string) => stderrLines.push(s) };
     const code = await runUninstall([], io);
     expect(code).toBe(1);
-    expect(stderrLines.join("")).toMatch(/schtasks \/Delete failed/);
-    expect(existsSync(xmlPath)).toBe(true);
+    expect(stderrLines.join("")).toMatch(/reg delete failed/);
     // Issue #904 — a failed teardown must NOT delete the credential either:
     // a still-running, still-supervised `run` needs it to reconnect.
     expect(existsSync(credFile)).toBe(true);
   });
-
   it("linux: a failed systemctl disable is surfaced, not swallowed — the unit file is left in place", async () => {
     const { io, dir: d } = baseIo({ platform: "linux" });
     (io as { homedir?: string }).homedir = path.join(d, "home");

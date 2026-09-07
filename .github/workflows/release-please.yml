@@ -102,16 +102,27 @@ jobs:
           gh release upload "${{ needs.release-please.outputs.tag_name }}" \
             "mullion-${version}.tgz" "mullion-${version}.tgz.sha256"
 
-  # Round 3 (PR2/PR3, Windows SEA) — builds and attaches `mullion-helper.exe`
-  # (scripts/build-helper-sea.mjs) the same way build-tarball above attaches
-  # the server tarball: a real multi-step job (no reusable upstream
-  # workflow for this either), gated on the same release_created output,
-  # checksummed the same way. `windows-latest`, not cross-compiled from
-  # ubuntu-latest — postject injects into a COPY of process.execPath, so the
-  # blob and the host node.exe must come from the same real Windows Node
-  # install for the result to actually be a valid PE the OS will run; cross-
-  # generating a Windows SEA from Linux isn't an officially supported Node
-  # SEA path.
+  # Round 3 (PR2/PR3, Windows SEA) — builds `mullion-helper.exe`
+  # (scripts/build-helper-sea.mjs), smoke-tests it, then wraps it in the
+  # installer built and uploaded below. `windows-latest`, not cross-compiled
+  # from ubuntu-latest — postject injects into a COPY of process.execPath,
+  # so the blob and the host node.exe must come from the same real Windows
+  # Node install for the result to actually be a valid PE the OS will run;
+  # cross-generating a Windows SEA from Linux isn't an officially supported
+  # Node SEA path.
+  #
+  # Round 4 (issue #871's own Windows installer UX cleanup) — this job used
+  # to ALSO checksum and upload the bare `mullion-helper.exe` as its own
+  # release asset, alongside the installer built below. Retired: the
+  # installer already covers every case the bare exe existed for
+  # (PrivilegesRequired=lowest, no admin prompt; `/VERYSILENT
+  # /SUPPRESSMSGBOXES` for scripted/enterprise installs), and two ~100MB-ish
+  # Windows downloads on one release page — "is this the app, or the
+  # installer for the app?" — was confusing at exactly the moment a user is
+  # least equipped to choose. macOS never had this asymmetry: `build-pkg`
+  # below has only ever uploaded the `.pkg`. The exe itself still gets
+  # built and smoke-tested here — the installer's own [Files] section
+  # consumes it a few steps down — only the separate upload went away.
   build-helper-exe:
     needs: release-please
     if: ${{ needs.release-please.outputs.release_created == 'true' }}
@@ -146,36 +157,18 @@ jobs:
           # having already validated it as the EXPECTED value (2, for an
           # unrecognized verb) — without this, the exe's own designed exit
           # code would re-surface as a spurious failure of THIS step, which
-          # would skip the upload step entirely and ship a release with no
-          # mullion-helper.exe attached.
+          # would skip the installer-build step below entirely and ship a
+          # release with no Windows installer attached.
           exit 0
 
-      - name: Rename, checksum, and upload to the GitHub Release
-        shell: pwsh
-        run: |
-          $version = $env:VERSION -replace '^v', ''
-          $exeName = "mullion-helper-$version.exe"
-          Copy-Item "build\helper-sea\mullion-helper.exe" $exeName
-
-          # sha256sum's own output format ("<lowercase-hex>  <filename>"),
-          # not PowerShell's default Get-FileHash table — self-update.sh and
-          # deploy/install.sh both expect a `sha256sum -c`-compatible file
-          # for the tarball's own checksum (see build-tarball above); this
-          # asset's checksum matches that same convention so anyone
-          # verifying it can use the same one-liner regardless of which
-          # release asset they downloaded.
-          $hash = (Get-FileHash $exeName -Algorithm SHA256).Hash.ToLower()
-          "$hash  $exeName" | Out-File -Encoding ascii -NoNewline "$exeName.sha256"
-
-          gh release upload "${{ needs.release-please.outputs.tag_name }}" $exeName "$exeName.sha256"
-
       # Round 3 (PR3) — the installer (deploy/windows/mullion-helper.iss)
-      # wraps the SAME mullion-helper.exe just built and uploaded above;
-      # built as its own release asset the same way, checksummed and
-      # uploaded identically. AppVersion is passed explicitly rather than
-      # relying on the .iss's own dev-mode fallback, so the installer's
-      # own Add/Remove Programs entry and OutputBaseFilename carry the
-      # real release version.
+      # wraps the SAME mullion-helper.exe just built and smoke-tested above
+      # (its own [Files] section reads directly from build\helper-sea\,
+      # nothing uploaded in between); built as its own release asset,
+      # checksummed and uploaded the same way build-tarball above does.
+      # AppVersion is passed explicitly rather than relying on the .iss's
+      # own dev-mode fallback, so the installer's own Add/Remove Programs
+      # entry and OutputBaseFilename carry the real release version.
       - name: Build and upload the Windows installer
         shell: pwsh
         run: |

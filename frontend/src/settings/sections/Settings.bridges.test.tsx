@@ -204,13 +204,13 @@ describe("Settings -> Hosts -> SSH agent bridges (issue #820 PR7c)", () => {
     );
   });
 
-  it("pairs a new bridge via the modal and shows the generated command", async () => {
+  it("pairs a new bridge via the modal and shows the generated payload", async () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="hosts" />);
 
     await user.click(await screen.findByText("Pair a new bridge"));
 
-    expect(await screen.findByText("mullion helper pair payload-bridge-1")).toBeInTheDocument();
+    expect(await screen.findByText("payload-bridge-1")).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/bridges",
       expect.objectContaining({ method: "POST" }),

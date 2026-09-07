@@ -184,9 +184,17 @@ vi.mock("node:child_process", async (importOriginal) => {
 // own header comment describes. Mocked at the module boundary for every
 // test in this file (nothing else here calls it), same posture as
 // test/plugins/bundle-sync.test.ts's own mock.
+//
+// Issue #1128 — the same handler's disabled:false branch now also calls
+// runBundleSyncExclusive(true) (a real sync against the same home
+// directory) instead of early-returning, so that has to be mocked here too
+// or the real module resolves and either does that filesystem I/O or, since
+// this factory replaces the whole module, throws on a missing export.
 const uninstallBundleContentMock = vi.fn(async () => ({ removed: 0, legacySwept: 0 }));
+const runBundleSyncExclusiveMock = vi.fn(async () => ({ changed: true }));
 vi.mock("../../src/services/bundle-sync.js", () => ({
   uninstallBundleContent: () => uninstallBundleContentMock(),
+  runBundleSyncExclusive: (enabled: boolean) => runBundleSyncExclusiveMock(enabled),
 }));
 
 // Issue #1101 — POST /internal/run-generation-turn's own handler calls
@@ -3534,6 +3542,8 @@ describe("internal routes (agent role, issue #26)", () => {
       process.env.HOME = fakeHome;
       uninstallBundleContentMock.mockClear();
       uninstallBundleContentMock.mockResolvedValue({ removed: 3, legacySwept: 1 });
+      runBundleSyncExclusiveMock.mockClear();
+      runBundleSyncExclusiveMock.mockResolvedValue({ changed: true });
     });
 
     afterEach(() => {
@@ -3576,7 +3586,7 @@ describe("internal routes (agent role, issue #26)", () => {
       await app.close();
     });
 
-    it("POST /internal/bundle-sync/remove with disabled: false only clears the flag, without running removal", async () => {
+    it("POST /internal/bundle-sync/remove with disabled: false clears the flag and re-syncs, without running removal (issue #1128)", async () => {
       const app = await buildApp();
       await app.inject({
         method: "POST",
@@ -3585,6 +3595,7 @@ describe("internal routes (agent role, issue #26)", () => {
         payload: { disabled: true },
       });
       uninstallBundleContentMock.mockClear();
+      runBundleSyncExclusiveMock.mockClear();
 
       const res = await app.inject({
         method: "POST",
@@ -3595,6 +3606,7 @@ describe("internal routes (agent role, issue #26)", () => {
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual({ removed: 0, legacySwept: 0, disabled: false });
       expect(uninstallBundleContentMock).not.toHaveBeenCalled();
+      expect(runBundleSyncExclusiveMock).toHaveBeenCalledExactlyOnceWith(true);
 
       await app.close();
     });
