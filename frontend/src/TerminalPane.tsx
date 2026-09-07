@@ -4,7 +4,6 @@ import type { IDisposable } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
-import { WebLinksAddon } from "@xterm/addon-web-links";
 import { SearchAddon } from "@xterm/addon-search";
 import type { ISearchResultChangeEvent } from "@xterm/addon-search";
 import "@xterm/xterm/css/xterm.css";
@@ -31,9 +30,11 @@ import { attachTerminalTouchScroll } from "./lib/terminalTouchScroll.js";
 import { parseChord, type KeyChord } from "./lib/keyChord.js";
 import { computeFitFontSize } from "./lib/terminalFontFit.js";
 import { useCoarsePointer } from "./lib/layoutTier.js";
+import { computeLinksForRow, isSafeLinkUrl, type LinkBufferSource } from "./lib/terminalLinks.js";
 import { useTerminalSearch } from "./hooks/useTerminalSearch.js";
 import { TerminalFindBar } from "./terminal-pane/TerminalFindBar.js";
 import { TerminalToasts } from "./terminal-pane/TerminalToasts.js";
+import { TerminalLinkTooltip } from "./terminal-pane/TerminalLinkTooltip.js";
 import { VoiceMicButton } from "./terminal-pane/VoiceMicButton.js";
 import { useVoiceDictation } from "./voice/useVoiceDictation.js";
 // ResizeMessage/GeometryMessage physically live in src/shared/ws-protocol.ts
@@ -179,6 +180,19 @@ export function TerminalPane(props: {
   // floor here — this stays correct regardless of what the backend's floor
   // constants are.
   const [paneTooSmall, setPaneTooSmall] = useState(false);
+  // Hover state for the wrap-aware link provider (lib/terminalLinks.ts) —
+  // set from the `hover`/`leave` closures the mount effect below passes to
+  // `term.registerLinkProvider()` and to the `linkHandler` option. Shows the
+  // FULL reconstructed URL before the user commits to clicking: a
+  // hard-wrapped link is reconstructed by heuristic (see that module's own
+  // header), so the tooltip is the safety affordance, not a decoration —
+  // see TerminalLinkTooltip.tsx's own doc comment.
+  const [linkTooltip, setLinkTooltip] = useState<{
+    text: string;
+    rowCount: number;
+    x: number;
+    y: number;
+  } | null>(null);
   // Narrow-pane font auto-fit — the server's MIN_TERMINAL_COLS/ROWS floor
   // (issue: prompt runs off the edge of a pane narrower than that floor),
   // learned from the `minCols`/`minRows` carried on every GeometryMessage
@@ -480,6 +494,52 @@ export function TerminalPane(props: {
     // "read once" value.
     const prefs = prefsRef.current;
     const fontFamily = `'${prefs.fontFamily}', 'Geist Mono', monospace`;
+
+    // Shared by both link surfaces below — the wrap-aware `ILinkProvider`
+    // (regex-matched http(s) URLs, including ones lib/terminalLinks.ts
+    // reconstructs across hard-wrapped rows) and the `linkHandler` option
+    // (OSC 8 hyperlinks, which xterm core handles entirely on its own). One
+    // pair of hover/leave closures and one tooltip for both — but NOT one
+    // shared `activate`. See `activateOscLink` below for why OSC 8 keeps its
+    // own gate: unlike our own provider, where the visible text and the
+    // navigated-to URL are the same string by construction (the match comes
+    // straight from what's printed in the buffer), an OSC 8 hyperlink lets
+    // the emitting process set the DISPLAYED text completely independently
+    // of the real href (`ESC]8;;https://evil.example\ESC\Read the docs
+    // ESC]8;;\ESC\`) — a known terminal phishing vector, which is exactly
+    // why xterm's own default OSC 8 handler (which setting any
+    // `linkHandler` at all replaces) gates activation behind
+    // `confirm("Do you want to navigate to …? WARNING: this link could
+    // potentially be dangerous")`. Losing that confirmation here, silently,
+    // was a real regression caught in review — restored below, scoped to
+    // just the OSC 8 path; our own provider's links don't need it, since
+    // there is nothing to spoof.
+    const hoverLink = (event: MouseEvent, text: string, rowCount: number) => {
+      // No hover on touch — nothing to preview against, and the tooltip
+      // would just get stuck showing after a tap. Clicking still opens.
+      if (isCoarsePointer) return;
+      const rect = container.getBoundingClientRect();
+      setLinkTooltip({
+        text,
+        rowCount,
+        x: event.clientX - rect.left,
+        y: event.clientY - rect.top,
+      });
+    };
+    const leaveLink = () => setLinkTooltip(null);
+    // For our own provider (lib/terminalLinks.ts): the hover tooltip is
+    // already the disclosure — what it shows IS what a click opens, so no
+    // extra confirmation step.
+    const activateLink = (_event: MouseEvent, text: string) => {
+      if (!isSafeLinkUrl(text)) return;
+      window.open(text, "_blank", "noopener,noreferrer");
+    };
+    const activateOscLink = (_event: MouseEvent, text: string) => {
+      if (!isSafeLinkUrl(text)) return;
+      if (!window.confirm(`Open this link?\n\n${text}`)) return;
+      window.open(text, "_blank", "noopener,noreferrer");
+    };
+
     const term = new Terminal({
       cursorBlink: prefs.cursorBlink,
       cursorStyle: prefs.cursorStyle,
@@ -494,6 +554,16 @@ export function TerminalPane(props: {
       // Unicode11Addon reads term.unicode, which xterm gates behind this
       // flag as a "proposed" (not yet stabilized) API.
       allowProposedApi: true,
+      linkHandler: {
+        activate: activateOscLink,
+        hover: (event, text, range) => hoverLink(event, text, range.end.y - range.start.y + 1),
+        leave: leaveLink,
+        // Non-http(s) OSC 8 links (file:, vscode:, etc. from untrusted
+        // transcript content) stay dropped, same as today's behaviour —
+        // raising this is a separate, deliberate decision, not a side
+        // effect of fixing wrapped links.
+        allowNonHttpProtocols: false,
+      },
     });
     termRef.current = term;
     const fitAddon = new FitAddon();
@@ -501,7 +571,43 @@ export function TerminalPane(props: {
     term.loadAddon(fitAddon);
     term.loadAddon(new Unicode11Addon());
     term.unicode.activeVersion = "11";
-    term.loadAddon(new WebLinksAddon());
+    // Wrap-aware replacement for the stock WebLinksAddon — see
+    // lib/terminalLinks.ts's own header for the bug this fixes (a URL a TUI
+    // hard-wraps across rows used to open truncated and wrong) and why a
+    // custom ILinkProvider, not the addon, is what can fix it. Registered
+    // in place of the addon rather than alongside it: xterm queries
+    // providers in registration order and an earlier provider wins
+    // overlapping columns, so keeping both would leave which one wins
+    // ambiguous.
+    const linkBuffer: LinkBufferSource = {
+      get cols() {
+        return term.cols;
+      },
+      getLine: (y: number) => term.buffer.active.getLine(y),
+    };
+    const linkProviderSub = term.registerLinkProvider({
+      // xterm calls this with a 1-indexed buffer line number (mirrors the
+      // addon's own `computeLink(e, ...)` doing `e-1` before touching the
+      // buffer) — lib/terminalLinks.ts's own coordinate convention is
+      // 0-indexed throughout, so the conversion happens at this one
+      // boundary and nowhere else.
+      provideLinks: (bufferLineNumber, callback) => {
+        const links = computeLinksForRow(linkBuffer, bufferLineNumber - 1);
+        callback(
+          links.map((link) => ({
+            range: {
+              start: { x: link.startCol + 1, y: bufferLineNumber },
+              end: { x: link.endCol, y: bufferLineNumber },
+            },
+            text: link.text,
+            decorations: { pointerCursor: true, underline: true },
+            activate: activateLink,
+            hover: (event) => hoverLink(event, link.text, link.rowCount),
+            leave: leaveLink,
+          })),
+        );
+      },
+    });
     // Terminal scrollback search (U1). See SEARCH_HIGHLIGHT_LIMIT's own
     // comment (lib/terminalKeys.ts) for why this is passed explicitly rather
     // than left at the addon's default.
@@ -1365,16 +1471,20 @@ export function TerminalPane(props: {
       titleSub.dispose();
       oscColorSubs.forEach((sub) => sub.dispose());
       webglContextLossSub?.dispose();
-      // Explicit dispose, unlike FitAddon/Unicode11Addon/WebLinksAddon above
-      // (which have no per-instance state and just get swept up by
-      // term.dispose()'s own addon-manager cleanup): SearchAddon owns live
-      // decoration/selection state and an event subscriber list, and this PR
-      // exists precisely because per-pane addon leaks are a real cost at the
+      // Explicit dispose, unlike FitAddon/Unicode11Addon above (which have
+      // no per-instance state and just get swept up by term.dispose()'s
+      // own addon-manager cleanup): SearchAddon owns live decoration/
+      // selection state and an event subscriber list, and this PR exists
+      // precisely because per-pane addon leaks are a real cost at the
       // session counts this app runs — worth disposing explicitly and
       // verifiably rather than trusting it falls out of term.dispose() for
-      // free.
+      // free. The link provider (lib/terminalLinks.ts) is disposed the same
+      // way for the same reason, even though it's plain-function state with
+      // nothing to leak — consistency with the rest of this block beats
+      // relying on term.dispose()'s own provider-list teardown.
       searchResultsSub.dispose();
       searchAddon.dispose();
+      linkProviderSub.dispose();
       ws?.close();
       term.dispose();
       termRef.current = null;
@@ -1383,6 +1493,7 @@ export function TerminalPane(props: {
       searchAddonRef.current = null;
       wsRef.current = null;
       pendingOscRef.current = null;
+      setLinkTooltip(null);
       refitRef.current = () => {};
       unregisterTerminalRepaint(props.params.sessionId);
       unregisterTerminalInput(props.params.sessionId, inputHandle);
@@ -1862,6 +1973,7 @@ export function TerminalPane(props: {
         paneTooSmall={paneTooSmall}
         voiceError={voiceController.error}
       />
+      <TerminalLinkTooltip tooltip={linkTooltip} />
     </div>
   );
 }

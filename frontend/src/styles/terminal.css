@@ -664,3 +664,47 @@
   z-index: 10;
   pointer-events: none;
 }
+
+/* Hover preview for lib/terminalLinks.ts's wrap-aware link provider — see
+   TerminalLinkTooltip.tsx's own doc comment for why this exists (it's the
+   safety affordance for a heuristically-reconstructed URL, not decoration).
+   `pointer-events: none` is mandatory, not a nicety: xterm's own hover
+   detection (Linkifier) tracks the mouse itself, and a tooltip element that
+   could receive pointer events sitting under the cursor would fight it —
+   see the ILinkHandler typings' own note that a hover element living INSIDE
+   term.element needs the `xterm-hover` class for exactly this reason; ours
+   renders outside term.element, so `pointer-events: none` is the equivalent
+   escape hatch. Anchored to the triggering MouseEvent's pane-relative
+   coordinates (TerminalLinkTooltip.tsx computes `left`/`top` inline) — this
+   rule only supplies the offset/transform relative to that anchor point. */
+.terminal-link-tooltip {
+  position: absolute;
+  max-width: min(480px, calc(100% - 24px));
+  padding: 6px 10px;
+  background: color-mix(in srgb, var(--term) 92%, transparent);
+  backdrop-filter: blur(2px);
+  border: 1px solid color-mix(in srgb, var(--accent-solid) 45%, var(--border));
+  border-radius: 6px;
+  font-size: 11.5px;
+  line-height: 1.4;
+  z-index: 20;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.terminal-link-tooltip-above {
+  translate: -50% calc(-100% - 10px);
+}
+.terminal-link-tooltip-below {
+  translate: -50% 10px;
+}
+.terminal-link-tooltip-url {
+  color: var(--fg);
+  font-family: "Geist Mono", monospace;
+  overflow-wrap: break-word;
+}
+.terminal-link-tooltip-meta {
+  color: var(--dim);
+  font-size: 10.5px;
+}
