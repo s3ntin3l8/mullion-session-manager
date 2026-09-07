@@ -400,3 +400,158 @@ describe("POST /api/bundle-sync/remove", () => {
     });
   });
 });
+
+// Issue #1128 — the re-enable counterpart to the fan-out above: flipping
+// sessions.injectMullionBundle back on (via PATCH /api/settings, the same
+// write path a Settings-panel toggle uses) must reach every registered
+// agent host's own persisted "disabled" flag, not just the setting itself.
+// Fires from applySettingsPatch's own false->true edge
+// (plugins/bundle-sync.ts's reenableAgentBundles) — fire-and-forget, so
+// every test here needs to explicitly wait for the mocked call to actually
+// land rather than asserting immediately after the triggering request
+// resolves.
+//
+// Deliberately does NOT also cover a primary-side resync: reenableAgentBundles
+// only fans out to remote agent hosts (see that function's own comment for
+// why re-enabling never needed to resync the primary itself — its
+// settings-table read was never stale the way an agent's persisted flag is).
+describe("re-enabling sessions.injectMullionBundle fans out to registered agent hosts (issue #1128)", () => {
+  it("calls removeAgentBundle(false) on a registered agent host", async () => {
+    const app = await buildTestApp();
+    await setInjectMullionBundle(app, false);
+    const { createHost, deleteHost } = await import("../../src/services/host-registry.js");
+    const host = createHost(app, {
+      name: "agent-1",
+      baseUrl: "http://agent-1.example:4000",
+      token: "tok",
+    });
+    const removeAgentBundleMock = vi.fn().mockResolvedValue({ removed: 0, legacySwept: 0 });
+    mockGetRemoteHostClient.mockReturnValue({ removeAgentBundle: removeAgentBundleMock });
+
+    try {
+      await setInjectMullionBundle(app, true);
+
+      await vi.waitFor(() => {
+        expect(removeAgentBundleMock).toHaveBeenCalledWith(false);
+      });
+      expect(mockGetRemoteHostClient).toHaveBeenCalledWith(expect.anything(), host.id);
+    } finally {
+      deleteHost(app, host.id);
+    }
+  });
+
+  it("does not fire on a redundant true -> true re-write of the same field", async () => {
+    const app = await buildTestApp();
+    await setInjectMullionBundle(app, true);
+    const { createHost, deleteHost } = await import("../../src/services/host-registry.js");
+    const host = createHost(app, {
+      name: "agent-1",
+      baseUrl: "http://agent-1.example:4000",
+      token: "tok",
+    });
+    const removeAgentBundleMock = vi.fn().mockResolvedValue({ removed: 0, legacySwept: 0 });
+    mockGetRemoteHostClient.mockReturnValue({ removeAgentBundle: removeAgentBundleMock });
+
+    try {
+      // injectMullionBundle is already true — re-sending the same value
+      // must not cross the false->true edge.
+      const res = await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { sessions: { injectMullionBundle: true } },
+      });
+      expect(res.statusCode).toBe(200);
+
+      // Give any (wrongly) fired fan-out a tick to land before asserting
+      // its absence.
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(removeAgentBundleMock).not.toHaveBeenCalled();
+    } finally {
+      deleteHost(app, host.id);
+    }
+  });
+
+  it("does not fire on an unrelated settings field patch while injectMullionBundle stays true", async () => {
+    const app = await buildTestApp();
+    await setInjectMullionBundle(app, true);
+    const { createHost, deleteHost } = await import("../../src/services/host-registry.js");
+    const host = createHost(app, {
+      name: "agent-1",
+      baseUrl: "http://agent-1.example:4000",
+      token: "tok",
+    });
+    const removeAgentBundleMock = vi.fn().mockResolvedValue({ removed: 0, legacySwept: 0 });
+    mockGetRemoteHostClient.mockReturnValue({ removeAgentBundle: removeAgentBundleMock });
+
+    try {
+      // injectMullionBundle is untouched by this patch — a bare
+      // `if (next.injectMullionBundle)` check (rather than the actual
+      // false->true edge check) would wrongly fire on this.
+      const res = await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { sessions: { reconcileIntervalSeconds: 45 } },
+      });
+      expect(res.statusCode).toBe(200);
+
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(removeAgentBundleMock).not.toHaveBeenCalled();
+    } finally {
+      deleteHost(app, host.id);
+    }
+  });
+
+  it("does not fire on the /remove route's own true -> false write", async () => {
+    const app = await buildTestApp();
+    await setInjectMullionBundle(app, true);
+    const { createHost, deleteHost } = await import("../../src/services/host-registry.js");
+    const host = createHost(app, {
+      name: "agent-1",
+      baseUrl: "http://agent-1.example:4000",
+      token: "tok",
+    });
+    const removeAgentBundleMock = vi.fn().mockResolvedValue({ removed: 0, legacySwept: 0 });
+    mockGetRemoteHostClient.mockReturnValue({ removeAgentBundle: removeAgentBundleMock });
+
+    try {
+      const res = await app.inject({ method: "POST", url: "/api/bundle-sync/remove" });
+      expect(res.statusCode).toBe(200);
+
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(removeAgentBundleMock).not.toHaveBeenCalledWith(false);
+    } finally {
+      deleteHost(app, host.id);
+    }
+  });
+
+  it("an unreachable agent host is logged and skipped", async () => {
+    const app = await buildTestApp();
+    await setInjectMullionBundle(app, false);
+    const { createHost, deleteHost } = await import("../../src/services/host-registry.js");
+    const host = createHost(app, {
+      name: "unreachable-agent",
+      baseUrl: "http://nope.example:4000",
+      token: "tok",
+    });
+    const { HostUnreachableError } = await import("../../src/services/remote-host-client.js");
+    mockGetRemoteHostClient.mockReturnValue({
+      removeAgentBundle: vi
+        .fn()
+        .mockRejectedValue(new HostUnreachableError(host.id, new Error("timeout"))),
+    });
+    const warnSpy = vi.spyOn(app.log, "warn");
+
+    try {
+      await setInjectMullionBundle(app, true);
+
+      await vi.waitFor(() => {
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.objectContaining({ hostId: host.id }),
+          expect.stringContaining("could not reach agent host to re-enable"),
+        );
+      });
+    } finally {
+      deleteHost(app, host.id);
+    }
+  });
+});

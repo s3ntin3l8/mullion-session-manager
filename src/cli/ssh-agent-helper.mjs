@@ -577,7 +577,7 @@ async function runPair(args, io) {
 // which document `path` as accepting "an IPC endpoint (Unix domain socket
 // or Windows named pipe)" without qualification. One implementation covers
 // all three platforms; see ssh-agent-helper-install.mjs's own Windows
-// Scheduled Task generator for the other half of Windows support (the
+// autostart-entry generator for the other half of Windows support (the
 // supervisor that keeps this process running). Concurrency behavior of
 // 1Password's own pipe under many simultaneous opens (the mux's channel-
 // per-request shape) is confirmed working — issue #874, 8 and 16
@@ -616,7 +616,7 @@ async function runRun(args, io) {
   if (!sshAuthSock) {
     io.stderr.write(
       "no SSH_AUTH_SOCK in this process's environment — pass --ssh-auth-sock <path>, or run this " +
-        "under a shell that has SSH_AUTH_SOCK set. Note: a launchd/systemd/Scheduled Task job does " +
+        "under a shell that has SSH_AUTH_SOCK set. Note: a launchd/systemd/autostart job does " +
         "NOT inherit your login shell's SSH_AUTH_SOCK — hardcode the real path there instead (see " +
         "docs/ssh-agent.md).\n",
     );

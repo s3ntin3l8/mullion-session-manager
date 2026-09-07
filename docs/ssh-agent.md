@@ -96,16 +96,17 @@ and run it — no Node install, no terminal. The installer:
   **Settings → Hosts → SSH agent bridges**, or leave it blank and pair
   later — see [Pairing](#pairing) above for where the payload comes from);
 - installs to `%LOCALAPPDATA%\Mullion\mullion-helper.exe` and registers the
-  Scheduled Task for you, both in the same step — there is no separate
-  `install` command to run afterward.
+  autostart entry for you (a per-user
+  `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` value — see
+  [Keeping it running](#keeping-it-running) below), both in the same step —
+  there is no separate `install` command to run afterward.
 
 The download is currently **unsigned** — Windows SmartScreen will show
 "Windows protected your PC"; click **More info → Run anyway**. A
 code-signing certificate is planned as part of the future native tray app,
-not this reference installer. If you'd rather run the bare `.exe` yourself
-(no installer, no Scheduled Task), or automate an install without the
-wizard (`mullion-helper-setup-<version>.exe /VERYSILENT /SUPPRESSMSGBOXES`,
-the same invocation CI itself uses to verify every release), see
+not this reference installer. To automate an install without the wizard
+(`mullion-helper-setup-<version>.exe /VERYSILENT /SUPPRESSMSGBOXES`, the
+same invocation CI itself uses to verify every release), see
 [`cli.md`](cli.md#helper) for the raw `mullion helper <verb>` commands the
 installer runs on your behalf.
 
@@ -222,44 +223,73 @@ mullion helper install --ssh-auth-sock "$SSH_AUTH_SOCK"
 (On Windows, the [installer](#getting-mullion-helper-onto-your-laptop)
 already runs this step for you — `--ssh-auth-sock` isn't even needed there,
 since it defaults to the real pipe path; this command is for macOS/Linux, or
-for running the bare `mullion-helper.exe` yourself without the installer.)
+for re-running `helper install` yourself against an already-installed
+`%LOCALAPPDATA%\Mullion\mullion-helper.exe`, e.g. after changing
+`--ssh-auth-sock`.)
 
 This generates and registers a launchd job (`~/Library/LaunchAgents/de.s3ntin3l8.mullion-helper.plist`),
 a systemd `--user` unit (`~/.config/systemd/user/mullion-helper.service`), or
-a Windows Scheduled Task (`MullionHelper`, registered from a generated
-`mullion-helper-task.xml` alongside the credential file), starts it
+— on Windows — a per-user autostart entry under
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run` (value name
+`MullionHelper`; the same mechanism nearly every comparable Windows tray
+app uses — Discord, Slack, Dropbox, 1Password itself), starts it
 immediately, and re-running the command later cleanly replaces the previous
 install (new `--ssh-auth-sock`, moved checkout, ...) rather than erroring
-over an already-loaded job — `schtasks /Create /F` is unconditionally
-idempotent, so Windows doesn't even need the explicit pre-teardown step the
-other two platforms do. `mullion helper uninstall` stops and removes it
-again, along with the pairing credential — a no-op, not an error, if nothing
-is installed (the installer's own uninstaller, from **Settings → Apps** or
+over an already-loaded job — `reg add ... /f` is unconditionally idempotent,
+so Windows doesn't even need the explicit pre-teardown step the other two
+platforms do. `mullion helper uninstall` stops and removes it again, along
+with the pairing credential — a no-op, not an error, if nothing is installed
+(the installer's own uninstaller, from **Settings → Apps** or
 `unins000.exe` in the install folder, runs this for you first, before
 removing the exe itself). On Linux,
 also run `loginctl enable-linger $(whoami)` so the unit survives logout, the
 same requirement the manual tunnel's own [systemd
 section](#linux-systemd---user) below has.
 
-**Windows verification status:** every release's `install`/`uninstall` path
-and the installer itself are exercised for real in CI on a `windows-latest`
-runner (`.github/workflows/ci-cd.yml`'s `test-windows` job) — a genuine
-`schtasks.exe` round trip, and the installer's own silent install/uninstall
-(`/VERYSILENT /SUPPRESSMSGBOXES`), confirming the exe lands, the Scheduled
-Task registers, and both remove the exe, the task, and the pairing
-credential again on uninstall.
+**Windows history:** round 3 shipped a per-user Scheduled Task
+(`schtasks /Create`) here. Live verification on a real, non-elevated
+Administrator account — the default account type on a personal Windows
+machine — found `schtasks /Create` unconditionally fails "Access is
+denied" there: an Administrator account running unelevated holds its own
+`Administrators` SID as deny-only (a UAC filtered-token effect, confirmed
+with `whoami /groups` and a minimal `schtasks /Create` carrying no
+Mullion-specific XML at all), so the installer's own non-elevated design
+could never have registered a Scheduled Task for that entire class of
+user. Round 4 replaced it with the `HKCU` autostart entry described above,
+which has no elevation dependency for either account type. **Known,
+accepted tradeoff:** the Scheduled Task's crash-restart supervision has no
+`HKCU` equivalent — macOS (`launchd`'s `KeepAlive`) and Linux
+(`systemd`'s `Restart=always`) still restart a crashed helper
+automatically; on Windows, a helper that crashes outright (not a network
+drop or a dead credential — `run`'s own reconnect/renewal loop already
+self-heals both of those) stays down until the next logon. No restart
+supervision beats no installed helper at all, which is what every
+non-elevated Administrator account got before this fix, but it's a real
+gap, not a non-issue — a future fix needs its own lightweight watcher, not
+a reach back to Scheduled Tasks. Every release's
+`install`/`uninstall` path and the installer itself are still exercised
+for real in CI on a `windows-latest` runner
+(`.github/workflows/ci-cd.yml`'s `test-windows` job) — a genuine `reg.exe`
+round trip, and the installer's own silent install/uninstall
+(`/VERYSILENT /SUPPRESSMSGBOXES`), confirming the exe lands, the autostart
+entry registers, and both remove the exe, the entry, and the pairing
+credential again on uninstall — but that runner is itself an elevated
+administrator, so it cannot exercise the specific unelevated-Administrator
+path that broke the Scheduled Task; `HKCU` has no such gap to miss, since
+it's per-user and always writable by its owner regardless of elevation.
 1Password's Windows named pipe accepting the mux's concurrent-channel shape
 is confirmed working too
 ([issue #874](https://github.com/s3ntin3l8/mullion-session-manager/issues/874),
 closed): 8 and 16 simultaneous connections each round-tripped correctly.
 `--ssh-auth-sock` defaults to `\\.\pipe\openssh-ssh-agent` on Windows if not
-given explicitly — pass it only to override. What CI _can't_ cover — a real
-interactive logon actually firing the Scheduled Task, and a real signature
-flowing end to end through a live 1Password agent — is tracked at [issue
+given explicitly — pass it only to override. What CI still _can't_ cover —
+a real signature request flowing end to end through a live 1Password agent
+on Windows, as opposed to the pipe-transport shape #874 already confirmed —
+remains tracked at [issue
 #871](https://github.com/s3ntin3l8/mullion-session-manager/issues/871).
 
 **Pass `--ssh-auth-sock <literal path>` explicitly**, as in the example
-above. Neither `launchd`, `systemd --user`, nor a Windows Scheduled Task
+above. Neither `launchd`, `systemd --user`, nor a Windows autostart entry
 inherits your login shell's `SSH_AUTH_SOCK` — the same reasoning as the
 manual tunnel's own
 [launchd](#macos-launchd)/[systemd](#linux-systemd---user) sections below —

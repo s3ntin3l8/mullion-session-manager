@@ -61,20 +61,51 @@ describe("PairBridgeModal", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    // Restores the navigator.userAgent spy the platform-detection test
+    // installs — otherwise it would leak into every later test in this
+    // file, since it's set on the real jsdom `navigator`, not a stub.
+    vi.restoreAllMocks();
   });
 
-  it("generates a pairing code on mount and shows the paste-able command", async () => {
+  it("generates a pairing code on mount and shows the bare payload", async () => {
+    render(<PairBridgeModal onClose={vi.fn()} onPaired={vi.fn()} />);
+
+    expect(await screen.findByText(PAIRING.pairing_payload)).toBeInTheDocument();
+  });
+
+  it("shows the Windows command form by default when the user agent looks like Windows", async () => {
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+    );
     render(<PairBridgeModal onClose={vi.fn()} onPaired={vi.fn()} />);
 
     expect(
-      await screen.findByText(`mullion helper pair ${PAIRING.pairing_payload}`),
+      await screen.findByText(
+        `& "$env:LOCALAPPDATA\\Mullion\\mullion-helper.exe" helper pair ${PAIRING.pairing_payload}`,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("switches the displayed command when a different platform is selected", async () => {
+    const user = userEvent.setup();
+    render(<PairBridgeModal onClose={vi.fn()} onPaired={vi.fn()} />);
+    await screen.findByText(PAIRING.pairing_payload);
+
+    await user.click(screen.getByRole("button", { name: "macOS" }));
+    expect(
+      await screen.findByText(`mullion-helper helper pair ${PAIRING.pairing_payload}`),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Linux" }));
+    expect(
+      await screen.findByText(`mullion helper pair '${PAIRING.pairing_payload}'`),
     ).toBeInTheDocument();
   });
 
   it("polls GET /api/bridges and calls onPaired once this bridge id shows connected", async () => {
     const onPaired = vi.fn();
     render(<PairBridgeModal onClose={vi.fn()} onPaired={onPaired} />);
-    await screen.findByText(`mullion helper pair ${PAIRING.pairing_payload}`);
+    await screen.findByText(PAIRING.pairing_payload);
 
     listResponses.push(
       bridgeList({ connected: true, hasLiveSession: true, lastSeenAt: "2026-01-01T00:00:00.000Z" }),
@@ -88,7 +119,7 @@ describe("PairBridgeModal", () => {
   it("does not call onPaired for a different bridge id showing connected", async () => {
     const onPaired = vi.fn();
     render(<PairBridgeModal onClose={vi.fn()} onPaired={onPaired} />);
-    await screen.findByText(`mullion helper pair ${PAIRING.pairing_payload}`);
+    await screen.findByText(PAIRING.pairing_payload);
 
     listResponses.push([
       {
@@ -121,13 +152,13 @@ describe("PairBridgeModal", () => {
     const onClose = vi.fn();
     const user = userEvent.setup();
     render(<PairBridgeModal onClose={onClose} onPaired={vi.fn()} />);
-    await screen.findByText(`mullion helper pair ${PAIRING.pairing_payload}`);
+    await screen.findByText(PAIRING.pairing_payload);
 
     await user.click(screen.getByRole("button", { name: "Close" }));
     expect(onClose).toHaveBeenCalled();
   });
 
-  it("copies the payload to the clipboard when Copy command is clicked", async () => {
+  it("copies the bare payload to the clipboard when Copy payload is clicked", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     // userEvent.setup() installs its own jsdom clipboard stub, which wins
     // over a defineProperty called BEFORE it — so this must run after
@@ -139,10 +170,32 @@ describe("PairBridgeModal", () => {
       value: { writeText },
     });
     render(<PairBridgeModal onClose={vi.fn()} onPaired={vi.fn()} />);
-    await screen.findByText(`mullion helper pair ${PAIRING.pairing_payload}`);
+    await screen.findByText(PAIRING.pairing_payload);
 
-    await user.click(screen.getByRole("button", { name: "Copy command" }));
+    await user.click(screen.getByRole("button", { name: "Copy payload" }));
     expect(writeText).toHaveBeenCalledWith(PAIRING.pairing_payload);
     expect(await screen.findByRole("button", { name: "Copied" })).toBeInTheDocument();
+  });
+
+  // Round 4 (issue #871's own installer UX cleanup) — "Copy payload" and
+  // "Copy command" must put DIFFERENT strings on the clipboard: the
+  // payload alone is what the Windows/macOS installer wizard wants, while
+  // the command is the platform-specific CLI invocation. A prior version
+  // of this modal had one button labeled "Copy command" that actually
+  // copied only the bare payload — this test would have caught that.
+  it("copies the full platform command, not the bare payload, when Copy command is clicked", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    render(<PairBridgeModal onClose={vi.fn()} onPaired={vi.fn()} />);
+    await screen.findByText(PAIRING.pairing_payload);
+
+    await user.click(screen.getByRole("button", { name: "Linux" }));
+    await user.click(screen.getByRole("button", { name: "Copy command" }));
+    expect(writeText).toHaveBeenCalledWith(`mullion helper pair '${PAIRING.pairing_payload}'`);
+    expect(writeText).not.toHaveBeenCalledWith(PAIRING.pairing_payload);
   });
 });

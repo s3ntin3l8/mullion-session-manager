@@ -1013,9 +1013,21 @@ export class RemoteHostClient {
    * and, when disabling, removes previously-installed bundle content
    * (#1089) — mirrors /internal/bundle-sync/remove's `{disabled}` ->
    * `{removed, legacySwept}` shape. See agent-bundle-state.ts's
-   * removeHostBundle for the caller-side dispatch this backs. Fast/cheap
-   * (a JSON-file write plus a manifest-driven filesystem sweep, same order
-   * of cost as writeFiles above), so the default timeout is fine. */
+   * removeHostBundle for the caller-side dispatch this backs.
+   *
+   * Cost differs by direction (Hermes review, PR #1151 — this comment
+   * used to call both branches uniformly "fast/cheap"): `disabled: true`
+   * is a JSON-file write plus a manifest-driven filesystem sweep, cheap by
+   * construction. `disabled: false` (issue #1128) now also runs a full
+   * `runBundleSyncExclusive(true)` reinstall across all four CLI roots
+   * plus content hashing — real work, not the trivial write the old
+   * comment implied. Still synchronous, local-disk-only (no network, no
+   * subprocess), so it comfortably clears the default timeout in the
+   * ordinary case; a host with an unusually large bundle or a genuinely
+   * slow disk could in principle push closer to it, at which point this
+   * client sees a spurious "unreachable" even though the agent completes
+   * the install anyway (see plugins/bundle-sync.ts's reenableAgentBundles
+   * for how that log-only symptom is handled). */
   async removeAgentBundle(disabled = true): Promise<{ removed: number; legacySwept: number }> {
     return this.request("/internal/bundle-sync/remove", {
       method: "POST",
