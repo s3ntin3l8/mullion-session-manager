@@ -65,7 +65,13 @@ context if you're running inside a Mullion-hosted session.
   this been explicitly killed?); live process state lives only in
   `PtyManager`'s in-memory map, and routes merge the two rather than trusting
   the DB column alone. Read this before touching `src/services/pty-manager.ts`
-  or the terminal WS protocol.
+  or the terminal WS protocol. The scope's unit name (`crs-session-<id>`,
+  `session-process.ts`'s `scopeUnitName`) is a **Unix-user-global**
+  namespace, while `sessions.id` is per-database — two Mullion backends (or
+  a test run) on one host can collide on a low id. A test must never let a
+  real `systemd-run` fire for this (mock `node:child_process`'s `spawn`, not
+  just `node-pty` — issue #1137), and a teardown must never call
+  `terminate()`/`stopScope()` on an id it didn't itself create.
 - **`sessions.command` and `workspaces.layout` are opaque blobs.** The
   backend never parses a shell command line or a dockview layout — it just
   stores and replays what it's given.

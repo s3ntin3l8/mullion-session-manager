@@ -50,6 +50,7 @@ import { RedrawNudge } from "./redraw-nudge.js";
 import type { CgroupProcess } from "./cgroup-inventory.js";
 import {
   stopScope,
+  describeScope,
   isMasterAlive as isMasterAliveProcess,
   isMasterAliveBatch as isMasterAliveBatchProcess,
   listSessionProcesses as listSessionProcessesProcess,
@@ -2154,8 +2155,37 @@ export class Session {
         reject(err);
       });
       child.on("exit", (code) => {
-        if (code === 0) resolve();
-        else reject(new Error(`master bootstrap exited with code ${code} (unit ${plan.unitName})`));
+        if (code === 0) {
+          resolve();
+          return;
+        }
+        // Issue #1137's investigation: a plain "exited with code N (unit
+        // crs-session-<id>)" gives no hint that `systemd-run --collect`
+        // rejects a scope name that already exists — the far more likely
+        // cause on a non-zero exit here than a genuine `systemd-run`/`dtach`
+        // problem, since a fresh master's OWN scope name has never existed
+        // before. describeScope() below checks whether that name is
+        // currently squatted and, if so, names the squatter in the error
+        // instead of leaving the next investigation to rediscover this by
+        // hand. Best-effort: on any probe failure/timeout it resolves
+        // `null`, and the message below falls back to today's plain text
+        // verbatim, unchanged from before this diagnostic existed.
+        describeScope(this.id).then((squatter) => {
+          if (squatter) {
+            reject(
+              new Error(
+                `master bootstrap exited with code ${code} (unit ${plan.unitName}): ` +
+                  `a scope named ${plan.unitName}.scope already exists and is running "${squatter}". ` +
+                  `Scope names are global per Unix user while session ids are per-database, so a ` +
+                  `leftover scope (a leaked test run, another Mullion instance) with this same id ` +
+                  `blocks this one. Run \`systemctl --user stop ${plan.unitName}.scope\` if it's not ` +
+                  `a session you still need.`,
+              ),
+            );
+            return;
+          }
+          reject(new Error(`master bootstrap exited with code ${code} (unit ${plan.unitName})`));
+        });
       });
     });
   }
