@@ -98,7 +98,13 @@ export function KeyChordField({
     // into a vertical one-word-per-line stack. Bounding this column's width
     // is what makes the hint/error text wrap instead of stealing space.
     <div
-      style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end", maxWidth: 240 }}
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 6,
+        alignItems: "flex-end",
+        maxWidth: 240,
+      }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <button
