@@ -215,7 +215,11 @@ vi.mock("../../src/services/bundle-sync.js", () => ({
 // scaffold-generate.test.ts already exercises, not a duplicated copy.
 vi.mock("../../src/services/scaffold-generate.js", async (importOriginal) => {
   const actual = await importOriginal<typeof ScaffoldGenerateModule>();
-  return { ...actual, runGenerationTurnInScratchWorktree: vi.fn() };
+  return {
+    ...actual,
+    runGenerationTurnInScratchWorktree: vi.fn(),
+    isSandboxCapable: vi.fn().mockResolvedValue(true),
+  };
 });
 const { runGenerationTurnInScratchWorktree } =
   await import("../../src/services/scaffold-generate.js");
@@ -2493,7 +2497,11 @@ describe("internal routes (agent role, issue #26)", () => {
         },
       });
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toEqual({ outcome: "ok", stdout: "some generated stdout" });
+      expect(res.json()).toEqual({
+        outcome: "ok",
+        sandboxed: true,
+        stdout: "some generated stdout",
+      });
       expect(runGenerationTurnInScratchWorktree).toHaveBeenCalledWith({
         cwd,
         slug: "demo",
