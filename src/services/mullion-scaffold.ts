@@ -90,12 +90,20 @@ function stampScaffoldBody(contents: string, slug: string): string {
   // always lands on its own fresh line after the WHOLE closing-delimiter
   // line, not glued onto the end of it.
   const frontmatterMatch = /^---\r?\n[\s\S]*?\r?\n---[^\n]*\r?\n?/.exec(contents);
+  // Hermes review, PR #1150 — mirrors the file's own EOL style (CRLF vs
+  // LF) rather than always injecting LF-only separators: an LF-only
+  // separator into a CRLF file (agent-generated content from a Windows
+  // checkout) produced hybrid EOLs and a doubled blank line, since
+  // `rest.replace(/^\n+/, "")` never matched a leading `\r`. Detected once,
+  // globally, from the raw input — every real caller's content is
+  // consistently one or the other, so this is not a per-line decision.
+  const eol = contents.includes("\r\n") ? "\r\n" : "\n";
   if (!frontmatterMatch) {
     // Defensive fallback — every caller of this function always produces
     // frontmatter (the static template above and the generation prompt
     // both require it), so this branch is not expected to be exercised in
     // production.
-    return contents.startsWith(`${stamp}\n`) ? contents : `${stamp}\n\n${contents}`;
+    return contents.startsWith(`${stamp}${eol}`) ? contents : `${stamp}${eol}${eol}${contents}`;
   }
   // The match itself may not end in a newline (a closing `---` with
   // nothing after it at all, e.g. no trailing newline in the source) —
@@ -103,9 +111,9 @@ function stampScaffoldBody(contents: string, slug: string): string {
   // so the stamp is never glued directly onto the same line as `---`.
   let frontmatter = frontmatterMatch[0];
   const rest = contents.slice(frontmatterMatch[0].length);
-  if (!frontmatter.endsWith("\n")) frontmatter += "\n";
-  if (rest.startsWith(`${stamp}\n`)) return contents;
-  return `${frontmatter}${stamp}\n\n${rest.replace(/^\n+/, "")}`;
+  if (!frontmatter.endsWith(eol)) frontmatter += eol;
+  if (rest.startsWith(`${stamp}${eol}`)) return contents;
+  return `${frontmatter}${stamp}${eol}${eol}${rest.replace(/^(?:\r?\n)+/, "")}`;
 }
 
 // PR-6 (scaffold Mullion integration as a PR) — the zero-repo-change

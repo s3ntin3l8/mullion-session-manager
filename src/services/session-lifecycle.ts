@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import path from "node:path";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, openSync, readSync, closeSync } from "node:fs";
 import { and, eq } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import {
@@ -445,6 +445,39 @@ const SCAFFOLD_REVIEWER_SUFFIX = "-reviewer.md";
  * (a stamped file is confirmed without ever reaching pass 2; an unstamped
  * shape match only is).
  */
+// Hermes review, PR #1150 — pass 1 below used a full, unbounded
+// `readFileSync` per candidate, on `createSessionRecord`'s own hot path
+// (every session create). A single large vendored SKILL.md (or a
+// candidate slug that happens to resolve to a symlinked huge file) would
+// block the event loop for the whole process just to check for a marker
+// line `computeScaffold` always places within a few hundred bytes of the
+// frontmatter. Bounded to a head read instead — enough headroom for any
+// real stamped file's frontmatter + stamp line, while capping the worst
+// case. A stamp that happens to fall outside this window (implausible
+// given where `stampScaffoldBody` places it, but not impossible for a
+// hand-edited file) simply falls through to pass 2's unconditional
+// existsSync fallback below, same as any other unstamped candidate —
+// never a correctness loss, only a possible extra pass-2 hit.
+const STAMP_SCAN_HEAD_BYTES = 16 * 1024;
+
+function readFileHeadSync(filePath: string, maxBytes: number): string | undefined {
+  let fd: number;
+  try {
+    fd = openSync(filePath, "r");
+  } catch {
+    return undefined;
+  }
+  try {
+    const buffer = Buffer.alloc(maxBytes);
+    const bytesRead = readSync(fd, buffer, 0, maxBytes, 0);
+    return buffer.subarray(0, bytesRead).toString("utf8");
+  } catch {
+    return undefined;
+  } finally {
+    closeSync(fd);
+  }
+}
+
 export function discoverCommittedScaffold(scaffoldCwd: string): {
   skillCommitted: boolean;
   reviewerCommitted: boolean;
@@ -487,24 +520,19 @@ export function discoverCommittedScaffold(scaffoldCwd: string): {
   // boundary against a dangerous-but-legal name like `__proto__`.
   for (const candidate of validCandidates) {
     if (!skillCommitted) {
-      let contents: string | undefined;
-      try {
-        contents = readFileSync(path.join(scaffoldCwd, scaffoldSkillPath(candidate)), "utf8");
-      } catch {
-        // Not present (or unreadable) — pass 2 below re-checks with
-        // existsSync regardless, so nothing is lost by skipping here.
-      }
+      const contents = readFileHeadSync(
+        path.join(scaffoldCwd, scaffoldSkillPath(candidate)),
+        STAMP_SCAN_HEAD_BYTES,
+      );
       if (contents !== undefined && hasScaffoldStamp(contents, candidate)) {
         skillCommitted = true;
       }
     }
     if (!reviewerCommitted) {
-      let contents: string | undefined;
-      try {
-        contents = readFileSync(path.join(scaffoldCwd, scaffoldReviewerPath(candidate)), "utf8");
-      } catch {
-        // Same as above.
-      }
+      const contents = readFileHeadSync(
+        path.join(scaffoldCwd, scaffoldReviewerPath(candidate)),
+        STAMP_SCAN_HEAD_BYTES,
+      );
       if (contents !== undefined && hasScaffoldStamp(contents, candidate)) {
         reviewerCommitted = true;
       }

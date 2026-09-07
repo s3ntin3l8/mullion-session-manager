@@ -454,6 +454,36 @@ describe("discoverCommittedScaffold — identity stamp vs shape fallback (issue 
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  // Hermes review, PR #1150 — pass 1's identity read is bounded (a head
+  // read, not the whole file) to keep this off the createSessionRecord hot
+  // path for a large file. Whether a stamp beyond that bound is actually
+  // found via pass 1 or falls through to pass 2's shape fallback isn't
+  // observable from `discoverCommittedScaffold`'s own return value (pass 2
+  // is unconditional existsSync, so an existing file always confirms
+  // either way) — what this guards is the invariant that actually matters:
+  // a file far larger than the bound never breaks the gate's correctness.
+  it("stays correct for a file whose stamp sits well past the bounded head read", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "scaffold-gate-stamp-bound-"));
+    try {
+      const slug = "acme-widgets";
+      const skillPath = path.join(dir, scaffoldSkillPath(slug));
+      fs.mkdirSync(path.dirname(skillPath), { recursive: true });
+
+      // Padding well past a 16KB head read, with the stamp only after it.
+      const padding = "x".repeat(20 * 1024);
+      fs.writeFileSync(
+        skillPath,
+        `---\nname: ${slug}\ndescription: "x"\n---\n\n<!-- ${padding} -->\n\n${scaffoldStampLine(slug)}\n\nBody.\n`,
+      );
+      expect(discoverCommittedScaffold(dir)).toEqual({
+        skillCommitted: true,
+        reviewerCommitted: false,
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 // mullion-reviewer, this PR's own review pass — the gate must check whatever

@@ -650,4 +650,22 @@ describe("computeScaffold — scaffold stamp (issue #1123)", () => {
       `---\nname: demo\ndescription: x\n---\n${scaffoldStampLine("demo")}\n\n`,
     );
   });
+
+  // Hermes review, PR #1150 — a CRLF-authored file (agent-generated
+  // content from a Windows checkout) used to get an LF-only `\n\n`
+  // separator injected, and only leading `\n`s stripped from `rest` (never
+  // a leading `\r`), producing hybrid EOLs and a doubled blank line. The
+  // stamp insertion must mirror the file's own EOL style instead.
+  it("mirrors the file's own CRLF line endings instead of injecting a mixed-EOL separator", () => {
+    const generated = "---\r\nname: demo\r\ndescription: x\r\n---\r\nBody\r\n";
+    const entries = computeScaffold({}, { slug: "demo", generated: { skill: generated } });
+    const skill = entries.find((e) => e.path === ".claude/skills/demo/SKILL.md") as {
+      contents: string;
+    };
+    expect(skill.contents).toBe(
+      `---\r\nname: demo\r\ndescription: x\r\n---\r\n${scaffoldStampLine("demo")}\r\n\r\nBody\r\n`,
+    );
+    // No bare, unpaired \n anywhere — every line ending is \r\n.
+    expect(skill.contents).not.toMatch(/[^\r]\n/);
+  });
 });
