@@ -33,8 +33,11 @@ export interface UseWorkspacePersistenceParams {
   // here so there's still exactly one `panelsVersion` in the tree. Must be
   // the raw `useState` setter (stable identity forever) — an inline wrapper
   // (e.g. `(v) => setPanelsVersion(v)`) would get a fresh identity every
-  // render and, being read in the autosave effect's dependency array,
-  // re-subscribe `onDidLayoutChange` on every render.
+  // render and, being read in BOTH this hook's own dependency arrays —
+  // the autosave effect's (re-subscribing `onDidLayoutChange` on every
+  // render) and the restore effect's own (re-running the whole restore on
+  // every render, which its `restoredWorkspaceIdRef` guard would no-op but
+  // still needlessly re-check) — would trigger that on every render.
   setPanelsVersion: Dispatch<SetStateAction<number>>;
 }
 
@@ -249,7 +252,26 @@ export function useWorkspacePersistence({
     // maximizedNode unconditionally on every future save.
     applyLayoutPresentation(dockviewApi, layoutTier);
     restoredWorkspaceIdRef.current = activeWorkspaceId;
-  }, [dockviewApi, activeWorkspaceId, workspaces, flushPendingSave, layoutTier]);
+    // Bumped directly here, rather than relying on the onDidLayoutChange
+    // effect below to notice this restore — it structurally can't.
+    // `activeWorkspaceId` is in THAT effect's own dep array too, so a
+    // workspace switch disposes and re-subscribes it in the same commit as
+    // this effect's own `clear()`/`fromJSON()` calls above. dockview's
+    // `onDidLayoutChange` is an `AsapEvent` (dockview-core's own source):
+    // every fire before the microtask drains only bumps an internal
+    // counter, and a subscriber gates on the counter value captured AT
+    // SUBSCRIBE TIME — so a subscriber created AFTER this restore's fires
+    // (but before the microtask drains) sees no fires at all. This is that
+    // exact case: dispose old subscriber -> clear()/fromJSON() fire the
+    // counter with no live subscriber -> re-subscribe captures the
+    // already-bumped count -> the microtask's fire is silently dropped.
+    // Without this line, `panelsVersion` (and therefore App.tsx's own
+    // workspaceProjectIds memo, which the Dock's project columns are
+    // derived from) would sit stale until some UNRELATED cause — usually
+    // the next 4s sessions poll — happened to bump it, showing the
+    // PREVIOUS workspace's Dock columns for that whole window.
+    setPanelsVersion((v) => v + 1);
+  }, [dockviewApi, activeWorkspaceId, workspaces, flushPendingSave, layoutTier, setPanelsVersion]);
 
   // Any real layout change (add/remove/move panel, or a splitter-drag
   // resize) schedules a debounced autosave, unless it's the restore
