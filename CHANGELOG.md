@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.12](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.11...v0.3.12) (2026-09-08)
+
+
+### Features
+
+* **session-process:** namespace scope unit names per Mullion instance ([#1171](https://github.com/s3ntin3l8/mullion-session-manager/issues/1171)) ([0c2a850](https://github.com/s3ntin3l8/mullion-session-manager/commit/0c2a8503d7ca0e6be5f8c987c0b103a710f1c0ea))
+
 ## [0.3.11](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.10...v0.3.11) (2026-09-07)
 
 
