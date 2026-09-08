@@ -1044,6 +1044,50 @@ describe("projects route — Docker Compose service discovery (issue #73)", () =
       await app.close();
     });
 
+    it("never leaks the internal ok:true discriminant onto the wire (Hermes review)", async () => {
+      // `startStackSession`'s success variant is `{ ok: true, sessionId,
+      // control, reused? }` — spreading (or sending) it directly onto the
+      // reply would leak `ok` as a stray field none of the three response
+      // consumers (frontend/mcp/cli) have any use for. Two DIFFERENT
+      // compose projects (not two calls on the SAME one) so neither
+      // request ever reaches findActiveStackSession's isMasterAlive check
+      // — this file's own node:child_process mock only ever fires `exit`,
+      // never `close`, which is what a real isMasterAlive call waits on
+      // (see session-reconciler.test.ts's own comment on the identical
+      // gotcha) and would hang the request for the test's full timeout.
+      discoveredServices = [
+        fixtureService(),
+        fixtureService({
+          composeProject: "pocket-dev",
+          service: "api",
+          containerName: "pocket-dev-api",
+          workingDir: "/home/user/sanctuary",
+        }),
+      ];
+      const app = await buildApp();
+      const projectId = await createProject(app);
+
+      // No willRecreate (restart/stop's own response shape).
+      const restart = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/docker/stack/restart`,
+        payload: { controlId: "docker:sanctuary:web" },
+      });
+      expect(restart.json()).not.toHaveProperty("ok");
+
+      // With willRecreate (apply/rebuild/update's own response shape) — a
+      // DIFFERENT compose project, so this is still a fresh create, not a
+      // reuse check.
+      const update = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/docker/update`,
+        payload: { controlId: "docker:pocket-dev:api" },
+      });
+      expect(update.json()).not.toHaveProperty("ok");
+
+      await app.close();
+    });
+
     it("the created session is named docker-stack:<composeProject> and name-locked", async () => {
       discoveredServices = [fixtureService()];
       const app = await buildApp();

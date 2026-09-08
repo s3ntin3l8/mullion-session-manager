@@ -1160,7 +1160,10 @@ export async function projectsRoute(app: FastifyInstance) {
         return reply.badGateway("Failed to start the update session");
       }
 
-      return reply.code(201).send({ ...started, willRecreate: await willRecreateOnApply(service) });
+      const { sessionId, control, reused } = started;
+      return reply
+        .code(201)
+        .send({ sessionId, control, reused, willRecreate: await willRecreateOnApply(service) });
     },
   );
 
@@ -1443,7 +1446,11 @@ export async function projectsRoute(app: FastifyInstance) {
           command,
         );
         if (!started.ok) return reply.badGateway(`Failed to start the ${spec.verb} session`);
-        if (!spec.reportWillRecreate) return reply.code(201).send(started);
+        // Destructured rather than `send(started)`/`{ ...started }`
+        // (Hermes review) — `started` also carries the internal
+        // discriminant `ok: true`, which has no business on the wire.
+        const { sessionId, control, reused } = started;
+        if (!spec.reportWillRecreate) return reply.code(201).send({ sessionId, control, reused });
         // Ordering here is incidental, not load-bearing: the session (and
         // its `up -d`/build) has already been spawned by the time this
         // reads the on-disk config, so it's a best-effort snapshot that the
@@ -1454,7 +1461,7 @@ export async function projectsRoute(app: FastifyInstance) {
         // value instead of a promise.
         return reply
           .code(201)
-          .send({ ...started, willRecreate: await willRecreateOnApply(service) });
+          .send({ sessionId, control, reused, willRecreate: await willRecreateOnApply(service) });
       },
     );
   }
