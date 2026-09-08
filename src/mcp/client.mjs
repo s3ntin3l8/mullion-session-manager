@@ -225,7 +225,23 @@ export class MullionClient {
     if (!control) {
       throw new Error(`no dock control '${dockControlId}' for project ${projectId}`);
     }
-    const body = { projectId, command: control.command, kind: "dock", name: control.title };
+    // A docker-sourced control's own stable identity (dockHelpers.ts's
+    // dockerSessionIdentity — this repo's own source of truth, since this
+    // file can't import the frontend's TS helper) — `command` is
+    // reconstructed fresh from live container labels on every discovery
+    // poll and can change text without the underlying service having
+    // changed, which would otherwise leave this session unmatched against
+    // its own control (issue #73 follow-up plan, 5b) the same way a
+    // command-string comparison already fails on the frontend. `nameLocked`
+    // matches Dock.tsx's own identityOpts for the same control.
+    const identity = control.docker ? `docker-logs:${control.docker.containerName}` : null;
+    const body = {
+      projectId,
+      command: control.command,
+      kind: "dock",
+      name: identity ?? control.title,
+      ...(identity ? { nameLocked: true } : {}),
+    };
     if (control.cwd !== undefined) body.cwd = control.cwd;
     if (control.worktreeRefresh !== undefined) body.worktreeRefresh = control.worktreeRefresh;
     if (control.env !== undefined) body.env = control.env;

@@ -1141,26 +1141,29 @@ export async function projectsRoute(app: FastifyInstance) {
       const projectFlag = composeContextFlags(service);
       const command = `docker compose ${projectFlag} pull && docker compose ${projectFlag} up -d`;
 
-      const result = await createSessionRecord(app, {
+      // Routed through the same startStackSession the 4 stack-wide routes
+      // below use (this route predates that table-driven refactor, hence
+      // living up here on its own) — this is a stack-wide action exactly
+      // like those four, sharing the same "one operation at a time per
+      // stack" identity concern: a "Restart stack" clicked mid-pull would
+      // otherwise fire a second, concurrent `docker compose` invocation
+      // against the same stack, command-matching having no way to catch it
+      // since every one of the five actions has a different command.
+      const started = await startStackSession(
         projectId,
+        service,
+        "docker-update",
+        `Update ${service.composeProject}`,
         command,
-        kind: "dock",
-        name: `Update ${service.composeProject}`,
-      });
-      if (!result.ok) {
+      );
+      if (!started.ok) {
         return reply.badGateway("Failed to start the update session");
       }
 
-      return reply.code(201).send({
-        sessionId: result.row.id,
-        control: {
-          id: `docker-update:${service.composeProject}`,
-          title: `Update ${service.composeProject}`,
-          command,
-          source: "docker" as const,
-        },
-        willRecreate: await willRecreateOnApply(service),
-      });
+      const { sessionId, control, reused } = started;
+      return reply
+        .code(201)
+        .send({ sessionId, control, reused, willRecreate: await willRecreateOnApply(service) });
     },
   );
 
@@ -1187,11 +1190,71 @@ export async function projectsRoute(app: FastifyInstance) {
     return currentHash !== service.configHash;
   }
 
+  // A stack-wide action's identity is the compose project it targets, not
+  // the command it happens to run — five different actionIds (docker-
+  // update/-restart/-apply/-rebuild/-stop, dockHelpers.ts's own
+  // composeProjectForControl list on the frontend) can each spawn a `docker
+  // compose` invocation against the SAME stack, and two of those running
+  // concurrently would leave it internally inconsistent (the exact
+  // "don't leave the stack half-applied" reasoning the stack-wide routes
+  // below already use to justify running the whole stack rather than one
+  // service). `nameLocked` matches the frontend's own convention for a
+  // stable session identity (Dock.tsx's dockIdentity/identityOpts).
+  function stackSessionName(composeProject: string): string {
+    return `docker-stack:${composeProject}`;
+  }
+
+  async function findActiveStackSession(projectId: number, composeProject: string) {
+    const [existing] = app.db
+      .select()
+      .from(sessions)
+      .where(
+        and(
+          eq(sessions.projectId, projectId),
+          eq(sessions.kind, "dock"),
+          eq(sessions.status, "active"),
+          eq(sessions.name, stackSessionName(composeProject)),
+        ),
+      )
+      .all();
+    if (!existing) return null;
+    // AGENTS.md's own invariant — `sessions.status` records INTENT, not live
+    // process state; a `docker compose` process that finished on its own
+    // (the common case: the action simply completed) isn't reflected there
+    // until session-reconciler.ts's own periodic sweep next runs, which can
+    // lag by up to its configured interval (5s-1h, settings.ts). Trusting
+    // `status: "active"` alone here would silently redirect a genuinely new
+    // action onto a dead session for that whole window (Hermes review).
+    //
+    // `app.pty.get(id)?.isAlive` (a bare in-memory Map lookup, no reattach)
+    // was tried here first and is WRONG — caught in review: PtyManager's own
+    // map starts EMPTY on every process boot (plugins/pty.ts constructs it
+    // fresh) and killAll() (the onClose shutdown hook, i.e. every redeploy)
+    // clears it entirely while the session's real systemd scope + dtach
+    // master survive underneath (AGENTS.md's own session-model invariant).
+    // So right after any redeploy, a bare `.get()` would report EVERY
+    // pre-existing session as not-alive — the opposite failure mode from
+    // the one this whole check exists to close, and with unbounded blast
+    // radius for anything (like a background stack-action session) with no
+    // client re-attaching to force a reattach. `isMasterAlive` is the
+    // primitive session-reconciler.ts already uses for exactly this reason
+    // — it queries the systemd scope directly, deliberately independent of
+    // anything tracked in this process's own memory (see its own doc
+    // comment, session-process.ts), so it's correct immediately after a
+    // restart too, not just mid-process.
+    return (await app.pty.isMasterAlive(String(existing.id))) ? existing : null;
+  }
+
   // Shared by every stack-wide lifecycle route below (restart/apply/
-  // rebuild/stop) — same "spawn a kind:dock session, echo an ephemeral
-  // control" shape the docker/update route above established, so a
-  // multi-minute compose operation streams its own output instead of
-  // blocking the request or risking a reverse-proxy idle timeout.
+  // rebuild/stop/update) — same "spawn a kind:dock session, echo an
+  // ephemeral control" shape, so a multi-minute compose operation streams
+  // its own output instead of blocking the request or risking a
+  // reverse-proxy idle timeout. Refuses to start a SECOND concurrent
+  // operation on the same stack (rather than letting a "Restart" clicked
+  // mid-rebuild fire a second `docker compose` invocation against it) —
+  // `reused: true` on the response tells the caller nothing new actually
+  // started, so it can surface that instead of treating this as a fresh
+  // action (Dock.tsx's handleStackAction).
   async function startStackSession(
     projectId: number,
     service: ComposeService,
@@ -1203,26 +1266,44 @@ export async function projectsRoute(app: FastifyInstance) {
         ok: true;
         sessionId: number;
         control: { id: string; title: string; command: string; source: "docker" };
+        reused?: boolean;
       }
     | { ok: false }
   > {
+    const control = {
+      id: `${actionId}:${service.composeProject}`,
+      title,
+      command,
+      source: "docker" as const,
+    };
+
+    const existing = await findActiveStackSession(projectId, service.composeProject);
+    if (existing) {
+      // `control` here still describes the just-REQUESTED action (title/
+      // command), not necessarily whatever the reused session was actually
+      // started with. Hermes review — Dock.tsx doesn't attach anything by
+      // `sessionId` for a stack-wide action (only ephemeral controls,
+      // matched by command string), so this mismatch isn't just cosmetic:
+      // the frontend's own handler (handlePullAndRestart/
+      // handleRebuildAndRestart/handleStackAction) checks `reused` FIRST
+      // and skips adding this control entirely, surfacing a status message
+      // instead — see those handlers' own comments. `control` is still
+      // returned (not omitted) for a caller that hasn't been updated to
+      // check `reused` first, so it degrades to the same "wrong label,
+      // right session" behavior this comment used to claim was the whole
+      // story.
+      return { ok: true, sessionId: existing.id, control, reused: true };
+    }
+
     const result = await createSessionRecord(app, {
       projectId,
       command,
       kind: "dock",
-      name: title,
+      name: stackSessionName(service.composeProject),
+      nameLocked: true,
     });
     if (!result.ok) return { ok: false };
-    return {
-      ok: true,
-      sessionId: result.row.id,
-      control: {
-        id: `${actionId}:${service.composeProject}`,
-        title,
-        command,
-        source: "docker" as const,
-      },
-    };
+    return { ok: true, sessionId: result.row.id, control };
   }
 
   // Per-service, inline lifecycle actions (restart/stop/start) — bounded
@@ -1365,7 +1446,11 @@ export async function projectsRoute(app: FastifyInstance) {
           command,
         );
         if (!started.ok) return reply.badGateway(`Failed to start the ${spec.verb} session`);
-        if (!spec.reportWillRecreate) return reply.code(201).send(started);
+        // Destructured rather than `send(started)`/`{ ...started }`
+        // (Hermes review) — `started` also carries the internal
+        // discriminant `ok: true`, which has no business on the wire.
+        const { sessionId, control, reused } = started;
+        if (!spec.reportWillRecreate) return reply.code(201).send({ sessionId, control, reused });
         // Ordering here is incidental, not load-bearing: the session (and
         // its `up -d`/build) has already been spawned by the time this
         // reads the on-disk config, so it's a best-effort snapshot that the
@@ -1376,7 +1461,7 @@ export async function projectsRoute(app: FastifyInstance) {
         // value instead of a promise.
         return reply
           .code(201)
-          .send({ ...started, willRecreate: await willRecreateOnApply(service) });
+          .send({ sessionId, control, reused, willRecreate: await willRecreateOnApply(service) });
       },
     );
   }
