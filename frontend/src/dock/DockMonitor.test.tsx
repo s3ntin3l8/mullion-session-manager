@@ -749,6 +749,64 @@ describe("Dock", () => {
       expect(group.style.flexGrow).toBe("1");
     });
 
+    it("floors a group's flexGrow at 1 even when its ONLY control is a live transient stack-action monitor (Hermes review)", async () => {
+      // Reachable via PR2b's OWN grace-window expiry: a rebuild starts
+      // while "web" is the sole discovered service (needed to have a stack
+      // header to click through in the first place), the container then
+      // takes longer to reappear than RECREATE_GRACE_MS, and the hold drops
+      // it — leaving the group with only the ephemeral "Update sanctuary"
+      // monitor. group.controls.filter(c => !ephemeralIds.has(c.id)).length
+      // computes 0 there, which would collapse the group to min-content
+      // (flexGrow: 0) instead of holding its normal share for that window.
+      const T0 = 1_700_000_000_000;
+      const dateSpy = vi.spyOn(Date, "now").mockReturnValue(T0);
+      try {
+        dockByProject[1] = [dockerControl()];
+        const rebuildCommand =
+          "docker compose -p 'sanctuary' build --pull && docker compose -p 'sanctuary' up -d";
+        updateByProject[1] = {
+          sessionId: 42,
+          control: {
+            id: "docker-update:sanctuary",
+            title: "Update sanctuary",
+            command: rebuildCommand,
+            source: "docker",
+          },
+        };
+        const rebuildSession = makeSession({ id: 42, kind: "dock", command: rebuildCommand });
+        useDashboardStore.setState({
+          projects: [PROJECT],
+          sessions: [rebuildSession],
+          refreshSessions: vi.fn().mockResolvedValue(undefined),
+        });
+        const user = userEvent.setup();
+        render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+        await screen.findByText("web");
+        await user.click(stackKebab());
+        await user.click(await screen.findByText("Pull & restart stack"));
+        await user.click(await screen.findByText("Click again — restarts the whole stack"));
+        await screen.findByText("Update sanctuary");
+
+        // The container vanishes mid-rebuild (recreate) — held at first.
+        dockByProject[1] = [];
+        useDashboardStore.getState().bumpDockConfigRefreshTrigger();
+        await screen.findByText("recreating…");
+
+        // The build takes longer than the grace window — the hold expires
+        // and "web" is fully dropped, leaving the ephemeral as the group's
+        // only control.
+        dateSpy.mockReturnValue(T0 + 36_000);
+        useDashboardStore.getState().bumpDockConfigRefreshTrigger();
+        await waitFor(() => expect(screen.queryByText("web")).not.toBeInTheDocument());
+
+        const group = document.querySelector(".dock-stack-group") as HTMLElement;
+        expect(group.style.flexGrow).toBe("1");
+      } finally {
+        dateSpy.mockRestore();
+      }
+    });
+
     it("a build-only service disables Check for update but offers an enabled Rebuild & restart, not a disabled Pull & restart", async () => {
       dockByProject[1] = [
         dockerControl({ docker: { ...dockerControl().docker, buildOnly: true } }),

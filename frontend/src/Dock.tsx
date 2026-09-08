@@ -1087,7 +1087,15 @@ function DockColumn({
           // this doesn't cover. Held controls (PR2b) DO count: the whole
           // point of holding one is that the group's flexGrow doesn't change
           // while its container is between the old and new instance.
-          const growingControlCount = group.controls.filter((c) => !ephemeralIds.has(c.id)).length;
+          // Floored at 1 (Hermes review, round 2) — a group whose ONLY
+          // control is a live transient stack-action monitor (the instant a
+          // rebuild starts, before discovery reports the recreated
+          // container) would otherwise compute 0, collapsing the group to
+          // min-content instead of its normal share for that brief window.
+          const growingControlCount = Math.max(
+            1,
+            group.controls.filter((c) => !ephemeralIds.has(c.id)).length,
+          );
           return (
             <div
               key={group.composeProject}
