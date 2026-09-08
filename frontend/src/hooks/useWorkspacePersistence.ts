@@ -33,8 +33,11 @@ export interface UseWorkspacePersistenceParams {
   // here so there's still exactly one `panelsVersion` in the tree. Must be
   // the raw `useState` setter (stable identity forever) — an inline wrapper
   // (e.g. `(v) => setPanelsVersion(v)`) would get a fresh identity every
-  // render and, being read in the autosave effect's dependency array,
-  // re-subscribe `onDidLayoutChange` on every render.
+  // render and, being read in BOTH this hook's own dependency arrays —
+  // the autosave effect's (re-subscribing `onDidLayoutChange` on every
+  // render) and the restore effect's own (re-running the whole restore on
+  // every render, which its `restoredWorkspaceIdRef` guard would no-op but
+  // still needlessly re-check) — would trigger that on every render.
   setPanelsVersion: Dispatch<SetStateAction<number>>;
 }
 
@@ -249,7 +252,13 @@ export function useWorkspacePersistence({
     // maximizedNode unconditionally on every future save.
     applyLayoutPresentation(dockviewApi, layoutTier);
     restoredWorkspaceIdRef.current = activeWorkspaceId;
-  }, [dockviewApi, activeWorkspaceId, workspaces, flushPendingSave, layoutTier]);
+    // Bumped directly here rather than relying on the onDidLayoutChange
+    // effect below to notice this restore — it structurally can't, because
+    // dockview's onDidLayoutChange is an AsapEvent whose subscribers gate on
+    // a fire-count captured at subscribe time. See App.tsx's own
+    // workspaceProjectIds memo comment for the full mechanism.
+    setPanelsVersion((v) => v + 1);
+  }, [dockviewApi, activeWorkspaceId, workspaces, flushPendingSave, layoutTier, setPanelsVersion]);
 
   // Any real layout change (add/remove/move panel, or a splitter-drag
   // resize) schedules a debounced autosave, unless it's the restore

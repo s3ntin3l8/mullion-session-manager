@@ -152,6 +152,37 @@ describe("useWorkspacePersistence", () => {
     expect(result.current.restoredWorkspaceIdRef.current).toBe(1);
   });
 
+  // The dock-lag bug this guards against: dockview's real onDidLayoutChange
+  // is an AsapEvent whose subscriber gates on a fire-count captured AT
+  // SUBSCRIBE TIME (dockview-core's own source). A workspace switch disposes
+  // and re-subscribes that listener in the SAME commit as this restore
+  // effect's own clear()/fromJSON() calls, so every fire those calls produce
+  // happens before the new subscriber's fire-count baseline is even read —
+  // the deferred microtask delivery is silently dropped for every one of
+  // them. This mock's own `onDidLayoutChange`/`fireLayoutChange` is a plain
+  // synchronous callback list, which can't reproduce that gating at all —
+  // so this test never calls `fireLayoutChange`, on purpose, to prove the
+  // restore doesn't depend on it.
+  it("bumps panelsVersion from the restore itself, without onDidLayoutChange ever firing", () => {
+    vi.useFakeTimers();
+    const { api } = makeMockApi();
+    const workspace = makeWorkspace();
+    const setPanelsVersion = makeSetPanelsVersion();
+
+    renderHook(() =>
+      useWorkspacePersistence({
+        dockviewApi: api,
+        activeWorkspaceId: 1,
+        workspaces: [workspace],
+        layoutTier: "desktop",
+        setPanelsVersion,
+      }),
+    );
+
+    expect(api.fromJSON).toHaveBeenCalledWith(workspace.layout);
+    expect(setPanelsVersion).toHaveBeenCalledTimes(1);
+  });
+
   it("does not re-restore when `workspaces` changes for an unrelated reason (e.g. renaming a different workspace)", () => {
     vi.useFakeTimers();
     const { api } = makeMockApi();
@@ -178,6 +209,10 @@ describe("useWorkspacePersistence", () => {
     // away any in-progress edit.
     expect(api.clear).toHaveBeenCalledTimes(1);
     expect(api.fromJSON).toHaveBeenCalledTimes(1);
+    // Same no-op guard applies to the restore's own setPanelsVersion call
+    // (added alongside it) — an unrelated `workspaces` change must not
+    // spuriously bump panelsVersion a second time.
+    expect(setPanelsVersion).toHaveBeenCalledTimes(1);
   });
 
   it("suppresses the restore's own onDidLayoutChange echo, then autosaves a real change once restore has settled", () => {
@@ -196,10 +231,15 @@ describe("useWorkspacePersistence", () => {
       }),
     );
 
+    // The restore effect itself already bumped setPanelsVersion once, on
+    // mount, synchronously — see the dedicated test below for why that call
+    // has to exist independently of onDidLayoutChange ever firing at all.
+    expect(setPanelsVersion).toHaveBeenCalledTimes(1);
+
     // Simulate fromJSON()'s own layout-change echo firing before the
     // restore effect's setTimeout(0) has flipped restoringRef false.
     fireLayoutChange();
-    expect(setPanelsVersion).toHaveBeenCalledTimes(1);
+    expect(setPanelsVersion).toHaveBeenCalledTimes(2);
     vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS);
     expect(saveWorkspaceLayout).not.toHaveBeenCalled();
 
@@ -208,7 +248,7 @@ describe("useWorkspacePersistence", () => {
 
     // A real, post-restore layout change now schedules a debounced save.
     fireLayoutChange();
-    expect(setPanelsVersion).toHaveBeenCalledTimes(2);
+    expect(setPanelsVersion).toHaveBeenCalledTimes(3);
     expect(saveWorkspaceLayout).not.toHaveBeenCalled();
     vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS);
     expect(saveWorkspaceLayout).toHaveBeenCalledTimes(1);

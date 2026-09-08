@@ -1225,13 +1225,24 @@ export function App() {
   );
   // Projects with a session open in the active workspace, derived from the
   // live dockview panels (panel.params.sessionId -> session.projectId) —
-  // reactive via panelsVersion, bumped on every dockview layout change,
-  // including a workspace-switch fromJSON() restore (see the
-  // onDidLayoutChange effect above). Deduped, first-seen order kept so the
-  // Dock's columns don't reshuffle on every render. There's no
-  // workspace<->project link in the DB (workspaces.layout is an opaque
-  // dockview blob) — this is what makes a "per-workspace dock" possible
-  // without a schema change.
+  // reactive via panelsVersion, bumped on every ordinary dockview layout
+  // change via the onDidLayoutChange effect above, AND on a workspace-switch
+  // fromJSON() restore via that same restore effect's own explicit
+  // `setPanelsVersion` call. The restore needs its own call rather than
+  // relying on onDidLayoutChange to notice: `activeWorkspaceId` is in BOTH
+  // effects' dep arrays, so a switch disposes/re-subscribes
+  // onDidLayoutChange in the same commit as the restore's own
+  // clear()/fromJSON() calls, and dockview's onDidLayoutChange is an
+  // AsapEvent whose subscribers gate on a fire-count captured at subscribe
+  // time — a subscriber created after the restore's fires (but before the
+  // deferred microtask drains) never sees them. Without the restore's own
+  // call, this memo — and therefore the Dock's project columns — stayed on
+  // the PREVIOUS workspace until some unrelated cause (usually the next 4s
+  // sessions poll) bumped panelsVersion for its own reasons. Deduped,
+  // first-seen order kept so the Dock's columns don't reshuffle on every
+  // render. There's no workspace<->project link in the DB (workspaces.layout
+  // is an opaque dockview blob) — this is what makes a "per-workspace dock"
+  // possible without a schema change.
   //
   // Hermes review, PR #727 — deliberately walks ALL panels, not
   // `mobilePanels` (which is tiled-only). `<Dock>` below renders on desktop
