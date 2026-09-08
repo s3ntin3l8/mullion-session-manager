@@ -5,7 +5,8 @@ import fs from "node:fs";
 import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
-import { projects } from "../../src/db/schema.js";
+import { eq } from "drizzle-orm";
+import { projects, sessions } from "../../src/db/schema.js";
 
 // Issue #73 — GET /api/projects/:id/dock merging in discovered Compose
 // services, and the two docker/check-update + docker/update routes.
@@ -864,6 +865,207 @@ describe("projects route — Docker Compose service discovery (issue #73)", () =
         payload: { controlId: "docker:some-other-project:web" },
       });
       expect(res.statusCode).toBe(404);
+
+      await app.close();
+    });
+  });
+
+  // Issue #73 follow-up plan (5a) — the five stack-wide action ids
+  // (docker-update, docker-restart, docker-apply, docker-rebuild,
+  // docker-stop) previously had no shared concept of "already running on
+  // this stack": command-string comparison alone can't catch a second
+  // action clicked mid-run, since each of the five runs a DIFFERENT
+  // command. Refused by keying every stack-wide session on the compose
+  // project instead.
+  describe("stack-wide action session identity (issue #73 follow-up, 5a)", () => {
+    it("a second stack action on the SAME compose project reuses the first session rather than starting a concurrent one", async () => {
+      discoveredServices = [fixtureService()];
+      const app = await buildApp();
+      vi.spyOn(app.pty, "isMasterAlive").mockResolvedValue(true);
+      const projectId = await createProject(app);
+
+      const first = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/docker/stack/apply`,
+        payload: { controlId: "docker:sanctuary:web" },
+      });
+      expect(first.statusCode).toBe(201);
+      const firstBody = first.json();
+      expect(firstBody.reused).toBeUndefined();
+
+      // A DIFFERENT action (restart, not apply) on the same stack while
+      // the first is still active — command-string matching would never
+      // catch this, since "restart" and "up -d" share no substring.
+      const second = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/docker/stack/restart`,
+        payload: { controlId: "docker:sanctuary:web" },
+      });
+      expect(second.statusCode).toBe(201);
+      const secondBody = second.json();
+      expect(secondBody.sessionId).toBe(firstBody.sessionId);
+      expect(secondBody.reused).toBe(true);
+
+      // Exactly one kind:dock session exists for this stack, not two.
+      const sessionsRes = await app.inject({
+        method: "GET",
+        url: `/api/sessions?projectId=${projectId}&kind=dock`,
+      });
+      expect(sessionsRes.json()).toHaveLength(1);
+
+      await app.close();
+    });
+
+    it("the docker/update route (pull-and-restart) shares the SAME identity as the four stack/* routes", async () => {
+      discoveredServices = [fixtureService()];
+      const app = await buildApp();
+      vi.spyOn(app.pty, "isMasterAlive").mockResolvedValue(true);
+      const projectId = await createProject(app);
+
+      const update = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/docker/update`,
+        payload: { controlId: "docker:sanctuary:web" },
+      });
+      expect(update.statusCode).toBe(201);
+      const updateBody = update.json();
+
+      const restart = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/docker/stack/restart`,
+        payload: { controlId: "docker:sanctuary:web" },
+      });
+      const restartBody = restart.json();
+      expect(restartBody.sessionId).toBe(updateBody.sessionId);
+      expect(restartBody.reused).toBe(true);
+
+      await app.close();
+    });
+
+    it("stack actions on DIFFERENT compose projects never block each other", async () => {
+      discoveredServices = [
+        fixtureService(),
+        fixtureService({
+          composeProject: "pocket-dev",
+          service: "api",
+          containerName: "pocket-dev-api",
+          workingDir: "/home/user/sanctuary",
+        }),
+      ];
+      const app = await buildApp();
+      const projectId = await createProject(app);
+
+      const web = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/docker/stack/restart`,
+        payload: { controlId: "docker:sanctuary:web" },
+      });
+      const api = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/docker/stack/restart`,
+        payload: { controlId: "docker:pocket-dev:api" },
+      });
+      expect(api.json().reused).toBeUndefined();
+      expect(api.json().sessionId).not.toBe(web.json().sessionId);
+
+      await app.close();
+    });
+
+    it("starts a genuinely new session once the reused one's DB row is no longer active", async () => {
+      discoveredServices = [fixtureService()];
+      const app = await buildApp();
+      const projectId = await createProject(app);
+
+      const first = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/docker/stack/apply`,
+        payload: { controlId: "docker:sanctuary:web" },
+      });
+      const firstSessionId = first.json().sessionId;
+
+      app.db
+        .update(sessions)
+        .set({ status: "exited" })
+        .where(eq(sessions.id, firstSessionId))
+        .run();
+
+      const second = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/docker/stack/restart`,
+        payload: { controlId: "docker:sanctuary:web" },
+      });
+      expect(second.json().reused).toBeUndefined();
+      expect(second.json().sessionId).not.toBe(firstSessionId);
+
+      await app.close();
+    });
+
+    it("starts a genuinely new session when the reused one's PROCESS has already died, even if the DB row is still 'active' (Hermes review)", async () => {
+      // The real gap this covers: `sessions.status` records INTENT, not
+      // live process state (AGENTS.md) — a `docker compose` process that
+      // finished on its own (the common case) isn't reflected in the DB
+      // until session-reconciler.ts's own periodic sweep next runs, which
+      // can lag by up to its configured interval (5s-1h). The DB-flip test
+      // above only proves the SQL predicate excludes non-active rows; it
+      // never exercises this window, since it flips the row itself. Here
+      // the row is left `status: "active"` — only the underlying systemd
+      // scope is reported dead — so this only passes if
+      // findActiveStackSession cross-checks `app.pty.isMasterAlive`, not
+      // the DB column alone. Spied directly (mockMasterAlive's own pattern,
+      // test/services/session-reconciler.test.ts) rather than routed
+      // through the mocked node-pty/child_process spawns — isMasterAlive
+      // shells out to `systemctl` independently of anything those mocks
+      // control, so a real dead-vs-alive distinction has to be injected at
+      // this layer, the same way the reconciler's own tests do it.
+      discoveredServices = [fixtureService()];
+      const app = await buildApp();
+      const isMasterAlive = vi.spyOn(app.pty, "isMasterAlive").mockResolvedValue(true);
+      const projectId = await createProject(app);
+
+      const first = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/docker/stack/apply`,
+        payload: { controlId: "docker:sanctuary:web" },
+      });
+      const firstSessionId = first.json().sessionId;
+
+      // The compose command itself finished — the real systemd scope is
+      // gone, but nothing tells the DB row about it yet.
+      isMasterAlive.mockResolvedValue(false);
+
+      const second = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/docker/stack/restart`,
+        payload: { controlId: "docker:sanctuary:web" },
+      });
+      expect(second.json().reused).toBeUndefined();
+      expect(second.json().sessionId).not.toBe(firstSessionId);
+
+      await app.close();
+    });
+
+    it("the created session is named docker-stack:<composeProject> and name-locked", async () => {
+      discoveredServices = [fixtureService()];
+      const app = await buildApp();
+      const projectId = await createProject(app);
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/docker/stack/restart`,
+        payload: { controlId: "docker:sanctuary:web" },
+      });
+
+      const sessionsRes = await app.inject({
+        method: "GET",
+        url: `/api/sessions?projectId=${projectId}&kind=dock`,
+      });
+      expect(sessionsRes.json()).toEqual([
+        expect.objectContaining({
+          id: res.json().sessionId,
+          name: "docker-stack:sanctuary",
+          nameLocked: true,
+        }),
+      ]);
 
       await app.close();
     });

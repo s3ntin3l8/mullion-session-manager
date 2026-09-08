@@ -923,6 +923,15 @@ export interface DockerUpdateResult {
    * `null` means "couldn't tell" (missing compose file, docker
    * unreachable, …); advisory only, never blocks the action. */
   willRecreate?: boolean | null;
+  /** Issue #73 follow-up plan (5a) — true when an action was refused
+   * because a DIFFERENT stack-wide action (any of the five: update/
+   * restart/apply/rebuild/stop) was already running on this same compose
+   * project; `sessionId` is that EXISTING session's id, not a new one, and
+   * `control`'s title/command describe the just-requested action, not
+   * necessarily what that existing session is actually running (Dock.tsx's
+   * own handler skips adding a second ephemeral control for this reason —
+   * see its own comment). */
+  reused?: boolean;
 }
 
 /** Shared response shape for every stack-wide lifecycle action

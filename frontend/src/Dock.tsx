@@ -732,6 +732,18 @@ function DockColumn({
   const handlePullAndRestart = async (control: DockControl, statusKey = control.id) => {
     try {
       const result = await api.updateDockerStack(projectId, control.id);
+      // Issue #73 follow-up plan (5a) — `reused: true` means a DIFFERENT
+      // stack-wide action is already running on this compose project;
+      // `result.control` describes the just-requested action, not
+      // necessarily the one actually running, so adding it as an ephemeral
+      // would render a row whose command never matches any live session
+      // (runningSessionFor) and vanish again next render — see
+      // addEphemeralControl's own reasoning below for why every OTHER
+      // caller here still adds it unconditionally.
+      if (result.reused) {
+        showCheckStatus(statusKey, "Already running another stack action");
+        return;
+      }
       addEphemeralControl(result.control);
       // The new session won't appear in the store's `sessions` list (and
       // hence `runningFor`/`dockSessions` above) until the next poll —
@@ -748,6 +760,10 @@ function DockColumn({
   const handleRebuildAndRestart = async (control: DockControl, statusKey = control.id) => {
     try {
       const result = await api.rebuildDockerStack(projectId, control.id);
+      if (result.reused) {
+        showCheckStatus(statusKey, "Already running another stack action");
+        return;
+      }
       addEphemeralControl(result.control);
       await useDashboardStore.getState().refreshSessions();
       if (result.willRecreate === true) showCheckStatus(statusKey, "Rebuilding — will recreate");
@@ -800,6 +816,10 @@ function DockColumn({
   ) => {
     try {
       const result = await action(projectId, control.id);
+      if (result.reused) {
+        showCheckStatus(statusKey, "Already running another stack action");
+        return;
+      }
       addEphemeralControl(result.control);
       await useDashboardStore.getState().refreshSessions();
       if (result.willRecreate === true) showCheckStatus(statusKey, "Applying — will recreate");

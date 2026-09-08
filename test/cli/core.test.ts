@@ -1285,6 +1285,37 @@ describe("runCommand", () => {
       });
     });
 
+    it("dock start names a docker-sourced control's session by its stable containerName identity, not its title", async () => {
+      // Issue #73 follow-up plan (5b) — mirrors the identical MCP client
+      // test/fix; see that test's own comment for why command/title alone
+      // isn't a reliable session identity for a docker-sourced control.
+      const client = fakeClient({
+        request: vi.fn(async (op: string) => {
+          if (op === "projects.dock") {
+            return [
+              {
+                id: "docker:sanctuary:web",
+                title: "web",
+                command: "docker compose -p sanctuary logs -f web",
+                source: "docker",
+                docker: { containerName: "sanctuary-web" },
+              },
+            ];
+          }
+          return { id: 10 };
+        }),
+      });
+      const io = fakeIo();
+      await runCommand(["dock", "start", "1", "docker:sanctuary:web"], { client, io });
+      expect(client.request).toHaveBeenCalledWith("sessions.create", {
+        projectId: "1",
+        command: "docker compose -p sanctuary logs -f web",
+        kind: "dock",
+        name: "docker-logs:sanctuary-web",
+        nameLocked: true,
+      });
+    });
+
     it("dock start errors clearly when the control id doesn't exist", async () => {
       const client = fakeClient({ request: vi.fn(async () => []) });
       const io = fakeIo();

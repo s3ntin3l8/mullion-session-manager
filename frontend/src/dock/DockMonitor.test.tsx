@@ -1020,6 +1020,35 @@ describe("Dock", () => {
       });
     });
 
+    it("a reused stack action (another one already running on this stack) surfaces a status message instead of adding a mismatched ephemeral row", async () => {
+      // Issue #73 follow-up plan (5a), Hermes review — `reused: true` means
+      // the backend refused to start a second concurrent operation on this
+      // stack. `result.control` here would describe THIS click's action
+      // (restart), not whatever's actually running, so adding it as an
+      // ephemeral would render a row that never matches any live session
+      // (command mismatch) and vanish again next render.
+      dockByProject[1] = [dockerControl()];
+      stackActionByProject[1] = {
+        sessionId: 44,
+        control: { id: "docker-restart:sanctuary", title: "Restart sanctuary", source: "docker" },
+        reused: true,
+      };
+      const refreshSessions = vi.fn().mockResolvedValue(undefined);
+      useDashboardStore.setState({ projects: [PROJECT], sessions: [], refreshSessions });
+      const user = userEvent.setup();
+      render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+      await screen.findByText("web");
+      await user.click(stackKebab());
+      await user.click(await screen.findByText("Restart stack"));
+
+      expect(await screen.findByText("Already running another stack action")).toBeInTheDocument();
+      // No mismatched ephemeral row, and no wasted refresh — the early
+      // return skips both.
+      expect(screen.queryByText("Restart sanctuary")).not.toBeInTheDocument();
+      expect(refreshSessions).not.toHaveBeenCalled();
+    });
+
     it("a manual dock.json control (no `docker` field) never renders a kebab or a stack header", async () => {
       dockByProject[1] = [{ id: "dev", title: "Dev server", command: "npm run dev" }];
       render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);

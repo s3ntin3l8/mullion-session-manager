@@ -431,6 +431,49 @@ describe("MullionClient (issue #271)", () => {
       expect(result).toEqual({ id: 42 });
     });
 
+    it("startDockSession names a docker-sourced control's session by its stable containerName identity, not its title", async () => {
+      // Issue #73 follow-up plan (5b) — `control.command` for a docker
+      // control is reconstructed fresh from live container labels on every
+      // discovery poll and can change text without the service having
+      // changed, so naming the session by `control.title` (or matching by
+      // command) can silently orphan it. `docker-logs:<containerName>`
+      // mirrors dockHelpers.ts's own dockerSessionIdentity on the frontend.
+      const socketPath = await startControlServer((msg, socket) => {
+        if (msg.op === "projects.dock") {
+          socket.write(
+            `${JSON.stringify({
+              id: msg.id,
+              ok: true,
+              status: 200,
+              result: [
+                {
+                  id: "docker:sanctuary:web",
+                  command: "docker compose -p sanctuary logs -f web",
+                  title: "web",
+                  source: "docker",
+                  docker: { containerName: "sanctuary-web" },
+                },
+              ],
+            })}\n`,
+          );
+          return;
+        }
+        expect(msg.op).toBe("sessions.create");
+        expect(msg.body).toEqual({
+          projectId: "3",
+          command: "docker compose -p sanctuary logs -f web",
+          kind: "dock",
+          name: "docker-logs:sanctuary-web",
+          nameLocked: true,
+        });
+        socket.write(
+          `${JSON.stringify({ id: msg.id, ok: true, status: 201, result: { id: 42 } })}\n`,
+        );
+      });
+      const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+      await client.startDockSession("3", "docker:sanctuary:web");
+    });
+
     it("startDockSession throws a clear error when the dock control id doesn't exist", async () => {
       const socketPath = await startControlServer((msg, socket) => {
         socket.write(`${JSON.stringify({ id: msg.id, ok: true, status: 200, result: [] })}\n`);
