@@ -3,8 +3,10 @@
 # bridge helper: packages scripts/build-helper-sea.mjs's own mullion-helper
 # binary (built by CI BEFORE this runs — see this file's own invocation in
 # .github/workflows/ci-cd.yml's test-macos job and release-please.yml's
-# build-helper-pkg job) into a plain pkgbuild component package. No custom
-# pairing-payload wizard page (unlike deploy/windows/mullion-helper.iss) —
+# build-helper-pkg job) into a pkgbuild component package, then wraps that
+# in a productbuild product archive purely to show our logo on
+# Installer.app's welcome pane (see the productbuild section below for why).
+# No custom pairing-payload wizard page (unlike deploy/windows/mullion-helper.iss) —
 # Installer.app has no Inno-Setup-style scripting for that; a real one would
 # need a compiled InstallerPlugin or a standalone GUI app, either of which is
 # tray-repo work, not this reference installer's job. Pairing stays a
@@ -28,6 +30,25 @@ case "$VERSION" in
     exit 1
     ;;
 esac
+# VERSION is trusted (see the comment above) but still gets interpolated
+# into a hand-written XML attribute below (Distribution document's own
+# <pkg-ref version="...">) — escape it there rather than assume it's
+# already XML-safe just because it already passed the path-safety check
+# above; the two are different hazards.
+xml_escape_attr() {
+  local s="$1"
+  # `&` in a `${s//pat/rep}` replacement means "the matched text" (bash
+  # 5.2+, sed-like) — verified empirically: an earlier version of this
+  # function without the `\&` escapes below produced `<lt;` instead of
+  # `&lt;`, silently mangling every substitution past the first. `\&`
+  # is bash's own escape for a literal ampersand in that position.
+  s="${s//&/\&amp;}"
+  s="${s//</\&lt;}"
+  s="${s//>/\&gt;}"
+  s="${s//\"/\&quot;}"
+  printf '%s' "$s"
+}
+VERSION_XML="$(xml_escape_attr "$VERSION")"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$HERE/../.." && pwd)"
 SEA_BIN="$REPO_ROOT/build/helper-sea/mullion-helper"
@@ -75,7 +96,29 @@ chmod 755 "$STAGE_ROOT/usr/local/bin/mullion-helper"
 # frontend/public/icon-512.png) — pkgbuild alone has no branding of its
 # own. Same installed contents/scripts either way; a product archive is
 # still a plain double-clickable/`installer -pkg`-able .pkg.
-COMPONENT_PATH="$OUT_DIR/.component-mullion-helper-$VERSION.pkg"
+#
+# Deliberately NOT dot-prefixed (an earlier version of this script used
+# `.component-...`): --package-path below resolves the <pkg-ref> content
+# by scanning $OUT_DIR for a matching filename, and productbuild's own
+# --synthesize is documented to skip hidden files when scanning a
+# directory — untested (and unnecessary to risk) whether --package-path's
+# own lookup does the same.
+COMPONENT_NAME="mullion-helper-component-$VERSION.pkg"
+COMPONENT_PATH="$OUT_DIR/$COMPONENT_NAME"
+# Escaped for the <pkg-ref> element TEXT below (needs &/</> escaping,
+# same hazard as the attribute VERSION_XML above) — productbuild decodes
+# entities back to the real string when it parses the XML, so this has no
+# effect on the ACTUAL file productbuild opens via --package-path; only
+# $COMPONENT_NAME/$COMPONENT_PATH (used unescaped everywhere else in this
+# script) touch the real filesystem path.
+COMPONENT_NAME_XML="$(xml_escape_attr "$COMPONENT_NAME")"
+DIST_XML="$OUT_DIR/distribution-$VERSION.xml"
+# Both are build-local scratch files, cleaned up on ANY exit, not just a
+# successful one — `productbuild` failing partway through (e.g. a missing
+# resources path) would otherwise leave these behind indefinitely, since
+# nothing else ever sweeps $OUT_DIR.
+trap 'rm -f "$COMPONENT_PATH" "$DIST_XML"' EXIT
+
 pkgbuild \
   --root "$STAGE_ROOT" \
   --identifier "$IDENTIFIER" \
@@ -84,16 +127,17 @@ pkgbuild \
   --install-location / \
   "$COMPONENT_PATH"
 
-DIST_XML="$OUT_DIR/.distribution-$VERSION.xml"
 # Hand-written rather than `productbuild --synthesize` + editing its
 # output — synthesize's own output has no background/title hooks to
 # insert into without fragile XML surgery, and this is short enough to
 # just state directly. `pkg-ref` for the *content* (naming the component
 # file productbuild loads via --package-path below) needs the SAME id as
-# the one for the *choice* (making it selectable, but forced on since
-# there's only one component and no customize option) — productbuild
-# fails at build time, not silently, if this id doesn't match the
-# component package's own --identifier above.
+# the one for the *choice* (selecting it) — productbuild fails at build
+# time, not silently, if this id doesn't match the component package's
+# own --identifier above. No `visible`/`onConclusion` attributes: the
+# choices page never renders at all under `customize="never"` below, and
+# `onConclusion` has no non-default value worth stating — both would just
+# be inert tokens in otherwise-hand-maintained XML.
 cat >"$DIST_XML" <<EOF
 <?xml version="1.0" encoding="utf-8"?>
 <installer-gui-script minSpecVersion="1">
@@ -106,10 +150,10 @@ cat >"$DIST_XML" <<EOF
         </line>
     </choices-outline>
     <choice id="default"/>
-    <choice id="$IDENTIFIER" visible="false">
+    <choice id="$IDENTIFIER">
         <pkg-ref id="$IDENTIFIER"/>
     </choice>
-    <pkg-ref id="$IDENTIFIER" version="$VERSION" onConclusion="none">$(basename "$COMPONENT_PATH")</pkg-ref>
+    <pkg-ref id="$IDENTIFIER" version="$VERSION_XML">$COMPONENT_NAME_XML</pkg-ref>
 </installer-gui-script>
 EOF
 
@@ -119,6 +163,5 @@ productbuild \
   --package-path "$OUT_DIR" \
   --resources "$HERE/resources" \
   "$OUT_PATH"
-rm -f "$COMPONENT_PATH" "$DIST_XML"
 
 echo "built $OUT_PATH"
