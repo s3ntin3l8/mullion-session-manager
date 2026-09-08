@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.3.11](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.10...v0.3.11) (2026-09-07)
+
+
+### Features
+
+* **bundle-sync:** fan out re-enable to registered agent hosts ([#1151](https://github.com/s3ntin3l8/mullion-session-manager/issues/1151)) ([13853a3](https://github.com/s3ntin3l8/mullion-session-manager/commit/13853a331bb21598d49dfdd9542f104d18807a67))
+* **scaffold-generate:** detect generation turns that didn't read the repo ([#1145](https://github.com/s3ntin3l8/mullion-session-manager/issues/1145)) ([#1168](https://github.com/s3ntin3l8/mullion-session-manager/issues/1168)) ([f7e5c42](https://github.com/s3ntin3l8/mullion-session-manager/commit/f7e5c4269b7ed356039182a137bca873f71ce557))
+* **scaffold-generate:** surface unsandboxed status and include Workflow Conventions in prompt ([#1144](https://github.com/s3ntin3l8/mullion-session-manager/issues/1144), [#1159](https://github.com/s3ntin3l8/mullion-session-manager/issues/1159), [#1115](https://github.com/s3ntin3l8/mullion-session-manager/issues/1115)) ([#1167](https://github.com/s3ntin3l8/mullion-session-manager/issues/1167)) ([e49dba8](https://github.com/s3ntin3l8/mullion-session-manager/commit/e49dba8cda66dfc9a8b9c57148c94754dcd1ab83))
+* **security:** add an opt-out for scaffold-generate's bwrap sandboxing ([#1161](https://github.com/s3ntin3l8/mullion-session-manager/issues/1161)) ([e613471](https://github.com/s3ntin3l8/mullion-session-manager/commit/e61347192907180bf2e9a61692f529e34d68d640))
+* **voice:** make the dictation push-to-talk hotkey configurable ([#1160](https://github.com/s3ntin3l8/mullion-session-manager/issues/1160)) ([3c51058](https://github.com/s3ntin3l8/mullion-session-manager/commit/3c51058e076424134218c5844eeac8f04c698c75))
+
+
+### Bug Fixes
+
+* **installer:** refuse non-SEA Windows and thread --insecure flag ([#1147](https://github.com/s3ntin3l8/mullion-session-manager/issues/1147)) ([#1166](https://github.com/s3ntin3l8/mullion-session-manager/issues/1166)) ([c345408](https://github.com/s3ntin3l8/mullion-session-manager/commit/c34540815e0a318ac131d559efea700d457b671b))
+* **pty-manager:** apply requested cols/rows when reattaching to a dead session ([#1169](https://github.com/s3ntin3l8/mullion-session-manager/issues/1169)) ([729f606](https://github.com/s3ntin3l8/mullion-session-manager/commit/729f606afb71be90ab00452fa2f7d92433c6539b)), closes [#1156](https://github.com/s3ntin3l8/mullion-session-manager/issues/1156)
+* **pty-manager:** persist alt-screen/mouse-tracking state across a backend restart ([#1158](https://github.com/s3ntin3l8/mullion-session-manager/issues/1158)) ([ab6ef86](https://github.com/s3ntin3l8/mullion-session-manager/commit/ab6ef866cc015c352810b39125e09f757aaeb3e4))
+* **pty-manager:** track bracketed paste mode across reattach and restart ([#1155](https://github.com/s3ntin3l8/mullion-session-manager/issues/1155)) ([#1163](https://github.com/s3ntin3l8/mullion-session-manager/issues/1163)) ([d0eace9](https://github.com/s3ntin3l8/mullion-session-manager/commit/d0eace9d382dc647bde3a806d438420aebcfca18))
+* **scaffold-generate:** make agy's generation turn actually work ([#1152](https://github.com/s3ntin3l8/mullion-session-manager/issues/1152)) ([91eedbd](https://github.com/s3ntin3l8/mullion-session-manager/commit/91eedbd83e17ae282eaad53602daab1cdd979875))
+* **scaffold:** stamp scaffolded files and make the committed-scaffold gate identity- and host-aware ([#1150](https://github.com/s3ntin3l8/mullion-session-manager/issues/1150)) ([6dda478](https://github.com/s3ntin3l8/mullion-session-manager/commit/6dda4789d1e660985c7a5276d1a7cdc2d5d25ddf))
+* **session-process:** resolve scope ownership by dtach socket path ([#1170](https://github.com/s3ntin3l8/mullion-session-manager/issues/1170)) ([6081e46](https://github.com/s3ntin3l8/mullion-session-manager/commit/6081e4615d4bcacdb1f0d00d28c7d8b9c6b6cb70))
+* **ssh-agent:** Windows helper install/pairing UX and diagnosability ([#1149](https://github.com/s3ntin3l8/mullion-session-manager/issues/1149)) ([33e0739](https://github.com/s3ntin3l8/mullion-session-manager/commit/33e0739fdfc672ac8b50ab15abca6bfd9428ea5f))
+* **terminal:** reconstruct URLs hard-wrapped across rows by agent TUIs ([#1162](https://github.com/s3ntin3l8/mullion-session-manager/issues/1162)) ([d5398d2](https://github.com/s3ntin3l8/mullion-session-manager/commit/d5398d2b5aef6debc0b3d47d6a6e02ddc44fcf1e))
+
 ## [0.3.10](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.9...v0.3.10) (2026-09-07)
 
 
