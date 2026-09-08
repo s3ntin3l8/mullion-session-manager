@@ -32,6 +32,7 @@ export function DockMonitor({
   dockerStatus,
   transient = false,
   held = false,
+  minWidthPx,
   checkStatus,
   armed,
   confirmBeforeKill,
@@ -68,6 +69,14 @@ export function DockMonitor({
   // container the backend's discovery no longer knows about and 404; the
   // header and kebab both go inert while held, not just cosmetically dim.
   held?: boolean;
+  // PR3, Hermes review round 2 — overrides .dock-monitor's static CSS
+  // min-width (empty-states.css, correct only at the default 14px font /
+  // 4px padding) with the SAME derivation recomputed from the user's live
+  // terminal settings (dockMonitorMinWidthPx, dockHelpers.ts) — an inline
+  // style wins over the CSS class by specificity. Optional so a caller that
+  // doesn't have `settings` handy (there are none today, but nothing here
+  // requires one) still gets the static fallback rather than an error.
+  minWidthPx?: number;
   checkStatus: { message: string; isError: boolean } | undefined;
   armed: boolean;
   confirmBeforeKill: boolean;
@@ -79,7 +88,10 @@ export function DockMonitor({
 }) {
   return (
     <Fragment>
-      <div className={`dock-monitor${transient ? " dock-monitor-transient" : ""}`}>
+      <div
+        className={`dock-monitor${transient ? " dock-monitor-transient" : ""}`}
+        style={minWidthPx !== undefined ? { minWidth: minWidthPx } : undefined}
+      >
         <div
           className="dock-monitor-header"
           style={{ cursor: held ? "default" : "pointer" }}

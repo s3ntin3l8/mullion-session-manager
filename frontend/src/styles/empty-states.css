@@ -1295,6 +1295,16 @@
    the real column count is `floor((350 − 10 − 14) / 8.4)` = 38, BELOW
    MIN_TERMINAL_COLS, so that number never actually left the shrunk-font
    regime this floor exists to fix; corrected before this ever shipped.)
+
+   364px is only correct at the DEFAULT 14px fontSize / 4px padding —
+   Hermes review round 2 flagged that both are user-configurable
+   (AppearanceSection sliders, 10-20px / 0-16px), and this static number
+   stops holding 40 columns well before the top of either range. Dock.tsx
+   now recomputes this same derivation from the user's LIVE settings
+   (dockMonitorMinWidthPx, dockHelpers.ts) and applies it as an inline
+   `minWidth` style, which wins over this rule by specificity — this
+   364px is only the fallback for a caller with no settings to compute
+   from (there is none today), not the actual floor most users get.
    Below 40
    columns, MIN_TERMINAL_COLS's own floor takes over (pty-manager.ts) and
    the PTY gets resized UP to 40 regardless of what the client asked for, so
