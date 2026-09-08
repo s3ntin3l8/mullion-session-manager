@@ -52,12 +52,19 @@ const DOCKER_POLL_INTERVAL_MS = 15_000;
 // changes a stack group's control count once per service, and the group's
 // own `flexGrow` (DockColumn's render, below) resizes every sibling monitor
 // each time — this is the mechanism behind "rebuilding a stack makes the
-// whole dock resize repeatedly." 30s = two poll intervals: long enough to
-// outlast one missed poll if the container is a little slow to reappear,
-// short enough that a service actually removed via `compose down` still
-// disappears from the Dock promptly. See holdVanishedDockerControls
-// (dockHelpers.ts) for the derivation this feeds.
-const RECREATE_GRACE_MS = 2 * DOCKER_POLL_INTERVAL_MS;
+// whole dock resize repeatedly." Two poll intervals plus a small margin:
+// long enough to outlast one missed poll if the container is a little slow
+// to reappear, short enough that a service actually removed via
+// `compose down` still disappears from the Dock promptly. The margin (vs.
+// a flat 2x) is deliberate — Hermes review, PR #1176: a recreate finishing
+// just after the exact 2x-interval poll would otherwise expire on that very
+// poll and reproduce the flicker for one more cycle. Expiry is only
+// re-checked ON a poll (not continuously), so this margin's real effect is
+// coarser than "+5s" sounds — it pushes the worst case past the 30s poll
+// entirely, to the 45s one, buying a full extra poll cycle of slack rather
+// than a few seconds of it. See holdVanishedDockerControls (dockHelpers.ts)
+// for the derivation this feeds.
+const RECREATE_GRACE_MS = 2 * DOCKER_POLL_INTERVAL_MS + 5_000;
 
 const DEFAULT_DOCK_HEIGHT = 220;
 const DOCK_MIN_HEIGHT = 120;
@@ -1072,11 +1079,14 @@ function DockColumn({
           // PR2a — a transient stack-action monitor is fixed-width
           // (.dock-monitor-transient), not an N-way split participant, so it
           // must not count toward the group's own flexGrow — otherwise the
-          // group's share of the column (and therefore every OTHER monitor's
-          // width) changes the moment it appears or disappears. Held
-          // controls (PR2b) DO count: the whole point of holding one is that
-          // the group's flexGrow doesn't change while its container is
-          // between the old and new instance.
+          // group's share of the column relative to every OTHER group
+          // changes the moment it appears or disappears (the unbounded,
+          // per-poll churn this PR fixes). It does NOT make the panel free
+          // within ITS OWN group — see .dock-monitor-transient's own comment
+          // (empty-states.css) for the bounded one-time in-group residual
+          // this doesn't cover. Held controls (PR2b) DO count: the whole
+          // point of holding one is that the group's flexGrow doesn't change
+          // while its container is between the old and new instance.
           const growingControlCount = group.controls.filter((c) => !ephemeralIds.has(c.id)).length;
           return (
             <div

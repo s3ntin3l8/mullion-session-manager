@@ -459,6 +459,72 @@ describe("Dock", () => {
         expect(screen.getByTestId("terminal-pane")).toBe(paneBefore);
       });
 
+      it("hides the kebab and makes the header inert while a row is held — control.docker is a frozen pre-vanish snapshot the backend can't resolve", async () => {
+        // Hermes review, PR #1176 — before this, the kebab's "Restart
+        // service"/"Stop service"/"Check for update" and the header's own
+        // start/kill both stayed live against `control.docker` while held,
+        // even though that snapshot no longer matches anything live
+        // discovery knows about — every one of those actions would 404
+        // into a failure toast for the ~1 poll interval the row is held.
+        dockByProject[1] = [dockerControl()];
+        const runningSession = makeSession({
+          id: 42,
+          kind: "dock",
+          name: "docker-logs:sanctuary-web",
+          command: dockerControl().command,
+        });
+        const deleteSession = vi.fn().mockResolvedValue(undefined);
+        useDashboardStore.setState({
+          projects: [PROJECT],
+          sessions: [runningSession],
+          sessionsLoaded: true,
+          deleteSession,
+          // Explicitly off (default settings has this ON, DEFAULT_SETTINGS —
+          // api/settings.ts): with it on, a single click only arms the kill
+          // rather than firing deleteSession at all, which would make the
+          // "deleteSession not called" assertion below pass whether or not
+          // the held-gate actually works. With it off, a click on an
+          // unblocked header kills immediately — the assertion is only
+          // discriminating this way.
+          settings: {
+            ...DEFAULT_SETTINGS,
+            sessions: { ...DEFAULT_SETTINGS.sessions, confirmBeforeKill: false },
+          },
+        });
+        const user = userEvent.setup();
+        render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+        await screen.findByText("web");
+        expect(document.querySelector(".dock-monitor-header .kebab-trigger-btn")).not.toBeNull();
+        expect(document.querySelector(".dock-monitor-header")).not.toHaveAttribute(
+          "aria-disabled",
+          "true",
+        );
+
+        dockByProject[1] = [];
+        useDashboardStore.getState().bumpDockConfigRefreshTrigger();
+        await screen.findByText("recreating…");
+
+        // The kebab is gone entirely rather than merely disabled.
+        expect(document.querySelector(".dock-monitor-header .kebab-trigger-btn")).toBeNull();
+        const header = document.querySelector(".dock-monitor-header") as HTMLElement;
+        expect(header).toHaveAttribute("aria-disabled", "true");
+
+        // The header itself no longer toggles the session — a click while
+        // held must not fire the kill handler (confirmBeforeKill is off
+        // above specifically so an unblocked click WOULD have fired it).
+        await user.click(screen.getByText("web"));
+        await new Promise((r) => setTimeout(r, 0));
+        expect(deleteSession).not.toHaveBeenCalled();
+
+        // Same for the keyboard path (P10) — Enter/Space while held is
+        // also a no-op, not just the mouse click.
+        header.focus();
+        await user.keyboard("{Enter}");
+        await new Promise((r) => setTimeout(r, 0));
+        expect(deleteSession).not.toHaveBeenCalled();
+      });
+
       it("drops the row once the grace window elapses without the service reappearing", async () => {
         // Date.now() mocked (not real timers) — same technique as the
         // auto-attach cooldown test above — so this doesn't need to
@@ -475,14 +541,15 @@ describe("Dock", () => {
           useDashboardStore.getState().bumpDockConfigRefreshTrigger();
           await screen.findByText("recreating…");
 
-          // Still within the grace window — a poll must keep holding it.
-          dateSpy.mockReturnValue(T0 + 29_000);
+          // Still within the grace window (RECREATE_GRACE_MS = 2 poll
+          // intervals + a 5s margin, Dock.tsx) — a poll must keep holding it.
+          dateSpy.mockReturnValue(T0 + 34_000);
           useDashboardStore.getState().bumpDockConfigRefreshTrigger();
           await new Promise((r) => setTimeout(r, 0));
           expect(screen.queryByText("web")).toBeInTheDocument();
 
           // Grace elapsed with no reappearance — the row finally drops.
-          dateSpy.mockReturnValue(T0 + 31_000);
+          dateSpy.mockReturnValue(T0 + 36_000);
           useDashboardStore.getState().bumpDockConfigRefreshTrigger();
           await waitFor(() => expect(screen.queryByText("web")).not.toBeInTheDocument());
         } finally {
@@ -670,9 +737,14 @@ describe("Dock", () => {
       expect(transientRow.closest(".dock-monitor")).toHaveClass("dock-monitor-transient");
 
       // Two controls render in the group now, but flexGrow counts only the
-      // one grow-participating control ("web") — this is the assertion that
-      // pins the fix: the transient panel appearing must not change the
-      // group's own flexGrow, which is what would otherwise resize "web".
+      // one grow-participating control ("web") — this pins the group's OWN
+      // flexGrow against changing, which is what stops every OTHER group's
+      // width from also resizing on every poll (the reported, unbounded
+      // churn). It does not claim "web" itself keeps its exact pixel width:
+      // the transient's fixed 260px still comes out of this group's own
+      // share, so "web" still takes one bounded step when the panel
+      // appears/disappears — see .dock-monitor-transient's own comment
+      // (empty-states.css) and Hermes' review on PR #1176.
       const group = document.querySelector(".dock-stack-group") as HTMLElement;
       expect(group.style.flexGrow).toBe("1");
     });

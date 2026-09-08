@@ -1277,17 +1277,26 @@
 /* PR2a — a transient stack-action monitor (startStackSession's own
    ephemeral control, rendered while its "Rebuild & restart"/etc. session is
    still live) is fixed-width rather than `flex: 1` — Dock.tsx's own
-   flexGrow computation excludes it from the group's grow count to match, so
-   together the two mean the monitor appears/disappears without changing
-   any SIBLING monitor's width. 260px comfortably clears the 216px
-   min-content floor above. */
+   flexGrow computation excludes it from the group's grow count to match.
+   That keeps the GROUP's own share of the dock row constant relative to
+   every OTHER group/stack — the bug this actually fixes, since before this
+   the group's grow count (and so every other group's width too) changed on
+   every poll a service happened to be mid-recreate. It does NOT make the
+   panel free within its own group: a fixed 260px still has to come from
+   somewhere, so an in-group sibling's width does step once, by up to
+   260px/N, when the panel appears or disappears (Hermes review, PR #1176)
+   — a single bounded step, not the unbounded per-poll oscillation this PR
+   set out to fix. 260px comfortably clears the 216px min-content floor
+   above. */
 .dock-monitor-transient {
   flex: 0 0 260px;
 }
 /* Min-content invariant this header must never be squeezed below, for a
-   Docker-backed row (the case this floor exists for — .dock-monitor-image
-   and .dock-monitor-kebab share the identical `control.docker &&` guard, so
-   whenever the kebab is present the image pill unconditionally is too):
+   Docker-backed row (the case this floor exists for — .dock-monitor-kebab's
+   guard, `control.docker && !held` (PR2b), is a strict SUBSET of
+   .dock-monitor-image's plain `control.docker`, so whenever the kebab is
+   present the image pill unconditionally is too — held only ever removes
+   the kebab from this floor's worst case, never adds to it):
    padding 20 + border 2 + status dot 6 + .dock-monitor-container-state
    ("restarting", its longest value) 57 + .dock-monitor-image's OWN fixed
    floor 27 (icon 11 + its padding 10 + border 2 + internal gap 4 — its text
