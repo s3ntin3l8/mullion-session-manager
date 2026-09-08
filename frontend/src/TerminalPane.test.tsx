@@ -3539,6 +3539,7 @@ describe("TerminalPane inputAffordances (PR3 — dock monitor terminal chrome)",
   // stub one locally (same technique as the voice-dictation describe block
   // above) so the mic button's default-visible case is actually exercised,
   // not vacuously true because isSupported is false in every other test.
+  let fakeAffordanceRecognitionInstances: FakeSpeechRecognition[];
   class FakeSpeechRecognition {
     continuous = false;
     interimResults = false;
@@ -3549,9 +3550,13 @@ describe("TerminalPane inputAffordances (PR3 — dock monitor terminal chrome)",
     start = vi.fn();
     stop = vi.fn();
     abort = vi.fn();
+    constructor() {
+      fakeAffordanceRecognitionInstances.push(this);
+    }
   }
 
   beforeEach(() => {
+    fakeAffordanceRecognitionInstances = [];
     (window as unknown as { SpeechRecognition: unknown }).SpeechRecognition = FakeSpeechRecognition;
   });
 
@@ -3569,5 +3574,31 @@ describe("TerminalPane inputAffordances (PR3 — dock monitor terminal chrome)",
     renderPane({ inputAffordances: false });
     expect(screen.queryByTitle("Attach image")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /dictation/i })).not.toBeInTheDocument();
+  });
+
+  it("the dictation HOTKEY is also inert when inputAffordances is false, not just its button — Hermes review", () => {
+    // Round 1 of this PR only gated the mic BUTTON; the hotkey
+    // (Ctrl+Shift+Space by default) still reached getVoiceChord and would
+    // start dictation into the log-stream PTY with no on-screen indicator
+    // at all once the button (its only phase feedback) was hidden.
+    renderPane({ inputAffordances: false });
+    const term = getLatestTermInstance();
+    const calls = term.attachCustomKeyEventHandler.mock.calls;
+    const handler = calls[calls.length - 1]![0] as (event: unknown) => boolean;
+    act(() =>
+      handler({
+        type: "keydown",
+        key: " ",
+        code: "Space",
+        ctrlKey: true,
+        shiftKey: true,
+        metaKey: false,
+        altKey: false,
+        repeat: false,
+        preventDefault: vi.fn(),
+      }),
+    );
+
+    expect(fakeAffordanceRecognitionInstances).toHaveLength(0);
   });
 });
