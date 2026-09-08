@@ -4,6 +4,7 @@ import {
   runningSessionFor,
   composeProjectForControl,
   groupDockerControls,
+  holdVanishedDockerControls,
 } from "./dockHelpers.js";
 import { makeSession } from "../test/fixtures.js";
 import type { DockControl } from "../api/index.js";
@@ -212,5 +213,125 @@ describe("groupDockerControls", () => {
         groupDockerControls([b, a]).groups[0].anyRep,
       );
     });
+  });
+});
+
+describe("holdVanishedDockerControls", () => {
+  const GRACE_MS = 30_000;
+
+  it("holds a docker control that vanished within the grace window, re-inserted at its previous index", () => {
+    const web = dockerControl({
+      id: "docker:sanctuary:web",
+      docker: { ...dockerControl().docker!, service: "web" },
+    });
+    const api = dockerControl({
+      id: "docker:sanctuary:api",
+      docker: { ...dockerControl().docker!, service: "api" },
+    });
+
+    // api vanishes (a compose recreate deleted its container) while web stays.
+    const { controls, heldIds, vanishedAt } = holdVanishedDockerControls(
+      [api, web],
+      [web],
+      new Map(),
+      1_000,
+      GRACE_MS,
+    );
+
+    expect(heldIds.has(api.id)).toBe(true);
+    // Re-inserted at its previous index (0), not appended at the end.
+    expect(controls).toEqual([api, web]);
+    expect(vanishedAt.get(api.id)).toBe(1_000);
+  });
+
+  it("is pure — never mutates the `vanishedAt` map it's given", () => {
+    const api = dockerControl({ id: "docker:sanctuary:api" });
+    const original = new Map<string, number>();
+
+    holdVanishedDockerControls([api, api], [], original, 1_000, GRACE_MS);
+
+    // Safe under React StrictMode's double-invoked render body (Dock.tsx
+    // calls this from render, not an effect — see the function's own doc
+    // comment): a second call with the SAME `original` map must see the
+    // exact same input every time, not whatever a prior call already wrote
+    // into it.
+    expect(original.size).toBe(0);
+  });
+
+  it("drops a control once it has been missing for graceMs or more", () => {
+    const api = dockerControl({ id: "docker:sanctuary:api" });
+
+    const { controls, heldIds, vanishedAt } = holdVanishedDockerControls(
+      [api],
+      [],
+      new Map([[api.id, 1_000]]),
+      1_000 + GRACE_MS,
+      GRACE_MS,
+    );
+
+    expect(heldIds.size).toBe(0);
+    expect(controls).toEqual([]);
+    expect(vanishedAt.has(api.id)).toBe(false);
+  });
+
+  it("clears the vanished-at entry once the control re-appears", () => {
+    const api = dockerControl({ id: "docker:sanctuary:api" });
+
+    const { controls, heldIds, vanishedAt } = holdVanishedDockerControls(
+      [api],
+      [api],
+      new Map([[api.id, 1_000]]),
+      1_010,
+      GRACE_MS,
+    );
+
+    expect(heldIds.size).toBe(0);
+    expect(controls).toEqual([api]);
+    expect(vanishedAt.has(api.id)).toBe(false);
+  });
+
+  it("never holds a dock.json (non-docker) control — its presence is config, not container state", () => {
+    const dev = configControl();
+
+    const { controls, heldIds, vanishedAt } = holdVanishedDockerControls(
+      [dev],
+      [],
+      new Map(),
+      1_000,
+      GRACE_MS,
+    );
+
+    expect(heldIds.size).toBe(0);
+    expect(controls).toEqual([]);
+    expect(vanishedAt.size).toBe(0);
+  });
+});
+
+describe("groupDockerControls with heldIds", () => {
+  it("keeps a held control in the group's `controls` for rendering/sizing but excludes it from representative selection", () => {
+    const web = dockerControl({ id: "docker:sanctuary:web" });
+    const held = dockerControl({
+      id: "docker:sanctuary:api",
+      docker: { ...dockerControl().docker!, service: "api", state: "running" },
+    });
+    const { groups } = groupDockerControls([web, held], new Set([held.id]));
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].controls).toEqual([web, held]);
+    // Only `web` was ever a candidate — not whatever selectRepresentatives
+    // would have picked from a list that includes the held control's stale
+    // "running" state.
+    expect(groups[0].anyRep?.id).toBe(web.id);
+  });
+
+  it("nulls anyRep/pullRep/rebuildRep when every docker-bearing control in the group is held", () => {
+    const held = dockerControl({ id: "docker:sanctuary:web" });
+    const { groups } = groupDockerControls([held], new Set([held.id]));
+
+    expect(groups[0].anyRep).toBeNull();
+    expect(groups[0].pullRep).toBeNull();
+    expect(groups[0].rebuildRep).toBeNull();
+    // The held control is still present for rendering/sizing purposes.
+    expect(groups[0].controls).toEqual([held]);
   });
 });

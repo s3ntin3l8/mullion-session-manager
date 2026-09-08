@@ -209,14 +209,27 @@ export interface DockerStackGroup {
  * `--project-directory` flags, so a stopped container is a worse source of
  * truth than a running sibling in the same stack — then breaks ties by
  * service name for a deterministic pick across polls/reorders.
+ *
+ * `heldIds` (PR2b) excludes a held control from candidacy entirely, not just
+ * from winning the sort: a held control's `docker.state` is frozen at
+ * whatever it was before it vanished from discovery (holdVanishedDockerControls'
+ * own doc comment), so a stale "running" must never outrank a genuinely
+ * running sibling, and a group where every service happens to be held must
+ * fall through to the same all-null result as an ephemerals-only group —
+ * not a representative computed from stale state, which the backend can no
+ * longer resolve against live discovery anyway.
  */
-function selectRepresentatives(controls: readonly DockControl[]): {
+function selectRepresentatives(
+  controls: readonly DockControl[],
+  heldIds: ReadonlySet<string>,
+): {
   anyRep: DockControl | null;
   pullRep: DockControl | null;
   rebuildRep: DockControl | null;
 } {
   const withDocker = controls.filter(
-    (c): c is DockControl & { docker: DockerServiceInfo } => c.docker !== undefined,
+    (c): c is DockControl & { docker: DockerServiceInfo } =>
+      c.docker !== undefined && !heldIds.has(c.id),
   );
   const sorted = [...withDocker].sort((a, b) => {
     const aRunning = a.docker.state === "running" ? 0 : 1;
@@ -244,8 +257,18 @@ function selectRepresentatives(controls: readonly DockControl[]): {
  * whatever `controls` the caller currently has on every call; never
  * memoized across polls, so a container that disappears or a group that
  * empties out just stops appearing on the next render.
+ *
+ * `heldIds` (PR2b, default empty) marks a control as present in `controls`
+ * for rendering/sizing purposes — a held control's ROW must not disappear,
+ * which is the whole point of holding it — while excluding it from
+ * `selectRepresentatives`' candidate pool, since its `docker.state` is
+ * stale. Callers that never hold anything (there is no PR2b caller today
+ * outside Dock.tsx) can omit the argument entirely.
  */
-export function groupDockerControls(controls: readonly DockControl[]): {
+export function groupDockerControls(
+  controls: readonly DockControl[],
+  heldIds: ReadonlySet<string> = new Set(),
+): {
   groups: DockerStackGroup[];
   ungrouped: DockControl[];
 } {
@@ -269,7 +292,76 @@ export function groupDockerControls(controls: readonly DockControl[]): {
     .map(([composeProject, groupControls]) => ({
       composeProject,
       controls: groupControls,
-      ...selectRepresentatives(groupControls),
+      ...selectRepresentatives(groupControls, heldIds),
     }));
   return { groups, ungrouped };
+}
+
+/**
+ * Holds a discovered docker-sourced control across a brief discovery gap —
+ * discovery is `docker ps -a`-driven (docker-service-detect.ts's
+ * probeComposeServices), not compose-config-driven, so a `compose up -d`
+ * recreate genuinely deletes a service's old container before creating the
+ * new one, and the service is legitimately absent from one or two polls
+ * mid-rebuild. Without this, a compose group's control count — and
+ * therefore its `flexGrow` share of the column (Dock.tsx) — drops and rises
+ * once per service on every recreate, resizing every OTHER monitor in the
+ * group each time (issue: rebuilding a stack makes the whole dock resize
+ * repeatedly).
+ *
+ * Re-inserts a vanished control at its previous index (relative to `next`,
+ * clamped to the current length) so a held row doesn't visually jump to the
+ * end of its group while it's held. Only a `source: "docker"` control is
+ * ever held — a `dock.json` control's presence is config, not container
+ * state, so it's never "vanished" in the sense this guards against.
+ *
+ * Fully pure — `vanishedAt` (id -> the timestamp it was first observed
+ * missing) is read-only in, a fresh Map out, never mutated. Dock.tsx calls
+ * this from its OWN render body (not an effect): a passive effect's
+ * `setState` only takes effect on the NEXT commit, after the browser has
+ * already painted the current one — for a compose group whose only control
+ * just vanished, that stale commit has already dropped the group's `&lt;div&gt;`
+ * (and its `TerminalPane` child) by the time the correction lands, i.e. the
+ * exact unmount/remount flicker this function exists to prevent. Rendering
+ * from a mutated-in-place Map would reintroduce the same class of bug one
+ * level down — React's dev-only StrictMode double-invokes a component's
+ * render body, and the SECOND invocation would then read back the FIRST
+ * invocation's mutations as its own "previous" state, computing a wrong
+ * diff. Returning a new Map keeps every render (however many times React
+ * calls it) a pure function of the STATE it's given, which is what makes
+ * comparing against `useState`-held previous values (see Dock.tsx's own
+ * call site) safe under that double-invoke.
+ *
+ * An id present in `next` always drops out of the returned map (real
+ * re-appearance, or the grace expiring on some earlier tick, both end the
+ * hold the same way), and an id absent for `graceMs` or more is dropped
+ * rather than held forever, so a service actually removed via
+ * `compose down` still disappears from the Dock promptly.
+ */
+export function holdVanishedDockerControls(
+  prev: readonly DockControl[],
+  next: readonly DockControl[],
+  vanishedAt: ReadonlyMap<string, number>,
+  now: number,
+  graceMs: number,
+): { controls: DockControl[]; heldIds: Set<string>; vanishedAt: Map<string, number> } {
+  const nextIds = new Set(next.map((c) => c.id));
+  const nextVanishedAt = new Map(vanishedAt);
+  for (const id of nextIds) nextVanishedAt.delete(id);
+
+  const merged = [...next];
+  const heldIds = new Set<string>();
+  prev.forEach((control, prevIndex) => {
+    if (control.source !== "docker") return;
+    if (nextIds.has(control.id)) return;
+    const firstMissingAt = nextVanishedAt.get(control.id) ?? now;
+    nextVanishedAt.set(control.id, firstMissingAt);
+    if (now - firstMissingAt >= graceMs) {
+      nextVanishedAt.delete(control.id);
+      return;
+    }
+    heldIds.add(control.id);
+    merged.splice(Math.min(prevIndex, merged.length), 0, control);
+  });
+  return { controls: merged, heldIds, vanishedAt: nextVanishedAt };
 }

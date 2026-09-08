@@ -328,15 +328,23 @@ describe("Dock", () => {
         await waitFor(() => expect(createSession).toHaveBeenCalledTimes(1));
 
         // "docker compose down" — the control disappears from discovery.
+        // PR2b: the row no longer vanishes instantly — it's held (labeled
+        // "recreating…") for RECREATE_GRACE_MS, so a brief mid-rebuild
+        // discovery gap doesn't resize every sibling monitor. The auto-attach
+        // effect this test is actually about reads the RAW (un-held) poll
+        // result, so its own eligibility prune fires exactly as before —
+        // proven below by the second createSession call, not by the row's
+        // own visibility.
         dockByProject[1] = [];
         useDashboardStore.getState().bumpDockConfigRefreshTrigger();
-        await waitFor(() => expect(screen.queryByText("web")).not.toBeInTheDocument());
+        await screen.findByText("recreating…");
 
         // "docker compose up -d" — same identity, running again, no session.
         dockByProject[1] = [dockerControl()];
         useDashboardStore.getState().bumpDockConfigRefreshTrigger();
 
         await waitFor(() => expect(createSession).toHaveBeenCalledTimes(2));
+        await waitFor(() => expect(screen.queryByText("recreating…")).not.toBeInTheDocument());
       });
 
       it("shows a transient status instead of an unhandled rejection when the auto-attach itself fails", async () => {
@@ -402,6 +410,81 @@ describe("Dock", () => {
           useDashboardStore.getState().bumpDockConfigRefreshTrigger();
 
           await waitFor(() => expect(createSession).toHaveBeenCalledTimes(2));
+        } finally {
+          dateSpy.mockRestore();
+        }
+      });
+    });
+
+    describe("PR2b — holding a docker control across a brief discovery gap", () => {
+      it("keeps a vanished service's row and its running terminal mounted (same DOM node, not unmounted+remounted), labeled recreating…", async () => {
+        dockByProject[1] = [dockerControl()];
+        const runningSession = makeSession({
+          id: 42,
+          kind: "dock",
+          name: "docker-logs:sanctuary-web",
+          command: dockerControl().command,
+        });
+        useDashboardStore.setState({
+          projects: [PROJECT],
+          sessions: [runningSession],
+          sessionsLoaded: true,
+        });
+        render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+        await screen.findByText("web");
+        // Captured by reference — this is the assertion that actually pins
+        // "stayed mounted" vs. "unmounted, then a different instance
+        // remounted": a getBy* re-query alone can't tell the two apart,
+        // since both would satisfy toBeInTheDocument() once settled.
+        const paneBefore = screen.getByTestId("terminal-pane");
+
+        // "compose up -d" recreate: the old container is deleted before the
+        // new one appears, so the service is briefly absent from discovery.
+        dockByProject[1] = [];
+        useDashboardStore.getState().bumpDockConfigRefreshTrigger();
+
+        await screen.findByText("recreating…");
+        // The row — and its still-live log session's terminal — stays
+        // mounted rather than unmounting for the gap.
+        expect(screen.getByText("web")).toBeInTheDocument();
+        expect(screen.getByTestId("terminal-pane")).toBe(paneBefore);
+
+        // New container appears with the same identity.
+        dockByProject[1] = [dockerControl()];
+        useDashboardStore.getState().bumpDockConfigRefreshTrigger();
+
+        await waitFor(() => expect(screen.queryByText("recreating…")).not.toBeInTheDocument());
+        expect(screen.getByText("web")).toBeInTheDocument();
+        expect(screen.getByTestId("terminal-pane")).toBe(paneBefore);
+      });
+
+      it("drops the row once the grace window elapses without the service reappearing", async () => {
+        // Date.now() mocked (not real timers) — same technique as the
+        // auto-attach cooldown test above — so this doesn't need to
+        // actually wait out RECREATE_GRACE_MS.
+        const T0 = 1_700_000_000_000;
+        const dateSpy = vi.spyOn(Date, "now").mockReturnValue(T0);
+        try {
+          dockByProject[1] = [dockerControl()];
+          useDashboardStore.setState({ projects: [PROJECT], sessions: [], sessionsLoaded: true });
+          render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+          await screen.findByText("web");
+
+          dockByProject[1] = [];
+          useDashboardStore.getState().bumpDockConfigRefreshTrigger();
+          await screen.findByText("recreating…");
+
+          // Still within the grace window — a poll must keep holding it.
+          dateSpy.mockReturnValue(T0 + 29_000);
+          useDashboardStore.getState().bumpDockConfigRefreshTrigger();
+          await new Promise((r) => setTimeout(r, 0));
+          expect(screen.queryByText("web")).toBeInTheDocument();
+
+          // Grace elapsed with no reappearance — the row finally drops.
+          dateSpy.mockReturnValue(T0 + 31_000);
+          useDashboardStore.getState().bumpDockConfigRefreshTrigger();
+          await waitFor(() => expect(screen.queryByText("web")).not.toBeInTheDocument());
         } finally {
           dateSpy.mockRestore();
         }
@@ -545,6 +628,53 @@ describe("Dock", () => {
         );
       });
       expect(refreshSessions).toHaveBeenCalled();
+    });
+
+    it("PR2a — a live transient stack-action monitor gets a fixed width and does not count toward the group's flexGrow", async () => {
+      // The reported bug: rebuilding a stack opened a second monitor inside
+      // the group, and the group's own inline flexGrow (Dock.tsx) — until
+      // this fix, `group.controls.length` — jumped from 1 to 2, N-way
+      // splitting "web"'s width with the new panel and resizing it.
+      dockByProject[1] = [dockerControl()]; // just "web"
+      const rebuildCommand =
+        "docker compose -p 'sanctuary' build --pull && docker compose -p 'sanctuary' up -d";
+      updateByProject[1] = {
+        sessionId: 42,
+        control: {
+          id: "docker-update:sanctuary",
+          title: "Update sanctuary",
+          command: rebuildCommand,
+          source: "docker",
+        },
+      };
+      const rebuildSession = makeSession({
+        id: 42,
+        kind: "dock",
+        command: rebuildCommand,
+      });
+      useDashboardStore.setState({
+        projects: [PROJECT],
+        sessions: [rebuildSession],
+        refreshSessions: vi.fn().mockResolvedValue(undefined),
+      });
+      const user = userEvent.setup();
+      render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+      await screen.findByText("web");
+      await user.click(stackKebab());
+      await user.click(await screen.findByText("Pull & restart stack"));
+      await user.click(await screen.findByText("Click again — restarts the whole stack"));
+
+      // The ephemeral "Update sanctuary" monitor now renders alongside "web".
+      const transientRow = await screen.findByText("Update sanctuary");
+      expect(transientRow.closest(".dock-monitor")).toHaveClass("dock-monitor-transient");
+
+      // Two controls render in the group now, but flexGrow counts only the
+      // one grow-participating control ("web") — this is the assertion that
+      // pins the fix: the transient panel appearing must not change the
+      // group's own flexGrow, which is what would otherwise resize "web".
+      const group = document.querySelector(".dock-stack-group") as HTMLElement;
+      expect(group.style.flexGrow).toBe("1");
     });
 
     it("a build-only service disables Check for update but offers an enabled Rebuild & restart, not a disabled Pull & restart", async () => {

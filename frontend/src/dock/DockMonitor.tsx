@@ -30,6 +30,8 @@ export function DockMonitor({
   onOpenBrowser,
   updateAvailable,
   dockerStatus,
+  transient = false,
+  held = false,
   checkStatus,
   armed,
   confirmBeforeKill,
@@ -49,6 +51,19 @@ export function DockMonitor({
   onOpenBrowser: () => void;
   updateAvailable: boolean;
   dockerStatus: DockerStatusPresentation | null;
+  // PR2a — a transient stack-action monitor (startStackSession's own
+  // ephemeral control, Dock.tsx's ephemeralIds) gets a fixed width via
+  // .dock-monitor-transient instead of N-way splitting its stack group with
+  // the rest — see that class's own comment (empty-states.css).
+  transient?: boolean;
+  // PR2b — this control briefly vanished from discovery (a compose recreate
+  // deletes the old container before the new one appears) and is being held
+  // across that gap rather than unmounted, so sibling monitors don't resize
+  // — see holdVanishedDockerControls' own doc comment (dockHelpers.ts).
+  // `dockerStatus` is stale while held (frozen at whatever it was before the
+  // container vanished), so the container-state label below overrides it
+  // with an honest "recreating…" instead.
+  held?: boolean;
   checkStatus: { message: string; isError: boolean } | undefined;
   armed: boolean;
   confirmBeforeKill: boolean;
@@ -60,7 +75,7 @@ export function DockMonitor({
 }) {
   return (
     <Fragment>
-      <div className="dock-monitor">
+      <div className={`dock-monitor${transient ? " dock-monitor-transient" : ""}`}>
         <div
           className="dock-monitor-header"
           style={{ cursor: "pointer" }}
@@ -100,11 +115,19 @@ export function DockMonitor({
               width: 6,
               height: 6,
               borderRadius: "50%",
-              background: dockerStatus
-                ? `var(${dockerStatus.colorToken})`
-                : running
-                  ? "var(--g)"
-                  : "var(--dim)",
+              // `held` overrides dockerStatus's own color: control.docker is
+              // a frozen snapshot from before the container vanished, so
+              // dockerStatus (derived from it by the caller) is stale, not
+              // current — the dim "recreating…" dot below is the honest
+              // read, not whatever state the container happened to be in
+              // right before it was removed.
+              background: held
+                ? "var(--dim)"
+                : dockerStatus
+                  ? `var(${dockerStatus.colorToken})`
+                  : running
+                    ? "var(--g)"
+                    : "var(--dim)",
               flexShrink: 0,
             }}
             // The dock-monitor-tag "logs on"/"logs off" text at the end of
@@ -115,10 +138,20 @@ export function DockMonitor({
             // dot (title="CI: ..."). The title remains as a hover
             // affordance on top of the always-visible text label below (PR3
             // — a hover-only label was easy to miss entirely).
-            title={dockerStatus ? `Container: ${dockerStatus.label}` : undefined}
+            title={
+              held
+                ? "Container: recreating…"
+                : dockerStatus
+                  ? `Container: ${dockerStatus.label}`
+                  : undefined
+            }
           />
-          {dockerStatus && (
-            <span className="dock-monitor-container-state">{dockerStatus.label}</span>
+          {held ? (
+            <span className="dock-monitor-container-state">recreating…</span>
+          ) : (
+            dockerStatus && (
+              <span className="dock-monitor-container-state">{dockerStatus.label}</span>
+            )
           )}
           <span className="dock-monitor-name">{control.title}</span>
           {showSelector && (

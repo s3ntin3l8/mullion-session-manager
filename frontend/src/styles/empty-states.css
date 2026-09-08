@@ -1274,6 +1274,16 @@
   overflow: hidden;
   min-width: 216px;
 }
+/* PR2a — a transient stack-action monitor (startStackSession's own
+   ephemeral control, rendered while its "Rebuild & restart"/etc. session is
+   still live) is fixed-width rather than `flex: 1` — Dock.tsx's own
+   flexGrow computation excludes it from the group's grow count to match, so
+   together the two mean the monitor appears/disappears without changing
+   any SIBLING monitor's width. 260px comfortably clears the 216px
+   min-content floor above. */
+.dock-monitor-transient {
+  flex: 0 0 260px;
+}
 /* Min-content invariant this header must never be squeezed below, for a
    Docker-backed row (the case this floor exists for — .dock-monitor-image
    and .dock-monitor-kebab share the identical `control.docker &&` guard, so
