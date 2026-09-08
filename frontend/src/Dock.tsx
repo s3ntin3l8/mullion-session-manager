@@ -21,6 +21,7 @@ import {
   clamp,
   dockerSessionIdentity,
   groupDockerControls,
+  holdVanishedDockerControls,
   isDockPreviewPath,
   resolveSelectedValue,
   runningSessionFor,
@@ -42,6 +43,28 @@ import { useCoarsePointer } from "./lib/layoutTier.js";
 // only pays for a fresh `docker ps` roughly once per poll, not once per
 // column.
 const DOCKER_POLL_INTERVAL_MS = 15_000;
+
+// Discovery is `docker ps -a`-driven (docker-service-detect.ts's
+// probeComposeServices), not compose-config-driven — a `compose up -d`
+// recreate genuinely deletes the old container before creating the new one,
+// so a service can be absent from a poll for a few seconds mid-rebuild with
+// nothing wrong. Without holding its row across that gap, every recreate
+// changes a stack group's control count once per service, and the group's
+// own `flexGrow` (DockColumn's render, below) resizes every sibling monitor
+// each time — this is the mechanism behind "rebuilding a stack makes the
+// whole dock resize repeatedly." Two poll intervals plus a small margin:
+// long enough to outlast one missed poll if the container is a little slow
+// to reappear, short enough that a service actually removed via
+// `compose down` still disappears from the Dock promptly. The margin (vs.
+// a flat 2x) is deliberate — Hermes review, PR #1176: a recreate finishing
+// just after the exact 2x-interval poll would otherwise expire on that very
+// poll and reproduce the flicker for one more cycle. Expiry is only
+// re-checked ON a poll (not continuously), so this margin's real effect is
+// coarser than "+5s" sounds — it pushes the worst case past the 30s poll
+// entirely, to the 45s one, buying a full extra poll cycle of slack rather
+// than a few seconds of it. See holdVanishedDockerControls (dockHelpers.ts)
+// for the derivation this feeds.
+const RECREATE_GRACE_MS = 2 * DOCKER_POLL_INTERVAL_MS + 5_000;
 
 const DEFAULT_DOCK_HEIGHT = 220;
 const DOCK_MIN_HEIGHT = 120;
@@ -441,6 +464,73 @@ function DockColumn({
     { deps: [projectId, dockConfigRefreshTrigger] },
   );
 
+  // PR2b — holds a docker-sourced control's row across the brief discovery
+  // gap a compose recreate opens up (RECREATE_GRACE_MS's own comment has the
+  // full mechanism). Computed HERE, in the render body — not in a
+  // `useEffect` — because a passive effect's `setState` only takes effect on
+  // the render AFTER the one that's already painted: for a compose group
+  // whose only control just vanished, that stale commit has already dropped
+  // the group's own `<div>` (and its `TerminalPane` child) by the time an
+  // effect-driven correction would land, i.e. exactly the unmount/remount
+  // flicker this mechanism exists to prevent. This is React's own documented
+  // "adjust state during render" pattern (react.dev) — comparing `controls`
+  // against a STATE-held previous value (never a ref) is what makes it safe
+  // under StrictMode's dev-only double-invocation of the render body: a ref
+  // mutated during the first invocation would be read back by the second as
+  // its own "previous" value, computing a wrong diff, whereas React
+  // guarantees both invocations see the identical prior state.
+  // holdVanishedDockerControls is itself pure for the same reason — see its
+  // own doc comment.
+  const [heldState, setHeldState] = useState<{
+    lastControls: DockControl[];
+    prevDiscovered: DockControl[];
+    vanishedAt: Map<string, number>;
+    merge: { controls: DockControl[]; heldIds: Set<string> };
+  }>({
+    lastControls: [],
+    prevDiscovered: [],
+    vanishedAt: new Map(),
+    merge: { controls: [], heldIds: new Set() },
+  });
+  if (controls !== heldState.lastControls) {
+    const currentDiscovered = controls.filter((c) => c.source === "docker");
+    // Date.now() during render is intentional here, not incidental impurity
+    // the compiler's purity pass would otherwise be right to flag: this must
+    // run synchronously in the render that first sees a new `controls`
+    // reference (see this block's own comment above for why an effect one
+    // commit later isn't good enough). A few ms of jitter in exactly which
+    // render observes "now" has no visible effect on a 30s grace window.
+    // eslint-disable-next-line react-hooks/purity
+    const now = Date.now();
+    const result = holdVanishedDockerControls(
+      heldState.prevDiscovered,
+      currentDiscovered,
+      heldState.vanishedAt,
+      now,
+      RECREATE_GRACE_MS,
+    );
+    setHeldState({
+      lastControls: controls,
+      // `result.controls` (the MERGED, held-inclusive list), not the raw
+      // `currentDiscovered` — a control that's still being held needs to
+      // stay a candidate `holdVanishedDockerControls` re-examines on every
+      // SUBSequent poll too, not just the one poll where it first vanished.
+      // Feeding the raw list back in would drop it from `prev` the moment
+      // it first disappears, so a second consecutive poll with it still
+      // missing would see it in neither `prev` nor `next` — never
+      // re-affirmed, never expired, just silently gone one poll early (or,
+      // depending on timing, stuck forever if `vanishedAt`'s entry is never
+      // revisited to prune it either). `vanishedAt` itself still carries the
+      // real first-missing timestamp regardless of what's in `prev`, so
+      // reusing the merged list here doesn't affect WHEN the grace window
+      // expires — only whether the held id keeps getting looked at.
+      prevDiscovered: result.controls,
+      vanishedAt: result.vanishedAt,
+      merge: { controls: result.controls, heldIds: result.heldIds },
+    });
+  }
+  const heldMerge = heldState.merge;
+
   const project = projects.find((p) => p.id === projectId) ?? null;
   const dockSessions = sessions.filter(
     (s) => s.kind === "dock" && s.projectId === projectId && s.status === "active",
@@ -492,10 +582,27 @@ function DockColumn({
   // place — none in practice today, but real rather than theoretical: an
   // ephemeral stack-action id this frontend doesn't recognize lands here
   // instead of being silently dropped.
-  const { groups: dockerStackGroups, ungrouped: ungroupedDockerControls } = groupDockerControls([
-    ...liveEphemeralControls,
-    ...discoveredControls,
-  ]);
+  //
+  // `heldMerge.controls` is `discoveredControls` with any currently-held
+  // (recently-vanished, still within RECREATE_GRACE_MS) control spliced back
+  // in — passing `heldMerge.heldIds` through lets groupDockerControls'
+  // selectRepresentatives exclude a held control from anyRep/pullRep/
+  // rebuildRep candidacy (its docker.state is frozen at whatever it was
+  // before it vanished) while still including it in each group's own
+  // `controls` for rendering/sizing — see holdVanishedDockerControls' and
+  // selectRepresentatives' own doc comments (dockHelpers.ts).
+  const { groups: dockerStackGroups, ungrouped: ungroupedDockerControls } = groupDockerControls(
+    [...liveEphemeralControls, ...heldMerge.controls],
+    heldMerge.heldIds,
+  );
+  // PR2a — a transient stack-action monitor (startStackSession's own
+  // ephemeral control) gets a fixed width instead of N-way splitting the
+  // group with the rest — see .dock-monitor-transient's own comment
+  // (empty-states.css) and the flexGrow computation below. Derived from
+  // liveEphemeralControls rather than re-parsing the id prefix so a
+  // deliberately-colliding dock.json control (docs/dock.md's own escape
+  // hatch) is never mis-classified as transient.
+  const ephemeralIds = new Set(liveEphemeralControls.map((c) => c.id));
 
   // Hermes review, round 2 — a transient failure (backend blip, briefly out
   // of PTY slots) otherwise recorded `eligible: true` right alongside
@@ -899,6 +1006,8 @@ function DockColumn({
         onOpenBrowser={() => onOpenBrowser(projectId)}
         updateAvailable={updateAvailable}
         dockerStatus={dockerStatus}
+        transient={ephemeralIds.has(control.id)}
+        held={heldMerge.heldIds.has(control.id)}
         checkStatus={checkStatusById[control.id]}
         armed={killArmedIds.has(control.id)}
         confirmBeforeKill={confirmBeforeKill}
@@ -967,11 +1076,31 @@ function DockColumn({
           // (and, per the same derivation, pullRep/rebuildRep when
           // relevant) is set.
           const rep = group.anyRep;
+          // PR2a — a transient stack-action monitor is fixed-width
+          // (.dock-monitor-transient), not an N-way split participant, so it
+          // must not count toward the group's own flexGrow — otherwise the
+          // group's share of the column relative to every OTHER group
+          // changes the moment it appears or disappears (the unbounded,
+          // per-poll churn this PR fixes). It does NOT make the panel free
+          // within ITS OWN group — see .dock-monitor-transient's own comment
+          // (empty-states.css) for the bounded one-time in-group residual
+          // this doesn't cover. Held controls (PR2b) DO count: the whole
+          // point of holding one is that the group's flexGrow doesn't change
+          // while its container is between the old and new instance.
+          // Floored at 1 (Hermes review, round 2) — a group whose ONLY
+          // control is a live transient stack-action monitor (the instant a
+          // rebuild starts, before discovery reports the recreated
+          // container) would otherwise compute 0, collapsing the group to
+          // min-content instead of its normal share for that brief window.
+          const growingControlCount = Math.max(
+            1,
+            group.controls.filter((c) => !ephemeralIds.has(c.id)).length,
+          );
           return (
             <div
               key={group.composeProject}
               className="dock-stack-group"
-              style={{ flexGrow: group.controls.length }}
+              style={{ flexGrow: growingControlCount }}
             >
               <DockStackHeader
                 composeProject={group.composeProject}

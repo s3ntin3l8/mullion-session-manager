@@ -30,6 +30,8 @@ export function DockMonitor({
   onOpenBrowser,
   updateAvailable,
   dockerStatus,
+  transient = false,
+  held = false,
   checkStatus,
   armed,
   confirmBeforeKill,
@@ -49,6 +51,23 @@ export function DockMonitor({
   onOpenBrowser: () => void;
   updateAvailable: boolean;
   dockerStatus: DockerStatusPresentation | null;
+  // PR2a — a transient stack-action monitor (startStackSession's own
+  // ephemeral control, Dock.tsx's ephemeralIds) gets a fixed width via
+  // .dock-monitor-transient instead of N-way splitting its stack group with
+  // the rest — see that class's own comment (empty-states.css).
+  transient?: boolean;
+  // PR2b — this control briefly vanished from discovery (a compose recreate
+  // deletes the old container before the new one appears) and is being held
+  // across that gap rather than unmounted, so sibling monitors don't resize
+  // — see holdVanishedDockerControls' own doc comment (dockHelpers.ts).
+  // `dockerStatus` is stale while held (frozen at whatever it was before the
+  // container vanished), so the container-state label below overrides it
+  // with an honest "recreating…" instead. Hermes review on PR #1176 —
+  // `control.docker` is that same frozen snapshot, so every per-service
+  // action (kebab items, header start/kill) would resolve against a
+  // container the backend's discovery no longer knows about and 404; the
+  // header and kebab both go inert while held, not just cosmetically dim.
+  held?: boolean;
   checkStatus: { message: string; isError: boolean } | undefined;
   armed: boolean;
   confirmBeforeKill: boolean;
@@ -60,18 +79,20 @@ export function DockMonitor({
 }) {
   return (
     <Fragment>
-      <div className="dock-monitor">
+      <div className={`dock-monitor${transient ? " dock-monitor-transient" : ""}`}>
         <div
           className="dock-monitor-header"
-          style={{ cursor: "pointer" }}
+          style={{ cursor: held ? "default" : "pointer" }}
           title={
-            running
-              ? armed
-                ? "Click again to confirm — ends the running program"
-                : confirmBeforeKill
-                  ? "Click to end this monitor"
-                  : undefined
-              : undefined
+            held
+              ? "Container is recreating — actions unavailable until it settles"
+              : running
+                ? armed
+                  ? "Click again to confirm — ends the running program"
+                  : confirmBeforeKill
+                    ? "Click to end this monitor"
+                    : undefined
+                : undefined
           }
           // P10 — U8's own finding flags this same header as "one
           // unconfirmed click kills a running dev server," and on
@@ -86,25 +107,49 @@ export function DockMonitor({
           // toggle/kill this monitor.
           role="button"
           tabIndex={0}
-          aria-label={`${control.title} — ${running ? "click to end" : "click to start"}`}
+          // `aria-disabled` (not the native `disabled` attribute, which would
+          // also drop this out of tab order) carries the inert STATE to
+          // assistive tech — same convention as PaneActionsMenu.tsx's own
+          // disabled menu items — on top of the aria-label wording below,
+          // which only explains WHY.
+          aria-disabled={held}
+          aria-label={
+            held
+              ? `${control.title} — recreating, actions unavailable`
+              : `${control.title} — ${running ? "click to end" : "click to start"}`
+          }
           onKeyDown={(e) => {
+            if (held) return;
             if (e.target !== e.currentTarget) return;
             if (e.key !== "Enter" && e.key !== " ") return;
             e.preventDefault();
             onHeaderActivate();
           }}
-          onClick={onHeaderActivate}
+          // `held` freezes control.docker to a pre-vanish snapshot the
+          // backend can no longer resolve against live discovery — a click
+          // here would 404 into a failure toast for the ~1 poll interval
+          // this control is held, so the header (and the kebab below) go
+          // inert rather than offer an action guaranteed to fail.
+          onClick={held ? undefined : onHeaderActivate}
         >
           <span
             style={{
               width: 6,
               height: 6,
               borderRadius: "50%",
-              background: dockerStatus
-                ? `var(${dockerStatus.colorToken})`
-                : running
-                  ? "var(--g)"
-                  : "var(--dim)",
+              // `held` overrides dockerStatus's own color: control.docker is
+              // a frozen snapshot from before the container vanished, so
+              // dockerStatus (derived from it by the caller) is stale, not
+              // current — the dim "recreating…" dot below is the honest
+              // read, not whatever state the container happened to be in
+              // right before it was removed.
+              background: held
+                ? "var(--dim)"
+                : dockerStatus
+                  ? `var(${dockerStatus.colorToken})`
+                  : running
+                    ? "var(--g)"
+                    : "var(--dim)",
               flexShrink: 0,
             }}
             // The dock-monitor-tag "logs on"/"logs off" text at the end of
@@ -115,10 +160,20 @@ export function DockMonitor({
             // dot (title="CI: ..."). The title remains as a hover
             // affordance on top of the always-visible text label below (PR3
             // — a hover-only label was easy to miss entirely).
-            title={dockerStatus ? `Container: ${dockerStatus.label}` : undefined}
+            title={
+              held
+                ? "Container: recreating…"
+                : dockerStatus
+                  ? `Container: ${dockerStatus.label}`
+                  : undefined
+            }
           />
-          {dockerStatus && (
-            <span className="dock-monitor-container-state">{dockerStatus.label}</span>
+          {held ? (
+            <span className="dock-monitor-container-state">recreating…</span>
+          ) : (
+            dockerStatus && (
+              <span className="dock-monitor-container-state">{dockerStatus.label}</span>
+            )
           )}
           <span className="dock-monitor-name">{control.title}</span>
           {showSelector && (
@@ -159,7 +214,14 @@ export function DockMonitor({
               <span className="dock-monitor-url-text">{imageTag(control.docker.imageRef)}</span>
             </span>
           )}
-          {control.docker && (
+          {
+            // Hidden entirely rather than rendered with every item disabled
+            // (KebabMenu's own per-item `disabled` exists and would work
+            // here too) — four dead menu entries behind a still-clickable
+            // trigger is worse than no trigger at all for something this
+            // short-lived (~1 poll interval).
+          }
+          {control.docker && !held && (
             <span className="dock-monitor-kebab" onClick={(e) => e.stopPropagation()}>
               <KebabMenu
                 title={`${control.title} actions`}
