@@ -1287,7 +1287,13 @@
    260px/N, when the panel appears or disappears (Hermes review, PR #1176)
    — a single bounded step, not the unbounded per-poll oscillation this PR
    set out to fix. 260px comfortably clears the 216px min-content floor
-   above. */
+   above as of this PR — a separate PR (dock terminal chrome/font-fit) may
+   raise that floor past 260px for an unrelated reason (fitting
+   MIN_TERMINAL_COLS, pty-manager.ts); `min-width` on this same element
+   clamps `flex-basis` up to whatever it's set to, so that's not a bug if
+   it happens — this panel just renders at the larger floor width instead
+   of 260px, same as it would at any other .dock-monitor. Re-check which
+   number actually wins before re-deriving either one. */
 .dock-monitor-transient {
   flex: 0 0 260px;
 }
