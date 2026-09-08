@@ -58,6 +58,12 @@ Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
 UninstallDisplayIcon={app}\mullion-helper.exe
+; Multi-resolution (16 up to 256px) .ico generated from
+; frontend/public/icon-512.png — frontend/public/favicon.ico exists but
+; tops out at 48px, too low-res for the installer exe's own Explorer/
+; taskbar icon. Relative to this .iss file's own directory, same as every
+; [Files] Source path below.
+SetupIconFile=mullion-helper.ico
 ; Unsigned — a known, stated limitation (docs/ssh-agent.md), not an
 ; oversight. SmartScreen will warn on first run; a code-signing certificate
 ; is Phase 4 (the separate mullion-helper tray repo) work, tracked

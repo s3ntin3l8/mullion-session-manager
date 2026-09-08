@@ -69,13 +69,56 @@ mkdir -p "$STAGE_ROOT/usr/local/bin" "$OUT_DIR"
 cp "$SEA_BIN" "$STAGE_ROOT/usr/local/bin/mullion-helper"
 chmod 755 "$STAGE_ROOT/usr/local/bin/mullion-helper"
 
-OUT_PATH="$OUT_DIR/mullion-helper-$VERSION.pkg"
+# Built as a component package first, then wrapped below with productbuild
+# into a product archive purely to show our logo on Installer.app's
+# welcome pane (deploy/macos/resources/background.png, generated from
+# frontend/public/icon-512.png) — pkgbuild alone has no branding of its
+# own. Same installed contents/scripts either way; a product archive is
+# still a plain double-clickable/`installer -pkg`-able .pkg.
+COMPONENT_PATH="$OUT_DIR/.component-mullion-helper-$VERSION.pkg"
 pkgbuild \
   --root "$STAGE_ROOT" \
   --identifier "$IDENTIFIER" \
   --version "$VERSION" \
   --scripts "$HERE/scripts" \
   --install-location / \
+  "$COMPONENT_PATH"
+
+DIST_XML="$OUT_DIR/.distribution-$VERSION.xml"
+# Hand-written rather than `productbuild --synthesize` + editing its
+# output — synthesize's own output has no background/title hooks to
+# insert into without fragile XML surgery, and this is short enough to
+# just state directly. `pkg-ref` for the *content* (naming the component
+# file productbuild loads via --package-path below) needs the SAME id as
+# the one for the *choice* (making it selectable, but forced on since
+# there's only one component and no customize option) — productbuild
+# fails at build time, not silently, if this id doesn't match the
+# component package's own --identifier above.
+cat >"$DIST_XML" <<EOF
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="1">
+    <title>Mullion Helper</title>
+    <background file="background.png" mime-type="image/png" alignment="topleft" scaling="none"/>
+    <options customize="never" require-scripts="false"/>
+    <choices-outline>
+        <line choice="default">
+            <line choice="$IDENTIFIER"/>
+        </line>
+    </choices-outline>
+    <choice id="default"/>
+    <choice id="$IDENTIFIER" visible="false">
+        <pkg-ref id="$IDENTIFIER"/>
+    </choice>
+    <pkg-ref id="$IDENTIFIER" version="$VERSION" onConclusion="none">$(basename "$COMPONENT_PATH")</pkg-ref>
+</installer-gui-script>
+EOF
+
+OUT_PATH="$OUT_DIR/mullion-helper-$VERSION.pkg"
+productbuild \
+  --distribution "$DIST_XML" \
+  --package-path "$OUT_DIR" \
+  --resources "$HERE/resources" \
   "$OUT_PATH"
+rm -f "$COMPONENT_PATH" "$DIST_XML"
 
 echo "built $OUT_PATH"
