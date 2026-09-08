@@ -298,7 +298,13 @@ export function DockMonitor({
         </div>
         {running && (
           <div className="dock-monitor-body">
-            <TerminalPane params={{ sessionId: running.id }} captureCtrlC={true} />
+            <TerminalPane
+              params={{ sessionId: running.id }}
+              captureCtrlC={true}
+              // PR3 — no attach-image or mic button over a log stream;
+              // see TerminalPane's own doc comment on this prop.
+              inputAffordances={false}
+            />
           </div>
         )}
       </div>

@@ -1260,10 +1260,52 @@
 
 /* .dock-body (dock.css) lays monitors out in a ROW, so `.dock-monitor { flex:
    1 }` splits the column N ways — at a minimum-width column with several
-   services, each monitor can get far less than its header actually needs.
-   min-width is the header's own min-content (see the comment on
-   .dock-monitor-header below): below it .dock-body scrolls horizontally
-   instead of squeezing the ⋯ kebab out of existence. */
+   services, each monitor can get far less than either the header or the
+   terminal body actually needs. PR3 — this floor is now driven by the
+   TERMINAL body, not the header (whose own min-content is smaller, ≈216px,
+   see .dock-monitor-header's own comment below): pty-manager.ts's
+   MIN_TERMINAL_COLS (40) is the narrowest column count a session's PTY will
+   ever be resized to, and 40 columns needs more than 216px of actual
+   terminal content width. Below 216px .dock-body would ALSO have to
+   squeeze the ⋯ kebab out of existence; below this larger floor instead it
+   just scrolls horizontally, same as before.
+
+   Derivation (measured in Chrome, not guessed — see this repo's dock plan
+   for why a guessed advance-width ratio was rejected): real xterm cell
+   width for Geist Mono at the default 14px terminalSettings.fontSize, read
+   off a live pane's `term._core._renderService.dimensions.css.cell.width`,
+   is 8.4px — so 40 columns needs 40 × 8.4 = 336px of xterm content width.
+   From there out to this rule's own border-box width, working through what
+   @xterm/addon-fit's `proposeDimensions()` (fitAddon.fit(), applyFontFit)
+   ACTUALLY measures — `getComputedStyle()` widths below are always
+   content-box, regardless of any element's own box-sizing:
+   + 14px (addon-fit's own fixed overview-ruler reserve — its source
+   subtracts `terminal.options.overviewRuler?.width || 14` whenever
+   `scrollback !== 0`; this repo's default scrollback is 5000 and no dock
+   terminal sets overviewRuler, so this reserve always applies here)
+   + 8px (TerminalPane's own containerRef padding, `terminalSettings.padding`
+   default 4px × 2 sides, TerminalPane.tsx — already excluded from what
+   getComputedStyle(containerRef).width reports, which is what addon-fit
+   reads, so it has to be added back in going the other direction)
+   + 2px (.dock-monitor's own 1px border × 2 sides) = 360px minimum to
+   actually clear 40 columns, plus a small ~4px margin for font-hinting/
+   subpixel variance this single Chrome measurement can't rule out on other
+   engines → 364px. (An earlier version of this derivation stopped at 346
+   + a margin = 350px, missing addon-fit's 14px reserve entirely — at 350px
+   the real column count is `floor((350 − 10 − 14) / 8.4)` = 38, BELOW
+   MIN_TERMINAL_COLS, so that number never actually left the shrunk-font
+   regime this floor exists to fix; corrected before this ever shipped.)
+   Below 40
+   columns, MIN_TERMINAL_COLS's own floor takes over (pty-manager.ts) and
+   the PTY gets resized UP to 40 regardless of what the client asked for, so
+   a narrower .dock-monitor doesn't get fewer columns — it gets the exact
+   same 40, rendered at whatever smaller font TerminalPane's auto-fit
+   shrinks to in order to still fit them (TerminalPane.tsx's applyFontFit)
+   — permanently, not just during a resize. Raising this floor trades
+   density (fewer monitors visible before .dock-body's overflow-x kicks in)
+   for legibility (dock terminals render at the user's actual configured
+   font size instead of a permanently shrunk one) — a deliberate, reversible
+   choice. */
 .dock-monitor {
   flex: 1;
   display: flex;
@@ -1272,7 +1314,7 @@
   border: 1px solid var(--border-soft);
   border-radius: 9px;
   overflow: hidden;
-  min-width: 216px;
+  min-width: 364px;
 }
 /* PR2a — a transient stack-action monitor (startStackSession's own
    ephemeral control, rendered while its "Rebuild & restart"/etc. session is
@@ -1316,16 +1358,20 @@
    min-content has no effect; the browser's own intrinsic-size floor still
    holds and .dock-body's overflow-x absorbs the difference), but a
    maintainer re-deriving this number should start from the corrected total,
-   not the original one. A compose project's own .dock-stack-group (below)
-   adds its .dock-stack-header on top of that (in its own column, not this
-   row — see that rule's comment), so a minimum-width column with any Docker
-   services still scrolls horizontally in practice regardless of this floor
-   — expected, not a bug: the point of this floor is that .dock-body scrolls
-   rather than clips the kebab, not that scrolling never happens. Above the
-   floor, yield order is: .dock-monitor-name (already flex:1 1 0%, so it's
-   first to hit zero) → .dock-monitor-url/.dock-monitor-image/
-   .dock-monitor-check-status (ellipsize instead of vanishing) → nothing
-   else shrinks. */
+   not the original one. PR3 — .dock-monitor's own min-width is now 364px,
+   set by the TERMINAL floor above, not this 216px header number; this
+   derivation stays here (and stays correct) purely as the smaller of the
+   two floors, in case the terminal floor above is ever relaxed again and
+   this one becomes binding. A compose project's own .dock-stack-group
+   (below) adds its .dock-stack-header on top of that (in its own column,
+   not this row — see that rule's comment), so a minimum-width column with
+   any Docker services still scrolls horizontally in practice regardless of
+   either floor — expected, not a bug: the point of these floors is that
+   .dock-body scrolls rather than clips the kebab or shrinks the font, not
+   that scrolling never happens. Above the floor, yield order is:
+   .dock-monitor-name (already flex:1 1 0%, so it's first to hit zero) →
+   .dock-monitor-url/.dock-monitor-image/.dock-monitor-check-status
+   (ellipsize instead of vanishing) → nothing else shrinks. */
 .dock-monitor-header {
   height: 28px;
   flex-shrink: 0;

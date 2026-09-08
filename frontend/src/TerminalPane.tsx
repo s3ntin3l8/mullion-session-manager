@@ -104,6 +104,15 @@ export function TerminalPane(props: {
   // button handles stop/kill instead. Defaults to false, preserving the
   // standard terminal behavior for regular sessions.
   captureCtrlC?: boolean;
+  // PR3 (.claude/plans/this-is-how-pocket-partitioned-mountain.md) — gates
+  // the attach-image button and the voice-dictation mic, both meaningless
+  // over a dock monitor's `docker compose logs -f` stream (there is no
+  // interactive agent CLI on the other end to paste an image into or
+  // dictate to). Defaults to true so every existing call site is
+  // unchanged; Dock.tsx's DockMonitor is the only caller that passes
+  // false. Does NOT touch the hidden file input or the paste-upload path —
+  // only the two visible affordances are wrong for a dock monitor.
+  inputAffordances?: boolean;
   // U7 — whether THIS pane is dockview's currently active one (see the
   // activation-focus effect near the find-bar effect below). Optional and
   // dockview-agnostic like every other prop here (see this component's own
@@ -1873,13 +1882,15 @@ export function TerminalPane(props: {
           if (file) uploadImageRef.current(file);
         }}
       />
-      <button
-        className="pane-tab-btn terminal-attach-image-btn"
-        title="Attach image"
-        onClick={() => fileInputRef.current?.click()}
-      >
-        <ImageIcon size={14} />
-      </button>
+      {(props.inputAffordances ?? true) && (
+        <button
+          className="pane-tab-btn terminal-attach-image-btn"
+          title="Attach image"
+          onClick={() => fileInputRef.current?.click()}
+        >
+          <ImageIcon size={14} />
+        </button>
+      )}
       {
         // Voice dictation mic button — hidden entirely (not just disabled)
         // when the browser has no SpeechRecognition constructor at all
@@ -1892,17 +1903,19 @@ export function TerminalPane(props: {
         // voice/support.ts's isSpeechDictationSupported/
         // isSecureContextForDictation for why these are two separate checks.
       }
-      {terminalSettings.voice.enabled && voiceController.isSupported && (
-        <VoiceMicButton
-          phase={voiceController.phase}
-          interimText={voiceController.interimText}
-          disabled={!voiceController.isSecureContext}
-          coarsePointer={isCoarsePointer}
-          onPress={voiceController.press}
-          onRelease={voiceController.release}
-          onCancel={voiceController.cancel}
-        />
-      )}
+      {(props.inputAffordances ?? true) &&
+        terminalSettings.voice.enabled &&
+        voiceController.isSupported && (
+          <VoiceMicButton
+            phase={voiceController.phase}
+            interimText={voiceController.interimText}
+            disabled={!voiceController.isSecureContext}
+            coarsePointer={isCoarsePointer}
+            onPress={voiceController.press}
+            onRelease={voiceController.release}
+            onCancel={voiceController.cancel}
+          />
+        )}
       {
         // Scrollback find bar (U1) — opened via Ctrl+Shift+F, see
         // attachKeyConflictHandler (lib/terminalKeys.ts) for why that chord.

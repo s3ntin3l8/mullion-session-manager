@@ -27,8 +27,18 @@ import { resetStore } from "../test/resetStore.js";
 // covered elsewhere; here we only need to know DockColumn decided to mount
 // it (i.e. a monitor is "running"), not exercise the real terminal.
 vi.mock("../TerminalPane.js", () => ({
-  TerminalPane: ({ params }: { params: { sessionId: number } }) => (
-    <div data-testid="terminal-pane" data-session-id={params.sessionId} />
+  TerminalPane: ({
+    params,
+    inputAffordances,
+  }: {
+    params: { sessionId: number };
+    inputAffordances?: boolean;
+  }) => (
+    <div
+      data-testid="terminal-pane"
+      data-session-id={params.sessionId}
+      data-input-affordances={String(inputAffordances)}
+    />
   ),
 }));
 
@@ -578,6 +588,21 @@ describe("Dock", () => {
         name: "docker-logs:sanctuary-web",
         nameLocked: true,
       });
+    });
+
+    it("PR3 — a running dock monitor's terminal gets inputAffordances={false} — no attach-image or mic button over a log stream", async () => {
+      dockByProject[1] = [dockerControl()];
+      const runningSession = makeSession({
+        id: 42,
+        kind: "dock",
+        name: "docker-logs:sanctuary-web",
+        command: dockerControl().command,
+      });
+      useDashboardStore.setState({ projects: [PROJECT], sessions: [runningSession] });
+      render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+      const pane = await screen.findByTestId("terminal-pane");
+      expect(pane).toHaveAttribute("data-input-affordances", "false");
     });
 
     it("'Check for update' calls the check-update endpoint and tints the image pill on an update", async () => {

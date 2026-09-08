@@ -451,7 +451,7 @@ afterEach(() => {
 // very first render, e.g. mount-already-active) is optional and defaults to
 // unset so every existing `renderPane()` call site — none of which know or
 // care about it — keeps behaving identically.
-function renderPane(extra: { active?: boolean } = {}) {
+function renderPane(extra: { active?: boolean; inputAffordances?: boolean } = {}) {
   useDashboardStore.setState({
     settings: {
       theme: "dark",
@@ -3530,6 +3530,44 @@ describe("TerminalPane voice dictation", () => {
     );
     // The mic button unmounts along with it — nothing left visible to
     // interact with.
+    expect(screen.queryByRole("button", { name: /dictation/i })).not.toBeInTheDocument();
+  });
+});
+
+describe("TerminalPane inputAffordances (PR3 — dock monitor terminal chrome)", () => {
+  // voiceController.isSupported requires a SpeechRecognition constructor —
+  // stub one locally (same technique as the voice-dictation describe block
+  // above) so the mic button's default-visible case is actually exercised,
+  // not vacuously true because isSupported is false in every other test.
+  class FakeSpeechRecognition {
+    continuous = false;
+    interimResults = false;
+    lang = "";
+    onresult: ((event: unknown) => void) | null = null;
+    onerror: ((event: unknown) => void) | null = null;
+    onend: (() => void) | null = null;
+    start = vi.fn();
+    stop = vi.fn();
+    abort = vi.fn();
+  }
+
+  beforeEach(() => {
+    (window as unknown as { SpeechRecognition: unknown }).SpeechRecognition = FakeSpeechRecognition;
+  });
+
+  afterEach(() => {
+    delete (window as { SpeechRecognition?: unknown }).SpeechRecognition;
+  });
+
+  it("renders the attach-image button and the mic button by default", () => {
+    renderPane();
+    expect(screen.getByTitle("Attach image")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /dictation/i })).toBeInTheDocument();
+  });
+
+  it("hides both the attach-image button and the mic button when inputAffordances is false — a dock monitor's log stream has no interactive CLI to paste into or dictate to", () => {
+    renderPane({ inputAffordances: false });
+    expect(screen.queryByTitle("Attach image")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /dictation/i })).not.toBeInTheDocument();
   });
 });
