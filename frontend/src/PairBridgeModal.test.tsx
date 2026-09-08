@@ -116,6 +116,37 @@ describe("PairBridgeModal", () => {
     ).toBeInTheDocument();
   }, 8000);
 
+  // The bug this responds to: `helper pair` only redeems the code and
+  // persists a credential — it never opens the forwarding connection
+  // itself, so `hasLiveSession` flips true well before `connected` does.
+  // Before this fix, that gap rendered identically to "haven't paired at
+  // all yet" (the same static "Waiting for the helper to connect…" text),
+  // giving no sign the pair step had actually landed.
+  it("shows a distinct 'paired, now run it' state once hasLiveSession flips before connected", async () => {
+    const onPaired = vi.fn();
+    const user = userEvent.setup();
+    render(<PairBridgeModal onClose={vi.fn()} onPaired={onPaired} />);
+    await screen.findByText(PAIRING.pairing_payload);
+
+    listResponses.push(
+      bridgeList({ hasLiveSession: true, lastSeenAt: "2026-01-01T00:00:00.000Z" }),
+    );
+    expect(
+      await screen.findByText(/Paired — the credential is saved/, {}, { timeout: 4000 }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("mullion helper run")).toBeInTheDocument();
+    expect(onPaired).not.toHaveBeenCalled();
+    expect(screen.queryByText(PAIRING.pairing_payload)).not.toBeInTheDocument();
+
+    // Hermes review, PR #1175 — the Linux string above was the only
+    // platform this test asserted; the headline Windows form (the one
+    // that actually needed the `&` fix this PR makes) went unasserted.
+    await user.click(screen.getByRole("button", { name: "Windows" }));
+    expect(
+      screen.getByText('& "$env:LOCALAPPDATA\\Mullion\\mullion-helper.exe" helper run'),
+    ).toBeInTheDocument();
+  }, 8000);
+
   it("does not call onPaired for a different bridge id showing connected", async () => {
     const onPaired = vi.fn();
     render(<PairBridgeModal onClose={vi.fn()} onPaired={onPaired} />);

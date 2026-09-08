@@ -61,7 +61,7 @@ function waitUntil(check: () => boolean, timeoutMs = 3000): Promise<void> {
   });
 }
 
-function fakeIo(env: Record<string, string>) {
+function fakeIo(env: Record<string, string>, overrides: Record<string, unknown> = {}) {
   const stdout: string[] = [];
   const stderr: string[] = [];
   let interruptCb: (() => void) | undefined;
@@ -75,6 +75,7 @@ function fakeIo(env: Record<string, string>) {
     triggerInterrupt: () => interruptCb?.(),
     stdoutLines: stdout,
     stderrLines: stderr,
+    ...overrides,
   };
 }
 
@@ -290,6 +291,55 @@ describe("mullion helper (pair + run) against the real primary", () => {
     const code = await runHelper("pair", ["not-a-real-payload"], io);
     expect(code).toBe(2);
     expect(fs.existsSync(path.join(stateDir, "ssh-agent-bridge.json"))).toBe(false);
+  });
+
+  // The success hint used to hardcode "run 'mullion helper run'" —
+  // correct only for someone with a full npm install of the PRIMARY on
+  // their PATH, which the laptop-side helper is explicitly designed NOT to
+  // require (see ssh-agent-helper.mjs's own header comment). It must instead
+  // reflect how THIS process was actually invoked, for each real
+  // distribution shape.
+  it("pair() success hint prefixes `& ` and drops the script arg for a Windows SEA binary", async () => {
+    const { app, port } = await buildAndListen();
+    const pairRes = await fetch(`http://127.0.0.1:${port}/api/bridges`, { method: "POST" });
+    const { pairing_payload } = (await pairRes.json()) as { pairing_payload: string };
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-helper-state-"));
+    const io = fakeIo(
+      { MULLION_HELPER_STATE_DIR: stateDir },
+      {
+        platform: "win32",
+        isSea: true,
+        execPath: "C:\\Users\\me\\AppData\\Local\\Mullion\\mullion-helper.exe",
+      },
+    );
+    const code = await runHelper("pair", [pairing_payload], io);
+    expect(code).toBe(0);
+    expect(io.stdoutLines.join("")).toContain(
+      'run & "C:\\Users\\me\\AppData\\Local\\Mullion\\mullion-helper.exe" helper run to start forwarding',
+    );
+    await app.close();
+  });
+
+  it("pair() success hint includes the script path and no `& ` on a Linux/darwin checkout", async () => {
+    const { app, port } = await buildAndListen();
+    const pairRes = await fetch(`http://127.0.0.1:${port}/api/bridges`, { method: "POST" });
+    const { pairing_payload } = (await pairRes.json()) as { pairing_payload: string };
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-helper-state-"));
+    const io = fakeIo(
+      { MULLION_HELPER_STATE_DIR: stateDir },
+      {
+        platform: "linux",
+        isSea: false,
+        execPath: "/usr/bin/node",
+        scriptPath: "/opt/mullion/dist/cli/mullion.mjs",
+      },
+    );
+    const code = await runHelper("pair", [pairing_payload], io);
+    expect(code).toBe(0);
+    expect(io.stdoutLines.join("")).toContain(
+      'run "/usr/bin/node" "/opt/mullion/dist/cli/mullion.mjs" helper run to start forwarding',
+    );
+    await app.close();
   });
 
   // Issue #820 (CodeQL js/http-to-file-access, PR #866) — the discriminating

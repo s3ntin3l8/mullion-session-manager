@@ -5,13 +5,8 @@ import { PairBridgeModal } from "../../PairBridgeModal.js";
 import { formatRelativeAge } from "../../relativeTime.js";
 import { usePolling } from "../../hooks/usePolling.js";
 import { HostsIcon, PlusIcon } from "../../ui/icons.js";
-import {
-  AddButton,
-  GroupHeading,
-  ListRow,
-  SecondaryButton,
-  StyledList,
-} from "../../ui/primitives.js";
+import { AddButton, GroupHeading, ListRow, StyledList } from "../../ui/primitives.js";
+import { ConfirmButton } from "../../ui/ConfirmButton.js";
 import { ErrorText } from "../../ui/ErrorText.js";
 
 // Issue #820 PR7c — same "these change rarely, poll on a live interval
@@ -58,9 +53,10 @@ export function BridgesSection() {
   const [pairOpen, setPairOpen] = useState(false);
   const [revokeError, setRevokeError] = useState<string | null>(null);
   // Tracks an in-flight revoke per row so a double-click can't fire the
-  // DELETE twice — KebabMenu's own `confirm: true` already requires a
-  // second click to arm this, but nothing stops a third rapid click before
-  // the first request resolves and this row disappears from `bridges`.
+  // DELETE twice — ConfirmButton already requires two separate clicks
+  // (arm, then confirm) before this fires at all, but nothing stops a
+  // third rapid click before the first request resolves and this row
+  // disappears from `bridges`.
   const [revoking, setRevoking] = useState<Record<string, boolean>>({});
 
   const refresh = () => {
@@ -121,12 +117,13 @@ export function BridgesSection() {
                   <span style={{ fontSize: 10.5, color: "var(--dim)" }}>
                     {describeBridge(bridge)}
                   </span>
-                  <SecondaryButton
-                    onClick={() => revoke(bridge)}
+                  <ConfirmButton
+                    title={`Revoke ${bridge.name ?? "this bridge"} — every session on every enrolled host loses its SSH agent forwarding immediately`}
+                    onConfirm={() => revoke(bridge)}
                     disabled={revoking[bridge.id] ?? false}
                   >
                     Revoke
-                  </SecondaryButton>
+                  </ConfirmButton>
                 </div>
               }
             />
