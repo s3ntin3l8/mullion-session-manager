@@ -14,6 +14,16 @@ than trusting the DB column alone. `sessions.command` and
 parses a shell command line or a dockview layout, it just stores and
 replays what it's given.
 
+The scope's unit name (`crs-session-<instanceId>-<id>`,
+`session-process.ts`'s `scopeUnitName`) is namespaced per Mullion instance
+(issue #1140) since the underlying systemd `--user` namespace is
+Unix-user-global while `sessions.id` is per-database. The unit name itself
+is not what identifies a session as this instance's own, though — that's
+always resolved from the scope's dtach socket path
+(`listOwnedScopes`/`resolveOwningUnit`), which is per-instance by
+construction and handles a pre-rename session's legacy unit name the same
+way as a namespaced one.
+
 - `src/app.ts` — the app factory (`buildApp()`); registers plugins then
   routes. `src/server.ts` calls it and handles listen + graceful shutdown
   (`SIGINT`/`SIGTERM`).

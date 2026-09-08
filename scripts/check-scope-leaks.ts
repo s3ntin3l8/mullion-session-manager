@@ -12,11 +12,17 @@
 //
 // A `.ts` file run via `tsx` (precedent: generate-ssh-agent-filter-
 // vectors.ts) rather than `.mjs` like this directory's other scripts — it
-// needs the real, typed scopeUnitName/parseScopeUnitsListing/
-// extractDtachSocketPath helpers from src/services/session-process.ts,
-// and (like that script) this is build/dev tooling, not something that
-// ships inside the SEA, so the `.mjs` CLI tree's "zero-dependency, node:
-// builtins only" constraint doesn't apply here.
+// needs the real, typed parseScopeUnitsListing/extractDtachSocketPath
+// helpers from src/services/session-process.ts, and (like that script)
+// this is build/dev tooling, not something that ships inside the SEA, so
+// the `.mjs` CLI tree's "zero-dependency, node: builtins only" constraint
+// doesn't apply here.
+//
+// Issue #1140 (PR 2) — unaffected by the per-instance unit rename
+// (`crs-session-<id>` -> `crs-session-<instanceId>-<id>`): this script
+// infers "foreign"/leaked only from the dtach socket path (missing on
+// disk, or under the OS tmpdir), never from the unit name, and the
+// `crs-session-*.scope` glob below still matches both shapes.
 //
 // Deliberately NOT wired into `make test`/the pre-push hook: this repo's
 // own `SESSIONS_DIR` is a real, persistent path on a developer's machine

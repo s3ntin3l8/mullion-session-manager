@@ -30,7 +30,7 @@ import {
   getAdapterResumeSessionArgs,
   resolveForwarderPath,
 } from "./hook-adapters/index.js";
-import { scopeUnitName } from "./session-process.js";
+import { deriveInstanceId, scopeUnitName } from "./session-process.js";
 
 // Per-agent skip-permissions flag lookup. Anchored at the start of the
 // trimmed command (optionally path-qualified), same conservative "no
@@ -206,7 +206,14 @@ export interface LaunchPlan {
  */
 export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
   const shell = process.env.SHELL || "/bin/bash";
-  const unitName = scopeUnitName(session.id);
+  // Issue #1140 (PR 2) — derived inline rather than threaded as a new
+  // LaunchPlanSession field: a sha256 of a short string is free, and this
+  // runs over the same already-`path.resolve`d value PtyManager's own
+  // `this.instanceId` derives from (`this.sessionsDir`, passed straight
+  // through as `session.sessionsDir` below — pty-manager.ts's
+  // bootstrapMaster() call site), so the two can never disagree.
+  const instanceId = deriveInstanceId(session.sessionsDir);
+  const unitName = scopeUnitName(instanceId, session.id);
   // Strip this server's own Mullion config (PORT, DATABASE_URL,
   // SESSIONS_DIR, secrets, ...) before it reaches the session's shell — a
   // session must not inherit the identity of the process that spawned it,

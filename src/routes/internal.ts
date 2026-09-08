@@ -2188,8 +2188,8 @@ export async function internalRoutes(app: FastifyInstance) {
         // Same shape as SESSION_ID_PARAMS_SCHEMA's `id` field
         // (internal-schemas.ts) — this route takes id as a query param, not
         // a JSON body, so it can't use the ajv schema directly, but the id
-        // flows into the exact same scopeUnitName(id) sink (pty-manager.ts)
-        // either way.
+        // flows into the exact same scopeUnitName(instanceId, id) sink
+        // (pty-manager.ts) either way.
         if (!SESSION_ID_PATTERN.test(query.id)) {
           return reply.badRequest("id must match ^[A-Za-z0-9_-]+$");
         }

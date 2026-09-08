@@ -371,8 +371,9 @@ the agent-attribution envelope — rather than being retired alongside 5.2.)_
   needs a real DB column and a real spawn path, and is scoped independently
   of Track A.
 - A **cgroup-based process inventory** (every session's dtach master runs in
-  its own transient systemd scope, `crs-session-<id>.scope`, whose
-  `cgroup.procs` lists the real process set under it) was investigated as a
+  its own transient systemd scope, `crs-session-<instanceId>-<id>.scope`
+  (namespaced per Mullion instance since issue #1140), whose `cgroup.procs`
+  lists the real process set under it) was investigated as a
   genuine `/proc`-adjacent mechanism and would surface real subprocesses
   (MCP servers, backgrounded shell jobs, nested CLIs) — but that is not
   subagent detection, it's a different, orthogonal feature, so it was

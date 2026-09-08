@@ -142,10 +142,14 @@ function ownedLine(id: string, dir: string = SESSIONS_DIR): string {
 }
 
 describe("scopeUnitName", () => {
-  it("is deterministic, id-derived, and not timestamped", () => {
-    expect(scopeUnitName("1")).toBe("crs-session-1");
-    expect(scopeUnitName("1")).toBe(scopeUnitName("1"));
-    expect(scopeUnitName("abc-def")).toBe("crs-session-abc-def");
+  it("is deterministic, instance- and id-derived, and not timestamped", () => {
+    expect(scopeUnitName(INSTANCE_ID, "1")).toBe(`crs-session-${INSTANCE_ID}-1`);
+    expect(scopeUnitName(INSTANCE_ID, "1")).toBe(scopeUnitName(INSTANCE_ID, "1"));
+    expect(scopeUnitName(INSTANCE_ID, "abc-def")).toBe(`crs-session-${INSTANCE_ID}-abc-def`);
+  });
+
+  it("differs for the same id across two instances — the whole point of #1140", () => {
+    expect(scopeUnitName("aaaaaaaa", "1")).not.toBe(scopeUnitName("bbbbbbbb", "1"));
   });
 });
 
@@ -178,7 +182,7 @@ describe("listOwnedScopes", () => {
     expect(result.owned).toEqual(new Map([["5", "crs-session-5.scope"]]));
   });
 
-  it("also owns an id from a future per-instance-namespaced unit name for THIS instance — #1140's point: PR1 already understands PR2's shape", async () => {
+  it("also owns an id from a per-instance-namespaced unit name for THIS instance (PR 2's own shape)", async () => {
     listUnitsReply = [
       line(
         `crs-session-${INSTANCE_A}-6.scope`,
@@ -320,18 +324,15 @@ describe("stopScope", () => {
     expect(stopCalls).toEqual([]);
   });
 
-  // Hermes review, this PR — the read path (isMasterAlive/isMasterAliveBatch)
-  // already fails open to "unknown" on a listing failure; stopScope must
-  // mirror that instead of falling back to an un-confirmed unit name, or it
-  // becomes the one path that can still stop a DIFFERENT instance's session
-  // under the exact degraded-bus conditions the read path refuses to answer
-  // under. The session leaks (keeps running) instead — accepted, since
-  // scripts/check-scope-leaks.ts is the tool that catches a leak, and
-  // that's a better failure mode than risking a cross-instance kill.
-  it("does nothing (does not fall back to the legacy name) when the listing itself fails", async () => {
+  // Issue #1140 (PR 2) — unlike PR 1 (Hermes review, PR 1: falling back to
+  // the un-namespaced legacy name on a listing failure could still stop a
+  // DIFFERENT instance's session), the fallback name is now namespaced —
+  // `crs-session-<instanceId>-<id>.scope` can only ever be a unit THIS
+  // instance created, so falling back to it on a listing failure is safe.
+  it("falls back to stopping the namespaced unit name when the listing itself fails", async () => {
     listUnitsShouldError = true;
-    await expect(stopScope(SESSIONS_DIR, INSTANCE_ID, "1")).resolves.toBeUndefined();
-    expect(stopCalls).toEqual([]);
+    await stopScope(SESSIONS_DIR, INSTANCE_ID, "1");
+    expect(stopCalls).toEqual([["--user", "stop", `crs-session-${INSTANCE_ID}-1.scope`]]);
   });
 
   it("resolves (does not reject) even when the stop spawn itself errors", async () => {
@@ -385,17 +386,19 @@ describe("isMasterAlive", () => {
 });
 
 describe("describeScope", () => {
+  const UNIT = `crs-session-${INSTANCE_ID}-1.scope`;
+
   it("resolves the unit's Description when it is active", async () => {
-    showReplies["crs-session-1.scope"] = {
+    showReplies[UNIT] = {
       description: "/usr/bin/dtach -n /tmp/some-sessions/1.sock /bin/bash",
       activeState: "active",
     };
-    await expect(describeScope("1")).resolves.toBe(
+    await expect(describeScope(INSTANCE_ID, "1")).resolves.toBe(
       "/usr/bin/dtach -n /tmp/some-sessions/1.sock /bin/bash",
     );
     expect(vi.mocked(spawnChildProcess)).toHaveBeenCalledWith(
       "systemctl",
-      ["--user", "show", "crs-session-1.scope", "-p", "Description", "-p", "ActiveState"],
+      ["--user", "show", UNIT, "-p", "Description", "-p", "ActiveState"],
       expect.objectContaining({ stdio: ["ignore", "pipe", "ignore"] }),
     );
   });
@@ -405,11 +408,11 @@ describe("describeScope", () => {
   // is still the genuine occupant of the name for a bootstrap collision's
   // purposes.
   it("resolves the Description when the unit is deactivating", async () => {
-    showReplies["crs-session-1.scope"] = {
+    showReplies[UNIT] = {
       description: "/usr/bin/dtach -n /tmp/some-sessions/1.sock /bin/bash",
       activeState: "deactivating",
     };
-    await expect(describeScope("1")).resolves.toBe(
+    await expect(describeScope(INSTANCE_ID, "1")).resolves.toBe(
       "/usr/bin/dtach -n /tmp/some-sessions/1.sock /bin/bash",
     );
   });
@@ -420,15 +423,15 @@ describe("describeScope", () => {
   // writing this. Description alone can't distinguish "genuinely occupied"
   // from "never existed"; ActiveState is what does.
   it("resolves null for a unit that doesn't exist (systemd's own fallback reply)", async () => {
-    await expect(describeScope("999999999")).resolves.toBeNull();
+    await expect(describeScope(INSTANCE_ID, "999999999")).resolves.toBeNull();
   });
 
   it("resolves null when the unit is inactive/failed, even with a real Description left over", async () => {
-    showReplies["crs-session-1.scope"] = {
+    showReplies[UNIT] = {
       description: "/usr/bin/dtach -n /tmp/some-sessions/1.sock /bin/bash",
       activeState: "failed",
     };
-    await expect(describeScope("1")).resolves.toBeNull();
+    await expect(describeScope(INSTANCE_ID, "1")).resolves.toBeNull();
   });
 
   it("never rejects, even if the probe itself fails to spawn", async () => {
@@ -437,7 +440,7 @@ describe("describeScope", () => {
       setImmediate(() => ee.emit("error", new Error("ENOENT")));
       return ee as unknown as ReturnType<typeof spawnChildProcess>;
     });
-    await expect(describeScope("1")).resolves.toBeNull();
+    await expect(describeScope(INSTANCE_ID, "1")).resolves.toBeNull();
   });
 });
 
@@ -611,10 +614,12 @@ describe("listSessionProcesses", () => {
     expect(vi.mocked(listScopeProcesses)).not.toHaveBeenCalled();
   });
 
-  it("falls back to the legacy unit name and still delegates when the listing itself fails", async () => {
+  it("falls back to the namespaced unit name and still delegates when the listing itself fails", async () => {
     listUnitsShouldError = true;
     await listSessionProcesses(SESSIONS_DIR, INSTANCE_ID, "1");
-    expect(vi.mocked(listScopeProcesses)).toHaveBeenCalledWith("crs-session-1.scope");
+    expect(vi.mocked(listScopeProcesses)).toHaveBeenCalledWith(
+      `crs-session-${INSTANCE_ID}-1.scope`,
+    );
   });
 
   it("passes through a populated process list unchanged", async () => {
