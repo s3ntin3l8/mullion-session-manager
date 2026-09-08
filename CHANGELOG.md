@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.3.13](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.12...v0.3.13) (2026-09-08)
+
+
+### Features
+
+* **installer:** brand the Windows and macOS helper installers with our logo ([#1174](https://github.com/s3ntin3l8/mullion-session-manager/issues/1174)) ([041a968](https://github.com/s3ntin3l8/mullion-session-manager/commit/041a96888080925e43e8d49a1655b0ce438b4f21))
+
+
+### Bug Fixes
+
+* **dock:** one session per dock control ([#1181](https://github.com/s3ntin3l8/mullion-session-manager/issues/1181)) ([6be6206](https://github.com/s3ntin3l8/mullion-session-manager/commit/6be6206c46a76e3dffff7d24b3374b2648a58936))
+* **dock:** stop a stack rebuild resizing every monitor in its group ([#1176](https://github.com/s3ntin3l8/mullion-session-manager/issues/1176)) ([fbe20da](https://github.com/s3ntin3l8/mullion-session-manager/commit/fbe20da583314238851255019917065b5f9e517f))
+* **dock:** stop the dock service-actions menu rendering 1000+px tall ([#1173](https://github.com/s3ntin3l8/mullion-session-manager/issues/1173)) ([240ceef](https://github.com/s3ntin3l8/mullion-session-manager/commit/240ceef932ef48a7eaf5bb9f1318a36d0bf9965e))
+* **dock:** terminal chrome and font-fit in dock monitors ([#1180](https://github.com/s3ntin3l8/mullion-session-manager/issues/1180)) ([0e9e3e0](https://github.com/s3ntin3l8/mullion-session-manager/commit/0e9e3e0b21a6566b81daf349eb90bb6eea57ab17))
+* **ssh-agent-bridge:** fix Windows/laptop UX gaps in helper pairing ([#1175](https://github.com/s3ntin3l8/mullion-session-manager/issues/1175)) ([2e88f13](https://github.com/s3ntin3l8/mullion-session-manager/commit/2e88f13f80826620391c38ca62f6d1d121fa9a13))
+* **workspaces:** stop the dock lagging up to 4s behind a workspace switch ([#1178](https://github.com/s3ntin3l8/mullion-session-manager/issues/1178)) ([3720464](https://github.com/s3ntin3l8/mullion-session-manager/commit/37204645374bc18d12723e27f8d5ff0c4bd8fdca))
+
 ## [0.3.12](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.11...v0.3.12) (2026-09-08)
 
 
