@@ -621,7 +621,12 @@ async function installWindows(io, { execPath, scriptPath, sshAuthSock, insecure 
       `installed — ${WINDOWS_RUN_KEY}\\${WINDOWS_TASK_NAME}\n` +
         `note: could not start it immediately (${reason}) — ` +
         "it will start at your next logon instead. Start it now with " +
-        `'"${execPath}" ${runArgv.map((v) => `"${v}"`).join(" ")}'.\n`,
+        // This function only runs from installWindows below, so the target
+        // is always PowerShell (Windows 11's default terminal) — a bare
+        // quoted path there is inert without the `&` call operator prefix,
+        // the same reasoning as PairBridgeModal.tsx's own commandFor() and
+        // the .iss installer's dialogs.
+        `'& "${execPath}" ${runArgv.map((v) => `"${v}"`).join(" ")}'.\n`,
     );
     return 0;
   };

@@ -28,16 +28,31 @@ function detectPlatform(): HelperPlatform {
 // `mullion-helper` and the verb doubles) and deploy/windows/
 // mullion-helper.iss (the Windows form: no `mullion` on PATH, and a
 // leading quoted path is inert in PowerShell — Windows 11's default
-// terminal — without the `&` call operator prefix).
-function commandFor(platform: HelperPlatform, payload: string): string {
+// terminal — without the `&` call operator prefix). Shared by commandFor
+// (helper pair) and runCommandFor (helper run) below so the three
+// per-platform invocation strings only exist once.
+function programFor(platform: HelperPlatform): string {
   switch (platform) {
     case "windows":
-      return `& "$env:LOCALAPPDATA\\Mullion\\mullion-helper.exe" helper pair ${payload}`;
+      return '& "$env:LOCALAPPDATA\\Mullion\\mullion-helper.exe"';
     case "macos":
-      return `mullion-helper helper pair ${payload}`;
+      return "mullion-helper";
     case "linux":
-      return `mullion helper pair '${payload}'`;
+      return "mullion";
   }
+}
+
+function commandFor(platform: HelperPlatform, payload: string): string {
+  const arg = platform === "linux" ? `'${payload}'` : payload;
+  return `${programFor(platform)} helper pair ${arg}`;
+}
+
+// Shown once `hasLiveSession` flips true (see the `mine` polling result
+// below) — `helper pair` only redeems the code and persists a credential,
+// it never opens the forwarding connection itself; `helper run` is the
+// separate step that actually starts forwarding.
+function runCommandFor(platform: HelperPlatform): string {
+  return `${programFor(platform)} helper run`;
 }
 
 const PLATFORM_OPTIONS: Array<{ value: HelperPlatform; label: string }> = [
@@ -45,6 +60,37 @@ const PLATFORM_OPTIONS: Array<{ value: HelperPlatform; label: string }> = [
   { value: "macos", label: "macOS" },
   { value: "linux", label: "Linux" },
 ];
+
+// Shared by both the "not yet paired" and "paired, now run it" bodies below
+// — same platform picker + command box + copy button, just a different
+// command string and copied-flag source.
+function PlatformCommandPicker({
+  platform,
+  onPlatformChange,
+  command,
+  copied,
+  onCopy,
+}: {
+  platform: HelperPlatform;
+  onPlatformChange: (platform: HelperPlatform) => void;
+  command: string;
+  copied: boolean;
+  onCopy: () => void;
+}) {
+  return (
+    <>
+      <div style={{ marginTop: 14 }}>
+        <Segmented options={PLATFORM_OPTIONS} value={platform} onChange={onPlatformChange} />
+      </div>
+      <div className="bridge-pairing-command" style={{ marginTop: 8 }}>
+        {command}
+      </div>
+      <div style={{ marginTop: 10 }}>
+        <SecondaryButton onClick={onCopy}>{copied ? "Copied" : "Copy command"}</SecondaryButton>
+      </div>
+    </>
+  );
+}
 
 // Issue #820 PR7c — same create-modal-* shell and "starts the flow the
 // moment this mounts, polls until the other side finishes" shape as
@@ -70,6 +116,13 @@ export function PairBridgeModal({
   const [payloadCopied, setPayloadCopied] = useState(false);
   const [commandCopied, setCommandCopied] = useState(false);
   const [connected, setConnected] = useState(false);
+  // True as soon as `helper pair` redeems the code (BridgeSummary's own
+  // `hasLiveSession`) — independent of `connected`, which only flips once
+  // `helper run`/`helper install` actually opens the forwarding connection.
+  // Without this, "haven't run `helper pair` yet" and "paired, now waiting
+  // on `helper run`" rendered identically (both just "Waiting for the
+  // helper to connect…"), with no sign the pair step had actually landed.
+  const [paired, setPaired] = useState(false);
   const [platform, setPlatform] = useState<HelperPlatform>(detectPlatform);
   // Reflects the TTL the server actually issued (bridge-registry.ts's
   // PAIRING_CODE_TTL_MS, currently 10 minutes) rather than a hardcoded
@@ -114,6 +167,7 @@ export function PairBridgeModal({
         .listBridges()
         .then((bridges) => {
           const mine = bridges.find((b) => b.id === pairing.bridge_id);
+          if (mine?.hasLiveSession) setPaired(true);
           if (mine?.connected) {
             setConnected(true);
             onPairedRef.current();
@@ -143,8 +197,11 @@ export function PairBridgeModal({
 
   const copyCommand = () => {
     if (!pairing) return;
+    const command = paired
+      ? runCommandFor(platform)
+      : commandFor(platform, pairing.pairing_payload);
     void navigator.clipboard
-      ?.writeText(commandFor(platform, pairing.pairing_payload))
+      ?.writeText(command)
       .then(() => {
         setCommandCopied(true);
         setTimeout(() => setCommandCopied(false), 2000);
@@ -175,7 +232,7 @@ export function PairBridgeModal({
           {!error && !pairing && (
             <div className="settings-readonly-value">Generating a pairing code…</div>
           )}
-          {!error && pairing && !connected && (
+          {!error && pairing && !connected && !paired && (
             <>
               <div className="bridge-pairing-command">{pairing.pairing_payload}</div>
               <div style={{ marginTop: 10 }}>
@@ -188,20 +245,36 @@ export function PairBridgeModal({
                 the CLI by hand instead? The command differs by platform:
               </div>
 
-              <div style={{ marginTop: 14 }}>
-                <Segmented options={PLATFORM_OPTIONS} value={platform} onChange={setPlatform} />
-              </div>
-              <div className="bridge-pairing-command" style={{ marginTop: 8 }}>
-                {commandFor(platform, pairing.pairing_payload)}
-              </div>
-              <div style={{ marginTop: 10 }}>
-                <SecondaryButton onClick={copyCommand}>
-                  {commandCopied ? "Copied" : "Copy command"}
-                </SecondaryButton>
-              </div>
+              <PlatformCommandPicker
+                platform={platform}
+                onPlatformChange={setPlatform}
+                command={commandFor(platform, pairing.pairing_payload)}
+                copied={commandCopied}
+                onCopy={copyCommand}
+              />
 
               <div style={{ fontSize: 11.5, color: "var(--dim)", marginTop: 12 }}>
                 Waiting for the helper to connect…
+              </div>
+            </>
+          )}
+          {!error && pairing && !connected && paired && (
+            <>
+              <div style={{ fontSize: 12.5, color: "var(--g)" }}>
+                Paired — the credential is saved. Now start the forwarder on your laptop:
+              </div>
+
+              <PlatformCommandPicker
+                platform={platform}
+                onPlatformChange={setPlatform}
+                command={runCommandFor(platform)}
+                copied={commandCopied}
+                onCopy={copyCommand}
+              />
+
+              <div style={{ fontSize: 11.5, color: "var(--dim)", marginTop: 12 }}>
+                Or run <code>helper install</code> instead of <code>helper run</code> to keep it
+                running across reboots. Waiting for it to connect…
               </div>
             </>
           )}
@@ -214,7 +287,7 @@ export function PairBridgeModal({
 
         <div className="create-modal-footer">
           <span className="create-modal-footer-hint">
-            {pairing && !connected
+            {pairing && !connected && !paired
               ? `The pairing code expires in about ${expiresInMinutes} minute${expiresInMinutes === 1 ? "" : "s"} if left unused.`
               : "You can close this at any time."}
           </span>

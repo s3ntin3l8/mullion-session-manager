@@ -23,6 +23,7 @@ import net from "node:net";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isSea as nodeIsSea } from "node:sea";
 import { Agent as UndiciAgent } from "undici";
 import { decodePairingPayload } from "./ssh-agent-bridge-pairing.mjs";
 import { attachInboundMux } from "./ssh-agent-bridge-mux.mjs";
@@ -489,6 +490,35 @@ function saveCredential(io, credential) {
   }
 }
 
+// The hint printed after a successful pair used to hardcode `mullion helper
+// run` — correct only for someone with a full npm install of the PRIMARY
+// on their PATH, which is exactly what the laptop-side helper is designed
+// NOT to require (see this file's own header comment). For the two actual
+// distribution shapes — a Node SEA binary (`mullion-helper[.exe]`, where
+// `execPath` IS the program with no separate script argument) and a
+// checkout/tarball invocation (`node .../mullion.mjs`) — reflecting how
+// THIS process was actually invoked (`process.execPath`/`process.argv[1]`)
+// stays correct regardless of which one got us here, rather than guessing.
+// `& ` on win32 mirrors PairBridgeModal.tsx's own commandFor() and
+// deploy/windows/mullion-helper.iss's dialogs: a bare quoted path is inert
+// in PowerShell (Windows 11's default terminal) without the call operator.
+function describeRunCommand(io) {
+  const platform = io.platform ?? process.platform;
+  const execPath = io.execPath ?? process.execPath;
+  const isSeaBuild = io.isSea !== undefined ? io.isSea : nodeIsSea();
+  // `!== undefined`, not `??` — the same convention runInstall (ssh-agent-
+  // helper-install.mjs) already documents for this exact field: a caller
+  // passing `scriptPath: null` explicitly must stay `null`, not silently
+  // fall back to `process.argv[1]`.
+  const scriptPath = isSeaBuild
+    ? null
+    : io.scriptPath !== undefined
+      ? io.scriptPath
+      : process.argv[1];
+  const program = scriptPath ? `"${execPath}" "${scriptPath}"` : `"${execPath}"`;
+  return `${platform === "win32" ? "& " : ""}${program} helper run`;
+}
+
 async function runPair(args, io) {
   const { flags, rest } = extractFlags(args, { name: "string", insecure: "boolean" });
   const [payload] = rest;
@@ -546,7 +576,7 @@ async function runPair(args, io) {
 
   io.stdout.write(
     `paired with ${decoded.baseUrl} — bridge_id ${ready.bridge_id}\n` +
-      "run 'mullion helper run' to start forwarding your SSH agent.\n",
+      `run ${describeRunCommand(io)} to start forwarding your SSH agent.\n`,
   );
   return 0;
 }

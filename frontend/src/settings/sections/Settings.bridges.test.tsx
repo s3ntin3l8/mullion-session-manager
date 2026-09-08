@@ -193,7 +193,14 @@ describe("Settings -> Hosts -> SSH agent bridges (issue #820 PR7c)", () => {
     render(<Settings onClose={vi.fn()} initialSection="hosts" />);
 
     const row = await screen.findByTestId("bridge-row-bridge-1");
-    await user.click(within(row).getByRole("button", { name: "Revoke" }));
+    // ConfirmButton (Revoke's own guard against a stray click) requires two
+    // separate clicks — arm, then confirm — and its accessible name changes
+    // to a bare checkmark icon once armed, so this re-uses the SAME element
+    // reference for both clicks rather than re-querying by "Revoke" a
+    // second time (ConfirmButton.test.tsx's own pattern).
+    const revokeButton = within(row).getByRole("button", { name: "Revoke" });
+    await user.click(revokeButton);
+    await user.click(revokeButton);
 
     await waitFor(() =>
       expect(screen.queryByTestId("bridge-row-bridge-1")).not.toBeInTheDocument(),

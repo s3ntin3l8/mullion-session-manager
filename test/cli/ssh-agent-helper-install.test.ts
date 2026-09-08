@@ -730,6 +730,11 @@ describe("runInstall / runUninstall", () => {
     expect(code).toBe(0);
     expect(findCall(calls, "reg", "add")).toBeDefined();
     expect(stderrLines.join("")).toMatch(/could not start it immediately/);
+    // A bare quoted path is inert in PowerShell (Windows 11's default
+    // terminal) without the `&` call operator — this message is read and
+    // typed by a human, so it needs the same prefix
+    // PairBridgeModal.tsx's commandFor() and the .iss dialogs already use.
+    expect(stderrLines.join("")).toMatch(/Start it now with '& "/);
   });
 
   // Round 4 (issue #871, mullion-reviewer round) — the REAL shape a spawn
