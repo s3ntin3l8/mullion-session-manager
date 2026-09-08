@@ -19,6 +19,7 @@ import {
 } from "./lib/persistedState.js";
 import {
   clamp,
+  dockMonitorMinWidthPx,
   dockerSessionIdentity,
   groupDockerControls,
   holdVanishedDockerControls,
@@ -808,6 +809,15 @@ function DockColumn({
     }
   };
 
+  // Recomputed from the user's LIVE terminal settings on every render
+  // (cheap — a few arithmetic ops, no measurement) rather than trusting
+  // .dock-monitor's own static CSS floor, which is only correct at the
+  // default 14px/4px — see dockMonitorMinWidthPx's own doc comment.
+  const dockMonitorMinWidth = dockMonitorMinWidthPx(
+    settings.terminal.fontSize,
+    settings.terminal.padding,
+  );
+
   // A single monitor row's render — closes over this render's own
   // worktreePaths/toggleGenRef/allOptions/runningFor/etc., same as the
   // handlers above it. Called for configured controls, ungrouped docker
@@ -1008,6 +1018,7 @@ function DockColumn({
         dockerStatus={dockerStatus}
         transient={ephemeralIds.has(control.id)}
         held={heldMerge.heldIds.has(control.id)}
+        minWidthPx={dockMonitorMinWidth}
         checkStatus={checkStatusById[control.id]}
         armed={killArmedIds.has(control.id)}
         confirmBeforeKill={confirmBeforeKill}

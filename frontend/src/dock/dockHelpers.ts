@@ -365,3 +365,46 @@ export function holdVanishedDockerControls(
   });
   return { controls: merged, heldIds, vanishedAt: nextVanishedAt };
 }
+
+// PR3 (.claude/plans/this-is-how-pocket-partitioned-mountain.md), Hermes
+// review round 2 — the CSS `.dock-monitor { min-width: 364px }` floor
+// (empty-states.css) is derived at the DEFAULT 14px fontSize / 4px padding
+// only; both are user-configurable (AppearanceSection, 10-20px / 0-16px),
+// and at larger values 364px stops holding pty-manager.ts's
+// MIN_TERMINAL_COLS (40) at any font size, leaving dock terminals back in
+// TerminalPane's permanent-shrink regime the static number was meant to
+// fix. This recomputes the SAME derivation from the user's actual live
+// settings instead — Dock.tsx applies it as an inline `minWidth` style,
+// which naturally overrides the CSS class's static value (higher
+// specificity) for every user, not just one at defaults.
+//
+// `PX_PER_COL_AT_14PX = 8.4` is the one real, measured data point this
+// whole floor is built on (see the CSS comment's own derivation for how it
+// was obtained — a live xterm pane's own
+// `term._core._renderService.dimensions.css.cell.width` at Geist Mono
+// 14px, not a guessed advance-width ratio). Scaling it linearly by
+// `fontSize / 14` is standard for a monospace font — glyph advance width
+// scales with em size — and is a materially better approximation than the
+// rejected blind ratio guess, since it's anchored to one precisely
+// measured point rather than assumed from nothing.
+const PX_PER_COL_AT_14PX = 8.4;
+const BASELINE_FONT_SIZE_PX = 14;
+// @xterm/addon-fit's own fixed reserve (its `proposeDimensions()`
+// subtracts `terminal.options.overviewRuler?.width || 14` whenever
+// `scrollback !== 0`, which this repo's terminals always have) — see the
+// CSS comment for the full trace through addon-fit's source.
+const ADDON_FIT_RESERVE_PX = 14;
+const DOCK_MONITOR_BORDER_PX = 2;
+const MIN_TERMINAL_COLS = 40;
+// Cross-platform font-hinting/subpixel margin the single (Chrome) cell-
+// width measurement can't rule out on other engines — matches the CSS
+// comment's own margin at the 14px baseline.
+const CROSS_PLATFORM_MARGIN_PX = 4;
+
+export function dockMonitorMinWidthPx(fontSize: number, padding: number): number {
+  const cellWidth = PX_PER_COL_AT_14PX * (fontSize / BASELINE_FONT_SIZE_PX);
+  const xtermContentWidth = MIN_TERMINAL_COLS * cellWidth + ADDON_FIT_RESERVE_PX;
+  return Math.ceil(
+    xtermContentWidth + padding * 2 + DOCK_MONITOR_BORDER_PX + CROSS_PLATFORM_MARGIN_PX,
+  );
+}

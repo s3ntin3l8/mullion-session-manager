@@ -104,6 +104,20 @@ export function TerminalPane(props: {
   // button handles stop/kill instead. Defaults to false, preserving the
   // standard terminal behavior for regular sessions.
   captureCtrlC?: boolean;
+  // PR3 (.claude/plans/this-is-how-pocket-partitioned-mountain.md) — gates
+  // the attach-image button, the voice-dictation mic BUTTON, and the
+  // dictation HOTKEY (Ctrl+Shift+Space by default) that triggers the same
+  // thing without the button — all meaningless over a dock monitor's
+  // `docker compose logs -f` stream (there is no interactive agent CLI on
+  // the other end to paste an image into or dictate to). Hermes review, PR
+  // #1180 — an earlier version of this gated only the button, leaving the
+  // hotkey reachable with no on-screen indicator once the button (its only
+  // phase feedback) was hidden. Defaults to true so every existing call
+  // site is unchanged; Dock.tsx's DockMonitor is the only caller that
+  // passes false. Does NOT touch the hidden file input or the
+  // paste-upload path — only the input-triggering affordances are wrong
+  // for a dock monitor.
+  inputAffordances?: boolean;
   // U7 — whether THIS pane is dockview's currently active one (see the
   // activation-focus effect near the find-bar effect below). Optional and
   // dockview-agnostic like every other prop here (see this component's own
@@ -374,6 +388,13 @@ export function TerminalPane(props: {
   // hold-tracking state machine.
   const voiceHotkeyPressRef = useRef<() => void>(() => {});
   const captureCtrlCRef = useRef(props.captureCtrlC);
+  // Hermes review, PR #1180 — `inputAffordances={false}` hid the mic BUTTON
+  // but left its keyboard twin (the dictation hotkey below) reachable, which
+  // defeats the point for a dock monitor: the hotkey would still start
+  // dictation and insert into the log-stream PTY, now with no on-screen
+  // phase indicator at all (the mic button was the only one). Read the same
+  // way captureCtrlCRef is, below.
+  const inputAffordancesRef = useRef(props.inputAffordances ?? true);
   // Mirrors `props.onTitleChange` for the same reason as prefsRef above — the
   // mount effect's term.onTitleChange subscription (below) is created once
   // and must not go stale if the caller passes a new callback identity later.
@@ -630,6 +651,7 @@ export function TerminalPane(props: {
       getClipboardKeys: () => prefsRef.current.clipboardKeys,
       onToggleFind: openFind,
       getVoiceChord: () =>
+        inputAffordancesRef.current &&
         voiceControllerRef.current.isSupported &&
         prefsRef.current.voice.enabled &&
         prefsRef.current.voice.hotkeyEnabled
@@ -1521,6 +1543,7 @@ export function TerminalPane(props: {
   // changes, without triggering the full font/atlas/repaint logic below.
   useEffect(() => {
     captureCtrlCRef.current = props.captureCtrlC;
+    inputAffordancesRef.current = props.inputAffordances ?? true;
     const term = termRef.current;
     if (!term) return;
     attachKeyConflictHandler({
@@ -1532,6 +1555,7 @@ export function TerminalPane(props: {
       getClipboardKeys: () => prefsRef.current.clipboardKeys,
       onToggleFind: openFind,
       getVoiceChord: () =>
+        inputAffordancesRef.current &&
         voiceControllerRef.current.isSupported &&
         prefsRef.current.voice.enabled &&
         prefsRef.current.voice.hotkeyEnabled
@@ -1542,11 +1566,11 @@ export function TerminalPane(props: {
     // `openFind` (from useTerminalSearch) only closes over stable refs/
     // setState identities, same as the plain in-component function it was
     // before PR 35's extraction — deliberately excluded here exactly as it
-    // was pre-extraction (this effect must only re-run on captureCtrlC
-    // changes, not on every render). The linter can't see through the
-    // custom-hook boundary to infer that stability on its own.
+    // was pre-extraction (this effect must only re-run on captureCtrlC/
+    // inputAffordances changes, not on every render). The linter can't see
+    // through the custom-hook boundary to infer that stability on its own.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.captureCtrlC]);
+  }, [props.captureCtrlC, props.inputAffordances]);
 
   // Applies every terminal pref to the *live* instance in place — this is
   // what fixes the async-hydration race noted above (a pane that mounted
@@ -1610,6 +1634,7 @@ export function TerminalPane(props: {
       getClipboardKeys: () => prefsRef.current.clipboardKeys,
       onToggleFind: openFind,
       getVoiceChord: () =>
+        inputAffordancesRef.current &&
         voiceControllerRef.current.isSupported &&
         prefsRef.current.voice.enabled &&
         prefsRef.current.voice.hotkeyEnabled
@@ -1873,13 +1898,15 @@ export function TerminalPane(props: {
           if (file) uploadImageRef.current(file);
         }}
       />
-      <button
-        className="pane-tab-btn terminal-attach-image-btn"
-        title="Attach image"
-        onClick={() => fileInputRef.current?.click()}
-      >
-        <ImageIcon size={14} />
-      </button>
+      {(props.inputAffordances ?? true) && (
+        <button
+          className="pane-tab-btn terminal-attach-image-btn"
+          title="Attach image"
+          onClick={() => fileInputRef.current?.click()}
+        >
+          <ImageIcon size={14} />
+        </button>
+      )}
       {
         // Voice dictation mic button — hidden entirely (not just disabled)
         // when the browser has no SpeechRecognition constructor at all
@@ -1892,17 +1919,19 @@ export function TerminalPane(props: {
         // voice/support.ts's isSpeechDictationSupported/
         // isSecureContextForDictation for why these are two separate checks.
       }
-      {terminalSettings.voice.enabled && voiceController.isSupported && (
-        <VoiceMicButton
-          phase={voiceController.phase}
-          interimText={voiceController.interimText}
-          disabled={!voiceController.isSecureContext}
-          coarsePointer={isCoarsePointer}
-          onPress={voiceController.press}
-          onRelease={voiceController.release}
-          onCancel={voiceController.cancel}
-        />
-      )}
+      {(props.inputAffordances ?? true) &&
+        terminalSettings.voice.enabled &&
+        voiceController.isSupported && (
+          <VoiceMicButton
+            phase={voiceController.phase}
+            interimText={voiceController.interimText}
+            disabled={!voiceController.isSecureContext}
+            coarsePointer={isCoarsePointer}
+            onPress={voiceController.press}
+            onRelease={voiceController.release}
+            onCancel={voiceController.cancel}
+          />
+        )}
       {
         // Scrollback find bar (U1) — opened via Ctrl+Shift+F, see
         // attachKeyConflictHandler (lib/terminalKeys.ts) for why that chord.

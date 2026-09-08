@@ -5,6 +5,7 @@ import {
   composeProjectForControl,
   groupDockerControls,
   holdVanishedDockerControls,
+  dockMonitorMinWidthPx,
 } from "./dockHelpers.js";
 import { makeSession } from "../test/fixtures.js";
 import type { DockControl } from "../api/index.js";
@@ -333,5 +334,30 @@ describe("groupDockerControls with heldIds", () => {
     expect(groups[0].rebuildRep).toBeNull();
     // The held control is still present for rendering/sizing purposes.
     expect(groups[0].controls).toEqual([held]);
+  });
+});
+
+describe("dockMonitorMinWidthPx", () => {
+  it("matches the CSS comment's own worked derivation at the default 14px/4px", () => {
+    // 40 * 8.4 + 14 (addon-fit reserve) + 4*2 (padding) + 2 (border) + 4
+    // (cross-platform margin) = 364 — the same static number
+    // .dock-monitor's own CSS min-width falls back to.
+    expect(dockMonitorMinWidthPx(14, 4)).toBe(364);
+  });
+
+  it("scales up at a larger configured font size — this is the whole point of the fix", () => {
+    // Hermes review round 2 — the static 364px only holds at the default
+    // font size; a user on a larger one needs a proportionally wider floor
+    // to actually clear MIN_TERMINAL_COLS (40) rather than silently
+    // reverting to the permanent-shrink regime this exists to fix.
+    const at14 = dockMonitorMinWidthPx(14, 4);
+    const at20 = dockMonitorMinWidthPx(20, 4);
+    expect(at20).toBeGreaterThan(at14);
+  });
+
+  it("scales up with a larger configured padding too", () => {
+    const at4 = dockMonitorMinWidthPx(14, 4);
+    const at16 = dockMonitorMinWidthPx(14, 16);
+    expect(at16).toBe(at4 + (16 - 4) * 2);
   });
 });
