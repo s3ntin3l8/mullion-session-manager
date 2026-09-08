@@ -164,6 +164,13 @@ export function CustomSelect({
     selectOption(optValue);
   }
 
+  // Both `top`/`bottom` and both `left`/`right` are set explicitly (to
+  // `"auto"` on the unused axis) rather than just omitting the one the active
+  // placement/align doesn't need — see KebabMenu.tsx's own getMenuStyle doc
+  // comment for the bug that omitting one leaked a stylesheet value into.
+  // `.custom-select-menu` itself carries no `position`/`top`, so this
+  // component was never actually exposed to that bug, but the two are meant
+  // to mirror each other.
   function getMenuStyle(): React.CSSProperties {
     const rect = triggerRect;
     if (!rect) return {};
@@ -173,13 +180,17 @@ export function CustomSelect({
     };
     if (menuPlacement === "top") {
       style.bottom = window.innerHeight - rect.top + 4;
+      style.top = "auto";
     } else {
       style.top = rect.bottom + 4;
+      style.bottom = "auto";
     }
     if (menuAlign === "right") {
       style.right = window.innerWidth - rect.right;
+      style.left = "auto";
     } else {
       style.left = rect.left;
+      style.right = "auto";
     }
     return style;
   }

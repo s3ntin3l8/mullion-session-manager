@@ -22,6 +22,11 @@ import { OverflowIcon } from "./icons.js";
 const ARM_MS = 3000;
 const ARM_SECONDS = ARM_MS / 1000;
 
+// Floor for getMenuStyle's own `maxHeight` cap — see that function's doc
+// comment for why an unfloored value can go negative and get silently
+// dropped by the browser.
+const MIN_MENU_MAX_HEIGHT = 120;
+
 export interface KebabMenuItem {
   key: string;
   label: string;
@@ -130,21 +135,40 @@ export function KebabMenu({
   };
 
   // Matches CustomSelect.tsx's own getMenuStyle: always right-aligned to the
-  // trigger (KebabMenu never offers a menuAlign), and — the one branch that
-  // matters here — "top" sets only `bottom`, never also `top`, since fixed
-  // positioning with just `bottom` set is what makes the menu grow upward
-  // from the trigger instead of down past it.
+  // trigger (KebabMenu never offers a menuAlign). Both `top` and `bottom` are
+  // always set explicitly (to `"auto"` on the unused axis) rather than just
+  // omitting the one the active placement doesn't need — the portaled node
+  // carries `.pane-tab-overflow-menu` (terminal.css), which hard-codes its own
+  // `top: 31px`, and an unset `style.top` here used to let that leak through
+  // underneath an inline `bottom`. With both offsets resolved and `height:
+  // auto`, CSS solved `height = triggerTop − 35`: a kebab near the bottom of
+  // the viewport (the Dock) rendered a menu over a thousand pixels tall. Also
+  // caps `maxHeight` to the space actually free on the side the menu opens
+  // toward, now that height is content-driven instead of implicitly bounded
+  // by the (buggy) fixed `top`. Floored at MIN_MENU_MAX_HEIGHT rather than
+  // used raw: a trigger within a few px of the edge it opens toward (the
+  // Dock at its minimum height is exactly this case) makes the raw
+  // `rect.top - 8`/`... - rect.bottom - 8` go negative, and a negative
+  // `max-height` is an invalid CSS length — the browser silently drops the
+  // whole declaration, un-capping the menu right back to the bug this cap
+  // exists to fix.
   const getMenuStyle = (): React.CSSProperties | null => {
     const rect = triggerRect;
     if (!rect) return null;
     const style: React.CSSProperties = {
       position: "fixed",
       right: window.innerWidth - rect.right,
+      left: "auto",
+      overflowY: "auto",
     };
     if (menuPlacement === "top") {
       style.bottom = window.innerHeight - rect.top + 4;
+      style.top = "auto";
+      style.maxHeight = Math.max(MIN_MENU_MAX_HEIGHT, rect.top - 8);
     } else {
       style.top = rect.bottom + 4;
+      style.bottom = "auto";
+      style.maxHeight = Math.max(MIN_MENU_MAX_HEIGHT, window.innerHeight - rect.bottom - 8);
     }
     return style;
   };
