@@ -252,24 +252,11 @@ export function useWorkspacePersistence({
     // maximizedNode unconditionally on every future save.
     applyLayoutPresentation(dockviewApi, layoutTier);
     restoredWorkspaceIdRef.current = activeWorkspaceId;
-    // Bumped directly here, rather than relying on the onDidLayoutChange
-    // effect below to notice this restore — it structurally can't.
-    // `activeWorkspaceId` is in THAT effect's own dep array too, so a
-    // workspace switch disposes and re-subscribes it in the same commit as
-    // this effect's own `clear()`/`fromJSON()` calls above. dockview's
-    // `onDidLayoutChange` is an `AsapEvent` (dockview-core's own source):
-    // every fire before the microtask drains only bumps an internal
-    // counter, and a subscriber gates on the counter value captured AT
-    // SUBSCRIBE TIME — so a subscriber created AFTER this restore's fires
-    // (but before the microtask drains) sees no fires at all. This is that
-    // exact case: dispose old subscriber -> clear()/fromJSON() fire the
-    // counter with no live subscriber -> re-subscribe captures the
-    // already-bumped count -> the microtask's fire is silently dropped.
-    // Without this line, `panelsVersion` (and therefore App.tsx's own
-    // workspaceProjectIds memo, which the Dock's project columns are
-    // derived from) would sit stale until some UNRELATED cause — usually
-    // the next 4s sessions poll — happened to bump it, showing the
-    // PREVIOUS workspace's Dock columns for that whole window.
+    // Bumped directly here rather than relying on the onDidLayoutChange
+    // effect below to notice this restore — it structurally can't, because
+    // dockview's onDidLayoutChange is an AsapEvent whose subscribers gate on
+    // a fire-count captured at subscribe time. See App.tsx's own
+    // workspaceProjectIds memo comment for the full mechanism.
     setPanelsVersion((v) => v + 1);
   }, [dockviewApi, activeWorkspaceId, workspaces, flushPendingSave, layoutTier, setPanelsVersion]);
 
