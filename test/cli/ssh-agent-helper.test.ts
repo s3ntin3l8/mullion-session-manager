@@ -1241,6 +1241,187 @@ describe("mullion helper run() — missing prerequisites", () => {
   });
 });
 
+// Issue #871 — the Windows autostart entry's HKCU Run value has no parent
+// console, so `helper run` launched from it at logon gets one allocated by
+// Windows; closing that window kills the helper (it IS the helper's own
+// console). `--detach` makes that invocation immediately re-spawn itself
+// with no console and exit, before any credential/network work — these
+// tests stub `io.spawn` the same way ssh-agent-helper-install.test.ts's own
+// `fakeChildProcess` does (a minimal EventEmitter firing 'spawn'/'error' on
+// a microtask, matching how a real spawn() always resolves asynchronously),
+// so none of this ever launches a real process.
+describe("mullion helper run() --detach (issue #871)", () => {
+  function fakeDetachedChild(fails: boolean) {
+    const listeners: Record<string, Array<(...a: unknown[]) => void>> = { spawn: [], error: [] };
+    queueMicrotask(() => {
+      const event = fails ? "error" : "spawn";
+      const arg = fails ? new Error("spawn failed") : undefined;
+      for (const cb of listeners[event]) cb(arg);
+    });
+    return {
+      once: (event: string, cb: (...a: unknown[]) => void) => {
+        listeners[event]?.push(cb);
+      },
+      removeListener: (event: string, cb: (...a: unknown[]) => void) => {
+        const list = listeners[event];
+        if (!list) return;
+        const i = list.indexOf(cb);
+        if (i !== -1) list.splice(i, 1);
+      },
+      unref: () => {},
+    };
+  }
+
+  it("on a Windows SEA, re-spawns itself detached+hidden with the right argv and returns without touching the network", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-helper-state-"));
+    let spawnCall: { cmd: string; args: string[]; options: Record<string, unknown> } | undefined;
+    const io = fakeIo(
+      { MULLION_HELPER_STATE_DIR: stateDir },
+      {
+        platform: "win32",
+        isSea: true,
+        execPath: "C:\\Users\\me\\AppData\\Local\\Mullion\\mullion-helper.exe",
+        spawn: (cmd: string, args: string[], options: Record<string, unknown>) => {
+          spawnCall = { cmd, args, options };
+          return fakeDetachedChild(false);
+        },
+      },
+    );
+    const code = await runHelper(
+      "run",
+      ["--detach", "--ssh-auth-sock", "\\\\.\\pipe\\openssh-ssh-agent", "--insecure"],
+      io,
+    );
+    expect(code).toBe(0);
+    // No credential file exists in this stateDir — if this reached the
+    // normal connect loop it would fail with "not paired yet" (exit 1),
+    // not succeed. Returning 0 here proves --detach short-circuited before
+    // any credential/network work, exactly as designed.
+    expect(spawnCall?.cmd).toBe("C:\\Users\\me\\AppData\\Local\\Mullion\\mullion-helper.exe");
+    expect(spawnCall?.args).toEqual([
+      "helper",
+      "run",
+      "--ssh-auth-sock",
+      "\\\\.\\pipe\\openssh-ssh-agent",
+      "--insecure",
+    ]);
+    expect(spawnCall?.options).toMatchObject({ detached: true, windowsHide: true });
+    // The human-readable confirmation goes to stderr, same as every other
+    // prose message in this file — stdout is reserved for NDJSON and only
+    // when --json-events is passed (docs/ssh-agent.md's own contract), which
+    // this invocation didn't. See the --json-events test below for the
+    // stdout side of this.
+    expect(io.stderrLines.join("")).toContain("started in the background");
+    expect(io.stdoutLines.join("")).toBe("");
+  });
+
+  it("with --json-events, emits a 'detached' NDJSON event on stdout instead of prose", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-helper-state-"));
+    const io = fakeIo(
+      { MULLION_HELPER_STATE_DIR: stateDir },
+      {
+        platform: "win32",
+        isSea: true,
+        execPath: "C:\\Users\\me\\AppData\\Local\\Mullion\\mullion-helper.exe",
+        spawn: () => fakeDetachedChild(false),
+      },
+    );
+    const code = await runHelper(
+      "run",
+      ["--detach", "--json-events", "--ssh-auth-sock", "\\\\.\\pipe\\openssh-ssh-agent"],
+      io,
+    );
+    expect(code).toBe(0);
+    // Every stdout line must be valid JSON — a supervisor parsing this
+    // stream with a bare JSON.parse per line, per docs/ssh-agent.md's own
+    // "Structured events" contract, must never see the prose confirmation
+    // land here instead.
+    const lines = io.stdoutLines.join("").trim().split("\n").filter(Boolean);
+    expect(lines).toHaveLength(1);
+    const event = JSON.parse(lines[0]);
+    expect(event.type).toBe("detached");
+    expect(typeof event.log_path).toBe("string");
+    expect(io.stderrLines.join("")).toContain("started in the background");
+  });
+
+  it("on a Windows checkout (non-SEA), the re-spawned argv includes the script path", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-helper-state-"));
+    let spawnCall: { cmd: string; args: string[] } | undefined;
+    const io = fakeIo(
+      { MULLION_HELPER_STATE_DIR: stateDir },
+      {
+        platform: "win32",
+        isSea: false,
+        execPath: "C:\\Program Files\\nodejs\\node.exe",
+        scriptPath: "C:\\mullion\\src\\cli\\mullion.mjs",
+        spawn: (cmd: string, args: string[]) => {
+          spawnCall = { cmd, args };
+          return fakeDetachedChild(false);
+        },
+      },
+    );
+    const code = await runHelper(
+      "run",
+      ["--detach", "--ssh-auth-sock", "\\\\.\\pipe\\openssh-ssh-agent"],
+      io,
+    );
+    expect(code).toBe(0);
+    expect(spawnCall?.cmd).toBe("C:\\Program Files\\nodejs\\node.exe");
+    expect(spawnCall?.args).toEqual([
+      "C:\\mullion\\src\\cli\\mullion.mjs",
+      "helper",
+      "run",
+      "--ssh-auth-sock",
+      "\\\\.\\pipe\\openssh-ssh-agent",
+    ]);
+  });
+
+  it("refuses on linux/darwin — those platforms already supervise run with no console to escape", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-helper-state-"));
+    let spawnCalled = false;
+    const io = fakeIo(
+      { SSH_AUTH_SOCK: "/tmp/whatever.sock", MULLION_HELPER_STATE_DIR: stateDir },
+      {
+        platform: "linux",
+        spawn: () => {
+          spawnCalled = true;
+          return fakeDetachedChild(false);
+        },
+      },
+    );
+    const code = await runHelper("run", ["--detach"], io);
+    expect(code).toBe(2);
+    expect(io.stderrLines.join("")).toContain("--detach is only meaningful on Windows");
+    expect(spawnCalled).toBe(false);
+  });
+
+  it("falls through to the foreground if the re-spawn fails, instead of exiting", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-helper-state-"));
+    const io = fakeIo(
+      { MULLION_HELPER_STATE_DIR: stateDir },
+      {
+        platform: "win32",
+        isSea: true,
+        execPath: "C:\\Users\\me\\AppData\\Local\\Mullion\\mullion-helper.exe",
+        spawn: () => fakeDetachedChild(true),
+      },
+    );
+    const code = await runHelper(
+      "run",
+      ["--detach", "--ssh-auth-sock", "\\\\.\\pipe\\openssh-ssh-agent"],
+      io,
+    );
+    // Falls through past the failed background attempt into the normal
+    // foreground path, which then fails for its own, unrelated reason (no
+    // credential in this fresh stateDir) — exit 1, not some bootstrap-
+    // specific error code, and not the "started in the background" exit 0
+    // the happy-path test above gets.
+    expect(code).toBe(1);
+    expect(io.stderrLines.join("")).toContain("running in the foreground instead");
+    expect(io.stderrLines.join("")).toContain("not paired yet");
+  });
+});
+
 describe("decodePairingPayload / real bridge-registry.ts", () => {
   it("both sides agree on the pairing payload format", async () => {
     const { app, port } = await buildAndListen();

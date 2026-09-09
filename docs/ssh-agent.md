@@ -291,6 +291,23 @@ on Windows, as opposed to the pipe-transport shape #874 already confirmed —
 remains tracked at [issue
 #871](https://github.com/s3ntin3l8/mullion-session-manager/issues/871).
 
+**No persistent console window at logon.** The `HKCU` Run value launches
+`helper run --detach`, not a plain `helper run`: the Run value has no parent
+console to inherit, so Windows allocates one for that bootstrap invocation
+too — the same console-subsystem SEA binary still gets a (transient) window
+at every logon. **Accepted tradeoff:** `--detach` makes that invocation
+immediately re-spawn itself with no console and exit, closing its own
+window behind it in well under a second, the same detached-and-hidden shape
+`install`'s own immediate start already uses — so nothing is ever left open
+for the user to close, but the brief flash itself isn't eliminated.
+The backgrounded helper's output goes to
+`%LOCALAPPDATA%\Mullion\helper-run.log`, the same log file `install`'s
+immediate start already writes to. **This only takes effect on the next
+`helper install`** — re-running the installer, or `helper install` by hand —
+since the Run value is only rewritten then; dropping a newer
+`mullion-helper.exe` in without re-running install leaves the old,
+`--detach`-less Run value (and its console window) in place.
+
 **Pass `--ssh-auth-sock <literal path>` explicitly**, as in the example
 above. Neither `launchd`, `systemd --user`, nor a Windows autostart entry
 inherits your login shell's `SSH_AUTH_SOCK` — the same reasoning as the
@@ -339,15 +356,16 @@ parsing stderr today keeps working exactly as it does now.
 
 Every line is a single object with at least a `type` field:
 
-| `type`             | Extra fields            | Meaning                                                                                                                                                              |
-| ------------------ | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `connected`        | `bridge_id`, `base_url` | The auth handshake with the primary succeeded (first connect or a reconnect).                                                                                        |
-| `disconnected`     | —                       | The connection dropped and wasn't caused by `run` itself stopping; a reconnect attempt follows.                                                                      |
-| `connect_failed`   | `message`               | A connection attempt failed at the network level (DNS, refused, timeout) rather than being rejected by the primary; a reconnect attempt follows.                     |
-| `session_renewed`  | `expires_at`            | The session was proactively renewed (see [Credential storage](#credential-storage) below) and the rotated credential was persisted.                                  |
-| `renewal_retry`    | `delay_ms`              | A renewal attempt failed at the network level and will be retried after `delay_ms`; the current session stays in use in the meantime.                                |
-| `renewal_rejected` | —                       | The primary rejected the renewal outright (the bridge was revoked). Fatal: `run` closes the connection and exits 1.                                                  |
-| `dead_credential`  | `message`               | The primary rejected an auth handshake using the current session id, and no concurrent renewal explains it — the credential is genuinely dead. Fatal: `run` exits 1. |
+| `type`             | Extra fields            | Meaning                                                                                                                                                                                                                                                                                                    |
+| ------------------ | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `connected`        | `bridge_id`, `base_url` | The auth handshake with the primary succeeded (first connect or a reconnect).                                                                                                                                                                                                                              |
+| `disconnected`     | —                       | The connection dropped and wasn't caused by `run` itself stopping; a reconnect attempt follows.                                                                                                                                                                                                            |
+| `connect_failed`   | `message`               | A connection attempt failed at the network level (DNS, refused, timeout) rather than being rejected by the primary; a reconnect attempt follows.                                                                                                                                                           |
+| `session_renewed`  | `expires_at`            | The session was proactively renewed (see [Credential storage](#credential-storage) below) and the rotated credential was persisted.                                                                                                                                                                        |
+| `renewal_retry`    | `delay_ms`              | A renewal attempt failed at the network level and will be retried after `delay_ms`; the current session stays in use in the meantime.                                                                                                                                                                      |
+| `renewal_rejected` | —                       | The primary rejected the renewal outright (the bridge was revoked). Fatal: `run` closes the connection and exits 1.                                                                                                                                                                                        |
+| `dead_credential`  | `message`               | The primary rejected an auth handshake using the current session id, and no concurrent renewal explains it — the credential is genuinely dead. Fatal: `run` exits 1.                                                                                                                                       |
+| `detached`         | `log_path`              | Windows-only, from `--detach` (see [Keeping it running](#keeping-it-running)): this invocation re-spawned itself in the background and is exiting; `log_path` is where the re-spawned process's own output — including its own further events on this same stream — goes instead of this process's stdout. |
 
 There's no `paired` event on this stream — pairing state is only ever
 observable via whether the credential file exists, and `run` never touches

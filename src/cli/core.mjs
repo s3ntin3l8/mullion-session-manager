@@ -9,6 +9,7 @@
 
 import fs from "node:fs";
 import net from "node:net";
+import { spawn as nodeSpawn } from "node:child_process";
 import { MullionSocketError } from "./client.mjs";
 
 /** Read all of stdin as a string. Used for --flag/- piped input. */
@@ -1177,4 +1178,87 @@ export async function runCommand(argv, { client, io }) {
   } finally {
     client.close?.();
   }
+}
+
+// ---------------------------------------------------------------------------
+// Detached spawn — shared by ssh-agent-helper.mjs (issue #871's `helper run
+// --detach` self-relaunch) and ssh-agent-helper-install.mjs (installWindows's
+// immediate start at install time). Lives here, not in either of those two
+// files, because they already import from each other (helper.mjs's
+// runHelper dispatches to installer's runInstall/runUninstall; installer
+// imports helper.mjs's stateDir/loadCredential/describePairCommand) — a
+// third shared piece of plumbing is better off owned by neither.
+//
+// `spawn()` itself never throws for a failure to actually start the child
+// (ENOENT, EACCES, an AV/EDR product transiently locking the just-written
+// exe) — that class of failure only ever surfaces asynchronously, as an
+// `'error'` event on the returned ChildProcess (self-review, mullion-
+// reviewer round: a bare `try { spawn(...) } catch {}` around this call
+// cannot catch it, and both callers' own immediate `process.exit()` right
+// after returning leaves no window for an unlistened-for `'error'` to be
+// observed later — worse, EventEmitter's default behavior for an 'error'
+// event with NO listener attached is to throw, which could crash the
+// process with an unrelated stack trace instead of the success message it
+// was about to print). `'spawn'` is the documented counterpart — Node
+// guarantees exactly one of the two fires for a real spawn attempt, never
+// neither — so awaiting whichever comes first turns an unobservable async
+// failure into a synchronously reportable one, at the cost of a spawn()
+// round trip's worth of async time before the caller returns. `unref()`
+// only once spawn is confirmed successful — unref'ing a child that's about
+// to fail doesn't change anything, but doing it before we know keeps the
+// intent ("we manage this process's own runtime lifetime, not our exit")
+// tied to the branch where it actually applies.
+//
+// `windowsHide: true` alongside `detached: true` — belt-and-braces: libuv
+// already maps `detached: true` to `DETACHED_PROCESS` on Windows (no
+// console allocated at all), but making the "no visible window" intent
+// explicit here means a future change to either flag's meaning doesn't
+// silently regress the other.
+export function spawnDetachedHelper(io, execPath, argv, logFd) {
+  return new Promise((resolve) => {
+    // A real Node spawn() call itself is not expected to throw
+    // synchronously for a runtime failure (see this function's own header
+    // comment) — but this catch keeps a genuinely unexpected synchronous
+    // throw (a malformed argv, for instance) degrading to the same
+    // "warning, not a failed install" outcome as the documented async
+    // 'error' path below, rather than escaping uncaught.
+    let child;
+    try {
+      child = (io.spawn ?? nodeSpawn)(execPath, argv, {
+        detached: true,
+        windowsHide: true,
+        stdio: ["ignore", logFd, logFd],
+      });
+    } catch (err) {
+      resolve({ ok: false, error: err });
+      return;
+    }
+    // Round 4 diagnostic follow-up (issue #871) — whichever of these two
+    // fires first, remove the OTHER one too: `.once()` only self-removes
+    // the listener that actually fired, so the loser stayed registered on
+    // this `child` indefinitely after this Promise already settled. If
+    // that leftover listener's event (most plausibly a late `'error'`
+    // after a successful `'spawn'`, e.g. the detached child later failing
+    // to write to its inherited log fd) ever fired, there was nothing left
+    // to catch it — an unhandled exception inside an event listener
+    // becomes an `unhandledRejection`-equivalent crash of the *parent*
+    // process, well after the caller had already returned and may already
+    // be mid-exit.
+    let settled = false;
+    const onError = (err) => {
+      if (settled) return;
+      settled = true;
+      child.removeListener("spawn", onSpawn);
+      resolve({ ok: false, error: err });
+    };
+    const onSpawn = () => {
+      if (settled) return;
+      settled = true;
+      child.removeListener("error", onError);
+      child.unref();
+      resolve({ ok: true });
+    };
+    child.once("error", onError);
+    child.once("spawn", onSpawn);
+  });
 }
