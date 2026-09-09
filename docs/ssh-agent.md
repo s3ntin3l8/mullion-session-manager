@@ -60,22 +60,18 @@ the primary itself — each materializes its own local bridge socket.
 
 1. On the primary, open **Settings → Hosts → SSH agent bridges** and click
    **Pair a new bridge**. This generates a one-time pairing payload, valid
-   for 10 minutes, and starts polling for the helper to redeem it.
-2. On your laptop, get `mullion helper` (see below) and run:
-
-   ```sh
-   mullion helper pair '<payload>'
-   ```
+   for 10 minutes, and starts polling for the helper to redeem it. The modal
+   shows the exact command for your laptop's platform — Windows, macOS, and
+   Linux each invoke the helper differently (there's no `mullion` on PATH by
+   default on any of them), see below.
+2. On your laptop, get `mullion helper` (see below) and run `helper pair
+'<payload>'` in the form shown for your platform.
 
    Quote the payload — it's an opaque, base64url-ish blob, not something to
    retype. `--name <name>` overrides the default label (your laptop's
    hostname) shown in Settings.
 
-3. Keep it forwarding:
-
-   ```sh
-   mullion helper run
-   ```
+3. Keep it forwarding — run `helper run` in that same platform-specific form.
 
    This is a long-running foreground process — supervise it the same way you
    would the manual tunnel's `ssh -R` (see [Keeping it

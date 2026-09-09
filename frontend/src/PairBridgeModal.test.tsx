@@ -98,7 +98,9 @@ describe("PairBridgeModal", () => {
 
     await user.click(screen.getByRole("button", { name: "Linux" }));
     expect(
-      await screen.findByText(`mullion helper pair '${PAIRING.pairing_payload}'`),
+      await screen.findByText(
+        `node mullion-helper/dist/cli/mullion.mjs helper pair '${PAIRING.pairing_payload}'`,
+      ),
     ).toBeInTheDocument();
   });
 
@@ -134,7 +136,9 @@ describe("PairBridgeModal", () => {
     expect(
       await screen.findByText(/Paired — the credential is saved/, {}, { timeout: 4000 }),
     ).toBeInTheDocument();
-    expect(screen.getByText("mullion helper run")).toBeInTheDocument();
+    expect(
+      screen.getByText("node mullion-helper/dist/cli/mullion.mjs helper run"),
+    ).toBeInTheDocument();
     expect(onPaired).not.toHaveBeenCalled();
     expect(screen.queryByText(PAIRING.pairing_payload)).not.toBeInTheDocument();
 
@@ -226,7 +230,9 @@ describe("PairBridgeModal", () => {
 
     await user.click(screen.getByRole("button", { name: "Linux" }));
     await user.click(screen.getByRole("button", { name: "Copy command" }));
-    expect(writeText).toHaveBeenCalledWith(`mullion helper pair '${PAIRING.pairing_payload}'`);
+    expect(writeText).toHaveBeenCalledWith(
+      `node mullion-helper/dist/cli/mullion.mjs helper pair '${PAIRING.pairing_payload}'`,
+    );
     expect(writeText).not.toHaveBeenCalledWith(PAIRING.pairing_payload);
   });
 });
