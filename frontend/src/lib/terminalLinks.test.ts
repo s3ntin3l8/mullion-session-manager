@@ -12,6 +12,9 @@ import {
   MAX_JOINED_LENGTH,
   mapOffsetsToRows,
   RIGHT_EDGE_SLACK,
+  SOFT_STRUCTURAL_CHAR_RE,
+  STRUCTURAL_CHAR_RE,
+  WRAP_BREAK_CHAR_RE,
   type LinkBufferCell,
   type LinkBufferLine,
   type LinkBufferSource,
@@ -239,6 +242,28 @@ describe("terminalLinks", () => {
       expect(links).toHaveLength(1);
       expect(links[0].text).toBe("https://example.com/foo-");
       expect(links[0].rowCount).toBe(1);
+    });
+
+    // Hermes-caught follow-up: the fix above (adding "." to
+    // WRAP_BREAK_CHAR_RE) restores the invariant that let the bug happen in
+    // the first place — that WRAP_BREAK_CHAR_RE is a superset of every
+    // character either admission gate (STRUCTURAL_CHAR_RE or
+    // SOFT_STRUCTURAL_CHAR_RE) lets through. `canExtend` now also fails
+    // closed if that invariant is ever violated (a `breakIdx < 0` no longer
+    // falls back to the whole continuation as the span), but a silent
+    // fail-closed is still worse than a loud test failure at the root
+    // cause. This test checks the invariant directly against the real
+    // regex objects — not a hand-copied character list, which could drift
+    // out of sync with the source the way this exact bug did — so a future
+    // widening of either gate without a matching WRAP_BREAK_CHAR_RE update
+    // fails here first.
+    it("invariant: WRAP_BREAK_CHAR_RE matches every character STRUCTURAL_CHAR_RE or SOFT_STRUCTURAL_CHAR_RE admits", () => {
+      for (let code = 0x21; code <= 0x7e; code++) {
+        const c = String.fromCharCode(code);
+        if (STRUCTURAL_CHAR_RE.test(c) || SOFT_STRUCTURAL_CHAR_RE.test(c)) {
+          expect(WRAP_BREAK_CHAR_RE.test(c)).toBe(true);
+        }
+      }
     });
   });
 

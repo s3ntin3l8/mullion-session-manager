@@ -213,7 +213,7 @@ const URL_MIDDLE_CHAR_RE = /[^\s"'!*(){}|\\^<>`]/;
 // that now correctly fails to extend — a link stopping one row short of a
 // non-essential trailing fragment segment is the safe direction, not a
 // regression.
-const STRUCTURAL_CHAR_RE = /[/?#&=%]/;
+export const STRUCTURAL_CHAR_RE = /[/?#&=%]/;
 
 // A producer row ending mid-token: a complete URL essentially never ends in
 // `-`, and a trailing `/` at a wrap point is a path separator the next row
@@ -228,7 +228,7 @@ const MID_TOKEN_BREAK_RE = /[-/]$/;
 // is only ever consulted behind the MID_TOKEN_BREAK_RE guard: a continuation
 // like "tracker.git" or "some-repo" after a producer row visibly cut at `-`
 // or `/` (opencode's own `git remote -v` output, wrapped mid-hostname).
-const SOFT_STRUCTURAL_CHAR_RE = /[.-]/;
+export const SOFT_STRUCTURAL_CHAR_RE = /[.-]/;
 
 // Break opportunities a word-wrapper would use — NOT a variant of
 // STRUCTURAL_CHAR_RE (that one gates whether a join happens at all; this one
@@ -241,7 +241,7 @@ const SOFT_STRUCTURAL_CHAR_RE = /[.-]/;
 // break-sized one — blowing the corroboration interval wide open exactly in
 // the module's most loosely-gated path. Caught by review; regression-tested
 // below (a real captured `.git` continuation with no early hyphen).
-const WRAP_BREAK_CHAR_RE = /[-./?#&=%]/;
+export const WRAP_BREAK_CHAR_RE = /[-./?#&=%]/;
 
 // A continuation row that itself starts a brand new http(s) URL is a
 // second, distinct link, not a continuation of the first — never merge the
@@ -367,8 +367,20 @@ function canExtend(
     if (!SOFT_STRUCTURAL_CHAR_RE.test(prefix)) return fail;
   }
 
+  // Invariant: every continuation admitted above (either STRUCTURAL_CHAR_RE
+  // or the SOFT_STRUCTURAL_CHAR_RE guarded exception) contains a character
+  // WRAP_BREAK_CHAR_RE also matches — both are subsets of it by construction
+  // (see WRAP_BREAK_CHAR_RE's own comment), so this should never be -1. Fail
+  // CLOSED rather than falling back to `prefix.length` as the span if that
+  // ever stops holding (e.g. one class widens without the other) — that
+  // fallback, using the ENTIRE continuation as the corroboration span, is
+  // exactly the review-caught bug this module was fixed for (see
+  // terminalLinks.test.ts's "WRAP_BREAK_CHAR_RE is a superset" invariant
+  // test, which would catch a real divergence directly, before it ever
+  // reaches this fallback).
   const breakIdx = prefix.search(WRAP_BREAK_CHAR_RE);
-  const span = breakIdx >= 0 ? breakIdx + 1 : prefix.length;
+  if (breakIdx < 0) return fail;
+  const span = breakIdx + 1;
   if (!isEligibleWrapRow(buf, producerY, producerEdge.edge, span)) return fail;
 
   return { ok: true, strippedNext: nextBody, skipped };
