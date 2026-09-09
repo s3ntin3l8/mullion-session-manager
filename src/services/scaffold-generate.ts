@@ -329,9 +329,10 @@ export function buildGenerationPrompt(opts: {
     `discover this reviewer as a skill; omitting it makes the reviewer silently invisible to ` +
     `codex sessions.\n` +
     `3. A short AGENTS.md briefing-region paragraph naming where the skill and reviewer live ` +
-    `and when to use them. Include a "## Workflow Conventions" section with this repo's ` +
-    `branching, review, and commit conventions (look at CONTRIBUTING.md, existing AGENTS.md, ` +
-    `and recent git history for specifics).${seedSection}\n\n` +
+    `and when to use them. Do NOT include a "## Workflow Conventions" section or any branching/` +
+    `review/commit-convention content — Mullion appends its own Workflow Conventions section ` +
+    `after your paragraph, sourced from this install's own configured conventions, not from ` +
+    `you. Report back the pointer paragraph only.${seedSection}\n\n` +
     `Report back EXACTLY this shape and nothing else outside these markers — no preamble, no ` +
     `commentary, no markdown fences around the markers themselves:\n\n` +
     `${SKILL_START}\n(full skill file contents, including YAML frontmatter with name/description)\n${SKILL_END}\n` +

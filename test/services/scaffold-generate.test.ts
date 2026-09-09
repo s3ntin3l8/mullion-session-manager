@@ -129,6 +129,27 @@ describe("buildGenerationPrompt", () => {
     });
     expect(prompt).toContain(CODEX_REVIEWER_DELEGATION_CLAUSE);
   });
+
+  // Issue #1200 — this prompt used to ask for a "## Workflow Conventions"
+  // section here AND tell the model to report back "the briefing paragraph
+  // only" in its own output-marker instruction a few lines later — a
+  // self-contradiction that likely produced #1115 (a scaffolded AGENTS.md
+  // whose briefing region omitted Workflow Conventions entirely).
+  // mullion-scaffold.ts's computeScaffold now owns that section
+  // unconditionally, sourced from this install's own configured
+  // conventions text, never from the generation turn — so the prompt must
+  // no longer ask for one at all.
+  it("does not ask the model for a Workflow Conventions section", () => {
+    const prompt = buildGenerationPrompt({
+      slug: "demo",
+      seed: {},
+      hasSkill: false,
+      hasReviewer: false,
+      hasBriefingRegion: false,
+    });
+    expect(prompt).not.toContain('Include a "## Workflow Conventions" section');
+    expect(prompt).toContain("Do NOT include a");
+  });
 });
 
 describe("parseGeneratedOutput", () => {

@@ -212,6 +212,16 @@ function scaffoldableRelPaths(slug: string, options: ScaffoldOptions): string[] 
   // apply path would silently OVERWRITE a real Code-of-Conduct/dev-setup
   // file with a pointer-only one instead of upserting into it.
   if (options.includeContributingPointer) paths.push("CONTRIBUTING.md");
+  // Issue #1200 — read-only. Codex reads AGENTS.override.md INSTEAD OF
+  // AGENTS.md when it exists (agent-rules.ts's own precedence table), and
+  // computeScaffold deliberately never writes to it (same posture as
+  // GEMINI.md's own retired mirror option, #978). Without this, a target
+  // repo that has one would have its Workflow Conventions land in
+  // AGENTS.md and codex would silently never see them. computeScaffold has
+  // no branch keyed on this path at all — it is read purely so the route
+  // can surface a warning in the preview response, never to feed a write
+  // decision.
+  paths.push("AGENTS.override.md");
   return paths;
 }
 
@@ -434,7 +444,18 @@ function findLiveSlugPreview(projectId: number, slug: string): PreviewRecord | n
 // an uncommitted local edit, ...) than the one the scratch worktree's own
 // resolved base ref actually reflects.
 type PreviewComputation =
-  | { ok: true; previewId: string; diff: string; files: string[] }
+  | {
+      ok: true;
+      previewId: string;
+      diff: string;
+      files: string[];
+      // Issue #1200 — true when the target repo already has its own
+      // AGENTS.override.md. computeScaffold never writes to that path
+      // (codex reads it INSTEAD OF AGENTS.md), so this is purely
+      // informational — the caller surfaces it as a warning, the preview
+      // diff itself is unaffected.
+      hasAgentsOverride: boolean;
+    }
   | { ok: false; status: 400 | 500; message: string };
 
 interface ReadyWorktree {
@@ -537,7 +558,13 @@ async function finishPreview(
     createdAt: Date.now(),
   });
 
-  return { ok: true, previewId, diff, files: entries.map((entry) => entry.path) };
+  return {
+    ok: true,
+    previewId,
+    diff,
+    files: entries.map((entry) => entry.path),
+    hasAgentsOverride: existingFiles["AGENTS.override.md"] !== undefined,
+  };
 }
 
 async function computeAndStorePreview(
@@ -560,7 +587,12 @@ function sendPreviewComputation(reply: FastifyReply, result: PreviewComputation)
       ? reply.badRequest(result.message)
       : reply.internalServerError(result.message);
   }
-  return { previewId: result.previewId, diff: result.diff, files: result.files };
+  return {
+    previewId: result.previewId,
+    diff: result.diff,
+    files: result.files,
+    hasAgentsOverride: result.hasAgentsOverride,
+  };
 }
 
 export async function projectSetupRoute(app: FastifyInstance) {
@@ -590,6 +622,13 @@ export async function projectSetupRoute(app: FastifyInstance) {
         includeContributingPointer: request.body.includeContributingPointer,
         symlinkAgentsSkills: request.body.symlinkAgentsSkills,
         includeDockConfig: request.body.includeDockConfig,
+        // Issue #1200 — this install's own Settings → Sessions conventions
+        // text, so the committed AGENTS.md Workflow Conventions section
+        // matches what's already injected into every session on this
+        // project, rather than computeScaffold's own fixed defaults
+        // silently outranking it. Empty string when nothing's configured
+        // yet — computeScaffold's own fallback takes over from there.
+        workflowConventionsText: getStoredSettings(app.db).sessions.workflowConventionsText,
       };
       if (!isValidScaffoldSlug(options.slug)) {
         return reply.badRequest(`"${options.slug}" is not a safe slug`);
@@ -621,6 +660,11 @@ export async function projectSetupRoute(app: FastifyInstance) {
         includeContributingPointer: request.body.includeContributingPointer,
         symlinkAgentsSkills: request.body.symlinkAgentsSkills,
         includeDockConfig: request.body.includeDockConfig,
+        // Issue #1200 — same resolution as /setup/preview above; must
+        // match it exactly, since finishPreview's "preview and apply are
+        // provably the same bytes" guarantee (mullion-scaffold.ts's own
+        // header) depends on both call sites resolving this identically.
+        workflowConventionsText: getStoredSettings(app.db).sessions.workflowConventionsText,
       };
       if (!isValidScaffoldSlug(options.slug)) {
         return reply.badRequest(`"${options.slug}" is not a safe slug`);
@@ -756,12 +800,14 @@ export async function projectSetupRoute(app: FastifyInstance) {
         diff: string;
         files: string[];
         sandboxed: boolean;
+        hasAgentsOverride: boolean;
         possiblyGeneric?: boolean;
       } = {
         previewId: result.previewId,
         diff: result.diff,
         files: result.files,
         sandboxed: generated.sandboxed,
+        hasAgentsOverride: result.hasAgentsOverride,
       };
       if (generated.possiblyGeneric) {
         response.possiblyGeneric = true;

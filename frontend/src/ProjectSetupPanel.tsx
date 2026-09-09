@@ -3,6 +3,7 @@ import { api, ApiError } from "./api/index.js";
 import { parseUnifiedDiff } from "./diffUtils.js";
 import { EmptyStateNote } from "./ui/EmptyState.js";
 import { FileTextIcon } from "./ui/icons.js";
+import { useDashboardStore } from "./store/index.js";
 
 export interface ProjectSetupPanelParams {
   projectId: number;
@@ -12,6 +13,13 @@ interface PreviewState {
   previewId: string;
   diff: string;
   files: string[];
+  // Issue #1200 — true when the target repo already has its own
+  // AGENTS.override.md. computeScaffold never writes to that path (codex
+  // reads it INSTEAD OF AGENTS.md), so the committed Workflow Conventions
+  // this scaffold writes into AGENTS.md would never reach codex sessions
+  // for this specific project — surfaced here so that's a decision the
+  // user makes with the fact in front of them, not a silent gap.
+  hasAgentsOverride: boolean;
 }
 
 interface ApplyResult {
@@ -34,6 +42,16 @@ interface ApplyResult {
 // token are available, opens a real PR — so the UI never lets Apply fire
 // without the user having seen the exact diff Preview produced first.
 export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams }) {
+  // Issue #1200 — same install-wide text every session already gets
+  // injected from (settings.sessions.workflowConventionsText, Settings ->
+  // Sessions), read here purely for disclosure: computeScaffold on the
+  // backend resolves and commits the SAME text server-side (project-setup.ts's
+  // own /setup/preview and /setup/generate handlers) — this is not a
+  // second source of truth, just showing the user what's about to be
+  // committed before they see the diff.
+  const workflowConventionsText = useDashboardStore(
+    (s) => s.settings.sessions.workflowConventionsText,
+  );
   const [slug, setSlug] = useState("");
   const [includeContributingPointer, setIncludeContributingPointer] = useState(false);
   const [symlinkAgentsSkills, setSymlinkAgentsSkills] = useState(false);
@@ -135,6 +153,14 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
           configured) — nothing is written until you click Apply.
         </div>
         {error && <div className="agent-rules-panel-notice error">{error}</div>}
+        {preview.hasAgentsOverride && (
+          <div className="agent-rules-panel-notice warning">
+            This repo already has its own <code>AGENTS.override.md</code> — codex reads that file
+            INSTEAD OF AGENTS.md, so the Workflow Conventions section this scaffold just committed
+            into AGENTS.md will never reach codex sessions on this project. Nothing here writes to
+            AGENTS.override.md; if codex needs to see these conventions, add them there by hand.
+          </div>
+        )}
         {diffLines.length === 0 ? (
           <EmptyStateNote>No changes to show.</EmptyStateNote>
         ) : (
@@ -239,6 +265,26 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
             checked={includeDockConfig}
             onChange={(e) => setIncludeDockConfig(e.target.checked)}
           />
+        </div>
+      </div>
+      <div className="settings-row">
+        <div className="settings-row-text">
+          <label className="settings-row-label">Workflow Conventions to commit</label>
+          <div className="settings-row-desc">
+            {workflowConventionsText.length > 0 ? (
+              <>
+                This install's own conventions, from Settings → Sessions — the same text already
+                injected into every session on this project.
+              </>
+            ) : (
+              <>
+                No conventions configured yet in Settings → Sessions, so this will commit Mullion's
+                own built-in defaults (always branch + PR, Conventional Commits titles, squash
+                merge, green CI, full lint/typecheck/test/format gate before pushing) — configure
+                your own there first if these aren't right for this project.
+              </>
+            )}
+          </div>
         </div>
       </div>
       <button

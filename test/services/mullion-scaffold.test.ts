@@ -152,21 +152,103 @@ describe("computeScaffold", () => {
       expect(region).toContain(workflowFragment("prePushChecks", "full-gate"));
     });
 
-    it("an agent-generated override (issue #956) replaces the whole region, including the Workflow Conventions section", () => {
-      // Documenting existing, deliberate behavior (see computeScaffold's own
+    it("an agent-generated override (issue #956) still gets a Workflow Conventions section, unlike pre-#1200 behavior", () => {
+      // Issue #1200 — before this, computeScaffold's own
       // `options.generated?.briefingRegion ?? briefingRegionBody(slug)`
-      // short-circuit) rather than asserting a new requirement: when
-      // scaffold-generate.ts supplies its own briefingRegion, it wins
-      // wholesale and the Workflow Conventions section this issue adds is
-      // NOT present. That's the same trade-off issue #956 already made for
-      // the rest of the region's content.
+      // was all-or-nothing: an agent-generated region replaced the WHOLE
+      // region, silently dropping the Workflow Conventions section
+      // entirely (this test used to assert exactly that, as documented
+      // pre-existing behavior). computeScaffold now always appends its
+      // own conventions section regardless of where the pointer prose
+      // came from — the generation turn no longer even asks for one
+      // (scaffold-generate.ts's buildGenerationPrompt), so letting it
+      // still own that section would have left it either duplicated or,
+      // per the old short-circuit, silently missing.
       const entries = computeScaffold(
         {},
         { slug: "demo", generated: { briefingRegion: "Custom generated region." } },
       );
       const agentsMd = entries.find((e) => e.path === "AGENTS.md") as { contents: string };
       const region = extractMarkedRegion(agentsMd.contents, MARKER_START, MARKER_END)!;
-      expect(region).not.toContain("## Workflow Conventions");
+      expect(region).toContain("Custom generated region.");
+      expect(region).toContain("## Workflow Conventions");
+      // Exactly one heading — not two.
+      expect(region.split("## Workflow Conventions")).toHaveLength(2);
+    });
+
+    it("strips a stray leading '## Workflow Conventions' heading a generation turn emits anyway, rather than duplicating the heading", () => {
+      // Only the HEADING itself is stripped (a literal, case-sensitive
+      // match at the very start of generated.briefingRegion) — this
+      // module makes no attempt to detect and remove an inferred
+      // conventions PARAGRAPH the model wrote under its own heading, since
+      // that's ordinary prose indistinguishable from any other pointer
+      // content once the heading marker is gone. The guarantee is "never
+      // two headings," not "the model's own conventions guess vanishes."
+      const entries = computeScaffold(
+        {},
+        {
+          slug: "demo",
+          generated: {
+            briefingRegion: "## Workflow Conventions\n\nSome inferred conventions text.\n",
+          },
+        },
+      );
+      const agentsMd = entries.find((e) => e.path === "AGENTS.md") as { contents: string };
+      const region = extractMarkedRegion(agentsMd.contents, MARKER_START, MARKER_END)!;
+      // Exactly one heading, and this install's own conventions (the
+      // fallback default here, since workflowConventionsText is unset)
+      // are what's actually committed under it.
+      expect(region.split("## Workflow Conventions")).toHaveLength(2);
+      expect(region).toContain(workflowFragment("branching", "branch-pr"));
+    });
+
+    it("commits this install's own workflowConventionsText verbatim when set, instead of the fixed defaults", () => {
+      const entries = computeScaffold(
+        {},
+        { slug: "demo", workflowConventionsText: "Our team's own conventions, written by hand." },
+      );
+      const agentsMd = entries.find((e) => e.path === "AGENTS.md") as { contents: string };
+      const region = extractMarkedRegion(agentsMd.contents, MARKER_START, MARKER_END)!;
+      expect(region).toContain("Our team's own conventions, written by hand.");
+      expect(region).not.toContain(workflowFragment("branching", "branch-pr"));
+    });
+
+    it("workflowConventionsText also wins when a generation turn supplied its own pointer prose", () => {
+      const entries = computeScaffold(
+        {},
+        {
+          slug: "demo",
+          generated: { briefingRegion: "Custom generated region." },
+          workflowConventionsText: "Our team's own conventions, written by hand.",
+        },
+      );
+      const agentsMd = entries.find((e) => e.path === "AGENTS.md") as { contents: string };
+      const region = extractMarkedRegion(agentsMd.contents, MARKER_START, MARKER_END)!;
+      expect(region).toContain("Custom generated region.");
+      expect(region).toContain("Our team's own conventions, written by hand.");
+      expect(region).not.toContain(workflowFragment("branching", "branch-pr"));
+    });
+
+    it("an unset workflowConventionsText produces byte-identical output to before issue #1200", () => {
+      // The regression guard that matters most: a caller that never sets
+      // the new field (every existing preview/apply call site, today)
+      // must keep producing EXACTLY the same AGENTS.md region as before
+      // this field existed.
+      const withoutField = computeScaffold({}, { slug: "demo" });
+      const withUndefinedField = computeScaffold(
+        {},
+        { slug: "demo", workflowConventionsText: undefined },
+      );
+      const withEmptyString = computeScaffold({}, { slug: "demo", workflowConventionsText: "" });
+      const agentsMdA = withoutField.find((e) => e.path === "AGENTS.md") as { contents: string };
+      const agentsMdB = withUndefinedField.find((e) => e.path === "AGENTS.md") as {
+        contents: string;
+      };
+      const agentsMdC = withEmptyString.find((e) => e.path === "AGENTS.md") as {
+        contents: string;
+      };
+      expect(agentsMdB.contents).toBe(agentsMdA.contents);
+      expect(agentsMdC.contents).toBe(agentsMdA.contents);
     });
   });
 

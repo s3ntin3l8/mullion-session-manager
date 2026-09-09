@@ -4,6 +4,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ProjectSetupPanel } from "./ProjectSetupPanel.js";
 import { jsonResponse } from "./test/jsonResponse.js";
+import { useDashboardStore } from "./store/index.js";
 
 function mockFetch(opts: {
   preview?: (body: unknown) => Response | Promise<Response>;
@@ -179,5 +180,93 @@ describe("ProjectSetupPanel", () => {
 
     expect(await screen.findByText("push failed")).toBeInTheDocument();
     expect(screen.getByText("Apply")).toBeInTheDocument();
+  });
+
+  // Issue #1200 — before this, the panel gave no indication of which
+  // conventions text would land in the scaffolded AGENTS.md, and
+  // computeScaffold's own fixed defaults could silently outrank whatever
+  // was actually configured in Settings -> Sessions.
+  describe("Workflow Conventions disclosure (issue #1200)", () => {
+    const originalState = useDashboardStore.getState();
+    afterEach(() => {
+      useDashboardStore.setState(originalState, true);
+    });
+
+    it("names Mullion's built-in defaults when no conventions are configured yet", () => {
+      vi.stubGlobal("fetch", mockFetch({}));
+      useDashboardStore.setState({
+        settings: {
+          ...originalState.settings,
+          sessions: { ...originalState.settings.sessions, workflowConventionsText: "" },
+        },
+      });
+      render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+      expect(screen.getByText(/Mullion's own built-in defaults/)).toBeInTheDocument();
+    });
+
+    it("names this install's own configured conventions when set", () => {
+      vi.stubGlobal("fetch", mockFetch({}));
+      useDashboardStore.setState({
+        settings: {
+          ...originalState.settings,
+          sessions: {
+            ...originalState.settings.sessions,
+            workflowConventionsText: "Our team's own conventions.",
+          },
+        },
+      });
+      render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+      expect(screen.getByText(/This install's own conventions/)).toBeInTheDocument();
+    });
+  });
+
+  it("warns when the preview reports an existing AGENTS.override.md, without blocking Apply", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        preview: () =>
+          jsonResponse(200, {
+            previewId: "abc123",
+            diff: "diff --git a/AGENTS.md b/AGENTS.md\n+new line\n",
+            files: ["AGENTS.md"],
+            hasAgentsOverride: true,
+          }),
+      }),
+    );
+    const user = userEvent.setup();
+    render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+
+    await user.type(screen.getByPlaceholderText("my-project"), "demo");
+    await user.click(screen.getByText("Preview"));
+
+    // The warning text mentions AGENTS.override.md twice (once in a <code>
+    // element, once in plain prose) — findAllByText, not findByText, since
+    // a single-match query would throw on the ambiguity.
+    expect((await screen.findAllByText(/AGENTS\.override\.md/)).length).toBeGreaterThan(0);
+    expect(screen.getByText(/codex reads that file/)).toBeInTheDocument();
+    expect(screen.getByText("Apply")).not.toBeDisabled();
+  });
+
+  it("shows no override warning when the preview reports none", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        preview: () =>
+          jsonResponse(200, {
+            previewId: "abc123",
+            diff: "diff --git a/AGENTS.md b/AGENTS.md\n+new line\n",
+            files: ["AGENTS.md"],
+            hasAgentsOverride: false,
+          }),
+      }),
+    );
+    const user = userEvent.setup();
+    render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+
+    await user.type(screen.getByPlaceholderText("my-project"), "demo");
+    await user.click(screen.getByText("Preview"));
+    await screen.findByText("Preview — 1 file");
+
+    expect(screen.queryByText(/AGENTS\.override\.md/)).not.toBeInTheDocument();
   });
 });
