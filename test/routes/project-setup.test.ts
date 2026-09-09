@@ -511,7 +511,7 @@ describe("project-setup route", () => {
     await app.close();
   });
 
-  // Issue #1200 — before this, the committed AGENTS.md always got
+  // Issue #1201 — before this, the committed AGENTS.md always got
   // computeScaffold's own fixed SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS
   // defaults, regardless of what this install's own
   // settings.sessions.workflowConventionsText actually said — a
@@ -558,7 +558,7 @@ describe("project-setup route", () => {
     }
   });
 
-  // Issue #1200 — codex reads AGENTS.override.md INSTEAD OF AGENTS.md when
+  // Issue #1201 — codex reads AGENTS.override.md INSTEAD OF AGENTS.md when
   // it exists (agent-rules.ts's own precedence table); the scaffold must
   // never write to it, but the preview response should surface its
   // presence so a project with one doesn't silently think its committed
@@ -736,7 +736,7 @@ describe("project-setup route — /setup/generate (issue #956)", () => {
     await app.close();
   });
 
-  // Issue #1200 — before this, an agent-generated briefingRegion replaced
+  // Issue #1201 — before this, an agent-generated briefingRegion replaced
   // the WHOLE AGENTS.md region, so a generated scaffold's committed
   // conventions came from wherever the generation turn happened to infer
   // them from (or nowhere, if it didn't). Both mocked here via
@@ -1103,7 +1103,7 @@ describe("project-setup route — /setup/generate (issue #956)", () => {
     await app.close();
   });
 
-  // Issue #1200 — /setup/generate goes through the same
+  // Issue #1201 — /setup/generate goes through the same
   // scaffoldableRelPaths()/existingFiles read as /setup/preview, so the
   // hasAgentsOverride signal must propagate through this route too, not
   // just the static preview path.

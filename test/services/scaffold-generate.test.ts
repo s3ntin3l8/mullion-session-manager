@@ -130,7 +130,7 @@ describe("buildGenerationPrompt", () => {
     expect(prompt).toContain(CODEX_REVIEWER_DELEGATION_CLAUSE);
   });
 
-  // Issue #1200 — this prompt used to ask for a "## Workflow Conventions"
+  // Issue #1201 — this prompt used to ask for a "## Workflow Conventions"
   // section here AND tell the model to report back "the briefing paragraph
   // only" in its own output-marker instruction a few lines later — a
   // self-contradiction that likely produced #1115 (a scaffolded AGENTS.md

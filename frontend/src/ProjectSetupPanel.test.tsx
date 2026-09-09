@@ -182,11 +182,11 @@ describe("ProjectSetupPanel", () => {
     expect(screen.getByText("Apply")).toBeInTheDocument();
   });
 
-  // Issue #1200 — before this, the panel gave no indication of which
+  // Issue #1201 — before this, the panel gave no indication of which
   // conventions text would land in the scaffolded AGENTS.md, and
   // computeScaffold's own fixed defaults could silently outrank whatever
   // was actually configured in Settings -> Sessions.
-  describe("Workflow Conventions disclosure (issue #1200)", () => {
+  describe("Workflow Conventions disclosure (issue #1201)", () => {
     const originalState = useDashboardStore.getState();
     afterEach(() => {
       useDashboardStore.setState(originalState, true);

@@ -212,7 +212,7 @@ function scaffoldableRelPaths(slug: string, options: ScaffoldOptions): string[] 
   // apply path would silently OVERWRITE a real Code-of-Conduct/dev-setup
   // file with a pointer-only one instead of upserting into it.
   if (options.includeContributingPointer) paths.push("CONTRIBUTING.md");
-  // Issue #1200 — read-only. Codex reads AGENTS.override.md INSTEAD OF
+  // Issue #1201 — read-only. Codex reads AGENTS.override.md INSTEAD OF
   // AGENTS.md when it exists (agent-rules.ts's own precedence table), and
   // computeScaffold deliberately never writes to it (same posture as
   // GEMINI.md's own retired mirror option, #978). Without this, a target
@@ -449,7 +449,7 @@ type PreviewComputation =
       previewId: string;
       diff: string;
       files: string[];
-      // Issue #1200 — true when the target repo already has its own
+      // Issue #1201 — true when the target repo already has its own
       // AGENTS.override.md. computeScaffold never writes to that path
       // (codex reads it INSTEAD OF AGENTS.md), so this is purely
       // informational — the caller surfaces it as a warning, the preview
@@ -622,7 +622,7 @@ export async function projectSetupRoute(app: FastifyInstance) {
         includeContributingPointer: request.body.includeContributingPointer,
         symlinkAgentsSkills: request.body.symlinkAgentsSkills,
         includeDockConfig: request.body.includeDockConfig,
-        // Issue #1200 — this install's own Settings → Sessions conventions
+        // Issue #1201 — this install's own Settings → Sessions conventions
         // text, so the committed AGENTS.md Workflow Conventions section
         // matches what's already injected into every session on this
         // project, rather than computeScaffold's own fixed defaults
@@ -660,7 +660,7 @@ export async function projectSetupRoute(app: FastifyInstance) {
         includeContributingPointer: request.body.includeContributingPointer,
         symlinkAgentsSkills: request.body.symlinkAgentsSkills,
         includeDockConfig: request.body.includeDockConfig,
-        // Issue #1200 — same resolution as /setup/preview above; must
+        // Issue #1201 — same resolution as /setup/preview above; must
         // match it exactly, since finishPreview's "preview and apply are
         // provably the same bytes" guarantee (mullion-scaffold.ts's own
         // header) depends on both call sites resolving this identically.

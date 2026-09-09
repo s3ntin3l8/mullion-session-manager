@@ -152,8 +152,8 @@ describe("computeScaffold", () => {
       expect(region).toContain(workflowFragment("prePushChecks", "full-gate"));
     });
 
-    it("an agent-generated override (issue #956) still gets a Workflow Conventions section, unlike pre-#1200 behavior", () => {
-      // Issue #1200 — before this, computeScaffold's own
+    it("an agent-generated override (issue #956) still gets a Workflow Conventions section, unlike pre-#1201 behavior", () => {
+      // Issue #1201 — before this, computeScaffold's own
       // `options.generated?.briefingRegion ?? briefingRegionBody(slug)`
       // was all-or-nothing: an agent-generated region replaced the WHOLE
       // region, silently dropping the Workflow Conventions section
@@ -229,7 +229,7 @@ describe("computeScaffold", () => {
       expect(region).not.toContain(workflowFragment("branching", "branch-pr"));
     });
 
-    it("an unset workflowConventionsText produces byte-identical output to before issue #1200", () => {
+    it("an unset workflowConventionsText produces byte-identical output to before issue #1201", () => {
       // The regression guard that matters most: a caller that never sets
       // the new field (every existing preview/apply call site, today)
       // must keep producing EXACTLY the same AGENTS.md region as before

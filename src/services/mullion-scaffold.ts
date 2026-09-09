@@ -418,11 +418,11 @@ function deriveCodexReviewerSkillContent(raw: string, slug: string): string | nu
 // GraphQL-resolveReviewThread recipe is Mullion-repo-specific, not a
 // reasonable default to impose on an arbitrary scaffolded project.
 //
-// Issue #1200 — this is now the FALLBACK `workflowConventionsSection` uses
+// Issue #1201 — this is now the FALLBACK `workflowConventionsSection` uses
 // when the caller passes no `ScaffoldOptions.workflowConventionsText` (an
 // install with nothing authored yet in Settings → Sessions), not the only
 // path. When this install HAS its own conventions text, that text is what
-// gets committed instead — the whole point of #1200 is that a scaffolded
+// gets committed instead — the whole point of #1201 is that a scaffolded
 // project's committed conventions and this install's own injected-per-
 // session conventions must be the SAME text, not two independently-sourced
 // ones. Every reasoning point above (why these six, why the other four are
@@ -437,7 +437,7 @@ const SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS: Record<string, string> = {
   prePushChecks: "full-gate",
 };
 
-// Issue #1200 — split off the `## Workflow Conventions` section (now
+// Issue #1201 — split off the `## Workflow Conventions` section (now
 // `workflowConventionsSection` below) so `computeScaffold` can own it
 // UNCONDITIONALLY, independent of whether `generated.briefingRegion` is
 // set. Before this split, `briefingRegionBody`'s return value was the
@@ -476,14 +476,14 @@ function stripStrayWorkflowConventionsHeading(region: string): string {
   return region.replace(STRAY_WORKFLOW_CONVENTIONS_HEADING, "");
 }
 
-// Issue #1200 — the ONE place that decides what actually lands in the
+// Issue #1201 — the ONE place that decides what actually lands in the
 // committed `## Workflow Conventions` heading, called unconditionally by
 // computeScaffold regardless of whether the pointer prose above it came
 // from a generation turn or the static template. `text` is
 // ScaffoldOptions.workflowConventionsText (this install's own Settings →
 // Sessions text, resolved by the caller); empty/undefined falls back to
 // `SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS`'s fixed defaults, preserving this
-// function's pre-#1200 byte output for a fresh install with nothing
+// function's pre-#1201 byte output for a fresh install with nothing
 // authored yet.
 function workflowConventionsSection(text: string | undefined): string {
   const workflowConventions =
@@ -590,7 +590,7 @@ export function computeScaffold(
   const { slug } = options;
   const entries: ScaffoldEntry[] = [];
 
-  // Issue #1200 — the pointer prose (where the skill/reviewer live) and
+  // Issue #1201 — the pointer prose (where the skill/reviewer live) and
   // the conventions section are now two independent sources composed
   // together, rather than one all-or-nothing region: whichever produced
   // the pointer prose (a generation turn, or the static template),

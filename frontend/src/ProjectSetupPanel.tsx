@@ -13,7 +13,7 @@ interface PreviewState {
   previewId: string;
   diff: string;
   files: string[];
-  // Issue #1200 — true when the target repo already has its own
+  // Issue #1201 — true when the target repo already has its own
   // AGENTS.override.md. computeScaffold never writes to that path (codex
   // reads it INSTEAD OF AGENTS.md), so the committed Workflow Conventions
   // this scaffold writes into AGENTS.md would never reach codex sessions
@@ -42,7 +42,7 @@ interface ApplyResult {
 // token are available, opens a real PR — so the UI never lets Apply fire
 // without the user having seen the exact diff Preview produced first.
 export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams }) {
-  // Issue #1200 — same install-wide text every session already gets
+  // Issue #1201 — same install-wide text every session already gets
   // injected from (settings.sessions.workflowConventionsText, Settings ->
   // Sessions), read here purely for disclosure: computeScaffold on the
   // backend resolves and commits the SAME text server-side (project-setup.ts's
