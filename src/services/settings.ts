@@ -17,6 +17,7 @@ import type {
   LayoutMode,
   TabletPaneCap,
 } from "../shared/types.js";
+import { WORKFLOW_CONVENTION_QUESTIONS } from "./workflow-conventions.js";
 
 export type { Theme, CursorStyle, SidebarDensity, SoundName, LayoutMode, TabletPaneCap };
 
@@ -326,9 +327,37 @@ export interface AppSettings {
     // above, which default to `true` because THEY gate a boolean, not a
     // value. Populated by the structured wizard
     // (buildWorkflowConventionsText) rather than hand-typed from a blank
-    // starter template, but ordinary free text from that point on — no
-    // separate wizard-answers state is stored alongside it.
+    // starter template, but ordinary free text from that point on.
     workflowConventionsText: string;
+    // Issue #1203 (Phase 2 of the follow-up plan) — before this field
+    // existed, the wizard was a one-shot:
+    // WorkflowConventionsWizardModal.tsx's own header comment used to say
+    // "re-opening this modal always starts from a blank slate," so changing
+    // a single answer meant re-answering every question and silently
+    // discarding any hand-edits already made to `workflowConventionsText`
+    // above. Stored alongside the text (same `PATCH /api/settings` call,
+    // same `sessions` group) so the modal can pre-fill and open on a review
+    // step when every question is already answered.
+    //
+    // Default: every CURRENT `WORKFLOW_CONVENTION_QUESTIONS` id mapped to
+    // `""`, never a bare `{}` — see DEFAULT_SETTINGS's own construction of
+    // this field (deepMerge below only ever touches a patch key that
+    // already exists on `base`, so a `{}` default would make the wizard's
+    // own real-answer PATCH merge to nothing). `""` per key is the "not yet
+    // answered" state — indistinguishable, deliberately, from "this
+    // install's wizard has never been run," since both cases must show the
+    // fresh question flow rather than a false "already answered" review
+    // step, and neither should ever trigger the hand-edit warning below.
+    //
+    // Storing this does NOT turn the wizard into an ongoing synced mode:
+    // `workflowConventionsText` stays a freely-editable textarea with no
+    // distinction between wizard-written and hand-edited text — the modal
+    // only computes, on open, whether
+    // `buildWorkflowConventionsText(workflowConventionAnswers) !==
+    // workflowConventionsText` (both sides "" when every answer is still ""
+    // — no false positive) to warn before an explicit re-apply would
+    // silently overwrite a hand-edit.
+    workflowConventionAnswers: Record<string, string>;
     // Phase 5 (Track B, issue #193 5.3b) — hard cap on how many LIVE
     // (status "active") children a single session may have spawned via the
     // sessions.spawn_child control-socket op. Enforced in
@@ -572,6 +601,24 @@ export const DEFAULT_SETTINGS: AppSettings = {
     // above for why "" is itself the gate, not just an uninteresting
     // default.
     workflowConventionsText: "",
+    // Every CURRENT question id mapped to "", not `{}` — deepMerge (below
+    // in this file) only ever touches a patch key that already exists on
+    // `base` (deliberately: it iterates base's own keys, never the
+    // patch's, so a PATCH body can't smuggle in an arbitrary key like
+    // "__proto__" — see deepMerge's own doc comment). A bare `{}` default
+    // would mean NO question id pre-exists on `base`, so a wizard's own
+    // PATCH — which sends real answers for ids that were never in the
+    // stored blob before — would silently merge to nothing. Derived from
+    // WORKFLOW_CONVENTION_QUESTIONS, never hand-copied, so an added/removed
+    // question (this file adding `worktrees`, say) changes this
+    // automatically — and getStoredSettings' own re-merge-over-defaults on
+    // every read means an older stored row missing a newer question's key
+    // self-heals to "" instead of staying permanently absent. `""` is the
+    // same "not yet answered" sentinel buildWorkflowConventionsText already
+    // treats as skip-worthy (no option has id "").
+    workflowConventionAnswers: Object.fromEntries(
+      WORKFLOW_CONVENTION_QUESTIONS.map((q) => [q.id, ""]),
+    ),
     maxChildSessionsPerParent: 5,
     autoOpenChildPanels: false,
   },

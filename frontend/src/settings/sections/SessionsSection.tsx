@@ -265,7 +265,18 @@ export function SessionsSection() {
       {wizardOpen && (
         <WorkflowConventionsWizardModal
           onClose={() => setWizardOpen(false)}
-          onApply={(text) => updateSettings({ sessions: { workflowConventionsText: text } })}
+          initialAnswers={s.workflowConventionAnswers}
+          currentText={s.workflowConventionsText}
+          onApply={(text, answers) =>
+            // Issue #1203 — one PATCH, both fields together: the text and
+            // the answers that produced it must land in the same settings
+            // write, or a reader between the two (another open tab, a
+            // concurrent PATCH) could observe text and answers that don't
+            // actually correspond to each other.
+            updateSettings({
+              sessions: { workflowConventionsText: text, workflowConventionAnswers: answers },
+            })
+          }
         />
       )}
 
