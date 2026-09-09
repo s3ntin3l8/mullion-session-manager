@@ -1336,6 +1336,7 @@ export function App() {
             onOpenSettingsProjects={() => openSettings("projects")}
             onOpenTasks={onOpenTasks}
             onOpenGit={onOpenGit}
+            onOpenProjectSetup={onOpenProjectSetup}
           />
         </div>
         <div className="grid-area">
