@@ -331,11 +331,29 @@ function reviewerAgentFileContents(slug: string): string {
 //
 // Returns `null` for unparseable frontmatter (mirroring
 // deriveAgyAgentFile/deriveOpenCodeReviewerAgentFile's own silent-skip
-// posture) — the only realistic trigger is a hand-mangled PRESERVED
-// existing reviewer file, since generated/template reviewer content is
-// always well-formed. `computeScaffold` treats `null` as "emit no codex
-// reviewer entry" rather than throwing; the rest of the scaffold still
-// proceeds.
+// posture). `computeScaffold` treats `null` as "emit no codex reviewer
+// entry" rather than throwing; the rest of the scaffold still proceeds.
+//
+// Hermes review, PR #1188 — narrowing a claim this doc comment used to
+// make ("the mirror always reflects whatever the preserved reviewer
+// resolved to"): that does NOT hold for every well-formed reviewer.
+// `parseSkillFrontmatter` (skills.ts) is built on a deliberately minimal
+// parser that treats a block-scalar `description: |`/`description: >`
+// as unparseable BY DESIGN (skills.ts's own comment on
+// parseFlatFrontmatterFields) — not a bug this function introduces, the
+// same limitation every other caller of that parser already silently
+// inherits (deriveAgyAgentFile, deriveOpenCodeReviewerAgentFile, and
+// every CLI-native skill/reviewer discovery path in this repo). A
+// PRESERVED reviewer whose description happens to use a folded/literal
+// YAML scalar — a legitimate, common style for a multi-sentence
+// description — hits this: `parsed` is `null`, this function returns
+// `null`, and computeScaffold silently emits no codex mirror entry at
+// all on that re-scaffold (no error, no diff line). Freshly generated or
+// templated reviewer content never hits this (both are always flat
+// scalars, verified by scaffold-generate.ts's own generation-prompt
+// example and this module's own static template) — only a PRESERVED,
+// hand-authored reviewer can trigger it. See the dedicated regression
+// test for this exact shape in mullion-scaffold.test.ts.
 //
 // mullion-reviewer's own pass on this issue's PR caught a real bug in an
 // earlier version of this function: it propagated `parsed.name` (the
@@ -486,7 +504,11 @@ function stripLegacyBriefingMirror(text: string): string {
  * (freshly generated, or preserved from an existing `.claude/skills` or
  * `.claude/agents` file) into codex's own project-scope discovery path (and
  * agy's too, for the skill mirror — agy has no reviewer discovery path at
- * all, see #943's 2026-09-05 spike).
+ * all, see #943's 2026-09-05 spike). "Always re-emitted" describes the
+ * unconditional code path, not an unconditional OUTCOME for the reviewer
+ * mirror specifically — see deriveCodexReviewerSkillContent's own doc
+ * comment for the one input shape (a preserved reviewer using a
+ * block-scalar YAML description) where it resolves to no entry at all.
  */
 export function computeScaffold(
   existingFiles: Record<string, string | undefined>,

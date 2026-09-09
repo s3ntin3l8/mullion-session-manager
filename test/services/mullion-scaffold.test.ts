@@ -360,6 +360,28 @@ describe("computeScaffold", () => {
       expect(entries.some((e) => e.path === "AGENTS.md")).toBe(true);
       expect(entries.some((e) => e.path === ".agents/skills/demo/SKILL.md")).toBe(true);
     });
+
+    // Hermes review, PR #1188 — pins a KNOWN, documented limitation
+    // (deriveCodexReviewerSkillContent's own doc comment), not a bug:
+    // parseSkillFrontmatter's underlying parser deliberately treats a
+    // block-scalar YAML description as unparseable (skills.ts's own
+    // comment on parseFlatFrontmatterFields) — a legitimate, common style
+    // for a multi-sentence description, not malformed input. A preserved
+    // reviewer using it silently gets no codex mirror on re-scaffold; this
+    // is the SAME parser limitation every other flat-frontmatter caller in
+    // this repo already inherits, not something new to the codex mirror.
+    it("emits no entry when the preserved reviewer's description is a well-formed YAML block scalar — a documented parser limitation, not a bug", () => {
+      const blockScalarReviewer =
+        "---\nname: demo-reviewer\ndescription: |\n  A perfectly valid multi-line\n  folded description.\n---\ncustom body";
+      const entries = computeScaffold(
+        { ".claude/agents/demo-reviewer.md": blockScalarReviewer },
+        { slug: "demo" },
+      );
+      expect(entries.some((e) => e.path === ".agents/skills/demo-reviewer/SKILL.md")).toBe(false);
+      // The source file itself and the rest of the scaffold are unaffected.
+      expect(entries.some((e) => e.path === ".claude/agents/demo-reviewer.md")).toBe(false);
+      expect(entries.some((e) => e.path === "AGENTS.md")).toBe(true);
+    });
   });
 
   it("no GEMINI.md, no AGENTS.override.md, no CONTRIBUTING.md pointer, no dock config, no symlink by default", () => {

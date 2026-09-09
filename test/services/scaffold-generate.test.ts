@@ -29,6 +29,7 @@ import {
   type SandboxCapabilityProbe,
 } from "../../src/services/scaffold-generate.js";
 import { CODEX_REVIEWER_DELEGATION_CLAUSE } from "../../src/services/mullion-scaffold.js";
+import { parseSkillFrontmatter } from "../../src/services/skills.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -180,6 +181,38 @@ describe("parseGeneratedOutput", () => {
     expect(() => parseGeneratedOutput(noDelegationClause, "demo")).toThrow(
       /codex-delegation clause/,
     );
+  });
+
+  // Hermes review, PR #1188 — the check must inspect the DESCRIPTION field
+  // specifically, not the whole reviewer section: only the description
+  // reaches the codex mirror (deriveCodexReviewerSkillContent copies
+  // parsed.description, nothing else). A generation pass that puts the
+  // clause in the body but leaves the description unchanged would have
+  // passed the old whole-text check while still shipping an undiscoverable
+  // mirror — this pins that the stricter, field-scoped check catches it.
+  it("still throws when the codex-delegation clause is present in the reviewer's BODY but not its description", () => {
+    const clauseInBodyOnly = validOutput("demo")
+      .replace(
+        `description: "Review changes. ${CODEX_REVIEWER_DELEGATION_CLAUSE}"`,
+        `description: "Review changes."`,
+      )
+      .replace(
+        "Read .claude/skills/demo/SKILL.md first.",
+        `Read .claude/skills/demo/SKILL.md first. ${CODEX_REVIEWER_DELEGATION_CLAUSE}`,
+      );
+    expect(() => parseGeneratedOutput(clauseInBodyOnly, "demo")).toThrow(GenerationOutputError);
+    expect(() => parseGeneratedOutput(clauseInBodyOnly, "demo")).toThrow(/codex-delegation clause/);
+  });
+
+  // Positive counterpart to the two negative tests above: pins that
+  // well-formed output's PARSED description (not just the raw section
+  // text) actually carries the clause — the property the codex mirror
+  // depends on downstream.
+  it("accepts well-formed output whose parsed description carries the codex-delegation clause", () => {
+    const result = parseGeneratedOutput(validOutput("demo"), "demo");
+    const parsed = parseSkillFrontmatter(result.reviewer);
+    expect(parsed).not.toBeNull();
+    expect(parsed!.description).toContain(CODEX_REVIEWER_DELEGATION_CLAUSE);
   });
 
   it("ignores any trailing text the agent printed after the markers — cannot be used to smuggle extra instructions", () => {
