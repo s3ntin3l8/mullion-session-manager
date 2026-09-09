@@ -29,6 +29,7 @@ import {
 import { attachTerminalTouchScroll } from "./lib/terminalTouchScroll.js";
 import { parseChord, type KeyChord } from "./lib/keyChord.js";
 import { computeFitFontSize } from "./lib/terminalFontFit.js";
+import { clampTerminalGridSize } from "./lib/terminalGridSize.js";
 import { useCoarsePointer } from "./lib/layoutTier.js";
 import { computeLinksForRow, isSafeLinkUrl, type LinkBufferSource } from "./lib/terminalLinks.js";
 import { useTerminalSearch } from "./hooks/useTerminalSearch.js";
@@ -62,6 +63,19 @@ function isGeometryMessage(value: unknown): value is GeometryMessage {
     typeof (value as { cols?: unknown }).cols === "number" &&
     typeof (value as { rows?: unknown }).rows === "number"
   );
+}
+
+// Hermes review, PR #708 — FitAddon.proposeDimensions() returns undefined
+// for a near-collapsed or `display:none` container, or a NaN-carrying
+// object (its own `parseInt(getComputedStyle(...))` resolving `"auto"` to
+// NaN rather than throwing) for the same case. Shared by applyClampedFit
+// (mount effect) and applyFontFit (settings-sync effect below) — two
+// separate effect closures that can't share a local const, hence module
+// scope, same as isGeometryMessage above.
+function isUsableGridProposal(
+  proposed: { cols: number; rows: number } | undefined,
+): proposed is { cols: number; rows: number } {
+  return proposed !== undefined && Number.isFinite(proposed.cols) && Number.isFinite(proposed.rows);
 }
 
 export interface TerminalPaneParams {
@@ -590,6 +604,45 @@ export function TerminalPane(props: {
     const fitAddon = new FitAddon();
     fitAddonRef.current = fitAddon;
     term.loadAddon(fitAddon);
+    // Dock monitor resize-runaway — the dock's CSS lets a terminal's own
+    // rendered content inflate the size of the container this measures
+    // against next (see clampTerminalGridSize's own doc comment for the full
+    // mechanism); with no ceiling, that closes into an unbounded resize loop
+    // that locks up the tab. Shared by every place this component applies a
+    // fitAddon proposal (the initial mount fit below, connectOnce(), and
+    // refit()) so none of them can bypass the ceiling — a runaway proposal
+    // reaching any one of them unclamped would still let the loop compound.
+    // Reads proposeDimensions() up front (read-only) purely to decide WHICH
+    // path to take; the common, already-in-bounds case still delegates to
+    // fitAddon.fit() itself (which re-derives the same proposal internally —
+    // a second forced-layout read, deliberately accepted here rather than
+    // reimplementing fit()'s own resize-and-clear behavior by hand for the
+    // overwhelmingly common case) so it keeps its normal side effects
+    // (notably `_renderService.clear()`, for which there's no public
+    // equivalent). Only a proposal that actually needs clamping takes the
+    // manual term.resize() path below, where `term.refresh()` is the
+    // public-API stand-in for that same clear-and-repaint — the same
+    // "heal after a disruptive resize" call this file's own `repaint()`
+    // (terminalRepaintRegistry registration below) already uses.
+    const applyClampedFit = () => {
+      const proposed = fitAddon.proposeDimensions();
+      // isUsableGridProposal false — fall back to fitAddon.fit() itself,
+      // which has the same no-op guard internally, rather than treating an
+      // unmeasurable container as "clamp to the ceiling."
+      if (!isUsableGridProposal(proposed)) {
+        fitAddon.fit();
+        return;
+      }
+      const clamped = clampTerminalGridSize(proposed.cols, proposed.rows);
+      if (clamped.cols === proposed.cols && clamped.rows === proposed.rows) {
+        fitAddon.fit();
+        return;
+      }
+      if (clamped.cols !== term.cols || clamped.rows !== term.rows) {
+        term.resize(clamped.cols, clamped.rows);
+        term.refresh(0, term.rows - 1);
+      }
+    };
     term.loadAddon(new Unicode11Addon());
     term.unicode.activeVersion = "11";
     // Wrap-aware replacement for the stock WebLinksAddon — see
@@ -711,7 +764,7 @@ export function TerminalPane(props: {
     }
 
     term.open(container);
-    fitAddon.fit();
+    applyClampedFit();
     // Mobile UI/UX overhaul follow-up — see terminalTouchScroll.ts's own
     // header comment for why xterm needs this at all (touch scrolling is a
     // genuine no-op in the installed @xterm/xterm, not a CSS bug).
@@ -823,9 +876,19 @@ export function TerminalPane(props: {
           cappedBelowFloor = stillCapped;
           setPaneTooSmall(stillCapped);
         }
+        // Code review — `return`ing here means a pane simultaneously below
+        // the floor on ONE axis and (hypothetically, via some other bug)
+        // over applyClampedFit()'s ceiling on the OTHER never reaches that
+        // clamp for as long as this condition holds. Accepted: this branch
+        // never calls resize() at all, so the outcome is the pane staying
+        // frozen at its last-applied (already-safe) size, not growing — the
+        // backend's own mirrored ceiling (pty-manager.ts's
+        // clampTerminalSize(), via MAX_TERMINAL_COLS/ROWS in
+        // shared/constants.ts) still bounds whatever this client sends,
+        // regardless of what this branch does or doesn't do here.
         if (stillCapped) return;
       }
-      fitAddon.fit();
+      applyClampedFit();
       if (term.cols === lastCols && term.rows === lastRows) return;
       lastCols = term.cols;
       lastRows = term.rows;
@@ -1315,9 +1378,20 @@ export function TerminalPane(props: {
             fitFloorRef.current = { cols: geo.minCols, rows: geo.minRows };
           }
           if (geo.cols !== term.cols || geo.rows !== term.rows) {
-            term.resize(geo.cols, geo.rows);
-            lastCols = geo.cols;
-            lastRows = geo.rows;
+            // Hermes review — geo.cols/rows come straight off the wire (an
+            // untyped GeometryMessage routes/terminal.ts forwards verbatim)
+            // and are trusted as already within MAX_TERMINAL_COLS/ROWS
+            // because the SAME-version backend's own clampTerminalSize()
+            // bounds session.size before ever echoing it. A remote-hosted
+            // session (this frame's own comment above) could be talking to a
+            // different-version host whose echo predates that ceiling —
+            // clamp here too so this path can't reintroduce the exact
+            // runaway the rest of this file guards against. A no-op in the
+            // aligned case (geo is already within bounds by construction).
+            const clampedGeo = clampTerminalGridSize(geo.cols, geo.rows);
+            term.resize(clampedGeo.cols, clampedGeo.rows);
+            lastCols = clampedGeo.cols;
+            lastRows = clampedGeo.rows;
             // A genuine floor override (as opposed to an echo merely
             // confirming a resize this client initiated) is the signal that
             // the settings-sync effect's font-fit check should (re-)run —
@@ -1446,7 +1520,7 @@ export function TerminalPane(props: {
       if (connectBackstopHolder.timer) clearTimeout(connectBackstopHolder.timer);
       // Re-measure now that layout has actually run — the fit() up in the
       // mount path above ran before the container was necessarily sized.
-      fitAddon.fit();
+      applyClampedFit();
       lastCols = term.cols;
       lastRows = term.rows;
       connect();
@@ -1713,18 +1787,14 @@ export function TerminalPane(props: {
       const fitAddon = fitAddonRef.current;
       if (!fitAddon) return;
       const proposed = fitAddon.proposeDimensions();
-      // Hermes review, PR #708 — proposeDimensions() returns undefined for a
-      // near-collapsed pane or a mid-drag zero-height layout. Skip the
-      // shrink for this pass rather than falling through to the render
-      // floor — an 8px font because a ResizeObserver fired mid-drag would be
-      // a visible regression the pane's actual size never actually asked
-      // for; the next real resize/geometry event will retry. Also guards
-      // against a defensive but real possibility: a `display:none` or
-      // zero-height container can make `getComputedStyle` report `"auto"`,
-      // which `proposeDimensions()`'s own `parseInt` turns into `NaN` rather
-      // than `undefined` — `NaN` isn't caught by the `!proposed` check above
-      // since the object itself is still defined.
-      if (!proposed || !Number.isFinite(proposed.cols) || !Number.isFinite(proposed.rows)) return;
+      // isUsableGridProposal false (near-collapsed pane, mid-drag
+      // zero-height layout, or a `display:none` container — see that
+      // function's own doc comment) — skip the shrink for this pass rather
+      // than falling through to the render floor — an 8px font because a
+      // ResizeObserver fired mid-drag would be a visible regression the
+      // pane's actual size never actually asked for; the next real
+      // resize/geometry event will retry.
+      if (!isUsableGridProposal(proposed)) return;
       // Hermes + independent review — `achievable` (also returned here) is
       // deliberately NOT consulted to skip this shrink: even when the floor
       // can't be fully met, applying `fontSize` (clamped to

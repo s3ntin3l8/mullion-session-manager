@@ -9,6 +9,7 @@ import { SearchAddon } from "@xterm/addon-search";
 import type { Theme } from "./store/index.js";
 import { useDashboardStore } from "./store/index.js";
 import { TerminalPane } from "./TerminalPane.js";
+import { MAX_TERMINAL_COLS, MAX_TERMINAL_ROWS } from "./lib/terminalGridSize.js";
 import { api } from "./api/index.js";
 import type * as ApiModule from "./api/index.js";
 import type { Session } from "./api/index.js";
@@ -3041,6 +3042,102 @@ describe("TerminalPane geometry sync (issue: small panes/floating windows ignori
       .slice(sendsBeforeEcho)
       .map(([data]) => JSON.parse(data as string) as { type?: string; cols?: number });
     expect(resizeMessages.some((m) => m.type === "resize" && m.cols === 45)).toBe(true);
+  });
+});
+
+// Dock monitor resize-runaway — the dock's CSS lets a terminal's own
+// rendered content inflate the size of the container this pane measures
+// itself against next (see lib/terminalGridSize.ts's own doc comment for the
+// full mechanism, and empty-states.css's `.dock-monitor-body` for the CSS
+// half of the fix), which without a ceiling closed into an unbounded resize
+// loop that locked up the tab. applyClampedFit() is the single choke point
+// shared by the mount-time fit, connectOnce()'s re-fit, and refit() — these
+// tests cover all three, since a runaway proposal reaching any one of them
+// unclamped would still let the loop compound.
+describe("TerminalPane grid-size ceiling (dock monitor resize-runaway)", () => {
+  it("clamps the initial mount fit and connectOnce's re-fit when the container is already inflated", () => {
+    stubFakeWebSocket(true);
+    // mockInitialTermSize feeds BOTH the Terminal mock's own initial
+    // cols/rows AND FitAddon.proposeDimensions()'s default return (see its
+    // own doc comment) — setting it huge simulates exactly the scenario
+    // this bug reproduced live: a pane mounting inside a shared dock
+    // container a SIBLING monitor's own prior runaway has already inflated,
+    // so even this pane's very FIRST measurement (at mount, before any
+    // resize of its own) reports an oversized grid.
+    mockInitialTermSize.cols = 35_140;
+    mockInitialTermSize.rows = 9_000;
+
+    // renderPane()'s default ResizeObserver stub (unlike
+    // stubManualResizeObserver() used elsewhere in this file) fires
+    // synchronously on observe() — so mounting exercises BOTH the raw
+    // term.open()/applyClampedFit() call and connectOnce()'s own
+    // applyClampedFit() re-fit in one render, matching how they actually
+    // run back-to-back in the real mount effect.
+    renderPane();
+
+    const term = getLatestTermInstance();
+    // toHaveBeenLastCalledWith, not toHaveBeenCalledWith — this mock's own
+    // resize() never applies a size itself (see its own doc comment above),
+    // so a plain "was called with the ceiling at some point" would pass
+    // whether or not an earlier, unclamped call also went through; asserting
+    // the LAST call is the discriminating check.
+    expect(term.resize).toHaveBeenLastCalledWith(MAX_TERMINAL_COLS, MAX_TERMINAL_ROWS);
+  });
+
+  it("clamps a later refit() when the container grows past the ceiling", () => {
+    stubFakeWebSocket(true);
+    const resizeObserver = stubManualResizeObserver();
+    mockInitialTermSize.cols = 80;
+    mockInitialTermSize.rows = 24;
+
+    renderPane();
+    act(() => {
+      resizeObserver.fire(); // deferred initial connect (issue #676)
+    });
+
+    const term = getLatestTermInstance();
+    const resizeCallsBeforeRunaway = term.resize.mock.calls.length;
+
+    // The shared dock container has since been inflated by a sibling
+    // monitor's own runaway growth (or, in principle, any other cause) —
+    // this pane's own next layout event proposes a grid to match.
+    mockInitialTermSize.cols = 35_140;
+    mockInitialTermSize.rows = 9_000;
+
+    act(() => {
+      resizeObserver.fire();
+    });
+
+    expect(term.resize.mock.calls.length).toBeGreaterThan(resizeCallsBeforeRunaway);
+    expect(term.resize).toHaveBeenLastCalledWith(MAX_TERMINAL_COLS, MAX_TERMINAL_ROWS);
+  });
+
+  // Hermes review — the geometry-echo handler trusts geo.cols/rows as
+  // already within bounds because the SAME-version backend's own
+  // clampTerminalSize() bounds session.size before ever echoing it; this
+  // simulates the one case that isn't true — a differently-versioned (e.g.
+  // remote-hosted, this file's own comment on that frame) host echoing a
+  // size from before that ceiling existed.
+  it("clamps an oversized geometry echo (e.g. a pre-ceiling remote host)", () => {
+    stubFakeWebSocket(true);
+    renderPane();
+
+    act(() => {
+      for (const handler of fakeSocket._messageHandlers) {
+        handler({
+          data: JSON.stringify({
+            type: "geometry",
+            cols: 35_140,
+            rows: 9_000,
+            minCols: 40,
+            minRows: 10,
+          }),
+        });
+      }
+    });
+
+    const term = getLatestTermInstance();
+    expect(term.resize).toHaveBeenLastCalledWith(MAX_TERMINAL_COLS, MAX_TERMINAL_ROWS);
   });
 });
 

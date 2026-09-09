@@ -1596,9 +1596,24 @@
   display: inline-flex;
   flex-shrink: 0;
 }
+/* min-width:0 (not overflow:hidden — .dock-monitor above already clips
+   visually) breaks a resize-runaway feedback path: without it, this box's
+   automatic minimum size is its content's real intrinsic width, and xterm's
+   own canvas resizing itself larger (TerminalPane.tsx's refit(), see
+   clampTerminalGridSize's own doc comment for the full loop) propagates that
+   size up through .dock-stack-monitors/.dock-stack-group/.dock-body — all of
+   which resolve their own automatic minimum from their children on purpose
+   (.dock-stack-group's own comment below), so the real terminal-grid growth
+   became a real, unbounded DOM width instead of being clipped here. Confirmed
+   live: this box measured ~200x wider than its own .dock-monitor parent
+   (which stayed pinned at its 364px floor, overflow:hidden doing its job)
+   while the terminal's internal grid ran away to tens of thousands of
+   columns. min-width:0 stops this box from ever contributing more than its
+   flex-resolved size to that chain, regardless of what's inside it. */
 .dock-monitor-body {
   flex: 1;
   min-height: 0;
+  min-width: 0;
 }
 
 /* GitHub panel (GitHubPanel.tsx, issue #27) — a dockview panel, opened from

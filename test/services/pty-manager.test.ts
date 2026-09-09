@@ -170,7 +170,7 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
-const { PtyManager, Session, getSkipPermissionFlag } =
+const { PtyManager, Session, getSkipPermissionFlag, MAX_TERMINAL_COLS, MAX_TERMINAL_ROWS } =
   await import("../../src/services/pty-manager.js");
 const { getAdapterEmits } = await import("../../src/services/hook-adapters/index.js");
 
@@ -1579,6 +1579,42 @@ describe("PtyManager", () => {
     expect(fakePtyChildren[0].resizeSpy).toHaveBeenCalledWith(120, 40);
     expect(session.toInfo().cols).toBe(120);
     expect(session.toInfo().rows).toBe(40);
+  });
+
+  // Dock monitor resize-runaway — a client-driven resize feedback loop (or
+  // any other misbehaving caller) sent an unbounded cols/rows to the pty
+  // with no ceiling to catch it. MIN_TERMINAL_COLS/ROWS's own doc comment
+  // covers the floor; this pins the analogous ceiling.
+  it("clamps an initial spawn size above the ceiling", async () => {
+    const session = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "bash",
+      cols: 35_140,
+      rows: 9_000,
+    });
+    await waitForSpawn(session);
+
+    expect(session.toInfo().cols).toBe(MAX_TERMINAL_COLS);
+    expect(session.toInfo().rows).toBe(MAX_TERMINAL_ROWS);
+    expect(fakePtyChildren[0].cols).toBe(MAX_TERMINAL_COLS);
+    expect(fakePtyChildren[0].rows).toBe(MAX_TERMINAL_ROWS);
+  });
+
+  it("clamps a resize() call above the ceiling, and calls through to the pty with the clamped size", async () => {
+    const session = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "bash",
+      cols: 80,
+      rows: 24,
+    });
+    await waitForSpawn(session);
+
+    session.resize(35_140, 9_000);
+    expect(fakePtyChildren[0].resizeSpy).toHaveBeenCalledWith(MAX_TERMINAL_COLS, MAX_TERMINAL_ROWS);
+    expect(session.toInfo().cols).toBe(MAX_TERMINAL_COLS);
+    expect(session.toInfo().rows).toBe(MAX_TERMINAL_ROWS);
   });
 
   it("requestRedraw dips then restores rows to force a repaint", async () => {

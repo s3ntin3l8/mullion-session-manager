@@ -626,14 +626,27 @@ const EVENTS_MAX = 100;
 // actually load-bearing dimension.
 export const MIN_TERMINAL_COLS = 40;
 export const MIN_TERMINAL_ROWS = 10;
+// MAX_TERMINAL_COLS/ROWS now physically live in src/shared/constants.ts —
+// see that file's own doc comment for the full dock resize-runaway
+// rationale (this is the one dimension of this fix the frontend genuinely
+// needs at build time, unlike MIN_TERMINAL_COLS/ROWS above, which it only
+// ever learns at runtime via the GeometryMessage echo). Re-exported below so
+// every existing backend importer of this module (this file's own
+// clampTerminalSize() included) keeps working unchanged.
+import { MAX_TERMINAL_COLS, MAX_TERMINAL_ROWS } from "../shared/constants.js";
+export { MAX_TERMINAL_COLS, MAX_TERMINAL_ROWS };
 
-/** Floor a client-supplied terminal size at MIN_TERMINAL_COLS/ROWS — see
- * those constants' own doc comment for why. Applied at every place a
+/** Clamp a client-supplied terminal size to
+ * [MIN_TERMINAL_COLS/ROWS, MAX_TERMINAL_COLS/ROWS] — see those constants'
+ * own doc comments for why each bound exists. Applied at every place a
  * Session's geometry can be set (the constructor and resize() below), so
- * it's impossible to construct or resize one below the floor regardless of
- * which attach path or caller supplied the number. */
+ * it's impossible to construct or resize one outside that range regardless
+ * of which attach path or caller supplied the number. */
 function clampTerminalSize(cols: number, rows: number): { cols: number; rows: number } {
-  return { cols: Math.max(cols, MIN_TERMINAL_COLS), rows: Math.max(rows, MIN_TERMINAL_ROWS) };
+  return {
+    cols: Math.min(Math.max(cols, MIN_TERMINAL_COLS), MAX_TERMINAL_COLS),
+    rows: Math.min(Math.max(rows, MIN_TERMINAL_ROWS), MAX_TERMINAL_ROWS),
+  };
 }
 
 /** Issue #988 / Hermes review, PR #1001 — bootstrapMaster()'s own ENOENT
