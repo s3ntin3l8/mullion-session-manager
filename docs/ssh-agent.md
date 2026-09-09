@@ -206,6 +206,13 @@ Two ways to get it running:
   the same machine you develop Mullion on): `node src/cli/mullion.mjs helper
 pair '<payload>'` works identically, no build step required.
 
+- **Already running Mullion itself on this machine** via
+  [`deploy/install.sh`](../deploy/install.sh) (it's a primary or agent
+  host, not just pairing its own laptop agent) — that script (and every
+  `scripts/self-update.sh` run since) already symlinked `mullion` onto your
+  PATH at `~/.local/bin/mullion`, so the bare `mullion helper pair
+'<payload>'` form works directly; no tarball extraction needed.
+
 ### Keeping it running
 
 `mullion helper run` is a plain foreground process — it doesn't daemonize or

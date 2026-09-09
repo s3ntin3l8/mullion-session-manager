@@ -30,11 +30,16 @@ function detectPlatform(): HelperPlatform {
 // verb doubles, and — for Linux — docs/ssh-agent.md's own
 // "macOS-without-installer / Linux" section (issue #1177): there is no
 // Linux SEA build (scripts/build-helper-sea.mjs targets win32/darwin only),
-// so a Linux laptop never has a bare `mullion` on PATH the way the other two
-// platforms' installers guarantee — the only documented shape is the
-// release tarball extracted next to its own `dist/cli/mullion.mjs`. Shared
-// by commandFor (helper pair) and runCommandFor (helper run) below so the
-// three per-platform invocation strings only exist once.
+// so a laptop that's ONLY ever extracted the helper tarball has no bare
+// `mullion` on PATH the way the other two platforms' installers guarantee —
+// the tarball form is this function's default for Linux. (Hermes review,
+// PR #1187 — a laptop that's ALSO a Mullion install/primary via
+// deploy/install.sh or scripts/self-update.sh does get `~/.local/bin/mullion`
+// symlinked automatically; the PlatformCommandPicker's own Linux note below
+// calls that case out, since this function has no way to detect which kind
+// of Linux laptop it's talking to.) Shared by commandFor (helper pair) and
+// runCommandFor (helper run) below so the three per-platform invocation
+// strings only exist once.
 function programFor(platform: HelperPlatform): string {
   switch (platform) {
     case "windows":
@@ -95,7 +100,9 @@ function PlatformCommandPicker({
       {platform === "linux" && (
         <div style={{ fontSize: 11.5, color: "var(--dim)", marginTop: 8 }}>
           From a Mullion checkout instead of the release tarball? Use{" "}
-          <code>node src/cli/mullion.mjs</code>.
+          <code>node src/cli/mullion.mjs</code>. Already running Mullion itself on this machine via{" "}
+          <code>deploy/install.sh</code>? Plain <code>mullion</code> already works — that script
+          symlinks it onto your PATH.
         </div>
       )}
     </>
