@@ -409,12 +409,16 @@ injection: check `~/.codex/hooks.json` / `~/.gemini/config/hooks.json`'s
 
 The tier-0 push above (and the `host`/`browser`/`troubleshooting`/
 `session-ops`/`taskmaster-issues`/`task-worker`/`task-reviewer`/
-`manual-review-methodology` skills it points you at) isn't delivered fresh
-per session anymore. Since issue #941,
-getting the shipped bundle
-(`src/bundle/skills/`) onto a host is a **host-local, boot-time,
-manifest-driven sync** (`src/services/bundle-sync.ts`, wired in by
-`src/plugins/bundle-sync.ts`), separate from anything a session spawn does:
+`manual-review-methodology` skills it points you at, plus a shipped
+`mullion-reviewer` subagent — general-purpose review methodology,
+`src/bundle/agents/reviewer.md`, reachable via a `Task`-tool-shaped
+invocation on claude-code/agy/opencode; codex has no static per-agent
+format, so it doesn't get this one — see the next section) isn't
+delivered fresh per session anymore. Since issue #941, getting the shipped
+bundle (`src/bundle/skills/`, `src/bundle/agents/`) onto a host is a
+**host-local, boot-time, manifest-driven sync**
+(`src/services/bundle-sync.ts`, wired in by `src/plugins/bundle-sync.ts`),
+separate from anything a session spawn does:
 
 - **Runs automatically at boot.** A single `onReady` hook fires once per
   Mullion process start — on the primary and on an `agent`-role host alike,
@@ -457,7 +461,13 @@ manifest-driven sync** (`src/services/bundle-sync.ts`, wired in by
 A project's own skill/reviewer subagent (the pinned-note/skill/reviewer
 feature — see [`project-briefing.md`](project-briefing.md)) is unrelated to
 this mechanism and still rides its own per-session, per-CLI channel exactly
-as described earlier in this doc.
+as described earlier in this doc — a much narrower reach than
+`mullion-reviewer` above: that doc's own delivery table has agy reaching
+**no** committed path for a project-specific reviewer at all (issue #1083),
+even though agy does receive Mullion's own shipped `mullion-reviewer`
+through the bundle sync just described. Same CLI, two unrelated
+mechanisms — don't read one table's "none" as contradicting the other's
+"yes".
 
 ## If something 403s
 

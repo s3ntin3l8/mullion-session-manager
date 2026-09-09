@@ -426,7 +426,9 @@ function deriveCodexReviewerSkillContent(raw: string, slug: string): string | nu
 // gets committed instead — the whole point of #1201 is that a scaffolded
 // project's committed conventions and this install's own injected-per-
 // session conventions must be the SAME text, not two independently-sourced
-// ones. Every reasoning point above (why these six, why the other four are
+// ones. Every reasoning point above (why these six, why the other five —
+// WORKFLOW_CONVENTION_QUESTIONS has grown to 11 entries since this comment
+// was first written, including a later-added `worktrees` question — are
 // left unanswered) still applies to this default set specifically; it just
 // no longer applies unconditionally.
 //
