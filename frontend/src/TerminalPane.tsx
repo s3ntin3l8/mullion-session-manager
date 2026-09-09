@@ -1378,9 +1378,20 @@ export function TerminalPane(props: {
             fitFloorRef.current = { cols: geo.minCols, rows: geo.minRows };
           }
           if (geo.cols !== term.cols || geo.rows !== term.rows) {
-            term.resize(geo.cols, geo.rows);
-            lastCols = geo.cols;
-            lastRows = geo.rows;
+            // Hermes review — geo.cols/rows come straight off the wire (an
+            // untyped GeometryMessage routes/terminal.ts forwards verbatim)
+            // and are trusted as already within MAX_TERMINAL_COLS/ROWS
+            // because the SAME-version backend's own clampTerminalSize()
+            // bounds session.size before ever echoing it. A remote-hosted
+            // session (this frame's own comment above) could be talking to a
+            // different-version host whose echo predates that ceiling —
+            // clamp here too so this path can't reintroduce the exact
+            // runaway the rest of this file guards against. A no-op in the
+            // aligned case (geo is already within bounds by construction).
+            const clampedGeo = clampTerminalGridSize(geo.cols, geo.rows);
+            term.resize(clampedGeo.cols, clampedGeo.rows);
+            lastCols = clampedGeo.cols;
+            lastRows = clampedGeo.rows;
             // A genuine floor override (as opposed to an echo merely
             // confirming a resize this client initiated) is the signal that
             // the settings-sync effect's font-fit check should (re-)run —

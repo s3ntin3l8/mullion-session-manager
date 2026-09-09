@@ -3111,6 +3111,34 @@ describe("TerminalPane grid-size ceiling (dock monitor resize-runaway)", () => {
     expect(term.resize.mock.calls.length).toBeGreaterThan(resizeCallsBeforeRunaway);
     expect(term.resize).toHaveBeenLastCalledWith(MAX_TERMINAL_COLS, MAX_TERMINAL_ROWS);
   });
+
+  // Hermes review — the geometry-echo handler trusts geo.cols/rows as
+  // already within bounds because the SAME-version backend's own
+  // clampTerminalSize() bounds session.size before ever echoing it; this
+  // simulates the one case that isn't true — a differently-versioned (e.g.
+  // remote-hosted, this file's own comment on that frame) host echoing a
+  // size from before that ceiling existed.
+  it("clamps an oversized geometry echo (e.g. a pre-ceiling remote host)", () => {
+    stubFakeWebSocket(true);
+    renderPane();
+
+    act(() => {
+      for (const handler of fakeSocket._messageHandlers) {
+        handler({
+          data: JSON.stringify({
+            type: "geometry",
+            cols: 35_140,
+            rows: 9_000,
+            minCols: 40,
+            minRows: 10,
+          }),
+        });
+      }
+    });
+
+    const term = getLatestTermInstance();
+    expect(term.resize).toHaveBeenLastCalledWith(MAX_TERMINAL_COLS, MAX_TERMINAL_ROWS);
+  });
 });
 
 // Issue #676's frontend follow-up — the backend clamp (pty-manager.ts's
