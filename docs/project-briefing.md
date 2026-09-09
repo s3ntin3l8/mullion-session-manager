@@ -155,10 +155,10 @@ entries.
 Delivery is per-CLI, since none of the four agents share a config format or
 an ephemeral-overlay mechanism:
 
-|                   | Claude Code                                       | opencode                                   | codex                                         | agy                                           |
-| ----------------- | ------------------------------------------------- | ------------------------------------------ | --------------------------------------------- | --------------------------------------------- |
-| Project skill     | composed into a per-session `--plugin-dir` bundle | `skills.paths` config key, ephemeral       | committed scaffold mirror only, never live    | committed scaffold mirror only, never live    |
-| Reviewer subagent | same composed bundle, `agents/<name>.md`          | translated, `<CONFIG_DIR>/agent/<name>.md` | none — no committed path exists for it either | none — no committed path exists for it either |
+|                   | Claude Code                                       | opencode                                   | codex                                                       | agy                                                       |
+| ----------------- | ------------------------------------------------- | ------------------------------------------ | ----------------------------------------------------------- | --------------------------------------------------------- |
+| Project skill     | composed into a per-session `--plugin-dir` bundle | `skills.paths` config key, ephemeral       | committed scaffold mirror only, never live                  | committed scaffold mirror only, never live                |
+| Reviewer subagent | same composed bundle, `agents/<name>.md`          | translated, `<CONFIG_DIR>/agent/<name>.md` | committed scaffold mirror, conditional (issue #943 — below) | none — no committed path exists for it (permanent, #1083) |
 
 - **Claude Code**: `hook-adapters/mullion-bundle.ts`'s
   `composeClaudeSessionBundle` materializes a per-session plugin directory —
@@ -257,8 +257,15 @@ three artifacts into a real, reviewable pull request:
    `.agents/skills/<slug>-reviewer/SKILL.md` mirror of the reviewer,
    translated into SKILL.md's two-field frontmatter shape, for codex's own
    `spawn_agent` delegation to discover — writes it into a scratch worktree
-   under `.mullion-worktrees/`, and shows the diff. One more entry
-   is opt-in: a short pointer paragraph upserted into `CONTRIBUTING.md`
+   under `.mullion-worktrees/`, and shows the diff. If the target repo
+   already has its own `AGENTS.override.md`, the preview surfaces a warning
+   rather than silently proceeding: codex reads that file **instead of**
+   `AGENTS.md` entirely, so the Workflow Conventions section this scaffold
+   is about to commit into `AGENTS.md` would never reach codex sessions on
+   that project — the scaffold never writes to `AGENTS.override.md` itself,
+   this is disclosure only, so a human can add the conventions there by
+   hand if codex needs to see them. One more entry is opt-in: a short
+   pointer paragraph upserted into `CONTRIBUTING.md`
    (created fresh if the project doesn't have one yet) pointing at
    `AGENTS.md`'s Workflow Conventions section, since that file's own
    process-rules section otherwise drifts from `AGENTS.md` the same way
@@ -362,22 +369,26 @@ per-project knob is a boolean: inject the global text, or don't.
   by default — a fresh install has no opinion yet — and an empty value is
   its own independent "nothing to inject" gate, not just an uninteresting
   default.
-- **Kickstarting it** uses a structured multiple-choice wizard ("Generate
-  with wizard" in that same Settings row), not an agent turn and not a
-  blank text box: workflow conventions are a small, finite set of
-  well-known policy choices
-  (`src/services/workflow-conventions.ts`'s
-  `WORKFLOW_CONVENTION_QUESTIONS`), a genuinely different shape of problem
-  from the pinned note/skill/reviewer above, which need a human (or an
-  agent, for #956's project-specific generation) because they require
-  actual prose about a specific project. `buildWorkflowConventionsText`
+- **Kickstarting and re-running it** uses a structured multiple-choice
+  wizard ("Generate with wizard" in that same Settings row), not an agent
+  turn and not a blank text box: workflow conventions are a small, finite
+  set of well-known policy choices (`src/services/workflow-conventions.ts`'s
+  `WORKFLOW_CONVENTION_QUESTIONS` — includes a `worktrees` question, whether
+  to work in a dedicated git worktree per branch), a genuinely different
+  shape of problem from the pinned note/skill/reviewer above, which need a
+  human (or an agent, for #956's project-specific generation) because they
+  require actual prose about a specific project. `buildWorkflowConventionsText`
   deterministically assembles the selected options' prose fragments — no
-  agent, no network — and the wizard **overwrites** the text field once,
-  on completion; it is a one-shot "regenerate from scratch" starter, not
-  an ongoing synced mode. From that point on the field is just a normal,
-  freely-editable textarea, with no distinction between wizard-written and
-  hand-edited text and no answer state kept around to reconcile against
-  later edits.
+  agent, no network. The wizard's answers persist
+  (`settings.sessions.workflowConventionAnswers`), so re-opening it after
+  the first run starts on a review step of what's already answered instead
+  of from scratch, and it detects when the stored text has since been
+  hand-edited away from what those answers would generate — derived by
+  comparing `buildWorkflowConventionsText(storedAnswers)` against the
+  stored text, not a separate tracked flag — and warns before an apply
+  would overwrite that edit. Applying still **overwrites** the text field
+  in full; it's a "regenerate from these answers" action, not an ongoing
+  synced mode.
 - **The per-project toggle** is `projects.injectWorkflowConventions`
   (nullable boolean, `schema.ts`) — same shape as the two per-project
   overrides below: `null`/`true` = inject the global text, `false` =
@@ -390,6 +401,27 @@ pinned note]` `additionalContext` ordering `hooks.ts` composes for
   `instructions[]` channel for the fourth CLI — see that adapter's own
   comment for why file presence alone (no separate ctx boolean) already
   encodes both the toggle and the "non-empty global text" gate.
+- **The scaffold reads the same text, not a separate copy.** "Scaffolding
+  it into the repo instead" above commits a `## Workflow Conventions`
+  section into the target `AGENTS.md`, resolved from this exact global text
+  (respecting the project's own `injectWorkflowConventions` opt-out) —
+  `mullion-scaffold.ts`'s `workflowConventionsSection`. When the text is
+  empty (a fresh install with no opinion authored yet, or a project that
+  opted out before ever being scaffolded), it falls back to
+  `buildWorkflowConventionsText(SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS)` — a
+  fixed answer set covering 6 of `WORKFLOW_CONVENTION_QUESTIONS`'s 11
+  questions (the other 5, including `worktrees`, are deliberately left
+  unanswered — see that constant's own doc comment for why) — rather than
+  committing nothing, so a freshly scaffolded repo still gets a reasonable
+  starter instead of a blank section.
+- **Staying in sync** — `projects.conventionsHash` stamps, at apply time,
+  the hash of exactly what was committed; `GET /api/projects` compares it
+  against what the _current_ global text (or defaults) would produce right
+  now and surfaces `conventionsDrifted` when they no longer match, with a
+  banner in Scaffold Mullion's own panel prompting a re-scaffold. Three
+  states only: never scaffolded (`null` hash), up to date, or drifted — an
+  opted-out project is never considered drifted, since by definition its
+  committed text is no longer tracking the install-wide one.
 
 ## Settings
 

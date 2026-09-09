@@ -409,12 +409,16 @@ injection: check `~/.codex/hooks.json` / `~/.gemini/config/hooks.json`'s
 
 The tier-0 push above (and the `host`/`browser`/`troubleshooting`/
 `session-ops`/`taskmaster-issues`/`task-worker`/`task-reviewer`/
-`manual-review-methodology` skills it points you at) isn't delivered fresh
-per session anymore. Since issue #941,
-getting the shipped bundle
-(`src/bundle/skills/`) onto a host is a **host-local, boot-time,
-manifest-driven sync** (`src/services/bundle-sync.ts`, wired in by
-`src/plugins/bundle-sync.ts`), separate from anything a session spawn does:
+`manual-review-methodology` skills it points you at, plus a shipped
+`mullion-reviewer` subagent — general-purpose review methodology,
+`src/bundle/agents/reviewer.md`, reachable via a `Task`-tool-shaped
+invocation on claude-code/agy/opencode; codex has no static per-agent
+format, so it doesn't get this one — see the next section) isn't
+delivered fresh per session anymore. Since issue #941, getting the shipped
+bundle (`src/bundle/skills/`, `src/bundle/agents/`) onto a host is a
+**host-local, boot-time, manifest-driven sync**
+(`src/services/bundle-sync.ts`, wired in by `src/plugins/bundle-sync.ts`),
+separate from anything a session spawn does:
 
 - **Runs automatically at boot.** A single `onReady` hook fires once per
   Mullion process start — on the primary and on an `agent`-role host alike,
