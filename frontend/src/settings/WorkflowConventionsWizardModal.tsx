@@ -297,7 +297,19 @@ export function WorkflowConventionsWizardModal({
     );
     footer = (
       <>
-        <button className="create-modal-cancel" onClick={handleBack}>
+        {/* Hermes review, PR #1204 — restores the pre-#1201 disabled guard
+            for the never-run flow only. In that flow (hasRunBefore false)
+            there is no review step to fall back to, so Back on the FIRST
+            question is a genuine no-op and should be disabled, same as
+            before this issue. In the review-entered flow, Back on step 0
+            correctly falls through to the review step (handleBack's own
+            `stepIndex === 0 && hasRunBefore` branch) — must stay enabled
+            there. */}
+        <button
+          className="create-modal-cancel"
+          onClick={handleBack}
+          disabled={!hasRunBefore && stepIndex === 0}
+        >
           Back
         </button>
         <button

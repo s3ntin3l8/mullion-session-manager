@@ -317,6 +317,24 @@ describe("Settings -> Sessions -> workflow-conventions wizard (pre-fill and revi
     ).not.toBeInTheDocument();
   });
 
+  // Hermes review, PR #1204 — removing the pre-#1201 `disabled={stepIndex
+  // === 0}` guard left Back enabled (but a no-op) on the FIRST question of
+  // the never-run flow, which has no review step to fall back to. Must stay
+  // disabled there specifically — the review-entered flow's own Back-to-
+  // review behavior (tested separately below) must keep working.
+  it("disables Back on the first question when the wizard has never been run — there is no review step to fall back to", async () => {
+    stubFetch({});
+    useDashboardStore.setState({ settings: DEFAULT_SETTINGS, settingsLoaded: true });
+
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="sessions" />);
+
+    await user.click(await screen.findByText("Generate with wizard"));
+    await screen.findByText("Direct commits, or always branch + PR?");
+
+    expect(screen.getByText("Back")).toBeDisabled();
+  });
+
   it("opens on the review step, pre-filled, when the wizard has been run before", async () => {
     const settingsWithAnswers = {
       ...DEFAULT_SETTINGS,
