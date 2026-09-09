@@ -49,3 +49,42 @@ export type TaskStatus = (typeof TASK_STATUSES)[number];
 // resolves to the in-process PtyManager (session-backend.ts) rather than a
 // RemoteHostClient.
 export const LOCAL_HOST_ID = "local";
+
+// ---------------------------------------------------------------------------
+// services/pty-manager.ts / frontend/src/lib/terminalGridSize.ts —
+// MAX_TERMINAL_COLS / MAX_TERMINAL_ROWS
+// ---------------------------------------------------------------------------
+//
+// Dock monitor resize-runaway — opening the dock on a project with Docker
+// Compose services could grow a dock terminal's grid without bound (observed
+// live at ~35,140 cols / ~9,000 rows before the tab locked up): the dock's
+// CSS deliberately lets a `.dock-monitor`'s content size propagate up to
+// `.dock-body` (see empty-states.css's own comment on `.dock-stack-group`),
+// which means a terminal's own rendered content can inflate the size of the
+// very container the frontend's fitAddon measures it against next — resize
+// bigger -> container measures bigger -> propose an even bigger resize ->
+// repeat, with no external trigger needed. pty-manager.ts's own
+// MIN_TERMINAL_COLS/ROWS had no upper counterpart, so nothing stopped a
+// client-supplied size — corrupted by that loop, or by any other client —
+// from reaching the pty unbounded.
+//
+// Genuinely shared (unlike MIN_TERMINAL_COLS/ROWS, which the frontend only
+// ever learns at runtime via the GeometryMessage echo, never at build time):
+// the frontend clamps proactively, before ever sending a resize
+// (frontend/src/TerminalPane.tsx's applyClampedFit()), specifically so a
+// runaway proposal never leaves the tab in the first place; the backend
+// clamp (this same value, via pty-manager.ts's clampTerminalSize()) is the
+// actual last line of defense against any client, this one included.
+//
+// Sized with deliberate headroom above any realistic display — a monospace
+// cell is roughly 6px wide / 12px tall at the lowest configurable font size
+// (settings.ts floors fontSize at 10px), so even an extreme span of three
+// stacked/tiled 4K displays (≈11,520px wide or ≈6,480px tall) proposes at
+// most ~1,920 cols / ~540 rows, well under these — while staying a
+// deliberate, consistent ~9x below the observed runaway's magnitude on both
+// axes. Generous, not an absolute guarantee for every conceivable future
+// display configuration: if a setup somehow does exceed this, the terminal
+// renders at the ceiling rather than growing further — the same graceful-
+// degradation posture MIN_TERMINAL_COLS/ROWS's own floor already has.
+export const MAX_TERMINAL_COLS = 4000;
+export const MAX_TERMINAL_ROWS = 1000;
