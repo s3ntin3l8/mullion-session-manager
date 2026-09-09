@@ -61,9 +61,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync as nodeSpawnSync, spawn as nodeSpawn } from "node:child_process";
+import { spawnSync as nodeSpawnSync } from "node:child_process";
 import { isSea as nodeIsSea } from "node:sea";
-import { extractFlags, CliUsageError } from "./core.mjs";
+import { extractFlags, CliUsageError, spawnDetachedHelper } from "./core.mjs";
 import {
   stateDir,
   loadCredential,
@@ -304,6 +304,18 @@ WantedBy=default.target
 // copies/finds the exe IS the permanent path — no "extracted the tarball to
 // Downloads, cleaned it up later, autostart entry silently breaks" failure
 // mode.
+//
+// Issue #871 — `--detach` is always appended here: this command only ever
+// runs from the HKCU Run value, with no parent console to inherit, so the
+// helper it launches would otherwise allocate its own console window at
+// every logon — and closing that window kills it (it IS the helper's
+// console). `--detach` tells `helper run` to immediately re-spawn itself
+// with no console and exit, leaving nothing for the user to close. The
+// OTHER detached spawn this file does — installWindows's own immediate
+// start right after writing this registry value — must NOT pass it: that
+// spawn already runs detached+hidden itself (spawnDetachedHelper, core.mjs)
+// and launching a `--detach` child from it would just add an unnecessary
+// extra hop.
 export function buildWindowsRunCommand({ execPath, scriptPath, sshAuthSock, insecure }) {
   const argv = [
     execPath,
@@ -313,6 +325,7 @@ export function buildWindowsRunCommand({ execPath, scriptPath, sshAuthSock, inse
     "--ssh-auth-sock",
     sshAuthSock,
     ...(insecure ? ["--insecure"] : []),
+    "--detach",
   ];
   return argv.map((value) => `"${windowsArgEscape(value)}"`).join(" ");
 }
@@ -445,77 +458,6 @@ function installSystemd(io, { execPath, scriptPath, sshAuthSock }) {
       "unless it's revoked from Settings or unreachable long enough to expire outright.\n",
   );
   return 0;
-}
-
-// `spawn()` itself never throws for a failure to actually start the child
-// (ENOENT, EACCES, an AV/EDR product transiently locking the just-written
-// exe) — that class of failure only ever surfaces asynchronously, as an
-// `'error'` event on the returned ChildProcess (self-review, mullion-
-// reviewer round: a bare `try { spawn(...) } catch {}` around this call
-// cannot catch it, and this file's own immediate `process.exit()` right
-// after `runInstall` returns leaves no window for an unlistened-for
-// `'error'` to be observed later — worse, EventEmitter's default behavior
-// for an 'error' event with NO listener attached is to throw, which could
-// crash this process with an unrelated stack trace instead of the success
-// message it was about to print). `'spawn'` is the documented counterpart
-// — Node guarantees exactly one of the two fires for a real spawn attempt,
-// never neither — so awaiting whichever comes first turns an
-// unobservable async failure into a synchronously reportable one, at the
-// cost of a spawn() round trip's worth of async time before `install`
-// returns. `unref()` only once spawn is confirmed successful — unref'ing
-// a child that's about to fail doesn't change anything, but doing it
-// before we know keeps the intent ("we manage this process's own runtime
-// lifetime, not our exit") tied to the branch where it actually applies.
-function spawnDetachedHelper(io, execPath, argv, logFd) {
-  return new Promise((resolve) => {
-    // A real Node spawn() call itself is not expected to throw
-    // synchronously for a runtime failure (see the function's own header
-    // comment) — but this catch keeps a genuinely unexpected synchronous
-    // throw (a malformed argv, for instance) degrading to the same
-    // "warning, not a failed install" outcome as the documented async
-    // 'error' path below, rather than escaping uncaught.
-    let child;
-    try {
-      child = runDetachedSpawn(io, execPath, argv, {
-        detached: true,
-        stdio: ["ignore", logFd, logFd],
-      });
-    } catch (err) {
-      resolve({ ok: false, error: err });
-      return;
-    }
-    // Round 4 diagnostic follow-up (issue #871) — whichever of these two
-    // fires first, remove the OTHER one too: `.once()` only self-removes
-    // the listener that actually fired, so the loser stayed registered on
-    // this `child` indefinitely after this Promise already settled. If
-    // that leftover listener's event (most plausibly a late `'error'`
-    // after a successful `'spawn'`, e.g. the detached child later failing
-    // to write to its inherited log fd) ever fired, there was nothing left
-    // to catch it — an unhandled exception inside an event listener
-    // becomes an `unhandledRejection`-equivalent crash of the *parent*
-    // process, well after `installWindows` had already returned 0 and
-    // `helper-main.mjs` may already be mid-exit.
-    let settled = false;
-    const onError = (err) => {
-      if (settled) return;
-      settled = true;
-      child.removeListener("spawn", onSpawn);
-      resolve({ ok: false, error: err });
-    };
-    const onSpawn = () => {
-      if (settled) return;
-      settled = true;
-      child.removeListener("error", onError);
-      child.unref();
-      resolve({ ok: true });
-    };
-    child.once("error", onError);
-    child.once("spawn", onSpawn);
-  });
-}
-
-function runDetachedSpawn(io, command, args, options) {
-  return (io.spawn ?? nodeSpawn)(command, args, options);
 }
 
 // Best-effort teardown of a pre-round-4 install (a true standard user, or

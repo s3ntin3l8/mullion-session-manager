@@ -246,6 +246,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "reg query found no registered autostart entry after install: $regOutput" }
           if (-not $regOutput.Contains("\\.\pipe\openssh-ssh-agent")) { throw "registered autostart command lost the --ssh-auth-sock value: $regOutput" }
           if (-not $regOutput.Contains("mullion-helper.exe")) { throw "registered autostart command does not reference mullion-helper.exe: $regOutput" }
+          # Issue #871 — the registered command must carry --detach: it's
+          # what makes the logon-launched helper re-spawn itself with no
+          # console instead of inheriting/allocating one that, when closed,
+          # kills it. See the next step for the actual behavioral proof
+          # (a real --detach invocation surviving and logging).
+          if (-not $regOutput.Contains("--detach")) { throw "registered autostart command is missing --detach: $regOutput" }
 
           $uninstallOutput = & $exe helper uninstall 2>&1
           Write-Host ($uninstallOutput -join "`n")
@@ -257,6 +263,54 @@ jobs:
           # here is EXPECTED to fail (proving the entry is really gone), so
           # $LASTEXITCODE is non-zero on the success path and would
           # otherwise fail this step despite every assertion having passed.
+          exit 0
+
+      # Issue #871 — behavioral proof that --detach actually backgrounds the
+      # helper with no console and a real log, not just that the registered
+      # command string contains the flag (the assertion in the step above).
+      # A well-formed but unreachable (port 1, nothing ever listens there)
+      # credential puts `helper run` into its own reconnect ladder
+      # (RECONNECT_DELAYS_MS, ssh-agent-helper.mjs) forever instead of
+      # exiting, which is what lets this step observe "the process survives
+      # past the --detach bootstrap returning" rather than racing a real
+      # connection attempt this Linux-only dev/CI environment has no way to
+      # satisfy.
+      - name: "--detach backgrounds the helper with no console, and logs to a file"
+        shell: pwsh
+        env:
+          MULLION_HELPER_STATE_DIR: ${{ runner.temp }}\mullion-helper-detach-state
+        run: |
+          $exe = "build\helper-sea\mullion-helper.exe"
+          New-Item -ItemType Directory -Force -Path $env:MULLION_HELPER_STATE_DIR | Out-Null
+          # Shape validated by loadCredential's own isValidHttpBaseUrl/
+          # isValidBridgeId/isValidSessionToken/isValidExpiresAt
+          # (src/cli/ssh-agent-helper.mjs) — a malformed credential would be
+          # silently treated as "not paired", never reaching the reconnect
+          # loop this step depends on.
+          $credential = @{
+            baseUrl   = "http://127.0.0.1:1"
+            bridgeId  = "00000000-0000-0000-0000-000000000000"
+            sessionId = ("0" * 64)
+            expiresAt = (Get-Date).AddDays(1).ToString("o")
+          } | ConvertTo-Json
+          Set-Content -Path (Join-Path $env:MULLION_HELPER_STATE_DIR "ssh-agent-bridge.json") -Value $credential -Encoding ascii
+
+          $output = & $exe helper run --detach --ssh-auth-sock "\\.\pipe\openssh-ssh-agent" 2>&1
+          $code = $LASTEXITCODE
+          Write-Host ($output -join "`n")
+          if ($code -ne 0) { throw "helper run --detach exited $code instead of backgrounding successfully" }
+          if (($output -join "`n") -notmatch "started in the background") { throw "missing 'started in the background' confirmation" }
+
+          Start-Sleep -Seconds 2
+          $proc = Get-Process -Name "mullion-helper" -ErrorAction SilentlyContinue
+          if (-not $proc) { throw "backgrounded helper is not running two seconds later — --detach's re-spawned child did not survive" }
+
+          $logPath = Join-Path $env:MULLION_HELPER_STATE_DIR "helper-run.log"
+          if (-not (Test-Path $logPath)) { throw "helper-run.log was not created — --detach's child did not write where it was told to" }
+          $logContent = Get-Content $logPath -Raw
+          if ($logContent -notmatch "connect failed") { throw "helper-run.log does not show the reconnect ladder retrying against the unreachable port: $logContent" }
+
+          $proc | Stop-Process -Force
           exit 0
 
       # Round 3 (PR3, Windows installer) — builds deploy/windows/mullion-

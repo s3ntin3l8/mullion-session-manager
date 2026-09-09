@@ -28,7 +28,7 @@ import { Agent as UndiciAgent } from "undici";
 import { decodePairingPayload } from "./ssh-agent-bridge-pairing.mjs";
 import { attachInboundMux } from "./ssh-agent-bridge-mux.mjs";
 import { pipeFilteredNetSocketToChannel } from "./ssh-agent-filtered-relay.mjs";
-import { extractFlags, CliUsageError } from "./core.mjs";
+import { extractFlags, CliUsageError, spawnDetachedHelper } from "./core.mjs";
 import { runInstall, runUninstall } from "./ssh-agent-helper-install.mjs";
 
 // Issue #1049 (Task 4) — `--insecure` lets `pair` and `run` talk to a
@@ -490,21 +490,18 @@ function saveCredential(io, credential) {
   }
 }
 
-// Shared by describeRunCommand and describePairCommand below — both hints
-// used to hardcode `mullion helper <verb>`, correct only for someone with a
-// full npm install of the PRIMARY on their PATH, which is exactly what the
-// laptop-side helper is designed NOT to require (see this file's own header
-// comment). For the two actual distribution shapes — a Node SEA binary
+// Shared by describeInvocation below and runRun's own `--detach` bootstrap
+// (issue #871): the raw execPath/scriptPath this process was actually
+// invoked with, for the two actual distribution shapes — a Node SEA binary
 // (`mullion-helper[.exe]`, where `execPath` IS the program with no separate
-// script argument) and a checkout/tarball invocation (`node .../mullion.mjs`)
-// — reflecting how THIS process was actually invoked
-// (`process.execPath`/`process.argv[1]`) stays correct regardless of which
-// one got us here, rather than guessing. `& ` on win32 mirrors
-// PairBridgeModal.tsx's own commandFor() and deploy/windows/
-// mullion-helper.iss's dialogs: a bare quoted path is inert in PowerShell
-// (Windows 11's default terminal) without the call operator.
-function describeInvocation(io) {
-  const platform = io.platform ?? process.platform;
+// script argument) and a checkout/tarball invocation (`node .../mullion.mjs`).
+// describeInvocation turns this into a human-readable, shell-quoted hint;
+// the `--detach` bootstrap uses the raw parts directly to build the
+// re-spawned child's real argv instead — reflecting how THIS process was
+// actually invoked (`process.execPath`/`process.argv[1]`) stays correct
+// regardless of which shape got us here, rather than guessing, in both
+// cases.
+function resolveInvocationParts(io) {
   const execPath = io.execPath ?? process.execPath;
   const isSeaBuild = io.isSea !== undefined ? io.isSea : nodeIsSea();
   // `!== undefined`, not `??` — the same convention runInstall (ssh-agent-
@@ -516,6 +513,19 @@ function describeInvocation(io) {
     : io.scriptPath !== undefined
       ? io.scriptPath
       : process.argv[1];
+  return { execPath, scriptPath };
+}
+
+// Shared by describeRunCommand and describePairCommand below — both hints
+// used to hardcode `mullion helper <verb>`, correct only for someone with a
+// full npm install of the PRIMARY on their PATH, which is exactly what the
+// laptop-side helper is designed NOT to require (see this file's own header
+// comment). `& ` on win32 mirrors PairBridgeModal.tsx's own commandFor() and
+// deploy/windows/mullion-helper.iss's dialogs: a bare quoted path is inert
+// in PowerShell (Windows 11's default terminal) without the call operator.
+function describeInvocation(io) {
+  const platform = io.platform ?? process.platform;
+  const { execPath, scriptPath } = resolveInvocationParts(io);
   const program = scriptPath ? `"${execPath}" "${scriptPath}"` : `"${execPath}"`;
   return `${platform === "win32" ? "& " : ""}${program}`;
 }
@@ -539,6 +549,58 @@ function describeRunCommand(io) {
 // payload too would nest a second, conflicting set of quotes around it.
 export function describePairCommand(io) {
   return `${describeInvocation(io)} helper pair <payload>`;
+}
+
+// Issue #871 — the Windows autostart entry's HKCU Run value has no parent
+// console to inherit, so the `helper run` it launches at logon gets one
+// allocated for it by Windows — and closing that window delivers
+// CTRL_CLOSE_EVENT, killing the helper (it IS the helper's own console).
+// `--detach` makes THIS invocation immediately re-spawn itself with no
+// console and stdio redirected to helper-run.log, then exit — mirroring
+// exactly the detached spawn ssh-agent-helper-install.mjs's own
+// installWindows already does at install time, via the same
+// spawnDetachedHelper (core.mjs) so the two don't duplicate its
+// 'spawn'-vs-'error' race handling. Returns `null` (not a code) to mean
+// "couldn't background — fall through and run in the foreground instead":
+// a helper with an ugly console window beats no helper at all. Windows-
+// only: on macOS/Linux, launchd/systemd already supervise `run` as a job
+// with no console to begin with (see ssh-agent-helper-install.mjs's
+// installLaunchd/installSystemd), and a parent that exited immediately
+// here would fight KeepAlive/Restart=always's own notion of "the
+// supervised process" — callers must refuse this flag on those platforms
+// rather than call this function.
+async function runDetachedBootstrap(io, { sshAuthSock, insecure, jsonEvents }) {
+  const { execPath, scriptPath } = resolveInvocationParts(io);
+  const argv = [
+    ...(scriptPath !== null && scriptPath !== undefined ? [scriptPath] : []),
+    "helper",
+    "run",
+    "--ssh-auth-sock",
+    sshAuthSock,
+    ...(insecure ? ["--insecure"] : []),
+    ...(jsonEvents ? ["--json-events"] : []),
+  ];
+  const logPath = path.join(stateDir(io), "helper-run.log");
+  let logFd;
+  try {
+    fs.mkdirSync(stateDir(io), { recursive: true, mode: 0o700 });
+    logFd = fs.openSync(logPath, "a");
+  } catch (err) {
+    io.stderr.write(
+      `--detach: could not open ${logPath} (${err.message}) — running in the foreground instead.\n`,
+    );
+    return null;
+  }
+  const spawnResult = await spawnDetachedHelper(io, execPath, argv, logFd);
+  if (!spawnResult.ok) {
+    io.stderr.write(
+      `--detach: failed to start in the background (${spawnResult.error.message}) — ` +
+        "running in the foreground instead.\n",
+    );
+    return null;
+  }
+  io.stdout.write(`started in the background — logs: ${logPath}\n`);
+  return 0;
 }
 
 async function runPair(args, io) {
@@ -639,6 +701,7 @@ async function runRun(args, io) {
     "ssh-auth-sock": "string",
     "json-events": "boolean",
     insecure: "boolean",
+    detach: "boolean",
   });
   // Round 4 (issue #820, tray-repo prerequisites) — a tray needs something
   // more reliable than regex-matching the stderr prose below, which has
@@ -673,6 +736,26 @@ async function runRun(args, io) {
         "docs/ssh-agent.md).\n",
     );
     return 1;
+  }
+  if (flags.detach === true) {
+    // Windows-only concept — see runDetachedBootstrap's own header comment
+    // for why macOS/Linux must refuse rather than silently no-op.
+    if (platform !== "win32") {
+      io.stderr.write(
+        "--detach is only meaningful on Windows — on macOS/Linux, 'mullion helper install' " +
+          "already supervises 'run' as a launchd/systemd job with no console to escape.\n",
+      );
+      return 2;
+    }
+    const bootstrapResult = await runDetachedBootstrap(io, {
+      sshAuthSock,
+      insecure: flags.insecure === true,
+      jsonEvents,
+    });
+    if (bootstrapResult !== null) return bootstrapResult;
+    // Couldn't background — fall through and run in the foreground below,
+    // the same "ugly window beats no helper" posture runDetachedBootstrap's
+    // own header comment documents.
   }
   let credential = loadCredential(io);
   if (!credential) {

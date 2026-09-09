@@ -182,7 +182,7 @@ describe("buildWindowsRunCommand", () => {
       sshAuthSock: "\\\\.\\pipe\\openssh-ssh-agent",
     });
     expect(command).toBe(
-      '"C:\\Program Files\\nodejs\\node.exe" "C:\\Program Files\\Mullion\\dist\\cli\\mullion.mjs" "helper" "run" "--ssh-auth-sock" "\\\\.\\pipe\\openssh-ssh-agent"',
+      '"C:\\Program Files\\nodejs\\node.exe" "C:\\Program Files\\Mullion\\dist\\cli\\mullion.mjs" "helper" "run" "--ssh-auth-sock" "\\\\.\\pipe\\openssh-ssh-agent" "--detach"',
     );
   });
 
@@ -257,6 +257,7 @@ describe("buildWindowsRunCommand", () => {
       "run",
       "--ssh-auth-sock",
       '\\\\.\\pipe\\foo"bar',
+      "--detach",
     ]);
   });
 
@@ -271,7 +272,7 @@ describe("buildWindowsRunCommand", () => {
       sshAuthSock: "\\\\.\\pipe\\openssh-ssh-agent",
     });
     expect(command).toBe(
-      '"C:\\Users\\me\\AppData\\Local\\Mullion\\mullion-helper.exe" "helper" "run" "--ssh-auth-sock" "\\\\.\\pipe\\openssh-ssh-agent"',
+      '"C:\\Users\\me\\AppData\\Local\\Mullion\\mullion-helper.exe" "helper" "run" "--ssh-auth-sock" "\\\\.\\pipe\\openssh-ssh-agent" "--detach"',
     );
     expect(command).not.toContain("null");
   });
@@ -337,6 +338,12 @@ describe("runInstall / runUninstall", () => {
   function baseIo(overrides: Record<string, unknown> = {}) {
     dir = mkdtempSync(path.join(os.tmpdir(), "mullion-helper-install-"));
     const calls: string[][] = [];
+    // Issue #871 — the real spawn()'s third argument (the options object:
+    // `detached`/`windowsHide`/`stdio`) used to be silently dropped by this
+    // fixture (the stub only accepted `(cmd, args)`), so no test could ever
+    // assert on it. Recorded separately from `calls` (which stays
+    // string[][] for the argv-pattern-matching assertions everywhere else).
+    const spawnOptions: Array<Record<string, unknown>> = [];
     const io = {
       env: { SSH_AUTH_SOCK: "/tmp/agent.sock", MULLION_HELPER_STATE_DIR: path.join(dir, "state") },
       stdout: { write: () => true },
@@ -367,10 +374,13 @@ describe("runInstall / runUninstall", () => {
       // runs. Fires 'spawn' on a microtask by default (a real spawn's
       // success signal is always asynchronous); override `io.spawn` per
       // test to fire 'error' instead for the failure-path tests.
-      spawn: (cmd: string, args: string[]) => fakeChildProcess(calls, cmd, args, { fails: false }),
+      spawn: (cmd: string, args: string[], options: Record<string, unknown>) => {
+        spawnOptions.push(options);
+        return fakeChildProcess(calls, cmd, args, { fails: false });
+      },
       ...overrides,
     };
-    return { io, calls, dir };
+    return { io, calls, dir, spawnOptions };
   }
 
   // win32-only helper: installWindows/uninstallWindows issue several
@@ -585,7 +595,7 @@ describe("runInstall / runUninstall", () => {
   });
 
   it("win32: writes an HKCU Run value with the exact command and starts the helper immediately", async () => {
-    const { io, calls, dir: d } = baseIo({ platform: "win32", isSea: true });
+    const { io, calls, spawnOptions, dir: d } = baseIo({ platform: "win32", isSea: true });
     (io as { homedir?: string }).homedir = path.join(d, "home");
     const code = await runInstall([], io);
     expect(code).toBe(0);
@@ -603,6 +613,13 @@ describe("runInstall / runUninstall", () => {
         "/f",
       ]),
     );
+    // Issue #871 — the immediate install-time spawn must be both detached
+    // AND hidden: `detached: true` alone already maps to Windows's own
+    // `DETACHED_PROCESS` (no console at all), but `windowsHide: true`
+    // makes that "no visible window" intent explicit rather than implicit
+    // in a libuv behavior a future change could silently alter.
+    expect(spawnOptions).toHaveLength(1);
+    expect(spawnOptions[0]).toMatchObject({ detached: true, windowsHide: true });
     const spawnCall = findCall(calls, "SPAWN");
     expect(spawnCall).toBeDefined();
     expect(spawnCall![1]).toBe(io.execPath);
@@ -627,8 +644,14 @@ describe("runInstall / runUninstall", () => {
     expect(regAdd).toBeDefined();
     const command = regAdd![regAdd!.indexOf("/d") + 1];
     expect(command).not.toContain("mullion.mjs");
+    // The stored HKCU Run value carries --detach (issue #871) — it's what
+    // Windows launches at every future logon, with no parent console. The
+    // immediate install-time spawn below must NOT: it already runs
+    // detached+hidden itself (spawnDetachedHelper), so a --detach child of
+    // it would just be an unneeded extra hop. Discriminating: the two spawn
+    // paths stay distinct.
     expect(command).toBe(
-      '"C:\\Users\\me\\AppData\\Local\\Mullion\\mullion-helper.exe" "helper" "run" "--ssh-auth-sock" "/tmp/agent.sock"',
+      '"C:\\Users\\me\\AppData\\Local\\Mullion\\mullion-helper.exe" "helper" "run" "--ssh-auth-sock" "/tmp/agent.sock" "--detach"',
     );
     const spawnCall = findCall(calls, "SPAWN");
     expect(spawnCall).toEqual([

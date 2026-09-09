@@ -291,6 +291,20 @@ on Windows, as opposed to the pipe-transport shape #874 already confirmed —
 remains tracked at [issue
 #871](https://github.com/s3ntin3l8/mullion-session-manager/issues/871).
 
+**No console window at logon.** The `HKCU` Run value launches `helper run
+--detach`, not a plain `helper run`: the Run value has no parent console to
+inherit, so Windows would otherwise allocate one for the helper, and closing
+that window would kill it (it IS the helper's own console). `--detach` makes
+that invocation immediately re-spawn itself with no console and exit, the
+same detached-and-hidden shape `install`'s own immediate start already uses.
+The backgrounded helper's output goes to
+`%LOCALAPPDATA%\Mullion\helper-run.log`, the same log file `install`'s
+immediate start already writes to. **This only takes effect on the next
+`helper install`** — re-running the installer, or `helper install` by hand —
+since the Run value is only rewritten then; dropping a newer
+`mullion-helper.exe` in without re-running install leaves the old,
+`--detach`-less Run value (and its console window) in place.
+
 **Pass `--ssh-auth-sock <literal path>` explicitly**, as in the example
 above. Neither `launchd`, `systemd --user`, nor a Windows autostart entry
 inherits your login shell's `SSH_AUTH_SOCK` — the same reasoning as the
