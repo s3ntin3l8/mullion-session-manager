@@ -461,7 +461,13 @@ separate from anything a session spawn does:
 A project's own skill/reviewer subagent (the pinned-note/skill/reviewer
 feature — see [`project-briefing.md`](project-briefing.md)) is unrelated to
 this mechanism and still rides its own per-session, per-CLI channel exactly
-as described earlier in this doc.
+as described earlier in this doc — a much narrower reach than
+`mullion-reviewer` above: that doc's own delivery table has agy reaching
+**no** committed path for a project-specific reviewer at all (issue #1083),
+even though agy does receive Mullion's own shipped `mullion-reviewer`
+through the bundle sync just described. Same CLI, two unrelated
+mechanisms — don't read one table's "none" as contradicting the other's
+"yes".
 
 ## If something 403s
 
