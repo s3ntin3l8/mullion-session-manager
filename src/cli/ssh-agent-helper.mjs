@@ -524,15 +524,21 @@ function describeRunCommand(io) {
   return `${describeInvocation(io)} helper run`;
 }
 
-// Same derivation as describeRunCommand, for the three hints that tell a
-// user to re-pair (not-paired-yet, renewal-rejected, dead-credential) — all
-// still hardcoded `mullion helper pair '<payload>'` (issue #1177's own bug,
-// found once in PairBridgeModal.tsx and here in triplicate) until this.
-// `<payload>` here is a literal placeholder, not a real one, since these are
-// hints printed before any payload exists — unlike describeRunCommand's
-// caller, which always has a concrete command to run right now.
-function describePairCommand(io) {
-  return `${describeInvocation(io)} helper pair '<payload>'`;
+// Same derivation as describeRunCommand, for the hints that tell a user to
+// (re-)pair — not-paired-yet, renewal-rejected, and dead-credential here,
+// plus warnIfNotPaired/the install-success notes in ssh-agent-helper-
+// install.mjs (exported for that). All still hardcoded `mullion helper pair
+// <payload>` (issue #1177's own bug, found once in PairBridgeModal.tsx and
+// here in several places) until this. `<payload>` here is a literal
+// placeholder, not a real one, since these are hints printed before any
+// payload exists — unlike describeRunCommand's caller, which always has a
+// concrete command to run right now. Deliberately no quotes around
+// `<payload>` itself — every call site wraps the WHOLE returned string in
+// single quotes to set it off as "the command to type", the same
+// convention the hardcoded strings this replaces already used; quoting the
+// payload too would nest a second, conflicting set of quotes around it.
+export function describePairCommand(io) {
+  return `${describeInvocation(io)} helper pair <payload>`;
 }
 
 async function runPair(args, io) {
@@ -671,7 +677,7 @@ async function runRun(args, io) {
   let credential = loadCredential(io);
   if (!credential) {
     io.stderr.write(
-      `not paired yet — run ${describePairCommand(io)} first ` +
+      `not paired yet — run '${describePairCommand(io)}' first ` +
         "(generate <payload> from Settings -> Hosts -> SSH agent bridges on the primary).\n",
     );
     return 1;
@@ -781,7 +787,7 @@ async function runRun(args, io) {
         stopped = true;
         io.stderr.write(
           `session renewal rejected — session no longer valid, re-pair with ` +
-            `${describePairCommand(io)}\n`,
+            `'${describePairCommand(io)}'\n`,
         );
         emitEvent("renewal_rejected");
         // The renewal endpoint rejecting the credential doesn't itself
@@ -943,7 +949,7 @@ async function runRun(args, io) {
           );
         } else {
           io.stderr.write(
-            `${err.message} — session no longer valid, re-pair with ${describePairCommand(io)}\n`,
+            `${err.message} — session no longer valid, re-pair with '${describePairCommand(io)}'\n`,
           );
           emitEvent("dead_credential", { message: err.message });
           clearTimeout(renewTimer);

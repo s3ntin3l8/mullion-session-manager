@@ -64,8 +64,8 @@ the primary itself — each materializes its own local bridge socket.
    shows the exact command for your laptop's platform — Windows, macOS, and
    Linux each invoke the helper differently (there's no `mullion` on PATH by
    default on any of them), see below.
-2. On your laptop, get `mullion helper` (see below) and run `helper pair
-'<payload>'` in the form shown for your platform.
+2. On your laptop, get `mullion helper` (see below) and run `helper pair`
+   with that payload, in the form shown for your platform.
 
    Quote the payload — it's an opaque, base64url-ish blob, not something to
    retype. `--name <name>` overrides the default label (your laptop's

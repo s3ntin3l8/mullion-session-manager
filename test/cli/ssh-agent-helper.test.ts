@@ -1179,7 +1179,11 @@ describe("mullion helper run() — missing prerequisites", () => {
   // Issue #1177 — the "not paired yet" hint used to hardcode 'mullion helper
   // pair <payload>' the same way the old pair-success hint did (see the
   // describeRunCommand tests above); it must reflect the real invocation
-  // shape too, via the shared describeInvocation() helper.
+  // shape too, via the shared describeInvocation() helper. The full
+  // expected substring is anchored immediately after the opening `run '`
+  // quote (not just asserted as present anywhere in the output) so a
+  // wrongly-added/dropped `& ` prefix inside the quotes fails the match,
+  // not just a `toContain` on a floating fragment.
   it("'not paired yet' hint prefixes `& ` and drops the script arg for a Windows SEA binary", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-helper-state-"));
     const io = fakeIo(
@@ -1193,7 +1197,7 @@ describe("mullion helper run() — missing prerequisites", () => {
     const code = await runHelper("run", [], io);
     expect(code).toBe(1);
     expect(io.stderrLines.join("")).toContain(
-      "& \"C:\\Users\\me\\AppData\\Local\\Mullion\\mullion-helper.exe\" helper pair '<payload>'",
+      "run '& \"C:\\Users\\me\\AppData\\Local\\Mullion\\mullion-helper.exe\" helper pair <payload>' first",
     );
   });
 
@@ -1211,7 +1215,7 @@ describe("mullion helper run() — missing prerequisites", () => {
     const code = await runHelper("run", [], io);
     expect(code).toBe(1);
     expect(io.stderrLines.join("")).toContain(
-      '"/usr/bin/node" "/opt/mullion/dist/cli/mullion.mjs" helper pair \'<payload>\'',
+      'run \'"/usr/bin/node" "/opt/mullion/dist/cli/mullion.mjs" helper pair <payload>\' first',
     );
   });
 
