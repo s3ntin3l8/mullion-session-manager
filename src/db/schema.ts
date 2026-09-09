@@ -144,12 +144,21 @@ export const projects = sqliteTable("projects", {
   // settings (settings.sessions.injectAgentGuide/injectProjectBriefing,
   // settings.ts). Same nullable-column shape/precedent as autoFetch above:
   // null = inherit the global setting, true/false = explicit override.
-  // Deliberately does NOT extend to sessions.injectMullionBundle — that
-  // setting gates a materially bigger thing (the whole plugin-dir/
-  // managed-install delivery mechanism, not a single SessionStart text
-  // injection), and per-project support for it would need to reach
-  // codex.ts's/agy.ts's host-level managed installs too. See these two
-  // fields' own resolution: session-lifecycle.ts's createSessionRecord
+  // Deliberately does NOT extend to sessions.injectMullionBundle — issue
+  // #933 asked for exactly that and #933's own closing comment verifies why
+  // it isn't just a matter of effort: codex.ts/agy.ts's managedInstall
+  // writes into ONE shared root per CLI per host (~/.agents/skills,
+  // ~/.gemini/config/skills), not a root per project, so there is nothing
+  // project-scoped for a per-project value to vary — two projects on one
+  // host with opposite values would fight over that single install on every
+  // interleaved launch. Worse, since #1079 a project-level OFF would reach
+  // claude-code.ts's/opencode.ts's managedInstall, which calls
+  // removeBundleContentForCli and deletes that HOST-GLOBAL content (and its
+  // ~/.mullion/bundle-sync.json manifest entries), breaking every other
+  // project on the host, not just opting this one out. hook-adapters/
+  // types.ts's projectSkill doc comment (issue #1083) documents the
+  // identical wall from the delivery side, for the same reason. See these
+  // two fields' own resolution: session-lifecycle.ts's createSessionRecord
   // resolves the effective boolean on the PRIMARY (where this table lives)
   // and threads it through the spawn body exactly like briefingOverride
   // already is — never read downstream via `app.db`, which is absent on a
