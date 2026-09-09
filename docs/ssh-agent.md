@@ -291,12 +291,15 @@ on Windows, as opposed to the pipe-transport shape #874 already confirmed —
 remains tracked at [issue
 #871](https://github.com/s3ntin3l8/mullion-session-manager/issues/871).
 
-**No console window at logon.** The `HKCU` Run value launches `helper run
---detach`, not a plain `helper run`: the Run value has no parent console to
-inherit, so Windows would otherwise allocate one for the helper, and closing
-that window would kill it (it IS the helper's own console). `--detach` makes
-that invocation immediately re-spawn itself with no console and exit, the
-same detached-and-hidden shape `install`'s own immediate start already uses.
+**No persistent console window at logon.** The `HKCU` Run value launches
+`helper run --detach`, not a plain `helper run`: the Run value has no parent
+console to inherit, so Windows allocates one for that bootstrap invocation
+too — the same console-subsystem SEA binary still gets a (transient) window
+at every logon. **Accepted tradeoff:** `--detach` makes that invocation
+immediately re-spawn itself with no console and exit, closing its own
+window behind it in well under a second, the same detached-and-hidden shape
+`install`'s own immediate start already uses — so nothing is ever left open
+for the user to close, but the brief flash itself isn't eliminated.
 The backgrounded helper's output goes to
 `%LOCALAPPDATA%\Mullion\helper-run.log`, the same log file `install`'s
 immediate start already writes to. **This only takes effect on the next

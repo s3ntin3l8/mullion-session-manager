@@ -593,6 +593,14 @@ async function runDetachedBootstrap(io, { sshAuthSock, insecure, jsonEvents }) {
   }
   const spawnResult = await spawnDetachedHelper(io, execPath, argv, logFd);
   if (!spawnResult.ok) {
+    // Hermes review, PR #1191 — unlike ssh-agent-helper-install.mjs's own
+    // identical-shaped spawnDetachedHelper call (whose process exits right
+    // after either way, so its own never-closed logFd is momentary and
+    // harmless), THIS failure path falls through into a foreground `run`
+    // that can stay up for days. Leaving logFd open for that whole lifetime
+    // would be a real, if small, leaked file handle — close it before
+    // falling through.
+    fs.closeSync(logFd);
     io.stderr.write(
       `--detach: failed to start in the background (${spawnResult.error.message}) — ` +
         "running in the foreground instead.\n",

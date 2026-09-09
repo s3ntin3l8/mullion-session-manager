@@ -301,14 +301,29 @@ jobs:
           if ($code -ne 0) { throw "helper run --detach exited $code instead of backgrounding successfully" }
           if (($output -join "`n") -notmatch "started in the background") { throw "missing 'started in the background' confirmation" }
 
-          Start-Sleep -Seconds 2
-          $proc = Get-Process -Name "mullion-helper" -ErrorAction SilentlyContinue
-          if (-not $proc) { throw "backgrounded helper is not running two seconds later — --detach's re-spawned child did not survive" }
-
+          # Hermes review, PR #1191 — a fixed 2s sleep before the one-shot
+          # check below flaked on a cold/loaded runner (SEA boot + first
+          # refused connect can exceed 2s there). Poll instead, up to 15s,
+          # re-checking the process is still alive on every iteration so a
+          # helper that started but then crashed fails fast and clearly,
+          # rather than this loop spinning for the full timeout waiting on
+          # a log line that will never arrive.
           $logPath = Join-Path $env:MULLION_HELPER_STATE_DIR "helper-run.log"
-          if (-not (Test-Path $logPath)) { throw "helper-run.log was not created — --detach's child did not write where it was told to" }
-          $logContent = Get-Content $logPath -Raw
-          if ($logContent -notmatch "connect failed") { throw "helper-run.log does not show the reconnect ladder retrying against the unreachable port: $logContent" }
+          $deadline = (Get-Date).AddSeconds(15)
+          $logContent = $null
+          do {
+            Start-Sleep -Seconds 1
+            $proc = Get-Process -Name "mullion-helper" -ErrorAction SilentlyContinue
+            if (-not $proc) { throw "backgrounded helper is not running — --detach's re-spawned child did not survive" }
+            if (Test-Path $logPath) {
+              $logContent = Get-Content $logPath -Raw
+              if ($logContent -match "connect failed") { break }
+            }
+          } while ((Get-Date) -lt $deadline)
+
+          if (-not $logContent -or $logContent -notmatch "connect failed") {
+            throw "helper-run.log did not show the reconnect ladder retrying against the unreachable port within 15s: $logContent"
+          }
 
           $proc | Stop-Process -Force
           exit 0
