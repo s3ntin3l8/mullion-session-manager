@@ -46,6 +46,19 @@ describe("Settings -> Launchers", () => {
         path: "/usr/local/bin/pi",
         emits: [],
       },
+      // Issue #882 — codex's hookTrust field is only ever set for the
+      // codex binary (agent-detect.ts:174); undefined for every other
+      // agent/shell above, which the "renders no badge" tests rely on.
+      {
+        id: "codex",
+        title: "codex",
+        command: "codex",
+        kind: "agent",
+        available: true,
+        path: "/usr/local/bin/codex",
+        emits: [],
+        hookTrust: "pending",
+      },
     ];
     skipFlags = { claude: "--dangerously-skip-permissions" };
     unexpectedCalls = [];
@@ -111,5 +124,55 @@ describe("Settings -> Launchers", () => {
     expect(screen.getByText("Skip perms")).toBeInTheDocument();
     expect(screen.getByText("Status")).toBeInTheDocument();
     expect(screen.getByText("Show")).toBeInTheDocument();
+  });
+
+  // Issue #882 — this badge (and the config-column remediation text) is the
+  // ONLY frontend surface of getCodexHookTrust() that had no test coverage
+  // at all; the store-slice logic that produces `hookTrust` is covered
+  // separately in store/codex-hook-trust.test.ts.
+  describe("codex hook-trust badge (issue #259/#882)", () => {
+    it("renders 'trust pending' and the remediation text for an agent with hookTrust: 'pending'", async () => {
+      render(<Settings onClose={vi.fn()} initialSection="launchers" />);
+
+      const codexRow = await screen.findByTestId("launcher-row-codex");
+      expect(within(codexRow).getByText("trust pending")).toBeInTheDocument();
+      expect(
+        within(codexRow).getByTitle(
+          "Hook trust pending — run /hooks in a Codex session to enable structured events",
+        ),
+      ).toBeInTheDocument();
+      // The badge REPLACES "available", it doesn't sit alongside it.
+      expect(within(codexRow).queryByText("available")).not.toBeInTheDocument();
+    });
+
+    it("renders the ordinary 'available' status, not the badge, when hookTrust is 'trusted'", async () => {
+      agentsDb = agentsDb.map((a) => (a.id === "codex" ? { ...a, hookTrust: "trusted" } : a));
+      render(<Settings onClose={vi.fn()} initialSection="launchers" />);
+
+      const codexRow = await screen.findByTestId("launcher-row-codex");
+      expect(within(codexRow).getByText("available")).toBeInTheDocument();
+      expect(within(codexRow).queryByText("trust pending")).not.toBeInTheDocument();
+    });
+
+    it("renders no badge for an agent with no hookTrust field at all (every non-codex agent/shell)", async () => {
+      render(<Settings onClose={vi.fn()} initialSection="launchers" />);
+
+      const claudeRow = await screen.findByTestId("launcher-row-claude");
+      expect(within(claudeRow).getByText("available")).toBeInTheDocument();
+      expect(within(claudeRow).queryByText("trust pending")).not.toBeInTheDocument();
+    });
+
+    // CodexHookTrust's third value (hooks never merged at all, as opposed
+    // to merged-but-untrusted) deliberately renders identically to
+    // "trusted"/absent today — LaunchersSection.tsx's badge is gated on
+    // `=== "pending"` specifically, not `!== "trusted"`.
+    it("renders the ordinary 'available' status, not the badge, when hookTrust is 'not-installed'", async () => {
+      agentsDb = agentsDb.map((a) => (a.id === "codex" ? { ...a, hookTrust: "not-installed" } : a));
+      render(<Settings onClose={vi.fn()} initialSection="launchers" />);
+
+      const codexRow = await screen.findByTestId("launcher-row-codex");
+      expect(within(codexRow).getByText("available")).toBeInTheDocument();
+      expect(within(codexRow).queryByText("trust pending")).not.toBeInTheDocument();
+    });
   });
 });
