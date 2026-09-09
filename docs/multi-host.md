@@ -380,19 +380,13 @@ alternative, and how the two compose.
   PR, and Retry — given an agent build new enough to serve the routes it
   needs; an older build degrades per-path rather than breaking (see
   [`tasks.md`](tasks.md)'s Known limitations).
-- **SSH agent bridge**: `mullion helper install`/`uninstall` generates a
-  Windows autostart entry too (see
-  [`ssh-agent.md`](ssh-agent.md#keeping-it-running) for what's verified in
-  CI vs. still tracked as manual), and separately,
-  whether 1Password's Windows named pipe accepts the mux's concurrent-
-  channel shape at all hasn't been verified against a real agent (tracked
-  at [issue #871](https://github.com/s3ntin3l8/mullion-session-manager/issues/871)
-  and [issue #874](https://github.com/s3ntin3l8/mullion-session-manager/issues/874)).
+- **SSH agent bridge**: the Mullion Helper tray app owns and supervises the
+  laptop-side worker; Mullion owns the primary and agent-host relay.
   An inherited ambient `SSH_AUTH_SOCK` on an agent host or the primary
   deliberately outranks the bridge in precedence (upgrade-safety
   trade-off, see [`ssh-agent.md`](ssh-agent.md#precedence)) — this applies
   regardless of whether a laptop has ever actually paired, since the
-  bridge socket is materialized unconditionally on every host. The host
+  bridge socket is materialized on every host. The host
   logs a shadow warning at boot whenever this shadowing happens, so it's
   visible in logs even though Settings' own `connected` status doesn't
   distinguish it from a session actually using the bridge.

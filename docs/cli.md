@@ -52,7 +52,6 @@ mullion history [--session <id>] [--kind <k>] [--since <ms>] [--until <ms>]
                 [--limit <n>] [--cursor <c>]
 mullion notify --message "..." [--title "..."]
 mullion mcp
-mullion helper pair|run|install|uninstall
 mullion config
 ```
 
@@ -342,50 +341,6 @@ only gate in that mode, same posture plain HTTP already takes), every
 handshake resolves to full scope, so all of the above are reachable from
 inside a session too — this isn't new to these tools, it's the existing
 socket-wide posture from `docs/socket-api.md`.
-
-### helper
-
-- `mullion helper pair <payload> [--name <name>] [--insecure]` — redeems a
-  pairing payload (generated from Settings → Hosts → SSH agent bridges on
-  the primary) and persists the resulting session credential. `--insecure`
-  disables TLS certificate verification on the WebSocket connection to the
-  primary — intended for self-signed or internal-CA primaries (Caddy/nginx
-  dev, Cloudflare origin-pinned, etc.); leave it off against any primary
-  you actually trust to issue its own certificates.
-- `mullion helper run [--ssh-auth-sock <path>] [--json-events] [--insecure]` —
-  long-running; forwards this machine's SSH agent to every enrolled agent
-  host via the primary, using the credential `pair` persisted.
-  `--ssh-auth-sock` overrides this process's own `SSH_AUTH_SOCK` env var —
-  required under a supervisor that doesn't set one (see below).
-  `--json-events` additionally writes newline-delimited JSON connection
-  events to stdout; see
-  [`ssh-agent.md`](ssh-agent.md#structured-events---json-events) for the
-  event shapes. `--insecure` has the same meaning as on `pair` above, and
-  must match what `pair` was run with against the same primary.
-- `mullion helper install [--ssh-auth-sock <path>]` — generates and
-  registers a launchd job (macOS), systemd `--user` unit (Linux), or a
-  per-user `HKCU\...\Run` autostart entry (Windows) that supervises `run`,
-  so you don't have to hand-write one. Re-running it replaces a previous
-  install (new `--ssh-auth-sock`, moved checkout, ...). On Windows, this is
-  what the
-  [installer](ssh-agent.md#getting-mullion-helper-onto-your-laptop) runs on
-  your behalf — see [`ssh-agent.md`](ssh-agent.md#keeping-it-running) for
-  the Scheduled Task → `HKCU` autostart entry history ([issue
-  #871](https://github.com/s3ntin3l8/mullion-session-manager/issues/871))
-  and what's verified in CI.
-- `mullion helper uninstall` — stops and removes whatever `install` set up,
-  on whichever of the three supported platforms this is, and forgets the
-  local pairing credential too. A no-op, not an error, if nothing is
-  installed (a paired-but-never-installed credential is still removed).
-
-The one subcommand meant to run on a machine with **no local Mullion server
-and no control socket at all** — a laptop holding the SSH agent that a
-Mullion session elsewhere needs to reach. Dispatched before
-`MullionSocketClient` is even constructed (same as `mcp` above), so it works
-from a bare extracted release tarball with no `.env`, no database, nothing
-but Node itself. Full walkthrough, including how to get this file onto a
-laptop with no checkout and how to keep `run` alive across reboots:
-[`ssh-agent.md`](ssh-agent.md#ssh-agent-bridge).
 
 ### config
 

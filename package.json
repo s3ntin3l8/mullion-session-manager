@@ -35,8 +35,7 @@
     "check:briefing-sync": "node scripts/check-briefing-sync.mjs",
     "check:ssh-agent-filter-vectors": "tsx scripts/generate-ssh-agent-filter-vectors.ts --check",
     "generate:ssh-agent-filter-vectors": "tsx scripts/generate-ssh-agent-filter-vectors.ts",
-    "check:scope-leaks": "tsx scripts/check-scope-leaks.ts",
-    "build:helper-sea": "node scripts/build-helper-sea.mjs"
+    "check:scope-leaks": "tsx scripts/check-scope-leaks.ts"
   },
   "dependencies": {
     "@fastify/compress": "^9.2.0",
@@ -75,7 +74,6 @@
     "esbuild": "^0.28.1",
     "eslint": "^10.9.1",
     "jose": "^6.2.10",
-    "postject": "^1.0.0-alpha.6",
     "prettier": "^3.9.6",
     "tsx": "^4.23.13",
     "typescript": "^6.0.3",

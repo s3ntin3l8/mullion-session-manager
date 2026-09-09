@@ -126,7 +126,7 @@ http:
     # doesn't need it. See deploy/README.md's "Optional: SSH-agent bridge
     # behind a forwardAuth gateway" section before uncommenting.
     #
-    # The helper (src/cli/ssh-agent-helper.mjs) authenticates with its own
+    # Mullion Helper authenticates with its own
     # credential in the WS handshake / renew body, never a gateway session —
     # so forwardAuth's SSO redirect must never intercept these two exact
     # paths. Deliberately Path(), not PathPrefix(`/ws/`): a prefix match
