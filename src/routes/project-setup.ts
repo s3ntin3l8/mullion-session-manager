@@ -175,6 +175,32 @@ const applySchema = {
 // (`../../src/routes/project-setup.js`) keeps working unchanged.
 export { PathEscapeError };
 
+// Hermes review, PR #1200 round 1 (W1) — mirrors session-lifecycle.ts's
+// createSessionRecord resolution exactly (`resolvedInjectWorkflowConventions`/
+// `resolvedWorkflowConventionsText`): a project that has explicitly opted out
+// of the per-session injection (`injectWorkflowConventions === false` —
+// schema.ts's own column comment: "this project's own AGENTS.md is
+// authoritative instead") must not have this install's global text committed
+// into that same AGENTS.md either, or "committed == injected" — this
+// module's whole design premise since issue #1201 — becomes false for
+// exactly that project, and the ProjectSetupPanel's own disclosure ("the
+// same text already injected into every session on this project") would be
+// lying to that project's user. `null`/`true` (the default) still resolves
+// the global text, same as the per-session path's own `?? true`. Returns
+// `""`, never `undefined`: computeScaffold's own workflowConventionsSection
+// already treats an empty string as "fall back to
+// SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS," the exact same fallback the opted-out
+// project would have gotten before this whole feature existed.
+function resolveScaffoldWorkflowConventionsText(
+  app: FastifyInstance,
+  project: { injectWorkflowConventions: boolean | null },
+): string {
+  const injectWorkflowConventions = project.injectWorkflowConventions ?? true;
+  return injectWorkflowConventions
+    ? getStoredSettings(app.db).sessions.workflowConventionsText
+    : "";
+}
+
 // Every path computeScaffold can ever emit, read up front so preview always
 // sees the CURRENT on-disk content (a previous scaffold's own output,
 // hand-edited content, or nothing) rather than assuming a fresh repo.
@@ -627,8 +653,10 @@ export async function projectSetupRoute(app: FastifyInstance) {
         // matches what's already injected into every session on this
         // project, rather than computeScaffold's own fixed defaults
         // silently outranking it. Empty string when nothing's configured
-        // yet — computeScaffold's own fallback takes over from there.
-        workflowConventionsText: getStoredSettings(app.db).sessions.workflowConventionsText,
+        // yet, or when this project has opted out of the injection
+        // (resolveScaffoldWorkflowConventionsText's own doc comment) —
+        // computeScaffold's own fallback takes over from there either way.
+        workflowConventionsText: resolveScaffoldWorkflowConventionsText(app, project),
       };
       if (!isValidScaffoldSlug(options.slug)) {
         return reply.badRequest(`"${options.slug}" is not a safe slug`);
@@ -664,7 +692,7 @@ export async function projectSetupRoute(app: FastifyInstance) {
         // match it exactly, since finishPreview's "preview and apply are
         // provably the same bytes" guarantee (mullion-scaffold.ts's own
         // header) depends on both call sites resolving this identically.
-        workflowConventionsText: getStoredSettings(app.db).sessions.workflowConventionsText,
+        workflowConventionsText: resolveScaffoldWorkflowConventionsText(app, project),
       };
       if (!isValidScaffoldSlug(options.slug)) {
         return reply.badRequest(`"${options.slug}" is not a safe slug`);
@@ -795,6 +823,15 @@ export async function projectSetupRoute(app: FastifyInstance) {
         writeExistingFiles,
       );
       if (!result.ok) return sendPreviewComputation(reply, result);
+      // Hermes review, PR #1200 round 1 (suggestion) — `hasAgentsOverride`
+      // here is computed and returned, same as `possiblyGeneric` below, but
+      // no frontend caller of /setup/generate exists yet at all (the
+      // documented gap `scaffold-generate.ts:244-248` already notes for
+      // `possiblyGeneric`) — so this field is currently dead on arrival for
+      // this route specifically. It's still correct to compute and return:
+      // /setup/preview's own caller (ProjectSetupPanel.tsx) already reads
+      // it, and whichever caller eventually wires up /setup/generate should
+      // get the identical shape for free.
       const response: {
         previewId: string;
         diff: string;

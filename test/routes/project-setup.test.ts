@@ -558,6 +558,103 @@ describe("project-setup route", () => {
     }
   });
 
+  // Hermes review, PR #1200 round 1 (W1) — before this, both /setup/preview
+  // and /setup/generate resolved workflowConventionsText straight off the
+  // install-wide settings row, with no regard for
+  // projects.injectWorkflowConventions — the exact per-project opt-out
+  // session-lifecycle.ts's own createSessionRecord gates the per-session
+  // INJECTION on ("this project's own AGENTS.md is authoritative instead").
+  // For an opted-out project, the scaffold would still commit the global
+  // text into AGENTS.md, silently breaking "committed == injected" — this
+  // whole feature's design premise — for exactly that project.
+  it("does not commit this install's own settings text when the project has opted out of workflow-conventions injection", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app, repoDir);
+
+    const settingsRes = await app.inject({
+      method: "PATCH",
+      url: "/api/settings",
+      payload: {
+        sessions: { workflowConventionsText: "Our team's own hand-authored conventions." },
+      },
+    });
+    expect(settingsRes.statusCode).toBe(200);
+
+    const optOutRes = await app.inject({
+      method: "PATCH",
+      url: `/api/projects/${projectId}`,
+      payload: { injectWorkflowConventions: false },
+    });
+    expect(optOutRes.statusCode).toBe(200);
+
+    try {
+      const preview = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/setup/preview`,
+        payload: { slug: "demo" },
+      });
+      expect(preview.statusCode).toBe(200);
+
+      const worktreeDir = path.join(repoDir, ".mullion-worktrees", "setup-demo");
+      const onDisk = fs.readFileSync(path.join(worktreeDir, "AGENTS.md"), "utf8");
+      // The opted-out project's own settings text never lands here...
+      expect(onDisk).not.toContain("Our team's own hand-authored conventions.");
+      // ...it falls back to the exact same fixed defaults an install with
+      // no settings text configured at all would have gotten — same
+      // resolution as the byte-identical-when-unset guard, just reached
+      // via the opt-out path instead of an empty settings row.
+      expect(onDisk).toContain("Never commit directly to the default branch");
+    } finally {
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { sessions: { workflowConventionsText: "" } },
+      });
+      await app.close();
+    }
+  });
+
+  it("still commits this install's own settings text when injectWorkflowConventions is explicitly true (not just the null default)", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app, repoDir);
+
+    const settingsRes = await app.inject({
+      method: "PATCH",
+      url: "/api/settings",
+      payload: {
+        sessions: { workflowConventionsText: "Our team's own hand-authored conventions." },
+      },
+    });
+    expect(settingsRes.statusCode).toBe(200);
+
+    const optInRes = await app.inject({
+      method: "PATCH",
+      url: `/api/projects/${projectId}`,
+      payload: { injectWorkflowConventions: true },
+    });
+    expect(optInRes.statusCode).toBe(200);
+
+    try {
+      const preview = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/setup/preview`,
+        payload: { slug: "demo" },
+      });
+      expect(preview.statusCode).toBe(200);
+
+      const worktreeDir = path.join(repoDir, ".mullion-worktrees", "setup-demo");
+      const onDisk = fs.readFileSync(path.join(worktreeDir, "AGENTS.md"), "utf8");
+      expect(onDisk).toContain("Our team's own hand-authored conventions.");
+    } finally {
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { sessions: { workflowConventionsText: "" } },
+      });
+      await app.close();
+    }
+  });
+
   // Issue #1201 — codex reads AGENTS.override.md INSTEAD OF AGENTS.md when
   // it exists (agent-rules.ts's own precedence table); the scaffold must
   // never write to it, but the preview response should surface its
@@ -773,6 +870,55 @@ describe("project-setup route — /setup/generate (issue #956)", () => {
       expect(agentsMd).toContain("The generated skill lives at");
       // ...and this install's own conventions are layered on top of it.
       expect(agentsMd).toContain("Our team's own hand-authored conventions.");
+    } finally {
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { sessions: { workflowConventionsText: "" } },
+      });
+      await app.close();
+    }
+  });
+
+  // Hermes review, PR #1200 round 1 (W1) — same opt-out gate as
+  // /setup/preview's own regression test above; /setup/generate resolves
+  // workflowConventionsText through the identical
+  // resolveScaffoldWorkflowConventionsText helper, so this proves that
+  // shared resolution, not a per-route duplicate that could drift.
+  it("does not layer this install's own settings text onto the generated AGENTS.md when the project has opted out", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app, repoDir);
+    mockValidGeneration("demo");
+
+    const settingsRes = await app.inject({
+      method: "PATCH",
+      url: "/api/settings",
+      payload: {
+        sessions: { workflowConventionsText: "Our team's own hand-authored conventions." },
+      },
+    });
+    expect(settingsRes.statusCode).toBe(200);
+
+    const optOutRes = await app.inject({
+      method: "PATCH",
+      url: `/api/projects/${projectId}`,
+      payload: { injectWorkflowConventions: false },
+    });
+    expect(optOutRes.statusCode).toBe(200);
+
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/setup/generate`,
+        payload: { slug: "demo" },
+      });
+      expect(res.statusCode).toBe(200);
+
+      const worktreeDir = path.join(repoDir, ".mullion-worktrees", "setup-demo");
+      const agentsMd = fs.readFileSync(path.join(worktreeDir, "AGENTS.md"), "utf8");
+      expect(agentsMd).toContain("The generated skill lives at");
+      expect(agentsMd).not.toContain("Our team's own hand-authored conventions.");
+      expect(agentsMd).toContain("Never commit directly to the default branch");
     } finally {
       await app.inject({
         method: "PATCH",

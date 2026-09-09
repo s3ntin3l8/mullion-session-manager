@@ -463,17 +463,29 @@ function briefingRegionPointerBody(slug: string): string {
 // prompt no longer asks for one (scaffold-generate.ts's buildGenerationPrompt
 // dropped the conventions ask, but nothing stops a model from including the
 // heading anyway when it's inferring conventions from CONTRIBUTING.md/
-// AGENTS.md on its own initiative). Stripped from the FRONT of
-// `generated.briefingRegion` only — a literal, case-sensitive match on the
+// AGENTS.md on its own initiative). Hermes review, PR #1200 round 1 (W2) —
+// this used to anchor at `^`, the very first byte of the region, which only
+// catches the layout where the model's stray section comes BEFORE its own
+// pointer paragraph. The pre-#1201 generation prompt (buildGenerationPrompt)
+// actually asked the model to put a conventions section AFTER the pointer
+// paragraph — the exact layout a model ignoring the new "Do NOT include"
+// instruction would realistically fall back to — which a `^`-anchored regex
+// can never see: the compose step then emitted TWO "## Workflow
+// Conventions" headings (the model's guessed one, then this module's own
+// canonical one), silently breaking the "never two headings" guarantee.
+// Matched anywhere in the region now (global, `(^|\n)`-anchored so it still
+// only ever matches a heading that starts its own line, never text that
+// merely contains the phrase mid-sentence) and stripped globally — this
+// module appends exactly ONE canonical heading itself, at the very end, so
+// removing every occurrence the model produced is always correct, never a
+// "removed too much" risk. Still a literal, case-sensitive match on the
 // exact heading `workflowConventionsSection` itself emits, immediately
 // followed by a blank line, so this can only ever remove a heading this
-// module's own convention would have written, never a legitimate "##
-// Workflow Conventions" the model wrote as a sub-point of unrelated prose
-// deeper in the text.
-const STRAY_WORKFLOW_CONVENTIONS_HEADING = /^## Workflow Conventions\n\n/;
+// module's own convention would have written.
+const STRAY_WORKFLOW_CONVENTIONS_HEADING = /(^|\n)## Workflow Conventions\n\n/g;
 
 function stripStrayWorkflowConventionsHeading(region: string): string {
-  return region.replace(STRAY_WORKFLOW_CONVENTIONS_HEADING, "");
+  return region.replace(STRAY_WORKFLOW_CONVENTIONS_HEADING, "$1");
 }
 
 // Issue #1201 — the ONE place that decides what actually lands in the
