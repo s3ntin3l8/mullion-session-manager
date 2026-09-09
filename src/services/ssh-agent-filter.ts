@@ -4,14 +4,11 @@
 // identities or produce a signature. THIS instance (wired in by
 // ssh-agent-relay.ts) is the primary-side leg, defense in depth — it runs
 // on the end that does NOT own the real agent socket. The authoritative
-// enforcement point (round 4 PR2) is src/cli/ssh-agent-filter.mjs, a
-// separate, hand-maintained implementation for the laptop-side `mullion
-// helper run` process, which is what actually owns the real agent socket
-// and is where a bypass would matter. Both copies must classify identically
-// — test/fixtures/ssh-agent-filter-vectors.json (generated FROM this file's
-// own SSH_AGENT_REQUEST_TYPE_VECTORS) is the shared source of truth both
-// implementations' test suites validate against, so they can't silently
-// drift apart.
+// enforcement point is the Mullion Helper worker, which owns the real agent
+// socket and independently implements this policy. Both copies must classify
+// identically: test/fixtures/ssh-agent-filter-vectors.json (generated FROM
+// this file's SSH_AGENT_REQUEST_TYPE_VECTORS) is the shared contract their
+// test suites validate against.
 //
 // This module only ever classifies REQUESTS (the client->agent direction,
 // SSH_AGENTC_* below) — the real agent's own REPLIES (SSH_AGENT_* success/

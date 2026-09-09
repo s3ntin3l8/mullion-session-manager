@@ -5,13 +5,10 @@
 // (src/services/ssh-agent-filter.ts) shipped as a TypeScript-only export for
 // two full rounds. This script is that fixture's generator.
 //
-// A `.ts` file, not `.mjs` like every other script here (run via `tsx`, an
-// existing devDependency) — it needs to import the real, typed
-// SSH_AGENT_REQUEST_TYPE_VECTORS table from src/services/, and the `.mjs`
-// CLI tree's own "zero-dependency, node: builtins only" constraint doesn't
-// apply to build-time tooling like this, only to what ships inside the SEA
-// (see src/cli/ssh-agent-bridge-mux.mjs's own header comment on why THAT
-// tree can't import TypeScript at all).
+// A `.ts` file (run via the existing `tsx` devDependency) so it can import
+// the real, typed SSH_AGENT_REQUEST_TYPE_VECTORS table from src/services/.
+// Mullion Helper consumes the checked-in JSON output without depending on
+// this repository's TypeScript source.
 //
 // Two modes, mirroring check-env-docs.mjs/check-briefing-sync.mjs's own
 // dual "regenerate" / "--check" shape:
