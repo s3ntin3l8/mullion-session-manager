@@ -301,7 +301,7 @@ export function resolveAgyGlobalSkillsDir(): string {
 // agy-specific at all — claude-code's own AGENT_TARGETS entry has the exact
 // same gap (installed verbatim, no rewrite). Likely an unaddressed design
 // gap rather than a considered decision. No longer fixture-only: Phase 5
-// (issue #1210's plan) shipped src/bundle/agents/reviewer.md, so this
+// (issue #1212's plan) shipped src/bundle/agents/reviewer.md, so this
 // mechanism now runs in production — that file's own frontmatter `name:`
 // was deliberately authored as `mullion-reviewer` (pre-matching the
 // installed prefixed filename) specifically to sidestep this gap, but

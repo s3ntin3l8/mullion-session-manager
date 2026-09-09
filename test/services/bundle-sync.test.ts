@@ -1206,7 +1206,7 @@ describe("runBundleSyncExclusive — serialization", () => {
   });
 });
 
-// Phase 5 (issue #1210's plan, Gap C) — every test above installs a
+// Phase 5 (issue #1212's plan, Gap C) — every test above installs a
 // SYNTHETIC writeAgent()/writeSkill() fixture under a MULLION_HOME-redirected
 // scratch bundle, which proves the AGENT_TARGETS mechanism itself works but
 // never once runs it against Mullion's own REAL shipped content. This block

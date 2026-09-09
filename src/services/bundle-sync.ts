@@ -288,7 +288,7 @@ function listBundleSkillNames(bundleDir: string): string[] {
 // Missing agents/ is treated as "zero agents", not an error — a test
 // fixture's scratch bundle (or a stripped-down release rebuilt without a
 // fresh `npm run build`) may legitimately ship none, even though
-// src/bundle/agents/ itself now ships one (Phase 5, issue #1210's plan).
+// src/bundle/agents/ itself now ships one (Phase 5, issue #1212's plan).
 function listBundleAgentNames(bundleDir: string): string[] {
   const agentsDir = path.join(bundleDir, "agents");
   if (!existsSync(agentsDir)) return [];
@@ -579,7 +579,7 @@ export function syncBundleContent(): { changed: boolean } {
     // `statusForRoot` report every row "stale" on every upgraded host for no
     // reason connected to this fix.
     //
-    // `src/bundle/agents/` now ships one agent (Phase 5, issue #1210's plan
+    // `src/bundle/agents/` now ships one agent (Phase 5, issue #1212's plan
     // — `reviewer.md`), so `agentNames` is no longer `[]` in production;
     // this guard is what keeps a genuinely empty/malformed listing from
     // being misread as "nothing to protect, sweep it all" if that ever

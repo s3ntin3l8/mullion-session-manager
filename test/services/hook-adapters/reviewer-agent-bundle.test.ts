@@ -8,7 +8,7 @@ import {
   deriveOpenCodeReviewerAgentFile,
 } from "../../../src/services/hook-adapters/mullion-bundle.js";
 
-// Phase 5 (issue #1210's plan, Gap C) — src/bundle/agents/reviewer.md is
+// Phase 5 (issue #1212's plan, Gap C) — src/bundle/agents/reviewer.md is
 // Mullion's first shipped subagent. bundle-sync.test.ts's own AGENT_TARGETS
 // coverage is thorough but entirely against synthetic writeAgent() fixtures
 // (MULLION_HOME redirected to a scratch dir) — none of it ever runs the
@@ -36,7 +36,14 @@ describe("shipped bundle agent (src/bundle/agents/reviewer.md) — real content,
     const parsed = parseSkillFrontmatter(raw);
     expect(parsed).not.toBeNull();
     expect(parsed?.name).toBe("mullion-reviewer");
-    expect(parsed?.description.length).toBeGreaterThan(0);
+    // Hermes review, PR #1213 — `description.length > 0` wouldn't catch a
+    // future regression where the description gets folded onto multiple
+    // physical YAML lines: parseFlatFrontmatterFields is line-based (only
+    // reads the first `description:` line), so a folded value would
+    // silently truncate what actually installs into agy/opencode. Asserting
+    // the description's own closing sentence — which only survives intact
+    // if the whole single-line value parsed — catches that.
+    expect(parsed?.description).toContain("as the review checklist, not from memory.");
   });
 
   it("claude-code's own AGENT_TARGETS transform is a verbatim copy (nothing to translate)", () => {
