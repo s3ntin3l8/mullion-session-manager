@@ -1,16 +1,27 @@
 import { describe, it, expect, afterEach, beforeEach } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  readFileSync,
+  writeFileSync,
+  realpathSync,
+  symlinkSync,
+} from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import {
   codexAdapter,
   resolveCodexAgentsSkillsDir,
   buildCodexMcpFlags,
+  buildCodexTrustFlag,
 } from "../../../src/services/hook-adapters/codex.js";
 import { forwarderHookCommand } from "../../../src/services/hook-adapters/forwarder-shim.js";
 import {
   resolveMcpServerPath,
   escapeTomlBasicString,
+  shellQuote,
 } from "../../../src/services/hook-adapters/shared.js";
 
 // Issue #880 (revised after Hermes review, PR #930) — pins
@@ -46,6 +57,81 @@ describe("buildCodexMcpFlags (issue #880)", () => {
     const escaped = escapeTomlBasicString(path_);
     expect(escaped).not.toBe(path_);
     expect(flags).toContain(`args=["${escaped}"]`);
+  });
+});
+
+// Folder-trust hang fix — see codex.ts's buildCodexTrustFlag doc comment
+// for why this rides an ephemeral `-c` flag rather than a managedInstall
+// write into config.toml (the same startup-race reasoning as
+// buildCodexMcpFlags, pinned by the identical style of shape test above).
+//
+// Hermes review, PR #1195 — buildCodexTrustFlag now calls realpathSync,
+// which requires the path to actually exist, so every fixture below is a
+// real directory under a fresh mkdtempSync base rather than a fictional
+// literal like "/srv/project". `base` is itself realpath'd once in
+// beforeEach so an expectation built from it matches even on a host where
+// the OS temp dir has its own symlink component (e.g. macOS's /tmp ->
+// /private/tmp) — the same reasoning the fix itself is for.
+describe("buildCodexTrustFlag (codex folder-trust hang)", () => {
+  let base: string;
+
+  beforeEach(() => {
+    base = realpathSync(mkdtempSync(path.join(os.tmpdir(), "mullion-codex-trust-")));
+  });
+
+  afterEach(() => {
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  it("builds a shell-quoted -c override as a TOML inline table, not a dotted-path key", () => {
+    expect(buildCodexTrustFlag(base)).toBe(`-c 'projects={"${base}"={trust_level="trusted"}}'`);
+  });
+
+  // The regression this whole fix is FOR (Hermes review, PR #1195): a naive
+  // path.resolve() normalizes `.`/`..` but never resolves symlinks, while
+  // codex's own trust key is the directory chdir()+getcwd() resolves to at
+  // ITS process startup — the canonical, symlink-free path, same as what a
+  // manual "Yes, continue" persists to config.toml. A symlinked cwd would
+  // key this override under a path codex never actually asks about.
+  it("resolves a symlinked cwd to its canonical target before quoting", () => {
+    const target = path.join(base, "real-worktree");
+    mkdirSync(target);
+    const link = path.join(base, "link-to-worktree");
+    symlinkSync(target, link);
+    expect(buildCodexTrustFlag(link)).toBe(`-c 'projects={"${target}"={trust_level="trusted"}}'`);
+  });
+
+  // The regression this whole fix is for — verified live against the
+  // installed codex CLI: `-c projects.<cwd>.trust_level=trusted` (an
+  // unquoted dotted-path key, which DOES work for a cwd with no dots)
+  // leaves the trust prompt showing for a real Task Master worktree, since
+  // `-c`'s dotted-key parser is a naive split on literal `.` and
+  // `.mullion-worktrees` starts with one. The inline-table form's dots
+  // live inside the TOML-parsed VALUE, not the key, so they're immune.
+  it("survives a cwd with a leading-dot path segment (a real Task Master worktree shape)", () => {
+    const cwd = path.join(base, ".mullion-worktrees", "mullion-task-42-fix-bug");
+    mkdirSync(cwd, { recursive: true });
+    expect(buildCodexTrustFlag(cwd)).toBe(`-c 'projects={"${cwd}"={trust_level="trusted"}}'`);
+  });
+
+  it("escapes a cwd containing a double quote and a backslash — a real cwd is arbitrary text", () => {
+    const cwd = path.join(base, 'pro"ject\\x');
+    mkdirSync(cwd);
+    const escaped = escapeTomlBasicString(cwd);
+    expect(escaped).not.toBe(cwd);
+    expect(buildCodexTrustFlag(cwd)).toContain(`projects={"${escaped}"`);
+  });
+
+  // escapeTomlBasicString and shellQuote handle disjoint character sets —
+  // `"`/`\` above are the TOML side, `'` is the ONE character only
+  // shellQuote touches (turned into the standard `'\''` shell escape). A
+  // cwd containing one (e.g. "O'Brien") is exactly the arbitrary-text case
+  // this function has to survive.
+  it("shell-escapes a cwd containing a single quote", () => {
+    const cwd = path.join(base, "O'Brien");
+    mkdirSync(cwd);
+    const inner = `projects={"${escapeTomlBasicString(cwd)}"={trust_level="trusted"}}`;
+    expect(buildCodexTrustFlag(cwd)).toBe(`-c ${shellQuote(inner)}`);
   });
 });
 
@@ -312,6 +398,42 @@ describe("codexAdapter.prepareLaunch / managed hooks.json merge (issue #252)", (
       expect(plan.commandTransform!("codex && npm test")).toBe("codex && npm test --add-dir .git");
       expect(plan.commandTransform!("echo hi | codex")).toBe("echo hi | codex --add-dir .git");
       expect(plan.commandTransform!("codex > out.log")).toBe("codex > out.log --add-dir .git");
+    });
+
+    // Folder-trust hang fix — same ctx.skipPermissions && ctx.cwd gate as
+    // agy.ts's mergeAgyTrustedWorkspace (see buildCodexTrustFlag's comment).
+    // buildCodexTrustFlag now calls realpathSync, so this cwd must actually
+    // exist — os.tmpdir() (realpath'd, in case the host's own temp dir has
+    // a symlink component) always does.
+    it("appends the trust flag last when skipPermissions and cwd are both set", () => {
+      const realCwd = realpathSync(os.tmpdir());
+      const plan = codexAdapter.prepareLaunch({
+        ...ctx(),
+        skipPermissions: true,
+        cwd: realCwd,
+      });
+      expect(plan.commandTransform!("codex")).toBe(
+        `codex --add-dir .git ${mcpFlags()} ${buildCodexTrustFlag(realCwd)}`,
+      );
+    });
+
+    it("omits the trust flag when skipPermissions is off, even with a cwd", () => {
+      const plan = codexAdapter.prepareLaunch({ ...ctx(), cwd: "/srv/project" });
+      expect(plan.commandTransform!("codex")).toBe(`codex --add-dir .git ${mcpFlags()}`);
+    });
+
+    it("omits the trust flag when cwd is absent, even with skipPermissions", () => {
+      const plan = codexAdapter.prepareLaunch({ ...ctx(), skipPermissions: true });
+      expect(plan.commandTransform!("codex")).toBe(`codex --add-dir .git ${mcpFlags()}`);
+    });
+
+    it("omits the trust flag on a chained/piped/redirected command, same as the MCP flags", () => {
+      const plan = codexAdapter.prepareLaunch({
+        ...ctx(),
+        skipPermissions: true,
+        cwd: "/srv/project",
+      });
+      expect(plan.commandTransform!("codex && npm test")).toBe("codex && npm test --add-dir .git");
     });
   });
 

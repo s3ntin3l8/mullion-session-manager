@@ -9,7 +9,7 @@ import type { HookMessage } from "../../src/services/hook-protocol.js";
 import { buildAgentGuideBlock, sessionAgentGuidePath } from "../../src/services/agent-guide.js";
 import { resolveMullionBundleDir } from "../../src/services/hook-adapters/mullion-bundle.js";
 import { buildOpenCodeMcpConfig } from "../../src/services/hook-adapters/opencode.js";
-import { buildCodexMcpFlags } from "../../src/services/hook-adapters/codex.js";
+import { buildCodexMcpFlags, buildCodexTrustFlag } from "../../src/services/hook-adapters/codex.js";
 import { resolveMcpServerPath } from "../../src/services/hook-adapters/shared.js";
 import { deriveInstanceId } from "../../src/services/session-process.js";
 
@@ -6794,8 +6794,15 @@ describe("PtyManager", () => {
             .mock.calls.findLast(([file]) => file === "systemd-run");
           const args = call?.[1] as string[];
           const mcpFlags = buildCodexMcpFlags(resolveMcpServerPath());
+          // Folder-trust hang fix — ctx.skipPermissions && ctx.cwd
+          // (both true here) also appends buildCodexTrustFlag, landing
+          // between the MCP flags and the skip-permissions flag: it's
+          // part of the SAME commandTransform as the MCP flags (launch-plan.ts
+          // runs commandTransform, then appends the skip-permissions flag
+          // as a separate later step).
+          const trustFlag = buildCodexTrustFlag("/tmp");
           expect(args[args.length - 1]).toBe(
-            `codex --add-dir .git ${mcpFlags} --dangerously-bypass-approvals-and-sandbox ${quotedDangerousPrompt}`,
+            `codex --add-dir .git ${mcpFlags} ${trustFlag} --dangerously-bypass-approvals-and-sandbox ${quotedDangerousPrompt}`,
           );
         });
       });
