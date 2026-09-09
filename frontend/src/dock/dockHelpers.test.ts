@@ -5,6 +5,8 @@ import {
   composeProjectForControl,
   groupDockerControls,
   holdVanishedDockerControls,
+  dockMonitorFullMinHeightPx,
+  dockMonitorMinHeightPx,
   dockMonitorMinWidthPx,
 } from "./dockHelpers.js";
 import { makeSession } from "../test/fixtures.js";
@@ -111,6 +113,29 @@ describe("composeProjectForControl", () => {
 
   it("returns null for a plain dock.json control", () => {
     expect(composeProjectForControl(configControl())).toBeNull();
+  });
+
+  it("issue #1112 — prefers the real composeProject field over parsing the id", () => {
+    // A control reconstructed from a live `docker-stack:<composeProject>`
+    // session (Dock.tsx, dock log-streaming resize fix symptom 3) has no
+    // actionId to parse an id like `<actionId>:<composeProject>` from in
+    // the first place — it must resolve via this field alone.
+    const control: DockControl = {
+      id: "docker-stack:sanctuary",
+      title: "Stack action running — sanctuary",
+      command: "docker compose ... ",
+      source: "docker",
+      composeProject: "sanctuary",
+    };
+    expect(composeProjectForControl(control)).toBe("sanctuary");
+  });
+
+  it("issue #1112 — composeProject wins even when the id would otherwise parse to something else", () => {
+    const control: DockControl = {
+      ...ephemeralControl("docker-restart", "wrong-project"),
+      composeProject: "sanctuary",
+    };
+    expect(composeProjectForControl(control)).toBe("sanctuary");
   });
 });
 
@@ -359,5 +384,55 @@ describe("dockMonitorMinWidthPx", () => {
     const at4 = dockMonitorMinWidthPx(14, 4);
     const at16 = dockMonitorMinWidthPx(14, 16);
     expect(at16).toBe(at4 + (16 - 4) * 2);
+  });
+});
+
+describe("dockMonitorMinHeightPx", () => {
+  it("matches the worked derivation at the default 14px/4px", () => {
+    // 10 (MIN_TERMINAL_ROWS) * 18.9 (measured cell height at 14px, scaled
+    // onto dockMonitorMinWidthPx's own pinned 8.4px-cell-width baseline —
+    // see PX_PER_ROW_AT_14PX's own doc comment for why 18.9, not the raw
+    // 18 a live measurement read) + 4*2 (padding) + 4 (cross-platform
+    // margin) = 201. No addon-fit reserve — unlike the width derivation,
+    // proposeDimensions() never subtracts one from the height measurement.
+    expect(dockMonitorMinHeightPx(14, 4)).toBe(201);
+  });
+
+  it("scales up at a larger configured font size — this is the whole point of the fix", () => {
+    // Confirmed live against a real dock monitor's own GeometryMessage
+    // echo: {"cols":63,"rows":10,"minCols":40,"minRows":10} — rows floored
+    // exactly at MIN_TERMINAL_ROWS, on a dock already taller than the
+    // static default, because nothing derived a height floor at all before
+    // this fix.
+    const at14 = dockMonitorMinHeightPx(14, 4);
+    const at20 = dockMonitorMinHeightPx(20, 4);
+    expect(at20).toBeGreaterThan(at14);
+  });
+
+  it("scales up with a larger configured padding too", () => {
+    const at4 = dockMonitorMinHeightPx(14, 4);
+    const at16 = dockMonitorMinHeightPx(14, 16);
+    expect(at16).toBe(at4 + (16 - 4) * 2);
+  });
+});
+
+describe("dockMonitorFullMinHeightPx", () => {
+  it("adds the header (28px) and border (2px) on top of dockMonitorMinHeightPx's body-only floor", () => {
+    // 201 (dockMonitorMinHeightPx(14, 4)) + 28 (.dock-monitor-header's own
+    // fixed CSS height) + 2 (.dock-monitor's own border) = 231. This is the
+    // value that actually has to be applied to `.dock-monitor` itself —
+    // review caught a real bug in an earlier version of this fix that
+    // applied the body-only 201 to `.dock-monitor-body` instead, which
+    // `.dock-monitor`'s own `overflow: hidden` silently defeated (see this
+    // function's own doc comment, dockHelpers.ts).
+    expect(dockMonitorFullMinHeightPx(14, 4)).toBe(231);
+  });
+
+  it("equals dockMonitorMinHeightPx plus a fixed 30px at every font size", () => {
+    for (const fontSize of [10, 14, 16, 20]) {
+      expect(dockMonitorFullMinHeightPx(fontSize, 4)).toBe(
+        dockMonitorMinHeightPx(fontSize, 4) + 30,
+      );
+    }
   });
 });

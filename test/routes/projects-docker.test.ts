@@ -1113,6 +1113,29 @@ describe("projects route — Docker Compose service discovery (issue #73)", () =
 
       await app.close();
     });
+
+    it("dock log-streaming resize fix, issue #1112 — the ephemeral control carries composeProject as a real field", async () => {
+      // Without this, the frontend has to parse `<actionId>:<composeProject>`
+      // back out of the control's own `id` (dockHelpers.ts's
+      // EPHEMERAL_STACK_ACTION_PREFIXES) — and a control reconstructed from
+      // a live `docker-stack:<composeProject>` session after a workspace
+      // switch (Dock.tsx) has no actionId to parse an id like that from in
+      // the first place, so it would land in groupDockerControls'
+      // `ungrouped` instead of grouping with its own stack.
+      discoveredServices = [fixtureService()];
+      const app = await buildApp();
+      const projectId = await createProject(app);
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/docker/stack/restart`,
+        payload: { controlId: "docker:sanctuary:web" },
+      });
+
+      expect(res.json().control).toEqual(expect.objectContaining({ composeProject: "sanctuary" }));
+
+      await app.close();
+    });
   });
 
   // Full remote-host round-trip, same pattern as test/routes/projects.test.ts

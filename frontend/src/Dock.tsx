@@ -19,6 +19,8 @@ import {
 } from "./lib/persistedState.js";
 import {
   clamp,
+  composeProjectForControl,
+  dockMonitorFullMinHeightPx,
   dockMonitorMinWidthPx,
   dockerSessionIdentity,
   groupDockerControls,
@@ -27,6 +29,7 @@ import {
   resolveSelectedValue,
   runningSessionFor,
 } from "./dock/dockHelpers.js";
+import { DOCKER_STACK_SESSION_NAME_PREFIX } from "../../src/shared/constants.js";
 import { useDockGithubStatus } from "./dock/useDockGithubStatus.js";
 import { DockGithubRow } from "./dock/DockGithubRow.js";
 import { useArmedKill } from "./dock/useArmedKill.js";
@@ -572,7 +575,45 @@ function DockColumn({
   // it open, same as any other dock monitor). Computed at render time off
   // the store's own `sessions` (via dockSessions above) rather than pruned
   // in a separate effect — no need to duplicate that liveness check.
-  const liveEphemeralControls = ephemeralControls.filter((c) => runningFor(c));
+  const optimisticEphemeralControls = ephemeralControls.filter((c) => runningFor(c));
+  // Dock log-streaming resize fix (symptom 3) — `ephemeralControls` above is
+  // component-local `useState`, populated only by the POST response that
+  // started a stack action (handlePullAndRestart/handleRebuildAndRestart/
+  // handleStackAction below). A workspace switch unmounts this whole
+  // DockColumn and loses that state even though the backend session
+  // (`${DOCKER_STACK_SESSION_NAME_PREFIX}<composeProject>`, nameLocked —
+  // stackSessionName, routes/projects.ts) survives untouched, which is what
+  // made a still-running rebuild silently disappear on return. Reconstruct
+  // one ephemeral control per such session that the optimistic list above
+  // doesn't already cover (keyed by compose project, via issue #1112's
+  // `composeProject` field — see composeProjectForControl's own doc
+  // comment) — the whole reason that field exists is so this reconstruction
+  // never has to parse an actionId out of an id it never had. `command`
+  // stays exactly what the session was created with: display-only, per
+  // AGENTS.md's opaque-blob invariant, never parsed to recover which of the
+  // five actions started it (there is nothing to recover it FROM — the verb
+  // was never persisted anywhere durable — so the title is deliberately
+  // generic here rather than guessed).
+  const optimisticComposeProjects = new Set(
+    optimisticEphemeralControls
+      .map((c) => composeProjectForControl(c))
+      .filter((p): p is string => p !== null),
+  );
+  const reconstructedEphemeralControls: DockControl[] = dockSessions.flatMap((session) => {
+    if (!session.name?.startsWith(DOCKER_STACK_SESSION_NAME_PREFIX)) return [];
+    const composeProject = session.name.slice(DOCKER_STACK_SESSION_NAME_PREFIX.length);
+    if (composeProject.length === 0 || optimisticComposeProjects.has(composeProject)) return [];
+    return [
+      {
+        id: session.name,
+        title: `Stack action running — ${composeProject}`,
+        command: session.command,
+        source: "docker" as const,
+        composeProject,
+      },
+    ];
+  });
+  const liveEphemeralControls = [...optimisticEphemeralControls, ...reconstructedEphemeralControls];
   const configuredControls = controls.filter((c) => c.source !== "docker");
   const discoveredControls = controls.filter((c) => c.source === "docker");
   // One DockerStackGroup per compose project (dockHelpers.ts's own doc
@@ -596,13 +637,16 @@ function DockColumn({
     [...liveEphemeralControls, ...heldMerge.controls],
     heldMerge.heldIds,
   );
-  // PR2a — a transient stack-action monitor (startStackSession's own
-  // ephemeral control) gets a fixed width instead of N-way splitting the
-  // group with the rest — see .dock-monitor-transient's own comment
-  // (empty-states.css) and the flexGrow computation below. Derived from
+  // Dock log-streaming resize fix (symptom 2, replacing PR2a) — a live
+  // stack-action monitor renders in its own fixed-height strip BELOW
+  // `.dock-stack-monitors` (Dock's own group-rendering block) rather than as
+  // a peer column inside it, so it costs zero horizontal space instead of
+  // needing a fixed-width carve-out that N-way-split the group with the
+  // rest. `ephemeralIds` is what tells that block which of a group's
+  // `controls` belong in the strip vs. the services row. Derived from
   // liveEphemeralControls rather than re-parsing the id prefix so a
   // deliberately-colliding dock.json control (docs/dock.md's own escape
-  // hatch) is never mis-classified as transient.
+  // hatch) is never mis-classified as an ephemeral.
   const ephemeralIds = new Set(liveEphemeralControls.map((c) => c.id));
 
   // Hermes review, round 2 — a transient failure (backend blip, briefly out
@@ -837,6 +881,20 @@ function DockColumn({
     settings.terminal.fontSize,
     settings.terminal.padding,
   );
+  // Vertical counterpart — see dockMonitorFullMinHeightPx's own doc comment
+  // for the mechanism this closes (every dock monitor was permanently below
+  // pty-manager.ts's MIN_TERMINAL_ROWS, on any dock height, with nothing
+  // enforcing a floor on this axis at all) and for why this is the FULL
+  // (header + body + border) monitor floor, applied to `.dock-monitor`
+  // itself — not dockMonitorMinHeightPx's own body-only number, which a
+  // review caught being applied to the wrong element in an earlier version
+  // of this fix (silently defeated by `.dock-monitor`'s own
+  // `overflow: hidden`). Also applied to `.dock-stack-monitors` below, for
+  // a second, independent reason: see that div's own comment.
+  const dockMonitorMinHeight = dockMonitorFullMinHeightPx(
+    settings.terminal.fontSize,
+    settings.terminal.padding,
+  );
 
   // A single monitor row's render — closes over this render's own
   // worktreePaths/toggleGenRef/allOptions/runningFor/etc., same as the
@@ -1036,9 +1094,9 @@ function DockColumn({
         onOpenBrowser={() => onOpenBrowser(projectId)}
         updateAvailable={updateAvailable}
         dockerStatus={dockerStatus}
-        transient={ephemeralIds.has(control.id)}
         held={heldMerge.heldIds.has(control.id)}
         minWidthPx={dockMonitorMinWidth}
+        minHeightPx={dockMonitorMinHeight}
         checkStatus={checkStatusById[control.id]}
         armed={killArmedIds.has(control.id)}
         confirmBeforeKill={confirmBeforeKill}
@@ -1107,26 +1165,24 @@ function DockColumn({
           // (and, per the same derivation, pullRep/rebuildRep when
           // relevant) is set.
           const rep = group.anyRep;
-          // PR2a — a transient stack-action monitor is fixed-width
-          // (.dock-monitor-transient), not an N-way split participant, so it
-          // must not count toward the group's own flexGrow — otherwise the
-          // group's share of the column relative to every OTHER group
-          // changes the moment it appears or disappears (the unbounded,
-          // per-poll churn this PR fixes). It does NOT make the panel free
-          // within ITS OWN group — see .dock-monitor-transient's own comment
-          // (empty-states.css) for the bounded one-time in-group residual
-          // this doesn't cover. Held controls (PR2b) DO count: the whole
-          // point of holding one is that the group's flexGrow doesn't change
-          // while its container is between the old and new instance.
-          // Floored at 1 (Hermes review, round 2) — a group whose ONLY
-          // control is a live transient stack-action monitor (the instant a
-          // rebuild starts, before discovery reports the recreated
-          // container) would otherwise compute 0, collapsing the group to
-          // min-content instead of its normal share for that brief window.
-          const growingControlCount = Math.max(
-            1,
-            group.controls.filter((c) => !ephemeralIds.has(c.id)).length,
-          );
+          // Dock log-streaming resize fix — a live stack-action control no
+          // longer renders inside `.dock-stack-monitors` at all (it gets its
+          // own fixed-height strip below, see `ephemeralControlsInGroup`
+          // further down), so it's excluded here at the source rather than
+          // needing PR2a's old "compute flexGrow as if it weren't there but
+          // render it there anyway, fixed-width" workaround — the class of
+          // bug that workaround only partially closed (its own
+          // .dock-monitor-transient's 260px never actually applied; see this
+          // PR's own investigation). Held controls (PR2b) DO still count:
+          // the whole point of holding one is that the group's flexGrow
+          // doesn't change while its container is between the old and new
+          // instance. Floored at 1 (Hermes review, round 2, PR #1176) — a
+          // group with no discovered service left (every control held or
+          // ephemeral) would otherwise compute 0, collapsing the group to
+          // min-content instead of holding its normal share.
+          const serviceControls = group.controls.filter((c) => !ephemeralIds.has(c.id));
+          const ephemeralControlsInGroup = group.controls.filter((c) => ephemeralIds.has(c.id));
+          const growingControlCount = Math.max(1, serviceControls.length);
           return (
             <div
               key={group.composeProject}
@@ -1139,6 +1195,7 @@ function DockColumn({
                 canPull={group.pullRep !== null}
                 canRebuild={group.rebuildRep !== null}
                 status={checkStatusById[statusKey]}
+                actionRunning={ephemeralControlsInGroup.length > 0}
                 onStackRestart={() =>
                   rep &&
                   void handleStackAction(
@@ -1173,7 +1230,59 @@ function DockColumn({
                   )
                 }
               />
-              <div className="dock-stack-monitors">{group.controls.map(renderMonitor)}</div>
+              {/* Dock log-streaming resize fix — review-caught interaction
+                  bug between this fix's own two halves: `.dock-stack-group`
+                  is an auto-height flex column with `.dock-monitor` now
+                  demanding a real min-height (dockMonitorFullMinHeightPx).
+                  With no floor of its own, this row's `flex: 1;
+                  min-height: 0` (empty-states.css) meant a live
+                  `.dock-stack-action-strip` below (flex: 0 0 auto, sized to
+                  its OWN now-real min-content) could claim the group's
+                  entire auto-grown height, flex-shrinking this row to a
+                  genuine 0px — the running service silently vanishing, not
+                  just scrolled out of view. The same `dockMonitorMinHeight`
+                  passed to every monitor below guarantees this row never
+                  shrinks below room for at least one, so the group's own
+                  auto-height (uncapped — no `overflow: hidden` on
+                  `.dock-stack-group` itself) grows enough to cover BOTH the
+                  strip and the services, with `.dock-body`'s
+                  `overflow-y: auto` (dock.css) revealing whatever still
+                  doesn't fit instead of squeezing either row to nothing.
+
+                  Hermes review — that reservation is pointless (and a dead
+                  block eating the group's height, being `flex: 1`) when
+                  `serviceControls` is genuinely empty — every service held
+                  mid-recreate past its own grace window, or dropped from
+                  discovery entirely, with only the ephemeral strip left.
+                  Skipping the row outright in that case reserves nothing:
+                  there is no service monitor whose squeeze-to-0px this
+                  floor needs to prevent if there's no service control to
+                  render in the first place. */}
+              {serviceControls.length > 0 && (
+                <div className="dock-stack-monitors" style={{ minHeight: dockMonitorMinHeight }}>
+                  {serviceControls.map(renderMonitor)}
+                </div>
+              )}
+              {/* Dock log-streaming resize fix — a live stack-action stream
+                  renders here, as its own fixed-height row below the
+                  services, instead of as a peer column inside
+                  .dock-stack-monitors above: .dock-stack-group is already
+                  flex-direction:column, so this costs zero horizontal
+                  space — no width step on the services when it appears or
+                  disappears, no push-off-screen. `.dock-stack-action-strip`
+                  is a plain (non-flex) block specifically so DockMonitor's
+                  own `flex:1 1 0%` is inert here and it instead sizes to its
+                  natural block height (28px header + its body's
+                  minHeightPx floor) — see that class's own comment
+                  (empty-states.css). In practice there is at most one, per
+                  findActiveStackSession's single-concurrent-stack-action
+                  guard (src/routes/projects.ts), but this maps over
+                  whatever's actually live rather than assuming that. */}
+              {ephemeralControlsInGroup.map((control) => (
+                <div key={control.id} className="dock-stack-action-strip">
+                  {renderMonitor(control)}
+                </div>
+              ))}
             </div>
           );
         })}

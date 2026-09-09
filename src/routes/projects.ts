@@ -15,6 +15,7 @@ import { getStoredSettings } from "../services/settings.js";
 import { KNOWN_AGENTS } from "../services/agent-detect.js";
 import { resolveGlobalPresets } from "./actions.js";
 import { LOCAL_HOST_ID, getHostRow } from "../services/host-registry.js";
+import { DOCKER_STACK_SESSION_NAME_PREFIX } from "../shared/constants.js";
 import { getRemoteHostClient, HostRequestError } from "../services/remote-host-client.js";
 import { portFromUrl } from "../plugins/preview-proxy.js";
 import { resolveBackend } from "../services/session-backend.js";
@@ -1201,7 +1202,7 @@ export async function projectsRoute(app: FastifyInstance) {
   // service). `nameLocked` matches the frontend's own convention for a
   // stable session identity (Dock.tsx's dockIdentity/identityOpts).
   function stackSessionName(composeProject: string): string {
-    return `docker-stack:${composeProject}`;
+    return `${DOCKER_STACK_SESSION_NAME_PREFIX}${composeProject}`;
   }
 
   async function findActiveStackSession(projectId: number, composeProject: string) {
@@ -1265,7 +1266,13 @@ export async function projectsRoute(app: FastifyInstance) {
     | {
         ok: true;
         sessionId: number;
-        control: { id: string; title: string; command: string; source: "docker" };
+        control: {
+          id: string;
+          title: string;
+          command: string;
+          source: "docker";
+          composeProject: string;
+        };
         reused?: boolean;
       }
     | { ok: false }
@@ -1275,6 +1282,16 @@ export async function projectsRoute(app: FastifyInstance) {
       title,
       command,
       source: "docker" as const,
+      // Issue #1112 — a real field instead of making every caller parse it
+      // back out of `id` against a hand-synced prefix list
+      // (EPHEMERAL_STACK_ACTION_PREFIXES, dockHelpers.ts). Also what makes
+      // the dock log-streaming resize fix's own reconstruction possible: a
+      // control rebuilt from a live `docker-stack:<composeProject>` session
+      // (Dock.tsx, after a workspace switch loses the POST response's
+      // optimistic control) has no `actionId` to parse from an id it never
+      // had, but it always knows its own compose project directly from the
+      // session name.
+      composeProject: service.composeProject,
     };
 
     const existing = await findActiveStackSession(projectId, service.composeProject);

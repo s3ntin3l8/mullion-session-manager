@@ -88,3 +88,23 @@ export const LOCAL_HOST_ID = "local";
 // degradation posture MIN_TERMINAL_COLS/ROWS's own floor already has.
 export const MAX_TERMINAL_COLS = 4000;
 export const MAX_TERMINAL_ROWS = 1000;
+
+// ---------------------------------------------------------------------------
+// routes/projects.ts's stackSessionName() / frontend/src/dock/dockHelpers.ts —
+// DOCKER_STACK_SESSION_NAME_PREFIX
+// ---------------------------------------------------------------------------
+//
+// Dock log-streaming resize fix (symptom 3) — a stack-wide action
+// (restart/apply/pull-and-restart/rebuild-and-restart/stop) spawns a
+// `kind: "dock"` session named `${DOCKER_STACK_SESSION_NAME_PREFIX}
+// <composeProject>`, `nameLocked: true` (startStackSession, routes/
+// projects.ts). That name is a stable, recoverable identity for "is a stack
+// action currently running against this compose project" — but the
+// frontend's own record of it (Dock.tsx's `ephemeralControls`) was
+// component-local `useState`, populated only from the POST response that
+// started it, so a workspace switch (which unmounts DockColumn) lost track
+// of a still-running action even though the backend session survived
+// untouched. Genuinely shared, not hand-synced, so the frontend's own
+// reconstruction of an ephemeral control from a live session list can
+// recognize this prefix without duplicating the string.
+export const DOCKER_STACK_SESSION_NAME_PREFIX = "docker-stack:";
