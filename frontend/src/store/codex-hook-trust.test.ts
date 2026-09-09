@@ -72,6 +72,33 @@ describe("checkCodexHookTrust (issue #259/#882)", () => {
     expect(useDashboardStore.getState().codexHookTrust).toBe("pending");
   });
 
+  // Hermes review, PR #1190 — the `?? null` passthrough at ui.ts:280 was
+  // only exercised for "pending" and the absent-field case above; the
+  // other two CodexHookTrust values pass straight through the same way,
+  // but that was previously unasserted at the slice level (the launcher
+  // badge tests only read the per-agent field, not this store state).
+  it.each(["trusted", "not-installed"] as const)(
+    "passes hookTrust: '%s' straight through unchanged",
+    async (hookTrust) => {
+      stubListAgentsResponse([
+        {
+          id: "agent:codex",
+          title: "codex",
+          command: "codex",
+          kind: "agent",
+          available: true,
+          path: null,
+          emits: [],
+          hookTrust,
+        },
+      ]);
+
+      await useDashboardStore.getState().checkCodexHookTrust();
+
+      expect(useDashboardStore.getState().codexHookTrust).toBe(hookTrust);
+    },
+  );
+
   it("sets codexHookTrust to null when no agent:codex entry is present at all", async () => {
     useDashboardStore.setState({ codexHookTrust: "pending" });
     stubListAgentsResponse([
