@@ -1205,3 +1205,51 @@ describe("runBundleSyncExclusive — serialization", () => {
     expect(leftoverTmp).toEqual([]);
   });
 });
+
+// Phase 5 (issue #1210's plan, Gap C) — every test above installs a
+// SYNTHETIC writeAgent()/writeSkill() fixture under a MULLION_HOME-redirected
+// scratch bundle, which proves the AGENT_TARGETS mechanism itself works but
+// never once runs it against Mullion's own REAL shipped content. This block
+// deliberately unsets MULLION_HOME (resolveMullionBundleDir() then falls
+// back to the checked-in src/bundle dir, same as
+// mullion-bundle.test.ts's own "resolves the checked-in src/bundle dir"
+// case) so syncBundleContent() runs against exactly what ships, HOME/
+// XDG_CONFIG_HOME/CLAUDE_CONFIG_DIR still redirected to this file's own
+// scratch dirs so nothing here can touch a real machine's config.
+describe("syncBundleContent — against the real checked-in src/bundle (not a synthetic fixture)", () => {
+  beforeEach(() => {
+    delete process.env.MULLION_HOME;
+  });
+
+  it("installs src/bundle/agents/reviewer.md for claude-code, agy, and opencode, each correctly transformed", () => {
+    const result = syncBundleContent();
+    expect(result.changed).toBe(true);
+
+    const claudeAgent = path.join(resolveClaudeConfigDir(), "agents", "mullion-reviewer.md");
+    expect(existsSync(claudeAgent)).toBe(true);
+    const claudeContents = readFileSync(claudeAgent, "utf8");
+    expect(claudeContents).toContain("name: mullion-reviewer");
+    expect(claudeContents).toContain("tools: Read, Grep, Glob, Bash");
+    expect(claudeContents).toContain(INSTALLED_AGENT_MARKER);
+
+    const agyAgent = path.join(resolveAgyGlobalAgentsDir(), "mullion-reviewer.md");
+    expect(existsSync(agyAgent)).toBe(true);
+    const agyContents = readFileSync(agyAgent, "utf8");
+    expect(agyContents).toContain("name: mullion-reviewer");
+    expect(agyContents).not.toContain("tools:");
+    expect(agyContents).not.toContain("model:");
+
+    // The specific, documented opencode hazard (mullion-bundle.ts's own doc
+    // comment on deriveOpenCodeReviewerAgentFile): an unexpected `tools:`/
+    // `model:` key hard-fails opencode's config loader and the session
+    // never starts. Verified here against the file actually installed on
+    // disk, not just the translator's return value in isolation.
+    const opencodeAgent = path.join(resolveOpenCodeConfigHome(), "agent", "mullion-reviewer.md");
+    expect(existsSync(opencodeAgent)).toBe(true);
+    const opencodeContents = readFileSync(opencodeAgent, "utf8");
+    expect(opencodeContents).toContain("mode: subagent");
+    expect(opencodeContents).not.toContain("tools:");
+    expect(opencodeContents).not.toContain("model:");
+    expect(opencodeContents).not.toContain("name:");
+  });
+});

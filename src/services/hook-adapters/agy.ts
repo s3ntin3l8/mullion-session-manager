@@ -300,10 +300,14 @@ export function resolveAgyGlobalSkillsDir(): string {
 // comment anywhere claims agy's loader needs an unprefixed name) and NOT
 // agy-specific at all — claude-code's own AGENT_TARGETS entry has the exact
 // same gap (installed verbatim, no rewrite). Likely an unaddressed design
-// gap rather than a considered decision, currently inert since
-// src/bundle/agents/ ships no real content yet (fixture-only in tests).
-// Flagged for bundle-sync.ts's owner to weigh / file as its own issue, not
-// this file's decision to make.
+// gap rather than a considered decision. No longer fixture-only: Phase 5
+// (issue #1210's plan) shipped src/bundle/agents/reviewer.md, so this
+// mechanism now runs in production — that file's own frontmatter `name:`
+// was deliberately authored as `mullion-reviewer` (pre-matching the
+// installed prefixed filename) specifically to sidestep this gap, but
+// nothing in the mechanism itself enforces that convention for a future
+// shipped agent. Flagged for bundle-sync.ts's owner to weigh / file as its
+// own issue, not this file's decision to make.
 export function resolveAgyGlobalAgentsDir(): string {
   return path.join(os.homedir(), ".gemini", "config", "agents");
 }

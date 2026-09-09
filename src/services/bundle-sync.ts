@@ -247,10 +247,12 @@ interface AgentTarget {
 // wording) overstated spawn_agent's own role; codex's delegation-by-skill
 // discovery is real, it's just prompt-driven rather than a structured
 // argument. (This module's src/bundle/agents/ — Mullion's own shipped
-// agents, not a project's reviewer content — is a separate, not-yet-built
-// track; #943's actual codex delivery for a PROJECT's reviewer instead goes
+// agents, not a project's reviewer content — is a separate track from
+// #943's actual codex delivery for a PROJECT's reviewer, which instead goes
 // through mullion-scaffold.ts's committed `.agents/skills/<slug>-reviewer/`
-// mirror, outside this bundle-sync path entirely.)
+// mirror, outside this bundle-sync path entirely. Codex still gets none of
+// THIS module's own shipped agents — no static per-agent format exists for
+// it (spike #946) — that remains a permanent gap, not a deferred one.)
 const AGENT_TARGETS: AgentTarget[] = [
   {
     cli: "claude-code",
@@ -283,8 +285,10 @@ function listBundleSkillNames(bundleDir: string): string[] {
   }
 }
 
-// Missing agents/ is treated as "zero agents", not an error — src/bundle/
-// doesn't ship one yet (issue #943/#953's job).
+// Missing agents/ is treated as "zero agents", not an error — a test
+// fixture's scratch bundle (or a stripped-down release rebuilt without a
+// fresh `npm run build`) may legitimately ship none, even though
+// src/bundle/agents/ itself now ships one (Phase 5, issue #1210's plan).
 function listBundleAgentNames(bundleDir: string): string[] {
   const agentsDir = path.join(bundleDir, "agents");
   if (!existsSync(agentsDir)) return [];
@@ -575,13 +579,11 @@ export function syncBundleContent(): { changed: boolean } {
     // `statusForRoot` report every row "stale" on every upgraded host for no
     // reason connected to this fix.
     //
-    // Also: `agentNames` is `[]` in production today — `src/bundle/agents/`
-    // doesn't ship yet (issues #943/#953) — so this guard (and
-    // `pruneOrphanManagedFiles` itself) is currently exercised only by this
-    // file's own fixture-based tests, not by a real release. Not dead code:
-    // the guard is what keeps a genuinely empty/malformed listing from being
-    // misread as "nothing to protect, sweep it all" the moment an
-    // agents/ directory does ship.
+    // `src/bundle/agents/` now ships one agent (Phase 5, issue #1210's plan
+    // — `reviewer.md`), so `agentNames` is no longer `[]` in production;
+    // this guard is what keeps a genuinely empty/malformed listing from
+    // being misread as "nothing to protect, sweep it all" if that ever
+    // regresses back to zero.
     if (agentNames.length > 0) {
       pruneOrphanManagedFiles(root, installedAgentFileNamesForTarget);
     }
