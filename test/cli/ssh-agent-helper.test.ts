@@ -1306,7 +1306,42 @@ describe("mullion helper run() --detach (issue #871)", () => {
       "--insecure",
     ]);
     expect(spawnCall?.options).toMatchObject({ detached: true, windowsHide: true });
-    expect(io.stdoutLines.join("")).toContain("started in the background");
+    // The human-readable confirmation goes to stderr, same as every other
+    // prose message in this file — stdout is reserved for NDJSON and only
+    // when --json-events is passed (docs/ssh-agent.md's own contract), which
+    // this invocation didn't. See the --json-events test below for the
+    // stdout side of this.
+    expect(io.stderrLines.join("")).toContain("started in the background");
+    expect(io.stdoutLines.join("")).toBe("");
+  });
+
+  it("with --json-events, emits a 'detached' NDJSON event on stdout instead of prose", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-helper-state-"));
+    const io = fakeIo(
+      { MULLION_HELPER_STATE_DIR: stateDir },
+      {
+        platform: "win32",
+        isSea: true,
+        execPath: "C:\\Users\\me\\AppData\\Local\\Mullion\\mullion-helper.exe",
+        spawn: () => fakeDetachedChild(false),
+      },
+    );
+    const code = await runHelper(
+      "run",
+      ["--detach", "--json-events", "--ssh-auth-sock", "\\\\.\\pipe\\openssh-ssh-agent"],
+      io,
+    );
+    expect(code).toBe(0);
+    // Every stdout line must be valid JSON — a supervisor parsing this
+    // stream with a bare JSON.parse per line, per docs/ssh-agent.md's own
+    // "Structured events" contract, must never see the prose confirmation
+    // land here instead.
+    const lines = io.stdoutLines.join("").trim().split("\n").filter(Boolean);
+    expect(lines).toHaveLength(1);
+    const event = JSON.parse(lines[0]);
+    expect(event.type).toBe("detached");
+    expect(typeof event.log_path).toBe("string");
+    expect(io.stderrLines.join("")).toContain("started in the background");
   });
 
   it("on a Windows checkout (non-SEA), the re-spawned argv includes the script path", async () => {

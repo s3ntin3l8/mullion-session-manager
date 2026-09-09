@@ -599,7 +599,17 @@ async function runDetachedBootstrap(io, { sshAuthSock, insecure, jsonEvents }) {
     );
     return null;
   }
-  io.stdout.write(`started in the background — logs: ${logPath}\n`);
+  // docs/ssh-agent.md's own "Structured events" contract: stdout carries
+  // ONLY NDJSON when --json-events is set, never prose — an existing
+  // supervisor parsing that stream with a bare JSON.parse per line must
+  // never see a non-JSON line land there. The human-readable confirmation
+  // always goes to stderr instead, the same "unchanged whether or not
+  // --json-events is passed" posture every other message in this file
+  // already has.
+  io.stderr.write(`started in the background — logs: ${logPath}\n`);
+  if (jsonEvents) {
+    io.stdout.write(`${JSON.stringify({ type: "detached", log_path: logPath })}\n`);
+  }
   return 0;
 }
 
