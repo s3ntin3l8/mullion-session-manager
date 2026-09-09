@@ -25,6 +25,19 @@ name: Hermes (review)
 # review workflows" section for the full story. `on-demand-review` is NOT
 # excluded -- a human can still explicitly ask for a second opinion on a
 # Task Master PR via `@s3ntin3l8-hermes Review`.
+#
+# SECURITY: this repo is public and the reusable workflow runs on a self-hosted
+# runner. For a `pull_request` event, GitHub runs the workflow FILE from the PR's
+# own head ref, i.e. a fork's copy of this file, on whatever runner the `if:`
+# lets it reach. Without the `head.repo.full_name` guard below, any stranger
+# could open a fork PR whose version of auto-review's job runs arbitrary steps
+# on that runner -- fork PRs get no secrets and a read-only token, but the
+# runner itself (its filesystem and LAN access) is the trust boundary, not the
+# token. The on-demand path is unaffected: `issue_comment` always runs the
+# DEFAULT BRANCH's copy of this file, so the author_association gate there is
+# sufficient on its own; a maintainer's @mention on a fork PR still works.
+# (The same fork guard is also enforced inside the reusable workflow itself,
+# as defense-in-depth -- belt-and-braces, not redundant.)
 on:
   pull_request:
     types: [opened, ready_for_review]
@@ -42,6 +55,7 @@ jobs:
   auto-review:
     if: >-
       github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
       github.actor != 's3ntin3l8-hermes[bot]' &&
       github.actor != 'dependabot[bot]' &&
       github.actor != 'github-actions[bot]' &&
