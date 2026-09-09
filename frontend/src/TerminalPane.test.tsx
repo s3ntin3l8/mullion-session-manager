@@ -528,6 +528,7 @@ function renderPane(extra: { active?: boolean; inputAffordances?: boolean } = {}
         injectProjectBriefing: true,
         injectMullionBundle: true,
         workflowConventionsText: "",
+        workflowConventionAnswers: {},
         maxChildSessionsPerParent: 5,
         autoOpenChildPanels: false,
       },
