@@ -99,6 +99,8 @@ export function makeProject(overrides: Partial<Project> = {}): Project {
     injectAgentGuide: null,
     injectProjectBriefing: null,
     injectWorkflowConventions: null,
+    conventionsHash: null,
+    conventionsDrifted: false,
     ...overrides,
   };
 }

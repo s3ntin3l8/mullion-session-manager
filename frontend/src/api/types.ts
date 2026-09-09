@@ -134,6 +134,20 @@ export interface Project {
   // global BOOLEAN setting to inherit from (the global tier here is the
   // text itself). Mirrors src/db/schema.ts's projects.injectWorkflowConventions.
   injectWorkflowConventions: boolean | null;
+  // Phase 3 (drift detection, issue #1205, follow-up to #1201) — mirrors
+  // src/db/schema.ts's projects.conventionsHash 1:1: null means "never
+  // scaffolded." Write-only from the frontend's own perspective (only ever
+  // set server-side, by /setup/apply) — read here purely so
+  // ProjectSetupPanel.tsx can tell "never scaffolded" apart from
+  // "scaffolded, and conventionsDrifted below says whether it's stale."
+  conventionsHash: string | null;
+  // Computed server-side in routes/projects.ts's GET /api/projects (not a
+  // DB column) — true iff conventionsHash is non-null AND no longer
+  // matches what this install's current settings (respecting this
+  // project's own injectWorkflowConventions opt-out) would produce right
+  // now. False for a never-scaffolded project — that's "unscaffolded," a
+  // distinct state from "stale," not something to badge as drifted.
+  conventionsDrifted: boolean;
 }
 
 // Mirrors src/services/host-registry.ts's HostSummary, plus the live

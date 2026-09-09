@@ -31,6 +31,19 @@ interface ApplyResult {
   detail?: string;
 }
 
+// Phase 3 (drift detection, issue #1205, follow-up to #1201) — shown at the top of the
+// initial form, before Preview is even clicked, so the signal is visible
+// the moment the user opens this panel on a drifted project. Kept as its
+// own small component rather than inlined so the copy has one definition.
+function ConventionsDriftBanner() {
+  return (
+    <div className="agent-rules-panel-notice warning">
+      This install's own workflow conventions have changed since this project was last scaffolded —
+      re-run Preview and Apply below to update the committed text.
+    </div>
+  );
+}
+
 // Issue: apply Mullion tooling to other repos, Layer 3 (PR-6) — a
 // project-scoped panel (same "project-scoped panel kind" family as
 // ProjectBriefingPanel/AgentRulesPanel — see usePanelOpener.ts's
@@ -64,6 +77,7 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
   // `?? true` default resolveScaffoldWorkflowConventionsText applies.
   const project = useDashboardStore((s) => s.projects.find((p) => p.id === params.projectId));
   const injectWorkflowConventions = project?.injectWorkflowConventions ?? true;
+  const refreshProjects = useDashboardStore((s) => s.refreshProjects);
   // Hermes review, PR #1200 round 3 (suggestion) — the disclosure used to
   // hand-copy a prose paraphrase of mullion-scaffold.ts's
   // SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS ("always branch + PR, Conventional
@@ -128,12 +142,21 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
       const result = await api.applyProjectSetup(params.projectId, preview.previewId);
       setApplyResult(result);
       setPreview(null);
+      // Hermes review, PR #1206 round 2 — apply just changed this project's
+      // conventionsHash server-side, which flips project.conventionsDrifted
+      // too. Without this, the store's stale copy could keep the drift
+      // banner showing through "Scaffold another" until the next
+      // unrelated /api/projects poll happened to land. Same fire-and-forget
+      // pattern as createProject/updateProject above (projects.ts slice) —
+      // apply already succeeded, so a refresh failure here must not surface
+      // as an apply error.
+      void refreshProjects().catch(() => {});
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to apply");
     } finally {
       setApplying(false);
     }
-  }, [params.projectId, preview]);
+  }, [params.projectId, preview, refreshProjects]);
 
   const handleBack = useCallback(() => {
     setPreview(null);
@@ -236,6 +259,7 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
         <FileTextIcon size={14} />
         Scaffold Mullion integration
       </div>
+      {project?.conventionsDrifted && <ConventionsDriftBanner />}
       <div className="agent-rules-panel-notice">
         Commits an AGENTS.md briefing region, a CLAUDE.md @AGENTS.md import (Claude Code doesn't
         read AGENTS.md on its own — the import is what puts it in context), a starter project skill,

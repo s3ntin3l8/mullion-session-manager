@@ -11,6 +11,7 @@ import {
   InvalidScaffoldSlugError,
   scaffoldSkillPath,
   scaffoldReviewerPath,
+  hashWorkflowConventionsSection,
   type ScaffoldOptions,
 } from "../services/mullion-scaffold.js";
 import { MARKER_START } from "../services/project-briefing.js";
@@ -31,6 +32,7 @@ import { resolveGitHubToken } from "../services/github-integration.js";
 import { createPullRequest, findPullRequestByHead } from "../services/github-write.js";
 import { GitHubApiError } from "../services/github.js";
 import { getStoredSettings } from "../services/settings.js";
+import { resolveWorkflowConventionsText } from "../services/workflow-conventions.js";
 import {
   readProjectSkill,
   readProjectReviewerAgent,
@@ -195,10 +197,10 @@ function resolveScaffoldWorkflowConventionsText(
   app: FastifyInstance,
   project: { injectWorkflowConventions: boolean | null },
 ): string {
-  const injectWorkflowConventions = project.injectWorkflowConventions ?? true;
-  return injectWorkflowConventions
-    ? getStoredSettings(app.db).sessions.workflowConventionsText
-    : "";
+  return resolveWorkflowConventionsText(
+    project.injectWorkflowConventions,
+    getStoredSettings(app.db).sessions.workflowConventionsText,
+  );
 }
 
 // Every path computeScaffold can ever emit, read up front so preview always
@@ -411,6 +413,17 @@ interface PreviewRecord {
   branch: string;
   slug: string;
   createdAt: number;
+  // Phase 3 (drift detection) — the resolved
+  // ScaffoldOptions.workflowConventionsText this preview/generate call
+  // actually used (resolveScaffoldWorkflowConventionsText's own return
+  // value, empty string when opted out or unconfigured — see that
+  // function's own doc comment). Read back unchanged at apply time to
+  // stamp projects.conventionsHash, rather than re-resolving settings
+  // there: settings can change inside this record's own TTL window, and
+  // stamping a hash for text that was never actually the text committed
+  // would make the drift badge wrong from the moment it ships. Same
+  // "resolved once, read back unchanged" posture as `slug` itself.
+  workflowConventionsText: string;
 }
 
 // In-memory only, primary-only, short-lived — a preview is a "here's what
@@ -582,6 +595,11 @@ async function finishPreview(
     branch: worktree.branch,
     slug: options.slug,
     createdAt: Date.now(),
+    // Both call sites (`/setup/preview`, `/setup/generate`) always resolve
+    // this via resolveScaffoldWorkflowConventionsText before reaching here
+    // — the `?? ""` only guards ScaffoldOptions's own optional typing, it's
+    // never actually reached with undefined in practice.
+    workflowConventionsText: options.workflowConventionsText ?? "",
   });
 
   return {
@@ -900,7 +918,23 @@ export async function projectSetupRoute(app: FastifyInstance) {
       // PR merges). Sourced from `record.slug` (the previewed/applied
       // slug), never re-read from the request body, since this route has no
       // body field of its own beyond `previewId`.
-      app.db.update(projects).set({ slug: record.slug }).where(eq(projects.id, projectId)).run();
+      //
+      // Phase 3 (drift detection) — conventionsHash stamped in the SAME
+      // update, from `record.workflowConventionsText` (resolved once at
+      // preview/generate time, read back unchanged here — see
+      // PreviewRecord's own doc comment for why re-resolving live settings
+      // at this point would be wrong) run through the identical
+      // workflowConventionsSection composition computeScaffold itself used
+      // to build the committed region. Reusing that exact function is what
+      // lets the drift check later compare like for like.
+      app.db
+        .update(projects)
+        .set({
+          slug: record.slug,
+          conventionsHash: hashWorkflowConventionsSection(record.workflowConventionsText),
+        })
+        .where(eq(projects.id, projectId))
+        .run();
 
       const repoRef = await resolveRepoRef(app, project);
       if (!repoRef) {

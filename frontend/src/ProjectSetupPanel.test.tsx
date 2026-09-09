@@ -173,6 +173,46 @@ describe("ProjectSetupPanel", () => {
     expect(screen.getByText(/No GitHub remote detected/)).toBeInTheDocument();
   });
 
+  // Hermes review, PR #1206 round 2 (suggestion) — before this, a
+  // successful apply left the store's project.conventionsDrifted stale
+  // until the next unrelated /api/projects poll, so the drift banner could
+  // briefly persist through "Scaffold another" even right after the fix
+  // apply that resolved it.
+  it("refreshes the project list after a successful apply, so a resolved drift banner doesn't linger stale", async () => {
+    const originalState = useDashboardStore.getState();
+    const refreshProjects = vi.fn().mockResolvedValue(undefined);
+    useDashboardStore.setState({ refreshProjects });
+    try {
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({
+          preview: () => jsonResponse(200, { previewId: "abc", diff: "", files: ["AGENTS.md"] }),
+          apply: () =>
+            jsonResponse(200, {
+              ok: true,
+              mode: "local-branch",
+              branch: "mullion/setup-demo",
+              detail: "committed locally",
+            }),
+        }),
+      );
+      const user = userEvent.setup();
+      render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+
+      await user.type(screen.getByPlaceholderText("my-project"), "demo");
+      await user.click(screen.getByText("Preview"));
+      await screen.findByText("Preview — 1 file");
+      expect(refreshProjects).not.toHaveBeenCalled();
+
+      await user.click(screen.getByText("Apply"));
+      await screen.findByText("mullion/setup-demo");
+
+      expect(refreshProjects).toHaveBeenCalledTimes(1);
+    } finally {
+      useDashboardStore.setState(originalState, true);
+    }
+  });
+
   it("shows an error and stays on the preview when apply fails", async () => {
     vi.stubGlobal(
       "fetch",
@@ -346,5 +386,39 @@ describe("ProjectSetupPanel", () => {
     await screen.findByText("Preview — 1 file");
 
     expect(screen.queryByText(/AGENTS\.override\.md/)).not.toBeInTheDocument();
+  });
+
+  // Issue #1205, Phase 3 (drift detection) — the banner is driven by
+  // project.conventionsDrifted, computed server-side (routes/projects.ts),
+  // never re-derived here.
+  describe("conventions drift banner (Phase 3)", () => {
+    const originalState = useDashboardStore.getState();
+    afterEach(() => {
+      useDashboardStore.setState(originalState, true);
+    });
+
+    it("shows the drift banner when the project's conventions have drifted", () => {
+      vi.stubGlobal("fetch", mockFetch({}));
+      useDashboardStore.setState({
+        projects: [makeProject({ id: 1, conventionsDrifted: true })],
+      });
+      render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+
+      expect(
+        screen.getByText(/re-run Preview and Apply below to update the committed text/),
+      ).toBeInTheDocument();
+    });
+
+    it("shows no drift banner when the project has not drifted", () => {
+      vi.stubGlobal("fetch", mockFetch({}));
+      useDashboardStore.setState({
+        projects: [makeProject({ id: 1, conventionsDrifted: false })],
+      });
+      render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+
+      expect(
+        screen.queryByText(/re-run Preview and Apply below to update the committed text/),
+      ).not.toBeInTheDocument();
+    });
   });
 });

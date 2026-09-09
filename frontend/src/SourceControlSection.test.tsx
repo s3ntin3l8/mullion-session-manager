@@ -47,6 +47,8 @@ function makeProject(overrides: Partial<Project>): Project {
     injectAgentGuide: null,
     injectProjectBriefing: null,
     injectWorkflowConventions: null,
+    conventionsHash: null,
+    conventionsDrifted: false,
     createdAt: "2026-01-01T00:00:00.000Z",
     ...overrides,
   };
