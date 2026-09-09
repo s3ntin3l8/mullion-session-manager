@@ -236,15 +236,21 @@ working — the boot-time sync already runs automatically with no user action.
   reinstalling everything. Best-effort per agent host: an unreachable or
   version-skewed one is logged and skipped, never blocks the primary's own
   removal.
-  **Known remaining gap, tracked separately:** there is currently no path
-  that clears an agent host's persisted "disabled" flag once set — turning
-  `sessions.injectMullionBundle` back on (Settings panel, or the primary's
-  own `bundle resync`) only re-syncs the **primary**; it does not fan out
-  to registered agent hosts, so each one stays uninstalled until that flag
-  is cleared by hand (or a fan-out for the "re-enable" direction is built).
-  No confirmation prompt at the CLI layer, same as `session kill`/
-  `preview delete` — a confirming UI is the dashboard panel's job, not
-  this command's.
+  **Re-enable now fans out too (issue #1128):** turning
+  `sessions.injectMullionBundle` back on (Settings panel) fires
+  `reenableAgentBundles` (`src/plugins/bundle-sync.ts`) on the false→true
+  edge, which clears the persisted "disabled" flag on every registered agent
+  host by calling the same removal route with the opposite direction —
+  deliberately without also re-syncing the **primary** itself, since the
+  primary reads this setting live and was never stuck the way an agent
+  host's persisted flag was. Best-effort per host, same posture as the
+  removal fan-out above: a host that's unreachable, or predates the
+  `/internal/bundle-sync/remove` route, is logged and skipped rather than
+  blocking the others — that host's bundle stays disabled until it's
+  reachable or updated, and its own next boot-time sync will still consult
+  its stale flag until then. No confirmation prompt at the CLI layer, same
+  as `session kill`/`preview delete` — a confirming UI is the dashboard
+  panel's job, not this command's.
 
 ### events
 

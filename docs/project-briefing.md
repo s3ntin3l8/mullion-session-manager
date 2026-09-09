@@ -422,9 +422,12 @@ not environment variables, so they don't appear in that table.
 
 **Per-project overrides (issue #884, extended by #937):** the agent-guide,
 project-briefing, and workflow-conventions toggles — but not the
-tooling-bundle one, which gates a materially bigger mechanism (managed
-host-level installs for codex/agy, not just a SessionStart text injection)
-— can also be set per project, from the project's own settings panel
+tooling-bundle one (issue #933 asked for it and its closing comment records
+why not: codex/agy's managed installs write into one shared skill root per
+CLI per host, not a root per project, so a per-project value has nothing
+project-scoped to vary, and since #1079 a per-project OFF would delete that
+host-global content for every other project on the host too) — can also be
+set per project, from the project's own settings panel
 (`ProjectBriefingPanel.tsx`'s "Session injection for this project" row).
 `null` (the default) inherits `true` for all three (there is no separate
 global BOOLEAN setting for workflow conventions to inherit from — the

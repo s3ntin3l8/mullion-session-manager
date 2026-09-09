@@ -225,10 +225,15 @@ export interface HookLaunchPlan {
    * Absent for every other agent. */
   commandTransform?: (command: string) => string;
   /** An idempotent, Mullion-owned write into the agent's OWN real config
-   * location, for agents with no ephemeral injection path at all (agy,
-   * OpenCode — see follow-up PRs). Must be safe to call on every launch:
-   * no-op if the content Mullion would write already matches. Absent for
-   * agents that don't need it (Claude Code, Codex). */
+   * location. Originally added for agents with no ephemeral injection path
+   * at all (agy, codex — installBundleSkills into their host-global skill
+   * roots, mergeCodexHooks/mergeAgyHooks); #1079 also gave Claude Code and
+   * opencode a managedInstall step, to REMOVE previously host-globally
+   * installed content when their ephemeral path is what's active instead
+   * (removeBundleContentForCli) — so this is no longer absent for any
+   * adapter, just used for different things depending on whether that
+   * adapter has an ephemeral overlay. Must be safe to call on every launch:
+   * no-op if the content Mullion would write (or remove) already matches. */
   managedInstall?: () => Promise<void> | void;
 }
 
