@@ -182,10 +182,10 @@ way as a namespaced one.
   Codex's own hook-trust model and `CODEX_HOME`'s all-or-nothing scope rule
   out an ephemeral injection there; agy has no documented env var to
   relocate its config at all — see [`agent-hooks.md`](agent-hooks.md)),
-  `hook-adapters/mullion-bundle` (ships `src/bundle/skills/`'s seven skills
+  `hook-adapters/mullion-bundle` (ships `src/bundle/skills/`'s eight skills
   — `host`, `browser`, `troubleshooting`, `session-ops`, `taskmaster-issues`,
-  `task-worker`, `task-reviewer` — into every Claude Code session via a
-  session-scoped `--plugin-dir`,
+  `task-worker`, `task-reviewer`, `manual-review-methodology` — into every
+  Claude Code session via a session-scoped `--plugin-dir`,
   installs the same skills into codex's/agy's own real global skill dirs
   (each `mullion-`-prefixed there to avoid colliding with a user's own
   skill) for the two agents with no ephemeral overlay, and — the same

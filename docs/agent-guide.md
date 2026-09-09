@@ -39,10 +39,11 @@ pulled into context automatically at startup, one way or another (see
 [Auto-injection](#auto-injection) below).
 
 Claude Code sessions also get this content as a set of discoverable
-skills — `host`, `browser`, `troubleshooting`, `session-ops`, plus three
+skills — `host`, `browser`, `troubleshooting`, `session-ops`, plus four
 that aren't a copy of anything here: `taskmaster-issues`, `task-worker`
-(issue #964), and `task-reviewer` (issue #955) — shipped as a
-session-scoped `--plugin-dir` bundle (`src/bundle/skills/`, see
+(issue #964), `task-reviewer` (issue #955), and `manual-review-methodology`
+(issue #1113) — shipped as a session-scoped `--plugin-dir` bundle
+(`src/bundle/skills/`, see
 `hook-adapters/mullion-bundle.ts`), not a file in any particular project's
 checkout, so it's available in every repo Mullion hosts a session in, not
 just this one. Codex and agy get the same content installed into their own
@@ -407,8 +408,9 @@ injection: check `~/.codex/hooks.json` / `~/.gemini/config/hooks.json`'s
 ## Where your skills actually come from
 
 The tier-0 push above (and the `host`/`browser`/`troubleshooting`/
-`session-ops`/`taskmaster-issues`/`task-worker`/`task-reviewer` skills it
-points you at) isn't delivered fresh per session anymore. Since issue #941,
+`session-ops`/`taskmaster-issues`/`task-worker`/`task-reviewer`/
+`manual-review-methodology` skills it points you at) isn't delivered fresh
+per session anymore. Since issue #941,
 getting the shipped bundle
 (`src/bundle/skills/`) onto a host is a **host-local, boot-time,
 manifest-driven sync** (`src/services/bundle-sync.ts`, wired in by
