@@ -1426,6 +1426,19 @@
   font-weight: 600;
   animation: cmuxAttn 1.4s ease-out infinite;
 }
+/* Hermes review (dock log-streaming resize fix) — a group's PERSISTENT
+   stack-action indicator (DockStackHeader.tsx's `actionRunning`), distinct
+   from the transient `.dock-monitor-check-status` tag right next to it:
+   this stays up for the whole duration of a live action, not just ~4s after
+   the click that started it, and in particular still shows up after a
+   workspace switch reconstructs a still-running action from its session
+   with no click involved at all. `--g` (the same "good/positive" tone
+   modals.css's own .settings-stat-value.good uses), not the `.armed`
+   tag's attention-red above — this is informational, not something that
+   needs the user's action. */
+.dock-monitor-tag.dock-stack-action-running {
+  color: var(--g);
+}
 /* PR3 (issue #73 follow-up) — the container-state dot's own meaning used to
    live only in a hover title; this is that same label, always visible,
    right next to the dot. Sized/toned like .dock-monitor-tag rather than the

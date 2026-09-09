@@ -893,6 +893,80 @@ describe("Dock", () => {
       expect(strip.querySelector("[data-testid='terminal-pane']")).not.toBeNull();
       const group = document.querySelector(".dock-stack-group") as HTMLElement;
       expect(group.querySelector(".dock-stack-action-strip")).not.toBeNull();
+
+      // Hermes review — a persistent "running" indicator lives in the
+      // always-visible DockStackHeader, independent of the strip's own
+      // scroll position and of the transient status message (which only
+      // ever fires from a click, never from this reconstruction path).
+      expect(screen.getByTitle("A stack action is running — see the log strip below")).toHaveClass(
+        "dock-stack-action-running",
+      );
+    });
+
+    it("Hermes review — no persistent 'running' indicator when nothing is running", async () => {
+      dockByProject[1] = [dockerControl()];
+      render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+      await screen.findByText("web");
+      expect(document.querySelector(".dock-stack-action-running")).toBeNull();
+    });
+
+    it("Hermes review — .dock-stack-monitors doesn't render (and reserves no dead space) when a group has no service controls left", async () => {
+      // Every service dropped from discovery past its own RECREATE_GRACE_MS
+      // hold, leaving only the live ephemeral stack-action control — a
+      // narrow but real case (PR2b's own grace-window expiry test below
+      // reaches it the same way). Before this fix, .dock-stack-monitors
+      // still rendered with its inline min-height, reserving ~231px of
+      // dead space with nothing inside it.
+      const T0 = 1_700_000_000_000;
+      const dateSpy = vi.spyOn(Date, "now").mockReturnValue(T0);
+      try {
+        dockByProject[1] = [dockerControl()];
+        const rebuildCommand =
+          "docker compose -p 'sanctuary' build --pull && docker compose -p 'sanctuary' up -d";
+        updateByProject[1] = {
+          sessionId: 42,
+          control: {
+            id: "docker-update:sanctuary",
+            title: "Update sanctuary",
+            command: rebuildCommand,
+            source: "docker",
+            composeProject: "sanctuary",
+          },
+        };
+        const rebuildSession = makeSession({ id: 42, kind: "dock", command: rebuildCommand });
+        useDashboardStore.setState({
+          projects: [PROJECT],
+          sessions: [rebuildSession],
+          refreshSessions: vi.fn().mockResolvedValue(undefined),
+        });
+        const user = userEvent.setup();
+        render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+        await screen.findByText("web");
+        await user.click(stackKebab());
+        await user.click(await screen.findByText("Pull & restart stack"));
+        await user.click(await screen.findByText("Click again — restarts the whole stack"));
+        await screen.findByText("Update sanctuary");
+
+        // The container vanishes mid-rebuild (recreate) — held at first,
+        // then the grace window itself expires (same two-step poll the
+        // "floors a group's flexGrow at 1" test below uses).
+        dockByProject[1] = [];
+        useDashboardStore.getState().bumpDockConfigRefreshTrigger();
+        await screen.findByText("recreating…");
+
+        dateSpy.mockReturnValue(T0 + 36_000);
+        useDashboardStore.getState().bumpDockConfigRefreshTrigger();
+        await waitFor(() => expect(screen.queryByText("web")).not.toBeInTheDocument());
+
+        expect(document.querySelector(".dock-stack-monitors")).toBeNull();
+        // The strip itself is untouched — only the (now genuinely empty)
+        // services row is gone.
+        expect(document.querySelector(".dock-stack-action-strip")).not.toBeNull();
+      } finally {
+        dateSpy.mockRestore();
+      }
     });
 
     it("floors a group's flexGrow at 1 even when its ONLY control is a live transient stack-action monitor (Hermes review)", async () => {

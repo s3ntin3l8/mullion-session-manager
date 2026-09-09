@@ -1195,6 +1195,7 @@ function DockColumn({
                 canPull={group.pullRep !== null}
                 canRebuild={group.rebuildRep !== null}
                 status={checkStatusById[statusKey]}
+                actionRunning={ephemeralControlsInGroup.length > 0}
                 onStackRestart={() =>
                   rep &&
                   void handleStackAction(
@@ -1246,10 +1247,22 @@ function DockColumn({
                   `.dock-stack-group` itself) grows enough to cover BOTH the
                   strip and the services, with `.dock-body`'s
                   `overflow-y: auto` (dock.css) revealing whatever still
-                  doesn't fit instead of squeezing either row to nothing. */}
-              <div className="dock-stack-monitors" style={{ minHeight: dockMonitorMinHeight }}>
-                {serviceControls.map(renderMonitor)}
-              </div>
+                  doesn't fit instead of squeezing either row to nothing.
+
+                  Hermes review — that reservation is pointless (and a dead
+                  block eating the group's height, being `flex: 1`) when
+                  `serviceControls` is genuinely empty — every service held
+                  mid-recreate past its own grace window, or dropped from
+                  discovery entirely, with only the ephemeral strip left.
+                  Skipping the row outright in that case reserves nothing:
+                  there is no service monitor whose squeeze-to-0px this
+                  floor needs to prevent if there's no service control to
+                  render in the first place. */}
+              {serviceControls.length > 0 && (
+                <div className="dock-stack-monitors" style={{ minHeight: dockMonitorMinHeight }}>
+                  {serviceControls.map(renderMonitor)}
+                </div>
+              )}
               {/* Dock log-streaming resize fix — a live stack-action stream
                   renders here, as its own fixed-height row below the
                   services, instead of as a peer column inside
