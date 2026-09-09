@@ -63,6 +63,17 @@ describe("manual-review-methodology skill — parses and gates the opposite way 
     expect(parsed?.name).toBe("manual-review-methodology");
   });
 
+  // Hermes review, PR #1214 — the DESCRIPTION, not just the body, is what a
+  // skill-selection layer keys on when deciding whether to load a skill at
+  // all. A reword that dropped the Task Master deferral from the
+  // description alone (leaving the body's own gate check untouched) would
+  // weaken the gate before any body-window test below could ever catch it.
+  it("the frontmatter description itself carries the Task Master deferral, not just the body", () => {
+    const parsed = parseSkillFrontmatter(skillBody);
+    expect(parsed?.description).toMatch(/Task Master/);
+    expect(parsed?.description).toMatch(/does not apply/i);
+  });
+
   it("quotes both real gate phrases verbatim, so it recognizes a Task Master session and defers", () => {
     expect(skillBodyNoFrontmatter).toContain(WORKER_GATE_PHRASE);
     expect(skillBodyNoFrontmatter).toContain(REVIEW_GATE_PHRASE);
