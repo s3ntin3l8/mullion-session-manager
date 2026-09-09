@@ -77,6 +77,7 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
   // `?? true` default resolveScaffoldWorkflowConventionsText applies.
   const project = useDashboardStore((s) => s.projects.find((p) => p.id === params.projectId));
   const injectWorkflowConventions = project?.injectWorkflowConventions ?? true;
+  const refreshProjects = useDashboardStore((s) => s.refreshProjects);
   // Hermes review, PR #1200 round 3 (suggestion) — the disclosure used to
   // hand-copy a prose paraphrase of mullion-scaffold.ts's
   // SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS ("always branch + PR, Conventional
@@ -141,12 +142,21 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
       const result = await api.applyProjectSetup(params.projectId, preview.previewId);
       setApplyResult(result);
       setPreview(null);
+      // Hermes review, PR #1206 round 2 — apply just changed this project's
+      // conventionsHash server-side, which flips project.conventionsDrifted
+      // too. Without this, the store's stale copy could keep the drift
+      // banner showing through "Scaffold another" until the next
+      // unrelated /api/projects poll happened to land. Same fire-and-forget
+      // pattern as createProject/updateProject above (projects.ts slice) —
+      // apply already succeeded, so a refresh failure here must not surface
+      // as an apply error.
+      void refreshProjects().catch(() => {});
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to apply");
     } finally {
       setApplying(false);
     }
-  }, [params.projectId, preview]);
+  }, [params.projectId, preview, refreshProjects]);
 
   const handleBack = useCallback(() => {
     setPreview(null);
