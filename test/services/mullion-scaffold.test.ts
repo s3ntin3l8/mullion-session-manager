@@ -152,21 +152,172 @@ describe("computeScaffold", () => {
       expect(region).toContain(workflowFragment("prePushChecks", "full-gate"));
     });
 
-    it("an agent-generated override (issue #956) replaces the whole region, including the Workflow Conventions section", () => {
-      // Documenting existing, deliberate behavior (see computeScaffold's own
+    it("an agent-generated override (issue #956) still gets a Workflow Conventions section, unlike pre-#1201 behavior", () => {
+      // Issue #1201 — before this, computeScaffold's own
       // `options.generated?.briefingRegion ?? briefingRegionBody(slug)`
-      // short-circuit) rather than asserting a new requirement: when
-      // scaffold-generate.ts supplies its own briefingRegion, it wins
-      // wholesale and the Workflow Conventions section this issue adds is
-      // NOT present. That's the same trade-off issue #956 already made for
-      // the rest of the region's content.
+      // was all-or-nothing: an agent-generated region replaced the WHOLE
+      // region, silently dropping the Workflow Conventions section
+      // entirely (this test used to assert exactly that, as documented
+      // pre-existing behavior). computeScaffold now always appends its
+      // own conventions section regardless of where the pointer prose
+      // came from — the generation turn no longer even asks for one
+      // (scaffold-generate.ts's buildGenerationPrompt), so letting it
+      // still own that section would have left it either duplicated or,
+      // per the old short-circuit, silently missing.
       const entries = computeScaffold(
         {},
         { slug: "demo", generated: { briefingRegion: "Custom generated region." } },
       );
       const agentsMd = entries.find((e) => e.path === "AGENTS.md") as { contents: string };
       const region = extractMarkedRegion(agentsMd.contents, MARKER_START, MARKER_END)!;
-      expect(region).not.toContain("## Workflow Conventions");
+      expect(region).toContain("Custom generated region.");
+      expect(region).toContain("## Workflow Conventions");
+      // Exactly one heading — not two.
+      expect(region.split("## Workflow Conventions")).toHaveLength(2);
+    });
+
+    it("strips a stray leading '## Workflow Conventions' heading a generation turn emits anyway, rather than duplicating the heading", () => {
+      // Only the HEADING itself is stripped (a literal, case-sensitive
+      // match anywhere the heading starts its own line in
+      // generated.briefingRegion) — this module makes no attempt to
+      // detect and remove an inferred conventions PARAGRAPH the model
+      // wrote under its own heading, since that's ordinary prose
+      // indistinguishable from any other pointer content once the heading
+      // marker is gone. The guarantee is "never two headings," not "the
+      // model's own conventions guess vanishes."
+      const entries = computeScaffold(
+        {},
+        {
+          slug: "demo",
+          generated: {
+            briefingRegion: "## Workflow Conventions\n\nSome inferred conventions text.\n",
+          },
+        },
+      );
+      const agentsMd = entries.find((e) => e.path === "AGENTS.md") as { contents: string };
+      const region = extractMarkedRegion(agentsMd.contents, MARKER_START, MARKER_END)!;
+      // Exactly one heading, and this install's own conventions (the
+      // fallback default here, since workflowConventionsText is unset)
+      // are what's actually committed under it.
+      expect(region.split("## Workflow Conventions")).toHaveLength(2);
+      expect(region).toContain(workflowFragment("branching", "branch-pr"));
+    });
+
+    it("also strips a stray '## Workflow Conventions' heading positioned AFTER the model's own pointer paragraph (Hermes review, PR #1200 round 1, W2)", () => {
+      // This is the layout the PRE-#1201 generation prompt actually asked
+      // for (pointer paragraph, THEN a Workflow Conventions section) — the
+      // realistic shape a model ignoring the new "Do NOT include"
+      // instruction would fall back to, and the one a `^`-anchored regex
+      // could never see: the heading starts mid-string, not at byte 0.
+      const entries = computeScaffold(
+        {},
+        {
+          slug: "demo",
+          generated: {
+            briefingRegion:
+              "The skill lives at .claude/skills/demo/SKILL.md.\n\n" +
+              "## Workflow Conventions\n\n" +
+              "Some model-inferred conventions text nobody asked for.\n",
+          },
+        },
+      );
+      const agentsMd = entries.find((e) => e.path === "AGENTS.md") as { contents: string };
+      const region = extractMarkedRegion(agentsMd.contents, MARKER_START, MARKER_END)!;
+      // The model's own pointer paragraph survives...
+      expect(region).toContain("The skill lives at .claude/skills/demo/SKILL.md.");
+      // ...its stray inferred paragraph survives too, as plain prose (no
+      // heading of its own — see the test above for why removing that
+      // paragraph entirely is explicitly out of scope)...
+      expect(region).toContain("Some model-inferred conventions text nobody asked for.");
+      // ...but there is exactly ONE "## Workflow Conventions" heading in
+      // the final region, and it's this module's own canonical one.
+      expect(region.split("## Workflow Conventions")).toHaveLength(2);
+      expect(region).toContain(workflowFragment("branching", "branch-pr"));
+    });
+
+    it("commits this install's own workflowConventionsText verbatim when set, instead of the fixed defaults", () => {
+      const entries = computeScaffold(
+        {},
+        { slug: "demo", workflowConventionsText: "Our team's own conventions, written by hand." },
+      );
+      const agentsMd = entries.find((e) => e.path === "AGENTS.md") as { contents: string };
+      const region = extractMarkedRegion(agentsMd.contents, MARKER_START, MARKER_END)!;
+      expect(region).toContain("Our team's own conventions, written by hand.");
+      expect(region).not.toContain(workflowFragment("branching", "branch-pr"));
+    });
+
+    it("workflowConventionsText also wins when a generation turn supplied its own pointer prose", () => {
+      const entries = computeScaffold(
+        {},
+        {
+          slug: "demo",
+          generated: { briefingRegion: "Custom generated region." },
+          workflowConventionsText: "Our team's own conventions, written by hand.",
+        },
+      );
+      const agentsMd = entries.find((e) => e.path === "AGENTS.md") as { contents: string };
+      const region = extractMarkedRegion(agentsMd.contents, MARKER_START, MARKER_END)!;
+      expect(region).toContain("Custom generated region.");
+      expect(region).toContain("Our team's own conventions, written by hand.");
+      expect(region).not.toContain(workflowFragment("branching", "branch-pr"));
+    });
+
+    it("an unset workflowConventionsText produces byte-identical output to before issue #1201", () => {
+      // The regression guard that matters most: a caller that never sets
+      // the new field (every existing preview/apply call site, today)
+      // must keep producing EXACTLY the same AGENTS.md region as before
+      // this field existed.
+      const withoutField = computeScaffold({}, { slug: "demo" });
+      const withUndefinedField = computeScaffold(
+        {},
+        { slug: "demo", workflowConventionsText: undefined },
+      );
+      const withEmptyString = computeScaffold({}, { slug: "demo", workflowConventionsText: "" });
+      const agentsMdA = withoutField.find((e) => e.path === "AGENTS.md") as { contents: string };
+      const agentsMdB = withUndefinedField.find((e) => e.path === "AGENTS.md") as {
+        contents: string;
+      };
+      const agentsMdC = withEmptyString.find((e) => e.path === "AGENTS.md") as {
+        contents: string;
+      };
+      expect(agentsMdB.contents).toBe(agentsMdA.contents);
+      expect(agentsMdC.contents).toBe(agentsMdA.contents);
+    });
+
+    // Hermes review, PR #1200 round 1 (suggestion) — the three variants
+    // above all share the SAME new composition formula
+    // (briefingRegionPointerBody + workflowConventionsSection), so a future
+    // edit to that shared formula that changed the actual bytes would keep
+    // all three in lockstep and this test green regardless. This golden
+    // literal is independent of computeScaffold's own internals: captured
+    // from the pre-#1201 `briefingRegionBody` output verbatim (unchanged by
+    // this issue — only split into two functions, never reworded) for
+    // slug "demo" with no workflowConventionsText set, so a genuine
+    // regression in either half still fails here even if it fails to move
+    // the three variants apart from each other.
+    it("matches the exact pre-#1201 AGENTS.md region byte-for-byte, as a literal", () => {
+      const entries = computeScaffold({}, { slug: "demo" });
+      const agentsMd = entries.find((e) => e.path === "AGENTS.md") as { contents: string };
+      const region = extractMarkedRegion(agentsMd.contents, MARKER_START, MARKER_END)!;
+      expect(region).toBe(
+        "This repository uses [Mullion](https://github.com/s3ntin3l8/mullion-session-manager)\n" +
+          "to run AI coding agents. A project-specific skill and reviewer subagent for\n" +
+          "this repo live at `.claude/skills/demo/SKILL.md` and\n" +
+          "`.claude/agents/demo-reviewer.md` — read the skill before making\n" +
+          "changes, and use the reviewer subagent (or `/code-review`) before\n" +
+          "declaring a change done.\n\n" +
+          "## Workflow Conventions\n\n" +
+          "Never commit directly to the default branch. Always branch and open a PR.\n\n" +
+          "Branch off the latest remote default branch, never off your local one: " +
+          "`git fetch origin && git checkout -b <branch> origin/<default>`. A local " +
+          "default branch is routinely stale, which is what makes a PR show up as " +
+          '"out-of-date with the base branch" the moment it\'s opened.\n\n' +
+          "Commit and PR titles need a Conventional Commits prefix " +
+          "(`feat:`, `fix:`, `chore:`, ...).\n\n" +
+          "Squash-merge PRs — the PR title becomes the commit message on the default branch.\n\n" +
+          "Require green CI before merging.\n\n" +
+          "Before pushing, run the full lint/typecheck/test/format gate.",
+      );
     });
   });
 

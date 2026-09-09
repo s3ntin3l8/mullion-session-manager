@@ -1,8 +1,9 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api, ApiError } from "./api/index.js";
 import { parseUnifiedDiff } from "./diffUtils.js";
 import { EmptyStateNote } from "./ui/EmptyState.js";
 import { FileTextIcon } from "./ui/icons.js";
+import { useDashboardStore } from "./store/index.js";
 
 export interface ProjectSetupPanelParams {
   projectId: number;
@@ -12,6 +13,13 @@ interface PreviewState {
   previewId: string;
   diff: string;
   files: string[];
+  // Issue #1201 — true when the target repo already has its own
+  // AGENTS.override.md. computeScaffold never writes to that path (codex
+  // reads it INSTEAD OF AGENTS.md), so the committed Workflow Conventions
+  // this scaffold writes into AGENTS.md would never reach codex sessions
+  // for this specific project — surfaced here so that's a decision the
+  // user makes with the fact in front of them, not a silent gap.
+  hasAgentsOverride: boolean;
 }
 
 interface ApplyResult {
@@ -34,6 +42,54 @@ interface ApplyResult {
 // token are available, opens a real PR — so the UI never lets Apply fire
 // without the user having seen the exact diff Preview produced first.
 export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams }) {
+  // Issue #1201 — same install-wide text every session already gets
+  // injected from (settings.sessions.workflowConventionsText, Settings ->
+  // Sessions), read here purely for disclosure: computeScaffold on the
+  // backend resolves and commits the SAME text server-side (project-setup.ts's
+  // own /setup/preview and /setup/generate handlers) — this is not a
+  // second source of truth, just showing the user what's about to be
+  // committed before they see the diff.
+  const workflowConventionsText = useDashboardStore(
+    (s) => s.settings.sessions.workflowConventionsText,
+  );
+  // Hermes review, PR #1200 round 2 — the disclosure above used to read
+  // ONLY the install-wide text, ignoring this project's own
+  // injectWorkflowConventions opt-out, which resolveScaffoldWorkflowConventionsText
+  // (project-setup.ts) already gates the SERVER-side resolution on. For an
+  // opted-out project the server falls back to the fixed defaults
+  // regardless of this text, but the disclosure kept claiming "the same
+  // text already injected into every session on this project" — false on
+  // both counts for exactly that project. Same store-read pattern
+  // ProjectBriefingPanel.tsx uses for the identical column, and the same
+  // `?? true` default resolveScaffoldWorkflowConventionsText applies.
+  const project = useDashboardStore((s) => s.projects.find((p) => p.id === params.projectId));
+  const injectWorkflowConventions = project?.injectWorkflowConventions ?? true;
+  // Hermes review, PR #1200 round 3 (suggestion) — the disclosure used to
+  // hand-copy a prose paraphrase of mullion-scaffold.ts's
+  // SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS ("always branch + PR, Conventional
+  // Commits titles, squash merge, ..."), which a later edit to that answer
+  // set could silently drift out of sync with. Fetched once here instead,
+  // from the same source (GET /api/workflow-conventions/scaffold-defaults,
+  // itself just buildWorkflowConventionsText(SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS))
+  // — `null` while loading or on fetch failure, in which case the
+  // disclosure below falls back to naming the defaults without quoting
+  // them verbatim, rather than blocking the panel on this fetch.
+  const [scaffoldDefaultsText, setScaffoldDefaultsText] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void api
+      .getScaffoldDefaultConventionsText()
+      .then((result) => {
+        if (!cancelled) setScaffoldDefaultsText(result.text);
+      })
+      .catch(() => {
+        // Disclosure-only fetch — a failure here degrades to the
+        // no-verbatim-text fallback below, never an error banner.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const [slug, setSlug] = useState("");
   const [includeContributingPointer, setIncludeContributingPointer] = useState(false);
   const [symlinkAgentsSkills, setSymlinkAgentsSkills] = useState(false);
@@ -135,6 +191,14 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
           configured) — nothing is written until you click Apply.
         </div>
         {error && <div className="agent-rules-panel-notice error">{error}</div>}
+        {preview.hasAgentsOverride && (
+          <div className="agent-rules-panel-notice warning">
+            This repo already has its own <code>AGENTS.override.md</code> — codex reads that file
+            INSTEAD OF AGENTS.md, so the Workflow Conventions section this scaffold just committed
+            into AGENTS.md will never reach codex sessions on this project. Nothing here writes to
+            AGENTS.override.md; if codex needs to see these conventions, add them there by hand.
+          </div>
+        )}
         {diffLines.length === 0 ? (
           <EmptyStateNote>No changes to show.</EmptyStateNote>
         ) : (
@@ -150,6 +214,21 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
       </div>
     );
   }
+
+  // A single <details> disclosure, referenced from both the opted-out and
+  // no-conventions-configured branches below, so there is exactly one
+  // place rendering the fetched text — never two copies that could show
+  // different things while `scaffoldDefaultsText` is still loading in one
+  // but not the other (impossible in practice, since both read the same
+  // state, but keeping it to one definition removes even that question).
+  const scaffoldDefaultsDisclosure = scaffoldDefaultsText !== null && (
+    <details style={{ display: "inline" }}>
+      <summary style={{ display: "inline", cursor: "pointer" }}>(see the exact defaults)</summary>
+      <pre className="session-file-change-diff" style={{ whiteSpace: "pre-wrap" }}>
+        {scaffoldDefaultsText}
+      </pre>
+    </details>
+  );
 
   return (
     <div className="agent-rules-panel-editor" style={{ padding: "12px 14px" }}>
@@ -239,6 +318,32 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
             checked={includeDockConfig}
             onChange={(e) => setIncludeDockConfig(e.target.checked)}
           />
+        </div>
+      </div>
+      <div className="settings-row">
+        <div className="settings-row-text">
+          <label className="settings-row-label">Workflow Conventions to commit</label>
+          <div className="settings-row-desc">
+            {!injectWorkflowConventions ? (
+              <>
+                This project has opted out of workflow-conventions injection (Session injection for
+                this project → Workflow conventions, in the Mullion Briefing panel), so this will
+                commit Mullion's own built-in defaults{scaffoldDefaultsDisclosure} regardless of
+                anything configured in Settings → Sessions.
+              </>
+            ) : workflowConventionsText.length > 0 ? (
+              <>
+                This install's own conventions, from Settings → Sessions — the same text already
+                injected into every session on this project.
+              </>
+            ) : (
+              <>
+                No conventions configured yet in Settings → Sessions, so this will commit Mullion's
+                own built-in defaults{scaffoldDefaultsDisclosure} — configure your own there first
+                if these aren't right for this project.
+              </>
+            )}
+          </div>
         </div>
       </div>
       <button

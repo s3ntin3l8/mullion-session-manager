@@ -230,6 +230,23 @@ export interface ScaffoldOptions {
     reviewer?: string;
     briefingRegion?: string;
   };
+  /** This Mullion install's own `settings.sessions.workflowConventionsText`
+   * (issue #937's Settings → Sessions field, resolved by the caller —
+   * `routes/project-setup.ts` — before this pure function ever sees it,
+   * same "arrives as data" posture as `generated` above). When non-empty,
+   * this is what `computeScaffold` commits into the `## Workflow
+   * Conventions` section of the `AGENTS.md` briefing region — REGARDLESS
+   * of whether `generated.briefingRegion` is also set. Before this field
+   * existed, a scaffolded repo's committed conventions and this install's
+   * own injected-per-session conventions were two different texts from two
+   * different sources (`SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS`'s fixed defaults
+   * vs. whatever was actually authored in Settings), with the committed one
+   * silently authoritative per `workflow-conventions.ts`'s own "AGENTS.md
+   * wins" rule. Falls back to
+   * `buildWorkflowConventionsText(SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS)` when
+   * empty/undefined — a fresh install with nothing authored yet must keep
+   * producing exactly the same bytes as before this field existed. */
+  workflowConventionsText?: string;
 }
 
 export type ScaffoldEntry =
@@ -400,7 +417,25 @@ function deriveCodexReviewerSkillContent(raw: string, slug: string): string | nu
 // subagent / `/code-review`), and reviewFeedback's GitHub-API-reply-and-
 // GraphQL-resolveReviewThread recipe is Mullion-repo-specific, not a
 // reasonable default to impose on an arbitrary scaffolded project.
-const SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS: Record<string, string> = {
+//
+// Issue #1201 — this is now the FALLBACK `workflowConventionsSection` uses
+// when the caller passes no `ScaffoldOptions.workflowConventionsText` (an
+// install with nothing authored yet in Settings → Sessions), not the only
+// path. When this install HAS its own conventions text, that text is what
+// gets committed instead — the whole point of #1201 is that a scaffolded
+// project's committed conventions and this install's own injected-per-
+// session conventions must be the SAME text, not two independently-sourced
+// ones. Every reasoning point above (why these six, why the other four are
+// left unanswered) still applies to this default set specifically; it just
+// no longer applies unconditionally.
+//
+// Hermes review, PR #1200 round 3 (suggestion) — exported so
+// routes/workflow-conventions.ts's `/api/workflow-conventions/scaffold-
+// defaults` endpoint (and, through it, ProjectSetupPanel.tsx's disclosure)
+// can derive the ACTUAL defaults text via `buildWorkflowConventionsText`
+// rather than hand-copying a prose paraphrase that could silently drift
+// from this object.
+export const SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS: Record<string, string> = {
   branching: "branch-pr",
   branchBase: "remote",
   titleConvention: "conventional-commits",
@@ -409,18 +444,72 @@ const SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS: Record<string, string> = {
   prePushChecks: "full-gate",
 };
 
-function briefingRegionBody(slug: string): string {
-  const workflowConventions = buildWorkflowConventionsText(SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS);
+// Issue #1201 — split off the `## Workflow Conventions` section (now
+// `workflowConventionsSection` below) so `computeScaffold` can own it
+// UNCONDITIONALLY, independent of whether `generated.briefingRegion` is
+// set. Before this split, `briefingRegionBody`'s return value was the
+// entire region, and `computeScaffold` picked either the agent-generated
+// region OR this static one — never both — which is what let a generation
+// turn silently omit conventions entirely (the exact contradiction
+// scaffold-generate.ts's own prompt used to contain: it asked for a
+// conventions section, then told the model to report back "the briefing
+// paragraph only"). This function now returns ONLY the pointer prose
+// naming where the skill/reviewer live; it never mentions conventions.
+function briefingRegionPointerBody(slug: string): string {
   return (
     `This repository uses [Mullion](https://github.com/s3ntin3l8/mullion-session-manager)\n` +
     `to run AI coding agents. A project-specific skill and reviewer subagent for\n` +
     `this repo live at \`.claude/skills/${slug}/SKILL.md\` and\n` +
     `\`.claude/agents/${slug}-reviewer.md\` — read the skill before making\n` +
     `changes, and use the reviewer subagent (or \`/code-review\`) before\n` +
-    `declaring a change done.\n\n` +
-    `## Workflow Conventions\n\n` +
-    workflowConventions
+    `declaring a change done.`
   );
+}
+
+// A stray heading a generation turn might still emit even though the
+// prompt no longer asks for one (scaffold-generate.ts's buildGenerationPrompt
+// dropped the conventions ask, but nothing stops a model from including the
+// heading anyway when it's inferring conventions from CONTRIBUTING.md/
+// AGENTS.md on its own initiative). Hermes review, PR #1200 round 1 (W2) —
+// this used to anchor at `^`, the very first byte of the region, which only
+// catches the layout where the model's stray section comes BEFORE its own
+// pointer paragraph. The pre-#1201 generation prompt (buildGenerationPrompt)
+// actually asked the model to put a conventions section AFTER the pointer
+// paragraph — the exact layout a model ignoring the new "Do NOT include"
+// instruction would realistically fall back to — which a `^`-anchored regex
+// can never see: the compose step then emitted TWO "## Workflow
+// Conventions" headings (the model's guessed one, then this module's own
+// canonical one), silently breaking the "never two headings" guarantee.
+// Matched anywhere in the region now (global, `(^|\n)`-anchored so it still
+// only ever matches a heading that starts its own line, never text that
+// merely contains the phrase mid-sentence) and stripped globally — this
+// module appends exactly ONE canonical heading itself, at the very end, so
+// removing every occurrence the model produced is always correct, never a
+// "removed too much" risk. Still a literal, case-sensitive match on the
+// exact heading `workflowConventionsSection` itself emits, immediately
+// followed by a blank line, so this can only ever remove a heading this
+// module's own convention would have written.
+const STRAY_WORKFLOW_CONVENTIONS_HEADING = /(^|\n)## Workflow Conventions\n\n/g;
+
+function stripStrayWorkflowConventionsHeading(region: string): string {
+  return region.replace(STRAY_WORKFLOW_CONVENTIONS_HEADING, "$1");
+}
+
+// Issue #1201 — the ONE place that decides what actually lands in the
+// committed `## Workflow Conventions` heading, called unconditionally by
+// computeScaffold regardless of whether the pointer prose above it came
+// from a generation turn or the static template. `text` is
+// ScaffoldOptions.workflowConventionsText (this install's own Settings →
+// Sessions text, resolved by the caller); empty/undefined falls back to
+// `SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS`'s fixed defaults, preserving this
+// function's pre-#1201 byte output for a fresh install with nothing
+// authored yet.
+function workflowConventionsSection(text: string | undefined): string {
+  const workflowConventions =
+    text && text.length > 0
+      ? text
+      : buildWorkflowConventionsText(SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS);
+  return `## Workflow Conventions\n\n${workflowConventions}`;
 }
 
 // Claude Code does NOT auto-load AGENTS.md (its own memory docs: "Claude
@@ -520,7 +609,28 @@ export function computeScaffold(
   const { slug } = options;
   const entries: ScaffoldEntry[] = [];
 
-  const region = options.generated?.briefingRegion ?? briefingRegionBody(slug);
+  // Issue #1201 — the pointer prose (where the skill/reviewer live) and
+  // the conventions section are now two independent sources composed
+  // together, rather than one all-or-nothing region: whichever produced
+  // the pointer prose (a generation turn, or the static template),
+  // `workflowConventionsSection` ALWAYS supplies the conventions half,
+  // sourced from this install's own Settings text — never from the
+  // generation turn, which no longer even asks for one (see
+  // scaffold-generate.ts's buildGenerationPrompt). Stripping a stray
+  // heading from `generated.briefingRegion` first means a model that
+  // ignores the prompt and includes one anyway still yields exactly one
+  // "## Workflow Conventions" heading in the final region, not two.
+  // `.trimEnd()` — scaffold-generate.ts's extractSection always appends
+  // exactly one trailing "\n" to generated content, while the static
+  // template below has none; normalizing here means both sources compose
+  // with the SAME single-blank-line separator before the heading, rather
+  // than the generated path silently getting an extra blank line.
+  const pointerBody = (
+    options.generated?.briefingRegion
+      ? stripStrayWorkflowConventionsHeading(options.generated.briefingRegion)
+      : briefingRegionPointerBody(slug)
+  ).trimEnd();
+  const region = `${pointerBody}\n\n${workflowConventionsSection(options.workflowConventionsText)}`;
   entries.push({
     path: "AGENTS.md",
     kind: "file",

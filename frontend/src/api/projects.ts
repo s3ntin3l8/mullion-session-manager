@@ -142,7 +142,7 @@ export const projectsApi = {
       includeDockConfig?: boolean;
     },
   ) =>
-    request<{ previewId: string; diff: string; files: string[] }>(
+    request<{ previewId: string; diff: string; files: string[]; hasAgentsOverride: boolean }>(
       `/api/projects/${projectId}/setup/preview`,
       { method: "POST", body: JSON.stringify(options) },
     ),

@@ -4,10 +4,17 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ProjectSetupPanel } from "./ProjectSetupPanel.js";
 import { jsonResponse } from "./test/jsonResponse.js";
+import { useDashboardStore } from "./store/index.js";
+import { makeProject } from "./test/fixtures.js";
 
 function mockFetch(opts: {
   preview?: (body: unknown) => Response | Promise<Response>;
   apply?: (body: unknown) => Response | Promise<Response>;
+  // Hermes review, PR #1200 round 3 (suggestion) — the panel now fetches
+  // this on mount to drive its "(see the exact defaults)" disclosure;
+  // defaults to a fixed literal here so every EXISTING test (which never
+  // asserted on this text) keeps working unchanged.
+  scaffoldDefaultsText?: string;
 }) {
   return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -19,6 +26,11 @@ function mockFetch(opts: {
     }
     if (url.endsWith("/setup/apply") && init?.method === "POST") {
       return Promise.resolve(opts.apply ? opts.apply(body) : new Response(null, { status: 500 }));
+    }
+    if (url.endsWith("/api/workflow-conventions/scaffold-defaults")) {
+      return Promise.resolve(
+        jsonResponse(200, { text: opts.scaffoldDefaultsText ?? "Always branch and open a PR." }),
+      );
     }
     return Promise.reject(new Error(`unhandled fetch in test: ${init?.method} ${url}`));
   });
@@ -179,5 +191,160 @@ describe("ProjectSetupPanel", () => {
 
     expect(await screen.findByText("push failed")).toBeInTheDocument();
     expect(screen.getByText("Apply")).toBeInTheDocument();
+  });
+
+  // Issue #1201 — before this, the panel gave no indication of which
+  // conventions text would land in the scaffolded AGENTS.md, and
+  // computeScaffold's own fixed defaults could silently outrank whatever
+  // was actually configured in Settings -> Sessions.
+  describe("Workflow Conventions disclosure (issue #1201)", () => {
+    const originalState = useDashboardStore.getState();
+    afterEach(() => {
+      useDashboardStore.setState(originalState, true);
+    });
+
+    it("names Mullion's built-in defaults when no conventions are configured yet", () => {
+      vi.stubGlobal("fetch", mockFetch({}));
+      useDashboardStore.setState({
+        settings: {
+          ...originalState.settings,
+          sessions: { ...originalState.settings.sessions, workflowConventionsText: "" },
+        },
+      });
+      render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+      expect(screen.getByText(/Mullion's own built-in defaults/)).toBeInTheDocument();
+    });
+
+    // Hermes review, PR #1200 round 3 (suggestion) — this disclosure used
+    // to hand-copy a prose paraphrase of the actual defaults, which could
+    // silently drift from mullion-scaffold.ts's own
+    // SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS. It now fetches the real text from
+    // GET /api/workflow-conventions/scaffold-defaults (same source the
+    // backend commits from) and shows it behind a "(see the exact
+    // defaults)" toggle — this proves the fetched text actually reaches
+    // the DOM, not just that the endpoint exists.
+    it("surfaces the actual fetched scaffold-defaults text behind the disclosure toggle", async () => {
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({ scaffoldDefaultsText: "Never commit directly to the default branch." }),
+      );
+      useDashboardStore.setState({
+        settings: {
+          ...originalState.settings,
+          sessions: { ...originalState.settings.sessions, workflowConventionsText: "" },
+        },
+      });
+      render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+      expect(
+        await screen.findByText("Never commit directly to the default branch."),
+      ).toBeInTheDocument();
+    });
+
+    it("names this install's own configured conventions when set", () => {
+      vi.stubGlobal("fetch", mockFetch({}));
+      useDashboardStore.setState({
+        settings: {
+          ...originalState.settings,
+          sessions: {
+            ...originalState.settings.sessions,
+            workflowConventionsText: "Our team's own conventions.",
+          },
+        },
+      });
+      render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+      expect(screen.getByText(/This install's own conventions/)).toBeInTheDocument();
+    });
+
+    // Hermes review, PR #1200 round 2 — before this, the disclosure read
+    // ONLY the install-wide settings text, ignoring this project's own
+    // injectWorkflowConventions opt-out that resolveScaffoldWorkflowConventionsText
+    // (project-setup.ts) already gates the SERVER-side resolution on. An
+    // opted-out project with configured settings text got shown "the same
+    // text already injected into every session on this project," which was
+    // false on both counts: the server falls back to the fixed defaults for
+    // exactly that project, ignoring this text entirely.
+    it("names the built-in defaults, not the configured text, when this project has opted out of injection", () => {
+      vi.stubGlobal("fetch", mockFetch({}));
+      useDashboardStore.setState({
+        settings: {
+          ...originalState.settings,
+          sessions: {
+            ...originalState.settings.sessions,
+            workflowConventionsText: "Our team's own conventions.",
+          },
+        },
+        projects: [makeProject({ id: 1, injectWorkflowConventions: false })],
+      });
+      render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+      expect(screen.getByText(/opted out of workflow-conventions injection/)).toBeInTheDocument();
+      expect(screen.getByText(/Mullion's own built-in defaults/)).toBeInTheDocument();
+      expect(screen.queryByText(/Our team's own conventions\./)).not.toBeInTheDocument();
+    });
+
+    it("still names this install's own configured conventions when injectWorkflowConventions is explicitly true (not just the null default)", () => {
+      vi.stubGlobal("fetch", mockFetch({}));
+      useDashboardStore.setState({
+        settings: {
+          ...originalState.settings,
+          sessions: {
+            ...originalState.settings.sessions,
+            workflowConventionsText: "Our team's own conventions.",
+          },
+        },
+        projects: [makeProject({ id: 1, injectWorkflowConventions: true })],
+      });
+      render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+      expect(screen.getByText(/This install's own conventions/)).toBeInTheDocument();
+    });
+  });
+
+  it("warns when the preview reports an existing AGENTS.override.md, without blocking Apply", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        preview: () =>
+          jsonResponse(200, {
+            previewId: "abc123",
+            diff: "diff --git a/AGENTS.md b/AGENTS.md\n+new line\n",
+            files: ["AGENTS.md"],
+            hasAgentsOverride: true,
+          }),
+      }),
+    );
+    const user = userEvent.setup();
+    render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+
+    await user.type(screen.getByPlaceholderText("my-project"), "demo");
+    await user.click(screen.getByText("Preview"));
+
+    // The warning text mentions AGENTS.override.md twice (once in a <code>
+    // element, once in plain prose) — findAllByText, not findByText, since
+    // a single-match query would throw on the ambiguity.
+    expect((await screen.findAllByText(/AGENTS\.override\.md/)).length).toBeGreaterThan(0);
+    expect(screen.getByText(/codex reads that file/)).toBeInTheDocument();
+    expect(screen.getByText("Apply")).not.toBeDisabled();
+  });
+
+  it("shows no override warning when the preview reports none", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        preview: () =>
+          jsonResponse(200, {
+            previewId: "abc123",
+            diff: "diff --git a/AGENTS.md b/AGENTS.md\n+new line\n",
+            files: ["AGENTS.md"],
+            hasAgentsOverride: false,
+          }),
+      }),
+    );
+    const user = userEvent.setup();
+    render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+
+    await user.type(screen.getByPlaceholderText("my-project"), "demo");
+    await user.click(screen.getByText("Preview"));
+    await screen.findByText("Preview — 1 file");
+
+    expect(screen.queryByText(/AGENTS\.override\.md/)).not.toBeInTheDocument();
   });
 });

@@ -510,6 +510,197 @@ describe("project-setup route", () => {
 
     await app.close();
   });
+
+  // Issue #1201 — before this, the committed AGENTS.md always got
+  // computeScaffold's own fixed SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS
+  // defaults, regardless of what this install's own
+  // settings.sessions.workflowConventionsText actually said — a
+  // route-level test is needed because a computeScaffold-only unit test
+  // can't catch a missing settings read in the route itself.
+  it("commits this install's own settings.sessions.workflowConventionsText into the scaffolded AGENTS.md, not the fixed defaults", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app, repoDir);
+
+    const settingsRes = await app.inject({
+      method: "PATCH",
+      url: "/api/settings",
+      payload: {
+        sessions: { workflowConventionsText: "Our team's own hand-authored conventions." },
+      },
+    });
+    expect(settingsRes.statusCode).toBe(200);
+
+    try {
+      const preview = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/setup/preview`,
+        payload: { slug: "demo" },
+      });
+      expect(preview.statusCode).toBe(200);
+
+      const worktreeDir = path.join(repoDir, ".mullion-worktrees", "setup-demo");
+      const onDisk = fs.readFileSync(path.join(worktreeDir, "AGENTS.md"), "utf8");
+      expect(onDisk).toContain("Our team's own hand-authored conventions.");
+      expect(onDisk).not.toContain("Never commit directly to the default branch");
+    } finally {
+      // `settings` is a singleton row shared across every test in this
+      // describe's tmpDb — reset it so a later test (which asserts the
+      // fixed-default fallback, e.g. the byte-identical-when-unset
+      // guarantee in mullion-scaffold.test.ts's own unit tests, or any
+      // future test added to this describe) never silently inherits this
+      // test's own text.
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { sessions: { workflowConventionsText: "" } },
+      });
+      await app.close();
+    }
+  });
+
+  // Hermes review, PR #1200 round 1 (W1) — before this, both /setup/preview
+  // and /setup/generate resolved workflowConventionsText straight off the
+  // install-wide settings row, with no regard for
+  // projects.injectWorkflowConventions — the exact per-project opt-out
+  // session-lifecycle.ts's own createSessionRecord gates the per-session
+  // INJECTION on ("this project's own AGENTS.md is authoritative instead").
+  // For an opted-out project, the scaffold would still commit the global
+  // text into AGENTS.md, silently breaking "committed == injected" — this
+  // whole feature's design premise — for exactly that project.
+  it("does not commit this install's own settings text when the project has opted out of workflow-conventions injection", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app, repoDir);
+
+    const settingsRes = await app.inject({
+      method: "PATCH",
+      url: "/api/settings",
+      payload: {
+        sessions: { workflowConventionsText: "Our team's own hand-authored conventions." },
+      },
+    });
+    expect(settingsRes.statusCode).toBe(200);
+
+    const optOutRes = await app.inject({
+      method: "PATCH",
+      url: `/api/projects/${projectId}`,
+      payload: { injectWorkflowConventions: false },
+    });
+    expect(optOutRes.statusCode).toBe(200);
+
+    try {
+      const preview = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/setup/preview`,
+        payload: { slug: "demo" },
+      });
+      expect(preview.statusCode).toBe(200);
+
+      const worktreeDir = path.join(repoDir, ".mullion-worktrees", "setup-demo");
+      const onDisk = fs.readFileSync(path.join(worktreeDir, "AGENTS.md"), "utf8");
+      // The opted-out project's own settings text never lands here...
+      expect(onDisk).not.toContain("Our team's own hand-authored conventions.");
+      // ...it falls back to the exact same fixed defaults an install with
+      // no settings text configured at all would have gotten — same
+      // resolution as the byte-identical-when-unset guard, just reached
+      // via the opt-out path instead of an empty settings row.
+      expect(onDisk).toContain("Never commit directly to the default branch");
+    } finally {
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { sessions: { workflowConventionsText: "" } },
+      });
+      await app.close();
+    }
+  });
+
+  it("still commits this install's own settings text when injectWorkflowConventions is explicitly true (not just the null default)", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app, repoDir);
+
+    const settingsRes = await app.inject({
+      method: "PATCH",
+      url: "/api/settings",
+      payload: {
+        sessions: { workflowConventionsText: "Our team's own hand-authored conventions." },
+      },
+    });
+    expect(settingsRes.statusCode).toBe(200);
+
+    const optInRes = await app.inject({
+      method: "PATCH",
+      url: `/api/projects/${projectId}`,
+      payload: { injectWorkflowConventions: true },
+    });
+    expect(optInRes.statusCode).toBe(200);
+
+    try {
+      const preview = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/setup/preview`,
+        payload: { slug: "demo" },
+      });
+      expect(preview.statusCode).toBe(200);
+
+      const worktreeDir = path.join(repoDir, ".mullion-worktrees", "setup-demo");
+      const onDisk = fs.readFileSync(path.join(worktreeDir, "AGENTS.md"), "utf8");
+      expect(onDisk).toContain("Our team's own hand-authored conventions.");
+    } finally {
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { sessions: { workflowConventionsText: "" } },
+      });
+      await app.close();
+    }
+  });
+
+  // Issue #1201 — codex reads AGENTS.override.md INSTEAD OF AGENTS.md when
+  // it exists (agent-rules.ts's own precedence table); the scaffold must
+  // never write to it, but the preview response should surface its
+  // presence so a project with one doesn't silently think its committed
+  // conventions reach codex when they don't.
+  it("reports hasAgentsOverride when the target repo has its own AGENTS.override.md, and never writes to it", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app, repoDir);
+
+    fs.writeFileSync(
+      path.join(repoDir, "AGENTS.override.md"),
+      "# AGENTS.override.md\n\nCodex-specific overrides.\n",
+    );
+    git(repoDir, ["add", "-A"]);
+    git(repoDir, ["commit", "-m", "hand-written AGENTS.override.md", "--no-verify"]);
+
+    const preview = await app.inject({
+      method: "POST",
+      url: `/api/projects/${projectId}/setup/preview`,
+      payload: { slug: "demo" },
+    });
+    expect(preview.statusCode).toBe(200);
+    expect(preview.json().hasAgentsOverride).toBe(true);
+    expect(preview.json().files).not.toContain("AGENTS.override.md");
+
+    const worktreeDir = path.join(repoDir, ".mullion-worktrees", "setup-demo");
+    const onDisk = fs.readFileSync(path.join(worktreeDir, "AGENTS.override.md"), "utf8");
+    expect(onDisk).toBe("# AGENTS.override.md\n\nCodex-specific overrides.\n");
+
+    await app.close();
+  });
+
+  it("reports hasAgentsOverride as false when the target repo has no AGENTS.override.md", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app, repoDir);
+
+    const preview = await app.inject({
+      method: "POST",
+      url: `/api/projects/${projectId}/setup/preview`,
+      payload: { slug: "demo" },
+    });
+    expect(preview.statusCode).toBe(200);
+    expect(preview.json().hasAgentsOverride).toBe(false);
+
+    await app.close();
+  });
 });
 
 // Issue #956 — `/setup/generate`: extends the same preview/apply worktree
@@ -640,6 +831,102 @@ describe("project-setup route — /setup/generate (issue #956)", () => {
     expect(applyRes.statusCode).toBe(200);
 
     await app.close();
+  });
+
+  // Issue #1201 — before this, an agent-generated briefingRegion replaced
+  // the WHOLE AGENTS.md region, so a generated scaffold's committed
+  // conventions came from wherever the generation turn happened to infer
+  // them from (or nowhere, if it didn't). Both mocked here via
+  // mockValidGeneration's own briefingRegion — the pointer prose the mock
+  // returns carries no conventions section at all — so this proves
+  // /setup/generate's own AGENTS.md now ALWAYS gets computeScaffold's own
+  // conventions section layered on top, sourced from this install's
+  // settings, not from the mocked generation output.
+  it("layers this install's own workflowConventionsText onto the generated AGENTS.md region too", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app, repoDir);
+    mockValidGeneration("demo");
+
+    const settingsRes = await app.inject({
+      method: "PATCH",
+      url: "/api/settings",
+      payload: {
+        sessions: { workflowConventionsText: "Our team's own hand-authored conventions." },
+      },
+    });
+    expect(settingsRes.statusCode).toBe(200);
+
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/setup/generate`,
+        payload: { slug: "demo" },
+      });
+      expect(res.statusCode).toBe(200);
+
+      const worktreeDir = path.join(repoDir, ".mullion-worktrees", "setup-demo");
+      const agentsMd = fs.readFileSync(path.join(worktreeDir, "AGENTS.md"), "utf8");
+      // The mocked generation's own pointer prose is still there...
+      expect(agentsMd).toContain("The generated skill lives at");
+      // ...and this install's own conventions are layered on top of it.
+      expect(agentsMd).toContain("Our team's own hand-authored conventions.");
+    } finally {
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { sessions: { workflowConventionsText: "" } },
+      });
+      await app.close();
+    }
+  });
+
+  // Hermes review, PR #1200 round 1 (W1) — same opt-out gate as
+  // /setup/preview's own regression test above; /setup/generate resolves
+  // workflowConventionsText through the identical
+  // resolveScaffoldWorkflowConventionsText helper, so this proves that
+  // shared resolution, not a per-route duplicate that could drift.
+  it("does not layer this install's own settings text onto the generated AGENTS.md when the project has opted out", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app, repoDir);
+    mockValidGeneration("demo");
+
+    const settingsRes = await app.inject({
+      method: "PATCH",
+      url: "/api/settings",
+      payload: {
+        sessions: { workflowConventionsText: "Our team's own hand-authored conventions." },
+      },
+    });
+    expect(settingsRes.statusCode).toBe(200);
+
+    const optOutRes = await app.inject({
+      method: "PATCH",
+      url: `/api/projects/${projectId}`,
+      payload: { injectWorkflowConventions: false },
+    });
+    expect(optOutRes.statusCode).toBe(200);
+
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/setup/generate`,
+        payload: { slug: "demo" },
+      });
+      expect(res.statusCode).toBe(200);
+
+      const worktreeDir = path.join(repoDir, ".mullion-worktrees", "setup-demo");
+      const agentsMd = fs.readFileSync(path.join(worktreeDir, "AGENTS.md"), "utf8");
+      expect(agentsMd).toContain("The generated skill lives at");
+      expect(agentsMd).not.toContain("Our team's own hand-authored conventions.");
+      expect(agentsMd).toContain("Never commit directly to the default branch");
+    } finally {
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { sessions: { workflowConventionsText: "" } },
+      });
+      await app.close();
+    }
   });
 
   it("surfaces possiblyGeneric in the response when the generation output is flagged", async () => {
@@ -958,6 +1245,33 @@ describe("project-setup route — /setup/generate (issue #956)", () => {
       payload: { slug: "demo" },
     });
     expect(res.statusCode).toBe(502);
+
+    await app.close();
+  });
+
+  // Issue #1201 — /setup/generate goes through the same
+  // scaffoldableRelPaths()/existingFiles read as /setup/preview, so the
+  // hasAgentsOverride signal must propagate through this route too, not
+  // just the static preview path.
+  it("reports hasAgentsOverride for /setup/generate too", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app, repoDir);
+    mockValidGeneration("demo");
+
+    fs.writeFileSync(
+      path.join(repoDir, "AGENTS.override.md"),
+      "# AGENTS.override.md\n\nCodex-specific overrides.\n",
+    );
+    git(repoDir, ["add", "-A"]);
+    git(repoDir, ["commit", "-m", "hand-written AGENTS.override.md", "--no-verify"]);
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/projects/${projectId}/setup/generate`,
+      payload: { slug: "demo" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().hasAgentsOverride).toBe(true);
 
     await app.close();
   });
