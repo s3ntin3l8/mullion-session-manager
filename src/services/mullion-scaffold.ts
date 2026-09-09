@@ -428,7 +428,14 @@ function deriveCodexReviewerSkillContent(raw: string, slug: string): string | nu
 // ones. Every reasoning point above (why these six, why the other four are
 // left unanswered) still applies to this default set specifically; it just
 // no longer applies unconditionally.
-const SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS: Record<string, string> = {
+//
+// Hermes review, PR #1200 round 3 (suggestion) — exported so
+// routes/workflow-conventions.ts's `/api/workflow-conventions/scaffold-
+// defaults` endpoint (and, through it, ProjectSetupPanel.tsx's disclosure)
+// can derive the ACTUAL defaults text via `buildWorkflowConventionsText`
+// rather than hand-copying a prose paraphrase that could silently drift
+// from this object.
+export const SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS: Record<string, string> = {
   branching: "branch-pr",
   branchBase: "remote",
   titleConvention: "conventional-commits",

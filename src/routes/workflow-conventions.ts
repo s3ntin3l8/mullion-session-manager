@@ -3,6 +3,7 @@ import {
   buildWorkflowConventionsText,
   WORKFLOW_CONVENTION_QUESTIONS,
 } from "../services/workflow-conventions.js";
+import { SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS } from "../services/mullion-scaffold.js";
 
 // Issue #937 — two small, read-only endpoints backing the Settings ->
 // Sessions wizard. Deliberately NOT reusing routes/project-setup.ts's
@@ -54,4 +55,19 @@ export async function workflowConventionsRoute(app: FastifyInstance) {
       return { text: buildWorkflowConventionsText(request.body.answers ?? {}) };
     },
   );
+
+  // Hermes review, PR #1200 round 3 (suggestion) — before this, the ONLY
+  // place a caller could learn what mullion-scaffold.ts's
+  // SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS actually resolves to was reading that
+  // module's own source; ProjectSetupPanel.tsx's disclosure hand-copied a
+  // prose paraphrase of it instead, which a later edit to that answer set
+  // could silently drift out of sync with. Pure computation, no I/O, same
+  // "not persisted, recomputed on every call" posture as the preview
+  // endpoint above — this is what the scaffold ACTUALLY commits when a
+  // caller (or a project that has opted out of injection) passes no
+  // workflowConventionsText of its own.
+  app.get("/api/workflow-conventions/scaffold-defaults", async (_request, reply) => {
+    reply.type("application/json");
+    return { text: buildWorkflowConventionsText(SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS) };
+  });
 }

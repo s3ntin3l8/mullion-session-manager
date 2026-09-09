@@ -8,6 +8,7 @@ import {
   WORKFLOW_CONVENTION_QUESTIONS,
   buildWorkflowConventionsText,
 } from "../../src/services/workflow-conventions.js";
+import { SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS } from "../../src/services/mullion-scaffold.js";
 
 // Issue #937 — the two small, read-only endpoints backing the Settings ->
 // Sessions wizard: GET the fixed question set, POST answers -> assembled
@@ -73,6 +74,27 @@ describe("workflow-conventions route", () => {
     });
     const settings = await app.inject({ method: "GET", url: "/api/settings" });
     expect(settings.json().sessions.workflowConventionsText).toBe("");
+    await app.close();
+  });
+
+  // Hermes review, PR #1200 round 3 (suggestion) — the ONLY place a caller
+  // could previously learn what mullion-scaffold.ts's own
+  // SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS resolves to was that module's source;
+  // ProjectSetupPanel.tsx's disclosure hand-copied a prose paraphrase
+  // instead, risking drift from the actual defaults. This endpoint derives
+  // the real text directly, so a future edit to that answer set changes
+  // this response too, mechanically.
+  it("GET /api/workflow-conventions/scaffold-defaults returns the exact text SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS resolves to", async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/workflow-conventions/scaffold-defaults",
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-type"]).toMatch(/^application\/json/);
+    expect(res.json()).toEqual({
+      text: buildWorkflowConventionsText(SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS),
+    });
     await app.close();
   });
 });

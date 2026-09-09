@@ -84,6 +84,13 @@ export const settingsApi = {
       method: "POST",
       body: JSON.stringify({ answers }),
     }),
+
+  // Hermes review, PR #1200 round 3 (suggestion) — the exact text
+  // mullion-scaffold.ts's SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS resolves to,
+  // for ProjectSetupPanel.tsx's disclosure to show instead of a
+  // hand-copied prose paraphrase that could drift from the real defaults.
+  getScaffoldDefaultConventionsText: () =>
+    request<{ text: string }>("/api/workflow-conventions/scaffold-defaults"),
 };
 
 // Mirrors src/services/settings.ts's DEFAULT_SETTINGS 1:1 — the store seeds

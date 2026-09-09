@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api, ApiError } from "./api/index.js";
 import { parseUnifiedDiff } from "./diffUtils.js";
 import { EmptyStateNote } from "./ui/EmptyState.js";
@@ -64,6 +64,32 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
   // `?? true` default resolveScaffoldWorkflowConventionsText applies.
   const project = useDashboardStore((s) => s.projects.find((p) => p.id === params.projectId));
   const injectWorkflowConventions = project?.injectWorkflowConventions ?? true;
+  // Hermes review, PR #1200 round 3 (suggestion) — the disclosure used to
+  // hand-copy a prose paraphrase of mullion-scaffold.ts's
+  // SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS ("always branch + PR, Conventional
+  // Commits titles, squash merge, ..."), which a later edit to that answer
+  // set could silently drift out of sync with. Fetched once here instead,
+  // from the same source (GET /api/workflow-conventions/scaffold-defaults,
+  // itself just buildWorkflowConventionsText(SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS))
+  // — `null` while loading or on fetch failure, in which case the
+  // disclosure below falls back to naming the defaults without quoting
+  // them verbatim, rather than blocking the panel on this fetch.
+  const [scaffoldDefaultsText, setScaffoldDefaultsText] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void api
+      .getScaffoldDefaultConventionsText()
+      .then((result) => {
+        if (!cancelled) setScaffoldDefaultsText(result.text);
+      })
+      .catch(() => {
+        // Disclosure-only fetch — a failure here degrades to the
+        // no-verbatim-text fallback below, never an error banner.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const [slug, setSlug] = useState("");
   const [includeContributingPointer, setIncludeContributingPointer] = useState(false);
   const [symlinkAgentsSkills, setSymlinkAgentsSkills] = useState(false);
@@ -189,6 +215,21 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
     );
   }
 
+  // A single <details> disclosure, referenced from both the opted-out and
+  // no-conventions-configured branches below, so there is exactly one
+  // place rendering the fetched text — never two copies that could show
+  // different things while `scaffoldDefaultsText` is still loading in one
+  // but not the other (impossible in practice, since both read the same
+  // state, but keeping it to one definition removes even that question).
+  const scaffoldDefaultsDisclosure = scaffoldDefaultsText !== null && (
+    <details style={{ display: "inline" }}>
+      <summary style={{ display: "inline", cursor: "pointer" }}>(see the exact defaults)</summary>
+      <pre className="session-file-change-diff" style={{ whiteSpace: "pre-wrap" }}>
+        {scaffoldDefaultsText}
+      </pre>
+    </details>
+  );
+
   return (
     <div className="agent-rules-panel-editor" style={{ padding: "12px 14px" }}>
       <div className="agent-rules-panel-editor-title">
@@ -287,9 +328,8 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
               <>
                 This project has opted out of workflow-conventions injection (Session injection for
                 this project → Workflow conventions, in the Mullion Briefing panel), so this will
-                commit Mullion's own built-in defaults (always branch + PR, Conventional Commits
-                titles, squash merge, green CI, full lint/typecheck/test/format gate before pushing)
-                regardless of anything configured in Settings → Sessions.
+                commit Mullion's own built-in defaults{scaffoldDefaultsDisclosure} regardless of
+                anything configured in Settings → Sessions.
               </>
             ) : workflowConventionsText.length > 0 ? (
               <>
@@ -299,9 +339,8 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
             ) : (
               <>
                 No conventions configured yet in Settings → Sessions, so this will commit Mullion's
-                own built-in defaults (always branch + PR, Conventional Commits titles, squash
-                merge, green CI, full lint/typecheck/test/format gate before pushing) — configure
-                your own there first if these aren't right for this project.
+                own built-in defaults{scaffoldDefaultsDisclosure} — configure your own there first
+                if these aren't right for this project.
               </>
             )}
           </div>

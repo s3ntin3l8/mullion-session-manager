@@ -10,6 +10,11 @@ import { makeProject } from "./test/fixtures.js";
 function mockFetch(opts: {
   preview?: (body: unknown) => Response | Promise<Response>;
   apply?: (body: unknown) => Response | Promise<Response>;
+  // Hermes review, PR #1200 round 3 (suggestion) — the panel now fetches
+  // this on mount to drive its "(see the exact defaults)" disclosure;
+  // defaults to a fixed literal here so every EXISTING test (which never
+  // asserted on this text) keeps working unchanged.
+  scaffoldDefaultsText?: string;
 }) {
   return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -21,6 +26,11 @@ function mockFetch(opts: {
     }
     if (url.endsWith("/setup/apply") && init?.method === "POST") {
       return Promise.resolve(opts.apply ? opts.apply(body) : new Response(null, { status: 500 }));
+    }
+    if (url.endsWith("/api/workflow-conventions/scaffold-defaults")) {
+      return Promise.resolve(
+        jsonResponse(200, { text: opts.scaffoldDefaultsText ?? "Always branch and open a PR." }),
+      );
     }
     return Promise.reject(new Error(`unhandled fetch in test: ${init?.method} ${url}`));
   });
@@ -203,6 +213,31 @@ describe("ProjectSetupPanel", () => {
       });
       render(<ProjectSetupPanel params={{ projectId: 1 }} />);
       expect(screen.getByText(/Mullion's own built-in defaults/)).toBeInTheDocument();
+    });
+
+    // Hermes review, PR #1200 round 3 (suggestion) — this disclosure used
+    // to hand-copy a prose paraphrase of the actual defaults, which could
+    // silently drift from mullion-scaffold.ts's own
+    // SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS. It now fetches the real text from
+    // GET /api/workflow-conventions/scaffold-defaults (same source the
+    // backend commits from) and shows it behind a "(see the exact
+    // defaults)" toggle — this proves the fetched text actually reaches
+    // the DOM, not just that the endpoint exists.
+    it("surfaces the actual fetched scaffold-defaults text behind the disclosure toggle", async () => {
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({ scaffoldDefaultsText: "Never commit directly to the default branch." }),
+      );
+      useDashboardStore.setState({
+        settings: {
+          ...originalState.settings,
+          sessions: { ...originalState.settings.sessions, workflowConventionsText: "" },
+        },
+      });
+      render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+      expect(
+        await screen.findByText("Never commit directly to the default branch."),
+      ).toBeInTheDocument();
     });
 
     it("names this install's own configured conventions when set", () => {
