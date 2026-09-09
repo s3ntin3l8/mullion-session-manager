@@ -36,6 +36,7 @@ import {
   RenameIcon,
   SearchAlertIcon,
   SearchIcon,
+  SkillIcon,
 } from "./ui/icons.js";
 import { STORAGE_KEYS, readJSON, writeJSON } from "./lib/persistedState.js";
 import { taskLinkedSessionIds } from "./unifiedBoard.js";
@@ -97,6 +98,11 @@ interface SidebarProps {
   // App.tsx already had this callback (for GitPanel's own command-palette
   // entry, issue #76) but never threaded it down to Sidebar until now.
   onOpenGit: (projectId: number) => void;
+  // Phase 4 (issue #1205's plan, Gap F) — "Scaffold Mullion" used to be
+  // reachable only from the Command Palette; App.tsx already had this
+  // callback (for the palette's own entry) but never threaded it down to
+  // Sidebar until now, so the project's own kebab menu can offer it too.
+  onOpenProjectSetup: (projectId: number) => void;
 }
 
 export function Sidebar({
@@ -107,6 +113,7 @@ export function Sidebar({
   onOpenSettingsProjects,
   onOpenTasks,
   onOpenGit,
+  onOpenProjectSetup,
 }: SidebarProps) {
   // P1 perf fix — was a single bare `useDashboardStore()` (whole-store
   // subscription); split into one selector per rendered field (via
@@ -143,6 +150,37 @@ export function Sidebar({
   // "Welcome to Mullion" empty state's "Scan for repos" button can force it
   // open, matching the design's two-button first-run CTA.
   const [discoverCollapsed, setDiscoverCollapsed] = useState(true);
+
+  // Phase 4 (Gap F) — the post-create "want to scaffold this?" offer.
+  // `newProjectRef` is a ref, not state: it's written inside the
+  // CreateProjectModal's own `onCreate` (fires on a successful create) and
+  // read inside `onClose` (fires right after, in the same user gesture,
+  // except the confirm-first PROJECT_DIR_MISSING retry path — see that
+  // callback's own comment) — nothing in between needs to re-render on it.
+  // Carries `{id, name}` straight off `onCreate`'s own resolved result
+  // rather than looking the id up in `projects` afterward — `createProject`
+  // only *triggers* a `refreshProjects()` (store/slices/projects.ts), it
+  // doesn't await it, so the new row isn't guaranteed to be in `projects`
+  // yet by the time `onClose` fires.
+  // `scaffoldOfferProject` is the actual banner-visibility state,
+  // deliberately never store-persisted (#944: an integration affordance is
+  // a dismissible nudge, not an onboarding gate) — dismissing it, or
+  // navigating away, drops it for good, same as the update banner above.
+  const newProjectRef = useRef<{ id: number; name: string } | null>(null);
+  const [scaffoldOfferProject, setScaffoldOfferProject] = useState<{
+    id: number;
+    name: string;
+  } | null>(null);
+  // code-review round 1 — opening a second "Add project" modal while an
+  // unactioned offer from a PREVIOUS create is still showing left the
+  // banner visible alongside/underneath the new modal, so its "Scaffold
+  // Mullion" button could navigate to the WRONG (stale) project once the
+  // new create resolved. Clearing on open, not on the modal's own onClose,
+  // ensures whichever create finishes first controls the banner.
+  const openAddProject = useCallback(() => {
+    setScaffoldOfferProject(null);
+    setAddProjectOpen(true);
+  }, []);
 
   // U3 — the search box + status chips. Plain component state, deliberately
   // NOT persisted (unlike the collapse state below): a filter silently
@@ -382,7 +420,7 @@ export function Sidebar({
           className="toolbar-icon-btn"
           style={{ width: 22, height: 22 }}
           title="Add project"
-          onClick={() => setAddProjectOpen(true)}
+          onClick={openAddProject}
         >
           <PlusIcon size={15} strokeLinecap="round" strokeWidth={1.9} />
         </button>
@@ -481,6 +519,7 @@ export function Sidebar({
               onSessionEnded={onSessionEnded}
               onOpenProjectLauncher={onOpenProjectLauncher}
               onToggleCollapsed={toggleProjectCollapsedVirtualized}
+              onOpenProjectSetup={onOpenProjectSetup}
             />
           ) : (
             visibleProjects.map((project) => (
@@ -494,6 +533,7 @@ export function Sidebar({
                 onOpenSession={onOpenSession}
                 onSessionEnded={onSessionEnded}
                 onOpenLauncher={() => onOpenProjectLauncher(project.id)}
+                onOpenProjectSetup={() => onOpenProjectSetup(project.id)}
                 hierarchicalView={hierarchicalView}
                 forceExpanded={filterActive}
               />
@@ -512,11 +552,72 @@ export function Sidebar({
         <CreateProjectModal
           hosts={hosts}
           initialPath={settingsLoaded ? (settings.projectRoots[0] ?? "") : ""}
-          onClose={() => setAddProjectOpen(false)}
-          onCreate={({ name, cwd, hostId, createDir, gitInit }) =>
-            useDashboardStore.getState().createProject(name, cwd, hostId, { createDir, gitInit })
-          }
+          onClose={() => {
+            setAddProjectOpen(false);
+            // Phase 4 (Gap F) — only surface the offer once the modal
+            // actually finishes closing, so it never renders underneath a
+            // still-open modal (the confirm-first PROJECT_DIR_MISSING
+            // retry path resolves onCreate but keeps the modal open for a
+            // second confirm — see CreateProjectModal's own gitInitFailed
+            // handling — so onClose, not onCreate, is the right trigger).
+            if (newProjectRef.current !== null) {
+              setScaffoldOfferProject(newProjectRef.current);
+              newProjectRef.current = null;
+            }
+          }}
+          onCreate={async ({ name, cwd, hostId, createDir, gitInit }) => {
+            const project = await useDashboardStore
+              .getState()
+              .createProject(name, cwd, hostId, { createDir, gitInit });
+            newProjectRef.current = { id: project.id, name: project.name };
+            return project;
+          }}
         />
+      )}
+      {scaffoldOfferProject && (
+        <div className="scaffold-offer-banner">
+          <div className="scaffold-offer-banner-header">
+            <SkillIcon size={14} style={{ color: "var(--b)", flexShrink: 0 }} />
+            <span className="scaffold-offer-banner-title">
+              Set up Mullion&rsquo;s conventions in &ldquo;{scaffoldOfferProject.name}&rdquo;?
+            </span>
+            <span
+              className="scaffold-offer-banner-dismiss"
+              role="button"
+              tabIndex={0}
+              onClick={() => setScaffoldOfferProject(null)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") setScaffoldOfferProject(null);
+              }}
+              title="Dismiss"
+            >
+              ×
+            </span>
+          </div>
+          {/* Plan's own "with the project's conventions preview inline" —
+              the same install-wide text ProjectSetupPanel.tsx's own
+              disclosure reads (see its comment for why this is not a
+              second source of truth: computeScaffold resolves and commits
+              the SAME text server-side). Empty when unconfigured — the
+              scaffold still has SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS to fall
+              back to, so this stays worth offering either way. */}
+          {settings.sessions.workflowConventionsText && (
+            <div className="scaffold-offer-banner-preview">
+              {settings.sessions.workflowConventionsText}
+            </div>
+          )}
+          <div className="scaffold-offer-banner-actions">
+            <button
+              className="scaffold-offer-banner-accept"
+              onClick={() => {
+                onOpenProjectSetup(scaffoldOfferProject.id);
+                setScaffoldOfferProject(null);
+              }}
+            >
+              Scaffold Mullion
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -633,6 +734,7 @@ function ProjectHeader({
   onToggleCollapsed,
   onOpenLauncher,
   onSessionEnded,
+  onOpenProjectSetup,
   bodyId,
 }: {
   project: Project;
@@ -642,6 +744,10 @@ function ProjectHeader({
   onToggleCollapsed: () => void;
   onOpenLauncher: () => void;
   onSessionEnded: (session: Session) => void;
+  // Phase 4 (Gap F) — "Scaffold Mullion" kebab-menu entry, bound to this
+  // project at the call site (ProjectSection/VirtualizedProjectTree),
+  // same shape as onOpenLauncher above.
+  onOpenProjectSetup: () => void;
   // P10/P11 polish — id of the collapsible region this header's
   // `aria-expanded` governs, for `aria-controls` (the disclosure-button
   // pattern; see UnifiedBoard.tsx's `kanban-lane-body` precedent). Only
@@ -782,6 +888,18 @@ function ProjectHeader({
             <FileTextIcon size={11} />
           </span>
         )}
+        {/* Phase 4 (Gap F) — `project.conventionsHash` (Phase 3) is null
+          until the first successful Scaffold Mullion apply stamps it
+          (schema.ts's own `conventionsHash` column, alongside `slug` in
+          the same /setup/apply write), so this needs no new backend
+          signal or frontend type change. Same non-interactive posture as
+          the rule-files indicator above — the kebab menu's "Scaffold
+          Mullion" entry below is the click target. */}
+        {project.conventionsHash == null && (
+          <span className="project-unscaffolded-indicator" title="Never scaffolded with Mullion">
+            <SkillIcon size={11} />
+          </span>
+        )}
         {host && (
           <span className="project-host-badge" title={`Runs on host: ${host.name}`}>
             <HostsIcon size={10} />
@@ -814,6 +932,12 @@ function ProjectHeader({
                 label: "Edit",
                 icon: <RenameIcon size={14} style={{ color: "var(--muted)" }} />,
                 onClick: () => setEditOpen(true),
+              },
+              {
+                key: "scaffold-mullion",
+                label: "Scaffold Mullion",
+                icon: <SkillIcon size={14} style={{ color: "var(--muted)" }} />,
+                onClick: onOpenProjectSetup,
               },
               {
                 key: "delete",
@@ -918,6 +1042,7 @@ export function ProjectSection({
   onOpenSessionAsFloat,
   onSessionEnded,
   onOpenLauncher,
+  onOpenProjectSetup,
   hierarchicalView,
   forceExpanded = false,
 }: {
@@ -936,6 +1061,7 @@ export function ProjectSection({
   onOpenSessionAsFloat: (session: Session) => void;
   onSessionEnded: (session: Session) => void;
   onOpenLauncher: () => void;
+  onOpenProjectSetup: () => void;
   hierarchicalView: boolean;
   // U3 — set by Sidebar while its search/chip filter is active: reveals a
   // matching session inside an otherwise manually-collapsed project rather
@@ -992,6 +1118,7 @@ export function ProjectSection({
         onToggleCollapsed={toggleCollapsed}
         onOpenLauncher={onOpenLauncher}
         onSessionEnded={onSessionEnded}
+        onOpenProjectSetup={onOpenProjectSetup}
         bodyId={`project-row-body-${project.id}`}
       />
 
@@ -1057,6 +1184,7 @@ function VirtualizedProjectTree({
   onSessionEnded,
   onOpenProjectLauncher,
   onToggleCollapsed,
+  onOpenProjectSetup,
 }: {
   rows: SidebarFlatRow[];
   hosts: Host[];
@@ -1065,6 +1193,7 @@ function VirtualizedProjectTree({
   onSessionEnded: (session: Session) => void;
   onOpenProjectLauncher: (projectId: number) => void;
   onToggleCollapsed: (projectId: number, derivedDefault: boolean) => void;
+  onOpenProjectSetup: (projectId: number) => void;
 }) {
   // The scroll container is `.sidebar-wrapper` (App.tsx), an ANCESTOR of
   // this component, not an element it renders itself — `closest()` off a
@@ -1148,6 +1277,7 @@ function VirtualizedProjectTree({
                   onToggleCollapsed={() => onToggleCollapsed(row.project.id, row.derivedDefault)}
                   onOpenLauncher={() => onOpenProjectLauncher(row.project.id)}
                   onSessionEnded={onSessionEnded}
+                  onOpenProjectSetup={() => onOpenProjectSetup(row.project.id)}
                 />
               </div>
             ) : row.type === "empty" ? (

@@ -87,6 +87,7 @@ function renderSection(status: GitStatus | null) {
       onOpenSessionAsFloat={vi.fn()}
       onSessionEnded={vi.fn()}
       onOpenLauncher={vi.fn()}
+      onOpenProjectSetup={vi.fn()}
       hierarchicalView={false}
     />,
   );
@@ -159,6 +160,7 @@ describe("ProjectHeader keyboard accessibility (P10)", () => {
         onOpenSessionAsFloat={vi.fn()}
         onSessionEnded={vi.fn()}
         onOpenLauncher={vi.fn()}
+        onOpenProjectSetup={vi.fn()}
         hierarchicalView={false}
       />,
     );

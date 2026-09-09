@@ -290,3 +290,13 @@
   color: var(--dim);
   flex-shrink: 0;
 }
+
+/* Sidebar.tsx's per-project "never scaffolded with Mullion" indicator
+   (Phase 4, Gap F) — same icon-only, tooltip-only shape as
+   .project-rules-indicator above. */
+.project-unscaffolded-indicator {
+  display: inline-flex;
+  align-items: center;
+  color: var(--dim);
+  flex-shrink: 0;
+}
