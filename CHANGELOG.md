@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.3.15](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.14...v0.3.15) (2026-09-09)
+
+
+### Features
+
+* **scaffold:** deliver the project reviewer to codex as a skill ([#1188](https://github.com/s3ntin3l8/mullion-session-manager/issues/1188)) ([6479879](https://github.com/s3ntin3l8/mullion-session-manager/commit/6479879fc4daed5cf9286905f45e9aa1b894be4f))
+
+
+### Bug Fixes
+
+* **dock:** stop log-streaming resize, fix the third log window, and survive workspace switch ([#1196](https://github.com/s3ntin3l8/mullion-session-manager/issues/1196)) ([c768006](https://github.com/s3ntin3l8/mullion-session-manager/commit/c7680063b5c0f901ad5014644d95de9690ddbc7d))
+* **hook-adapters:** prevent codex's directory-trust prompt from hanging skip-permissions sessions ([#1195](https://github.com/s3ntin3l8/mullion-session-manager/issues/1195)) ([26c3511](https://github.com/s3ntin3l8/mullion-session-manager/commit/26c351141e1f22f6375357767c05e45cbfd08e41))
+* **scaffold:** thread this install's own workflow conventions into the scaffold ([#1200](https://github.com/s3ntin3l8/mullion-session-manager/issues/1200)) ([1d15e83](https://github.com/s3ntin3l8/mullion-session-manager/commit/1d15e83462650c5307ed490a18700dc43df0e0a9))
+* **ssh-agent-bridge:** correct Linux pairing/run hints that assume 'mullion' is on PATH ([#1187](https://github.com/s3ntin3l8/mullion-session-manager/issues/1187)) ([140f94b](https://github.com/s3ntin3l8/mullion-session-manager/commit/140f94bd7202c33e1fc80a4ed2d40d63e65fd1fd))
+* **ssh-agent:** helper run --detach stops the Windows autostart console window from killing the helper ([#1191](https://github.com/s3ntin3l8/mullion-session-manager/issues/1191)) ([6ac77fd](https://github.com/s3ntin3l8/mullion-session-manager/commit/6ac77fd63b110da81f89066744ca9188dc74fae0))
+
 ## [0.3.14](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.13...v0.3.14) (2026-09-09)
 
 
