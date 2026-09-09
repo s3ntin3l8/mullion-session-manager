@@ -210,6 +210,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
     injectProjectBriefing: true,
     injectMullionBundle: true,
     workflowConventionsText: "",
+    // Placeholder only, overwritten wholesale once GET /api/settings
+    // resolves — unlike the backend's own DEFAULT_SETTINGS (settings.ts),
+    // this store-seed value never goes through a per-key deep-merge, so it
+    // doesn't need every current question id pre-populated with "".
+    workflowConventionAnswers: {},
     maxChildSessionsPerParent: 5,
     autoOpenChildPanels: false,
   },

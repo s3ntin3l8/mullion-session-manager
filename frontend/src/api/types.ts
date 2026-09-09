@@ -1464,6 +1464,13 @@ export interface AppSettings {
     // /api/workflow-conventions/preview) rather than hand-typed from a
     // blank starter template.
     workflowConventionsText: string;
+    // Issue #1201 (Phase 2 of the follow-up plan) — mirrors
+    // src/services/settings.ts 1:1, including the "every current question
+    // id mapped to \"\", never a bare {}" default rationale — see that
+    // field's own doc comment for why. WorkflowConventionsWizardModal.tsx
+    // reads this to pre-fill and to decide whether to open on the question
+    // flow or a review step.
+    workflowConventionAnswers: Record<string, string>;
     // Phase 5 (Track B, issue #193 5.3b) — mirrors src/services/settings.ts
     // 1:1. Surfaced in Settings.tsx's Sessions section ("Max child sessions
     // per parent").
