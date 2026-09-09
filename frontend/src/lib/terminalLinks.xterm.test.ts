@@ -142,4 +142,42 @@ describe("terminalLinks against a real xterm Terminal", () => {
     expect(links).toHaveLength(1);
     expect(links[0].text).toBe("https://github.com/foo/bar");
   });
+
+  it("reconstructs a URL word-wrapped inside opencode's own bordered panel (mid-token-break guard)", async () => {
+    // Shape captured from a live opencode Mullion session (`git remote -v`
+    // output rendered inside opencode's `┃`-bordered panel, cols 78):
+    // opencode word-wraps its own panel content, so the wrap column varies
+    // per line rather than sitting at a fixed hard-wrap width — and the
+    // continuation ("tracker.git") carries only `.`/`-`, which the
+    // structural gate alone would reject were it not for the producer row
+    // visibly ending mid-token ("pocket-"). Without this fix, row 0's own
+    // fragment matches on its own and opens a truncated
+    // `https://github.com/s3ntin3l8/pocket-` — a 404, not the repo.
+    const wideTerm = new Terminal({ cols: 78, rows: 30, allowProposedApi: true });
+    const lines = [
+      "  ┃  $ git remote -v",
+      "  ┃",
+      "  ┃  origin  https://github.com/s3ntin3l8/pocket-",
+      "  ┃  portfolio-tracker.git (fetch)",
+      "  ┃  origin  https://github.com/s3ntin3l8/pocket-",
+      "  ┃  portfolio-tracker.git (push)",
+    ];
+    await write(wideTerm, lines.join("\r\n") + "\r\n");
+
+    const buf = asBufferSource(wideTerm);
+    const line2 = buf.getLine(2)!;
+    expect(line2.isWrapped).toBe(false); // confirms this is opencode's own wrap, not a terminal soft wrap
+
+    const links = computeLinksForRow(buf, 2);
+    expect(links).toHaveLength(1);
+    expect(links[0].text).toBe("https://github.com/s3ntin3l8/pocket-portfolio-tracker.git");
+    expect(links[0].text).not.toBe("https://github.com/s3ntin3l8/pocket-");
+    expect(links[0].rowCount).toBe(2);
+
+    // The duplicated `origin ... (push)` line resolves identically — the
+    // fix must not depend on which occurrence of the pattern is hovered.
+    const links4 = computeLinksForRow(buf, 4);
+    expect(links4).toHaveLength(1);
+    expect(links4[0].text).toBe(links[0].text);
+  });
 });

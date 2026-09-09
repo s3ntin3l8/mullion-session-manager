@@ -12,6 +12,9 @@ import {
   MAX_JOINED_LENGTH,
   mapOffsetsToRows,
   RIGHT_EDGE_SLACK,
+  SOFT_STRUCTURAL_CHAR_RE,
+  STRUCTURAL_CHAR_RE,
+  WRAP_BREAK_CHAR_RE,
   type LinkBufferCell,
   type LinkBufferLine,
   type LinkBufferSource,
@@ -104,6 +107,163 @@ describe("terminalLinks", () => {
       expect(links).toHaveLength(1);
       expect(links[0].text).toBe("https://example.com/" + "y".repeat(35));
       expect(links[0].rowCount).toBe(1);
+    });
+  });
+
+  describe("word-wrapped panel corroboration (opencode: interval, not exact-match)", () => {
+    // Real bug: opencode word-wraps its own bordered-panel content, so
+    // consecutive rows in one wrapped paragraph almost never share an exact
+    // right edge the way a fixed-width hard-wrap does — the original
+    // exact-column-match corroboration essentially never fires for it. The
+    // fix generalizes to interval membership: a nearby row's edge landing
+    // in `[P, P + C)`, where `C` is the continuation's next unbreakable
+    // chunk, is enough — even when that row is unrelated content that
+    // merely happens to reach that far, not a "sibling" row sharing the
+    // panel's own wrap width.
+    it("joins when a nearby row's edge falls inside the interval, not at the exact same column", () => {
+      const row0 = "y".repeat(21) + "https://example.com/abc-"; // P = 45
+      const cols = 78;
+      const buf = makeBuffer(
+        [
+          { text: "z".repeat(44) }, // edge 44 — below P, does not qualify alone
+          { text: "m".repeat(5) },
+          { text: "n".repeat(5) },
+          { text: row0 }, // producer, row index 3
+          { text: "def/ghi more words" }, // continuation: prefix "def/ghi", span 4 -> interval [45,49)
+          { text: "w".repeat(47) }, // edge 47 — inside [45,49), corroborates
+        ],
+        cols,
+      );
+      const links = computeLinksForRow(buf, 3);
+      expect(links).toHaveLength(1);
+      expect(links[0].text).toBe("https://example.com/abc-def/ghi");
+      expect(links[0].rowCount).toBe(2);
+    });
+
+    it("does not join when every nearby row's edge falls outside the interval", () => {
+      const row0 = "y".repeat(21) + "https://example.com/abc-"; // P = 45
+      const cols = 78;
+      const buf = makeBuffer(
+        [
+          { text: "z".repeat(44) }, // edge 44 < 45 — excluded
+          { text: "m".repeat(5) },
+          { text: "n".repeat(5) },
+          { text: row0 }, // producer, row index 3
+          { text: "def/ghi more words" }, // span 4 -> interval [45,49)
+          { text: "w".repeat(49) }, // edge 49 — interval's exclusive upper bound, excluded
+        ],
+        cols,
+      );
+      const links = computeLinksForRow(buf, 3);
+      expect(links).toHaveLength(1);
+      expect(links[0].text).toBe("https://example.com/abc-");
+      expect(links[0].rowCount).toBe(1);
+    });
+  });
+
+  describe("mid-token-break exception to the structural gate", () => {
+    // opencode's own `git remote -v` output wraps mid-hostname: the
+    // continuation ("tracker.git") carries only `.`/`-`, which
+    // STRUCTURAL_CHAR_RE alone would reject. Admitted only because the
+    // producer row's own text was visibly cut mid-token (ends in `-`).
+    it("joins a `.`/`-`-only continuation when the producer row ends mid-token", () => {
+      const row0 = "z".repeat(20) + "https://github.com/s3ntin3l8/pocket-"; // ends in "-", flush to margin
+      const cols = row0.length;
+      const row1 = "portfolio-tracker.git (fetch)";
+      const buf = makeBuffer([{ text: row0 }, { text: row1 }], cols);
+      const links = computeLinksForRow(buf, 0);
+      expect(links).toHaveLength(1);
+      expect(links[0].text).toBe("https://github.com/s3ntin3l8/pocket-portfolio-tracker.git");
+      expect(links[0].rowCount).toBe(2);
+    });
+
+    // Pins the prior review's decision in place: without a mid-token
+    // producer ending, a `.`/`-`-only continuation stays rejected exactly
+    // as before this fix.
+    it("still rejects a `.`/`-`-only continuation when the producer row ends on an ordinary character", () => {
+      const row0 = "z".repeat(20) + "https://github.com/s3ntin3l8/pocket"; // no trailing "-", flush to margin
+      const cols = row0.length;
+      const row1 = "portfolio-tracker.git (fetch)";
+      const buf = makeBuffer([{ text: row0 }, { text: row1 }], cols);
+      const links = computeLinksForRow(buf, 0);
+      expect(links).toHaveLength(1);
+      expect(links[0].text).toBe("https://github.com/s3ntin3l8/pocket");
+      expect(links[0].rowCount).toBe(1);
+    });
+
+    // Known, accepted residual gap of the `/` half of MID_TOKEN_BREAK_RE
+    // (documented in this module's own header): a trailing-slash URL is
+    // complete and routine, so a producer ending in `/` is weaker evidence
+    // of a mid-token break than one ending in `-`. Combined with a nearby
+    // row's edge coincidentally landing in the interval, this CAN still
+    // join a URL onto unrelated hyphenated prose. Locked in here as
+    // documentation of current, deliberate behaviour — not a target to
+    // "fix" blindly — the same way the `/var/log/syslog` case above is: the
+    // hover tooltip shows the full reconstructed URL before any click.
+    it("still joins hyphenated prose after a trailing-slash URL when a nearby edge coincides — documented limitation", () => {
+      const row0 = "z".repeat(20) + "https://example.com/"; // ends in "/", P = 40
+      const cols = 78;
+      const buf = makeBuffer(
+        [
+          { text: "q".repeat(42) }, // edge 42 — unrelated content, happens to land in [40,45)
+          { text: row0 }, // producer, row index 1
+          { text: "well-known limitations apply" }, // prefix "well-known", span 5 -> interval [40,45)
+        ],
+        cols,
+      );
+      const links = computeLinksForRow(buf, 1);
+      expect(links).toHaveLength(1);
+      expect(links[0].text).toBe("https://example.com/well-known");
+    });
+
+    // Review-caught regression: WRAP_BREAK_CHAR_RE (used only to size the
+    // corroboration span) didn't include `.`, even though
+    // SOFT_STRUCTURAL_CHAR_RE (which gates entry into this guarded branch)
+    // admits a lone `.` as sufficient. A continuation with a `.` but no
+    // early `-`/`/`/etc. made `prefix.search(WRAP_BREAK_CHAR_RE)` return -1,
+    // so the span fell back to the ENTIRE continuation length instead of
+    // stopping at the first break opportunity — wildly widening the
+    // corroboration interval in exactly this module's most loosely-gated
+    // path. Fixed by adding `.` to WRAP_BREAK_CHAR_RE; this pins the narrow
+    // span in place so the bug can't silently return.
+    it("sizes the corroboration span narrowly for a `.`-only continuation, not the whole continuation length", () => {
+      const row0 = "z".repeat(20) + "https://example.com/foo-"; // ends in "-", P = 44
+      const cols = 78;
+      const continuation = "a." + "x".repeat(60); // WRAP_BREAK_CHAR_RE should stop at the "." (index 1) -> span 2
+      const buf = makeBuffer(
+        [
+          { text: row0 }, // producer, row index 0
+          { text: continuation },
+          { text: "q".repeat(70) }, // edge 70 — inside the OLD buggy [44,106) span, outside the fixed [44,46)
+        ],
+        cols,
+      );
+      const links = computeLinksForRow(buf, 0);
+      expect(links).toHaveLength(1);
+      expect(links[0].text).toBe("https://example.com/foo-");
+      expect(links[0].rowCount).toBe(1);
+    });
+
+    // Hermes-caught follow-up: the fix above (adding "." to
+    // WRAP_BREAK_CHAR_RE) restores the invariant that let the bug happen in
+    // the first place — that WRAP_BREAK_CHAR_RE is a superset of every
+    // character either admission gate (STRUCTURAL_CHAR_RE or
+    // SOFT_STRUCTURAL_CHAR_RE) lets through. `canExtend` now also fails
+    // closed if that invariant is ever violated (a `breakIdx < 0` no longer
+    // falls back to the whole continuation as the span), but a silent
+    // fail-closed is still worse than a loud test failure at the root
+    // cause. This test checks the invariant directly against the real
+    // regex objects — not a hand-copied character list, which could drift
+    // out of sync with the source the way this exact bug did — so a future
+    // widening of either gate without a matching WRAP_BREAK_CHAR_RE update
+    // fails here first.
+    it("invariant: WRAP_BREAK_CHAR_RE matches every character STRUCTURAL_CHAR_RE or SOFT_STRUCTURAL_CHAR_RE admits", () => {
+      for (let code = 0x21; code <= 0x7e; code++) {
+        const c = String.fromCharCode(code);
+        if (STRUCTURAL_CHAR_RE.test(c) || SOFT_STRUCTURAL_CHAR_RE.test(c)) {
+          expect(WRAP_BREAK_CHAR_RE.test(c)).toBe(true);
+        }
+      }
     });
   });
 

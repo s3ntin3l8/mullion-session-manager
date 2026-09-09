@@ -41,36 +41,76 @@
 // OWN column, which can be far short of `cols`. The fix: also accept a row
 // as a plausible wrap point when another NEARBY row (small window — a
 // coincidence there is far less likely than across a whole scrollback)
-// ends at the exact same column. In session B, the row directly above the
-// URL row (an unrelated comment line, "// Adjusting state during render
-// (Reac") independently ends at that same column 50 — two rows in the same
-// inset block sharing one wrap width is exactly the signal a fixed-width
-// panel produces, and exactly what an unrelated coincidence is unlikely to.
+// reaches at least as far right as this row did, without overshooting by
+// more than the continuation's own next unbreakable chunk could explain
+// (see `isEligibleWrapRow`'s interval check below). In session B, the row
+// directly above the URL row (an unrelated comment line, "// Adjusting
+// state during render (Reac") independently ends at that same column 50 —
+// two rows in the same inset block sharing one wrap width is exactly the
+// signal a fixed-width panel produces, and exactly what an unrelated
+// coincidence is unlikely to.
+//
+// Session C, opencode (cols 78): opencode renders inside a `┃`-bordered
+// panel and WORD-WRAPS its own content at the panel's width, unlike Claude
+// Code's fixed-column hard wrap — so each line ends wherever its last word
+// happened to fit, and consecutive lines in the same wrapped paragraph
+// almost never end at the *exact same* column (confirmed against real
+// captured bytes: edges 39, 41, 42, 43, 45, 46, 48, 49 across one capture).
+// The original exact-column-match rule essentially never corroborates a
+// word-wrapped panel, so opencode's own wrapped URLs stayed truncated. The
+// fix generalizes exact match to interval membership: a neighbour whose
+// edge falls in `[P, P + C)`, where `P` is this row's own edge and `C` is
+// the continuation's next unbreakable chunk length, corroborates a wrap —
+// this subsumes the old exact-match case (`C ≥ 1` is already guaranteed
+// below) but also catches a word-wrapped paragraph, where the corroborating
+// row is often UNRELATED content that merely happens to reach into that
+// narrow span, not a second row that shares the panel's wrap column. This
+// is a weaker signal than the exact-match story above implies — accepted
+// because the real safety load lives in the structural check below, not
+// here.
 //
 // This corroboration signal alone is still not enough — in a large window
-// two unrelated short lines CAN happen to end at the same column by chance.
-// The real safety load is carried by a second, independent check applied to
-// the *continuation row's own content*: it must contain a "structural" URL
-// character (`/ ? # & =` or `%` — see STRUCTURAL_CHAR_RE's own comment for
-// why this set is deliberately narrow) in the portion that would extend the
-// match. A plain English continuation ("installed at /usr/lib" → chunk
-// "installed" before the regex would stop, "not part of the url" → chunk
-// "not", "Note: restart the daemon" → chunk "Note") essentially never has
-// one; a URL path/fragment segment (`session-manager/pull/1234`,
+// two unrelated short lines CAN happen to end at the same column by chance,
+// or land in the same narrow interval. The real safety load is carried by
+// a second, independent check applied to the *continuation row's own
+// content*: it must contain a "structural" URL character (`/ ? # & =` or
+// `%` — see STRUCTURAL_CHAR_RE's own comment for why this set is
+// deliberately narrow) in the portion that would extend the match. A plain
+// English continuation ("installed at /usr/lib" → chunk "installed" before
+// the regex would stop, "not part of the url" → chunk "not", "Note:
+// restart the daemon" → chunk "Note") essentially never has one; a URL
+// path/fragment segment (`session-manager/pull/1234`,
 // `ot-need-an-effect#adjusting-`) reliably does. Both real captures above
 // pass this; the adversarial cases in this module's own tests fail it.
+//
+// A narrow, guarded exception to that structural gate exists for a
+// continuation that carries only `.`/`-` (e.g. opencode's own
+// `origin  https://github.com/owner/repo-` + `name.git (fetch)`, from
+// `git remote -v` output wrapped mid-hostname): admitted ONLY when the
+// producer row's own visible text ends in `-` or `/` — a token visibly cut
+// mid-word (see MID_TOKEN_BREAK_RE). The `-` half is near-conclusive (a
+// complete URL essentially never ends in `-`); the `/` half is weaker
+// (trailing-slash URLs are complete and routine) and is this exception's
+// specific, accepted exposure: `https://example.com/` immediately followed
+// by hyphenated prose ("well-known limitations…") on the next row CAN
+// still coincidentally join if a nearby row's edge lands in the interval —
+// pinned as a deliberate, documented case in this module's own tests, not
+// a bug to fix blindly.
 //
 // Known, accepted residual gap: this can't distinguish a real URL path
 // continuation from an unrelated line that ITSELF happens to open with a
 // path-shaped token — an absolute filesystem path on the very next
 // terminal row (`/var/log/syslog was rotated`) is lexically identical to a
 // wrapped URL path segment, and no check on buffer content alone can tell
-// them apart. This is NOT eliminated, only mitigated: by design (see
-// TerminalPane.tsx's own `hoverLink`), a hover always shows the full
-// reconstructed URL before any click — a link that reads
-// "https://example.com/foo/var/log/syslog" is visibly wrong before it's
-// ever opened. No heuristic here silently navigates anywhere; the worst
-// case is a wrong-looking link the user chooses not to click.
+// them apart. Widening exact-column-match to interval membership makes
+// this gap marginally easier to hit (a wider window of neighbour edges now
+// qualifies), but does not create a new class of failure. This is NOT
+// eliminated, only mitigated: by design (see TerminalPane.tsx's own
+// `hoverLink`), a hover always shows the full reconstructed URL before any
+// click — a link that reads "https://example.com/foo/var/log/syslog" is
+// visibly wrong before it's ever opened. No heuristic here silently
+// navigates anywhere; the worst case is a wrong-looking link the user
+// chooses not to click.
 //
 // Depends only on this narrow structural slice of xterm's buffer API (not
 // on `Terminal` itself) so the joining/matching logic can be unit-tested
@@ -112,9 +152,10 @@ export const URL_REGEX =
 export const RIGHT_EDGE_SLACK = 3;
 
 /** How many rows on either side of a candidate wrap row are searched for
- * another row ending at the exact same column (the "inset panel" signal —
- * see the module header). Deliberately small: a coincidental match becomes
- * likelier, not less likely, as the window grows. */
+ * another row whose edge falls in the corroboration interval (the "inset
+ * panel" signal — see the module header). Deliberately small: a
+ * coincidental match becomes likelier, not less likely, as the window
+ * grows. */
 export const CORROBORATION_WINDOW = 6;
 
 /** A row's content edge must reach at least this column before a nearby
@@ -172,7 +213,35 @@ const URL_MIDDLE_CHAR_RE = /[^\s"'!*(){}|\\^<>`]/;
 // that now correctly fails to extend — a link stopping one row short of a
 // non-essential trailing fragment segment is the safe direction, not a
 // regression.
-const STRUCTURAL_CHAR_RE = /[/?#&=%]/;
+export const STRUCTURAL_CHAR_RE = /[/?#&=%]/;
+
+// A producer row ending mid-token: a complete URL essentially never ends in
+// `-`, and a trailing `/` at a wrap point is a path separator the next row
+// continues. Only these two endings unlock SOFT_STRUCTURAL_CHAR_RE below —
+// see the module header for why the `/` half is the weaker of the two, and
+// its specific, accepted exposure (a trailing-slash URL followed by
+// hyphenated prose).
+const MID_TOKEN_BREAK_RE = /[-/]$/;
+
+// Hostname/path continuation characters — far too common in ordinary prose
+// to accept on their own (see STRUCTURAL_CHAR_RE's comment above), so this
+// is only ever consulted behind the MID_TOKEN_BREAK_RE guard: a continuation
+// like "tracker.git" or "some-repo" after a producer row visibly cut at `-`
+// or `/` (opencode's own `git remote -v` output, wrapped mid-hostname).
+export const SOFT_STRUCTURAL_CHAR_RE = /[.-]/;
+
+// Break opportunities a word-wrapper would use — NOT a variant of
+// STRUCTURAL_CHAR_RE (that one gates whether a join happens at all; this one
+// only sizes the corroboration interval, i.e. how far past this row's edge
+// the continuation's first unbreakable chunk could plausibly reach). Must
+// stay a superset of SOFT_STRUCTURAL_CHAR_RE (hence the `.` here too, not
+// just STRUCTURAL_CHAR_RE's set plus `-`): a `.`-only continuation admitted
+// through the mid-token-break guard with no `.` in this set would fall back
+// to `prefix.length` as the span — the entire continuation, not a narrow
+// break-sized one — blowing the corroboration interval wide open exactly in
+// the module's most loosely-gated path. Caught by review; regression-tested
+// below (a real captured `.git` continuation with no early hyphen).
+export const WRAP_BREAK_CHAR_RE = /[-./?#&=%]/;
 
 // A continuation row that itself starts a brand new http(s) URL is a
 // second, distinct link, not a continuation of the first — never merge the
@@ -223,11 +292,23 @@ function urlEligiblePrefix(text: string): string {
   return text.slice(0, i);
 }
 
-/** Whether `y`'s content edge looks like a genuine wrap point: either it
- * reaches the terminal's own right margin, or another nearby row
- * independently ends at the exact same column (see module header). */
-function isEligibleWrapRow(buf: LinkBufferSource, y: number, rawText: string): boolean {
-  const { edge } = contentEdge(rawText);
+/** Whether a row with content edge `edge` looks like a genuine wrap point:
+ * either it reaches the terminal's own right margin, or another nearby
+ * row's edge falls in `[edge, edge + corroborationSpan)` — the
+ * interval-membership generalization of "ends at the exact same column"
+ * (see module header for why this is needed for a word-wrapped panel like
+ * opencode's, where consecutive rows in the same paragraph rarely share an
+ * exact edge). `edge` and `corroborationSpan` (the continuation's own next
+ * unbreakable chunk length, `WRAP_BREAK_CHAR_RE`) are both computed by the
+ * caller — `edge` is threaded in rather than recomputed here because
+ * `canExtend` already needs `contentEdge(producerRaw)` for its own
+ * mid-token-break guard check. */
+function isEligibleWrapRow(
+  buf: LinkBufferSource,
+  y: number,
+  edge: number,
+  corroborationSpan: number,
+): boolean {
   if (edge === 0) return false;
   if (edge >= buf.cols - RIGHT_EDGE_SLACK) return true;
   if (edge < MIN_CORROBORATION_EDGE) return false;
@@ -238,7 +319,8 @@ function isEligibleWrapRow(buf: LinkBufferSource, y: number, rawText: string): b
     if (!other) continue;
     const otherRaw = other.translateToString(true);
     if (otherRaw.length === 0) continue;
-    if (contentEdge(otherRaw).edge === edge) return true;
+    const otherEdge = contentEdge(otherRaw).edge;
+    if (otherEdge >= edge && otherEdge < edge + corroborationSpan) return true;
   }
   return false;
 }
@@ -266,7 +348,7 @@ function canExtend(
   nextRaw: string,
 ): ExtendCheck {
   const fail: ExtendCheck = { ok: false, strippedNext: "", skipped: 0 };
-  if (!isEligibleWrapRow(buf, producerY, producerRaw)) return fail;
+  const producerEdge = contentEdge(producerRaw);
 
   const { stripped: nextBody, skipped } = stripGutter(nextRaw);
   if (nextBody.length === 0) return fail;
@@ -274,7 +356,32 @@ function canExtend(
 
   const prefix = urlEligiblePrefix(nextBody);
   if (prefix.length === 0) return fail;
-  if (!STRUCTURAL_CHAR_RE.test(prefix)) return fail;
+
+  if (!STRUCTURAL_CHAR_RE.test(prefix)) {
+    // Guarded exception: a hostname/path segment like "tracker.git" or
+    // "some-repo" that carries only `.`/`-`, admitted only when the
+    // producer row's own text was visibly cut mid-token (see
+    // MID_TOKEN_BREAK_RE's comment for why `-` and `/` aren't equally
+    // strong evidence, and the module header for the accepted exposure).
+    if (!MID_TOKEN_BREAK_RE.test(producerEdge.stripped)) return fail;
+    if (!SOFT_STRUCTURAL_CHAR_RE.test(prefix)) return fail;
+  }
+
+  // Invariant: every continuation admitted above (either STRUCTURAL_CHAR_RE
+  // or the SOFT_STRUCTURAL_CHAR_RE guarded exception) contains a character
+  // WRAP_BREAK_CHAR_RE also matches — both are subsets of it by construction
+  // (see WRAP_BREAK_CHAR_RE's own comment), so this should never be -1. Fail
+  // CLOSED rather than falling back to `prefix.length` as the span if that
+  // ever stops holding (e.g. one class widens without the other) — that
+  // fallback, using the ENTIRE continuation as the corroboration span, is
+  // exactly the review-caught bug this module was fixed for (see
+  // terminalLinks.test.ts's "WRAP_BREAK_CHAR_RE is a superset" invariant
+  // test, which would catch a real divergence directly, before it ever
+  // reaches this fallback).
+  const breakIdx = prefix.search(WRAP_BREAK_CHAR_RE);
+  if (breakIdx < 0) return fail;
+  const span = breakIdx + 1;
+  if (!isEligibleWrapRow(buf, producerY, producerEdge.edge, span)) return fail;
 
   return { ok: true, strippedNext: nextBody, skipped };
 }
