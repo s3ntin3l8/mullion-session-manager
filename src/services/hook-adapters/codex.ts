@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./types.js";
@@ -529,9 +529,29 @@ export function buildCodexMcpFlags(
 // entry, and doesn't touch `projects` at all) — so this is harmless in
 // practice, but it's a real behavioral difference from a targeted merge,
 // not a mere implementation detail.
+//
+// Hermes review, PR #1195 — `path.resolve()` alone is the wrong
+// normalization here: it collapses `.`/`..` but never resolves symlinks,
+// while codex's own trust key is the directory `chdir()`+`getcwd()` resolve
+// to at its OWN process startup — the canonical, symlink-free path, and the
+// same one a manual "Yes, continue" persists to config.toml under. A cwd
+// with a symlinked component (a symlinked project root hosting Task
+// Master's `.mullion-worktrees/`, or `/tmp` on macOS, itself a symlink to
+// `/private/tmp`) would key this override under a DIFFERENT path than the
+// one codex actually asks about, silently reintroducing the exact hang this
+// function exists to close for that path shape. `realpathSync` matches
+// codex's own resolution exactly (`path.resolve` would still be wrong even
+// with a hand-rolled symlink-following loop, since realpathSync IS that
+// loop, done correctly against the real filesystem). Not wrapped in a
+// try/catch — this session's own cwd must already exist by the time this
+// runs (it's what dtach/systemd-run itself is about to chdir into), so a
+// throw here is a genuine invariant violation, not a recoverable case, and
+// is handled the same as any other adapter failure by applyHookAdapters'
+// own outer catch (index.ts) — degrade to launching without hooks, not a
+// silently-wrong trust key.
 export function buildCodexTrustFlag(cwd: string): string {
   const tomlString = (value: string) => `"${escapeTomlBasicString(value)}"`;
-  const override = `projects={${tomlString(path.resolve(cwd))}={trust_level=${tomlString("trusted")}}}`;
+  const override = `projects={${tomlString(realpathSync(cwd))}={trust_level=${tomlString("trusted")}}}`;
   return `-c ${shellQuote(override)}`;
 }
 

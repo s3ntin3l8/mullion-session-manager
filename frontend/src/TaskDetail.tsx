@@ -43,6 +43,34 @@ function taskDetailBlockerLabel(b: TaskBlocker): string {
   return b.htmlUrl === null ? b.title : `#${b.number}`;
 }
 
+// Hermes review, PR #1195 — one banner shape, rendered for both the worker
+// and review session so neither role is invisible here (see the call sites'
+// own comment for the gap this closes). `session` is `undefined` for "no
+// session linked" and for "linked id no longer resolves" alike — both
+// render nothing, same as the "Open session" button above does.
+function SessionAttentionBanner({
+  role,
+  session,
+  onOpenSession,
+}: {
+  role: "Worker" | "Review";
+  session: Session | undefined;
+  onOpenSession: (session: Session) => void;
+}) {
+  if (!session || !session.sessionStatusAttentionRequired) return null;
+  return (
+    <div className="task-detail-session-attention">
+      <TerminalPromptIcon size={12} />
+      {role} session needs attention:{" "}
+      {formatStatusLabel(STATUS_PRESENTATION[session.sessionStatus], session.sessionStatusDetail)}
+      {" — "}
+      <button className="task-detail-link" onClick={() => onOpenSession(session)}>
+        open it
+      </button>
+    </div>
+  );
+}
+
 // Phase 6 (6.5/#218) — the task board's detail panel: metadata, issue/PR
 // links, Claim/Approve/Reject/Retry/Give up (GateActions idiom,
 // NotificationBell.tsx's own precedent — no optimistic local state, the
@@ -125,6 +153,12 @@ export function TaskDetail({
 
   const workerSession =
     task.sessionId !== null ? sessions.find((s) => s.id === task.sessionId) : undefined;
+  // Hermes review, PR #1195 — the board's TaskSessionSlot renders this same
+  // status chip for BOTH roles; a review session (spawned into the same
+  // worktree the worker used, task-reconciler.ts's spawnReviewAgentNow) can
+  // sit attention-required just the same and was invisible here otherwise.
+  const reviewSession =
+    task.reviewSessionId !== null ? sessions.find((s) => s.id === task.reviewSessionId) : undefined;
   // Issue #1038 — see TaskCard.tsx's own comment on the same distinction:
   // autoReturnCapped flips true at the START of the last permitted round,
   // while the worker (and then the confirming review) may still be running.
@@ -371,32 +405,21 @@ export function TaskDetail({
         </div>
       )}
 
-      {/* The task-view worker-session-visibility gap this closes: TaskDetail
-          previously read none of the worker session's own live status
-          fields at all — a stuck/blocked worker (needing permission, a
-          plan decision, or any other in-terminal prompt) was invisible here
-          even though "Open session" already sits right above, unlike
-          TaskSessionSlot.tsx on the board, which has shown this same data
-          all along. Reuses session-status.ts's already-derived fields
+      {/* The task-view session-visibility gap this closes: TaskDetail
+          previously read none of either linked session's own live status
+          fields at all — a stuck/blocked worker or reviewer (needing
+          permission, a plan decision, or any other in-terminal prompt) was
+          invisible here even though "Open session" already sits right
+          above, unlike TaskSessionSlot.tsx on the board, which has shown
+          this same data (for BOTH roles) all along. Reuses
+          session-status.ts's already-derived fields
           (STATUS_PRESENTATION/formatStatusLabel — the exact same lookup the
           board's own status dot uses), not a new detection mechanism; gated
           on sessionStatusAttentionRequired so a routine "working"/"idle"
           session stays silent here, matching the failureReason/
           githubSyncError/blockedState banners below. */}
-      {workerSession && workerSession.sessionStatusAttentionRequired && (
-        <div className="task-detail-session-attention">
-          <TerminalPromptIcon size={12} />
-          Worker session needs attention:{" "}
-          {formatStatusLabel(
-            STATUS_PRESENTATION[workerSession.sessionStatus],
-            workerSession.sessionStatusDetail,
-          )}
-          {" — "}
-          <button className="task-detail-link" onClick={() => onOpenSession(workerSession)}>
-            open it
-          </button>
-        </div>
-      )}
+      <SessionAttentionBanner role="Worker" session={workerSession} onOpenSession={onOpenSession} />
+      <SessionAttentionBanner role="Review" session={reviewSession} onOpenSession={onOpenSession} />
 
       {/* #485 — independent of status: a task can be happily in_progress
           while its GitHub sync is silently broken (e.g. an under-scoped

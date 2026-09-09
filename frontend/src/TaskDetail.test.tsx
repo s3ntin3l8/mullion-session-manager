@@ -1082,6 +1082,38 @@ describe("TaskDetail worker session attention banner", () => {
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
     expect(screen.queryByText(/Worker session needs attention/)).toBeNull();
   });
+
+  // Hermes review, PR #1195 — parity with TaskSessionSlot.tsx on the board,
+  // which renders this same status chip for both worker and review roles.
+  it("shows the review session's status when it needs attention, independently of the worker session", async () => {
+    tasks = [makeTask({ id: 1, status: "reviewing", sessionId: 7, reviewSessionId: 8 })];
+    sessions = [
+      makeSession({ id: 7, command: "codex", sessionStatusAttentionRequired: false }),
+      makeSession({
+        id: 8,
+        command: "opencode",
+        sessionStatus: "awaiting_plan",
+        sessionStatusSeverity: "blocked",
+        sessionStatusDetail: null,
+        sessionStatusAttentionRequired: true,
+      }),
+    ];
+    const onOpenSession = vi.fn();
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={onOpenSession} />);
+
+    expect(screen.queryByText(/Worker session needs attention/)).toBeNull();
+    expect(screen.getByText(/Review session needs attention/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /open it/ }));
+    expect(onOpenSession).toHaveBeenCalledWith(expect.objectContaining({ id: 8 }));
+  });
+
+  it("stays silent when there is no review session", () => {
+    tasks = [makeTask({ id: 1, status: "in_progress", sessionId: 7, reviewSessionId: null })];
+    sessions = [makeSession({ id: 7, command: "codex", sessionStatusAttentionRequired: false })];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.queryByText(/Review session needs attention/)).toBeNull();
+  });
 });
 
 describe("TaskDetail merge-on-approve status", () => {
