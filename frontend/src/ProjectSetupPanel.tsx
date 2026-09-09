@@ -52,6 +52,18 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
   const workflowConventionsText = useDashboardStore(
     (s) => s.settings.sessions.workflowConventionsText,
   );
+  // Hermes review, PR #1200 round 2 — the disclosure above used to read
+  // ONLY the install-wide text, ignoring this project's own
+  // injectWorkflowConventions opt-out, which resolveScaffoldWorkflowConventionsText
+  // (project-setup.ts) already gates the SERVER-side resolution on. For an
+  // opted-out project the server falls back to the fixed defaults
+  // regardless of this text, but the disclosure kept claiming "the same
+  // text already injected into every session on this project" — false on
+  // both counts for exactly that project. Same store-read pattern
+  // ProjectBriefingPanel.tsx uses for the identical column, and the same
+  // `?? true` default resolveScaffoldWorkflowConventionsText applies.
+  const project = useDashboardStore((s) => s.projects.find((p) => p.id === params.projectId));
+  const injectWorkflowConventions = project?.injectWorkflowConventions ?? true;
   const [slug, setSlug] = useState("");
   const [includeContributingPointer, setIncludeContributingPointer] = useState(false);
   const [symlinkAgentsSkills, setSymlinkAgentsSkills] = useState(false);
@@ -271,7 +283,15 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
         <div className="settings-row-text">
           <label className="settings-row-label">Workflow Conventions to commit</label>
           <div className="settings-row-desc">
-            {workflowConventionsText.length > 0 ? (
+            {!injectWorkflowConventions ? (
+              <>
+                This project has opted out of workflow-conventions injection (Session injection for
+                this project → Workflow conventions, in the Mullion Briefing panel), so this will
+                commit Mullion's own built-in defaults (always branch + PR, Conventional Commits
+                titles, squash merge, green CI, full lint/typecheck/test/format gate before pushing)
+                regardless of anything configured in Settings → Sessions.
+              </>
+            ) : workflowConventionsText.length > 0 ? (
               <>
                 This install's own conventions, from Settings → Sessions — the same text already
                 injected into every session on this project.

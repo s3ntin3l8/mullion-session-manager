@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { ProjectSetupPanel } from "./ProjectSetupPanel.js";
 import { jsonResponse } from "./test/jsonResponse.js";
 import { useDashboardStore } from "./store/index.js";
+import { makeProject } from "./test/fixtures.js";
 
 function mockFetch(opts: {
   preview?: (body: unknown) => Response | Promise<Response>;
@@ -214,6 +215,48 @@ describe("ProjectSetupPanel", () => {
             workflowConventionsText: "Our team's own conventions.",
           },
         },
+      });
+      render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+      expect(screen.getByText(/This install's own conventions/)).toBeInTheDocument();
+    });
+
+    // Hermes review, PR #1200 round 2 — before this, the disclosure read
+    // ONLY the install-wide settings text, ignoring this project's own
+    // injectWorkflowConventions opt-out that resolveScaffoldWorkflowConventionsText
+    // (project-setup.ts) already gates the SERVER-side resolution on. An
+    // opted-out project with configured settings text got shown "the same
+    // text already injected into every session on this project," which was
+    // false on both counts: the server falls back to the fixed defaults for
+    // exactly that project, ignoring this text entirely.
+    it("names the built-in defaults, not the configured text, when this project has opted out of injection", () => {
+      vi.stubGlobal("fetch", mockFetch({}));
+      useDashboardStore.setState({
+        settings: {
+          ...originalState.settings,
+          sessions: {
+            ...originalState.settings.sessions,
+            workflowConventionsText: "Our team's own conventions.",
+          },
+        },
+        projects: [makeProject({ id: 1, injectWorkflowConventions: false })],
+      });
+      render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+      expect(screen.getByText(/opted out of workflow-conventions injection/)).toBeInTheDocument();
+      expect(screen.getByText(/Mullion's own built-in defaults/)).toBeInTheDocument();
+      expect(screen.queryByText(/Our team's own conventions\./)).not.toBeInTheDocument();
+    });
+
+    it("still names this install's own configured conventions when injectWorkflowConventions is explicitly true (not just the null default)", () => {
+      vi.stubGlobal("fetch", mockFetch({}));
+      useDashboardStore.setState({
+        settings: {
+          ...originalState.settings,
+          sessions: {
+            ...originalState.settings.sessions,
+            workflowConventionsText: "Our team's own conventions.",
+          },
+        },
+        projects: [makeProject({ id: 1, injectWorkflowConventions: true })],
       });
       render(<ProjectSetupPanel params={{ projectId: 1 }} />);
       expect(screen.getByText(/This install's own conventions/)).toBeInTheDocument();
