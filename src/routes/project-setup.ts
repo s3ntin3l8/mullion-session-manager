@@ -198,6 +198,13 @@ function scaffoldableRelPaths(slug: string, options: ScaffoldOptions): string[] 
     options.symlinkAgentsSkills
       ? path.join(".agents", "skills", slug)
       : path.join(".agents", "skills", slug, "SKILL.md"),
+    // Issue #943 — the codex reviewer mirror is ALWAYS a plain file, even
+    // under symlinkAgentsSkills (unlike the skill mirror above): a symlink
+    // needs a same-shape source to point at, and
+    // `.claude/agents/<slug>-reviewer.md` (Claude Code subagent
+    // frontmatter) isn't the same shape as codex's SKILL.md target, so
+    // there's no symlink-mode variant to branch on here.
+    path.join(".agents", "skills", `${slug}-reviewer`, "SKILL.md"),
   ];
   if (options.includeDockConfig) paths.push(path.join(".crs", "dock.json"));
   // Issue #942 — without this, readScaffoldableFiles below never sees a real

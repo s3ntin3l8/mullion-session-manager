@@ -2,6 +2,7 @@ import path from "node:path";
 import { upsertMarkedRegion } from "./marked-region.js";
 import { MARKER_START, MARKER_END } from "./project-briefing.js";
 import { isDangerousSkillName } from "./hook-adapters/skill-name.js";
+import { parseSkillFrontmatter } from "./skills.js";
 import type { DockControl } from "./project-config.js";
 // Issue #1036 — only the PURE assembly helper and its static question data,
 // never the I/O-bearing session-file helpers workflow-conventions.ts also
@@ -145,7 +146,8 @@ export class InvalidScaffoldSlugError extends Error {
 }
 
 /** A slug becomes multiple path segments below (`.claude/skills/<slug>/`,
- * `.claude/agents/<slug>-reviewer.md`, `.agents/skills/<slug>/`) — reuses
+ * `.claude/agents/<slug>-reviewer.md`, `.agents/skills/<slug>/`,
+ * `.agents/skills/<slug>-reviewer/` — issue #943) — reuses
  * hook-adapters/skill-name.ts's own guard (path separators, `.`/`..`,
  * control characters, dangerous object-key names) rather than a second,
  * independently-drifting validator for the same "safe to join into a
@@ -170,8 +172,10 @@ export function scaffoldReviewerPath(slug: string): string {
 export interface ScaffoldOptions {
   /** Names the project's own skill (`.claude/skills/<slug>/SKILL.md`,
    * `.agents/skills/<slug>/SKILL.md`) and reviewer subagent
-   * (`.claude/agents/<slug>-reviewer.md`) — and appears in the scaffolded
-   * AGENTS.md briefing region's pointer text. Validated by the caller
+   * (`.claude/agents/<slug>-reviewer.md`, mirrored for codex at
+   * `.agents/skills/<slug>-reviewer/SKILL.md` — issue #943) — and appears
+   * in the scaffolded AGENTS.md briefing region's pointer text. Validated
+   * by the caller
    * (routes/project-setup.ts) via isValidScaffoldSlug before this module
    * ever sees it; computeScaffold itself still throws
    * InvalidScaffoldSlugError rather than silently emitting an unsafe path,
@@ -259,11 +263,33 @@ function skillFileContents(slug: string): string {
   );
 }
 
+// Issue #943 — this exact clause is deliberate, not incidental: it mirrors
+// codex's own bundled `~/.codex/skills/.system/review-agent` description.
+// Codex's `spawn_agent` has no structured named-skill parameter (confirmed
+// live, 2026-09-09 spike) — a delegating model resolves this skill purely
+// from its description text, so the description IS the discovery
+// mechanism, and that mechanism only works if this clause (or its
+// equivalent) actually reaches the codex mirror's frontmatter. Exported so
+// scaffold-generate.ts's generation prompt can both REQUIRE it verbatim in
+// agent-generated reviewer content and VALIDATE its presence
+// (parseGeneratedOutput) — the same "prompt text and parser can never
+// drift out of sync" pattern that module already uses for its
+// SKILL_START/REVIEWER_START markers. Without this, the static template
+// below would be the only reviewer content ever guaranteed to be
+// codex-discoverable — every real-world `/setup/generate` reviewer
+// (the actual, intended way most projects get reviewer content) would
+// reach codex only by chance.
+export const CODEX_REVIEWER_DELEGATION_CLAUSE =
+  "Use when another agent delegates review of uncommitted changes.";
+
 function reviewerAgentFileContents(slug: string): string {
   return (
     `---\n` +
     `name: ${slug}-reviewer\n` +
-    `description: "Review a diff or PR in this repo for correctness against this repo's own domain invariants, not just general code quality. Use this before declaring a change done, or when asked for a review pass specific to this codebase."\n` +
+    // Edited on the SHARED template rather than in a codex-only translation
+    // step, so this also changes what Claude Code's own subagent picker
+    // shows — intentional, since the clause is equally true there.
+    `description: "Review a diff or PR in this repo for correctness against this repo's own domain invariants, not just general code quality. Use this before declaring a change done, or when asked for a review pass specific to this codebase. ${CODEX_REVIEWER_DELEGATION_CLAUSE}"\n` +
     `tools: Read, Grep, Glob, Bash\n` +
     `model: inherit\n` +
     `---\n\n` +
@@ -284,6 +310,56 @@ function reviewerAgentFileContents(slug: string): string {
     `that matters. If you find nothing, say so plainly rather than\n` +
     `manufacturing a nitpick to seem thorough.\n`
   );
+}
+
+// Issue #943 — codex has no static per-agent config file; the live spike
+// confirmed it discovers a *skill* by name/description via `spawn_agent`
+// delegation instead (same mechanism `.agents/skills/<slug>/SKILL.md`
+// already serves for the project skill). This reduces the reviewer's
+// Claude-Code-only four-field subagent frontmatter (name/description/
+// tools/model) down to SKILL.md's two-field shape (name/description) —
+// deliberately modelled on `deriveAgyAgentFile`
+// (hook-adapters/mullion-bundle.ts), which reduces the exact same shape
+// for agy and documents that the two-field result IS "the exact same
+// two-field shape SKILL.md itself already uses." NOT importing that
+// function directly: mullion-bundle.ts is an fs-heavy module
+// (installBundleSkills et al.), and pulling it into this module would
+// break computeScaffold's documented "no filesystem access of its own,
+// pure in, pure out" contract for a single shared helper's sake.
+// `tools`/`model` are Claude-Code-specific execution config with no codex
+// equivalent, so they're dropped, not translated.
+//
+// Returns `null` for unparseable frontmatter (mirroring
+// deriveAgyAgentFile/deriveOpenCodeReviewerAgentFile's own silent-skip
+// posture) — the only realistic trigger is a hand-mangled PRESERVED
+// existing reviewer file, since generated/template reviewer content is
+// always well-formed. `computeScaffold` treats `null` as "emit no codex
+// reviewer entry" rather than throwing; the rest of the scaffold still
+// proceeds.
+//
+// mullion-reviewer's own pass on this issue's PR caught a real bug in an
+// earlier version of this function: it propagated `parsed.name` (the
+// PRESERVED reviewer's own frontmatter `name:`) as the emitted mirror's
+// identity, independent of the slug-derived directory it actually lands
+// in (`.agents/skills/<slug>-reviewer/`). A hand-edited reviewer whose
+// `name:` was never updated to match its own slug — plausible after a
+// copy-paste, or simply drift over time — could then emit `name:
+// <slug>` verbatim, IDENTICAL to the project skill's own mirror at
+// `.agents/skills/<slug>/SKILL.md`. Per skills.ts's own header comment,
+// codex/opencode key enable/disable on frontmatter `name`, not path, so
+// two skills sharing a name become impossible to toggle independently.
+// Fixed by forcing the emitted `name:` to `<slug>-reviewer` — the same
+// value `scaffoldReviewerPath`/the directory this mirror is written into
+// already commit to — rather than trusting whatever the preserved file's
+// own frontmatter happens to say. `slug` reaching this function has
+// already passed `isValidScaffoldSlug` (computeScaffold throws
+// InvalidScaffoldSlugError before this point), so `${slug}-reviewer` is
+// safe to emit without a separate isDangerousSkillName check on it.
+function deriveCodexReviewerSkillContent(raw: string, slug: string): string | null {
+  const parsed = parseSkillFrontmatter(raw);
+  if (!parsed) return null;
+  const body = raw.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "").trim();
+  return `---\nname: ${slug}-reviewer\ndescription: ${JSON.stringify(parsed.description)}\n---\n\n${body}\n`;
 }
 
 // Issue #1036 — before this, a scaffolded repo's AGENTS.md said nothing
@@ -403,11 +479,14 @@ function stripLegacyBriefingMirror(text: string): string {
  * at that path, so a re-scaffold over a repo that already committed or
  * hand-edited them leaves that content alone rather than silently
  * clobbering it with the generic starter text. The `.agents/skills/<slug>`
- * mirror is the one exception that's always (re-)emitted regardless —
- * it has no independent identity to preserve, it just carries whatever
- * the skill's resolved content is (freshly generated, or preserved from
- * an existing `.claude/skills` file) into codex/agy's own project-scope
- * discovery path.
+ * mirror, and the `.agents/skills/<slug>-reviewer/SKILL.md` codex reviewer
+ * mirror (issue #943), are the two exceptions that are always (re-)emitted
+ * regardless — neither has an independent identity to preserve, each just
+ * carries whatever the skill's / reviewer's own resolved content is
+ * (freshly generated, or preserved from an existing `.claude/skills` or
+ * `.claude/agents` file) into codex's own project-scope discovery path (and
+ * agy's too, for the skill mirror — agy has no reviewer discovery path at
+ * all, see #943's 2026-09-05 spike).
  */
 export function computeScaffold(
   existingFiles: Record<string, string | undefined>,
@@ -500,15 +579,42 @@ export function computeScaffold(
     entries.push({ path: skillPath, kind: "file", contents: skillContent });
   }
 
+  // Issue #943 — same "resolve final content once, mirror always carries
+  // it" shape as skillContent/skillPath above: reviewerContent must be
+  // hoisted OUT of the create-once `if` (unlike before this issue, when
+  // nothing needed the resolved value outside that branch) so a PRESERVED
+  // existing reviewer — not just freshly generated/template content — is
+  // what the codex mirror below reflects. Getting this wrong would silently
+  // diverge the codex reviewer from the Claude Code one on every re-scaffold
+  // of a repo whose reviewer was hand-edited after the first scaffold.
   const reviewerPath = scaffoldReviewerPath(slug);
-  if (existingFiles[reviewerPath] === undefined) {
+  const reviewerAlreadyExists = existingFiles[reviewerPath] !== undefined;
+  const reviewerContent =
+    existingFiles[reviewerPath] ??
+    stampScaffoldBody(options.generated?.reviewer ?? reviewerAgentFileContents(slug), slug);
+  if (!reviewerAlreadyExists) {
+    entries.push({ path: reviewerPath, kind: "file", contents: reviewerContent });
+  }
+
+  // Issue #943 — codex-readable mirror of the reviewer, translated to
+  // SKILL.md's two-field frontmatter shape (see deriveCodexReviewerSkillContent
+  // above). Always (re-)written, same "no independent identity of its own to
+  // preserve" rationale as the skill mirror below — it only ever carries
+  // whatever reviewerContent resolved to. UNLIKE the skill mirror, this is
+  // NEVER a symlink, even under symlinkAgentsSkills: the skill mirror can
+  // symlink because both ends are the same SKILL.md format, but
+  // `.claude/agents/<slug>-reviewer.md` is Claude Code subagent frontmatter
+  // and the codex target needs a genuinely different shape — there is no
+  // valid symlink target to point at. A `null` translation (unparseable/
+  // unsafe preserved reviewer frontmatter) silently emits no entry here;
+  // `finishPreview`'s diff loop iterates `entries`, not the scaffoldable
+  // path list, so a read-but-not-emitted path is simply not diffed.
+  const codexReviewerContent = deriveCodexReviewerSkillContent(reviewerContent, slug);
+  if (codexReviewerContent !== null) {
     entries.push({
-      path: reviewerPath,
+      path: path.join(".agents", "skills", `${slug}-reviewer`, "SKILL.md"),
       kind: "file",
-      contents: stampScaffoldBody(
-        options.generated?.reviewer ?? reviewerAgentFileContents(slug),
-        slug,
-      ),
+      contents: codexReviewerContent,
     });
   }
 

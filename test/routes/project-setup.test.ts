@@ -180,6 +180,11 @@ describe("project-setup route", () => {
         "CLAUDE.md",
         ".claude/skills/demo/SKILL.md",
         ".claude/agents/demo-reviewer.md",
+        // Issue #943 — the codex-readable reviewer mirror. Presence here
+        // confirms scaffoldableRelPaths() (this route's own hardcoded read
+        // list) was extended in lockstep with computeScaffold's emitted
+        // entries, not just that computeScaffold itself emits it.
+        ".agents/skills/demo-reviewer/SKILL.md",
       ]),
     );
     expect(body.diff).toContain("AGENTS.md");
@@ -191,6 +196,9 @@ describe("project-setup route", () => {
     expect(fs.existsSync(path.join(worktreeDir, ".claude", "skills", "demo", "SKILL.md"))).toBe(
       true,
     );
+    expect(
+      fs.existsSync(path.join(worktreeDir, ".agents", "skills", "demo-reviewer", "SKILL.md")),
+    ).toBe(true);
 
     await app.close();
   });

@@ -9,7 +9,11 @@ import { deleteBranch } from "./git-branch-delete.js";
 import { resolveHostBaseRef, viaRemote } from "./host-git.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { gitEnv } from "./git-env.js";
-import { scaffoldSkillPath, scaffoldReviewerPath } from "./mullion-scaffold.js";
+import {
+  scaffoldSkillPath,
+  scaffoldReviewerPath,
+  CODEX_REVIEWER_DELEGATION_CLAUSE,
+} from "./mullion-scaffold.js";
 
 // Issue #956 — replaces mullion-scaffold.ts's static placeholder skill/
 // reviewer/AGENTS.md-region text with genuinely codebase-specific content, by
@@ -318,7 +322,11 @@ export function buildGenerationPrompt(opts: {
     `\`.claude/agents/mullion-reviewer.md\` says "Read \`.claude/skills/mullion-review-` +
     `invariants/SKILL.md\` first; it's the compact checklist this review is built on." Never ` +
     `invent invariants independently of what you wrote in the skill — the reviewer's checklist ` +
-    `IS the skill's content, applied.\n` +
+    `IS the skill's content, applied. Its \`description:\` frontmatter field MUST include this ` +
+    `exact clause, verbatim, appended after your own description text: "${CODEX_REVIEWER_DELEGATION_CLAUSE}" ` +
+    `— this is the only mechanism by which codex's own delegation (\`spawn_agent\`) can ` +
+    `discover this reviewer as a skill; omitting it makes the reviewer silently invisible to ` +
+    `codex sessions.\n` +
     `3. A short AGENTS.md briefing-region paragraph naming where the skill and reviewer live ` +
     `and when to use them. Include a "## Workflow Conventions" section with this repo's ` +
     `branching, review, and commit conventions (look at CONTRIBUTING.md, existing AGENTS.md, ` +
@@ -349,12 +357,15 @@ function extractSection(raw: string, start: string, end: string, label: string):
 }
 
 /** Parses the generation agent's raw stdout into the three target-file
- * contents, and enforces the one cross-file invariant a prompt instruction
- * alone can't guarantee: the reviewer body must actually name the skill's
- * real path, not just have been ASKED to (issue's "skill<->reviewer
- * relationship must be explicit" section) — checked here, not left to
- * hope, so a generation pass that drifts fails loudly instead of silently
- * shipping a reviewer with no real cross-reference. */
+ * contents, and enforces two cross-cutting invariants a prompt instruction
+ * alone can't guarantee — checked here, not left to hope, so a generation
+ * pass that drifts fails loudly instead of silently shipping broken
+ * content: (1) the reviewer body must actually name the skill's real path,
+ * not just have been ASKED to (issue's "skill<->reviewer relationship must
+ * be explicit" section); (2) the reviewer's description must carry the
+ * CODEX_REVIEWER_DELEGATION_CLAUSE verbatim (issue #943) — without it, the
+ * generated reviewer's codex mirror exists on disk but is never actually
+ * discoverable by codex's `spawn_agent` delegation. */
 export function parseGeneratedOutput(raw: string, slug: string): GeneratedScaffoldContent {
   const skill = extractSection(raw, SKILL_START, SKILL_END, "skill");
   const reviewer = extractSection(raw, REVIEWER_START, REVIEWER_END, "reviewer");
@@ -365,6 +376,22 @@ export function parseGeneratedOutput(raw: string, slug: string): GeneratedScaffo
     throw new GenerationOutputError(
       `reviewer content never references the skill's own path (${skillPath}) — ` +
         `regenerate rather than commit a reviewer with no real cross-reference`,
+    );
+  }
+  // Issue #943 — same fail-loud posture as the skill-path check above,
+  // for the same reason: a prompt instruction alone doesn't guarantee
+  // compliance, and this specific clause is the ONLY thing that makes the
+  // generated reviewer's codex mirror (mullion-scaffold.ts's
+  // deriveCodexReviewerSkillContent) discoverable by codex's `spawn_agent`
+  // delegation. Without this check, a generation pass that drops the
+  // clause would silently ship a codex mirror that exists on disk but is
+  // never actually resolved by a delegating model — exactly the gap a
+  // mullion-reviewer pass on this issue's own PR caught.
+  if (!reviewer.includes(CODEX_REVIEWER_DELEGATION_CLAUSE)) {
+    throw new GenerationOutputError(
+      `reviewer content never includes the required codex-delegation clause ` +
+        `("${CODEX_REVIEWER_DELEGATION_CLAUSE}") — regenerate rather than commit a reviewer ` +
+        `codex's spawn_agent delegation can't discover`,
     );
   }
 

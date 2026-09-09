@@ -55,7 +55,7 @@ describe("computeScaffold", () => {
     expect(() => computeScaffold({}, { slug: "../evil" })).toThrow(InvalidScaffoldSlugError);
   });
 
-  it("always includes AGENTS.md, CLAUDE.md, the two .claude/ starter files, and .agents/skills", () => {
+  it("always includes AGENTS.md, CLAUDE.md, the two .claude/ starter files, and both .agents/skills mirrors", () => {
     const entries = computeScaffold({}, { slug: "demo" });
     const paths = entries.map((e) => e.path);
     expect(paths).toContain("AGENTS.md");
@@ -63,6 +63,8 @@ describe("computeScaffold", () => {
     expect(paths).toContain("claude/skills/demo/SKILL.md".replace("claude", ".claude"));
     expect(paths).toContain("claude/agents/demo-reviewer.md".replace("claude", ".claude"));
     expect(paths).toContain("agents/skills/demo/SKILL.md".replace("agents", ".agents"));
+    // Issue #943.
+    expect(paths).toContain("agents/skills/demo-reviewer/SKILL.md".replace("agents", ".agents"));
   });
 
   it("creates a fresh AGENTS.md with just the briefing region when the file doesn't exist yet", () => {
@@ -241,6 +243,122 @@ describe("computeScaffold", () => {
       // the same as real content, never as "absent, generate fresh".
       const entries = computeScaffold({ ".claude/skills/demo/SKILL.md": "" }, { slug: "demo" });
       expect(entries.some((e) => e.path === ".claude/skills/demo/SKILL.md")).toBe(false);
+    });
+  });
+
+  // Issue #943 — codex has no static per-agent config file; a live spike
+  // (2026-09-09) confirmed `spawn_agent` delegation resolves a project-
+  // scoped SKILL.md by name/description instead. This mirror translates
+  // the Claude-Code-only reviewer subagent (name/description/tools/model)
+  // into that two-field shape, modelled on deriveAgyAgentFile
+  // (hook-adapters/mullion-bundle.ts).
+  describe("codex reviewer skill (issue #943)", () => {
+    it("emits a translated mirror at .agents/skills/<slug>-reviewer/SKILL.md", () => {
+      const entries = computeScaffold({}, { slug: "demo" });
+      const mirror = entries.find((e) => e.path === ".agents/skills/demo-reviewer/SKILL.md");
+      expect(mirror).toBeDefined();
+      expect(mirror!.kind).toBe("file");
+    });
+
+    it("its frontmatter parses and names itself demo-reviewer, same as the Claude Code reviewer", () => {
+      const entries = computeScaffold({}, { slug: "demo" });
+      const mirror = entries.find((e) => e.path === ".agents/skills/demo-reviewer/SKILL.md") as {
+        contents: string;
+      };
+      const parsed = parseSkillFrontmatter(mirror.contents);
+      expect(parsed).not.toBeNull();
+      expect(parsed!.name).toBe("demo-reviewer");
+    });
+
+    it("drops tools:/model: — codex has no equivalent execution config", () => {
+      const entries = computeScaffold({}, { slug: "demo" });
+      const mirror = entries.find((e) => e.path === ".agents/skills/demo-reviewer/SKILL.md") as {
+        contents: string;
+      };
+      expect(mirror.contents).not.toContain("tools:");
+      expect(mirror.contents).not.toContain("model:");
+      // The untranslated Claude Code reviewer, by contrast, still has both.
+      const reviewer = entries.find((e) => e.path === ".claude/agents/demo-reviewer.md") as {
+        contents: string;
+      };
+      expect(reviewer.contents).toContain("tools:");
+      expect(reviewer.contents).toContain("model:");
+    });
+
+    it("mirrors a PRESERVED existing reviewer's content, not freshly-regenerated starter text (the reviewerContent hoist)", () => {
+      const existingReviewer =
+        "---\nname: demo-reviewer\ndescription: my own hand-edited reviewer\n---\ncustom body";
+      const entries = computeScaffold(
+        { ".claude/agents/demo-reviewer.md": existingReviewer },
+        { slug: "demo" },
+      );
+      // The source file itself is untouched (create-once, unchanged).
+      expect(entries.some((e) => e.path === ".claude/agents/demo-reviewer.md")).toBe(false);
+      // But the codex mirror still reflects the preserved content.
+      const mirror = entries.find((e) => e.path === ".agents/skills/demo-reviewer/SKILL.md") as {
+        contents: string;
+      };
+      expect(mirror).toBeDefined();
+      expect(mirror.contents).toContain("my own hand-edited reviewer");
+      expect(mirror.contents).toContain("custom body");
+    });
+
+    it("emits name: <slug>-reviewer even when a preserved reviewer's own frontmatter names itself something else (regression: identity must not collide with the skill mirror)", () => {
+      // A hand-edited reviewer whose `name:` was never updated to match its
+      // own slug (plausible after a copy-paste) — if propagated verbatim,
+      // this would collide with the project skill's own mirror, which also
+      // names itself "demo". skills.ts keys codex/opencode enable/disable
+      // on frontmatter name, not path, so a collision makes the two
+      // impossible to toggle independently.
+      const driftedReviewer =
+        "---\nname: demo\ndescription: forgot to rename this\n---\ncustom body";
+      const entries = computeScaffold(
+        { ".claude/agents/demo-reviewer.md": driftedReviewer },
+        { slug: "demo" },
+      );
+      const mirror = entries.find((e) => e.path === ".agents/skills/demo-reviewer/SKILL.md") as {
+        contents: string;
+      };
+      const skillMirror = entries.find((e) => e.path === ".agents/skills/demo/SKILL.md") as {
+        contents: string;
+      };
+      const parsedReviewerMirror = parseSkillFrontmatter(mirror.contents);
+      const parsedSkillMirror = parseSkillFrontmatter(skillMirror.contents);
+      expect(parsedReviewerMirror!.name).toBe("demo-reviewer");
+      expect(parsedReviewerMirror!.name).not.toBe(parsedSkillMirror!.name);
+    });
+
+    it("is re-emitted even when the mirror path already 'exists' — always-mirrored, not create-once", () => {
+      const entries = computeScaffold(
+        { ".agents/skills/demo-reviewer/SKILL.md": "stale mirror content" },
+        { slug: "demo" },
+      );
+      const mirror = entries.find((e) => e.path === ".agents/skills/demo-reviewer/SKILL.md") as {
+        contents: string;
+      };
+      expect(mirror).toBeDefined();
+      expect(mirror.contents).not.toBe("stale mirror content");
+    });
+
+    it("is still a plain file under symlinkAgentsSkills — the reviewer has no same-shape source to symlink to", () => {
+      const entries = computeScaffold({}, { slug: "demo", symlinkAgentsSkills: true });
+      const mirror = entries.find((e) => e.path === ".agents/skills/demo-reviewer/SKILL.md");
+      expect(mirror).toBeDefined();
+      expect(mirror!.kind).toBe("file");
+      // No symlink entry at the reviewer's own directory either — only the
+      // skill mirror symlinks under this option.
+      expect(entries.some((e) => e.path === ".agents/skills/demo-reviewer")).toBe(false);
+    });
+
+    it("emits no entry when the preserved reviewer's frontmatter is unparseable, and the rest of the scaffold still proceeds", () => {
+      const entries = computeScaffold(
+        { ".claude/agents/demo-reviewer.md": "not frontmatter at all, just plain text" },
+        { slug: "demo" },
+      );
+      expect(entries.some((e) => e.path === ".agents/skills/demo-reviewer/SKILL.md")).toBe(false);
+      // The rest of the scaffold is unaffected by the skip.
+      expect(entries.some((e) => e.path === "AGENTS.md")).toBe(true);
+      expect(entries.some((e) => e.path === ".agents/skills/demo/SKILL.md")).toBe(true);
     });
   });
 
@@ -501,6 +619,15 @@ describe("computeScaffold — generated content (issue #956)", () => {
     };
     const entries = computeScaffold({}, { slug: "demo", generated: maliciousGenerated });
     const paths = entries.map((e) => e.path).sort();
+    // Issue #943 — NOT extended to include the codex reviewer mirror
+    // (`.agents/skills/demo-reviewer/SKILL.md`) here: `maliciousGenerated
+    // .reviewer` above carries no real YAML frontmatter at all, so
+    // `deriveCodexReviewerSkillContent`'s `parseSkillFrontmatter` guard
+    // returns null for it and computeScaffold silently emits no mirror
+    // entry — verified empirically (this test fails loudly if that guard
+    // ever stops firing and a mirror path appears here unexpectedly). See
+    // the dedicated "codex reviewer skill" describe block below for the
+    // well-formed-input cases.
     expect(paths).toEqual(
       [
         "AGENTS.md",
