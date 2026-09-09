@@ -258,6 +258,23 @@ export function buildWorkflowConventionsText(answers: Record<string, string>): s
   return fragments.join("\n\n");
 }
 
+// Phase 3 (drift detection, issue #1205, follow-up to #1201) — the SAME per-project
+// opt-out resolution session-lifecycle.ts's own createSessionRecord uses
+// for the per-session injection (`project.injectWorkflowConventions ?? true`
+// gates whether the install-wide text applies at all), extracted as a pure
+// function (no `app`/DB access — the caller resolves `globalText` itself,
+// typically via `getStoredSettings(app.db).sessions.workflowConventionsText`)
+// so routes/project-setup.ts's scaffold resolution and routes/projects.ts's
+// drift check both derive "what SHOULD this project's conventions be right
+// now" the identical way, rather than each route re-deriving its own
+// slightly different version of the same opt-out logic.
+export function resolveWorkflowConventionsText(
+  injectWorkflowConventions: boolean | null,
+  globalText: string,
+): string {
+  return (injectWorkflowConventions ?? true) ? globalText : "";
+}
+
 /** Cap on the injected text, mirroring project-briefing.ts's own
  * MAX_BRIEFING_BYTES posture (a defense-in-depth clamp on top of whatever
  * the Settings UI already lets an operator save) but sized for genuinely

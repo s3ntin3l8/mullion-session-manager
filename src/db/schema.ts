@@ -296,6 +296,18 @@ export const projects = sqliteTable("projects", {
   // (see session-lifecycle.ts's discoverCommittedScaffoldOnHost, issue
   // #1124).
   slug: text("slug"),
+  // Phase 3 (drift detection, issue #1205, follow-up to #1201) — a hash of the EXACT
+  // `workflowConventionsSection(...)` string /setup/apply committed into
+  // this project's own AGENTS.md, stamped at the same moment as `slug`
+  // above. Nullable: null means "never scaffolded" — a project that has
+  // never been scaffolded is not "drifted," it's simply unscaffolded, a
+  // distinct third state from "up to date" and "stale." The drift check
+  // (routes/project-setup.ts) re-derives
+  // `workflowConventionsSection(currentSettingsText)` at READ time and
+  // compares to this column — reusing the same function at both stamp and
+  // check time is what keeps the two from silently diverging. Overwritten
+  // (not merged) on every successful apply, same posture as `slug`.
+  conventionsHash: text("conventions_hash"),
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
     .$defaultFn(() => new Date()),

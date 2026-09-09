@@ -96,6 +96,8 @@ import {
   type ComposeService,
 } from "../services/docker-service-detect.js";
 import { createSessionRecord } from "../services/session-lifecycle.js";
+import { resolveWorkflowConventionsText } from "../services/workflow-conventions.js";
+import { hashWorkflowConventionsSection } from "../services/mullion-scaffold.js";
 
 interface CreateProjectBody {
   name: string;
@@ -754,6 +756,16 @@ export async function projectsRoute(app: FastifyInstance) {
       .orderBy(sql`LOWER(${projects.name})`)
       .all();
 
+    // Phase 3 (drift detection, issue #1205, follow-up to #1201) — this install's own
+    // conventions text, read ONCE for the whole list rather than per row:
+    // it's install-wide, not per-project, so re-reading settings inside
+    // the row loop below would just be N redundant reads of the same
+    // value. Per-row resolution still differs by each project's own
+    // injectWorkflowConventions opt-out — resolveWorkflowConventionsText
+    // (the same pure function routes/project-setup.ts's own scaffold
+    // resolution uses) applies that per row.
+    const globalConventionsText = getStoredSettings(app.db).sessions.workflowConventionsText;
+
     const activeDockSessions = app.db
       .select()
       .from(sessions)
@@ -829,10 +841,27 @@ export async function projectsRoute(app: FastifyInstance) {
             ruleFiles = [];
           }
         }
+        // Phase 3 (drift detection) — three states, never a fourth:
+        // `null` conventionsHash means "never scaffolded" (a project that
+        // was never scaffolded is not "drifted," it's simply unscaffolded
+        // — a distinct state the UI must not conflate with staleness).
+        // Otherwise, compare the stamped hash against what this install's
+        // CURRENT settings would produce for this project right now,
+        // through the exact same resolveWorkflowConventionsText +
+        // hashWorkflowConventionsSection pair /setup/apply itself used to
+        // stamp it — reusing both functions is what keeps this comparison
+        // from ever silently diverging from what was actually committed.
+        const conventionsDrifted =
+          row.conventionsHash !== null &&
+          row.conventionsHash !==
+            hashWorkflowConventionsSection(
+              resolveWorkflowConventionsText(row.injectWorkflowConventions, globalConventionsText),
+            );
         return {
           ...row,
           currentBranch,
           ruleFiles,
+          conventionsDrifted,
           // Remote-hosted projects are skipped outright, not just "usually
           // null": app.pty only tracks sessions spawned/attached by this
           // same process, and a remote project's dock session lives in its

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { upsertMarkedRegion } from "./marked-region.js";
 import { MARKER_START, MARKER_END } from "./project-briefing.js";
 import { isDangerousSkillName } from "./hook-adapters/skill-name.js";
@@ -504,12 +505,30 @@ function stripStrayWorkflowConventionsHeading(region: string): string {
 // `SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS`'s fixed defaults, preserving this
 // function's pre-#1201 byte output for a fresh install with nothing
 // authored yet.
-function workflowConventionsSection(text: string | undefined): string {
+//
+// Exported as of Phase 3 (drift detection) so routes/project-setup.ts can
+// hash the EXACT same string both at stamp time (/setup/apply) and at
+// drift-check time (from live settings) — reusing this function at both
+// sites is what keeps the two hashes from silently diverging.
+export function workflowConventionsSection(text: string | undefined): string {
   const workflowConventions =
     text && text.length > 0
       ? text
       : buildWorkflowConventionsText(SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS);
   return `## Workflow Conventions\n\n${workflowConventions}`;
+}
+
+// Phase 3 (drift detection, issue #1205, follow-up to #1201) — the ONE place that hashes
+// a committed conventions section, called both when routes/project-setup.ts
+// stamps `projects.conventionsHash` at `/setup/apply` and when it later
+// re-derives the same value from live settings to check for drift. Wrapping
+// `workflowConventionsSection` here (rather than each call site hashing its
+// own call to that function) is what guarantees the two can never compute
+// the digest over a subtly different string — an unsalted, non-security
+// digest purely for change detection, same posture as bundle-sync.ts's own
+// private `sha256` helper.
+export function hashWorkflowConventionsSection(text: string | undefined): string {
+  return createHash("sha256").update(workflowConventionsSection(text)).digest("hex");
 }
 
 // Claude Code does NOT auto-load AGENTS.md (its own memory docs: "Claude

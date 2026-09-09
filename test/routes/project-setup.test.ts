@@ -278,8 +278,189 @@ describe("project-setup route", () => {
     const { eq } = await import("drizzle-orm");
     const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
     expect(project?.slug).toBe("demo");
+    // Phase 3 (drift detection) — apply also stamps conventionsHash, in the
+    // same update as slug.
+    expect(project?.conventionsHash).toBeTypeOf("string");
+    expect(project?.conventionsHash).not.toBe("");
 
     await app.close();
+  });
+
+  // Hermes-style regression for a hazard this pass's own verification
+  // found: /setup/apply used to have no way to know what conventions text
+  // the preview it's committing actually used, and re-resolving live
+  // settings AT APPLY TIME would stamp a hash for text that was never the
+  // text actually committed — a `PreviewRecord` lives for a ~15-minute TTL,
+  // easily long enough for someone to edit Settings -> Sessions in between.
+  it("stamps conventionsHash from what preview actually resolved, not from settings changed afterward", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app, repoDir);
+
+    await app.inject({
+      method: "PATCH",
+      url: "/api/settings",
+      payload: { sessions: { workflowConventionsText: "Text at preview time." } },
+    });
+
+    const previewRes = await app.inject({
+      method: "POST",
+      url: `/api/projects/${projectId}/setup/preview`,
+      payload: { slug: "demo" },
+    });
+    const { previewId } = previewRes.json();
+
+    // Settings change AFTER preview, BEFORE apply.
+    await app.inject({
+      method: "PATCH",
+      url: "/api/settings",
+      payload: { sessions: { workflowConventionsText: "Different text, changed after preview." } },
+    });
+
+    const applyRes = await app.inject({
+      method: "POST",
+      url: `/api/projects/${projectId}/setup/apply`,
+      payload: { previewId },
+    });
+    expect(applyRes.statusCode).toBe(200);
+
+    const { workflowConventionsSection } = await import("../../src/services/mullion-scaffold.js");
+    const { createHash } = await import("node:crypto");
+    const expectedHash = createHash("sha256")
+      .update(workflowConventionsSection("Text at preview time."))
+      .digest("hex");
+
+    const { projects } = await import("../../src/db/schema.js");
+    const { eq } = await import("drizzle-orm");
+    const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+    expect(project?.conventionsHash).toBe(expectedHash);
+
+    await app.inject({
+      method: "PATCH",
+      url: "/api/settings",
+      payload: { sessions: { workflowConventionsText: "" } },
+    });
+    await app.close();
+  });
+
+  // Phase 3 (drift detection, issue #1205, follow-up to #1201) — GET /api/projects's own
+  // conventionsDrifted field, computed in routes/projects.ts by re-deriving
+  // the SAME workflowConventionsSection+hash pair /setup/apply itself used
+  // to stamp `conventionsHash`. Exercised here (rather than in
+  // routes/projects.test.ts) because this file already has the full real
+  // preview -> apply flow this needs, without duplicating that setup.
+  describe("GET /api/projects conventionsDrifted (issue #1205, Phase 3)", () => {
+    it("is false for a project that has never been scaffolded (null hash is 'unscaffolded', not 'drifted')", async () => {
+      const app = await buildApp();
+      await createProject(app, repoDir);
+
+      const listed = await app.inject({ method: "GET", url: "/api/projects" });
+      const project = listed.json().find((p: { cwd: string }) => p.cwd === repoDir);
+      expect(project.conventionsHash).toBeNull();
+      expect(project.conventionsDrifted).toBe(false);
+
+      await app.close();
+    });
+
+    it("is false immediately after apply — the just-committed text matches current settings", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app, repoDir);
+
+      const previewRes = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/setup/preview`,
+        payload: { slug: "demo" },
+      });
+      await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/setup/apply`,
+        payload: { previewId: previewRes.json().previewId },
+      });
+
+      const listed = await app.inject({ method: "GET", url: "/api/projects" });
+      const project = listed.json().find((p: { id: number }) => p.id === projectId);
+      expect(project.conventionsDrifted).toBe(false);
+
+      await app.close();
+    });
+
+    it("becomes true once the install's own conventions text changes after apply", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app, repoDir);
+
+      const previewRes = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/setup/preview`,
+        payload: { slug: "demo" },
+      });
+      await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/setup/apply`,
+        payload: { previewId: previewRes.json().previewId },
+      });
+
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { sessions: { workflowConventionsText: "Our conventions changed." } },
+      });
+
+      try {
+        const listed = await app.inject({ method: "GET", url: "/api/projects" });
+        const project = listed.json().find((p: { id: number }) => p.id === projectId);
+        expect(project.conventionsDrifted).toBe(true);
+      } finally {
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { sessions: { workflowConventionsText: "" } },
+        });
+        await app.close();
+      }
+    });
+
+    it("stays false for a project that opted out of injection, even after the install's text changes", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app, repoDir);
+
+      const previewRes = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/setup/preview`,
+        payload: { slug: "demo" },
+      });
+      await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/setup/apply`,
+        payload: { previewId: previewRes.json().previewId },
+      });
+      await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${projectId}`,
+        payload: { injectWorkflowConventions: false },
+      });
+
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { sessions: { workflowConventionsText: "Our conventions changed." } },
+      });
+
+      try {
+        const listed = await app.inject({ method: "GET", url: "/api/projects" });
+        const project = listed.json().find((p: { id: number }) => p.id === projectId);
+        // The opted-out project's committed hash was derived from the
+        // fixed defaults (resolveScaffoldWorkflowConventionsText returns
+        // "" for it), and the drift check resolves it the identical way —
+        // the changed install text is irrelevant to this project.
+        expect(project.conventionsDrifted).toBe(false);
+      } finally {
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { sessions: { workflowConventionsText: "" } },
+        });
+        await app.close();
+      }
+    });
   });
 
   it("re-applying the same previewId after it's already been consumed is rejected", async () => {
