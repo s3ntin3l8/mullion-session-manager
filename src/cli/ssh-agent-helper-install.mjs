@@ -68,6 +68,7 @@ import {
   stateDir,
   loadCredential,
   credentialPath,
+  describePairCommand,
   WINDOWS_DEFAULT_SSH_AUTH_SOCK,
 } from "./ssh-agent-helper.mjs";
 
@@ -361,7 +362,7 @@ function warnIfNotPaired(io) {
   if (loadCredential(io)) return;
   io.stderr.write(
     "note: not paired yet — the installed job will fail until you run " +
-      "'mullion helper pair <payload>' (generate <payload> from Settings -> Hosts -> SSH " +
+      `'${describePairCommand(io)}' (generate <payload> from Settings -> Hosts -> SSH ` +
       "agent bridges on the primary).\n",
   );
 }
@@ -409,7 +410,7 @@ function installLaunchd(io, { execPath, scriptPath, sshAuthSock }) {
     `installed and started — ${plistPath}\n` +
       "check status: launchctl list | grep mullion-helper\n" +
       `logs: tail -f ${logPath}\n` +
-      "this session renews itself automatically — no need to re-run 'mullion helper pair' " +
+      `this session renews itself automatically — no need to re-run '${describePairCommand(io)}' ` +
       "unless it's revoked from Settings or unreachable long enough to expire outright.\n",
   );
   return 0;
@@ -440,7 +441,7 @@ function installSystemd(io, { execPath, scriptPath, sshAuthSock }) {
       `check status: systemctl --user status ${SYSTEMD_UNIT_NAME}\n` +
       `logs: journalctl --user -u ${SYSTEMD_UNIT_NAME} -f\n` +
       "run 'loginctl enable-linger $(whoami)' so this survives logout.\n" +
-      "this session renews itself automatically — no need to re-run 'mullion helper pair' " +
+      `this session renews itself automatically — no need to re-run '${describePairCommand(io)}' ` +
       "unless it's revoked from Settings or unreachable long enough to expire outright.\n",
   );
   return 0;
@@ -643,7 +644,7 @@ async function installWindows(io, { execPath, scriptPath, sshAuthSock, insecure 
   io.stdout.write(
     `installed and started — ${WINDOWS_RUN_KEY}\\${WINDOWS_TASK_NAME}\n` +
       `logs: ${logPath}\n` +
-      "this session renews itself automatically — no need to re-run 'mullion helper pair' " +
+      `this session renews itself automatically — no need to re-run '${describePairCommand(io)}' ` +
       "unless it's revoked from Settings or unreachable long enough to expire outright.\n",
   );
   return 0;

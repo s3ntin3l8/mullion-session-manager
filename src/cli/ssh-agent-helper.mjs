@@ -490,19 +490,20 @@ function saveCredential(io, credential) {
   }
 }
 
-// The hint printed after a successful pair used to hardcode `mullion helper
-// run` — correct only for someone with a full npm install of the PRIMARY
-// on their PATH, which is exactly what the laptop-side helper is designed
-// NOT to require (see this file's own header comment). For the two actual
-// distribution shapes — a Node SEA binary (`mullion-helper[.exe]`, where
-// `execPath` IS the program with no separate script argument) and a
-// checkout/tarball invocation (`node .../mullion.mjs`) — reflecting how
-// THIS process was actually invoked (`process.execPath`/`process.argv[1]`)
-// stays correct regardless of which one got us here, rather than guessing.
-// `& ` on win32 mirrors PairBridgeModal.tsx's own commandFor() and
-// deploy/windows/mullion-helper.iss's dialogs: a bare quoted path is inert
-// in PowerShell (Windows 11's default terminal) without the call operator.
-function describeRunCommand(io) {
+// Shared by describeRunCommand and describePairCommand below — both hints
+// used to hardcode `mullion helper <verb>`, correct only for someone with a
+// full npm install of the PRIMARY on their PATH, which is exactly what the
+// laptop-side helper is designed NOT to require (see this file's own header
+// comment). For the two actual distribution shapes — a Node SEA binary
+// (`mullion-helper[.exe]`, where `execPath` IS the program with no separate
+// script argument) and a checkout/tarball invocation (`node .../mullion.mjs`)
+// — reflecting how THIS process was actually invoked
+// (`process.execPath`/`process.argv[1]`) stays correct regardless of which
+// one got us here, rather than guessing. `& ` on win32 mirrors
+// PairBridgeModal.tsx's own commandFor() and deploy/windows/
+// mullion-helper.iss's dialogs: a bare quoted path is inert in PowerShell
+// (Windows 11's default terminal) without the call operator.
+function describeInvocation(io) {
   const platform = io.platform ?? process.platform;
   const execPath = io.execPath ?? process.execPath;
   const isSeaBuild = io.isSea !== undefined ? io.isSea : nodeIsSea();
@@ -516,7 +517,28 @@ function describeRunCommand(io) {
       ? io.scriptPath
       : process.argv[1];
   const program = scriptPath ? `"${execPath}" "${scriptPath}"` : `"${execPath}"`;
-  return `${platform === "win32" ? "& " : ""}${program} helper run`;
+  return `${platform === "win32" ? "& " : ""}${program}`;
+}
+
+function describeRunCommand(io) {
+  return `${describeInvocation(io)} helper run`;
+}
+
+// Same derivation as describeRunCommand, for the hints that tell a user to
+// (re-)pair — not-paired-yet, renewal-rejected, and dead-credential here,
+// plus warnIfNotPaired/the install-success notes in ssh-agent-helper-
+// install.mjs (exported for that). All still hardcoded `mullion helper pair
+// <payload>` (issue #1177's own bug, found once in PairBridgeModal.tsx and
+// here in several places) until this. `<payload>` here is a literal
+// placeholder, not a real one, since these are hints printed before any
+// payload exists — unlike describeRunCommand's caller, which always has a
+// concrete command to run right now. Deliberately no quotes around
+// `<payload>` itself — every call site wraps the WHOLE returned string in
+// single quotes to set it off as "the command to type", the same
+// convention the hardcoded strings this replaces already used; quoting the
+// payload too would nest a second, conflicting set of quotes around it.
+export function describePairCommand(io) {
+  return `${describeInvocation(io)} helper pair <payload>`;
 }
 
 async function runPair(args, io) {
@@ -655,7 +677,7 @@ async function runRun(args, io) {
   let credential = loadCredential(io);
   if (!credential) {
     io.stderr.write(
-      "not paired yet — run 'mullion helper pair <payload>' first " +
+      `not paired yet — run '${describePairCommand(io)}' first ` +
         "(generate <payload> from Settings -> Hosts -> SSH agent bridges on the primary).\n",
     );
     return 1;
@@ -764,8 +786,8 @@ async function runRun(args, io) {
         renewalRejected = true;
         stopped = true;
         io.stderr.write(
-          "session renewal rejected — session no longer valid, re-pair with " +
-            "'mullion helper pair <payload>'\n",
+          `session renewal rejected — session no longer valid, re-pair with ` +
+            `'${describePairCommand(io)}'\n`,
         );
         emitEvent("renewal_rejected");
         // The renewal endpoint rejecting the credential doesn't itself
@@ -927,7 +949,7 @@ async function runRun(args, io) {
           );
         } else {
           io.stderr.write(
-            `${err.message} — session no longer valid, re-pair with 'mullion helper pair <payload>'\n`,
+            `${err.message} — session no longer valid, re-pair with '${describePairCommand(io)}'\n`,
           );
           emitEvent("dead_credential", { message: err.message });
           clearTimeout(renewTimer);

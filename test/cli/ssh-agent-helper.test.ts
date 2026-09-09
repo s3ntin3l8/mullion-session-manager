@@ -1176,6 +1176,49 @@ describe("mullion helper run() — missing prerequisites", () => {
     expect(io.stderrLines.join("")).toContain("not paired");
   });
 
+  // Issue #1177 — the "not paired yet" hint used to hardcode 'mullion helper
+  // pair <payload>' the same way the old pair-success hint did (see the
+  // describeRunCommand tests above); it must reflect the real invocation
+  // shape too, via the shared describeInvocation() helper. The full
+  // expected substring is anchored immediately after the opening `run '`
+  // quote (not just asserted as present anywhere in the output) so a
+  // wrongly-added/dropped `& ` prefix inside the quotes fails the match,
+  // not just a `toContain` on a floating fragment.
+  it("'not paired yet' hint prefixes `& ` and drops the script arg for a Windows SEA binary", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-helper-state-"));
+    const io = fakeIo(
+      { SSH_AUTH_SOCK: "/tmp/whatever.sock", MULLION_HELPER_STATE_DIR: stateDir },
+      {
+        platform: "win32",
+        isSea: true,
+        execPath: "C:\\Users\\me\\AppData\\Local\\Mullion\\mullion-helper.exe",
+      },
+    );
+    const code = await runHelper("run", [], io);
+    expect(code).toBe(1);
+    expect(io.stderrLines.join("")).toContain(
+      "run '& \"C:\\Users\\me\\AppData\\Local\\Mullion\\mullion-helper.exe\" helper pair <payload>' first",
+    );
+  });
+
+  it("'not paired yet' hint includes the script path and no `& ` on a Linux/darwin checkout", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-helper-state-"));
+    const io = fakeIo(
+      { SSH_AUTH_SOCK: "/tmp/whatever.sock", MULLION_HELPER_STATE_DIR: stateDir },
+      {
+        platform: "linux",
+        isSea: false,
+        execPath: "/usr/bin/node",
+        scriptPath: "/opt/mullion/dist/cli/mullion.mjs",
+      },
+    );
+    const code = await runHelper("run", [], io);
+    expect(code).toBe(1);
+    expect(io.stderrLines.join("")).toContain(
+      'run \'"/usr/bin/node" "/opt/mullion/dist/cli/mullion.mjs" helper pair <payload>\' first',
+    );
+  });
+
   // Issue #820 (CodeQL js/file-access-to-http, PR #866) — the discriminating
   // test for loadCredential's own shape validation: a hand-edited or
   // otherwise corrupted credential file must be treated the same as "never

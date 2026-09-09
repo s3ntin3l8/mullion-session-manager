@@ -23,14 +23,23 @@ function detectPlatform(): HelperPlatform {
 }
 
 // Three real, different invocations — not one command with a platform
-// swapped in. Sources: docs/ssh-agent.md's own Pairing section (Linux/
-// tarball form, and the macOS `.pkg` form where the binary is
-// `mullion-helper` and the verb doubles) and deploy/windows/
-// mullion-helper.iss (the Windows form: no `mullion` on PATH, and a
-// leading quoted path is inert in PowerShell — Windows 11's default
-// terminal — without the `&` call operator prefix). Shared by commandFor
-// (helper pair) and runCommandFor (helper run) below so the three
-// per-platform invocation strings only exist once.
+// swapped in. Sources: deploy/windows/mullion-helper.iss (the Windows form:
+// no `mullion` on PATH, and a leading quoted path is inert in PowerShell —
+// Windows 11's default terminal — without the `&` call operator prefix), the
+// macOS `.pkg` form where the binary is `mullion-helper` on PATH and the
+// verb doubles, and — for Linux — docs/ssh-agent.md's own
+// "macOS-without-installer / Linux" section (issue #1177): there is no
+// Linux SEA build (scripts/build-helper-sea.mjs targets win32/darwin only),
+// so a laptop that's ONLY ever extracted the helper tarball has no bare
+// `mullion` on PATH the way the other two platforms' installers guarantee —
+// the tarball form is this function's default for Linux. (Hermes review,
+// PR #1187 — a laptop that's ALSO a Mullion install/primary via
+// deploy/install.sh or scripts/self-update.sh does get `~/.local/bin/mullion`
+// symlinked automatically; the PlatformCommandPicker's own Linux note below
+// calls that case out, since this function has no way to detect which kind
+// of Linux laptop it's talking to.) Shared by commandFor (helper pair) and
+// runCommandFor (helper run) below so the three per-platform invocation
+// strings only exist once.
 function programFor(platform: HelperPlatform): string {
   switch (platform) {
     case "windows":
@@ -38,7 +47,7 @@ function programFor(platform: HelperPlatform): string {
     case "macos":
       return "mullion-helper";
     case "linux":
-      return "mullion";
+      return "node mullion-helper/dist/cli/mullion.mjs";
   }
 }
 
@@ -88,6 +97,14 @@ function PlatformCommandPicker({
       <div style={{ marginTop: 10 }}>
         <SecondaryButton onClick={onCopy}>{copied ? "Copied" : "Copy command"}</SecondaryButton>
       </div>
+      {platform === "linux" && (
+        <div style={{ fontSize: 11.5, color: "var(--dim)", marginTop: 8 }}>
+          From a Mullion checkout instead of the release tarball? Use{" "}
+          <code>node src/cli/mullion.mjs</code>. Already running Mullion itself on this machine via{" "}
+          <code>deploy/install.sh</code>? Plain <code>mullion</code> already works — that script
+          symlinks it onto your PATH.
+        </div>
+      )}
     </>
   );
 }
