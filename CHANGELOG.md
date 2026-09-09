@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.14](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.13...v0.3.14) (2026-09-09)
+
+
+### Bug Fixes
+
+* **dock:** stop a dock terminal's own resize from inflating its container ([#1185](https://github.com/s3ntin3l8/mullion-session-manager/issues/1185)) ([e80b3f4](https://github.com/s3ntin3l8/mullion-session-manager/commit/e80b3f485116a8191e1b2e542b833d7fe40d8707))
+* **terminal:** join opencode's word-wrapped URLs instead of truncating ([#1184](https://github.com/s3ntin3l8/mullion-session-manager/issues/1184)) ([a462928](https://github.com/s3ntin3l8/mullion-session-manager/commit/a462928c37e8442192c0069d70719f189e8ccfec))
+
 ## [0.3.13](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.12...v0.3.13) (2026-09-08)
 
 
