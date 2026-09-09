@@ -587,7 +587,10 @@ export function Sidebar({
               tabIndex={0}
               onClick={() => setScaffoldOfferProject(null)}
               onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") setScaffoldOfferProject(null);
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  setScaffoldOfferProject(null);
+                }
               }}
               title="Dismiss"
             >
