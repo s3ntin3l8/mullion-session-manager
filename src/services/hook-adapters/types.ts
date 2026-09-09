@@ -83,20 +83,22 @@ export interface HookAdapterContext {
    * host-level sync already covers a given CLI, the per-session pointer
    * for the plain shipped-bundle case is skipped as redundant. */
   injectMullionBundle: boolean;
-  /** This session's working directory. Optional — only agy's adapter reads
-   * it today (to pre-trust a fresh worktree, see agy.ts's
-   * mergeAgyTrustedWorkspace), so it's not required on every ctx literal
-   * the other three adapters' tests already construct. */
+  /** This session's working directory. Optional — only agy's and codex's
+   * adapters read it today (to pre-trust a fresh worktree, see agy.ts's
+   * mergeAgyTrustedWorkspace and codex.ts's buildCodexTrustFlag), so it's
+   * not required on every ctx literal the other two adapters' tests already
+   * construct. */
   cwd?: string;
   /** Mirrors this session's own `skipPermissions` spawn option (the same
    * flag pty-manager.ts uses to decide whether to append
    * `--dangerously-skip-permissions`/`--auto`/etc — see
    * getSkipPermissionFlag()). Optional for the same reason as `cwd` above.
-   * agy's adapter uses this to decide whether pre-trusting `cwd` is in
-   * scope: a caller that already asked to skip every tool-permission
-   * prompt has opted into "unattended, don't stop me," which is exactly
-   * the posture a pre-trusted folder matches — a manual launch with this
-   * off (the default) still sees agy's folder-trust prompt, unchanged. */
+   * agy's and codex's adapters use this to decide whether pre-trusting
+   * `cwd` is in scope: a caller that already asked to skip every
+   * tool-permission prompt has opted into "unattended, don't stop me,"
+   * which is exactly the posture a pre-trusted folder matches — a manual
+   * launch with this off (the default) still sees the folder-trust prompt,
+   * unchanged. */
   skipPermissions?: boolean;
   /** Issue #949 — mirrors `isAuthEnabled(app.config)`, a boot-time constant
    * (same category as pty-manager.ts's own `sshAuthSock` field — read once

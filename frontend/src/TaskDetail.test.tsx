@@ -1034,6 +1034,56 @@ describe("TaskDetail open session", () => {
   });
 });
 
+// TaskDetail previously read none of the worker session's own live status
+// fields — a stuck/blocked worker was invisible here even with "Open
+// session" right above it. See sessionStatus.ts's STATUS_PRESENTATION for
+// the label source; gated on sessionStatusAttentionRequired so a routine
+// working/idle session doesn't add noise.
+describe("TaskDetail worker session attention banner", () => {
+  it("shows the worker session's status when it needs attention", async () => {
+    tasks = [makeTask({ id: 1, status: "in_progress", sessionId: 7 })];
+    sessions = [
+      makeSession({
+        id: 7,
+        command: "codex",
+        sessionStatus: "awaiting_permission",
+        sessionStatusSeverity: "blocked",
+        sessionStatusDetail: null,
+        sessionStatusAttentionRequired: true,
+      }),
+    ];
+    const onOpenSession = vi.fn();
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={onOpenSession} />);
+
+    expect(screen.getByText(/Worker session needs attention/)).toBeInTheDocument();
+    expect(screen.getByText(/Needs permission/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /open it/ }));
+    expect(onOpenSession).toHaveBeenCalledWith(expect.objectContaining({ id: 7 }));
+  });
+
+  it("stays silent for a worker session that doesn't need attention", () => {
+    tasks = [makeTask({ id: 1, status: "in_progress", sessionId: 7 })];
+    sessions = [
+      makeSession({
+        id: 7,
+        command: "codex",
+        sessionStatus: "working",
+        sessionStatusSeverity: "busy",
+        sessionStatusAttentionRequired: false,
+      }),
+    ];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.queryByText(/Worker session needs attention/)).toBeNull();
+  });
+
+  it("stays silent when there is no worker session", () => {
+    tasks = [makeTask({ id: 1, status: "backlog", sessionId: null })];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.queryByText(/Worker session needs attention/)).toBeNull();
+  });
+});
+
 describe("TaskDetail merge-on-approve status", () => {
   it("shows Merge now for a done task with a PR and no merge requested yet", async () => {
     tasks = [makeTask({ id: 1, status: "done", prNumber: 9, prUrl: "https://x/pull/9" })];

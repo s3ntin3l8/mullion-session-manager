@@ -17,6 +17,7 @@ import {
 import { formatRelativeAge } from "./relativeTime.js";
 import { EmptyStateNote } from "./ui/EmptyState.js";
 import { Markdown } from "./ui/Markdown.js";
+import { STATUS_PRESENTATION, formatStatusLabel } from "./sessionStatus.js";
 
 const UNSET_AGENT = "";
 
@@ -367,6 +368,33 @@ export function TaskDetail({
         <div className="task-detail-failure">
           <WarningTriangleIcon size={12} />
           {task.failureReason}
+        </div>
+      )}
+
+      {/* The task-view worker-session-visibility gap this closes: TaskDetail
+          previously read none of the worker session's own live status
+          fields at all — a stuck/blocked worker (needing permission, a
+          plan decision, or any other in-terminal prompt) was invisible here
+          even though "Open session" already sits right above, unlike
+          TaskSessionSlot.tsx on the board, which has shown this same data
+          all along. Reuses session-status.ts's already-derived fields
+          (STATUS_PRESENTATION/formatStatusLabel — the exact same lookup the
+          board's own status dot uses), not a new detection mechanism; gated
+          on sessionStatusAttentionRequired so a routine "working"/"idle"
+          session stays silent here, matching the failureReason/
+          githubSyncError/blockedState banners below. */}
+      {workerSession && workerSession.sessionStatusAttentionRequired && (
+        <div className="task-detail-session-attention">
+          <TerminalPromptIcon size={12} />
+          Worker session needs attention:{" "}
+          {formatStatusLabel(
+            STATUS_PRESENTATION[workerSession.sessionStatus],
+            workerSession.sessionStatusDetail,
+          )}
+          {" — "}
+          <button className="task-detail-link" onClick={() => onOpenSession(workerSession)}>
+            open it
+          </button>
         </div>
       )}
 

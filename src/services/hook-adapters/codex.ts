@@ -474,6 +474,67 @@ export function buildCodexMcpFlags(
   return overrides.map((override) => `-c ${shellQuote(override)}`).join(" ");
 }
 
+// Folder-trust pre-approval — SEPARATE from `--dangerously-bypass-approvals-
+// and-sandbox` (SKIP_PERMISSION_FLAGS.codex, launch-plan.ts): verified live
+// against the installed codex CLI that flag activates YOLO mode for
+// tool-approval prompts but does NOT suppress codex's own interactive
+// "Do you trust the contents of this directory?" TUI dialog on a
+// never-before-seen cwd — a genuinely separate gate. A skip-permissions
+// codex session launched into a fresh directory (every Task Master
+// claim/retry creates one under `.mullion-worktrees/`) hangs indefinitely at
+// this prompt with zero visibility in Mullion's session-state machine: it
+// fires before codex's hook system is even trusted/active, so none of
+// attention/gateState/permissionState/questionState — all hook-channel-
+// driven — ever see it.
+//
+// Mirrors agy.ts's mergeAgyTrustedWorkspace in spirit (same "skipPermissions
+// opts into unattended, pre-trust the cwd" reasoning — ctx.skipPermissions
+// && ctx.cwd), but deliberately NOT its persistent-settings-file-merge
+// mechanism. Unlike agy's settings.json, codex reads config.toml at process
+// STARTUP, and managedInstall runs fire-and-forget (see buildCodexMcpFlags'
+// own comment above for the identical race with the MCP `-c` flags) — a
+// managedInstall write here could lose the race against THIS launch's own
+// startup read. `-c` has no such race, so trust rides the same ephemeral
+// commandTransform channel as the MCP flags: verified live to bypass the
+// prompt, and confirmed (via `diff` against config.toml before/after) to
+// never persist there — a manual, un-skip-permissioned codex launch into
+// the same directory still sees the prompt, unchanged.
+//
+// The override's SHAPE matters and was wrong on the first pass: codex's own
+// `--help` describes `-c`'s dotted-path key form ("foo.bar.baz") as a naive
+// split on literal `.` characters, not a TOML-aware key tokenizer — verified
+// live three ways. `-c 'projects."<cwd>".trust_level="trusted"'` (a quoted
+// TOML table-header key, matching config.toml's own on-disk format) leaves
+// the trust prompt showing: the literal `"` characters become part of the
+// split key instead of TOML quoting syntax. `-c projects.<cwd>.trust_level=
+// trusted` (bare, unquoted) DOES work for a cwd with no dots in it — but
+// every Task Master worktree lives under `.mullion-worktrees/`, a
+// dot-LEADING path component, and re-tested live against exactly that shape
+// the prompt came right back: the leading dot gets split as its own path
+// segment. Only a TOML **inline table** as the `-c` value — a key with no
+// dots at all (`projects`), whose VALUE is parsed as real TOML and so
+// respects quoting/escaping properly — survived both cases live, including
+// a `.mullion-worktrees/mullion-task-<id>` cwd.
+//
+// One consequence of the inline-table shape worth being explicit about,
+// unlike buildCodexMcpFlags' targeted leaf-key overrides above (`-c
+// mcp_servers.mullion.command=...` etc, which compose with whatever else is
+// already in that table): `-c projects={...}` assigns the WHOLE top-level
+// `projects` key for this one launch, so this session's in-memory config
+// sees ONLY the cwd being trusted here — every other `[projects.*]` entry
+// already on disk in config.toml is invisible to it. The on-disk file
+// itself is never touched (verified via `diff` before/after), and a single
+// codex session only ever needs its own cwd trusted (--add-dir .git, the
+// other addition this adapter makes, is a sandbox grant, not a trust-table
+// entry, and doesn't touch `projects` at all) — so this is harmless in
+// practice, but it's a real behavioral difference from a targeted merge,
+// not a mere implementation detail.
+export function buildCodexTrustFlag(cwd: string): string {
+  const tomlString = (value: string) => `"${escapeTomlBasicString(value)}"`;
+  const override = `projects={${tomlString(path.resolve(cwd))}={trust_level=${tomlString("trusted")}}}`;
+  return `-c ${shellQuote(override)}`;
+}
+
 function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
   return {
     // Issue #906 — Codex's workspace-write sandbox marks .git read-only,
@@ -507,10 +568,28 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
     // — appending `-c ...` to one piece of a chain could attach it to the
     // wrong command entirely, but that's a reason to skip the flag, not to
     // drop hooks too.
+    //
+    // The same early-return also skips buildCodexTrustFlag below, and that
+    // one degradation is NOT equally cosmetic: dropping the MCP flags loses
+    // a nice-to-have tool integration for one launch, but dropping the
+    // trust flag on a skip-permissions session re-opens the exact
+    // indefinite, invisible hang this function exists to close. In
+    // practice this is unreachable for the motivating case — Task Master's
+    // own launch command is always a bare `codex` with no metacharacters
+    // (task-agent-resolve.ts's resolveAgentCommand), and initialPromptArgs
+    // is appended AFTER commandTransform runs (launch-plan.ts), so a
+    // worker's own prompt text never reaches this check either. It only
+    // matters for a hand-typed, chained/piped skip-permissions codex
+    // launch — worth knowing before this shared guard is ever reused
+    // somewhere that assumption doesn't hold.
     commandTransform: (command) => {
       const withGitDir = command.includes("--add-dir .git") ? command : `${command} --add-dir .git`;
       if (SHELL_METACHARACTERS_RE.test(command.trim())) return withGitDir;
-      return `${withGitDir} ${buildCodexMcpFlags(resolveMcpServerPath())}`;
+      const parts = [withGitDir, buildCodexMcpFlags(resolveMcpServerPath())];
+      // ctx.skipPermissions && ctx.cwd — same gate as agy's
+      // mergeAgyTrustedWorkspace, see buildCodexTrustFlag's own comment.
+      if (ctx.skipPermissions && ctx.cwd) parts.push(buildCodexTrustFlag(ctx.cwd));
+      return parts.join(" ");
     },
     // async, not a plain arrow wrapping a sync call: a synchronous throw
     // from any step below must become a REJECTED PROMISE here, not an
