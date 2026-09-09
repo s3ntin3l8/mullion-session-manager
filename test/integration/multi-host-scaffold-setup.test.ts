@@ -5,6 +5,7 @@ import fs from "node:fs";
 import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
+import { CODEX_REVIEWER_DELEGATION_CLAUSE } from "../../src/services/mullion-scaffold.js";
 
 // Issue #895 — end-to-end proof that `/setup/preview` and `/setup/apply`
 // actually work for a remote-hosted project, against two real buildApp()
@@ -35,7 +36,11 @@ vi.mock("node-pty", () => ({
 // below in place of a real agent CLI/LLM call.
 const GENERATE_STDOUT =
   `<<<MULLION_SKILL_START>>>\n---\nname: gendemo\n---\nReal invariant.\n<<<MULLION_SKILL_END>>>\n` +
-  `<<<MULLION_REVIEWER_START>>>\n---\nname: gendemo-reviewer\n---\nRead .claude/skills/gendemo/SKILL.md first.\n<<<MULLION_REVIEWER_END>>>\n` +
+  // Issue #943 — the description now carries CODEX_REVIEWER_DELEGATION_CLAUSE
+  // verbatim, same as scaffold-generate.test.ts's own validOutput() fixture
+  // and every real generation turn now must — parseGeneratedOutput rejects
+  // a reviewer missing it.
+  `<<<MULLION_REVIEWER_START>>>\n---\nname: gendemo-reviewer\ndescription: "Review changes. ${CODEX_REVIEWER_DELEGATION_CLAUSE}"\n---\nRead .claude/skills/gendemo/SKILL.md first.\n<<<MULLION_REVIEWER_END>>>\n` +
   `<<<MULLION_BRIEFING_START>>>\nThe skill lives at .claude/skills/gendemo/SKILL.md.\n<<<MULLION_BRIEFING_END>>>\n`;
 
 vi.mock("node:child_process", async (importOriginal) => {

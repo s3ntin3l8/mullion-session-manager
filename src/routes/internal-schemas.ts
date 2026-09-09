@@ -315,10 +315,10 @@ const GIT_FIELD_DEFS = {
         target: { type: "string" },
       },
     },
-    // mullion-scaffold.ts's computeScaffold emits at most ~8 entries per
-    // slug (AGENTS.md/CLAUDE.md/CONTRIBUTING.md/skill/reviewer/mirror/dock
-    // config) — 50 is generous headroom, not a real limit any caller
-    // approaches.
+    // mullion-scaffold.ts's computeScaffold emits at most ~9 entries per
+    // slug (AGENTS.md/CLAUDE.md/CONTRIBUTING.md/skill/reviewer/skill
+    // mirror/codex reviewer mirror (issue #943)/dock config) — 50 is
+    // generous headroom, not a real limit any caller approaches.
     maxItems: 50,
   },
   // Issue #895 — commitWipChanges' own optional commit message override

@@ -28,6 +28,8 @@ import {
   type SpawnGenerationTurn,
   type SandboxCapabilityProbe,
 } from "../../src/services/scaffold-generate.js";
+import { CODEX_REVIEWER_DELEGATION_CLAUSE } from "../../src/services/mullion-scaffold.js";
+import { parseSkillFrontmatter } from "../../src/services/skills.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -77,7 +79,11 @@ function validOutput(slug: string, extra = ""): string {
   return (
     `some preamble the parser should ignore\n` +
     `<<<MULLION_SKILL_START>>>\n---\nname: ${slug}\n---\nReal invariant.\n<<<MULLION_SKILL_END>>>\n` +
-    `<<<MULLION_REVIEWER_START>>>\n---\nname: ${slug}-reviewer\n---\nRead .claude/skills/${slug}/SKILL.md first.\n<<<MULLION_REVIEWER_END>>>\n` +
+    // Issue #943 — the description line carries CODEX_REVIEWER_DELEGATION_CLAUSE
+    // verbatim, same as every real generated reviewer must, now that
+    // parseGeneratedOutput enforces it (see the dedicated describe block
+    // below for the negative case).
+    `<<<MULLION_REVIEWER_START>>>\n---\nname: ${slug}-reviewer\ndescription: "Review changes. ${CODEX_REVIEWER_DELEGATION_CLAUSE}"\n---\nRead .claude/skills/${slug}/SKILL.md first.\n<<<MULLION_REVIEWER_END>>>\n` +
     `<<<MULLION_BRIEFING_START>>>\nThe skill lives at .claude/skills/${slug}/SKILL.md.\n<<<MULLION_BRIEFING_END>>>\n` +
     extra
   );
@@ -107,6 +113,21 @@ describe("buildGenerationPrompt", () => {
     });
     expect(prompt).not.toContain("draft skill text");
     expect(prompt).toContain("draft reviewer text");
+  });
+
+  // Issue #943 — without this instruction, a generated reviewer's codex
+  // mirror (mullion-scaffold.ts's deriveCodexReviewerSkillContent) exists
+  // on disk but is never actually discoverable by codex's `spawn_agent`
+  // delegation. parseGeneratedOutput below enforces it can't be dropped.
+  it("requires the codex-delegation clause verbatim in the reviewer's description", () => {
+    const prompt = buildGenerationPrompt({
+      slug: "demo",
+      seed: {},
+      hasSkill: false,
+      hasReviewer: false,
+      hasBriefingRegion: false,
+    });
+    expect(prompt).toContain(CODEX_REVIEWER_DELEGATION_CLAUSE);
   });
 });
 
@@ -144,6 +165,54 @@ describe("parseGeneratedOutput", () => {
     );
     expect(() => parseGeneratedOutput(noCrossRef, "demo")).toThrow(GenerationOutputError);
     expect(() => parseGeneratedOutput(noCrossRef, "demo")).toThrow(/skill's own path/);
+  });
+
+  // Issue #943 — same enforcement pattern as the skill cross-reference
+  // check above, for the codex-discoverability clause the prompt now also
+  // requires. Caught by a mullion-reviewer pass on this issue's own PR:
+  // the description-shaping was only guaranteed on the static template,
+  // not on the real-world generation path, until this check existed.
+  it("throws GenerationOutputError when the reviewer's description never includes the codex-delegation clause", () => {
+    const noDelegationClause = validOutput("demo").replace(
+      `description: "Review changes. ${CODEX_REVIEWER_DELEGATION_CLAUSE}"`,
+      `description: "Review changes."`,
+    );
+    expect(() => parseGeneratedOutput(noDelegationClause, "demo")).toThrow(GenerationOutputError);
+    expect(() => parseGeneratedOutput(noDelegationClause, "demo")).toThrow(
+      /codex-delegation clause/,
+    );
+  });
+
+  // Hermes review, PR #1188 — the check must inspect the DESCRIPTION field
+  // specifically, not the whole reviewer section: only the description
+  // reaches the codex mirror (deriveCodexReviewerSkillContent copies
+  // parsed.description, nothing else). A generation pass that puts the
+  // clause in the body but leaves the description unchanged would have
+  // passed the old whole-text check while still shipping an undiscoverable
+  // mirror — this pins that the stricter, field-scoped check catches it.
+  it("still throws when the codex-delegation clause is present in the reviewer's BODY but not its description", () => {
+    const clauseInBodyOnly = validOutput("demo")
+      .replace(
+        `description: "Review changes. ${CODEX_REVIEWER_DELEGATION_CLAUSE}"`,
+        `description: "Review changes."`,
+      )
+      .replace(
+        "Read .claude/skills/demo/SKILL.md first.",
+        `Read .claude/skills/demo/SKILL.md first. ${CODEX_REVIEWER_DELEGATION_CLAUSE}`,
+      );
+    expect(() => parseGeneratedOutput(clauseInBodyOnly, "demo")).toThrow(GenerationOutputError);
+    expect(() => parseGeneratedOutput(clauseInBodyOnly, "demo")).toThrow(/codex-delegation clause/);
+  });
+
+  // Positive counterpart to the two negative tests above: pins that
+  // well-formed output's PARSED description (not just the raw section
+  // text) actually carries the clause — the property the codex mirror
+  // depends on downstream.
+  it("accepts well-formed output whose parsed description carries the codex-delegation clause", () => {
+    const result = parseGeneratedOutput(validOutput("demo"), "demo");
+    const parsed = parseSkillFrontmatter(result.reviewer);
+    expect(parsed).not.toBeNull();
+    expect(parsed!.description).toContain(CODEX_REVIEWER_DELEGATION_CLAUSE);
   });
 
   it("ignores any trailing text the agent printed after the markers — cannot be used to smuggle extra instructions", () => {

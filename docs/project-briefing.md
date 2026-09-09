@@ -181,17 +181,20 @@ an ephemeral-overlay mechanism:
 - **codex and agy**: neither has an ephemeral per-project overlay — their
   own project-scope skill discovery is a fixed, workspace-relative
   `.agents/skills/<name>/SKILL.md` path in the repo itself. Codex has no
-  subagent concept at all (`bundle-sync.ts`'s own comment: "Codex has no
-  static per-agent file format at all," confirmed by spike #946 — it invokes
-  a skill by name at runtime instead of loading a static agent file). agy
-  _does_ have one — a single flat `<name>.md` file under its host-global
-  agents directory (`resolveAgyGlobalAgentsDir()`, spike #950) — but that
-  path only ever carries Mullion's own shipped bundle agent
-  (`bundle-sync.ts`'s `AGENT_TARGETS`), never a project-specific one; nothing
-  routes a project's own reviewer content there today. There's no way to
-  deliver a project skill to either without writing into the project's own
-  repo — see the next section — and no way to deliver a _project-specific_
-  reviewer subagent to either at all.
+  static per-agent config file at all (`bundle-sync.ts`'s own comment, spike
+  #946); a live spike (issue #943, 2026-09-09) confirmed what it has
+  instead: `spawn_agent` carries no skill-name argument of its own — the
+  _calling_ model composes a free-text reference to a skill by name/path in
+  its delegation prompt, and the sub-agent it spawns resolves and follows
+  that skill on its own. agy _does_ have a static agent file — a single flat
+  `<name>.md` file under its host-global agents directory
+  (`resolveAgyGlobalAgentsDir()`, spike #950) — but that path only ever
+  carries Mullion's own shipped bundle agent (`bundle-sync.ts`'s
+  `AGENT_TARGETS`), never a project-specific one; nothing routes a project's
+  own reviewer content there today, and #943's 2026-09-05 spike confirmed
+  agy has no project-scope agent discovery path either, with or without
+  `--add-dir`. There's no way to deliver a project skill to either without
+  writing into the project's own repo — see the next section.
   **The absence of a _live_ DB delivery channel is a permanent, structural
   gap, not a "not implemented yet" one**
   ([issue #1083](https://github.com/s3ntin3l8/mullion-session-manager/issues/1083)):
@@ -207,17 +210,28 @@ an ephemeral-overlay mechanism:
   editing the `project_tooling.skill` DB row after scaffolding changes
   nothing those two CLIs actually see until the scaffold is re-run (or,
   once a diff-aware refresh path lands, until someone explicitly triggers
-  one). For **reviewer** content, there is no committed path to codex/agy
-  at all _today_ — the scaffold's reviewer file only ever lands at
-  `.claude/agents/<slug>-reviewer.md`, a Claude-Code-only subagent
-  location — so the Mullion Briefing panel's reviewer field is inert for
-  codex and agy regardless of whether the project has been scaffolded.
-  Unlike the live-DB-channel gap above, this specific committed-path gap is
-  not claimed to be permanent — #1083 itself notes a scaffold-side agy
-  reviewer path is being worked on separately as its own follow-on track;
-  until that lands, though, there is no committed reviewer path to codex/agy
-  either, so the practical effect today is the same. This whole bullet is
-  deliberately scoped as documentation only: no code change to
+  one). For **reviewer** content, codex and agy now diverge: codex gains a
+  committed path — the scaffold also emits a translated copy of the
+  reviewer at `.agents/skills/<slug>-reviewer/SKILL.md` (two-field SKILL.md
+  frontmatter; issue #943), which `spawn_agent` delegation can discover the
+  same way it discovers the project skill **for reviewer content with flat
+  (single-line) frontmatter whose `description` carries the delegation
+  clause** — a preserved reviewer with a block-scalar (`|`/`>`) description
+  emits no mirror at all (see `deriveCodexReviewerSkillContent`'s own
+  comment in `mullion-scaffold.ts`), and a freshly generated reviewer whose
+  description drops the clause fails the generation gate before it ever
+  reaches the scaffold (see `parseGeneratedOutput`'s clause check in
+  `scaffold-generate.ts`) — a preserved, hand-edited reviewer has no
+  equivalent gate, so its mirror can still land undiscoverable if a human
+  edit removes the clause. agy
+  gets none: the project-scope agent-discovery gap above rules out both the
+  live DB channel and any committed scaffold path for agy specifically, and
+  #943 dropped agy reviewer delivery as won't-implement rather than leaving
+  it open — there is no known agy mechanism this could target. Either way,
+  the Mullion Briefing panel's reviewer field itself stays inert for both
+  CLIs — it's the _live_ DB channel, and neither CLI has one; only a
+  scaffold re-run reaches codex's committed mirror. This whole bullet is
+  deliberately scoped as documentation only: no further code change to
   `agy.ts`/`mullion-bundle.ts` is implied here, and the live-channel gap is
   only worth revisiting if agy ever gains a real per-session config channel.
 
@@ -238,9 +252,12 @@ three artifacts into a real, reviewable pull request:
    same reasoning as `AGENTS.md` itself — without it, a Claude Code session
    in the target repo would never see `AGENTS.md`'s content at all), a
    starter `.claude/skills/<slug>/SKILL.md`, a starter
-   `.claude/agents/<slug>-reviewer.md`, and a `.agents/skills/<slug>` mirror
-   for codex's/agy's own project-scope discovery — writes it into a scratch
-   worktree under `.mullion-worktrees/`, and shows the diff. One more entry
+   `.claude/agents/<slug>-reviewer.md`, a `.agents/skills/<slug>` mirror for
+   codex's/agy's own project-scope skill discovery, and (issue #943) a
+   `.agents/skills/<slug>-reviewer/SKILL.md` mirror of the reviewer,
+   translated into SKILL.md's two-field frontmatter shape, for codex's own
+   `spawn_agent` delegation to discover — writes it into a scratch worktree
+   under `.mullion-worktrees/`, and shows the diff. One more entry
    is opt-in: a short pointer paragraph upserted into `CONTRIBUTING.md`
    (created fresh if the project doesn't have one yet) pointing at
    `AGENTS.md`'s Workflow Conventions section, since that file's own

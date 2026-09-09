@@ -635,7 +635,16 @@ describe("syncBundleContent — agent install (fixture-based, src/bundle/agents/
     expect(contents).not.toContain("model:");
   });
 
-  it("never installs an agent for codex — codex has no static per-agent file format", () => {
+  // Scoped to THIS module's bundle-sync path — Mullion's own shipped
+  // agents (src/bundle/agents/), not a project's own reviewer content.
+  // Codex still has no static per-agent file format for that path (issue
+  // #943's 2026-09-09 spike didn't change this: `spawn_agent` itself takes
+  // no skill-name argument, only a free-text prompt the calling model
+  // composes). A PROJECT's own reviewer reaches codex through a different,
+  // separate path entirely — mullion-scaffold.ts's committed
+  // `.agents/skills/<slug>-reviewer/SKILL.md` mirror — which this test
+  // doesn't exercise.
+  it("never installs an agent for codex via bundle-sync — codex has no static per-agent file format", () => {
     writeSkill("host");
     writeAgent("reviewer");
     syncBundleContent();

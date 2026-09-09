@@ -238,9 +238,19 @@ interface AgentTarget {
   transform(raw: string): string | null;
 }
 
-// Codex has no static per-agent file format at all (spike #946 — codex
-// invokes a skill by name at runtime via `spawn_agent`, not a static agent
-// file), so it deliberately has no entry here.
+// Codex has no static per-agent file format at all, so it deliberately has
+// no entry here (spike #946). #943's 2026-09-09 follow-up spike sharpened
+// the mechanism: `spawn_agent` itself carries no skill-name argument — the
+// CALLING model composes a reference to a skill by name/path in free text,
+// and the sub-agent it spawns resolves and follows that skill on its own.
+// So "codex invokes a skill by name via spawn_agent" (this comment's prior
+// wording) overstated spawn_agent's own role; codex's delegation-by-skill
+// discovery is real, it's just prompt-driven rather than a structured
+// argument. (This module's src/bundle/agents/ — Mullion's own shipped
+// agents, not a project's reviewer content — is a separate, not-yet-built
+// track; #943's actual codex delivery for a PROJECT's reviewer instead goes
+// through mullion-scaffold.ts's committed `.agents/skills/<slug>-reviewer/`
+// mirror, outside this bundle-sync path entirely.)
 const AGENT_TARGETS: AgentTarget[] = [
   {
     cli: "claude-code",

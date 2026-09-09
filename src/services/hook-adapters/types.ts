@@ -160,7 +160,23 @@ export interface HookAdapterContext {
    * agent file, with or without `--add-dir`), not an assumption pending
    * confirmation; `projectSkill`'s host-global-fallback reasoning above
    * (the `installBundleSkills` prune-pass argument, #1083) applies
-   * identically here. */
+   * identically here.
+   *
+   * Codex's absence from THIS field is scoped narrowly to the live,
+   * ephemeral DB channel this field carries — codex has no per-session
+   * overlay to receive it through, same as `projectSkill` above. That's a
+   * DIFFERENT gap from "codex has no reviewer delivery path at all," which
+   * was true until issue #943's 2026-09-09 spike confirmed codex resolves
+   * a project-scoped skill by delegation (`spawn_agent`) via description
+   * text, not a structured reference. `mullion-scaffold.ts`'s
+   * `computeScaffold` now emits a codex-readable, always-mirrored
+   * translation of the COMMITTED reviewer at
+   * `.agents/skills/<slug>-reviewer/SKILL.md` (two-field SKILL.md
+   * frontmatter, `deriveCodexReviewerSkillContent`) — a real path to codex,
+   * just not through this field. Editing `project_tooling.reviewerAgent`
+   * after scaffolding still reaches codex only once the scaffold is
+   * re-run, same "seed, not a live channel" caveat `docs/project-briefing.md`
+   * already documents for `projectSkill`. */
   projectReviewerAgent?: string;
   /** Issue #957 — the resolved opencode model the session is configured
    * to use, threaded from createSessionRecord (where resolveOpenCodeModel
