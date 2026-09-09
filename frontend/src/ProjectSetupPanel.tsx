@@ -76,7 +76,6 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
   // ProjectBriefingPanel.tsx uses for the identical column, and the same
   // `?? true` default resolveScaffoldWorkflowConventionsText applies.
   const project = useDashboardStore((s) => s.projects.find((p) => p.id === params.projectId));
-  const updateProject = useDashboardStore((s) => s.updateProject);
   const injectWorkflowConventions = project?.injectWorkflowConventions ?? true;
   // Hermes review, PR #1200 round 3 (suggestion) — the disclosure used to
   // hand-copy a prose paraphrase of mullion-scaffold.ts's
@@ -113,13 +112,6 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
   const [previewing, setPreviewing] = useState(false);
   const [applying, setApplying] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Phase 3 (drift detection) — offered only after a successful apply, and
-  // only a checkbox: "not an automatic write" per the design this
-  // implements. Defaults to checked since after Phase 1 the committed and
-  // injected text are the same bytes by construction, but nothing is
-  // PATCHed until the user clicks "Done" below.
-  const [turnOffInjectionAfterApply, setTurnOffInjectionAfterApply] = useState(true);
-  const [savingInjectionChoice, setSavingInjectionChoice] = useState(false);
 
   const handlePreview = useCallback(async () => {
     setPreviewing(true);
@@ -160,26 +152,7 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
     setPreview(null);
     setApplyResult(null);
     setError(null);
-    setTurnOffInjectionAfterApply(true);
   }, []);
-
-  const handleDoneAfterApply = useCallback(async () => {
-    if (turnOffInjectionAfterApply && injectWorkflowConventions) {
-      setSavingInjectionChoice(true);
-      try {
-        await updateProject(params.projectId, { injectWorkflowConventions: false });
-      } finally {
-        setSavingInjectionChoice(false);
-      }
-    }
-    handleBack();
-  }, [
-    turnOffInjectionAfterApply,
-    injectWorkflowConventions,
-    updateProject,
-    params.projectId,
-    handleBack,
-  ]);
 
   if (applyResult) {
     return (
@@ -201,40 +174,8 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
             Committed to branch <code>{applyResult.branch}</code> — {applyResult.detail}
           </div>
         )}
-        {/* Phase 3 (drift detection) — only offered when this project is
-            currently set to receive the per-session injection at all;
-            already-opted-out has nothing to turn off. */}
-        {injectWorkflowConventions && (
-          <div className="settings-row">
-            <div className="settings-row-text">
-              <label className="settings-row-label" htmlFor="setup-turn-off-injection">
-                Turn off per-session conventions injection for this project
-              </label>
-              <div className="settings-row-desc">
-                The committed AGENTS.md now carries this install's own conventions text — turning
-                this off avoids sending the same text twice. If you later edit Settings → Sessions'
-                conventions text, re-run Scaffold Mullion to refresh what's committed here.
-              </div>
-            </div>
-            <div className="settings-row-control">
-              <input
-                id="setup-turn-off-injection"
-                type="checkbox"
-                checked={turnOffInjectionAfterApply}
-                onChange={(e) => setTurnOffInjectionAfterApply(e.target.checked)}
-              />
-            </div>
-          </div>
-        )}
         <button className="git-panel-fetch-btn" onClick={handleBack}>
           Scaffold another
-        </button>
-        <button
-          className="git-panel-fetch-btn"
-          onClick={handleDoneAfterApply}
-          disabled={savingInjectionChoice}
-        >
-          {savingInjectionChoice ? "Saving…" : "Done"}
         </button>
       </div>
     );

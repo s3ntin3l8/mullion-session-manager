@@ -418,7 +418,7 @@ describe("project-setup route", () => {
       }
     });
 
-    it("stays false for a project that opted out of injection, even after the install's text changes", async () => {
+    it("stays false for a project that opted out before ever being scaffolded, even after the install's text changes", async () => {
       const app = await buildApp();
       const projectId = await createProject(app, repoDir);
 
@@ -447,10 +447,66 @@ describe("project-setup route", () => {
       try {
         const listed = await app.inject({ method: "GET", url: "/api/projects" });
         const project = listed.json().find((p: { id: number }) => p.id === projectId);
-        // The opted-out project's committed hash was derived from the
+        // Settings held "" (never configured) at apply time here, so the
+        // opted-out project's committed hash was already derived from the
         // fixed defaults (resolveScaffoldWorkflowConventionsText returns
-        // "" for it), and the drift check resolves it the identical way —
-        // the changed install text is irrelevant to this project.
+        // "" for it) — the changed install text is irrelevant to this
+        // project either way. See the next test for the case this one
+        // does NOT cover: opting out AFTER a real, non-default text was
+        // already committed.
+        expect(project.conventionsDrifted).toBe(false);
+      } finally {
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { sessions: { workflowConventionsText: "" } },
+        });
+        await app.close();
+      }
+    });
+
+    it("stays false for a project that opted out AFTER real (non-default) text was already committed — Hermes review, PR #1206 round 1", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app, repoDir);
+
+      // Real, non-default text is live in settings BEFORE this project is
+      // ever scaffolded, so apply commits and stamps a hash derived from
+      // THIS text, not from the fixed defaults.
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { sessions: { workflowConventionsText: "Our real, hand-authored conventions." } },
+      });
+
+      const previewRes = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/setup/preview`,
+        payload: { slug: "demo" },
+      });
+      await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/setup/apply`,
+        payload: { previewId: previewRes.json().previewId },
+      });
+
+      // Only now does the project opt out — after its committed AGENTS.md
+      // already carries the real text, not the defaults. Before the
+      // Hermes-flagged fix, resolveWorkflowConventionsText would resolve
+      // this opted-out project to "" from this point on, so its stamped
+      // hash (of the real text) would stop matching hash("") and
+      // conventionsDrifted would flip to a false positive — and the
+      // drift banner's own "re-run Preview and Apply" suggestion would
+      // then silently replace the real text with the generic defaults on
+      // the next apply.
+      await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${projectId}`,
+        payload: { injectWorkflowConventions: false },
+      });
+
+      try {
+        const listed = await app.inject({ method: "GET", url: "/api/projects" });
+        const project = listed.json().find((p: { id: number }) => p.id === projectId);
         expect(project.conventionsDrifted).toBe(false);
       } finally {
         await app.inject({

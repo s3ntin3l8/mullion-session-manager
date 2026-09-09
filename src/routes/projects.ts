@@ -851,7 +851,28 @@ export async function projectsRoute(app: FastifyInstance) {
         // hashWorkflowConventionsSection pair /setup/apply itself used to
         // stamp it — reusing both functions is what keeps this comparison
         // from ever silently diverging from what was actually committed.
+        //
+        // Hermes review, PR #1206 round 1 — an opted-out project
+        // (`injectWorkflowConventions === false`) must never report
+        // drifted, full stop, regardless of what its stamped hash happens
+        // to be. That flag's own documented meaning is "this project's own
+        // AGENTS.md is authoritative instead" — it has explicitly stopped
+        // tracking this install's global text, so comparing its hash
+        // against that text is comparing against a value it no longer
+        // claims to follow. Without this short-circuit, a project scaffolded
+        // while opted IN (real global text committed, hash stamped from
+        // that text) and later opted OUT — by any path, not just a
+        // since-removed one-click toggle — would flip to a false-positive
+        // "drifted" the moment resolveWorkflowConventionsText starts
+        // resolving it to "" instead: the stamped hash (of the real text)
+        // would stop matching hash("") forever, and the drift banner's own
+        // "re-run Preview and Apply" suggestion would then silently
+        // overwrite that real, previously-committed text with the generic
+        // SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS stub on the next apply — a
+        // data-loss bug. Gating on the opt-out flag here removes the
+        // signal that would ever prompt that re-apply for such a project.
         const conventionsDrifted =
+          (row.injectWorkflowConventions ?? true) &&
           row.conventionsHash !== null &&
           row.conventionsHash !==
             hashWorkflowConventionsSection(
