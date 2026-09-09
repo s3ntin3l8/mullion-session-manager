@@ -1333,28 +1333,32 @@
   overflow: hidden;
   min-width: 364px;
 }
-/* PR2a — a transient stack-action monitor (startStackSession's own
-   ephemeral control, rendered while its "Rebuild & restart"/etc. session is
-   still live) is fixed-width rather than `flex: 1` — Dock.tsx's own
-   flexGrow computation excludes it from the group's grow count to match.
-   That keeps the GROUP's own share of the dock row constant relative to
-   every OTHER group/stack — the bug this actually fixes, since before this
-   the group's grow count (and so every other group's width too) changed on
-   every poll a service happened to be mid-recreate. It does NOT make the
-   panel free within its own group: a fixed 260px still has to come from
-   somewhere, so an in-group sibling's width does step once, by up to
-   260px/N, when the panel appears or disappears (Hermes review, PR #1176)
-   — a single bounded step, not the unbounded per-poll oscillation this PR
-   set out to fix. 260px comfortably clears the 216px min-content floor
-   above as of this PR — a separate PR (dock terminal chrome/font-fit) may
-   raise that floor past 260px for an unrelated reason (fitting
-   MIN_TERMINAL_COLS, pty-manager.ts); `min-width` on this same element
-   clamps `flex-basis` up to whatever it's set to, so that's not a bug if
-   it happens — this panel just renders at the larger floor width instead
-   of 260px, same as it would at any other .dock-monitor. Re-check which
-   number actually wins before re-deriving either one. */
-.dock-monitor-transient {
-  flex: 0 0 260px;
+/* Dock log-streaming resize fix, replacing PR2a's .dock-monitor-transient —
+   that rule's own `flex: 0 0 260px` never actually applied: DockMonitor.tsx
+   put it on the SAME element as the 364px inline `minWidth` override
+   (min-width above), and min-width clamps flex-basis on the same element,
+   so the "transient" panel always rendered at >=364px — a full peer
+   column, not a 260px sliver — confirmed live via this PR's own
+   investigation. A live stack-action monitor now renders inside this class
+   instead, as a plain (non-flex) block wrapping a single DockMonitor, as a
+   ROW below `.dock-stack-monitors` inside `.dock-stack-group` (which is
+   already flex-direction:column) rather than as a peer column inside it —
+   see Dock.tsx's own group-rendering comment. Being a plain block, not a
+   flex container, makes `.dock-monitor`'s own `flex: 1 1 0%` inert here
+   (that property only takes effect when the element is itself a flex
+   item), so the monitor falls back to ordinary block sizing: full width
+   from its parent, and a height equal to its own explicit minimum
+   (`.dock-monitor`'s own inline min-height, dockHelpers.ts's
+   dockMonitorFullMinHeightPx — NOT `.dock-monitor-body`'s, see that
+   function's own doc comment for why the body-only number silently doesn't
+   work here) rather than splitting the group's vertical space with
+   .dock-stack-monitors. That's what makes this "zero horizontal space,
+   fixed height" rather than needing a hand-picked pixel width like the
+   rule it replaces did — see .dock-stack-group's own comment for a second,
+   review-caught bug in this same mechanism (the services row shrinking to
+   0px, not just this strip's own sizing). */
+.dock-stack-action-strip {
+  flex: 0 0 auto;
 }
 /* Min-content invariant this header must never be squeezed below, for a
    Docker-backed row (the case this floor exists for — .dock-monitor-kebab's
@@ -1552,7 +1556,26 @@
    sizes in the same column; deliberately no min-width override here, so
    its automatic minimum stays its children's own min-content and
    .dock-monitor's floor (see that rule's own comment) propagates up to
-   this box, which is what lets .dock-body's overflow-x actually kick in. */
+   this box, which is what lets .dock-body's overflow-x actually kick in.
+
+   Deliberately no `overflow` property either, unlike .dock-monitor — this
+   box's own AUTOMATIC minimum size must NOT be zeroed the way
+   overflow:hidden zeroes one (dock.css's own .dock-body comment has the
+   full mechanism), because that automatic minimum is what makes THIS box
+   grow past .dock-body's row stretch-fit height when its children need
+   more room than the dock region has. Review caught a real bug here during
+   the dock log-streaming resize fix: with a live .dock-stack-action-strip
+   present below (a fixed-content-size row, flex:0 0 auto, sized to a full
+   monitor's own real minimum height once that existed), this box's OWN
+   auto-height correctly grew to fit the strip — but .dock-stack-monitors
+   (the services row, flex:1;min-height:0) had no floor of its OWN, so once
+   this box's auto height matched the strip's content exactly, there was
+   zero free space left to grow the services row into, and it flex-shrank
+   to a genuine 0px — the running service silently vanishing rather than
+   just scrolling out of view. `.dock-stack-monitors`'s own inline
+   min-height (Dock.tsx, the same dockMonitorFullMinHeightPx passed to
+   every monitor) is the fix — it reserves this box's own auto-height
+   growth for at least one row of services too, not just the strip. */
 .dock-stack-group {
   display: flex;
   flex-direction: column;

@@ -605,6 +605,47 @@ describe("Dock", () => {
       expect(pane).toHaveAttribute("data-input-affordances", "false");
     });
 
+    it("dock log-streaming resize fix — a running dock monitor carries an inline min-height (on .dock-monitor itself, not the body) derived from the user's live terminal settings", async () => {
+      // Confirmed live: without this, every dock monitor's terminal body
+      // was permanently below pty-manager.ts's MIN_TERMINAL_ROWS (10) on any
+      // dock height (a real GeometryMessage echo read
+      // {"cols":63,"rows":10,"minCols":40,"minRows":10} — rows floored
+      // exactly at the minimum), which latches TerminalPane's
+      // cappedBelowFloor permanently true and skips applyClampedFit() from
+      // ever running (see dockMonitorFullMinHeightPx's own doc comment,
+      // dockHelpers.ts). The floor has to be applied to `.dock-monitor`
+      // itself, not `.dock-monitor-body` — review caught an earlier version
+      // of this fix applying it to the body, which `.dock-monitor`'s own
+      // `overflow: hidden` silently defeated.
+      dockByProject[1] = [dockerControl()];
+      const runningSession = makeSession({
+        id: 42,
+        kind: "dock",
+        name: "docker-logs:sanctuary-web",
+        command: dockerControl().command,
+      });
+      useDashboardStore.setState({
+        projects: [PROJECT],
+        sessions: [runningSession],
+        settings: {
+          ...DEFAULT_SETTINGS,
+          terminal: { ...DEFAULT_SETTINGS.terminal, fontSize: 14, padding: 4 },
+        },
+      });
+      render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+      const pane = await screen.findByTestId("terminal-pane");
+      const body = pane.closest(".dock-monitor-body") as HTMLElement;
+      const monitor = body.closest(".dock-monitor") as HTMLElement;
+      // dockMonitorFullMinHeightPx(14, 4) === 231 — see dockHelpers.test.ts's
+      // own worked derivation.
+      expect(monitor.style.minHeight).toBe("231px");
+      // The body itself carries no inline min-height of its own — the
+      // monitor's own explicit floor is what has to force room for it, per
+      // the mechanism this test's own header comment documents.
+      expect(body.style.minHeight).toBe("");
+    });
+
     it("'Check for update' calls the check-update endpoint and tints the image pill on an update", async () => {
       dockByProject[1] = [dockerControl()];
       checkUpdateByProject[1] = {
@@ -722,11 +763,20 @@ describe("Dock", () => {
       expect(refreshSessions).toHaveBeenCalled();
     });
 
-    it("PR2a — a live transient stack-action monitor gets a fixed width and does not count toward the group's flexGrow", async () => {
-      // The reported bug: rebuilding a stack opened a second monitor inside
-      // the group, and the group's own inline flexGrow (Dock.tsx) — until
-      // this fix, `group.controls.length` — jumped from 1 to 2, N-way
-      // splitting "web"'s width with the new panel and resizing it.
+    it("dock log-streaming resize fix — a live stack-action monitor renders in its own strip, not inside .dock-stack-monitors, and does not count toward the group's flexGrow", async () => {
+      // The reported bug (originally PR2a, since superseded): rebuilding a
+      // stack opened a second monitor inside .dock-stack-monitors, and the
+      // group's own inline flexGrow (Dock.tsx) — until PR2a,
+      // `group.controls.length` — jumped from 1 to 2, N-way splitting
+      // "web"'s width with the new panel and resizing it. PR2a's own fix
+      // (a fixed-width `.dock-monitor-transient` class, still rendered
+      // alongside "web" inside .dock-stack-monitors) turned out not to work
+      // at all — its 260px was clamped by the very same 364px inline
+      // min-width every monitor gets, so the "fixed-width" panel actually
+      // rendered as a full peer column and could still push a sibling off
+      // the group's horizontal scroll edge. This PR moves it out of
+      // .dock-stack-monitors entirely, into its own fixed-height strip
+      // below.
       dockByProject[1] = [dockerControl()]; // just "web"
       const rebuildCommand =
         "docker compose -p 'sanctuary' build --pull && docker compose -p 'sanctuary' up -d";
@@ -757,21 +807,92 @@ describe("Dock", () => {
       await user.click(await screen.findByText("Pull & restart stack"));
       await user.click(await screen.findByText("Click again — restarts the whole stack"));
 
-      // The ephemeral "Update sanctuary" monitor now renders alongside "web".
+      // The ephemeral "Update sanctuary" monitor now renders in its own
+      // strip, a sibling of .dock-stack-monitors — not inside it.
       const transientRow = await screen.findByText("Update sanctuary");
-      expect(transientRow.closest(".dock-monitor")).toHaveClass("dock-monitor-transient");
+      const transientMonitor = transientRow.closest(".dock-monitor") as HTMLElement;
+      expect(transientMonitor.closest(".dock-stack-action-strip")).not.toBeNull();
+      expect(transientMonitor.closest(".dock-stack-monitors")).toBeNull();
 
-      // Two controls render in the group now, but flexGrow counts only the
-      // one grow-participating control ("web") — this pins the group's OWN
-      // flexGrow against changing, which is what stops every OTHER group's
-      // width from also resizing on every poll (the reported, unbounded
-      // churn). It does not claim "web" itself keeps its exact pixel width:
-      // the transient's fixed 260px still comes out of this group's own
-      // share, so "web" still takes one bounded step when the panel
-      // appears/disappears — see .dock-monitor-transient's own comment
-      // (empty-states.css) and Hermes' review on PR #1176.
+      // "web" is still the only control inside .dock-stack-monitors.
+      const servicesRow = document.querySelector(".dock-stack-monitors") as HTMLElement;
+      expect(servicesRow.querySelectorAll(".dock-monitor")).toHaveLength(1);
+      expect(servicesRow.textContent).toContain("web");
+
+      // The group's own flexGrow reflects only "web" — the ephemeral strip
+      // contributes no horizontal width to it at all now, so there is no
+      // step to bound, unlike PR2a's old fixed-width-inside-the-row
+      // approach.
       const group = document.querySelector(".dock-stack-group") as HTMLElement;
       expect(group.style.flexGrow).toBe("1");
+    });
+
+    it("dock log-streaming resize fix (symptom 3) — a live stack action survives a workspace switch, reconstructed from its session", async () => {
+      // Before this fix, Dock.tsx's `ephemeralControls` was component-local
+      // useState, populated only by the POST response that started the
+      // action — a workspace switch unmounts the whole DockColumn (this
+      // component's own parent), losing that state even though the backend
+      // session (named `docker-stack:<composeProject>`, nameLocked) is
+      // untouched. Simulated here by re-rendering with `workspaceProjectIds`
+      // dropping project 1 and then bringing it back — the same unmount/
+      // remount App.tsx's own workspaceProjectIds derivation puts a
+      // DockColumn through on a real workspace switch.
+      dockByProject[1] = [dockerControl()]; // just "web"
+      const rebuildCommand =
+        "docker compose -p 'sanctuary' build --pull && docker compose -p 'sanctuary' up -d";
+      updateByProject[1] = {
+        sessionId: 42,
+        control: {
+          id: "docker-update:sanctuary",
+          title: "Update sanctuary",
+          command: rebuildCommand,
+          source: "docker",
+          composeProject: "sanctuary",
+        },
+      };
+      // The real backend always names a stack-action session
+      // `docker-stack:<composeProject>` (stackSessionName, routes/
+      // projects.ts) — that's the identity the reconstruction below reads.
+      const rebuildSession = makeSession({
+        id: 42,
+        kind: "dock",
+        name: "docker-stack:sanctuary",
+        command: rebuildCommand,
+      });
+      useDashboardStore.setState({
+        projects: [PROJECT],
+        sessions: [rebuildSession],
+        refreshSessions: vi.fn().mockResolvedValue(undefined),
+      });
+      const user = userEvent.setup();
+      const { rerender } = render(
+        <Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />,
+      );
+
+      await screen.findByText("web");
+      await user.click(stackKebab());
+      await user.click(await screen.findByText("Pull & restart stack"));
+      await user.click(await screen.findByText("Click again — restarts the whole stack"));
+      await screen.findByText("Update sanctuary");
+
+      // Workspace switch away — DockColumn (and its ephemeralControls
+      // state) unmounts. The session itself is untouched in the store.
+      rerender(<Dock workspaceProjectIds={[]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+      expect(screen.queryByText("web")).not.toBeInTheDocument();
+
+      // Workspace switch back — a fresh DockColumn mount, with none of its
+      // own optimistic ephemeralControls state.
+      rerender(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+      await screen.findByText("web");
+
+      // The strip is back, reconstructed from the still-live session —
+      // grouped correctly under "sanctuary" via the reconstructed control's
+      // own `composeProject` field (issue #1112), not left in `ungrouped`.
+      const strip = document.querySelector(".dock-stack-action-strip") as HTMLElement;
+      expect(strip).not.toBeNull();
+      expect(strip.querySelector("[data-testid='terminal-pane']")).not.toBeNull();
+      const group = document.querySelector(".dock-stack-group") as HTMLElement;
+      expect(group.querySelector(".dock-stack-action-strip")).not.toBeNull();
     });
 
     it("floors a group's flexGrow at 1 even when its ONLY control is a live transient stack-action monitor (Hermes review)", async () => {
@@ -780,9 +901,9 @@ describe("Dock", () => {
       // header to click through in the first place), the container then
       // takes longer to reappear than RECREATE_GRACE_MS, and the hold drops
       // it — leaving the group with only the ephemeral "Update sanctuary"
-      // monitor. group.controls.filter(c => !ephemeralIds.has(c.id)).length
-      // computes 0 there, which would collapse the group to min-content
-      // (flexGrow: 0) instead of holding its normal share for that window.
+      // monitor. `serviceControls.length` (Dock.tsx) computes 0 there,
+      // which would collapse the group to min-content (flexGrow: 0) instead
+      // of holding its normal share for that window.
       const T0 = 1_700_000_000_000;
       const dateSpy = vi.spyOn(Date, "now").mockReturnValue(T0);
       try {

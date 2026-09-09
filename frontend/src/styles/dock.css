@@ -280,22 +280,46 @@
    services can squeeze each one below its header's min-content (see
    .dock-monitor-header's own comment in empty-states.css) — scroll
    horizontally instead of clipping, mirroring .dock-columns above.
-   overflow-y is pinned explicit rather than left at its `visible` default —
-   .kanban-lane-body's own comment a few hundred lines down documents the
-   exact trap: pairing overflow-x:auto with the other axis left unset
-   computes overflow-y to auto too, opening a second, hidden-until-hovered
-   vertical scrollbar the moment a child's rendered height creeps past this
-   row's own stretch height. .dock-monitor-body (this row's terminal host)
-   already sets flex:1 + min-height:0, the correct defensive pairing, but
-   this is cheap insurance against the same class of bug this codebase has
-   already shipped once. */
+
+   overflow-y was `hidden` (pinned explicit, not left at its `visible`
+   default, to dodge the .kanban-lane-body-style trap of an unset axis
+   silently computing to `auto` too) on the theory that .dock-monitor-body's
+   own flex:1 + min-height:0 was defensive insurance enough. Dock
+   log-streaming resize fix — that theory didn't hold once dock terminals
+   needed a real, load-bearing minimum height
+   (dockMonitorFullMinHeightPx, dockHelpers.ts) to hold
+   pty-manager.ts's MIN_TERMINAL_ROWS: a dock shorter than that floor (this
+   repo's own default height was, on every default) needs a vertical escape
+   hatch the same way a column narrower than .dock-monitor's own min-width
+   floor already gets a horizontal one (.dock-columns/.dock-column above),
+   or it silently clips instead. `auto` is deliberate, not a regression back
+   through the trap the original comment warned about — that trap was an
+   axis left UNSET computing to `auto` on its own; this one is explicitly
+   set to `auto` because an explicit floor now genuinely needs it.
+
+   Getting the floor itself to actually reach this element mattered more
+   than this one-line change, though, and a first version of this fix got
+   it wrong — caught in review: the minHeight has to live on `.dock-monitor`
+   itself (DockMonitor.tsx), not `.dock-monitor-body`. `.dock-monitor` has
+   its own `overflow: hidden` (empty-states.css), and per CSS Flexbox §4.5
+   `overflow: hidden` zeroes a flex item's AUTOMATIC minimum size — so a
+   floor placed only on the body never propagated up through `.dock-monitor`
+   at all; it just clipped silently one level deeper, and this row's own
+   scrollHeight never exceeded its clientHeight, so this very `overflow-y`
+   rule never had anything to scroll. An EXPLICIT min-height (not the
+   automatic kind `overflow: hidden` zeroes) on `.dock-monitor` is what
+   actually forces it past its own stretch-fit size — the same mechanism
+   `.dock-monitor`'s `min-width: 364px` already uses on the horizontal axis.
+   `.dock-stack-group` (empty-states.css) needed a second, independent fix
+   for the same reason on a different element — see that class's own
+   comment and `.dock-stack-monitors`'s inline minHeight (Dock.tsx). */
 .dock-body {
   flex: 1;
   display: flex;
   gap: 6px;
   min-height: 0;
   overflow-x: auto;
-  overflow-y: hidden;
+  overflow-y: auto;
 }
 .dock-empty {
   height: 88px;

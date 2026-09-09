@@ -138,13 +138,17 @@ export function runningSessionFor(
   return dockSessions.find((s) => s.command === control.command);
 }
 
-// A stack-wide action's own ephemeral DockControl (POST .../docker/{update,
+// Issue #1112 (folded into the dock log-streaming resize fix) — a stack-wide
+// action's own ephemeral DockControl (POST .../docker/{update,
 // stack/restart,stack/apply,stack/rebuild,stack/stop}'s response — see
-// startStackSession/the docker/update route in src/routes/projects.ts) has
-// no `docker` field, only an id of `<actionId>:<composeProject>`. This is
-// the fixed set of actionId prefixes those five routes ever emit — kept in
-// sync with them by hand, not derived, since the frontend has no other
-// reachable source of truth for it.
+// startStackSession/the docker/update route in src/routes/projects.ts) now
+// carries `composeProject` as a real field, so composeProjectForControl
+// below no longer needs to parse it back out of `id`. This fallback list
+// stays only for a control from before this field existed (a stale
+// optimistic control still sitting in Dock.tsx's own `ephemeralControls`
+// state across a hot-reload, or a caller this repo doesn't control) — the
+// fixed set of actionId prefixes those five routes ever emit, kept in sync
+// with them by hand.
 const EPHEMERAL_STACK_ACTION_PREFIXES: readonly string[] = [
   "docker-update",
   "docker-restart",
@@ -157,14 +161,20 @@ const EPHEMERAL_STACK_ACTION_PREFIXES: readonly string[] = [
  * The compose project a Dock control belongs to, for grouping every
  * service/ephemeral belonging to the same `docker compose` stack under one
  * header (issue #73 follow-up — "one stack action menu per stack" rather
- * than the stack-wide actions repeating on every service row). A
- * `docker`-bearing control (a discovered service) answers directly; an
- * ephemeral stack-action control is parsed against the known id prefixes
- * above. Returns `null` for anything else — a plain dock.json control, or
- * an ephemeral control this function doesn't recognize — which callers
- * must NOT fold into a group (see groupDockerControls's `ungrouped`).
+ * than the stack-wide actions repeating on every service row). Prefers the
+ * real `composeProject` field (issue #1112) when present — set on every
+ * ephemeral stack-action control the backend emits, and on every control
+ * reconstructed from a live `docker-stack:<composeProject>` session
+ * (Dock.tsx, dock log-streaming resize fix symptom 3) — falling back to
+ * `docker.composeProject` for a discovered service, then to parsing the
+ * legacy `<actionId>:<composeProject>` id shape for a control from before
+ * either field existed. Returns `null` for anything else — a plain
+ * dock.json control, or an ephemeral control this function doesn't
+ * recognize — which callers must NOT fold into a group (see
+ * groupDockerControls's `ungrouped`).
  */
 export function composeProjectForControl(control: DockControl): string | null {
+  if (control.composeProject) return control.composeProject;
   if (control.docker) return control.docker.composeProject;
   const colonIndex = control.id.indexOf(":");
   if (colonIndex === -1) return null;
@@ -406,5 +416,98 @@ export function dockMonitorMinWidthPx(fontSize: number, padding: number): number
   const xtermContentWidth = MIN_TERMINAL_COLS * cellWidth + ADDON_FIT_RESERVE_PX;
   return Math.ceil(
     xtermContentWidth + padding * 2 + DOCK_MONITOR_BORDER_PX + CROSS_PLATFORM_MARGIN_PX,
+  );
+}
+
+// Dock log-streaming resize fix — every dock monitor was permanently below
+// pty-manager.ts's MIN_TERMINAL_ROWS (10), on ANY dock height, because
+// nothing derived a floor for the vertical axis the way dockMonitorMinWidthPx
+// above does for the horizontal one. Confirmed live: a real dock monitor's
+// own GeometryMessage echo read `{"cols":63,"rows":10,"minCols":40,
+// "minRows":10}` — rows floored exactly at the minimum — which latches
+// TerminalPane's `cappedBelowFloor` permanently true, which in turn skips
+// `applyClampedFit()` on every subsequent resize (see that function's own
+// comment for why), leaving the terminal's real rendered grid larger than
+// its clipped container instead of ever being re-fit down to it.
+//
+// `PX_PER_ROW_AT_14PX` is, like PX_PER_COL_AT_14PX above, anchored to a real
+// measured data point — a live xterm pane's own
+// `term._core._renderService.dimensions.css.cell` at Geist Mono 14px read
+// `{ width: 8, height: 18 }` together, on the same uncapped pane, in the
+// same session. That `width: 8` doesn't match PX_PER_COL_AT_14PX's own 8.4
+// (a different session's measurement, on whatever engine/DPI produced it —
+// review caught this discrepancy uncaught in an earlier version of this
+// comment, which wrongly claimed the two were consistent). Rather than
+// picking one session's width over the other — and since
+// PX_PER_COL_AT_14PX is load-bearing for dockMonitorMinWidthPx's own
+// dockHelpers.test.ts-pinned 364px result, so it can't just be swapped for
+// this session's `8` — this scales the height/width RATIO measured
+// together in this one session (18 / 8 = 2.25) onto the already-pinned 8.4
+// baseline: 8.4 * 2.25 = 18.9. That keeps the width and height derivations
+// internally consistent with each other (same font, same ratio) without
+// silently changing the width floor's own pinned number.
+const PX_PER_ROW_AT_14PX = 18.9;
+// pty-manager.ts's own MIN_TERMINAL_ROWS — hand-synced the same way
+// MIN_TERMINAL_COLS above is; the frontend has no build-time import for it
+// (see pty-manager.ts's own comment on why only MAX_TERMINAL_COLS/ROWS are
+// genuinely shared).
+const MIN_TERMINAL_ROWS = 10;
+// .dock-monitor-header's own fixed CSS height (empty-states.css).
+const DOCK_MONITOR_HEADER_HEIGHT_PX = 28;
+
+/**
+ * The pixel height a dock monitor's TERMINAL BODY must be at least, so a
+ * dock terminal can hold pty-manager.ts's MIN_TERMINAL_ROWS at the user's
+ * live font settings — the vertical counterpart to dockMonitorMinWidthPx
+ * above. See that function's own doc comment for why a STATIC floor isn't
+ * enough (font size/padding are user-configurable) and this one's own
+ * comment above for the measurement and mechanism this fixes.
+ *
+ * Unlike the width derivation, this needs no addon-fit reserve:
+ * FitAddon.proposeDimensions() only subtracts its fixed overview-ruler
+ * reserve from the WIDTH measurement, never from the height one (see that
+ * addon's own source, quoted in dockMonitorMinWidthPx's own doc comment's
+ * referenced CSS derivation) — there is no vertical analogue to reserve
+ * space for.
+ *
+ * This is the BODY-only floor — see dockMonitorFullMinHeightPx below for
+ * why the header has to be added on top of it, and why that combined total,
+ * not this one alone, is what actually goes on the DOM.
+ */
+export function dockMonitorMinHeightPx(fontSize: number, padding: number): number {
+  const cellHeight = PX_PER_ROW_AT_14PX * (fontSize / BASELINE_FONT_SIZE_PX);
+  const xtermContentHeight = MIN_TERMINAL_ROWS * cellHeight;
+  return Math.ceil(xtermContentHeight + padding * 2 + CROSS_PLATFORM_MARGIN_PX);
+}
+
+/**
+ * The full `.dock-monitor` element's own minimum height — header
+ * (DOCK_MONITOR_HEADER_HEIGHT_PX) + terminal body floor
+ * (dockMonitorMinHeightPx) + border (DOCK_MONITOR_BORDER_PX) — and the value
+ * that actually has to be applied to `.dock-monitor` itself, NOT
+ * `.dock-monitor-body`. Review caught a real bug in an earlier version of
+ * this fix that applied the body-only floor to `.dock-monitor-body` alone:
+ * `.dock-monitor` has `overflow: hidden` (empty-states.css), and per CSS
+ * Flexbox §4.5 `overflow: hidden` zeroes a flex item's AUTOMATIC minimum
+ * size — so `.dock-monitor`, stretched by `.dock-body`'s row layout, never
+ * grew to accommodate its child's new min-height at all; the overflow was
+ * clipped silently INSIDE `.dock-monitor`'s own boundary, one level deeper
+ * than before, and `.dock-body` itself never saw the overflow, so its own
+ * `overflow-y: auto` (dock.css) never engaged either. An EXPLICIT min-height
+ * (not the automatic kind `overflow: hidden` zeroes) on `.dock-monitor`
+ * itself is what actually forces it past its stretch-fit size when the dock
+ * region is too short — the same mechanism `.dock-monitor`'s own
+ * `min-width: 364px` already uses on the horizontal axis, just on the
+ * cross axis here instead of the main one. Confirmed live: applying this
+ * combined value as `.dock-monitor`'s own min-height, not the body's, is
+ * what makes `.dock-body`'s `scrollHeight` actually exceed its
+ * `clientHeight` — the precondition for its `overflow-y: auto` to do
+ * anything at all.
+ */
+export function dockMonitorFullMinHeightPx(fontSize: number, padding: number): number {
+  return (
+    dockMonitorMinHeightPx(fontSize, padding) +
+    DOCK_MONITOR_HEADER_HEIGHT_PX +
+    DOCK_MONITOR_BORDER_PX
   );
 }

@@ -384,6 +384,19 @@ export interface DockControl {
    * these fields. */
   source?: "config" | "docker";
   docker?: DockerServiceInfo;
+  /** Issue #1112 — set on a stack-wide action's own ephemeral control
+   * (startStackSession, routes/projects.ts) so a caller can group it with
+   * its stack without parsing `id` against a hand-synced actionId prefix
+   * list (dockHelpers.ts's EPHEMERAL_STACK_ACTION_PREFIXES / the old
+   * composeProjectForControl). Also what makes reconstructing an ephemeral
+   * control from a live `docker-stack:<composeProject>` session possible
+   * after a workspace switch drops the frontend's own optimistic record of
+   * it — the reconstruction has no actionId to parse an id from in the
+   * first place, but always knows the compose project directly from the
+   * session name. A `docker`-bearing (discovered service) control never
+   * sets this — its compose project lives at `docker.composeProject`
+   * instead; see composeProjectForControl's own doc comment. */
+  composeProject?: string;
 }
 
 // ---------------------------------------------------------------------------

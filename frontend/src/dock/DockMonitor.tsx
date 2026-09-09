@@ -30,9 +30,9 @@ export function DockMonitor({
   onOpenBrowser,
   updateAvailable,
   dockerStatus,
-  transient = false,
   held = false,
   minWidthPx,
+  minHeightPx,
   checkStatus,
   armed,
   confirmBeforeKill,
@@ -52,11 +52,6 @@ export function DockMonitor({
   onOpenBrowser: () => void;
   updateAvailable: boolean;
   dockerStatus: DockerStatusPresentation | null;
-  // PR2a — a transient stack-action monitor (startStackSession's own
-  // ephemeral control, Dock.tsx's ephemeralIds) gets a fixed width via
-  // .dock-monitor-transient instead of N-way splitting its stack group with
-  // the rest — see that class's own comment (empty-states.css).
-  transient?: boolean;
   // PR2b — this control briefly vanished from discovery (a compose recreate
   // deletes the old container before the new one appears) and is being held
   // across that gap rather than unmounted, so sibling monitors don't resize
@@ -77,6 +72,18 @@ export function DockMonitor({
   // doesn't have `settings` handy (there are none today, but nothing here
   // requires one) still gets the static fallback rather than an error.
   minWidthPx?: number;
+  // Dock log-streaming resize fix — the vertical counterpart to minWidthPx
+  // above (dockMonitorFullMinHeightPx, dockHelpers.ts), applied to THIS
+  // element for the same reason minWidthPx is: a review caught an earlier
+  // version of this fix applying the equivalent number to
+  // `.dock-monitor-body` instead, which `.dock-monitor`'s own
+  // `overflow: hidden` silently defeated (that CSS zeroes a flex item's
+  // AUTOMATIC minimum size, so `.dock-monitor` never grew to accommodate
+  // its child's new floor — the overflow just clipped one level deeper).
+  // An EXPLICIT min-height on `.dock-monitor` itself isn't zeroed the same
+  // way — see dockMonitorFullMinHeightPx's own doc comment for the full
+  // mechanism this fixes.
+  minHeightPx?: number;
   checkStatus: { message: string; isError: boolean } | undefined;
   armed: boolean;
   confirmBeforeKill: boolean;
@@ -89,8 +96,11 @@ export function DockMonitor({
   return (
     <Fragment>
       <div
-        className={`dock-monitor${transient ? " dock-monitor-transient" : ""}`}
-        style={minWidthPx !== undefined ? { minWidth: minWidthPx } : undefined}
+        className="dock-monitor"
+        style={{
+          ...(minWidthPx !== undefined ? { minWidth: minWidthPx } : undefined),
+          ...(minHeightPx !== undefined ? { minHeight: minHeightPx } : undefined),
+        }}
       >
         <div
           className="dock-monitor-header"
