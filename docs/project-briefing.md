@@ -211,10 +211,19 @@ an ephemeral-overlay mechanism:
   nothing those two CLIs actually see until the scaffold is re-run (or,
   once a diff-aware refresh path lands, until someone explicitly triggers
   one). For **reviewer** content, codex and agy now diverge: codex gains a
-  committed path — the scaffold also emits a translated, always-mirrored
-  copy of the reviewer at `.agents/skills/<slug>-reviewer/SKILL.md`
-  (two-field SKILL.md frontmatter; issue #943), which `spawn_agent`
-  delegation can discover the same way it discovers the project skill. agy
+  committed path — the scaffold also emits a translated copy of the
+  reviewer at `.agents/skills/<slug>-reviewer/SKILL.md` (two-field SKILL.md
+  frontmatter; issue #943), which `spawn_agent` delegation can discover the
+  same way it discovers the project skill **for reviewer content with flat
+  (single-line) frontmatter whose `description` carries the delegation
+  clause** — a preserved reviewer with a block-scalar (`|`/`>`) description
+  emits no mirror at all (see `deriveCodexReviewerSkillContent`'s own
+  comment in `mullion-scaffold.ts`), and a freshly generated reviewer whose
+  description drops the clause fails the generation gate before it ever
+  reaches the scaffold (see `parseGeneratedOutput`'s clause check in
+  `scaffold-generate.ts`) — a preserved, hand-edited reviewer has no
+  equivalent gate, so its mirror can still land undiscoverable if a human
+  edit removes the clause. agy
   gets none: the project-scope agent-discovery gap above rules out both the
   live DB channel and any committed scaffold path for agy specifically, and
   #943 dropped agy reviewer delivery as won't-implement rather than leaving
