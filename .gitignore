@@ -15,3 +15,6 @@ data/
 !.claude/skills/
 !.claude/agents/
 .wt/
+
+# Agent workspace / superpowers plans scratch
+docs/superpowers/
