@@ -821,7 +821,7 @@ export function CommandPalette({
                         Mullion Briefing: {target?.name ?? "this project"}
                       </span>
                       <span className="cmd-row-subtitle">
-                        DB-authored — always additive on top of the committed AGENTS.md
+                        DB-authored — pushed on top of whatever AGENTS.md already says
                       </span>
                     </span>
                   </button>
