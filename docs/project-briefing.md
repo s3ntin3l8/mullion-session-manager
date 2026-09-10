@@ -444,11 +444,19 @@ pinned note]` `additionalContext` ordering `hooks.ts` composes for
     neither resolver nor in the `conventionsDrifted` computation. Drift
     tracking keeps working exactly as before: if the install's global text
     later changes, this project still shows `conventionsDrifted: true`,
-    and a re-scaffold still commits the real, current text. Offered as a
-    checkbox after a successful apply in Scaffold Mullion's own panel (only
-    when there's install-wide text to suppress in the first place), and
-    toggleable any time from the same "Session injection for this project"
-    row in `ProjectBriefingPanel.tsx` the other three toggles live in.
+    and a re-scaffold still commits the real, current text. Deliberately
+    **not** offered right after a successful apply — Hermes review caught
+    that both apply modes land the scaffold on a scratch worktree branch
+    (`git worktree add -b`, never `project.cwd`), so immediately after
+    apply the project's real, checked-out `AGENTS.md` does not carry the
+    text yet (PR mode's own notice says "before merging"); offering the
+    toggle at that moment would let a user suppress injection for text that
+    hasn't actually landed anywhere yet, silently delivering it neither way
+    until the scaffold branch/PR is merged by hand. Instead it's toggleable
+    only from the "Session injection for this project" row in
+    `ProjectBriefingPanel.tsx` the other three toggles live in — a standing
+    control the user reaches for once they know the merge has actually
+    happened, not a one-time offer tied to the apply moment.
 
 ## Settings
 

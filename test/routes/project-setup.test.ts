@@ -524,11 +524,13 @@ describe("project-setup route", () => {
     // a project scaffolded with real (non-default) text, then suppressed
     // via the new column, must STILL report conventionsDrifted: true once
     // the install's text changes — the exact opposite of the test above
-    // (opting out via injectWorkflowConventions), which stays false. If
-    // this ever starts passing with the new column wired into
-    // conventionsDrifted's computation (routes/projects.ts), the test
-    // itself is wrong, not the code — see that column's own doc comment
-    // (schema.ts) for the invariant this enforces.
+    // (opting out via injectWorkflowConventions), which stays false. If a
+    // future edit wires the new column into conventionsDrifted's
+    // computation (routes/projects.ts) the same way injectWorkflowConventions
+    // is, this test's final assertion FAILS (expects `true`, gets `false`)
+    // — that failure is this invariant being violated, not a stale test to
+    // update; see that column's own doc comment (schema.ts) for why the two
+    // must stay independent.
     it("stays TRUE (keeps tracking) for a project that suppressed per-session injection after real text was committed — unlike injectWorkflowConventions opt-out", async () => {
       const app = await buildApp();
       const projectId = await createProject(app, repoDir);

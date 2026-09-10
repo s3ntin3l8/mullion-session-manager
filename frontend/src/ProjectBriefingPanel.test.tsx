@@ -689,6 +689,54 @@ describe("ProjectBriefingPanel", () => {
 
       expect(updateProject).toHaveBeenCalledWith(1, { injectWorkflowConventions: null });
     });
+
+    // Issue #1208, Hermes review — never mixing this column with
+    // injectWorkflowConventions is this PR's whole point, so this toggle
+    // needs its own coverage rather than relying on the (removed)
+    // ProjectSetupPanel checkbox's tests to stand in for it.
+    it("clicking the suppress-injection toggle PATCHes suppressConventionsInjectionAfterScaffold, never injectWorkflowConventions", async () => {
+      useDashboardStore.setState({ projects: [makeProject({ id: 1 })] });
+      const updateProject = vi.fn().mockResolvedValue({});
+      useDashboardStore.setState({ updateProject });
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({
+          get: () => jsonResponse(200, { briefing: null, skill: null, reviewerAgent: null }),
+        }),
+      );
+      const user = userEvent.setup();
+      render(<ProjectBriefingPanel params={{ projectId: 1 }} />);
+
+      const toggle = await screen.findByRole("button", {
+        name: "Suppress — already committed to AGENTS.md",
+      });
+      await user.click(toggle);
+
+      expect(updateProject).toHaveBeenCalledWith(1, {
+        suppressConventionsInjectionAfterScaffold: true,
+      });
+      expect(updateProject).not.toHaveBeenCalledWith(1, {
+        injectWorkflowConventions: expect.anything(),
+      });
+    });
+
+    it("hides the suppress-injection toggle when the project has opted out via injectWorkflowConventions", async () => {
+      useDashboardStore.setState({
+        projects: [makeProject({ id: 1, injectWorkflowConventions: false })],
+      });
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({
+          get: () => jsonResponse(200, { briefing: null, skill: null, reviewerAgent: null }),
+        }),
+      );
+      render(<ProjectBriefingPanel params={{ projectId: 1 }} />);
+
+      await screen.findByText("Workflow conventions");
+      expect(
+        screen.queryByRole("button", { name: "Suppress — already committed to AGENTS.md" }),
+      ).not.toBeInTheDocument();
+    });
   });
 
   // Issue #895 — Scaffold Mullion is local-host projects only, so the
