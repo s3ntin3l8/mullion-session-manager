@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.3.17](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.16...v0.3.17) (2026-09-10)
+
+
+### Features
+
+* **notifications:** show what a session is doing, not just that it rang ([#1234](https://github.com/s3ntin3l8/mullion-session-manager/issues/1234)) ([16d1f4d](https://github.com/s3ntin3l8/mullion-session-manager/commit/16d1f4dc4cd844c2868955abb41c92d03a74c703))
+
+
+### Bug Fixes
+
+* **dock:** detect build-only services correctly and explain the disabled update check ([#1231](https://github.com/s3ntin3l8/mullion-session-manager/issues/1231)) ([09c2509](https://github.com/s3ntin3l8/mullion-session-manager/commit/09c25094a15bd125bfca66dad4a77034f1c2ae17))
+* **dock:** serialize stack-session check-then-create ([#1225](https://github.com/s3ntin3l8/mullion-session-manager/issues/1225)) ([4ef9559](https://github.com/s3ntin3l8/mullion-session-manager/commit/4ef9559c834f1c3a465d599858d36064c65cb722))
+* **mobile:** give the phone tab bar a visible scroll affordance ([#1224](https://github.com/s3ntin3l8/mullion-session-manager/issues/1224)) ([92718fb](https://github.com/s3ntin3l8/mullion-session-manager/commit/92718fb92ca3a7da5fb04675dd6caafaa0056d1c))
+
 ## [0.3.16](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.15...v0.3.16) (2026-09-10)
 
 
