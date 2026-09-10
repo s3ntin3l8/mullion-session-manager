@@ -240,13 +240,21 @@ describe("mapClaudeCodePostToolUse", () => {
       ]);
     });
 
-    it("returns a bare tool_done when every todo is completed (nothing current to report)", () => {
+    it("falls back to the last entry (a completion signal, not a task) when every todo is completed (Hermes review)", () => {
+      // Without this fallback, sessionContextMap on the frontend had no way
+      // to learn the in-progress task it was showing had actually finished —
+      // it kept displaying the stale content until an unrelated later event
+      // happened to override it. A `todo` message with a non-active status
+      // is what lets it clear that context instead of a new task to display.
       expect(
         mapClaudeCodePostToolUse({
           tool_name: "TodoWrite",
           tool_input: { todos: [{ content: "Done", status: "completed" }] },
         }),
-      ).toEqual({ kind: "tool_done", tool: "TodoWrite" });
+      ).toEqual([
+        { kind: "todo", content: "Done", status: "completed" },
+        { kind: "tool_done", tool: "TodoWrite" },
+      ]);
     });
 
     it("returns a bare tool_done when tool_input has no todos array", () => {

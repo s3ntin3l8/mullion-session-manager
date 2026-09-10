@@ -50,6 +50,29 @@ function fileChangeVerb(action: unknown): { titleCase: string; lower: string } {
   return (typeof action === "string" && FILE_CHANGE_VERBS[action]) || DEFAULT_FILE_CHANGE_VERB;
 }
 
+// Graphify review (issue #903) — a `session_diff` NotificationEvent's
+// `files[0]` is read defensively here even though the wire-level validator
+// (src/services/hook-protocol.ts's validateSessionDiff) already guarantees
+// every entry is a non-null object with a non-empty string `.file`: that
+// guarantee holds for THIS backend's own validation today, but the frontend
+// has no way to enforce it stays true across a version-skewed remote host or
+// a persisted event replayed from an older backend build — every other field
+// read in this file already treats `payload` as untrusted
+// (`typeof x === "string"` guards throughout), and an unguarded
+// `files[0].file` was the one place that didn't. Returns null (falls back to
+// the plain-count text) rather than throwing on a malformed entry.
+function firstChangedFileName(files: unknown[]): string | null {
+  const first = files[0];
+  if (
+    first &&
+    typeof first === "object" &&
+    typeof (first as { file?: unknown }).file === "string"
+  ) {
+    return (first as { file: string }).file;
+  }
+  return null;
+}
+
 // Shared kind/payload interpretation for Phase 1's notification event model
 // (issue #166) — the one place that turns a raw `NotificationEvent` into
 // human text, an unread-worthiness classification, or both. Originally lived
@@ -377,7 +400,8 @@ export function describeEvent(
     case "session_diff": {
       const files = event.payload.files;
       if (Array.isArray(files) && files.length > 0) {
-        const changed = files.length === 1 ? files[0].file : `${files.length} files`;
+        const changed =
+          files.length === 1 ? (firstChangedFileName(files) ?? "1 file") : `${files.length} files`;
         return { text: `Changed: ${changed}`, attention: false };
       }
       return { text: "Session diff", attention: false };
@@ -461,14 +485,22 @@ export function sessionContextMap(
         const content = typeof event.payload.content === "string" ? event.payload.content : null;
         const status = typeof event.payload.status === "string" ? event.payload.status : null;
         if (!content) break;
-        if (status === "in_progress") {
-          inProgressTodo = content;
-        } else if (content === inProgressTodo) {
-          // The item we were tracking as in-progress moved to a different
-          // status — no longer "what this session is working on".
-          inProgressTodo = null;
+        if (status === "in_progress" || status === "pending") {
+          anyTodo = content;
+          if (status === "in_progress") inProgressTodo = content;
+          else if (content === inProgressTodo) inProgressTodo = null;
+        } else {
+          // Hermes review (issue #903) — a terminal status (completed/
+          // cancelled) is a completion signal, not new context to display:
+          // clear it from whichever slot currently holds it rather than
+          // (as before) unconditionally overwriting `anyTodo` with the
+          // now-done content, which kept a finished task showing as "▸
+          // what this session is doing" until some unrelated later event
+          // happened to override it. Content-matched, same limitation as
+          // the in-progress tracking above (no stable per-item id).
+          if (content === inProgressTodo) inProgressTodo = null;
+          if (content === anyTodo) anyTodo = null;
         }
-        anyTodo = content;
         break;
       }
       case "file_change": {
@@ -481,7 +513,8 @@ export function sessionContextMap(
       case "session_diff": {
         const files = event.payload.files;
         if (!Array.isArray(files) || files.length === 0) break;
-        const changed = files.length === 1 ? files[0].file : `${files.length} files`;
+        const changed =
+          files.length === 1 ? (firstChangedFileName(files) ?? "1 file") : `${files.length} files`;
         lastSessionDiff = `changed ${changed}`;
         break;
       }

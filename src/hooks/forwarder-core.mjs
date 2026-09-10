@@ -164,6 +164,18 @@ export function mapClaudeCodePostToolUse(payload) {
     const current =
       todos.find((t) => t && t.status === "in_progress") ??
       todos.find((t) => t && t.status === "pending") ??
+      // Hermes review (issue #903) — every remaining todo is already
+      // terminal (completed/cancelled) once this fires. Without this
+      // fallback the whole call was silently dropped to a bare toolDone,
+      // and the frontend's sessionContextMap had no way to learn the
+      // in-progress task it was still showing had actually finished — it
+      // just kept displaying the last real update forever (until some
+      // unrelated file_change/session_diff/title_change happened to
+      // override it). Falling back to the LAST entry (not the first) still
+      // produces a real `todo` message, just with a non-active status —
+      // sessionContextMap reads that as a completion signal that clears
+      // the stale context, not as a new task to display.
+      todos[todos.length - 1] ??
       null;
     const content = typeof current?.content === "string" ? current.content : null;
     const status = typeof current?.status === "string" ? current.status : null;

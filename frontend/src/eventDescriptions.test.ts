@@ -469,6 +469,30 @@ describe("eventDescriptions (Phase 2, issue #176)", () => {
     });
   });
 
+  describe("describeEvent — session_diff (Graphify review, issue #903)", () => {
+    it("describes a single-file diff by name", () => {
+      const event = makeEvent({ kind: "session_diff", payload: { files: [{ file: "a.ts" }] } });
+      expect(describeEvent(event)).toEqual({ text: "Changed: a.ts", attention: false });
+    });
+
+    it("describes a multi-file diff by count", () => {
+      const event = makeEvent({
+        kind: "session_diff",
+        payload: { files: [{ file: "a.ts" }, { file: "b.ts" }] },
+      });
+      expect(describeEvent(event)).toEqual({ text: "Changed: 2 files", attention: false });
+    });
+
+    it("falls back to a plain count rather than throwing on a malformed single-file entry", () => {
+      // hook-protocol.ts's validateSessionDiff guarantees this can't happen
+      // on the wire today, but the frontend can't enforce that guarantee
+      // stays true across a version-skewed remote host or a persisted event
+      // from an older backend — must degrade gracefully, not throw.
+      const event = makeEvent({ kind: "session_diff", payload: { files: [null] } });
+      expect(describeEvent(event)).toEqual({ text: "Changed: 1 file", attention: false });
+    });
+  });
+
   describe("describeEvent — dev_server_detected (issue #404)", () => {
     it("describes the initial pending detection as attention-worthy, with the port", () => {
       const event = makeEvent({
@@ -599,6 +623,14 @@ describe("eventDescriptions (Phase 2, issue #176)", () => {
       expect(fileChangeBeatsSessionDiff.get(3)).toBe("edited a.ts");
     });
 
+    it("falls back to a plain count rather than throwing on a malformed single-file entry (Graphify review)", () => {
+      const events: NotificationEvent[] = [
+        makeEvent({ seq: 1, kind: "session_diff", payload: { files: [null] } }),
+        makeEvent({ seq: 2, kind: "attention", payload: { attention: true, signal: "silence" } }),
+      ];
+      expect(sessionContextMap(events).get(2)).toBe("changed 1 file");
+    });
+
     it("skips a title_change that merely repeats the session's own label", () => {
       const events: NotificationEvent[] = [
         makeEvent({ seq: 1, kind: "title_change", payload: { title: "make dev" } }),
@@ -607,7 +639,11 @@ describe("eventDescriptions (Phase 2, issue #176)", () => {
       expect(sessionContextMap(events, "make dev").get(2)).toBeUndefined();
     });
 
-    it("clears the in-progress todo once it moves to a different status, falling back to the last todo of any status", () => {
+    it("clears the todo context entirely once it completes, rather than keeping it displayed (Hermes review)", () => {
+      // Regression test: `anyTodo = content` unconditionally (the old
+      // behavior) kept showing a DONE task as "current work" until some
+      // unrelated later event overrode it — a terminal status is a
+      // completion signal, not new context.
       const events: NotificationEvent[] = [
         makeEvent({
           seq: 1,
@@ -621,7 +657,37 @@ describe("eventDescriptions (Phase 2, issue #176)", () => {
         }),
         makeEvent({ seq: 3, kind: "attention", payload: { attention: true, signal: "silence" } }),
       ];
-      expect(sessionContextMap(events).get(3)).toBe("▸ Wire the adapter");
+      expect(sessionContextMap(events).get(3)).toBeUndefined();
+    });
+
+    it("a completed todo falls back to a different in-progress todo, not to the completed one", () => {
+      const events: NotificationEvent[] = [
+        makeEvent({
+          seq: 1,
+          kind: "todo",
+          payload: { content: "Write tests", status: "in_progress" },
+        }),
+        makeEvent({
+          seq: 2,
+          kind: "todo",
+          payload: { content: "Write tests", status: "completed" },
+        }),
+        makeEvent({
+          seq: 3,
+          kind: "todo",
+          payload: { content: "Wire the adapter", status: "in_progress" },
+        }),
+        makeEvent({ seq: 4, kind: "attention", payload: { attention: true, signal: "silence" } }),
+      ];
+      expect(sessionContextMap(events).get(4)).toBe("▸ Wire the adapter");
+    });
+
+    it("a pending todo (not just in_progress) counts as active context", () => {
+      const events: NotificationEvent[] = [
+        makeEvent({ seq: 1, kind: "todo", payload: { content: "Write tests", status: "pending" } }),
+        makeEvent({ seq: 2, kind: "attention", payload: { attention: true, signal: "silence" } }),
+      ];
+      expect(sessionContextMap(events).get(2)).toBe("▸ Write tests");
     });
 
     it("records context as of BEFORE each event, not including that event's own contribution", () => {
