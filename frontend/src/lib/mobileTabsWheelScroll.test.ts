@@ -231,6 +231,54 @@ describe("attachMobileTabsEdgeState", () => {
     detach();
   });
 
+  // Hermes review round 2, PR #1224 — reproduced with a custom jsdom probe:
+  // a plain `{childList: true}` on `.mobile-tabs` only sees ITS OWN direct
+  // children change, not a grandchild inside a `.mobile-tab-wrap` — exactly
+  // what the bar's own rename flow does (App.tsx: swaps a tab's label for
+  // an `<input>`) or a title growing longer. `subtree`/`characterData` are
+  // what closes this.
+  it("re-evaluates when a tab's OWN content changes (subtree), not just when a tab is added/removed", async () => {
+    const wrap = document.createElement("div");
+    const label = document.createElement("span");
+    label.textContent = "Short";
+    wrap.appendChild(label);
+    el.appendChild(wrap);
+    setScrollState({ scrollLeft: 0, scrollWidth: 100, clientWidth: 100 });
+    const detach = attachMobileTabsEdgeState(el);
+    expect(el.classList.contains("at-end")).toBe(true);
+
+    // Simulates the rename flow swapping the label for an <input> — a
+    // childList change on `wrap` (a GRANDCHILD of `el`), not on `el`
+    // itself.
+    const input = document.createElement("input");
+    wrap.replaceChild(input, label);
+    setScrollState({ scrollWidth: 250 });
+    await Promise.resolve();
+
+    expect(el.classList.contains("at-end")).toBe(false);
+
+    detach();
+  });
+
+  it("re-evaluates when a tab's text content grows (characterData), e.g. a title update", async () => {
+    const wrap = document.createElement("div");
+    const label = document.createElement("span");
+    label.textContent = "Short";
+    wrap.appendChild(label);
+    el.appendChild(wrap);
+    setScrollState({ scrollLeft: 0, scrollWidth: 100, clientWidth: 100 });
+    const detach = attachMobileTabsEdgeState(el);
+    expect(el.classList.contains("at-end")).toBe(true);
+
+    label.firstChild!.textContent = "A much longer session title than before";
+    setScrollState({ scrollWidth: 250 });
+    await Promise.resolve();
+
+    expect(el.classList.contains("at-end")).toBe(false);
+
+    detach();
+  });
+
   it("stops reacting to scroll, resize, and DOM mutation once detached", async () => {
     setScrollState({ scrollLeft: 0, scrollWidth: 400, clientWidth: 100 });
     const detach = attachMobileTabsEdgeState(el);

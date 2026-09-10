@@ -39,11 +39,16 @@ export function attachMobileTabsWheelScroll(element: HTMLElement): () => void {
 const AT_END_EPSILON_PX = 1;
 
 function updateMobileTabsEdgeState(element: HTMLElement): void {
-  element.classList.toggle("at-start", element.scrollLeft <= 0);
-  element.classList.toggle(
-    "at-end",
-    element.scrollLeft + element.clientWidth >= element.scrollWidth - AT_END_EPSILON_PX,
-  );
+  // Read all three geometry values into locals BEFORE either classList
+  // write below (Hermes review) — toggling "at-start" first, then reading
+  // scrollLeft/clientWidth/scrollWidth again for "at-end", interleaves a
+  // style write between two geometry reads, forcing the browser to flush
+  // layout twice instead of once. Matters here specifically because this
+  // runs on every `scroll` event, i.e. potentially every frame of momentum
+  // scrolling.
+  const { scrollLeft, clientWidth, scrollWidth } = element;
+  element.classList.toggle("at-start", scrollLeft <= 0);
+  element.classList.toggle("at-end", scrollLeft + clientWidth >= scrollWidth - AT_END_EPSILON_PX);
 }
 
 /** Keeps `.at-start`/`.at-end` classes on `element` in sync with its scroll
@@ -53,17 +58,26 @@ function updateMobileTabsEdgeState(element: HTMLElement): void {
  *    needs to block the native scroll) — the user actually scrolling.
  *  - `ResizeObserver` on `element` itself — a CONTAINER size change (device
  *    rotation, the sidebar resizing, ...) that alters `clientWidth`.
- *  - `MutationObserver({ childList: true })` on `element` — a tab
- *    added/removed. This is NOT redundant with the ResizeObserver above:
- *    verified in real Chromium (Hermes review, PR #1224) that adding tabs
+ *  - `MutationObserver({ childList: true, subtree: true, characterData:
+ *    true })` on `element` — a tab added/removed, OR a tab's own content
+ *    changing width (a title getting longer, or the bar's own rename flow
+ *    swapping a tab's label for an `<input>` — App.tsx's mobile-tab-wrap
+ *    rename UI). `subtree`/`characterData` are load-bearing, not
+ *    redundant: a plain `{childList: true}` on `element` only sees ITS OWN
+ *    direct children change, not a grandchild inside a `.mobile-tab-wrap`
+ *    (Hermes review, PR #1224 — reproduced in jsdom: swapping a tab's
+ *    label for the rename input grows `scrollWidth` 400→460 with zero
+ *    fires from a childList-only observer). Also not redundant with the
+ *    ResizeObserver above: verified in real Chromium that adding tabs
  *    grows `scrollWidth` with ZERO ResizeObserver fires, since `element`'s
  *    OWN box (what a ResizeObserver on it actually watches) never changes
  *    when clipped overflow content grows — only `clientWidth`/`offsetWidth`
- *    do that, and those are exactly what stays fixed here. Without this,
- *    `.at-end` goes stale the moment a tab is added while already scrolled
- *    to the end, and only self-heals if something else happens to scroll
- *    the bar (e.g. the active-tab `scrollIntoView` in App.tsx — which a
- *    tab opened by another client/process never triggers).
+ *    do that, and those are exactly what stays fixed here. Without either
+ *    piece, `.at-end` can go stale while already scrolled to the end, and
+ *    only self-heals if something else happens to scroll the bar (e.g.
+ *    the active-tab `scrollIntoView` in App.tsx — which a tab opened by
+ *    another client/process, or a rename by that tab's own session, never
+ *    triggers).
  * All three are torn down together by the returned cleanup. */
 export function attachMobileTabsEdgeState(element: HTMLElement): () => void {
   updateMobileTabsEdgeState(element);
@@ -75,7 +89,7 @@ export function attachMobileTabsEdgeState(element: HTMLElement): () => void {
   resizeObserver.observe(element);
 
   const mutationObserver = new MutationObserver(() => updateMobileTabsEdgeState(element));
-  mutationObserver.observe(element, { childList: true });
+  mutationObserver.observe(element, { childList: true, subtree: true, characterData: true });
 
   return () => {
     element.removeEventListener("scroll", handleScroll);
