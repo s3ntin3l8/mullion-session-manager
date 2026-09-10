@@ -1511,13 +1511,20 @@
    `background-attachment: local` scroll-shadow layer, which paints behind
    them and would show through `.mobile-tab.active`'s own translucent
    highlight) while staying pinned to each edge of the scroll viewport.
-   Each fades to `var(--chrome)` — the bar's own background — so it is
-   invisible when the tabs don't reach that edge, and just fades the
-   nearest tab out when they do. Deliberately does NOT hide itself once
-   scrolled fully to that end (unlike a mask-based approach) — the fade
-   sits over the last/first tab regardless; a 24px fade over a 44px-tall
-   pill isn't an occlusion problem, and "there's more here" is the only
-   job this affordance has. */
+   Each fades to `var(--chrome)` — the bar's own background.
+   `.at-start`/`.at-end` (toggled by lib/mobileTabsWheelScroll.ts's
+   attachMobileTabsEdgeState, App.tsx) hide the fade on whichever side has
+   nothing left to scroll to — needed for the LEFT fade specifically: as
+   the first flex item, it always overlaps tab 1's leading edge regardless
+   of scroll position, including at rest with nothing to scroll to on that
+   side at all (Hermes review, PR #1224 — verified in real Chromium). The
+   right fade doesn't strictly need this (it naturally sits past the last
+   tab in the untouched trailing track once there's no overflow, so it's
+   already invisible there), but gets the same treatment for symmetry and
+   to hide once genuinely scrolled to the end. `z-index: 1` guards against
+   a future positioned tab (e.g. `position: relative` for a badge) painting
+   over these — verified without it, DOM order alone lets an earlier
+   positioned sibling win paint order over `::before`. */
 .mobile-tabs::before,
 .mobile-tabs::after {
   content: "";
@@ -1525,9 +1532,15 @@
   flex: 0 0 24px;
   align-self: stretch;
   pointer-events: none;
+  z-index: 1;
 }
 .mobile-tabs::before {
-  left: 0;
+  /* -8px (not 0) reaches the bar's true visual edge — `left`/`right` on a
+     sticky element inside `.mobile-tabs` are relative to ITS OWN padding
+     edge, and the bar has `padding: 7px 8px` (verified: ramp otherwise
+     starts 8px in from the edge, leaving a strip of unfaded content even
+     at full scroll). */
+  left: -8px;
   /* -24px cancels the pseudo-element's own flex-basis so it overlays
      rather than reserving track width; the extra -5px cancels the
      container's own `gap`, which flexbox still inserts between this
@@ -1537,10 +1550,16 @@
   margin-right: calc(-24px - 5px);
   background: linear-gradient(to left, transparent, var(--chrome));
 }
+.mobile-tabs.at-start::before {
+  opacity: 0;
+}
 .mobile-tabs::after {
-  right: 0;
+  right: -8px;
   margin-left: calc(-24px - 5px);
   background: linear-gradient(to right, transparent, var(--chrome));
+}
+.mobile-tabs.at-end::after {
+  opacity: 0;
 }
 /* Mobile UI/UX overhaul, item A.5 — one wrap per panel so the active pane's
    trailing close/kebab buttons (added conditionally in App.tsx) sit next to

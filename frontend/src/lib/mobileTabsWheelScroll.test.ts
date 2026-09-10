@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach } from "vitest";
-import { attachMobileTabsWheelScroll } from "./mobileTabsWheelScroll.js";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { attachMobileTabsWheelScroll, attachMobileTabsEdgeState } from "./mobileTabsWheelScroll.js";
 
 function setOverflowing(el: HTMLElement, overflowing: boolean) {
   Object.defineProperty(el, "scrollWidth", { value: overflowing ? 400 : 100, configurable: true });
@@ -78,5 +78,143 @@ describe("attachMobileTabsWheelScroll", () => {
     const event = dispatchWheel(el, 40);
     expect(event.defaultPrevented).toBe(false);
     expect(el.scrollLeft).toBe(0);
+  });
+});
+
+// Issue #960 (Hermes review, PR #1224) — a real Chromium render found the
+// left fade always overlapping tab 1's leading edge even at rest, since
+// sticky positioning alone can't tell "at the very start" from "scrolled
+// partway". These classes are what sidebar.css keys the fade's opacity off.
+describe("attachMobileTabsEdgeState", () => {
+  let el: HTMLDivElement;
+  // jsdom has no real ResizeObserver — stubbed to capture the callback so
+  // tests can fire it manually, same shape as PaneTab.test.tsx's stub but
+  // capturing (rather than discarding) the callback since this suite
+  // exercises the observer firing, not just that observe()/disconnect()
+  // don't throw.
+  let resizeCallback: (() => void) | null;
+
+  beforeEach(() => {
+    el = document.createElement("div");
+    document.body.appendChild(el);
+    resizeCallback = null;
+    vi.stubGlobal(
+      "ResizeObserver",
+      vi.fn(function (this: unknown, callback: () => void) {
+        resizeCallback = callback;
+        // A real ResizeObserver stops notifying once disconnected — mirror
+        // that here (rather than a bare `vi.fn()`) so the "stops reacting
+        // once detached" test below is exercising realistic semantics, not
+        // a stub that keeps firing after disconnect.
+        return {
+          observe: vi.fn(),
+          unobserve: vi.fn(),
+          disconnect: vi.fn(() => (resizeCallback = null)),
+        };
+      }),
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function setScrollState(overrides: {
+    scrollLeft?: number;
+    scrollWidth?: number;
+    clientWidth?: number;
+  }) {
+    if (overrides.scrollLeft !== undefined) {
+      Object.defineProperty(el, "scrollLeft", { value: overrides.scrollLeft, configurable: true });
+    }
+    if (overrides.scrollWidth !== undefined) {
+      Object.defineProperty(el, "scrollWidth", {
+        value: overrides.scrollWidth,
+        configurable: true,
+      });
+    }
+    if (overrides.clientWidth !== undefined) {
+      Object.defineProperty(el, "clientWidth", {
+        value: overrides.clientWidth,
+        configurable: true,
+      });
+    }
+  }
+
+  it("sets both at-start and at-end immediately when the bar doesn't overflow at all", () => {
+    setScrollState({ scrollLeft: 0, scrollWidth: 100, clientWidth: 100 });
+    const detach = attachMobileTabsEdgeState(el);
+
+    expect(el.classList.contains("at-start")).toBe(true);
+    expect(el.classList.contains("at-end")).toBe(true);
+
+    detach();
+  });
+
+  it("is at-start only when scrolled to the very beginning of an overflowing bar", () => {
+    setScrollState({ scrollLeft: 0, scrollWidth: 400, clientWidth: 100 });
+    const detach = attachMobileTabsEdgeState(el);
+
+    expect(el.classList.contains("at-start")).toBe(true);
+    expect(el.classList.contains("at-end")).toBe(false);
+
+    detach();
+  });
+
+  it("is neither at-start nor at-end when scrolled partway", () => {
+    setScrollState({ scrollLeft: 0, scrollWidth: 400, clientWidth: 100 });
+    const detach = attachMobileTabsEdgeState(el);
+
+    setScrollState({ scrollLeft: 150 });
+    el.dispatchEvent(new Event("scroll"));
+
+    expect(el.classList.contains("at-start")).toBe(false);
+    expect(el.classList.contains("at-end")).toBe(false);
+
+    detach();
+  });
+
+  it("is at-end only once scrolled to the far end, tolerating sub-pixel rounding", () => {
+    setScrollState({ scrollLeft: 0, scrollWidth: 400, clientWidth: 100 });
+    const detach = attachMobileTabsEdgeState(el);
+
+    // 300.5 + 99.5 = 400 exactly; a non-integer-DPR layout can land here.
+    setScrollState({ scrollLeft: 300.5, clientWidth: 99.5 });
+    el.dispatchEvent(new Event("scroll"));
+
+    expect(el.classList.contains("at-start")).toBe(false);
+    expect(el.classList.contains("at-end")).toBe(true);
+
+    detach();
+  });
+
+  it("re-evaluates when the ResizeObserver fires, not just on scroll", () => {
+    setScrollState({ scrollLeft: 0, scrollWidth: 400, clientWidth: 100 });
+    const detach = attachMobileTabsEdgeState(el);
+    expect(el.classList.contains("at-end")).toBe(false);
+
+    // A tab was removed, e.g. a session closed — content now fits, so
+    // scrollWidth shrinks to clientWidth, with no 'scroll' event involved.
+    setScrollState({ scrollWidth: 100 });
+    resizeCallback?.();
+
+    expect(el.classList.contains("at-start")).toBe(true);
+    expect(el.classList.contains("at-end")).toBe(true);
+
+    detach();
+  });
+
+  it("stops reacting to scroll and resize once detached", () => {
+    setScrollState({ scrollLeft: 0, scrollWidth: 400, clientWidth: 100 });
+    const detach = attachMobileTabsEdgeState(el);
+    detach();
+
+    setScrollState({ scrollLeft: 350 });
+    el.dispatchEvent(new Event("scroll"));
+    resizeCallback?.();
+
+    // Still reflects the state as of detach, not the post-detach scroll.
+    expect(el.classList.contains("at-start")).toBe(true);
+    expect(el.classList.contains("at-end")).toBe(false);
   });
 });

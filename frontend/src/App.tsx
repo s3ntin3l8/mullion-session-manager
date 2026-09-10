@@ -51,7 +51,10 @@ import { useDragResize } from "./hooks/useDragResize.js";
 import { useWorkspacePersistence } from "./hooks/useWorkspacePersistence.js";
 import { useCoarsePointer } from "./lib/layoutTier.js";
 import type { LayoutTier, LayoutContext } from "./lib/layoutTier.js";
-import { attachMobileTabsWheelScroll } from "./lib/mobileTabsWheelScroll.js";
+import {
+  attachMobileTabsWheelScroll,
+  attachMobileTabsEdgeState,
+} from "./lib/mobileTabsWheelScroll.js";
 import { attachSidebarSwipeGesture } from "./lib/sidebarSwipeGesture.js";
 import { useSessionDeepLink } from "./hooks/useSessionDeepLink.js";
 import { useLayoutPresentation } from "./hooks/useLayoutPresentation.js";
@@ -478,12 +481,20 @@ export function App() {
   // when isMobile is true — a desktop-first mount would otherwise find
   // `mobileTabsRef.current` null and never re-attach on a later
   // desktop-to-mobile resize. See lib/mobileTabsWheelScroll.ts for why this
-  // is a manually-attached native listener rather than a JSX onWheel prop.
+  // is a manually-attached native listener rather than a JSX onWheel prop,
+  // and for why the edge-state tracker (issue #960's fade affordance) is a
+  // second, independent listener pair on the same element rather than
+  // folded into the wheel handler above.
   useEffect(() => {
     if (!isMobile) return;
     const el = mobileTabsRef.current;
     if (!el) return;
-    return attachMobileTabsWheelScroll(el);
+    const detachWheel = attachMobileTabsWheelScroll(el);
+    const detachEdgeState = attachMobileTabsEdgeState(el);
+    return () => {
+      detachWheel();
+      detachEdgeState();
+    };
   }, [isMobile]);
 
   // Sidebar session drag-to-dock — dragging a session row out of the Sidebar
