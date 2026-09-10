@@ -423,10 +423,15 @@ export function PaneActionsMenu({
                 <span style={{ flex: 1 }}>Split down</span>
               </button>
             )}
+            {/* aria-disabled, not the native `disabled` attribute — a
+                disabled button doesn't reliably carry an explanatory
+                `title` across engines (issue #1106, same fix applied to
+                KebabMenu.tsx). No onClick here at all, so there's nothing
+                for a click guard to intercept. */}
             <button
               className="pane-tab-overflow-item"
               role="menuitem"
-              disabled
+              aria-disabled="true"
               title="Drag the tab to move it between panes/workspaces"
             >
               <MoveIcon size={14} style={{ color: "var(--muted)" }} />
@@ -447,17 +452,24 @@ export function PaneActionsMenu({
                 resetTiledGroupWidths itself has nothing eligible to
                 redistribute — fewer than two tiled groups, or a multi-row
                 grid the same-row heuristic rejects — same
-                disabled+explanatory-title pattern as "Move (drag tab)"
+                aria-disabled+explanatory-title pattern as "Move (drag tab)"
                 above, rather than leaving a user-invoked "repair my layout"
                 action clickable with no way to tell whether it did
                 anything. `canReset` (computed above, once, only while the
-                menu is open) rather than re-deriving it here twice. */}
+                menu is open) rather than re-deriving it here twice.
+                aria-disabled, not `disabled` (issue #1106) — a disabled
+                button doesn't reliably carry the explanatory `title`, so
+                the guard against firing when `!canReset` moves into the
+                onClick handler itself instead. */}
             <button
               className="pane-tab-overflow-item"
               role="menuitem"
-              disabled={!canReset}
+              aria-disabled={!canReset || undefined}
               title={canReset ? undefined : "No skewed row of tiled panes to reset"}
-              onClick={() => closeMenuAfterAction(() => resetTiledGroupWidths(containerApi))}
+              onClick={() => {
+                if (!canReset) return;
+                closeMenuAfterAction(() => resetTiledGroupWidths(containerApi));
+              }}
             >
               <GridIcon size={14} style={{ color: "var(--muted)" }} />
               <span style={{ flex: 1 }}>Reset pane sizes</span>
