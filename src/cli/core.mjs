@@ -131,6 +131,13 @@ const NOUNS = new Set(["session", "browser", "project", "preview", "dock", "even
 export function resolveCommand(rest) {
   const [first, ...tail] = rest;
   if (first === undefined) return { error: "no command given — see 'mullion --help'" };
+  if (first === "helper") {
+    return {
+      error:
+        "'mullion helper' has moved to the Mullion Helper tray app — " +
+        "install it from https://github.com/s3ntin3l8/mullion-helper/releases/latest",
+    };
+  }
   if (Object.prototype.hasOwnProperty.call(TOP_LEVEL_ALIASES, first)) {
     const [noun, verb] = TOP_LEVEL_ALIASES[first];
     return { noun, verb, args: tail };

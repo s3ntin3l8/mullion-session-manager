@@ -6,9 +6,10 @@
 // on the end that does NOT own the real agent socket. The authoritative
 // enforcement point is the Mullion Helper worker, which owns the real agent
 // socket and independently implements this policy. Both copies must classify
-// identically: test/fixtures/ssh-agent-filter-vectors.json (generated FROM
-// this file's SSH_AGENT_REQUEST_TYPE_VECTORS) is the shared contract their
-// test suites validate against.
+// identically: test/fixtures/ssh-agent-filter-vectors.json is generated FROM
+// this file's SSH_AGENT_REQUEST_TYPE_VECTORS. Mullion Helper vendors a
+// source-commit-identified snapshot of that versioned contract and validates
+// its worker against it, so protocol changes must update both repositories.
 //
 // This module only ever classifies REQUESTS (the client->agent direction,
 // SSH_AGENTC_* below) — the real agent's own REPLIES (SSH_AGENT_* success/

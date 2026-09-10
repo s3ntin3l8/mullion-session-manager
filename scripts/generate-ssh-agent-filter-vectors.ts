@@ -7,8 +7,10 @@
 //
 // A `.ts` file (run via the existing `tsx` devDependency) so it can import
 // the real, typed SSH_AGENT_REQUEST_TYPE_VECTORS table from src/services/.
-// Mullion Helper consumes the checked-in JSON output without depending on
-// this repository's TypeScript source.
+// Mullion Helper vendors a source-commit-identified snapshot of the checked-in
+// JSON output without depending on this repository's TypeScript source. Its
+// tests validate the worker against that snapshot; protocol changes therefore
+// require updating and testing the versioned fixture in both repositories.
 //
 // Two modes, mirroring check-env-docs.mjs/check-scaffold-region-sync.mjs's own
 // dual "regenerate" / "--check" shape:
