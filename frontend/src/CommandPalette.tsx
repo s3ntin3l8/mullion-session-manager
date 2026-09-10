@@ -821,7 +821,7 @@ export function CommandPalette({
                         Mullion Briefing: {target?.name ?? "this project"}
                       </span>
                       <span className="cmd-row-subtitle">
-                        DB-authored — overrides any committed AGENTS.md briefing region
+                        DB-authored — always additive on top of the committed AGENTS.md
                       </span>
                     </span>
                   </button>
