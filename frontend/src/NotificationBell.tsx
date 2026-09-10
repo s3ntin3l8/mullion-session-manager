@@ -3,7 +3,13 @@ import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { eventKey, useDashboardStore } from "./store/index.js";
-import { describeEvent, notifyKind, notifyLabel, notifySeverity } from "./eventDescriptions.js";
+import {
+  describeEvent,
+  notifyKind,
+  notifyLabel,
+  notifySeverity,
+  sessionContextMap,
+} from "./eventDescriptions.js";
 import { api } from "./api/index.js";
 import type { NotificationEvent, Project, Session } from "./api/index.js";
 import { BellIcon, BlockedIcon, CheckIcon, CloseIcon, WarningTriangleIcon } from "./ui/icons.js";
@@ -66,9 +72,18 @@ interface FeedEventItem {
   type: "event";
   sessionId: number;
   // The newest event in this row's group — its own seq/ts/payload drive the
-  // row's icon/pill/text/age. See `foldedSeqs` below for why this alone
-  // isn't enough to fully describe a collapsed row.
+  // row's icon/pill/age. See `foldedSeqs` below for why this alone isn't
+  // enough to fully describe a collapsed row.
   event: NotificationEvent;
+  // Issue #903 — the row's actual display text, decided in buildFeedItems
+  // BEFORE folding (see foldConsecutiveRows' own comment for why fold order
+  // matters here): describeEvent(event).text, unless that description is
+  // `generic: true` (content-free — "Gone quiet — needs input" says nothing
+  // about this session) AND sessionContextMap has something better for this
+  // event's own seq, in which case this is that context line instead. Kept
+  // on the item rather than recomputed in EventRow so the substitution and
+  // the fold decision can never disagree about what a row's text actually is.
+  text: string;
   read: boolean;
   // Making notifications relevant/scannable — every event this row
   // represents, newest first, always including `event.seq` itself
@@ -87,30 +102,50 @@ type FeedItem = FeedHeaderItem | FeedEventItem;
 // row carrying a repeat count, so e.g. 25 auto-approved opencode
 // `external_directory` permission asks for the same glob pattern show as one
 // "×25" row instead of 25 visually-identical ones. "Identical" is
-// (severity, described text) — text alone would also fold e.g. a `bell` and
-// a `hookNotification` that happen to produce the same generic fallback
-// text, which severity keeps distinct. Deliberately does NOT fold non-
-// adjacent duplicates (an unrelated event in between breaks the run) — that
-// preserves chronological reading order rather than reordering the feed
-// around a foldable value.
+// (severity, label, described text). `label` (issue #903, code review) is
+// load-bearing, not redundant with severity: every one of describeEvent's
+// `generic: true` signals (bell/titleIdle/altScreenExit/silence/agentIdle/
+// bare hookNotification) shares the SAME severity ("done" — see
+// notifySeverity's own fallthrough), and sessionContextMap substitution can
+// now also give two of them the SAME text (e.g. a `bell` immediately
+// followed by a `silence`, with no file_change/todo/title_change event in
+// between to change the derived context) — `(severity, text)` alone would
+// wrongly fold those into one row, discarding the fact that two DIFFERENT
+// things happened. `label` (notifyLabel — the row's own kind pill: "Bell"
+// vs "Silence") is what still tells them apart. Deliberately does NOT fold
+// non-adjacent duplicates (an unrelated event in between breaks the run) —
+// that preserves chronological reading order rather than reordering the
+// feed around a foldable value.
 function foldConsecutiveRows(
-  rows: { event: NotificationEvent; read: boolean; text: string; severity: string | null }[],
-): { event: NotificationEvent; read: boolean; foldedSeqs: number[] }[] {
+  rows: {
+    event: NotificationEvent;
+    read: boolean;
+    text: string;
+    label: string;
+    severity: string | null;
+  }[],
+): { event: NotificationEvent; read: boolean; text: string; foldedSeqs: number[] }[] {
   const folded: {
     event: NotificationEvent;
     read: boolean;
     foldedSeqs: number[];
     text: string;
+    label: string;
     severity: string | null;
   }[] = [];
   for (const row of rows) {
     const last = folded[folded.length - 1];
-    if (last && last.severity === row.severity && last.text === row.text) {
+    if (
+      last &&
+      last.severity === row.severity &&
+      last.label === row.label &&
+      last.text === row.text
+    ) {
       last.foldedSeqs.push(row.event.seq);
       // The representative event stays the NEWEST of the group (`rows`
       // arrives newest-first, so `last` was already set from the first —
-      // i.e. newest — row of this run) — `event`/`read`/`text`/`severity`
-      // are intentionally left untouched here.
+      // i.e. newest — row of this run) — `event`/`read`/`text`/`label`/
+      // `severity` are intentionally left untouched here.
       continue;
     }
     folded.push({
@@ -118,10 +153,15 @@ function foldConsecutiveRows(
       read: row.read,
       foldedSeqs: [row.event.seq],
       text: row.text,
+      label: row.label,
       severity: row.severity,
     });
   }
-  return folded.map(({ event, read, foldedSeqs }) => ({ event, read, foldedSeqs }));
+  // `text` (issue #903) is kept in the output now — it's the row's already-
+  // decided display text (see FeedEventItem.text's own comment), not just a
+  // fold-decision input to discard once folding is done. `label`/`severity`
+  // stay fold-decision-only, same as before.
+  return folded.map(({ event, read, text, foldedSeqs }) => ({ event, read, text, foldedSeqs }));
 }
 
 // Turns the raw per-session event slices into one flat, virtualizable list:
@@ -138,21 +178,36 @@ function buildFeedItems(
 ): FeedItem[] {
   const groups: {
     session: Session;
-    rows: { event: NotificationEvent; read: boolean; foldedSeqs: number[] }[];
+    rows: { event: NotificationEvent; read: boolean; text: string; foldedSeqs: number[] }[];
   }[] = [];
 
   for (const session of sessions) {
     const sessionEvents = events[session.id];
     if (!sessionEvents || sessionEvents.length === 0) continue;
     const cursor = lastSeenSeq[session.id] ?? 0;
+    // Issue #903 — one context map per session, built once up front (NOT
+    // per row — see sessionContextMap's own comment for why a per-row scan
+    // would be O(rows × events) on every tick this panel is open).
+    const contextMap = sessionContextMap(sessionEvents, session.name || session.command);
     const rawRows = sessionEvents
       .filter((e) => notifyKind(e) !== null && !dismissedEventKeys[eventKey(session.id, e.seq)])
-      .map((e) => ({
-        event: e,
-        read: e.seq <= cursor,
-        text: describeEvent(e)?.text ?? "Event",
-        severity: notifySeverity(e),
-      }))
+      .map((e) => {
+        const described = describeEvent(e);
+        // Only a content-free row's OWN text is ever replaced — one that
+        // already carries real content (a permission summary, a question
+        // header, ...) keeps it untouched, substitution or not.
+        const context = described?.generic ? contextMap.get(e.seq) : undefined;
+        return {
+          event: e,
+          read: e.seq <= cursor,
+          text: context ?? described?.text ?? "Event",
+          // Code review (issue #903) — see foldConsecutiveRows' own comment
+          // for why this is load-bearing, not redundant with severity, once
+          // generic rows can share substituted text.
+          label: notifyLabel(e),
+          severity: notifySeverity(e),
+        };
+      })
       .sort((a, b) => b.event.seq - a.event.seq);
     const rows = foldConsecutiveRows(rawRows);
     if (rows.length > 0) groups.push({ session, rows });
@@ -174,6 +229,7 @@ function buildFeedItems(
         type: "event",
         sessionId: group.session.id,
         event: row.event,
+        text: row.text,
         read: row.read,
         foldedSeqs: row.foldedSeqs,
       });
@@ -554,10 +610,15 @@ function EventRow({
   onMarkRead: () => void;
   onDismiss: () => void;
 }) {
-  const described = describeEvent(item.event);
   const { icon, className } = kindTreatment(item.event);
   const age = formatRelativeAge(item.event.ts);
-  const fullText = described?.text ?? "Event";
+  // Issue #903 — buildFeedItems already decided this row's actual text
+  // (describeEvent's own text, or a sessionContextMap substitute for a
+  // generic row — see FeedEventItem.text's own comment); re-deriving via
+  // describeEvent(item.event) here would only recompute the PRE-
+  // substitution text and, for a folded row, disagree with whatever text
+  // the fold decision above was actually keyed on.
+  const fullText = item.text;
   // Making notifications relevant/scannable — head-truncated (see
   // truncatePath.ts's own comment for why: a permission summary's ONLY
   // distinguishing part is usually its tail, and CSS ellipsis cuts the

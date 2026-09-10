@@ -223,6 +223,78 @@ export type HookHandler = (ctx: SessionHookContext, message: HookMessage) => voi
  * (pty-manager.ts) treats that as a silent no-op, same as the original
  * switch's `default: return`.
  */
+// Issue #903 — Claude Code's generic Notification hook ("Claude needs your
+// permission") fires ALONGSIDE a structured ask this session already latched
+// via its own dedicated hook (PermissionRequest -> permission_request/
+// question, the plan-mode dialog -> plan_ready, ...). Both reach the
+// notification panel as their own row, so one dialog produced two: a
+// content-free "Claude Code — Claude needs your permission" stacked on top
+// of (or, since these are two independent hook subprocesses racing each
+// other, sometimes below) the specific "Needs answer: <header>" row that
+// already says the same thing better.
+//
+// A bare "is a latch pending right now" check is unsafe on its own: several
+// of these latches are known to get stuck pending past their own dialog
+// (see the "Fix: sticky needs_input (D4)" comment on the `progress:done`
+// case below, and the live incident it names — 2026-08-14, session 331 —
+// plus clearStaleBlockedIfOlderThan's whole reason for existing). Suppressing
+// on a stale latch wouldn't just mis-render a status dot, it would silently
+// drop every future notification for that session until the staleness sweep
+// clears it — worse than the duplicate row this is fixing. Bounding the
+// check to a short recency window keeps it scoped to "this notification's
+// own dialog", not "any dialog this session ever raised" — but the bound has
+// to be measured from when the latch was RAISED (what `*At` actually
+// records), not from "now" relative to a fixed reference, and a dialog can
+// stay genuinely pending — unanswered, not stale — for much longer than any
+// reasonable window. So this is a best-effort content-correlation proxy, not
+// a guarantee: a truly unrelated notification arriving from some OTHER
+// channel while an unrelated ask is still within its first few seconds of
+// being raised would also be (wrongly) suppressed. Kept short — matching
+// ATTENTION_SETTLE_MS's own `permissionRequest`/`toolFailure`/`apiError`
+// precedent (2000ms, below) — specifically to minimize that window, since
+// the two hooks this is actually correlating (the generic Notification and
+// its paired structured ask) fire within milliseconds of each other in
+// practice, per the "just now"/"just now" timestamps in the reported case.
+//
+// Deliberately NOT solved by delaying hookNotification itself through
+// ATTENTION_SETTLE_MS (attention-tracker.ts) — that file's own doc comment
+// on the constant already reasons through exactly this case and rejects it:
+// hookNotification fires alongside a specific kind that already carries its
+// own settle window, so delaying hookNotification too "would just duplicate
+// the specific kind's own window for no benefit". It also wouldn't fix the
+// ordering below.
+//
+// Known limitation (code review) — this only catches ONE race ordering: the
+// structured ask's own hook setting its latch BEFORE the generic Notification
+// hook is processed. If the generic Notification arrives and is processed
+// FIRST (before the paired latch is set), this check sees an idle latch and
+// does not suppress — the original duplicate-row symptom reappears for that
+// ordering. Both are independent forwarder subprocesses with no ordering
+// guarantee (see the doc comment above), so this is a real, accepted gap,
+// not an oversight — see
+// test/services/pty-manager.test.ts's own test documenting it.
+const RECENT_STRUCTURED_ASK_MS = 2_000;
+
+// Code review (issue #903) — this hand-enumerates every current "structured
+// ask" state/timestamp pair; nothing (type-level or otherwise) enforces it
+// stays in sync with SessionHookContext. A future 7th latch added the same
+// way `gateState`/`promoteState`/etc. were will silently NOT participate in
+// this suppression unless it's added here too — the original duplicate-row
+// symptom would then reappear for just that one ask kind. Update this
+// alongside any new `*State: "pending"`/`*At` pair.
+function hasRecentStructuredAsk(ctx: SessionHookContext): boolean {
+  const now = Date.now();
+  const recent = (at: number | null) => at !== null && now - at < RECENT_STRUCTURED_ASK_MS;
+  return (
+    (ctx.questionState === "pending" && recent(ctx.questionAt)) ||
+    (ctx.permissionState === "pending" && recent(ctx.permissionAt)) ||
+    (ctx.planState === "pending" && recent(ctx.planAt)) ||
+    (ctx.promoteState === "pending" && recent(ctx.promoteAt)) ||
+    (ctx.elicitationState === "pending" && recent(ctx.elicitationAt)) ||
+    (ctx.gateState === "waiting" && recent(ctx.gateAt))
+  );
+}
+
 export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, HookHandler>([
   [
     "notification",
@@ -237,6 +309,8 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
       // a kind matching this literal, so the runtime value is always really
       // a NotificationHookMessage.
       const notification = message as NotificationHookMessage;
+      // Issue #903 — see hasRecentStructuredAsk's own doc comment above.
+      if (hasRecentStructuredAsk(ctx)) return;
       ctx.emitAttentionSignalWithExtras("hookNotification", {
         title: notification.title,
         body: notification.body,

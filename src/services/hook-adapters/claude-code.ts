@@ -202,10 +202,24 @@ export function buildClaudeHookSettings(
           // real release path for `planState` — is unverified: check live,
           // and drop this from the matcher list if it doesn't fire), and any
           // MCP tool (`mcp__<server>__<tool>`, permission-gated by default).
-          // Read/Grep/Glob/Task/TodoWrite are deliberately NOT matched here —
-          // none of them can prompt, so there's nothing to release and no
-          // reason to pay a forwarder spawn on every one of them.
+          // Read/Grep/Glob/Task are deliberately NOT matched here — none of
+          // them can prompt, so there's nothing to release and no reason to
+          // pay a forwarder spawn on every one of them. TodoWrite used to be
+          // excluded on the same grounds; it now gets its own matcher below
+          // (issue #903) — the spawn cost is worth paying there, but it still
+          // can't prompt, so it stays out of THIS group.
           matcher: "AskUserQuestion|WebFetch|WebSearch|ExitPlanMode|mcp__.*",
+          ...hookEntry(execPath, forwarderPath, "PostToolUse"),
+        },
+        {
+          // Issue #903 — the model's current task, forwarded as a `todo`
+          // message (see forwarder-core's mapClaudeCodePostToolUse) for the
+          // notification panel's context line. Its own matcher group, not
+          // folded into one of the ones above: TodoWrite can't raise a
+          // permission/plan dialog (see the comment just above), so this
+          // exists purely for the `todo` message, at the cost of one
+          // forwarder spawn per TodoWrite call — roughly 5-20 per turn.
+          matcher: "TodoWrite",
           ...hookEntry(execPath, forwarderPath, "PostToolUse"),
         },
       ],
@@ -336,6 +350,8 @@ export const CLAUDE_CODE_EMITS = [
   // that status as unreachable for claude-code and render its dot
   // `.estimated`.
   "question",
+  // Issue #903 — the TodoWrite matcher above.
+  "todo",
 ] as const;
 
 export function buildClaudeMcpConfig(

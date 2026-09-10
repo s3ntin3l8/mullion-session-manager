@@ -201,6 +201,69 @@ describe("mapClaudeCodePostToolUse", () => {
   it("returns null when tool_name itself is missing (nothing to tag a tool_done with)", () => {
     expect(mapClaudeCodePostToolUse({ tool_input: { file_path: "/repo/a.ts" } })).toBeNull();
   });
+
+  // Issue #903 — TodoWrite forwarding: one `todo` message per call, not one
+  // per todo item (the panel only ever needs the CURRENT task).
+  describe("TodoWrite (issue #903)", () => {
+    it("prefers the in_progress todo over an earlier pending one", () => {
+      expect(
+        mapClaudeCodePostToolUse({
+          tool_name: "TodoWrite",
+          tool_input: {
+            todos: [
+              { content: "Write tests", status: "pending" },
+              { content: "Wire the adapter", status: "in_progress" },
+            ],
+          },
+        }),
+      ).toEqual([
+        { kind: "todo", content: "Wire the adapter", status: "in_progress" },
+        { kind: "tool_done", tool: "TodoWrite" },
+      ]);
+    });
+
+    it("falls back to the first pending todo when none is in_progress", () => {
+      expect(
+        mapClaudeCodePostToolUse({
+          tool_name: "TodoWrite",
+          tool_input: {
+            todos: [
+              { content: "Already done", status: "completed" },
+              { content: "Write tests", status: "pending" },
+              { content: "Ship it", status: "pending" },
+            ],
+          },
+        }),
+      ).toEqual([
+        { kind: "todo", content: "Write tests", status: "pending" },
+        { kind: "tool_done", tool: "TodoWrite" },
+      ]);
+    });
+
+    it("falls back to the last entry (a completion signal, not a task) when every todo is completed (Hermes review)", () => {
+      // Without this fallback, sessionContextMap on the frontend had no way
+      // to learn the in-progress task it was showing had actually finished —
+      // it kept displaying the stale content until an unrelated later event
+      // happened to override it. A `todo` message with a non-active status
+      // is what lets it clear that context instead of a new task to display.
+      expect(
+        mapClaudeCodePostToolUse({
+          tool_name: "TodoWrite",
+          tool_input: { todos: [{ content: "Done", status: "completed" }] },
+        }),
+      ).toEqual([
+        { kind: "todo", content: "Done", status: "completed" },
+        { kind: "tool_done", tool: "TodoWrite" },
+      ]);
+    });
+
+    it("returns a bare tool_done when tool_input has no todos array", () => {
+      expect(mapClaudeCodePostToolUse({ tool_name: "TodoWrite", tool_input: {} })).toEqual({
+        kind: "tool_done",
+        tool: "TodoWrite",
+      });
+    });
+  });
 });
 
 describe("mapClaudeCodeEvent", () => {
@@ -2123,6 +2186,14 @@ describe("hook adapter emits capability parity (issue: extend surfaced session s
       PostToolUse: [
         { tool_name: "Write", tool_input: { file_path: "x" } },
         { tool_name: "Bash", tool_input: { command: "git worktree add -b fix /tmp/wt" } },
+        // Issue #903 — without a TodoWrite payload here, "todo" declared in
+        // CLAUDE_CODE_EMITS with no payload ever producing it is invisible
+        // to this parity check (same "AskUserQuestion mislabelled" gap the
+        // comment above already flags for PermissionRequest).
+        {
+          tool_name: "TodoWrite",
+          tool_input: { todos: [{ content: "Wire the adapter", status: "in_progress" }] },
+        },
       ],
       PermissionRequest: [
         { tool_name: "Bash", tool_input: { command: "npm test" } },
