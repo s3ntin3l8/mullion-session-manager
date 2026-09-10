@@ -1,8 +1,10 @@
 name: Hermes (review)
 
 # Two ways to get a review from the s3ntin3l8-hermes bot:
-#   1. auto-review    -> exactly once per PR: on `opened` if it starts non-draft,
-#      or on `ready_for_review` if it starts as a draft.
+#   1. auto-review    -> once per PR unless the prior review was dismissed:
+#      on `opened` if it starts non-draft, or on `ready_for_review` if it
+#      starts as a draft (the guard counts only non-dismissed reviews, so
+#      dismissing re-arms the next draft<->ready flip).
 #   2. on-demand-review -> comment "@s3ntin3l8-hermes Review" (or "Triage" on
 #      an issue) any time you want another look -- including every follow-up
 #      after the initial auto-review.
