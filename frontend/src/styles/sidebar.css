@@ -1470,9 +1470,11 @@
 
 .mobile-tabs {
   display: none;
-  /* Issue #960 — a flex item with `overflow-x: auto` needs an explicit
-     `min-width: 0` or it can refuse to shrink below its content's natural
-     width, clipping instead of scrolling. */
+  /* Issue #960 — defensive only: `.mobile-tabs` sits in `.grid-area-body`,
+     a COLUMN flex container, where the flex auto-minimum-size quirk this
+     would guard against applies to height, not width (verified — removing
+     this line doesn't change measured overflow here). Kept in case a
+     future layout change nests this in a row flex parent instead. */
   min-width: 0;
   flex-shrink: 0;
   align-items: center;
@@ -1491,6 +1493,11 @@
   scrollbar-width: none;
   background: var(--chrome);
   border-bottom: 1px solid var(--border);
+  /* -webkit-overflow-scrolling: touch removed here — a no-op since iOS 13,
+     and historically known to force its own compositing layer on iOS
+     Safari, which can interact oddly with the position: sticky fade
+     pseudo-elements below. Not re-added as a quick fix for a future iOS
+     momentum-scrolling regression without checking that interaction. */
 }
 .mobile-tabs::-webkit-scrollbar {
   display: none;
@@ -1521,12 +1528,18 @@
 }
 .mobile-tabs::before {
   left: 0;
-  margin-right: -24px;
+  /* -24px cancels the pseudo-element's own flex-basis so it overlays
+     rather than reserving track width; the extra -5px cancels the
+     container's own `gap`, which flexbox still inserts between this
+     pseudo-element and the next tab regardless of the margin (verified —
+     without it, an exactly-fitting bar measures 10px of bogus extra
+     scrollWidth: 5px on each edge, wrongly registering as overflowing). */
+  margin-right: calc(-24px - 5px);
   background: linear-gradient(to left, transparent, var(--chrome));
 }
 .mobile-tabs::after {
   right: 0;
-  margin-left: -24px;
+  margin-left: calc(-24px - 5px);
   background: linear-gradient(to right, transparent, var(--chrome));
 }
 /* Mobile UI/UX overhaul, item A.5 — one wrap per panel so the active pane's
