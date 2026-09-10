@@ -97,6 +97,7 @@ export interface ProjectsSlice {
         | "injectAgentGuide"
         | "injectProjectBriefing"
         | "injectWorkflowConventions"
+        | "suppressConventionsInjectionAfterScaffold"
       >
     > &
       CreateProjectDirOptions,

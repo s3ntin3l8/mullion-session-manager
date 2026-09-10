@@ -517,6 +517,72 @@ describe("project-setup route", () => {
         await app.close();
       }
     });
+
+    // Issue #1208 — the discriminating test. This is what proves
+    // suppressConventionsInjectionAfterScaffold is a genuinely SEPARATE
+    // signal from injectWorkflowConventions, not a renamed duplicate of it:
+    // a project scaffolded with real (non-default) text, then suppressed
+    // via the new column, must STILL report conventionsDrifted: true once
+    // the install's text changes — the exact opposite of the test above
+    // (opting out via injectWorkflowConventions), which stays false. If a
+    // future edit wires the new column into conventionsDrifted's
+    // computation (routes/projects.ts) the same way injectWorkflowConventions
+    // is, this test's final assertion FAILS (expects `true`, gets `false`)
+    // — that failure is this invariant being violated, not a stale test to
+    // update; see that column's own doc comment (schema.ts) for why the two
+    // must stay independent.
+    it("stays TRUE (keeps tracking) for a project that suppressed per-session injection after real text was committed — unlike injectWorkflowConventions opt-out", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app, repoDir);
+
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { sessions: { workflowConventionsText: "Our real, hand-authored conventions." } },
+      });
+
+      const previewRes = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/setup/preview`,
+        payload: { slug: "demo" },
+      });
+      await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/setup/apply`,
+        payload: { previewId: previewRes.json().previewId },
+      });
+
+      // Suppress per-session delivery — this must NOT be treated like
+      // injectWorkflowConventions: false above.
+      await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${projectId}`,
+        payload: { suppressConventionsInjectionAfterScaffold: true },
+      });
+
+      try {
+        const beforeChange = await app.inject({ method: "GET", url: "/api/projects" });
+        const beforeProject = beforeChange.json().find((p: { id: number }) => p.id === projectId);
+        expect(beforeProject.conventionsDrifted).toBe(false);
+
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { sessions: { workflowConventionsText: "Our conventions changed." } },
+        });
+
+        const afterChange = await app.inject({ method: "GET", url: "/api/projects" });
+        const afterProject = afterChange.json().find((p: { id: number }) => p.id === projectId);
+        expect(afterProject.conventionsDrifted).toBe(true);
+      } finally {
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { sessions: { workflowConventionsText: "" } },
+        });
+        await app.close();
+      }
+    });
   });
 
   it("re-applying the same previewId after it's already been consumed is rejected", async () => {

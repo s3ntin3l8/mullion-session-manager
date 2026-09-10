@@ -539,10 +539,47 @@ export function ProjectBriefingPanel({ params }: { params: ProjectBriefingPanelP
           // field) — `null` always inherits `true` (inject), so this is a
           // fixed constant, not a store read.
           globalValue={true}
+          // Hermes review, PR #1217 — opting out here hides the suppress
+          // toggle below (it's only rendered while this stays inject-ing
+          // something) without touching its own DB value, so a later
+          // re-enable would silently re-arm a suppression the user set
+          // before opting out and has no way to have seen since. Clearing
+          // it in the SAME patch whenever this flips to `false` means
+          // re-enabling always starts from an explicit, freshly-visible
+          // unchecked state — never a value the user can't currently see.
           onChange={(value) =>
-            void updateProject(params.projectId, { injectWorkflowConventions: value })
+            void updateProject(params.projectId, {
+              injectWorkflowConventions: value,
+              ...(value === false ? { suppressConventionsInjectionAfterScaffold: null } : {}),
+            })
           }
         />
+        {/* Issue #1208 — a plain on/off toggle, not an InjectOverrideRow:
+            that component's "inherit from a global setting" reset (the ×
+            button) doesn't apply here — this column has no global tier at
+            all, it's a per-project-only suppression on top of the row
+            above. Only meaningful once the row above is actually inject-
+            ing something (`injectWorkflowConventions !== false`); shown
+            regardless of scaffold state so it's reachable from this panel
+            even if a project's committed AGENTS.md was hand-edited to
+            carry the text rather than scaffolded through ProjectSetupPanel. */}
+        {(project?.injectWorkflowConventions ?? true) && (
+          <span className="git-panel-toggle-wrapper">
+            <Toggle
+              size="small"
+              on={project?.suppressConventionsInjectionAfterScaffold ?? false}
+              onChange={(next) =>
+                void updateProject(params.projectId, {
+                  suppressConventionsInjectionAfterScaffold: next,
+                })
+              }
+              ariaLabel="Suppress — already committed to AGENTS.md"
+            />
+            <span className="git-panel-toggle-label">
+              Suppress — already committed to AGENTS.md
+            </span>
+          </span>
+        )}
       </div>
       <div className="agent-rules-panel">
         <div className="agent-rules-panel-list cmux-scroll">

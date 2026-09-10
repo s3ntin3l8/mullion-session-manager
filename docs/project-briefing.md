@@ -422,6 +422,47 @@ pinned note]` `additionalContext` ordering `hooks.ts` composes for
   states only: never scaffolded (`null` hash), up to date, or drifted — an
   opted-out project is never considered drifted, since by definition its
   committed text is no longer tracking the install-wide one.
+- **Two independent opt-outs, not one (issue #1208).** It's tempting to
+  read `injectWorkflowConventions` as covering "the committed `AGENTS.md`
+  already has this text, stop injecting it too" — PR #1206 shipped exactly
+  that as a post-apply checkbox, and Hermes review caught it as a data-loss
+  bug before merge: that flag also gates text _resolution_ (the bullet
+  above), so flipping it after a real scaffold made the drift check
+  permanently false-positive and made its own "re-run Preview and Apply"
+  banner silently overwrite the just-committed real text with the generic
+  defaults on the next apply. The two questions are genuinely different and
+  need genuinely different columns:
+  - `injectWorkflowConventions === false` — **"my `AGENTS.md` is
+    authoritative instead."** Feeds `resolveWorkflowConventionsText` /
+    `resolveScaffoldWorkflowConventionsText`, which resolve to `""` (→ the
+    scaffold defaults) for this project; `conventionsDrifted` is
+    unconditionally `false`; a re-scaffold writes the generic defaults, not
+    this install's real text.
+  - `suppressConventionsInjectionAfterScaffold === true` — **"stop
+    double-delivering, keep tracking."** Touches only
+    `session-lifecycle.ts`'s per-session injection gate — it appears in
+    neither resolver nor in the `conventionsDrifted` computation. Drift
+    tracking keeps working exactly as before: if the install's global text
+    later changes, this project still shows `conventionsDrifted: true`,
+    and a re-scaffold still commits the real, current text. Deliberately
+    **not** offered right after a successful apply — Hermes review caught
+    that both apply modes land the scaffold on a scratch worktree branch
+    (`git worktree add -b`, never `project.cwd`), so immediately after
+    apply the project's real, checked-out `AGENTS.md` does not carry the
+    text yet (PR mode's own notice says "before merging"); offering the
+    toggle at that moment would let a user suppress injection for text that
+    hasn't actually landed anywhere yet, silently delivering it neither way
+    until the scaffold branch/PR is merged by hand. Instead it's toggleable
+    only from the "Session injection for this project" row in
+    `ProjectBriefingPanel.tsx` the other three toggles live in — a standing
+    control the user reaches for once they know the merge has actually
+    happened, not a one-time offer tied to the apply moment. That row also
+    only renders while `injectWorkflowConventions` isn't `false` (opting out
+    the other way makes this toggle meaningless); opting out clears this
+    column back to `null` in the same PATCH, so a later re-enable of
+    `injectWorkflowConventions` can't silently re-arm a suppression the user
+    set before opting out and had no way to see while the row was hidden —
+    Hermes review, round 2.
 
 ## Settings
 
