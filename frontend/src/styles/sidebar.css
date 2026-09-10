@@ -1493,11 +1493,7 @@
   scrollbar-width: none;
   background: var(--chrome);
   border-bottom: 1px solid var(--border);
-  /* -webkit-overflow-scrolling: touch removed here — a no-op since iOS 13,
-     and historically known to force its own compositing layer on iOS
-     Safari, which can interact oddly with the position: sticky fade
-     pseudo-elements below. Not re-added as a quick fix for a future iOS
-     momentum-scrolling regression without checking that interaction. */
+  -webkit-overflow-scrolling: touch;
 }
 .mobile-tabs::-webkit-scrollbar {
   display: none;
