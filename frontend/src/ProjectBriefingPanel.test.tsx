@@ -666,7 +666,13 @@ describe("ProjectBriefingPanel", () => {
       const toggle = screen.getByRole("button", { name: "Workflow conventions" });
       await user.click(toggle);
 
-      expect(updateProject).toHaveBeenCalledWith(1, { injectWorkflowConventions: false });
+      // Hermes review, PR #1217 — also clears the sibling suppress-injection
+      // column in the same patch (see that onChange's own comment); this
+      // assertion would need updating alongside that fix, not just this one.
+      expect(updateProject).toHaveBeenCalledWith(1, {
+        injectWorkflowConventions: false,
+        suppressConventionsInjectionAfterScaffold: null,
+      });
     });
 
     it("clicking the Workflow conventions reset button calls updateProject with null", async () => {
@@ -717,6 +723,43 @@ describe("ProjectBriefingPanel", () => {
       });
       expect(updateProject).not.toHaveBeenCalledWith(1, {
         injectWorkflowConventions: expect.anything(),
+      });
+    });
+
+    // Issue #1208, Hermes review round 2 — without this, opting out via
+    // Workflow conventions hides the suppress toggle but leaves its DB
+    // value untouched, so a later re-enable would silently re-arm a
+    // suppression the user set before opting out and has had no way to see
+    // since. Starts from a project that already has the column set, to
+    // prove opting out clears it rather than just leaving it alone.
+    it("clearing suppressConventionsInjectionAfterScaffold when the sibling opt-out is set, so a later re-enable can't silently re-arm it", async () => {
+      useDashboardStore.setState({
+        projects: [
+          makeProject({
+            id: 1,
+            injectWorkflowConventions: null,
+            suppressConventionsInjectionAfterScaffold: true,
+          }),
+        ],
+      });
+      const updateProject = vi.fn().mockResolvedValue({});
+      useDashboardStore.setState({ updateProject });
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({
+          get: () => jsonResponse(200, { briefing: null, skill: null, reviewerAgent: null }),
+        }),
+      );
+      const user = userEvent.setup();
+      render(<ProjectBriefingPanel params={{ projectId: 1 }} />);
+
+      await screen.findByText("Workflow conventions");
+      const toggle = screen.getByRole("button", { name: "Workflow conventions" });
+      await user.click(toggle);
+
+      expect(updateProject).toHaveBeenCalledWith(1, {
+        injectWorkflowConventions: false,
+        suppressConventionsInjectionAfterScaffold: null,
       });
     });
 

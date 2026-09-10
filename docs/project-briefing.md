@@ -456,7 +456,13 @@ pinned note]` `additionalContext` ordering `hooks.ts` composes for
     only from the "Session injection for this project" row in
     `ProjectBriefingPanel.tsx` the other three toggles live in — a standing
     control the user reaches for once they know the merge has actually
-    happened, not a one-time offer tied to the apply moment.
+    happened, not a one-time offer tied to the apply moment. That row also
+    only renders while `injectWorkflowConventions` isn't `false` (opting out
+    the other way makes this toggle meaningless); opting out clears this
+    column back to `null` in the same PATCH, so a later re-enable of
+    `injectWorkflowConventions` can't silently re-arm a suppression the user
+    set before opting out and had no way to see while the row was hidden —
+    Hermes review, round 2.
 
 ## Settings
 

@@ -539,8 +539,19 @@ export function ProjectBriefingPanel({ params }: { params: ProjectBriefingPanelP
           // field) — `null` always inherits `true` (inject), so this is a
           // fixed constant, not a store read.
           globalValue={true}
+          // Hermes review, PR #1217 — opting out here hides the suppress
+          // toggle below (it's only rendered while this stays inject-ing
+          // something) without touching its own DB value, so a later
+          // re-enable would silently re-arm a suppression the user set
+          // before opting out and has no way to have seen since. Clearing
+          // it in the SAME patch whenever this flips to `false` means
+          // re-enabling always starts from an explicit, freshly-visible
+          // unchecked state — never a value the user can't currently see.
           onChange={(value) =>
-            void updateProject(params.projectId, { injectWorkflowConventions: value })
+            void updateProject(params.projectId, {
+              injectWorkflowConventions: value,
+              ...(value === false ? { suppressConventionsInjectionAfterScaffold: null } : {}),
+            })
           }
         />
         {/* Issue #1208 — a plain on/off toggle, not an InjectOverrideRow:
