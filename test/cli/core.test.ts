@@ -141,6 +141,12 @@ describe("resolveCommand", () => {
   it("errors on an unknown top-level command", () => {
     expect(resolveCommand(["bogus"])).toEqual({ error: "unknown command: bogus" });
   });
+
+  it("redirects invocations of the retired helper command to the tray app", () => {
+    expect(resolveCommand(["helper", "pair", "payload"])).toEqual({
+      error: expect.stringMatching(/Mullion Helper tray app.*releases\/latest/),
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -976,6 +982,18 @@ describe("runCommand", () => {
     const code = await runCommand(["bogus"], { client: fakeClient(), io });
     expect(code).toBe(2);
     expect(io.stderr.write).toHaveBeenCalledWith(expect.stringContaining("unknown command"));
+  });
+
+  it("prints the tray-app migration hint for the retired helper command", async () => {
+    const io = fakeIo();
+    const code = await runCommand(["helper", "pair", "payload"], {
+      client: fakeClient(),
+      io,
+    });
+    expect(code).toBe(2);
+    expect(io.stderr.write).toHaveBeenCalledWith(
+      expect.stringMatching(/Mullion Helper tray app.*releases\/latest/),
+    );
   });
 
   it("exits 2 for a noun with an unknown verb", async () => {

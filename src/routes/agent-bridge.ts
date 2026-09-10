@@ -31,14 +31,14 @@ import { requestScheme } from "../services/request-scheme.js";
 //     Authenticated by its OWN credential (pairing code on first connect,
 //     an unrotated session id on every reconnect after), carried in the
 //     connection's own first frame rather than an Authorization header, so
-//     a plain global `WebSocket` — no custom-header support — works as the
-//     client (see PR6's `mullion helper` CLI). Deliberately exempted from
+//     a plain global `WebSocket` — no custom-header support — works for
+//     Mullion Helper's bundled worker. Deliberately exempted from
 //     authPlugin's global gate (src/plugins/auth.ts's isProtectedPath) the
 //     same way /api/internal/register and /api/internal/deregister are:
 //     the helper is never going to hold this deployment's
 //     MULLION_AUTH_TOKEN or an OIDC session cookie.
 //   - POST /api/bridges/renew (round 3) — the helper's own periodic
-//     credential refresh, called on a timer from `mullion helper run`
+//     credential refresh, called on a timer by Mullion Helper's worker
 //     WITHOUT tearing down the live `/ws/agent-bridge` connection (unlike
 //     the WS "auth" handshake above, which stays a plain, non-rotating
 //     verify — see below for why). Mirrors src/plugins/agent-enrollment.ts's
@@ -394,7 +394,7 @@ export async function agentBridgeRoute(app: FastifyInstance) {
         // Round 3 — the reply now also carries the CURRENT session's
         // expiry, read fresh off the row rather than trusted from whatever
         // this client last persisted. This is what lets the client's own
-        // renewal timer (ssh-agent-helper.mjs's scheduleRenewal) arm itself
+        // worker renewal timer arm itself
         // from an authoritative value on every successful connect, instead
         // of either guessing a legacy file's missing expiresAt or racing a
         // pre-armed timer against the very first handshake that establishes

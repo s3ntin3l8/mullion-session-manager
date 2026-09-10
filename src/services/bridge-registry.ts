@@ -108,8 +108,8 @@ const PAIRING_CODE_TTL_MS = 10 * 60 * 1000;
 
 // Matches hosts.ts's own SESSION_TTL_MS — a bridge's live session is
 // renewed well before expiry the same way an enrolled host's is
-// (agent-enrollment.ts's own renewal timer; the future `mullion helper`
-// CLI does the equivalent for a bridge).
+// (agent-enrollment.ts's own renewal timer; Mullion Helper does the
+// equivalent for a bridge).
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 
 export interface PairingCode {
@@ -345,8 +345,8 @@ export interface PairingPayload {
  * encrypted or signed — the pairing code inside it is already the secret
  * (short-lived, single-use); the URL is not sensitive. Symmetric with
  * `decodePairingPayload`, and both are meant to be shared by the future
- * `/ws/agent-bridge` route (which encodes) and the `mullion helper` CLI
- * (which decodes), so the two ends can't drift on the format
+ * `/ws/agent-bridge` route (which encodes) and Mullion Helper (which
+ * decodes), so the two ends can't drift on the format
  * independently. */
 export function encodePairingPayload(payload: PairingPayload): string {
   return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");

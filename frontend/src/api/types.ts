@@ -240,15 +240,12 @@ export interface BridgeSummary {
 
 // Mirrors POST /api/bridges's response shape 1:1 (src/routes/agent-bridge.ts's
 // PairResponse) — snake_case field names, unlike every other type in this
-// file, because this is also exactly the wire shape `mullion helper pair`
-// (src/cli/ssh-agent-helper.mjs) decodes on the laptop side; keeping the
-// frontend's type a literal passthrough rather than renaming fields avoids
-// a translation layer that could silently drift from what that CLI expects.
+// file, because this is also exactly the wire shape Mullion Helper decodes
+// on the laptop side. Keeping the frontend's type a literal passthrough
+// avoids a translation layer that could silently drift from the app.
 export interface BridgePairingResponse {
   bridge_id: string;
-  /** The full one-paste payload a user copies into `mullion helper pair
-   * <payload>` on their laptop — see agent-bridge.ts's own PairResponse
-   * comment for what's encoded inside it. */
+  /** The full one-paste payload a user pastes into Mullion Helper. */
   pairing_payload: string;
   expires_at: string;
 }

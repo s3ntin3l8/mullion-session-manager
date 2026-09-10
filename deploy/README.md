@@ -261,9 +261,8 @@ See [`docs/ssh-agent.md`](../docs/ssh-agent.md) for the feature itself; this
 section covers only what a Traefik + forwardAuth (Authentik/Authelia/etc.)
 deployment needs on top.
 
-**The problem.** The SSH-agent bridge helper
-(`src/cli/ssh-agent-helper.mjs`) is a plain Node `WebSocket` client — it has
-no cookie jar and runs no OIDC flow. It authenticates by presenting its own
+**The problem.** Mullion Helper's bundled bridge worker has no browser cookie
+jar and runs no OIDC flow. It authenticates by presenting its own
 credential directly in the first handshake frame of the
 `/ws/agent-bridge` connection, or in the body of its periodic
 `POST /api/bridges/renew` renewal call — never a browser session cookie or a
