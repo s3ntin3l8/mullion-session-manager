@@ -50,7 +50,7 @@ context if you're running inside a Mullion-hosted session.
   commands.
 - **Note for Codex:** an `AGENTS.override.md`, if one is ever added, takes
   precedence over `AGENTS.md` _entirely_ — Codex reads it _instead of_ this
-  file. `npm run check:briefing-sync` (also a pre-commit hook) hard-fails if
+  file. `npm run check:scaffold-region-sync` (also a pre-commit hook) hard-fails if
   one ever carries its own copy of this region — AGENTS.md is the single
   source of truth now, so don't paste this region into it; point at this one
   instead.

@@ -12,6 +12,14 @@ This is the feature currently otherwise undocumented outside source comments
 — this page is the missing doc the `hook-adapters/mullion-bundle.ts` and
 `project-briefing.ts`/`project-tooling.ts` headers point at.
 
+> Filename note (issue #1215): this file was renamed from
+> `project-briefing.md` to `agent-context.md`, a broader name covering both
+> the pinned note below (which still legitimately carries the "briefing"
+> name — see "The pinned note") and the scaffold's own delivery paths (which
+> don't; see "Two independent opt-outs" under "Workflow conventions" below).
+> The rename is about the _filename_, not about renaming the pinned-note
+> feature itself.
+
 ## AGENTS.md leads
 
 Issue #942 made `AGENTS.md` a project's single source of truth for standing
@@ -37,7 +45,7 @@ is expanded by Claude Code into the session's auto-loaded context at launch
 `AGENTS.md` (Codex reads it _instead of_ `AGENTS.md` when it exists —
 `src/services/agent-rules.ts`'s precedence table); the scaffold no longer
 offers it as an option, though an existing, hand-authored one is left
-untouched. `scripts/check-briefing-sync.mjs` (wired into `make lint`/
+untouched. `scripts/check-scaffold-region-sync.mjs` (wired into `make lint`/
 pre-commit for this repo) fails loud if `CLAUDE.md`, `GEMINI.md`, or
 `AGENTS.override.md` ever re-acquires a content-bearing copy of the old
 `<!-- mullion:briefing:start/end -->` region.
@@ -247,7 +255,7 @@ panel (Command Palette → "Scaffold Mullion: \<project\>") turns the same
 three artifacts into a real, reviewable pull request:
 
 1. **Preview** computes the target file set — a scaffolded `AGENTS.md`
-   briefing region (created fresh, or upserted in place if the file
+   scaffold region (created fresh, or upserted in place if the file
    already has one), a **`CLAUDE.md` `@AGENTS.md` import** (unconditional,
    same reasoning as `AGENTS.md` itself — without it, a Claude Code session
    in the target repo would never see `AGENTS.md`'s content at all), a
@@ -283,7 +291,9 @@ three artifacts into a real, reviewable pull request:
    leaves that content alone. Every freshly-written skill/reviewer file
    also carries a one-line `<!-- mullion:scaffold:<slug> -->` stamp right
    after its frontmatter (issue #1123) — a different marker family from
-   `mullion:pointer:`/`mullion:briefing:` above, since it identifies a
+   `mullion:pointer:`/`mullion:briefing:` above (the second literal frozen
+   at the wire-format level — see `SCAFFOLD_REGION_START`'s own doc comment
+   in `mullion-scaffold.ts`), since it identifies a
    whole FILE as Mullion's own scaffold output rather than delimiting a
    region within one. It's what lets `createSessionRecord`'s
    committed-scaffold gate (see "How the skill and reviewer actually reach
@@ -300,15 +310,15 @@ three artifacts into a real, reviewable pull request:
    remote/token is configured, leaves it as a local branch you push
    yourself.
 
-The scaffold does not emit a `check-briefing-sync.mjs`-equivalent guard
-script into the target repo at all — `scripts/check-briefing-sync.mjs` (the
-script that guards `CLAUDE.md`/`GEMINI.md`/`AGENTS.override.md` against
-re-acquiring a content-bearing briefing region — see "AGENTS.md leads"
-above) is specific to this repo's own `make lint`/pre-commit wiring, and
-`scaffoldableRelPaths` never reads/writes a target repo's own
+The scaffold does not emit a `check-scaffold-region-sync.mjs`-equivalent
+guard script into the target repo at all — `scripts/check-scaffold-region-sync.mjs`
+(the script that guards `CLAUDE.md`/`GEMINI.md`/`AGENTS.override.md`
+against re-acquiring a content-bearing scaffold region — see "AGENTS.md
+leads" above) is specific to this repo's own `make lint`/pre-commit
+wiring, and `scaffoldableRelPaths` never reads/writes a target repo's own
 `package.json` either way, so a copied-in script would be unwired there
 regardless. A team that wants the same guard in its own repo can copy
-`scripts/check-briefing-sync.mjs` and wire it into its own lint/pre-commit
+`scripts/check-scaffold-region-sync.mjs` and wire it into its own lint/pre-commit
 setup by hand.
 
 The `.agents/skills/<slug>` mirror defaults to a **plain file copy** of the

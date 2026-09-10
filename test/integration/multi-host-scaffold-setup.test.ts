@@ -41,7 +41,7 @@ const GENERATE_STDOUT =
   // and every real generation turn now must — parseGeneratedOutput rejects
   // a reviewer missing it.
   `<<<MULLION_REVIEWER_START>>>\n---\nname: gendemo-reviewer\ndescription: "Review changes. ${CODEX_REVIEWER_DELEGATION_CLAUSE}"\n---\nRead .claude/skills/gendemo/SKILL.md first.\n<<<MULLION_REVIEWER_END>>>\n` +
-  `<<<MULLION_BRIEFING_START>>>\nThe skill lives at .claude/skills/gendemo/SKILL.md.\n<<<MULLION_BRIEFING_END>>>\n`;
+  `<<<MULLION_SCAFFOLD_REGION_START>>>\nThe skill lives at .claude/skills/gendemo/SKILL.md.\n<<<MULLION_SCAFFOLD_REGION_END>>>\n`;
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof ChildProcess>();

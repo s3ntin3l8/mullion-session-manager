@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 // Historically this compared AGENTS.md/GEMINI.md/AGENTS.override.md's
-// briefing regions for byte-identical content (issue #716) — that
+// scaffold regions for byte-identical content (issue #716) — that
 // precedence model was retired by issue #942: AGENTS.md is now the single
 // source of truth, CLAUDE.md is an `@AGENTS.md` import, and the scaffold
 // (src/services/mullion-scaffold.ts) no longer offers AGENTS.override.md or
 // a GEMINI.md content mirror at all (GEMINI.md itself was dropped from this
 // repo — agy reads project AGENTS.md natively, so a pointer to it was
-// redundant; see docs/project-briefing.md). What the guarded files can
+// redundant; see docs/agent-context.md). What the guarded files can
 // still do is silently shadow AGENTS.md if someone pastes a copy of the
 // tier-1 region back into them — Codex reads AGENTS.override.md *instead
 // of* AGENTS.md when it exists (src/services/agent-rules.ts's precedence
@@ -23,16 +23,21 @@
 // (mullion-scaffold.ts's computeScaffold), not something anything reads
 // back — a project that hand-writes AGENTS.md without markers, or removes
 // them, is not a regression this check needs to catch.
+//
+// Issue #1215 — renamed from check-briefing-sync.mjs. The marker VALUE
+// below is frozen (a wire format already committed into every scaffolded
+// repo — see SCAFFOLD_REGION_START's own doc comment in mullion-scaffold.ts)
+// even though this script's own name and env var no longer say "briefing".
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 // Overridable so tests can point this at a fixture directory instead of the
-// real repo — see test/scripts/check-briefing-sync.test.ts. Every real
-// invocation (the pre-commit hook, `npm run lint`) leaves this unset and
-// gets the real repo root.
+// real repo — see test/scripts/check-scaffold-region-sync.test.ts. Every
+// real invocation (the pre-commit hook, `npm run lint`) leaves this unset
+// and gets the real repo root.
 const root =
-  process.env.BRIEFING_SYNC_ROOT ??
+  process.env.SCAFFOLD_REGION_SYNC_ROOT ??
   path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const START = "<!-- mullion:briefing:start -->";
@@ -53,8 +58,8 @@ for (const file of GUARDED_FILES) {
   if (hasRegion(file)) {
     console.log(
       `${file} carries its own ${START} ... ${END} region — AGENTS.md is the single source of ` +
-        `truth for the briefing now. Remove the region; ${file} should carry only a pointer or ` +
-        "import that sends the agent to AGENTS.md instead.",
+        `truth for the scaffold region now. Remove the region; ${file} should carry only a pointer ` +
+        "or import that sends the agent to AGENTS.md instead.",
     );
     failed = true;
   }
@@ -63,4 +68,4 @@ for (const file of GUARDED_FILES) {
 if (failed) {
   process.exit(1);
 }
-console.log("OK — no content-bearing briefing mirror or override found.");
+console.log("OK — no content-bearing scaffold-region mirror or override found.");

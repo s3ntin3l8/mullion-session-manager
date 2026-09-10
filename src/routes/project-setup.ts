@@ -12,9 +12,9 @@ import {
   scaffoldSkillPath,
   scaffoldReviewerPath,
   hashWorkflowConventionsSection,
+  SCAFFOLD_REGION_START,
   type ScaffoldOptions,
 } from "../services/mullion-scaffold.js";
-import { MARKER_START } from "../services/project-briefing.js";
 import { deriveWorktreePath, type CreateWorktreeResult } from "../services/git-worktree.js";
 import { resolveBackend } from "../services/session-backend.js";
 import {
@@ -296,7 +296,7 @@ async function readScaffoldableFiles(
  * always scaffoldSkillPath/scaffoldReviewerPath's own slug-derived output,
  * but cloning this way costs nothing and keeps the guard uniform) rather
  * than mutating the caller's own `existingFiles`, which
- * generateScaffoldContent's hasSkill/hasReviewer/hasBriefingRegion
+ * generateScaffoldContent's hasSkill/hasReviewer/hasScaffoldRegion
  * parameters must keep reading unmodified (see the route's own comment on
  * why those booleans are computed BEFORE this function ever runs). */
 function withoutRefreshedPaths(
@@ -476,7 +476,7 @@ function findLiveSlugPreview(projectId: number, slug: string): PreviewRecord | n
 // cares where that content came from (see mullion-scaffold.ts's own doc
 // comment on why that has to stay true). Split into `ensureSetupWorktree`
 // + `finishPreview` (rather than one function) so `/setup/generate` can
-// read `existingFiles` — hence hasSkill/hasReviewer/hasBriefingRegion —
+// read `existingFiles` — hence hasSkill/hasReviewer/hasScaffoldRegion —
 // from the SAME worktree instance that goes on to decide computeScaffold's
 // entries, instead of a second, independent read against `project.cwd`
 // that could answer a different question (a feature branch checked out,
@@ -717,7 +717,7 @@ export async function projectSetupRoute(app: FastifyInstance) {
       }
 
       // Stood up (or reused) FIRST, and its own `existingFiles` read used
-      // for both the hasSkill/hasReviewer/hasBriefingRegion decision below
+      // for both the hasSkill/hasReviewer/hasScaffoldRegion decision below
       // AND, later, computeScaffold's own entries — one worktree, one
       // read, one consistent answer to "does a committed file already
       // exist" (see ensureSetupWorktree's own doc comment: a second,
@@ -737,7 +737,7 @@ export async function projectSetupRoute(app: FastifyInstance) {
       const existingFiles = read.files;
       const hasSkill = existingFiles[scaffoldSkillPath(options.slug)] !== undefined;
       const hasReviewer = existingFiles[scaffoldReviewerPath(options.slug)] !== undefined;
-      const hasBriefingRegion = (existingFiles["AGENTS.md"] ?? "").includes(MARKER_START);
+      const hasScaffoldRegion = (existingFiles["AGENTS.md"] ?? "").includes(SCAFFOLD_REGION_START);
 
       // Issue #1082(c) — `refresh` is the caller's explicit, per-target
       // opt-in to regenerating an already-committed file (see the schema's
@@ -799,7 +799,7 @@ export async function projectSetupRoute(app: FastifyInstance) {
           },
           hasSkill,
           hasReviewer,
-          hasBriefingRegion,
+          hasScaffoldRegion,
           // Issue #1133 — this primary's own opt-out; only takes effect for
           // a LOCAL_HOST_ID project (generateScaffoldContent's own doc
           // comment). A remote-hosted project's own

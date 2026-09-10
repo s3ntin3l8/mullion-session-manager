@@ -177,7 +177,7 @@ export interface HookAdapterContext {
    * frontmatter, `deriveCodexReviewerSkillContent`) — a real path to codex,
    * just not through this field. Editing `project_tooling.reviewerAgent`
    * after scaffolding still reaches codex only once the scaffold is
-   * re-run, same "seed, not a live channel" caveat `docs/project-briefing.md`
+   * re-run, same "seed, not a live channel" caveat `docs/agent-context.md`
    * already documents for `projectSkill`. */
   projectReviewerAgent?: string;
   /** Issue #957 — the resolved opencode model the session is configured

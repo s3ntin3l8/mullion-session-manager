@@ -20,7 +20,7 @@ when you'd reach for it.
 - [`tasks.md`](tasks.md) — Task Master: turn a labeled issue (or a
   dashboard-created task) into an autonomously-worked, reviewed, and
   promoted pull request.
-- [`project-briefing.md`](project-briefing.md) — a project's own briefing,
+- [`agent-context.md`](agent-context.md) — a project's own briefing,
   skill, and reviewer subagent: DB-authored with no repo write, or
   scaffolded into the repo itself as a real pull request; also covers the
   install-wide workflow-conventions text (issue #937) and its per-project

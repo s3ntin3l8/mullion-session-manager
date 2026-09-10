@@ -13,13 +13,6 @@ import { clampToBytes } from "./marked-region.js";
 // extra is pushed. See project-tooling.ts's own doc comment for the
 // producer side.
 
-// Kept for the scaffold's write-side upsert boundary only (mullion-
-// scaffold.ts's computeScaffold) — there is no read-side consumer of these
-// markers anymore; a project's committed AGENTS.md region is read natively
-// by each CLI, never extracted or re-injected by Mullion.
-export const MARKER_START = "<!-- mullion:briefing:start -->";
-export const MARKER_END = "<!-- mullion:briefing:end -->";
-
 /** Cap on the pinned note's body, before buildSessionBriefingContent's
  * header is added on top — actual injected bytes run a little over this.
  * Deliberately small: this is a short, live "pay attention to this" note,

@@ -135,7 +135,7 @@ describeIfAgy("agy generation turn actually reads the repo (issue #1130)", () =>
         seed: {},
         hasSkill: false,
         hasReviewer: false,
-        hasBriefingRegion: false,
+        hasScaffoldRegion: false,
         timeoutMs: 4 * 60 * 1000,
       });
 
