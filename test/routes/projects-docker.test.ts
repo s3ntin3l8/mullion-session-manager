@@ -136,6 +136,7 @@ vi.mock("../../src/services/docker-service-detect.js", () => ({
 
 const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
+const { createKeyedLock } = await import("../../src/routes/projects.js");
 
 const tmpDb = path.join(os.tmpdir(), `projects-docker-test-${process.pid}.db`);
 
@@ -916,14 +917,20 @@ describe("projects route — Docker Compose service discovery (issue #73)", () =
       await app.close();
     });
 
-    // Issue #1182 — findActiveStackSession's check and createSessionRecord's
-    // create are two separate `await`s; without withStackLock (projects.ts)
-    // serializing them per (projectId, composeProject), two genuinely
-    // concurrent requests can both observe "no active session" and both
-    // insert one. `Promise.all` is what makes this reproducible in-process:
-    // the `await` inside findActiveStackSession yields the microtask queue
-    // before the insert, so both `app.inject()` calls below interleave even
-    // though better-sqlite3 itself is synchronous.
+    // Issue #1182, integration-level sanity check — the actual regression
+    // guard for the race itself is createKeyedLock's own deterministic unit
+    // tests at the bottom of this file, not this test. The check-then-create
+    // race (findActiveStackSession's select, then createSessionRecord's
+    // insert) is a single-microtask-wide window in a synchronous-SQLite
+    // codebase; two `app.inject()` calls racing under `Promise.all` don't
+    // reliably land in it (Hermes review, PR #1182: this test passed on one
+    // host even with the fix fully reverted, because the two requests never
+    // actually interleaved there). What this test DOES still verify, deter
+    // -ministically: the wiring is correct end-to-end — the route handler
+    // actually calls through withStackLock with the right key, and the
+    // observable contract (one session, one `reused: true`) holds under
+    // ordinary concurrent load, not just sequential load (the neighboring
+    // test above).
     it("two CONCURRENT stack actions on the same compose project resolve to exactly one created session", async () => {
       discoveredServices = [fixtureService()];
       const app = await buildApp();
@@ -1249,5 +1256,124 @@ describe("projects route — Docker Compose service discovery (issue #73)", () =
       await agentApp.close();
       fs.rmSync(agentCwd, { recursive: true, force: true });
     });
+  });
+});
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason?: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+// Issue #1182 — createKeyedLock is the actual mutex startStackSession
+// wraps its check-then-create in. Tested directly, with fully controlled
+// promises, rather than only through two racing `app.inject()` calls
+// (the "two CONCURRENT stack actions..." test above): the real race
+// window this closes is a single-microtask-wide gap in a
+// synchronous-SQLite codebase, and Hermes review on PR #1182 found that
+// window doesn't reliably get hit by two HTTP-level requests under
+// `Promise.all` — on one host, that test passed even with the fix fully
+// reverted, because the two requests simply never interleaved. These
+// tests can't have that problem: they control every scheduling point
+// directly, so they fail deterministically if createKeyedLock's
+// serialization guarantee ever regresses, on any host.
+describe("createKeyedLock (issue #1182)", () => {
+  it("serializes two calls for the same key — the second's fn does not start until the first's fn has settled", async () => {
+    const withLock = createKeyedLock();
+    const order: string[] = [];
+    const gate = deferred<void>();
+
+    const callA = withLock("k", async () => {
+      order.push("a-start");
+      await gate.promise;
+      order.push("a-end");
+      return "a";
+    });
+
+    // Let callA's fn actually begin (it's scheduled via a promise chain,
+    // not invoked synchronously) before starting callB, so the assertion
+    // below proves callB's fn genuinely waits — not merely "hasn't been
+    // scheduled yet regardless of the lock".
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(order).toEqual(["a-start"]);
+
+    const callB = withLock("k", async () => {
+      order.push("b-start");
+      return "b";
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(order).toEqual(["a-start"]); // b's fn has NOT started — a still holds the lock
+
+    gate.resolve();
+    expect(await callA).toBe("a");
+    expect(await callB).toBe("b");
+    expect(order).toEqual(["a-start", "a-end", "b-start"]);
+  });
+
+  it("runs calls for DIFFERENT keys concurrently, not serialized", async () => {
+    const withLock = createKeyedLock();
+    const order: string[] = [];
+    const gate = deferred<void>();
+
+    const callA = withLock("key-a", async () => {
+      order.push("a-start");
+      await gate.promise;
+      order.push("a-end");
+    });
+    const callB = withLock("key-b", async () => {
+      order.push("b-start");
+      order.push("b-end");
+    });
+
+    await callB;
+    // b ran to completion without ever waiting on a's still-pending gate.
+    expect(order).toEqual(["a-start", "b-start", "b-end"]);
+
+    gate.resolve();
+    await callA;
+    expect(order).toEqual(["a-start", "b-start", "b-end", "a-end"]);
+  });
+
+  it("a rejected call does not wedge the lock for the next caller of the same key", async () => {
+    const withLock = createKeyedLock();
+
+    const failing = withLock("k", async () => {
+      throw new Error("boom");
+    });
+    await expect(failing).rejects.toThrow("boom");
+
+    const next = await withLock("k", async () => "ok");
+    expect(next).toBe("ok");
+  });
+
+  it("the second caller's fn genuinely re-runs — it is not handed the first caller's result", async () => {
+    const withLock = createKeyedLock();
+    let calls = 0;
+
+    const a = await withLock("k", async () => {
+      calls++;
+      return calls;
+    });
+    const b = await withLock("k", async () => {
+      calls++;
+      return calls;
+    });
+
+    expect(a).toBe(1);
+    // A coalescing cache (the shape git-status.ts/docker-service-detect.ts
+    // use elsewhere) would have handed b the SAME result as a — 1, not 2 —
+    // which is exactly wrong for startStackSession's `reused: true` contract.
+    expect(b).toBe(2);
   });
 });

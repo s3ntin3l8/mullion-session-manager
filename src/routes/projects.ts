@@ -741,6 +741,62 @@ async function loadProjectRepoContext(
   return { project, repoRef, token };
 }
 
+// Issue #1182 — a generic keyed async mutex: calls for the SAME key run one
+// at a time, in order; calls for different keys never wait on each other.
+// Each key gets its own promise CHAIN, not a coalescing cache — a later
+// call for a key waits for the earlier one to fully SETTLE before its own
+// `fn` runs, rather than sharing the earlier call's result (a coalescing
+// map, the shape git-status.ts/docker-service-detect.ts use elsewhere in
+// this repo, would hand both callers the same result — wrong here, since
+// startStackSession's second caller needs to see `reused: true`, not
+// whatever the first caller got).
+//
+// A module-level export (rather than defined inline in projectsRoute's
+// closure, where it originally lived) specifically so it's unit-testable
+// with fully controlled promises — see test/routes/projects-docker.test.ts.
+// The check-then-create race this exists to close (findActiveStackSession's
+// select, then createSessionRecord's insert) is a single-microtask-wide
+// window in a synchronous-SQLite codebase, which two `app.inject()` calls
+// racing under `Promise.all` don't reliably land in — Hermes review, PR
+// #1182: that HTTP-level test passed even with a reverted fix on one host,
+// because the two requests never actually interleaved there. A direct test
+// against this function needs no such luck.
+//
+// No timeout on a queued `fn()` — a caller stuck behind a hung `fn()` waits
+// indefinitely. For `startStackSession`'s own use below, the unbounded wait
+// is inherited from `listOwnedScopes`'s `systemctl --user list-units` spawn
+// (session-process.ts), which has no timeout at all — `isMasterAlive`
+// already depended on that being fast; this lock just makes a hang there
+// block every OTHER stack action on the same compose project too, not only
+// the one that triggered it. Deliberately not worked around here: racing a
+// timeout against `fn()` and moving on while it's still running would let a
+// second `fn()` start before the first's insert completes — reopening the
+// exact race this lock exists to close, just narrowed to the rare hang case
+// instead of closed. The correct fix is a timeout in `listOwnedScopes`
+// itself, which resolves for every caller of `isMasterAlive`/
+// `isMasterAliveBatch`, not just this one — tracked in issue #1232.
+export function createKeyedLock(): <T>(key: string, fn: () => Promise<T>) => Promise<T> {
+  const locks = new Map<string, Promise<unknown>>();
+  return function withLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    const previous = locks.get(key) ?? Promise.resolve();
+    // `previous` is always this same function's own `tail` below, which is
+    // built to never reject — so `fn` only ever runs as the onFulfilled
+    // handler here, never as onRejected.
+    const run = previous.then(fn);
+    // Swallow so a failed run doesn't become an unhandled rejection via the
+    // map entry alone — the caller's own `run` promise still rejects.
+    const tail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    locks.set(key, tail);
+    tail.finally(() => {
+      if (locks.get(key) === tail) locks.delete(key);
+    });
+    return run;
+  };
+}
+
 export async function projectsRoute(app: FastifyInstance) {
   // detectedDevServerPort is derived, not persisted (see dev-server-detect.ts):
   // a project's own devServerUrl column is the sole authoritative value, this
@@ -1272,43 +1328,22 @@ export async function projectsRoute(app: FastifyInstance) {
   // DB check, it also requires `isMasterAlive` (see its own comment above)
   // because `sessions.status` records intent, not live process state — a
   // constraint would reject the legitimate, common case of a finished
-  // action whose row hasn't been reconciled yet. A keyed in-process mutex
-  // serializes the two callers instead: the second one re-runs the WHOLE
-  // check (including isMasterAlive) only after the first has finished
-  // inserting, so it correctly finds the new session and returns
-  // `reused: true` — same semantics as running one request at a time by
-  // hand. Same shape as the in-flight-promise maps in git-status.ts/
-  // docker-service-detect.ts, except this one is a serializing CHAIN, not
-  // a coalescing map: those hand every caller the SAME promise/result,
-  // which would make the second caller here miss `reused: true`.
-  //
-  // Keyed by `${projectId}:${composeProject}` — same identity
-  // stackSessionName() already uses. Closure-scoped (not module-scoped) so
-  // it doesn't leak entries across `buildApp()` instances sharing a
-  // `projectId` value, e.g. in tests.
+  // action whose row hasn't been reconciled yet. `createKeyedLock` (module
+  // scope, above `projectsRoute`) is the actual mutex; see its own doc
+  // comment for the full design rationale, including why it's a module
+  // -level export rather than defined inline here. Keyed by
+  // `${projectId}:${composeProject}` — same identity stackSessionName()
+  // already uses. Called fresh per `projectsRoute(app)` invocation (not
+  // hoisted to module scope itself) so its internal Map doesn't leak
+  // entries across `buildApp()` instances sharing a `projectId` value, e.g.
+  // in tests.
   //
   // Per-process only: two backend processes against the same SQLite file
   // would still race. Not a supported configuration today —
   // `deriveInstanceId` namespaces an instance by its own `sessionsDir`,
   // which is where the DB lives. See issue #1223 for a DB-level guard if
   // that configuration is ever supported.
-  const stackSessionLocks = new Map<string, Promise<unknown>>();
-
-  function withStackLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
-    const previous = stackSessionLocks.get(key) ?? Promise.resolve();
-    const run = previous.then(fn, fn);
-    // Swallow so a failed run doesn't become an unhandled rejection via the
-    // map entry alone — the caller's own `run` promise still rejects.
-    const tail = run.then(
-      () => undefined,
-      () => undefined,
-    );
-    stackSessionLocks.set(key, tail);
-    tail.finally(() => {
-      if (stackSessionLocks.get(key) === tail) stackSessionLocks.delete(key);
-    });
-    return run;
-  }
+  const withStackLock = createKeyedLock();
 
   async function findActiveStackSession(projectId: number, composeProject: string) {
     const [existing] = app.db
@@ -1399,11 +1434,27 @@ export async function projectsRoute(app: FastifyInstance) {
       composeProject: service.composeProject,
     };
 
-    // Issue #1182 — see withStackLock's own comment. Everything that reads
-    // "is there already an active session for this stack" and, if not,
-    // creates one, has to run as a single unit per (projectId,
-    // composeProject) — otherwise two concurrent callers can both observe
-    // "no active session" and both insert one.
+    // Issue #1182 — see createKeyedLock's own comment. The check-then
+    // -create below has to run as a single unit per (projectId,
+    // composeProject) — otherwise two concurrent callers of THIS function
+    // can both observe "no active session" and both insert one. Scoped to
+    // this one call path, not every possible way a `docker-stack:
+    // <composeProject>` session could get created — Hermes review caught
+    // that `POST /api/sessions/:id/promote` (sessions.ts) creates a
+    // replacement session carrying the source's own `name` forward with no
+    // kind/name guard at all, entirely outside this lock; tracked
+    // separately as issue #1233 rather than fixed here, since it's a
+    // different route with its own review surface.
+    //
+    // The lock is held across the WHOLE call below, including
+    // createSessionRecord's actual process spawn (systemd-run) — not just
+    // the DB read/write. Deliberate: a second request arriving mid-spawn
+    // waits for the spawn to finish before it can even re-check, rather
+    // than returning promptly off a not-yet-existing row, but the
+    // alternative (release the lock right after the insert, before the
+    // spawn) reopens a narrower version of the exact race this closes — a
+    // third request between "row inserted" and "spawn confirmed" could
+    // still see the row as active but not yet a going process.
     return withStackLock(`${projectId}:${service.composeProject}`, async () => {
       const existing = await findActiveStackSession(projectId, service.composeProject);
       if (existing) {
