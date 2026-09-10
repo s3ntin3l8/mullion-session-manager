@@ -51,7 +51,10 @@ import { useDragResize } from "./hooks/useDragResize.js";
 import { useWorkspacePersistence } from "./hooks/useWorkspacePersistence.js";
 import { useCoarsePointer } from "./lib/layoutTier.js";
 import type { LayoutTier, LayoutContext } from "./lib/layoutTier.js";
-import { attachMobileTabsWheelScroll } from "./lib/mobileTabsWheelScroll.js";
+import {
+  attachMobileTabsWheelScroll,
+  attachMobileTabsEdgeState,
+} from "./lib/mobileTabsWheelScroll.js";
 import { attachSidebarSwipeGesture } from "./lib/sidebarSwipeGesture.js";
 import { useSessionDeepLink } from "./hooks/useSessionDeepLink.js";
 import { useLayoutPresentation } from "./hooks/useLayoutPresentation.js";
@@ -156,7 +159,6 @@ export function App() {
   const [mobileDraftName, setMobileDraftName] = useState("");
   const mobileRenameInputRef = useRef<HTMLInputElement>(null);
   const activeMobileTabRef = useRef<HTMLDivElement>(null);
-  const mobileTabsRef = useRef<HTMLDivElement>(null);
   const [palette, setPalette] = useState<PaletteState>({
     open: false,
     scope: "global",
@@ -474,17 +476,46 @@ export function App() {
     }
   }, [isMobile, activePanelId]);
 
-  // Depends on `isMobile` (not `[]`) because `.mobile-tabs` only renders
-  // when isMobile is true — a desktop-first mount would otherwise find
-  // `mobileTabsRef.current` null and never re-attach on a later
-  // desktop-to-mobile resize. See lib/mobileTabsWheelScroll.ts for why this
-  // is a manually-attached native listener rather than a JSX onWheel prop.
-  useEffect(() => {
-    if (!isMobile) return;
-    const el = mobileTabsRef.current;
+  // A callback ref, not a useRef()+useEffect([isMobile]) pair (Hermes
+  // review, PR #1224) — `.mobile-tabs` only renders when
+  // `isMobile && mobilePanels.length > 0` (the JSX below), and an effect
+  // keyed on `isMobile` alone missed the case where `isMobile` was already
+  // true before the bar first appeared (mobile cold start before panels
+  // restore, or reopening a panel after closing the last one): the effect
+  // would fire with `mobileTabsRef.current` still null, bail, and never
+  // get another chance to re-attach once the bar actually mounted. A
+  // callback ref fires exactly when the DOM node itself mounts/unmounts,
+  // independent of any dependency array — same "callback-ref for
+  // mount-time work" pattern PaneTab.tsx already uses. It also fixes a
+  // second, related bug: React calls ref callbacks synchronously during
+  // the commit phase, before the browser paints, so
+  // attachMobileTabsEdgeState's synchronous initial class-set (below) is
+  // guaranteed to land before first paint — a plain (passive) `useEffect`
+  // doesn't guarantee that, so the left fade could paint over tab 1 for a
+  // frame on every mobile mount before flipping to `.at-start`.
+  //
+  // See lib/mobileTabsWheelScroll.ts for why the wheel listener is
+  // manually-attached rather than a JSX onWheel prop, and for why the
+  // edge-state tracker (issue #960's fade affordance) is a second,
+  // independent listener pair on the same element rather than folded into
+  // the wheel handler.
+  const mobileTabsDetachRef = useRef<(() => void) | null>(null);
+  const setMobileTabsRef = useCallback((el: HTMLDivElement | null) => {
+    mobileTabsDetachRef.current?.();
+    mobileTabsDetachRef.current = null;
     if (!el) return;
-    return attachMobileTabsWheelScroll(el);
-  }, [isMobile]);
+    const detachWheel = attachMobileTabsWheelScroll(el);
+    // Stored immediately, before the second attach — Hermes review: if
+    // attachMobileTabsEdgeState throws (e.g. ResizeObserver missing on an
+    // older WebView), the wheel listener above must not leak. Overwritten
+    // below once the edge-state attach succeeds.
+    mobileTabsDetachRef.current = detachWheel;
+    const detachEdgeState = attachMobileTabsEdgeState(el);
+    mobileTabsDetachRef.current = () => {
+      detachWheel();
+      detachEdgeState();
+    };
+  }, []);
 
   // Sidebar session drag-to-dock — dragging a session row out of the Sidebar
   // and dropping it onto the dockview grid to open/dock its panel —
@@ -1487,7 +1518,7 @@ export function App() {
                 toggle (Toolbar.tsx) is the only one left at this breakpoint
                 — the second, redundant ☰ that used to render here is gone. */}
             {isMobile && mobilePanels.length > 0 && (
-              <div className="mobile-tabs" ref={mobileTabsRef}>
+              <div className="mobile-tabs" ref={setMobileTabsRef}>
                 {mobilePanels.map((panel) => {
                   const sessionId = panelSessionId(panel);
                   const session = sessions.find((s) => s.id === sessionId);
