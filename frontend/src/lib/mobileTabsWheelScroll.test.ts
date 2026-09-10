@@ -204,7 +204,34 @@ describe("attachMobileTabsEdgeState", () => {
     detach();
   });
 
-  it("stops reacting to scroll and resize once detached", () => {
+  // Hermes review, PR #1224 — verified in real Chromium that a
+  // ResizeObserver on `.mobile-tabs` itself is a DEAD signal for a tab
+  // being added: the container's own box (clientWidth) doesn't change when
+  // clipped overflow content grows, only scrollWidth does, so adding 6
+  // tabs produced zero ResizeObserver fires beyond the mandatory initial
+  // one. jsdom implements a real (non-stubbed) MutationObserver, so this
+  // test mutates the DOM for real rather than faking a callback.
+  it("re-evaluates when a tab is added/removed (MutationObserver), which the ResizeObserver above provably can't see", async () => {
+    setScrollState({ scrollLeft: 0, scrollWidth: 100, clientWidth: 100 });
+    const detach = attachMobileTabsEdgeState(el);
+    expect(el.classList.contains("at-end")).toBe(true);
+
+    // A tab was added — scrollWidth grows, but clientWidth (what a
+    // ResizeObserver on `el` watches) doesn't, so this is exercising the
+    // MutationObserver path specifically.
+    const tab = document.createElement("div");
+    el.appendChild(tab);
+    setScrollState({ scrollWidth: 250 });
+
+    // MutationObserver callbacks fire as a microtask, not synchronously.
+    await Promise.resolve();
+
+    expect(el.classList.contains("at-end")).toBe(false);
+
+    detach();
+  });
+
+  it("stops reacting to scroll, resize, and DOM mutation once detached", async () => {
     setScrollState({ scrollLeft: 0, scrollWidth: 400, clientWidth: 100 });
     const detach = attachMobileTabsEdgeState(el);
     detach();
@@ -212,8 +239,10 @@ describe("attachMobileTabsEdgeState", () => {
     setScrollState({ scrollLeft: 350 });
     el.dispatchEvent(new Event("scroll"));
     resizeCallback?.();
+    el.appendChild(document.createElement("div"));
+    await Promise.resolve();
 
-    // Still reflects the state as of detach, not the post-detach scroll.
+    // Still reflects the state as of detach, not any post-detach change.
     expect(el.classList.contains("at-start")).toBe(true);
     expect(el.classList.contains("at-end")).toBe(false);
   });

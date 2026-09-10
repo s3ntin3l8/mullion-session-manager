@@ -47,22 +47,39 @@ function updateMobileTabsEdgeState(element: HTMLElement): void {
 }
 
 /** Keeps `.at-start`/`.at-end` classes on `element` in sync with its scroll
- * position — set on attach, and re-evaluated on `scroll` (passive: the fade
- * classes are pure CSS reads, nothing here needs to block the native
- * scroll) and on any `ResizeObserver` fire (a tab added/removed changes
- * `scrollWidth` without necessarily firing `scroll`). Both listeners are
- * torn down together by the returned cleanup. */
+ * position — set on attach, and re-evaluated on three independent signals,
+ * each catching a change the others can't:
+ *  - `scroll` (passive: the fade classes are pure CSS reads, nothing here
+ *    needs to block the native scroll) — the user actually scrolling.
+ *  - `ResizeObserver` on `element` itself — a CONTAINER size change (device
+ *    rotation, the sidebar resizing, ...) that alters `clientWidth`.
+ *  - `MutationObserver({ childList: true })` on `element` — a tab
+ *    added/removed. This is NOT redundant with the ResizeObserver above:
+ *    verified in real Chromium (Hermes review, PR #1224) that adding tabs
+ *    grows `scrollWidth` with ZERO ResizeObserver fires, since `element`'s
+ *    OWN box (what a ResizeObserver on it actually watches) never changes
+ *    when clipped overflow content grows — only `clientWidth`/`offsetWidth`
+ *    do that, and those are exactly what stays fixed here. Without this,
+ *    `.at-end` goes stale the moment a tab is added while already scrolled
+ *    to the end, and only self-heals if something else happens to scroll
+ *    the bar (e.g. the active-tab `scrollIntoView` in App.tsx — which a
+ *    tab opened by another client/process never triggers).
+ * All three are torn down together by the returned cleanup. */
 export function attachMobileTabsEdgeState(element: HTMLElement): () => void {
   updateMobileTabsEdgeState(element);
 
   const handleScroll = () => updateMobileTabsEdgeState(element);
   element.addEventListener("scroll", handleScroll, { passive: true });
 
-  const observer = new ResizeObserver(() => updateMobileTabsEdgeState(element));
-  observer.observe(element);
+  const resizeObserver = new ResizeObserver(() => updateMobileTabsEdgeState(element));
+  resizeObserver.observe(element);
+
+  const mutationObserver = new MutationObserver(() => updateMobileTabsEdgeState(element));
+  mutationObserver.observe(element, { childList: true });
 
   return () => {
     element.removeEventListener("scroll", handleScroll);
-    observer.disconnect();
+    resizeObserver.disconnect();
+    mutationObserver.disconnect();
   };
 }

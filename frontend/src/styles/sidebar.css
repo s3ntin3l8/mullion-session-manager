@@ -1533,6 +1533,7 @@
   align-self: stretch;
   pointer-events: none;
   z-index: 1;
+  transition: opacity 0.15s ease;
 }
 .mobile-tabs::before {
   /* -8px (not 0) reaches the bar's true visual edge — `left`/`right` on a
