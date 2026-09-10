@@ -432,6 +432,21 @@ describe("eventDescriptions (Phase 2, issue #176)", () => {
       const event = makeEvent({ kind: "file_change", payload: { action: "modify" } });
       expect(describeEvent(event)).toBeNull();
     });
+
+    it.each(["toString", "constructor", "hasOwnProperty", "__proto__"])(
+      "treats a prototype-chain action name (%s) as unknown, not a crash or Object.prototype leak (Graphify review)",
+      (action) => {
+        // A plain object literal keyed by `action` would resolve these to
+        // the INHERITED Object.prototype member (truthy) instead of
+        // falling through to the default verb — see fileChangeVerb's own
+        // doc comment. hook-protocol.ts's validateFileChange constrains
+        // `action` to modify|create|delete on the wire, but this asserts
+        // the frontend degrades safely even if that guarantee doesn't hold
+        // (a persisted older event, a version-skewed remote host).
+        const event = makeEvent({ kind: "file_change", payload: { path: "src/x.ts", action } });
+        expect(describeEvent(event)).toEqual({ text: "Changed src/x.ts", attention: false });
+      },
+    );
   });
 
   describe("describeEvent — review_gate", () => {
@@ -654,6 +669,33 @@ describe("eventDescriptions (Phase 2, issue #176)", () => {
           seq: 2,
           kind: "todo",
           payload: { content: "Wire the adapter", status: "completed" },
+        }),
+        makeEvent({ seq: 3, kind: "attention", payload: { attention: true, signal: "silence" } }),
+      ];
+      expect(sessionContextMap(events).get(3)).toBeUndefined();
+    });
+
+    it("a terminal update clears the tracked todo even when it names a DIFFERENT item (Graphify review)", () => {
+      // Regression test: the backend's own completion fallback
+      // (forwarder-core.mjs's TodoWrite mapper, when a call ends with every
+      // item terminal) falls back to the LAST entry in the list — which is
+      // not necessarily the SAME item sessionContextMap is currently
+      // tracking as in-progress. A content-matched clear would silently
+      // miss this and leave "Wire the adapter" stuck forever; the clear
+      // must be unconditional on any terminal status, not content-matched.
+      const events: NotificationEvent[] = [
+        makeEvent({
+          seq: 1,
+          kind: "todo",
+          payload: { content: "Wire the adapter", status: "in_progress" },
+        }),
+        // A DIFFERENT item's completion — same TodoWrite call, but the
+        // forwarder's fallback happened to name this one, not "Wire the
+        // adapter".
+        makeEvent({
+          seq: 2,
+          kind: "todo",
+          payload: { content: "Some other item", status: "completed" },
         }),
         makeEvent({ seq: 3, kind: "attention", payload: { attention: true, signal: "silence" } }),
       ];

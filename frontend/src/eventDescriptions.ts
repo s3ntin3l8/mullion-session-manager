@@ -40,14 +40,30 @@ function countOutstandingBackgroundTasksInPayload(value: unknown): number {
 // "delete" today, defaulting to modify) only ever needs adding HERE, not
 // independently to two hand-written ternaries that can silently drift out
 // of wording sync with each other.
-const FILE_CHANGE_VERBS: Record<string, { titleCase: string; lower: string }> = {
-  create: { titleCase: "Created", lower: "created" },
-  delete: { titleCase: "Deleted", lower: "deleted" },
-};
+// Graphify review (issue #903) — a plain object literal here would be a
+// classic prototype-pollution-via-bracket-lookup footgun: `action` is
+// untrusted `unknown` at this point, and `FILE_CHANGE_VERBS["toString"]` (or
+// "constructor"/"hasOwnProperty"/...) on a plain `{}` resolves to the
+// INHERITED Object.prototype member — truthy, so the `||` fallback would
+// never fire — rather than `undefined`. The caller would then read
+// `.titleCase`/`.lower` off that function and silently render
+// "undefined src/x.ts". hook-protocol.ts's validateFileChange constrains
+// `action` to exactly "modify"|"create"|"delete" on the wire today, but the
+// frontend has no way to enforce that guarantee holds for a persisted older
+// event or a version-skewed remote host — same posture as
+// firstChangedFileName's own doc comment just above. A `Map` has no
+// prototype-chain lookup surface for `.get()`, so this class of bug is
+// structurally impossible here rather than merely avoided by validation
+// elsewhere.
+const FILE_CHANGE_VERBS = new Map<string, { titleCase: string; lower: string }>([
+  ["create", { titleCase: "Created", lower: "created" }],
+  ["delete", { titleCase: "Deleted", lower: "deleted" }],
+]);
 const DEFAULT_FILE_CHANGE_VERB = { titleCase: "Changed", lower: "edited" };
 
 function fileChangeVerb(action: unknown): { titleCase: string; lower: string } {
-  return (typeof action === "string" && FILE_CHANGE_VERBS[action]) || DEFAULT_FILE_CHANGE_VERB;
+  if (typeof action !== "string") return DEFAULT_FILE_CHANGE_VERB;
+  return FILE_CHANGE_VERBS.get(action) ?? DEFAULT_FILE_CHANGE_VERB;
 }
 
 // Graphify review (issue #903) — a `session_diff` NotificationEvent's
@@ -456,11 +472,16 @@ export function describeEvent(
 // `file_change`/`session_diff`/`title_change` event updates the running
 // context for events AFTER it, never for itself.
 //
-// Todo priority is content-based, not id-based: NotificationEvent's `todo`
-// payload carries no stable per-item id, so "is this in-progress todo still
-// THE in-progress todo" is tracked by string equality against the last
-// content seen at status "in_progress". Good enough for a display nicety;
-// not exact if two distinct todos ever share literal text.
+// Todo tracking has no stable per-item id: NotificationEvent's `todo`
+// payload carries none. Setting the tracked in-progress/pending todo is
+// content-based (the last content seen at that status) — good enough for a
+// display nicety, not exact if two distinct todos ever share literal text.
+// CLEARING it on a terminal (completed/cancelled) update is deliberately
+// content-AGNOSTIC (see that branch's own comment): an unconditional clear
+// on any terminal update, not a content match, because the backend's own
+// completion fallback (forwarder-core.mjs, when a TodoWrite call ends with
+// every item terminal) can't necessarily name the SAME item this map is
+// tracking either.
 export function sessionContextMap(
   events: readonly NotificationEvent[],
   sessionLabel?: string | null,
@@ -490,16 +511,22 @@ export function sessionContextMap(
           if (status === "in_progress") inProgressTodo = content;
           else if (content === inProgressTodo) inProgressTodo = null;
         } else {
-          // Hermes review (issue #903) — a terminal status (completed/
-          // cancelled) is a completion signal, not new context to display:
-          // clear it from whichever slot currently holds it rather than
-          // (as before) unconditionally overwriting `anyTodo` with the
-          // now-done content, which kept a finished task showing as "▸
-          // what this session is doing" until some unrelated later event
-          // happened to override it. Content-matched, same limitation as
-          // the in-progress tracking above (no stable per-item id).
-          if (content === inProgressTodo) inProgressTodo = null;
-          if (content === anyTodo) anyTodo = null;
+          // Hermes review (issue #903), then Graphify review — a terminal
+          // status (completed/cancelled) is a completion signal, not new
+          // context to display. Originally cleared only the slot whose
+          // CONTENT matched this event's own — but the backend's own
+          // completion fallback (forwarder-core.mjs's TodoWrite mapper,
+          // when every remaining todo is terminal) picks the LAST entry in
+          // the list, which is not necessarily the SAME item this map is
+          // currently tracking as in-progress. A content-matched clear
+          // then silently misses: whatever WAS tracked stays stuck
+          // forever, exactly the staleness Hermes originally flagged, just
+          // one level removed. Content has no stable identity here anyway
+          // (this file's own doc comment already accepts that limitation)
+          // — an unconditional clear on ANY terminal update is the
+          // robust choice: no todo context beats stale/wrong todo context.
+          inProgressTodo = null;
+          anyTodo = null;
         }
         break;
       }
