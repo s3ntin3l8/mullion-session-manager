@@ -1,7 +1,6 @@
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { upsertMarkedRegion } from "./marked-region.js";
-import { MARKER_START, MARKER_END } from "./project-briefing.js";
 import { isDangerousSkillName } from "./hook-adapters/skill-name.js";
 import { parseSkillFrontmatter } from "./skills.js";
 import type { DockControl } from "./project-config.js";
@@ -12,17 +11,35 @@ import type { DockControl } from "./project-config.js";
 // filesystem access of its own" purity still holds.
 import { buildWorkflowConventionsText } from "./workflow-conventions.js";
 
-// Issue #942 — a SEPARATE marker pair from MARKER_START/MARKER_END above:
-// those wrap a full mirrored copy of AGENTS.md's own briefing region (the
+// Issue #1215 — the marker VALUE is a wire format, not just an identifier:
+// it's already committed into every repo this scaffold has ever run
+// against, and upsertMarkedRegion below locates a region with a plain
+// `text.indexOf(startMarker)` — if the marker is absent it APPENDS a new
+// region instead of failing (see that function's own doc comment), so
+// changing the bytes here would make the next scaffold of any existing
+// repo grow a duplicate region rather than update the one already there.
+// "briefing" is therefore frozen at the wire level while the identifier
+// below says what this actually is: the scaffold's own write-side upsert
+// boundary in a target repo's AGENTS.md, not the operator-authored pinned
+// note project-briefing.ts carries (that feature legitimately keeps the
+// "briefing" name — see docs/agent-context.md). Moved here from
+// project-briefing.ts, which never had anything to do with this constant
+// beyond being where it happened to be declared.
+export const SCAFFOLD_REGION_START = "<!-- mullion:briefing:start -->";
+export const SCAFFOLD_REGION_END = "<!-- mullion:briefing:end -->";
+
+// Issue #942 — a SEPARATE marker pair from SCAFFOLD_REGION_START/END above:
+// those wrap a full mirrored copy of AGENTS.md's own scaffold region (the
 // thing this issue is retiring), while these wrap a one-line POINTER back
 // to AGENTS.md instead. Reusing the same markers for both would make this
-// repo's own scripts/check-briefing-sync.mjs's "does this file re-acquire a
-// mullion:briefing region" guard fire on its own committed CLAUDE.md just
-// for carrying the pointer it's SUPPOSED to carry — a new, distinct pair
-// keeps "a full mirror reappeared" (bad) and "the pointer this scaffold
-// itself wrote is present" (expected) unambiguous. Exported so tests (and
-// this repo's own committed CLAUDE.md, which has to use the identical
-// literal) never risk drifting from a hardcoded copy of these strings.
+// repo's own scripts/check-scaffold-region-sync.mjs's "does this file
+// re-acquire a mullion:briefing region" guard fire on its own committed
+// CLAUDE.md just for carrying the pointer it's SUPPOSED to carry — a new,
+// distinct pair keeps "a full mirror reappeared" (bad) and "the pointer
+// this scaffold itself wrote is present" (expected) unambiguous. Exported
+// so tests (and this repo's own committed CLAUDE.md, which has to use the
+// identical literal) never risk drifting from a hardcoded copy of these
+// strings.
 export const POINTER_MARKER_START = "<!-- mullion:pointer:start -->";
 export const POINTER_MARKER_END = "<!-- mullion:pointer:end -->";
 
@@ -122,7 +139,7 @@ function stampScaffoldBody(contents: string, slug: string): string {
 // delivery mechanisms PR-1 through PR-5 built (the shipped bundle,
 // per-project skills/reviewer authored from the UI) only ever apply
 // Mullion's own tooling automatically; the FEATURES they deliver — a
-// project's own briefing region, a project's own skill, a project's own
+// project's own scaffold region, a project's own skill, a project's own
 // reviewer subagent — still need somewhere to live if a repo wants them
 // committed and shared with the team rather than authored per-project in
 // Mullion's own UI (project-tooling.ts). This module computes exactly
@@ -175,7 +192,7 @@ export interface ScaffoldOptions {
    * `.agents/skills/<slug>/SKILL.md`) and reviewer subagent
    * (`.claude/agents/<slug>-reviewer.md`, mirrored for codex at
    * `.agents/skills/<slug>-reviewer/SKILL.md` — issue #943) — and appears
-   * in the scaffolded AGENTS.md briefing region's pointer text. Validated
+   * in the scaffolded AGENTS.md scaffold region's pointer text. Validated
    * by the caller
    * (routes/project-setup.ts) via isValidScaffoldSlug before this module
    * ever sees it; computeScaffold itself still throws
@@ -229,15 +246,15 @@ export interface ScaffoldOptions {
   generated?: {
     skill?: string;
     reviewer?: string;
-    briefingRegion?: string;
+    scaffoldRegion?: string;
   };
   /** This Mullion install's own `settings.sessions.workflowConventionsText`
    * (issue #937's Settings → Sessions field, resolved by the caller —
    * `routes/project-setup.ts` — before this pure function ever sees it,
    * same "arrives as data" posture as `generated` above). When non-empty,
    * this is what `computeScaffold` commits into the `## Workflow
-   * Conventions` section of the `AGENTS.md` briefing region — REGARDLESS
-   * of whether `generated.briefingRegion` is also set. Before this field
+   * Conventions` section of the `AGENTS.md` scaffold region — REGARDLESS
+   * of whether `generated.scaffoldRegion` is also set. Before this field
    * existed, a scaffolded repo's committed conventions and this install's
    * own injected-per-session conventions were two different texts from two
    * different sources (`SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS`'s fixed defaults
@@ -449,16 +466,16 @@ export const SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS: Record<string, string> = {
 
 // Issue #1201 — split off the `## Workflow Conventions` section (now
 // `workflowConventionsSection` below) so `computeScaffold` can own it
-// UNCONDITIONALLY, independent of whether `generated.briefingRegion` is
-// set. Before this split, `briefingRegionBody`'s return value was the
-// entire region, and `computeScaffold` picked either the agent-generated
+// UNCONDITIONALLY, independent of whether `generated.scaffoldRegion` is
+// set. Before this split, `scaffoldRegionPointerBody`'s return value was
+// the entire region, and `computeScaffold` picked either the agent-generated
 // region OR this static one — never both — which is what let a generation
 // turn silently omit conventions entirely (the exact contradiction
 // scaffold-generate.ts's own prompt used to contain: it asked for a
-// conventions section, then told the model to report back "the briefing
-// paragraph only"). This function now returns ONLY the pointer prose
+// conventions section, then told the model to report back "the
+// scaffold-region paragraph only"). This function now returns ONLY the pointer prose
 // naming where the skill/reviewer live; it never mentions conventions.
-function briefingRegionPointerBody(slug: string): string {
+function scaffoldRegionPointerBody(slug: string): string {
   return (
     `This repository uses [Mullion](https://github.com/s3ntin3l8/mullion-session-manager)\n` +
     `to run AI coding agents. A project-specific skill and reviewer subagent for\n` +
@@ -571,22 +588,22 @@ function contributingPointerBody(): string {
   return "See `AGENTS.md`'s Workflow Conventions section for our process rules.";
 }
 
-/** Removes a pre-#942 byte-identical mirror region (the `MARKER_START`/
- * `MARKER_END` pair a scaffold used to write into `GEMINI.md`, the actual
- * historical mirror target) from `CLAUDE.md` before the new pointer region
- * is upserted into what's left. `CLAUDE.md` was never itself a mirror
+/** Removes a pre-#942 byte-identical mirror region (the `SCAFFOLD_REGION_START`/
+ * `SCAFFOLD_REGION_END` pair a scaffold used to write into `GEMINI.md`, the
+ * actual historical mirror target) from `CLAUDE.md` before the new pointer
+ * region is upserted into what's left. `CLAUDE.md` was never itself a mirror
  * target, pre- or post-#942, but a hand-pasted legacy region is still
  * possible there — leaving it in place would let a target repo's
  * `CLAUDE.md` keep silently duplicating `AGENTS.md`'s own content instead
  * of just pointing at it, and would append the new pointer region below
  * that stale content rather than replacing it. A no-op when the old
  * markers aren't present — the ordinary, post-#942 case. */
-function stripLegacyBriefingMirror(text: string): string {
-  const startIdx = text.indexOf(MARKER_START);
+function stripLegacyScaffoldRegionMirror(text: string): string {
+  const startIdx = text.indexOf(SCAFFOLD_REGION_START);
   if (startIdx === -1) return text;
-  const endIdx = text.indexOf(MARKER_END, startIdx + MARKER_START.length);
+  const endIdx = text.indexOf(SCAFFOLD_REGION_END, startIdx + SCAFFOLD_REGION_START.length);
   if (endIdx === -1) return text;
-  return text.slice(0, startIdx) + text.slice(endIdx + MARKER_END.length);
+  return text.slice(0, startIdx) + text.slice(endIdx + SCAFFOLD_REGION_END.length);
 }
 
 /**
@@ -599,7 +616,7 @@ function stripLegacyBriefingMirror(text: string): string {
  * everything else) rather than requiring the caller to pre-populate every
  * possible path with an empty string.
  *
- * Always returns at least an AGENTS.md entry (upserting the briefing
+ * Always returns at least an AGENTS.md entry (upserting the scaffold
  * region is safe to repeat by design — see upsertMarkedRegion). The
  * starter skill/reviewer/`.crs/dock.json` entries, by contrast, are
  * "create once, never overwrite" (Hermes review, PR #896 round 2): each
@@ -638,7 +655,7 @@ export function computeScaffold(
   // sourced from this install's own Settings text — never from the
   // generation turn, which no longer even asks for one (see
   // scaffold-generate.ts's buildGenerationPrompt). Stripping a stray
-  // heading from `generated.briefingRegion` first means a model that
+  // heading from `generated.scaffoldRegion` first means a model that
   // ignores the prompt and includes one anyway still yields exactly one
   // "## Workflow Conventions" heading in the final region, not two.
   // `.trimEnd()` — scaffold-generate.ts's extractSection always appends
@@ -647,9 +664,9 @@ export function computeScaffold(
   // with the SAME single-blank-line separator before the heading, rather
   // than the generated path silently getting an extra blank line.
   const pointerBody = (
-    options.generated?.briefingRegion
-      ? stripStrayWorkflowConventionsHeading(options.generated.briefingRegion)
-      : briefingRegionPointerBody(slug)
+    options.generated?.scaffoldRegion
+      ? stripStrayWorkflowConventionsHeading(options.generated.scaffoldRegion)
+      : scaffoldRegionPointerBody(slug)
   ).trimEnd();
   const region = `${pointerBody}\n\n${workflowConventionsSection(options.workflowConventionsText)}`;
   entries.push({
@@ -657,8 +674,8 @@ export function computeScaffold(
     kind: "file",
     contents: upsertMarkedRegion(
       existingFiles["AGENTS.md"] ?? "",
-      MARKER_START,
-      MARKER_END,
+      SCAFFOLD_REGION_START,
+      SCAFFOLD_REGION_END,
       region,
     ),
   });
@@ -670,13 +687,13 @@ export function computeScaffold(
   // scaffold wrote. Upserted into its own pointer marker pair, same posture
   // as CONTRIBUTING.md's pointer: never touches content outside the marked
   // region, so an existing multi-section CLAUDE.md keeps everything else.
-  // `stripLegacyBriefingMirror` guards against a hand-pasted legacy
-  // briefing region (see that function's own doc comment).
+  // `stripLegacyScaffoldRegionMirror` guards against a hand-pasted legacy
+  // scaffold region (see that function's own doc comment).
   entries.push({
     path: "CLAUDE.md",
     kind: "file",
     contents: upsertMarkedRegion(
-      stripLegacyBriefingMirror(existingFiles["CLAUDE.md"] ?? ""),
+      stripLegacyScaffoldRegionMirror(existingFiles["CLAUDE.md"] ?? ""),
       POINTER_MARKER_START,
       POINTER_MARKER_END,
       claudeMdImportBody(),
@@ -705,7 +722,7 @@ export function computeScaffold(
   // Hermes review, PR #896 round 2 — this used to emit the starter
   // skill/reviewer/dock-config UNCONDITIONALLY, silently clobbering a
   // target repo's own hand-edited (or previously-scaffolded-and-since-
-  // customized) content on every re-run. Unlike the briefing region above
+  // customized) content on every re-run. Unlike the scaffold region above
   // (explicitly marker-delimited and DESIGNED for repeated safe upserts),
   // these are one-time starter files a human is expected to edit
   // afterward — the safe, idempotent posture is "create if missing, never

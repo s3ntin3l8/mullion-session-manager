@@ -97,7 +97,7 @@ const SCAFFOLD_RECOMMENDATION_NOTICE_REMOTE =
   "remote-hosted, so the field below is the only way to author this content for now.";
 
 // Issue #1083 — codex and agy have no ephemeral per-session channel at all
-// (see docs/project-briefing.md's delivery table), so the project skill
+// (see docs/agent-context.md's delivery table), so the project skill
 // only ever reaches them via Scaffold Mullion's committed
 // `.agents/skills/<slug>` mirror. Saving this field here changes only what
 // Claude Code/opencode see live; it does not touch that committed file, so

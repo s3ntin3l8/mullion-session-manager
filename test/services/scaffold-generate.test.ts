@@ -84,7 +84,7 @@ function validOutput(slug: string, extra = ""): string {
     // parseGeneratedOutput enforces it (see the dedicated describe block
     // below for the negative case).
     `<<<MULLION_REVIEWER_START>>>\n---\nname: ${slug}-reviewer\ndescription: "Review changes. ${CODEX_REVIEWER_DELEGATION_CLAUSE}"\n---\nRead .claude/skills/${slug}/SKILL.md first.\n<<<MULLION_REVIEWER_END>>>\n` +
-    `<<<MULLION_BRIEFING_START>>>\nThe skill lives at .claude/skills/${slug}/SKILL.md.\n<<<MULLION_BRIEFING_END>>>\n` +
+    `<<<MULLION_SCAFFOLD_REGION_START>>>\nThe skill lives at .claude/skills/${slug}/SKILL.md.\n<<<MULLION_SCAFFOLD_REGION_END>>>\n` +
     extra
   );
 }
@@ -96,7 +96,7 @@ describe("buildGenerationPrompt", () => {
       seed: {},
       hasSkill: false,
       hasReviewer: false,
-      hasBriefingRegion: false,
+      hasScaffoldRegion: false,
     });
     expect(prompt).toContain("READ-ONLY");
     expect(prompt).toContain(".claude/skills/demo/SKILL.md");
@@ -109,7 +109,7 @@ describe("buildGenerationPrompt", () => {
       seed: { skill: "draft skill text", reviewerAgent: "draft reviewer text" },
       hasSkill: true,
       hasReviewer: false,
-      hasBriefingRegion: false,
+      hasScaffoldRegion: false,
     });
     expect(prompt).not.toContain("draft skill text");
     expect(prompt).toContain("draft reviewer text");
@@ -125,7 +125,7 @@ describe("buildGenerationPrompt", () => {
       seed: {},
       hasSkill: false,
       hasReviewer: false,
-      hasBriefingRegion: false,
+      hasScaffoldRegion: false,
     });
     expect(prompt).toContain(CODEX_REVIEWER_DELEGATION_CLAUSE);
   });
@@ -145,7 +145,7 @@ describe("buildGenerationPrompt", () => {
       seed: {},
       hasSkill: false,
       hasReviewer: false,
-      hasBriefingRegion: false,
+      hasScaffoldRegion: false,
     });
     expect(prompt).not.toContain('Include a "## Workflow Conventions" section');
     expect(prompt).toContain("Do NOT include a");
@@ -157,7 +157,7 @@ describe("parseGeneratedOutput", () => {
     const result = parseGeneratedOutput(validOutput("demo"), "demo");
     expect(result.skill).toContain("Real invariant.");
     expect(result.reviewer).toContain("Read .claude/skills/demo/SKILL.md first.");
-    expect(result.briefingRegion).toContain("The skill lives at");
+    expect(result.scaffoldRegion).toContain("The skill lives at");
   });
 
   it("throws GenerationOutputError when a section marker is missing", () => {
@@ -244,7 +244,7 @@ describe("parseGeneratedOutput", () => {
     const result = parseGeneratedOutput(withTrailingJunk, "demo");
     expect(result.skill).not.toContain("etc/passwd");
     expect(result.reviewer).not.toContain("etc/passwd");
-    expect(result.briefingRegion).not.toContain("etc/passwd");
+    expect(result.scaffoldRegion).not.toContain("etc/passwd");
   });
 });
 
@@ -313,7 +313,7 @@ describe("generateScaffoldContent", () => {
         seed: {},
         hasSkill: false,
         hasReviewer: false,
-        hasBriefingRegion: false,
+        hasScaffoldRegion: false,
       }),
     ).rejects.toThrow(UnsupportedGenerationAgentError);
     // No scratch worktree was ever created for a rejected agent.
@@ -346,7 +346,7 @@ describe("generateScaffoldContent", () => {
       seed: {},
       hasSkill: false,
       hasReviewer: false,
-      hasBriefingRegion: false,
+      hasScaffoldRegion: false,
       spawn: fakeSpawn,
     });
 
@@ -375,7 +375,7 @@ describe("generateScaffoldContent", () => {
         seed: {},
         hasSkill: false,
         hasReviewer: false,
-        hasBriefingRegion: false,
+        hasScaffoldRegion: false,
         spawn: failingSpawn,
       }),
     ).rejects.toThrow("agent crashed");
@@ -404,7 +404,7 @@ describe("generateScaffoldContent", () => {
         seed: {},
         hasSkill: false,
         hasReviewer: false,
-        hasBriefingRegion: false,
+        hasScaffoldRegion: false,
         spawn: malformedSpawn,
       }),
     ).rejects.toThrow(GenerationOutputError);
@@ -437,7 +437,7 @@ describe("generateScaffoldContent", () => {
         seed: {},
         hasSkill: false,
         hasReviewer: false,
-        hasBriefingRegion: false,
+        hasScaffoldRegion: false,
         spawn: async () => validOutput("demo"),
       });
 
@@ -456,7 +456,7 @@ describe("generateScaffoldContent", () => {
         seed: {},
         hasSkill: false,
         hasReviewer: false,
-        hasBriefingRegion: false,
+        hasScaffoldRegion: false,
         spawn: async () => validOutput("demo"),
       });
 
@@ -475,7 +475,7 @@ describe("generateScaffoldContent", () => {
         seed: {},
         hasSkill: false,
         hasReviewer: false,
-        hasBriefingRegion: false,
+        hasScaffoldRegion: false,
         sandbox: false,
         spawn: async () => validOutput("demo"),
       });
@@ -508,7 +508,7 @@ describe("generateScaffoldContent", () => {
       seed: {},
       hasSkill: false,
       hasReviewer: false,
-      hasBriefingRegion: false,
+      hasScaffoldRegion: false,
       spawn: claimsToHaveWrittenElsewhere,
     });
 
@@ -575,7 +575,7 @@ describe("generateScaffoldContent — remote-hosted project (issue #1101)", () =
       seed: {},
       hasSkill: false,
       hasReviewer: false,
-      hasBriefingRegion: false,
+      hasScaffoldRegion: false,
     });
 
     expect(result.skill).toContain("Real invariant.");
@@ -615,7 +615,7 @@ describe("generateScaffoldContent — remote-hosted project (issue #1101)", () =
         seed: {},
         hasSkill: false,
         hasReviewer: false,
-        hasBriefingRegion: false,
+        hasScaffoldRegion: false,
       }),
     ).rejects.toThrow(GenerationWorktreeError);
 
@@ -645,7 +645,7 @@ describe("generateScaffoldContent — remote-hosted project (issue #1101)", () =
         seed: {},
         hasSkill: false,
         hasReviewer: false,
-        hasBriefingRegion: false,
+        hasScaffoldRegion: false,
       }),
     ).rejects.toThrow(GenerationSpawnError);
 
@@ -675,7 +675,7 @@ describe("generateScaffoldContent — remote-hosted project (issue #1101)", () =
         seed: {},
         hasSkill: false,
         hasReviewer: false,
-        hasBriefingRegion: false,
+        hasScaffoldRegion: false,
       }),
     ).rejects.toThrow(UnsupportedGenerationAgentError);
 
@@ -701,7 +701,7 @@ describe("generateScaffoldContent — remote-hosted project (issue #1101)", () =
         seed: {},
         hasSkill: false,
         hasReviewer: false,
-        hasBriefingRegion: false,
+        hasScaffoldRegion: false,
       }),
     ).rejects.toThrow(GenerationSpawnError);
 
@@ -1329,7 +1329,7 @@ describe("validateGenerationOutput", () => {
   const content = (text: string) => ({
     skill: text,
     reviewer: "",
-    briefingRegion: "",
+    scaffoldRegion: "",
     sandboxed: true,
   });
 

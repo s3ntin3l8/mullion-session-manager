@@ -66,7 +66,7 @@ Code, or opencode's own `skills.paths`/`agent/<name>.md` config keys.
 Neither codex nor agy has an equivalent per-project channel; if one of
 those is missing a skill you'd expect, it needs a real repo write to reach
 it (`.agents/skills/<name>/SKILL.md`) — see
-[`project-briefing.md`](project-briefing.md) for the full per-CLI delivery
+[`agent-context.md`](agent-context.md) for the full per-CLI delivery
 table and the repo-scaffolding flow.
 
 ## The four env vars you were spawned with
@@ -459,7 +459,7 @@ separate from anything a session spawn does:
   whether or not anyone opens it.
 
 A project's own skill/reviewer subagent (the pinned-note/skill/reviewer
-feature — see [`project-briefing.md`](project-briefing.md)) is unrelated to
+feature — see [`agent-context.md`](agent-context.md)) is unrelated to
 this mechanism and still rides its own per-session, per-CLI channel exactly
 as described earlier in this doc — a much narrower reach than
 `mullion-reviewer` above: that doc's own delivery table has agy reaching

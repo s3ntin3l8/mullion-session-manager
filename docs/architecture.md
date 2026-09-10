@@ -124,7 +124,7 @@ way as a namespaced one.
   `project-urls` (per-project saved external-URL shortcuts), `project-tooling`
   (`GET`/`PUT`/`DELETE /api/projects/:id/tooling[/skill|/reviewer-agent]` —
   a project's DB-authored pinned note/skill/reviewer subagent, primary-only,
-  no host branching — see [`project-briefing.md`](project-briefing.md)),
+  no host branching — see [`agent-context.md`](agent-context.md)),
   `project-setup` (`POST /api/projects/:id/setup/preview`/`apply`/`generate` —
   scaffold a committed briefing region + starter skill/reviewer into a
   project's own repo as a real pull request; all three work for local AND
@@ -136,13 +136,13 @@ way as a namespaced one.
   (`scaffold-generate.ts`'s `generateScaffoldContent`), which now runs on
   whichever host owns the project's checkout via a new
   `POST /internal/run-generation-turn` route — see
-  [`project-briefing.md`](project-briefing.md#scaffolding-it-into-the-repo-instead)),
+  [`agent-context.md`](agent-context.md#scaffolding-it-into-the-repo-instead)),
   `workflow-conventions` (`GET /api/workflow-conventions/questions`, `POST
 /api/workflow-conventions/preview` — the two read-only endpoints backing
   the Settings → Sessions wizard; neither reads nor writes the actual
   `settings.sessions.workflowConventionsText` value, which rides the
   ordinary `PATCH /api/settings` path — see
-  [`project-briefing.md`](project-briefing.md#workflow-conventions-issue-937)).
+  [`agent-context.md`](agent-context.md#workflow-conventions-issue-937)).
 - `src/services/` — `pty-manager` (dtach/node-pty session lifecycle),
   `project-config` (layered `.crs/actions.json`/`dock.json` + `package.json`/
   `tasks.json` resolution), `agent-detect`, `attention-detect` (BEL/OSC
@@ -194,7 +194,7 @@ way as a namespaced one.
   DB-authored skill/reviewer subagent alongside it; opencode's project
   skill/reviewer instead ride its own `skills.paths`/`agent/` config keys
   directly, no bundle involved — see
-  [`project-briefing.md`](project-briefing.md)), `skills` (per-agent Skill
+  [`agent-context.md`](agent-context.md)), `skills` (per-agent Skill
   discovery/enable-disable across Claude Code/codex/opencode/agy's own
   config locations, plus the hand-rolled SKILL.md frontmatter parser
   `mullion-bundle.ts`/`mullion-scaffold.ts` both reuse), `marked-region`
@@ -203,10 +203,10 @@ way as a namespaced one.
   `mullion-scaffold.ts`), `project-briefing`/`project-tooling` (a project's
   own DB-authored briefing/skill/reviewer — resolution vs. a committed
   AGENTS.md region, and the primary-only DB row backing it, respectively —
-  see [`project-briefing.md`](project-briefing.md)), `mullion-scaffold`
+  see [`agent-context.md`](agent-context.md)), `mullion-scaffold`
   (pure "current file contents + options → target file set" computation
   backing the scaffold-as-PR flow — see
-  [`project-briefing.md`](project-briefing.md#scaffolding-it-into-the-repo-instead)),
+  [`agent-context.md`](agent-context.md#scaffolding-it-into-the-repo-instead)),
   `opencode-session-transfer` (PR #696 — full opencode conversation-history
   carryover into a promoted worktree via `opencode export`/`import`,
   re-keying the imported session to the worktree's project/directory; local

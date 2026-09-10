@@ -35,7 +35,7 @@ function mockValidGeneration(slug: string) {
   vi.mocked(generateScaffoldContent).mockResolvedValue({
     skill: `---\nname: ${slug}\n---\nGenerated: real invariant about ${slug}.\n`,
     reviewer: `---\nname: ${slug}-reviewer\n---\nRead .claude/skills/${slug}/SKILL.md first.\n`,
-    briefingRegion: `The generated skill lives at .claude/skills/${slug}/SKILL.md.`,
+    scaffoldRegion: `The generated skill lives at .claude/skills/${slug}/SKILL.md.`,
     sandboxed: true,
     possiblyGeneric: false,
   });
@@ -1136,11 +1136,11 @@ describe("project-setup route — /setup/generate (issue #956)", () => {
     await app.close();
   });
 
-  // Issue #1201 — before this, an agent-generated briefingRegion replaced
+  // Issue #1201 — before this, an agent-generated scaffoldRegion replaced
   // the WHOLE AGENTS.md region, so a generated scaffold's committed
   // conventions came from wherever the generation turn happened to infer
   // them from (or nowhere, if it didn't). Both mocked here via
-  // mockValidGeneration's own briefingRegion — the pointer prose the mock
+  // mockValidGeneration's own scaffoldRegion — the pointer prose the mock
   // returns carries no conventions section at all — so this proves
   // /setup/generate's own AGENTS.md now ALWAYS gets computeScaffold's own
   // conventions section layered on top, sourced from this install's
@@ -1238,7 +1238,7 @@ describe("project-setup route — /setup/generate (issue #956)", () => {
     vi.mocked(generateScaffoldContent).mockResolvedValue({
       skill: "---\nname: generic-demo\n---\nCreate src/index.ts.\n",
       reviewer: "---\nname: generic-demo-reviewer\n---\nRead the skill.\n",
-      briefingRegion: "Generic content.",
+      scaffoldRegion: "Generic content.",
       sandboxed: true,
       possiblyGeneric: true,
     });
@@ -1306,7 +1306,7 @@ describe("project-setup route — /setup/generate (issue #956)", () => {
     }
   });
 
-  it("computes hasSkill/hasReviewer/hasBriefingRegion from the project's real checkout, not the scratch worktree", async () => {
+  it("computes hasSkill/hasReviewer/hasScaffoldRegion from the project's real checkout, not the scratch worktree", async () => {
     const app = await buildApp();
     fs.mkdirSync(path.join(repoDir, ".claude", "skills", "demo"), { recursive: true });
     fs.writeFileSync(
@@ -1330,7 +1330,7 @@ describe("project-setup route — /setup/generate (issue #956)", () => {
     const call = vi.mocked(generateScaffoldContent).mock.calls[0][0];
     expect(call.hasSkill).toBe(true);
     expect(call.hasReviewer).toBe(false);
-    expect(call.hasBriefingRegion).toBe(false);
+    expect(call.hasScaffoldRegion).toBe(false);
 
     await app.close();
   });

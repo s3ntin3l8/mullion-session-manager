@@ -77,7 +77,7 @@
 // same posture as agy's permanent read-only status above (so agy's own
 // agent row is discovery-only too, not a special case). Codex has no
 // subagent/command concept at all (confirmed against its own docs — see
-// docs/project-briefing.md's coverage table), so it never contributes an
+// docs/agent-context.md's coverage table), so it never contributes an
 // "agent"/"command" row; agy's own exception (a real, flat-file subagent
 // convention at `resolveAgyGlobalAgentsDir()`) is documented at
 // `globalAgentAndCommandDirs()`'s own entry for it below. Unlike a skill

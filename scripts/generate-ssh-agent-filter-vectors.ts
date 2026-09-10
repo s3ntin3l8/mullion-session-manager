@@ -13,7 +13,7 @@
 // (see src/cli/ssh-agent-bridge-mux.mjs's own header comment on why THAT
 // tree can't import TypeScript at all).
 //
-// Two modes, mirroring check-env-docs.mjs/check-briefing-sync.mjs's own
+// Two modes, mirroring check-env-docs.mjs/check-scaffold-region-sync.mjs's own
 // dual "regenerate" / "--check" shape:
 //   node/tsx scripts/generate-ssh-agent-filter-vectors.ts          — writes
 //   node/tsx scripts/generate-ssh-agent-filter-vectors.ts --check  — exits
@@ -34,8 +34,8 @@ import { CHANNEL_WINDOW_BYTES } from "../src/services/ssh-agent-mux.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 // Overridable so tests can point this at a tmpdir fixture instead of the
-// real, tracked JSON file — same convention as check-briefing-sync.mjs's
-// own BRIEFING_SYNC_ROOT (see that script's comment). Every real invocation
+// real, tracked JSON file — same convention as check-scaffold-region-sync.mjs's
+// own SCAFFOLD_REGION_SYNC_ROOT (see that script's comment). Every real invocation
 // (`npm run lint`, `npm run generate:ssh-agent-filter-vectors`) leaves this
 // unset and gets the real repo path.
 const FIXTURE_PATH =

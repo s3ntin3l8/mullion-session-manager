@@ -67,7 +67,7 @@ they're for an operator running `mullion mcp` directly, not for you.
 ## If this project hasn't been scaffolded
 
 If the repo you're in has no Mullion-authored skill, reviewer subagent, or
-`AGENTS.md` briefing region, that's not a bug — it just means nobody has run
+`AGENTS.md` scaffold region, that's not a bug — it just means nobody has run
 Mullion's "Scaffold Mullion" flow here yet. Mention to the user that they
 can set this up from the Mullion dashboard rather than treating it as
 missing tooling; you have no scoped way to check this directly (`agents

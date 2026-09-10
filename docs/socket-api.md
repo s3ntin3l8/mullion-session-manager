@@ -178,7 +178,7 @@ monitor with no code change on their side. `previews.get`/`.delete` take
 `projects.get_tooling` and `projects.set_tooling` are how the per-project
 `project_tooling` row is read and written (the same row the Mullion Briefing
 panel edits in the UI). They're operator-facing surfaces — see
-[`docs/project-briefing.md`](project-briefing.md) — and `set_tooling` is
+[`docs/agent-context.md`](agent-context.md) — and `set_tooling` is
 **full-scope only**; `get_tooling` is reachable at both scopes (an agent
 inside a session can read its own project's tooling, just not edit it).
 

@@ -70,7 +70,7 @@ export function clampToBytes(text: string, maxBytes: number, sourceLabel: string
  * superseded, not merged with. If either marker is missing, appends a new
  * region to the end of `text` instead (separated by a blank line from
  * whatever's already there), rather than refusing or guessing where to
- * insert into unfamiliar prose — this mirrors `check-briefing-sync.mjs`'s
+ * insert into unfamiliar prose — this mirrors `check-scaffold-region-sync.mjs`'s
  * own byte-identical-region assumption: a fresh region always starts
  * unambiguous only when appended, never spliced mid-paragraph. `body` is
  * trimmed before being placed between the markers, so callers don't need
