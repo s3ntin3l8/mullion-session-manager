@@ -8,20 +8,34 @@ import type { DockControl, DockerServiceInfo, Session } from "../api/index.js";
 // full-component renders — that coverage is unaffected by this move, this
 // file's own dockHelpers.test.ts adds direct coverage on top.)
 
+const DIGEST_PREFIX_LENGTH = 19; // "sha256:" + 12 hex chars
+
+/** Truncates a `sha256:<hex>` digest to a short, legible prefix — shared by
+ * both branches below that can hand `imageTag` a full 64-char digest. */
+function shortenDigest(digest: string): string {
+  return digest.length > DIGEST_PREFIX_LENGTH ? digest.slice(0, DIGEST_PREFIX_LENGTH) : digest;
+}
+
 /** Last path segment, then the tag after its final `:` — "latest" when the
  * ref carries no explicit tag (compose's own default). A `name@sha256:...`
  * digest reference is handled first (Hermes review — splitting on `:`
  * alone would wrongly return the bare string "sha256" for one), shown as a
- * short digest prefix instead. Not exhaustive beyond that (doesn't handle a
- * registry host with a literal port, e.g. "host:5000/repo" with no tag),
- * but good enough for a compact pill; the full ref is always available via
- * the pill's own title attribute. */
+ * short digest prefix instead — and so is a BARE `sha256:<64 hex>` ref with
+ * no name/tag at all (Hermes review, issue #1221's own PR): without this,
+ * a service whose container reports a bare digest — build-only or not,
+ * e.g. a registry image that's since been pruned locally too — showed the
+ * full, unshortened 64-char hash in the pill. Not exhaustive beyond that
+ * (doesn't handle a registry host with a literal port, e.g.
+ * "host:5000/repo" with no tag), but good enough for a compact pill; the
+ * full ref is always available via the pill's own title attribute. */
 export function imageTag(imageRef: string): string {
   const lastSegment = imageRef.split("/").pop() ?? imageRef;
   const atIndex = lastSegment.indexOf("@");
   if (atIndex !== -1) {
-    const digest = lastSegment.slice(atIndex + 1);
-    return digest.length > 19 ? digest.slice(0, 19) : digest; // "sha256:" + 12 hex chars
+    return shortenDigest(lastSegment.slice(atIndex + 1));
+  }
+  if (/^sha256:[0-9a-f]{64}$/i.test(lastSegment)) {
+    return shortenDigest(lastSegment);
   }
   const colonIndex = lastSegment.lastIndexOf(":");
   return colonIndex === -1 ? "latest" : lastSegment.slice(colonIndex + 1);

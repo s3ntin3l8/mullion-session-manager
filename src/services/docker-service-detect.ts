@@ -289,11 +289,21 @@ interface BuildOnlyProbeCacheEntry {
  * this whole module is a singleton discovery cache, not per-request state. */
 const buildOnlyProbeCache = new Map<string, BuildOnlyProbeCacheEntry>();
 
+/** Folds in `composeResolvable` too (Hermes review), not just each
+ * service's `configHash` — a container's `com.docker.compose.config-hash`
+ * label only changes on recreate, so deleting/moving the stack's compose
+ * files, or editing them without yet applying the change, leaves every
+ * hash exactly as it was. Without this, a `buildOnly: true` result from
+ * back when the files existed would stay cached forever even after they're
+ * gone, contradicting this cache's own "falls back to looksBuildOnly when
+ * the probe can't run" doc comment on `ComposeService.buildOnly`. */
 function foldConfigHashes(services: readonly ComposeService[]): string {
-  return services
+  const hashes = services
     .map((s) => `${s.service}:${s.configHash}`)
     .sort()
     .join(",");
+  const anyResolvable = services.some((s) => s.composeResolvable);
+  return `${hashes}|resolvable=${anyResolvable}`;
 }
 
 /** Runs `docker compose ... config --format json` for one compose project
