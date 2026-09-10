@@ -1264,6 +1264,52 @@ export async function projectsRoute(app: FastifyInstance) {
     return `${DOCKER_STACK_SESSION_NAME_PREFIX}${composeProject}`;
   }
 
+  // Issue #1182 — findActiveStackSession's check + createSessionRecord's
+  // create are two separate `await`s with nothing between them stopping a
+  // second, genuinely concurrent request for the SAME stack from also
+  // seeing "no active session" and also inserting one. A DB-level unique
+  // constraint can't fix this cleanly: findActiveStackSession isn't a pure
+  // DB check, it also requires `isMasterAlive` (see its own comment above)
+  // because `sessions.status` records intent, not live process state — a
+  // constraint would reject the legitimate, common case of a finished
+  // action whose row hasn't been reconciled yet. A keyed in-process mutex
+  // serializes the two callers instead: the second one re-runs the WHOLE
+  // check (including isMasterAlive) only after the first has finished
+  // inserting, so it correctly finds the new session and returns
+  // `reused: true` — same semantics as running one request at a time by
+  // hand. Same shape as the in-flight-promise maps in git-status.ts/
+  // docker-service-detect.ts, except this one is a serializing CHAIN, not
+  // a coalescing map: those hand every caller the SAME promise/result,
+  // which would make the second caller here miss `reused: true`.
+  //
+  // Keyed by `${projectId}:${composeProject}` — same identity
+  // stackSessionName() already uses. Closure-scoped (not module-scoped) so
+  // it doesn't leak entries across `buildApp()` instances sharing a
+  // `projectId` value, e.g. in tests.
+  //
+  // Per-process only: two backend processes against the same SQLite file
+  // would still race. Not a supported configuration today —
+  // `deriveInstanceId` namespaces an instance by its own `sessionsDir`,
+  // which is where the DB lives. See issue #1223 for a DB-level guard if
+  // that configuration is ever supported.
+  const stackSessionLocks = new Map<string, Promise<unknown>>();
+
+  function withStackLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    const previous = stackSessionLocks.get(key) ?? Promise.resolve();
+    const run = previous.then(fn, fn);
+    // Swallow so a failed run doesn't become an unhandled rejection via the
+    // map entry alone — the caller's own `run` promise still rejects.
+    const tail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    stackSessionLocks.set(key, tail);
+    tail.finally(() => {
+      if (stackSessionLocks.get(key) === tail) stackSessionLocks.delete(key);
+    });
+    return run;
+  }
+
   async function findActiveStackSession(projectId: number, composeProject: string) {
     const [existing] = app.db
       .select()
@@ -1353,33 +1399,40 @@ export async function projectsRoute(app: FastifyInstance) {
       composeProject: service.composeProject,
     };
 
-    const existing = await findActiveStackSession(projectId, service.composeProject);
-    if (existing) {
-      // `control` here still describes the just-REQUESTED action (title/
-      // command), not necessarily whatever the reused session was actually
-      // started with. Hermes review — Dock.tsx doesn't attach anything by
-      // `sessionId` for a stack-wide action (only ephemeral controls,
-      // matched by command string), so this mismatch isn't just cosmetic:
-      // the frontend's own handler (handlePullAndRestart/
-      // handleRebuildAndRestart/handleStackAction) checks `reused` FIRST
-      // and skips adding this control entirely, surfacing a status message
-      // instead — see those handlers' own comments. `control` is still
-      // returned (not omitted) for a caller that hasn't been updated to
-      // check `reused` first, so it degrades to the same "wrong label,
-      // right session" behavior this comment used to claim was the whole
-      // story.
-      return { ok: true, sessionId: existing.id, control, reused: true };
-    }
+    // Issue #1182 — see withStackLock's own comment. Everything that reads
+    // "is there already an active session for this stack" and, if not,
+    // creates one, has to run as a single unit per (projectId,
+    // composeProject) — otherwise two concurrent callers can both observe
+    // "no active session" and both insert one.
+    return withStackLock(`${projectId}:${service.composeProject}`, async () => {
+      const existing = await findActiveStackSession(projectId, service.composeProject);
+      if (existing) {
+        // `control` here still describes the just-REQUESTED action (title/
+        // command), not necessarily whatever the reused session was actually
+        // started with. Hermes review — Dock.tsx doesn't attach anything by
+        // `sessionId` for a stack-wide action (only ephemeral controls,
+        // matched by command string), so this mismatch isn't just cosmetic:
+        // the frontend's own handler (handlePullAndRestart/
+        // handleRebuildAndRestart/handleStackAction) checks `reused` FIRST
+        // and skips adding this control entirely, surfacing a status message
+        // instead — see those handlers' own comments. `control` is still
+        // returned (not omitted) for a caller that hasn't been updated to
+        // check `reused` first, so it degrades to the same "wrong label,
+        // right session" behavior this comment used to claim was the whole
+        // story.
+        return { ok: true, sessionId: existing.id, control, reused: true };
+      }
 
-    const result = await createSessionRecord(app, {
-      projectId,
-      command,
-      kind: "dock",
-      name: stackSessionName(service.composeProject),
-      nameLocked: true,
+      const result = await createSessionRecord(app, {
+        projectId,
+        command,
+        kind: "dock",
+        name: stackSessionName(service.composeProject),
+        nameLocked: true,
+      });
+      if (!result.ok) return { ok: false };
+      return { ok: true, sessionId: result.row.id, control };
     });
-    if (!result.ok) return { ok: false };
-    return { ok: true, sessionId: result.row.id, control };
   }
 
   // Per-service, inline lifecycle actions (restart/stop/start) — bounded

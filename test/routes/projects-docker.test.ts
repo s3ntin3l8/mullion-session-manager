@@ -916,6 +916,52 @@ describe("projects route — Docker Compose service discovery (issue #73)", () =
       await app.close();
     });
 
+    // Issue #1182 — findActiveStackSession's check and createSessionRecord's
+    // create are two separate `await`s; without withStackLock (projects.ts)
+    // serializing them per (projectId, composeProject), two genuinely
+    // concurrent requests can both observe "no active session" and both
+    // insert one. `Promise.all` is what makes this reproducible in-process:
+    // the `await` inside findActiveStackSession yields the microtask queue
+    // before the insert, so both `app.inject()` calls below interleave even
+    // though better-sqlite3 itself is synchronous.
+    it("two CONCURRENT stack actions on the same compose project resolve to exactly one created session", async () => {
+      discoveredServices = [fixtureService()];
+      const app = await buildApp();
+      vi.spyOn(app.pty, "isMasterAlive").mockResolvedValue(true);
+      const projectId = await createProject(app);
+
+      const [apply, restart] = await Promise.all([
+        app.inject({
+          method: "POST",
+          url: `/api/projects/${projectId}/docker/stack/apply`,
+          payload: { controlId: "docker:sanctuary:web" },
+        }),
+        app.inject({
+          method: "POST",
+          url: `/api/projects/${projectId}/docker/stack/restart`,
+          payload: { controlId: "docker:sanctuary:web" },
+        }),
+      ]);
+
+      expect(apply.statusCode).toBe(201);
+      expect(restart.statusCode).toBe(201);
+      const applyBody = apply.json();
+      const restartBody = restart.json();
+
+      // Exactly one of the two started a fresh session; the other reused it.
+      const reusedCount = [applyBody.reused, restartBody.reused].filter((r) => r === true).length;
+      expect(reusedCount).toBe(1);
+      expect(applyBody.sessionId).toBe(restartBody.sessionId);
+
+      const sessionsRes = await app.inject({
+        method: "GET",
+        url: `/api/sessions?projectId=${projectId}&kind=dock`,
+      });
+      expect(sessionsRes.json()).toHaveLength(1);
+
+      await app.close();
+    });
+
     it("the docker/update route (pull-and-restart) shares the SAME identity as the four stack/* routes", async () => {
       discoveredServices = [fixtureService()];
       const app = await buildApp();
