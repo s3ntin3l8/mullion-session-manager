@@ -1039,7 +1039,16 @@ describe("Dock", () => {
 
       await screen.findByText("Check for update");
       const checkBtn = screen.getByText("Check for update").closest("button");
-      expect(checkBtn).toBeDisabled();
+      // Issue #1106 — aria-disabled, not the native `disabled` attribute
+      // (see KebabMenu.tsx's own comment): a `disabled` button can't
+      // reliably carry an explanatory `title`, so the click guard lives in
+      // handleItemClick instead and this stays presentational.
+      expect(checkBtn).toHaveAttribute("aria-disabled", "true");
+      expect(checkBtn).not.toBeDisabled();
+      expect(checkBtn).toHaveAttribute(
+        "title",
+        "No registry image to compare — this service is built from source",
+      );
 
       // The bug #857 fixed: previously BOTH menu items were disabled for a
       // build-only stack, leaving no lifecycle action reachable at all. Now

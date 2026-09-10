@@ -80,6 +80,12 @@ let stopSucceeds = true;
 let startSucceeds = true;
 let configHashSucceeds = true;
 let configHashOutput = "web abc123hash";
+// Defaults to an empty services map — every existing fixture's own service
+// name is then simply absent from it, so refineBuildOnlyDetection() finds
+// nothing to override and each test's looksBuildOnly fallback value stands
+// unchanged. Tests exercising the probe itself set this explicitly.
+let buildOnlyProbeSucceeds = true;
+let buildOnlyProbeOutput = '{"services":{}}';
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof ChildProcess>();
@@ -151,6 +157,18 @@ vi.mock("node:child_process", async (importOriginal) => {
           }
           return;
         }
+        // Issue #1221's probe — checked BEFORE the --hash= branch below,
+        // since both match `args.includes("config")`.
+        if (args[0] === "compose" && args.includes("config") && args.includes("--format")) {
+          if (buildOnlyProbeSucceeds) {
+            child.stdout.emit("data", Buffer.from(buildOnlyProbeOutput));
+            child.emit("close", 0);
+          } else {
+            child.stderr.emit("data", Buffer.from("Error: no configuration file provided\n"));
+            child.emit("close", 1);
+          }
+          return;
+        }
         if (args[0] === "compose" && args.includes("config")) {
           if (configHashSucceeds) {
             child.stdout.emit("data", Buffer.from(`${configHashOutput}\n`));
@@ -172,6 +190,7 @@ const {
   getComposeServices,
   clearComposeCacheForTests,
   clearComposeAvailabilityCacheForTests,
+  clearBuildOnlyProbeCacheForTests,
   mapServicesToProject,
   toDockControls,
   shellQuote,
@@ -206,8 +225,11 @@ describe("docker-service-detect", () => {
     startSucceeds = true;
     configHashSucceeds = true;
     configHashOutput = "web abc123hash";
+    buildOnlyProbeSucceeds = true;
+    buildOnlyProbeOutput = '{"services":{}}';
     clearComposeCacheForTests();
     clearComposeAvailabilityCacheForTests();
+    clearBuildOnlyProbeCacheForTests();
     resolvableDir = fs.mkdtempSync(path.join(os.tmpdir(), "docker-detect-resolvable-"));
     resolvableComposeFile = path.join(resolvableDir, "docker-compose.yml");
     fs.writeFileSync(resolvableComposeFile, "services: {}\n");
@@ -412,6 +434,127 @@ describe("docker-service-detect", () => {
 
       const services = await getComposeServices();
       expect(services[0]?.buildOnly).toBe(false);
+    });
+
+    // Issue #1221 — a rebuilt-and-pruned build-only service's container
+    // reverts to a bare `sha256:` digest once its old, default-named image
+    // is pruned, which looksBuildOnly's name-shape guess can never
+    // recognize. The `docker compose ... config --format json` probe reads
+    // the compose file directly instead, and is authoritative whenever the
+    // stack is composeResolvable.
+    it("flags buildOnly from the compose config probe when the image is a bare digest looksBuildOnly can't match", async () => {
+      buildOnlyProbeOutput = JSON.stringify({
+        services: { api: { build: { context: "." } } },
+      });
+      psOutput = psLine({
+        id: "a",
+        names: "pocket-portfolio-tracker-api-1",
+        state: "running",
+        status: "Up 17 hours",
+        image: "sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+        createdAt: "2026-08-01 00:00:00 +0000 UTC",
+        project: "pocket-portfolio-tracker",
+        service: "api",
+        workingDir: resolvableDir,
+        imageId: "sha256:x",
+        oneoff: "False",
+        configFiles: resolvableComposeFile,
+      });
+
+      const services = await getComposeServices();
+      // looksBuildOnly alone would report false here — the whole point of
+      // the probe.
+      expect(services[0]?.buildOnly).toBe(true);
+    });
+
+    it("falls back to the name heuristic without throwing when the compose config probe fails", async () => {
+      buildOnlyProbeSucceeds = false;
+      psOutput = psLine({
+        id: "a",
+        names: "pocket-portfolio-tracker-api-1",
+        state: "running",
+        status: "Up 17 hours",
+        image: "sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+        createdAt: "2026-08-01 00:00:00 +0000 UTC",
+        project: "pocket-portfolio-tracker",
+        service: "api",
+        workingDir: resolvableDir,
+        imageId: "sha256:x",
+        oneoff: "False",
+        configFiles: resolvableComposeFile,
+      });
+
+      const services = await getComposeServices();
+      // The probe failed, so this falls back to looksBuildOnly, which
+      // can't match a bare digest — false, not a thrown error.
+      expect(services[0]?.buildOnly).toBe(false);
+    });
+
+    it("falls back to the name heuristic when the compose config probe returns unparsable output", async () => {
+      buildOnlyProbeOutput = "not json";
+      psOutput = psLine({
+        id: "a",
+        names: "pocket-portfolio-tracker-api-1",
+        state: "running",
+        status: "Up 1 hour",
+        image: "pocket-portfolio-tracker-api",
+        createdAt: "2026-08-01 00:00:00 +0000 UTC",
+        project: "pocket-portfolio-tracker",
+        service: "api",
+        workingDir: resolvableDir,
+        imageId: "sha256:x",
+        oneoff: "False",
+        configFiles: resolvableComposeFile,
+      });
+
+      const services = await getComposeServices();
+      // Unparsable probe output falls back to looksBuildOnly, which DOES
+      // match this fixture's still-default-named image.
+      expect(services[0]?.buildOnly).toBe(true);
+    });
+
+    // Hermes review, issue #1221's own PR — the probe cache was originally
+    // keyed only on each service's configHash, which a container's
+    // com.docker.compose.config-hash label only changes on RECREATE.
+    // Deleting/moving the stack's compose files leaves that label exactly
+    // as it was, so a cache keyed on it alone would keep serving a stale
+    // `buildOnly: true` forever even after the files (and therefore the
+    // probe's own ability to run at all) are gone.
+    it("invalidates the cached probe result when composeResolvable changes, even though configHash hasn't", async () => {
+      buildOnlyProbeOutput = JSON.stringify({ services: { api: { build: { context: "." } } } });
+      const fixture = () =>
+        psLine({
+          id: "a",
+          names: "pocket-portfolio-tracker-api-1",
+          state: "running",
+          status: "Up 17 hours",
+          // A bare digest — looksBuildOnly's name-shape fallback can never
+          // match this, so if the fallback fires we'll see `false`, not a
+          // stale `true` carried over from the earlier probe.
+          image: `sha256:${"a1".repeat(32)}`,
+          createdAt: "2026-08-01 00:00:00 +0000 UTC",
+          project: "pocket-portfolio-tracker",
+          service: "api",
+          workingDir: resolvableDir,
+          imageId: "sha256:x",
+          oneoff: "False",
+          configFiles: resolvableComposeFile,
+          configHash: "stable-hash-unaffected-by-file-deletion",
+        });
+      psOutput = fixture();
+
+      const first = await getComposeServices(true);
+      expect(first[0]?.composeResolvable).toBe(true);
+      expect(first[0]?.buildOnly).toBe(true); // from the probe
+
+      // Compose file gone — composeResolvable flips to false — but the
+      // running container's own configHash label is untouched.
+      fs.rmSync(resolvableComposeFile, { force: true });
+      psOutput = fixture();
+
+      const second = await getComposeServices(true);
+      expect(second[0]?.composeResolvable).toBe(false);
+      expect(second[0]?.buildOnly).toBe(false);
     });
 
     it("flags composeResolvable false when the config_files label is empty", async () => {

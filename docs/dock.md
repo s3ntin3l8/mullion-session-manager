@@ -220,7 +220,12 @@ Each discovered monitor:
   service comes back up. It never fights a manual "logs off" — the log
   stream stays off until the container's state actually changes (or the
   setting is toggled), not merely re-polled.
-- Shows an **image tag** pill (hover for the full image reference).
+- Shows an **image tag** pill (hover for the full image reference) — for a
+  `build:`-only service whose own image has since been superseded and
+  pruned (its container now reports a bare `sha256:<digest>`, not a
+  readable name), this shows compose's own default build-image name
+  (`<composeProject>-<service>`) instead of the raw digest, which would
+  otherwise read as a meaningless hash.
 - Has its own **⋯ menu with only that container's own actions**:
   - **Restart service** / **Stop service** — `docker compose restart|stop
 <service>`. Stop arms for 3 seconds before firing; restart doesn't.
@@ -229,10 +234,24 @@ Each discovered monitor:
   - **Check for update** — runs a quiet `docker compose pull` for that one
     service and compares the resulting local image id against the running
     container's own image, without pulling or restarting it. Disabled for
-    a `build:`-only service (no registry image to compare). Stays
-    per-service rather than moving to the stack header below: `build:`-only
-    is a per-service property, and the image pill this re-tints on an
-    available update belongs to this one container specifically.
+    a `build:`-only service (no registry image to compare) — the disabled
+    item carries a hover tooltip stating that reason, rather than leaving a
+    clickable-looking item with no explanation of why it does nothing
+    (issue #1106). Stays per-service rather than moving to the stack header
+    below: `build:`-only is a per-service property, and the image pill this
+    re-tints on an available update belongs to this one container
+    specifically.
+
+`build:`-only detection itself (issue #1221) reads `docker compose ...
+config --format json` directly — whether a service has a `build:` key and
+no `image:` key — whenever the stack's compose file(s) are still resolvable
+on disk, one probe per distinct compose project, cached until any of that
+project's services' config changes. This is what a rebuilt-and-pruned
+service needs: its own old, default-named image gets pruned once
+superseded, so its container reverts to a bare digest that a name-shape
+guess alone can never recognize as build-only. That name-shape guess
+(`<composeProject>-<service>[:latest]`, compose's own default build-image
+name) is kept only as the fallback for when the probe can't run.
 
 Every compose project discovered in a column also gets its own **stack
 header**, above that project's monitors, labelled with the compose project
@@ -242,7 +261,11 @@ is one header per project rather than one label for the whole column. Its
 own **⋯ menu** carries the actions that apply to the **whole** stack, not
 just one service — these used to repeat identically on every service row of
 the same stack; they're hoisted here instead so a two-service stack doesn't
-offer "Restart stack" twice with no indication they're the same button:
+offer "Restart stack" twice with no indication they're the same button.
+Unlike the per-service Check for update above, Pull/Rebuild are **omitted**
+from this menu entirely when they don't apply, not shown disabled — a
+`build:`-only stack's ⋯ simply has no "Pull & restart stack" item to
+explain:
 
 - **Restart stack** / **Apply config** — `docker compose restart` / `up -d`
   for the whole stack, no confirmation needed.
