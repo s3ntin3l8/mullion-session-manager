@@ -134,6 +134,13 @@ export interface Project {
   // global BOOLEAN setting to inherit from (the global tier here is the
   // text itself). Mirrors src/db/schema.ts's projects.injectWorkflowConventions.
   injectWorkflowConventions: boolean | null;
+  // Issue #1208 — a SECOND, independent opt-out from injectWorkflowConventions
+  // above. Mirrors src/db/schema.ts's
+  // projects.suppressConventionsInjectionAfterScaffold: means "the committed
+  // AGENTS.md already carries this install's text, don't deliver it a
+  // second way per-session" and affects only session-lifecycle.ts's
+  // injection gate — never conventionsDrifted below or any text resolver.
+  suppressConventionsInjectionAfterScaffold: boolean | null;
   // Phase 3 (drift detection, issue #1205, follow-up to #1201) — mirrors
   // src/db/schema.ts's projects.conventionsHash 1:1: null means "never
   // scaffolded." Write-only from the frontend's own perspective (only ever

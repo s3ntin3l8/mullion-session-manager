@@ -543,6 +543,32 @@ export function ProjectBriefingPanel({ params }: { params: ProjectBriefingPanelP
             void updateProject(params.projectId, { injectWorkflowConventions: value })
           }
         />
+        {/* Issue #1208 — a plain on/off toggle, not an InjectOverrideRow:
+            that component's "inherit from a global setting" reset (the ×
+            button) doesn't apply here — this column has no global tier at
+            all, it's a per-project-only suppression on top of the row
+            above. Only meaningful once the row above is actually inject-
+            ing something (`injectWorkflowConventions !== false`); shown
+            regardless of scaffold state so it's reachable from this panel
+            even if a project's committed AGENTS.md was hand-edited to
+            carry the text rather than scaffolded through ProjectSetupPanel. */}
+        {(project?.injectWorkflowConventions ?? true) && (
+          <span className="git-panel-toggle-wrapper">
+            <Toggle
+              size="small"
+              on={project?.suppressConventionsInjectionAfterScaffold ?? false}
+              onChange={(next) =>
+                void updateProject(params.projectId, {
+                  suppressConventionsInjectionAfterScaffold: next,
+                })
+              }
+              ariaLabel="Suppress — already committed to AGENTS.md"
+            />
+            <span className="git-panel-toggle-label">
+              Suppress — already committed to AGENTS.md
+            </span>
+          </span>
+        )}
       </div>
       <div className="agent-rules-panel">
         <div className="agent-rules-panel-list cmux-scroll">

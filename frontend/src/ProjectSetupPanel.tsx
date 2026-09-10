@@ -78,6 +78,7 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
   const project = useDashboardStore((s) => s.projects.find((p) => p.id === params.projectId));
   const injectWorkflowConventions = project?.injectWorkflowConventions ?? true;
   const refreshProjects = useDashboardStore((s) => s.refreshProjects);
+  const updateProject = useDashboardStore((s) => s.updateProject);
   // Hermes review, PR #1200 round 3 (suggestion) — the disclosure used to
   // hand-copy a prose paraphrase of mullion-scaffold.ts's
   // SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS ("always branch + PR, Conventional
@@ -182,6 +183,47 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
         ) : (
           <div className="agent-rules-panel-notice">
             Committed to branch <code>{applyResult.branch}</code> — {applyResult.detail}
+          </div>
+        )}
+        {/* Issue #1208, the properly-scoped follow-up to PR #1206 round 1's
+            reverted checkbox: THAT checkbox flipped injectWorkflowConventions,
+            which also controls what text gets resolved/hashed (see this
+            column's own doc comment, schema.ts) — flipping it here would
+            have permanently false-positived the drift badge and made the
+            banner's own "re-run Preview and Apply" advice silently
+            overwrite the just-committed real text with the generic
+            defaults on the next apply. This one PATCHes a column that
+            touches only session-lifecycle.ts's injection gate — drift
+            tracking (conventionsDrifted, above) is UNAFFECTED and keeps
+            working exactly as before, which the copy below says
+            explicitly. Only shown when there is install-wide text to
+            suppress in the first place (an opted-out or empty-text project
+            just committed the generic defaults, and the spawn gate
+            wouldn't have injected anything for it anyway). */}
+        {workflowConventionsText.length > 0 && injectWorkflowConventions && (
+          <div className="settings-row">
+            <div className="settings-row-text">
+              <label className="settings-row-label" htmlFor="setup-suppress-injection">
+                Skip per-session injection
+              </label>
+              <div className="settings-row-desc">
+                This project's <code>AGENTS.md</code> now carries the same conventions text. Mullion
+                keeps checking it against your install's conventions and will still flag it if they
+                drift — this only stops delivering it a second way at session start.
+              </div>
+            </div>
+            <div className="settings-row-control">
+              <input
+                id="setup-suppress-injection"
+                type="checkbox"
+                checked={project?.suppressConventionsInjectionAfterScaffold ?? false}
+                onChange={(e) =>
+                  void updateProject(params.projectId, {
+                    suppressConventionsInjectionAfterScaffold: e.target.checked,
+                  })
+                }
+              />
+            </div>
           </div>
         )}
         <button className="git-panel-fetch-btn" onClick={handleBack}>

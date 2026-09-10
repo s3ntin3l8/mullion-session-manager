@@ -978,7 +978,17 @@ export async function createSessionRecord(
   // that field's own doc comment, pty-manager.ts). `undefined` here also
   // fails CLOSED on a version-skewed remote build that strips the field —
   // the right direction for a policy-text feature.
-  const resolvedInjectWorkflowConventions = project.injectWorkflowConventions ?? true;
+  // Issue #1208 — a SECOND, independent opt-out layered on top of the one
+  // above: `injectWorkflowConventions` means "my AGENTS.md is authoritative
+  // instead" (feeds text resolution/hashing elsewhere); this one means
+  // "the committed AGENTS.md already carries this install's current text,
+  // stop delivering it a second way" and touches nothing but this gate —
+  // see its own doc comment on the schema column for why the two must stay
+  // independent. `?? false` so existing rows (column not yet set) keep
+  // today's behavior unchanged.
+  const resolvedInjectWorkflowConventions =
+    (project.injectWorkflowConventions ?? true) &&
+    !(project.suppressConventionsInjectionAfterScaffold ?? false);
   const resolvedWorkflowConventionsText =
     resolvedInjectWorkflowConventions && globalSessionSettings.workflowConventionsText.length > 0
       ? globalSessionSettings.workflowConventionsText

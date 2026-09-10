@@ -163,6 +163,14 @@ interface UpdateProjectBody {
   // text itself (settings.ts), which has its own independent "empty means
   // nothing to inject" gate.
   injectWorkflowConventions?: boolean | null;
+  // Issue #1208 — a SECOND, independent opt-out from injectWorkflowConventions
+  // above. That flag means "my AGENTS.md is authoritative instead" and feeds
+  // text resolution (resolveWorkflowConventionsText); this one means "the
+  // committed AGENTS.md already carries this install's text, don't deliver
+  // it a second way per-session" and touches only session-lifecycle.ts's
+  // injection gate — never conventionsDrifted or any resolver. See the
+  // schema column's own doc comment for the full invariant.
+  suppressConventionsInjectionAfterScaffold?: boolean | null;
   // Same confirm-first contract as CreateProjectBody, above.
   createDir?: boolean;
   gitInit?: boolean;
@@ -207,6 +215,7 @@ const updateProjectSchema = {
       injectAgentGuide: { type: ["boolean", "null"] },
       injectProjectBriefing: { type: ["boolean", "null"] },
       injectWorkflowConventions: { type: ["boolean", "null"] },
+      suppressConventionsInjectionAfterScaffold: { type: ["boolean", "null"] },
       createDir: { type: "boolean" },
       gitInit: { type: "boolean" },
     },
@@ -2845,6 +2854,7 @@ export async function projectsRoute(app: FastifyInstance) {
         injectAgentGuide,
         injectProjectBriefing,
         injectWorkflowConventions,
+        suppressConventionsInjectionAfterScaffold,
         createDir,
         gitInit,
       } = request.body;
@@ -2903,10 +2913,11 @@ export async function projectsRoute(app: FastifyInstance) {
         autoTagRelease === undefined &&
         injectAgentGuide === undefined &&
         injectProjectBriefing === undefined &&
-        injectWorkflowConventions === undefined
+        injectWorkflowConventions === undefined &&
+        suppressConventionsInjectionAfterScaffold === undefined
       ) {
         return reply.badRequest(
-          "At least one of name, cwd, devServerUrl, autoFetch, defaultAgent, defaultReviewAgent, mergeOnApprove, autoApprove, maxAutoReturnRounds, conventionalCommitTitles, autoTagRelease, injectAgentGuide, injectProjectBriefing, or injectWorkflowConventions must be provided.",
+          "At least one of name, cwd, devServerUrl, autoFetch, defaultAgent, defaultReviewAgent, mergeOnApprove, autoApprove, maxAutoReturnRounds, conventionalCommitTitles, autoTagRelease, injectAgentGuide, injectProjectBriefing, injectWorkflowConventions, or suppressConventionsInjectionAfterScaffold must be provided.",
         );
       }
 
@@ -2979,6 +2990,9 @@ export async function projectsRoute(app: FastifyInstance) {
           ...(injectAgentGuide !== undefined ? { injectAgentGuide } : {}),
           ...(injectProjectBriefing !== undefined ? { injectProjectBriefing } : {}),
           ...(injectWorkflowConventions !== undefined ? { injectWorkflowConventions } : {}),
+          ...(suppressConventionsInjectionAfterScaffold !== undefined
+            ? { suppressConventionsInjectionAfterScaffold }
+            : {}),
         })
         .where(eq(projects.id, projectId))
         .returning()

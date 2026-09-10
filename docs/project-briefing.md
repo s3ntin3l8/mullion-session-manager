@@ -422,6 +422,33 @@ pinned note]` `additionalContext` ordering `hooks.ts` composes for
   states only: never scaffolded (`null` hash), up to date, or drifted — an
   opted-out project is never considered drifted, since by definition its
   committed text is no longer tracking the install-wide one.
+- **Two independent opt-outs, not one (issue #1208).** It's tempting to
+  read `injectWorkflowConventions` as covering "the committed `AGENTS.md`
+  already has this text, stop injecting it too" — PR #1206 shipped exactly
+  that as a post-apply checkbox, and Hermes review caught it as a data-loss
+  bug before merge: that flag also gates text _resolution_ (the bullet
+  above), so flipping it after a real scaffold made the drift check
+  permanently false-positive and made its own "re-run Preview and Apply"
+  banner silently overwrite the just-committed real text with the generic
+  defaults on the next apply. The two questions are genuinely different and
+  need genuinely different columns:
+  - `injectWorkflowConventions === false` — **"my `AGENTS.md` is
+    authoritative instead."** Feeds `resolveWorkflowConventionsText` /
+    `resolveScaffoldWorkflowConventionsText`, which resolve to `""` (→ the
+    scaffold defaults) for this project; `conventionsDrifted` is
+    unconditionally `false`; a re-scaffold writes the generic defaults, not
+    this install's real text.
+  - `suppressConventionsInjectionAfterScaffold === true` — **"stop
+    double-delivering, keep tracking."** Touches only
+    `session-lifecycle.ts`'s per-session injection gate — it appears in
+    neither resolver nor in the `conventionsDrifted` computation. Drift
+    tracking keeps working exactly as before: if the install's global text
+    later changes, this project still shows `conventionsDrifted: true`,
+    and a re-scaffold still commits the real, current text. Offered as a
+    checkbox after a successful apply in Scaffold Mullion's own panel (only
+    when there's install-wide text to suppress in the first place), and
+    toggleable any time from the same "Session injection for this project"
+    row in `ProjectBriefingPanel.tsx` the other three toggles live in.
 
 ## Settings
 
