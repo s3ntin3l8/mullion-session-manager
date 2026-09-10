@@ -114,6 +114,7 @@ const NOOP_PROPS = {
   onOpenSettingsProjects: vi.fn(),
   onOpenTasks: vi.fn(),
   onOpenGit: vi.fn(),
+  onOpenProjectSetup: vi.fn(),
 };
 
 // App.tsx always renders <Sidebar> as the sole child of `.sidebar-wrapper`
@@ -673,6 +674,115 @@ describe("Sidebar P9 — inline error on a failed delete", () => {
     await user.click(screen.getByTitle("End this session (the program will be terminated)"));
 
     expect(await screen.findByText(/unreachable/i)).toBeInTheDocument();
+  });
+});
+
+// Phase 4 (issue #1205's plan, Gap F) — "Scaffold Mullion" used to be
+// reachable only from the Command Palette. These three describe blocks
+// cover the badge/kebab-entry/post-create-offer discoverability surfaces
+// added on top of that.
+describe("Sidebar Phase 4 — never-scaffolded badge", () => {
+  it("shows the indicator when the project has never been scaffolded (conventionsHash null)", () => {
+    projects = [makeProject({ id: PROJECT.id, conventionsHash: null })];
+    renderSidebar();
+
+    expect(screen.getByTitle("Never scaffolded with Mullion")).toBeInTheDocument();
+  });
+
+  it("hides the indicator once the project has been scaffolded", () => {
+    projects = [makeProject({ id: PROJECT.id, conventionsHash: "abc123" })];
+    renderSidebar();
+
+    expect(screen.queryByTitle("Never scaffolded with Mullion")).not.toBeInTheDocument();
+  });
+});
+
+describe("Sidebar Phase 4 — 'Scaffold Mullion' kebab-menu entry", () => {
+  it("calls onOpenProjectSetup with this project's id", async () => {
+    const onOpenProjectSetup = vi.fn();
+    const user = userEvent.setup();
+    renderSidebar({ onOpenProjectSetup });
+
+    await user.click(screen.getByTitle("More…"));
+    await user.click(await screen.findByText("Scaffold Mullion"));
+
+    expect(onOpenProjectSetup).toHaveBeenCalledWith(PROJECT.id);
+  });
+});
+
+describe("Sidebar Phase 4 — post-create scaffold offer (#944: dismissible, never a modal gate)", () => {
+  it("offers to scaffold the newly created project, and accepting it opens setup and dismisses the offer", async () => {
+    const created = makeProject({ id: 999, name: "widgets" });
+    createProject.mockResolvedValueOnce(created);
+    const onOpenProjectSetup = vi.fn();
+    const user = userEvent.setup();
+    renderSidebar({ onOpenProjectSetup });
+
+    await user.click(screen.getByTitle("Add project"));
+    await user.type(screen.getByPlaceholderText("~/code/my-project"), "/repos/widgets");
+    await user.click(screen.getByText("Add project", { selector: "button" }));
+
+    expect(
+      await screen.findByText(/Set up Mullion.s conventions in .widgets./),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByText("Scaffold Mullion"));
+
+    expect(onOpenProjectSetup).toHaveBeenCalledWith(999);
+    expect(screen.queryByText(/Set up Mullion.s conventions in/)).not.toBeInTheDocument();
+  });
+
+  it("dismissing the offer hides it without opening setup", async () => {
+    const created = makeProject({ id: 999, name: "widgets" });
+    createProject.mockResolvedValueOnce(created);
+    const onOpenProjectSetup = vi.fn();
+    const user = userEvent.setup();
+    renderSidebar({ onOpenProjectSetup });
+
+    await user.click(screen.getByTitle("Add project"));
+    await user.type(screen.getByPlaceholderText("~/code/my-project"), "/repos/widgets");
+    await user.click(screen.getByText("Add project", { selector: "button" }));
+    await screen.findByText(/Set up Mullion.s conventions in/);
+
+    await user.click(screen.getByTitle("Dismiss"));
+
+    expect(screen.queryByText(/Set up Mullion.s conventions in/)).not.toBeInTheDocument();
+    expect(onOpenProjectSetup).not.toHaveBeenCalled();
+  });
+
+  it("never offers to scaffold when the modal is simply cancelled without creating anything", async () => {
+    // This file's shared `createProject` mock isn't cleared between tests
+    // (see the other Phase 4 tests above, which do call it) — clear here so
+    // this test's "not called" assertion checks only this test's own gesture.
+    createProject.mockClear();
+    const user = userEvent.setup();
+    renderSidebar();
+
+    await user.click(screen.getByTitle("Add project"));
+    await user.type(screen.getByPlaceholderText("~/code/my-project"), "/repos/widgets");
+    await user.click(screen.getByText("Cancel"));
+
+    expect(createProject).not.toHaveBeenCalled();
+    expect(screen.queryByText(/Set up Mullion.s conventions in/)).not.toBeInTheDocument();
+  });
+
+  // code-review round 1 — reopening "Add project" while a previous offer is
+  // still showing used to leave that stale offer's banner visible
+  // alongside/underneath the new modal, so its "Scaffold Mullion" button
+  // could fire for the WRONG project once the new create resolved.
+  it("clears a still-showing offer from a previous create when 'Add project' is opened again", async () => {
+    createProject.mockResolvedValueOnce(makeProject({ id: 999, name: "widgets" }));
+    const user = userEvent.setup();
+    renderSidebar();
+
+    await user.click(screen.getByTitle("Add project"));
+    await user.type(screen.getByPlaceholderText("~/code/my-project"), "/repos/widgets");
+    await user.click(screen.getByText("Add project", { selector: "button" }));
+    await screen.findByText(/Set up Mullion.s conventions in .widgets./);
+
+    await user.click(screen.getByTitle("Add project"));
+
+    expect(screen.queryByText(/Set up Mullion.s conventions in/)).not.toBeInTheDocument();
   });
 });
 

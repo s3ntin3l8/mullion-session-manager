@@ -341,7 +341,10 @@ describe("PaneActionsMenu", () => {
       await user.click(screen.getByTitle("More…"));
       const item = screen.getByText("Reset pane sizes").closest("button");
 
-      expect(item).toBeDisabled();
+      // aria-disabled, not the native `disabled` attribute — issue #1106:
+      // a disabled button can't reliably carry the explanatory title.
+      expect(item).toHaveAttribute("aria-disabled", "true");
+      expect(item).not.toBeDisabled();
       expect(item).toHaveAttribute("title", "No skewed row of tiled panes to reset");
 
       await user.click(item!);
@@ -379,7 +382,9 @@ describe("PaneActionsMenu", () => {
       // Rename/Kill above.
       expect(screen.queryByText("Split right")).not.toBeInTheDocument();
       expect(screen.queryByText("Split down")).not.toBeInTheDocument();
-      expect(screen.getByText("Move (drag tab)").closest("button")).toBeDisabled();
+      const moveItem = screen.getByText("Move (drag tab)").closest("button");
+      expect(moveItem).toHaveAttribute("aria-disabled", "true");
+      expect(moveItem).not.toBeDisabled();
     });
 
     it("hides View timeline, Open Agent Browser, and Promote to worktree", async () => {
@@ -426,6 +431,9 @@ describe("PaneActionsMenu", () => {
         injectAgentGuide: null,
         injectProjectBriefing: null,
         injectWorkflowConventions: null,
+        suppressConventionsInjectionAfterScaffold: null,
+        conventionsHash: null,
+        conventionsDrifted: false,
         createdAt: "2026-01-01T00:00:00.000Z",
       },
     ];
@@ -478,6 +486,9 @@ describe("PaneActionsMenu", () => {
         injectAgentGuide: null,
         injectProjectBriefing: null,
         injectWorkflowConventions: null,
+        suppressConventionsInjectionAfterScaffold: null,
+        conventionsHash: null,
+        conventionsDrifted: false,
         createdAt: "2026-01-01T00:00:00.000Z",
       },
     ];

@@ -11,9 +11,10 @@ import {
   InvalidScaffoldSlugError,
   scaffoldSkillPath,
   scaffoldReviewerPath,
+  hashWorkflowConventionsSection,
+  SCAFFOLD_REGION_START,
   type ScaffoldOptions,
 } from "../services/mullion-scaffold.js";
-import { MARKER_START } from "../services/project-briefing.js";
 import { deriveWorktreePath, type CreateWorktreeResult } from "../services/git-worktree.js";
 import { resolveBackend } from "../services/session-backend.js";
 import {
@@ -31,6 +32,7 @@ import { resolveGitHubToken } from "../services/github-integration.js";
 import { createPullRequest, findPullRequestByHead } from "../services/github-write.js";
 import { GitHubApiError } from "../services/github.js";
 import { getStoredSettings } from "../services/settings.js";
+import { resolveWorkflowConventionsText } from "../services/workflow-conventions.js";
 import {
   readProjectSkill,
   readProjectReviewerAgent,
@@ -195,10 +197,10 @@ function resolveScaffoldWorkflowConventionsText(
   app: FastifyInstance,
   project: { injectWorkflowConventions: boolean | null },
 ): string {
-  const injectWorkflowConventions = project.injectWorkflowConventions ?? true;
-  return injectWorkflowConventions
-    ? getStoredSettings(app.db).sessions.workflowConventionsText
-    : "";
+  return resolveWorkflowConventionsText(
+    project.injectWorkflowConventions,
+    getStoredSettings(app.db).sessions.workflowConventionsText,
+  );
 }
 
 // Every path computeScaffold can ever emit, read up front so preview always
@@ -294,7 +296,7 @@ async function readScaffoldableFiles(
  * always scaffoldSkillPath/scaffoldReviewerPath's own slug-derived output,
  * but cloning this way costs nothing and keeps the guard uniform) rather
  * than mutating the caller's own `existingFiles`, which
- * generateScaffoldContent's hasSkill/hasReviewer/hasBriefingRegion
+ * generateScaffoldContent's hasSkill/hasReviewer/hasScaffoldRegion
  * parameters must keep reading unmodified (see the route's own comment on
  * why those booleans are computed BEFORE this function ever runs). */
 function withoutRefreshedPaths(
@@ -411,6 +413,17 @@ interface PreviewRecord {
   branch: string;
   slug: string;
   createdAt: number;
+  // Phase 3 (drift detection) — the resolved
+  // ScaffoldOptions.workflowConventionsText this preview/generate call
+  // actually used (resolveScaffoldWorkflowConventionsText's own return
+  // value, empty string when opted out or unconfigured — see that
+  // function's own doc comment). Read back unchanged at apply time to
+  // stamp projects.conventionsHash, rather than re-resolving settings
+  // there: settings can change inside this record's own TTL window, and
+  // stamping a hash for text that was never actually the text committed
+  // would make the drift badge wrong from the moment it ships. Same
+  // "resolved once, read back unchanged" posture as `slug` itself.
+  workflowConventionsText: string;
 }
 
 // In-memory only, primary-only, short-lived — a preview is a "here's what
@@ -463,7 +476,7 @@ function findLiveSlugPreview(projectId: number, slug: string): PreviewRecord | n
 // cares where that content came from (see mullion-scaffold.ts's own doc
 // comment on why that has to stay true). Split into `ensureSetupWorktree`
 // + `finishPreview` (rather than one function) so `/setup/generate` can
-// read `existingFiles` — hence hasSkill/hasReviewer/hasBriefingRegion —
+// read `existingFiles` — hence hasSkill/hasReviewer/hasScaffoldRegion —
 // from the SAME worktree instance that goes on to decide computeScaffold's
 // entries, instead of a second, independent read against `project.cwd`
 // that could answer a different question (a feature branch checked out,
@@ -582,6 +595,11 @@ async function finishPreview(
     branch: worktree.branch,
     slug: options.slug,
     createdAt: Date.now(),
+    // Both call sites (`/setup/preview`, `/setup/generate`) always resolve
+    // this via resolveScaffoldWorkflowConventionsText before reaching here
+    // — the `?? ""` only guards ScaffoldOptions's own optional typing, it's
+    // never actually reached with undefined in practice.
+    workflowConventionsText: options.workflowConventionsText ?? "",
   });
 
   return {
@@ -699,7 +717,7 @@ export async function projectSetupRoute(app: FastifyInstance) {
       }
 
       // Stood up (or reused) FIRST, and its own `existingFiles` read used
-      // for both the hasSkill/hasReviewer/hasBriefingRegion decision below
+      // for both the hasSkill/hasReviewer/hasScaffoldRegion decision below
       // AND, later, computeScaffold's own entries — one worktree, one
       // read, one consistent answer to "does a committed file already
       // exist" (see ensureSetupWorktree's own doc comment: a second,
@@ -719,7 +737,7 @@ export async function projectSetupRoute(app: FastifyInstance) {
       const existingFiles = read.files;
       const hasSkill = existingFiles[scaffoldSkillPath(options.slug)] !== undefined;
       const hasReviewer = existingFiles[scaffoldReviewerPath(options.slug)] !== undefined;
-      const hasBriefingRegion = (existingFiles["AGENTS.md"] ?? "").includes(MARKER_START);
+      const hasScaffoldRegion = (existingFiles["AGENTS.md"] ?? "").includes(SCAFFOLD_REGION_START);
 
       // Issue #1082(c) — `refresh` is the caller's explicit, per-target
       // opt-in to regenerating an already-committed file (see the schema's
@@ -781,7 +799,7 @@ export async function projectSetupRoute(app: FastifyInstance) {
           },
           hasSkill,
           hasReviewer,
-          hasBriefingRegion,
+          hasScaffoldRegion,
           // Issue #1133 — this primary's own opt-out; only takes effect for
           // a LOCAL_HOST_ID project (generateScaffoldContent's own doc
           // comment). A remote-hosted project's own
@@ -900,7 +918,23 @@ export async function projectSetupRoute(app: FastifyInstance) {
       // PR merges). Sourced from `record.slug` (the previewed/applied
       // slug), never re-read from the request body, since this route has no
       // body field of its own beyond `previewId`.
-      app.db.update(projects).set({ slug: record.slug }).where(eq(projects.id, projectId)).run();
+      //
+      // Phase 3 (drift detection) — conventionsHash stamped in the SAME
+      // update, from `record.workflowConventionsText` (resolved once at
+      // preview/generate time, read back unchanged here — see
+      // PreviewRecord's own doc comment for why re-resolving live settings
+      // at this point would be wrong) run through the identical
+      // workflowConventionsSection composition computeScaffold itself used
+      // to build the committed region. Reusing that exact function is what
+      // lets the drift check later compare like for like.
+      app.db
+        .update(projects)
+        .set({
+          slug: record.slug,
+          conventionsHash: hashWorkflowConventionsSection(record.workflowConventionsText),
+        })
+        .where(eq(projects.id, projectId))
+        .run();
 
       const repoRef = await resolveRepoRef(app, project);
       if (!repoRef) {

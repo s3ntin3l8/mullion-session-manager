@@ -71,13 +71,17 @@ describe("buildWorkflowConventionsText", () => {
     }
   });
 
-  // Issue #937's own "Starting question set" names exactly these ten axes —
-  // pinning the id list here so a future edit that silently drops or
-  // renames one of them fails a test instead of just shrinking the wizard.
-  it("covers the issue's own ten v1 question axes", () => {
+  // Issue #937's own "Starting question set" named the original ten axes;
+  // issue #1203 (Phase 2 of the follow-up plan) added `worktrees` as an
+  // eleventh, right after `branchBase` (a refinement of the same "how do
+  // you start work on a branch" question). Pinning the id list here so a
+  // future edit that silently drops, renames, or reorders one of them
+  // fails a test instead of just shrinking or reshuffling the wizard.
+  it("covers the eleven v1+worktrees question axes, in order", () => {
     expect(WORKFLOW_CONVENTION_QUESTIONS.map((q) => q.id)).toEqual([
       "branching",
       "branchBase",
+      "worktrees",
       "titleConvention",
       "mergeStrategy",
       "preMergeRequirements",
@@ -89,13 +93,55 @@ describe("buildWorkflowConventionsText", () => {
     ]);
   });
 
-  it("answering the full ten-question set produces a longer, all-fragments-present text (a full 'regenerate' run)", () => {
+  it("answering the full question set produces a longer, all-fragments-present text (a full 'regenerate' run)", () => {
     const answers: Record<string, string> = {};
     for (const question of WORKFLOW_CONVENTION_QUESTIONS) {
       answers[question.id] = question.options[0].id;
     }
     const text = buildWorkflowConventionsText(answers);
     expect(text.split("\n\n")).toHaveLength(WORKFLOW_CONVENTION_QUESTIONS.length);
+  });
+
+  // Issue #1203 (Phase 2) — the worktree question specifically: named
+  // as one of the five conventions the whole follow-up plan tracks, and
+  // unlike the other v1 axes, `worktree` text already existed as a
+  // sub-clause of postMergeCleanup's own cleanup fragment before this —
+  // these assertions pin down that the NEW dedicated question's own
+  // fragment is what's selected, not a false-positive match against that
+  // pre-existing text.
+  describe("worktrees question", () => {
+    it("selects the dedicated-worktree-per-branch fragment, not the postMergeCleanup cleanup clause", () => {
+      const text = buildWorkflowConventionsText({ worktrees: "worktree" });
+      expect(text).toContain("Work in a dedicated worktree per branch");
+      expect(text).toContain("git worktree add");
+      // postMergeCleanup's own "delete" option fragment (a DIFFERENT
+      // question, unanswered here) — confirms this isn't a false-positive
+      // match against that pre-existing worktree-adjacent text.
+      expect(text).not.toContain("remove any associated worktree");
+    });
+
+    it("selects the main-checkout fragment when chosen", () => {
+      const text = buildWorkflowConventionsText({ worktrees: "main-checkout" });
+      expect(text).toBe("Work directly in the main checkout — no separate worktree per branch.");
+    });
+
+    it("is silently skipped, like every other unanswered question, when omitted", () => {
+      const text = buildWorkflowConventionsText({ branching: "branch-pr" });
+      expect(text).not.toContain("worktree");
+    });
+  });
+
+  // Regression guard: buildWorkflowConventionsText(SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS)
+  // is Phase 1's own byte-identical-when-unset fallback
+  // (mullion-scaffold.ts's workflowConventionsSection) — adding a question
+  // here must not change what that fixed default answer set (which
+  // deliberately never answers `worktrees`) produces.
+  it("SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS still produces its pre-#1203 text, unaffected by the new question", async () => {
+    const { SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS } =
+      await import("../../src/services/mullion-scaffold.js");
+    const text = buildWorkflowConventionsText(SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS);
+    expect(text).not.toContain("worktree");
+    expect(text).toContain("Never commit directly to the default branch");
   });
 });
 

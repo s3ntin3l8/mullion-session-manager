@@ -1068,6 +1068,76 @@ describe("projects route", () => {
       await app.close();
     });
 
+    // Issue #1208 — a SECOND, independent opt-out from injectWorkflowConventions
+    // above; same nullable-boolean contract (null/false = inject, true =
+    // suppress), but it must never affect what injectWorkflowConventions
+    // itself resolves to or reports.
+    it("sets, then clears, suppressConventionsInjectionAfterScaffold", async () => {
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: {
+          createDir: true,
+          name: "suppress-conventions-injection-p",
+          cwd: "/tmp/suppress-conventions-injection-p",
+        },
+      });
+      const { id } = created.json();
+      expect(created.json().suppressConventionsInjectionAfterScaffold).toBeNull();
+
+      const set = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${id}`,
+        payload: { suppressConventionsInjectionAfterScaffold: true },
+      });
+      expect(set.statusCode).toBe(200);
+      expect(set.json()).toMatchObject({ suppressConventionsInjectionAfterScaffold: true });
+
+      const cleared = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${id}`,
+        payload: { suppressConventionsInjectionAfterScaffold: null },
+      });
+      expect(cleared.statusCode).toBe(200);
+      expect(cleared.json().suppressConventionsInjectionAfterScaffold).toBeNull();
+
+      await app.close();
+    });
+
+    // TASK_ROW_COLUMNS-style regression guard, same rationale as
+    // injectWorkflowConventions's own list-projection test above.
+    it("GET /api/projects includes suppressConventionsInjectionAfterScaffold in the list response", async () => {
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: {
+          createDir: true,
+          name: "suppress-conventions-injection-list",
+          cwd: "/tmp/suppress-conventions-injection-list",
+        },
+      });
+      const { id } = created.json();
+      await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${id}`,
+        payload: { suppressConventionsInjectionAfterScaffold: true },
+      });
+
+      const list = await app.inject({ method: "GET", url: "/api/projects" });
+      expect(list.statusCode).toBe(200);
+      const project = (
+        list.json() as Array<{
+          id: number;
+          suppressConventionsInjectionAfterScaffold?: boolean;
+        }>
+      ).find((p) => p.id === id);
+      expect(project?.suppressConventionsInjectionAfterScaffold).toBe(true);
+
+      await app.close();
+    });
+
     it("accepts a PATCH carrying only autoApprove", async () => {
       const app = await buildApp();
       const created = await app.inject({

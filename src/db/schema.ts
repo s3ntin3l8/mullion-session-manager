@@ -296,6 +296,40 @@ export const projects = sqliteTable("projects", {
   // (see session-lifecycle.ts's discoverCommittedScaffoldOnHost, issue
   // #1124).
   slug: text("slug"),
+  // Phase 3 (drift detection, issue #1205, follow-up to #1201) — a hash of the EXACT
+  // `workflowConventionsSection(...)` string /setup/apply committed into
+  // this project's own AGENTS.md, stamped at the same moment as `slug`
+  // above. Nullable: null means "never scaffolded" — a project that has
+  // never been scaffolded is not "drifted," it's simply unscaffolded, a
+  // distinct third state from "up to date" and "stale." The drift check
+  // (routes/project-setup.ts) re-derives
+  // `workflowConventionsSection(currentSettingsText)` at READ time and
+  // compares to this column — reusing the same function at both stamp and
+  // check time is what keeps the two from silently diverging. Overwritten
+  // (not merged) on every successful apply, same posture as `slug`.
+  conventionsHash: text("conventions_hash"),
+  // Issue #1208, the properly-scoped follow-up to PR #1206's reverted
+  // post-apply checkbox. Deliberately a SECOND, independent signal from
+  // `injectWorkflowConventions` above — that flag means "this project's own
+  // AGENTS.md is authoritative instead" and feeds text RESOLUTION
+  // (resolveWorkflowConventionsText / resolveScaffoldWorkflowConventionsText
+  // both fold it to "", which falls back to SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS
+  // — that's the exact footgun #1206 round 1 hit). This column means
+  // something narrower: "stop double-delivering the same text per session,
+  // because the committed AGENTS.md already carries it" — it must never
+  // affect what text gets resolved or hashed. Load-bearing invariant: this
+  // column appears in NONE of resolveWorkflowConventionsText,
+  // resolveScaffoldWorkflowConventionsText, or the conventionsDrifted
+  // computation (routes/projects.ts) — only in session-lifecycle.ts's
+  // spawn-time injection gate and the UI. A project with this column set
+  // must still report conventionsDrifted: true after the install's global
+  // text changes, unlike a project opted out via injectWorkflowConventions.
+  // Nullable, no default: null/false = inject as before (today's behavior
+  // for every existing row); true = suppress.
+  suppressConventionsInjectionAfterScaffold: integer(
+    "suppress_conventions_injection_after_scaffold",
+    { mode: "boolean" },
+  ),
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
     .$defaultFn(() => new Date()),

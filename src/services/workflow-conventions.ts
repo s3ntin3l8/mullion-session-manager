@@ -71,6 +71,34 @@ export const WORKFLOW_CONVENTION_QUESTIONS: readonly WorkflowConventionQuestion[
       },
     ],
   },
+  // Issue #1203 (Phase 2 of the follow-up plan) — a refinement of the
+  // branching question directly above: not WHERE you branch off, but
+  // whether you also work in a dedicated checkout of that branch.
+  // Deliberately not added to SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS
+  // (mullion-scaffold.ts) — imposing a worktree workflow on an arbitrary
+  // scaffolded repo is exactly what that constant's own rationale comment
+  // argues against; a project only gets this answer when its own install
+  // actually configured it.
+  {
+    id: "worktrees",
+    question: "Work in a dedicated git worktree per branch, or in the main checkout?",
+    options: [
+      {
+        id: "worktree",
+        label: "Dedicated worktree per branch (recommended)",
+        fragment:
+          "Work in a dedicated worktree per branch, off the latest remote default branch: " +
+          "`git fetch origin && git worktree add <dir> -b <branch> origin/<default>`. " +
+          "A fresh worktree does not inherit installed dependencies — reinstall them there " +
+          "before testing or building.",
+      },
+      {
+        id: "main-checkout",
+        label: "Work directly in the main checkout",
+        fragment: "Work directly in the main checkout — no separate worktree per branch.",
+      },
+    ],
+  },
   {
     id: "titleConvention",
     question:
@@ -256,6 +284,23 @@ export function buildWorkflowConventionsText(answers: Record<string, string>): s
     fragments.push(option.fragment);
   }
   return fragments.join("\n\n");
+}
+
+// Phase 3 (drift detection, issue #1205, follow-up to #1201) — the SAME per-project
+// opt-out resolution session-lifecycle.ts's own createSessionRecord uses
+// for the per-session injection (`project.injectWorkflowConventions ?? true`
+// gates whether the install-wide text applies at all), extracted as a pure
+// function (no `app`/DB access — the caller resolves `globalText` itself,
+// typically via `getStoredSettings(app.db).sessions.workflowConventionsText`)
+// so routes/project-setup.ts's scaffold resolution and routes/projects.ts's
+// drift check both derive "what SHOULD this project's conventions be right
+// now" the identical way, rather than each route re-deriving its own
+// slightly different version of the same opt-out logic.
+export function resolveWorkflowConventionsText(
+  injectWorkflowConventions: boolean | null,
+  globalText: string,
+): string {
+  return (injectWorkflowConventions ?? true) ? globalText : "";
 }
 
 /** Cap on the injected text, mirroring project-briefing.ts's own

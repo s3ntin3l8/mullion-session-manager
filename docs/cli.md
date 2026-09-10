@@ -179,7 +179,7 @@ $M browser screenshot $S --out /tmp/shot.png
   `error` for any field that rejected — this is the one surface that
   exposes the per-field diagnostics (the MCP `set_project_tooling` tool
   collapses them to a generic error). See
-  [`docs/project-briefing.md`](project-briefing.md) for what each field
+  [`docs/agent-context.md`](agent-context.md) for what each field
   does and how the resolved values reach spawned sessions.
 
 ### preview
@@ -316,7 +316,7 @@ Tools exposed, beyond `promote_to_worktree`/`use_browser`/`browser_action`
 (`src/mcp/tools.mjs`). The two `*_project_tooling` tools are full-scope only
 — they're operator-side, for automating the same per-project row the
 Mullion Briefing panel edits in the UI; see
-[`docs/project-briefing.md`](project-briefing.md). Note: the
+[`docs/agent-context.md`](agent-context.md). Note: the
 `set_project_tooling` MCP tool surfaces a partial-failure upsert as a
 generic tool error — the CLI is the right surface if a caller needs to
 see which field rejected (the per-field `ok`/`status`/`error`).

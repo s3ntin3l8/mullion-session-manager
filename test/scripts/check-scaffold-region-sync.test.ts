@@ -3,13 +3,16 @@
 // AGENTS.md is now the single source of truth, so there's nothing left to
 // compare it against. This exercises the REPURPOSED script via execFile
 // (precedent: test/scripts/self-update.test.ts), against per-test fixture
-// directories, using the script's BRIEFING_SYNC_ROOT override so it never
-// touches this repo's own AGENTS.md/CLAUDE.md — it now guards a narrower
-// invariant: none of CLAUDE.md, GEMINI.md, or AGENTS.override.md may
-// re-acquire a content-bearing copy of the old `mullion:briefing` region.
+// directories, using the script's SCAFFOLD_REGION_SYNC_ROOT override so it
+// never touches this repo's own AGENTS.md/CLAUDE.md — it now guards a
+// narrower invariant: none of CLAUDE.md, GEMINI.md, or AGENTS.override.md
+// may re-acquire a content-bearing copy of the old `mullion:briefing`
+// region. Issue #1215 — renamed from check-briefing-sync.test.ts; the
+// marker literals below are unchanged (see SCAFFOLD_REGION_START's own doc
+// comment in mullion-scaffold.ts for why the wire format is frozen).
 //
-// One case deliberately does NOT set BRIEFING_SYNC_ROOT: without it, the
-// script falls back to the real repo root, which is the only path
+// One case deliberately does NOT set SCAFFOLD_REGION_SYNC_ROOT: without it,
+// the script falls back to the real repo root, which is the only path
 // `npm run lint` and the pre-commit hook ever take in production. Every
 // other case here injects the env var, so that fallback would otherwise go
 // completely unexercised.
@@ -23,7 +26,9 @@ import { fileURLToPath } from "node:url";
 
 const execFileAsync = promisify(execFile);
 
-const SCRIPT = fileURLToPath(new URL("../../scripts/check-briefing-sync.mjs", import.meta.url));
+const SCRIPT = fileURLToPath(
+  new URL("../../scripts/check-scaffold-region-sync.mjs", import.meta.url),
+);
 
 const START = "<!-- mullion:briefing:start -->";
 const END = "<!-- mullion:briefing:end -->";
@@ -33,25 +38,26 @@ function withRegion(label: string): string {
 }
 
 function runScript(root?: string) {
-  // Explicitly clear BRIEFING_SYNC_ROOT rather than passing bare
-  // `process.env` when `root` is omitted — an ambient BRIEFING_SYNC_ROOT
-  // leaked into this process's env (e.g. from a shell export) would
-  // otherwise silently redirect the "unset" case to a fixture too, defeating
-  // the one test that's supposed to exercise the real default-root fallback.
+  // Explicitly clear SCAFFOLD_REGION_SYNC_ROOT rather than passing bare
+  // `process.env` when `root` is omitted — an ambient
+  // SCAFFOLD_REGION_SYNC_ROOT leaked into this process's env (e.g. from a
+  // shell export) would otherwise silently redirect the "unset" case to a
+  // fixture too, defeating the one test that's supposed to exercise the
+  // real default-root fallback.
   const env = { ...process.env };
   if (root) {
-    env.BRIEFING_SYNC_ROOT = root;
+    env.SCAFFOLD_REGION_SYNC_ROOT = root;
   } else {
-    delete env.BRIEFING_SYNC_ROOT;
+    delete env.SCAFFOLD_REGION_SYNC_ROOT;
   }
   return execFileAsync("node", [SCRIPT], { env });
 }
 
-describe("scripts/check-briefing-sync.mjs", () => {
+describe("scripts/check-scaffold-region-sync.mjs", () => {
   let root: string;
 
   beforeEach(() => {
-    root = fs.mkdtempSync(path.join(os.tmpdir(), "briefing-sync-test-"));
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "scaffold-region-sync-test-"));
   });
 
   afterEach(() => {
@@ -63,7 +69,7 @@ describe("scripts/check-briefing-sync.mjs", () => {
 
     const { stdout } = await runScript(root);
 
-    expect(stdout).toContain("OK — no content-bearing briefing mirror or override found.");
+    expect(stdout).toContain("OK — no content-bearing scaffold-region mirror or override found.");
   });
 
   it("passes when GEMINI.md exists but only carries a plain pointer, no mullion:briefing region", async () => {
@@ -140,7 +146,7 @@ describe("scripts/check-briefing-sync.mjs", () => {
     expect(error.stdout).toContain("AGENTS.override.md carries its own");
   });
 
-  it("passes against the real repo root when BRIEFING_SYNC_ROOT is unset", async () => {
+  it("passes against the real repo root when SCAFFOLD_REGION_SYNC_ROOT is unset", async () => {
     // This is the path `npm run lint` and the pre-commit hook actually take
     // in production — every other test in this file overrides the root, so
     // without this one the default-root fallback would never run at all.

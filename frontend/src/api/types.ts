@@ -134,6 +134,27 @@ export interface Project {
   // global BOOLEAN setting to inherit from (the global tier here is the
   // text itself). Mirrors src/db/schema.ts's projects.injectWorkflowConventions.
   injectWorkflowConventions: boolean | null;
+  // Issue #1208 — a SECOND, independent opt-out from injectWorkflowConventions
+  // above. Mirrors src/db/schema.ts's
+  // projects.suppressConventionsInjectionAfterScaffold: means "the committed
+  // AGENTS.md already carries this install's text, don't deliver it a
+  // second way per-session" and affects only session-lifecycle.ts's
+  // injection gate — never conventionsDrifted below or any text resolver.
+  suppressConventionsInjectionAfterScaffold: boolean | null;
+  // Phase 3 (drift detection, issue #1205, follow-up to #1201) — mirrors
+  // src/db/schema.ts's projects.conventionsHash 1:1: null means "never
+  // scaffolded." Write-only from the frontend's own perspective (only ever
+  // set server-side, by /setup/apply) — read here purely so
+  // ProjectSetupPanel.tsx can tell "never scaffolded" apart from
+  // "scaffolded, and conventionsDrifted below says whether it's stale."
+  conventionsHash: string | null;
+  // Computed server-side in routes/projects.ts's GET /api/projects (not a
+  // DB column) — true iff conventionsHash is non-null AND no longer
+  // matches what this install's current settings (respecting this
+  // project's own injectWorkflowConventions opt-out) would produce right
+  // now. False for a never-scaffolded project — that's "unscaffolded," a
+  // distinct state from "stale," not something to badge as drifted.
+  conventionsDrifted: boolean;
 }
 
 // Mirrors src/services/host-registry.ts's HostSummary, plus the live
@@ -1447,6 +1468,13 @@ export interface AppSettings {
     // /api/workflow-conventions/preview) rather than hand-typed from a
     // blank starter template.
     workflowConventionsText: string;
+    // Issue #1201 (Phase 2 of the follow-up plan) — mirrors
+    // src/services/settings.ts 1:1, including the "every current question
+    // id mapped to \"\", never a bare {}" default rationale — see that
+    // field's own doc comment for why. WorkflowConventionsWizardModal.tsx
+    // reads this to pre-fill and to decide whether to open on the question
+    // flow or a review step.
+    workflowConventionAnswers: Record<string, string>;
     // Phase 5 (Track B, issue #193 5.3b) — mirrors src/services/settings.ts
     // 1:1. Surfaced in Settings.tsx's Sessions section ("Max child sessions
     // per parent").

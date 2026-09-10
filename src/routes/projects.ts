@@ -96,6 +96,8 @@ import {
   type ComposeService,
 } from "../services/docker-service-detect.js";
 import { createSessionRecord } from "../services/session-lifecycle.js";
+import { resolveWorkflowConventionsText } from "../services/workflow-conventions.js";
+import { hashWorkflowConventionsSection } from "../services/mullion-scaffold.js";
 
 interface CreateProjectBody {
   name: string;
@@ -161,6 +163,14 @@ interface UpdateProjectBody {
   // text itself (settings.ts), which has its own independent "empty means
   // nothing to inject" gate.
   injectWorkflowConventions?: boolean | null;
+  // Issue #1208 — a SECOND, independent opt-out from injectWorkflowConventions
+  // above. That flag means "my AGENTS.md is authoritative instead" and feeds
+  // text resolution (resolveWorkflowConventionsText); this one means "the
+  // committed AGENTS.md already carries this install's text, don't deliver
+  // it a second way per-session" and touches only session-lifecycle.ts's
+  // injection gate — never conventionsDrifted or any resolver. See the
+  // schema column's own doc comment for the full invariant.
+  suppressConventionsInjectionAfterScaffold?: boolean | null;
   // Same confirm-first contract as CreateProjectBody, above.
   createDir?: boolean;
   gitInit?: boolean;
@@ -205,6 +215,7 @@ const updateProjectSchema = {
       injectAgentGuide: { type: ["boolean", "null"] },
       injectProjectBriefing: { type: ["boolean", "null"] },
       injectWorkflowConventions: { type: ["boolean", "null"] },
+      suppressConventionsInjectionAfterScaffold: { type: ["boolean", "null"] },
       createDir: { type: "boolean" },
       gitInit: { type: "boolean" },
     },
@@ -730,6 +741,62 @@ async function loadProjectRepoContext(
   return { project, repoRef, token };
 }
 
+// Issue #1182 — a generic keyed async mutex: calls for the SAME key run one
+// at a time, in order; calls for different keys never wait on each other.
+// Each key gets its own promise CHAIN, not a coalescing cache — a later
+// call for a key waits for the earlier one to fully SETTLE before its own
+// `fn` runs, rather than sharing the earlier call's result (a coalescing
+// map, the shape git-status.ts/docker-service-detect.ts use elsewhere in
+// this repo, would hand both callers the same result — wrong here, since
+// startStackSession's second caller needs to see `reused: true`, not
+// whatever the first caller got).
+//
+// A module-level export (rather than defined inline in projectsRoute's
+// closure, where it originally lived) specifically so it's unit-testable
+// with fully controlled promises — see test/routes/projects-docker.test.ts.
+// The check-then-create race this exists to close (findActiveStackSession's
+// select, then createSessionRecord's insert) is a single-microtask-wide
+// window in a synchronous-SQLite codebase, which two `app.inject()` calls
+// racing under `Promise.all` don't reliably land in — Hermes review, PR
+// #1182: that HTTP-level test passed even with a reverted fix on one host,
+// because the two requests never actually interleaved there. A direct test
+// against this function needs no such luck.
+//
+// No timeout on a queued `fn()` — a caller stuck behind a hung `fn()` waits
+// indefinitely. For `startStackSession`'s own use below, the unbounded wait
+// is inherited from `listOwnedScopes`'s `systemctl --user list-units` spawn
+// (session-process.ts), which has no timeout at all — `isMasterAlive`
+// already depended on that being fast; this lock just makes a hang there
+// block every OTHER stack action on the same compose project too, not only
+// the one that triggered it. Deliberately not worked around here: racing a
+// timeout against `fn()` and moving on while it's still running would let a
+// second `fn()` start before the first's insert completes — reopening the
+// exact race this lock exists to close, just narrowed to the rare hang case
+// instead of closed. The correct fix is a timeout in `listOwnedScopes`
+// itself, which resolves for every caller of `isMasterAlive`/
+// `isMasterAliveBatch`, not just this one — tracked in issue #1232.
+export function createKeyedLock(): <T>(key: string, fn: () => Promise<T>) => Promise<T> {
+  const locks = new Map<string, Promise<unknown>>();
+  return function withLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    const previous = locks.get(key) ?? Promise.resolve();
+    // `previous` is always this same function's own `tail` below, which is
+    // built to never reject — so `fn` only ever runs as the onFulfilled
+    // handler here, never as onRejected.
+    const run = previous.then(fn);
+    // Swallow so a failed run doesn't become an unhandled rejection via the
+    // map entry alone — the caller's own `run` promise still rejects.
+    const tail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    locks.set(key, tail);
+    tail.finally(() => {
+      if (locks.get(key) === tail) locks.delete(key);
+    });
+    return run;
+  };
+}
+
 export async function projectsRoute(app: FastifyInstance) {
   // detectedDevServerPort is derived, not persisted (see dev-server-detect.ts):
   // a project's own devServerUrl column is the sole authoritative value, this
@@ -753,6 +820,16 @@ export async function projectsRoute(app: FastifyInstance) {
       .from(projects)
       .orderBy(sql`LOWER(${projects.name})`)
       .all();
+
+    // Phase 3 (drift detection, issue #1205, follow-up to #1201) — this install's own
+    // conventions text, read ONCE for the whole list rather than per row:
+    // it's install-wide, not per-project, so re-reading settings inside
+    // the row loop below would just be N redundant reads of the same
+    // value. Per-row resolution still differs by each project's own
+    // injectWorkflowConventions opt-out — resolveWorkflowConventionsText
+    // (the same pure function routes/project-setup.ts's own scaffold
+    // resolution uses) applies that per row.
+    const globalConventionsText = getStoredSettings(app.db).sessions.workflowConventionsText;
 
     const activeDockSessions = app.db
       .select()
@@ -829,10 +906,48 @@ export async function projectsRoute(app: FastifyInstance) {
             ruleFiles = [];
           }
         }
+        // Phase 3 (drift detection) — three states, never a fourth:
+        // `null` conventionsHash means "never scaffolded" (a project that
+        // was never scaffolded is not "drifted," it's simply unscaffolded
+        // — a distinct state the UI must not conflate with staleness).
+        // Otherwise, compare the stamped hash against what this install's
+        // CURRENT settings would produce for this project right now,
+        // through the exact same resolveWorkflowConventionsText +
+        // hashWorkflowConventionsSection pair /setup/apply itself used to
+        // stamp it — reusing both functions is what keeps this comparison
+        // from ever silently diverging from what was actually committed.
+        //
+        // Hermes review, PR #1206 round 1 — an opted-out project
+        // (`injectWorkflowConventions === false`) must never report
+        // drifted, full stop, regardless of what its stamped hash happens
+        // to be. That flag's own documented meaning is "this project's own
+        // AGENTS.md is authoritative instead" — it has explicitly stopped
+        // tracking this install's global text, so comparing its hash
+        // against that text is comparing against a value it no longer
+        // claims to follow. Without this short-circuit, a project scaffolded
+        // while opted IN (real global text committed, hash stamped from
+        // that text) and later opted OUT — by any path, not just a
+        // since-removed one-click toggle — would flip to a false-positive
+        // "drifted" the moment resolveWorkflowConventionsText starts
+        // resolving it to "" instead: the stamped hash (of the real text)
+        // would stop matching hash("") forever, and the drift banner's own
+        // "re-run Preview and Apply" suggestion would then silently
+        // overwrite that real, previously-committed text with the generic
+        // SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS stub on the next apply — a
+        // data-loss bug. Gating on the opt-out flag here removes the
+        // signal that would ever prompt that re-apply for such a project.
+        const conventionsDrifted =
+          (row.injectWorkflowConventions ?? true) &&
+          row.conventionsHash !== null &&
+          row.conventionsHash !==
+            hashWorkflowConventionsSection(
+              resolveWorkflowConventionsText(row.injectWorkflowConventions, globalConventionsText),
+            );
         return {
           ...row,
           currentBranch,
           ruleFiles,
+          conventionsDrifted,
           // Remote-hosted projects are skipped outright, not just "usually
           // null": app.pty only tracks sessions spawned/attached by this
           // same process, and a remote project's dock session lives in its
@@ -1205,6 +1320,31 @@ export async function projectsRoute(app: FastifyInstance) {
     return `${DOCKER_STACK_SESSION_NAME_PREFIX}${composeProject}`;
   }
 
+  // Issue #1182 — findActiveStackSession's check + createSessionRecord's
+  // create are two separate `await`s with nothing between them stopping a
+  // second, genuinely concurrent request for the SAME stack from also
+  // seeing "no active session" and also inserting one. A DB-level unique
+  // constraint can't fix this cleanly: findActiveStackSession isn't a pure
+  // DB check, it also requires `isMasterAlive` (see its own comment above)
+  // because `sessions.status` records intent, not live process state — a
+  // constraint would reject the legitimate, common case of a finished
+  // action whose row hasn't been reconciled yet. `createKeyedLock` (module
+  // scope, above `projectsRoute`) is the actual mutex; see its own doc
+  // comment for the full design rationale, including why it's a module
+  // -level export rather than defined inline here. Keyed by
+  // `${projectId}:${composeProject}` — same identity stackSessionName()
+  // already uses. Called fresh per `projectsRoute(app)` invocation (not
+  // hoisted to module scope itself) so its internal Map doesn't leak
+  // entries across `buildApp()` instances sharing a `projectId` value, e.g.
+  // in tests.
+  //
+  // Per-process only: two backend processes against the same SQLite file
+  // would still race. Not a supported configuration today —
+  // `deriveInstanceId` namespaces an instance by its own `sessionsDir`,
+  // which is where the DB lives. See issue #1223 for a DB-level guard if
+  // that configuration is ever supported.
+  const withStackLock = createKeyedLock();
+
   async function findActiveStackSession(projectId: number, composeProject: string) {
     const [existing] = app.db
       .select()
@@ -1294,33 +1434,56 @@ export async function projectsRoute(app: FastifyInstance) {
       composeProject: service.composeProject,
     };
 
-    const existing = await findActiveStackSession(projectId, service.composeProject);
-    if (existing) {
-      // `control` here still describes the just-REQUESTED action (title/
-      // command), not necessarily whatever the reused session was actually
-      // started with. Hermes review — Dock.tsx doesn't attach anything by
-      // `sessionId` for a stack-wide action (only ephemeral controls,
-      // matched by command string), so this mismatch isn't just cosmetic:
-      // the frontend's own handler (handlePullAndRestart/
-      // handleRebuildAndRestart/handleStackAction) checks `reused` FIRST
-      // and skips adding this control entirely, surfacing a status message
-      // instead — see those handlers' own comments. `control` is still
-      // returned (not omitted) for a caller that hasn't been updated to
-      // check `reused` first, so it degrades to the same "wrong label,
-      // right session" behavior this comment used to claim was the whole
-      // story.
-      return { ok: true, sessionId: existing.id, control, reused: true };
-    }
+    // Issue #1182 — see createKeyedLock's own comment. The check-then
+    // -create below has to run as a single unit per (projectId,
+    // composeProject) — otherwise two concurrent callers of THIS function
+    // can both observe "no active session" and both insert one. Scoped to
+    // this one call path, not every possible way a `docker-stack:
+    // <composeProject>` session could get created — Hermes review caught
+    // that `POST /api/sessions/:id/promote` (sessions.ts) creates a
+    // replacement session carrying the source's own `name` forward with no
+    // kind/name guard at all, entirely outside this lock; tracked
+    // separately as issue #1233 rather than fixed here, since it's a
+    // different route with its own review surface.
+    //
+    // The lock is held across the WHOLE call below, including
+    // createSessionRecord's actual process spawn (systemd-run) — not just
+    // the DB read/write. Deliberate: a second request arriving mid-spawn
+    // waits for the spawn to finish before it can even re-check, rather
+    // than returning promptly off a not-yet-existing row, but the
+    // alternative (release the lock right after the insert, before the
+    // spawn) reopens a narrower version of the exact race this closes — a
+    // third request between "row inserted" and "spawn confirmed" could
+    // still see the row as active but not yet a going process.
+    return withStackLock(`${projectId}:${service.composeProject}`, async () => {
+      const existing = await findActiveStackSession(projectId, service.composeProject);
+      if (existing) {
+        // `control` here still describes the just-REQUESTED action (title/
+        // command), not necessarily whatever the reused session was actually
+        // started with. Hermes review — Dock.tsx doesn't attach anything by
+        // `sessionId` for a stack-wide action (only ephemeral controls,
+        // matched by command string), so this mismatch isn't just cosmetic:
+        // the frontend's own handler (handlePullAndRestart/
+        // handleRebuildAndRestart/handleStackAction) checks `reused` FIRST
+        // and skips adding this control entirely, surfacing a status message
+        // instead — see those handlers' own comments. `control` is still
+        // returned (not omitted) for a caller that hasn't been updated to
+        // check `reused` first, so it degrades to the same "wrong label,
+        // right session" behavior this comment used to claim was the whole
+        // story.
+        return { ok: true, sessionId: existing.id, control, reused: true };
+      }
 
-    const result = await createSessionRecord(app, {
-      projectId,
-      command,
-      kind: "dock",
-      name: stackSessionName(service.composeProject),
-      nameLocked: true,
+      const result = await createSessionRecord(app, {
+        projectId,
+        command,
+        kind: "dock",
+        name: stackSessionName(service.composeProject),
+        nameLocked: true,
+      });
+      if (!result.ok) return { ok: false };
+      return { ok: true, sessionId: result.row.id, control };
     });
-    if (!result.ok) return { ok: false };
-    return { ok: true, sessionId: result.row.id, control };
   }
 
   // Per-service, inline lifecycle actions (restart/stop/start) — bounded
@@ -2795,6 +2958,7 @@ export async function projectsRoute(app: FastifyInstance) {
         injectAgentGuide,
         injectProjectBriefing,
         injectWorkflowConventions,
+        suppressConventionsInjectionAfterScaffold,
         createDir,
         gitInit,
       } = request.body;
@@ -2853,10 +3017,11 @@ export async function projectsRoute(app: FastifyInstance) {
         autoTagRelease === undefined &&
         injectAgentGuide === undefined &&
         injectProjectBriefing === undefined &&
-        injectWorkflowConventions === undefined
+        injectWorkflowConventions === undefined &&
+        suppressConventionsInjectionAfterScaffold === undefined
       ) {
         return reply.badRequest(
-          "At least one of name, cwd, devServerUrl, autoFetch, defaultAgent, defaultReviewAgent, mergeOnApprove, autoApprove, maxAutoReturnRounds, conventionalCommitTitles, autoTagRelease, injectAgentGuide, injectProjectBriefing, or injectWorkflowConventions must be provided.",
+          "At least one of name, cwd, devServerUrl, autoFetch, defaultAgent, defaultReviewAgent, mergeOnApprove, autoApprove, maxAutoReturnRounds, conventionalCommitTitles, autoTagRelease, injectAgentGuide, injectProjectBriefing, injectWorkflowConventions, or suppressConventionsInjectionAfterScaffold must be provided.",
         );
       }
 
@@ -2929,6 +3094,9 @@ export async function projectsRoute(app: FastifyInstance) {
           ...(injectAgentGuide !== undefined ? { injectAgentGuide } : {}),
           ...(injectProjectBriefing !== undefined ? { injectProjectBriefing } : {}),
           ...(injectWorkflowConventions !== undefined ? { injectWorkflowConventions } : {}),
+          ...(suppressConventionsInjectionAfterScaffold !== undefined
+            ? { suppressConventionsInjectionAfterScaffold }
+            : {}),
         })
         .where(eq(projects.id, projectId))
         .returning()

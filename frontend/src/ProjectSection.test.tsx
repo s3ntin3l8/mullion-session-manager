@@ -58,6 +58,9 @@ const PROJECT: Project = {
   injectAgentGuide: null,
   injectProjectBriefing: null,
   injectWorkflowConventions: null,
+  suppressConventionsInjectionAfterScaffold: null,
+  conventionsHash: null,
+  conventionsDrifted: false,
   createdAt: "2026-01-01T00:00:00.000Z",
 };
 
@@ -85,6 +88,7 @@ function renderSection(status: GitStatus | null) {
       onOpenSessionAsFloat={vi.fn()}
       onSessionEnded={vi.fn()}
       onOpenLauncher={vi.fn()}
+      onOpenProjectSetup={vi.fn()}
       hierarchicalView={false}
     />,
   );
@@ -157,6 +161,7 @@ describe("ProjectHeader keyboard accessibility (P10)", () => {
         onOpenSessionAsFloat={vi.fn()}
         onSessionEnded={vi.fn()}
         onOpenLauncher={vi.fn()}
+        onOpenProjectSetup={vi.fn()}
         hierarchicalView={false}
       />,
     );

@@ -5,6 +5,7 @@ import fs from "node:fs";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { DEFAULT_SETTINGS } from "../../src/services/settings.js";
+import { WORKFLOW_CONVENTION_QUESTIONS } from "../../src/services/workflow-conventions.js";
 
 const tmpDb = path.join(os.tmpdir(), `settings-test-${process.pid}.db`);
 
@@ -267,6 +268,69 @@ describe("settings route", () => {
     expect(cleared.json().sessions.workflowConventionsText).toBe("");
 
     await app.close();
+  });
+
+  // Issue #1203 (Phase 2) — defaults to every CURRENT question id mapped to
+  // "", never a bare `{}`. This is load-bearing, not cosmetic:
+  // deepMerge (settings.ts) only ever touches a patch key that already
+  // exists on the stored `base` object (a deliberate anti-prototype-
+  // pollution measure — it iterates base's own keys, never the patch's). A
+  // `{}` default would mean the wizard's own real-answer PATCH — sending
+  // ids that were never in the stored blob before — silently merges to
+  // nothing. This test is the regression guard for exactly that failure
+  // mode: it proves a real answer actually persists, not just that the
+  // route returns 200.
+  describe("sessions.workflowConventionAnswers (issue #1203)", () => {
+    it("defaults to every WORKFLOW_CONVENTION_QUESTIONS id mapped to an empty string", async () => {
+      const app = await buildApp();
+      const res = await app.inject({ method: "GET", url: "/api/settings" });
+      const answers = res.json().sessions.workflowConventionAnswers;
+      expect(Object.keys(answers).sort()).toEqual(
+        [...WORKFLOW_CONVENTION_QUESTIONS.map((q) => q.id)].sort(),
+      );
+      expect(Object.values(answers)).toEqual(WORKFLOW_CONVENTION_QUESTIONS.map(() => ""));
+      await app.close();
+    });
+
+    it("a real answer actually persists through PATCH and a subsequent GET — the deepMerge regression guard", async () => {
+      const app = await buildApp();
+
+      const patched = await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { sessions: { workflowConventionAnswers: { branching: "branch-pr" } } },
+      });
+      expect(patched.statusCode).toBe(200);
+      expect(patched.json().sessions.workflowConventionAnswers.branching).toBe("branch-pr");
+
+      const fetched = await app.inject({ method: "GET", url: "/api/settings" });
+      expect(fetched.json().sessions.workflowConventionAnswers.branching).toBe("branch-pr");
+      // Every other question's answer is untouched by this partial patch.
+      expect(fetched.json().sessions.workflowConventionAnswers.branchBase).toBe("");
+
+      await app.close();
+    });
+
+    it("patching multiple answers at once persists all of them", async () => {
+      const app = await buildApp();
+
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: {
+          sessions: {
+            workflowConventionAnswers: { branching: "branch-pr", worktrees: "worktree" },
+          },
+        },
+      });
+      const fetched = await app.inject({ method: "GET", url: "/api/settings" });
+      expect(fetched.json().sessions.workflowConventionAnswers).toMatchObject({
+        branching: "branch-pr",
+        worktrees: "worktree",
+      });
+
+      await app.close();
+    });
   });
 
   // Catches exactly the failure mode settings.ts's own comment on

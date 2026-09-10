@@ -8,6 +8,8 @@ import {
   dockMonitorFullMinHeightPx,
   dockMonitorMinHeightPx,
   dockMonitorMinWidthPx,
+  imagePillLabel,
+  imageTag,
 } from "./dockHelpers.js";
 import { makeSession } from "../test/fixtures.js";
 import type { DockControl } from "../api/index.js";
@@ -35,6 +37,80 @@ function dockerControl(overrides: Partial<DockControl> = {}): DockControl {
 function configControl(overrides: Partial<DockControl> = {}): DockControl {
   return { id: "dev", title: "Dev server", command: "npm run dev", ...overrides };
 }
+
+describe("imageTag", () => {
+  it("shortens a name@sha256:... digest reference", () => {
+    expect(imageTag("ghcr.io/s3ntin3l8/sanctuary@sha256:" + "b2".repeat(32))).toBe(
+      "sha256:b2b2b2b2b2b2",
+    );
+  });
+
+  it("shortens a BARE sha256:<64 hex> ref with no name/tag at all (issue #1221)", () => {
+    expect(imageTag("sha256:" + "c3".repeat(32))).toBe("sha256:c3c3c3c3c3c3");
+  });
+
+  it("still returns the ordinary tag for a normal name:tag ref", () => {
+    expect(imageTag("ghcr.io/s3ntin3l8/sanctuary:edge")).toBe("edge");
+  });
+
+  it("returns latest for a ref with no explicit tag", () => {
+    expect(imageTag("nginx")).toBe("latest");
+  });
+});
+
+// Issue #1221 — a build-only service whose old, default-named image has
+// been pruned reports a bare sha256: digest; imagePillLabel shows compose's
+// own default build-image name instead, since that's a far more legible
+// (and still correct) label than any digest shortening alone would give.
+describe("imagePillLabel", () => {
+  it("shows compose's default build-image name for a build-only service with a bare digest imageRef", () => {
+    expect(
+      imagePillLabel({
+        composeProject: "pocket-portfolio-tracker",
+        service: "api",
+        buildOnly: true,
+        imageRef: "sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      }),
+    ).toBe("pocket-portfolio-tracker-api");
+  });
+
+  it("falls through to imageTag for a build-only service that still has a real tag", () => {
+    expect(
+      imagePillLabel({
+        composeProject: "pocket-portfolio-tracker",
+        service: "api",
+        buildOnly: true,
+        imageRef: "pocket-portfolio-tracker-api:latest",
+      }),
+    ).toBe("latest");
+  });
+
+  it("falls through to imageTag for a registry-image (non-build-only) service with a bare digest — still shortened", () => {
+    // Hermes review — imageTag() itself now shortens a bare `sha256:` ref
+    // the same way it already shortened the `name@sha256:...` form, so a
+    // non-build-only service (a pruned local copy of a registry image,
+    // say) also gets a legible pill instead of the raw 64-char hash.
+    expect(
+      imagePillLabel({
+        composeProject: "sanctuary",
+        service: "db",
+        buildOnly: false,
+        imageRef: "sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      }),
+    ).toBe("sha256:a1a1a1a1a1a1");
+  });
+
+  it("uses the ordinary tag for a build-only service with a normal registry-style imageRef", () => {
+    expect(
+      imagePillLabel({
+        composeProject: "sanctuary",
+        service: "web",
+        buildOnly: true,
+        imageRef: "ghcr.io/s3ntin3l8/sanctuary:edge",
+      }),
+    ).toBe("edge");
+  });
+});
 
 describe("dockerSessionIdentity", () => {
   it("is docker-logs:<containerName> for a docker-sourced control", () => {

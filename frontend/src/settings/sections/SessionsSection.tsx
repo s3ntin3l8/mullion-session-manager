@@ -223,12 +223,12 @@ export function SessionsSection() {
       <Row
         label="Inject project briefing"
         desc={
-          "On SessionStart, carry a project-authored block into every" +
-          " session's starting context: a <!-- mullion:briefing:start -->" +
-          " region in the project's AGENTS.md or CLAUDE.md, or a" +
-          " .agents/briefing.md file. The extracted region is capped at 4 KB" +
-          " (a short header and, if truncated, a truncation note add a" +
-          " little on top). Projects with no such region are unaffected —" +
+          "On SessionStart, carry a project's pinned note (set per-project in" +
+          " the Mullion Briefing panel) into every session's starting" +
+          " context — always additive on top of whatever AGENTS.md already" +
+          " told the agent, never a competing alternate to it. Capped at 512" +
+          " bytes (a short header and, if truncated, a truncation note add a" +
+          " little on top). Projects with no pinned note set are unaffected —" +
           " nothing is injected."
         }
       >
@@ -265,7 +265,18 @@ export function SessionsSection() {
       {wizardOpen && (
         <WorkflowConventionsWizardModal
           onClose={() => setWizardOpen(false)}
-          onApply={(text) => updateSettings({ sessions: { workflowConventionsText: text } })}
+          initialAnswers={s.workflowConventionAnswers}
+          currentText={s.workflowConventionsText}
+          onApply={(text, answers) =>
+            // Issue #1203 — one PATCH, both fields together: the text and
+            // the answers that produced it must land in the same settings
+            // write, or a reader between the two (another open tab, a
+            // concurrent PATCH) could observe text and answers that don't
+            // actually correspond to each other.
+            updateSettings({
+              sessions: { workflowConventionsText: text, workflowConventionAnswers: answers },
+            })
+          }
         />
       )}
 

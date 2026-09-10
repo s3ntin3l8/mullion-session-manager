@@ -1470,13 +1470,31 @@
 
 .mobile-tabs {
   display: none;
+  /* Issue #960 — defensive only: `.mobile-tabs` sits in `.grid-area-body`,
+     a COLUMN flex container, where the flex auto-minimum-size quirk this
+     would guard against applies to height, not width (verified — removing
+     this line doesn't change measured overflow here). Kept in case a
+     future layout change nests this in a row flex parent instead. */
+  min-width: 0;
   flex-shrink: 0;
   align-items: center;
-  gap: 5px;
-  padding: 7px 8px;
+  /* Read back by the fade pseudo-elements' geometry below (Hermes review —
+     the -8px/-5px there used to hardcode these two values a second time,
+     so a future edit here could silently desync them from the fade). */
+  --mobile-tabs-padding-x: 8px;
+  --mobile-tabs-gap: 5px;
+  gap: var(--mobile-tabs-gap);
+  padding: 7px var(--mobile-tabs-padding-x);
   overflow-x: auto;
   touch-action: pan-x;
   overscroll-behavior-x: contain;
+  /* Scrollbar hidden on both engines deliberately (touch/trackpad affordance
+     is the wheel listener + the sticky fade below, not a visible track) —
+     keep this even though the fade exists for the SAME reason a hidden
+     scrollbar was chosen in the first place: a native scrollbar here is a
+     mouse-facing artifact this bar was never designed to show (see the
+     scrollbars={isCoarsePointer ? "native" : "custom"} comment on
+     DockviewReact in App.tsx for the same reasoning applied elsewhere). */
   scrollbar-width: none;
   background: var(--chrome);
   border-bottom: 1px solid var(--border);
@@ -1484,6 +1502,66 @@
 }
 .mobile-tabs::-webkit-scrollbar {
   display: none;
+}
+/* Issue #960 — the bar has no visible signal that more tabs exist off
+   -screen once the (deliberately hidden, see above) scrollbar is gone.
+   Sticky pseudo-elements rather than a `mask-image` on the bar itself: a
+   mask fades the bar's own `background`/`border-bottom` too, notching the
+   header's separator line at the edge. Sticky pseudo-elements are flex
+   items of `.mobile-tabs`, so they paint OVER the tabs (unlike a
+   `background-attachment: local` scroll-shadow layer, which paints behind
+   them and would show through `.mobile-tab.active`'s own translucent
+   highlight) while staying pinned to each edge of the scroll viewport.
+   Each fades to `var(--chrome)` — the bar's own background.
+   `.at-start`/`.at-end` (toggled by lib/mobileTabsWheelScroll.ts's
+   attachMobileTabsEdgeState, App.tsx) hide the fade on whichever side has
+   nothing left to scroll to — needed for the LEFT fade specifically: as
+   the first flex item, it always overlaps tab 1's leading edge regardless
+   of scroll position, including at rest with nothing to scroll to on that
+   side at all (Hermes review, PR #1224 — verified in real Chromium). The
+   right fade doesn't strictly need this (it naturally sits past the last
+   tab in the untouched trailing track once there's no overflow, so it's
+   already invisible there), but gets the same treatment for symmetry and
+   to hide once genuinely scrolled to the end. `z-index: 1` guards against
+   a future positioned tab (e.g. `position: relative` for a badge) painting
+   over these — verified without it, DOM order alone lets an earlier
+   positioned sibling win paint order over `::before`. */
+.mobile-tabs::before,
+.mobile-tabs::after {
+  content: "";
+  position: sticky;
+  flex: 0 0 24px;
+  align-self: stretch;
+  pointer-events: none;
+  z-index: 1;
+  transition: opacity 0.15s ease;
+}
+.mobile-tabs::before {
+  /* Negative padding-x (not 0) reaches the bar's true visual edge —
+     `left`/`right` on a sticky element inside `.mobile-tabs` are relative
+     to ITS OWN padding edge (verified: ramp otherwise starts
+     `--mobile-tabs-padding-x` in from the edge, leaving a strip of unfaded
+     content even at full scroll). */
+  left: calc(-1 * var(--mobile-tabs-padding-x));
+  /* -24px cancels the pseudo-element's own flex-basis so it overlays
+     rather than reserving track width; the negative gap cancels the
+     container's own `gap`, which flexbox still inserts between this
+     pseudo-element and the next tab regardless of the margin (verified —
+     without it, an exactly-fitting bar measures 10px of bogus extra
+     scrollWidth: 5px on each edge, wrongly registering as overflowing). */
+  margin-right: calc(-24px - var(--mobile-tabs-gap));
+  background: linear-gradient(to left, transparent, var(--chrome));
+}
+.mobile-tabs.at-start::before {
+  opacity: 0;
+}
+.mobile-tabs::after {
+  right: calc(-1 * var(--mobile-tabs-padding-x));
+  margin-left: calc(-24px - var(--mobile-tabs-gap));
+  background: linear-gradient(to right, transparent, var(--chrome));
+}
+.mobile-tabs.at-end::after {
+  opacity: 0;
 }
 /* Mobile UI/UX overhaul, item A.5 — one wrap per panel so the active pane's
    trailing close/kebab buttons (added conditionally in App.tsx) sit next to
@@ -1717,4 +1795,75 @@
 .update-banner-dismiss:hover {
   background: color-mix(in srgb, var(--o) 18%, transparent);
   color: var(--fg);
+}
+
+/* Phase 4 (Gap F) — post-create "want to scaffold this?" offer, dismissible
+   and never a modal gate (#944). Blue/informational rather than
+   .update-banner's orange/warning palette — this is a suggestion, not a
+   problem. Column layout (title row, optional preview, actions row) since
+   this banner carries more than .update-banner's single line. */
+.scaffold-offer-banner {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 14px;
+  background: color-mix(in srgb, var(--b) 10%, var(--chrome));
+  border-bottom: 1px solid color-mix(in srgb, var(--b) 22%, transparent);
+}
+.scaffold-offer-banner-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.scaffold-offer-banner-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--fg);
+  flex: 1;
+}
+.scaffold-offer-banner-dismiss {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--dim);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+}
+.scaffold-offer-banner-dismiss:hover {
+  background: color-mix(in srgb, var(--b) 18%, transparent);
+  color: var(--fg);
+}
+.scaffold-offer-banner-preview {
+  font-family: "Geist Mono", monospace;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+.scaffold-offer-banner-actions {
+  display: flex;
+}
+.scaffold-offer-banner-accept {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--b);
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--b) 40%, transparent);
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+.scaffold-offer-banner-accept:hover {
+  background: color-mix(in srgb, var(--b) 14%, transparent);
 }

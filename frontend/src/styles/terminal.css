@@ -331,6 +331,18 @@
 .pane-tab-overflow-item:hover {
   background: color-mix(in srgb, var(--fg) 8%, transparent);
 }
+/* Issue #1106 — previously nothing at all: a `disabled` item rendered at
+   full color with a live `:hover` background, visually identical to an
+   enabled one, with no signal that clicking does nothing. Keyed off
+   aria-disabled rather than :disabled — see KebabMenu.tsx's own comment on
+   why the item uses aria-disabled, not the native attribute. */
+.pane-tab-overflow-item[aria-disabled="true"] {
+  color: var(--dim);
+  cursor: default;
+}
+.pane-tab-overflow-item[aria-disabled="true"]:hover {
+  background: transparent;
+}
 .pane-tab-overflow-item.danger {
   color: var(--r);
 }

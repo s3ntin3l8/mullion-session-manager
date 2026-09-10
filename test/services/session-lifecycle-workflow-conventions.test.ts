@@ -199,4 +199,65 @@ describe("session-lifecycle.ts — global workflow-conventions injection (issue 
 
     await app.close();
   });
+
+  // Issue #1208 — a SECOND, independent opt-out layered on top of
+  // injectWorkflowConventions: it touches only this gate, never the resolvers
+  // or conventionsDrifted (that discrimination is covered in
+  // test/routes/project-setup.test.ts, where drift is actually exercised).
+  it("writes no per-session file when suppressConventionsInjectionAfterScaffold is true, even with non-empty global text and injectWorkflowConventions null", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app);
+
+    await app.inject({
+      method: "PATCH",
+      url: "/api/settings",
+      payload: { sessions: { workflowConventionsText: "Always branch, never commit to main." } },
+    });
+    const patchRes = await app.inject({
+      method: "PATCH",
+      url: `/api/projects/${projectId}`,
+      payload: { suppressConventionsInjectionAfterScaffold: true },
+    });
+    expect(patchRes.statusCode).toBe(200);
+
+    const sessionId = await spawnSession(app, projectId);
+
+    expect(
+      fs.existsSync(sessionWorkflowConventionsPath(app.config.SESSIONS_DIR, String(sessionId))),
+    ).toBe(false);
+
+    await app.close();
+  });
+
+  it("clearing suppressConventionsInjectionAfterScaffold back to null resumes injection", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app);
+
+    await app.inject({
+      method: "PATCH",
+      url: "/api/settings",
+      payload: { sessions: { workflowConventionsText: "Rebase-merge PRs." } },
+    });
+    await app.inject({
+      method: "PATCH",
+      url: `/api/projects/${projectId}`,
+      payload: { suppressConventionsInjectionAfterScaffold: true },
+    });
+    const clearRes = await app.inject({
+      method: "PATCH",
+      url: `/api/projects/${projectId}`,
+      payload: { suppressConventionsInjectionAfterScaffold: null },
+    });
+    expect(clearRes.statusCode).toBe(200);
+
+    const sessionId = await spawnSession(app, projectId);
+
+    const written = fs.readFileSync(
+      sessionWorkflowConventionsPath(app.config.SESSIONS_DIR, String(sessionId)),
+      "utf8",
+    );
+    expect(written).toContain("Rebase-merge PRs.");
+
+    await app.close();
+  });
 });

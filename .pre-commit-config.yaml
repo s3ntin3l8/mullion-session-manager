@@ -88,7 +88,7 @@ repos:
 
       # Issue #942 — guards against CLAUDE.md/GEMINI.md/AGENTS.override.md
       # silently re-acquiring a content-bearing copy of AGENTS.md's own
-      # briefing region (see the script's own header comment for the full
+      # scaffold region (see the script's own header comment for the full
       # reasoning); AGENTS.md itself is no longer read by this check at all,
       # so it isn't in the trigger pattern below. Any of the three may or
       # may not exist in a given commit (this repo has no GEMINI.md at
@@ -96,13 +96,13 @@ repos:
       # fast staged-file path; the unconditional working-tree probe that
       # also catches an untracked AGENTS.override.md (e.g. one just created
       # by the Agent Rules Editor, never staged) comes from `npm run lint`'s
-      # check:briefing-sync step. Deliberately kept `files:`-scoped rather
-      # than `always_run: true`, per this repo's own developer-worktree
-      # tooling convention (see CONTRIBUTING.md's "Developer worktrees"
-      # section).
-      - id: briefing-sync
-        name: no content-bearing briefing mirror/override (CLAUDE.md / GEMINI.md / AGENTS.override.md, if present)
-        entry: node scripts/check-briefing-sync.mjs
+      # check:scaffold-region-sync step. Deliberately kept `files:`-scoped
+      # rather than `always_run: true`, per this repo's own
+      # developer-worktree tooling convention (see CONTRIBUTING.md's
+      # "Developer worktrees" section).
+      - id: scaffold-region-sync
+        name: no content-bearing scaffold-region mirror/override (CLAUDE.md / GEMINI.md / AGENTS.override.md, if present)
+        entry: node scripts/check-scaffold-region-sync.mjs
         language: system
         files: '^(AGENTS\.override|GEMINI|CLAUDE)\.md$'
         pass_filenames: false

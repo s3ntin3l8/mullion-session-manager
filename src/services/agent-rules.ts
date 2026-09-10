@@ -375,7 +375,7 @@ export function resolveTarget(id: string): TargetDef | null {
       // only rule file is AGENTS.md, agy cited it directly and had no
       // knowledge of a GEMINI.md, which didn't exist in that repo). This
       // target used to be modeled as GEMINI.md, which agy does not consult
-      // at project scope — see docs/project-briefing.md's "There is no
+      // at project scope — see docs/agent-context.md's "There is no
       // GEMINI.md in this repo" section for the same finding. Cross-agent
       // sharing of this same AGENTS.md file (also read by codex:project and
       // opencode:project) is the norm this file's header comment already

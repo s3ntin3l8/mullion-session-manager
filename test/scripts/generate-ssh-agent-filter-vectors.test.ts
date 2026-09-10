@@ -1,11 +1,12 @@
 // Round 4 (issue #820) — exercises the REAL generator script via execFile
-// (precedent: test/scripts/self-update.test.ts, test/scripts/check-briefing-
-// sync.test.ts), the drift guard `npm run lint` actually runs
+// (precedent: test/scripts/self-update.test.ts, test/scripts/check-scaffold-
+// region-sync.test.ts), the drift guard `npm run lint` actually runs
 // (check:ssh-agent-filter-vectors). Uses SSH_AGENT_FILTER_VECTORS_FIXTURE_PATH
 // to point the script at a per-test tmpdir fixture instead of the real,
 // tracked JSON file — the same injectable-override convention
-// check-briefing-sync.mjs's own BRIEFING_SYNC_ROOT already established, so
-// these tests never touch this repo's own checked-in fixture.
+// check-scaffold-region-sync.mjs's own SCAFFOLD_REGION_SYNC_ROOT already
+// established, so these tests never touch this repo's own checked-in
+// fixture.
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import os from "node:os";

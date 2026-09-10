@@ -58,6 +58,9 @@ const PROJECT_A: Project = {
   injectAgentGuide: null,
   injectProjectBriefing: null,
   injectWorkflowConventions: null,
+  suppressConventionsInjectionAfterScaffold: null,
+  conventionsHash: null,
+  conventionsDrifted: false,
   createdAt: "2026-01-01T00:00:00.000Z",
 };
 
@@ -81,6 +84,9 @@ const PROJECT_B: Project = {
   injectAgentGuide: null,
   injectProjectBriefing: null,
   injectWorkflowConventions: null,
+  suppressConventionsInjectionAfterScaffold: null,
+  conventionsHash: null,
+  conventionsDrifted: false,
   createdAt: "2026-01-01T00:00:00.000Z",
 };
 

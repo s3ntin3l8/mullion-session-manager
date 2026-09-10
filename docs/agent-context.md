@@ -12,6 +12,14 @@ This is the feature currently otherwise undocumented outside source comments
 — this page is the missing doc the `hook-adapters/mullion-bundle.ts` and
 `project-briefing.ts`/`project-tooling.ts` headers point at.
 
+> Filename note (issue #1215): this file was renamed from
+> `project-briefing.md` to `agent-context.md`, a broader name covering both
+> the pinned note below (which still legitimately carries the "briefing"
+> name — see "The pinned note") and the scaffold's own delivery paths (which
+> don't; see "Two independent opt-outs" under "Workflow conventions" below).
+> The rename is about the _filename_, not about renaming the pinned-note
+> feature itself.
+
 ## AGENTS.md leads
 
 Issue #942 made `AGENTS.md` a project's single source of truth for standing
@@ -37,7 +45,7 @@ is expanded by Claude Code into the session's auto-loaded context at launch
 `AGENTS.md` (Codex reads it _instead of_ `AGENTS.md` when it exists —
 `src/services/agent-rules.ts`'s precedence table); the scaffold no longer
 offers it as an option, though an existing, hand-authored one is left
-untouched. `scripts/check-briefing-sync.mjs` (wired into `make lint`/
+untouched. `scripts/check-scaffold-region-sync.mjs` (wired into `make lint`/
 pre-commit for this repo) fails loud if `CLAUDE.md`, `GEMINI.md`, or
 `AGENTS.override.md` ever re-acquires a content-bearing copy of the old
 `<!-- mullion:briefing:start/end -->` region.
@@ -155,10 +163,10 @@ entries.
 Delivery is per-CLI, since none of the four agents share a config format or
 an ephemeral-overlay mechanism:
 
-|                   | Claude Code                                       | opencode                                   | codex                                         | agy                                           |
-| ----------------- | ------------------------------------------------- | ------------------------------------------ | --------------------------------------------- | --------------------------------------------- |
-| Project skill     | composed into a per-session `--plugin-dir` bundle | `skills.paths` config key, ephemeral       | committed scaffold mirror only, never live    | committed scaffold mirror only, never live    |
-| Reviewer subagent | same composed bundle, `agents/<name>.md`          | translated, `<CONFIG_DIR>/agent/<name>.md` | none — no committed path exists for it either | none — no committed path exists for it either |
+|                   | Claude Code                                       | opencode                                   | codex                                                       | agy                                                       |
+| ----------------- | ------------------------------------------------- | ------------------------------------------ | ----------------------------------------------------------- | --------------------------------------------------------- |
+| Project skill     | composed into a per-session `--plugin-dir` bundle | `skills.paths` config key, ephemeral       | committed scaffold mirror only, never live                  | committed scaffold mirror only, never live                |
+| Reviewer subagent | same composed bundle, `agents/<name>.md`          | translated, `<CONFIG_DIR>/agent/<name>.md` | committed scaffold mirror, conditional (issue #943 — below) | none — no committed path exists for it (permanent, #1083) |
 
 - **Claude Code**: `hook-adapters/mullion-bundle.ts`'s
   `composeClaudeSessionBundle` materializes a per-session plugin directory —
@@ -247,7 +255,7 @@ panel (Command Palette → "Scaffold Mullion: \<project\>") turns the same
 three artifacts into a real, reviewable pull request:
 
 1. **Preview** computes the target file set — a scaffolded `AGENTS.md`
-   briefing region (created fresh, or upserted in place if the file
+   scaffold region (created fresh, or upserted in place if the file
    already has one), a **`CLAUDE.md` `@AGENTS.md` import** (unconditional,
    same reasoning as `AGENTS.md` itself — without it, a Claude Code session
    in the target repo would never see `AGENTS.md`'s content at all), a
@@ -257,8 +265,15 @@ three artifacts into a real, reviewable pull request:
    `.agents/skills/<slug>-reviewer/SKILL.md` mirror of the reviewer,
    translated into SKILL.md's two-field frontmatter shape, for codex's own
    `spawn_agent` delegation to discover — writes it into a scratch worktree
-   under `.mullion-worktrees/`, and shows the diff. One more entry
-   is opt-in: a short pointer paragraph upserted into `CONTRIBUTING.md`
+   under `.mullion-worktrees/`, and shows the diff. If the target repo
+   already has its own `AGENTS.override.md`, the preview surfaces a warning
+   rather than silently proceeding: codex reads that file **instead of**
+   `AGENTS.md` entirely, so the Workflow Conventions section this scaffold
+   is about to commit into `AGENTS.md` would never reach codex sessions on
+   that project — the scaffold never writes to `AGENTS.override.md` itself,
+   this is disclosure only, so a human can add the conventions there by
+   hand if codex needs to see them. One more entry is opt-in: a short
+   pointer paragraph upserted into `CONTRIBUTING.md`
    (created fresh if the project doesn't have one yet) pointing at
    `AGENTS.md`'s Workflow Conventions section, since that file's own
    process-rules section otherwise drifts from `AGENTS.md` the same way
@@ -276,7 +291,9 @@ three artifacts into a real, reviewable pull request:
    leaves that content alone. Every freshly-written skill/reviewer file
    also carries a one-line `<!-- mullion:scaffold:<slug> -->` stamp right
    after its frontmatter (issue #1123) — a different marker family from
-   `mullion:pointer:`/`mullion:briefing:` above, since it identifies a
+   `mullion:pointer:`/`mullion:briefing:` above (the second literal frozen
+   at the wire-format level — see `SCAFFOLD_REGION_START`'s own doc comment
+   in `mullion-scaffold.ts`), since it identifies a
    whole FILE as Mullion's own scaffold output rather than delimiting a
    region within one. It's what lets `createSessionRecord`'s
    committed-scaffold gate (see "How the skill and reviewer actually reach
@@ -293,15 +310,15 @@ three artifacts into a real, reviewable pull request:
    remote/token is configured, leaves it as a local branch you push
    yourself.
 
-The scaffold does not emit a `check-briefing-sync.mjs`-equivalent guard
-script into the target repo at all — `scripts/check-briefing-sync.mjs` (the
-script that guards `CLAUDE.md`/`GEMINI.md`/`AGENTS.override.md` against
-re-acquiring a content-bearing briefing region — see "AGENTS.md leads"
-above) is specific to this repo's own `make lint`/pre-commit wiring, and
-`scaffoldableRelPaths` never reads/writes a target repo's own
+The scaffold does not emit a `check-scaffold-region-sync.mjs`-equivalent
+guard script into the target repo at all — `scripts/check-scaffold-region-sync.mjs`
+(the script that guards `CLAUDE.md`/`GEMINI.md`/`AGENTS.override.md`
+against re-acquiring a content-bearing scaffold region — see "AGENTS.md
+leads" above) is specific to this repo's own `make lint`/pre-commit
+wiring, and `scaffoldableRelPaths` never reads/writes a target repo's own
 `package.json` either way, so a copied-in script would be unwired there
 regardless. A team that wants the same guard in its own repo can copy
-`scripts/check-briefing-sync.mjs` and wire it into its own lint/pre-commit
+`scripts/check-scaffold-region-sync.mjs` and wire it into its own lint/pre-commit
 setup by hand.
 
 The `.agents/skills/<slug>` mirror defaults to a **plain file copy** of the
@@ -362,22 +379,26 @@ per-project knob is a boolean: inject the global text, or don't.
   by default — a fresh install has no opinion yet — and an empty value is
   its own independent "nothing to inject" gate, not just an uninteresting
   default.
-- **Kickstarting it** uses a structured multiple-choice wizard ("Generate
-  with wizard" in that same Settings row), not an agent turn and not a
-  blank text box: workflow conventions are a small, finite set of
-  well-known policy choices
-  (`src/services/workflow-conventions.ts`'s
-  `WORKFLOW_CONVENTION_QUESTIONS`), a genuinely different shape of problem
-  from the pinned note/skill/reviewer above, which need a human (or an
-  agent, for #956's project-specific generation) because they require
-  actual prose about a specific project. `buildWorkflowConventionsText`
+- **Kickstarting and re-running it** uses a structured multiple-choice
+  wizard ("Generate with wizard" in that same Settings row), not an agent
+  turn and not a blank text box: workflow conventions are a small, finite
+  set of well-known policy choices (`src/services/workflow-conventions.ts`'s
+  `WORKFLOW_CONVENTION_QUESTIONS` — includes a `worktrees` question, whether
+  to work in a dedicated git worktree per branch), a genuinely different
+  shape of problem from the pinned note/skill/reviewer above, which need a
+  human (or an agent, for #956's project-specific generation) because they
+  require actual prose about a specific project. `buildWorkflowConventionsText`
   deterministically assembles the selected options' prose fragments — no
-  agent, no network — and the wizard **overwrites** the text field once,
-  on completion; it is a one-shot "regenerate from scratch" starter, not
-  an ongoing synced mode. From that point on the field is just a normal,
-  freely-editable textarea, with no distinction between wizard-written and
-  hand-edited text and no answer state kept around to reconcile against
-  later edits.
+  agent, no network. The wizard's answers persist
+  (`settings.sessions.workflowConventionAnswers`), so re-opening it after
+  the first run starts on a review step of what's already answered instead
+  of from scratch, and it detects when the stored text has since been
+  hand-edited away from what those answers would generate — derived by
+  comparing `buildWorkflowConventionsText(storedAnswers)` against the
+  stored text, not a separate tracked flag — and warns before an apply
+  would overwrite that edit. Applying still **overwrites** the text field
+  in full; it's a "regenerate from these answers" action, not an ongoing
+  synced mode.
 - **The per-project toggle** is `projects.injectWorkflowConventions`
   (nullable boolean, `schema.ts`) — same shape as the two per-project
   overrides below: `null`/`true` = inject the global text, `false` =
@@ -390,6 +411,68 @@ pinned note]` `additionalContext` ordering `hooks.ts` composes for
   `instructions[]` channel for the fourth CLI — see that adapter's own
   comment for why file presence alone (no separate ctx boolean) already
   encodes both the toggle and the "non-empty global text" gate.
+- **The scaffold reads the same text, not a separate copy.** "Scaffolding
+  it into the repo instead" above commits a `## Workflow Conventions`
+  section into the target `AGENTS.md`, resolved from this exact global text
+  (respecting the project's own `injectWorkflowConventions` opt-out) —
+  `mullion-scaffold.ts`'s `workflowConventionsSection`. When the text is
+  empty (a fresh install with no opinion authored yet, or a project that
+  opted out before ever being scaffolded), it falls back to
+  `buildWorkflowConventionsText(SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS)` — a
+  fixed answer set covering 6 of `WORKFLOW_CONVENTION_QUESTIONS`'s 11
+  questions (the other 5, including `worktrees`, are deliberately left
+  unanswered — see that constant's own doc comment for why) — rather than
+  committing nothing, so a freshly scaffolded repo still gets a reasonable
+  starter instead of a blank section.
+- **Staying in sync** — `projects.conventionsHash` stamps, at apply time,
+  the hash of exactly what was committed; `GET /api/projects` compares it
+  against what the _current_ global text (or defaults) would produce right
+  now and surfaces `conventionsDrifted` when they no longer match, with a
+  banner in Scaffold Mullion's own panel prompting a re-scaffold. Three
+  states only: never scaffolded (`null` hash), up to date, or drifted — an
+  opted-out project is never considered drifted, since by definition its
+  committed text is no longer tracking the install-wide one.
+- **Two independent opt-outs, not one (issue #1208).** It's tempting to
+  read `injectWorkflowConventions` as covering "the committed `AGENTS.md`
+  already has this text, stop injecting it too" — PR #1206 shipped exactly
+  that as a post-apply checkbox, and Hermes review caught it as a data-loss
+  bug before merge: that flag also gates text _resolution_ (the bullet
+  above), so flipping it after a real scaffold made the drift check
+  permanently false-positive and made its own "re-run Preview and Apply"
+  banner silently overwrite the just-committed real text with the generic
+  defaults on the next apply. The two questions are genuinely different and
+  need genuinely different columns:
+  - `injectWorkflowConventions === false` — **"my `AGENTS.md` is
+    authoritative instead."** Feeds `resolveWorkflowConventionsText` /
+    `resolveScaffoldWorkflowConventionsText`, which resolve to `""` (→ the
+    scaffold defaults) for this project; `conventionsDrifted` is
+    unconditionally `false`; a re-scaffold writes the generic defaults, not
+    this install's real text.
+  - `suppressConventionsInjectionAfterScaffold === true` — **"stop
+    double-delivering, keep tracking."** Touches only
+    `session-lifecycle.ts`'s per-session injection gate — it appears in
+    neither resolver nor in the `conventionsDrifted` computation. Drift
+    tracking keeps working exactly as before: if the install's global text
+    later changes, this project still shows `conventionsDrifted: true`,
+    and a re-scaffold still commits the real, current text. Deliberately
+    **not** offered right after a successful apply — Hermes review caught
+    that both apply modes land the scaffold on a scratch worktree branch
+    (`git worktree add -b`, never `project.cwd`), so immediately after
+    apply the project's real, checked-out `AGENTS.md` does not carry the
+    text yet (PR mode's own notice says "before merging"); offering the
+    toggle at that moment would let a user suppress injection for text that
+    hasn't actually landed anywhere yet, silently delivering it neither way
+    until the scaffold branch/PR is merged by hand. Instead it's toggleable
+    only from the "Session injection for this project" row in
+    `ProjectBriefingPanel.tsx` the other three toggles live in — a standing
+    control the user reaches for once they know the merge has actually
+    happened, not a one-time offer tied to the apply moment. That row also
+    only renders while `injectWorkflowConventions` isn't `false` (opting out
+    the other way makes this toggle meaningless); opting out clears this
+    column back to `null` in the same PATCH, so a later re-enable of
+    `injectWorkflowConventions` can't silently re-arm a suppression the user
+    set before opting out and had no way to see while the row was hidden —
+    Hermes review, round 2.
 
 ## Settings
 

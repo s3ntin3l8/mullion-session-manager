@@ -226,7 +226,7 @@ export class GenerationOutputError extends Error {
 export interface GeneratedScaffoldContent {
   skill: string;
   reviewer: string;
-  briefingRegion: string;
+  scaffoldRegion: string;
   /** Issue #1144, #1159 — whether the generation turn actually ran inside a
    * bwrap sandbox. `false` when sandboxing was opted out via
    * MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED or when bwrap is unusable and
@@ -267,8 +267,14 @@ const SKILL_START = "<<<MULLION_SKILL_START>>>";
 const SKILL_END = "<<<MULLION_SKILL_END>>>";
 const REVIEWER_START = "<<<MULLION_REVIEWER_START>>>";
 const REVIEWER_END = "<<<MULLION_REVIEWER_END>>>";
-const BRIEFING_START = "<<<MULLION_BRIEFING_START>>>";
-const BRIEFING_END = "<<<MULLION_BRIEFING_END>>>";
+// Issue #1215 — this pair is request-scoped (the prompt below and
+// extractSection's parse are updated together, in this same commit, and
+// nothing persists the delimiter past a single generation turn), unlike
+// mullion-scaffold.ts's SCAFFOLD_REGION_START/END — those are a wire
+// format already committed into every previously-scaffolded repo's
+// AGENTS.md and can't be renamed. This one carries no such history.
+const GENERATED_REGION_START = "<<<MULLION_SCAFFOLD_REGION_START>>>";
+const GENERATED_REGION_END = "<<<MULLION_SCAFFOLD_REGION_END>>>";
 
 /** The generation agent never writes files itself (see this module's own
  * header) — it reports back by printing exactly these three delimited
@@ -280,9 +286,9 @@ export function buildGenerationPrompt(opts: {
   seed: GenerationSeed;
   hasSkill: boolean;
   hasReviewer: boolean;
-  hasBriefingRegion: boolean;
+  hasScaffoldRegion: boolean;
 }): string {
-  const { slug, seed, hasSkill, hasReviewer, hasBriefingRegion } = opts;
+  const { slug, seed, hasSkill, hasReviewer, hasScaffoldRegion } = opts;
   const skillPath = scaffoldSkillPath(slug);
   const reviewerPath = scaffoldReviewerPath(slug);
 
@@ -299,7 +305,7 @@ export function buildGenerationPrompt(opts: {
         `strong hint, not a final answer:\n---\n${seed.reviewerAgent}\n---`,
     );
   }
-  if (!hasBriefingRegion && seed.briefing) {
+  if (!hasScaffoldRegion && seed.briefing) {
     seedLines.push(
       `A short pinned briefing note already exists for this project — you may draw on it, ` +
         `but the AGENTS.md region you write is a different, longer-lived thing:\n---\n${seed.briefing}\n---`,
@@ -328,7 +334,7 @@ export function buildGenerationPrompt(opts: {
     `— this is the only mechanism by which codex's own delegation (\`spawn_agent\`) can ` +
     `discover this reviewer as a skill; omitting it makes the reviewer silently invisible to ` +
     `codex sessions.\n` +
-    `3. A short AGENTS.md briefing-region paragraph naming where the skill and reviewer live ` +
+    `3. A short AGENTS.md scaffold-region paragraph naming where the skill and reviewer live ` +
     `and when to use them. Do NOT include a "## Workflow Conventions" section or any branching/` +
     `review/commit-convention content — Mullion appends its own Workflow Conventions section ` +
     `after your paragraph, sourced from this install's own configured conventions, not from ` +
@@ -337,7 +343,7 @@ export function buildGenerationPrompt(opts: {
     `commentary, no markdown fences around the markers themselves:\n\n` +
     `${SKILL_START}\n(full skill file contents, including YAML frontmatter with name/description)\n${SKILL_END}\n` +
     `${REVIEWER_START}\n(full reviewer file contents, including YAML frontmatter with name/description/tools/model)\n${REVIEWER_END}\n` +
-    `${BRIEFING_START}\n(the briefing paragraph only)\n${BRIEFING_END}\n`
+    `${GENERATED_REGION_START}\n(the scaffold-region paragraph only)\n${GENERATED_REGION_END}\n`
   );
 }
 
@@ -372,7 +378,12 @@ function extractSection(raw: string, start: string, end: string, label: string):
 export function parseGeneratedOutput(raw: string, slug: string): GeneratedScaffoldContent {
   const skill = extractSection(raw, SKILL_START, SKILL_END, "skill");
   const reviewer = extractSection(raw, REVIEWER_START, REVIEWER_END, "reviewer");
-  const briefingRegion = extractSection(raw, BRIEFING_START, BRIEFING_END, "briefing region");
+  const scaffoldRegion = extractSection(
+    raw,
+    GENERATED_REGION_START,
+    GENERATED_REGION_END,
+    "scaffold region",
+  );
 
   const skillPath = scaffoldSkillPath(slug);
   if (!reviewer.includes(skillPath)) {
@@ -404,7 +415,7 @@ export function parseGeneratedOutput(raw: string, slug: string): GeneratedScaffo
     );
   }
 
-  return { skill, reviewer, briefingRegion, sandboxed: false, possiblyGeneric: false };
+  return { skill, reviewer, scaffoldRegion, sandboxed: false, possiblyGeneric: false };
 }
 
 /**
@@ -438,7 +449,7 @@ export function validateGenerationOutput(
   // Match file path references: src/foo.ts, lib/bar.js, test/baz.test.ts, etc.
   const pathPattern =
     /(?:^|\s|`|\()([A-Za-z0-9_/.-]+\.(?:ts|js|mjs|tsx|jsx|json|md|yaml|yml|toml|sh))\b/g;
-  const allText = `${content.skill}\n${content.reviewer}\n${content.briefingRegion}`;
+  const allText = `${content.skill}\n${content.reviewer}\n${content.scaffoldRegion}`;
   const referencedPaths = new Set<string>();
   let match;
   while ((match = pathPattern.exec(allText)) !== null) {
@@ -1201,7 +1212,7 @@ export interface GenerateScaffoldContentOptions {
   seed: GenerationSeed;
   hasSkill: boolean;
   hasReviewer: boolean;
-  hasBriefingRegion: boolean;
+  hasScaffoldRegion: boolean;
   timeoutMs?: number;
   /** Issue #1133 — LOCAL_HOST_ID only. The route resolves this from ITS
    * OWN `app.config.MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED` and passes
@@ -1223,7 +1234,7 @@ export interface GenerateScaffoldContentOptions {
 
 /**
  * Runs one read-only generation turn and returns the parsed
- * skill/reviewer/briefing-region content — on whichever host owns
+ * skill/reviewer/scaffold-region content — on whichever host owns
  * `opts.cwd` (issue #1101). For `LOCAL_HOST_ID`, calls
  * `runGenerationTurnInScratchWorktree` directly, in this process. For a
  * remote host, dispatches to the new `/internal/run-generation-turn` route
@@ -1254,7 +1265,7 @@ export async function generateScaffoldContent(
     seed: opts.seed,
     hasSkill: opts.hasSkill,
     hasReviewer: opts.hasReviewer,
-    hasBriefingRegion: opts.hasBriefingRegion,
+    hasScaffoldRegion: opts.hasScaffoldRegion,
   });
 
   let raw: string;

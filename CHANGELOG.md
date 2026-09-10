@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.3.16](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.15...v0.3.16) (2026-09-10)
+
+
+### Features
+
+* **bundle:** manual-session implement/review methodology skill ([#1214](https://github.com/s3ntin3l8/mullion-session-manager/issues/1214)) ([a07845f](https://github.com/s3ntin3l8/mullion-session-manager/commit/a07845f41725aae65d35db073042149d27d04376))
+* **bundle:** ship a generic reviewer subagent ([#1213](https://github.com/s3ntin3l8/mullion-session-manager/issues/1213)) ([72a21cb](https://github.com/s3ntin3l8/mullion-session-manager/commit/72a21cb29f2c370b3f69e1c33d38b18982c3ab5b))
+* **projects:** distinct opt-out for post-scaffold conventions injection ([#1217](https://github.com/s3ntin3l8/mullion-session-manager/issues/1217)) ([d7019a0](https://github.com/s3ntin3l8/mullion-session-manager/commit/d7019a023405ab6371576401f51d2488a4c2b793))
+* **scaffold:** add worktree wizard question, persist answers so the wizard is re-runnable ([#1204](https://github.com/s3ntin3l8/mullion-session-manager/issues/1204)) ([d7f327c](https://github.com/s3ntin3l8/mullion-session-manager/commit/d7f327c20f60491f14bc98347921629cf570a1f3))
+* **scaffold:** discoverability — post-create offer, never-scaffolded badge, kebab entry ([#1211](https://github.com/s3ntin3l8/mullion-session-manager/issues/1211)) ([6c26591](https://github.com/s3ntin3l8/mullion-session-manager/commit/6c26591b70579e73fa6b2ad57132dfe67eebdcea))
+* **scaffold:** drift detection + per-project opt-out toggle for committed conventions ([#1206](https://github.com/s3ntin3l8/mullion-session-manager/issues/1206)) ([e64d35e](https://github.com/s3ntin3l8/mullion-session-manager/commit/e64d35ee8b5b4d6957e57dd7e524017e4b58d1b7))
+
+
+### Bug Fixes
+
+* exclude bot-authored PRs by author, not actor; correct guard comment ([#1218](https://github.com/s3ntin3l8/mullion-session-manager/issues/1218)) ([d65546b](https://github.com/s3ntin3l8/mullion-session-manager/commit/d65546b223c505b3417e3b9a1b9f82493ab2b928))
+* **ui:** update two copy strings left stale by issue [#942](https://github.com/s3ntin3l8/mullion-session-manager/issues/942) ([#1220](https://github.com/s3ntin3l8/mullion-session-manager/issues/1220)) ([d74ec0d](https://github.com/s3ntin3l8/mullion-session-manager/commit/d74ec0d1ff21594471485db2f8a15d2386fef3c7))
+
 ## [0.3.15](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.14...v0.3.15) (2026-09-09)
 
 
