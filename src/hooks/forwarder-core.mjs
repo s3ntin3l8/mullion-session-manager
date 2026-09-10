@@ -146,6 +146,34 @@ export function mapClaudeCodePostToolUse(payload) {
   // message.
   const toolDone = { kind: "tool_done", tool: toolName };
 
+  // Issue #903 — TodoWrite carries the model's current task list, the best
+  // signal available for "what is this session actually doing" (consumed by
+  // the notification panel's context line — frontend/src/
+  // eventDescriptions.ts's sessionContextMap). One `todo` message per
+  // TodoWrite call, not one per todo item: the panel only ever needs the
+  // CURRENT task, so N messages per call would just multiply forwarder
+  // spawns for information nothing downstream reads. TodoWrite was
+  // previously excluded from this matcher entirely — see hook-adapters/
+  // claude-code.ts's PostToolUse registration comment ("none of them can
+  // prompt, so there's nothing to release and no reason to pay a forwarder
+  // spawn on every one of them"). That's still true — TodoWrite can never
+  // itself be gated by a permission/plan dialog — but the spawn cost is now
+  // worth paying for the context this buys.
+  if (toolName === "TodoWrite") {
+    const todos = Array.isArray(payload?.tool_input?.todos) ? payload.tool_input.todos : [];
+    const current =
+      todos.find((t) => t && t.status === "in_progress") ??
+      todos.find((t) => t && t.status === "pending") ??
+      null;
+    const content = typeof current?.content === "string" ? current.content : null;
+    const status = typeof current?.status === "string" ? current.status : null;
+    // Still forward-progress evidence (toolDone) even when the todo list
+    // itself doesn't parse — same "always append toolDone" posture as the
+    // no-file-path fallback below.
+    if (content && status) return [{ kind: "todo", content, status }, toolDone];
+    return toolDone;
+  }
+
   // Check for git worktree add before checking the file-tools set — a Bash
   // command that creates a worktree is interesting even though Bash is not
   // a file-editing tool.

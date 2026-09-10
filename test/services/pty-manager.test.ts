@@ -3297,6 +3297,110 @@ describe("PtyManager", () => {
       });
     });
 
+    it("notification: suppressed when a structured ask (question) is already pending and recent (issue #903)", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      session.emitHookEvent({ kind: "question", state: "started", header: "Stack menu" });
+      const beforeCount = session.getEvents().filter((e) => e.kind === "attention").length;
+
+      session.emitHookEvent({
+        kind: "notification",
+        title: "Claude Code",
+        body: "Claude needs your permission",
+      });
+
+      const attentionEvents = session.getEvents().filter((e) => e.kind === "attention");
+      expect(attentionEvents).toHaveLength(beforeCount);
+    });
+
+    it("notification: still emits when a structured ask is pending but stale (issue #903 — must not silently swallow notifications forever)", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      session.emitHookEvent({ kind: "question", state: "started", header: "Stack menu" });
+      // Simulate the D4-style stuck-latch case directly: questionState
+      // stays "pending" but questionAt is old — a sticky latch that never
+      // got its own release, per the D4 incident this suppression's own
+      // doc comment cites. A recency-unbounded check would drop every
+      // notification for this session forever; the bound must not.
+      const hourAgo = Date.now() - 60 * 60 * 1000;
+      (session as unknown as { questionAt: number }).questionAt = hourAgo;
+
+      session.emitHookEvent({
+        kind: "notification",
+        title: "Claude Code",
+        body: "Claude needs your permission",
+      });
+
+      const attentionEvents = session.getEvents().filter((e) => e.kind === "attention");
+      expect(attentionEvents.at(-1)).toMatchObject({
+        payload: expect.objectContaining({ signal: "hookNotification" }),
+      });
+    });
+
+    it("notification: does NOT suppress when it arrives BEFORE the structured ask's own latch is set (known ordering limitation, code review)", async () => {
+      // hasRecentStructuredAsk only catches ONE race ordering — the latch
+      // going pending BEFORE the generic notification is processed (the
+      // other two tests above). Two independent forwarder subprocesses have
+      // no ordering guarantee, so the reverse — notification processed
+      // first, question's own latch set only afterward — is a real, accepted
+      // gap: nothing here retroactively suppresses an already-emitted row.
+      // Documented as a known limitation on RECENT_STRUCTURED_ASK_MS's own
+      // doc comment rather than silently untested.
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      session.emitHookEvent({
+        kind: "notification",
+        title: "Claude Code",
+        body: "Claude needs your permission",
+      });
+      session.emitHookEvent({ kind: "question", state: "started", header: "Stack menu" });
+
+      const attentionEvents = session.getEvents().filter((e) => e.kind === "attention");
+      const notificationEmits = attentionEvents.filter(
+        (e) => (e.payload as { signal?: string }).signal === "hookNotification",
+      );
+      expect(notificationEmits).toHaveLength(1);
+    });
+
+    it("notification: still emits when no structured ask is pending (fallback role preserved)", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      session.emitHookEvent({ kind: "notification", title: "opencode", body: "Build finished" });
+
+      const attentionEvents = session.getEvents().filter((e) => e.kind === "attention");
+      expect(attentionEvents.at(-1)).toMatchObject({
+        payload: expect.objectContaining({ signal: "hookNotification" }),
+      });
+    });
+
     it("progress: emits a status_change event with the phase, no attention change", async () => {
       const session = manager.getOrCreate({
         id: "1",

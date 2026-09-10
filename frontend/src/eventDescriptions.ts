@@ -31,6 +31,25 @@ function countOutstandingBackgroundTasksInPayload(value: unknown): number {
   }).length;
 }
 
+// Code review (issue #903) — one canonical `file_change.action` -> verb
+// table, read by both describeEvent's own "file_change" case (a standalone
+// timeline sentence: "Changed src/x.ts") and sessionContextMap's (an inline
+// fragment following a kind pill: "edited src/x.ts"). Each site needs its
+// own casing, not the same string, so this can't just be a single shared
+// text template — but a NEW `action` value (there are only "create"/
+// "delete" today, defaulting to modify) only ever needs adding HERE, not
+// independently to two hand-written ternaries that can silently drift out
+// of wording sync with each other.
+const FILE_CHANGE_VERBS: Record<string, { titleCase: string; lower: string }> = {
+  create: { titleCase: "Created", lower: "created" },
+  delete: { titleCase: "Deleted", lower: "deleted" },
+};
+const DEFAULT_FILE_CHANGE_VERB = { titleCase: "Changed", lower: "edited" };
+
+function fileChangeVerb(action: unknown): { titleCase: string; lower: string } {
+  return (typeof action === "string" && FILE_CHANGE_VERBS[action]) || DEFAULT_FILE_CHANGE_VERB;
+}
+
 // Shared kind/payload interpretation for Phase 1's notification event model
 // (issue #166) — the one place that turns a raw `NotificationEvent` into
 // human text, an unread-worthiness classification, or both. Originally lived
@@ -55,7 +74,7 @@ function countOutstandingBackgroundTasksInPayload(value: unknown): number {
 // fields this function actually needs have to line up.
 export function describeEvent(
   event: Pick<NotificationEvent, "kind" | "payload">,
-): { text: string; attention: boolean } | null {
+): { text: string; attention: boolean; generic?: boolean } | null {
   switch (event.kind) {
     case "attention": {
       if (event.payload.attention !== true) {
@@ -65,16 +84,27 @@ export function describeEvent(
         return { text: "No longer needs attention", attention: false };
       }
       switch (event.payload.signal) {
+        // Issue #903 — `generic: true` on every one of these marks the row
+        // as content-free: the text says nothing about THIS session beyond
+        // "something happened", which is exactly what NotificationBell.tsx's
+        // sessionContextMap exists to fill in with what the session was
+        // actually doing. A row whose own text already carries real content
+        // (a permission summary, a question header, a plan summary, ...)
+        // must never get `generic: true` — substituting context there would
+        // LOSE information, not add it.
         case "bell":
-          return { text: "Bell", attention: true };
+          return { text: "Bell", attention: true, generic: true };
         case "titleIdle":
-          return { text: "Finished — needs input", attention: true };
+          return { text: "Finished — needs input", attention: true, generic: true };
         case "altScreenExit":
-          return { text: "Exited full-screen — needs input", attention: true };
+          return { text: "Exited full-screen — needs input", attention: true, generic: true };
         case "silence":
-          return { text: "Gone quiet — needs input", attention: true };
+          return { text: "Gone quiet — needs input", attention: true, generic: true };
         case "notification":
-          return { text: "Sent a notification", attention: true };
+          // The PTY-parsed OSC 9/777 signal — distinct from the hook-driven
+          // "hookNotification" case below, and just as content-free (no
+          // title/body ever reaches this one).
+          return { text: "Sent a notification", attention: true, generic: true };
         case "hookNotification": {
           // Phase 2 (issue #176) — a hook `notification` message, unlike the
           // PTY-parsed OSC 9/777 signal above, carries real title/body text
@@ -82,9 +112,18 @@ export function describeEvent(
           const title = typeof event.payload.title === "string" ? event.payload.title : null;
           const body = typeof event.payload.body === "string" ? event.payload.body : null;
           if (title && body) return { text: `${title} — ${body}`, attention: true };
-          // `||`, not `??`: an empty-string title (falsy but non-null) must
-          // also fall through to the generic message, not render as blank text.
-          return { text: title || "Sent a notification", attention: true };
+          // Code review (issue #903) — a body-only message (empty/missing
+          // title) is real content too, same as title-only; hook-protocol.ts's
+          // validateNotification accepts an empty-string title with a
+          // populated body, so this is a real wire state, not just a
+          // type-level curiosity. `title || body` alone previously discarded
+          // the body silently, which — once this case ALSO got `generic: true`
+          // below for the true empty case — would have let sessionContextMap
+          // substitute unrelated text over the top of a real message.
+          if (title) return { text: title, attention: true };
+          if (body) return { text: body, attention: true };
+          // Neither title nor body — genuinely content-free.
+          return { text: "Sent a notification", attention: true, generic: true };
         }
         case "reviewGate": {
           // Phase 2 (issue #176) — the attention-flip half of a review_gate
@@ -106,8 +145,9 @@ export function describeEvent(
         // pty-manager.ts for the payload shape each one carries).
         case "agentIdle":
           // The agent's own hook-confirmed "turn is over" signal — mirrors
-          // sessionStatus.ts's "finished" status text.
-          return { text: "Finished", attention: true };
+          // sessionStatus.ts's "finished" status text. `generic: true` (#903)
+          // — "Finished" alone says nothing about what finished.
+          return { text: "Finished", attention: true, generic: true };
         case "promoteRequest": {
           const summary = typeof event.payload.summary === "string" ? event.payload.summary : null;
           return {
@@ -247,12 +287,7 @@ export function describeEvent(
     case "file_change": {
       const path = typeof event.payload.path === "string" ? event.payload.path : null;
       if (!path) return null;
-      const verb =
-        event.payload.action === "create"
-          ? "Created"
-          : event.payload.action === "delete"
-            ? "Deleted"
-            : "Changed";
+      const verb = fileChangeVerb(event.payload.action).titleCase;
       return { text: `${verb} ${path}`, attention: false };
     }
     case "review_gate": {
@@ -376,6 +411,90 @@ export function describeEvent(
     default:
       return null;
   }
+}
+
+// Issue #903 — "what was this session actually doing" for a `generic: true`
+// row (see describeEvent's cases above): a `silence`/`titleIdle`/`bell`/
+// `agentIdle`/content-free-`hookNotification` row's own text says nothing
+// about the session beyond "something happened". Priority, first non-empty
+// wins: the in-progress todo, else the last file changed, else the last
+// session diff, else the terminal title (skipped when it just repeats the
+// session's own name/command — the weakest source, and often all a hookless
+// session has).
+//
+// Returns a MAP keyed by event seq, built in ONE forward pass over the
+// session's own events, not a per-row backward scan — NotificationBell.tsx's
+// buildFeedItems already re-runs on every store tick while the panel is
+// open, and a scan per row would be O(rows × events) on every one of those
+// ticks (same posture as this file's own countUnread/buildFeedItems split
+// and dev-server-detect.ts's "perf audit finding B8(1)"). Each entry is the
+// context that was true immediately BEFORE that seq's own event — a `todo`/
+// `file_change`/`session_diff`/`title_change` event updates the running
+// context for events AFTER it, never for itself.
+//
+// Todo priority is content-based, not id-based: NotificationEvent's `todo`
+// payload carries no stable per-item id, so "is this in-progress todo still
+// THE in-progress todo" is tracked by string equality against the last
+// content seen at status "in_progress". Good enough for a display nicety;
+// not exact if two distinct todos ever share literal text.
+export function sessionContextMap(
+  events: readonly NotificationEvent[],
+  sessionLabel?: string | null,
+): Map<number, string> {
+  const map = new Map<number, string>();
+  let inProgressTodo: string | null = null;
+  let anyTodo: string | null = null;
+  let lastFileChange: string | null = null;
+  let lastSessionDiff: string | null = null;
+  let lastTitle: string | null = null;
+
+  const sorted = [...events].sort((a, b) => a.seq - b.seq);
+  for (const event of sorted) {
+    const context =
+      (inProgressTodo ?? anyTodo) !== null
+        ? `▸ ${inProgressTodo ?? anyTodo}`
+        : (lastFileChange ?? lastSessionDiff ?? lastTitle);
+    if (context) map.set(event.seq, context);
+
+    switch (event.kind) {
+      case "todo": {
+        const content = typeof event.payload.content === "string" ? event.payload.content : null;
+        const status = typeof event.payload.status === "string" ? event.payload.status : null;
+        if (!content) break;
+        if (status === "in_progress") {
+          inProgressTodo = content;
+        } else if (content === inProgressTodo) {
+          // The item we were tracking as in-progress moved to a different
+          // status — no longer "what this session is working on".
+          inProgressTodo = null;
+        }
+        anyTodo = content;
+        break;
+      }
+      case "file_change": {
+        const path = typeof event.payload.path === "string" ? event.payload.path : null;
+        if (!path) break;
+        const verb = fileChangeVerb(event.payload.action).lower;
+        lastFileChange = `${verb} ${path}`;
+        break;
+      }
+      case "session_diff": {
+        const files = event.payload.files;
+        if (!Array.isArray(files) || files.length === 0) break;
+        const changed = files.length === 1 ? files[0].file : `${files.length} files`;
+        lastSessionDiff = `changed ${changed}`;
+        break;
+      }
+      case "title_change": {
+        const title = typeof event.payload.title === "string" ? event.payload.title : null;
+        if (title && title !== sessionLabel) lastTitle = title;
+        break;
+      }
+      default:
+        break;
+    }
+  }
+  return map;
 }
 
 // Issue #167's per-session status line — turns the most recent describable

@@ -70,6 +70,8 @@ describe("applyHookAdapters (issue #174)", () => {
       // Fix: AskUserQuestion mislabelled — CLAUDE_CODE_EMITS now includes
       // "question" (hook-adapters/claude-code.ts).
       "question",
+      // Issue #903 — TodoWrite forwarding.
+      "todo",
     ]);
     expect(existsSync(path.join(c.sessionsDir, "1.hooks.json"))).toBe(true);
     const written = JSON.parse(readFileSync(path.join(c.sessionsDir, "1.hooks.json"), "utf8"));

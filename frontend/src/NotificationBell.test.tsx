@@ -238,6 +238,65 @@ describe("NotificationBell", () => {
     expect(screen.getByText("Exited")).toBeInTheDocument();
   });
 
+  it("issue #903 — a generic silence row shows the session's last file change; a specific question row keeps its own text", async () => {
+    events = {
+      1: [
+        makeEvent({
+          seq: 1,
+          kind: "file_change",
+          payload: { path: "src/hooks/forwarder-core.mjs", action: "modify" },
+        }),
+        makeEvent({
+          seq: 2,
+          kind: "attention",
+          payload: { attention: true, signal: "silence" },
+        }),
+        makeEvent({
+          seq: 3,
+          kind: "attention",
+          payload: { attention: true, signal: "question", header: "Stack menu" },
+        }),
+      ],
+    };
+    await openPanel();
+    expect(screen.getByText("edited src/hooks/forwarder-core.mjs")).toBeInTheDocument();
+    expect(screen.getByText("Needs answer: Stack menu")).toBeInTheDocument();
+    expect(screen.queryByText("Gone quiet — needs input")).not.toBeInTheDocument();
+  });
+
+  it("issue #903 — two consecutive generic rows with identical derived context still fold to a repeat count", async () => {
+    events = {
+      1: [
+        makeEvent({ seq: 1, kind: "file_change", payload: { path: "src/x.ts", action: "modify" } }),
+        makeEvent({ seq: 2, kind: "attention", payload: { attention: true, signal: "silence" } }),
+        makeEvent({ seq: 3, kind: "attention", payload: { attention: true, signal: "silence" } }),
+      ],
+    };
+    await openPanel();
+    expect(screen.getByText("edited src/x.ts")).toBeInTheDocument();
+    expect(screen.getByText("×2")).toBeInTheDocument();
+  });
+
+  it("code review (issue #903) — a bell and a silence sharing the SAME derived context do NOT fold together", async () => {
+    // Regression test: bell/silence share severity ("done" — notifySeverity
+    // falls through the same way for every generic signal) AND, once both
+    // substitute the same sessionContextMap context, the same text — folding
+    // on (severity, text) alone would wrongly collapse these into one row,
+    // hiding that two DIFFERENT things happened. The kind pill (label) is
+    // what still has to keep them apart.
+    events = {
+      1: [
+        makeEvent({ seq: 1, kind: "file_change", payload: { path: "src/x.ts", action: "modify" } }),
+        makeEvent({ seq: 2, kind: "attention", payload: { attention: true, signal: "bell" } }),
+        makeEvent({ seq: 3, kind: "attention", payload: { attention: true, signal: "silence" } }),
+      ],
+    };
+    await openPanel();
+    const rows = screen.getAllByText("edited src/x.ts");
+    expect(rows).toHaveLength(2);
+    expect(screen.queryByText("×2")).not.toBeInTheDocument();
+  });
+
   it("excludes routine, high-frequency kinds (title_change, alt-screen status_change) from the feed", async () => {
     events = {
       1: [
@@ -247,9 +306,17 @@ describe("NotificationBell", () => {
       ],
     };
     await openPanel();
-    expect(screen.queryByText("zsh")).not.toBeInTheDocument();
+    // Neither routine kind ever gets its OWN row — that's the invariant this
+    // test protects. But (issue #903) they're still buffered into the
+    // session's own event ring, which sessionContextMap now reads: the
+    // generic `bell` row's text becomes "zsh" (the last title seen) instead
+    // of the bare, content-free "Bell" — its kind pill still reads "Bell"
+    // (notifyLabel, unaffected by the substitution), just not as the row's
+    // own body text.
     expect(screen.queryByText("Entered full-screen mode")).not.toBeInTheDocument();
-    expect(screen.getByText("Bell")).toBeInTheDocument();
+    expect(screen.getByText("zsh")).toBeInTheDocument();
+    expect(screen.queryByText("Bell", { selector: ".notif-event-text" })).not.toBeInTheDocument();
+    expect(screen.getByText("Bell", { selector: ".notif-event-kind-pill" })).toBeInTheDocument();
   });
 
   it("sorts sessions by recency — the session with the newest event leads", async () => {

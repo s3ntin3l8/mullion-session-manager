@@ -5,6 +5,7 @@ import {
   notifyKind,
   notifyLabel,
   notifySeverity,
+  sessionContextMap,
 } from "./eventDescriptions.js";
 import type { NotificationEvent } from "./api/index.js";
 
@@ -47,7 +48,11 @@ describe("eventDescriptions (Phase 2, issue #176)", () => {
         kind: "attention",
         payload: { attention: true, signal: "hookNotification" },
       });
-      expect(describeEvent(event)).toEqual({ text: "Sent a notification", attention: true });
+      expect(describeEvent(event)).toEqual({
+        text: "Sent a notification",
+        attention: true,
+        generic: true,
+      });
     });
 
     it("falls back to a generic message for an empty-string title, not blank text", () => {
@@ -57,7 +62,24 @@ describe("eventDescriptions (Phase 2, issue #176)", () => {
         kind: "attention",
         payload: { attention: true, signal: "hookNotification", title: "" },
       });
-      expect(describeEvent(event)).toEqual({ text: "Sent a notification", attention: true });
+      expect(describeEvent(event)).toEqual({
+        text: "Sent a notification",
+        attention: true,
+        generic: true,
+      });
+    });
+
+    it("shows the body when title is an empty string but body is present (code review, issue #903)", () => {
+      // hook-protocol.ts's validateNotification accepts an empty-string
+      // title alongside a real body — a body-only message is real content,
+      // same as title-only, and must NOT be marked `generic: true` (which
+      // would let sessionContextMap substitute unrelated session context
+      // over the top of it).
+      const event = makeEvent({
+        kind: "attention",
+        payload: { attention: true, signal: "hookNotification", title: "", body: "Deploy failed" },
+      });
+      expect(describeEvent(event)).toEqual({ text: "Deploy failed", attention: true });
     });
   });
 
@@ -126,7 +148,7 @@ describe("eventDescriptions (Phase 2, issue #176)", () => {
         kind: "attention",
         payload: { attention: true, signal: "agentIdle" },
       });
-      expect(describeEvent(event)).toEqual({ text: "Finished", attention: true });
+      expect(describeEvent(event)).toEqual({ text: "Finished", attention: true, generic: true });
     });
 
     it("describes promoteRequest with its summary", () => {
@@ -479,6 +501,138 @@ describe("eventDescriptions (Phase 2, issue #176)", () => {
         text: "Dismissed dev server on port 5173",
         attention: false,
       });
+    });
+  });
+
+  describe("describeEvent — generic flag (issue #903)", () => {
+    it.each([
+      ["bell", { attention: true, signal: "bell" }],
+      ["titleIdle", { attention: true, signal: "titleIdle" }],
+      ["altScreenExit", { attention: true, signal: "altScreenExit" }],
+      ["silence", { attention: true, signal: "silence" }],
+      ["notification", { attention: true, signal: "notification" }],
+      ["agentIdle", { attention: true, signal: "agentIdle" }],
+    ])("marks %s content-free", (_label, payload) => {
+      const event = makeEvent({ kind: "attention", payload });
+      expect(describeEvent(event)?.generic).toBe(true);
+    });
+
+    it("marks a hookNotification with neither title nor body content-free", () => {
+      const event = makeEvent({
+        kind: "attention",
+        payload: { attention: true, signal: "hookNotification" },
+      });
+      expect(describeEvent(event)).toEqual({
+        text: "Sent a notification",
+        attention: true,
+        generic: true,
+      });
+    });
+
+    it("does NOT mark a hookNotification with a title content-free", () => {
+      const event = makeEvent({
+        kind: "attention",
+        payload: { attention: true, signal: "hookNotification", title: "Build done" },
+      });
+      expect(describeEvent(event)).toEqual({ text: "Build done", attention: true });
+    });
+
+    it("does NOT mark a row whose own text already carries content", () => {
+      const permission = makeEvent({
+        kind: "attention",
+        payload: { attention: true, signal: "permissionRequest", summary: "Bash(npm test)" },
+      });
+      const question = makeEvent({
+        kind: "attention",
+        payload: { attention: true, signal: "question", header: "Stack menu" },
+      });
+      expect(describeEvent(permission)?.generic).toBeUndefined();
+      expect(describeEvent(question)?.generic).toBeUndefined();
+    });
+  });
+
+  describe("sessionContextMap (issue #903)", () => {
+    it("returns an empty map for a session with no matching event kinds", () => {
+      const events: NotificationEvent[] = [
+        makeEvent({ seq: 1, kind: "attention", payload: { attention: true, signal: "silence" } }),
+      ];
+      expect(sessionContextMap(events).size).toBe(0);
+    });
+
+    it("prefers the in-progress todo over an older file change", () => {
+      const events: NotificationEvent[] = [
+        makeEvent({ seq: 1, kind: "file_change", payload: { path: "a.ts", action: "modify" } }),
+        makeEvent({
+          seq: 2,
+          kind: "todo",
+          payload: { content: "Wire the adapter", status: "in_progress" },
+        }),
+        makeEvent({ seq: 3, kind: "attention", payload: { attention: true, signal: "silence" } }),
+      ];
+      expect(sessionContextMap(events).get(3)).toBe("▸ Wire the adapter");
+    });
+
+    it("falls back to file_change, then session_diff, then title_change, in that order", () => {
+      const withOnlyFileChange = sessionContextMap([
+        makeEvent({ seq: 1, kind: "file_change", payload: { path: "a.ts", action: "create" } }),
+        makeEvent({ seq: 2, kind: "attention", payload: { attention: true, signal: "silence" } }),
+      ]);
+      expect(withOnlyFileChange.get(2)).toBe("created a.ts");
+
+      const withOnlySessionDiff = sessionContextMap([
+        makeEvent({ seq: 1, kind: "session_diff", payload: { files: [{ file: "b.ts" }] } }),
+        makeEvent({ seq: 2, kind: "attention", payload: { attention: true, signal: "silence" } }),
+      ]);
+      expect(withOnlySessionDiff.get(2)).toBe("changed b.ts");
+
+      const withOnlyTitle = sessionContextMap([
+        makeEvent({ seq: 1, kind: "title_change", payload: { title: "npm run dev" } }),
+        makeEvent({ seq: 2, kind: "attention", payload: { attention: true, signal: "silence" } }),
+      ]);
+      expect(withOnlyTitle.get(2)).toBe("npm run dev");
+
+      const fileChangeBeatsSessionDiff = sessionContextMap([
+        makeEvent({ seq: 1, kind: "session_diff", payload: { files: [{ file: "b.ts" }] } }),
+        makeEvent({ seq: 2, kind: "file_change", payload: { path: "a.ts", action: "modify" } }),
+        makeEvent({ seq: 3, kind: "attention", payload: { attention: true, signal: "silence" } }),
+      ]);
+      expect(fileChangeBeatsSessionDiff.get(3)).toBe("edited a.ts");
+    });
+
+    it("skips a title_change that merely repeats the session's own label", () => {
+      const events: NotificationEvent[] = [
+        makeEvent({ seq: 1, kind: "title_change", payload: { title: "make dev" } }),
+        makeEvent({ seq: 2, kind: "attention", payload: { attention: true, signal: "silence" } }),
+      ];
+      expect(sessionContextMap(events, "make dev").get(2)).toBeUndefined();
+    });
+
+    it("clears the in-progress todo once it moves to a different status, falling back to the last todo of any status", () => {
+      const events: NotificationEvent[] = [
+        makeEvent({
+          seq: 1,
+          kind: "todo",
+          payload: { content: "Wire the adapter", status: "in_progress" },
+        }),
+        makeEvent({
+          seq: 2,
+          kind: "todo",
+          payload: { content: "Wire the adapter", status: "completed" },
+        }),
+        makeEvent({ seq: 3, kind: "attention", payload: { attention: true, signal: "silence" } }),
+      ];
+      expect(sessionContextMap(events).get(3)).toBe("▸ Wire the adapter");
+    });
+
+    it("records context as of BEFORE each event, not including that event's own contribution", () => {
+      const events: NotificationEvent[] = [
+        makeEvent({ seq: 1, kind: "file_change", payload: { path: "a.ts", action: "modify" } }),
+        // seq 2's own context should be "edited a.ts" (from seq 1), not
+        // whatever seq 2 itself introduces.
+        makeEvent({ seq: 2, kind: "file_change", payload: { path: "b.ts", action: "modify" } }),
+      ];
+      const map = sessionContextMap(events);
+      expect(map.get(2)).toBe("edited a.ts");
     });
   });
 

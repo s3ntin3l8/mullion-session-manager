@@ -115,7 +115,7 @@ describe("buildClaudeHookSettings", () => {
     expect(notificationCommand).toContain("claude-code Notification");
   });
 
-  it("restricts PostToolUse to the file-editing tools, Bash, and the prompting tools via matcher", () => {
+  it("restricts PostToolUse to the file-editing tools, Bash, the prompting tools, and TodoWrite via matcher", () => {
     expect(settings.hooks.PostToolUse[0].matcher).toBe("Write|Edit|MultiEdit|NotebookEdit");
     expect(settings.hooks.PostToolUse[1].matcher).toBe("Bash");
     // Fix: status-clearing-semantics — the tools that can raise a
@@ -123,6 +123,10 @@ describe("buildClaudeHookSettings", () => {
     expect(settings.hooks.PostToolUse[2].matcher).toBe(
       "AskUserQuestion|WebFetch|WebSearch|ExitPlanMode|mcp__.*",
     );
+    // Issue #903 — its own matcher group; can't prompt, so it's not folded
+    // into the group just above.
+    expect(settings.hooks.PostToolUse[3].matcher).toBe("TodoWrite");
+    expect(settings.hooks.PostToolUse).toHaveLength(4);
   });
 
   it("defaults the node binary to process.execPath when not overridden", () => {
