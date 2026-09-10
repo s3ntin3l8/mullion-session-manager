@@ -7,7 +7,7 @@ import type { CustomSelectOption } from "../ui/CustomSelect.js";
 import { KebabMenu } from "../ui/KebabMenu.js";
 import type { DockerStatusPresentation } from "../dockerServiceStatus.js";
 import { isStartable } from "../dockerServiceStatus.js";
-import { imageTag } from "./dockHelpers.js";
+import { imagePillLabel } from "./dockHelpers.js";
 
 // A single dock monitor row (header + its live terminal body) — extracted
 // from DockColumn's own render loop (Wave 5 / PR 28 of
@@ -233,7 +233,7 @@ export function DockMonitor({
               }
             >
               <ContainerIcon size={11} />
-              <span className="dock-monitor-url-text">{imageTag(control.docker.imageRef)}</span>
+              <span className="dock-monitor-url-text">{imagePillLabel(control.docker)}</span>
             </span>
           )}
           {
@@ -293,6 +293,11 @@ export function DockMonitor({
                     label: "Check for update",
                     icon: <RefreshIcon size={12} />,
                     disabled: control.docker.buildOnly,
+                    // Issue #1106 — the disabled state alone gave no reason;
+                    // wording matches docs/dock.md's own explanation.
+                    title: control.docker.buildOnly
+                      ? "No registry image to compare — this service is built from source"
+                      : undefined,
                     onClick: onCheckUpdate,
                   },
                 ]}

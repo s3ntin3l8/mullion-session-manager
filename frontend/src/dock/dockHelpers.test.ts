@@ -8,6 +8,7 @@ import {
   dockMonitorFullMinHeightPx,
   dockMonitorMinHeightPx,
   dockMonitorMinWidthPx,
+  imagePillLabel,
 } from "./dockHelpers.js";
 import { makeSession } from "../test/fixtures.js";
 import type { DockControl } from "../api/index.js";
@@ -35,6 +36,60 @@ function dockerControl(overrides: Partial<DockControl> = {}): DockControl {
 function configControl(overrides: Partial<DockControl> = {}): DockControl {
   return { id: "dev", title: "Dev server", command: "npm run dev", ...overrides };
 }
+
+// Issue #1221 — a build-only service whose old, default-named image has
+// been pruned reports a bare sha256: digest; imageTag() alone has no
+// special case for that shape (only the `name@sha256:...` digest-reference
+// form) and would show the full 64-char digest untruncated.
+describe("imagePillLabel", () => {
+  it("shows compose's default build-image name for a build-only service with a bare digest imageRef", () => {
+    expect(
+      imagePillLabel({
+        composeProject: "pocket-portfolio-tracker",
+        service: "api",
+        buildOnly: true,
+        imageRef: "sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      }),
+    ).toBe("pocket-portfolio-tracker-api");
+  });
+
+  it("falls through to imageTag for a build-only service that still has a real tag", () => {
+    expect(
+      imagePillLabel({
+        composeProject: "pocket-portfolio-tracker",
+        service: "api",
+        buildOnly: true,
+        imageRef: "pocket-portfolio-tracker-api:latest",
+      }),
+    ).toBe("latest");
+  });
+
+  it("falls through to imageTag for a registry-image (non-build-only) service, even with a bare digest", () => {
+    // Not the display fix's territory — imageTag() already treats the bare
+    // `sha256:` prefix as a tag separator, so it strips down to just the
+    // hex digest (still not great, but a pre-existing/separate concern from
+    // the build-only-specific case this helper targets).
+    expect(
+      imagePillLabel({
+        composeProject: "sanctuary",
+        service: "db",
+        buildOnly: false,
+        imageRef: "sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      }),
+    ).toBe("a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1");
+  });
+
+  it("uses the ordinary tag for a build-only service with a normal registry-style imageRef", () => {
+    expect(
+      imagePillLabel({
+        composeProject: "sanctuary",
+        service: "web",
+        buildOnly: true,
+        imageRef: "ghcr.io/s3ntin3l8/sanctuary:edge",
+      }),
+    ).toBe("edge");
+  });
+});
 
 describe("dockerSessionIdentity", () => {
   it("is docker-logs:<containerName> for a docker-sourced control", () => {

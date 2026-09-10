@@ -40,6 +40,11 @@ export interface KebabMenuItem {
   // ConfirmButton's own 3s arm window) before a second click fires it.
   confirm?: boolean;
   disabled?: boolean;
+  // Rendered as the item button's `title` — meant for explaining WHY a
+  // `disabled` item is disabled (issue #1106). Only useful paired with
+  // `disabled: true`: see the item render below for why a plain
+  // `disabled` attribute can't carry this on its own.
+  title?: string;
 }
 
 export function KebabMenu({
@@ -207,7 +212,14 @@ export function KebabMenu({
                 className={`pane-tab-overflow-item${item.danger ? " danger" : ""}${
                   armedKey === item.key ? " armed" : ""
                 }`}
-                disabled={item.disabled}
+                // Issue #1106 — `aria-disabled`, not the native `disabled`
+                // attribute: a disabled button doesn't receive pointer
+                // events, which is exactly what makes a `title` on it
+                // unreliable across engines. handleItemClick's own
+                // `if (item.disabled) return` above is what actually keeps
+                // this inert; aria-disabled is presentation + a11y only.
+                aria-disabled={item.disabled || undefined}
+                title={item.title}
                 onClick={() => handleItemClick(item)}
               >
                 {item.icon}

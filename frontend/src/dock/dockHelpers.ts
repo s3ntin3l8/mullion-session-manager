@@ -27,6 +27,33 @@ export function imageTag(imageRef: string): string {
   return colonIndex === -1 ? "latest" : lastSegment.slice(colonIndex + 1);
 }
 
+/** A bare `sha256:<64 hex>` digest, no repo path or tag at all — imageTag()
+ * doesn't special-case this shape (only the `name@sha256:...` digest-
+ * reference form above), so it falls through to returning the full 64-char
+ * digest untruncated. This is exactly what a build-only service's own
+ * container reports once its old, default-named image (still shaped
+ * `<composeProject>-<service>`) has been superseded by a later build and
+ * pruned — issue #1221. */
+function isBareDigestRef(imageRef: string): boolean {
+  return /^sha256:[0-9a-f]{64}$/i.test(imageRef);
+}
+
+/** Pill text for a service's image: imageTag()'s tag/digest-prefix by
+ * default, but compose's own default build-image name
+ * (`<composeProject>-<service>`) for a build-only service whose `imageRef`
+ * has degraded to a bare digest — a far more legible label than a raw hash,
+ * and still correct (it's the name the service would carry again the next
+ * time it's rebuilt). The full `imageRef` stays available either way via
+ * the pill's own `title` attribute (DockMonitor.tsx). */
+export function imagePillLabel(
+  docker: Pick<DockerServiceInfo, "composeProject" | "service" | "buildOnly" | "imageRef">,
+): string {
+  if (docker.buildOnly && isBareDigestRef(docker.imageRef)) {
+    return `${docker.composeProject}-${docker.service}`;
+  }
+  return imageTag(docker.imageRef);
+}
+
 export function clamp(n: number, min: number, max: number) {
   return Math.min(Math.max(n, min), max);
 }

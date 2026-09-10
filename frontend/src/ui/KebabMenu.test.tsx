@@ -115,3 +115,58 @@ describe("ui/KebabMenu maxHeight floor", () => {
     }
   });
 });
+
+// Issue #1106 — an item's `disabled` used to map straight to the native
+// `disabled` attribute, which can't reliably carry an explanatory `title`
+// (disabled controls don't receive pointer events, and tooltip display is
+// tied to those). Switched to `aria-disabled` + a JS click guard instead.
+describe("ui/KebabMenu disabled item — title and aria-disabled", () => {
+  it("forwards an item's title onto its rendered button", async () => {
+    const user = userEvent.setup();
+    render(
+      <KebabMenu
+        items={[
+          {
+            key: "check-update",
+            label: "Check for update",
+            disabled: true,
+            title: "No registry image to compare",
+            onClick: vi.fn(),
+          },
+        ]}
+      />,
+    );
+
+    await user.click(screen.getByRole("button"));
+
+    const item = screen.getByText("Check for update").closest("button");
+    expect(item).toHaveAttribute("title", "No registry image to compare");
+    expect(item).toHaveAttribute("aria-disabled", "true");
+    expect(item).not.toBeDisabled();
+  });
+
+  it("does not fire onClick for a disabled item even though the button itself stays enabled", async () => {
+    const onClick = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <KebabMenu
+        items={[{ key: "check-update", label: "Check for update", disabled: true, onClick }]}
+      />,
+    );
+
+    await user.click(screen.getByRole("button"));
+    await user.click(screen.getByText("Check for update"));
+
+    expect(onClick).not.toHaveBeenCalled();
+  });
+
+  it("an enabled item has no aria-disabled attribute at all", async () => {
+    const user = userEvent.setup();
+    render(<KebabMenu items={[{ key: "restart", label: "Restart service", onClick: vi.fn() }]} />);
+
+    await user.click(screen.getByRole("button"));
+
+    const item = screen.getByText("Restart service").closest("button");
+    expect(item).not.toHaveAttribute("aria-disabled");
+  });
+});

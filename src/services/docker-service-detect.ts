@@ -47,7 +47,19 @@ export interface ComposeService {
   imageRef: string;
   imageId: string;
   /** No registry image to pull/compare — a `build:`-only service. Set at
-   * discovery time only, from the image-name heuristic below (looksBuildOnly).
+   * discovery time from `docker compose ... config --format json`
+   * (refineBuildOnlyDetection below) when the stack's compose file(s) are
+   * still resolvable on disk — the authoritative source, since it reads the
+   * actual `build:`/`image:` keys rather than guessing from a name. Falls
+   * back to the image-name heuristic (looksBuildOnly) when the probe can't
+   * run (compose files gone, `docker compose` unavailable, probe timeout)
+   * or a service the probe covers doesn't have one — issue #1221: a
+   * rebuilt-and-pruned build-only service's OWN image (still tagged with
+   * compose's default build-image name) gets pruned once superseded, so
+   * its container reverts to reporting a bare `sha256:` digest that the
+   * name heuristic alone can never recognize (verified live against this
+   * repo's own pocket-portfolio-tracker).
+   *
    * A failed check-update pull for a service NOT already flagged this way
    * (a private registry, transient network failure, …) surfaces as
    * `reason: "pull-failed"` instead — see projects.ts's docker/check-update
@@ -242,12 +254,134 @@ function escapeRegExp(s: string): string {
 /** compose's own default build-image name (`<project>-<service>[:latest]`,
  * verified live against a build:-only stack) — a service still using that
  * name never had a registry image pulled, so `docker compose pull` /
- * `check-update` can never do anything useful for it. */
+ * `check-update` can never do anything useful for it.
+ *
+ * FALLBACK ONLY (issue #1221) — refineBuildOnlyDetection() below reads the
+ * compose file directly and is authoritative whenever it can run; this is
+ * what's left once a stack has been rebuilt at least once and its old,
+ * default-named image pruned: the running container's own `imageRef`
+ * reverts to a bare `sha256:<digest>`, which this name-shape guess can
+ * never match. Kept as the fallback for when the stack's compose files
+ * aren't resolvable on disk, `docker compose` isn't available, or the probe
+ * itself fails/times out. */
 function looksBuildOnly(imageRef: string, composeProject: string, service: string): boolean {
   const pattern = new RegExp(
     `^${escapeRegExp(composeProject)}-${escapeRegExp(service)}(:latest)?$`,
   );
   return pattern.test(imageRef);
+}
+
+/** Result of one `docker compose ... config --format json` probe for a
+ * compose project: which of its services have a `build:` key and no
+ * `image:` key, i.e. are genuinely build-only per the compose file itself
+ * rather than a name-shape guess. */
+type BuildOnlyProbeResult = ReadonlyMap<string, boolean>;
+
+interface BuildOnlyProbeCacheEntry {
+  /** Sorted `service:configHash` fold over every service in the project at
+   * probe time — changes whenever any service's config changes, or a
+   * service is added/removed, invalidating the cache entry. */
+  key: string;
+  result: BuildOnlyProbeResult;
+}
+
+/** Keyed by composeProject. Module-scoped like `cache`/`inFlight` above —
+ * this whole module is a singleton discovery cache, not per-request state. */
+const buildOnlyProbeCache = new Map<string, BuildOnlyProbeCacheEntry>();
+
+function foldConfigHashes(services: readonly ComposeService[]): string {
+  return services
+    .map((s) => `${s.service}:${s.configHash}`)
+    .sort()
+    .join(",");
+}
+
+/** Runs `docker compose ... config --format json` for one compose project
+ * and returns which services have `build:` and no `image:` — the
+ * authoritative source refineBuildOnlyDetection() below prefers over
+ * looksBuildOnly's name-shape guess. `services` only needs to contain
+ * members of ONE compose project; any resolvable one works as the
+ * representative since composeContextArgs() only depends on project-wide
+ * fields (-p/--project-directory/--env-file/-f), identical for every
+ * service in the same project. Returns `null` when no service is resolvable
+ * (nothing to probe against) or the probe itself fails/produces unparsable
+ * output — the caller falls back to looksBuildOnly per service in that
+ * case, same "can't tell" convention as reconstructConfigHash. */
+async function probeBuildOnlyServices(
+  services: readonly ComposeService[],
+): Promise<BuildOnlyProbeResult | null> {
+  const rep = services.find((s) => s.composeResolvable);
+  if (!rep) return null;
+
+  const output = await runDocker([
+    "compose",
+    ...composeContextArgs(rep),
+    "config",
+    "--format",
+    "json",
+  ]);
+  if (output === null) return null;
+
+  try {
+    const parsed = JSON.parse(output) as {
+      services?: Record<string, { build?: unknown; image?: unknown }>;
+    };
+    const result = new Map<string, boolean>();
+    for (const [name, def] of Object.entries(parsed.services ?? {})) {
+      result.set(name, def.build !== undefined && def.image === undefined);
+    }
+    return result;
+  } catch (err) {
+    warn(`failed to parse "docker compose config" output for ${rep.composeProject}`, err);
+    return null;
+  }
+}
+
+/** Overrides looksBuildOnly's name-shape guess with the authoritative
+ * `docker compose config` probe wherever it can run, one probe per distinct
+ * compose project (in parallel — issue #1221, avoids paying `docker`'s
+ * timeout N times sequentially on a cold cache with N stacks on the host),
+ * cached per project until its services' config-hashes change. A service
+ * the probe doesn't cover (probe failed, or the service is missing from the
+ * compose config output for any reason) keeps its looksBuildOnly value
+ * unchanged. */
+async function refineBuildOnlyDetection(
+  services: readonly ComposeService[],
+): Promise<ComposeService[]> {
+  const byProject = new Map<string, ComposeService[]>();
+  for (const svc of services) {
+    const group = byProject.get(svc.composeProject);
+    if (group) group.push(svc);
+    else byProject.set(svc.composeProject, [svc]);
+  }
+
+  const resultsByProject = new Map(
+    await Promise.all(
+      [...byProject.entries()].map(async ([composeProject, group]) => {
+        const cacheKey = foldConfigHashes(group);
+        const cached = buildOnlyProbeCache.get(composeProject);
+        if (cached && cached.key === cacheKey) {
+          return [composeProject, cached.result] as const;
+        }
+
+        const probed = await probeBuildOnlyServices(group);
+        if (probed !== null) {
+          buildOnlyProbeCache.set(composeProject, { key: cacheKey, result: probed });
+        }
+        return [composeProject, probed] as const;
+      }),
+    ),
+  );
+
+  return services.map((svc) => {
+    const probed = resultsByProject.get(svc.composeProject)?.get(svc.service);
+    return probed === undefined || probed === svc.buildOnly ? svc : { ...svc, buildOnly: probed };
+  });
+}
+
+/** Exported for tests only. */
+export function clearBuildOnlyProbeCacheForTests(): void {
+  buildOnlyProbeCache.clear();
 }
 
 /** Whether every file in `configFiles`, plus `envFile` when one was
@@ -343,7 +477,8 @@ async function probeComposeServices(): Promise<ComposeService[]> {
     PS_FORMAT,
   ]);
   if (output === null) return [];
-  return dedupe(parsePsOutput(output)).map(toComposeService);
+  const services = dedupe(parsePsOutput(output)).map(toComposeService);
+  return refineBuildOnlyDetection(services);
 }
 
 let cache: { data: ComposeService[]; expiresAt: number } | null = null;
