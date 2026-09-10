@@ -505,6 +505,11 @@ export function App() {
     mobileTabsDetachRef.current = null;
     if (!el) return;
     const detachWheel = attachMobileTabsWheelScroll(el);
+    // Stored immediately, before the second attach — Hermes review: if
+    // attachMobileTabsEdgeState throws (e.g. ResizeObserver missing on an
+    // older WebView), the wheel listener above must not leak. Overwritten
+    // below once the edge-state attach succeeds.
+    mobileTabsDetachRef.current = detachWheel;
     const detachEdgeState = attachMobileTabsEdgeState(el);
     mobileTabsDetachRef.current = () => {
       detachWheel();

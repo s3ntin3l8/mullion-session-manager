@@ -78,7 +78,14 @@ function updateMobileTabsEdgeState(element: HTMLElement): void {
  *    the active-tab `scrollIntoView` in App.tsx — which a tab opened by
  *    another client/process, or a rename by that tab's own session, never
  *    triggers).
- * All three are torn down together by the returned cleanup. */
+ *
+ * None of the three sees a web font swapping in late and widening a tab
+ * title (Hermes review) — not a scroll, DOM mutation, or container resize.
+ * A one-shot `document.fonts.ready` correction below closes that specific
+ * gap; anything else outside all four signals still just heals on the next
+ * scroll, same as before this function existed.
+ *
+ * All listeners are torn down together by the returned cleanup. */
 export function attachMobileTabsEdgeState(element: HTMLElement): () => void {
   updateMobileTabsEdgeState(element);
 
@@ -91,7 +98,16 @@ export function attachMobileTabsEdgeState(element: HTMLElement): () => void {
   const mutationObserver = new MutationObserver(() => updateMobileTabsEdgeState(element));
   mutationObserver.observe(element, { childList: true, subtree: true, characterData: true });
 
+  // `document.fonts` isn't guaranteed on every WebView this bar has to run
+  // on (same caveat as ResizeObserver itself on this surface) — missing it
+  // just means this one-shot correction doesn't fire, not a throw.
+  let detached = false;
+  document.fonts?.ready.then(() => {
+    if (!detached) updateMobileTabsEdgeState(element);
+  });
+
   return () => {
+    detached = true;
     element.removeEventListener("scroll", handleScroll);
     resizeObserver.disconnect();
     mutationObserver.disconnect();

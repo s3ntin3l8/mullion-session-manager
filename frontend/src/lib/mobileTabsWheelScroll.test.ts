@@ -1,6 +1,27 @@
 // @vitest-environment jsdom
+/// <reference types="node" />
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
 import { attachMobileTabsWheelScroll, attachMobileTabsEdgeState } from "./mobileTabsWheelScroll.js";
+
+// node:fs, not import.meta.glob(?raw) (pwaSplashScreens.test.ts's pattern
+// for reading a real file, preferred to stay in tsconfig.app.json's
+// browser-only type universe) — verified that path doesn't work for a
+// .css path specifically: Vitest's default CSS-file interception returns
+// an empty string regardless of the `?raw`/`?inline` query, unlike the
+// .html file that pattern was built for, which Vitest doesn't intercept
+// at all. Enabling `test.css: true` in vitest.config.ts would fix it but
+// changes CSS-import behavior for every test in the workspace, not just
+// this one — too broad a change for one contract check. The triple-slash
+// reference above brings in Node's global types for JUST this file,
+// without adding "node" to tsconfig.app.json's types array project-wide.
+//
+// process.cwd()-relative, not import.meta.url-relative: Vitest's module
+// transform doesn't give this file a real `file://` URL, so
+// `new URL(..., import.meta.url)` throws "must be of scheme file" here —
+// `npm test`/`make test` both run vitest with cwd already at `frontend/`.
+const sidebarCss = fs.readFileSync(path.resolve(process.cwd(), "src/styles/sidebar.css"), "utf8");
 
 function setOverflowing(el: HTMLElement, overflowing: boolean) {
   Object.defineProperty(el, "scrollWidth", { value: overflowing ? 400 : 100, configurable: true });
@@ -293,5 +314,25 @@ describe("attachMobileTabsEdgeState", () => {
     // Still reflects the state as of detach, not any post-detach change.
     expect(el.classList.contains("at-start")).toBe(true);
     expect(el.classList.contains("at-end")).toBe(false);
+  });
+});
+
+// Hermes review, PR #1224 — "at-start"/"at-end" are a string contract
+// between this module and sidebar.css with no other cross-check: a rename
+// on either side passes every test above (they only ever exercise the
+// class names as opaque strings) and silently kills the fade in the real
+// app. Reads the real stylesheet and asserts the two rules this module's
+// classes are meant to drive still exist and still zero the opacity.
+describe("sidebar.css contract with attachMobileTabsEdgeState's classes", () => {
+  it("still has a .mobile-tabs.at-start::before rule that zeroes opacity", () => {
+    const rule = sidebarCss.match(/\.mobile-tabs\.at-start::before\s*\{([^}]*)\}/);
+    expect(rule, "no .mobile-tabs.at-start::before rule in sidebar.css").not.toBeNull();
+    expect(rule![1]).toMatch(/opacity:\s*0\s*;/);
+  });
+
+  it("still has a .mobile-tabs.at-end::after rule that zeroes opacity", () => {
+    const rule = sidebarCss.match(/\.mobile-tabs\.at-end::after\s*\{([^}]*)\}/);
+    expect(rule, "no .mobile-tabs.at-end::after rule in sidebar.css").not.toBeNull();
+    expect(rule![1]).toMatch(/opacity:\s*0\s*;/);
   });
 });
