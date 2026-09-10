@@ -51,6 +51,23 @@ describe("isValidScaffoldSlug", () => {
   });
 });
 
+// Hermes review, PR #1219 — SCAFFOLD_REGION_START/END's own doc comment
+// explains WHY the bytes are frozen (a wire format already committed into
+// every previously-scaffolded repo's AGENTS.md; upsertMarkedRegion appends
+// a duplicate region rather than failing if the marker is absent), but
+// nothing previously enforced it: check-scaffold-region-sync.mjs:43-44
+// hardcodes an independent copy of the same literal, and a later edit to
+// either constant could silently desync the two — computeScaffold would
+// start writing a region the guard script no longer recognizes, or vice
+// versa. Pinning the exact value here means such an edit fails loud in
+// this test, not silently in a target repo's next scaffold run.
+describe("SCAFFOLD_REGION_START/END — frozen wire format (issue #1215)", () => {
+  it("matches the exact byte value check-scaffold-region-sync.mjs independently hardcodes", () => {
+    expect(SCAFFOLD_REGION_START).toBe("<!-- mullion:briefing:start -->");
+    expect(SCAFFOLD_REGION_END).toBe("<!-- mullion:briefing:end -->");
+  });
+});
+
 describe("computeScaffold", () => {
   it("throws InvalidScaffoldSlugError for an unsafe slug rather than emitting an unsafe path", () => {
     expect(() => computeScaffold({}, { slug: "../evil" })).toThrow(InvalidScaffoldSlugError);
