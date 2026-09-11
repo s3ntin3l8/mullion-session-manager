@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -9,7 +9,11 @@ import {
   resolveSshAuthSock,
   sshAgentSocketPath,
 } from "../../src/services/ssh-agent-socket.js";
-import { DEFAULT_MAX_CHANNELS, type MuxChannel } from "../../src/services/ssh-agent-mux.js";
+import {
+  DEFAULT_MAX_CHANNELS,
+  PONG_TIMEOUT_MS,
+  type MuxChannel,
+} from "../../src/services/ssh-agent-mux.js";
 
 function tmpSocketPath(name: string): string {
   return path.join(os.tmpdir(), `ssh-agent-socket-test-${process.pid}-${name}.sock`);
@@ -154,6 +158,77 @@ describe("ssh-agent-socket", () => {
     resolveOpen!(channel);
     await waitUntil(() => channel.closed);
     expect(channel.closed).toBe(true);
+  });
+
+  it("closes the connection if no reply arrives within the first-reply deadline (PONG_TIMEOUT_MS) — converts a downstream stall into a bounded failure instead of the indefinite hang nothing previously guarded against", async () => {
+    vi.useFakeTimers();
+    try {
+      const socketPath = tmpSocketPath("deadline");
+      // Never calls emitData() — simulates a channel that opened
+      // successfully but then stalled somewhere downstream (a dropped
+      // frame, a wedged relay hop), exactly the case OPEN_ACK_TIMEOUT_MS
+      // and the no-bridge fail-fast don't cover.
+      const channel = new FakeChannel();
+      const warnCalls: Array<Record<string, unknown>> = [];
+      const handle = await materializeSshAgentSocket({
+        socketPath,
+        openChannel: () => Promise.resolve(channel),
+        log: { debug: () => {}, warn: (obj) => warnCalls.push(obj) },
+      });
+      handles.push(handle);
+
+      const client = net.createConnection(socketPath);
+      const closed = new Promise<void>((resolve) => client.once("close", () => resolve()));
+      await new Promise<void>((resolve, reject) => {
+        client.once("connect", () => resolve());
+        client.once("error", reject);
+      });
+      // Let handleConnection's own `await openChannel()` continuation run
+      // and arm the deadline before advancing the fake clock past it.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(channel.closed).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(PONG_TIMEOUT_MS);
+      await closed;
+
+      expect(channel.closed).toBe(true);
+      expect(warnCalls).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not fire the first-reply deadline once a reply has already arrived, even much later", async () => {
+    vi.useFakeTimers();
+    try {
+      const socketPath = tmpSocketPath("deadline-cleared");
+      const channel = new FakeChannel();
+      const handle = await materializeSshAgentSocket({
+        socketPath,
+        openChannel: () => Promise.resolve(channel),
+      });
+      handles.push(handle);
+
+      const client = net.createConnection(socketPath);
+      await new Promise<void>((resolve, reject) => {
+        client.once("connect", () => resolve());
+        client.once("error", reject);
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      channel.emitData(Buffer.from("reply-before-deadline"));
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Deadline should already be cleared — advancing well past it must
+      // not close the channel or the socket.
+      await vi.advanceTimersByTimeAsync(PONG_TIMEOUT_MS * 2);
+
+      expect(channel.closed).toBe(false);
+      expect(client.destroyed).toBe(false);
+      client.destroy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("close() tears down the listener — a further connection attempt fails", async () => {

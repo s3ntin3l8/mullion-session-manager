@@ -2298,7 +2298,10 @@ export async function internalRoutes(app: FastifyInstance) {
       // disconnect) must not leave that old connection's channels
       // orphaned. MuxConnection.close() closes every one of its own open
       // channels plus the underlying socket.
-      if (holder.current) holder.current.close();
+      if (holder.current) {
+        app.log.debug({}, "ssh-agent: superseding an already-live primary<->agent connection");
+        holder.current.close();
+      }
       // THIS side (the agent) accepts the connection — the primary dials
       // out as the WS client to reach this route. Per ssh-agent-mux.ts's
       // own dial-out/accept parity convention ("odd" for the dialer,
@@ -2310,13 +2313,17 @@ export async function internalRoutes(app: FastifyInstance) {
       // other, not mirror images to keep in sync.
       const mux = createMuxConnection(socket, { channelIdParity: "even" });
       holder.current = mux;
+      app.log.debug({}, "ssh-agent: primary<->agent connection established");
       // Only clear `current` if it's STILL this same connection — a
       // newer one may have already superseded it (the branch above) by
       // the time this fires, in which case clearing would incorrectly
       // drop the live replacement instead of the dead connection this
       // listener is actually for.
       mux.onClose(() => {
-        if (holder.current === mux) holder.current = null;
+        if (holder.current === mux) {
+          holder.current = null;
+          app.log.debug({}, "ssh-agent: primary<->agent connection closed");
+        }
       });
     },
   );

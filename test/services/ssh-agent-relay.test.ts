@@ -1,5 +1,8 @@
-import { describe, it, expect } from "vitest";
-import { pipeFilteredChannelToChannel } from "../../src/services/ssh-agent-relay.js";
+import { describe, it, expect, vi } from "vitest";
+import {
+  pipeFilteredChannelToChannel,
+  type SshAgentRelayLogger,
+} from "../../src/services/ssh-agent-relay.js";
 import {
   createMuxConnection,
   CHANNEL_WINDOW_BYTES,
@@ -84,7 +87,7 @@ function frame(type: number, body: Buffer = Buffer.alloc(0)): Buffer {
 // chanP <-> chanQ are a second, independent mux connection (Q plays the
 // real agent/helper). pipeFilteredChannelToChannel(chanY, chanP) is the
 // module under test.
-async function setupFilteredRelay() {
+async function setupFilteredRelay(log?: SshAgentRelayLogger) {
   const wsX = new FakeSocket();
   const wsY = new FakeSocket();
   link(wsX, wsY);
@@ -103,7 +106,7 @@ async function setupFilteredRelay() {
   connQ.onChannel((ch) => (chanQ = ch));
   const chanP = await connP.openChannel();
 
-  pipeFilteredChannelToChannel(chanY!, chanP);
+  pipeFilteredChannelToChannel(chanY!, chanP, log);
   return { chanX, chanY: chanY!, chanP, chanQ: chanQ! };
 }
 
@@ -135,6 +138,18 @@ describe("ssh-agent-relay", () => {
     chanX.send(frame(SSH_AGENTC_ADD_IDENTITY, Buffer.from("private-key-material")));
     expect(atQ).toHaveLength(0);
     expect(atX).toEqual([SSH_AGENT_FAILURE_FRAME]);
+  });
+
+  it("logs a blocked request at debug level, and never logs an allowed one — a blocked request was otherwise silent by design, which cost real time to diagnose against a live deployment", async () => {
+    const debug = vi.fn();
+    const { chanX: allowedChanX } = await setupFilteredRelay({ debug });
+    allowedChanX.send(frame(SSH_AGENTC_SIGN_REQUEST, Buffer.from("digest")));
+    expect(debug).not.toHaveBeenCalled();
+
+    const { chanX: blockedChanX } = await setupFilteredRelay({ debug });
+    blockedChanX.send(frame(SSH_AGENTC_ADD_IDENTITY, Buffer.from("private-key-material")));
+    expect(debug).toHaveBeenCalledOnce();
+    expect(debug.mock.calls[0][1]).toMatch(/blocked/);
   });
 
   it("keeps a separate filter per channel — a partial frame queued on one channel never leaks into another's classification", async () => {
