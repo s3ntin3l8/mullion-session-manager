@@ -84,6 +84,17 @@ describe("Dock", () => {
         jsonResponse(201, stackActionByProject[Number(params.id)] ?? {}),
     }));
     vi.stubGlobal("fetch", fetchMock);
+    // Dock master-detail rework — DockColumn's own `.dock-split--stacked`
+    // ResizeObserver (Dock.tsx) doesn't exist in jsdom; same stub PaneTab.
+    // test.tsx uses for its own narrow/tight observer. `observe`/
+    // `disconnect` only need to not throw — no test here depends on the
+    // stacked-layout flip itself, so the callback never needs to fire.
+    vi.stubGlobal(
+      "ResizeObserver",
+      vi.fn(function () {
+        return { observe: vi.fn(), unobserve: vi.fn(), disconnect: vi.fn() };
+      }),
+    );
     resetStore({ projects: [PROJECT], sessions: [] });
   });
 
@@ -142,11 +153,46 @@ describe("Dock", () => {
         deleteSession,
       });
 
-      const runningHeader = await screen.findByText("Dev server");
-      expect(screen.getByText("on")).toBeInTheDocument();
-      await user.click(runningHeader);
+      // Dock master-detail rework — stopping a running stream is now the
+      // trailing "on"/"off" tag's own job, not the row body's (clicking the
+      // row body only SELECTS; see DockMonitor.tsx's own header comment on
+      // the select-vs-toggle split, and the dedicated tests below for that
+      // split itself).
+      await screen.findByText("Dev server");
+      const onTag = screen.getByText("on");
+      await user.click(onTag);
 
       expect(deleteSession).toHaveBeenCalledWith(99);
+    });
+
+    it("dock master-detail rework — clicking a running row's body SELECTS it without stopping its stream", async () => {
+      dockByProject[1] = [{ id: "dev", title: "Dev server", command: "npm run dev" }];
+      const user = userEvent.setup();
+      const deleteSession = vi.fn().mockResolvedValue(undefined);
+      const runningSession: Session = makeSession({
+        id: 99,
+        command: "npm run dev",
+        kind: "dock",
+      });
+      useDashboardStore.setState({
+        projects: [PROJECT],
+        sessions: [runningSession],
+        deleteSession,
+        settings: {
+          ...DEFAULT_SETTINGS,
+          sessions: { ...DEFAULT_SETTINGS.sessions, confirmBeforeKill: false },
+        },
+      });
+
+      render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+      const row = await screen.findByText("Dev server");
+      await user.click(row);
+
+      expect(deleteSession).not.toHaveBeenCalled();
+      await waitFor(() => {
+        expect(screen.getByTestId("terminal-pane")).toHaveAttribute("data-session-id", "99");
+      });
     });
   });
 
@@ -469,13 +515,18 @@ describe("Dock", () => {
         expect(screen.getByTestId("terminal-pane")).toBe(paneBefore);
       });
 
-      it("hides the kebab and makes the header inert while a row is held — control.docker is a frozen pre-vanish snapshot the backend can't resolve", async () => {
+      it("hides the kebab and makes the row/stream-toggle inert while held — control.docker is a frozen pre-vanish snapshot the backend can't resolve", async () => {
         // Hermes review, PR #1176 — before this, the kebab's "Restart
         // service"/"Stop service"/"Check for update" and the header's own
         // start/kill both stayed live against `control.docker` while held,
         // even though that snapshot no longer matches anything live
         // discovery knows about — every one of those actions would 404
         // into a failure toast for the ~1 poll interval the row is held.
+        // Dock master-detail rework — `role="button"`/`aria-disabled` moved
+        // from `.dock-monitor-header` up to `.dock-monitor` itself
+        // (DockMonitor.tsx's own comment on why), and killing a running
+        // stream moved from the row's own click to the trailing tag's —
+        // this test now pins BOTH relocations, not just the kebab.
         dockByProject[1] = [dockerControl()];
         const runningSession = makeSession({
           id: 42,
@@ -489,13 +540,6 @@ describe("Dock", () => {
           sessions: [runningSession],
           sessionsLoaded: true,
           deleteSession,
-          // Explicitly off (default settings has this ON, DEFAULT_SETTINGS —
-          // api/settings.ts): with it on, a single click only arms the kill
-          // rather than firing deleteSession at all, which would make the
-          // "deleteSession not called" assertion below pass whether or not
-          // the held-gate actually works. With it off, a click on an
-          // unblocked header kills immediately — the assertion is only
-          // discriminating this way.
           settings: {
             ...DEFAULT_SETTINGS,
             sessions: { ...DEFAULT_SETTINGS.sessions, confirmBeforeKill: false },
@@ -505,31 +549,39 @@ describe("Dock", () => {
         render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
 
         await screen.findByText("web");
-        expect(document.querySelector(".dock-monitor-header .kebab-trigger-btn")).not.toBeNull();
-        expect(document.querySelector(".dock-monitor-header")).not.toHaveAttribute(
+        expect(document.querySelector(".dock-monitor .kebab-trigger-btn")).not.toBeNull();
+        expect(document.querySelector(".dock-monitor")).not.toHaveAttribute(
           "aria-disabled",
           "true",
         );
+        // The stream-toggle tag is interactive (carries its own class and
+        // role) while not held.
+        expect(document.querySelector(".dock-monitor-stream-toggle")).not.toBeNull();
 
         dockByProject[1] = [];
         useDashboardStore.getState().bumpDockConfigRefreshTrigger();
         await screen.findByText("recreating…");
 
         // The kebab is gone entirely rather than merely disabled.
-        expect(document.querySelector(".dock-monitor-header .kebab-trigger-btn")).toBeNull();
-        const header = document.querySelector(".dock-monitor-header") as HTMLElement;
-        expect(header).toHaveAttribute("aria-disabled", "true");
+        expect(document.querySelector(".dock-monitor .kebab-trigger-btn")).toBeNull();
+        const row = document.querySelector(".dock-monitor") as HTMLElement;
+        expect(row).toHaveAttribute("aria-disabled", "true");
+        // The tag renders as a plain, non-interactive span while held — no
+        // role/onClick, so clicking it can't 404 against a container
+        // discovery no longer knows about.
+        expect(document.querySelector(".dock-monitor-stream-toggle")).toBeNull();
+        expect(screen.getByText("logs on")).not.toHaveAttribute("role");
 
-        // The header itself no longer toggles the session — a click while
-        // held must not fire the kill handler (confirmBeforeKill is off
-        // above specifically so an unblocked click WOULD have fired it).
+        // Neither the row's own click (which only ever SELECTS, never
+        // kills — see DockMonitor.tsx) nor the (now absent) tag can fire
+        // deleteSession while held.
         await user.click(screen.getByText("web"));
         await new Promise((r) => setTimeout(r, 0));
         expect(deleteSession).not.toHaveBeenCalled();
 
-        // Same for the keyboard path (P10) — Enter/Space while held is
-        // also a no-op, not just the mouse click.
-        header.focus();
+        // Same for the keyboard path (P10) — Enter/Space on the held row is
+        // also a no-op.
+        row.focus();
         await user.keyboard("{Enter}");
         await new Promise((r) => setTimeout(r, 0));
         expect(deleteSession).not.toHaveBeenCalled();
@@ -605,18 +657,17 @@ describe("Dock", () => {
       expect(pane).toHaveAttribute("data-input-affordances", "false");
     });
 
-    it("dock log-streaming resize fix — a running dock monitor carries an inline min-height (on .dock-monitor itself, not the body) derived from the user's live terminal settings", async () => {
-      // Confirmed live: without this, every dock monitor's terminal body
-      // was permanently below pty-manager.ts's MIN_TERMINAL_ROWS (10) on any
-      // dock height (a real GeometryMessage echo read
-      // {"cols":63,"rows":10,"minCols":40,"minRows":10} — rows floored
-      // exactly at the minimum), which latches TerminalPane's
+    it("dock master-detail rework — the column's one log pane carries an inline min-width/min-height (on .dock-log-pane itself, not its body) derived from the user's live terminal settings", async () => {
+      // Confirmed live (pre-rework): without an explicit floor on the right
+      // element, every dock terminal was permanently below pty-manager.ts's
+      // MIN_TERMINAL_ROWS (10) on any dock height (a real GeometryMessage
+      // echo read {"cols":63,"rows":10,"minCols":40,"minRows":10} — rows
+      // floored exactly at the minimum), which latches TerminalPane's
       // cappedBelowFloor permanently true and skips applyClampedFit() from
-      // ever running (see dockMonitorFullMinHeightPx's own doc comment,
-      // dockHelpers.ts). The floor has to be applied to `.dock-monitor`
-      // itself, not `.dock-monitor-body` — review caught an earlier version
-      // of this fix applying it to the body, which `.dock-monitor`'s own
-      // `overflow: hidden` silently defeated.
+      // ever running. The floor has to be applied to `.dock-log-pane`
+      // itself, not `.dock-log-pane-body` — the same review-caught bug this
+      // test's predecessor pinned for `.dock-monitor`/`.dock-monitor-body`,
+      // now on the box that actually holds the terminal post-rework.
       dockByProject[1] = [dockerControl()];
       const runningSession = makeSession({
         id: 42,
@@ -635,15 +686,20 @@ describe("Dock", () => {
       render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
 
       const pane = await screen.findByTestId("terminal-pane");
-      const body = pane.closest(".dock-monitor-body") as HTMLElement;
-      const monitor = body.closest(".dock-monitor") as HTMLElement;
-      // dockMonitorFullMinHeightPx(14, 4) === 231 — see dockHelpers.test.ts's
-      // own worked derivation.
-      expect(monitor.style.minHeight).toBe("231px");
-      // The body itself carries no inline min-height of its own — the
-      // monitor's own explicit floor is what has to force room for it, per
+      const body = pane.closest(".dock-log-pane-body") as HTMLElement;
+      const logPane = body.closest(".dock-log-pane") as HTMLElement;
+      // dockMonitorMinWidthPx(14, 4) === 364, dockMonitorMinHeightPx(14, 4)
+      // === 201 — the BODY-only number, not the full 231 the old
+      // .dock-monitor floor used: `.dock-log-pane` has no 28px header of
+      // its own to add back in. See dockHelpers.test.ts's own worked
+      // derivations for both.
+      expect(logPane.style.minWidth).toBe("364px");
+      expect(logPane.style.minHeight).toBe("201px");
+      // The body itself carries no inline min-height/min-width of its own —
+      // the pane's own explicit floor is what has to force room for it, per
       // the mechanism this test's own header comment documents.
       expect(body.style.minHeight).toBe("");
+      expect(body.style.minWidth).toBe("");
     });
 
     it("'Check for update' calls the check-update endpoint and tints the image pill on an update", async () => {
@@ -763,20 +819,16 @@ describe("Dock", () => {
       expect(refreshSessions).toHaveBeenCalled();
     });
 
-    it("dock log-streaming resize fix — a live stack-action monitor renders in its own strip, not inside .dock-stack-monitors, and does not count toward the group's flexGrow", async () => {
-      // The reported bug (originally PR2a, since superseded): rebuilding a
-      // stack opened a second monitor inside .dock-stack-monitors, and the
-      // group's own inline flexGrow (Dock.tsx) — until PR2a,
-      // `group.controls.length` — jumped from 1 to 2, N-way splitting
-      // "web"'s width with the new panel and resizing it. PR2a's own fix
-      // (a fixed-width `.dock-monitor-transient` class, still rendered
-      // alongside "web" inside .dock-stack-monitors) turned out not to work
-      // at all — its 260px was clamped by the very same 364px inline
-      // min-width every monitor gets, so the "fixed-width" panel actually
-      // rendered as a full peer column and could still push a sibling off
-      // the group's horizontal scroll edge. This PR moves it out of
-      // .dock-stack-monitors entirely, into its own fixed-height strip
-      // below.
+    it("dock master-detail rework — a live stack-action control renders as an ordinary rail row after its stack's services, not inside .dock-stack-monitors", async () => {
+      // Superseded history: originally (PR2a) rebuilding a stack opened a
+      // second CARD inside .dock-stack-monitors, N-way splitting "web"'s
+      // WIDTH with the new panel via the group's own flexGrow — fixed (PR2b
+      // era) by moving it into its own `.dock-stack-action-strip` sibling
+      // instead. The master-detail rework removes the strip entirely: every
+      // row (service or stack-action) is now a 28px rail row with no
+      // per-row width to fight over in the first place, so there's nothing
+      // left for a special strip to protect against — an ephemeral control
+      // just renders where any other row would, after its stack's services.
       dockByProject[1] = [dockerControl()]; // just "web"
       const rebuildCommand =
         "docker compose -p 'sanctuary' build --pull && docker compose -p 'sanctuary' up -d";
@@ -807,24 +859,25 @@ describe("Dock", () => {
       await user.click(await screen.findByText("Pull & restart stack"));
       await user.click(await screen.findByText("Click again — restarts the whole stack"));
 
-      // The ephemeral "Update sanctuary" monitor now renders in its own
-      // strip, a sibling of .dock-stack-monitors — not inside it.
+      // The ephemeral "Update sanctuary" row is a sibling of
+      // .dock-stack-monitors within the group — not inside it.
       const transientRow = await screen.findByText("Update sanctuary");
       const transientMonitor = transientRow.closest(".dock-monitor") as HTMLElement;
-      expect(transientMonitor.closest(".dock-stack-action-strip")).not.toBeNull();
       expect(transientMonitor.closest(".dock-stack-monitors")).toBeNull();
+      const group = document.querySelector(".dock-stack-group") as HTMLElement;
+      expect(group.contains(transientMonitor)).toBe(true);
 
       // "web" is still the only control inside .dock-stack-monitors.
       const servicesRow = document.querySelector(".dock-stack-monitors") as HTMLElement;
       expect(servicesRow.querySelectorAll(".dock-monitor")).toHaveLength(1);
       expect(servicesRow.textContent).toContain("web");
 
-      // The group's own flexGrow reflects only "web" — the ephemeral strip
-      // contributes no horizontal width to it at all now, so there is no
-      // step to bound, unlike PR2a's old fixed-width-inside-the-row
-      // approach.
-      const group = document.querySelector(".dock-stack-group") as HTMLElement;
-      expect(group.style.flexGrow).toBe("1");
+      // No `.dock-stack-action-strip` anywhere — the mechanism it existed
+      // for (protecting a service row's WIDTH share) doesn't apply to a
+      // column of uniform 28px rows.
+      expect(document.querySelector(".dock-stack-action-strip")).toBeNull();
+      // Nor an inline flexGrow — every row is content-sized now.
+      expect(group.style.flexGrow).toBe("");
     });
 
     it("dock log-streaming resize fix (symptom 3) — a live stack action survives a workspace switch, reconstructed from its session", async () => {
@@ -885,20 +938,24 @@ describe("Dock", () => {
       rerender(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
       await screen.findByText("web");
 
-      // The strip is back, reconstructed from the still-live session —
-      // grouped correctly under "sanctuary" via the reconstructed control's
+      // The row is back, reconstructed from the still-live session — its
+      // title is the reconstruction's own generic "Stack action running —
+      // sanctuary" (Dock.tsx's reconstructedEphemeralControls), not the
+      // original "Update sanctuary" the optimistic control had before the
+      // unmount lost it (deliberately: the verb was never persisted
+      // anywhere durable to recover it from — see Dock.tsx's own comment).
+      // Grouped correctly under "sanctuary" via the reconstructed control's
       // own `composeProject` field (issue #1112), not left in `ungrouped`.
-      const strip = document.querySelector(".dock-stack-action-strip") as HTMLElement;
-      expect(strip).not.toBeNull();
-      expect(strip.querySelector("[data-testid='terminal-pane']")).not.toBeNull();
+      const transientRow = screen.getByText("Stack action running — sanctuary");
       const group = document.querySelector(".dock-stack-group") as HTMLElement;
-      expect(group.querySelector(".dock-stack-action-strip")).not.toBeNull();
+      expect(group.contains(transientRow)).toBe(true);
+      expect(document.querySelector(".dock-stack-action-strip")).toBeNull();
 
       // Hermes review — a persistent "running" indicator lives in the
-      // always-visible DockStackHeader, independent of the strip's own
-      // scroll position and of the transient status message (which only
-      // ever fires from a click, never from this reconstruction path).
-      expect(screen.getByTitle("A stack action is running — see the log strip below")).toHaveClass(
+      // always-visible DockStackHeader, independent of the transient status
+      // message (which only ever fires from a click, never from this
+      // reconstruction path).
+      expect(screen.getByTitle("A stack action is running — see the log row below")).toHaveClass(
         "dock-stack-action-running",
       );
     });
@@ -911,13 +968,16 @@ describe("Dock", () => {
       expect(document.querySelector(".dock-stack-action-running")).toBeNull();
     });
 
-    it("Hermes review — .dock-stack-monitors doesn't render (and reserves no dead space) when a group has no service controls left", async () => {
+    it("Hermes review — .dock-stack-monitors doesn't render when a group has no service controls left", async () => {
       // Every service dropped from discovery past its own RECREATE_GRACE_MS
       // hold, leaving only the live ephemeral stack-action control — a
       // narrow but real case (PR2b's own grace-window expiry test below
-      // reaches it the same way). Before this fix, .dock-stack-monitors
-      // still rendered with its inline min-height, reserving ~231px of
-      // dead space with nothing inside it.
+      // reaches it the same way). Originally (pre-master-detail-rework)
+      // .dock-stack-monitors still rendered with its inline min-height,
+      // reserving ~231px of dead space with nothing inside it; post-rework
+      // an empty content-sized column costs nothing layout-wise either way,
+      // but it's skipped anyway as a plain "don't render a pointless empty
+      // wrapper" cleanup (Dock.tsx).
       const T0 = 1_700_000_000_000;
       const dateSpy = vi.spyOn(Date, "now").mockReturnValue(T0);
       try {
@@ -961,67 +1021,11 @@ describe("Dock", () => {
         await waitFor(() => expect(screen.queryByText("web")).not.toBeInTheDocument());
 
         expect(document.querySelector(".dock-stack-monitors")).toBeNull();
-        // The strip itself is untouched — only the (now genuinely empty)
-        // services row is gone.
-        expect(document.querySelector(".dock-stack-action-strip")).not.toBeNull();
-      } finally {
-        dateSpy.mockRestore();
-      }
-    });
-
-    it("floors a group's flexGrow at 1 even when its ONLY control is a live transient stack-action monitor (Hermes review)", async () => {
-      // Reachable via PR2b's OWN grace-window expiry: a rebuild starts
-      // while "web" is the sole discovered service (needed to have a stack
-      // header to click through in the first place), the container then
-      // takes longer to reappear than RECREATE_GRACE_MS, and the hold drops
-      // it — leaving the group with only the ephemeral "Update sanctuary"
-      // monitor. `serviceControls.length` (Dock.tsx) computes 0 there,
-      // which would collapse the group to min-content (flexGrow: 0) instead
-      // of holding its normal share for that window.
-      const T0 = 1_700_000_000_000;
-      const dateSpy = vi.spyOn(Date, "now").mockReturnValue(T0);
-      try {
-        dockByProject[1] = [dockerControl()];
-        const rebuildCommand =
-          "docker compose -p 'sanctuary' build --pull && docker compose -p 'sanctuary' up -d";
-        updateByProject[1] = {
-          sessionId: 42,
-          control: {
-            id: "docker-update:sanctuary",
-            title: "Update sanctuary",
-            command: rebuildCommand,
-            source: "docker",
-          },
-        };
-        const rebuildSession = makeSession({ id: 42, kind: "dock", command: rebuildCommand });
-        useDashboardStore.setState({
-          projects: [PROJECT],
-          sessions: [rebuildSession],
-          refreshSessions: vi.fn().mockResolvedValue(undefined),
-        });
-        const user = userEvent.setup();
-        render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
-
-        await screen.findByText("web");
-        await user.click(stackKebab());
-        await user.click(await screen.findByText("Pull & restart stack"));
-        await user.click(await screen.findByText("Click again — restarts the whole stack"));
-        await screen.findByText("Update sanctuary");
-
-        // The container vanishes mid-rebuild (recreate) — held at first.
-        dockByProject[1] = [];
-        useDashboardStore.getState().bumpDockConfigRefreshTrigger();
-        await screen.findByText("recreating…");
-
-        // The build takes longer than the grace window — the hold expires
-        // and "web" is fully dropped, leaving the ephemeral as the group's
-        // only control.
-        dateSpy.mockReturnValue(T0 + 36_000);
-        useDashboardStore.getState().bumpDockConfigRefreshTrigger();
-        await waitFor(() => expect(screen.queryByText("web")).not.toBeInTheDocument());
-
+        // The ephemeral row itself is untouched — only the (now genuinely
+        // empty) services block is gone. No `.dock-stack-action-strip`
+        // exists post-rework; the row lives directly in `.dock-stack-group`.
         const group = document.querySelector(".dock-stack-group") as HTMLElement;
-        expect(group.style.flexGrow).toBe("1");
+        expect(group.textContent).toContain("Update sanctuary");
       } finally {
         dateSpy.mockRestore();
       }
@@ -1838,11 +1842,12 @@ describe("Dock", () => {
       await waitFor(() => expect(deleteSession).toHaveBeenCalledTimes(1));
       expect(screen.getByText("on")).toBeInTheDocument();
 
-      // The user manually clicks the header (still reads "running" — the
-      // switch's own delete hasn't resolved yet) while that switch is in
-      // flight — confirmBeforeKill is off, so this kills immediately.
-      const header = screen.getByText("Dev server").closest(".dock-monitor-header")!;
-      await user.click(header);
+      // The user manually clicks the stream-toggle tag (still reads "on" —
+      // the switch's own delete hasn't resolved yet) while that switch is
+      // in flight — confirmBeforeKill is off, so this kills immediately.
+      // Dock master-detail rework — killing moved from the row body to this
+      // tag; see DockMonitor.tsx's own header comment on the split.
+      await user.click(screen.getByText("on"));
       expect(deleteSession).toHaveBeenCalledTimes(2);
 
       // Now let the switch's own delete resolve.
@@ -1875,15 +1880,16 @@ describe("Dock", () => {
         useDashboardStore.setState({ sessions: [makeRunningDockSession()] });
         await waitFor(() => expect(screen.getByText("on")).toBeInTheDocument());
 
-        const header = screen.getByText("Dev server").closest(".dock-monitor-header")!;
-        await user.click(header);
+        // Dock master-detail rework — killing (and arming) is the trailing
+        // tag's own job now, not the row body's.
+        await user.click(screen.getByText("on"));
 
         // Armed, not killed — the tag flips to "confirm?" and deleteSession
         // must not have fired yet.
-        expect(await screen.findByText("confirm?")).toBeInTheDocument();
+        const confirmTag = await screen.findByText("confirm?");
         expect(deleteSession).not.toHaveBeenCalled();
 
-        await user.click(header);
+        await user.click(confirmTag);
 
         expect(deleteSession).toHaveBeenCalledWith(99);
       });
@@ -2323,11 +2329,16 @@ describe("Dock", () => {
         <Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />,
       );
       await screen.findByText("Dev server");
-      const header = container.querySelector(".dock-monitor-header") as HTMLElement;
-      expect(header).toHaveAttribute("role", "button");
-      expect(header).toHaveAttribute("tabIndex", "0");
+      // Dock master-detail rework — role/tabIndex moved from
+      // `.dock-monitor-header` up to `.dock-monitor` itself (DockMonitor.
+      // tsx's own comment on why: a valid listbox needs `option` as a
+      // direct child; this settled on plain `role="button"` instead, but
+      // kept the relocation).
+      const row = container.querySelector(".dock-monitor") as HTMLElement;
+      expect(row).toHaveAttribute("role", "button");
+      expect(row).toHaveAttribute("tabIndex", "0");
 
-      header.focus();
+      row.focus();
       await user.keyboard("{Enter}");
 
       expect(createSession).toHaveBeenCalledWith(1, "npm run dev", {
@@ -2355,9 +2366,9 @@ describe("Dock", () => {
         <Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />,
       );
       await screen.findByText("Dev server");
-      const header = container.querySelector(".dock-monitor-header") as HTMLElement;
+      const row = container.querySelector(".dock-monitor") as HTMLElement;
 
-      header.focus();
+      row.focus();
       await user.keyboard(" ");
 
       expect(createSession).toHaveBeenCalledWith(1, "npm run dev", {
@@ -2419,6 +2430,59 @@ describe("Dock", () => {
       // A click on the worktree picker's own trigger must not ALSO kill the
       // running monitor via the header's onClick.
       expect(deleteSession).not.toHaveBeenCalled();
+    });
+
+    it("Hermes review — a click on the worktree selector's own trigger does not ALSO select that row", async () => {
+      // Two running monitors so adopt-on-empty (Dock.tsx) has something to
+      // pick besides the one under test — with only one row, "did clicking
+      // its own selector select it" is indistinguishable from "it was
+      // already the sole adopted row." "a" sorts first alphabetically among
+      // the discovered controls' own ids, so it's the one adopt-on-empty
+      // picks.
+      dockByProject[1] = [
+        { id: "a", title: "A server", command: "npm run a" },
+        { id: "b", title: "B server", command: "npm run b" },
+      ];
+      const MULTI: GitBranchesResult = {
+        branches: [
+          { name: "main", isCurrent: false },
+          { name: "feature-x", isCurrent: true },
+        ],
+        worktrees: [
+          { path: "/home/x/mullion", branch: "main", isMain: true },
+          {
+            path: "/home/x/mullion/.mullion-worktrees/feature-x",
+            branch: "feature-x",
+            isMain: false,
+          },
+        ],
+        remoteBranches: [],
+      };
+      useDashboardStore.setState({
+        projects: [PROJECT],
+        sessions: [
+          makeSession({ id: 10, command: "npm run a", kind: "dock" }),
+          makeSession({ id: 20, command: "npm run b", kind: "dock" }),
+        ],
+        gitBranchesByProject: { 1: MULTI },
+      });
+      const user = userEvent.setup();
+      render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+      await screen.findByText("A server");
+      await screen.findByText("B server");
+      await waitFor(() => {
+        expect(screen.getByTestId("terminal-pane")).toHaveAttribute("data-session-id", "10");
+      });
+
+      // Click "B server"'s own worktree-selector trigger — not its row body.
+      const bRow = screen.getByText("B server").closest(".dock-monitor") as HTMLElement;
+      const trigger = bRow.querySelector(".custom-select-trigger") as HTMLButtonElement;
+      await user.click(trigger);
+
+      // Still showing "A"'s session — the click didn't bubble into
+      // selecting "B"'s row.
+      expect(screen.getByTestId("terminal-pane")).toHaveAttribute("data-session-id", "10");
+      expect(bRow).not.toHaveClass("dock-monitor--selected");
     });
   });
 });
