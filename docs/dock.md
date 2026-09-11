@@ -262,7 +262,7 @@ has an `image:` key. The name-shape guess
 name) is kept only as the fallback for when the probe can't run.
 
 One rare shape is deliberately left misclassified rather than special-cased:
-`build:` + a single-segment *official* Docker Hub image with no
+`build:` + a single-segment _official_ Docker Hub image with no
 `pull_policy` override (e.g. `image: redis` next to a `build:` key) has no
 `/`, so it's flagged `buildOnly: true` even though it does have a real
 registry image to pull. That's user-visible, not just a labeling quirk —
