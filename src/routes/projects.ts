@@ -1323,14 +1323,9 @@ export async function projectsRoute(app: FastifyInstance) {
   // Issue #1182 — findActiveStackSession's check + createSessionRecord's
   // create are two separate `await`s with nothing between them stopping a
   // second, genuinely concurrent request for the SAME stack from also
-  // seeing "no active session" and also inserting one. A DB-level unique
-  // constraint can't fix this cleanly: findActiveStackSession isn't a pure
-  // DB check, it also requires `isMasterAlive` (see its own comment above)
-  // because `sessions.status` records intent, not live process state — a
-  // constraint would reject the legitimate, common case of a finished
-  // action whose row hasn't been reconciled yet. `createKeyedLock` (module
-  // scope, above `projectsRoute`) is the actual mutex; see its own doc
-  // comment for the full design rationale, including why it's a module
+  // seeing "no active session" and also inserting one. `createKeyedLock`
+  // (module scope, above `projectsRoute`) is the actual mutex; see its own
+  // doc comment for the full design rationale, including why it's a module
   // -level export rather than defined inline here. Keyed by
   // `${projectId}:${composeProject}` — same identity stackSessionName()
   // already uses. Called fresh per `projectsRoute(app)` invocation (not
@@ -1339,10 +1334,44 @@ export async function projectsRoute(app: FastifyInstance) {
   // in tests.
   //
   // Per-process only: two backend processes against the same SQLite file
-  // would still race. Not a supported configuration today —
-  // `deriveInstanceId` namespaces an instance by its own `sessionsDir`,
-  // which is where the DB lives. See issue #1223 for a DB-level guard if
-  // that configuration is ever supported.
+  // would still race THIS mutex — it's an in-memory Map, so it has no
+  // visibility across processes. #1182's original conclusion was that a
+  // DB-level unique constraint "can't fix this cleanly" for that case
+  // either, because findActiveStackSession isn't a pure DB check — it also
+  // requires `isMasterAlive` (see its own comment above), since
+  // `sessions.status` records intent, not live process state. A NAIVE
+  // constraint would reject the legitimate, common case of a finished
+  // action whose row hasn't yet been reconciled (session-reconciler.ts's
+  // sweep lags 5s-1h) — exactly the case findActiveStackSession's own
+  // liveness check exists to tolerate.
+  //
+  // Issue #1223 overturns that "can't fix this cleanly" conclusion by
+  // making the constraint TOLERANT instead of naive:
+  // `sessions_stack_identity_unique` (schema.ts) is a real DB-level unique
+  // index, but a violation is not treated as "the existing row wins" —
+  // `createSessionRecord` surfaces it as a `reason: "unique-conflict"`
+  // result instead of letting the raw constraint error propagate, and
+  // `startStackSession` below reconciles it with the SAME liveness check
+  // findActiveStackSession already trusts: if the conflicting row's process
+  // is actually dead, flip it to `exited` and retry the insert once; only
+  // if it's genuinely still alive does the caller get a reused session.
+  // That reconcile-then-retry step is what closes the gap this mutex can't
+  // — a second backend process (still not a supported configuration
+  // today; `deriveInstanceId` namespaces an instance by its own
+  // `sessionsDir`, which is where the DB lives — but this is now
+  // defense-in-depth for that shape), or any future `kind: "dock"` insert
+  // that bypasses `withStackLock` entirely.
+  //
+  // A single process hits this reconcile path too, and routinely, not just
+  // in the cross-process case above: findActiveStackSession's own
+  // isMasterAlive check is read-only, so the moment it decides a row is
+  // dead it does NOT flip that row's status — the row stays `active` in
+  // the DB until either session-reconciler.ts's own sweep gets to it or
+  // THIS reconcile-then-retry does. So any restart request landing in that
+  // same 5s-1h reconciler-lag window `findActiveStackSession`'s own comment
+  // already describes will hit `unique-conflict` on its very next insert,
+  // with zero concurrency involved at all — see startStackSession's own
+  // comment at its `unique-conflict` branch below.
   const withStackLock = createKeyedLock();
 
   async function findActiveStackSession(projectId: number, composeProject: string) {
@@ -1475,15 +1504,68 @@ export async function projectsRoute(app: FastifyInstance) {
         return { ok: true, sessionId: existing.id, control, reused: true };
       }
 
-      const result = await createSessionRecord(app, {
+      const sessionParams = {
         projectId,
         command,
-        kind: "dock",
+        kind: "dock" as const,
         name: stackSessionName(service.composeProject),
         nameLocked: true,
-      });
-      if (!result.ok) return { ok: false };
-      return { ok: true, sessionId: result.row.id, control };
+      };
+      const result = await createSessionRecord(app, sessionParams);
+      if (result.ok) return { ok: true, sessionId: result.row.id, control };
+      if (result.reason !== "unique-conflict") return { ok: false };
+
+      // Issue #1223 — createSessionRecord hit sessions_stack_identity_unique.
+      // This is NOT just a rare cross-process edge case — it's the ROUTINE
+      // path any time this stack's previous session died since the last
+      // session-reconciler.ts sweep (5s-1h lag): findActiveStackSession
+      // just above already called isMasterAlive and saw the row was dead,
+      // but it never WRITES anything (it's read-only, by design — see its
+      // own comment), so the stale row is still `status: "active"` in the
+      // DB the moment this insert runs, and collides with it. A second
+      // backend process (or a future `kind: "dock"` insert bypassing
+      // withStackLock) can ALSO land here, but is not the common case.
+      // findActiveStackSession is the wrong primitive to reach for again
+      // here: it collapses both "no row" and "dead-process row" to `null`,
+      // giving no handle on the actual conflicting row to reconcile.
+      // Select it directly instead.
+      const [conflictingRow] = app.db
+        .select()
+        .from(sessions)
+        .where(
+          and(
+            eq(sessions.projectId, projectId),
+            eq(sessions.name, sessionParams.name),
+            eq(sessions.kind, "dock"),
+            eq(sessions.status, "active"),
+          ),
+        )
+        .all();
+
+      // Same primitive findActiveStackSession already trusts for this
+      // identity (not isMasterAliveBatch — different unknown-collapses-to
+      // semantics; mixing the two in one code path would be inconsistent).
+      if (conflictingRow && (await app.pty.isMasterAlive(String(conflictingRow.id)))) {
+        return { ok: true, sessionId: conflictingRow.id, control, reused: true };
+      }
+
+      if (conflictingRow) {
+        // Confirmed dead (or it vanished between the select above and here,
+        // in which case this CAS is a harmless no-op) — flip it, CAS'd
+        // exactly like session-reconciler.ts's own sweep, so a concurrent
+        // reconciler pass touching the same row can't race this update.
+        app.db
+          .update(sessions)
+          .set({ status: "exited" })
+          .where(and(eq(sessions.id, conflictingRow.id), eq(sessions.status, "active")))
+          .run();
+      }
+
+      // Retry once. If this ALSO hits unique-conflict, some other actor won
+      // an exceedingly rare double-race — give up rather than loop.
+      const retried = await createSessionRecord(app, sessionParams);
+      if (!retried.ok) return { ok: false };
+      return { ok: true, sessionId: retried.row.id, control };
     });
   }
 
