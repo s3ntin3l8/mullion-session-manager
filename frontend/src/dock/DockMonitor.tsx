@@ -146,6 +146,20 @@ export function DockMonitor({
         // here would 404 into a failure toast for the ~1 poll interval
         // this control is held, so the row (and the kebab/tag below) go
         // inert rather than offer an action guaranteed to fail.
+        //
+        // Deliberately NO `e.target !== e.currentTarget` guard here, unlike
+        // the onKeyDown handler above — a plain click bubbles from whatever
+        // child was actually clicked (the name span, the status dot, ...),
+        // and that target is essentially never `e.currentTarget` itself,
+        // so that guard would silently break "click anywhere on the row
+        // selects it" for all of this row's ordinary, non-interactive
+        // content. keydown's guard exists for a different reason (a
+        // FOCUSED nested control's own Enter/Space bubbling up), which
+        // doesn't apply to a mouse click at all. The real fix for a
+        // genuinely interactive child (Hermes review — the worktree
+        // CustomSelect below was the one such child left unguarded) is the
+        // same `stopPropagation()` wrapper devServerUrl/kebab/the
+        // stream-toggle tag already use, not this guard.
         onClick={held ? undefined : onSelect}
       >
         <div
@@ -200,15 +214,29 @@ export function DockMonitor({
           )}
           <span className="dock-monitor-name">{control.title}</span>
           {showSelector && (
-            <CustomSelect
-              className="dock-monitor-worktree-select"
-              value={selectedValue}
-              options={worktreeOptions}
-              label={`${control.title} worktree`}
-              menuPlacement="top"
-              menuAlign="right"
-              onChange={onWorktreeChange}
-            />
+            // Hermes review — the one interactive child of this row that
+            // didn't already stopPropagation its own clicks (unlike
+            // devServerUrl/the kebab/the stream-toggle tag below), so a
+            // click on the worktree picker's own trigger used to bubble
+            // into onSelect too. `display: contents` keeps this wrapper
+            // out of the flex layout entirely — CustomSelect's own root
+            // div still has to be the DIRECT flex child of
+            // `.dock-monitor-header` for `.dock-monitor-worktree-select`'s
+            // own max-width/min-width/flex-shrink (empty-states.css) to
+            // size correctly, and a wrapper with any real box would nest it
+            // one level too deep — while still sitting in the DOM tree
+            // click events bubble through, which is all this needs.
+            <span style={{ display: "contents" }} onClick={(e) => e.stopPropagation()}>
+              <CustomSelect
+                className="dock-monitor-worktree-select"
+                value={selectedValue}
+                options={worktreeOptions}
+                label={`${control.title} worktree`}
+                menuPlacement="top"
+                menuAlign="right"
+                onChange={onWorktreeChange}
+              />
+            </span>
           )}
           {devServerUrl && (
             <button

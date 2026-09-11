@@ -2431,5 +2431,58 @@ describe("Dock", () => {
       // running monitor via the header's onClick.
       expect(deleteSession).not.toHaveBeenCalled();
     });
+
+    it("Hermes review — a click on the worktree selector's own trigger does not ALSO select that row", async () => {
+      // Two running monitors so adopt-on-empty (Dock.tsx) has something to
+      // pick besides the one under test — with only one row, "did clicking
+      // its own selector select it" is indistinguishable from "it was
+      // already the sole adopted row." "a" sorts first alphabetically among
+      // the discovered controls' own ids, so it's the one adopt-on-empty
+      // picks.
+      dockByProject[1] = [
+        { id: "a", title: "A server", command: "npm run a" },
+        { id: "b", title: "B server", command: "npm run b" },
+      ];
+      const MULTI: GitBranchesResult = {
+        branches: [
+          { name: "main", isCurrent: false },
+          { name: "feature-x", isCurrent: true },
+        ],
+        worktrees: [
+          { path: "/home/x/mullion", branch: "main", isMain: true },
+          {
+            path: "/home/x/mullion/.mullion-worktrees/feature-x",
+            branch: "feature-x",
+            isMain: false,
+          },
+        ],
+        remoteBranches: [],
+      };
+      useDashboardStore.setState({
+        projects: [PROJECT],
+        sessions: [
+          makeSession({ id: 10, command: "npm run a", kind: "dock" }),
+          makeSession({ id: 20, command: "npm run b", kind: "dock" }),
+        ],
+        gitBranchesByProject: { 1: MULTI },
+      });
+      const user = userEvent.setup();
+      render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+      await screen.findByText("A server");
+      await screen.findByText("B server");
+      await waitFor(() => {
+        expect(screen.getByTestId("terminal-pane")).toHaveAttribute("data-session-id", "10");
+      });
+
+      // Click "B server"'s own worktree-selector trigger — not its row body.
+      const bRow = screen.getByText("B server").closest(".dock-monitor") as HTMLElement;
+      const trigger = bRow.querySelector(".custom-select-trigger") as HTMLButtonElement;
+      await user.click(trigger);
+
+      // Still showing "A"'s session — the click didn't bubble into
+      // selecting "B"'s row.
+      expect(screen.getByTestId("terminal-pane")).toHaveAttribute("data-session-id", "10");
+      expect(bRow).not.toHaveClass("dock-monitor--selected");
+    });
   });
 });

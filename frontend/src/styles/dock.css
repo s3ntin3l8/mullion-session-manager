@@ -320,11 +320,22 @@
    min-height can make this row taller than the dock region actually has
    room for, and `.dock` itself (`overflow: hidden`, above) won't let that
    push the region taller — this scrolls to reveal it instead of clipping.
-   Below `DOCK_SPLIT_STACKED_WIDTH_PX` (Dock.tsx) a `.dock-split--stacked`
-   modifier flips `flex-direction` to `column` — rail on top, pane below —
-   for a column too narrow to hold both side by side; see Dock.tsx's own
-   ResizeObserver comment for why that's a measured breakpoint, not a CSS
-   container query. */
+   Below `stackedThresholdPx` (Dock.tsx, derived from the live `railWidth` +
+   this rule's own divider + `.dock-log-pane`'s own live width floor, NOT a
+   fixed literal) a `.dock-split--stacked` modifier flips `flex-direction`
+   to `column` — rail on top, pane below — for a column too narrow to hold
+   both side by side; see Dock.tsx's own ResizeObserver comment for why
+   that's a measured breakpoint, not a CSS container query.
+
+   Hermes review — setting only `overflow-y` here doesn't leave `overflow-x`
+   at its `visible` default: per the CSS Overflow spec, once EITHER axis is
+   anything other than `visible`, a `visible` value on the OTHER axis
+   computes to `auto` instead. So `.dock-split--stacked` (rail above the
+   pane, in a COLUMN) also gets a horizontal scrollbar for free the moment a
+   column narrower than `.dock-log-pane`'s own inline `min-width` floor
+   forces it — consistent with this rule's own "scroll, don't clip"
+   posture, just worth stating rather than leaving an implicit spec detail
+   for the next reader to rediscover. */
 .dock-split {
   flex: 1;
   display: flex;
