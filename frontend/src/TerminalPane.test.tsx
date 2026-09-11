@@ -1603,6 +1603,88 @@ describe("TerminalPane OSC 52 clipboard write", () => {
     expect(handled).toBe(true);
     await waitFor(() => expect(writeText).toHaveBeenCalledWith("still live"));
   });
+
+  // Self-review finding: a stale geometry-sentinel write callback from a
+  // SUPERSEDED connection must not clear the replay guard for the
+  // connection that replaced it. xterm's write queue is shared across
+  // reconnects and drains asynchronously (unlike this test's default
+  // synchronous `write` mock), so the old connection's own callback can, in
+  // principle, fire after a new connect() has already started — the
+  // `myGeneration === connectionGeneration` check is what makes that
+  // harmless. Overrides `term.write` here to capture callbacks instead of
+  // firing them immediately, so the test controls exactly when each
+  // connection's sentinel "completes".
+  it("ignores a stale replay-complete callback from a connection a reconnect has since superseded", async () => {
+    vi.useFakeTimers();
+    try {
+      stubFakeWebSocket(true);
+      const writeText = stubClipboardWrite();
+      // Not `await waitFor(...)` for readyState here (the usual pattern in
+      // this describe block) — `waitFor` polls on real timers, which would
+      // hang against vi.useFakeTimers() above. readyState is already 1
+      // synchronously (stubFakeWebSocket(true) sets it before render), so
+      // there's nothing to actually wait for.
+      renderPane();
+      const term = getLatestTermInstance() as unknown as { write: ReturnType<typeof vi.fn> };
+      const pendingWrites: Array<() => void> = [];
+      term.write.mockImplementation((_data: unknown, cb?: () => void) => {
+        if (cb) pendingWrites.push(cb);
+      });
+      act(() => {
+        useDashboardStore.setState((s) => ({
+          settings: {
+            ...s.settings,
+            terminal: { ...s.settings.terminal, reconnect: { enabled: true, maxAttempts: 5 } },
+          },
+        }));
+      });
+
+      // Generation 1: its geometry sentinel is queued but not yet fired.
+      sendGeometryFrame();
+      expect(pendingWrites).toHaveLength(1);
+      expect(oscHandlers.get(52)!(`c;${btoa("gen1 still replaying")}`)).toBe(true);
+      expect(writeText).not.toHaveBeenCalled();
+
+      // The connection drops and a reconnect fires — this is a NEW
+      // generation as far as the replay guard is concerned, even though the
+      // test harness's fake WebSocket constructor returns the same object.
+      act(() => {
+        for (const handler of fakeSocket._closeHandlers) handler({ code: 1006, reason: "" });
+      });
+      act(() => {
+        vi.advanceTimersByTime(600);
+      });
+
+      // Generation 2's own geometry sentinel is now also queued (both
+      // connections' message listeners are attached to the same fake
+      // socket, so this frame reaches gen1's handler too — a no-op there,
+      // since gen1 already saw its own first geometry frame).
+      sendGeometryFrame();
+      expect(pendingWrites).toHaveLength(2);
+      expect(oscHandlers.get(52)!(`c;${btoa("still mid-reconnect")}`)).toBe(true);
+      expect(writeText).not.toHaveBeenCalled();
+
+      // Generation 2's own callback fires — now, and only now, live OSC 52
+      // copies should land. writeText is called synchronously inside
+      // copyToClipboard (only its `.then()` — irrelevant here — is async),
+      // so no waitFor is needed even under fake timers.
+      pendingWrites[1]!();
+      expect(oscHandlers.get(52)!(`c;${btoa("live on gen 2")}`)).toBe(true);
+      expect(writeText).toHaveBeenCalledWith("live on gen 2");
+
+      // The real hazard: the STALE generation-1 callback fires even later —
+      // arriving AFTER generation 2 has already genuinely completed its own
+      // replay. An implementation that assigns unconditionally (rather than
+      // checking `myGeneration === connectionGeneration`) would downgrade
+      // replayCompleteGeneration back to 1 here, spuriously re-entering
+      // "still replaying" for a connection that finished replay long ago.
+      pendingWrites[0]!();
+      expect(oscHandlers.get(52)!(`c;${btoa("still live after stale callback")}`)).toBe(true);
+      expect(writeText).toHaveBeenCalledWith("still live after stale callback");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("TerminalPane copy failure toast", () => {

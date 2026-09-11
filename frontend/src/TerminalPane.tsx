@@ -797,12 +797,25 @@ export function TerminalPane(props: {
     // otherwise re-fire on every reconnect and silently overwrite whatever
     // the user copied since — reconnects are frequent (network blips,
     // backend redeploys, an agent-hosted session's extra proxy hop), so this
-    // isn't a rare edge case. Reset at the top of connect() (a fresh
-    // connection always starts by replaying, if it has anything to replay)
-    // and cleared once the backlog is known to be fully parsed — see the
-    // "geometry" branch below for how that's determined.
-    let replaying = true;
-    let sawGeometry = false;
+    // isn't a rare edge case.
+    //
+    // Identity-based, not timing-based: each connect() call claims the next
+    // generation number, and only ITS OWN geometry-sentinel write callback
+    // (below) is allowed to advance replayCompleteGeneration. A boolean
+    // reset at connect()/open time was tried and rejected (self-review) —
+    // xterm's write queue is shared across reconnects and drains
+    // asynchronously (WriteBuffer._innerWrite time-slices at ~12ms per
+    // macrotask, and a backgrounded tab throttles the timers on both sides
+    // of this independently), so an old, already-superseded connection's
+    // queued sentinel callback could otherwise fire AFTER a reset meant for
+    // the new connection, clearing the guard while the new connection's own
+    // backlog is still being parsed. Comparing generations at the moment
+    // each callback actually fires makes that ordering irrelevant: a stale
+    // callback's `myGeneration` can never equal the current
+    // `connectionGeneration` once a newer connect() has run, so it's
+    // harmlessly ignored no matter how late it arrives.
+    let connectionGeneration = 0;
+    let replayCompleteGeneration = 0;
 
     const dataSub = term.onData((data) => {
       if (ws?.readyState === WebSocket.OPEN) {
@@ -1138,12 +1151,13 @@ export function TerminalPane(props: {
       const semi = data.indexOf(";");
       const payload = semi === -1 ? data : data.slice(semi + 1); // drop the Pc selection spec, unused
       if (payload === "?") return true; // read query — swallow, never reply
-      // Scrollback replay (see `replaying`'s own comment above) — swallow
-      // without touching the clipboard. The sequence is still "handled"
-      // (true), not left for xterm's own no-op default, so a malformed
-      // payload during replay doesn't fall through to the `false` branch
-      // below and get treated as unrecognized.
-      if (replaying) return true;
+      // Scrollback replay (see `connectionGeneration`'s own comment above) —
+      // swallow without touching the clipboard until the CURRENT connection
+      // has confirmed its own replay (if any) is done. The sequence is still
+      // "handled" (true), not left for xterm's own no-op default, so a
+      // malformed payload during replay doesn't fall through to the `false`
+      // branch below and get treated as unrecognized.
+      if (replayCompleteGeneration !== connectionGeneration) return true;
       if (!prefsRef.current.clipboardWrite) return true;
       let text: string;
       try {
@@ -1345,6 +1359,17 @@ export function TerminalPane(props: {
       if (destroyed) return;
       setStatus(reconnectAttempt === 0 ? "connecting" : "reconnecting");
       setReconnectAttempt(reconnectAttempt);
+      // This connection's own identity for the replay guard above — see
+      // connectionGeneration's own comment for why generation comparison
+      // (rather than a shared boolean reset at some point in time) is what
+      // makes the guard correct regardless of xterm's write-queue timing.
+      // `sawGeometry` is deliberately a plain local here, not hoisted to
+      // effect scope: closing over one fresh copy per connect() call is
+      // exactly "has THIS connection seen its own first geometry frame yet",
+      // with no manual reset needed.
+      connectionGeneration += 1;
+      const myGeneration = connectionGeneration;
+      let sawGeometry = false;
 
       const protocol = location.protocol === "https:" ? "wss:" : "ws:";
       const wsUrl = `${protocol}//${location.host}/ws/terminal?sessionId=${props.params.sessionId}&cols=${term.cols}&rows=${term.rows}`;
@@ -1356,19 +1381,6 @@ export function TerminalPane(props: {
       socket.addEventListener("open", () => {
         reconnectAttempt = 0;
         setStatus("open");
-        // A fresh connection always starts by replaying whatever this
-        // session produced while unwatched (see replaying's own comment
-        // above) — reset here, on THIS socket's own open, not synchronously
-        // at the top of connect(). No message (and therefore no term.write())
-        // can arrive for this socket before its own "open" fires, but a
-        // PREVIOUS connection's already-queued live output can still be
-        // draining through xterm's async write queue at the moment connect()
-        // itself runs (a reconnect only starts after the old socket's
-        // "close", but xterm's own write buffer has no such synchronization
-        // with it) — resetting here instead of there means that in-flight
-        // tail can never be misread as replay.
-        replaying = true;
-        sawGeometry = false;
         // The URL's cols/rows were captured when this connect() call was
         // made, which can be stale if a deferred refit (below) corrected
         // the terminal's size in the meantime — send whatever the terminal's
@@ -1428,19 +1440,23 @@ export function TerminalPane(props: {
           const geo = parsed;
           // The first "geometry" frame on this connection is sent
           // unconditionally right after the (optional) scrollback backlog —
-          // see replaying's own comment above — so it's a reliable
-          // end-of-replay sentinel even for a fresh spawn with no backlog at
-          // all. term.write() queues in FIFO order and only invokes its
-          // callback once that write is fully parsed, so queuing a no-op
-          // write here guarantees `replaying` doesn't clear until any OSC 52
+          // see connectionGeneration's own comment above — so it's a
+          // reliable end-of-replay sentinel even for a fresh spawn with no
+          // backlog at all. term.write() queues in FIFO order and only
+          // invokes its callback once that write is fully parsed, so queuing
+          // a no-op write here guarantees this fires only once any OSC 52
           // earlier in the backlog has already been (harmlessly) swallowed
-          // by the handler below — clearing it synchronously here instead
-          // would race an unparsed backlog still sitting in xterm's write
-          // queue.
+          // by the handler below — advancing replayCompleteGeneration
+          // synchronously here instead would race an unparsed backlog still
+          // sitting in xterm's write queue. The `myGeneration ===
+          // connectionGeneration` check discards this callback if a later
+          // connect() has since superseded it (see connectionGeneration's
+          // own comment for why that can happen even though this callback
+          // was queued first).
           if (!sawGeometry) {
             sawGeometry = true;
             term.write(new Uint8Array(0), () => {
-              replaying = false;
+              if (myGeneration === connectionGeneration) replayCompleteGeneration = myGeneration;
             });
           }
           // Narrow-pane font auto-fit — fitFloorRef holds the server's
