@@ -1345,12 +1345,6 @@ export function TerminalPane(props: {
       if (destroyed) return;
       setStatus(reconnectAttempt === 0 ? "connecting" : "reconnecting");
       setReconnectAttempt(reconnectAttempt);
-      // A fresh connection always starts by replaying whatever this session
-      // produced while unwatched (see replaying's own comment above) — reset
-      // per-connection, not per-mount, so a second and later reconnect within
-      // the same mount is guarded exactly like the first.
-      replaying = true;
-      sawGeometry = false;
 
       const protocol = location.protocol === "https:" ? "wss:" : "ws:";
       const wsUrl = `${protocol}//${location.host}/ws/terminal?sessionId=${props.params.sessionId}&cols=${term.cols}&rows=${term.rows}`;
@@ -1362,6 +1356,19 @@ export function TerminalPane(props: {
       socket.addEventListener("open", () => {
         reconnectAttempt = 0;
         setStatus("open");
+        // A fresh connection always starts by replaying whatever this
+        // session produced while unwatched (see replaying's own comment
+        // above) — reset here, on THIS socket's own open, not synchronously
+        // at the top of connect(). No message (and therefore no term.write())
+        // can arrive for this socket before its own "open" fires, but a
+        // PREVIOUS connection's already-queued live output can still be
+        // draining through xterm's async write queue at the moment connect()
+        // itself runs (a reconnect only starts after the old socket's
+        // "close", but xterm's own write buffer has no such synchronization
+        // with it) — resetting here instead of there means that in-flight
+        // tail can never be misread as replay.
+        replaying = true;
+        sawGeometry = false;
         // The URL's cols/rows were captured when this connect() call was
         // made, which can be stale if a deferred refit (below) corrected
         // the terminal's size in the meantime — send whatever the terminal's
