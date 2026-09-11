@@ -1265,100 +1265,43 @@
   flex: none;
 }
 
-/* .dock-body (dock.css) lays monitors out in a ROW, so `.dock-monitor { flex:
-   1 }` splits the column N ways — at a minimum-width column with several
-   services, each monitor can get far less than either the header or the
-   terminal body actually needs. PR3 — this floor is now driven by the
-   TERMINAL body, not the header (whose own min-content is smaller, ≈216px,
-   see .dock-monitor-header's own comment below): pty-manager.ts's
-   MIN_TERMINAL_COLS (40) is the narrowest column count a session's PTY will
-   ever be resized to, and 40 columns needs more than 216px of actual
-   terminal content width. Below 216px .dock-body would ALSO have to
-   squeeze the ⋯ kebab out of existence; below this larger floor instead it
-   just scrolls horizontally, same as before.
+/* Dock master-detail rework — `.dock-monitor` used to BE the card that held
+   both a header and (when its stream was live) a `TerminalPane` body, so
+   its own min-width had to hold the TERMINAL's floor: 364px, derived below.
+   The terminal moved out entirely, into `.dock-log-pane` (this file, below)
+   — one per column, not one per monitor — so `.dock-monitor` is now just a
+   28px rail row and only ever needs to hold its own HEADER content: the
+   216px min-content floor `.dock-monitor-header`'s own comment derives.
+   That derivation, and its "smaller of two floors, in case the terminal
+   floor is ever relaxed" framing, predates this rework; 216px is now the
+   floor in use, not a fallback for one that might someday bind.
 
-   Derivation (measured in Chrome, not guessed — see this repo's dock plan
-   for why a guessed advance-width ratio was rejected): real xterm cell
-   width for Geist Mono at the default 14px terminalSettings.fontSize, read
-   off a live pane's `term._core._renderService.dimensions.css.cell.width`,
-   is 8.4px — so 40 columns needs 40 × 8.4 = 336px of xterm content width.
-   From there out to this rule's own border-box width, working through what
-   @xterm/addon-fit's `proposeDimensions()` (fitAddon.fit(), applyFontFit)
-   ACTUALLY measures — `getComputedStyle()` widths below are always
-   content-box, regardless of any element's own box-sizing:
-   + 14px (addon-fit's own fixed overview-ruler reserve — its source
-   subtracts `terminal.options.overviewRuler?.width || 14` whenever
-   `scrollback !== 0`; this repo's default scrollback is 5000 and no dock
-   terminal sets overviewRuler, so this reserve always applies here)
-   + 8px (TerminalPane's own containerRef padding, `terminalSettings.padding`
-   default 4px × 2 sides, TerminalPane.tsx — already excluded from what
-   getComputedStyle(containerRef).width reports, which is what addon-fit
-   reads, so it has to be added back in going the other direction)
-   + 2px (.dock-monitor's own 1px border × 2 sides) = 360px minimum to
-   actually clear 40 columns, plus a small ~4px margin for font-hinting/
-   subpixel variance this single Chrome measurement can't rule out on other
-   engines → 364px. (An earlier version of this derivation stopped at 346
-   + a margin = 350px, missing addon-fit's 14px reserve entirely — at 350px
-   the real column count is `floor((350 − 10 − 14) / 8.4)` = 38, BELOW
-   MIN_TERMINAL_COLS, so that number never actually left the shrunk-font
-   regime this floor exists to fix; corrected before this ever shipped.)
+   `flex: 0 0 auto`, not `flex: 1` — `.dock-rail` (dock.css, the renamed
+   `.dock-body`) is a COLUMN now, so `flex: 1` would grow every row to fill
+   the rail's leftover height instead of sizing each to its own 28px
+   content, which is the entire point of a rail row.
 
-   364px is only correct at the DEFAULT 14px fontSize / 4px padding —
-   Hermes review round 2 flagged that both are user-configurable
-   (AppearanceSection sliders, 10-20px / 0-16px), and this static number
-   stops holding 40 columns well before the top of either range. Dock.tsx
-   now recomputes this same derivation from the user's LIVE settings
-   (dockMonitorMinWidthPx, dockHelpers.ts) and applies it as an inline
-   `minWidth` style, which wins over this rule by specificity — this
-   364px is only the fallback for a caller with no settings to compute
-   from (there is none today), not the actual floor most users get.
-   Below 40
-   columns, MIN_TERMINAL_COLS's own floor takes over (pty-manager.ts) and
-   the PTY gets resized UP to 40 regardless of what the client asked for, so
-   a narrower .dock-monitor doesn't get fewer columns — it gets the exact
-   same 40, rendered at whatever smaller font TerminalPane's auto-fit
-   shrinks to in order to still fit them (TerminalPane.tsx's applyFontFit)
-   — permanently, not just during a resize. Raising this floor trades
-   density (fewer monitors visible before .dock-body's overflow-x kicks in)
-   for legibility (dock terminals render at the user's actual configured
-   font size instead of a permanently shrunk one) — a deliberate, reversible
-   choice. */
+   The 364px terminal-width derivation this rule used to carry (xterm cell
+   width × MIN_TERMINAL_COLS + addon-fit's reserve + padding + border +
+   margin, measured live in Chrome, pinned by dockHelpers.test.ts) moved to
+   `.dock-log-pane`'s own comment below, unchanged — only its owner changed. */
 .dock-monitor {
-  flex: 1;
+  flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   background: var(--term);
   border: 1px solid var(--border-soft);
   border-radius: 9px;
   overflow: hidden;
-  min-width: 364px;
+  min-width: 216px;
 }
-/* Dock log-streaming resize fix, replacing PR2a's .dock-monitor-transient —
-   that rule's own `flex: 0 0 260px` never actually applied: DockMonitor.tsx
-   put it on the SAME element as the 364px inline `minWidth` override
-   (min-width above), and min-width clamps flex-basis on the same element,
-   so the "transient" panel always rendered at >=364px — a full peer
-   column, not a 260px sliver — confirmed live via this PR's own
-   investigation. A live stack-action monitor now renders inside this class
-   instead, as a plain (non-flex) block wrapping a single DockMonitor, as a
-   ROW below `.dock-stack-monitors` inside `.dock-stack-group` (which is
-   already flex-direction:column) rather than as a peer column inside it —
-   see Dock.tsx's own group-rendering comment. Being a plain block, not a
-   flex container, makes `.dock-monitor`'s own `flex: 1 1 0%` inert here
-   (that property only takes effect when the element is itself a flex
-   item), so the monitor falls back to ordinary block sizing: full width
-   from its parent, and a height equal to its own explicit minimum
-   (`.dock-monitor`'s own inline min-height, dockHelpers.ts's
-   dockMonitorFullMinHeightPx — NOT `.dock-monitor-body`'s, see that
-   function's own doc comment for why the body-only number silently doesn't
-   work here) rather than splitting the group's vertical space with
-   .dock-stack-monitors. That's what makes this "zero horizontal space,
-   fixed height" rather than needing a hand-picked pixel width like the
-   rule it replaces did — see .dock-stack-group's own comment for a second,
-   review-caught bug in this same mechanism (the services row shrinking to
-   0px, not just this strip's own sizing). */
-.dock-stack-action-strip {
-  flex: 0 0 auto;
+/* Dock master-detail rework — the row whose identity matches DockColumn's
+   selection (dockRowKey, dockHelpers.ts), i.e. the row DockLogPane is
+   currently showing. Border tint rather than a background fill: a fill
+   would compete with .dock-monitor-image-update's own tint on the same
+   row. */
+.dock-monitor--selected {
+  border-color: var(--accent-solid);
 }
 /* Min-content invariant this header must never be squeezed below, for a
    Docker-backed row (the case this floor exists for — .dock-monitor-kebab's
@@ -1377,19 +1320,16 @@
    version of this estimate omitted the image pill and undercounted gaps at
    4 instead of 5 — harmless in practice (a CSS min-width below the true
    min-content has no effect; the browser's own intrinsic-size floor still
-   holds and .dock-body's overflow-x absorbs the difference), but a
+   holds and .dock-rail's overflow-x absorbs the difference), but a
    maintainer re-deriving this number should start from the corrected total,
-   not the original one. PR3 — .dock-monitor's own min-width is now 364px,
-   set by the TERMINAL floor above, not this 216px header number; this
-   derivation stays here (and stays correct) purely as the smaller of the
-   two floors, in case the terminal floor above is ever relaxed again and
-   this one becomes binding. A compose project's own .dock-stack-group
-   (below) adds its .dock-stack-header on top of that (in its own column,
-   not this row — see that rule's comment), so a minimum-width column with
-   any Docker services still scrolls horizontally in practice regardless of
-   either floor — expected, not a bug: the point of these floors is that
-   .dock-body scrolls rather than clips the kebab or shrinks the font, not
-   that scrolling never happens. Above the floor, yield order is:
+   not the original one. Dock master-detail rework — this WAS "the smaller
+   of two floors" while `.dock-monitor` itself held a terminal (364px bound
+   in practice); now that the terminal lives in `.dock-log-pane` instead,
+   this 216px number is `.dock-monitor`'s own min-width directly (see that
+   rule's own comment above). A rail narrower than 216px still scrolls
+   horizontally rather than clipping the kebab — `.dock-rail`'s own
+   overflow-x (dock.css) is what absorbs that, same mechanism as before,
+   just on a rail row instead of a full card. Above the floor, yield order is:
    .dock-monitor-name (already flex:1 1 0%, so it's first to hit zero) →
    .dock-monitor-url/.dock-monitor-image/.dock-monitor-check-status
    (ellipsize instead of vanishing) → nothing else shrinks. */
@@ -1417,6 +1357,28 @@
   color: var(--dim);
   font-family: "Geist Mono", monospace;
   flex-shrink: 0;
+}
+/* Dock master-detail rework — the "logs on"/"logs off" tag is now itself the
+   stream start/stop control (DockMonitor.tsx's own header comment explains
+   the select-vs-toggle split), not just a label — give it the same
+   clickable affordance .dock-monitor-url already uses (border/radius/
+   padding, no fill so it stays visually a tag rather than a pill) so it
+   reads as interactive. Not rendered at all while `held` (DockMonitor.tsx),
+   so there's no disabled state to style here. */
+.dock-monitor-stream-toggle {
+  cursor: pointer;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  padding: 1px 5px;
+  margin: -1px -5px;
+}
+.dock-monitor-stream-toggle:hover {
+  border-color: var(--border-soft);
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+}
+.dock-monitor-stream-toggle:focus-visible {
+  outline: 2px solid var(--accent-solid);
+  outline-offset: 1px;
 }
 /* U8 — armed (arm-then-confirm before killing a running monitor from its
    header) reuses button.danger.armed's own tone/animation language (--r +
@@ -1562,45 +1524,27 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* One box per compose project (DockStackHeader.tsx) inside .dock-body's row
-   — column layout so the header sits above that stack's own monitors.
-   flex-basis:0 + the caller's own inline flexGrow (the group's monitor
-   count) is what keeps monitor widths uniform across groups of different
-   sizes in the same column; deliberately no min-width override here, so
-   its automatic minimum stays its children's own min-content and
-   .dock-monitor's floor (see that rule's own comment) propagates up to
-   this box, which is what lets .dock-body's overflow-x actually kick in.
-
-   Deliberately no `overflow` property either, unlike .dock-monitor — this
-   box's own AUTOMATIC minimum size must NOT be zeroed the way
-   overflow:hidden zeroes one (dock.css's own .dock-body comment has the
-   full mechanism), because that automatic minimum is what makes THIS box
-   grow past .dock-body's row stretch-fit height when its children need
-   more room than the dock region has. Review caught a real bug here during
-   the dock log-streaming resize fix: with a live .dock-stack-action-strip
-   present below (a fixed-content-size row, flex:0 0 auto, sized to a full
-   monitor's own real minimum height once that existed), this box's OWN
-   auto-height correctly grew to fit the strip — but .dock-stack-monitors
-   (the services row, flex:1;min-height:0) had no floor of its OWN, so once
-   this box's auto height matched the strip's content exactly, there was
-   zero free space left to grow the services row into, and it flex-shrank
-   to a genuine 0px — the running service silently vanishing rather than
-   just scrolling out of view. `.dock-stack-monitors`'s own inline
-   min-height (Dock.tsx, the same dockMonitorFullMinHeightPx passed to
-   every monitor) is the fix — it reserves this box's own auto-height
-   growth for at least one row of services too, not just the strip. */
+/* One box per compose project (DockStackHeader.tsx) inside `.dock-rail`
+   (dock.css) — a column, so the header sits above that stack's own service
+   rows. Dock master-detail rework simplified this considerably: the group
+   used to need `flex-basis: 0` plus the caller's own inline `flexGrow`
+   (Dock.tsx) to apportion HORIZONTAL width fairly against sibling groups of
+   different sizes, and needed a second, independent min-height fix
+   (`.dock-stack-monitors`'s own inline min-height, removed) to stop a live
+   stack-action row silently squeezing the services list to 0px — both were
+   row-layout artifacts. With every row now 28px and content-sized, and
+   `.dock-rail` itself a column rather than a row of peer groups, there is
+   nothing left to apportion: this box just stacks its header above its
+   rows and lets `.dock-rail`'s own overflow-y handle whatever doesn't fit. */
 .dock-stack-group {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  flex-basis: 0;
-  flex-shrink: 1;
+  gap: 2px;
 }
 .dock-stack-monitors {
-  flex: 1;
   display: flex;
-  gap: 6px;
-  min-height: 0;
+  flex-direction: column;
+  gap: 2px;
 }
 .dock-stack-header {
   display: flex;
@@ -1639,24 +1583,73 @@
   display: inline-flex;
   flex-shrink: 0;
 }
-/* min-width:0 (not overflow:hidden — .dock-monitor above already clips
-   visually) breaks a resize-runaway feedback path: without it, this box's
-   automatic minimum size is its content's real intrinsic width, and xterm's
-   own canvas resizing itself larger (TerminalPane.tsx's refit(), see
-   clampTerminalGridSize's own doc comment for the full loop) propagates that
-   size up through .dock-stack-monitors/.dock-stack-group/.dock-body — all of
-   which resolve their own automatic minimum from their children on purpose
-   (.dock-stack-group's own comment below), so the real terminal-grid growth
-   became a real, unbounded DOM width instead of being clipped here. Confirmed
-   live: this box measured ~200x wider than its own .dock-monitor parent
-   (which stayed pinned at its 364px floor, overflow:hidden doing its job)
-   while the terminal's internal grid ran away to tens of thousands of
-   columns. min-width:0 stops this box from ever contributing more than its
-   flex-resolved size to that chain, regardless of what's inside it. */
-.dock-monitor-body {
+/* Dock master-detail rework — the ONE terminal per column now lives here
+   instead of inside every `.dock-monitor` card. `.dock-log-pane` is the
+   floor-bearing outer box (the direct counterpart of the old
+   `.dock-monitor`); `.dock-log-pane-body` is the inner box the
+   `TerminalPane` (or the "nothing selected" empty state) actually mounts
+   into (the direct counterpart of the old `.dock-monitor-body`) — kept as
+   two elements for the same reason the monitor card was: the floor has to
+   be an EXPLICIT min-width/min-height on the OUTER box, because
+   `overflow: hidden` zeroes a flex item's AUTOMATIC minimum size per CSS
+   Flexbox §4.5, so a floor placed only on the inner box would never
+   propagate out through an `overflow: hidden` parent (the exact
+   review-caught bug `dockHelpers.ts`'s `dockMonitorFullMinHeightPx` doc
+   comment describes).
+
+   Width floor (`dockMonitorMinWidthPx`, dockHelpers.ts, applied as this
+   element's inline `minWidth`) is the SAME 364px terminal-column derivation
+   `.dock-monitor` used to carry directly: pty-manager.ts's
+   MIN_TERMINAL_COLS (40) × the measured 8.4px Geist-Mono cell width at the
+   default 14px font, plus @xterm/addon-fit's 14px overview-ruler reserve,
+   plus TerminalPane's own 8px padding, plus this box's 2px border, plus a
+   4px cross-platform margin — see dockHelpers.ts's own doc comment for the
+   full, Chrome-measured derivation; nothing about the NUMBER changed here,
+   only which element carries it.
+
+   Height floor (`dockMonitorMinHeightPx`, dockHelpers.ts, 201px at
+   defaults) is deliberately the BODY-only number, not
+   `dockMonitorFullMinHeightPx` (231px, header + body + border) — this box
+   has no 28px header of its own to add back in, unlike a monitor card. See
+   dockHelpers.ts's own doc comment on dockMonitorMinHeightPx for why using
+   the wrong one of these two is easy to get backwards. */
+.dock-log-pane {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--term);
+  border: 1px solid var(--border-soft);
+  border-radius: 9px;
+  overflow: hidden;
+}
+/* min-width:0 (not overflow:hidden — .dock-log-pane above already clips
+   visually) breaks the same xterm resize-runaway feedback path
+   .dock-monitor-body used to guard against (TerminalPane.tsx's refit(), see
+   clampTerminalGridSize's own doc comment): without it, this box's
+   automatic minimum size is its content's real intrinsic width, and a
+   resize-triggered canvas grid runaway would propagate that size out
+   through this box to `.dock-log-pane`'s own stretch-fit size. The chain is
+   shorter now than it was (the terminal used to sit under three nested
+   auto-sizing containers — .dock-stack-monitors/.dock-stack-group/
+   .dock-rail — that all resolved their own automatic minimum from their
+   children on purpose; `.dock-log-pane`'s `overflow: hidden` above already
+   stops that one level up), but min-width:0 here costs nothing and keeps
+   the same defense-in-depth the monitor card had. */
+.dock-log-pane-body {
   flex: 1;
   min-height: 0;
   min-width: 0;
+}
+/* Centred hint shown in place of a TerminalPane when nothing is selected, or
+   the selected row's stream is off — styled like .dock-empty (dock.css)
+   rather than inventing a new empty-state language. */
+.dock-log-pane-hint {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--dim);
+  font-size: 12px;
 }
 
 /* GitHub panel (GitHubPanel.tsx, issue #27) — a dockview panel, opened from

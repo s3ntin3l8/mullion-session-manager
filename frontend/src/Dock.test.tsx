@@ -51,6 +51,16 @@ describe("Dock", () => {
       "GET /api/projects/:id/github": () => jsonResponse(204),
     }));
     vi.stubGlobal("fetch", fetchMock);
+    // Dock master-detail rework — DockColumn's own `.dock-split--stacked`
+    // ResizeObserver doesn't exist in jsdom; same stub DockMonitor.test.tsx
+    // and PaneTab.test.tsx use for their own observers. `observe`/
+    // `disconnect` only need to not throw.
+    vi.stubGlobal(
+      "ResizeObserver",
+      vi.fn(function () {
+        return { observe: vi.fn(), unobserve: vi.fn(), disconnect: vi.fn() };
+      }),
+    );
     resetStore({ projects: [PROJECT], sessions: [] });
   });
 

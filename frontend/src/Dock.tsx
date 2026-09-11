@@ -1,4 +1,12 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import { api } from "./api/index.js";
 import type { DockControl, DockerUpdateCheckResult, GitBranchesResult } from "./api/index.js";
@@ -20,8 +28,10 @@ import {
 import {
   clamp,
   composeProjectForControl,
-  dockMonitorFullMinHeightPx,
+  dockLogPaneComfortHeightPx,
+  dockMonitorMinHeightPx,
   dockMonitorMinWidthPx,
+  dockRowKey,
   dockerSessionIdentity,
   groupDockerControls,
   holdVanishedDockerControls,
@@ -35,6 +45,7 @@ import { DockGithubRow } from "./dock/DockGithubRow.js";
 import { useArmedKill } from "./dock/useArmedKill.js";
 import { useTransientStatus } from "./dock/useTransientStatus.js";
 import { DockMonitor } from "./dock/DockMonitor.js";
+import { DockLogPane } from "./dock/DockLogPane.js";
 import { DockStackHeader } from "./dock/DockStackHeader.js";
 import { AddColumnControl } from "./dock/AddColumnControl.js";
 import { useCoarsePointer } from "./lib/layoutTier.js";
@@ -52,11 +63,15 @@ const DOCKER_POLL_INTERVAL_MS = 15_000;
 // probeComposeServices), not compose-config-driven — a `compose up -d`
 // recreate genuinely deletes the old container before creating the new one,
 // so a service can be absent from a poll for a few seconds mid-rebuild with
-// nothing wrong. Without holding its row across that gap, every recreate
-// changes a stack group's control count once per service, and the group's
-// own `flexGrow` (DockColumn's render, below) resizes every sibling monitor
-// each time — this is the mechanism behind "rebuilding a stack makes the
-// whole dock resize repeatedly." Two poll intervals plus a small margin:
+// nothing wrong. Without holding its row across that gap, a stack group's
+// row LIST churns every recreate: the row vanishes and its terminal (or,
+// pre-dock-master-detail-rework, the group's own `flexGrow`) has to
+// reconstruct or resize every time — this is the mechanism behind
+// "rebuilding a stack makes the whole dock flicker/resize repeatedly," and
+// holding the row (and, per dockRowKey's own doc comment, the SELECTION,
+// since it's keyed on the same stable identity) across the gap is still
+// what prevents it, even though the group no longer resizes siblings the
+// way it used to. Two poll intervals plus a small margin:
 // long enough to outlast one missed poll if the container is a little slow
 // to reappear, short enough that a service actually removed via
 // `compose down` still disappears from the Dock promptly. The margin (vs.
@@ -70,13 +85,42 @@ const DOCKER_POLL_INTERVAL_MS = 15_000;
 // for the derivation this feeds.
 const RECREATE_GRACE_MS = 2 * DOCKER_POLL_INTERVAL_MS + 5_000;
 
-const DEFAULT_DOCK_HEIGHT = 220;
+// Dock master-detail rework — everything below dock-header/column-header/
+// stack-header chrome a column needs around `.dock-split` before the log
+// pane gets any room at all. Not exact (padding/border rounding, and
+// DockGithubRow's own 26px+gap is excluded — present for some projects, not
+// a baseline every column pays), just enough to land DEFAULT_DOCK_HEIGHT
+// near a sane starting size rather than picking one out of the air.
+const DOCK_CHROME_PX = 85;
+// dockLogPaneComfortHeightPx(14, 4) (dockHelpers.ts) + DOCK_CHROME_PX — a
+// genuinely readable log pane by default, not merely a non-clipping one.
+// dockMonitorMinHeightPx (also dockHelpers.ts) is the SEPARATE, smaller hard
+// floor `.dock-log-pane`'s own CSS min-height enforces regardless of this
+// default — see that function's own doc comment for why conflating the two
+// would silently ship every new user a 10-row log pane forever (the server
+// clamps UP to MIN_TERMINAL_ROWS, it never clamps down).
+const DEFAULT_DOCK_HEIGHT = dockLogPaneComfortHeightPx(14, 4) + DOCK_CHROME_PX;
 const DOCK_MIN_HEIGHT = 120;
 // Must equal .dockview-container's min-height in styles.css — the resize
 // drag's clamp and the CSS floor have to agree, or the CSS floor silently
 // wins and the drag looks like it stopped responding partway through.
 const GRID_MIN_HEIGHT = 160;
 const COLUMN_MIN_WIDTH = 200;
+// Default width of the rail before any drag, and the floor a drag can't go
+// below — see the rail-divider drag handler below.
+const DEFAULT_RAIL_WIDTH = 280;
+const RAIL_MIN_WIDTH = 216;
+// `.dock-rail-divider`'s own fixed CSS width (dock.css) — DockColumn's own
+// stacked-layout threshold below needs this same number in JS to reproduce
+// what the CSS actually costs.
+const RAIL_DIVIDER_WIDTH_PX = 6;
+// How long `pendingSelectKeyRef` (DockColumn) exempts a just-requested row
+// from the reconciliation's "no matching row, fall back" rule before giving
+// up on it — generous relative to a normal local createSession round trip,
+// short enough that a genuinely hung request (a dead remote host with no
+// timeout on this path) doesn't wedge the log pane on its empty hint
+// indefinitely.
+const PENDING_SELECT_TIMEOUT_MS = 15_000;
 
 // The dock: persistent monitors (dev server, git status, logs) — distinct
 // from one-shot session launches. Config is read-only (.crs/dock.json /
@@ -147,6 +191,19 @@ export function Dock({
   // column set itself is mostly derived, so a stored width map would just
   // accumulate stale entries for projects that drift in and out of view.
   const [widths, setWidths] = useState<Record<number, number>>({});
+  // Dock master-detail rework — the rail width (`.dock-rail`, dock.css)
+  // inside EVERY column's own `.dock-split`, dragged via that column's
+  // `.dock-rail-divider`. Unlike `widths` above, this genuinely IS a stable
+  // per-user preference (persisted, `crs.dockRailWidth`) rather than an
+  // artifact of which projects happen to be tiled right now — see
+  // STORAGE_KEYS.dockRailWidth's own doc comment. One shared value for
+  // every column (not indexed by projectId) is deliberate: a user who
+  // widens the rail on one stack almost certainly wants the same width on
+  // every other column too, not a per-project setting to redo each time.
+  const [railWidth, setRailWidth] = useState(() => {
+    const n = readNumber(STORAGE_KEYS.dockRailWidth, NaN);
+    return Number.isFinite(n) && n > 0 ? clamp(n, RAIL_MIN_WIDTH, Infinity) : DEFAULT_RAIL_WIDTH;
+  });
 
   const dockRef = useRef<HTMLDivElement>(null);
 
@@ -195,25 +252,83 @@ export function Dock({
   // `invert: true`. Persists on drag end only via `onCommit` (never fires
   // on mount, so no separate "skip the initial mount" guard is needed the
   // way the pre-extraction effect had by hand).
+  // Extracted so the mount-time clamp effect below can reuse the exact same
+  // ceiling the drag itself enforces, rather than a second, possibly
+  // drifting copy of the same math.
+  const getDockMaxHeight = () => {
+    const dockEl = dockRef.current;
+    // Measure the two flex siblings directly (not the shared parent's
+    // clientHeight, which also includes the mobile-only tab bar /
+    // sidebar toggle) so the available-space math stays correct
+    // regardless of which of those happen to be rendered.
+    const dockviewEl = dockEl?.parentElement?.querySelector<HTMLElement>(".dockview-container");
+    const available = (dockEl?.clientHeight ?? 0) + (dockviewEl?.clientHeight ?? 0);
+    return Math.max(DOCK_MIN_HEIGHT, available - GRID_MIN_HEIGHT);
+  };
+
   const { onMouseDown: onHeightHandleMouseDown } = useDragResize({
     axis: "y",
     invert: true,
     min: DOCK_MIN_HEIGHT,
-    getMax: () => {
-      const dockEl = dockRef.current;
-      // Measure the two flex siblings directly (not the shared parent's
-      // clientHeight, which also includes the mobile-only tab bar /
-      // sidebar toggle) so the available-space math stays correct
-      // regardless of which of those happen to be rendered.
-      const dockviewEl = dockEl?.parentElement?.querySelector<HTMLElement>(".dockview-container");
-      const available = (dockEl?.clientHeight ?? 0) + (dockviewEl?.clientHeight ?? 0);
-      return Math.max(DOCK_MIN_HEIGHT, available - GRID_MIN_HEIGHT);
-    },
+    getMax: getDockMaxHeight,
     value: height,
     onChange: setHeight,
     onCommit: (v) => writeNumber(STORAGE_KEYS.dockHeight, v),
     cursor: "ns-resize",
   });
+
+  // Dock master-detail rework — DEFAULT_DOCK_HEIGHT rose from 220 to ~400 to
+  // give a fresh install's log pane real breathing room (see that
+  // constant's own doc comment). The persisted-value branch of the `height`
+  // initializer above can't run this same clamp inline: `dockRef` isn't
+  // attached to anything yet during that useState initializer, so
+  // `getDockMaxHeight()` would only ever see zeros. A short viewport could
+  // otherwise open at a height taller than the drag handle would ever let
+  // it reach — this brings a first-mount default (or a stale persisted
+  // value from a since-shrunk window) in line with the same ceiling the
+  // drag itself enforces, once refs actually resolve to real layout. Fires
+  // once, not on every `height` change (an intentional user drag past this
+  // "ceiling" mid-session — the window growing after mount — must not be
+  // fought by this effect re-running).
+  useLayoutEffect(() => {
+    const max = getDockMaxHeight();
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setHeight((h) => (h > max ? max : h));
+  }, []);
+
+  // ---- Rail-divider resize (dock master-detail rework) ----
+  // One `useDragResize` call here, shared by EVERY column's own
+  // `.dock-rail-divider` (DockColumn passes this file's `onRailDividerMouseDown`
+  // straight through) — `railWidth` is one value for the whole dock (see its
+  // own doc comment above), so it only needs one drag driver, not one per
+  // column. `getMax` can't be a plain closure over "the" column's width the
+  // way `getDockMaxHeight` above closes over `dockRef`, though: which
+  // column's own width bounds THIS drag depends on which column's divider
+  // was actually grabbed, and that's only known at the moment of the
+  // mousedown — `draggingColumnElRef`, set by `onRailDividerMouseDown`
+  // itself just before delegating to the hook, is what lets `getMax` read
+  // the right element on every drag regardless of which column started it.
+  const draggingColumnElRef = useRef<HTMLElement | null>(null);
+  const { onMouseDown: onRailDividerMouseDownRaw } = useDragResize({
+    axis: "x",
+    min: RAIL_MIN_WIDTH,
+    getMax: () => {
+      const colWidth = draggingColumnElRef.current?.getBoundingClientRect().width ?? 0;
+      // 40% of the column — the plan's own clamp — floored at RAIL_MIN_WIDTH
+      // so a very narrow column (already in stacked layout at that point,
+      // per DockColumn's own stackedThresholdPx) never computes a max
+      // below the min.
+      return Math.max(RAIL_MIN_WIDTH, colWidth * 0.4);
+    },
+    value: railWidth,
+    onChange: setRailWidth,
+    onCommit: (v) => writeNumber(STORAGE_KEYS.dockRailWidth, v),
+    cursor: "col-resize",
+  });
+  const onRailDividerMouseDown = (e: ReactMouseEvent, columnEl: HTMLElement | null) => {
+    draggingColumnElRef.current = columnEl;
+    onRailDividerMouseDownRaw(e);
+  };
 
   // ---- Column divider resize ----
   // Deliberately NOT `useDragResize` — see that hook's own doc comment:
@@ -322,6 +437,8 @@ export function Dock({
               <DockColumn
                 projectId={id}
                 width={widths[id]}
+                railWidth={railWidth}
+                onRailDividerMouseDown={onRailDividerMouseDown}
                 onOpenGitHub={onOpenGitHub}
                 onOpenBrowser={onOpenBrowser}
                 onRemove={manualOnly(id) ? () => removeColumn(id) : undefined}
@@ -337,12 +454,18 @@ export function Dock({
 function DockColumn({
   projectId,
   width,
+  railWidth,
+  onRailDividerMouseDown,
   onOpenGitHub,
   onOpenBrowser,
   onRemove,
 }: {
   projectId: number;
   width: number | undefined;
+  // Dock master-detail rework — shared across every column, see Dock's own
+  // `railWidth` state comment for why this isn't per-column.
+  railWidth: number;
+  onRailDividerMouseDown: (e: ReactMouseEvent, columnEl: HTMLElement | null) => void;
   onOpenGitHub: (projectId: number) => void;
   onOpenBrowser: (projectId: number) => void;
   // Present only for a manually-pinned column not also derived from the
@@ -434,6 +557,157 @@ function DockColumn({
   // current dock session; not persisted to localStorage since the worktree
   // list itself can change (worktrees are created/deleted externally).
   const [worktreePaths, setWorktreePaths] = useState<Record<string, string>>({});
+
+  // ---- Selected rail row (dock master-detail rework) ----
+  // dockRowKey(control) of whichever row DockLogPane is currently showing —
+  // component-local, not persisted (see issue #1238, filed and linked from
+  // this rework's own PR, for adding that), same scope as worktreePaths
+  // above. Reconciled against the row set further down (after
+  // allRenderedControls is computed) using the SAME render-time "adjust
+  // state during render" pattern heldState above already uses, not a
+  // passive `useEffect` — a first version of this used an effect, and a
+  // real test failure caught why that's wrong: `controls` only loads
+  // asynchronously (usePolling below), so the render where a row's session
+  // is ALREADY running (e.g. reload-with-streams-already-running) would
+  // otherwise paint the log pane's empty hint for one commit before the
+  // effect's own follow-up render adopted it — a real, user-visible flicker
+  // on every reload with a live stream, not just test flakiness. Reconciling
+  // during render means the row and its correct selection land in the SAME
+  // commit. Every direct assignment beyond that happens in renderMonitor's
+  // own selectRow/toggleStream closures below.
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  // Exempts a row the user (or a stack action) just asked to START from the
+  // reconciliation's "no matching row, fall back" rule for however many
+  // renders it takes to become real. Load-bearing specifically for a stack
+  // action: `optimisticEphemeralControls` below filters on `runningFor(c)`,
+  // so a freshly-added ephemeral control is invisible to
+  // `allRenderedControls` until `refreshSessions()` (awaited after the POST
+  // that starts it) lands — without this exemption the reconciliation would
+  // see "selected key, no row" on the very next render and immediately fall
+  // back, then re-select once the row appears a moment later: a visible
+  // select→unselect→reselect flicker for every stack action.
+  //
+  // A plain ref, safely — it's only ever WRITTEN from an event handler
+  // (renderMonitor's own start paths, never from inside this render body)
+  // and only READ here during render, which is the one ref-during-render
+  // pattern React's own rules actually permit (writing one during render is
+  // what heldState's own comment above warns is unsafe under StrictMode's
+  // double-invocation; reading a ref that's never written mid-render has no
+  // such hazard). Deliberately never CLEARED once the row is observed
+  // either, for the same reason — that clear would itself be a mid-render
+  // ref write. Left set, it's harmless: every subsequent start overwrites it
+  // with that start's own key, and the reconciliation below only ever
+  // consults it as a narrow exemption for a key that's already missing from
+  // `rowKeys`, so a stale value sitting here after its row long since
+  // arrived is simply never read again for that key.
+  //
+  // Carries a timestamp, not just the key, so this exemption can't wedge
+  // the reconciliation forever if the launch it's guarding never actually
+  // settles — `startAndSelect`'s own `.catch()` clears it on an explicit
+  // rejection, but a request that just HANGS (a dead remote host with no
+  // request timeout on this path) never rejects at all, and without a
+  // self-expiry a genuinely-vanished row would stay exempt from the
+  // "fall back to a neighbour" rule indefinitely, leaving `.dock-log-pane`
+  // stuck on its empty hint until the user clicks something else by hand.
+  const pendingSelectKeyRef = useRef<{ key: string; setAt: number } | null>(null);
+
+  // Recomputed from the user's LIVE terminal settings on every render
+  // (cheap — a few arithmetic ops, no measurement) rather than trusting
+  // `.dock-log-pane`'s own static CSS floor, which is only correct at the
+  // default 14px/4px — see dockMonitorMinWidthPx's own doc comment. Dock
+  // master-detail rework — this used to size every `.dock-monitor` card;
+  // now there's one terminal per column, so it sizes `.dock-log-pane`
+  // instead (still the same derivation, same pinned 364px at defaults).
+  // Computed here (not down by `renderMonitor`, where the analogous
+  // pre-rework value lived) because the stacked-layout threshold right
+  // below needs it too.
+  const logPaneMinWidth = dockMonitorMinWidthPx(
+    settings.terminal.fontSize,
+    settings.terminal.padding,
+  );
+  // Vertical counterpart — deliberately `dockMonitorMinHeightPx` (the
+  // BODY-only number), NOT `dockMonitorFullMinHeightPx` (which adds back a
+  // 28px header this box doesn't have) — see `.dock-log-pane`'s own doc
+  // comment (empty-states.css) for why using the full number here would be
+  // the exact review-caught "wrong element, wrong number" bug its own
+  // history warns about, just re-introduced on the other side of this
+  // rework.
+  const logPaneMinHeight = dockMonitorMinHeightPx(
+    settings.terminal.fontSize,
+    settings.terminal.padding,
+  );
+
+  // Dock master-detail rework — below this width, this column's own
+  // `.dock-split` flips to `flex-direction: column` (rail above, log pane
+  // below) instead of side by side: below that width neither the rail nor
+  // `.dock-log-pane`'s own floor can hold without one clipping the other.
+  // Derived from the SAME two numbers that actually determine the
+  // side-by-side layout's real minimum width — the user's live `railWidth`
+  // (not a fixed default) plus the divider plus `logPaneMinWidth` above
+  // (recomputed from live font settings, not a fixed 364) — rather than a
+  // static literal: a fixed threshold would desync from reality the moment
+  // either one changed (a wide dragged rail staying "unstacked" past the
+  // point its own content genuinely overflows, or a shrunk font/padding
+  // making the real floor narrower than a stale threshold assumed).
+  const stackedThresholdPx = railWidth + RAIL_DIVIDER_WIDTH_PX + logPaneMinWidth;
+
+  // A ResizeObserver (not a CSS container query) drives the stacked flip —
+  // this dock's overflow-x escape hatch for a too-narrow rail/column
+  // depends on a child's min-content propagating up through several
+  // ordinary flex containers, which `container-type: inline-size` would
+  // break by establishing containment on this box. Same pattern as
+  // PaneTab.tsx's own `narrow`/`tight` ResizeObserver — see that
+  // component's comment for the "why not a resize event on window"
+  // reasoning, which applies here identically (a column can narrow from a
+  // sidebar/divider drag with no window resize at all).
+  //
+  // `lastColumnWidthRef` plus the ref-mirrored `stackedThresholdPx` below
+  // are what let `splitStacked` react to EITHER kind of change that can
+  // make this column need to flip — a real column resize (only the
+  // ResizeObserver ever sees this) or the threshold itself moving (a rail
+  // drag or a font-size settings change, neither of which resizes the
+  // column element at all). Re-deriving `splitStacked` from the last
+  // measured width whenever the threshold changes, in the effect below,
+  // covers the second case without a second ResizeObserver.
+  const columnRef = useRef<HTMLDivElement>(null);
+  const [splitStacked, setSplitStacked] = useState(false);
+  const lastColumnWidthRef = useRef<number | null>(null);
+  const stackedThresholdRef = useRef(stackedThresholdPx);
+  useEffect(() => {
+    stackedThresholdRef.current = stackedThresholdPx;
+    if (lastColumnWidthRef.current !== null) {
+      setSplitStacked(lastColumnWidthRef.current < stackedThresholdPx);
+    }
+  }, [stackedThresholdPx]);
+  useEffect(() => {
+    const el = columnRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect.width;
+      if (width === undefined) return;
+      lastColumnWidthRef.current = width;
+      setSplitStacked(width < stackedThresholdRef.current);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  // The callback-ref form (rather than plain useRef + a mount effect) runs
+  // during React's commit phase, before the browser paints — measuring
+  // here and calling setSplitStacked synchronously avoids a one-frame
+  // flash of the WRONG layout on a column that mounts already narrower (or
+  // wider) than the threshold, exactly the class of bug PaneTab.tsx's own
+  // `setTabRef` callback-ref exists to avoid (see that component's own
+  // comment). The ResizeObserver above still owns every resize after
+  // mount. Wrapped in useCallback so React doesn't treat it as a new ref
+  // on every re-render, which would detach/reattach (and re-measure) on
+  // each one.
+  const setColumnRef = useCallback((el: HTMLDivElement | null) => {
+    columnRef.current = el;
+    if (!el) return;
+    const width = el.getBoundingClientRect().width;
+    lastColumnWidthRef.current = width;
+    setSplitStacked(width < stackedThresholdRef.current);
+  }, []);
 
   const { githubStatus, prsStatus } = useDockGithubStatus(projectId, prsRefreshTrigger);
 
@@ -637,17 +911,134 @@ function DockColumn({
     [...liveEphemeralControls, ...heldMerge.controls],
     heldMerge.heldIds,
   );
-  // Dock log-streaming resize fix (symptom 2, replacing PR2a) — a live
-  // stack-action monitor renders in its own fixed-height strip BELOW
-  // `.dock-stack-monitors` (Dock's own group-rendering block) rather than as
-  // a peer column inside it, so it costs zero horizontal space instead of
-  // needing a fixed-width carve-out that N-way-split the group with the
-  // rest. `ephemeralIds` is what tells that block which of a group's
-  // `controls` belong in the strip vs. the services row. Derived from
+  // A live stack-action control still renders as its own rail row (below
+  // its stack's service rows — see the group-rendering block further
+  // down), same as any other control, now that the dock master-detail
+  // rework removed the old `.dock-stack-action-strip` a stack action used
+  // to get instead: every row costs the same 28px whether it's a service
+  // or a stack action, so there's no longer a horizontal-space reason to
+  // treat the two differently. `ephemeralIds` still tells the group-
+  // rendering block which of a group's `controls` are ephemeral, purely so
+  // it can render them in a visually distinct trailing position, not to
+  // route them through a different mechanism. Derived from
   // liveEphemeralControls rather than re-parsing the id prefix so a
   // deliberately-colliding dock.json control (docs/dock.md's own escape
   // hatch) is never mis-classified as an ephemeral.
   const ephemeralIds = new Set(liveEphemeralControls.map((c) => c.id));
+
+  // Dock master-detail rework — every group's own service/ephemeral split,
+  // computed ONCE here rather than inline inside the JSX `.map` below, so
+  // the selection reconciliation right after this and the actual render
+  // (further down) can't drift apart on what counts as "a row."
+  const stackGroupRenderData = dockerStackGroups.map((group) => ({
+    group,
+    serviceControls: group.controls.filter((c) => !ephemeralIds.has(c.id)),
+    ephemeralControlsInGroup: group.controls.filter((c) => ephemeralIds.has(c.id)),
+  }));
+
+  // Every control that will actually render as a rail row this render, in
+  // render order — the single source of truth the reconciliation below and
+  // DockLogPane's own sessionId lookup both read, so "does a row exist for
+  // this key" can never disagree between the two.
+  const allRenderedControls: DockControl[] = [
+    ...configuredControls,
+    ...ungroupedDockerControls,
+    ...stackGroupRenderData.flatMap((g) => [...g.serviceControls, ...g.ephemeralControlsInGroup]),
+  ];
+  const rowKeys = allRenderedControls.map(dockRowKey);
+  const liveRowKeys = allRenderedControls.filter((c) => runningFor(c)).map(dockRowKey);
+  // Primitive signatures, not the arrays themselves, as the change-detection
+  // trigger below — `allRenderedControls` is a fresh array every render
+  // regardless of whether the actual row set changed, so comparing it by
+  // reference (the way `heldState`'s own `controls !== heldState.
+  // lastControls` check does for a genuine STATE array) would never skip;
+  // joining to a string gives an equivalent cheap equality check for a
+  // value that's recomputed from scratch every render instead.
+  const rowKeysSignature = rowKeys.join(" ");
+  const liveRowKeysSignature = liveRowKeys.join(" ");
+
+  // Reconciles `selectedKey` against the row set above — the render-time
+  // "adjust state during render" pattern (react.dev), same idiom
+  // `heldState` above already uses and for the SAME reason: a passive
+  // `useEffect` version of this shipped first and a real test failure
+  // (DockMonitor.test.tsx's PR2b pane-identity test, under full-suite
+  // timing) caught why it's wrong here too — `controls` loads
+  // asynchronously (usePolling below), so the render where a row's session
+  // is ALREADY running (reload-with-streams-already-running) would paint
+  // `.dock-log-pane`'s empty hint for one commit before an effect-driven
+  // correction landed one tick later. Comparing against a STATE-held
+  // previous signature (never a ref) is what makes this safe under
+  // StrictMode's dev-only double-invocation, exactly as heldState's own
+  // comment explains — `pendingSelectKeyRef` below is the one exception,
+  // safe for the opposite reason: it's only ever WRITTEN from an event
+  // handler, never during render, so there's nothing for a double-render to
+  // corrupt.
+  //
+  // Two independent facts worth remembering across a render — the full row
+  // set and its live subset — not three: the earlier version of this also
+  // stored each one's own `.join(" ")` signature as a THIRD, separate
+  // field, letting a future edit update the array without its signature
+  // (or vice versa) and desync the two silently. Signatures are derived
+  // fresh from these two arrays at comparison time instead.
+  const [lastRows, setLastRows] = useState<{ rowKeys: string[]; liveRowKeys: string[] }>({
+    rowKeys: [],
+    liveRowKeys: [],
+  });
+  if (
+    rowKeysSignature !== lastRows.rowKeys.join(" ") ||
+    liveRowKeysSignature !== lastRows.liveRowKeys.join(" ")
+  ) {
+    const previousRowKeys = lastRows.rowKeys;
+    setLastRows({ rowKeys, liveRowKeys });
+    // Same "Date.now() during render is intentional here" reasoning as
+    // heldState's own comment above — this has to run synchronously in the
+    // render that first sees the row-set change, and a few ms of jitter in
+    // exactly which render observes "now" has no visible effect on a 15s
+    // timeout.
+    // eslint-disable-next-line react-hooks/purity
+    const nowForPendingCheck = Date.now();
+    setSelectedKey((prev) => {
+      if (prev !== null) {
+        if (rowKeys.includes(prev)) return prev;
+        const pending = pendingSelectKeyRef.current;
+        if (
+          pending !== null &&
+          prev === pending.key &&
+          nowForPendingCheck - pending.setAt < PENDING_SELECT_TIMEOUT_MS
+        ) {
+          return prev;
+        }
+        // Nearest surviving neighbour by the PREVIOUS render's index, not
+        // the new one — "nearest to where the removed row used to be,"
+        // matching a plain list's usual removal-selects-neighbour feel.
+        // Bounded by `previousRowKeys.length` (the list `prevIndex` is
+        // actually an index INTO), not `rowKeys.length` — a bulk removal
+        // that shrinks a long rail down to a short one must still be able
+        // to search the FULL old distance from `prevIndex` in both
+        // directions, or a surviving neighbour past the new, shorter
+        // length silently never gets checked.
+        const prevIndex = previousRowKeys.indexOf(prev);
+        if (prevIndex !== -1) {
+          for (let offset = 0; offset < previousRowKeys.length; offset++) {
+            const before = previousRowKeys[prevIndex - offset];
+            if (before !== undefined && rowKeys.includes(before)) return before;
+            const after = previousRowKeys[prevIndex + offset];
+            if (after !== undefined && rowKeys.includes(after)) return after;
+          }
+        }
+        return rowKeys[0] ?? null;
+      }
+      // Adopt-on-empty — nothing was selected (initial mount, or every row
+      // vanished a moment ago) and at least one row now has a live stream:
+      // covers reload-with-streams-already-running. Never fires merely
+      // because `settings.dock.autoAttachDockerLogs`'s own effect started a
+      // stream — that effect never touches `selectedKey` itself — but DOES
+      // react when ITS session shows up here, same as any other stream
+      // starting while nothing is selected; that's "adopt," not "steal,"
+      // since there was no existing selection to steal from.
+      return liveRowKeys[0] ?? null;
+    });
+  }
 
   // Hermes review, round 2 — a transient failure (backend blip, briefly out
   // of PTY slots) otherwise recorded `eligible: true` right alongside
@@ -873,29 +1264,6 @@ function DockColumn({
     }
   };
 
-  // Recomputed from the user's LIVE terminal settings on every render
-  // (cheap — a few arithmetic ops, no measurement) rather than trusting
-  // .dock-monitor's own static CSS floor, which is only correct at the
-  // default 14px/4px — see dockMonitorMinWidthPx's own doc comment.
-  const dockMonitorMinWidth = dockMonitorMinWidthPx(
-    settings.terminal.fontSize,
-    settings.terminal.padding,
-  );
-  // Vertical counterpart — see dockMonitorFullMinHeightPx's own doc comment
-  // for the mechanism this closes (every dock monitor was permanently below
-  // pty-manager.ts's MIN_TERMINAL_ROWS, on any dock height, with nothing
-  // enforcing a floor on this axis at all) and for why this is the FULL
-  // (header + body + border) monitor floor, applied to `.dock-monitor`
-  // itself — not dockMonitorMinHeightPx's own body-only number, which a
-  // review caught being applied to the wrong element in an earlier version
-  // of this fix (silently defeated by `.dock-monitor`'s own
-  // `overflow: hidden`). Also applied to `.dock-stack-monitors` below, for
-  // a second, independent reason: see that div's own comment.
-  const dockMonitorMinHeight = dockMonitorFullMinHeightPx(
-    settings.terminal.fontSize,
-    settings.terminal.padding,
-  );
-
   // A single monitor row's render — closes over this render's own
   // worktreePaths/toggleGenRef/allOptions/runningFor/etc., same as the
   // handlers above it. Called for configured controls, ungrouped docker
@@ -971,19 +1339,60 @@ function DockColumn({
     );
     const dockerStatus = control.docker ? dockerServiceStatus(control.docker.state) : null;
 
-    // P10 — named so the header's onKeyDown (Enter/Space) can call
-    // the exact same action as a click, rather than dispatching a
-    // synthetic `.click()` at the DOM node — matching how
-    // unified-board/TaskCard.tsx and NotificationBell.tsx's EventRow
-    // both call a plain function from both handlers.
-    const handleHeaderActivate = () => {
+    // Dock master-detail rework — the old single `handleHeaderActivate`
+    // (one click did both select AND kill/start — the exact thing U8/P10
+    // flagged as "one unconfirmed click kills a running dev server") splits
+    // into two named handlers, matching DockMonitor.tsx's own row-vs-tag
+    // split. `startAndSelect` is the shared "not running yet" behavior both
+    // land on — starting a stream always focuses it, regardless of which
+    // affordance asked for it.
+    const rowKey = dockRowKey(control);
+    const startAndSelect = () => {
+      setSelectedKey(rowKey);
+      pendingSelectKeyRef.current = { key: rowKey, setAt: Date.now() };
+      bumpToggleGen(control.id);
+      // Hermes review — this discarded the promise outright:
+      // a failed createSession (dead remote host, a bad
+      // worktree path, ...) became an unhandled rejection
+      // with nothing on screen, the exact P9 silent-failure
+      // class this PR fixes everywhere else. Reuses this
+      // file's own showCheckStatus transient-message infra
+      // (already rendered next to this same tag for
+      // "Check for update"/"Pull & restart") rather than
+      // introducing a new error-state shape.
+      launchForValue(selectedValue).catch(() => {
+        showCheckStatus(control.id, "Failed to start — try again", true);
+        // The row this was meant to focus will never arrive on its own —
+        // release the reconciliation exemption so the NEXT render's effect
+        // is free to fall back off this key instead of holding it forever.
+        // (A request that HANGS instead of rejecting never reaches this
+        // catch at all — PENDING_SELECT_TIMEOUT_MS above is what bounds
+        // that case instead.)
+        if (pendingSelectKeyRef.current?.key === rowKey) pendingSelectKeyRef.current = null;
+      });
+    };
+    // Wired to a rail row's own click/Enter/Space (DockMonitor.tsx's
+    // `onSelect`) — always changes focus; only starts the stream when it
+    // was off. Selecting an already-running row is a pure focus change,
+    // never a kill — that's the whole point of the split.
+    const selectRow = () => {
       if (running) {
-        // U8 — only the KILL half of this header needs
-        // arm-then-confirm; the header doubles as the START
-        // affordance when nothing is running (the `else`
-        // branch below), and starting a session is never
-        // destructive, so it always fires on the first click
-        // regardless of confirmBeforeKill.
+        setSelectedKey(rowKey);
+        return;
+      }
+      startAndSelect();
+    };
+    // Wired to the trailing "logs on"/"logs off" tag (DockMonitor.tsx's
+    // `onToggleStream`) — the ONLY place a running stream gets killed from,
+    // and it never touches selection on that path: stopping the currently-
+    // selected row's stream leaves it selected (the pane will show its own
+    // empty state once `running` goes away), and stopping an UNselected
+    // row's stream obviously shouldn't select it either.
+    const toggleStream = () => {
+      if (running) {
+        // U8 — arm-then-confirm before actually killing; starting is never
+        // destructive, so it always fires on the first click regardless of
+        // confirmBeforeKill (see the `!running` branch below).
         if (!confirmBeforeKill || killArmedIds.has(control.id)) {
           disarmKill(control.id);
           bumpToggleGen(control.id);
@@ -991,21 +1400,9 @@ function DockColumn({
         } else {
           armKill(control.id);
         }
-      } else {
-        bumpToggleGen(control.id);
-        // Hermes review — this discarded the promise outright:
-        // a failed createSession (dead remote host, a bad
-        // worktree path, ...) became an unhandled rejection
-        // with nothing on screen, the exact P9 silent-failure
-        // class this PR fixes everywhere else. Reuses this
-        // file's own showCheckStatus transient-message infra
-        // (already rendered next to this same tag for
-        // "Check for update"/"Pull & restart") rather than
-        // introducing a new error-state shape.
-        launchForValue(selectedValue).catch(() => {
-          showCheckStatus(control.id, "Failed to start — try again", true);
-        });
+        return;
       }
+      startAndSelect();
     };
 
     // The worktree/branch select's own onChange — stays here rather
@@ -1086,6 +1483,7 @@ function DockColumn({
         key={control.id}
         control={control}
         running={running}
+        selected={selectedKey === rowKey}
         showSelector={controlShowSelector}
         selectedValue={selectedValue}
         worktreeOptions={allOptions}
@@ -1095,12 +1493,11 @@ function DockColumn({
         updateAvailable={updateAvailable}
         dockerStatus={dockerStatus}
         held={heldMerge.heldIds.has(control.id)}
-        minWidthPx={dockMonitorMinWidth}
-        minHeightPx={dockMonitorMinHeight}
         checkStatus={checkStatusById[control.id]}
         armed={killArmedIds.has(control.id)}
         confirmBeforeKill={confirmBeforeKill}
-        onHeaderActivate={handleHeaderActivate}
+        onSelect={selectRow}
+        onToggleStream={toggleStream}
         onCheckUpdate={() => void handleCheckUpdate(control)}
         onServiceRestart={() =>
           void handleServiceAction(control, api.restartDockerService, "Restart failed")
@@ -1115,8 +1512,22 @@ function DockColumn({
     );
   };
 
+  // Dock master-detail rework — resolves DockLogPane's own `sessionId` prop:
+  // the selected control's running session, or null when nothing is
+  // selected or the selected row's stream is off. Looked up against
+  // `allRenderedControls` (the same list the reconciliation effect above
+  // validates `selectedKey` against), not re-derived some other way, so
+  // "the row DockLogPane shows" and "the row the reconciliation effect
+  // thinks is selected" can never disagree about which control they mean.
+  const selectedControl = allRenderedControls.find((c) => dockRowKey(c) === selectedKey) ?? null;
+  const selectedSession = selectedControl ? runningFor(selectedControl) : undefined;
+
   return (
-    <div className="dock-column" style={{ flex: width != null ? `0 0 ${width}px` : "1 1 0" }}>
+    <div
+      ref={setColumnRef}
+      className="dock-column"
+      style={{ flex: width != null ? `0 0 ${width}px` : "1 1 0" }}
+    >
       <div className="dock-column-header">
         <span className="dock-column-name">{project?.name ?? `#${projectId}`}</span>
         {onRemove && (
@@ -1132,160 +1543,144 @@ function DockColumn({
           onOpen={() => onOpenGitHub(projectId)}
         />
       )}
-      <div className="dock-body cmux-scroll">
-        {configuredControls.length === 0 &&
-          dockerStackGroups.length === 0 &&
-          ungroupedDockerControls.length === 0 && (
-            <div className="dock-empty">
-              {project?.devServerUrl ? (
-                <button
-                  className="dock-monitor-url"
-                  onClick={() => onOpenBrowser(projectId)}
-                  title={`Open preview for ${project.devServerUrl}`}
-                  type="button"
-                >
-                  <GlobeIcon size={11} />
-                  <span className="dock-monitor-url-text">{project.devServerUrl}</span>
-                </button>
-              ) : (
-                "No monitors configured for this project"
-              )}
-            </div>
-          )}
-        {configuredControls.map(renderMonitor)}
-        {ungroupedDockerControls.map(renderMonitor)}
-        {dockerStackGroups.map((group) => {
-          const statusKey = `stack:${group.composeProject}`;
-          // anyRep is only null for a group of live ephemerals whose
-          // originating service has since dropped out of discovery
-          // (dockHelpers.ts's own doc comment) — the `rep &&`/`group.xRep &&`
-          // short-circuit guards below are exactly as safe as the
-          // `hasActions` check DockStackHeader itself gates its kebab on:
-          // every handler they're attached to is unreachable unless anyRep
-          // (and, per the same derivation, pullRep/rebuildRep when
-          // relevant) is set.
-          const rep = group.anyRep;
-          // Dock log-streaming resize fix — a live stack-action control no
-          // longer renders inside `.dock-stack-monitors` at all (it gets its
-          // own fixed-height strip below, see `ephemeralControlsInGroup`
-          // further down), so it's excluded here at the source rather than
-          // needing PR2a's old "compute flexGrow as if it weren't there but
-          // render it there anyway, fixed-width" workaround — the class of
-          // bug that workaround only partially closed (its own
-          // .dock-monitor-transient's 260px never actually applied; see this
-          // PR's own investigation). Held controls (PR2b) DO still count:
-          // the whole point of holding one is that the group's flexGrow
-          // doesn't change while its container is between the old and new
-          // instance. Floored at 1 (Hermes review, round 2, PR #1176) — a
-          // group with no discovered service left (every control held or
-          // ephemeral) would otherwise compute 0, collapsing the group to
-          // min-content instead of holding its normal share.
-          const serviceControls = group.controls.filter((c) => !ephemeralIds.has(c.id));
-          const ephemeralControlsInGroup = group.controls.filter((c) => ephemeralIds.has(c.id));
-          const growingControlCount = Math.max(1, serviceControls.length);
-          return (
-            <div
-              key={group.composeProject}
-              className="dock-stack-group"
-              style={{ flexGrow: growingControlCount }}
-            >
-              <DockStackHeader
-                composeProject={group.composeProject}
-                hasActions={rep !== null}
-                canPull={group.pullRep !== null}
-                canRebuild={group.rebuildRep !== null}
-                status={checkStatusById[statusKey]}
-                actionRunning={ephemeralControlsInGroup.length > 0}
-                onStackRestart={() =>
-                  rep &&
-                  void handleStackAction(
-                    rep,
-                    api.restartDockerStack,
-                    "Failed to start restart",
-                    statusKey,
+      <div className={`dock-split${splitStacked ? " dock-split--stacked" : ""}`}>
+        <div
+          className="dock-rail cmux-scroll"
+          // No `role="listbox"` here — DockMonitor.tsx's own comment on its
+          // root `role="button"` explains why: a Docker-grouped row sits
+          // several levels below this box (`.dock-stack-group` /
+          // `.dock-stack-monitors` in between), which would make `option`
+          // an invalid, non-direct listbox child. Plain rows with their own
+          // aria-label carry the same information without claiming a tree
+          // shape this markup doesn't have.
+          //
+          // Only in the normal side-by-side layout — stacked mode (rail
+          // above the pane) wants the rail at full column width instead,
+          // so this inline override is omitted there and `.dock-rail`'s
+          // own CSS `flex: 0 0 auto` takes over (content-sized height on
+          // what's now the vertical main axis — see that rule's own
+          // comment, dock.css).
+          style={splitStacked ? undefined : { flex: `0 0 ${railWidth}px` }}
+        >
+          {configuredControls.length === 0 &&
+            dockerStackGroups.length === 0 &&
+            ungroupedDockerControls.length === 0 && (
+              <div className="dock-empty">
+                {project?.devServerUrl ? (
+                  <button
+                    className="dock-monitor-url"
+                    onClick={() => onOpenBrowser(projectId)}
+                    title={`Open preview for ${project.devServerUrl}`}
+                    type="button"
+                  >
+                    <GlobeIcon size={11} />
+                    <span className="dock-monitor-url-text">{project.devServerUrl}</span>
+                  </button>
+                ) : (
+                  "No monitors configured for this project"
+                )}
+              </div>
+            )}
+          {configuredControls.map(renderMonitor)}
+          {ungroupedDockerControls.map(renderMonitor)}
+          {stackGroupRenderData.map(({ group, serviceControls, ephemeralControlsInGroup }) => {
+            const statusKey = `stack:${group.composeProject}`;
+            // anyRep is only null for a group of live ephemerals whose
+            // originating service has since dropped out of discovery
+            // (dockHelpers.ts's own doc comment) — the `rep &&`/`group.xRep &&`
+            // short-circuit guards below are exactly as safe as the
+            // `hasActions` check DockStackHeader itself gates its kebab on:
+            // every handler they're attached to is unreachable unless anyRep
+            // (and, per the same derivation, pullRep/rebuildRep when
+            // relevant) is set.
+            const rep = group.anyRep;
+            return (
+              <div key={group.composeProject} className="dock-stack-group">
+                <DockStackHeader
+                  composeProject={group.composeProject}
+                  hasActions={rep !== null}
+                  canPull={group.pullRep !== null}
+                  canRebuild={group.rebuildRep !== null}
+                  status={checkStatusById[statusKey]}
+                  actionRunning={ephemeralControlsInGroup.length > 0}
+                  onStackRestart={() =>
+                    rep &&
+                    void handleStackAction(
+                      rep,
+                      api.restartDockerStack,
+                      "Failed to start restart",
+                      statusKey,
+                    )
+                  }
+                  onStackApply={() =>
+                    rep &&
+                    void handleStackAction(
+                      rep,
+                      api.applyDockerStack,
+                      "Failed to apply config",
+                      statusKey,
+                    )
+                  }
+                  onPullAndRestart={() =>
+                    group.pullRep && void handlePullAndRestart(group.pullRep, statusKey)
+                  }
+                  onRebuildAndRestart={() =>
+                    group.rebuildRep && void handleRebuildAndRestart(group.rebuildRep, statusKey)
+                  }
+                  onStackStop={() =>
+                    rep &&
+                    void handleStackAction(
+                      rep,
+                      api.stopDockerStack,
+                      "Failed to start stop",
+                      statusKey,
+                    )
+                  }
+                />
+                {
+                  // Skipped entirely, not just rendered empty, when a group
+                  // has no service controls left (every one held past its
+                  // own grace window or dropped from discovery, only the
+                  // ephemeral row remaining below) — an empty content-sized
+                  // column costs nothing layout-wise post-rework, but a
+                  // pointless wrapper div is still pointless.
+                  serviceControls.length > 0 && (
+                    <div className="dock-stack-monitors">{serviceControls.map(renderMonitor)}</div>
                   )
                 }
-                onStackApply={() =>
-                  rep &&
-                  void handleStackAction(
-                    rep,
-                    api.applyDockerStack,
-                    "Failed to apply config",
-                    statusKey,
-                  )
-                }
-                onPullAndRestart={() =>
-                  group.pullRep && void handlePullAndRestart(group.pullRep, statusKey)
-                }
-                onRebuildAndRestart={() =>
-                  group.rebuildRep && void handleRebuildAndRestart(group.rebuildRep, statusKey)
-                }
-                onStackStop={() =>
-                  rep &&
-                  void handleStackAction(
-                    rep,
-                    api.stopDockerStack,
-                    "Failed to start stop",
-                    statusKey,
-                  )
-                }
-              />
-              {/* Dock log-streaming resize fix — review-caught interaction
-                  bug between this fix's own two halves: `.dock-stack-group`
-                  is an auto-height flex column with `.dock-monitor` now
-                  demanding a real min-height (dockMonitorFullMinHeightPx).
-                  With no floor of its own, this row's `flex: 1;
-                  min-height: 0` (empty-states.css) meant a live
-                  `.dock-stack-action-strip` below (flex: 0 0 auto, sized to
-                  its OWN now-real min-content) could claim the group's
-                  entire auto-grown height, flex-shrinking this row to a
-                  genuine 0px — the running service silently vanishing, not
-                  just scrolled out of view. The same `dockMonitorMinHeight`
-                  passed to every monitor below guarantees this row never
-                  shrinks below room for at least one, so the group's own
-                  auto-height (uncapped — no `overflow: hidden` on
-                  `.dock-stack-group` itself) grows enough to cover BOTH the
-                  strip and the services, with `.dock-body`'s
-                  `overflow-y: auto` (dock.css) revealing whatever still
-                  doesn't fit instead of squeezing either row to nothing.
-
-                  Hermes review — that reservation is pointless (and a dead
-                  block eating the group's height, being `flex: 1`) when
-                  `serviceControls` is genuinely empty — every service held
-                  mid-recreate past its own grace window, or dropped from
-                  discovery entirely, with only the ephemeral strip left.
-                  Skipping the row outright in that case reserves nothing:
-                  there is no service monitor whose squeeze-to-0px this
-                  floor needs to prevent if there's no service control to
-                  render in the first place. */}
-              {serviceControls.length > 0 && (
-                <div className="dock-stack-monitors" style={{ minHeight: dockMonitorMinHeight }}>
-                  {serviceControls.map(renderMonitor)}
-                </div>
-              )}
-              {/* Dock log-streaming resize fix — a live stack-action stream
-                  renders here, as its own fixed-height row below the
-                  services, instead of as a peer column inside
-                  .dock-stack-monitors above: .dock-stack-group is already
-                  flex-direction:column, so this costs zero horizontal
-                  space — no width step on the services when it appears or
-                  disappears, no push-off-screen. `.dock-stack-action-strip`
-                  is a plain (non-flex) block specifically so DockMonitor's
-                  own `flex:1 1 0%` is inert here and it instead sizes to its
-                  natural block height (28px header + its body's
-                  minHeightPx floor) — see that class's own comment
-                  (empty-states.css). In practice there is at most one, per
-                  findActiveStackSession's single-concurrent-stack-action
-                  guard (src/routes/projects.ts), but this maps over
-                  whatever's actually live rather than assuming that. */}
-              {ephemeralControlsInGroup.map((control) => (
-                <div key={control.id} className="dock-stack-action-strip">
-                  {renderMonitor(control)}
-                </div>
-              ))}
-            </div>
-          );
-        })}
+                {/* A live stack-action control renders as an ordinary rail
+                    row too, right after its stack's own services — kept as
+                    a SEPARATE map (not merged into serviceControls above)
+                    purely so this stays visually last within the group and
+                    DockStackHeader's own `actionRunning` above can still
+                    key off `ephemeralControlsInGroup.length`, not so it
+                    needs a different rendering MECHANISM the way the old
+                    `.dock-stack-action-strip` did — every row costs the
+                    same 28px now, service or not. */}
+                {ephemeralControlsInGroup.map(renderMonitor)}
+              </div>
+            );
+          })}
+        </div>
+        {
+          // A col-resize divider makes no sense once `.dock-split` has
+          // flipped to a COLUMN (stacked mode, above) — there's no
+          // horizontal split left to drag. The rail simply takes the
+          // column's full width there instead (see `.dock-rail`'s own
+          // inline style above).
+        }
+        {!splitStacked && (
+          <div
+            className="dock-rail-divider"
+            onMouseDown={(e) => onRailDividerMouseDown(e, columnRef.current)}
+          />
+        )}
+        <DockLogPane
+          key={selectedSession?.id ?? "empty"}
+          sessionId={selectedSession?.id ?? null}
+          minWidthPx={logPaneMinWidth}
+          minHeightPx={logPaneMinHeight}
+        />
       </div>
     </div>
   );

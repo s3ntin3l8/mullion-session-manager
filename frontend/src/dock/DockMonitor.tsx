@@ -1,7 +1,6 @@
 import { Fragment } from "react";
 import type { DockControl, Session } from "../api/index.js";
 import { ContainerIcon, GlobeIcon, RefreshIcon, KillIcon, PlayTriangleIcon } from "../ui/icons.js";
-import { TerminalPane } from "../TerminalPane.js";
 import { CustomSelect } from "../ui/CustomSelect.js";
 import type { CustomSelectOption } from "../ui/CustomSelect.js";
 import { KebabMenu } from "../ui/KebabMenu.js";
@@ -9,19 +8,32 @@ import type { DockerStatusPresentation } from "../dockerServiceStatus.js";
 import { isStartable } from "../dockerServiceStatus.js";
 import { imagePillLabel } from "./dockHelpers.js";
 
-// A single dock monitor row (header + its live terminal body) — extracted
-// from DockColumn's own render loop (Wave 5 / PR 28 of
-// .claude/plans/can-we-do-a-warm-cocke.md). Deliberately presentational:
-// every value that depends on DockColumn's own state (armed-kill,
-// check-status messages, the worktree/branch selector's resolved value,
-// docker update availability) is computed by the caller's map loop and
-// passed in as a prop, and every action (start/kill, worktree switch,
-// docker check-update/pull-restart) is a callback already bound to this
-// control — see DockColumn's own comment on why the worktree-switch and
-// header-activate handlers stay up there rather than moving down here.
+// A single dock RAIL ROW — extracted from DockColumn's own render loop
+// (Wave 5 / PR 28 of .claude/plans/can-we-do-a-warm-cocke.md), then reduced
+// to header-only content by the dock master-detail rework
+// (.claude/plans/another-dock-item-to-imperative-treasure.md): the terminal
+// that used to render inside this component whenever `running` was truthy
+// now lives once per column, in DockLogPane.tsx, showing whichever row is
+// selected. Deliberately presentational: every value that depends on
+// DockColumn's own state (armed-kill, check-status messages, the
+// worktree/branch selector's resolved value, docker update availability,
+// selection) is computed by the caller's map loop and passed in as a prop,
+// and every action (select, toggle-stream, worktree switch, docker
+// check-update/pull-restart) is a callback already bound to this control.
+//
+// Click semantics split in two, where a single header click used to do
+// both and — per this repo's own U8/P10 findings — could kill a running
+// dev server with one unconfirmed click:
+//   - clicking the row body SELECTS it (and, per DockColumn's own onSelect
+//     handler, starts its stream if it's off — "wanting to read a log is
+//     why you clicked" is the stated assumption, not an accident);
+//   - clicking the trailing "logs on"/"logs off" tag TOGGLES the stream,
+//     independent of selection, and is where the arm-then-confirm kill
+//     flow (`armed`/`confirmBeforeKill`, useArmedKill in DockColumn) lives.
 export function DockMonitor({
   control,
   running,
+  selected,
   showSelector,
   selectedValue,
   worktreeOptions,
@@ -31,12 +43,11 @@ export function DockMonitor({
   updateAvailable,
   dockerStatus,
   held = false,
-  minWidthPx,
-  minHeightPx,
   checkStatus,
   armed,
   confirmBeforeKill,
-  onHeaderActivate,
+  onSelect,
+  onToggleStream,
   onCheckUpdate,
   onServiceRestart,
   onServiceStop,
@@ -44,6 +55,12 @@ export function DockMonitor({
 }: {
   control: DockControl;
   running: Session | undefined;
+  // Whether this row's identity (dockRowKey, dockHelpers.ts) is
+  // DockColumn's current selection — drives both the visual highlight and
+  // `aria-selected`. Never derived locally: DockColumn owns selection so it
+  // can reconcile it against the live control/session list on every render
+  // (see its own selection-state comment).
+  selected: boolean;
   showSelector: boolean;
   selectedValue: string;
   worktreeOptions: CustomSelectOption[];
@@ -54,40 +71,21 @@ export function DockMonitor({
   dockerStatus: DockerStatusPresentation | null;
   // PR2b — this control briefly vanished from discovery (a compose recreate
   // deletes the old container before the new one appears) and is being held
-  // across that gap rather than unmounted, so sibling monitors don't resize
-  // — see holdVanishedDockerControls' own doc comment (dockHelpers.ts).
+  // across that gap rather than unmounted, so sibling rows don't resize —
+  // see holdVanishedDockerControls' own doc comment (dockHelpers.ts).
   // `dockerStatus` is stale while held (frozen at whatever it was before the
   // container vanished), so the container-state label below overrides it
   // with an honest "recreating…" instead. Hermes review on PR #1176 —
   // `control.docker` is that same frozen snapshot, so every per-service
-  // action (kebab items, header start/kill) would resolve against a
+  // action (kebab items, select, stream toggle) would resolve against a
   // container the backend's discovery no longer knows about and 404; the
-  // header and kebab both go inert while held, not just cosmetically dim.
+  // row, tag, and kebab all go inert while held, not just cosmetically dim.
   held?: boolean;
-  // PR3, Hermes review round 2 — overrides .dock-monitor's static CSS
-  // min-width (empty-states.css, correct only at the default 14px font /
-  // 4px padding) with the SAME derivation recomputed from the user's live
-  // terminal settings (dockMonitorMinWidthPx, dockHelpers.ts) — an inline
-  // style wins over the CSS class by specificity. Optional so a caller that
-  // doesn't have `settings` handy (there are none today, but nothing here
-  // requires one) still gets the static fallback rather than an error.
-  minWidthPx?: number;
-  // Dock log-streaming resize fix — the vertical counterpart to minWidthPx
-  // above (dockMonitorFullMinHeightPx, dockHelpers.ts), applied to THIS
-  // element for the same reason minWidthPx is: a review caught an earlier
-  // version of this fix applying the equivalent number to
-  // `.dock-monitor-body` instead, which `.dock-monitor`'s own
-  // `overflow: hidden` silently defeated (that CSS zeroes a flex item's
-  // AUTOMATIC minimum size, so `.dock-monitor` never grew to accommodate
-  // its child's new floor — the overflow just clipped one level deeper).
-  // An EXPLICIT min-height on `.dock-monitor` itself isn't zeroed the same
-  // way — see dockMonitorFullMinHeightPx's own doc comment for the full
-  // mechanism this fixes.
-  minHeightPx?: number;
   checkStatus: { message: string; isError: boolean } | undefined;
   armed: boolean;
   confirmBeforeKill: boolean;
-  onHeaderActivate: () => void;
+  onSelect: () => void;
+  onToggleStream: () => void;
   onCheckUpdate: () => void;
   onServiceRestart: () => void;
   onServiceStop: () => void;
@@ -96,63 +94,66 @@ export function DockMonitor({
   return (
     <Fragment>
       <div
-        className="dock-monitor"
-        style={{
-          ...(minWidthPx !== undefined ? { minWidth: minWidthPx } : undefined),
-          ...(minHeightPx !== undefined ? { minHeight: minHeightPx } : undefined),
+        className={`dock-monitor${selected ? " dock-monitor--selected" : ""}`}
+        // P10 — U8's own finding flagged the OLD single-click-does-
+        // everything header as "one unconfirmed click kills a running dev
+        // server"; splitting select from stream-toggle (see this file's
+        // own header comment) is what retires that finding, not this
+        // role/keyboard handling, which is unchanged in SHAPE from before:
+        // same role/tabIndex/Enter-Space pattern as Sidebar.tsx's
+        // SessionRow/ProjectHeader, including the
+        // `e.target !== e.currentTarget` guard — this row nests a
+        // CustomSelect (worktree picker), a "open preview" button, a
+        // KebabMenu, and the stream-toggle tag, and without the guard
+        // tabbing to any of those and pressing Enter/Space would ALSO
+        // select this row (harmless on its own, but still not what the
+        // guard is for elsewhere in this file).
+        //
+        // Stayed `role="button"` rather than `role="option"` — this row
+        // sits inside `.dock-stack-group`/`.dock-stack-monitors` for a
+        // Docker-grouped control, several levels below `.dock-rail`, and a
+        // valid ARIA listbox needs `option` as a DIRECT child of `listbox`
+        // (or of a `role="group"` wrapper this markup doesn't have); an
+        // `option` this deeply nested would be an invalid tree, and worse
+        // for assistive tech than the working `role="button"` pattern this
+        // whole guard already matches (Sidebar.tsx's SessionRow/
+        // ProjectHeader). `role="option"`/a real `listbox` ancestor with
+        // roving-tabindex/arrow-key navigation is filed as a fast-follow
+        // rather than shipped half-correct here. Selection is instead
+        // conveyed as plain text in `aria-label` below.
+        role="button"
+        tabIndex={0}
+        // `aria-disabled` (not the native `disabled` attribute, which would
+        // also drop this out of tab order) carries the inert STATE to
+        // assistive tech — same convention as PaneActionsMenu.tsx's own
+        // disabled menu items — on top of the aria-label wording below,
+        // which only explains WHY.
+        aria-disabled={held}
+        aria-label={
+          held
+            ? `${control.title} — recreating, actions unavailable`
+            : `${control.title}${selected ? " — selected" : ""}`
+        }
+        onKeyDown={(e) => {
+          if (held) return;
+          if (e.target !== e.currentTarget) return;
+          if (e.key !== "Enter" && e.key !== " ") return;
+          e.preventDefault();
+          onSelect();
         }}
+        // `held` freezes control.docker to a pre-vanish snapshot the
+        // backend can no longer resolve against live discovery — a click
+        // here would 404 into a failure toast for the ~1 poll interval
+        // this control is held, so the row (and the kebab/tag below) go
+        // inert rather than offer an action guaranteed to fail.
+        onClick={held ? undefined : onSelect}
       >
         <div
           className="dock-monitor-header"
           style={{ cursor: held ? "default" : "pointer" }}
           title={
-            held
-              ? "Container is recreating — actions unavailable until it settles"
-              : running
-                ? armed
-                  ? "Click again to confirm — ends the running program"
-                  : confirmBeforeKill
-                    ? "Click to end this monitor"
-                    : undefined
-                : undefined
+            held ? "Container is recreating — actions unavailable until it settles" : undefined
           }
-          // P10 — U8's own finding flags this same header as "one
-          // unconfirmed click kills a running dev server," and on
-          // top of that it was entirely unreachable from the
-          // keyboard. Same role="button"/tabIndex/Enter-Space
-          // pattern as Sidebar.tsx's SessionRow/ProjectHeader,
-          // including the `e.target !== e.currentTarget` guard —
-          // this header nests a CustomSelect (worktree picker), a
-          // "open preview" button, and (for a Docker-backed
-          // control) a KebabMenu, and without the guard tabbing to
-          // any of those and pressing Enter/Space would ALSO
-          // toggle/kill this monitor.
-          role="button"
-          tabIndex={0}
-          // `aria-disabled` (not the native `disabled` attribute, which would
-          // also drop this out of tab order) carries the inert STATE to
-          // assistive tech — same convention as PaneActionsMenu.tsx's own
-          // disabled menu items — on top of the aria-label wording below,
-          // which only explains WHY.
-          aria-disabled={held}
-          aria-label={
-            held
-              ? `${control.title} — recreating, actions unavailable`
-              : `${control.title} — ${running ? "click to end" : "click to start"}`
-          }
-          onKeyDown={(e) => {
-            if (held) return;
-            if (e.target !== e.currentTarget) return;
-            if (e.key !== "Enter" && e.key !== " ") return;
-            e.preventDefault();
-            onHeaderActivate();
-          }}
-          // `held` freezes control.docker to a pre-vanish snapshot the
-          // backend can no longer resolve against live discovery — a click
-          // here would 404 into a failure toast for the ~1 poll interval
-          // this control is held, so the header (and the kebab below) go
-          // inert rather than offer an action guaranteed to fail.
-          onClick={held ? undefined : onHeaderActivate}
         >
           <span
             style={{
@@ -311,8 +312,16 @@ export function DockMonitor({
               {checkStatus.message}
             </span>
           )}
-          <span className={`dock-monitor-tag${armed ? " armed" : ""}`}>
-            {armed
+          {(() => {
+            // Text is the same regardless of `held` — a held control's log
+            // SESSION is untouched (that's the entire point of the hold;
+            // see `held`'s own doc comment above), so `running` reads
+            // exactly as it did before the container vanished, and the tag
+            // must keep saying so. Only the INTERACTIVITY drops while
+            // held, same as the kebab above: a click here would 404
+            // against a container the backend's discovery no longer knows
+            // about.
+            const label = armed
               ? "confirm?"
               : control.docker
                 ? running
@@ -320,20 +329,44 @@ export function DockMonitor({
                   : "logs off"
                 : running
                   ? "on"
-                  : "off"}
-          </span>
+                  : "off";
+            if (held) {
+              return <span className="dock-monitor-tag">{label}</span>;
+            }
+            return (
+              <span
+                className={`dock-monitor-tag dock-monitor-stream-toggle${armed ? " armed" : ""}`}
+                role="button"
+                tabIndex={0}
+                // Mirrors the old header's own title logic (armed → confirm
+                // wording; running + confirmBeforeKill → explain the arm
+                // step; otherwise no tooltip — starting a stream needs no
+                // explanation, and an immediate stop with confirmBeforeKill
+                // off doesn't either) verbatim, just re-scoped to this tag.
+                title={
+                  armed
+                    ? "Click again to confirm — ends the running program"
+                    : running && confirmBeforeKill
+                      ? "Click to stop this stream"
+                      : undefined
+                }
+                aria-label={`${control.title} — ${running ? "click to stop" : "click to start"} log streaming`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleStream();
+                }}
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter" && e.key !== " ") return;
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onToggleStream();
+                }}
+              >
+                {label}
+              </span>
+            );
+          })()}
         </div>
-        {running && (
-          <div className="dock-monitor-body">
-            <TerminalPane
-              params={{ sessionId: running.id }}
-              captureCtrlC={true}
-              // PR3 — no attach-image or mic button over a log stream;
-              // see TerminalPane's own doc comment on this prop.
-              inputAffordances={false}
-            />
-          </div>
-        )}
       </div>
     </Fragment>
   );

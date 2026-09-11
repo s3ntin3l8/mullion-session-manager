@@ -34,16 +34,18 @@ export function DockStackHeader({
   canPull: boolean;
   canRebuild: boolean;
   status: { message: string; isError: boolean } | undefined;
-  // Hermes review (dock log-streaming resize fix) — whether this group has
-  // a live stack-action strip below it right now (Dock.tsx's
+  // Hermes review (dock log-streaming resize fix; wording updated for the
+  // dock master-detail rework, which replaced the live stack-action's old
+  // `.dock-stack-action-strip` with an ordinary rail row) — whether this
+  // group has a live stack-action row right now (Dock.tsx's
   // ephemeralControlsInGroup.length > 0), independent of `status` above.
   // `status` is a TRANSIENT ~4s message (useTransientStatus) that only ever
   // fires from THIS render's own click handlers, so it says nothing after a
   // workspace switch remounts the column and reconstructs a still-running
   // action from its session (the dock log-streaming resize fix's own
-  // symptom-3 repair) — and `.dock-body`'s new overflow-y:auto means the
-  // strip itself can start scrolled out of view on a short dock, right when
-  // a user returns specifically to check whether it's still running. This
+  // symptom-3 repair) — and `.dock-rail`'s own overflow-y:auto means the
+  // row itself can start scrolled out of view on a short dock, right when a
+  // user returns specifically to check whether it's still running. This
   // indicator lives in the always-visible header instead, so "is it still
   // running" never depends on scroll position or on having been the one who
   // clicked the button.
@@ -66,7 +68,7 @@ export function DockStackHeader({
       {actionRunning && (
         <span
           className="dock-monitor-tag dock-stack-action-running"
-          title="A stack action is running — see the log strip below"
+          title="A stack action is running — see the log row below"
         >
           running…
         </span>

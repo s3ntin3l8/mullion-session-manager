@@ -37,6 +37,13 @@ export const STORAGE_KEYS = {
   dockCollapsed: "crs.dockCollapsed",
   dockHeight: "crs.dockHeight",
   dockManualProjects: "crs.dockManualProjects",
+  // Dock master-detail rework — width of the per-column rail (left side of
+  // `.dock-split`, dock.css), dragged via `.dock-rail-divider`. One global
+  // width for every column, not per-column: the column SET itself is
+  // derived and drifts (see `widths` in Dock.tsx, deliberately NOT
+  // persisted for that reason), but the rail width is a stable per-user
+  // preference independent of which projects happen to be tiled.
+  dockRailWidth: "crs.dockRailWidth",
   projectCollapsed: "crs.projectCollapsed",
   expandedSessionRows: "crs.expandedSessionRows",
   expandedSubagentRows: "crs.expandedSubagentRows",

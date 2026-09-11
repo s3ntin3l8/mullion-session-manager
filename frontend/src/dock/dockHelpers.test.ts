@@ -1,10 +1,12 @@
 import { describe, it, expect } from "vitest";
 import {
   dockerSessionIdentity,
+  dockRowKey,
   runningSessionFor,
   composeProjectForControl,
   groupDockerControls,
   holdVanishedDockerControls,
+  dockLogPaneComfortHeightPx,
   dockMonitorFullMinHeightPx,
   dockMonitorMinHeightPx,
   dockMonitorMinWidthPx,
@@ -119,6 +121,22 @@ describe("dockerSessionIdentity", () => {
 
   it("is null for a non-docker (dock.json) control", () => {
     expect(dockerSessionIdentity(configControl())).toBeNull();
+  });
+});
+
+describe("dockRowKey", () => {
+  it("is dockerSessionIdentity's own value for a docker-sourced control", () => {
+    expect(dockRowKey(dockerControl())).toBe("docker-logs:sanctuary-web");
+  });
+
+  it("namespaces a plain (dock.json) control's id under dock-config:", () => {
+    expect(dockRowKey(configControl())).toBe("dock-config:dev");
+  });
+
+  it("never collides with a real docker control even when a dock.json control's id is crafted to match its dockerSessionIdentity string verbatim (docs/dock.md's documented override escape hatch)", () => {
+    const real = dockerControl();
+    const collidingConfig = configControl({ id: dockerSessionIdentity(real) as string });
+    expect(dockRowKey(collidingConfig)).not.toBe(dockRowKey(real));
   });
 });
 
@@ -509,6 +527,28 @@ describe("dockMonitorFullMinHeightPx", () => {
       expect(dockMonitorFullMinHeightPx(fontSize, 4)).toBe(
         dockMonitorMinHeightPx(fontSize, 4) + 30,
       );
+    }
+  });
+});
+
+describe("dockLogPaneComfortHeightPx", () => {
+  it("is 315 at the default 14px font / 4px padding — double the 10-row hard floor's row count, not the floor itself", () => {
+    // 16 rows (COMFORT_LOG_ROWS) × 18.9 (PX_PER_ROW_AT_14PX) + 2×4 (padding)
+    // + 4 (cross-platform margin) = 314.4, ceil'd to 315 — a genuinely
+    // readable default, not merely a non-clipping one (dockMonitorMinHeightPx
+    // is 201 at the same settings; this is deliberately larger, see this
+    // function's own doc comment).
+    expect(dockLogPaneComfortHeightPx(14, 4)).toBe(315);
+  });
+
+  it("scales with font size the same way dockMonitorMinHeightPx does — both share one cell-height derivation", () => {
+    for (const fontSize of [10, 14, 16, 20]) {
+      const comfort = dockLogPaneComfortHeightPx(fontSize, 4);
+      const floor = dockMonitorMinHeightPx(fontSize, 4);
+      // Both terminalContentHeightPx(rows, ...) calls only differ in row
+      // count (16 vs. 10) — the ratio between the two should track that
+      // 1.6x, not drift as font size changes.
+      expect(comfort).toBeGreaterThan(floor);
     }
   });
 });

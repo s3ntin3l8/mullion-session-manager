@@ -161,6 +161,39 @@ export function dockerSessionIdentity(control: DockControl): string | null {
 }
 
 /**
+ * Dock master-detail rework — the key `DockColumn` uses for its selected-rail-
+ * row state (and the `pendingSelectKey` ref that guards it, Dock.tsx). Reuses
+ * `dockerSessionIdentity` for a docker-sourced control, for the same reason
+ * that identity exists at all: `containerName` survives a container
+ * recreation, so a control held across a brief PR2b recreate gap
+ * (`holdVanishedDockerControls`) keeps its own key stable and a `held` row
+ * never loses its selection or its terminal. Falls back to a NAMESPACED
+ * `control.id` for a plain (non-docker) control, which has no more stable
+ * an identity to offer — the same fallback `composeProjectForControl` and
+ * friends use, just prefixed here.
+ *
+ * The `dock-config:` prefix on the fallback is load-bearing, not
+ * decorative: docs/dock.md documents deliberately letting a `.crs/dock.json`
+ * control's own `id` collide with a discovered `docker:<project>:<service>`
+ * id as a supported override escape hatch. Without a distinct namespace, a
+ * dock.json control whose `id` happens to equal (or be crafted to equal)
+ * some real container's OWN `docker-logs:<containerName>` string would
+ * produce the exact same key `dockerSessionIdentity` derives for that
+ * container — two unrelated rows silently sharing one selection identity,
+ * each one highlighting (and showing the other's log for) whichever row
+ * this function resolves to first. `docker-logs:` and `dock-config:` can
+ * never collide with each other, so this rules that out structurally
+ * instead of relying on no one ever choosing a colliding id.
+ *
+ * Deliberately NOT the session id: a session is created fresh per stream
+ * start/stop and gets a new id on every recreate, which would make held
+ * rows and reused controls look like a different row on every reconnect.
+ */
+export function dockRowKey(control: DockControl): string {
+  return dockerSessionIdentity(control) ?? `dock-config:${control.id}`;
+}
+
+/**
  * Resolves the live session (if any) for a dock control. Prefers matching
  * by `dockerSessionIdentity` for a docker-sourced control — stable across a
  * re-synthesized `command` string — falling back to the original
@@ -354,11 +387,13 @@ export function groupDockerControls(
  * probeComposeServices), not compose-config-driven, so a `compose up -d`
  * recreate genuinely deletes a service's old container before creating the
  * new one, and the service is legitimately absent from one or two polls
- * mid-rebuild. Without this, a compose group's control count — and
- * therefore its `flexGrow` share of the column (Dock.tsx) — drops and rises
- * once per service on every recreate, resizing every OTHER monitor in the
- * group each time (issue: rebuilding a stack makes the whole dock resize
- * repeatedly).
+ * mid-rebuild. Without this, a compose group's control count drops and
+ * rises once per service on every recreate — pre-master-detail-rework, that
+ * also churned every OTHER monitor's `flexGrow` share of the column
+ * (Dock.tsx), resizing the whole dock repeatedly; post-rework there's no
+ * `flexGrow` left to churn, but the row list itself still churns without
+ * this hold, and (per `dockRowKey`'s own doc comment) so would `selectedKey`
+ * if the vanishing row happened to be the selected one.
  *
  * Re-inserts a vanished control at its previous index (relative to `next`,
  * clamped to the current length) so a held row doesn't visually jump to the
@@ -371,9 +406,10 @@ export function groupDockerControls(
  * this from its OWN render body (not an effect): a passive effect's
  * `setState` only takes effect on the NEXT commit, after the browser has
  * already painted the current one — for a compose group whose only control
- * just vanished, that stale commit has already dropped the group's `&lt;div&gt;`
- * (and its `TerminalPane` child) by the time the correction lands, i.e. the
- * exact unmount/remount flicker this function exists to prevent. Rendering
+ * just vanished, that stale commit has already dropped the row (and, if it
+ * was selected, its `.dock-log-pane` terminal) by the time the correction
+ * lands — the exact unmount/remount flicker this function exists to
+ * prevent. Rendering
  * from a mutated-in-place Map would reintroduce the same class of bug one
  * level down — React's dev-only StrictMode double-invokes a component's
  * render body, and the SECOND invocation would then read back the FIRST
@@ -497,6 +533,20 @@ const MIN_TERMINAL_ROWS = 10;
 const DOCK_MONITOR_HEADER_HEIGHT_PX = 28;
 
 /**
+ * Shared per-row cell math behind every "how tall must a dock terminal be
+ * to hold N rows" question — `dockMonitorMinHeightPx` (the hard floor, N =
+ * MIN_TERMINAL_ROWS) and `dockLogPaneComfortHeightPx` (a larger, non-floor
+ * comfort target, N = COMFORT_LOG_ROWS) below both call this rather than
+ * each re-deriving the same formula with a different row count — a future
+ * change to the derivation (e.g. adding a border term the way the width
+ * side's `dockMonitorMinWidthPx` does) only has to land in one place.
+ */
+function terminalContentHeightPx(rows: number, fontSize: number, padding: number): number {
+  const cellHeight = PX_PER_ROW_AT_14PX * (fontSize / BASELINE_FONT_SIZE_PX);
+  return Math.ceil(rows * cellHeight + padding * 2 + CROSS_PLATFORM_MARGIN_PX);
+}
+
+/**
  * The pixel height a dock monitor's TERMINAL BODY must be at least, so a
  * dock terminal can hold pty-manager.ts's MIN_TERMINAL_ROWS at the user's
  * live font settings — the vertical counterpart to dockMonitorMinWidthPx
@@ -516,34 +566,29 @@ const DOCK_MONITOR_HEADER_HEIGHT_PX = 28;
  * not this one alone, is what actually goes on the DOM.
  */
 export function dockMonitorMinHeightPx(fontSize: number, padding: number): number {
-  const cellHeight = PX_PER_ROW_AT_14PX * (fontSize / BASELINE_FONT_SIZE_PX);
-  const xtermContentHeight = MIN_TERMINAL_ROWS * cellHeight;
-  return Math.ceil(xtermContentHeight + padding * 2 + CROSS_PLATFORM_MARGIN_PX);
+  return terminalContentHeightPx(MIN_TERMINAL_ROWS, fontSize, padding);
 }
 
 /**
- * The full `.dock-monitor` element's own minimum height — header
- * (DOCK_MONITOR_HEADER_HEIGHT_PX) + terminal body floor
- * (dockMonitorMinHeightPx) + border (DOCK_MONITOR_BORDER_PX) — and the value
- * that actually has to be applied to `.dock-monitor` itself, NOT
- * `.dock-monitor-body`. Review caught a real bug in an earlier version of
- * this fix that applied the body-only floor to `.dock-monitor-body` alone:
- * `.dock-monitor` has `overflow: hidden` (empty-states.css), and per CSS
- * Flexbox §4.5 `overflow: hidden` zeroes a flex item's AUTOMATIC minimum
- * size — so `.dock-monitor`, stretched by `.dock-body`'s row layout, never
- * grew to accommodate its child's new min-height at all; the overflow was
- * clipped silently INSIDE `.dock-monitor`'s own boundary, one level deeper
- * than before, and `.dock-body` itself never saw the overflow, so its own
- * `overflow-y: auto` (dock.css) never engaged either. An EXPLICIT min-height
- * (not the automatic kind `overflow: hidden` zeroes) on `.dock-monitor`
- * itself is what actually forces it past its stretch-fit size when the dock
- * region is too short — the same mechanism `.dock-monitor`'s own
- * `min-width: 364px` already uses on the horizontal axis, just on the
- * cross axis here instead of the main one. Confirmed live: applying this
- * combined value as `.dock-monitor`'s own min-height, not the body's, is
- * what makes `.dock-body`'s `scrollHeight` actually exceed its
- * `clientHeight` — the precondition for its `overflow-y: auto` to do
- * anything at all.
+ * Header (DOCK_MONITOR_HEADER_HEIGHT_PX) + terminal body floor
+ * (dockMonitorMinHeightPx) + border (DOCK_MONITOR_BORDER_PX) — the combined
+ * minimum height a box needs when it holds BOTH a 28px monitor header AND a
+ * terminal body inside it, the way `.dock-monitor` used to before the dock
+ * master-detail rework (see that class's own comment, empty-states.css).
+ *
+ * That box no longer exists — a rail row (`.dock-monitor` today) is
+ * header-only, and the column's one terminal lives in `.dock-log-pane`,
+ * which has no header of its own to add back in. `.dock-log-pane` therefore
+ * uses `dockMonitorMinHeightPx` directly, NOT this function — see that
+ * class's own doc comment (empty-states.css) for why using this one there
+ * would be the exact review-caught "wrong number" bug its own history
+ * warns about.
+ *
+ * Kept, unused in production, purely as a regression canary:
+ * dockHelpers.test.ts pins this at 231 (14px/4px), and its staying green
+ * across the rework is the signal that dockMonitorMinHeightPx itself was
+ * re-homed onto `.dock-log-pane` unchanged, not silently redefined along
+ * the way. Safe to delete once that signal has served its purpose.
  */
 export function dockMonitorFullMinHeightPx(fontSize: number, padding: number): number {
   return (
@@ -551,4 +596,28 @@ export function dockMonitorFullMinHeightPx(fontSize: number, padding: number): n
     DOCK_MONITOR_HEADER_HEIGHT_PX +
     DOCK_MONITOR_BORDER_PX
   );
+}
+
+// Dock master-detail rework — dockMonitorMinHeightPx (above) is a hard FLOOR:
+// the minimum that avoids pty-manager.ts's MIN_TERMINAL_ROWS clamp latching
+// TerminalPane's cappedBelowFloor permanently true. It is not a comfortable
+// DEFAULT — the server clamps UP to MIN_TERMINAL_ROWS regardless of what the
+// client asks for (pty-manager.ts's clampTerminalSize), so a pane sized to
+// exactly this floor renders exactly 10 rows, permanently, at whatever font
+// size still fits — the same "permanently shrunk" regime
+// dockMonitorMinWidthPx's own doc comment describes escaping on the
+// horizontal axis. COMFORT_LOG_ROWS targets a genuinely readable log pane —
+// double the hard floor — using the identical per-row cell math.
+const COMFORT_LOG_ROWS = 16;
+
+/**
+ * A comfortable (not merely non-clipping) height for `.dock-log-pane`'s
+ * terminal body, used only to derive `Dock.tsx`'s `DEFAULT_DOCK_HEIGHT` —
+ * `.dock-log-pane`'s own CSS floor stays `dockMonitorMinHeightPx`
+ * (unchanged, still the hard minimum); this is strictly larger and never
+ * applied as a CSS min-height itself, only as an input to picking a sane
+ * starting dock size for a user who has never dragged one.
+ */
+export function dockLogPaneComfortHeightPx(fontSize: number, padding: number): number {
+  return terminalContentHeightPx(COMFORT_LOG_ROWS, fontSize, padding);
 }
