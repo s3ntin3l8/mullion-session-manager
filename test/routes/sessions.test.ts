@@ -1770,6 +1770,42 @@ describe("sessions route", () => {
         await app.close();
       });
 
+      it("409s promoting a kind:'dock' session and creates no replacement row (#1233)", async () => {
+        const app = await buildApp();
+        const cwd = createGitRepo();
+        const projectId = await createProjectWithGitRepo(app, cwd);
+
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: {
+            projectId,
+            command: "docker compose up",
+            kind: "dock",
+            name: "docker-stack:demo-project",
+          },
+        });
+        const sourceId = created.json().id as number;
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/sessions/${sourceId}/promote`,
+          payload: { baseRef: "main" },
+        });
+        expect(res.statusCode).toBe(409);
+
+        const list = await app.inject({
+          method: "GET",
+          url: `/api/sessions?projectId=${projectId}`,
+        });
+        expect(list.json()).toHaveLength(1);
+        const sourceRow = list.json().find((s: { id: number }) => s.id === sourceId);
+        expect(sourceRow.status).toBe("active");
+
+        fs.rmSync(cwd, { recursive: true, force: true });
+        await app.close();
+      });
+
       it("404s promoting an unknown session", async () => {
         const app = await buildApp();
         const res = await app.inject({

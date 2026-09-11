@@ -483,6 +483,9 @@ export async function sessionsRoute(app: FastifyInstance) {
       const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
       if (!row) return reply.notFound();
       if (row.status !== "active") return reply.conflict("Session is not active");
+      if (row.kind === "dock") {
+        return reply.conflict("Cannot promote a dock-managed session");
+      }
 
       const [project] = app.db.select().from(projects).where(eq(projects.id, row.projectId)).all();
       if (!project) return reply.notFound();
