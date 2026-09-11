@@ -513,6 +513,88 @@ describe("docker-service-detect", () => {
       expect(services[0]?.buildOnly).toBe(true);
     });
 
+    // Issue #1221's follow-up — a service can declare BOTH `build:` and an
+    // explicit `image:` (a custom local tag, not a registry ref), which the
+    // original probe predicate (`build && !image`) misses since these DO
+    // have an `image:` key. Verified live against this host's own
+    // nanokvm-manager (`nanokvm-manager:local`) and open-design
+    // (`open-design-local`) stacks.
+    it("flags buildOnly for build: + a single-segment custom local tag with no pull_policy", async () => {
+      buildOnlyProbeOutput = JSON.stringify({
+        services: { "nanokvm-dash": { build: { context: "." }, image: "nanokvm-manager:local" } },
+      });
+      psOutput = psLine({
+        id: "a",
+        names: "nanokvm-manager-nanokvm-dash-1",
+        state: "running",
+        status: "Up 1 hour",
+        image: "nanokvm-manager:local",
+        createdAt: "2026-08-01 00:00:00 +0000 UTC",
+        project: "nanokvm-manager",
+        service: "nanokvm-dash",
+        workingDir: resolvableDir,
+        imageId: "sha256:x",
+        oneoff: "False",
+        configFiles: resolvableComposeFile,
+      });
+
+      const services = await getComposeServices();
+      // No `/` in the ref — the third tier catches it despite the
+      // `image:` key being present.
+      expect(services[0]?.buildOnly).toBe(true);
+    });
+
+    it("does not flag buildOnly for build: + a namespaced registry image with no pull_policy", async () => {
+      buildOnlyProbeOutput = JSON.stringify({
+        services: { web: { build: { context: "." }, image: "ghcr.io/org/img:edge" } },
+      });
+      psOutput = psLine({
+        id: "a",
+        names: "myapp-web-1",
+        state: "running",
+        status: "Up 1 hour",
+        image: "ghcr.io/org/img:edge",
+        createdAt: "2026-08-01 00:00:00 +0000 UTC",
+        project: "myapp",
+        service: "web",
+        workingDir: resolvableDir,
+        imageId: "sha256:x",
+        oneoff: "False",
+        configFiles: resolvableComposeFile,
+      });
+
+      const services = await getComposeServices();
+      // Has a `/` — still pullable, so still not build-only.
+      expect(services[0]?.buildOnly).toBe(false);
+    });
+
+    it("flags buildOnly for build: + a namespaced registry image when pull_policy is build", async () => {
+      buildOnlyProbeOutput = JSON.stringify({
+        services: {
+          web: { build: { context: "." }, image: "ghcr.io/org/img:edge", pull_policy: "build" },
+        },
+      });
+      psOutput = psLine({
+        id: "a",
+        names: "myapp-web-1",
+        state: "running",
+        status: "Up 1 hour",
+        image: "ghcr.io/org/img:edge",
+        createdAt: "2026-08-01 00:00:00 +0000 UTC",
+        project: "myapp",
+        service: "web",
+        workingDir: resolvableDir,
+        imageId: "sha256:x",
+        oneoff: "False",
+        configFiles: resolvableComposeFile,
+      });
+
+      const services = await getComposeServices();
+      // pull_policy: build is authoritative — the second tier catches this
+      // despite the `/` that would otherwise classify it as pullable.
+      expect(services[0]?.buildOnly).toBe(true);
+    });
+
     // Hermes review, issue #1221's own PR — the probe cache was originally
     // keyed only on each service's configHash, which a container's
     // com.docker.compose.config-hash label only changes on RECREATE.

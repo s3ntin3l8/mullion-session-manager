@@ -334,11 +334,59 @@ async function probeBuildOnlyServices(
 
   try {
     const parsed = JSON.parse(output) as {
-      services?: Record<string, { build?: unknown; image?: unknown }>;
+      services?: Record<string, { build?: unknown; image?: unknown; pull_policy?: unknown }>;
     };
     const result = new Map<string, boolean>();
+    // Three tiers, in order — issue #1221's follow-up. The original fix
+    // (PR #1231) only handled a bare `build:` with no `image:` key at all
+    // (a rebuilt-and-pruned service whose old default-named image is gone,
+    // reverting `imageRef` to a bare `sha256:` digest). Two real stacks on
+    // this host (`nanokvm-manager`'s `nanokvm-dash`, `open-design`'s
+    // `open-design` service) declare BOTH `build:` and an explicit
+    // `image:` — a custom local tag, not a registry ref — which that
+    // single-expression predicate (`build && !image`) misses entirely,
+    // since these DO have an `image:` key.
+    //
+    // 1. No `build:` key at all — never build-only, regardless of
+    //    `image:`/`pull_policy:`.
+    // 2. `build:` present, no `image:` key — the original #1221 case:
+    //    nothing to pull, full stop.
+    // 3. `build:` present AND `image:` present — two sub-checks, in
+    //    order:
+    //    a. `pull_policy: build` — an explicit compose-file declaration
+    //       that this image is only ever built locally, never pulled,
+    //       regardless of what its name looks like. Authoritative;
+    //       short-circuits (b).
+    //    b. No such override: fall back to the image ref's own shape,
+    //       testing for a `/` — deliberately NOT `.` or `:`. Docker's own
+    //       domain-vs-tag disambiguation only inspects the text BEFORE the
+    //       first `/`: an unqualified single-segment ref like
+    //       `nanokvm-manager:local` resolves to
+    //       `docker.io/library/nanokvm-manager:local` when pulled from a
+    //       registry — the `:` there is a TAG separator, not a
+    //       registry-host marker. Testing the whole ref for `.`/`:` would
+    //       misclassify exactly this shape as registry-qualified (a
+    //       mistake caught during this fix's own planning — don't
+    //       reintroduce it). Testing for `/` instead correctly leaves a
+    //       namespaced registry ref (`ghcr.io/org/img:edge`, `myorg/img`)
+    //       classified as pullable, and only misclassifies one rare,
+    //       deliberately accepted residual case: `build:` + a
+    //       single-segment OFFICIAL Hub image with no `pull_policy`
+    //       override (e.g. `image: redis` next to a `build:` key) —
+    //       vanishingly rare, intentionally not special-cased.
+    //
+    // Kept as one `buildOnly` boolean, not split into separate
+    // buildable/pullable flags — that split is out of scope here, filed as
+    // follow-up issue #1243.
     for (const [name, def] of Object.entries(parsed.services ?? {})) {
-      result.set(name, def.build !== undefined && def.image === undefined);
+      if (def.build === undefined) {
+        result.set(name, false);
+        continue;
+      }
+      const image = typeof def.image === "string" ? def.image : undefined;
+      const pullPolicy = typeof def.pull_policy === "string" ? def.pull_policy : undefined;
+      const buildOnly = image === undefined || pullPolicy === "build" || !image.includes("/");
+      result.set(name, buildOnly);
     }
     return result;
   } catch (err) {

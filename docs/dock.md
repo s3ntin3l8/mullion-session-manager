@@ -243,13 +243,20 @@ Each discovered monitor:
     specifically.
 
 `build:`-only detection itself (issue #1221) reads `docker compose ...
-config --format json` directly — whether a service has a `build:` key and
-no `image:` key — whenever the stack's compose file(s) are still resolvable
-on disk, one probe per distinct compose project, cached until any of that
-project's services' config changes. This is what a rebuilt-and-pruned
-service needs: its own old, default-named image gets pruned once
-superseded, so its container reverts to a bare digest that a name-shape
-guess alone can never recognize as build-only. That name-shape guess
+config --format json` directly, whenever the stack's compose file(s) are
+still resolvable on disk, one probe per distinct compose project, cached
+until any of that project's services' config changes. A service is
+build-only when it has a `build:` key AND any of: no `image:` key at all;
+an explicit `pull_policy: build`; or an `image:` whose ref has no `/` (an
+unqualified single-segment tag like `myimage:local` — the `:` there is a
+tag separator, not a registry-host marker, so this is _not_ the same test
+as looking for a `.`/`:` anywhere in the ref). This covers two real cases: a
+rebuilt-and-pruned service whose own old, default-named image gets pruned
+once superseded (its container reverts to a bare digest a name-shape guess
+alone can never recognize as build-only), and a service that declares both
+`build:` and an explicit custom local `image:` tag (e.g. `image:
+myapp:local` next to a `build:` key) — still nothing to pull, even though it
+has an `image:` key. The name-shape guess
 (`<composeProject>-<service>[:latest]`, compose's own default build-image
 name) is kept only as the fallback for when the probe can't run.
 
