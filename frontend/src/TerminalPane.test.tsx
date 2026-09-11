@@ -150,7 +150,14 @@ vi.mock("@xterm/xterm", () => {
       open: vi.fn(),
       loadAddon: vi.fn(),
       dispose: vi.fn(),
-      write: vi.fn(),
+      // Real xterm.js queues writes and invokes the completion callback once
+      // that chunk is fully parsed (FIFO) — the OSC-52-replay-guard tests
+      // below depend on the callback actually firing, so this mock invokes
+      // it synchronously rather than the no-op `vi.fn()` every other test
+      // relied on being a pure call-recorder. Synchronous invocation is a
+      // strictly stronger/earlier guarantee than the real async queue, so it
+      // can't spuriously pass a test that would fail against real xterm.
+      write: vi.fn((_data: unknown, cb?: () => void) => cb?.()),
       // jsdom has no `document.fonts`, so the settings-sync effect's
       // font-load path (TerminalPane.tsx) takes its synchronous fallback
       // branch on every render, which calls `repaint()` -> `term.refresh()`
@@ -1448,11 +1455,28 @@ describe("TerminalPane OSC 52 clipboard write", () => {
     return writeText;
   }
 
+  // Every connection starts "replaying" until its first geometry frame (see
+  // TerminalPane.tsx's own comment on `replaying`) — attachSocketToSession
+  // (routes/terminal.ts) sends an optional scrollback backlog frame followed
+  // unconditionally by a "geometry" frame on every attach and reattach, and
+  // the mock socket here never sends either on its own. Every test in this
+  // describe block below that means to exercise LIVE OSC 52 handling (as
+  // opposed to the replay-guard tests further down) calls this first, to
+  // simulate "past replay" the same way a real reattach settles.
+  function sendGeometryFrame(): void {
+    for (const handler of fakeSocket._messageHandlers) {
+      handler({
+        data: JSON.stringify({ type: "geometry", cols: 80, rows: 24, minCols: 40, minRows: 10 }),
+      });
+    }
+  }
+
   it("writes the decoded payload to the clipboard on an OSC 52 set", async () => {
     stubFakeWebSocket(true);
     const writeText = stubClipboardWrite();
     renderPane();
     await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    sendGeometryFrame();
 
     const handled = oscHandlers.get(52)!(`c;${btoa("hello from claude")}`);
 
@@ -1465,6 +1489,7 @@ describe("TerminalPane OSC 52 clipboard write", () => {
     const writeText = stubClipboardWrite();
     renderPane();
     await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    sendGeometryFrame();
     fakeWsSend.mockClear();
 
     const handled = oscHandlers.get(52)!("c;?");
@@ -1479,6 +1504,7 @@ describe("TerminalPane OSC 52 clipboard write", () => {
     const writeText = stubClipboardWrite();
     renderPane();
     await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    sendGeometryFrame();
 
     act(() => {
       useDashboardStore.setState((s) => ({
@@ -1497,6 +1523,7 @@ describe("TerminalPane OSC 52 clipboard write", () => {
     const writeText = stubClipboardWrite();
     renderPane();
     await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    sendGeometryFrame();
 
     const handled = oscHandlers.get(52)!(btoa("no Pc here"));
 
@@ -1509,11 +1536,105 @@ describe("TerminalPane OSC 52 clipboard write", () => {
     const writeText = stubClipboardWrite();
     renderPane();
     await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    sendGeometryFrame();
 
     const handled = oscHandlers.get(52)!("c;not-valid-base64!!!");
 
     expect(handled).toBe(false);
     expect(writeText).not.toHaveBeenCalled();
+  });
+
+  it("does not copy an OSC 52 sequence seen before the first geometry frame (replay)", async () => {
+    stubFakeWebSocket(true);
+    const writeText = stubClipboardWrite();
+    renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+
+    const handled = oscHandlers.get(52)!(`c;${btoa("stale scrollback copy")}`);
+
+    expect(handled).toBe(true); // swallowed, not left unhandled
+    expect(writeText).not.toHaveBeenCalled();
+  });
+
+  it("copies an OSC 52 sequence seen after the first geometry frame (live output)", async () => {
+    stubFakeWebSocket(true);
+    const writeText = stubClipboardWrite();
+    renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+
+    sendGeometryFrame();
+    const handled = oscHandlers.get(52)!(`c;${btoa("live copy")}`);
+
+    expect(handled).toBe(true);
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("live copy"));
+  });
+
+  it("still swallows an OSC 52 read query during replay, before any geometry frame", async () => {
+    stubFakeWebSocket(true);
+    const writeText = stubClipboardWrite();
+    renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+
+    const handled = oscHandlers.get(52)!("c;?");
+
+    expect(handled).toBe(true);
+    expect(writeText).not.toHaveBeenCalled();
+  });
+
+  it("a second geometry frame on the same connection does not re-arm the replay guard", async () => {
+    stubFakeWebSocket(true);
+    const writeText = stubClipboardWrite();
+    renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    const term = getLatestTermInstance() as unknown as { write: ReturnType<typeof vi.fn> };
+
+    sendGeometryFrame();
+    const zeroLengthWrites = () =>
+      term.write.mock.calls.filter((call: unknown[]) => {
+        const data = call[0];
+        return data instanceof Uint8Array && data.length === 0;
+      });
+    expect(zeroLengthWrites()).toHaveLength(1);
+
+    sendGeometryFrame();
+    expect(zeroLengthWrites()).toHaveLength(1); // not queued again
+
+    const handled = oscHandlers.get(52)!(`c;${btoa("still live")}`);
+    expect(handled).toBe(true);
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("still live"));
+  });
+});
+
+describe("TerminalPane copy failure toast", () => {
+  // "Copy on select" (copyToClipboard's own !hasClipboardApi() early return)
+  // — distinct from the opt-in Ctrl+C chord's "no Clipboard API" test above,
+  // which never reaches copyToClipboard at all because terminalKeys.ts gates
+  // on hasClipboardApi() before calling onCopy(). This is the path that
+  // previously only logged "clipboard API not available" to the console.
+  it("surfaces a failure toast when copy-on-select has no Clipboard API to write to", async () => {
+    stubFakeWebSocket(true);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+    renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    act(() => {
+      useDashboardStore.setState((s) => ({
+        settings: { ...s.settings, terminal: { ...s.settings.terminal, copyOnSelect: true } },
+      }));
+    });
+
+    const term = getLatestTermInstance() as unknown as {
+      getSelection: ReturnType<typeof vi.fn>;
+      onSelectionChange: ReturnType<typeof vi.fn>;
+    };
+    term.getSelection.mockReturnValue("selected text");
+    const calls = term.onSelectionChange.mock.calls;
+    const selectionChangeHandler = calls[calls.length - 1]![0] as () => void;
+
+    act(() => {
+      selectionChangeHandler();
+    });
+
+    expect(screen.getByText("Copy failed")).toBeInTheDocument();
   });
 });
 
@@ -1870,6 +1991,9 @@ describe("TerminalPane opt-in Ctrl+V / Ctrl+C clipboard chords (issue #67 follow
     // the selection the user was trying to copy.
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(term.clearSelection).not.toHaveBeenCalled();
+    // Previously this failure was console.warn-only and invisible in the UI
+    // — a rejected write must now surface a toast instead.
+    expect(screen.getByText("Copy failed")).toBeInTheDocument();
   });
 
   it("ctrlC enabled, no Clipboard API at all (plain-http deploy): falls through to SIGINT instead of swallowing", async () => {
@@ -1886,9 +2010,14 @@ describe("TerminalPane opt-in Ctrl+V / Ctrl+C clipboard chords (issue #67 follow
     const result = triggerCtrlCChord();
 
     // No clipboard API to copy to — must not eat the keypress with nothing
-    // to show for it; the byte reaches the shell as SIGINT instead.
+    // to show for it; the byte reaches the shell as SIGINT instead. This
+    // path never calls copyToClipboard at all (terminalKeys.ts's own
+    // hasClipboardApi() gate short-circuits before onCopy()), so unlike the
+    // rejected-write case above there is no failure toast here either — a
+    // toast would misleadingly imply a copy was attempted.
     expect(result).toBe(true);
     expect(term.clearSelection).not.toHaveBeenCalled();
+    expect(screen.queryByText("Copy failed")).not.toBeInTheDocument();
   });
 
   it("two-press sequence: first Ctrl+C copies and clears, second Ctrl+C (now no selection) reaches SIGINT", async () => {
