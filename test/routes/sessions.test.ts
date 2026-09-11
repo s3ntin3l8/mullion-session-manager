@@ -1778,7 +1778,12 @@ describe("sessions route", () => {
         const created = await app.inject({
           method: "POST",
           url: "/api/sessions",
-          payload: { projectId, command: "docker compose up", kind: "dock" },
+          payload: {
+            projectId,
+            command: "docker compose up",
+            kind: "dock",
+            name: "docker-stack:demo-project",
+          },
         });
         const sourceId = created.json().id as number;
 
