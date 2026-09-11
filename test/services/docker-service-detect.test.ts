@@ -550,10 +550,17 @@ describe("docker-service-detect", () => {
       });
       psOutput = psLine({
         id: "a",
+        // Deliberately still matches looksBuildOnly's own default-name
+        // pattern (`<project>-<service>`) — if this test's `false` merely
+        // reflected the name-heuristic fallback agreeing by coincidence
+        // (rather than proving the probe's tier 3b actually ran and
+        // overrode it), giving the fallback a name it WOULD flag true
+        // would catch that: only the probe, not the fallback, can produce
+        // `false` here.
         names: "myapp-web-1",
         state: "running",
         status: "Up 1 hour",
-        image: "ghcr.io/org/img:edge",
+        image: "myapp-web",
         createdAt: "2026-08-01 00:00:00 +0000 UTC",
         project: "myapp",
         service: "web",
@@ -564,7 +571,9 @@ describe("docker-service-detect", () => {
       });
 
       const services = await getComposeServices();
-      // Has a `/` — still pullable, so still not build-only.
+      // The probe's own compose config declares a namespaced `image:` (has
+      // a `/`) — still pullable, so still not build-only, overriding what
+      // the name-heuristic fallback alone would have said for this imageRef.
       expect(services[0]?.buildOnly).toBe(false);
     });
 
@@ -593,6 +602,65 @@ describe("docker-service-detect", () => {
       // pull_policy: build is authoritative — the second tier catches this
       // despite the `/` that would otherwise classify it as pullable.
       expect(services[0]?.buildOnly).toBe(true);
+    });
+
+    it("flags buildOnly for build: + a namespaced registry image when pull_policy is never", async () => {
+      buildOnlyProbeOutput = JSON.stringify({
+        services: {
+          web: { build: { context: "." }, image: "ghcr.io/org/img:edge", pull_policy: "never" },
+        },
+      });
+      psOutput = psLine({
+        id: "a",
+        names: "myapp-web-1",
+        state: "running",
+        status: "Up 1 hour",
+        image: "ghcr.io/org/img:edge",
+        createdAt: "2026-08-01 00:00:00 +0000 UTC",
+        project: "myapp",
+        service: "web",
+        workingDir: resolvableDir,
+        imageId: "sha256:x",
+        oneoff: "False",
+        configFiles: resolvableComposeFile,
+      });
+
+      const services = await getComposeServices();
+      // pull_policy: never means the same "don't bother pulling" thing as
+      // pull_policy: build for this predicate's purposes — also
+      // authoritative despite the `/`.
+      expect(services[0]?.buildOnly).toBe(true);
+    });
+
+    // A stray `image:` key with no value parses as `image: null`, not an
+    // absent key — `def.image === undefined` is false for it. This must NOT
+    // fall into tier 2 (which only fires for a truly absent `image:` key);
+    // it falls through to tier 3 instead, same as the old predicate treated
+    // any defined-but-not-a-string `image:` shape.
+    it("does not flag buildOnly for build: + a null image (present key, unusable value) with no pull_policy", async () => {
+      buildOnlyProbeOutput = JSON.stringify({
+        services: { web: { build: { context: "." }, image: null } },
+      });
+      psOutput = psLine({
+        id: "a",
+        names: "myapp-web-1",
+        state: "running",
+        status: "Up 1 hour",
+        image: "myapp-web",
+        createdAt: "2026-08-01 00:00:00 +0000 UTC",
+        project: "myapp",
+        service: "web",
+        workingDir: resolvableDir,
+        imageId: "sha256:x",
+        oneoff: "False",
+        configFiles: resolvableComposeFile,
+      });
+
+      const services = await getComposeServices();
+      // image key is present (null), so tier 2 doesn't fire; tier 3 can't
+      // inspect a shape a non-string value doesn't have, so it defaults to
+      // pullable/false rather than silently reclassifying via tier 2.
+      expect(services[0]?.buildOnly).toBe(false);
     });
 
     // Hermes review, issue #1221's own PR — the probe cache was originally
