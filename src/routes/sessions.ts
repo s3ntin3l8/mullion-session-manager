@@ -836,9 +836,7 @@ export async function sessionsRoute(app: FastifyInstance) {
         // index is the ONLY unique constraint on `sessions`, so any other
         // SqliteError is unrelated and must keep propagating unchanged.
         if (err instanceof BetterSqlite3.SqliteError && err.code === "SQLITE_CONSTRAINT_UNIQUE") {
-          return reply.conflict(
-            "Another active session already uses that name for this project",
-          );
+          return reply.conflict("Another active session already uses that name for this project");
         }
         throw err;
       }
