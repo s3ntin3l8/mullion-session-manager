@@ -753,18 +753,11 @@ export async function isMasterAliveStateBatch(
 }
 
 /**
- * Single-id read off isMasterAliveStateBatch() above — issue #1232, added
- * because `startStackSession`/`findActiveStackSession` (routes/projects.ts)
- * take a DESTRUCTIVE action on "not alive" (mark a row exited, then
- * recreate it) and need "unknown" (an unverifiable id, or the listing
- * itself failing/timing out) kept distinct from a confident "dead" — a
- * `listOwnedScopes` timeout is no longer a rare event confined to
- * "systemctl is missing," it can now happen whenever `--user` D-Bus is
- * merely slow, which is exactly when a real host is under the most load and
- * its sessions are most likely to be genuinely alive. Folding that timeout
- * into "dead" would permanently orphan a scope that was actually still
- * running (the reconciler never revisits a row once it leaves
- * `status: "active"`).
+ * Single-id read off isMasterAliveStateBatch() above — see that function's
+ * own doc comment for the trust rule this preserves (issue #1232's original
+ * motivation: `startStackSession`/`findActiveStackSession` take a
+ * DESTRUCTIVE action on "not alive" and must not fold a merely-unverifiable
+ * or timed-out listing into a confident "dead").
  */
 export async function isMasterAliveState(
   sessionsDir: string,
