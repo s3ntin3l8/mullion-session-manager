@@ -288,7 +288,7 @@ export function startSshAgentFanout(app: FastifyInstance): SshAgentFanoutHandle 
               agentChannel.close();
               return;
             }
-            pipeFilteredChannelToChannel(agentChannel, bridgeChannel);
+            pipeFilteredChannelToChannel(agentChannel, bridgeChannel, app.log);
           })
           .catch((err: unknown) => {
             // The bridge's own connection cap, or it died mid-open — same

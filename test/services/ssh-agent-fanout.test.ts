@@ -489,6 +489,67 @@ describe("startSshAgentFanout — channel fan-out", () => {
     expect(atHelperData[0]).toEqual(frame(SSH_AGENTC_SIGN_REQUEST, Buffer.from("digest")));
   });
 
+  it("relays data written on the agent channel before the bridge-side openChannel() promise has resolved — reproduces the exact race behind the dropped-request bug (regression: a raw SSH-agent REQUEST_IDENTITIES frame written immediately after connect to a real agent host's ssh-agent.sock was silently dropped on every attempt; the identical frame written after any delay, even a few ms, was relayed correctly every time)", async () => {
+    // A manually-controlled bridge mux, not a second real MuxConnection
+    // pair: with two REAL, synchronously-delivering FakeSockets on both
+    // hops, `bridge.mux.openChannel()`'s own `.then()` callback (attached
+    // deep inside the synchronous Open/OpenAck cascade triggered by this
+    // test's own `agentConn.openChannel()` call, before that call even
+    // returns) is scheduled as a microtask BEFORE the test's own `await`
+    // continuation — so it always wins the race in that setup, the
+    // opposite of what happens for real over an actual network. Holding
+    // the bridge-side promise open under direct control is what actually
+    // lets this test put a write on the wire while `agentChannel.onData`
+    // is still unattached, exactly as ssh's own request beats the
+    // primary<->laptop round trip in production.
+    let resolveBridgeChannel!: (ch: MuxChannel) => void;
+    const bridgeOpenChannel = vi.fn(
+      () => new Promise<MuxChannel>((resolve) => (resolveBridgeChannel = resolve)),
+    );
+    const app = fakeApp(0);
+    app.connectedBridges.set("bridge-0", {
+      socket: {},
+      mux: { openChannel: bridgeOpenChannel },
+      connectedAt: Date.now(),
+    });
+
+    const { agentConn } = await setupPrimaryAndAgent(app);
+    const agentChannel = await agentConn.openChannel();
+
+    // bridge.mux.openChannel() (our mock) has been called by
+    // ssh-agent-fanout.ts's onChannel handler but is still pending — its
+    // `.then()` has not run, so `agentChannel.onData` has not been
+    // attached yet. This is the exact window the bug lives in.
+    expect(bridgeOpenChannel).toHaveBeenCalledOnce();
+    agentChannel.send(frame(SSH_AGENTC_SIGN_REQUEST, Buffer.from("digest")));
+
+    // Now let the bridge-side open resolve and its `.then()` actually run.
+    const fakeBridgeChannel: MuxChannel = {
+      id: 2,
+      sendWindow: 1024 * 1024,
+      closed: false,
+      send: vi.fn(),
+      eof: vi.fn(),
+      close: vi.fn(),
+      onData: vi.fn(),
+      onEof: vi.fn(),
+      onClose: vi.fn(),
+      onDrain: vi.fn(),
+      acknowledgeConsumed: vi.fn(),
+    };
+    resolveBridgeChannel(fakeBridgeChannel);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // Without the pre-listener buffering fix, the Data frame sent above
+    // was dropped the instant it arrived at agentChannel.handleData() with
+    // zero dataListeners attached — pipeFilteredChannelToChannel's later
+    // onData attach would then see nothing. With the fix, the buffered
+    // frame is replayed the moment onData is finally attached.
+    expect(fakeBridgeChannel.send).toHaveBeenCalledOnce();
+    const sent = (fakeBridgeChannel.send as ReturnType<typeof vi.fn>).mock.calls[0][0] as Buffer;
+    expect(sent).toEqual(frame(SSH_AGENTC_SIGN_REQUEST, Buffer.from("digest")));
+  });
+
   it("closes the agent channel immediately when the bridge disconnects in the narrow window between the primary<->agent connection staying alive and reconcile() tearing it down — must not leave the SSH client hanging", async () => {
     // Start WITH a bridge connected so the primary<->agent connection
     // (f.mux) actually gets established — the real race Hermes flagged

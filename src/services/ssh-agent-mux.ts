@@ -345,6 +345,23 @@ class ChannelImpl implements MuxChannel {
   private eofListeners: Array<() => void> = [];
   private closeListeners: Array<() => void> = [];
   private drainListeners: Array<() => void> = [];
+  // Issue: a channel can receive Data (or Eof) before its consumer has
+  // called onData()/onEof() at all — `handleMessage`'s Open branch sends
+  // OpenAck (telling the peer it's safe to start sending) BEFORE invoking
+  // `channelListeners`, and a caller that pairs this inbound channel with
+  // an outbound one (ssh-agent-fanout.ts's onChannel, opening a second
+  // channel toward a DIFFERENT peer before wiring the two together) only
+  // attaches onData/onEof once that second, inherently async
+  // `openChannel()` resolves. Reproduced directly: a 5-byte SSH-agent
+  // REQUEST_IDENTITIES frame written immediately after connect was
+  // dropped on every attempt; the same frame written after any delay
+  // (even a few ms — enough for the second leg's OpenAck to come back)
+  // was relayed correctly every time. Buffered here, not fixed at each
+  // call site, because every two-hop caller has this hazard and the mux
+  // is the one place that can close it for all of them.
+  private pendingData: Buffer[] = [];
+  private pendingDataBytes = 0;
+  private pendingEof = false;
 
   constructor(
     readonly id: number,
@@ -395,6 +412,8 @@ class ChannelImpl implements MuxChannel {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    this.pendingData = [];
+    this.pendingDataBytes = 0;
     this.sendFrame(encodeHeader(FrameType.Close, this.id));
     this.onLocalClose(this.id);
     for (const listener of this.closeListeners) invokeListener(listener);
@@ -407,15 +426,35 @@ class ChannelImpl implements MuxChannel {
   closeLocally(): void {
     if (this.closed) return;
     this.closed = true;
+    this.pendingData = [];
+    this.pendingDataBytes = 0;
     for (const listener of this.closeListeners) invokeListener(listener);
   }
 
+  /** Attaching the first listener replays whatever `handleData` already
+   * buffered, in arrival order, before this call returns — a consumer that
+   * calls `onData` synchronously (the ordinary case) sees pre- and
+   * post-attach chunks as one seamless stream and never has to know
+   * anything was buffered at all. */
   onData(listener: (chunk: Buffer) => void): void {
+    const isFirst = this.dataListeners.length === 0;
     this.dataListeners.push(listener);
+    if (isFirst && this.pendingData.length > 0) {
+      const buffered = this.pendingData;
+      this.pendingData = [];
+      this.pendingDataBytes = 0;
+      for (const chunk of buffered) invokeListener(listener, chunk);
+    }
   }
 
+  /** Same deferred-replay shape as `onData` — see its own doc. */
   onEof(listener: () => void): void {
+    const isFirst = this.eofListeners.length === 0;
     this.eofListeners.push(listener);
+    if (isFirst && this.pendingEof) {
+      this.pendingEof = false;
+      invokeListener(listener);
+    }
   }
 
   onClose(listener: () => void): void {
@@ -426,13 +465,36 @@ class ChannelImpl implements MuxChannel {
     this.drainListeners.push(listener);
   }
 
-  /** @internal — dispatch from `MuxConnectionImpl`'s frame handler only. */
+  /** @internal — dispatch from `MuxConnectionImpl`'s frame handler only.
+   * Buffers rather than drops when no consumer has attached `onData` yet
+   * (see this class's own header comment for why that's a real, reproduced
+   * case, not a theoretical one) — replayed in order once one does.
+   * Bounded by `maxSendWindow` (== `CHANNEL_WINDOW_BYTES`, the same value
+   * this channel granted the peer as its own send-side ceiling): an honest
+   * peer's own window accounting can never leave more than that much
+   * outstanding unacknowledged, so this bound is never hit in normal
+   * operation. A peer that violates it anyway (buggy or malicious) gets
+   * this channel closed rather than an unbounded local buffer. */
   handleData(chunk: Buffer): void {
+    if (this.dataListeners.length === 0) {
+      if (this.pendingDataBytes + chunk.length > this.maxSendWindow) {
+        this.close();
+        return;
+      }
+      this.pendingDataBytes += chunk.length;
+      this.pendingData.push(chunk);
+      return;
+    }
     for (const listener of this.dataListeners) invokeListener(listener, chunk);
   }
 
-  /** @internal */
+  /** @internal — same pre-listener buffering as `handleData`, for the
+   * degenerate one-bit case of EOF. */
   handleEof(): void {
+    if (this.eofListeners.length === 0) {
+      this.pendingEof = true;
+      return;
+    }
     for (const listener of this.eofListeners) invokeListener(listener);
   }
 

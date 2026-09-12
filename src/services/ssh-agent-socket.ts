@@ -2,7 +2,12 @@ import net from "node:net";
 import path from "node:path";
 import { chmodSync } from "node:fs";
 import { reclaimSocketPath } from "./unix-socket.js";
-import { DEFAULT_MAX_CHANNELS, pipeNetSocketToChannel, type MuxChannel } from "./ssh-agent-mux.js";
+import {
+  DEFAULT_MAX_CHANNELS,
+  PONG_TIMEOUT_MS,
+  pipeNetSocketToChannel,
+  type MuxChannel,
+} from "./ssh-agent-mux.js";
 
 // Issue #820 — the agent-host half of the bridge's local surface: a real
 // unix socket a launched session's SSH_AUTH_SOCK can point at (see
@@ -19,6 +24,16 @@ import { DEFAULT_MAX_CHANNELS, pipeNetSocketToChannel, type MuxChannel } from ".
 // anything about how — or whether — a bridge is currently reachable. Only
 // the wiring in that later PR knows that.
 
+/** The minimal logging surface this module needs — matches
+ * `FastifyBaseLogger`'s `(obj, msg)` calling convention (fastify/types/
+ * logger.d.ts) so a caller can pass `app.log` directly, but kept as its
+ * own narrow interface rather than importing Fastify's type so this
+ * module (and its tests, which construct fakes) stay decoupled from it. */
+export interface SshAgentSocketLogger {
+  debug(obj: Record<string, unknown>, msg: string): void;
+  warn(obj: Record<string, unknown>, msg: string): void;
+}
+
 export interface SshAgentSocketOptions {
   socketPath: string;
   /** Called once per accepted SSH-client connection to obtain the
@@ -32,6 +47,11 @@ export interface SshAgentSocketOptions {
    * fallback. Closing immediately lets ssh fall through to its next
    * configured auth method instead. */
   openChannel: () => Promise<MuxChannel | null>;
+  /** Optional — every log line this module emits is `debug`-level (normal
+   * operation stays quiet) except the first-reply deadline firing, which is
+   * `warn` (it means a client-visible stall actually happened). Omitting
+   * this is safe; every log site checks for it first. */
+  log?: SshAgentSocketLogger;
 }
 
 export interface SshAgentSocketHandle {
@@ -57,12 +77,17 @@ export async function materializeSshAgentSocket(
     // no-bridge-connected case in handleConnection() below has to keep:
     // a hung SSH client is a UX-breaking stall, not a safe fallback.
     if (openSockets.size >= DEFAULT_MAX_CHANNELS) {
+      opts.log?.warn(
+        { socketPath: opts.socketPath, cap: DEFAULT_MAX_CHANNELS },
+        "ssh-agent-socket: rejecting accepted connection — at DEFAULT_MAX_CHANNELS cap",
+      );
       socket.destroy();
       return;
     }
     openSockets.add(socket);
     socket.once("close", () => openSockets.delete(socket));
-    void handleConnection(socket, opts.openChannel);
+    opts.log?.debug({ socketPath: opts.socketPath }, "ssh-agent-socket: accepted connection");
+    void handleConnection(socket, opts.openChannel, opts.log);
   });
 
   await new Promise<void>((resolve, reject) => {
@@ -217,9 +242,23 @@ export function describeBridgeShadowing(
   }
 }
 
+/** How long a locally-accepted SSH client may wait for its FIRST reply byte
+ * once a channel is open before this module gives up and closes the
+ * connection. Every other documented bound in this feature
+ * (`OPEN_ACK_TIMEOUT_MS`, the no-bridge fail-fast just below) fires before
+ * this point — nothing previously bounded a stall introduced anywhere
+ * downstream of a successful OpenAck (a dropped frame, a wedged relay hop),
+ * so `ssh`/`ssh-add` could block on `SSH_AUTH_SOCK` indefinitely instead of
+ * falling through to their next configured auth method. Reuses
+ * `PONG_TIMEOUT_MS` rather than inventing a new magic number — it's already
+ * this feature's own "how long is too long to wait for a live peer to
+ * answer" constant. */
+const FIRST_REPLY_DEADLINE_MS = PONG_TIMEOUT_MS;
+
 async function handleConnection(
   socket: net.Socket,
   openChannel: () => Promise<MuxChannel | null>,
+  log?: SshAgentSocketLogger,
 ): Promise<void> {
   let channel: MuxChannel | null;
   try {
@@ -232,9 +271,70 @@ async function handleConnection(
   // socket to a freshly-opened channel just to immediately tear it down
   // via pipeNetSocketToChannel's own close plumbing.
   if (!channel || socket.destroyed) {
+    if (!channel) {
+      log?.debug({}, "ssh-agent-socket: no channel available (no bridge reachable) — closing");
+    }
     if (channel) channel.close();
     if (!socket.destroyed) socket.destroy();
     return;
   }
-  pipeNetSocketToChannel(socket, channel);
+  const openChannelRef = channel;
+
+  // Watches for the first reply byte to clear the deadline below, and for
+  // an early close to cancel it — without touching pipeNetSocketToChannel
+  // itself (a second, independent `onData`/`onClose` listener alongside
+  // its own would either miss data buffered before either attaches, or
+  // double-handle it; see ssh-agent-mux.ts's ChannelImpl — only the first
+  // listener attached receives whatever was buffered before any listener
+  // existed). Every other member just delegates straight through.
+  let deadlineTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+    deadlineTimer = null;
+    log?.warn(
+      { channelId: openChannelRef.id, deadlineMs: FIRST_REPLY_DEADLINE_MS },
+      "ssh-agent-socket: no reply within the first-reply deadline — closing",
+    );
+    if (!openChannelRef.closed) openChannelRef.close();
+    if (!socket.destroyed) socket.destroy();
+  }, FIRST_REPLY_DEADLINE_MS);
+  deadlineTimer.unref?.();
+
+  function clearDeadline(): void {
+    if (deadlineTimer !== null) {
+      clearTimeout(deadlineTimer);
+      deadlineTimer = null;
+    }
+  }
+
+  const watchedChannel: MuxChannel = {
+    get id() {
+      return openChannelRef.id;
+    },
+    get sendWindow() {
+      return openChannelRef.sendWindow;
+    },
+    get closed() {
+      return openChannelRef.closed;
+    },
+    send: (chunk) => openChannelRef.send(chunk),
+    eof: () => openChannelRef.eof(),
+    close: () => openChannelRef.close(),
+    onData: (listener) => {
+      openChannelRef.onData((chunk) => {
+        clearDeadline();
+        listener(chunk);
+      });
+    },
+    onEof: (listener) => openChannelRef.onEof(listener),
+    onClose: (listener) => {
+      openChannelRef.onClose(() => {
+        clearDeadline();
+        listener();
+      });
+    },
+    onDrain: (listener) => openChannelRef.onDrain(listener),
+    acknowledgeConsumed: (byteCount) => openChannelRef.acknowledgeConsumed(byteCount),
+  };
+
+  log?.debug({ channelId: channel.id }, "ssh-agent-socket: channel open, piping");
+  pipeNetSocketToChannel(socket, watchedChannel);
 }

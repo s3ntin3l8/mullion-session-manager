@@ -143,7 +143,7 @@ export const sshAgentPlugin = fp(async (app: FastifyInstance) => {
   let handle: Awaited<ReturnType<typeof materializeSshAgentSocket>> | null = null;
   if (app.sshAuthSockBridgeExpected) {
     try {
-      handle = await materializeSshAgentSocket({ socketPath, openChannel });
+      handle = await materializeSshAgentSocket({ socketPath, openChannel, log: app.log });
     } catch (err) {
       if (shouldCrashOnBridgeSocketBindFailure(err, app.sshAuthSockBridgeExpected)) {
         throw err;

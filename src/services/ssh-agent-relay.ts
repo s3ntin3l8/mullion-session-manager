@@ -15,6 +15,13 @@ import { pipeChannelDirection, type MuxChannel } from "./ssh-agent-mux.js";
 // the laptop's real agent socket; this copy is the independent
 // defense-in-depth leg on the primary.
 //
+/** The minimal logging surface this module needs — see
+ * ssh-agent-socket.ts's identically-named/shaped interface for why this
+ * isn't just `FastifyBaseLogger` imported directly. */
+export interface SshAgentRelayLogger {
+  debug(obj: Record<string, unknown>, msg: string): void;
+}
+
 // `requestSource` carries an SSH client's raw request bytes (the agent
 // host's own inbound leg — see the local-socket materialization module
 // this PR also adds). `replyDest` is the channel toward the bridge/helper,
@@ -22,15 +29,24 @@ import { pipeChannelDirection, type MuxChannel } from "./ssh-agent-mux.js";
 export function pipeFilteredChannelToChannel(
   requestSource: MuxChannel,
   replyDest: MuxChannel,
+  log?: SshAgentRelayLogger,
 ): void {
-  pipeFilteredRequestDirection(requestSource, replyDest);
+  pipeFilteredRequestDirection(requestSource, replyDest, log);
   pipeChannelDirection(replyDest, requestSource);
 }
 
 /** The filtered half of `pipeFilteredChannelToChannel` — kept separate and
  * exported for direct unit testing of the filtering/accounting behavior
- * without needing two full mux connections wired together. */
-export function pipeFilteredRequestDirection(source: MuxChannel, dest: MuxChannel): void {
+ * without needing two full mux connections wired together. `log` is
+ * optional and, if given, only ever used at `debug` level — every blocked
+ * request was already silent by design before this (see this module's own
+ * header comment on `SIGN_ONLY_ALLOWLIST`'s enforcement), and stays that
+ * way in normal operation; this just makes it observable on demand. */
+export function pipeFilteredRequestDirection(
+  source: MuxChannel,
+  dest: MuxChannel,
+  log?: SshAgentRelayLogger,
+): void {
   const filter = new SignOnlyFilter();
   const pending: Buffer[] = [];
 
@@ -79,6 +95,10 @@ export function pipeFilteredRequestDirection(source: MuxChannel, dest: MuxChanne
     }
 
     for (let i = 0; i < result.reject.length; i++) {
+      log?.debug(
+        { channelId: source.id, rejectedLength: result.rejectedLengths[i] },
+        "ssh-agent-relay: blocked a non-sign-only request — replying SSH_AGENT_FAILURE",
+      );
       sendReject(result.reject[i], result.rejectedLengths[i]);
     }
     pending.push(...result.forward);
