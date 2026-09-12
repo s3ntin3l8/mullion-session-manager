@@ -882,7 +882,10 @@ describe("projects route — Docker Compose service discovery (issue #73)", () =
     it("a second stack action on the SAME compose project reuses the first session rather than starting a concurrent one", async () => {
       discoveredServices = [fixtureService()];
       const app = await buildApp();
-      vi.spyOn(app.pty, "isMasterAlive").mockResolvedValue(true);
+      // Issue #1232 — findActiveStackSession now cross-checks
+      // `app.pty.isMasterAliveState` (a three-way, not `isMasterAlive`'s
+      // plain boolean), so this stack of tests mocks that instead.
+      vi.spyOn(app.pty, "isMasterAliveState").mockResolvedValue("alive");
       const projectId = await createProject(app);
 
       const first = await app.inject({
@@ -934,7 +937,7 @@ describe("projects route — Docker Compose service discovery (issue #73)", () =
     it("two CONCURRENT stack actions on the same compose project resolve to exactly one created session", async () => {
       discoveredServices = [fixtureService()];
       const app = await buildApp();
-      vi.spyOn(app.pty, "isMasterAlive").mockResolvedValue(true);
+      vi.spyOn(app.pty, "isMasterAliveState").mockResolvedValue("alive");
       const projectId = await createProject(app);
 
       const [apply, restart] = await Promise.all([
@@ -972,7 +975,7 @@ describe("projects route — Docker Compose service discovery (issue #73)", () =
     it("the docker/update route (pull-and-restart) shares the SAME identity as the four stack/* routes", async () => {
       discoveredServices = [fixtureService()];
       const app = await buildApp();
-      vi.spyOn(app.pty, "isMasterAlive").mockResolvedValue(true);
+      vi.spyOn(app.pty, "isMasterAliveState").mockResolvedValue("alive");
       const projectId = await createProject(app);
 
       const update = await app.inject({
@@ -1063,16 +1066,19 @@ describe("projects route — Docker Compose service discovery (issue #73)", () =
       // never exercises this window, since it flips the row itself. Here
       // the row is left `status: "active"` — only the underlying systemd
       // scope is reported dead — so this only passes if
-      // findActiveStackSession cross-checks `app.pty.isMasterAlive`, not
-      // the DB column alone. Spied directly (mockMasterAlive's own pattern,
-      // test/services/session-reconciler.test.ts) rather than routed
-      // through the mocked node-pty/child_process spawns — isMasterAlive
-      // shells out to `systemctl` independently of anything those mocks
-      // control, so a real dead-vs-alive distinction has to be injected at
-      // this layer, the same way the reconciler's own tests do it.
+      // findActiveStackSession cross-checks `app.pty.isMasterAliveState`,
+      // not the DB column alone. Spied directly (mockMasterAlive's own
+      // pattern, test/services/session-reconciler.test.ts) rather than
+      // routed through the mocked node-pty/child_process spawns —
+      // isMasterAliveState shells out to `systemctl` independently of
+      // anything those mocks control, so a real dead-vs-alive distinction
+      // has to be injected at this layer, the same way the reconciler's own
+      // tests do it. `"dead"`, not `"unknown"` — issue #1232's own guard
+      // treats "unknown" as live, so this test has to answer with the
+      // CONFIRMED-dead variant to still exercise the "starts fresh" branch.
       discoveredServices = [fixtureService()];
       const app = await buildApp();
-      const isMasterAlive = vi.spyOn(app.pty, "isMasterAlive").mockResolvedValue(true);
+      const isMasterAliveState = vi.spyOn(app.pty, "isMasterAliveState").mockResolvedValue("alive");
       const projectId = await createProject(app);
 
       const first = await app.inject({
@@ -1084,7 +1090,7 @@ describe("projects route — Docker Compose service discovery (issue #73)", () =
 
       // The compose command itself finished — the real systemd scope is
       // gone, but nothing tells the DB row about it yet.
-      isMasterAlive.mockResolvedValue(false);
+      isMasterAliveState.mockResolvedValue("dead");
 
       const second = await app.inject({
         method: "POST",
@@ -1103,11 +1109,13 @@ describe("projects route — Docker Compose service discovery (issue #73)", () =
       // reply would leak `ok` as a stray field none of the three response
       // consumers (frontend/mcp/cli) have any use for. Two DIFFERENT
       // compose projects (not two calls on the SAME one) so neither
-      // request ever reaches findActiveStackSession's isMasterAlive check
-      // — this file's own node:child_process mock only ever fires `exit`,
-      // never `close`, which is what a real isMasterAlive call waits on
-      // (see session-reconciler.test.ts's own comment on the identical
-      // gotcha) and would hang the request for the test's full timeout.
+      // request ever reaches findActiveStackSession's isMasterAliveState
+      // check — this file's own node:child_process mock only ever fires
+      // `exit`, never `close`, which is what a real isMasterAliveState call
+      // waits on (see session-reconciler.test.ts's own comment on the
+      // identical gotcha) and would pay the full SYSTEMCTL_TIMEOUT_MS
+      // (session-process.ts) before resolving, right at vitest's own
+      // default test timeout.
       discoveredServices = [
         fixtureService(),
         fixtureService({
@@ -1198,12 +1206,12 @@ describe("projects route — Docker Compose service discovery (issue #73)", () =
   // own lock — modeled here by inserting the conflicting row directly,
   // bypassing withStackLock/createSessionRecord entirely, the same way a
   // second backend process (or a hypothetical future `kind: "dock"` insert
-  // that bypasses the lock) would leave one behind. isMasterAlive is spied
-  // directly rather than routed through the mocked node-pty/child_process
-  // spawns for the same reason the neighboring describe block above does
-  // (see its "never leaks the internal ok:true discriminant" test) — this
-  // file's own node:child_process mock only ever fires `exit`, never
-  // `close`, which is what a real isMasterAlive call waits on
+  // that bypasses the lock) would leave one behind. isMasterAliveState is
+  // spied directly rather than routed through the mocked node-pty/
+  // child_process spawns for the same reason the neighboring describe block
+  // above does (see its "never leaks the internal ok:true discriminant"
+  // test) — this file's own node:child_process mock only ever fires `exit`,
+  // never `close`, which is what a real isMasterAliveState call waits on
   // (session-reconciler.test.ts's own documented fix for the identical
   // gotcha).
   describe("DB-level stack-identity guard, out-of-lock duplicate (issue #1223)", () => {
@@ -1235,8 +1243,10 @@ describe("projects route — Docker Compose service discovery (issue #73)", () =
       const staleRow = insertActiveStackRow(app, projectId);
 
       // The row's process has actually exited — this is the exact case
-      // this issue exists to tolerate, not reject.
-      const isMasterAlive = vi.spyOn(app.pty, "isMasterAlive").mockResolvedValue(false);
+      // this issue exists to tolerate, not reject. `"dead"`, not
+      // `"unknown"` — issue #1232's own guard treats "unknown" as live, so
+      // this test answers with the CONFIRMED-dead variant.
+      const isMasterAliveState = vi.spyOn(app.pty, "isMasterAliveState").mockResolvedValue("dead");
 
       const res = await app.inject({
         method: "POST",
@@ -1264,33 +1274,33 @@ describe("projects route — Docker Compose service discovery (issue #73)", () =
       expect(activeStackSessions).toHaveLength(1);
       expect(activeStackSessions[0]?.id).toBe(body.sessionId);
 
-      expect(isMasterAlive).toHaveBeenCalled();
+      expect(isMasterAliveState).toHaveBeenCalled();
       await app.close();
     });
 
     it("an out-of-lock duplicate whose process is genuinely still alive is reused via the conflict handler, no thrown error", async () => {
-      // Deliberately does NOT mock isMasterAlive to a constant `true` —
-      // that would let findActiveStackSession's own pre-existing check
-      // short-circuit before createSessionRecord is ever called, leaving
-      // this test's namesake code path (the NEW conflict handler in
-      // startStackSession, added by this issue) completely unexercised.
-      // Ordering is the only lever available to target it, since both
-      // calls query the same row id: findActiveStackSession's own call is
-      // always the FIRST isMasterAlive call inside withStackLock (it's the
-      // first thing the callback does) — answer that `false` so it treats
-      // the row as dead and falls through to the insert, which then hits
-      // sessions_stack_identity_unique; only the conflict handler's own
-      // (second) call answers `true`, confirming the row is genuinely
-      // alive after all.
+      // Deliberately does NOT mock isMasterAliveState to a constant
+      // `"alive"` — that would let findActiveStackSession's own
+      // pre-existing check short-circuit before createSessionRecord is ever
+      // called, leaving this test's namesake code path (the NEW conflict
+      // handler in startStackSession, added by this issue) completely
+      // unexercised. Ordering is the only lever available to target it,
+      // since both calls query the same row id: findActiveStackSession's
+      // own call is always the FIRST isMasterAliveState call inside
+      // withStackLock (it's the first thing the callback does) — answer
+      // that `"dead"` so it treats the row as dead and falls through to the
+      // insert, which then hits sessions_stack_identity_unique; only the
+      // conflict handler's own (second) call answers `"alive"`, confirming
+      // the row is genuinely alive after all.
       discoveredServices = [fixtureService()];
       const app = await buildApp();
       const projectId = await createProject(app);
 
       const staleRow = insertActiveStackRow(app, projectId);
-      const isMasterAlive = vi
-        .spyOn(app.pty, "isMasterAlive")
-        .mockResolvedValueOnce(false)
-        .mockResolvedValue(true);
+      const isMasterAliveState = vi
+        .spyOn(app.pty, "isMasterAliveState")
+        .mockResolvedValueOnce("dead")
+        .mockResolvedValue("alive");
 
       const res = await app.inject({
         method: "POST",
@@ -1306,9 +1316,9 @@ describe("projects route — Docker Compose service discovery (issue #73)", () =
       // Both calls target the SAME row id — the only way to tell "reused
       // via findActiveStackSession's short-circuit" (one call) apart from
       // "reused via the conflict handler" (two calls) is this count.
-      expect(isMasterAlive).toHaveBeenCalledTimes(2);
-      expect(isMasterAlive).toHaveBeenNthCalledWith(1, String(staleRow.id));
-      expect(isMasterAlive).toHaveBeenNthCalledWith(2, String(staleRow.id));
+      expect(isMasterAliveState).toHaveBeenCalledTimes(2);
+      expect(isMasterAliveState).toHaveBeenNthCalledWith(1, String(staleRow.id));
+      expect(isMasterAliveState).toHaveBeenNthCalledWith(2, String(staleRow.id));
 
       // Untouched — it really is the live, correct session, not flipped.
       const [row] = app.db.select().from(sessions).where(eq(sessions.id, staleRow.id)).all();
@@ -1322,6 +1332,103 @@ describe("projects route — Docker Compose service discovery (issue #73)", () =
         .all()
         .filter((s) => s.name === "docker-stack:sanctuary");
       expect(stackRows).toHaveLength(1);
+
+      await app.close();
+    });
+
+    // Issue #1232 — a listOwnedScopes timeout (or any other momentary
+    // systemctl failure) makes isMasterAliveState resolve "unknown," not
+    // "dead." The conflict handler must bail out with no DB write rather
+    // than falling through to its own mark-exited-and-recreate branch —
+    // treating "unknown" as dead there would permanently orphan a scope
+    // that's actually still running, since session-reconciler.ts never
+    // revisits a row once it leaves `status: "active"`.
+    it("an unverifiable liveness answer in the conflict handler bails out with a 502, never marks the row exited", async () => {
+      discoveredServices = [fixtureService()];
+      const app = await buildApp();
+      const projectId = await createProject(app);
+
+      const staleRow = insertActiveStackRow(app, projectId);
+      const isMasterAliveState = vi
+        .spyOn(app.pty, "isMasterAliveState")
+        // findActiveStackSession's own call, first: "dead", so it does NOT
+        // short-circuit the request via its own `if (existing)` branch —
+        // the row appears exited, so the code proceeds to the insert,
+        // which then hits sessions_stack_identity_unique and reaches the
+        // conflict handler this test actually targets.
+        .mockResolvedValueOnce("dead")
+        // The conflict handler's own (second) call — the one under test.
+        .mockResolvedValueOnce("unknown");
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/docker/stack/restart`,
+        payload: { controlId: "docker:sanctuary:web" },
+      });
+
+      expect(res.statusCode).toBe(502);
+      // Both calls target the SAME row id — findActiveStackSession's own
+      // check, then the conflict handler's.
+      expect(isMasterAliveState).toHaveBeenCalledTimes(2);
+      expect(isMasterAliveState).toHaveBeenNthCalledWith(1, String(staleRow.id));
+      expect(isMasterAliveState).toHaveBeenNthCalledWith(2, String(staleRow.id));
+
+      // Untouched — an unverifiable answer must never flip a row to exited.
+      const [row] = app.db.select().from(sessions).where(eq(sessions.id, staleRow.id)).all();
+      expect(row?.status).toBe("active");
+
+      // No second row was created for this identity either.
+      const stackRows = app.db
+        .select()
+        .from(sessions)
+        .where(eq(sessions.projectId, projectId))
+        .all()
+        .filter((s) => s.name === "docker-stack:sanctuary");
+      expect(stackRows).toHaveLength(1);
+
+      await app.close();
+    });
+  });
+
+  // Issue #1232 — findActiveStackSession's own OWN "unknown" branch,
+  // separate from the conflict handler above: an unverifiable/timed-out
+  // liveness answer for an EXISTING active row must be treated as live
+  // (reused), not dead, or a second `docker compose` invocation would fire
+  // against a stack that's still running.
+  describe("findActiveStackSession — unverifiable liveness (issue #1232)", () => {
+    it("treats an existing active row as reused when its liveness is unverifiable, not as dead", async () => {
+      discoveredServices = [fixtureService()];
+      const app = await buildApp();
+      vi.spyOn(app.pty, "isMasterAliveState").mockResolvedValue("alive");
+      const projectId = await createProject(app);
+
+      const first = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/docker/stack/apply`,
+        payload: { controlId: "docker:sanctuary:web" },
+      });
+      const firstSessionId = first.json().sessionId;
+
+      // The listing timed out (or D-Bus hiccuped) — momentarily unverifiable,
+      // not confirmed dead.
+      vi.spyOn(app.pty, "isMasterAliveState").mockResolvedValue("unknown");
+
+      const second = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/docker/stack/restart`,
+        payload: { controlId: "docker:sanctuary:web" },
+      });
+      expect(second.statusCode).toBe(201);
+      expect(second.json().reused).toBe(true);
+      expect(second.json().sessionId).toBe(firstSessionId);
+
+      // Exactly one kind:dock session for this stack — no second
+      // `docker compose` invocation was fired against it.
+      const sessionsRes = await app.inject({
+        method: "GET",
+        url: `/api/sessions?projectId=${projectId}&kind=dock`,
+      });
+      expect(sessionsRes.json()).toHaveLength(1);
 
       await app.close();
     });
