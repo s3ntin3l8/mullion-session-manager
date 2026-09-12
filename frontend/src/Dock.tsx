@@ -981,7 +981,30 @@ function DockColumn({
   // drag from the clamped, actually-rendered position, not a value this
   // column can't currently honor, so the divider never jumps the instant a
   // drag begins on a column narrower than the one that last set the ratio.
-  const { onMouseDown: onPaneDividerMouseDown } = useDragResize({
+  // A bare click (mousedown -> mouseup with no mousemove in between, an
+  // entirely ordinary stray click on the handle) still fires `onCommit`
+  // below: `useDragResize`'s own `lastValueRef` is seeded to `value` at
+  // drag start and only ever updated by a real `mousemove`, so a no-op
+  // "drag" commits with exactly that seed. Since `value` (`effectivePanePx`)
+  // is the CLAMPED render value, not necessarily the raw stored ratio (see
+  // `effectiveRatio`'s own comment above), persisting unconditionally would
+  // silently overwrite the user's ACTUAL stored ratio with today's clamped
+  // approximation on every stray click — for every column sharing this
+  // workspace's ratio, not just this narrow one (which is expected to
+  // degrade), but a wider sibling that was rendering the real ratio
+  // correctly. That's exactly what the render-time clamp's own comment
+  // above says never happens.
+  //
+  // Comparing `onCommit`'s own `px` against the LIVE `effectivePanePx` at
+  // commit time doesn't work, though: a REAL drag's own `onChange` already
+  // re-renders this column with a matching `effectivePanePx` before
+  // `mouseup` ever fires, so by commit time the two are equal for a
+  // genuine drag too, not just a stray click — this ref instead captures
+  // `effectivePanePx` once, at the MOMENT this specific drag starts, so a
+  // later render's updated value can't retroactively make a real drag look
+  // like a no-op.
+  const dragStartPxRef = useRef<number | null>(null);
+  const { onMouseDown: onPaneDividerMouseDownRaw } = useDragResize({
     axis: "x",
     min: logPaneMinWidth,
     getMax: () => paneAreaWidth - logPaneMinWidth,
@@ -990,10 +1013,18 @@ function DockColumn({
       if (paneAreaWidth > 0) onPaneSplitRatioChange(px / paneAreaWidth);
     },
     onCommit: (px) => {
-      if (paneAreaWidth > 0) onPaneSplitRatioCommit(px / paneAreaWidth);
+      const startPx = dragStartPxRef.current;
+      dragStartPxRef.current = null;
+      if (paneAreaWidth > 0 && px !== startPx) {
+        onPaneSplitRatioCommit(px / paneAreaWidth);
+      }
     },
     cursor: "col-resize",
   });
+  const onPaneDividerMouseDown = (e: ReactMouseEvent) => {
+    dragStartPxRef.current = effectivePanePx;
+    onPaneDividerMouseDownRaw(e);
+  };
 
   const { githubStatus, prsStatus } = useDockGithubStatus(projectId, prsRefreshTrigger);
 

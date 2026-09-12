@@ -803,6 +803,42 @@ describe("Dock", () => {
         expect(JSON.parse(localStorage.getItem("crs.dockPaneSplitRatio") ?? "{}")["9"]).toBe(0.75);
       });
 
+      it("a stray click on the divider (mousedown/mouseup, no movement) does not overwrite a clamped stored ratio", async () => {
+        // Regression coverage: `useDragResize`'s own `onUp` fires `onCommit`
+        // unconditionally on every `mouseup`, including a bare click with no
+        // `mousemove` in between — `lastValueRef` is seeded to `value` at
+        // mousedown and never updated without a real move, so a no-op
+        // "drag" commits with the CLAMPED render value
+        // (`effectivePanePx`), not the raw stored ratio. Without a guard at
+        // the call site, this would silently replace the user's actual
+        // 0.75 with the narrow column's own clamped ≈0.5495 on every stray
+        // click — for every column sharing this workspace's ratio, not just
+        // this narrow one.
+        const sessions = twoRunningControls();
+        localStorage.setItem("crs.dockPaneSplitRatio", JSON.stringify({ "9": 0.75 }));
+        useDashboardStore.setState({
+          projects: [PROJECT],
+          sessions,
+          sessionsLoaded: true,
+          activeWorkspaceId: 9,
+        });
+
+        render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+        resizeTo(TWO_PANE_WIDTH);
+        await screen.findByTestId("terminal-pane");
+        const user = userEvent.setup();
+        await user.click(screen.getByText("pin"));
+        expect(await screen.findAllByTestId("terminal-pane")).toHaveLength(2);
+        expect(primaryPaneEl().style.flex).toBe("0 0 444px");
+
+        fireEvent.mouseDown(dividerEl(), { clientX: 0 });
+        act(() => {
+          window.dispatchEvent(new MouseEvent("mouseup")); // no mousemove
+        });
+
+        expect(JSON.parse(localStorage.getItem("crs.dockPaneSplitRatio") ?? "{}")["9"]).toBe(0.75);
+      });
+
       it("shares the ratio across columns in one workspace, each clamping independently against its own width", async () => {
         const PROJECT2 = makeProject({ id: 2, name: "second", cwd: "/home/x/second" });
         dockByProject[1] = [
