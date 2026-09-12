@@ -774,7 +774,12 @@ async function loadProjectRepoContext(
 // exact race this lock exists to close, just narrowed to the rare hang case
 // instead of closed. The correct fix is a timeout in `listOwnedScopes`
 // itself, which resolves for every caller of `isMasterAlive`/
-// `isMasterAliveBatch`, not just this one — tracked in issue #1232.
+// `isMasterAliveBatch`, not just this one — landed in issue #1232. That fix
+// converts a hang into a fast, confident "unknown," which is exactly what
+// findActiveStackSession/startStackSession below now consult via
+// `app.pty.isMasterAliveState` rather than plain `isMasterAlive` — that
+// function's own `?? false` posture would otherwise fold a merely-slow
+// D-Bus round trip into the same branch as a session that's actually dead.
 export function createKeyedLock(): <T>(key: string, fn: () => Promise<T>) => Promise<T> {
   const locks = new Map<string, Promise<unknown>>();
   return function withLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
@@ -1412,7 +1417,18 @@ export async function projectsRoute(app: FastifyInstance) {
     // anything tracked in this process's own memory (see its own doc
     // comment, session-process.ts), so it's correct immediately after a
     // restart too, not just mid-process.
-    return (await app.pty.isMasterAlive(String(existing.id))) ? existing : null;
+    //
+    // Issue #1232 — `isMasterAliveState`, not plain `isMasterAlive`: a
+    // merely-slow or momentarily-failing listing ("unknown") is treated as
+    // LIVE here, never dead. Over-trusting a stale row in that case costs at
+    // most a second `docker compose` invocation racing a session that
+    // already finished — annoying, not destructive. The opposite mistake
+    // (treating a genuinely live stack session as dead) feeds
+    // startStackSession's own mark-exited-and-recreate branch below, which
+    // permanently orphans the still-running scope (session-reconciler.ts
+    // never revisits a row once it leaves `status: "active"`).
+    const state = await app.pty.isMasterAliveState(String(existing.id));
+    return state === "dead" ? null : existing;
   }
 
   // Shared by every stack-wide lifecycle route below (restart/apply/
@@ -1543,17 +1559,29 @@ export async function projectsRoute(app: FastifyInstance) {
         .all();
 
       // Same primitive findActiveStackSession already trusts for this
-      // identity (not isMasterAliveBatch — different unknown-collapses-to
-      // semantics; mixing the two in one code path would be inconsistent).
-      if (conflictingRow && (await app.pty.isMasterAlive(String(conflictingRow.id)))) {
-        return { ok: true, sessionId: conflictingRow.id, control, reused: true };
-      }
-
+      // identity. Issue #1232 — three-way, not a boolean: an "unknown"
+      // answer (the listing timed out, or couldn't confirm ownership) must
+      // NOT fall through to the mark-exited-and-recreate branch below —
+      // that would permanently orphan a scope that's actually still
+      // running, since session-reconciler.ts never revisits a row once it
+      // leaves `status: "active"`. Bail out with no DB write instead; both
+      // callers of startStackSession already map `!ok` to a plain 502, so
+      // this surfaces as an honest, retryable failure rather than data
+      // loss. `!conflictingRow` (vanished between the select above and
+      // here, e.g. a concurrent reconciler pass already flipped it) skips
+      // this whole block and falls straight to the retry below, same as
+      // before this issue.
       if (conflictingRow) {
-        // Confirmed dead (or it vanished between the select above and here,
-        // in which case this CAS is a harmless no-op) — flip it, CAS'd
-        // exactly like session-reconciler.ts's own sweep, so a concurrent
-        // reconciler pass touching the same row can't race this update.
+        const conflictState = await app.pty.isMasterAliveState(String(conflictingRow.id));
+        if (conflictState === "alive") {
+          return { ok: true, sessionId: conflictingRow.id, control, reused: true };
+        }
+        if (conflictState === "unknown") {
+          return { ok: false };
+        }
+        // Confirmed dead — flip it, CAS'd exactly like session-reconciler.ts's
+        // own sweep, so a concurrent reconciler pass touching the same row
+        // can't race this update.
         app.db
           .update(sessions)
           .set({ status: "exited" })

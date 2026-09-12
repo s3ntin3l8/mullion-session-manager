@@ -54,6 +54,7 @@ import {
   describeScope,
   deriveInstanceId,
   isMasterAlive as isMasterAliveProcess,
+  isMasterAliveState as isMasterAliveStateProcess,
   isMasterAliveBatch as isMasterAliveBatchProcess,
   listSessionProcesses as listSessionProcessesProcess,
 } from "./session-process.js";
@@ -4563,6 +4564,20 @@ export class PtyManager {
    */
   isMasterAlive(id: string): Promise<boolean> {
     return isMasterAliveProcess(this.sessionsDir, this.instanceId, id);
+  }
+
+  /**
+   * Issue #1232 — same lookup as isMasterAlive() above, but distinguishes
+   * "unknown" (an unverifiable id, or the underlying listing timing out)
+   * from a confident "dead." See isMasterAliveState() in session-process.ts
+   * for the full doc comment on why a caller that takes a destructive
+   * action on "not alive" must use this instead of isMasterAlive()'s own
+   * `?? false` collapse. Kept as a real instance method for the same
+   * reason as isMasterAlive() above — routes/projects.ts's
+   * startStackSession/findActiveStackSession call `app.pty.isMasterAliveState(id)`.
+   */
+  isMasterAliveState(id: string): Promise<"alive" | "dead" | "unknown"> {
+    return isMasterAliveStateProcess(this.sessionsDir, this.instanceId, id);
   }
 
   /**
