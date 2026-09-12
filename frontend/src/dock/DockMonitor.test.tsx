@@ -839,6 +839,45 @@ describe("Dock", () => {
         expect(JSON.parse(localStorage.getItem("crs.dockPaneSplitRatio") ?? "{}")["9"]).toBe(0.75);
       });
 
+      it("persists a real drag that ends back at its own starting pixel (Hermes review) — a moved-during-drag flag, not final-vs-start px", async () => {
+        // Regression coverage for a real bug caught in review on the FIRST
+        // version of the stray-click guard above: that version compared
+        // `onCommit`'s final px against the px captured at drag start, and
+        // skipped the persist whenever they matched — which also matches a
+        // completely genuine drag that moves away and back to the exact
+        // same pixel before release. `onChange` fired (the divider visibly
+        // moved), so this MUST persist; the guard has to track whether any
+        // movement happened, not whether the net position changed.
+        const sessions = twoRunningControls();
+        useDashboardStore.setState({
+          projects: [PROJECT],
+          sessions,
+          sessionsLoaded: true,
+          activeWorkspaceId: 5,
+        });
+        const user = userEvent.setup();
+
+        render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+        resizeTo(TWO_PANE_WIDTH);
+        await screen.findByTestId("terminal-pane");
+        await user.click(screen.getByText("pin"));
+        expect(await screen.findAllByTestId("terminal-pane")).toHaveLength(2);
+        expect(primaryPaneEl().style.flex).toBe("0 0 404px"); // 0.5 default
+
+        fireEvent.mouseDown(dividerEl(), { clientX: 0 });
+        act(() => {
+          window.dispatchEvent(new MouseEvent("mousemove", { clientX: 20 })); // -> 424px
+          window.dispatchEvent(new MouseEvent("mousemove", { clientX: 0 })); // back to 404px
+        });
+        expect(primaryPaneEl().style.flex).toBe("0 0 404px");
+        act(() => {
+          window.dispatchEvent(new MouseEvent("mouseup"));
+        });
+
+        const stored = JSON.parse(localStorage.getItem("crs.dockPaneSplitRatio") ?? "{}");
+        expect(stored["5"]).toBeCloseTo(404 / 808);
+      });
+
       it("shares the ratio across columns in one workspace, each clamping independently against its own width", async () => {
         const PROJECT2 = makeProject({ id: 2, name: "second", cwd: "/home/x/second" });
         dockByProject[1] = [

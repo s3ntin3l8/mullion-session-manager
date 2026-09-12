@@ -995,34 +995,37 @@ function DockColumn({
   // correctly. That's exactly what the render-time clamp's own comment
   // above says never happens.
   //
-  // Comparing `onCommit`'s own `px` against the LIVE `effectivePanePx` at
-  // commit time doesn't work, though: a REAL drag's own `onChange` already
-  // re-renders this column with a matching `effectivePanePx` before
-  // `mouseup` ever fires, so by commit time the two are equal for a
-  // genuine drag too, not just a stray click — this ref instead captures
-  // `effectivePanePx` once, at the MOMENT this specific drag starts, so a
-  // later render's updated value can't retroactively make a real drag look
-  // like a no-op.
-  const dragStartPxRef = useRef<number | null>(null);
+  // Comparing `onCommit`'s own `px` against a px value captured at drag
+  // start doesn't work either (an earlier version of this guard did
+  // exactly that, caught in Hermes review): a user who drags away and back
+  // to that exact same pixel before releasing has a completely real drag —
+  // `onChange` fired, the divider visibly moved — that just happens to
+  // settle back on its starting value. Comparing final-vs-start px can't
+  // tell that apart from a stray click that never moved at all, and would
+  // silently drop the persist for the former. Track whether `onChange`
+  // fired at all during THIS drag instead — that's the actual distinction
+  // being made ("did anything happen"), not "did the value net-change."
+  const draggedRef = useRef(false);
   const { onMouseDown: onPaneDividerMouseDownRaw } = useDragResize({
     axis: "x",
     min: logPaneMinWidth,
     getMax: () => paneAreaWidth - logPaneMinWidth,
     value: effectivePanePx,
     onChange: (px) => {
+      draggedRef.current = true;
       if (paneAreaWidth > 0) onPaneSplitRatioChange(px / paneAreaWidth);
     },
     onCommit: (px) => {
-      const startPx = dragStartPxRef.current;
-      dragStartPxRef.current = null;
-      if (paneAreaWidth > 0 && px !== startPx) {
+      const dragged = draggedRef.current;
+      draggedRef.current = false;
+      if (paneAreaWidth > 0 && dragged) {
         onPaneSplitRatioCommit(px / paneAreaWidth);
       }
     },
     cursor: "col-resize",
   });
   const onPaneDividerMouseDown = (e: ReactMouseEvent) => {
-    dragStartPxRef.current = effectivePanePx;
+    draggedRef.current = false;
     onPaneDividerMouseDownRaw(e);
   };
 
