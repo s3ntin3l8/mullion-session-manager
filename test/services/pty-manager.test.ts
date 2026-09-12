@@ -4781,7 +4781,12 @@ describe("PtyManager", () => {
       });
       await waitForSpawn(session);
       const now = Date.now();
-      session.emitHookEvent({ kind: "tool_failure", tool: "Bash", error: "boom" });
+      // `now` passed explicitly (rather than emitHookEvent's own default
+      // Date.now()) so errorAt and the `now + 600_001` staleness check
+      // below race against the identical value, not two independent
+      // real-time reads a CI-scheduling jitter apart — see the "fix:
+      // sticky needs_input" test further down for the same pattern.
+      session.emitHookEvent({ kind: "tool_failure", tool: "Bash", error: "boom" }, now);
 
       // Not yet stale.
       expect(session.clearStaleErrorIfOlderThan(600_000, now)).toBe(false);
@@ -4809,11 +4814,14 @@ describe("PtyManager", () => {
         await waitForSpawn(session);
         const now = Date.now();
 
-        session.emitHookEvent({
-          kind: "permission_request",
-          tool: "Bash",
-          summary: "rm -rf /tmp/x",
-        });
+        session.emitHookEvent(
+          {
+            kind: "permission_request",
+            tool: "Bash",
+            summary: "rm -rf /tmp/x",
+          },
+          now,
+        );
         expect(session.toInfo().permissionState).toBe("pending");
 
         expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now)).toBe(false);
@@ -4994,7 +5002,7 @@ describe("PtyManager", () => {
         await waitForSpawn(session);
         const now = Date.now();
 
-        session.emitHookEvent({ kind: "compact", state: "started", trigger: "auto" });
+        session.emitHookEvent({ kind: "compact", state: "started", trigger: "auto" }, now);
         expect(session.toInfo().compactState).toBe("compacting");
 
         expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 600_001)).toBe(true);
@@ -5015,7 +5023,7 @@ describe("PtyManager", () => {
         await waitForSpawn(session);
         const now = Date.now();
 
-        session.emitHookEvent({ kind: "subagent", state: "started", agentType: "Explore" });
+        session.emitHookEvent({ kind: "subagent", state: "started", agentType: "Explore" }, now);
         expect(session.toInfo().subagentCount).toBe(1);
 
         expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 600_001)).toBe(true);
@@ -5042,13 +5050,16 @@ describe("PtyManager", () => {
         await waitForSpawn(session);
         const now = Date.now();
 
-        session.emitHookEvent({
-          kind: "progress",
-          phase: "done",
-          backgroundTasks: [
-            { id: "t1", type: "subagent", status: "running", description: "Explore agent" },
-          ],
-        });
+        session.emitHookEvent(
+          {
+            kind: "progress",
+            phase: "done",
+            backgroundTasks: [
+              { id: "t1", type: "subagent", status: "running", description: "Explore agent" },
+            ],
+          },
+          now,
+        );
         expect(session.toInfo().outstandingBackgroundTasks).toHaveLength(1);
         // The deferred-turn-end gate held: no attention event fired yet.
         expect(session.getEvents().map((e) => e.kind)).not.toContain("attention");
@@ -5114,8 +5125,8 @@ describe("PtyManager", () => {
         await waitForSpawn(session);
         const now = Date.now();
 
-        session.emitHookEvent({ kind: "compact", state: "started", trigger: "auto" });
-        session.emitHookEvent({ kind: "subagent", state: "started", agentType: "Explore" });
+        session.emitHookEvent({ kind: "compact", state: "started", trigger: "auto" }, now);
+        session.emitHookEvent({ kind: "subagent", state: "started", agentType: "Explore" }, now);
 
         expect(session.clearStaleBlockedIfOlderThan(600_000, 7_200_000, now + 7_200_001)).toBe(
           true,
@@ -5135,12 +5146,15 @@ describe("PtyManager", () => {
         await waitForSpawn(session);
         const now = Date.now();
 
-        session.emitHookEvent({
-          kind: "permission_request",
-          tool: "Bash",
-          summary: "rm -rf /tmp/x",
-        });
-        session.emitHookEvent({ kind: "compact", state: "started", trigger: "auto" });
+        session.emitHookEvent(
+          {
+            kind: "permission_request",
+            tool: "Bash",
+            summary: "rm -rf /tmp/x",
+          },
+          now,
+        );
+        session.emitHookEvent({ kind: "compact", state: "started", trigger: "auto" }, now);
 
         expect(session.clearStaleBlockedIfOlderThan(600_000, 7_200_000, now + 600_001)).toBe(true);
         expect(session.toInfo().permissionState).toBe("idle");
