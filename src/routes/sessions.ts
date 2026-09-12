@@ -1,13 +1,9 @@
 import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import { and, eq, inArray, isNull } from "drizzle-orm";
-// Issue #1255 — only used for the `instanceof BetterSqlite3.SqliteError`
-// check in the rename route below, to detect `sessions_stack_identity_unique`'s
-// violation. Same detection session-lifecycle.ts's createSessionRecord
-// already relies on for its own insert path — see that file's own comment
-// for the empirical confirmation that better-sqlite3 throws `SqliteError`
-// with `.code === "SQLITE_CONSTRAINT_UNIQUE"` for this, and that drizzle's
-// synchronous `.all()` re-throws it unchanged.
+// Issue #1255 — only used for the rename route's `instanceof
+// BetterSqlite3.SqliteError` check below; see session-lifecycle.ts's
+// createSessionRecord for the empirical confirmation of this detection.
 import BetterSqlite3 from "better-sqlite3";
 import { projects, sessions } from "../db/schema.js";
 import { ensurePreviewSyncTick, stopPreviewSyncTick } from "../services/git-worktree.js";
