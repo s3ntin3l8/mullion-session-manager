@@ -192,6 +192,16 @@ export function TerminalPane(props: {
   // (mount-triggered) wouldn't restart and the toast could vanish mid-fade
   // right after the second copy.
   const [copyToastKey, setCopyToastKey] = useState(0);
+  // A copy attempt that didn't land — clipboard API unavailable (a
+  // non-secure-context deploy) or the browser rejected the write (denied
+  // permission, no transient user activation for an OSC 52 write). Previously
+  // this was a console.warn only, which made "Copied" a lie a user had no way
+  // to notice from the UI itself. Holds the message itself (Hermes review),
+  // not just a boolean, so the toast can say which of the two situations
+  // actually happened — null means no failure toast is showing. Same
+  // remount-key trick as copyToastKey above, for the same reason.
+  const [copyFailedMessage, setCopyFailedMessage] = useState<string | null>(null);
+  const [copyFailedToastKey, setCopyFailedToastKey] = useState(0);
   // Issue #68: surfaces the image-upload round trip (paste or the "attach
   // image" button below) as a small toast, same spirit as the copy toast
   // above — an upload is a real network request, unlike an ordinary paste,
@@ -780,6 +790,35 @@ export function TerminalPane(props: {
     // unlike anything scoped inside connect() itself.
     let sessionExited = false;
 
+    // Guards the OSC 52 clipboard-write handler (registered below) against
+    // scrollback replay. attachSocketToSession (routes/terminal.ts) sends, in
+    // this order, on EVERY attach and reattach — not just the first: an
+    // optional single scrollback backlog frame, then an unconditional
+    // "geometry" JSON frame. Any OSC 52 sequence still sitting in that
+    // backlog (e.g. a CLI's own earlier "copied to clipboard" escape) would
+    // otherwise re-fire on every reconnect and silently overwrite whatever
+    // the user copied since — reconnects are frequent (network blips,
+    // backend redeploys, an agent-hosted session's extra proxy hop), so this
+    // isn't a rare edge case.
+    //
+    // Identity-based, not timing-based: each connect() call claims the next
+    // generation number, and only ITS OWN geometry-sentinel write callback
+    // (below) is allowed to advance replayCompleteGeneration. A boolean
+    // reset at connect()/open time was tried and rejected (self-review) —
+    // xterm's write queue is shared across reconnects and drains
+    // asynchronously (WriteBuffer._innerWrite time-slices at ~12ms per
+    // macrotask, and a backgrounded tab throttles the timers on both sides
+    // of this independently), so an old, already-superseded connection's
+    // queued sentinel callback could otherwise fire AFTER a reset meant for
+    // the new connection, clearing the guard while the new connection's own
+    // backlog is still being parsed. Comparing generations at the moment
+    // each callback actually fires makes that ordering irrelevant: a stale
+    // callback's `myGeneration` can never equal the current
+    // `connectionGeneration` once a newer connect() has run, so it's
+    // harmlessly ignored no matter how late it arrives.
+    let connectionGeneration = 0;
+    let replayCompleteGeneration = 0;
+
     const dataSub = term.onData((data) => {
       if (ws?.readyState === WebSocket.OPEN) {
         ws.send(new TextEncoder().encode(data));
@@ -1024,14 +1063,44 @@ export function TerminalPane(props: {
     window.addEventListener("resize", refit);
 
     let copyToastTimer: ReturnType<typeof setTimeout> | null = null;
+    let copyFailedToastTimer: ReturnType<typeof setTimeout> | null = null;
+
+    // The failure half of copyToClipboard below — previously a console.warn
+    // only, which made a clobbered/rejected copy invisible from the UI (see
+    // copyFailedMessage's own comment). Same transient-toast shape as the
+    // success path (1.5s, remount key so back-to-back failures each restart
+    // the fade), kept as its own function since it has two call sites. Takes
+    // the message itself (Hermes review) rather than a fixed string, so a
+    // non-secure-context deploy ("Clipboard unavailable") and an actually
+    // rejected write ("Copy failed") read as the two distinct situations
+    // they are, instead of one undifferentiated failure toast.
+    function showCopyFailed(message: string): void {
+      if (destroyed) return;
+      setCopyFailedMessage(message);
+      setCopyFailedToastKey((k) => k + 1);
+      if (copyFailedToastTimer) clearTimeout(copyFailedToastTimer);
+      copyFailedToastTimer = setTimeout(() => {
+        if (destroyed) return;
+        setCopyFailedMessage(null);
+      }, 1500);
+    }
 
     // Shared by "copy on select", the OSC 52 handler, and the Ctrl+Insert/
     // Ctrl+C handlers below. Returns whether the write actually landed — the
     // opt-in Ctrl+C path (attachKeyConflictHandler) needs that to decide
     // whether it's safe to clear the selection; the other callers ignore it.
-    function copyToClipboard(text: string): Promise<boolean> {
+    //
+    // `notifyOnFailure` (Hermes review) defaults to true for the three
+    // explicit-copy callers (OSC 52 live output, Ctrl+Insert, the opt-in
+    // Ctrl+C chord) — each is a deliberate "copy this" action, so a failure
+    // is worth surfacing. "Copy on select" below passes false: it fires on
+    // every selection change, including an accidental drag, so in a
+    // non-secure-context deploy it would otherwise flash a failure toast on
+    // every incidental selection rather than a real, intentional copy.
+    function copyToClipboard(text: string, notifyOnFailure = true): Promise<boolean> {
       if (!hasClipboardApi()) {
         console.warn("[terminal] clipboard API not available (not a secure context)");
+        if (notifyOnFailure) showCopyFailed("Clipboard unavailable");
         return Promise.resolve(false);
       }
       return navigator.clipboard
@@ -1049,6 +1118,7 @@ export function TerminalPane(props: {
         })
         .catch((err: unknown) => {
           console.warn("[terminal] clipboard write failed:", err);
+          if (notifyOnFailure) showCopyFailed("Copy failed");
           return false;
         });
     }
@@ -1060,7 +1130,7 @@ export function TerminalPane(props: {
     const selectionSub = term.onSelectionChange(() => {
       if (!prefsRef.current.copyOnSelect) return;
       const text = term.getSelection();
-      if (text) void copyToClipboard(text);
+      if (text) void copyToClipboard(text, false);
     });
 
     // OSC 52 — clipboard write requested by the foreground program. Claude
@@ -1095,6 +1165,13 @@ export function TerminalPane(props: {
       const semi = data.indexOf(";");
       const payload = semi === -1 ? data : data.slice(semi + 1); // drop the Pc selection spec, unused
       if (payload === "?") return true; // read query — swallow, never reply
+      // Scrollback replay (see `connectionGeneration`'s own comment above) —
+      // swallow without touching the clipboard until the CURRENT connection
+      // has confirmed its own replay (if any) is done. The sequence is still
+      // "handled" (true), not left for xterm's own no-op default, so a
+      // malformed payload during replay doesn't fall through to the `false`
+      // branch below and get treated as unrecognized.
+      if (replayCompleteGeneration !== connectionGeneration) return true;
       if (!prefsRef.current.clipboardWrite) return true;
       let text: string;
       try {
@@ -1296,6 +1373,17 @@ export function TerminalPane(props: {
       if (destroyed) return;
       setStatus(reconnectAttempt === 0 ? "connecting" : "reconnecting");
       setReconnectAttempt(reconnectAttempt);
+      // This connection's own identity for the replay guard above — see
+      // connectionGeneration's own comment for why generation comparison
+      // (rather than a shared boolean reset at some point in time) is what
+      // makes the guard correct regardless of xterm's write-queue timing.
+      // `sawGeometry` is deliberately a plain local here, not hoisted to
+      // effect scope: closing over one fresh copy per connect() call is
+      // exactly "has THIS connection seen its own first geometry frame yet",
+      // with no manual reset needed.
+      connectionGeneration += 1;
+      const myGeneration = connectionGeneration;
+      let sawGeometry = false;
 
       const protocol = location.protocol === "https:" ? "wss:" : "ws:";
       const wsUrl = `${protocol}//${location.host}/ws/terminal?sessionId=${props.params.sessionId}&cols=${term.cols}&rows=${term.rows}`;
@@ -1364,6 +1452,27 @@ export function TerminalPane(props: {
         // instead of immediately trying to fight this back down.
         if (isGeometryMessage(parsed)) {
           const geo = parsed;
+          // The first "geometry" frame on this connection is sent
+          // unconditionally right after the (optional) scrollback backlog —
+          // see connectionGeneration's own comment above — so it's a
+          // reliable end-of-replay sentinel even for a fresh spawn with no
+          // backlog at all. term.write() queues in FIFO order and only
+          // invokes its callback once that write is fully parsed, so queuing
+          // a no-op write here guarantees this fires only once any OSC 52
+          // earlier in the backlog has already been (harmlessly) swallowed
+          // by the handler below — advancing replayCompleteGeneration
+          // synchronously here instead would race an unparsed backlog still
+          // sitting in xterm's write queue. The `myGeneration ===
+          // connectionGeneration` check discards this callback if a later
+          // connect() has since superseded it (see connectionGeneration's
+          // own comment for why that can happen even though this callback
+          // was queued first).
+          if (!sawGeometry) {
+            sawGeometry = true;
+            term.write(new Uint8Array(0), () => {
+              if (myGeneration === connectionGeneration) replayCompleteGeneration = myGeneration;
+            });
+          }
           // Narrow-pane font auto-fit — fitFloorRef holds the server's
           // constant MIN_TERMINAL_COLS/ROWS floor (see that ref's own
           // comment for why this must be the floor, not `geo.cols`/
@@ -1556,6 +1665,7 @@ export function TerminalPane(props: {
       cancelAnimationFrame(repaintSiblingsRaf);
       if (reconnectTimer) clearTimeout(reconnectTimer);
       if (copyToastTimer) clearTimeout(copyToastTimer);
+      if (copyFailedToastTimer) clearTimeout(copyFailedToastTimer);
       if (connectBackstopHolder.timer) clearTimeout(connectBackstopHolder.timer);
       resizeObserver.disconnect();
       window.removeEventListener("resize", refit);
@@ -2068,6 +2178,8 @@ export function TerminalPane(props: {
       <TerminalToasts
         copied={copied}
         copyToastKey={copyToastKey}
+        copyFailedMessage={copyFailedMessage}
+        copyFailedToastKey={copyFailedToastKey}
         uploadState={uploadState}
         paneTooSmall={paneTooSmall}
         voiceError={voiceController.error}

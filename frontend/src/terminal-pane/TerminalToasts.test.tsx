@@ -6,14 +6,59 @@ import { TerminalToasts } from "./TerminalToasts.js";
 describe("TerminalToasts", () => {
   it("renders nothing when idle, not copied, and not too small", () => {
     const { container } = render(
-      <TerminalToasts copied={false} copyToastKey={0} uploadState="idle" paneTooSmall={false} />,
+      <TerminalToasts
+        copied={false}
+        copyToastKey={0}
+        copyFailedMessage={null}
+        copyFailedToastKey={0}
+        uploadState="idle"
+        paneTooSmall={false}
+      />,
     );
     expect(container).toBeEmptyDOMElement();
   });
 
   it("renders the copy toast when copied", () => {
-    render(<TerminalToasts copied copyToastKey={0} uploadState="idle" paneTooSmall={false} />);
+    render(
+      <TerminalToasts
+        copied
+        copyToastKey={0}
+        copyFailedMessage={null}
+        copyFailedToastKey={0}
+        uploadState="idle"
+        paneTooSmall={false}
+      />,
+    );
     expect(screen.getByText("Copied")).toBeInTheDocument();
+  });
+
+  it("renders a copy-failed toast with the error class", () => {
+    render(
+      <TerminalToasts
+        copied={false}
+        copyToastKey={0}
+        copyFailedMessage="Copy failed"
+        copyFailedToastKey={0}
+        uploadState="idle"
+        paneTooSmall={false}
+      />,
+    );
+    const toast = screen.getByText("Copy failed");
+    expect(toast).toHaveClass("error");
+  });
+
+  it("does not render the copy-failed toast when a copy succeeded", () => {
+    render(
+      <TerminalToasts
+        copied
+        copyToastKey={0}
+        copyFailedMessage={null}
+        copyFailedToastKey={0}
+        uploadState="idle"
+        paneTooSmall={false}
+      />,
+    );
+    expect(screen.queryByText("Copy failed")).not.toBeInTheDocument();
   });
 
   it("renders an uploading toast", () => {
@@ -21,6 +66,8 @@ describe("TerminalToasts", () => {
       <TerminalToasts
         copied={false}
         copyToastKey={0}
+        copyFailedMessage={null}
+        copyFailedToastKey={0}
         uploadState="uploading"
         paneTooSmall={false}
       />,
@@ -30,14 +77,30 @@ describe("TerminalToasts", () => {
 
   it("renders an error toast with the error class", () => {
     render(
-      <TerminalToasts copied={false} copyToastKey={0} uploadState="error" paneTooSmall={false} />,
+      <TerminalToasts
+        copied={false}
+        copyToastKey={0}
+        copyFailedMessage={null}
+        copyFailedToastKey={0}
+        uploadState="error"
+        paneTooSmall={false}
+      />,
     );
     const toast = screen.getByText("Image upload failed");
     expect(toast).toHaveClass("error");
   });
 
   it("both toasts can be shown at once", () => {
-    render(<TerminalToasts copied copyToastKey={1} uploadState="uploading" paneTooSmall={false} />);
+    render(
+      <TerminalToasts
+        copied
+        copyToastKey={1}
+        copyFailedMessage={null}
+        copyFailedToastKey={0}
+        uploadState="uploading"
+        paneTooSmall={false}
+      />,
+    );
     expect(screen.getByText("Copied")).toBeInTheDocument();
     expect(screen.getByText("Uploading image…")).toBeInTheDocument();
   });
@@ -47,7 +110,16 @@ describe("TerminalToasts", () => {
   // unlike the transient copy/upload toasts above, so it's exercised
   // independently rather than folded into one of those cases.
   it("renders the too-small hint, and it can coexist with the other toasts", () => {
-    render(<TerminalToasts copied copyToastKey={0} uploadState="uploading" paneTooSmall />);
+    render(
+      <TerminalToasts
+        copied
+        copyToastKey={0}
+        copyFailedMessage={null}
+        copyFailedToastKey={0}
+        uploadState="uploading"
+        paneTooSmall
+      />,
+    );
     expect(screen.getByText("Pane too small")).toBeInTheDocument();
     expect(screen.getByText("Copied")).toBeInTheDocument();
     expect(screen.getByText("Uploading image…")).toBeInTheDocument();
@@ -55,7 +127,14 @@ describe("TerminalToasts", () => {
 
   it("does not render the too-small hint when the pane fits", () => {
     render(
-      <TerminalToasts copied={false} copyToastKey={0} uploadState="idle" paneTooSmall={false} />,
+      <TerminalToasts
+        copied={false}
+        copyToastKey={0}
+        copyFailedMessage={null}
+        copyFailedToastKey={0}
+        uploadState="idle"
+        paneTooSmall={false}
+      />,
     );
     expect(screen.queryByText("Pane too small")).not.toBeInTheDocument();
   });
@@ -65,6 +144,8 @@ describe("TerminalToasts", () => {
       <TerminalToasts
         copied={false}
         copyToastKey={0}
+        copyFailedMessage={null}
+        copyFailedToastKey={0}
         uploadState="idle"
         paneTooSmall={false}
         voiceError="Microphone access denied — allow it in your browser's site settings."
@@ -79,6 +160,8 @@ describe("TerminalToasts", () => {
       <TerminalToasts
         copied={false}
         copyToastKey={0}
+        copyFailedMessage={null}
+        copyFailedToastKey={0}
         uploadState="idle"
         paneTooSmall={false}
         voiceError={null}
