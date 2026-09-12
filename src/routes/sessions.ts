@@ -1,6 +1,14 @@
 import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import { and, eq, inArray, isNull } from "drizzle-orm";
+// Issue #1255 — only used for the `instanceof BetterSqlite3.SqliteError`
+// check in the rename route below, to detect `sessions_stack_identity_unique`'s
+// violation. Same detection session-lifecycle.ts's createSessionRecord
+// already relies on for its own insert path — see that file's own comment
+// for the empirical confirmation that better-sqlite3 throws `SqliteError`
+// with `.code === "SQLITE_CONSTRAINT_UNIQUE"` for this, and that drizzle's
+// synchronous `.all()` re-throws it unchanged.
+import BetterSqlite3 from "better-sqlite3";
 import { projects, sessions } from "../db/schema.js";
 import { ensurePreviewSyncTick, stopPreviewSyncTick } from "../services/git-worktree.js";
 import { getStoredSettings } from "../services/settings.js";
@@ -807,15 +815,33 @@ export async function sessionsRoute(app: FastifyInstance) {
       const sessionId = Number(request.params.id);
       if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
 
-      const updated = app.db
-        .update(sessions)
-        // nameLocked pins this title against live OSC title updates (issue
-        // #69) — only an explicit rename through this route sets it; a
-        // launch-time name pattern (CommandPalette) never does.
-        .set({ name: request.body.name, nameLocked: true })
-        .where(eq(sessions.id, sessionId))
-        .returning()
-        .all();
+      let updated;
+      try {
+        updated = app.db
+          .update(sessions)
+          // nameLocked pins this title against live OSC title updates (issue
+          // #69) — only an explicit rename through this route sets it; a
+          // launch-time name pattern (CommandPalette) never does.
+          .set({ name: request.body.name, nameLocked: true })
+          .where(eq(sessions.id, sessionId))
+          .returning()
+          .all();
+      } catch (err) {
+        // Issue #1255 — this route wasn't in scope for #1223's DB-level
+        // guard (sessions_stack_identity_unique, schema.ts), so a rename
+        // that lands an active `kind: "dock"` session on an already-active
+        // `docker-stack:<x>` name hit this raw UNIQUE violation uncaught,
+        // surfacing as a generic 500 instead of a clean 409. Matches
+        // createSessionRecord's own detection (session-lifecycle.ts) — that
+        // index is the ONLY unique constraint on `sessions`, so any other
+        // SqliteError is unrelated and must keep propagating unchanged.
+        if (err instanceof BetterSqlite3.SqliteError && err.code === "SQLITE_CONSTRAINT_UNIQUE") {
+          return reply.conflict(
+            "Another active session already uses that name for this project",
+          );
+        }
+        throw err;
+      }
       if (updated.length === 0) return reply.notFound();
       const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
       const hostId = resolveProjectHostId(app, updated[0].projectId);
