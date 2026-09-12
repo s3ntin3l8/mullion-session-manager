@@ -362,7 +362,13 @@ export interface DockerServiceInfo {
   status: string;
   imageRef: string;
   imageId: string;
-  buildOnly: boolean;
+  // Issue #1243 — split from a single `buildOnly` boolean: `buildable`
+  // (has a `build:` key) and `pullable` (has a registry image worth
+  // pulling) are independent, since a service can be both. See
+  // src/services/docker-service-detect.ts's ComposeService doc comments
+  // for the full derivation.
+  buildable: boolean;
+  pullable: boolean;
 }
 
 export interface DockControl {

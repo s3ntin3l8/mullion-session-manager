@@ -221,11 +221,14 @@ Each discovered monitor:
   stream stays off until the container's state actually changes (or the
   setting is toggled), not merely re-polled.
 - Shows an **image tag** pill (hover for the full image reference) — for a
-  `build:`-only service whose own image has since been superseded and
-  pruned (its container now reports a bare `sha256:<digest>`, not a
-  readable name), this shows compose's own default build-image name
+  `buildable` service whose own image has since been superseded and pruned
+  (its container now reports a bare `sha256:<digest>`, not a readable
+  name), this shows compose's own default build-image name
   (`<composeProject>-<service>`) instead of the raw digest, which would
-  otherwise read as a meaningless hash.
+  otherwise read as a meaningless hash. Gated on `buildable`, not
+  `pullable`: a service that's both `buildable` and `pullable` still has a
+  bare digest that belongs to its own local build, so the pill still shows
+  the compose default name for it.
 - Has its own **⋯ menu with only that container's own actions**:
   - **Restart service** / **Stop service** — `docker compose restart|stop
 <service>`. Stop arms for 3 seconds before firing; restart doesn't.
@@ -234,46 +237,61 @@ Each discovered monitor:
   - **Check for update** — runs a quiet `docker compose pull` for that one
     service and compares the resulting local image id against the running
     container's own image, without pulling or restarting it. Disabled for
-    a `build:`-only service (no registry image to compare) — the disabled
+    a non-`pullable` service (no registry image to compare) — the disabled
     item carries a hover tooltip stating that reason, rather than leaving a
     clickable-looking item with no explanation of why it does nothing
     (issue #1106). Stays per-service rather than moving to the stack header
-    below: `build:`-only is a per-service property, and the image pill this
+    below: `pullable` is a per-service property, and the image pill this
     re-tints on an available update belongs to this one container
     specifically.
 
-`build:`-only detection itself (issue #1221) reads `docker compose ...
-config --format json` directly, whenever the stack's compose file(s) are
-still resolvable on disk, one probe per distinct compose project, cached
-until any of that project's services' config changes. A service is
-build-only when it has a `build:` key AND any of: no `image:` key at all;
-an explicit `pull_policy: build` or `pull_policy: never`; or an `image:`
-whose ref has no `/` (an unqualified single-segment tag like
-`myimage:local` — the `:` there is a tag separator, not a registry-host
-marker, so this is _not_ the same test as looking for a `.`/`:` anywhere in
-the ref). This covers two real cases: a
-rebuilt-and-pruned service whose own old, default-named image gets pruned
-once superseded (its container reverts to a bare digest a name-shape guess
-alone can never recognize as build-only), and a service that declares both
-`build:` and an explicit custom local `image:` tag (e.g. `image:
-myapp:local` next to a `build:` key) — still nothing to pull, even though it
-has an `image:` key. The name-shape guess
-(`<composeProject>-<service>[:latest]`, compose's own default build-image
-name) is kept only as the fallback for when the probe can't run.
+Discovery computes two independent facts per service, `buildable` (does it
+declare a `build:` key at all) and `pullable` (does it have a registry image
+worth pulling) — issue #1243 split these apart because a service can be
+BOTH: a `build:` key next to a real, registry-qualified `image:` is
+perfectly valid, and forcing a choice between offering Rebuild or Pull for
+that shape (the pre-#1243 single `buildOnly` flag's behavior) meant
+whichever one lost was simply unavailable even though it would have worked.
+
+`pullable`/`buildable` detection (issue #1221, then #1243) reads `docker
+compose ... config --format json` directly, whenever the stack's compose
+file(s) are still resolvable on disk, one probe per distinct compose
+project, cached until any of that project's services' config changes.
+`buildable` is simple: does the service declare a `build:` key. `pullable`
+needs an `image:` key to be present, no `pull_policy: build`/`pull_policy:
+never` override, and — only when `buildable` is ALSO true, since that's
+what makes the `image:` ref ambiguous (it might be a local build tag rather
+than something a registry can serve) — the ref must contain a `/` (an
+unqualified single-segment tag like `myimage:local` has no `/`; the `:`
+there is a tag separator, not a registry-host marker, so this is _not_ the
+same test as looking for a `.`/`:` anywhere in the ref). This covers three
+real cases: a rebuilt-and-pruned service whose own old, default-named image
+gets pruned once superseded (its container reverts to a bare digest a
+name-shape guess alone can never recognize as buildable), a service that
+declares both `build:` and an explicit custom local `image:` tag (e.g.
+`image: myapp:local` next to a `build:` key) — still nothing to pull, even
+though it has an `image:` key, and a service that declares both `build:`
+and a REAL registry-qualified `image:` — both facts true, both actions
+offered. The name-shape guess (`<composeProject>-<service>[:latest]`,
+compose's own default build-image name) is kept only as the fallback for
+when the probe can't run, and can only ever produce the old
+mutually-exclusive pair (it has no visibility into whether a service
+declares `build:` at all beyond the name match itself).
 
 One rare shape is deliberately left misclassified rather than special-cased:
 `build:` + a single-segment _official_ Docker Hub image with no
 `pull_policy` override (e.g. `image: redis` next to a `build:` key) has no
-`/`, so it's flagged `buildOnly: true` even though it does have a real
+`/`, so it's flagged `pullable: false` even though it does have a real
 registry image to pull. That's user-visible, not just a labeling quirk —
 per-service "Check for update" stays disabled and the stack header's ⋯ menu
 won't offer "Pull & restart stack" for that service — but this shape is
-vanishingly rare in practice (a `build:`-only service almost never also
-names an unqualified official Hub image), so it's accepted rather than
-worth the complexity of resolving unqualified refs against Hub. (Splitting
-`buildOnly` into independent `buildable`/`pullable` facts, tracked as
-follow-up issue #1243, would let a service like this offer both actions
-correctly instead of trading one off against the other.)
+vanishingly rare in practice (a service with a `build:` key almost never
+also names an unqualified official Hub image), so it's accepted rather than
+worth the complexity of resolving unqualified refs against Hub. Splitting
+`buildOnly` into `buildable`/`pullable` (issue #1243) does NOT fix this
+residual case — the ref still has no `/`, so it's still classified
+`pullable: false` — it only fixes the DIFFERENT case above, where the
+`image:` ref is genuinely registry-qualified.
 
 Every compose project discovered in a column also gets its own **stack
 header**, above that project's monitors, labelled with the compose project
@@ -292,24 +310,29 @@ explain:
 - **Restart stack** / **Apply config** — `docker compose restart` / `up -d`
   for the whole stack, no confirmation needed.
 - **Pull & restart stack** — `docker compose pull && docker compose up -d`,
-  offered when at least one service in the stack has a registry image to
-  pull. Requires two clicks (arm for 3 seconds after the first).
+  offered when at least one service in the stack is `pullable`. Requires
+  two clicks (arm for 3 seconds after the first).
 - **Rebuild & restart stack** — `docker compose build --pull && docker
 compose up -d`, offered when at least one service in the stack is
-  `build:`-only. Requires two clicks.
+  `buildable`. Requires two clicks.
 - **Stop stack** — `docker compose stop` for the whole stack. Arms for 3
   seconds before firing.
 
 Pull and Rebuild are **independently gated**, not either/or: a **mixed**
 stack (one service with a registry image, one `build:`-only) shows **both**
 items in this one menu — exactly the two actions that would have appeared,
-spread across two different rows, before this menu was hoisted. Whichever
-one you click runs against a representative service for the whole stack
-(preferring a currently-`running` one, since a dead container's own labels
-are what reconstructing the stack's `-f`/`--project-directory`/`--env-file`
-flags reads) — the pull path always picks a non-`build:`-only service, the
-rebuild path always picks a `build:`-only one, so neither can ever hit the
-backend's own mirror-image 400 guard for the other case.
+spread across two different rows, before this menu was hoisted. A single
+service can also be both `buildable` and `pullable` at once (issue #1243) —
+in that case the SAME service is picked as the representative for both
+actions, so a one-service stack of that shape still shows both items, not
+just one. Whichever one you click runs against a representative service for
+the whole stack (preferring a currently-`running` one, since a dead
+container's own labels are what reconstructing the stack's
+`-f`/`--project-directory`/`--env-file` flags reads) — the pull path always
+picks a `pullable` service, the rebuild path always picks a `buildable` one,
+so neither can ever hit the backend's own mirror-image 400 guard for the
+other case (each route's guard checks exactly the fact its own
+representative was selected on, not the inverse of the other route's fact).
 
 Every stack-wide action (pull-restart, rebuild-restart, restart, apply,
 stop) runs as its own `kind: "dock"` session, same as the log stream, so

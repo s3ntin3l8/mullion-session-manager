@@ -54,15 +54,23 @@ function isBareDigestRef(imageRef: string): boolean {
 
 /** Pill text for a service's image: imageTag()'s tag/digest-prefix by
  * default, but compose's own default build-image name
- * (`<composeProject>-<service>`) for a build-only service whose `imageRef`
- * has degraded to a bare digest — a far more legible label than a raw hash,
- * and still correct (it's the name the service would carry again the next
- * time it's rebuilt). The full `imageRef` stays available either way via
- * the pill's own `title` attribute (DockMonitor.tsx). */
+ * (`<composeProject>-<service>`) for a `build:`-having service whose
+ * `imageRef` has degraded to a bare digest — a far more legible label than
+ * a raw hash, and still correct (it's the name the service would carry
+ * again the next time it's rebuilt). The full `imageRef` stays available
+ * either way via the pill's own `title` attribute (DockMonitor.tsx).
+ *
+ * Gated on `buildable`, NOT `!pullable` (issue #1243) — this check means
+ * "this bare digest belongs to a locally-built image," which is a
+ * statement about having a `build:` key, not about whether a registry
+ * image is ALSO available. For a service that is both `buildable` and
+ * `pullable` (a `build:` key next to a real registry image), a bare digest
+ * still means the local build image, so the pill should still show the
+ * compose default name. */
 export function imagePillLabel(
-  docker: Pick<DockerServiceInfo, "composeProject" | "service" | "buildOnly" | "imageRef">,
+  docker: Pick<DockerServiceInfo, "composeProject" | "service" | "buildable" | "imageRef">,
 ): string {
-  if (docker.buildOnly && isBareDigestRef(docker.imageRef)) {
+  if (docker.buildable && isBareDigestRef(docker.imageRef)) {
     return `${docker.composeProject}-${docker.service}`;
   }
   return imageTag(docker.imageRef);
@@ -313,16 +321,20 @@ export interface DockerStackGroup {
    * only) — a group in that state renders its label with no kebab. */
   anyRep: DockControl | null;
   /** Representative for POST .../docker/update — that route 400s on a
-   * build-only service (src/routes/projects.ts), so this is `null` unless
-   * at least one service in the group has a registry image. */
+   * non-`pullable` service (src/routes/projects.ts), so this is `null`
+   * unless at least one service in the group has a registry image worth
+   * pulling. */
   pullRep: DockControl | null;
   /** Representative for POST .../docker/stack/rebuild — the mirror-image
-   * guard requires buildOnly === true, so this is `null` unless at least
-   * one service in the group is build-only. A MIXED stack (one registry
-   * image, one build-only) gets both pullRep and rebuildRep non-null,
-   * which is intentional — see the group's own PR description: this is a
-   * pure regrouping, not a new aggregate policy, so a shape that offered
-   * both actions per-row before still offers both after, just once. */
+   * guard requires `buildable === true` (issue #1243), so this is `null`
+   * unless at least one service in the group declares a `build:` key. A
+   * MIXED stack (one registry-only service, one build-only service) gets
+   * both pullRep and rebuildRep non-null — that was already true before
+   * #1243. What #1243 additionally allows is a SINGLE service being both
+   * `pullRep` and `rebuildRep` at once (a `build:` key next to a real
+   * registry image) — structurally impossible before the split, since
+   * `pullRep`/`rebuildRep` used to be selected on opposite values of one
+   * boolean. */
   rebuildRep: DockControl | null;
 }
 
@@ -367,8 +379,8 @@ function selectRepresentatives(
   });
   return {
     anyRep: sorted[0] ?? null,
-    pullRep: sorted.find((c) => !c.docker.buildOnly) ?? null,
-    rebuildRep: sorted.find((c) => c.docker.buildOnly) ?? null,
+    pullRep: sorted.find((c) => c.docker.pullable) ?? null,
+    rebuildRep: sorted.find((c) => c.docker.buildable) ?? null,
   };
 }
 

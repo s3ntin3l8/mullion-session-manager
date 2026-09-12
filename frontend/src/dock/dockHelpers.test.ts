@@ -31,7 +31,8 @@ function dockerControl(overrides: Partial<DockControl> = {}): DockControl {
       status: "Up 2 hours",
       imageRef: "ghcr.io/s3ntin3l8/sanctuary:edge",
       imageId: "sha256:current",
-      buildOnly: false,
+      buildable: false,
+      pullable: true,
     },
     ...overrides,
   };
@@ -71,7 +72,7 @@ describe("imagePillLabel", () => {
       imagePillLabel({
         composeProject: "pocket-portfolio-tracker",
         service: "api",
-        buildOnly: true,
+        buildable: true,
         imageRef: "sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
       }),
     ).toBe("pocket-portfolio-tracker-api");
@@ -82,22 +83,22 @@ describe("imagePillLabel", () => {
       imagePillLabel({
         composeProject: "pocket-portfolio-tracker",
         service: "api",
-        buildOnly: true,
+        buildable: true,
         imageRef: "pocket-portfolio-tracker-api:latest",
       }),
     ).toBe("latest");
   });
 
-  it("falls through to imageTag for a registry-image (non-build-only) service with a bare digest — still shortened", () => {
+  it("falls through to imageTag for a registry-image (non-buildable) service with a bare digest — still shortened", () => {
     // Hermes review — imageTag() itself now shortens a bare `sha256:` ref
     // the same way it already shortened the `name@sha256:...` form, so a
-    // non-build-only service (a pruned local copy of a registry image,
-    // say) also gets a legible pill instead of the raw 64-char hash.
+    // non-buildable service (a pruned local copy of a registry image, say)
+    // also gets a legible pill instead of the raw 64-char hash.
     expect(
       imagePillLabel({
         composeProject: "sanctuary",
         service: "db",
-        buildOnly: false,
+        buildable: false,
         imageRef: "sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
       }),
     ).toBe("sha256:a1a1a1a1a1a1");
@@ -108,11 +109,18 @@ describe("imagePillLabel", () => {
       imagePillLabel({
         composeProject: "sanctuary",
         service: "web",
-        buildOnly: true,
+        buildable: true,
         imageRef: "ghcr.io/s3ntin3l8/sanctuary:edge",
       }),
     ).toBe("edge");
   });
+
+  // Issue #1243 — this function's own Pick<> only ever accepts `buildable`,
+  // never `pullable`: the bare-digest-belongs-to-a-local-build inference it
+  // makes doesn't depend on whether a registry image is ALSO available (a
+  // service that's both buildable and pullable still has its own local
+  // build's digest), so `pullable` genuinely has nothing to add here. See
+  // dockHelpers.ts's own doc comment on imagePillLabel for the full reasoning.
 });
 
 describe("dockerSessionIdentity", () => {
@@ -314,7 +322,9 @@ describe("groupDockerControls", () => {
   describe("representative selection", () => {
     it("an all-registry-image stack gets pullRep only", () => {
       const { groups } = groupDockerControls([
-        dockerControl({ docker: { ...dockerControl().docker!, buildOnly: false } }),
+        dockerControl({
+          docker: { ...dockerControl().docker!, buildable: false, pullable: true },
+        }),
       ]);
       expect(groups[0].pullRep).not.toBeNull();
       expect(groups[0].rebuildRep).toBeNull();
@@ -322,7 +332,9 @@ describe("groupDockerControls", () => {
 
     it("an all-build-only stack gets rebuildRep only", () => {
       const { groups } = groupDockerControls([
-        dockerControl({ docker: { ...dockerControl().docker!, buildOnly: true } }),
+        dockerControl({
+          docker: { ...dockerControl().docker!, buildable: true, pullable: false },
+        }),
       ]);
       expect(groups[0].pullRep).toBeNull();
       expect(groups[0].rebuildRep).not.toBeNull();
@@ -331,16 +343,40 @@ describe("groupDockerControls", () => {
     it("a mixed stack gets BOTH pullRep and rebuildRep, from the correct services", () => {
       const registryService = dockerControl({
         id: "docker:mixed:web",
-        docker: { ...dockerControl().docker!, service: "web", buildOnly: false },
+        docker: {
+          ...dockerControl().docker!,
+          service: "web",
+          buildable: false,
+          pullable: true,
+        },
       });
       const buildOnlyService = dockerControl({
         id: "docker:mixed:api",
-        docker: { ...dockerControl().docker!, service: "api", buildOnly: true },
+        docker: {
+          ...dockerControl().docker!,
+          service: "api",
+          buildable: true,
+          pullable: false,
+        },
       });
       const { groups } = groupDockerControls([registryService, buildOnlyService]);
 
-      expect(groups[0].pullRep?.docker?.buildOnly).toBe(false);
-      expect(groups[0].rebuildRep?.docker?.buildOnly).toBe(true);
+      expect(groups[0].pullRep?.docker?.buildable).toBe(false);
+      expect(groups[0].pullRep?.docker?.pullable).toBe(true);
+      expect(groups[0].rebuildRep?.docker?.buildable).toBe(true);
+      expect(groups[0].rebuildRep?.docker?.pullable).toBe(false);
+    });
+
+    // Issue #1243 — the previously-impossible shape: a single service that
+    // is BOTH buildable and pullable is now selected as BOTH pullRep and
+    // rebuildRep (the same control), not forced into exactly one.
+    it("a single service that is both buildable and pullable is BOTH pullRep and rebuildRep", () => {
+      const { groups } = groupDockerControls([
+        dockerControl({ docker: { ...dockerControl().docker!, buildable: true, pullable: true } }),
+      ]);
+      expect(groups[0].pullRep).not.toBeNull();
+      expect(groups[0].rebuildRep).not.toBeNull();
+      expect(groups[0].pullRep).toBe(groups[0].rebuildRep);
     });
 
     it("prefers a running service over a stopped one", () => {
