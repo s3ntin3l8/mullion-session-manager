@@ -1191,6 +1191,142 @@ describe("projects route — Docker Compose service discovery (issue #73)", () =
     });
   });
 
+  // Issue #1223 — sessions_stack_identity_unique (schema.ts) is a DB-level,
+  // defense-in-depth guard for the SAME identity withStackLock already
+  // serializes within one process. It only ever fires when a conflicting
+  // `docker-stack:<composeProject>` row was created OUTSIDE this process's
+  // own lock — modeled here by inserting the conflicting row directly,
+  // bypassing withStackLock/createSessionRecord entirely, the same way a
+  // second backend process (or a hypothetical future `kind: "dock"` insert
+  // that bypasses the lock) would leave one behind. isMasterAlive is spied
+  // directly rather than routed through the mocked node-pty/child_process
+  // spawns for the same reason the neighboring describe block above does
+  // (see its "never leaks the internal ok:true discriminant" test) — this
+  // file's own node:child_process mock only ever fires `exit`, never
+  // `close`, which is what a real isMasterAlive call waits on
+  // (session-reconciler.test.ts's own documented fix for the identical
+  // gotcha).
+  describe("DB-level stack-identity guard, out-of-lock duplicate (issue #1223)", () => {
+    function insertActiveStackRow(app: Awaited<ReturnType<typeof buildApp>>, projectId: number) {
+      const [row] = app.db
+        .insert(sessions)
+        .values({
+          projectId,
+          command: "docker compose -p sanctuary up -d",
+          kind: "dock",
+          status: "active",
+          name: "docker-stack:sanctuary",
+          nameLocked: true,
+        })
+        .returning()
+        .all();
+      return row;
+    }
+
+    it("reconciles a stale out-of-lock duplicate: flips it to exited, retries, and starts a NEW session", async () => {
+      discoveredServices = [fixtureService()];
+      const app = await buildApp();
+      const projectId = await createProject(app);
+
+      // Simulates a second process (or any caller bypassing withStackLock)
+      // having already created this stack's session — not through
+      // startStackSession, so this row's existence has nothing to do with
+      // this process's own mutex.
+      const staleRow = insertActiveStackRow(app, projectId);
+
+      // The row's process has actually exited — this is the exact case
+      // this issue exists to tolerate, not reject.
+      const isMasterAlive = vi.spyOn(app.pty, "isMasterAlive").mockResolvedValue(false);
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/docker/stack/restart`,
+        payload: { controlId: "docker:sanctuary:web" },
+      });
+
+      expect(res.statusCode).toBe(201);
+      const body = res.json();
+      expect(body.reused).toBeUndefined();
+      expect(body.sessionId).not.toBe(staleRow.id);
+
+      // The stale row itself must be flipped, not deleted — it's session
+      // history, same posture as session-reconciler.ts's own sweep.
+      const [flipped] = app.db.select().from(sessions).where(eq(sessions.id, staleRow.id)).all();
+      expect(flipped?.status).toBe("exited");
+
+      // Exactly one ACTIVE docker-stack session for this project now.
+      const activeStackSessions = app.db
+        .select()
+        .from(sessions)
+        .where(eq(sessions.projectId, projectId))
+        .all()
+        .filter((s) => s.name === "docker-stack:sanctuary" && s.status === "active");
+      expect(activeStackSessions).toHaveLength(1);
+      expect(activeStackSessions[0]?.id).toBe(body.sessionId);
+
+      expect(isMasterAlive).toHaveBeenCalled();
+      await app.close();
+    });
+
+    it("an out-of-lock duplicate whose process is genuinely still alive is reused via the conflict handler, no thrown error", async () => {
+      // Deliberately does NOT mock isMasterAlive to a constant `true` —
+      // that would let findActiveStackSession's own pre-existing check
+      // short-circuit before createSessionRecord is ever called, leaving
+      // this test's namesake code path (the NEW conflict handler in
+      // startStackSession, added by this issue) completely unexercised.
+      // Ordering is the only lever available to target it, since both
+      // calls query the same row id: findActiveStackSession's own call is
+      // always the FIRST isMasterAlive call inside withStackLock (it's the
+      // first thing the callback does) — answer that `false` so it treats
+      // the row as dead and falls through to the insert, which then hits
+      // sessions_stack_identity_unique; only the conflict handler's own
+      // (second) call answers `true`, confirming the row is genuinely
+      // alive after all.
+      discoveredServices = [fixtureService()];
+      const app = await buildApp();
+      const projectId = await createProject(app);
+
+      const staleRow = insertActiveStackRow(app, projectId);
+      const isMasterAlive = vi
+        .spyOn(app.pty, "isMasterAlive")
+        .mockResolvedValueOnce(false)
+        .mockResolvedValue(true);
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/docker/stack/restart`,
+        payload: { controlId: "docker:sanctuary:web" },
+      });
+
+      expect(res.statusCode).toBe(201);
+      const body = res.json();
+      expect(body.reused).toBe(true);
+      expect(body.sessionId).toBe(staleRow.id);
+
+      // Both calls target the SAME row id — the only way to tell "reused
+      // via findActiveStackSession's short-circuit" (one call) apart from
+      // "reused via the conflict handler" (two calls) is this count.
+      expect(isMasterAlive).toHaveBeenCalledTimes(2);
+      expect(isMasterAlive).toHaveBeenNthCalledWith(1, String(staleRow.id));
+      expect(isMasterAlive).toHaveBeenNthCalledWith(2, String(staleRow.id));
+
+      // Untouched — it really is the live, correct session, not flipped.
+      const [row] = app.db.select().from(sessions).where(eq(sessions.id, staleRow.id)).all();
+      expect(row?.status).toBe("active");
+
+      // No second row was created for this identity.
+      const stackRows = app.db
+        .select()
+        .from(sessions)
+        .where(eq(sessions.projectId, projectId))
+        .all()
+        .filter((s) => s.name === "docker-stack:sanctuary");
+      expect(stackRows).toHaveLength(1);
+
+      await app.close();
+    });
+  });
+
   // Full remote-host round-trip, same pattern as test/routes/projects.test.ts
   // — confirms the dock route's remote branch is untouched by issue #73 (no
   // docker fields leak into a remote host's response) end to end, not just
