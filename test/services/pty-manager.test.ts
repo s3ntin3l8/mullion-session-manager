@@ -4772,38 +4772,15 @@ describe("PtyManager", () => {
     });
 
     it("clearStaleErrorIfOlderThan: clears errorState past the TTL and logs a real transition", async () => {
-      const session = manager.getOrCreate({
-        id: "1",
-        cwd: "/tmp",
-        command: "bash",
-        cols: 80,
-        rows: 24,
-      });
-      await waitForSpawn(session);
-      const now = Date.now();
-      // `now` passed explicitly (rather than emitHookEvent's own default
-      // Date.now()) so errorAt and the `now + 600_001` staleness check
-      // below race against the identical value, not two independent
-      // real-time reads a CI-scheduling jitter apart — see the "fix:
-      // sticky needs_input" test further down for the same pattern.
-      session.emitHookEvent({ kind: "tool_failure", tool: "Bash", error: "boom" }, now);
-
-      // Not yet stale.
-      expect(session.clearStaleErrorIfOlderThan(600_000, now)).toBe(false);
-      expect(session.toInfo().errorState).toBe("tool_failure");
-
-      // Past the TTL.
-      expect(session.clearStaleErrorIfOlderThan(600_000, now + 600_001)).toBe(true);
-      expect(session.toInfo().errorState).toBe("idle");
-      expect(session.toInfo().errorDetail).toBeNull();
-
-      // A second check with nothing left to clear is a no-op, not a
-      // re-trigger.
-      expect(session.clearStaleErrorIfOlderThan(600_000, now + 700_000)).toBe(false);
-    });
-
-    describe("clearStaleBlockedIfOlderThan (issue #320)", () => {
-      it("a1: clears a stale permissionState past the TTL and emits status_change", async () => {
+      // Hermes review, PR #1262 round 2 — emitHookEvent's own `now` param
+      // does NOT thread into errorAt (hook-handlers.ts's tool_failure case
+      // writes `ctx.errorAt = Date.now()` unconditionally); only
+      // vi.useFakeTimers({ toFake: ["Date"] }) actually pins every
+      // Date.now() call inside the handler to a synthetic clock, closing
+      // the real-clock race by construction rather than by a margin — same
+      // pattern as tests "c"/"c2"/"d"/"e" further down this describe block.
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
         const session = manager.getOrCreate({
           id: "1",
           cwd: "/tmp",
@@ -4813,29 +4790,64 @@ describe("PtyManager", () => {
         });
         await waitForSpawn(session);
         const now = Date.now();
+        session.emitHookEvent({ kind: "tool_failure", tool: "Bash", error: "boom" });
 
-        session.emitHookEvent(
-          {
+        // Not yet stale.
+        expect(session.clearStaleErrorIfOlderThan(600_000, now)).toBe(false);
+        expect(session.toInfo().errorState).toBe("tool_failure");
+
+        // Past the TTL.
+        vi.setSystemTime(now + 600_001);
+        expect(session.clearStaleErrorIfOlderThan(600_000, Date.now())).toBe(true);
+        expect(session.toInfo().errorState).toBe("idle");
+        expect(session.toInfo().errorDetail).toBeNull();
+
+        // A second check with nothing left to clear is a no-op, not a
+        // re-trigger.
+        vi.setSystemTime(now + 700_000);
+        expect(session.clearStaleErrorIfOlderThan(600_000, Date.now())).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    describe("clearStaleBlockedIfOlderThan (issue #320)", () => {
+      it("a1: clears a stale permissionState past the TTL and emits status_change", async () => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        try {
+          const session = manager.getOrCreate({
+            id: "1",
+            cwd: "/tmp",
+            command: "bash",
+            cols: 80,
+            rows: 24,
+          });
+          await waitForSpawn(session);
+          const now = Date.now();
+
+          session.emitHookEvent({
             kind: "permission_request",
             tool: "Bash",
             summary: "rm -rf /tmp/x",
-          },
-          now,
-        );
-        expect(session.toInfo().permissionState).toBe("pending");
+          });
+          expect(session.toInfo().permissionState).toBe("pending");
 
-        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now)).toBe(false);
+          expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now)).toBe(false);
 
-        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 600_001)).toBe(true);
-        expect(session.toInfo().permissionState).toBe("idle");
+          vi.setSystemTime(now + 600_001);
+          expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, Date.now())).toBe(true);
+          expect(session.toInfo().permissionState).toBe("idle");
 
-        const events = session.getEvents();
-        const statusEvent = events[events.length - 1];
-        expect(statusEvent.kind).toBe("status_change");
-        expect(statusEvent.payload).toMatchObject({
-          reason: "stale_blocked_cleared",
-          state: "permissionState",
-        });
+          const events = session.getEvents();
+          const statusEvent = events[events.length - 1];
+          expect(statusEvent.kind).toBe("status_change");
+          expect(statusEvent.payload).toMatchObject({
+            reason: "stale_blocked_cleared",
+            state: "permissionState",
+          });
+        } finally {
+          vi.useRealTimers();
+        }
       });
 
       it("fix: sticky needs_input (D4) — a stale permissionState sweep also drops the attention machine's permissionRequest-owned flag it confirmed", async () => {
@@ -4992,45 +5004,60 @@ describe("PtyManager", () => {
       });
 
       it("a6: clears a stale compactState (compacting) past the TTL and emits status_change", async () => {
-        const session = manager.getOrCreate({
-          id: "1",
-          cwd: "/tmp",
-          command: "bash",
-          cols: 80,
-          rows: 24,
-        });
-        await waitForSpawn(session);
-        const now = Date.now();
+        vi.useFakeTimers({ toFake: ["Date"] });
+        try {
+          const session = manager.getOrCreate({
+            id: "1",
+            cwd: "/tmp",
+            command: "bash",
+            cols: 80,
+            rows: 24,
+          });
+          await waitForSpawn(session);
+          const now = Date.now();
 
-        session.emitHookEvent({ kind: "compact", state: "started", trigger: "auto" }, now);
-        expect(session.toInfo().compactState).toBe("compacting");
+          session.emitHookEvent({ kind: "compact", state: "started", trigger: "auto" });
+          expect(session.toInfo().compactState).toBe("compacting");
 
-        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 600_001)).toBe(true);
-        expect(session.toInfo().compactState).toBe("idle");
+          vi.setSystemTime(now + 600_001);
+          expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, Date.now())).toBe(true);
+          expect(session.toInfo().compactState).toBe("idle");
 
-        const payload = session.getEvents().findLast((e) => e.kind === "status_change")?.payload;
-        expect(payload).toMatchObject({ reason: "stale_blocked_cleared", state: "compactState" });
+          const payload = session.getEvents().findLast((e) => e.kind === "status_change")?.payload;
+          expect(payload).toMatchObject({ reason: "stale_blocked_cleared", state: "compactState" });
+        } finally {
+          vi.useRealTimers();
+        }
       });
 
       it("a7: resets stale subagentCount > 0 past the TTL and emits status_change", async () => {
-        const session = manager.getOrCreate({
-          id: "1",
-          cwd: "/tmp",
-          command: "bash",
-          cols: 80,
-          rows: 24,
-        });
-        await waitForSpawn(session);
-        const now = Date.now();
+        vi.useFakeTimers({ toFake: ["Date"] });
+        try {
+          const session = manager.getOrCreate({
+            id: "1",
+            cwd: "/tmp",
+            command: "bash",
+            cols: 80,
+            rows: 24,
+          });
+          await waitForSpawn(session);
+          const now = Date.now();
 
-        session.emitHookEvent({ kind: "subagent", state: "started", agentType: "Explore" }, now);
-        expect(session.toInfo().subagentCount).toBe(1);
+          session.emitHookEvent({ kind: "subagent", state: "started", agentType: "Explore" });
+          expect(session.toInfo().subagentCount).toBe(1);
 
-        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 600_001)).toBe(true);
-        expect(session.toInfo().subagentCount).toBe(0);
+          vi.setSystemTime(now + 600_001);
+          expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, Date.now())).toBe(true);
+          expect(session.toInfo().subagentCount).toBe(0);
 
-        const payload = session.getEvents().findLast((e) => e.kind === "status_change")?.payload;
-        expect(payload).toMatchObject({ reason: "stale_blocked_cleared", state: "subagentCount" });
+          const payload = session.getEvents().findLast((e) => e.kind === "status_change")?.payload;
+          expect(payload).toMatchObject({
+            reason: "stale_blocked_cleared",
+            state: "subagentCount",
+          });
+        } finally {
+          vi.useRealTimers();
+        }
       });
 
       // Hermes review, PR #453 — the sweep deliberately does NOT fire the
@@ -5040,41 +5067,44 @@ describe("PtyManager", () => {
       // task), not a confirmed drain, so it must not assert "the work is
       // done" via a possibly-false "Finished" notification.
       it("issue #428: resets stale outstanding backgroundTasks past the TTL and emits status_change, without firing a possibly-false agentIdle ping", async () => {
-        const session = manager.getOrCreate({
-          id: "1",
-          cwd: "/tmp",
-          command: "bash",
-          cols: 80,
-          rows: 24,
-        });
-        await waitForSpawn(session);
-        const now = Date.now();
+        vi.useFakeTimers({ toFake: ["Date"] });
+        try {
+          const session = manager.getOrCreate({
+            id: "1",
+            cwd: "/tmp",
+            command: "bash",
+            cols: 80,
+            rows: 24,
+          });
+          await waitForSpawn(session);
+          const now = Date.now();
 
-        session.emitHookEvent(
-          {
+          session.emitHookEvent({
             kind: "progress",
             phase: "done",
             backgroundTasks: [
               { id: "t1", type: "subagent", status: "running", description: "Explore agent" },
             ],
-          },
-          now,
-        );
-        expect(session.toInfo().outstandingBackgroundTasks).toHaveLength(1);
-        // The deferred-turn-end gate held: no attention event fired yet.
-        expect(session.getEvents().map((e) => e.kind)).not.toContain("attention");
+          });
+          expect(session.toInfo().outstandingBackgroundTasks).toHaveLength(1);
+          // The deferred-turn-end gate held: no attention event fired yet.
+          expect(session.getEvents().map((e) => e.kind)).not.toContain("attention");
 
-        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 600_001)).toBe(true);
-        expect(session.toInfo().outstandingBackgroundTasks).toHaveLength(0);
+          vi.setSystemTime(now + 600_001);
+          expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, Date.now())).toBe(true);
+          expect(session.toInfo().outstandingBackgroundTasks).toHaveLength(0);
 
-        const events = session.getEvents();
-        const payload = events.findLast((e) => e.kind === "status_change")?.payload;
-        expect(payload).toMatchObject({
-          reason: "stale_blocked_cleared",
-          state: "backgroundTasks",
-        });
-        // No attention/agentIdle ping — the sweep isn't a confirmed drain.
-        expect(events.map((e) => e.kind)).not.toContain("attention");
+          const events = session.getEvents();
+          const payload = events.findLast((e) => e.kind === "status_change")?.payload;
+          expect(payload).toMatchObject({
+            reason: "stale_blocked_cleared",
+            state: "backgroundTasks",
+          });
+          // No attention/agentIdle ping — the sweep isn't a confirmed drain.
+          expect(events.map((e) => e.kind)).not.toContain("attention");
+        } finally {
+          vi.useRealTimers();
+        }
       });
 
       it("a8: busy latches (compactState) use busyMaxAgeMs, not blockedMaxAgeMs — past the short blocked TTL but within the longer busy TTL stays untouched", async () => {
@@ -5115,50 +5145,57 @@ describe("PtyManager", () => {
       });
 
       it("a10: busy latches ARE cleared once past their own (longer) busyMaxAgeMs, even while a shorter blockedMaxAgeMs applies to blocked latches", async () => {
-        const session = manager.getOrCreate({
-          id: "1",
-          cwd: "/tmp",
-          command: "bash",
-          cols: 80,
-          rows: 24,
-        });
-        await waitForSpawn(session);
-        const now = Date.now();
+        vi.useFakeTimers({ toFake: ["Date"] });
+        try {
+          const session = manager.getOrCreate({
+            id: "1",
+            cwd: "/tmp",
+            command: "bash",
+            cols: 80,
+            rows: 24,
+          });
+          await waitForSpawn(session);
+          const now = Date.now();
 
-        session.emitHookEvent({ kind: "compact", state: "started", trigger: "auto" }, now);
-        session.emitHookEvent({ kind: "subagent", state: "started", agentType: "Explore" }, now);
+          session.emitHookEvent({ kind: "compact", state: "started", trigger: "auto" });
+          session.emitHookEvent({ kind: "subagent", state: "started", agentType: "Explore" });
 
-        expect(session.clearStaleBlockedIfOlderThan(600_000, 7_200_000, now + 7_200_001)).toBe(
-          true,
-        );
-        expect(session.toInfo().compactState).toBe("idle");
-        expect(session.toInfo().subagentCount).toBe(0);
+          vi.setSystemTime(now + 7_200_001);
+          expect(session.clearStaleBlockedIfOlderThan(600_000, 7_200_000, Date.now())).toBe(true);
+          expect(session.toInfo().compactState).toBe("idle");
+          expect(session.toInfo().subagentCount).toBe(0);
+        } finally {
+          vi.useRealTimers();
+        }
       });
 
       it("a11: a blocked latch past blockedMaxAgeMs is cleared even while a busy latch set at the same time is still within its own (longer) busyMaxAgeMs", async () => {
-        const session = manager.getOrCreate({
-          id: "1",
-          cwd: "/tmp",
-          command: "bash",
-          cols: 80,
-          rows: 24,
-        });
-        await waitForSpawn(session);
-        const now = Date.now();
+        vi.useFakeTimers({ toFake: ["Date"] });
+        try {
+          const session = manager.getOrCreate({
+            id: "1",
+            cwd: "/tmp",
+            command: "bash",
+            cols: 80,
+            rows: 24,
+          });
+          await waitForSpawn(session);
+          const now = Date.now();
 
-        session.emitHookEvent(
-          {
+          session.emitHookEvent({
             kind: "permission_request",
             tool: "Bash",
             summary: "rm -rf /tmp/x",
-          },
-          now,
-        );
-        session.emitHookEvent({ kind: "compact", state: "started", trigger: "auto" }, now);
+          });
+          session.emitHookEvent({ kind: "compact", state: "started", trigger: "auto" });
 
-        expect(session.clearStaleBlockedIfOlderThan(600_000, 7_200_000, now + 600_001)).toBe(true);
-        expect(session.toInfo().permissionState).toBe("idle");
-        expect(session.toInfo().compactState).toBe("compacting");
+          vi.setSystemTime(now + 600_001);
+          expect(session.clearStaleBlockedIfOlderThan(600_000, 7_200_000, Date.now())).toBe(true);
+          expect(session.toInfo().permissionState).toBe("idle");
+          expect(session.toInfo().compactState).toBe("compacting");
+        } finally {
+          vi.useRealTimers();
+        }
       });
 
       it("b: recent blocked states are untouched by the sweep", async () => {

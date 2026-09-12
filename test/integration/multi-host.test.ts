@@ -346,19 +346,21 @@ describe("multi-host proxy (issue #26)", () => {
   });
 
   it("discovers this agent's own PROJECTS_ROOTS through the primary's proxy", async () => {
-    // This route's handler makes a REAL loopback HTTP round trip to the
-    // agent (getRemoteHostClient's discover(), REQUEST_TIMEOUT_MS = 5s) —
-    // under a fully parallel CI run (many concurrent real Fastify servers
-    // across test files), event-loop lag can occasionally push that one
-    // round trip past the timeout, surfacing as a transient 503 ("host
-    // unreachable") that has nothing to do with this test's actual claim
-    // (the proxy correctly relays a successful discover call). Retried a
-    // few times here rather than loosening REQUEST_TIMEOUT_MS itself — that
-    // constant is a real user-facing "how long before an unreachable host
-    // is reported as such" budget, not something to widen for CI noise.
-    // Safe to retry: this route's 10/minute rate limit isn't touched by any
-    // other test in this describe block, so a couple of extra calls can't
-    // starve it.
+    // This route's handler (src/routes/projects.ts's GET /api/projects/discover)
+    // makes a REAL loopback HTTP round trip to the agent
+    // (getRemoteHostClient's discover(), REQUEST_TIMEOUT_MS = 5_000 at
+    // src/services/remote-host-client.ts:107) — under a fully parallel CI
+    // run (many concurrent real Fastify servers across test files),
+    // event-loop lag can occasionally push that one round trip past the
+    // timeout, surfacing as a transient 503 ("host unreachable") that has
+    // nothing to do with this test's actual claim (the proxy correctly
+    // relays a successful discover call). Retried a few times here rather
+    // than loosening REQUEST_TIMEOUT_MS itself — that constant is a real
+    // user-facing "how long before an unreachable host is reported as such"
+    // budget, not something to widen for CI noise. Safe to retry: this
+    // route's own `config.rateLimit: { max: 10, timeWindow: "1 minute" }`
+    // (src/routes/projects.ts) isn't touched by any other test in this
+    // describe block, so a couple of extra calls can't starve it.
     let res!: Awaited<ReturnType<typeof primary.app.inject>>;
     for (let attempt = 0; attempt < 3; attempt++) {
       res = await primary.app.inject({
