@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.3.18](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.17...v0.3.18) (2026-09-12)
+
+
+### Features
+
+* **dock:** add a draggable divider between the two split-pane log panes ([#1268](https://github.com/s3ntin3l8/mullion-session-manager/issues/1268)) ([ffb7ba6](https://github.com/s3ntin3l8/mullion-session-manager/commit/ffb7ba6e29d7cc6a0a054030b406eb59593c375f))
+* **dock:** master-detail layout — service rail + one log pane per column ([#1241](https://github.com/s3ntin3l8/mullion-session-manager/issues/1241)) ([20ed658](https://github.com/s3ntin3l8/mullion-session-manager/commit/20ed65830367ef006a6d4d7889ec9a1c51fea16b))
+* **dock:** persist the selected rail row per column across reload ([#1258](https://github.com/s3ntin3l8/mullion-session-manager/issues/1258)) ([bcb7d78](https://github.com/s3ntin3l8/mullion-session-manager/commit/bcb7d784a23907a77e2e07765875df19373b0492)), closes [#1238](https://github.com/s3ntin3l8/mullion-session-manager/issues/1238)
+* **dock:** pin a second log pane, gated on column width ([#1263](https://github.com/s3ntin3l8/mullion-session-manager/issues/1263)) ([55fdc5d](https://github.com/s3ntin3l8/mullion-session-manager/commit/55fdc5d39530568890b3ea6ee5a35aaa2901e686))
+* **dock:** split build-only detection into independent buildable/pullable facts ([#1269](https://github.com/s3ntin3l8/mullion-session-manager/issues/1269)) ([bc3ede8](https://github.com/s3ntin3l8/mullion-session-manager/commit/bc3ede86f7b58f324e5780485acc28ab0f2cb9b1)), closes [#1243](https://github.com/s3ntin3l8/mullion-session-manager/issues/1243)
+* **dock:** surface an orphaned dock session inline ([#1259](https://github.com/s3ntin3l8/mullion-session-manager/issues/1259)) ([b3e1b2c](https://github.com/s3ntin3l8/mullion-session-manager/commit/b3e1b2cf90c7c7a4a3fa5369b2aea19bbf385659))
+
+
+### Bug Fixes
+
+* **dock:** add DB-level guard for stack-session identity ([#1257](https://github.com/s3ntin3l8/mullion-session-manager/issues/1257)) ([bb0b070](https://github.com/s3ntin3l8/mullion-session-manager/commit/bb0b07017e7eaba447416314342d21c780c199a7)), closes [#1223](https://github.com/s3ntin3l8/mullion-session-manager/issues/1223)
+* **dock:** detect build-only services with a custom local tag ([#1252](https://github.com/s3ntin3l8/mullion-session-manager/issues/1252)) ([b0816a4](https://github.com/s3ntin3l8/mullion-session-manager/commit/b0816a4bcc6362ad6f55cdfd02b9fd312bfedcea))
+* **sessions:** listOwnedScopes' systemctl spawn has no timeout ([#1266](https://github.com/s3ntin3l8/mullion-session-manager/issues/1266)) ([63508b6](https://github.com/s3ntin3l8/mullion-session-manager/commit/63508b63c616303e93c84ff2fa54675650e3cbbe))
+* **sessions:** PATCH /api/sessions/:id rename can 500 on sessions_stack_identity_unique ([#1267](https://github.com/s3ntin3l8/mullion-session-manager/issues/1267)) ([5d3b186](https://github.com/s3ntin3l8/mullion-session-manager/commit/5d3b186684009d734df173e6f575884ad1aee98e))
+* **sessions:** reject promote of a kind:"dock" session ([#1233](https://github.com/s3ntin3l8/mullion-session-manager/issues/1233)) ([#1245](https://github.com/s3ntin3l8/mullion-session-manager/issues/1245)) ([0ab1599](https://github.com/s3ntin3l8/mullion-session-manager/commit/0ab15997e35a68e07f11400acedd930464068753))
+* **ssh-agent:** buffer channel data/EOF arriving before a listener attaches ([#1250](https://github.com/s3ntin3l8/mullion-session-manager/issues/1250)) ([16fa37e](https://github.com/s3ntin3l8/mullion-session-manager/commit/16fa37ea8728d797aca8ad9f7a74dfdac5fe7832))
+* **ssh-agent:** re-log a sustained fan-out ws-error streak, not just its first failure ([#1254](https://github.com/s3ntin3l8/mullion-session-manager/issues/1254)) ([0d900cb](https://github.com/s3ntin3l8/mullion-session-manager/commit/0d900cbedf40ec9d872fb345af327af08ea216f5))
+* **terminal:** don't let scrollback replay clobber the clipboard via OSC 52 ([#1251](https://github.com/s3ntin3l8/mullion-session-manager/issues/1251)) ([928aab0](https://github.com/s3ntin3l8/mullion-session-manager/commit/928aab0b22b6629cd8a05a25e98a1c9d6e2180a0))
+
 ## [0.3.17](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.16...v0.3.17) (2026-09-10)
 
 
