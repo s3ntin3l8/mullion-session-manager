@@ -683,7 +683,11 @@ describe("Dock", () => {
           status: "Up 6 days",
           imageRef: "ghcr.io/s3ntin3l8/sanctuary:edge",
           imageId: "sha256:current",
-          buildOnly: false,
+          // Issue #1243 — split from a single `buildOnly` boolean. This
+          // factory is `Record<string, unknown>`-typed, so a missed field
+          // here would NOT be a compile error — update it deliberately.
+          buildable: false,
+          pullable: true,
         },
         ...overrides,
       };
@@ -1504,7 +1508,7 @@ describe("Dock", () => {
 
     it("a build-only service disables Check for update but offers an enabled Rebuild & restart, not a disabled Pull & restart", async () => {
       dockByProject[1] = [
-        dockerControl({ docker: { ...dockerControl().docker, buildOnly: true } }),
+        dockerControl({ docker: { ...dockerControl().docker, buildable: true, pullable: false } }),
       ];
       const user = userEvent.setup();
       render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
@@ -1537,7 +1541,7 @@ describe("Dock", () => {
 
     it("'Rebuild & restart stack' requires arming before it fires the rebuild route", async () => {
       dockByProject[1] = [
-        dockerControl({ docker: { ...dockerControl().docker, buildOnly: true } }),
+        dockerControl({ docker: { ...dockerControl().docker, buildable: true, pullable: false } }),
       ];
       rebuildByProject[1] = {
         sessionId: 43,
@@ -1837,12 +1841,12 @@ describe("Dock", () => {
       const registryService = dockerControl({
         id: "docker:sanctuary:web",
         title: "web",
-        docker: { ...dockerControl().docker, service: "web", buildOnly: false },
+        docker: { ...dockerControl().docker, service: "web", buildable: false, pullable: true },
       });
       const buildOnlyService = dockerControl({
         id: "docker:sanctuary:api",
         title: "api",
-        docker: { ...dockerControl().docker, service: "api", buildOnly: true },
+        docker: { ...dockerControl().docker, service: "api", buildable: true, pullable: false },
       });
       dockByProject[1] = [registryService, buildOnlyService];
       updateByProject[1] = {
@@ -1899,6 +1903,35 @@ describe("Dock", () => {
           }),
         );
       });
+    });
+
+    // Issue #1243 — the shape the buildable/pullable split newly enables: a
+    // SINGLE service that is both buildable and pullable, so it's selected
+    // as both pullRep and rebuildRep at once (dockHelpers.ts's
+    // selectRepresentatives). Before the split this was structurally
+    // impossible — one boolean could only ever pick one of the two.
+    it("a single service that is both buildable and pullable offers BOTH Pull and Rebuild in its stack menu", async () => {
+      dockByProject[1] = [
+        dockerControl({ docker: { ...dockerControl().docker, buildable: true, pullable: true } }),
+      ];
+      updateByProject[1] = {
+        sessionId: 61,
+        control: { id: "docker-update:sanctuary", title: "Update sanctuary", source: "docker" },
+      };
+      rebuildByProject[1] = {
+        sessionId: 62,
+        control: { id: "docker-rebuild:sanctuary", title: "Rebuild sanctuary", source: "docker" },
+      };
+      const refreshSessions = vi.fn().mockResolvedValue(undefined);
+      useDashboardStore.setState({ projects: [PROJECT], sessions: [], refreshSessions });
+      const user = userEvent.setup();
+      render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+      await screen.findByText("web");
+      await user.click(stackKebab());
+
+      expect(await screen.findByText("Pull & restart stack")).toBeInTheDocument();
+      expect(screen.getByText("Rebuild & restart stack")).toBeInTheDocument();
     });
 
     describe("issue #1240 — an orphaned dock session (control dropped out of discovery)", () => {
