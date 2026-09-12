@@ -513,6 +513,156 @@ describe("docker-service-detect", () => {
       expect(services[0]?.buildOnly).toBe(true);
     });
 
+    // Issue #1221's follow-up — a service can declare BOTH `build:` and an
+    // explicit `image:` (a custom local tag, not a registry ref), which the
+    // original probe predicate (`build && !image`) misses since these DO
+    // have an `image:` key. Verified live against this host's own
+    // nanokvm-manager (`nanokvm-manager:local`) and open-design
+    // (`open-design-local`) stacks.
+    it("flags buildOnly for build: + a single-segment custom local tag with no pull_policy", async () => {
+      buildOnlyProbeOutput = JSON.stringify({
+        services: { "nanokvm-dash": { build: { context: "." }, image: "nanokvm-manager:local" } },
+      });
+      psOutput = psLine({
+        id: "a",
+        names: "nanokvm-manager-nanokvm-dash-1",
+        state: "running",
+        status: "Up 1 hour",
+        image: "nanokvm-manager:local",
+        createdAt: "2026-08-01 00:00:00 +0000 UTC",
+        project: "nanokvm-manager",
+        service: "nanokvm-dash",
+        workingDir: resolvableDir,
+        imageId: "sha256:x",
+        oneoff: "False",
+        configFiles: resolvableComposeFile,
+      });
+
+      const services = await getComposeServices();
+      // No `/` in the ref — the third tier catches it despite the
+      // `image:` key being present.
+      expect(services[0]?.buildOnly).toBe(true);
+    });
+
+    it("does not flag buildOnly for build: + a namespaced registry image with no pull_policy", async () => {
+      buildOnlyProbeOutput = JSON.stringify({
+        services: { web: { build: { context: "." }, image: "ghcr.io/org/img:edge" } },
+      });
+      psOutput = psLine({
+        id: "a",
+        // Deliberately still matches looksBuildOnly's own default-name
+        // pattern (`<project>-<service>`) — if this test's `false` merely
+        // reflected the name-heuristic fallback agreeing by coincidence
+        // (rather than proving the probe's tier 3b actually ran and
+        // overrode it), giving the fallback a name it WOULD flag true
+        // would catch that: only the probe, not the fallback, can produce
+        // `false` here.
+        names: "myapp-web-1",
+        state: "running",
+        status: "Up 1 hour",
+        image: "myapp-web",
+        createdAt: "2026-08-01 00:00:00 +0000 UTC",
+        project: "myapp",
+        service: "web",
+        workingDir: resolvableDir,
+        imageId: "sha256:x",
+        oneoff: "False",
+        configFiles: resolvableComposeFile,
+      });
+
+      const services = await getComposeServices();
+      // The probe's own compose config declares a namespaced `image:` (has
+      // a `/`) — still pullable, so still not build-only, overriding what
+      // the name-heuristic fallback alone would have said for this imageRef.
+      expect(services[0]?.buildOnly).toBe(false);
+    });
+
+    it("flags buildOnly for build: + a namespaced registry image when pull_policy is build", async () => {
+      buildOnlyProbeOutput = JSON.stringify({
+        services: {
+          web: { build: { context: "." }, image: "ghcr.io/org/img:edge", pull_policy: "build" },
+        },
+      });
+      psOutput = psLine({
+        id: "a",
+        names: "myapp-web-1",
+        state: "running",
+        status: "Up 1 hour",
+        image: "ghcr.io/org/img:edge",
+        createdAt: "2026-08-01 00:00:00 +0000 UTC",
+        project: "myapp",
+        service: "web",
+        workingDir: resolvableDir,
+        imageId: "sha256:x",
+        oneoff: "False",
+        configFiles: resolvableComposeFile,
+      });
+
+      const services = await getComposeServices();
+      // pull_policy: build is authoritative — the second tier catches this
+      // despite the `/` that would otherwise classify it as pullable.
+      expect(services[0]?.buildOnly).toBe(true);
+    });
+
+    it("flags buildOnly for build: + a namespaced registry image when pull_policy is never", async () => {
+      buildOnlyProbeOutput = JSON.stringify({
+        services: {
+          web: { build: { context: "." }, image: "ghcr.io/org/img:edge", pull_policy: "never" },
+        },
+      });
+      psOutput = psLine({
+        id: "a",
+        names: "myapp-web-1",
+        state: "running",
+        status: "Up 1 hour",
+        image: "ghcr.io/org/img:edge",
+        createdAt: "2026-08-01 00:00:00 +0000 UTC",
+        project: "myapp",
+        service: "web",
+        workingDir: resolvableDir,
+        imageId: "sha256:x",
+        oneoff: "False",
+        configFiles: resolvableComposeFile,
+      });
+
+      const services = await getComposeServices();
+      // pull_policy: never means the same "don't bother pulling" thing as
+      // pull_policy: build for this predicate's purposes — also
+      // authoritative despite the `/`.
+      expect(services[0]?.buildOnly).toBe(true);
+    });
+
+    // A stray `image:` key with no value parses as `image: null`, not an
+    // absent key — `def.image === undefined` is false for it. This must NOT
+    // fall into tier 2 (which only fires for a truly absent `image:` key);
+    // it falls through to tier 3 instead, same as the old predicate treated
+    // any defined-but-not-a-string `image:` shape.
+    it("does not flag buildOnly for build: + a null image (present key, unusable value) with no pull_policy", async () => {
+      buildOnlyProbeOutput = JSON.stringify({
+        services: { web: { build: { context: "." }, image: null } },
+      });
+      psOutput = psLine({
+        id: "a",
+        names: "myapp-web-1",
+        state: "running",
+        status: "Up 1 hour",
+        image: "myapp-web",
+        createdAt: "2026-08-01 00:00:00 +0000 UTC",
+        project: "myapp",
+        service: "web",
+        workingDir: resolvableDir,
+        imageId: "sha256:x",
+        oneoff: "False",
+        configFiles: resolvableComposeFile,
+      });
+
+      const services = await getComposeServices();
+      // image key is present (null), so tier 2 doesn't fire; tier 3 can't
+      // inspect a shape a non-string value doesn't have, so it defaults to
+      // pullable/false rather than silently reclassifying via tier 2.
+      expect(services[0]?.buildOnly).toBe(false);
+    });
+
     // Hermes review, issue #1221's own PR — the probe cache was originally
     // keyed only on each service's configHash, which a container's
     // com.docker.compose.config-hash label only changes on RECREATE.

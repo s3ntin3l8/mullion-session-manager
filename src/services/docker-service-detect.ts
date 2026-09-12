@@ -334,11 +334,80 @@ async function probeBuildOnlyServices(
 
   try {
     const parsed = JSON.parse(output) as {
-      services?: Record<string, { build?: unknown; image?: unknown }>;
+      services?: Record<string, { build?: unknown; image?: unknown; pull_policy?: unknown }>;
     };
     const result = new Map<string, boolean>();
+    // Three tiers, in order — issue #1221's follow-up. The original fix
+    // (PR #1231) only handled a bare `build:` with no `image:` key at all
+    // (a rebuilt-and-pruned service whose old default-named image is gone,
+    // reverting `imageRef` to a bare `sha256:` digest). Two real stacks on
+    // this host (`nanokvm-manager`'s `nanokvm-dash`, `open-design`'s
+    // `open-design` service) declare BOTH `build:` and an explicit
+    // `image:` — a custom local tag, not a registry ref — which that
+    // single-expression predicate (`build && !image`) misses entirely,
+    // since these DO have an `image:` key.
+    //
+    // 1. No `build:` key at all — never build-only, regardless of
+    //    `image:`/`pull_policy:`.
+    // 2. `build:` present, no `image:` key at all (checked against the RAW
+    //    value, `def.image === undefined` — not the string-narrowed one
+    //    below) — the original #1221 case: nothing to pull, full stop. A
+    //    present-but-not-a-string `image:` (e.g. a stray `image:` key with
+    //    no value, parsing as `null`) does NOT count as "no image key" —
+    //    it falls through to tier 3 below, same as the old predicate
+    //    treated it (that predicate's own `def.image === undefined` check
+    //    only ever matched a truly absent key too).
+    // 3. `build:` present AND `image:` present (of any type) — two
+    //    sub-checks, in order:
+    //    a. `pull_policy: build` or `pull_policy: never` — an explicit
+    //       compose-file declaration that this image is only ever built
+    //       locally, never pulled from a registry, regardless of what its
+    //       name looks like. Authoritative; short-circuits (b). (`build`
+    //       and `never` differ in compose's own default-pull semantics
+    //       outside this predicate's concern — both mean "don't bother
+    //       pulling", which is all `buildOnly` tracks.)
+    //    b. No such override: fall back to the image ref's own shape,
+    //       testing for a `/` — deliberately NOT `.` or `:`. Docker's own
+    //       domain-vs-tag disambiguation only inspects the text BEFORE the
+    //       first `/`: an unqualified single-segment ref like
+    //       `nanokvm-manager:local` resolves to
+    //       `docker.io/library/nanokvm-manager:local` when pulled from a
+    //       registry — the `:` there is a TAG separator, not a
+    //       registry-host marker. Testing the whole ref for `.`/`:` would
+    //       misclassify exactly this shape as registry-qualified (a
+    //       mistake caught during this fix's own planning — don't
+    //       reintroduce it). Testing for `/` instead correctly leaves a
+    //       namespaced registry ref (`ghcr.io/org/img:edge`, `myorg/img`)
+    //       classified as pullable, and only misclassifies one rare,
+    //       deliberately accepted residual case: `build:` + a
+    //       single-segment OFFICIAL Hub image with no `pull_policy`
+    //       override (e.g. `image: redis` next to a `build:` key) —
+    //       vanishingly rare, intentionally not special-cased. A non-string
+    //       `image:` value narrows to `undefined` above, so `image !==
+    //       undefined` short-circuits this check straight to `false`
+    //       (can't inspect a shape it doesn't have) — same "can't tell,
+    //       assume pullable" default the old predicate effectively used for
+    //       any defined-but-weird `image:` shape.
+    //
+    // Kept as one `buildOnly` boolean, not split into separate
+    // buildable/pullable flags — that split is out of scope here, filed as
+    // follow-up issue #1243.
     for (const [name, def] of Object.entries(parsed.services ?? {})) {
-      result.set(name, def.build !== undefined && def.image === undefined);
+      if (def.build === undefined) {
+        result.set(name, false);
+        continue;
+      }
+      if (def.image === undefined) {
+        result.set(name, true);
+        continue;
+      }
+      const pullPolicy = typeof def.pull_policy === "string" ? def.pull_policy : undefined;
+      if (pullPolicy === "build" || pullPolicy === "never") {
+        result.set(name, true);
+        continue;
+      }
+      const image = typeof def.image === "string" ? def.image : undefined;
+      result.set(name, image !== undefined && !image.includes("/"));
     }
     return result;
   } catch (err) {

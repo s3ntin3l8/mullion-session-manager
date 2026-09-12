@@ -243,15 +243,37 @@ Each discovered monitor:
     specifically.
 
 `build:`-only detection itself (issue #1221) reads `docker compose ...
-config --format json` directly — whether a service has a `build:` key and
-no `image:` key — whenever the stack's compose file(s) are still resolvable
-on disk, one probe per distinct compose project, cached until any of that
-project's services' config changes. This is what a rebuilt-and-pruned
-service needs: its own old, default-named image gets pruned once
-superseded, so its container reverts to a bare digest that a name-shape
-guess alone can never recognize as build-only. That name-shape guess
+config --format json` directly, whenever the stack's compose file(s) are
+still resolvable on disk, one probe per distinct compose project, cached
+until any of that project's services' config changes. A service is
+build-only when it has a `build:` key AND any of: no `image:` key at all;
+an explicit `pull_policy: build` or `pull_policy: never`; or an `image:`
+whose ref has no `/` (an unqualified single-segment tag like
+`myimage:local` — the `:` there is a tag separator, not a registry-host
+marker, so this is _not_ the same test as looking for a `.`/`:` anywhere in
+the ref). This covers two real cases: a
+rebuilt-and-pruned service whose own old, default-named image gets pruned
+once superseded (its container reverts to a bare digest a name-shape guess
+alone can never recognize as build-only), and a service that declares both
+`build:` and an explicit custom local `image:` tag (e.g. `image:
+myapp:local` next to a `build:` key) — still nothing to pull, even though it
+has an `image:` key. The name-shape guess
 (`<composeProject>-<service>[:latest]`, compose's own default build-image
 name) is kept only as the fallback for when the probe can't run.
+
+One rare shape is deliberately left misclassified rather than special-cased:
+`build:` + a single-segment _official_ Docker Hub image with no
+`pull_policy` override (e.g. `image: redis` next to a `build:` key) has no
+`/`, so it's flagged `buildOnly: true` even though it does have a real
+registry image to pull. That's user-visible, not just a labeling quirk —
+per-service "Check for update" stays disabled and the stack header's ⋯ menu
+won't offer "Pull & restart stack" for that service — but this shape is
+vanishingly rare in practice (a `build:`-only service almost never also
+names an unqualified official Hub image), so it's accepted rather than
+worth the complexity of resolving unqualified refs against Hub. (Splitting
+`buildOnly` into independent `buildable`/`pullable` facts, tracked as
+follow-up issue #1243, would let a service like this offer both actions
+correctly instead of trading one off against the other.)
 
 Every compose project discovered in a column also gets its own **stack
 header**, above that project's monitors, labelled with the compose project
