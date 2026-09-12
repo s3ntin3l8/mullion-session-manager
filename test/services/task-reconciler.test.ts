@@ -1379,7 +1379,7 @@ describe("reconcileTasks", () => {
         liveStatus: vi.fn().mockResolvedValue({
           [String(workerSession.id)]: fakeInfo({ lastTurnEndedAt: Date.now() }),
         }),
-        isMasterAlive: vi.fn().mockResolvedValue({}),
+        liveness: vi.fn().mockResolvedValue({}),
         terminate: vi.fn().mockResolvedValue(undefined),
         getScrollback: vi.fn().mockResolvedValue(Buffer.alloc(0)),
         uploadImage: vi.fn().mockResolvedValue({ path: "/remote/upload" }),
@@ -1470,7 +1470,7 @@ describe("reconcileTasks", () => {
         liveStatus: vi.fn().mockResolvedValue({
           [String(workerSession.id)]: fakeInfo({ lastTurnEndedAt: Date.now() }),
         }),
-        isMasterAlive: vi.fn().mockResolvedValue({}),
+        liveness: vi.fn().mockResolvedValue({}),
         terminate: vi.fn().mockResolvedValue(undefined),
         getScrollback: vi.fn().mockResolvedValue(Buffer.alloc(0)),
         uploadImage: vi.fn().mockResolvedValue({ path: "/remote/upload" }),
@@ -1565,7 +1565,7 @@ describe("reconcileTasks", () => {
         liveStatus: vi.fn().mockResolvedValue({
           [String(workerSession.id)]: fakeInfo({ lastTurnEndedAt: Date.now() }),
         }),
-        isMasterAlive: vi.fn().mockResolvedValue({}),
+        liveness: vi.fn().mockResolvedValue({}),
         terminate: vi.fn().mockResolvedValue(undefined),
         getScrollback: vi.fn().mockResolvedValue(Buffer.alloc(0)),
         uploadImage: vi.fn().mockResolvedValue({ path: "/remote/upload" }),
@@ -4845,7 +4845,7 @@ describe("reconcileTasks", () => {
         liveStatus: vi.fn().mockResolvedValue({
           [String(workerSessionId)]: fakeInfo({ lastTurnEndedAt: Date.now() }),
         }),
-        isMasterAlive: vi.fn().mockResolvedValue({}),
+        liveness: vi.fn().mockResolvedValue({}),
         terminate: vi.fn().mockResolvedValue(undefined),
         getScrollback: vi.fn().mockResolvedValue(Buffer.alloc(0)),
         uploadImage: vi.fn().mockResolvedValue({ path: "/remote/upload" }),

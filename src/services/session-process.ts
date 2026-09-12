@@ -20,14 +20,15 @@
 // Session, like the other three) would just be a wrapper around functions
 // that ignore `this` entirely.
 //
-// PtyManager keeps thin instance methods (isMasterAlive, isMasterAliveBatch,
-// listSessionProcesses) that delegate to the functions here, rather than
-// having callers import the functions directly — that keeps `app.pty.*` the
-// one call surface routes/session-reconciler.ts/session-backend.ts and their
-// tests already use (session-reconciler.test.ts spies on
-// `app.pty.isMasterAliveBatch` directly; pty-manager.test.ts calls
-// `manager.isMasterAlive`/`manager.isMasterAliveBatch`) — those keep working
-// unchanged. scopeUnitName/stopScope, by contrast, were already plain
+// PtyManager keeps thin instance methods (isMasterAliveState,
+// isMasterAliveStateBatch, isMasterAliveBatch, listSessionProcesses) that
+// delegate to the functions here, rather than having callers import the
+// functions directly — that keeps `app.pty.*` the one call surface routes/
+// session-reconciler.ts/session-backend.ts and their tests already use
+// (session-reconciler.test.ts spies on `app.pty.isMasterAliveStateBatch`
+// directly; pty-manager.test.ts calls `manager.isMasterAliveState`/
+// `manager.isMasterAliveStateBatch`) — those keep working unchanged.
+// scopeUnitName/stopScope, by contrast, were already plain
 // module-level functions (not PtyManager methods) before this extraction, so
 // pty-manager.ts now just imports and calls them directly, same as before.
 //
@@ -232,8 +233,8 @@ export function isSystemctlUserAvailable(): boolean {
  * Returns the squatting unit's `Description` (systemd's own rendering of
  * its `dtach -n <socket> ...` command line — see stopScope's own unit
  * naming) when it is genuinely occupying the name (`ActiveState` is
- * "active" or "deactivating" — same trust window as isMasterAlive()'s doc
- * comment on that pair, a scope Mullion itself just asked to stop is not
+ * "active" or "deactivating" — same trust window as isMasterAliveStateBatch()'s
+ * doc comment on that pair, a scope Mullion itself just asked to stop is not
  * yet gone). Returns `null` for every other case — no such unit, a
  * `systemctl` spawn error, or an unparseable reply — so a caller can always
  * fall back to today's plain message with no special-casing. Deliberately
@@ -284,8 +285,8 @@ export function describeScope(instanceId: string, id: string): Promise<string | 
       armed.clearOnSettle();
       finish(null);
     });
-    // 'close', not 'exit' — same stdout-delivery race isMasterAlive() and
-    // isMasterAliveBatch() below already guard against.
+    // 'close', not 'exit' — same stdout-delivery race isMasterAliveStateBatch()
+    // below already guards against.
     child.on("close", () => {
       armed.clearOnSettle();
       const fields = Object.create(null) as Record<string, string>;
@@ -486,12 +487,13 @@ export function listOwnedScopes(
     const fail = () => finish({ owned: new Map(), unverifiable: new Set(), failed: true });
 
     // Issue #1232 — this spawn had no timeout at all: a wedged `--user`
-    // D-Bus bus left this promise pending forever, and every isMasterAlive/
-    // isMasterAliveBatch caller (including routes/projects.ts's
-    // withStackLock-serialized stack-session mutex, issue #1182) bottoms
-    // out here — one hung call there stalled every OTHER queued stack
-    // action for the same (projectId, composeProject) key indefinitely, not
-    // just the in-flight request. A timeout maps to the SAME `fail()` the
+    // D-Bus bus left this promise pending forever, and every
+    // isMasterAliveStateBatch/isMasterAliveBatch caller (including
+    // routes/projects.ts's withStackLock-serialized stack-session mutex,
+    // issue #1182) bottoms out here — one hung call there stalled every
+    // OTHER queued stack action for the same (projectId, composeProject)
+    // key indefinitely, not just the in-flight request. A timeout maps to
+    // the SAME `fail()` the
     // 'error'/non-zero-exit paths below already use, never to a successful
     // empty listing — `failed: true` is the "everything unknown" contract
     // this interface's own doc comment documents, not "nothing is owned."
@@ -503,8 +505,8 @@ export function listOwnedScopes(
       armed.clearOnSettle();
       fail();
     });
-    // 'close', not 'exit' — same stdout-delivery race isMasterAlive()/
-    // isMasterAliveBatch() below already guard against.
+    // 'close', not 'exit' — same stdout-delivery race isMasterAliveStateBatch()
+    // below already guards against.
     child.on("close", (code) => {
       armed.clearOnSettle();
       if (code !== 0) {
@@ -669,132 +671,137 @@ export async function stopScope(
   });
 }
 
+/** "alive" — this instance owns a currently active/deactivating scope for
+ *  this id. "dead" — a confident negative, no row anywhere plausibly names
+ *  this id as active. "unknown" — a row could name it but ownership can't
+ *  be confirmed, or the underlying listing itself failed/timed out. See
+ *  isMasterAliveStateBatch's own doc comment for the full trust rule this
+ *  type exists to make un-ignorable: a caller that takes a DESTRUCTIVE
+ *  action (mark-exited, kill, recreate) on "not alive" must treat "unknown"
+ *  as "don't know," never silently fold it into "dead." */
+export type SessionLiveness = "alive" | "dead" | "unknown";
+
 /**
- * Perf audit finding B8(2) — the batched liveness check for MANY sessions
- * in one go (session-backend.ts's LocalSessionBackend.isMasterAlive, and
+ * Perf audit finding B8(2) — the batched liveness check for MANY sessions in
+ * one go (session-backend.ts's LocalBackend.liveness, and
  * routes/internal.ts's `/internal/sessions/liveness` for a remote agent's
- * own sessions; isMasterAlive() below is now a thin single-id wrapper over
- * this). A single `systemctl --user list-units` call (via
- * listOwnedScopes(), filtered to `--state=active,deactivating` — issue
- * #988: a scope Mullion itself just asked systemd to stop sits in
- * "deactivating" for up to systemd's own DefaultTimeoutStopSec before
- * settling, and is NOT "the program exited on its own," the only thing
- * this function exists to catch) returns every currently-active scope in
- * one spawn; per-id liveness is then a plain in-memory lookup, no further
- * subprocesses.
+ * own sessions, via the isMasterAliveBatch wire-adapter below). A single
+ * `systemctl --user list-units` call (via listOwnedScopes(), filtered to
+ * `--state=active,deactivating` — issue #988: a scope Mullion itself just
+ * asked systemd to stop sits in "deactivating" for up to systemd's own
+ * DefaultTimeoutStopSec before settling, and is NOT "the program exited on
+ * its own," the only thing this function exists to catch) returns every
+ * currently-active scope in one spawn; per-id liveness is then a plain
+ * in-memory lookup, no further subprocesses.
  *
- * Trust rule — deliberately NOT "unknown collapses to false":
+ * Issue #1265 — this is the TOTAL primitive every liveness caller in this
+ * codebase should build on: every requested id is always present in the
+ * result, so there is no omitted key left for a caller to collapse to
+ * "dead" by mistake (the exact footgun #1232's isMasterAliveState closed
+ * for two call sites specifically, and this closes for good — see that
+ * issue). Trust rule:
  *
- *   - `listing.owned.has(id)` -> `true`.
- *   - neither owned nor unverifiable -> `false` (a confident negative — no
+ *   - `listing.owned.has(id)` -> `"alive"`.
+ *   - neither owned nor unverifiable -> `"dead"` (a confident negative — no
  *     row anywhere plausibly names this id as active). This includes a row
  *     whose socket parses CLEANLY but resolves under a DIFFERENT instance's
- *     sessionsDir (Hermes review, this PR): since systemd forbids two units
+ *     sessionsDir (Hermes review, PR #1232): since systemd forbids two units
  *     sharing a name, if THIS instance's own session `id` were still alive
  *     it would hold that exact unit name itself — a foreign-owned
  *     `crs-session-<id>` scope existing at all means this instance's own
  *     same-id session has already ended (or, pre-any-namespacing, raced a
  *     genuine #1137 collision at creation and never held the name to begin
- *     with). `false` is the correct, confident answer here, not
- *     "unverifiable" — see the dedicated test coverage in
+ *     with). `"dead"` is the correct, confident answer here, not
+ *     `"unknown"` — see the dedicated test coverage in
  *     session-process.test.ts locking this outcome in.
- *   - `listing.unverifiable.has(id)` -> id OMITTED from the result. A row
- *     could name `id`, but this instance can't confirm ownership, so it
- *     must not assert either answer.
+ *   - `listing.unverifiable.has(id)` -> `"unknown"`. A row could name `id`,
+ *     but this instance can't confirm ownership, so it must not assert
+ *     either answer.
  *   - `listing.failed` (spawn/parse error, e.g. systemctl missing, a
- *     `--user` D-Bus hiccup) -> an EMPTY record, every id omitted.
+ *     `--user` D-Bus hiccup, or a timeout) -> `"unknown"` for every id.
  *
- * Both "omitted" cases matter for the same reason: collapsing either to
- * `false` would mass-flip active sessions to exited on a single ambiguous
- * row or a transient systemctl error — exactly the "missing key -> false"
- * mass-exit landmine session-reconciler.ts's own doc comment calls out and
- * specifically protects against for the multi-host case (a key a REACHABLE
- * host's response merely omits is treated as "unknown," never "not
- * alive"). Every caller already handles `alive === undefined` -> skip via
- * that same path. Only ids resolved with real confidence get true/false.
+ * Both "unknown" cases matter for the same reason: collapsing either to
+ * `"dead"` would mass-flip active sessions to exited on a single ambiguous
+ * row or a transient systemctl error — exactly the mass-exit landmine
+ * session-reconciler.ts's own doc comment calls out and specifically
+ * protects against for the multi-host case (a key a REACHABLE host's
+ * response merely omits is treated as "unknown," never "not alive"). Only
+ * ids resolved with real confidence get `"alive"`/`"dead"`.
+ */
+export async function isMasterAliveStateBatch(
+  sessionsDir: string,
+  instanceId: string,
+  ids: string[],
+): Promise<Record<string, SessionLiveness>> {
+  if (ids.length === 0) return Object.create(null);
+  const listing = await listOwnedScopes(sessionsDir, instanceId, {
+    states: "active,deactivating",
+  });
+  const result: Record<string, SessionLiveness> = Object.create(null);
+  for (const id of ids) {
+    if (listing.failed) {
+      result[id] = "unknown";
+    } else if (listing.owned.has(id)) {
+      result[id] = "alive";
+    } else if (listing.unverifiable.has(id)) {
+      result[id] = "unknown";
+    } else {
+      result[id] = "dead";
+    }
+  }
+  return result;
+}
+
+/**
+ * Single-id read off isMasterAliveStateBatch() above — issue #1232, added
+ * because `startStackSession`/`findActiveStackSession` (routes/projects.ts)
+ * take a DESTRUCTIVE action on "not alive" (mark a row exited, then
+ * recreate it) and need "unknown" (an unverifiable id, or the listing
+ * itself failing/timing out) kept distinct from a confident "dead" — a
+ * `listOwnedScopes` timeout is no longer a rare event confined to
+ * "systemctl is missing," it can now happen whenever `--user` D-Bus is
+ * merely slow, which is exactly when a real host is under the most load and
+ * its sessions are most likely to be genuinely alive. Folding that timeout
+ * into "dead" would permanently orphan a scope that was actually still
+ * running (the reconciler never revisits a row once it leaves
+ * `status: "active"`).
+ */
+export async function isMasterAliveState(
+  sessionsDir: string,
+  instanceId: string,
+  id: string,
+): Promise<SessionLiveness> {
+  const result = await isMasterAliveStateBatch(sessionsDir, instanceId, [id]);
+  return result[id];
+}
+
+/**
+ * Wire-format adapter for `/internal/sessions/liveness` ONLY — this
+ * boolean-with-omitted-keys shape is preserved byte-for-byte (issue #1265)
+ * purely so an already-deployed remote agent's response stays parseable by
+ * an already-deployed primary and vice versa (remote agents run different
+ * builds than the primary by design — see docs/multi-host.md's "Agent
+ * updates"). Every OTHER caller in this codebase should use
+ * isMasterAliveStateBatch()/isMasterAliveState() above instead — the
+ * omitted-key convention this function preserves is exactly the footgun
+ * #1265 exists to stop new callers from reaching for.
  */
 export async function isMasterAliveBatch(
   sessionsDir: string,
   instanceId: string,
   ids: string[],
 ): Promise<Record<string, boolean>> {
-  if (ids.length === 0) return Object.create(null);
-  const listing = await listOwnedScopes(sessionsDir, instanceId, {
-    states: "active,deactivating",
-  });
-  if (listing.failed) return Object.create(null);
+  const state = await isMasterAliveStateBatch(sessionsDir, instanceId, ids);
   const result: Record<string, boolean> = Object.create(null);
   for (const id of ids) {
-    if (listing.owned.has(id)) {
+    if (state[id] === "alive") {
       result[id] = true;
-    } else if (!listing.unverifiable.has(id)) {
+    } else if (state[id] === "dead") {
       result[id] = false;
     }
-    // else: some row's unit name could plausibly be `id`, but ownership
-    // couldn't be confirmed — omitted, per this function's own trust rule.
+    // "unknown" -> omitted, matching this route's existing wire contract.
   }
   return result;
-}
-
-/**
- * Same batch lookup as isMasterAlive() below, but keeps "unknown" (an
- * unverifiable id, or the listing itself failing/timing out — see
- * isMasterAliveBatch's own trust-rule doc comment) distinct from a
- * confident "dead."
- *
- * Issue #1232 — added because a `listOwnedScopes` timeout (also this issue)
- * means `failed: true`/"unknown" is no longer a rare event confined to
- * "systemctl is missing" — it can now happen whenever `--user` D-Bus is
- * merely slow, which is exactly when a real host is under the most load and
- * its sessions are most likely to be genuinely alive.
- * `startStackSession`/`findActiveStackSession` (routes/projects.ts) take a
- * DESTRUCTIVE action on "not alive" — mark a row exited, then recreate it —
- * and isMasterAlive()'s own `?? false` posture would silently fold that
- * timeout into the same destructive branch, permanently orphaning a scope
- * that was actually still running (the reconciler never revisits a row once
- * it leaves `status: "active"`). Every OTHER caller in this module already
- * preserves "unknown" on its own via isMasterAliveBatch directly; this is
- * the single-id equivalent for a caller that needs the same distinction
- * without switching to the batch shape.
- */
-export async function isMasterAliveState(
-  sessionsDir: string,
-  instanceId: string,
-  id: string,
-): Promise<"alive" | "dead" | "unknown"> {
-  const result = await isMasterAliveBatch(sessionsDir, instanceId, [id]);
-  const value = result[id];
-  return value === undefined ? "unknown" : value ? "alive" : "dead";
-}
-
-/**
- * Whether `id`'s systemd scope — the true owner of the dtach master and the
- * program running inside it, per PtyManager.terminate()'s doc comment in
- * pty-manager.ts — is still active. This is the source of truth
- * session-reconciler.ts polls to catch a program that exited without an
- * explicit DELETE /api/sessions/:id — deliberately NOT based on anything
- * tracked in this process's memory, so it works correctly even right after
- * a restart, before anything has re-attached.
- *
- * A thin wrapper over isMasterAliveState() above, itself a thin wrapper over
- * isMasterAliveBatch() — issue #1140 (PR 1): every one of these needs the
- * exact same ownership-by-socket-path listing, so a second, differently-
- * shaped single-unit `is-active` spawn would just be a second copy of that
- * same logic to keep in sync. Collapsing "unknown" to `false` here is what
- * preserves this function's own documented single-id posture — "unknown
- * collapses to false" — exactly as a failed/absent single-unit `is-active`
- * reply always did before this PR. A caller that takes a DESTRUCTIVE action
- * on `false` (mark-exited, kill, recreate — not just "skip re-attaching")
- * must use isMasterAliveState() directly instead, so a transient/timed-out
- * listing can't silently take that branch — see that function's own doc
- * comment (issue #1232).
- */
-export async function isMasterAlive(
-  sessionsDir: string,
-  instanceId: string,
-  id: string,
-): Promise<boolean> {
-  return (await isMasterAliveState(sessionsDir, instanceId, id)) === "alive";
 }
 
 /**
@@ -810,11 +817,11 @@ export async function isMasterAlive(
  * attribution is harmless (this is a best-effort inventory, not a security
  * boundary), so a transient systemctl failure degrades gracefully instead
  * of silently reporting no processes for a session that may well be alive.
- * Returns `[]` for a scope that isn't owned/active, same as isMasterAlive()
- * would report — listScopeProcesses() itself already returns `[]` for a
- * unit with no live cgroup. This now costs two sequential spawns (the
- * ownership listing, then listScopeProcesses' own cgroup query) instead of
- * one — this is reachable from a route (GET /api/sessions/:id/processes,
+ * Returns `[]` for a scope that isn't owned/active, same as
+ * isMasterAliveState() would report — listScopeProcesses() itself already
+ * returns `[]` for a unit with no live cgroup. This now costs two sequential
+ * spawns (the ownership listing, then listScopeProcesses' own cgroup query)
+ * instead of one — this is reachable from a route (GET /api/sessions/:id/processes,
  * src/routes/sessions.ts) that a client could poll, so the added latency
  * is more visible here than in stopScope (rare, terminate()-only); still
  * accepted, since correctness (never attributing another instance's

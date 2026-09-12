@@ -311,7 +311,7 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
   // Re-entrancy guards (6.4/#217) — both reconcilers now make GitHub round
   // trips (reconcileExitedSessions via its #282 task-failed hook,
   // reconcileTasks via its transition syncs), on top of the liveStatus/
-  // isMasterAlive calls they already made, so a slow GitHub makes
+  // liveness calls they already made, so a slow GitHub makes
   // overlapping ticks meaningfully more likely than before this PR. Same
   // shape as task-watcher.ts's own `running` guard. Each reconciler's own
   // DB writes are already status-guarded against a stacked call actually
