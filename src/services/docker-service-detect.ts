@@ -46,8 +46,8 @@ export interface ComposeService {
   status: string;
   imageRef: string;
   imageId: string;
-  /** No registry image to pull/compare — a `build:`-only service. Set at
-   * discovery time from `docker compose ... config --format json`
+  /** Whether this service declares a `build:` key at all. Set at discovery
+   * time from `docker compose ... config --format json`
    * (refineBuildOnlyDetection below) when the stack's compose file(s) are
    * still resolvable on disk — the authoritative source, since it reads the
    * actual `build:`/`image:` keys rather than guessing from a name. Falls
@@ -60,13 +60,49 @@ export interface ComposeService {
    * name heuristic alone can never recognize (verified live against this
    * repo's own pocket-portfolio-tracker).
    *
-   * A failed check-update pull for a service NOT already flagged this way
+   * Issue #1243 — split from a single `buildOnly` boolean into this and
+   * `pullable` below: a service can be BOTH (`build:` + a registry-
+   * qualified `image:`), which used to force a choice between offering
+   * Rebuild or Pull when both are actually valid. See `pullable`'s own doc
+   * comment for the full split. The old `buildOnly` semantics are exactly
+   * `buildable && !pullable`. */
+  buildable: boolean;
+  /** Whether this service has a registry image `docker compose pull` (or
+   * the check-update probe) can actually do something useful with. Three
+   * independent conditions all have to hold:
+   *
+   * 1. An `image:` key is present at all — no key at all means nothing to
+   *    pull, full stop (a plain `build:`-only service with no `image:`).
+   * 2. No `pull_policy: build` / `pull_policy: never` override — an
+   *    explicit compose-file declaration that this image is only ever
+   *    built locally, never pulled, regardless of what its name looks
+   *    like. Authoritative; short-circuits the ref-shape check below.
+   * 3. When `build:` is ALSO present (making the `image:` ref ambiguous —
+   *    it might be a local build tag rather than something a registry can
+   *    serve), the ref must look registry-qualified: it must contain a
+   *    `/`. Docker's own domain-vs-tag disambiguation only inspects the
+   *    text BEFORE the first `/`: an unqualified single-segment ref like
+   *    `nanokvm-manager:local` resolves to
+   *    `docker.io/library/nanokvm-manager:local` when pulled — the `:`
+   *    there is a TAG separator, not a registry-host marker. Testing for
+   *    `/` instead correctly leaves a namespaced ref (`ghcr.io/org/img:edge`,
+   *    `myorg/img`) classified as pullable, and only misclassifies one
+   *    rare, deliberately accepted residual case: `build:` + a
+   *    single-segment OFFICIAL Hub image with no `pull_policy` override
+   *    (e.g. `image: redis` next to a `build:` key) — see docs/dock.md.
+   *    Without a `build:` key at all, any `image:` is unambiguously the
+   *    thing this service runs and pulls, so this check is skipped
+   *    entirely (a plain `image: redis` service IS pullable).
+   *
+   * A failed check-update pull for a service already flagged as not
+   * `pullable` never reaches this decision at all (short-circuited by
+   * the route). A failed pull for a service THIS flag says IS pullable
    * (a private registry, transient network failure, …) surfaces as
    * `reason: "pull-failed"` instead — see projects.ts's docker/check-update
-   * route — rather than being memoized into `buildOnly` here, so a
+   * route — rather than being memoized into `pullable` here, so a
    * transient failure doesn't permanently hide the update actions for a
    * service that legitimately has a registry image. */
-  buildOnly: boolean;
+  pullable: boolean;
   /** Whether every file compose originally recorded in `configFiles` still
    * exists — see composeContextArgs() for why this decides the synthesized
    * command. */
@@ -251,6 +287,14 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/** The two independent facts `probeBuildOnlyServices` computes per service —
+ * see `ComposeService.buildable`/`pullable`'s own doc comments (issue
+ * #1243). */
+interface BuildPullFacts {
+  buildable: boolean;
+  pullable: boolean;
+}
+
 /** compose's own default build-image name (`<project>-<service>[:latest]`,
  * verified live against a build:-only stack) — a service still using that
  * name never had a registry image pulled, so `docker compose pull` /
@@ -263,19 +307,28 @@ function escapeRegExp(s: string): string {
  * reverts to a bare `sha256:<digest>`, which this name-shape guess can
  * never match. Kept as the fallback for when the stack's compose files
  * aren't resolvable on disk, `docker compose` isn't available, or the probe
- * itself fails/times out. */
-function looksBuildOnly(imageRef: string, composeProject: string, service: string): boolean {
+ * itself fails/times out.
+ *
+ * This name heuristic can only ever produce a mutually-exclusive pair — it
+ * has no visibility into whether the service ALSO declares a real `build:`
+ * key, only whether its image name looks like compose's own default build
+ * tag — so a match reports `{buildable: true, pullable: false}` and a
+ * non-match reports `{buildable: false, pullable: true}` (issue #1243):
+ * exactly the old `buildOnly`/`!buildOnly` split, reproduced verbatim
+ * whenever the authoritative probe can't run. Don't try to make this
+ * tri-state; there's no third signal available here to make it one. */
+function looksBuildOnly(imageRef: string, composeProject: string, service: string): BuildPullFacts {
   const pattern = new RegExp(
     `^${escapeRegExp(composeProject)}-${escapeRegExp(service)}(:latest)?$`,
   );
-  return pattern.test(imageRef);
+  const matches = pattern.test(imageRef);
+  return matches ? { buildable: true, pullable: false } : { buildable: false, pullable: true };
 }
 
 /** Result of one `docker compose ... config --format json` probe for a
- * compose project: which of its services have a `build:` key and no
- * `image:` key, i.e. are genuinely build-only per the compose file itself
- * rather than a name-shape guess. */
-type BuildOnlyProbeResult = ReadonlyMap<string, boolean>;
+ * compose project: each service's `buildable`/`pullable` facts per the
+ * compose file itself, rather than a name-shape guess. */
+type BuildOnlyProbeResult = ReadonlyMap<string, BuildPullFacts>;
 
 interface BuildOnlyProbeCacheEntry {
   /** Sorted `service:configHash` fold over every service in the project at
@@ -293,10 +346,11 @@ const buildOnlyProbeCache = new Map<string, BuildOnlyProbeCacheEntry>();
  * service's `configHash` — a container's `com.docker.compose.config-hash`
  * label only changes on recreate, so deleting/moving the stack's compose
  * files, or editing them without yet applying the change, leaves every
- * hash exactly as it was. Without this, a `buildOnly: true` result from
+ * hash exactly as it was. Without this, a `buildable: true` result from
  * back when the files existed would stay cached forever even after they're
  * gone, contradicting this cache's own "falls back to looksBuildOnly when
- * the probe can't run" doc comment on `ComposeService.buildOnly`. */
+ * the probe can't run" doc comment on `ComposeService.buildable`/
+ * `pullable`. */
 function foldConfigHashes(services: readonly ComposeService[]): string {
   const hashes = services
     .map((s) => `${s.service}:${s.configHash}`)
@@ -307,7 +361,7 @@ function foldConfigHashes(services: readonly ComposeService[]): string {
 }
 
 /** Runs `docker compose ... config --format json` for one compose project
- * and returns which services have `build:` and no `image:` — the
+ * and returns each service's `buildable`/`pullable` facts — the
  * authoritative source refineBuildOnlyDetection() below prefers over
  * looksBuildOnly's name-shape guess. `services` only needs to contain
  * members of ONE compose project; any resolvable one works as the
@@ -336,78 +390,73 @@ async function probeBuildOnlyServices(
     const parsed = JSON.parse(output) as {
       services?: Record<string, { build?: unknown; image?: unknown; pull_policy?: unknown }>;
     };
-    const result = new Map<string, boolean>();
-    // Three tiers, in order — issue #1221's follow-up. The original fix
-    // (PR #1231) only handled a bare `build:` with no `image:` key at all
-    // (a rebuilt-and-pruned service whose old default-named image is gone,
-    // reverting `imageRef` to a bare `sha256:` digest). Two real stacks on
-    // this host (`nanokvm-manager`'s `nanokvm-dash`, `open-design`'s
-    // `open-design` service) declare BOTH `build:` and an explicit
-    // `image:` — a custom local tag, not a registry ref — which that
-    // single-expression predicate (`build && !image`) misses entirely,
-    // since these DO have an `image:` key.
+    const result = new Map<string, BuildPullFacts>();
+    // Issue #1243 — two INDEPENDENT facts, not one tiered `buildOnly`
+    // boolean. The original fix (PR #1231, then #1221's follow-up)
+    // conflated "has a build: key" and "has no usable registry image" into
+    // a single flag, which forced a choice between offering Rebuild or
+    // Pull even for a service where both are actually valid (a `build:`
+    // key next to a real registry-qualified `image:`, e.g.
+    // `ghcr.io/org/img:edge`) — see docs/dock.md for the full writeup.
     //
-    // 1. No `build:` key at all — never build-only, regardless of
-    //    `image:`/`pull_policy:`.
-    // 2. `build:` present, no `image:` key at all (checked against the RAW
-    //    value, `def.image === undefined` — not the string-narrowed one
-    //    below) — the original #1221 case: nothing to pull, full stop. A
+    // `buildable` is simple: does the service declare a `build:` key at
+    // all, full stop.
+    //
+    // `pullable` needs three independent conditions to all hold:
+    // 1. `image:` key present at all (checked against the RAW value,
+    //    `def.image === undefined` — not the string-narrowed one below) —
+    //    no key at all means nothing to pull, full stop. A
     //    present-but-not-a-string `image:` (e.g. a stray `image:` key with
-    //    no value, parsing as `null`) does NOT count as "no image key" —
-    //    it falls through to tier 3 below, same as the old predicate
-    //    treated it (that predicate's own `def.image === undefined` check
-    //    only ever matched a truly absent key too).
-    // 3. `build:` present AND `image:` present (of any type) — two
-    //    sub-checks, in order:
-    //    a. `pull_policy: build` or `pull_policy: never` — an explicit
-    //       compose-file declaration that this image is only ever built
-    //       locally, never pulled from a registry, regardless of what its
-    //       name looks like. Authoritative; short-circuits (b). (`build`
-    //       and `never` differ in compose's own default-pull semantics
-    //       outside this predicate's concern — both mean "don't bother
-    //       pulling", which is all `buildOnly` tracks.)
-    //    b. No such override: fall back to the image ref's own shape,
-    //       testing for a `/` — deliberately NOT `.` or `:`. Docker's own
-    //       domain-vs-tag disambiguation only inspects the text BEFORE the
-    //       first `/`: an unqualified single-segment ref like
-    //       `nanokvm-manager:local` resolves to
-    //       `docker.io/library/nanokvm-manager:local` when pulled from a
-    //       registry — the `:` there is a TAG separator, not a
-    //       registry-host marker. Testing the whole ref for `.`/`:` would
-    //       misclassify exactly this shape as registry-qualified (a
-    //       mistake caught during this fix's own planning — don't
-    //       reintroduce it). Testing for `/` instead correctly leaves a
-    //       namespaced registry ref (`ghcr.io/org/img:edge`, `myorg/img`)
-    //       classified as pullable, and only misclassifies one rare,
-    //       deliberately accepted residual case: `build:` + a
-    //       single-segment OFFICIAL Hub image with no `pull_policy`
-    //       override (e.g. `image: redis` next to a `build:` key) —
-    //       vanishingly rare, intentionally not special-cased. A non-string
-    //       `image:` value narrows to `undefined` above, so `image !==
-    //       undefined` short-circuits this check straight to `false`
-    //       (can't inspect a shape it doesn't have) — same "can't tell,
-    //       assume pullable" default the old predicate effectively used for
-    //       any defined-but-weird `image:` shape.
+    //    no value, parsing as `null`) still counts as "has the key" here —
+    //    it just can't be inspected for the `/` test below, which narrows
+    //    it to "assume pullable" the same way the old predicate did for
+    //    any defined-but-weird `image:` shape.
+    // 2. No `pull_policy: build` / `pull_policy: never` override — an
+    //    explicit compose-file declaration that this image is only ever
+    //    built locally, never pulled from a registry, regardless of what
+    //    its name looks like. Authoritative; short-circuits condition 3.
+    //    (`build` and `never` differ in compose's own default-pull
+    //    semantics outside this predicate's concern — both mean "don't
+    //    bother pulling", which is all `pullable` tracks.)
+    // 3. When `buildable` is ALSO true (making the `image:` ref
+    //    ambiguous — it might be a local build tag rather than something a
+    //    registry can serve), the ref must look registry-qualified: test
+    //    for a `/` — deliberately NOT `.` or `:`. Docker's own
+    //    domain-vs-tag disambiguation only inspects the text BEFORE the
+    //    first `/`: an unqualified single-segment ref like
+    //    `nanokvm-manager:local` resolves to
+    //    `docker.io/library/nanokvm-manager:local` when pulled from a
+    //    registry — the `:` there is a TAG separator, not a
+    //    registry-host marker. Testing the whole ref for `.`/`:` would
+    //    misclassify exactly this shape as registry-qualified (a mistake
+    //    caught during #1221's own planning — don't reintroduce it).
+    //    Testing for `/` instead correctly leaves a namespaced registry
+    //    ref (`ghcr.io/org/img:edge`, `myorg/img`) classified as pullable,
+    //    and only misclassifies one rare, deliberately accepted residual
+    //    case: `build:` + a single-segment OFFICIAL Hub image with no
+    //    `pull_policy` override (e.g. `image: redis` next to a `build:`
+    //    key) — vanishingly rare, intentionally not special-cased, see
+    //    docs/dock.md. Without a `build:` key at all, ANY `image:` is
+    //    unambiguously the thing this service runs and pulls, so this `/`
+    //    test is skipped entirely — a plain `image: redis` service with no
+    //    `build:` key is pullable, full stop.
     //
-    // Kept as one `buildOnly` boolean, not split into separate
-    // buildable/pullable flags — that split is out of scope here, filed as
-    // follow-up issue #1243.
+    // `hasImageKey` and `imageRef` below look like they collapse to the
+    // same narrowed value in most branches, but they are NOT the same
+    // condition three lines apart — one is "key present at all" (any
+    // value), the other is "key present AND usable as a string" — so they
+    // stay as two named locals; collapsing them back into one check would
+    // silently reintroduce the tier-2/tier-3b conflation this split
+    // exists to remove.
     for (const [name, def] of Object.entries(parsed.services ?? {})) {
-      if (def.build === undefined) {
-        result.set(name, false);
-        continue;
-      }
-      if (def.image === undefined) {
-        result.set(name, true);
-        continue;
-      }
+      const buildable = def.build !== undefined;
+      const hasImageKey = def.image !== undefined;
+      const imageRef = typeof def.image === "string" ? def.image : undefined;
       const pullPolicy = typeof def.pull_policy === "string" ? def.pull_policy : undefined;
-      if (pullPolicy === "build" || pullPolicy === "never") {
-        result.set(name, true);
-        continue;
-      }
-      const image = typeof def.image === "string" ? def.image : undefined;
-      result.set(name, image !== undefined && !image.includes("/"));
+      const neverPulls = pullPolicy === "build" || pullPolicy === "never";
+      const refLooksPullable = !buildable || imageRef === undefined || imageRef.includes("/");
+      const pullable = hasImageKey && !neverPulls && refLooksPullable;
+      result.set(name, { buildable, pullable });
     }
     return result;
   } catch (err) {
@@ -454,7 +503,13 @@ async function refineBuildOnlyDetection(
 
   return services.map((svc) => {
     const probed = resultsByProject.get(svc.composeProject)?.get(svc.service);
-    return probed === undefined || probed === svc.buildOnly ? svc : { ...svc, buildOnly: probed };
+    if (
+      probed === undefined ||
+      (probed.buildable === svc.buildable && probed.pullable === svc.pullable)
+    ) {
+      return svc;
+    }
+    return { ...svc, buildable: probed.buildable, pullable: probed.pullable };
   });
 }
 
@@ -537,7 +592,7 @@ function toComposeService(row: RawRow): ComposeService {
     status: row.status,
     imageRef: row.image,
     imageId: row.imageId,
-    buildOnly: looksBuildOnly(row.image, row.composeProject, row.service),
+    ...looksBuildOnly(row.image, row.composeProject, row.service),
     composeResolvable: isComposeResolvable(configFiles, envFile),
     configFiles,
     envFile,
@@ -822,7 +877,8 @@ export interface DockerDockControl {
     status: string;
     imageRef: string;
     imageId: string;
-    buildOnly: boolean;
+    buildable: boolean;
+    pullable: boolean;
   };
 }
 
@@ -846,7 +902,8 @@ export async function toDockControls(services: ComposeService[]): Promise<Docker
       status: svc.status,
       imageRef: svc.imageRef,
       imageId: svc.imageId,
-      buildOnly: svc.buildOnly,
+      buildable: svc.buildable,
+      pullable: svc.pullable,
     },
   }));
 }

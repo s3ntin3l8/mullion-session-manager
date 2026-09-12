@@ -1189,7 +1189,7 @@ export async function projectsRoute(app: FastifyInstance) {
       const service = await resolveOwnedService(project, request.body.controlId);
       if (!service) return reply.notFound();
 
-      if (service.buildOnly) {
+      if (!service.pullable) {
         return { updateAvailable: false, reason: "build-only" as const };
       }
 
@@ -1243,7 +1243,7 @@ export async function projectsRoute(app: FastifyInstance) {
 
       const service = await resolveOwnedService(project, request.body.controlId);
       if (!service) return reply.notFound();
-      if (service.buildOnly) {
+      if (!service.pullable) {
         return reply.badRequest("This service has no registry image to pull");
       }
 
@@ -1631,7 +1631,7 @@ export async function projectsRoute(app: FastifyInstance) {
     title: (composeProject: string) => string;
     buildCommand: (service: ComposeService) => string;
     // Returns a 400 message when the action doesn't apply to this service
-    // (only `rebuild` uses this — the buildOnly mirror-guard of the
+    // (only `rebuild` uses this — the buildable mirror-guard of the
     // existing pull-restart route above).
     guard?: (service: ComposeService) => string | null;
     // Only an action that runs `up -d` needs the recreate precondition.
@@ -1664,11 +1664,13 @@ export async function projectsRoute(app: FastifyInstance) {
         return `docker compose ${flags} build --pull && docker compose ${flags} up -d`;
       },
       // The `build:`-only counterpart to the existing pull-restart route
-      // above — gated the mirror-opposite way (buildOnly must be TRUE
-      // here, not false), since a build-only service has no registry
-      // image for `pull` to do anything useful with.
+      // above — gated on `buildable` (issue #1243), not the inverse of
+      // `pullable`: a service can be BOTH (a `build:` key next to a real
+      // registry image), in which case both this route and the pull-restart
+      // route above must accept it. Only a service with no `build:` key at
+      // all is rejected here.
       guard: (s) =>
-        s.buildOnly ? null : "This service has a registry image — use Pull & restart instead",
+        s.buildable ? null : "This service has a registry image — use Pull & restart instead",
       reportWillRecreate: true,
     },
     {

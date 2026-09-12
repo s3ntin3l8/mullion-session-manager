@@ -12,7 +12,7 @@ import { projects, sessions } from "../../src/db/schema.js";
 // services, and the two docker/check-update + docker/update routes.
 //
 // docker-service-detect.ts's own shell-out logic (parsing, dedupe,
-// buildOnly/composeResolvable heuristics, shell-quoting) is already
+// buildable/pullable/composeResolvable heuristics, shell-quoting) is already
 // exhaustively covered by test/services/docker-service-detect.test.ts — this
 // file mocks that whole module with controllable fixtures so it can focus on
 // the ROUTE layer: merge order, manual-override-wins, the local/remote host
@@ -53,7 +53,10 @@ interface FixtureService {
   status: string;
   imageRef: string;
   imageId: string;
-  buildOnly: boolean;
+  // Issue #1243 — split from a single `buildOnly` boolean; see
+  // src/services/docker-service-detect.ts's ComposeService doc comments.
+  buildable: boolean;
+  pullable: boolean;
   composeResolvable: boolean;
   configFiles: string[];
   envFile: string | null;
@@ -70,7 +73,8 @@ function fixtureService(overrides: Partial<FixtureService> = {}): FixtureService
     status: "Up 6 days",
     imageRef: "ghcr.io/s3ntin3l8/sanctuary:edge",
     imageId: "sha256:current00000000000000000000000000000000000000000000000000000",
-    buildOnly: false,
+    buildable: false,
+    pullable: true,
     composeResolvable: true,
     configFiles: [],
     envFile: null,
@@ -112,7 +116,8 @@ vi.mock("../../src/services/docker-service-detect.js", () => ({
         status: s.status,
         imageRef: s.imageRef,
         imageId: s.imageId,
-        buildOnly: s.buildOnly,
+        buildable: s.buildable,
+        pullable: s.pullable,
       },
     })),
   ),
@@ -324,7 +329,7 @@ describe("projects route — Docker Compose service discovery (issue #73)", () =
     });
 
     it("returns reason:'build-only' without attempting a pull", async () => {
-      discoveredServices = [fixtureService({ buildOnly: true })];
+      discoveredServices = [fixtureService({ buildable: true, pullable: false })];
       const app = await buildApp();
       const projectId = await createProject(app);
 
@@ -510,7 +515,7 @@ describe("projects route — Docker Compose service discovery (issue #73)", () =
     });
 
     it("rejects a build-only service", async () => {
-      discoveredServices = [fixtureService({ buildOnly: true })];
+      discoveredServices = [fixtureService({ buildable: true, pullable: false })];
       const app = await buildApp();
       const projectId = await createProject(app);
 
@@ -520,6 +525,26 @@ describe("projects route — Docker Compose service discovery (issue #73)", () =
         payload: { controlId: "docker:sanctuary:web" },
       });
       expect(res.statusCode).toBe(400);
+
+      await app.close();
+    });
+
+    // Issue #1243 — the previously-impossible shape: a service with BOTH a
+    // build: key and a real registry image must pass this route's
+    // `!pullable` guard (it IS pullable), and separately (test below) the
+    // stack/rebuild route's `buildable` guard — the two guards no longer
+    // exclude one another the way they did when both read one boolean.
+    it("accepts a service that is both buildable and pullable", async () => {
+      discoveredServices = [fixtureService({ buildable: true, pullable: true })];
+      const app = await buildApp();
+      const projectId = await createProject(app);
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/docker/update`,
+        payload: { controlId: "docker:sanctuary:web" },
+      });
+      expect(res.statusCode).toBe(201);
 
       await app.close();
     });
@@ -819,7 +844,9 @@ describe("projects route — Docker Compose service discovery (issue #73)", () =
 
   describe("POST /api/projects/:id/docker/stack/rebuild", () => {
     it("spawns a build+up session and reports willRecreate for a build-only service", async () => {
-      discoveredServices = [fixtureService({ buildOnly: true, configHash: "hash-old" })];
+      discoveredServices = [
+        fixtureService({ buildable: true, pullable: false, configHash: "hash-old" }),
+      ];
       reconstructedHash = "hash-new";
       const app = await buildApp();
       const projectId = await createProject(app);
@@ -841,7 +868,7 @@ describe("projects route — Docker Compose service discovery (issue #73)", () =
     });
 
     it("rejects a service that has a registry image (use pull-restart instead)", async () => {
-      discoveredServices = [fixtureService({ buildOnly: false })];
+      discoveredServices = [fixtureService({ buildable: false, pullable: true })];
       const app = await buildApp();
       const projectId = await createProject(app);
 
@@ -856,7 +883,7 @@ describe("projects route — Docker Compose service discovery (issue #73)", () =
     });
 
     it("404s for a controlId not owned by this project", async () => {
-      discoveredServices = [fixtureService({ buildOnly: true })];
+      discoveredServices = [fixtureService({ buildable: true, pullable: false })];
       const app = await buildApp();
       const projectId = await createProject(app);
 
@@ -866,6 +893,27 @@ describe("projects route — Docker Compose service discovery (issue #73)", () =
         payload: { controlId: "docker:some-other-project:web" },
       });
       expect(res.statusCode).toBe(404);
+
+      await app.close();
+    });
+
+    // Issue #1243 — the mirror-image guard now reads `buildable`, not the
+    // inverse of the pull route's `pullable` guard, so a service with BOTH
+    // facts true passes here too (paired with the same-shape test in
+    // docker/update above — together they pin that neither route can ever
+    // 400 the other's representative for this shape, per docs/dock.md's
+    // "independently gated" guarantee).
+    it("accepts a service that is both buildable and pullable", async () => {
+      discoveredServices = [fixtureService({ buildable: true, pullable: true })];
+      const app = await buildApp();
+      const projectId = await createProject(app);
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/docker/stack/rebuild`,
+        payload: { controlId: "docker:sanctuary:web" },
+      });
+      expect(res.statusCode).toBe(201);
 
       await app.close();
     });

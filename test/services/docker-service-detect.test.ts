@@ -270,7 +270,8 @@ describe("docker-service-detect", () => {
           status: "Up 6 days",
           imageRef: "ghcr.io/s3ntin3l8/sanctuary:edge",
           imageId: "sha256:c14dd0e39e89f0c15c2bf462d8a2e05fb17a3b89dc8fe59b60e9f7daa48d7837",
-          buildOnly: false,
+          buildable: false,
+          pullable: true,
           composeResolvable: true,
           configFiles: [resolvableComposeFile],
           envFile: null,
@@ -398,7 +399,7 @@ describe("docker-service-detect", () => {
       expect(services[0]?.containerName).toBe("app-web-2");
     });
 
-    it("flags buildOnly when the image matches compose's default build-image name", async () => {
+    it("flags buildable/!pullable when the image matches compose's default build-image name", async () => {
       psOutput = psLine({
         id: "a",
         names: "pocket-portfolio-tracker-api-1",
@@ -414,10 +415,11 @@ describe("docker-service-detect", () => {
       });
 
       const services = await getComposeServices();
-      expect(services[0]?.buildOnly).toBe(true);
+      expect(services[0]?.buildable).toBe(true);
+      expect(services[0]?.pullable).toBe(false);
     });
 
-    it("does not flag buildOnly for a real registry image", async () => {
+    it("flags !buildable/pullable for a real registry image", async () => {
       psOutput = psLine({
         id: "a",
         names: "sanctuary-web",
@@ -433,7 +435,8 @@ describe("docker-service-detect", () => {
       });
 
       const services = await getComposeServices();
-      expect(services[0]?.buildOnly).toBe(false);
+      expect(services[0]?.buildable).toBe(false);
+      expect(services[0]?.pullable).toBe(true);
     });
 
     // Issue #1221 — a rebuilt-and-pruned build-only service's container
@@ -442,7 +445,7 @@ describe("docker-service-detect", () => {
     // recognize. The `docker compose ... config --format json` probe reads
     // the compose file directly instead, and is authoritative whenever the
     // stack is composeResolvable.
-    it("flags buildOnly from the compose config probe when the image is a bare digest looksBuildOnly can't match", async () => {
+    it("flags buildable/!pullable from the compose config probe when the image is a bare digest looksBuildOnly can't match", async () => {
       buildOnlyProbeOutput = JSON.stringify({
         services: { api: { build: { context: "." } } },
       });
@@ -462,9 +465,10 @@ describe("docker-service-detect", () => {
       });
 
       const services = await getComposeServices();
-      // looksBuildOnly alone would report false here — the whole point of
-      // the probe.
-      expect(services[0]?.buildOnly).toBe(true);
+      // looksBuildOnly alone would report pullable:true here — the whole
+      // point of the probe.
+      expect(services[0]?.buildable).toBe(true);
+      expect(services[0]?.pullable).toBe(false);
     });
 
     it("falls back to the name heuristic without throwing when the compose config probe fails", async () => {
@@ -486,8 +490,9 @@ describe("docker-service-detect", () => {
 
       const services = await getComposeServices();
       // The probe failed, so this falls back to looksBuildOnly, which
-      // can't match a bare digest — false, not a thrown error.
-      expect(services[0]?.buildOnly).toBe(false);
+      // can't match a bare digest — !buildable/pullable, not a thrown error.
+      expect(services[0]?.buildable).toBe(false);
+      expect(services[0]?.pullable).toBe(true);
     });
 
     it("falls back to the name heuristic when the compose config probe returns unparsable output", async () => {
@@ -510,7 +515,8 @@ describe("docker-service-detect", () => {
       const services = await getComposeServices();
       // Unparsable probe output falls back to looksBuildOnly, which DOES
       // match this fixture's still-default-named image.
-      expect(services[0]?.buildOnly).toBe(true);
+      expect(services[0]?.buildable).toBe(true);
+      expect(services[0]?.pullable).toBe(false);
     });
 
     // Issue #1221's follow-up — a service can declare BOTH `build:` and an
@@ -519,7 +525,7 @@ describe("docker-service-detect", () => {
     // have an `image:` key. Verified live against this host's own
     // nanokvm-manager (`nanokvm-manager:local`) and open-design
     // (`open-design-local`) stacks.
-    it("flags buildOnly for build: + a single-segment custom local tag with no pull_policy", async () => {
+    it("flags buildable/!pullable for build: + a single-segment custom local tag with no pull_policy", async () => {
       buildOnlyProbeOutput = JSON.stringify({
         services: { "nanokvm-dash": { build: { context: "." }, image: "nanokvm-manager:local" } },
       });
@@ -539,24 +545,28 @@ describe("docker-service-detect", () => {
       });
 
       const services = await getComposeServices();
-      // No `/` in the ref — the third tier catches it despite the
-      // `image:` key being present.
-      expect(services[0]?.buildOnly).toBe(true);
+      // No `/` in the ref — pullable stays false despite the `image:` key
+      // being present.
+      expect(services[0]?.buildable).toBe(true);
+      expect(services[0]?.pullable).toBe(false);
     });
 
-    it("does not flag buildOnly for build: + a namespaced registry image with no pull_policy", async () => {
+    // Issue #1243 — this is the exact shape the buildable/pullable split
+    // fixes: build: + a REAL registry image is now BOTH facts true, not a
+    // forced mutually-exclusive choice.
+    it("flags both buildable and pullable for build: + a namespaced registry image with no pull_policy", async () => {
       buildOnlyProbeOutput = JSON.stringify({
         services: { web: { build: { context: "." }, image: "ghcr.io/org/img:edge" } },
       });
       psOutput = psLine({
         id: "a",
         // Deliberately still matches looksBuildOnly's own default-name
-        // pattern (`<project>-<service>`) — if this test's `false` merely
+        // pattern (`<project>-<service>`) — if this test's result merely
         // reflected the name-heuristic fallback agreeing by coincidence
-        // (rather than proving the probe's tier 3b actually ran and
-        // overrode it), giving the fallback a name it WOULD flag true
-        // would catch that: only the probe, not the fallback, can produce
-        // `false` here.
+        // (rather than proving the probe's own ref-shape check actually ran
+        // and overrode it), giving the fallback a name it WOULD flag
+        // build-only would catch that: only the probe, not the fallback,
+        // can produce `pullable: true` here.
         names: "myapp-web-1",
         state: "running",
         status: "Up 1 hour",
@@ -571,13 +581,15 @@ describe("docker-service-detect", () => {
       });
 
       const services = await getComposeServices();
-      // The probe's own compose config declares a namespaced `image:` (has
-      // a `/`) — still pullable, so still not build-only, overriding what
-      // the name-heuristic fallback alone would have said for this imageRef.
-      expect(services[0]?.buildOnly).toBe(false);
+      // The probe's own compose config declares BOTH a build: key AND a
+      // namespaced image: (has a `/`) — both actions are valid, overriding
+      // what the name-heuristic fallback alone would have said for this
+      // imageRef.
+      expect(services[0]?.buildable).toBe(true);
+      expect(services[0]?.pullable).toBe(true);
     });
 
-    it("flags buildOnly for build: + a namespaced registry image when pull_policy is build", async () => {
+    it("flags buildable/!pullable for build: + a namespaced registry image when pull_policy is build", async () => {
       buildOnlyProbeOutput = JSON.stringify({
         services: {
           web: { build: { context: "." }, image: "ghcr.io/org/img:edge", pull_policy: "build" },
@@ -599,12 +611,13 @@ describe("docker-service-detect", () => {
       });
 
       const services = await getComposeServices();
-      // pull_policy: build is authoritative — the second tier catches this
-      // despite the `/` that would otherwise classify it as pullable.
-      expect(services[0]?.buildOnly).toBe(true);
+      // pull_policy: build is authoritative — pullable stays false despite
+      // the `/` that would otherwise classify it as pullable.
+      expect(services[0]?.buildable).toBe(true);
+      expect(services[0]?.pullable).toBe(false);
     });
 
-    it("flags buildOnly for build: + a namespaced registry image when pull_policy is never", async () => {
+    it("flags buildable/!pullable for build: + a namespaced registry image when pull_policy is never", async () => {
       buildOnlyProbeOutput = JSON.stringify({
         services: {
           web: { build: { context: "." }, image: "ghcr.io/org/img:edge", pull_policy: "never" },
@@ -629,15 +642,17 @@ describe("docker-service-detect", () => {
       // pull_policy: never means the same "don't bother pulling" thing as
       // pull_policy: build for this predicate's purposes — also
       // authoritative despite the `/`.
-      expect(services[0]?.buildOnly).toBe(true);
+      expect(services[0]?.buildable).toBe(true);
+      expect(services[0]?.pullable).toBe(false);
     });
 
     // A stray `image:` key with no value parses as `image: null`, not an
     // absent key — `def.image === undefined` is false for it. This must NOT
-    // fall into tier 2 (which only fires for a truly absent `image:` key);
-    // it falls through to tier 3 instead, same as the old predicate treated
-    // any defined-but-not-a-string `image:` shape.
-    it("does not flag buildOnly for build: + a null image (present key, unusable value) with no pull_policy", async () => {
+    // count as "no image key" (which would force pullable: false); it falls
+    // through to the ref-shape check instead, which can't inspect a
+    // non-string value and defaults to "assume pullable", same as the old
+    // predicate treated any defined-but-not-a-string `image:` shape.
+    it("flags both buildable and pullable for build: + a null image (present key, unusable value) with no pull_policy", async () => {
       buildOnlyProbeOutput = JSON.stringify({
         services: { web: { build: { context: "." }, image: null } },
       });
@@ -657,10 +672,12 @@ describe("docker-service-detect", () => {
       });
 
       const services = await getComposeServices();
-      // image key is present (null), so tier 2 doesn't fire; tier 3 can't
-      // inspect a shape a non-string value doesn't have, so it defaults to
-      // pullable/false rather than silently reclassifying via tier 2.
-      expect(services[0]?.buildOnly).toBe(false);
+      // image key is present (null), so this doesn't count as "no image at
+      // all"; the ref-shape check can't inspect a non-string value, so it
+      // defaults to pullable — reproducing the old predicate's `buildOnly:
+      // false` for this shape (buildOnly ≡ buildable && !pullable).
+      expect(services[0]?.buildable).toBe(true);
+      expect(services[0]?.pullable).toBe(true);
     });
 
     // Hermes review, issue #1221's own PR — the probe cache was originally
@@ -668,8 +685,8 @@ describe("docker-service-detect", () => {
     // com.docker.compose.config-hash label only changes on RECREATE.
     // Deleting/moving the stack's compose files leaves that label exactly
     // as it was, so a cache keyed on it alone would keep serving a stale
-    // `buildOnly: true` forever even after the files (and therefore the
-    // probe's own ability to run at all) are gone.
+    // `buildable: true, pullable: false` forever even after the files (and
+    // therefore the probe's own ability to run at all) are gone.
     it("invalidates the cached probe result when composeResolvable changes, even though configHash hasn't", async () => {
       buildOnlyProbeOutput = JSON.stringify({ services: { api: { build: { context: "." } } } });
       const fixture = () =>
@@ -679,8 +696,8 @@ describe("docker-service-detect", () => {
           state: "running",
           status: "Up 17 hours",
           // A bare digest — looksBuildOnly's name-shape fallback can never
-          // match this, so if the fallback fires we'll see `false`, not a
-          // stale `true` carried over from the earlier probe.
+          // match this, so if the fallback fires we'll see `pullable: true`,
+          // not a stale `buildable: true` carried over from the earlier probe.
           image: `sha256:${"a1".repeat(32)}`,
           createdAt: "2026-08-01 00:00:00 +0000 UTC",
           project: "pocket-portfolio-tracker",
@@ -695,7 +712,8 @@ describe("docker-service-detect", () => {
 
       const first = await getComposeServices(true);
       expect(first[0]?.composeResolvable).toBe(true);
-      expect(first[0]?.buildOnly).toBe(true); // from the probe
+      expect(first[0]?.buildable).toBe(true); // from the probe
+      expect(first[0]?.pullable).toBe(false);
 
       // Compose file gone — composeResolvable flips to false — but the
       // running container's own configHash label is untouched.
@@ -704,7 +722,67 @@ describe("docker-service-detect", () => {
 
       const second = await getComposeServices(true);
       expect(second[0]?.composeResolvable).toBe(false);
-      expect(second[0]?.buildOnly).toBe(false);
+      expect(second[0]?.buildable).toBe(false);
+      expect(second[0]?.pullable).toBe(true);
+    });
+
+    // Issue #1243 — the safety invariant the buildable/pullable split must
+    // hold: `buildOnly ≡ buildable && !pullable` for every shape the old
+    // single-flag predicate (PR #1231, then #1221's follow-up) distinguished.
+    // `expectedOldBuildOnly` in each row below is the value the PRE-#1243
+    // tiered predicate produced for that exact `services` definition (hand-
+    // traced from that predicate, not derived from `buildable`/`pullable` —
+    // deriving it from the same formula being tested would make this
+    // tautological and unable to catch a real regression).
+    describe("buildOnly ≡ buildable && !pullable (safety invariant)", () => {
+      it.each([
+        ["no build key, real registry image", { web: { image: "ghcr.io/org/img:edge" } }, false],
+        ["build key, no image key", { api: { build: { context: "." } } }, true],
+        [
+          "build key, single-segment local tag, no pull_policy",
+          { web: { build: {}, image: "myimage:local" } },
+          true,
+        ],
+        [
+          "build key, namespaced registry image, no pull_policy",
+          { web: { build: {}, image: "ghcr.io/org/img:edge" } },
+          false,
+        ],
+        [
+          "build key, namespaced registry image, pull_policy: build",
+          { web: { build: {}, image: "ghcr.io/org/img:edge", pull_policy: "build" } },
+          true,
+        ],
+        [
+          "build key, namespaced registry image, pull_policy: never",
+          { web: { build: {}, image: "ghcr.io/org/img:edge", pull_policy: "never" } },
+          true,
+        ],
+        ["build key, null image, no pull_policy", { web: { build: {}, image: null } }, false],
+      ] as const)("%s", async (_label, services, expectedOldBuildOnly) => {
+        buildOnlyProbeOutput = JSON.stringify({ services });
+        const [serviceName] = Object.keys(services);
+        psOutput = psLine({
+          id: "a",
+          // Deliberately NOT shaped like compose's own default build-image
+          // name, so the fallback (which this test isn't exercising) could
+          // never coincidentally produce the right answer on its own.
+          names: `some-project-${serviceName}-1`,
+          state: "running",
+          status: "Up 1 hour",
+          image: "irrelevant-to-this-test",
+          createdAt: "2026-08-01 00:00:00 +0000 UTC",
+          project: "some-project",
+          service: serviceName,
+          workingDir: resolvableDir,
+          imageId: "sha256:x",
+          oneoff: "False",
+          configFiles: resolvableComposeFile,
+        });
+
+        const [service] = await getComposeServices();
+        expect(service.buildable && !service.pullable).toBe(expectedOldBuildOnly);
+      });
     });
 
     it("flags composeResolvable false when the config_files label is empty", async () => {
@@ -870,7 +948,8 @@ describe("docker-service-detect", () => {
         status: "Up 6 days",
         imageRef: "ghcr.io/s3ntin3l8/sanctuary:edge",
         imageId: "sha256:x",
-        buildOnly: false,
+        buildable: false,
+        pullable: true,
         composeResolvable: true,
         configFiles: [resolvableComposeFile],
         envFile: null,
@@ -891,7 +970,8 @@ describe("docker-service-detect", () => {
             status: "Up 6 days",
             imageRef: "ghcr.io/s3ntin3l8/sanctuary:edge",
             imageId: "sha256:x",
-            buildOnly: false,
+            buildable: false,
+            pullable: true,
           },
         },
       ]);
@@ -909,7 +989,8 @@ describe("docker-service-detect", () => {
         status: "Up",
         imageRef: "pocket-portfolio-tracker-api",
         imageId: "sha256:x",
-        buildOnly: true,
+        buildable: true,
+        pullable: false,
         composeResolvable: true,
         configFiles: [path.join(resolvableDir, "docker-compose.prod.yml")],
         envFile,
@@ -934,7 +1015,8 @@ describe("docker-service-detect", () => {
           status: "Up",
           imageRef: "nginx:latest",
           imageId: "sha256:x",
-          buildOnly: false,
+          buildable: false,
+          pullable: true,
           composeResolvable: false,
           configFiles: [],
           envFile: null,
@@ -956,7 +1038,8 @@ describe("docker-service-detect", () => {
           status: "Up",
           imageRef: "nginx:latest",
           imageId: "sha256:x",
-          buildOnly: false,
+          buildable: false,
+          pullable: true,
           composeResolvable: true,
           configFiles: [resolvableComposeFile],
           envFile: null,
@@ -979,7 +1062,8 @@ describe("docker-service-detect", () => {
           status: "Up",
           imageRef: "nginx:latest",
           imageId: "sha256:x",
-          buildOnly: false,
+          buildable: false,
+          pullable: true,
           composeResolvable: false, // dangerousDir doesn't actually exist
           configFiles: [],
           envFile: null,
@@ -1002,7 +1086,8 @@ describe("docker-service-detect", () => {
       status: "Up",
       imageRef: "pocket-portfolio-tracker-api",
       imageId: "sha256:x",
-      buildOnly: true,
+      buildable: true,
+      pullable: false,
       composeResolvable: true,
       configFiles: ["/home/user/pocket-portfolio-tracker/docker-compose.prod.yml"],
       envFile: "/home/user/pocket-portfolio-tracker/.env.prod",
@@ -1069,7 +1154,8 @@ describe("docker-service-detect", () => {
         status: "Up",
         imageRef: "x",
         imageId: "y",
-        buildOnly: false,
+        buildable: false,
+        pullable: true,
         composeResolvable: true,
         configFiles: [],
         envFile: null,
@@ -1083,7 +1169,8 @@ describe("docker-service-detect", () => {
         status: "Up",
         imageRef: "x",
         imageId: "y",
-        buildOnly: false,
+        buildable: false,
+        pullable: true,
         composeResolvable: true,
         configFiles: [],
         envFile: null,
@@ -1097,7 +1184,8 @@ describe("docker-service-detect", () => {
         status: "Up",
         imageRef: "x",
         imageId: "y",
-        buildOnly: false,
+        buildable: false,
+        pullable: true,
         composeResolvable: true,
         configFiles: [],
         envFile: null,
@@ -1137,7 +1225,8 @@ describe("docker-service-detect", () => {
       status: "Up",
       imageRef: "ghcr.io/s3ntin3l8/sanctuary:edge",
       imageId: "sha256:old000000000000000000000000000000000000000000000000000000000",
-      buildOnly: false,
+      buildable: false,
+      pullable: true,
       composeResolvable: true,
       configFiles: [
         "/home/user/sanctuary/docker-compose.yml",
@@ -1204,7 +1293,8 @@ describe("docker-service-detect", () => {
       status: "Up",
       imageRef: "ghcr.io/s3ntin3l8/sanctuary:edge",
       imageId: "sha256:x",
-      buildOnly: false,
+      buildable: false,
+      pullable: true,
       composeResolvable: true,
       configFiles: ["/home/user/sanctuary/docker-compose.yml"],
       envFile: null,
@@ -1269,7 +1359,8 @@ describe("docker-service-detect", () => {
       status: "Up",
       imageRef: "ghcr.io/s3ntin3l8/sanctuary:edge",
       imageId: "sha256:x",
-      buildOnly: false,
+      buildable: false,
+      pullable: true,
       composeResolvable: true,
       configFiles: ["/home/user/sanctuary/docker-compose.yml"],
       envFile: null,

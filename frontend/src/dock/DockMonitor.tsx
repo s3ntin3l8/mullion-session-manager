@@ -378,7 +378,7 @@ export function DockMonitor({
                   // service row of the same stack — hoisted to a single
                   // per-compose-project DockStackHeader kebab instead (see
                   // Dock.tsx's DockColumn). check-update stays per-service:
-                  // buildOnly is per-service, the route short-circuits per
+                  // pullable is per-service, the route short-circuits per
                   // service, and updateAvailable drives THIS row's own
                   // image-pill tint — hoisting it would either lose that
                   // tint or lie about which service was actually checked.
@@ -386,10 +386,10 @@ export function DockMonitor({
                     key: "check-update",
                     label: "Check for update",
                     icon: <RefreshIcon size={12} />,
-                    disabled: control.docker.buildOnly,
+                    disabled: !control.docker.pullable,
                     // Issue #1106 — the disabled state alone gave no reason;
                     // wording matches docs/dock.md's own explanation.
-                    title: control.docker.buildOnly
+                    title: !control.docker.pullable
                       ? "No registry image to compare — this service is built from source"
                       : undefined,
                     onClick: onCheckUpdate,
