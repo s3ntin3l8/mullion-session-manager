@@ -2,6 +2,16 @@ import type { FastifyInstance } from "fastify";
 import path from "node:path";
 import { readdirSync, openSync, readSync, closeSync, statSync } from "node:fs";
 import { and, eq } from "drizzle-orm";
+// Issue #1223 — only used for the `instanceof BetterSqlite3.SqliteError`
+// check below, to detect `sessions_stack_identity_unique`'s violation.
+// Empirically confirmed (throwaway script against a real better-sqlite3
+// DB): the driver throws `SqliteError` with `.code === "SQLITE_CONSTRAINT_UNIQUE"`
+// (not the bare `SQLITE_CONSTRAINT` family), and drizzle's synchronous
+// `db.transaction()` wrapper (drizzle-orm/better-sqlite3/session.js) is a
+// thin pass-through to better-sqlite3's own `Database#transaction()` — it
+// re-throws the same error unchanged, so catching it here (at the
+// `app.db.transaction(...)` call site) is the correct, and only, place.
+import BetterSqlite3 from "better-sqlite3";
 import { projects, sessions } from "../db/schema.js";
 import {
   scaffoldSkillPath,
@@ -350,7 +360,23 @@ export type CreateSessionResult =
   // is bound by the same reserved-key rules as a dock control. See
   // session-env-keys.ts's own comment for why this is the required second
   // enforcement point, not a redundant one.
-  | { ok: false; reason: "reserved-env-key"; detail: string };
+  | { ok: false; reason: "reserved-env-key"; detail: string }
+  // Issue #1223 — the insert below hit `sessions_stack_identity_unique`
+  // (schema.ts), the DB-level partial-unique-index guard for a
+  // `docker-stack:<composeProject>` session's identity. This is the ONLY
+  // caller-visible reason this variant can ever be returned: the index's
+  // `WHERE` clause is scoped to exactly `kind = 'dock' AND status = 'active'
+  // AND name LIKE 'docker-stack:%'`, so no other insert (a
+  // `docker-logs:<containerName>` row, a plain terminal session, ...) can
+  // ever trigger it — see the index's own doc comment in schema.ts.
+  // Deliberately NOT resolved here: whether the conflicting row is a live
+  // reuse candidate or a stale dead-process row requires the same
+  // `app.pty.isMasterAlive(...)` liveness check `findActiveStackSession`
+  // already trusts (sessions.status records intent, not live process
+  // state — AGENTS.md's session-model invariant), and that check belongs
+  // in the caller that actually holds `withStackLock` (projects.ts's
+  // `startStackSession`), not buried in this generic helper.
+  | { ok: false; reason: "unique-conflict" };
 
 const SCAFFOLD_SKILLS_DIRNAME = path.join(".claude", "skills");
 const SCAFFOLD_AGENTS_DIRNAME = path.join(".claude", "agents");
@@ -799,33 +825,51 @@ export async function createSessionRecord(
   // describes), just not a sustained-low-rate abuse pattern — a rate
   // limiter would be the real fix for that, and is a follow-up, not this PR.
   const maxChildren = getStoredSettings(app.db).sessions.maxChildSessionsPerParent;
-  const inserted = app.db.transaction((tx) => {
-    if (resolvedParentId !== null) {
-      const liveChildren = tx
-        .select()
-        .from(sessions)
-        .where(and(eq(sessions.parentSessionId, resolvedParentId), eq(sessions.status, "active")))
+  let inserted;
+  try {
+    inserted = app.db.transaction((tx) => {
+      if (resolvedParentId !== null) {
+        const liveChildren = tx
+          .select()
+          .from(sessions)
+          .where(and(eq(sessions.parentSessionId, resolvedParentId), eq(sessions.status, "active")))
+          .all();
+        if (liveChildren.length >= maxChildren) return null;
+      }
+      return tx
+        .insert(sessions)
+        .values({
+          projectId,
+          command,
+          name: name ?? null,
+          cwd: cwd ?? null,
+          ...(kind !== undefined ? { kind } : {}),
+          ...(nameLocked !== undefined ? { nameLocked } : {}),
+          ...(skipPermissions !== undefined ? { skipPermissions } : {}),
+          ...(resolvedParentId !== null ? { parentSessionId: resolvedParentId } : {}),
+          ...(env !== undefined ? { env: JSON.stringify(env) } : {}),
+          ...(model !== undefined ? { model } : {}),
+          ...(smallModel !== undefined ? { smallModel } : {}),
+        })
+        .returning()
         .all();
-      if (liveChildren.length >= maxChildren) return null;
+    });
+  } catch (err) {
+    // Issue #1223 — the only unique index any `sessions` insert can hit is
+    // `sessions_stack_identity_unique` (schema.ts), scoped to exactly
+    // `kind = 'dock' AND status = 'active' AND name LIKE 'docker-stack:%'`.
+    // Confirmed empirically (throwaway script against a real better-sqlite3
+    // DB, not assumed from docs): the driver throws `SqliteError` with
+    // `.code === "SQLITE_CONSTRAINT_UNIQUE"` for this violation (not the
+    // bare `SQLITE_CONSTRAINT` family), and drizzle's synchronous
+    // `db.transaction()` re-throws it unchanged. Any other `SqliteError`
+    // (e.g. an unrelated FK violation) is NOT this case and must keep
+    // propagating unchanged — re-throw rather than swallow it.
+    if (err instanceof BetterSqlite3.SqliteError && err.code === "SQLITE_CONSTRAINT_UNIQUE") {
+      return { ok: false, reason: "unique-conflict" };
     }
-    return tx
-      .insert(sessions)
-      .values({
-        projectId,
-        command,
-        name: name ?? null,
-        cwd: cwd ?? null,
-        ...(kind !== undefined ? { kind } : {}),
-        ...(nameLocked !== undefined ? { nameLocked } : {}),
-        ...(skipPermissions !== undefined ? { skipPermissions } : {}),
-        ...(resolvedParentId !== null ? { parentSessionId: resolvedParentId } : {}),
-        ...(env !== undefined ? { env: JSON.stringify(env) } : {}),
-        ...(model !== undefined ? { model } : {}),
-        ...(smallModel !== undefined ? { smallModel } : {}),
-      })
-      .returning()
-      .all();
-  });
+    throw err;
+  }
   if (!inserted) return { ok: false, reason: "child-cap-exceeded" };
   const [created] = inserted;
 

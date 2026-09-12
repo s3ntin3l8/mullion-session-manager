@@ -196,6 +196,157 @@ describe("Dock", () => {
     });
   });
 
+  describe("issue #1238 — persisted rail-row selection survives reload", () => {
+    // Both rows already have a live stream (reload-with-streams-already-
+    // running), same setup the adopt-on-empty reconciliation itself is
+    // built around (Dock.tsx's own doc comment on `lastRows`). Without a
+    // persisted selection, adopt-on-empty would pick "dev" — it's first in
+    // `dockByProject[1]` and therefore first in `liveRowKeys`. Persisting
+    // "worker" (a non-docker, dock.json-style control, so its row key is
+    // `dock-config:worker` per dockRowKey's own doc comment) proves the
+    // persisted value is consulted BEFORE that fallback, not just as a
+    // tiebreaker for a case adopt-on-empty would already get right.
+    function twoRunningControls() {
+      dockByProject[1] = [
+        { id: "dev", title: "Dev server", command: "npm run dev" },
+        { id: "worker", title: "Worker", command: "npm run worker" },
+      ];
+      return [
+        makeSession({ id: 10, command: "npm run dev", kind: "dock", status: "active" }),
+        makeSession({ id: 20, command: "npm run worker", kind: "dock", status: "active" }),
+      ];
+    }
+
+    it("restores the persisted row and shows its log pane in the same commit adopt-on-empty would have used for the wrong row", async () => {
+      const sessions = twoRunningControls();
+      localStorage.setItem(
+        "crs.dockSelectedRows",
+        JSON.stringify({ "1": { selected: "dock-config:worker" } }),
+      );
+      useDashboardStore.setState({ projects: [PROJECT], sessions, sessionsLoaded: true });
+
+      render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+      // Same "find the terminal pane, assert its session id" technique the
+      // existing master-detail tests already use (e.g. "clicking a running
+      // row's body SELECTS it" above) as this suite's own proof of no
+      // visible flicker to the wrong row — the pane that appears is already
+      // showing the persisted session, not a first-render "dev" that a
+      // later correction would have to fix up.
+      await waitFor(() => {
+        expect(screen.getByTestId("terminal-pane")).toHaveAttribute("data-session-id", "20");
+      });
+      expect(screen.queryByText("Select a row to view its log")).not.toBeInTheDocument();
+    });
+
+    it("falls back to the adopt-on-empty rule when the persisted row no longer matches any control", async () => {
+      const sessions = twoRunningControls();
+      localStorage.setItem(
+        "crs.dockSelectedRows",
+        JSON.stringify({ "1": { selected: "dock-config:ghost" } }),
+      );
+      useDashboardStore.setState({ projects: [PROJECT], sessions, sessionsLoaded: true });
+
+      render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("terminal-pane")).toHaveAttribute("data-session-id", "10");
+      });
+    });
+
+    it("falls back to no selection when the persisted row is gone and nothing is running", async () => {
+      dockByProject[1] = [
+        { id: "dev", title: "Dev server", command: "npm run dev" },
+        { id: "worker", title: "Worker", command: "npm run worker" },
+      ];
+      localStorage.setItem(
+        "crs.dockSelectedRows",
+        JSON.stringify({ "1": { selected: "dock-config:ghost" } }),
+      );
+      useDashboardStore.setState({ projects: [PROJECT], sessions: [], sessionsLoaded: true });
+
+      render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+      await screen.findByText("Dev server");
+      expect(screen.getByText("Select a row to view its log")).toBeInTheDocument();
+      expect(screen.queryByTestId("terminal-pane")).not.toBeInTheDocument();
+    });
+
+    it("persists a new selection via read-modify-write — preserves this project's own pinned field and another project's entry untouched", async () => {
+      const PROJECT2 = makeProject({ id: 2, name: "other", cwd: "/home/x/other" });
+      const sessions = twoRunningControls();
+      dockByProject[2] = [];
+      localStorage.setItem(
+        "crs.dockSelectedRows",
+        JSON.stringify({
+          "1": { selected: "dock-config:dev", pinned: "keep-me" },
+          "2": { selected: "untouched" },
+        }),
+      );
+      const user = userEvent.setup();
+      useDashboardStore.setState({
+        projects: [PROJECT, PROJECT2],
+        sessions,
+        sessionsLoaded: true,
+      });
+
+      const { unmount } = render(
+        <Dock workspaceProjectIds={[1, 2]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />,
+      );
+
+      const workerRow = await screen.findByText("Worker");
+      await user.click(workerRow);
+
+      // The write effect's own read-modify-write is what this test exists
+      // to prove: project "1"'s entry picks up the new selection while its
+      // pre-existing `pinned` field (issue #1239's own field, untouched by
+      // this issue) survives, and project "2"'s entry — a second column
+      // tiled in the same dock — is never clobbered by project "1"'s write.
+      await waitFor(() => {
+        const stored = JSON.parse(localStorage.getItem("crs.dockSelectedRows") ?? "{}");
+        expect(stored["1"]).toEqual({ selected: "dock-config:worker", pinned: "keep-me" });
+        expect(stored["2"]).toEqual({ selected: "untouched" });
+      });
+
+      // The round trip this whole feature depends on: what the write
+      // effect just produced is fed back through the mount-time read on a
+      // fresh mount (same project set, same underlying fake backend and
+      // store — only `beforeEach` resets those, not this remount) — proving
+      // the write and read sides agree on the SAME shape, not just that
+      // each independently matches a hand-authored fixture.
+      unmount();
+      render(<Dock workspaceProjectIds={[1, 2]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+      await waitFor(() => {
+        expect(screen.getByTestId("terminal-pane")).toHaveAttribute("data-session-id", "20");
+      });
+    });
+
+    it("does not clobber a not-yet-consumed persisted seed with null before controls ever load", async () => {
+      // Regression coverage for the persist effect's own guard — without
+      // it, the very first commit (before the mocked `GET .../dock` fetch
+      // resolves, so `controls` is still `[]`) would write `selected: null`
+      // straight over the seed below, and a project whose dock config never
+      // loads at all (a dead backend, matching this test's own empty
+      // `dockByProject[1]`) would never get a later commit to correct it.
+      dockByProject[1] = [];
+      localStorage.setItem(
+        "crs.dockSelectedRows",
+        JSON.stringify({ "1": { selected: "dock-config:dev", pinned: "keep-me" } }),
+      );
+      useDashboardStore.setState({ projects: [PROJECT], sessions: [], sessionsLoaded: true });
+
+      render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+      // `DockLogPane` renders unconditionally (Dock.tsx's own render, keyed
+      // off `selectedSession?.id`), so its empty-hint text is a stable
+      // signal that the empty-controls poll has settled, without depending
+      // on any control-specific text that (deliberately) never appears here.
+      await screen.findByText("Select a row to view its log");
+      const stored = JSON.parse(localStorage.getItem("crs.dockSelectedRows") ?? "{}");
+      expect(stored["1"]).toEqual({ selected: "dock-config:dev", pinned: "keep-me" });
+    });
+  });
+
   describe("Docker Compose services (issue #73)", () => {
     function dockerControl(overrides: Record<string, unknown> = {}) {
       return {

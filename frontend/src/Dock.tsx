@@ -122,6 +122,13 @@ const RAIL_DIVIDER_WIDTH_PX = 6;
 // indefinitely.
 const PENDING_SELECT_TIMEOUT_MS = 15_000;
 
+// Issue #1238 — shape of `STORAGE_KEYS.dockSelectedRows`'s stored value,
+// keyed by `String(projectId)`. `pinned` is carried in the type even though
+// nothing in this file writes it yet, so #1239 can start writing it without
+// a storage migration; DockColumn's own persist effect below preserves
+// whatever is already there on read-modify-write.
+type PersistedDockSelection = Record<string, { selected: string | null; pinned?: string | null }>;
+
 // The dock: persistent monitors (dev server, git status, logs) — distinct
 // from one-shot session launches. Config is read-only (.crs/dock.json /
 // global CRS_CONFIG_DIR/dock.json), so a column can't create a monitor that
@@ -560,22 +567,58 @@ function DockColumn({
 
   // ---- Selected rail row (dock master-detail rework) ----
   // dockRowKey(control) of whichever row DockLogPane is currently showing —
-  // component-local, not persisted (see issue #1238, filed and linked from
-  // this rework's own PR, for adding that), same scope as worktreePaths
-  // above. Reconciled against the row set further down (after
-  // allRenderedControls is computed) using the SAME render-time "adjust
-  // state during render" pattern heldState above already uses, not a
-  // passive `useEffect` — a first version of this used an effect, and a
-  // real test failure caught why that's wrong: `controls` only loads
-  // asynchronously (usePolling below), so the render where a row's session
-  // is ALREADY running (e.g. reload-with-streams-already-running) would
-  // otherwise paint the log pane's empty hint for one commit before the
-  // effect's own follow-up render adopted it — a real, user-visible flicker
-  // on every reload with a live stream, not just test flakiness. Reconciling
-  // during render means the row and its correct selection land in the SAME
-  // commit. Every direct assignment beyond that happens in renderMonitor's
-  // own selectRow/toggleStream closures below.
+  // component-local state, persisted to `crs.dockSelectedRows` per project
+  // (issue #1238) so it survives a reload rather than always falling back
+  // to the adopt-on-empty rule below. Reconciled against the row set
+  // further down (after allRenderedControls is computed) using the SAME
+  // render-time "adjust state during render" pattern heldState above
+  // already uses, not a passive `useEffect` — a first version of this used
+  // an effect, and a real test failure caught why that's wrong: `controls`
+  // only loads asynchronously (usePolling below), so the render where a
+  // row's session is ALREADY running (e.g. reload-with-streams-already-
+  // running) would otherwise paint the log pane's empty hint for one commit
+  // before the effect's own follow-up render adopted it — a real,
+  // user-visible flicker on every reload with a live stream, not just test
+  // flakiness. Reconciling during render means the row and its correct
+  // selection land in the SAME commit. Every direct assignment beyond that
+  // happens in renderMonitor's own selectRow/toggleStream closures below.
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  // Issue #1238 — this column's persisted selection, read from
+  // `localStorage` exactly once per mount via `useState`'s lazy initializer
+  // (not on every render), then held in a ref so the reconciliation below
+  // can consult it without re-reading storage. `useRef`'s constructor has no
+  // lazy-init form of its own — writing `useRef(() => {...})()` would call
+  // the ref object itself as a function and throw — so the read has to go
+  // through this `useState` first.
+  //
+  // One shared type for both the read here and the persist effect further
+  // down, rather than two independently hand-written literals for the same
+  // storage shape — the two call sites can't drift out of sync with each
+  // other this way. Not exported from persistedState.ts: that module's own
+  // header describes itself as general-purpose read/write primitives, not a
+  // per-key schema registry, and Dock.tsx is (and, per #1239, will remain)
+  // the only consumer.
+  const [persistedInitialKey] = useState<string | null>(() => {
+    const all = readJSON<PersistedDockSelection>(STORAGE_KEYS.dockSelectedRows, {});
+    return all[String(projectId)]?.selected ?? null;
+  });
+  // Mirrors `persistedInitialKey` into a ref rather than reading that state
+  // value directly below — `persistedInitialKey` itself never changes after
+  // mount, so reading it directly would be equally safe, but going through
+  // a ref makes the reconciliation's intent legible at the call site:
+  // "consult the mount-time seed," not "read live state that happens to be
+  // frozen." Read-only during render (the reconciliation's adopt-on-empty
+  // branch below), written only here at mount — never cleared afterward.
+  // The adopt-on-empty branch only ever fires while `selectedKey` is
+  // `null`, so once a selection lands this ref stops being consulted
+  // regardless of whether it's cleared; clearing it would itself be a ref
+  // write during render, which is exactly what heldState's own comment
+  // above documents as unsafe under StrictMode's dev-only
+  // double-invocation (the first pass would consume the seed and clear it,
+  // the second pass would see it already `null` and the restored selection
+  // would silently fail to apply). Same posture as `pendingSelectKeyRef`
+  // below: read-only during render, safe to leave stale forever.
+  const initialPersistedKeyRef = useRef<string | null>(persistedInitialKey);
   // Exempts a row the user (or a stack action) just asked to START from the
   // reconciliation's "no matching row, fall back" rule for however many
   // renders it takes to become real. Load-bearing specifically for a stack
@@ -956,6 +999,22 @@ function DockColumn({
   // value that's recomputed from scratch every render instead.
   const rowKeysSignature = rowKeys.join(" ");
   const liveRowKeysSignature = liveRowKeys.join(" ");
+  // Issue #1238 — has this column ever observed a non-empty row set. Read
+  // by the persist effect further down, which otherwise can't distinguish
+  // "controls haven't loaded yet" (rowKeys still empty on the very first
+  // commit, `selectedKey` still `null` regardless of what's persisted) from
+  // "controls loaded and genuinely nothing is selected" — without this,
+  // that first commit's effect run would immediately overwrite a valid
+  // persisted seed with `null`, before the reconciliation above ever gets a
+  // chance to restore it (permanent if `controls` never loads at all — a
+  // dead backend/failed fetch). The SAME "adjust state during render"
+  // pattern `lastRows` below already uses, not a ref — a ref write during
+  // render is flagged by this repo's own react-hooks/refs lint rule (it
+  // only permits reading a ref mid-render, e.g. `pendingSelectKeyRef`
+  // further down, never writing one), so this has to be state even though
+  // it only ever flips one way.
+  const [hasSeenRows, setHasSeenRows] = useState(false);
+  if (rowKeys.length > 0 && !hasSeenRows) setHasSeenRows(true);
 
   // Reconciles `selectedKey` against the row set above — the render-time
   // "adjust state during render" pattern (react.dev), same idiom
@@ -1036,9 +1095,49 @@ function DockColumn({
       // react when ITS session shows up here, same as any other stream
       // starting while nothing is selected; that's "adopt," not "steal,"
       // since there was no existing selection to steal from.
+      //
+      // Issue #1238 — before falling back to that rule, prefer whatever was
+      // persisted for this column at mount, checked against `rowKeys`
+      // (existence), deliberately NOT `liveRowKeys` (liveness) — the same
+      // distinction the `prev !== null` branch above already draws
+      // (`rowKeys.includes(prev)`, not `liveRowKeys.includes(prev)`):
+      // selection has been orthogonal to whether a row is currently
+      // streaming since the master-detail rework itself (the row body
+      // selects; the trailing tag starts/stops the stream), and restoring a
+      // persisted selection onto a row that exists but isn't currently live
+      // is the exact same state a user already reaches by clicking that row
+      // by hand. A row that no longer exists at all (its control was
+      // removed, or never existed — a stale/hand-edited value) falls
+      // through to the adopt-on-empty rule below unchanged.
+      const persisted = initialPersistedKeyRef.current;
+      if (persisted !== null && rowKeys.includes(persisted)) {
+        return persisted;
+      }
       return liveRowKeys[0] ?? null;
     });
   }
+
+  // Issue #1238 — persist this column's selection on change. Unlike the
+  // reconciliation above, this IS a legitimate `useEffect`: writing to
+  // `localStorage` is a genuine side effect, not derived render state.
+  // Read-modify-write against the existing stored object (rather than
+  // overwriting the whole thing) so multiple columns — multiple projects
+  // tiled in the dock at once — don't clobber each other's entries, and any
+  // existing `pinned` field on this project's own entry is preserved
+  // untouched (forward-compatible with #1239, which is not this issue's
+  // job — nothing here ever writes `pinned`).
+  useEffect(() => {
+    // See `hasSeenRows`'s own doc comment above — skips the write on the
+    // very first commit(s) before `controls` has loaded at all, so a
+    // not-yet-consumed persisted seed never gets clobbered with `null`
+    // before the reconciliation above has had a chance to restore it.
+    if (selectedKey === null && !hasSeenRows) return;
+    const all = readJSON<PersistedDockSelection>(STORAGE_KEYS.dockSelectedRows, {});
+    writeJSON(STORAGE_KEYS.dockSelectedRows, {
+      ...all,
+      [String(projectId)]: { ...all[String(projectId)], selected: selectedKey },
+    });
+  }, [projectId, selectedKey, hasSeenRows]);
 
   // Hermes review, round 2 — a transient failure (backend blip, briefly out
   // of PTY slots) otherwise recorded `eligible: true` right alongside
