@@ -425,8 +425,8 @@ without a human clicking something, and even that never auto-applies it.
 | **Check/pull a Docker service** | Click the ⋯ menu on a discovered Docker monitor                                     |
 
 Dock state persists to `localStorage` (collapsed state, region height,
-manually pinned project IDs). Column widths from divider drags are
-ephemeral and reset on reload.
+manually pinned project IDs, rail width, and each column's selected rail
+row). Column widths from divider drags are ephemeral and reset on reload.
 
 ## Troubleshooting
 

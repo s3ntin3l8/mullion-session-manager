@@ -44,6 +44,14 @@ export const STORAGE_KEYS = {
   // persisted for that reason), but the rail width is a stable per-user
   // preference independent of which projects happen to be tiled.
   dockRailWidth: "crs.dockRailWidth",
+  // Dock master-detail rework, issue #1238 — which rail row is selected per
+  // column, keyed by `String(projectId)` (a column's identity — see
+  // DockColumn's own `projectId` prop). Value shape:
+  // `Record<string, { selected: string | null; pinned?: string | null }>`.
+  // `pinned` is included in the type now, even though nothing writes it
+  // yet, so a later issue (#1239) can extend this additively without a
+  // storage migration.
+  dockSelectedRows: "crs.dockSelectedRows",
   projectCollapsed: "crs.projectCollapsed",
   expandedSessionRows: "crs.expandedSessionRows",
   expandedSubagentRows: "crs.expandedSubagentRows",
