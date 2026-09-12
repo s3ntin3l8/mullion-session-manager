@@ -245,6 +245,123 @@ describe("ssh-agent-mux", () => {
     });
   });
 
+  describe("pre-listener buffering (data/EOF arriving before onData/onEof is attached)", () => {
+    // Reproduced directly against the real deployment (not just inferred
+    // from code reading): a raw 5-byte SSH-agent REQUEST_IDENTITIES frame
+    // written to an agent host's local ssh-agent.sock immediately on
+    // connect was dropped on every attempt; the identical frame written
+    // after any delay (even a few ms) was relayed correctly every time.
+    // The cause is this exact shape — `handleMessage`'s Open branch
+    // (ssh-agent-mux.ts) sends OpenAck, telling the peer it's safe to
+    // start sending, BEFORE invoking `channelListeners`; a caller that
+    // pairs this inbound channel with a second, asynchronously-opened one
+    // (ssh-agent-fanout.ts's onChannel, opening a channel toward a
+    // DIFFERENT peer before wiring the two together) only calls onData
+    // once that second open resolves — a real network round-trip after
+    // the first peer was already told to send.
+
+    it("buffers Data received before onData is attached, and replays it on first attach", async () => {
+      const a = new FakeSocket();
+      const b = new FakeSocket();
+      link(a, b);
+      const connA = createMuxConnection(a as never, { channelIdParity: "odd" });
+      const connB = createMuxConnection(b as never, { channelIdParity: "even" });
+      let serverChannel: MuxChannel | null = null;
+      connB.onChannel((ch) => (serverChannel = ch));
+      const clientChannel = await connA.openChannel();
+
+      // Sent before the peer has called onData() at all.
+      clientChannel.send(Buffer.from("early-request"));
+
+      const received: Buffer[] = [];
+      serverChannel!.onData((chunk) => received.push(chunk));
+
+      expect(received).toHaveLength(1);
+      expect(received[0].toString()).toBe("early-request");
+    });
+
+    it("buffers Eof received before onEof is attached, and replays it on first attach", async () => {
+      const a = new FakeSocket();
+      const b = new FakeSocket();
+      link(a, b);
+      const connA = createMuxConnection(a as never, { channelIdParity: "odd" });
+      const connB = createMuxConnection(b as never, { channelIdParity: "even" });
+      let serverChannel: MuxChannel | null = null;
+      connB.onChannel((ch) => (serverChannel = ch));
+      const clientChannel = await connA.openChannel();
+
+      clientChannel.eof();
+
+      const eofSpy = vi.fn();
+      serverChannel!.onEof(eofSpy);
+      expect(eofSpy).toHaveBeenCalledOnce();
+    });
+
+    it("replays multiple pre-buffered chunks in arrival order, then keeps delivering live chunks, as one continuous stream", async () => {
+      const a = new FakeSocket();
+      const b = new FakeSocket();
+      link(a, b);
+      const connA = createMuxConnection(a as never, { channelIdParity: "odd" });
+      const connB = createMuxConnection(b as never, { channelIdParity: "even" });
+      let serverChannel: MuxChannel | null = null;
+      connB.onChannel((ch) => (serverChannel = ch));
+      const clientChannel = await connA.openChannel();
+
+      clientChannel.send(Buffer.from("one"));
+      clientChannel.send(Buffer.from("two"));
+
+      const received: Buffer[] = [];
+      serverChannel!.onData((chunk) => received.push(chunk));
+
+      clientChannel.send(Buffer.from("three"));
+
+      expect(received.map((buf) => buf.toString())).toEqual(["one", "two", "three"]);
+    });
+
+    it("delivers data synchronously with no buffering when a listener is already attached — no behavior change for the ordinary (non-racing) case", async () => {
+      const a = new FakeSocket();
+      const b = new FakeSocket();
+      link(a, b);
+      const connA = createMuxConnection(a as never, { channelIdParity: "odd" });
+      const connB = createMuxConnection(b as never, { channelIdParity: "even" });
+      let serverChannel: MuxChannel | null = null;
+      connB.onChannel((ch) => (serverChannel = ch));
+      const clientChannel = await connA.openChannel();
+
+      const received: Buffer[] = [];
+      serverChannel!.onData((chunk) => received.push(chunk));
+      clientChannel.send(Buffer.from("live"));
+
+      expect(received).toHaveLength(1);
+      expect(received[0].toString()).toBe("live");
+    });
+
+    it("closes the channel rather than growing an unbounded buffer if pre-listener Data exceeds the channel's own window — a dishonest peer ignoring the window it was granted; an honest peer's own send-window accounting can never trigger this through the public send() API", () => {
+      const a = new FakeSocket();
+      let serverChannel: MuxChannel | null = null;
+      createMuxConnection(a as never, { channelIdParity: "even" }).onChannel(
+        (ch) => (serverChannel = ch),
+      );
+
+      // Peer-initiated Open, constructed as a raw frame — same pattern as
+      // the "reassembles a fragmented message" test above.
+      a.receive(Buffer.from([1, 0, 0, 0, 1])); // type=Open, channelId=1
+      expect(serverChannel).not.toBeNull();
+
+      // Two raw Data frames delivered without ever attaching onData — a
+      // real peer's own sendWindowBytes accounting could never produce
+      // this without a WindowAdjust replenishing it in between, which
+      // nothing here ever sends.
+      const header = Buffer.from([4, 0, 0, 0, 1]); // type=Data, channelId=1
+      const half = Buffer.alloc(CHANNEL_WINDOW_BYTES / 2, 1);
+      a.receive(Buffer.concat([header, half]));
+      expect(serverChannel!.closed).toBe(false);
+
+      a.receive(Buffer.concat([header, half, Buffer.from([9])])); // tips over the bound
+      expect(serverChannel!.closed).toBe(true);
+    });
+  });
+
   describe("window-based flow control", () => {
     it("exhausts the send window, then replenishes it via WINDOW_ADJUST once the peer acknowledges consumption", async () => {
       const a = new FakeSocket();

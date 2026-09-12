@@ -198,6 +198,51 @@ describe("startSshAgentFanout — connection lifecycle", () => {
     expect(getRemoteHostClientMock).toHaveBeenCalledTimes(3);
   });
 
+  it("re-logs a sustained ws-error failure streak periodically instead of only ever logging its first failure (regression: #1247)", () => {
+    listHostsMock.mockReturnValue([fakeHost("agent-a")]);
+    const sockets = Array.from({ length: 6 }, () => new MockSocket());
+    let i = 0;
+    openSshAgentStreamMock.mockImplementation(() => sockets[i++]);
+    const app = fakeApp(1);
+
+    startSshAgentFanout(app).reconcile();
+
+    // Five consecutive failures, backing off between each — a real outage
+    // that never resolves, not a single blip. Advances by RECONNECT_DELAYS_MS's
+    // own steps exactly (mirrors the "established backoff shape" test above)
+    // rather than a flat overshoot: overshooting past CONNECT_TIMEOUT_MS
+    // would let the freshly-reconnected socket's own connect-timeout timer
+    // fire within the same advance, terminating it and cascading into extra,
+    // untested reconnects.
+    const backoffStepsMs = [1_000, 2_000, 5_000, 10_000, 30_000];
+    for (let n = 0; n < 5; n++) {
+      sockets[n].emit("error", new Error("boom"));
+      sockets[n].emit("close");
+      vi.advanceTimersByTime(backoffStepsMs[n]);
+    }
+
+    const wsErrorCalls = (app.log.warn as ReturnType<typeof vi.fn>).mock.calls.filter(
+      ([, msg]) => msg === "[ssh-agent-fanout] ws error",
+    );
+    // FAILURE_RELOG_INTERVAL is 5 — logged on the 1st and 5th failure, not
+    // just the 1st, and not on every single one of the 5.
+    expect(wsErrorCalls).toHaveLength(2);
+    expect(wsErrorCalls[0][0]).toMatchObject({ consecutiveFailureCount: 1 });
+    expect(wsErrorCalls[1][0]).toMatchObject({ consecutiveFailureCount: 5 });
+
+    // A successful open resets the streak — the next failure logs
+    // immediately again rather than waiting out the rest of an interval
+    // from the PREVIOUS, now-resolved streak.
+    sockets[5].open();
+    sockets[5].emit("error", new Error("boom-again"));
+
+    const wsErrorCallsAfterReset = (app.log.warn as ReturnType<typeof vi.fn>).mock.calls.filter(
+      ([, msg]) => msg === "[ssh-agent-fanout] ws error",
+    );
+    expect(wsErrorCallsAfterReset).toHaveLength(3);
+    expect(wsErrorCallsAfterReset[2][0]).toMatchObject({ consecutiveFailureCount: 1 });
+  });
+
   it("fetches getRemoteHostClient fresh on every reconnect attempt rather than caching the client", () => {
     listHostsMock.mockReturnValue([fakeHost("agent-a")]);
     const first = new MockSocket();
@@ -487,6 +532,67 @@ describe("startSshAgentFanout — channel fan-out", () => {
     agentChannel.send(frame(SSH_AGENTC_SIGN_REQUEST, Buffer.from("digest")));
     expect(atHelperData).toHaveLength(1);
     expect(atHelperData[0]).toEqual(frame(SSH_AGENTC_SIGN_REQUEST, Buffer.from("digest")));
+  });
+
+  it("relays data written on the agent channel before the bridge-side openChannel() promise has resolved — reproduces the exact race behind the dropped-request bug (regression: a raw SSH-agent REQUEST_IDENTITIES frame written immediately after connect to a real agent host's ssh-agent.sock was silently dropped on every attempt; the identical frame written after any delay, even a few ms, was relayed correctly every time)", async () => {
+    // A manually-controlled bridge mux, not a second real MuxConnection
+    // pair: with two REAL, synchronously-delivering FakeSockets on both
+    // hops, `bridge.mux.openChannel()`'s own `.then()` callback (attached
+    // deep inside the synchronous Open/OpenAck cascade triggered by this
+    // test's own `agentConn.openChannel()` call, before that call even
+    // returns) is scheduled as a microtask BEFORE the test's own `await`
+    // continuation — so it always wins the race in that setup, the
+    // opposite of what happens for real over an actual network. Holding
+    // the bridge-side promise open under direct control is what actually
+    // lets this test put a write on the wire while `agentChannel.onData`
+    // is still unattached, exactly as ssh's own request beats the
+    // primary<->laptop round trip in production.
+    let resolveBridgeChannel!: (ch: MuxChannel) => void;
+    const bridgeOpenChannel = vi.fn(
+      () => new Promise<MuxChannel>((resolve) => (resolveBridgeChannel = resolve)),
+    );
+    const app = fakeApp(0);
+    app.connectedBridges.set("bridge-0", {
+      socket: {},
+      mux: { openChannel: bridgeOpenChannel },
+      connectedAt: Date.now(),
+    });
+
+    const { agentConn } = await setupPrimaryAndAgent(app);
+    const agentChannel = await agentConn.openChannel();
+
+    // bridge.mux.openChannel() (our mock) has been called by
+    // ssh-agent-fanout.ts's onChannel handler but is still pending — its
+    // `.then()` has not run, so `agentChannel.onData` has not been
+    // attached yet. This is the exact window the bug lives in.
+    expect(bridgeOpenChannel).toHaveBeenCalledOnce();
+    agentChannel.send(frame(SSH_AGENTC_SIGN_REQUEST, Buffer.from("digest")));
+
+    // Now let the bridge-side open resolve and its `.then()` actually run.
+    const fakeBridgeChannel: MuxChannel = {
+      id: 2,
+      sendWindow: 1024 * 1024,
+      closed: false,
+      send: vi.fn(),
+      eof: vi.fn(),
+      close: vi.fn(),
+      onData: vi.fn(),
+      onEof: vi.fn(),
+      onClose: vi.fn(),
+      onDrain: vi.fn(),
+      acknowledgeConsumed: vi.fn(),
+    };
+    resolveBridgeChannel(fakeBridgeChannel);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // Without the pre-listener buffering fix, the Data frame sent above
+    // was dropped the instant it arrived at agentChannel.handleData() with
+    // zero dataListeners attached — pipeFilteredChannelToChannel's later
+    // onData attach would then see nothing. With the fix, the buffered
+    // frame is replayed the moment onData is finally attached.
+    expect(fakeBridgeChannel.send).toHaveBeenCalledOnce();
+    const sent = (fakeBridgeChannel.send as ReturnType<typeof vi.fn>).mock.calls[0][0] as Buffer;
+    expect(sent).toEqual(frame(SSH_AGENTC_SIGN_REQUEST, Buffer.from("digest")));
   });
 
   it("closes the agent channel immediately when the bridge disconnects in the narrow window between the primary<->agent connection staying alive and reconcile() tearing it down — must not leave the SSH client hanging", async () => {

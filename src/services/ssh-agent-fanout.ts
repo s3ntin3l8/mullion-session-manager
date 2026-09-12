@@ -28,6 +28,17 @@ import { pipeFilteredChannelToChannel } from "./ssh-agent-relay.js";
 
 const RECONNECT_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
 
+// A sustained fan-out failure streak must stay visible in the logs for its
+// entire duration, not just its first second (issue #1247: a lone
+// ECONNREFUSED logged at the very start of a real, hours-long outage read
+// as a brief, resolved blip during a live investigation — there was no way
+// to tell from the logs alone that the connection had kept failing ever
+// since). Re-log every Nth consecutive failure rather than once, ever, per
+// streak — still throttled, not logged on every single ~1s-to-30s retry,
+// same "streak, not call count" shape `hasLoggedBridgeAmbiguity` already
+// uses elsewhere in this file for a different, shorter-lived streak.
+const FAILURE_RELOG_INTERVAL = 5;
+
 // openSshAgentStream() has no connect timeout of its own (same documented
 // gap as openEventsStream() — remote-host-client.ts) — bounded here so a
 // half-open handshake can't stall this host's fan-out indefinitely.
@@ -41,7 +52,12 @@ interface HostFanout {
   attempt: number;
   reconnectTimer: ReturnType<typeof setTimeout> | null;
   connectTimeoutTimer: ReturnType<typeof setTimeout> | null;
-  hasLoggedFailure: boolean;
+  /** Consecutive "error" events since the last successful "open" — drives
+   * the periodic re-log in the "error" handler below (see
+   * FAILURE_RELOG_INTERVAL's own comment). Reset to 0 on a successful
+   * open, not merely decremented, so a later streak logs its own first
+   * failure immediately rather than picking up mid-interval. */
+  consecutiveFailureCount: number;
 }
 
 export interface SshAgentFanoutHandle {
@@ -228,7 +244,7 @@ export function startSshAgentFanout(app: FastifyInstance): SshAgentFanoutHandle 
       if (f.connectTimeoutTimer !== null) clearTimeout(f.connectTimeoutTimer);
       f.connectTimeoutTimer = null;
       f.attempt = 0; // reset backoff on a successful connect
-      f.hasLoggedFailure = false;
+      f.consecutiveFailureCount = 0;
 
       // Primary dials OUT here — "odd" to match the agent's own "even" pin
       // (routes/internal.ts's `/internal/ws/ssh-agent` handler, PR5b). A
@@ -288,7 +304,7 @@ export function startSshAgentFanout(app: FastifyInstance): SshAgentFanoutHandle 
               agentChannel.close();
               return;
             }
-            pipeFilteredChannelToChannel(agentChannel, bridgeChannel);
+            pipeFilteredChannelToChannel(agentChannel, bridgeChannel, app.log);
           })
           .catch((err: unknown) => {
             // The bridge's own connection cap, or it died mid-open — same
@@ -304,9 +320,15 @@ export function startSshAgentFanout(app: FastifyInstance): SshAgentFanoutHandle 
     });
 
     socket.on("error", (err) => {
-      if (!f.hasLoggedFailure) {
-        app.log.warn({ err, hostId: f.hostId }, "[ssh-agent-fanout] ws error");
-        f.hasLoggedFailure = true;
+      f.consecutiveFailureCount++;
+      if (
+        f.consecutiveFailureCount === 1 ||
+        f.consecutiveFailureCount % FAILURE_RELOG_INTERVAL === 0
+      ) {
+        app.log.warn(
+          { err, hostId: f.hostId, consecutiveFailureCount: f.consecutiveFailureCount },
+          "[ssh-agent-fanout] ws error",
+        );
       }
       // "close" always follows "error" for a ws client socket — reconnect
       // is scheduled from the "close" handler below, not duplicated here.
@@ -355,7 +377,7 @@ export function startSshAgentFanout(app: FastifyInstance): SshAgentFanoutHandle 
         attempt: 0,
         reconnectTimer: null,
         connectTimeoutTimer: null,
-        hasLoggedFailure: false,
+        consecutiveFailureCount: 0,
       };
       fanouts.set(hostId, f);
       connect(f);
