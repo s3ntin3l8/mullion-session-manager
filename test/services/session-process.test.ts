@@ -475,20 +475,30 @@ describe("stopScope", () => {
   it("resolves (does not hang) when the stop spawn never exits", async () => {
     listUnitsReply = [ownedLine("1")];
     stopShouldHang = true;
-    const promise = stopScope(SESSIONS_DIR, INSTANCE_ID, "1");
-    // stopScope first does a real (unhung) listing via resolveOwningUnit,
-    // which resolves through this mock's own real setImmediate chain — let
-    // that settle, with real timers still in effect, before engaging fake
-    // timers for just the "stop" spawn's own timeout below. Faking
-    // setImmediate too (a plain vi.useFakeTimers() up front) would freeze
-    // that chain and hang the test itself, not just exercise the timeout
-    // under test.
-    await new Promise((r) => setImmediate(r));
-    await new Promise((r) => setImmediate(r));
-    await new Promise((r) => setImmediate(r));
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    // Full fake timers (setImmediate included) — this call has two phases:
+    // the listing (resolveOwningUnit -> listOwnedScopes) resolves through
+    // this mock's own two nested setImmediate calls, THEN the "stop"
+    // spawn's own armKillEscalation timeout fires via setTimeout. A scoped
+    // `{ toFake: ["setTimeout", "clearTimeout"] }` looks like the natural
+    // fit (only the second phase needs faking), but doesn't work: whether
+    // fake timers are installed before or after the listing starts, there
+    // is no reliable point at which the real setImmediate chain is
+    // guaranteed to have already settled and the "stop" spawn's own
+    // setTimeout not yet scheduled — installed after a fixed number of
+    // real `setImmediate` ticks, the "stop" timer risks already being real
+    // by then (an earlier version of this test passed for that wrong
+    // reason — waiting out a genuine 5s, not faking it — caught by a
+    // review pass on wall-clock duration); installed before, nothing ever
+    // lets the still-real setImmediate chain interleave, and the test
+    // hangs outright. `runAllTimersAsync()` sidesteps the ordering
+    // question entirely: it keeps firing whatever is currently pending —
+    // fake setImmediate, then the later real-turned-fake setTimeout, then
+    // the SIGKILL escalation's own nested setTimeout — until nothing is
+    // left, which is exactly this promise settling.
+    vi.useFakeTimers();
     try {
-      await vi.advanceTimersByTimeAsync(5_000);
+      const promise = stopScope(SESSIONS_DIR, INSTANCE_ID, "1");
+      await vi.runAllTimersAsync();
       await expect(promise).resolves.toBeUndefined();
     } finally {
       vi.useRealTimers();
