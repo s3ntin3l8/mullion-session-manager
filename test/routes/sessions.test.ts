@@ -505,6 +505,102 @@ describe("sessions route", () => {
     await app.close();
   });
 
+  // Issue #1255 — #1223's sessions_stack_identity_unique index
+  // (`(projectId, name) WHERE kind = 'dock' AND status = 'active' AND name
+  // LIKE 'docker-stack:%'`) guards every INSERT-side caller, but this
+  // route's raw UPDATE wasn't in #1223's own scope. Renaming an active
+  // `kind: "dock"` session onto an already-active `docker-stack:<x>` name
+  // in the SAME project must return a clean 409, not an uncaught
+  // SqliteError surfacing as a generic 500. The index is scoped per
+  // `projectId`, so this deliberately keeps both sessions in one project —
+  // a cross-project rename onto the same name is an ordinary, unrelated
+  // 200.
+  it("409s renaming an active dock session onto an already-active docker-stack:<x> name in the same project (#1255)", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app);
+
+    const existing = await app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: {
+        projectId,
+        command: "docker compose up",
+        kind: "dock",
+        name: "docker-stack:demo",
+      },
+    });
+    expect(existing.statusCode).toBe(201);
+
+    const other = await app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: {
+        projectId,
+        command: "docker compose logs -f api",
+        kind: "dock",
+        name: "docker-logs:api",
+      },
+    });
+    const otherId = other.json().id as number;
+
+    const renamed = await app.inject({
+      method: "PATCH",
+      url: `/api/sessions/${otherId}`,
+      payload: { name: "docker-stack:demo" },
+    });
+    expect(renamed.statusCode).toBe(409);
+
+    // Neither row was corrupted by the failed rename.
+    const list = await app.inject({
+      method: "GET",
+      url: `/api/sessions?projectId=${projectId}`,
+    });
+    const rows = list.json() as Array<{ id: number; name: string; nameLocked: boolean }>;
+    const otherRow = rows.find((s) => s.id === otherId);
+    expect(otherRow?.name).toBe("docker-logs:api");
+    expect(otherRow?.nameLocked).toBe(false);
+    expect(rows.filter((s) => s.name === "docker-stack:demo")).toHaveLength(1);
+
+    await app.close();
+  });
+
+  // Same collision, but the second session isn't `kind: "dock"` at all —
+  // the index's own WHERE clause only ever matches a dock session, so this
+  // must succeed as an ordinary rename; the catch must not over-trigger on
+  // an unrelated session kind.
+  it("an ordinary rename that happens to collide only by name, on a non-dock session, still succeeds", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app);
+
+    await app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: {
+        projectId,
+        command: "docker compose up",
+        kind: "dock",
+        name: "docker-stack:demo",
+      },
+    });
+
+    const terminal = await app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: { projectId, command: "bash" },
+    });
+    const terminalId = terminal.json().id as number;
+
+    const renamed = await app.inject({
+      method: "PATCH",
+      url: `/api/sessions/${terminalId}`,
+      payload: { name: "docker-stack:demo" },
+    });
+    expect(renamed.statusCode).toBe(200);
+    expect(renamed.json().name).toBe("docker-stack:demo");
+
+    await app.close();
+  });
+
   it("kills a session: marks it killed and stops reporting alive", async () => {
     const app = await buildApp();
     const projectId = await createProject(app);
