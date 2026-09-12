@@ -71,6 +71,7 @@
 //   only sessions created after the upgrade get the namespaced name.
 
 import { spawn as spawnChild, execFileSync } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { listScopeProcesses } from "./cgroup-inventory.js";
@@ -119,9 +120,94 @@ export function scopeUnitName(instanceId: string, id: string): string {
  * candidate), its exit code isn't affected by unit health, so a host with
  * one failed unit elsewhere ("degraded") doesn't false-negative here.
  */
+// Issue #1232 — every systemctl spawn in this file except describeScope()
+// had no timeout at all: a wedged `--user` D-Bus bus (systemd restart, OOM
+// pressure) left the caller pending indefinitely. isSystemctlUserAvailable's
+// execFileSync below is worse than the async cases — a synchronous call
+// blocks the entire event loop, not just one promise. SYSTEMCTL_TIMEOUT_MS
+// matches cgroup-inventory.ts's own SYSTEMCTL_TIMEOUT_MS budget for the same
+// class of call; KILL_ESCALATION_MS mirrors every other spawn-with-timeout
+// helper in this repo (git-status.ts, agent-detect.ts, ...) — SIGTERM first,
+// SIGKILL only if the process is still alive after a short grace period.
+const SYSTEMCTL_TIMEOUT_MS = 5_000;
+const KILL_ESCALATION_MS = 2_000;
+
+/**
+ * Arms the SIGTERM-then-SIGKILL escalation every timed spawn below needs —
+ * extracted once three near-identical hand-rolled copies of this same
+ * bookkeeping accumulated in this file (describeScope, listOwnedScopes,
+ * stopScope; code-review finding on this issue). `onTimeout` fires once,
+ * synchronously, when `timeoutMs` elapses with SIGTERM already sent — its
+ * ONLY job is to settle whatever promise this spawn backs (e.g. call this
+ * function's own `finish`/`fail`); it must NOT call the returned
+ * `clearOnSettle` itself, or the escalation timer this function just armed
+ * would be cancelled before it can ever fire, defeating the whole point.
+ *
+ * `clearOnSettle` is what the caller's own 'error'/'close'/'exit' handlers
+ * call instead, unconditionally, once the child is CONFIRMED to have
+ * actually ended — whether that happens before `timeoutMs` (the ordinary,
+ * on-time case) or after (SIGTERM/SIGKILL actually worked). Safe to call
+ * either way: clearing an already-fired `timeoutMs` timer is a no-op: only
+ * the still-pending escalation timer, if any, actually gets cancelled.
+ */
+function armKillEscalation(
+  child: Pick<ChildProcess, "kill" | "exitCode" | "signalCode">,
+  timeoutMs: number,
+  onTimeout: () => void,
+): { clearOnSettle: () => void } {
+  let killTimer: ReturnType<typeof setTimeout> | null = null;
+  const clearKillTimer = () => {
+    if (killTimer) {
+      clearTimeout(killTimer);
+      killTimer = null;
+    }
+  };
+
+  const timer = setTimeout(() => {
+    try {
+      child.kill(); // SIGTERM
+    } catch {
+      // Best-effort — a kill() failure on an already-dead or non-standard
+      // child must not turn into an unhandled throw here.
+    }
+    // Escalate to SIGKILL if still alive after a short grace period.
+    // `killed`/`exitCode` alone don't tell us this — Node sets `killed`
+    // once a signal is successfully SENT, not once the process has
+    // actually died — so `exitCode`/`signalCode` both staying `null` is
+    // the real "still alive" signal. Deliberately NOT cancelled by
+    // `onTimeout` below — see this function's own doc comment.
+    killTimer = setTimeout(() => {
+      if (child.exitCode === null && child.signalCode === null) {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // Same best-effort posture as the SIGTERM above.
+        }
+      }
+    }, KILL_ESCALATION_MS);
+    killTimer.unref();
+    onTimeout();
+  }, timeoutMs);
+  timer.unref();
+
+  return {
+    clearOnSettle: () => {
+      clearTimeout(timer);
+      clearKillTimer();
+    },
+  };
+}
+
 export function isSystemctlUserAvailable(): boolean {
   try {
-    execFileSync("systemctl", ["--user", "show-environment"], { stdio: "ignore" });
+    execFileSync("systemctl", ["--user", "show-environment"], {
+      stdio: "ignore",
+      // #1232 — bounds this synchronous call so a wedged bus can't block
+      // the event loop forever. Node kills the child and throws on timeout;
+      // the catch below already maps that to `false`, the correct
+      // fail-closed answer for "couldn't confirm a bus is reachable."
+      timeout: SYSTEMCTL_TIMEOUT_MS,
+    });
     return true;
   } catch {
     return false;
@@ -177,32 +263,31 @@ export function describeScope(instanceId: string, id: string): Promise<string | 
       { stdio: ["ignore", "pipe", "ignore"] },
     );
 
+    const onStdoutData = (chunk: Buffer) => {
+      stdout += chunk.toString("utf8");
+    };
+    child.stdout?.on("data", onStdoutData);
+
     const finish = (value: string | null) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      child.stdout?.off("data", onStdoutData);
       resolve(value);
     };
 
-    const timer = setTimeout(() => {
-      try {
-        child.kill();
-      } catch {
-        // Best-effort — this probe already never rejects/hangs (see this
-        // function's own doc comment); a kill() failure on an already-dead
-        // or non-standard child must not turn into an unhandled throw here.
-      }
-      finish(null);
-    }, DESCRIBE_SCOPE_TIMEOUT_MS);
-    timer.unref();
+    // #1232 — this probe already never rejects/hangs (see this function's
+    // own doc comment); bounded by DESCRIBE_SCOPE_TIMEOUT_MS the same way
+    // every other spawn below is.
+    const armed = armKillEscalation(child, DESCRIBE_SCOPE_TIMEOUT_MS, () => finish(null));
 
-    child.stdout?.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString("utf8");
+    child.on("error", () => {
+      armed.clearOnSettle();
+      finish(null);
     });
-    child.on("error", () => finish(null));
     // 'close', not 'exit' — same stdout-delivery race isMasterAlive() and
     // isMasterAliveBatch() below already guard against.
     child.on("close", () => {
+      armed.clearOnSettle();
       const fields = Object.create(null) as Record<string, string>;
       for (const line of stdout.split("\n")) {
         const eq = line.indexOf("=");
@@ -384,17 +469,44 @@ export function listOwnedScopes(
     args.push("--no-legend", "--plain", "crs-session-*.scope");
 
     let stdout = "";
+    let settled = false;
     const child = spawnChild("systemctl", args, { stdio: ["ignore", "pipe", "ignore"] });
-    child.stdout?.on("data", (chunk: Buffer) => {
+
+    const onStdoutData = (chunk: Buffer) => {
       stdout += chunk.toString("utf8");
-    });
-    const fail = () => resolve({ owned: new Map(), unverifiable: new Set(), failed: true });
+    };
+    child.stdout?.on("data", onStdoutData);
+
+    const finish = (result: ScopeOwnershipListing) => {
+      if (settled) return;
+      settled = true;
+      child.stdout?.off("data", onStdoutData);
+      resolve(result);
+    };
+    const fail = () => finish({ owned: new Map(), unverifiable: new Set(), failed: true });
+
+    // Issue #1232 — this spawn had no timeout at all: a wedged `--user`
+    // D-Bus bus left this promise pending forever, and every isMasterAlive/
+    // isMasterAliveBatch caller (including routes/projects.ts's
+    // withStackLock-serialized stack-session mutex, issue #1182) bottoms
+    // out here — one hung call there stalled every OTHER queued stack
+    // action for the same (projectId, composeProject) key indefinitely, not
+    // just the in-flight request. A timeout maps to the SAME `fail()` the
+    // 'error'/non-zero-exit paths below already use, never to a successful
+    // empty listing — `failed: true` is the "everything unknown" contract
+    // this interface's own doc comment documents, not "nothing is owned."
+    const armed = armKillEscalation(child, SYSTEMCTL_TIMEOUT_MS, fail);
+
     // Spawn failure (systemctl missing, etc.) — everything unknown, per
     // this function's own doc comment on `failed`.
-    child.on("error", fail);
+    child.on("error", () => {
+      armed.clearOnSettle();
+      fail();
+    });
     // 'close', not 'exit' — same stdout-delivery race isMasterAlive()/
     // isMasterAliveBatch() below already guard against.
     child.on("close", (code) => {
+      armed.clearOnSettle();
       if (code !== 0) {
         fail();
         return;
@@ -413,7 +525,7 @@ export function listOwnedScopes(
           owned.set(path.basename(socketPath, ".sock"), unit);
         }
       }
-      resolve({ owned, unverifiable, failed: false });
+      finish({ owned, unverifiable, failed: false });
     });
   });
 }
@@ -522,14 +634,38 @@ export async function stopScope(
   });
   if (unit === undefined) return;
   return new Promise((resolve) => {
+    let settled = false;
     const child = spawnChild("systemctl", ["--user", "stop", unit], {
       stdio: "ignore",
     });
+
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+
+    // Issue #1232 — this spawn had no timeout either. Unlike
+    // listOwnedScopes()'s read-only listing above, this issues a MUTATING
+    // request: killing the child on timeout does not cancel the stop —
+    // systemd already has the request over D-Bus — so timing out here means
+    // only "stop requested, outcome unknown," exactly what this best-effort
+    // cleanup already promises (see the 'error' handler's own comment
+    // below). It must not be read as "stop failed," and must not trigger
+    // any retry/teardown of its own.
+    const armed = armKillEscalation(child, SYSTEMCTL_TIMEOUT_MS, finish);
+
     // "unit not loaded" (already stopped / never existed) is an expected,
     // ignorable outcome here — this is a best-effort cleanup, not a
     // correctness-critical step whose failure should propagate.
-    child.on("error", () => resolve());
-    child.on("exit", () => resolve());
+    child.on("error", () => {
+      armed.clearOnSettle();
+      finish();
+    });
+    child.on("exit", () => {
+      armed.clearOnSettle();
+      finish();
+    });
   });
 }
 
@@ -601,6 +737,37 @@ export async function isMasterAliveBatch(
 }
 
 /**
+ * Same batch lookup as isMasterAlive() below, but keeps "unknown" (an
+ * unverifiable id, or the listing itself failing/timing out — see
+ * isMasterAliveBatch's own trust-rule doc comment) distinct from a
+ * confident "dead."
+ *
+ * Issue #1232 — added because a `listOwnedScopes` timeout (also this issue)
+ * means `failed: true`/"unknown" is no longer a rare event confined to
+ * "systemctl is missing" — it can now happen whenever `--user` D-Bus is
+ * merely slow, which is exactly when a real host is under the most load and
+ * its sessions are most likely to be genuinely alive.
+ * `startStackSession`/`findActiveStackSession` (routes/projects.ts) take a
+ * DESTRUCTIVE action on "not alive" — mark a row exited, then recreate it —
+ * and isMasterAlive()'s own `?? false` posture would silently fold that
+ * timeout into the same destructive branch, permanently orphaning a scope
+ * that was actually still running (the reconciler never revisits a row once
+ * it leaves `status: "active"`). Every OTHER caller in this module already
+ * preserves "unknown" on its own via isMasterAliveBatch directly; this is
+ * the single-id equivalent for a caller that needs the same distinction
+ * without switching to the batch shape.
+ */
+export async function isMasterAliveState(
+  sessionsDir: string,
+  instanceId: string,
+  id: string,
+): Promise<"alive" | "dead" | "unknown"> {
+  const result = await isMasterAliveBatch(sessionsDir, instanceId, [id]);
+  const value = result[id];
+  return value === undefined ? "unknown" : value ? "alive" : "dead";
+}
+
+/**
  * Whether `id`'s systemd scope — the true owner of the dtach master and the
  * program running inside it, per PtyManager.terminate()'s doc comment in
  * pty-manager.ts — is still active. This is the source of truth
@@ -609,24 +776,25 @@ export async function isMasterAliveBatch(
  * tracked in this process's memory, so it works correctly even right after
  * a restart, before anything has re-attached.
  *
- * A thin wrapper over isMasterAliveBatch() above — issue #1140 (PR 1): both
- * need the exact same ownership-by-socket-path listing, so a second,
- * differently-shaped single-unit `is-active` spawn would just be a second
- * copy of that same logic to keep in sync. The `?? false` here is what
+ * A thin wrapper over isMasterAliveState() above, itself a thin wrapper over
+ * isMasterAliveBatch() — issue #1140 (PR 1): every one of these needs the
+ * exact same ownership-by-socket-path listing, so a second, differently-
+ * shaped single-unit `is-active` spawn would just be a second copy of that
+ * same logic to keep in sync. Collapsing "unknown" to `false` here is what
  * preserves this function's own documented single-id posture — "unknown
- * collapses to false" — on top of isMasterAliveBatch's batch-level "unknown
- * stays unknown": a listing failure returns an empty record (every id
- * omitted) and an unverifiable id is also omitted, so both collapse to
- * `false` here exactly as a failed/absent single-unit `is-active` reply
- * always did before this PR.
+ * collapses to false" — exactly as a failed/absent single-unit `is-active`
+ * reply always did before this PR. A caller that takes a DESTRUCTIVE action
+ * on `false` (mark-exited, kill, recreate — not just "skip re-attaching")
+ * must use isMasterAliveState() directly instead, so a transient/timed-out
+ * listing can't silently take that branch — see that function's own doc
+ * comment (issue #1232).
  */
 export async function isMasterAlive(
   sessionsDir: string,
   instanceId: string,
   id: string,
 ): Promise<boolean> {
-  const result = await isMasterAliveBatch(sessionsDir, instanceId, [id]);
-  return result[id] ?? false;
+  return (await isMasterAliveState(sessionsDir, instanceId, id)) === "alive";
 }
 
 /**
