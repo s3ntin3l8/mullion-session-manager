@@ -541,8 +541,13 @@ describe("Dock", () => {
       // No neighbour reassignment — the second pane is simply gone, not
       // reassigned to whatever row happens to remain.
       expect(screen.getAllByTestId("terminal-pane")).toHaveLength(1);
-      const stored = JSON.parse(localStorage.getItem("crs.dockSelectedRows") ?? "{}");
-      expect(stored["1"].pinned).toBeNull();
+      // Wrapped in `waitFor` — the persist effect that writes `pinned` to
+      // `localStorage` is a genuine `useEffect`, so it can commit a tick
+      // after the DOM assertion above already settled.
+      await waitFor(() => {
+        const stored = JSON.parse(localStorage.getItem("crs.dockSelectedRows") ?? "{}");
+        expect(stored["1"].pinned).toBeNull();
+      });
     });
 
     it("clears the pin when the currently-pinned row is selected as the new primary — no auto-swap", async () => {
@@ -611,8 +616,16 @@ describe("Dock", () => {
       expect(panes).toHaveLength(1);
       expect(panes[0]).toHaveAttribute("data-session-id", "20");
       expect(screen.queryByText("pinned")).not.toBeInTheDocument();
-      const stored = JSON.parse(localStorage.getItem("crs.dockSelectedRows") ?? "{}");
-      expect(stored["1"].pinned).toBeNull();
+      // Wrapped in `waitFor`, not a synchronous read right after the render
+      // assertions above — the persist effect that writes `pinned` to
+      // `localStorage` is a genuine `useEffect` (Dock.tsx's own comment on
+      // it), so it can commit a tick after the DOM updates this test just
+      // asserted on. The "falls back to unpinned..." test further below
+      // uses the same wrapped pattern for the same reason.
+      await waitFor(() => {
+        const stored = JSON.parse(localStorage.getItem("crs.dockSelectedRows") ?? "{}");
+        expect(stored["1"].pinned).toBeNull();
+      });
     });
 
     it("persists the pin across a remount, keyed by the same crs.dockSelectedRows entry #1238 already writes", async () => {
