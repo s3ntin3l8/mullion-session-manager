@@ -52,6 +52,16 @@ export const STORAGE_KEYS = {
   // yet, so a later issue (#1239) can extend this additively without a
   // storage migration.
   dockSelectedRows: "crs.dockSelectedRows",
+  // Issue #1244 — the primary pane's share (0,1) of the two-log-pane area,
+  // dragged via `.dock-pane-divider`. Value shape `Record<string, number>`
+  // keyed by `String(activeWorkspaceId)`, NOT `projectId` — a dedicated key
+  // (like `dockRailWidth` above), not folded into `dockSelectedRows`, because
+  // a workspace can hold several projects and this ratio applies uniformly
+  // across all of that workspace's columns, the same "one shared value" shape
+  // `dockRailWidth` already uses for a different axis. `activeWorkspaceId` can
+  // be `null` (no active workspace) — callers use 0.5 and skip persisting
+  // rather than writing under a `"null"` key.
+  dockPaneSplitRatio: "crs.dockPaneSplitRatio",
   projectCollapsed: "crs.projectCollapsed",
   expandedSessionRows: "crs.expandedSessionRows",
   expandedSubagentRows: "crs.expandedSubagentRows",

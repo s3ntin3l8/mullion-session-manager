@@ -485,18 +485,34 @@ without a human clicking something, and even that never auto-applies it.
 | **Check/pull a Docker service** | Click the ⋯ menu on a discovered Docker monitor                                     |
 | **Pin a second log pane**       | Click the "pin" tag on a rail row other than the one currently selected             |
 | **Unpin a second log pane**     | Click the "pinned" tag again (on the row it's pinned to)                            |
+| **Resize the rail**             | Drag the divider between the rail and the log pane (`col-resize` cursor)            |
+| **Resize the two log panes**    | Drag the divider between the primary and pinned log panes (`col-resize` cursor)     |
 
 Dock state persists to `localStorage` (collapsed state, region height,
-manually pinned project IDs, rail width, and each column's selected AND
-pinned rail row). Column widths from divider drags are ephemeral and reset
-on reload.
+manually pinned project IDs, rail width, each column's selected AND pinned
+rail row, and the primary/pinned pane split ratio — see below). Column
+widths from divider drags are ephemeral and reset on reload.
 
 Each column's log pane is normally a single terminal, showing whichever rail
 row is selected. Clicking the "pin" tag on a **different** row (it's hidden
 on the row that's currently selected — pinning yourself as your own second
 pane is meaningless) adds a second, independently-selected log pane to the
-right of the primary one, side by side, a fixed 50/50 split with no
-draggable divider between them. Only one row can be pinned at a time —
+right of the primary one, side by side, divided by a draggable divider
+(`col-resize` cursor) rather than a fixed 50/50 split. Dragging it resizes
+the primary pane's share of the two-pane area; the pinned pane absorbs
+whatever's left. The ratio persists per **workspace**, not per project —
+`crs.dockPaneSplitRatio` in `localStorage`, keyed by the active workspace id
+— since a workspace can hold several projects and a split chosen while
+looking at that workspace applies uniformly across all of its columns.
+Widening or narrowing a column doesn't reset it: each column independently
+clamps the same shared ratio against its own measured width, so a ratio
+that's legal in a wide column but would push a pane below its floor in a
+narrower one just degrades that column's rendering (without touching the
+stored value) until it — or a wider sibling column in the same workspace —
+has room to honor it exactly. The divider itself is mouse-only (a
+non-focusable `role="separator"`, deliberately with no `tabIndex`) —
+keyboard-driven resizing for both this divider and the rail's is tracked
+separately as issue #1264. Only one row can be pinned at a time —
 pinning a different row replaces the previous pin, and selecting the
 currently-pinned row as the new primary selection simply clears the pin
 (no automatic swap promoting the old primary into the now-empty pin slot).

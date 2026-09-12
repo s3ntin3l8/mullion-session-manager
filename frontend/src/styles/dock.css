@@ -345,21 +345,6 @@
 .dock-split--stacked {
   flex-direction: column;
 }
-/* Issue #1239 — a small visual gap between the two `.dock-log-pane`s when
-   the pinned second one is rendered alongside the primary. Deliberately an
-   adjacent-sibling rule (`.dock-log-pane + .dock-log-pane`), not a plain
-   `gap` on `.dock-split` itself: `.dock-split` also lays out `.dock-rail`
-   and `.dock-rail-divider` as flex children (both above), and a `gap` there
-   would add unwanted space between THOSE, not just between the two panes —
-   the rail already sits flush against its own divider by design. This rule
-   only ever matches when a second `.dock-log-pane` is actually adjacent to
-   the first, i.e. exactly when there are two to separate. No drag divider
-   between them in this PR (a fixed 50/50 split, both panes' own
-   `flex: 1 1 0` — see `.dock-log-pane`'s own comment, empty-states.css); a
-   draggable divider is deliberately out of scope, filed as issue #1244. */
-.dock-log-pane + .dock-log-pane {
-  margin-left: 8px;
-}
 /* Drag handle between the rail and the log pane — same look and mechanism
    as .dock-column-divider above, just col-resize between two DIFFERENT
    boxes within one column instead of between sibling columns. Persisted
@@ -382,6 +367,33 @@
   background: transparent;
 }
 .dock-rail-divider:hover::after {
+  background: var(--ring, var(--muted));
+}
+/* Issue #1244 — drag handle between the primary and pinned `.dock-log-pane`s
+   (only rendered when the second pane is), replacing #1239's fixed-50/50
+   `.dock-log-pane + .dock-log-pane` margin rule: that adjacent-sibling
+   selector stopped matching once a divider element sits between the two
+   panes, and this element is now the separation itself instead — same look
+   and mechanism as `.dock-rail-divider` above, just between the two panes
+   rather than between the rail and the primary pane. `PANE_DIVIDER_WIDTH_PX`
+   (Dock.tsx) carries this same 6px width for `twoPaneThresholdPx`'s own
+   layout-budget math. */
+.dock-pane-divider {
+  width: 6px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  position: relative;
+}
+.dock-pane-divider::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 2px;
+  width: 2px;
+  background: transparent;
+}
+.dock-pane-divider:hover::after {
   background: var(--ring, var(--muted));
 }
 .dock-empty {
