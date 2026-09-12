@@ -4,6 +4,7 @@ import {
   dockRowKey,
   runningSessionFor,
   composeProjectForControl,
+  composeProjectFromContainerName,
   groupDockerControls,
   holdVanishedDockerControls,
   dockLogPaneComfortHeightPx,
@@ -121,6 +122,42 @@ describe("dockerSessionIdentity", () => {
 
   it("is null for a non-docker (dock.json) control", () => {
     expect(dockerSessionIdentity(configControl())).toBeNull();
+  });
+
+  it("issue #1240 — is the control's own id for a synthetic orphan control (no .docker, id starts with docker-logs:)", () => {
+    const orphan: DockControl = {
+      id: "docker-logs:ghost-web-1",
+      title: "ghost-web-1",
+      command: "docker compose ... logs -f web",
+      source: "docker",
+    };
+    expect(dockerSessionIdentity(orphan)).toBe("docker-logs:ghost-web-1");
+  });
+
+  it("issue #1240 — is null for a reconstructed stack-action control (no .docker, id starts with docker-stack:, NOT docker-logs:)", () => {
+    const reconstructed: DockControl = {
+      id: "docker-stack:sanctuary",
+      title: "Stack action running — sanctuary",
+      command: "docker compose ... up -d",
+      source: "docker",
+      composeProject: "sanctuary",
+    };
+    expect(dockerSessionIdentity(reconstructed)).toBeNull();
+  });
+});
+
+describe("composeProjectFromContainerName", () => {
+  it("parses compose's own <project>-<service>-<replica> convention", () => {
+    expect(composeProjectFromContainerName("sanctuary-web-1")).toBe("sanctuary");
+  });
+
+  it("handles a project name that itself contains hyphens", () => {
+    expect(composeProjectFromContainerName("my-cool-app-worker-2")).toBe("my-cool-app");
+  });
+
+  it("returns null for a container_name: override that doesn't follow the convention", () => {
+    expect(composeProjectFromContainerName("my-custom-name")).toBeNull();
+    expect(composeProjectFromContainerName("nanokvm-manager")).toBeNull();
   });
 });
 

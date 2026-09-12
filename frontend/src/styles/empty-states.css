@@ -1303,6 +1303,34 @@
 .dock-monitor--selected {
   border-color: var(--accent-solid);
 }
+/* Issue #1240 — a row synthesized for a session whose own control dropped
+   out of discovery (compose down, or a hold-window expiry). A warm border
+   tint (not a fill, for the same reason `.dock-monitor--selected` above
+   uses one — no competing with `.dock-monitor-image-update`'s own tint,
+   though an orphaned row never carries an image pill at all) so the row
+   reads as "needs attention" without implying an error occurred; the icon +
+   aria-label (DockMonitor.tsx) carry the actual explanation. Combines with
+   `--selected` rather than being made mutually exclusive with it — see the
+   compound `--selected.--orphaned` rule right below for how that
+   combination resolves, since these two single-class rules alone have
+   EQUAL specificity and source order (this one declared after
+   `--selected`) would otherwise let the orphaned tint silently win. */
+.dock-monitor--orphaned {
+  border-color: var(--y);
+}
+/* A higher-specificity override (two classes, not one) so a SELECTED
+   orphaned row still shows the selection accent, not the orphaned tint —
+   code-review caught the single-class rules above resolving the opposite
+   way on source order alone. */
+.dock-monitor--selected.dock-monitor--orphaned {
+  border-color: var(--accent-solid);
+}
+.dock-monitor-orphaned-icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--y);
+  flex-shrink: 0;
+}
 /* Min-content invariant this header must never be squeezed below, for a
    Docker-backed row (the case this floor exists for — .dock-monitor-kebab's
    guard, `control.docker && !held` (PR2b), is a strict SUBSET of

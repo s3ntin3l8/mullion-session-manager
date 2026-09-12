@@ -1,6 +1,13 @@
 import { Fragment } from "react";
 import type { DockControl, Session } from "../api/index.js";
-import { ContainerIcon, GlobeIcon, RefreshIcon, KillIcon, PlayTriangleIcon } from "../ui/icons.js";
+import {
+  ContainerIcon,
+  GlobeIcon,
+  RefreshIcon,
+  KillIcon,
+  PlayTriangleIcon,
+  WarningTriangleIcon,
+} from "../ui/icons.js";
 import { CustomSelect } from "../ui/CustomSelect.js";
 import type { CustomSelectOption } from "../ui/CustomSelect.js";
 import { KebabMenu } from "../ui/KebabMenu.js";
@@ -91,10 +98,35 @@ export function DockMonitor({
   onServiceStop: () => void;
   onServiceStart: () => void;
 }) {
+  // Issue #1240 — a control synthesized for a session whose own control
+  // dropped out of discovery (Dock.tsx's `orphanControls`). Its `id` is set
+  // to the session's own `docker-logs:<containerName>` name directly — the
+  // SAME shape dockerSessionIdentity (dockHelpers.ts) now recognizes, and
+  // mirrors that function's own check exactly (both the `source === "docker"`
+  // guard and the id-prefix check), for two independent reasons:
+  //
+  // - Deliberately NOT `!control.docker` alone — Dock.tsx's
+  //   `reconstructedEphemeralControls` (a live stack action surviving a
+  //   workspace switch) ALSO constructs a `source: "docker"` control with
+  //   no `.docker` field, for a completely unrelated reason. That
+  //   reconstructed control's own id is always a
+  //   `docker-stack:<composeProject>` session name (stackSessionName,
+  //   routes/projects.ts) — a different, non-overlapping prefix — so the id
+  //   check alone already never misclassifies it as orphaned.
+  // - The `source === "docker"` guard is still required on TOP of the id
+  //   check, though: docs/dock.md documents a `.crs/dock.json` control's own
+  //   `id` as a supported override escape hatch, and dockerSessionIdentity's
+  //   own "never collides" test (dockHelpers.test.ts) crafts exactly such a
+  //   control with `id: "docker-logs:<containerName>"` but `source`
+  //   undefined. Without this guard, that ordinary, working config control
+  //   would render with the orphaned warning icon/border/aria-label for no
+  //   reason — and if a real orphaned session of the same name existed
+  //   too, both rows would even share a React `key`.
+  const orphaned = control.source === "docker" && control.id.startsWith("docker-logs:");
   return (
     <Fragment>
       <div
-        className={`dock-monitor${selected ? " dock-monitor--selected" : ""}`}
+        className={`dock-monitor${selected ? " dock-monitor--selected" : ""}${orphaned ? " dock-monitor--orphaned" : ""}`}
         // P10 — U8's own finding flagged the OLD single-click-does-
         // everything header as "one unconfirmed click kills a running dev
         // server"; splitting select from stream-toggle (see this file's
@@ -132,7 +164,9 @@ export function DockMonitor({
         aria-label={
           held
             ? `${control.title} — recreating, actions unavailable`
-            : `${control.title}${selected ? " — selected" : ""}`
+            : orphaned
+              ? `${control.title} — orphaned, no matching service${selected ? " — selected" : ""}`
+              : `${control.title}${selected ? " — selected" : ""}`
         }
         onKeyDown={(e) => {
           if (held) return;
@@ -211,6 +245,20 @@ export function DockMonitor({
             dockerStatus && (
               <span className="dock-monitor-container-state">{dockerStatus.label}</span>
             )
+          )}
+          {orphaned && (
+            // Issue #1240 — this row's own control is gone from discovery;
+            // its session (and this row) survive only because the stream
+            // itself is still live. No dot/kebab/image pill to tint (there's
+            // no `control.docker` at all — see this component's own
+            // `orphaned` comment above), so the marker is a standalone icon
+            // rather than a recolor of something that doesn't exist here.
+            <span
+              className="dock-monitor-orphaned-icon"
+              title="Orphaned — no matching service in current discovery"
+            >
+              <WarningTriangleIcon size={11} />
+            </span>
           )}
           <span className="dock-monitor-name">{control.title}</span>
           {showSelector && (

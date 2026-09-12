@@ -28,6 +28,7 @@ import {
 import {
   clamp,
   composeProjectForControl,
+  composeProjectFromContainerName,
   dockLogPaneComfortHeightPx,
   dockMonitorMinHeightPx,
   dockMonitorMinWidthPx,
@@ -979,15 +980,78 @@ function DockColumn({
     ephemeralControlsInGroup: group.controls.filter((c) => ephemeralIds.has(c.id)),
   }));
 
-  // Every control that will actually render as a rail row this render, in
-  // render order — the single source of truth the reconciliation below and
-  // DockLogPane's own sessionId lookup both read, so "does a row exist for
-  // this key" can never disagree between the two.
-  const allRenderedControls: DockControl[] = [
+  // Every NON-orphan control that will actually render as a rail row this
+  // render — computed first, before issue #1240's orphan detection below,
+  // so that detection can check "is there already a row for this session"
+  // against the exact same set the ordinary render path produces.
+  const controlsBeforeOrphans: DockControl[] = [
     ...configuredControls,
     ...ungroupedDockerControls,
     ...stackGroupRenderData.flatMap((g) => [...g.serviceControls, ...g.ephemeralControlsInGroup]),
   ];
+
+  // Issue #1240 — a `docker-logs:<containerName>` session can outlive its
+  // own control: `docker compose down`, or holdVanishedDockerControls' own
+  // RECREATE_GRACE_MS hold window (above) expiring, both drop a control from
+  // discovery while its log-streaming session stays alive server-side. Such
+  // a session has no rail row and therefore no UI affordance to stop it —
+  // this block finds every one and synthesizes a standalone rail row for it.
+  //
+  // This MUST run after `controlsBeforeOrphans` (and therefore after
+  // heldMerge's own hold-window merge earlier in this render) — a control
+  // still inside its RECREATE_GRACE_MS hold window is already present in
+  // `controlsBeforeOrphans` (dockerSessionIdentity already resolves it
+  // there via its held `control.docker`), so it's correctly excluded from
+  // `orphanedSessions` below. Getting this ordering backwards would double-
+  // render a freshly-vanished-but-still-held row as BOTH held AND orphaned
+  // in the same commit — see this file's own test coverage
+  // (DockMonitor.test.tsx, "issue #1240") for a test that pins this.
+  const orphanedSessions = dockSessions.filter(
+    (s) =>
+      s.name?.startsWith("docker-logs:") &&
+      !controlsBeforeOrphans.some((c) => dockerSessionIdentity(c) === s.name),
+  );
+  const orphanControls: DockControl[] = orphanedSessions.map((s) => {
+    const name = s.name as string;
+    return {
+      id: name,
+      title: name.slice("docker-logs:".length),
+      command: s.command,
+      source: "docker" as const,
+      // No `.docker` field at all — deliberate. Every existing docker-only
+      // affordance (image pill, kebab menu, container-state label) is
+      // already gated on `control.docker &&` (DockMonitor.tsx), so omitting
+      // it naturally suppresses all three, leaving exactly "name + stream
+      // toggle" — issue #1240's own "no container means no docker actions,
+      // only stop-stream" requirement, for free.
+    };
+  });
+
+  // Best-effort cosmetic grouping only — never identity or actions. Attach
+  // an orphan under its former stack's group when composeProjectFromContainerName
+  // resolves a project that's still a real, live group (see that function's
+  // own doc comment for the `container_name:`-override case this can't
+  // detect); otherwise it renders standalone, exactly like `ungroupedDockerControls`.
+  const liveStackProjects = new Set(dockerStackGroups.map((g) => g.composeProject));
+  const groupedOrphansByProject = new Map<string, DockControl[]>();
+  const standaloneOrphanControls: DockControl[] = [];
+  for (const orphan of orphanControls) {
+    const containerName = orphan.id.slice("docker-logs:".length);
+    const project = composeProjectFromContainerName(containerName);
+    if (project !== null && liveStackProjects.has(project)) {
+      const existing = groupedOrphansByProject.get(project);
+      if (existing) existing.push(orphan);
+      else groupedOrphansByProject.set(project, [orphan]);
+    } else {
+      standaloneOrphanControls.push(orphan);
+    }
+  }
+
+  // Every control that will actually render as a rail row this render, in
+  // render order — the single source of truth the reconciliation below and
+  // DockLogPane's own sessionId lookup both read, so "does a row exist for
+  // this key" can never disagree between the two.
+  const allRenderedControls: DockControl[] = [...controlsBeforeOrphans, ...orphanControls];
   const rowKeys = allRenderedControls.map(dockRowKey);
   const liveRowKeys = allRenderedControls.filter((c) => runningFor(c)).map(dockRowKey);
   // Primitive signatures, not the arrays themselves, as the change-detection
@@ -1663,7 +1727,8 @@ function DockColumn({
         >
           {configuredControls.length === 0 &&
             dockerStackGroups.length === 0 &&
-            ungroupedDockerControls.length === 0 && (
+            ungroupedDockerControls.length === 0 &&
+            orphanControls.length === 0 && (
               <div className="dock-empty">
                 {project?.devServerUrl ? (
                   <button
@@ -1682,6 +1747,7 @@ function DockColumn({
             )}
           {configuredControls.map(renderMonitor)}
           {ungroupedDockerControls.map(renderMonitor)}
+          {standaloneOrphanControls.map(renderMonitor)}
           {stackGroupRenderData.map(({ group, serviceControls, ephemeralControlsInGroup }) => {
             const statusKey = `stack:${group.composeProject}`;
             // anyRep is only null for a group of live ephemerals whose
@@ -1757,6 +1823,14 @@ function DockColumn({
                     `.dock-stack-action-strip` did — every row costs the
                     same 28px now, service or not. */}
                 {ephemeralControlsInGroup.map(renderMonitor)}
+                {/* Issue #1240 — an orphaned session (its own control
+                    dropped from discovery, but composeProjectFromContainerName
+                    still resolves it back to THIS still-live stack) renders
+                    last within the group, after any live stack action —
+                    see groupedOrphansByProject's own comment above for why
+                    this is a cosmetic-only grouping, never wired through
+                    groupDockerControls/selectRepresentatives itself. */}
+                {(groupedOrphansByProject.get(group.composeProject) ?? []).map(renderMonitor)}
               </div>
             );
           })}
