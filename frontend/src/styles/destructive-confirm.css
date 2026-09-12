@@ -139,6 +139,9 @@
   pointer-events: none;
   animation: terminalCopyFadeOut 1.5s ease-out forwards;
 }
+.terminal-copy-indicator.error {
+  color: var(--r);
+}
 
 @keyframes terminalCopyFadeOut {
   0% {

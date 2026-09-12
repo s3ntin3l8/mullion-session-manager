@@ -14,6 +14,16 @@ export interface TerminalToastsProps {
   // first toast is still showing is a true->true no-op React skips, so the
   // CSS fade animation wouldn't restart).
   copyToastKey: number;
+  // A copy attempt that didn't land — clipboard API unavailable (a
+  // non-secure-context deploy) or the browser rejected the write. Previously
+  // silent (console.warn only); see TerminalPane.tsx's own comment on
+  // copyFailedMessage for why that made a clobbered/rejected copy
+  // undiagnosable from the UI. Holds the message text itself (Hermes
+  // review) so the two situations read as distinct ("Clipboard unavailable"
+  // vs. "Copy failed") rather than one undifferentiated failure; null means
+  // no toast. Same remount-key shape as copyToastKey, same reason.
+  copyFailedMessage: string | null;
+  copyFailedToastKey: number;
   uploadState: "idle" | "uploading" | "error";
   // Issue: small panes/floating windows ignoring input — true for as long as
   // this pane's viewport is smaller than the pty's applied grid (pty-
@@ -38,6 +48,8 @@ export interface TerminalToastsProps {
 export function TerminalToasts({
   copied,
   copyToastKey,
+  copyFailedMessage,
+  copyFailedToastKey,
   uploadState,
   paneTooSmall,
   voiceError,
@@ -47,6 +59,11 @@ export function TerminalToasts({
       {copied && (
         <div key={copyToastKey} className="terminal-copy-indicator">
           Copied
+        </div>
+      )}
+      {copyFailedMessage && (
+        <div key={copyFailedToastKey} className="terminal-copy-indicator error">
+          {copyFailedMessage}
         </div>
       )}
       {uploadState !== "idle" && (
