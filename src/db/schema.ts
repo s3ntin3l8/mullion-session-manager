@@ -6,6 +6,7 @@ import {
   index,
   foreignKey,
 } from "drizzle-orm/sqlite-core";
+import { sql } from "drizzle-orm";
 // TASK_STATUSES/TaskStatus now physically live in src/shared/constants.ts
 // (re-exported by the frontend too, from the same file — see
 // frontend/src/api.ts's own re-export). Re-exported below so every existing
@@ -460,6 +461,31 @@ export const sessions = sqliteTable(
     // paths, the ON DELETE CASCADE from projects) filters/joins on this
     // column. Without it, every one of those is a full table scan.
     index("sessions_project_id_idx").on(table.projectId),
+    // Issue #1223 — DB-level, defense-in-depth guard for the same
+    // (projectId, composeProject) identity that projects.ts's in-process
+    // `withStackLock` mutex (issue #1182) already serializes within one
+    // process. The mutex can't protect a second backend process (or any
+    // future `kind: "dock"` insert that bypasses it) against creating a
+    // second concurrently-active `docker-stack:<composeProject>` session —
+    // this index is what closes that gap. Scoped to exactly the
+    // `docker-stack:` name prefix `stackSessionName()`/
+    // `findActiveStackSession()` already use as this identity, NOT all
+    // `kind: 'dock'` rows — a `docker-logs:<containerName>` row (the
+    // per-service log-stream sessions, a wholly separate check-then-create-
+    // free path with its own churn) must stay ungoverned by this index, or
+    // a routine log-stream toggle could 500 on an unrelated unique
+    // violation. This index intentionally tolerates a stale `active` row
+    // left behind by a not-yet-reconciled dead process (session-reconciler.ts's
+    // sweep lags 5s-1h) — a caller that hits SQLITE_CONSTRAINT_UNIQUE here
+    // is expected to re-run the same liveness check
+    // `findActiveStackSession` already trusts (`app.pty.isMasterAlive`),
+    // flip the stale row to `exited` if it's actually dead, and retry the
+    // insert once (see `createSessionRecord`'s `unique-conflict` result
+    // variant and `startStackSession`'s handling of it) — never treat the
+    // violation itself as proof the existing row is the right one to reuse.
+    uniqueIndex("sessions_stack_identity_unique")
+      .on(table.projectId, table.name)
+      .where(sql`kind = 'dock' AND status = 'active' AND name LIKE 'docker-stack:%'`),
   ],
 );
 
