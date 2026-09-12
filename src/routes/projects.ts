@@ -773,13 +773,15 @@ async function loadProjectRepoContext(
 // second `fn()` start before the first's insert completes — reopening the
 // exact race this lock exists to close, just narrowed to the rare hang case
 // instead of closed. The correct fix is a timeout in `listOwnedScopes`
-// itself, which resolves for every caller of `isMasterAlive`/
-// `isMasterAliveBatch`, not just this one — landed in issue #1232. That fix
+// itself, which resolves for every caller of isMasterAliveState/
+// isMasterAliveStateBatch/isMasterAliveBatch, not just this one — landed in
+// issue #1232. That fix
 // converts a hang into a fast, confident "unknown," which is exactly what
 // findActiveStackSession/startStackSession below now consult via
-// `app.pty.isMasterAliveState` rather than plain `isMasterAlive` — that
-// function's own `?? false` posture would otherwise fold a merely-slow
-// D-Bus round trip into the same branch as a session that's actually dead.
+// `app.pty.isMasterAliveState` rather than the single-id `isMasterAlive`
+// boolean that existed at the time (removed, issue #1265) — that function's
+// own `?? false` posture would otherwise have folded a merely-slow D-Bus
+// round trip into the same branch as a session that's actually dead.
 export function createKeyedLock(): <T>(key: string, fn: () => Promise<T>) => Promise<T> {
   const locks = new Map<string, Promise<unknown>>();
   return function withLock<T>(key: string, fn: () => Promise<T>): Promise<T> {

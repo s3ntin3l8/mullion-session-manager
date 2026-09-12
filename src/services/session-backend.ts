@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import path from "node:path";
 import type { SessionInfo } from "./pty-manager.js";
+import type { SessionLiveness } from "./session-process.js";
 import type { CgroupProcess } from "./cgroup-inventory.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { getRemoteHostClient, type SpawnResult } from "./remote-host-client.js";
@@ -109,7 +110,13 @@ export interface SessionBackend {
     idleThresholdMs: number,
     sessionProjectIds?: Record<string, number>,
   ): Promise<Record<string, SessionInfo | null>>;
-  isMasterAlive(ids: string[]): Promise<Record<string, boolean>>;
+  // Issue #1265 — TOTAL tri-state map: every requested id is always present
+  // in the result, so a caller can never mistake "this reachable host's
+  // response omitted the id" for a confident "dead." Named `liveness`, not
+  // `isMasterAlive`, because it's batch-shaped (`ids[]` -> record) and the
+  // old name collided with PtyManager's differently-shaped single-id
+  // `isMasterAliveState(id)` — see that method's own doc comment.
+  liveness(ids: string[]): Promise<Record<string, SessionLiveness>>;
   terminate(id: string): Promise<void>;
   // Phase 4 (#187) — the scrollback replay buffer for whichever host
   // actually runs this session's PTY. Never rejects for "not currently
@@ -378,12 +385,14 @@ class LocalBackend implements SessionBackend {
   }
 
   // Perf audit finding B8(2) — used to Promise.all(ids.map(id =>
-  // app.pty.isMasterAlive(id))): one `systemctl --user is-active` subprocess
-  // spawn per active session, every reconcile tick. isMasterAliveBatch
-  // (pty-manager.ts) does the equivalent check with a single `systemctl
-  // --user list-units` spawn for the whole batch.
-  async isMasterAlive(ids: string[]): Promise<Record<string, boolean>> {
-    return this.app.pty.isMasterAliveBatch(ids);
+  // app.pty.isMasterAliveState(id))): one `systemctl --user is-active`
+  // subprocess spawn per active session, every reconcile tick.
+  // isMasterAliveStateBatch (pty-manager.ts) does the equivalent check with
+  // a single `systemctl --user list-units` spawn for the whole batch, and
+  // — issue #1265 — returns a TOTAL map (every requested id present), so
+  // this can pass it straight through with no re-derivation.
+  async liveness(ids: string[]): Promise<Record<string, SessionLiveness>> {
+    return this.app.pty.isMasterAliveStateBatch(ids);
   }
 
   async terminate(id: string): Promise<void> {
@@ -516,6 +525,24 @@ class LocalBackend implements SessionBackend {
   }
 }
 
+// Issue #1265 — the one place in this codebase that interprets
+// `/internal/sessions/liveness`'s wire shape (see RemoteBackend.liveness
+// above). `RemoteHostClient.request<T>`'s final step is a raw
+// `(await res.json()) as T` with no runtime validation, so `wire` here is
+// only a boolean map by *assumed* contract, not a verified one — a
+// malformed/truncated body from a misbehaving or ancient agent build must
+// still resolve to "unknown," never crash the reconciler or silently read
+// as "dead." Deliberately not exported and not reused elsewhere: every
+// other consumer of liveness data works with the typed, total
+// `SessionLiveness` map directly and has nothing left to launder.
+function livenessFromWire(wire: unknown, id: string): SessionLiveness {
+  if (wire === null || typeof wire !== "object") return "unknown";
+  const value = (wire as Record<string, unknown>)[id];
+  if (value === true) return "alive";
+  if (value === false) return "dead";
+  return "unknown";
+}
+
 class RemoteBackend implements SessionBackend {
   constructor(
     private readonly app: FastifyInstance,
@@ -576,8 +603,24 @@ class RemoteBackend implements SessionBackend {
     return this.client.bulkLiveStatus(ids, idleThresholdMs, sessionProjectIds);
   }
 
-  isMasterAlive(ids: string[]): Promise<Record<string, boolean>> {
-    return this.client.bulkIsMasterAlive(ids);
+  // Issue #1265 — derives the TOTAL tri-state map from the wire's existing
+  // boolean-with-omitted-keys shape (`bulkIsMasterAlive`/
+  // `/internal/sessions/liveness`), which stays unchanged on purpose: an
+  // agent legitimately runs a different build than the primary
+  // (docs/multi-host.md's "Agent updates" — updates are per-host and
+  // manually triggered), and this wire shape has no envelope to carry a
+  // version/skew signal in, so extending it would break silently in one
+  // direction (an old primary reading a new agent's response, or vice
+  // versa) rather than failing loudly. An id this reachable agent's
+  // response omits — whether because it's genuinely unverifiable there, or
+  // because it's simply too old to answer at all — is "unknown," never
+  // folded into "dead"; see livenessFromWire below, this file's only place
+  // that interprets the wire's omission convention.
+  async liveness(ids: string[]): Promise<Record<string, SessionLiveness>> {
+    const wire = await this.client.bulkIsMasterAlive(ids);
+    const result: Record<string, SessionLiveness> = Object.create(null);
+    for (const id of ids) result[id] = livenessFromWire(wire, id);
+    return result;
   }
 
   terminate(id: string): Promise<void> {

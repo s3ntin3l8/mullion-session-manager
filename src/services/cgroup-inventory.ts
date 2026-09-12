@@ -163,8 +163,8 @@ export interface ResolveScopeCgroupOptions {
 
 // Bounds queryControlGroup's spawn — a hung user D-Bus (systemd restart, OOM
 // pressure) would otherwise leave this pending indefinitely. Unlike
-// PtyManager.isMasterAlive()'s identical spawn shape (fire-and-forget from
-// an internal poll loop), this is reachable directly from a pollable HTTP
+// PtyManager.isMasterAliveState()'s identical spawn shape (fire-and-forget
+// from an internal poll loop), this is reachable directly from a pollable HTTP
 // route, so an unbounded hang is a real request-handler leak here. Matches
 // git-diff.ts's GIT_TIMEOUT_MS budget for the same class of "external
 // process, bounded wait" call.
@@ -196,7 +196,7 @@ function queryControlGroup(unit: string): Promise<string> {
       stdout += chunk.toString("utf8");
     });
     child.on("error", (err) => finish(() => reject(err)));
-    // 'close', not 'exit' — see PtyManager.isMasterAlive()'s identical
+    // 'close', not 'exit' — see PtyManager.isMasterAliveState()'s identical
     // reasoning: 'exit' doesn't guarantee every stdout chunk has arrived yet.
     child.on("close", () => finish(() => resolve(stdout)));
   });

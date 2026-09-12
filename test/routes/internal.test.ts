@@ -3352,6 +3352,39 @@ describe("internal routes (agent role, issue #26)", () => {
     await app.close();
   });
 
+  // Issue #1265 — an explicit regression guard on this route's WIRE FORMAT
+  // itself, independent of the internal isMasterAliveBatch/
+  // isMasterAliveStateBatch refactor: an id this reachable agent can't
+  // confirm ownership of must stay OMITTED from the response body, never
+  // rendered as `false`. `RemoteBackend.liveness` (session-backend.ts) on
+  // the primary side depends on that omission to tell "unknown" apart from
+  // a confident "dead" — silently changing this wire shape (e.g. to
+  // `null`) would break that derivation for every already-deployed
+  // primary/agent pair without any test here catching it.
+  it("omits an unverifiable id from /internal/sessions/liveness's response, rather than reporting it false", async () => {
+    const app = await buildApp();
+    // A `crs-session-*.scope` unit with no matching entry in
+    // unitSocketPaths renders with the bare-unit-name placeholder
+    // Description (not real dtach-shaped) — extractDtachSocketPath returns
+    // null for it, so listOwnedScopes classifies id "999" as unverifiable,
+    // never owned or confidently absent. No real session needs to be
+    // spawned for this — it exercises the fake list-units reply directly.
+    activeScopeUnits.add("crs-session-999.scope");
+
+    const livenessRes = await app.inject({
+      method: "POST",
+      url: "/internal/sessions/liveness",
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: { ids: ["999"] },
+    });
+    expect(livenessRes.statusCode).toBe(200);
+    expect(livenessRes.json()).toEqual({});
+    expect("999" in (livenessRes.json() as Record<string, boolean>)).toBe(false);
+
+    activeScopeUnits.delete("crs-session-999.scope");
+    await app.close();
+  });
+
   // Task Master's initial-prompt fix (see task-claim.ts's own doc comment)
   // reaches a remote agent host through this exact route — RemoteBackend.
   // spawn (session-backend.ts) serializes the whole SpawnSessionOptions

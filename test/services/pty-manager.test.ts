@@ -88,7 +88,7 @@ vi.mock("../../src/services/bundle-sync.js", () => ({
 }));
 
 // Issue #1140 (PR 1) — the fake `systemctl --user list-units` reply every
-// session-process.ts function now goes through (isMasterAlive/
+// session-process.ts function now goes through (isMasterAliveStateBatch/
 // isMasterAliveBatch, and terminate()'s stopScope): raw `--plain
 // --no-legend` output LINES, not just unit names — ownership is resolved
 // from each row's Description (the dtach socket path), not from the unit
@@ -105,8 +105,8 @@ function scopeLine(unit: string, description: string, state = "active"): string 
 
 // A row for `id`'s scope whose socket resolves under `dir` (defaults to
 // this suite's own per-test sessionsDir) — the shape stopScope/
-// isMasterAlive/isMasterAliveBatch now require to treat a unit as this
-// instance's own.
+// isMasterAliveStateBatch/isMasterAliveBatch now require to treat a unit as
+// this instance's own.
 function ownedLine(id: string, dir: string): string {
   return scopeLine(
     `crs-session-${id}.scope`,
@@ -132,8 +132,8 @@ vi.mock("node:child_process", async (importOriginal) => {
       if (file === "systemctl" && args[1] === "list-units") {
         ee.stdout = new EventEmitter();
         // 'exit' fires before 'data'/'close' — the exact real race
-        // isMasterAlive()/isMasterAliveBatch() must resolve off 'close' to
-        // survive; see their own doc comments and agent-detect.ts's
+        // isMasterAliveStateBatch()/isMasterAliveBatch() must resolve off
+        // 'close' to survive; see their own doc comments and agent-detect.ts's
         // probe() for the live bug this guards against.
         setImmediate(() => {
           ee.emit("exit", 0);
@@ -2085,13 +2085,13 @@ describe("PtyManager", () => {
     expect(manager.list()).toHaveLength(0);
   });
 
-  describe("isMasterAlive", () => {
-    it("resolves true when this instance's scope for the id is owned and listed", async () => {
+  describe("isMasterAliveState", () => {
+    it('resolves "alive" when this instance\'s scope for the id is owned and listed', async () => {
       listUnitsReply = [ownedLine("1", sessionsDir)];
-      await expect(manager.isMasterAlive("1")).resolves.toBe(true);
+      await expect(manager.isMasterAliveState("1")).resolves.toBe("alive");
       // A single list-units spawn, not a per-unit is-active spawn — issue
-      // #1140 (PR 1): isMasterAlive is now a thin wrapper over
-      // isMasterAliveBatch, which needs the same ownership-by-socket-path
+      // #1140 (PR 1): isMasterAliveState is now a thin wrapper over
+      // isMasterAliveStateBatch, which needs the same ownership-by-socket-path
       // listing either way. See session-process.test.ts for the dedicated,
       // exhaustive coverage of this; these tests just confirm PtyManager's
       // own delegating method threads sessionsDir/instanceId through.
@@ -2110,29 +2110,62 @@ describe("PtyManager", () => {
       );
     });
 
-    it("resolves false when nothing in the listing claims this id", async () => {
+    it('resolves "dead" when nothing in the listing claims this id', async () => {
       listUnitsReply = [];
-      await expect(manager.isMasterAlive("1")).resolves.toBe(false);
+      await expect(manager.isMasterAliveState("1")).resolves.toBe("dead");
     });
 
-    it("resolves false when a same-named scope belongs to a different instance's sessionsDir", async () => {
+    it('resolves "dead" when a same-named scope belongs to a different instance\'s sessionsDir', async () => {
       listUnitsReply = [ownedLine("1", "/some/other/instances/sessions")];
-      await expect(manager.isMasterAlive("1")).resolves.toBe(false);
+      await expect(manager.isMasterAliveState("1")).resolves.toBe("dead");
     });
 
-    it("never rejects, even if the probe itself fails to spawn", async () => {
+    it('resolves "unknown", never rejects, even if the probe itself fails to spawn', async () => {
       vi.mocked(spawnChildProcess).mockImplementationOnce(() => {
         const ee = new EventEmitter();
         setImmediate(() => ee.emit("error", new Error("ENOENT")));
         return ee as unknown as ReturnType<typeof spawnChildProcess>;
       });
-      await expect(manager.isMasterAlive("1")).resolves.toBe(false);
+      await expect(manager.isMasterAliveState("1")).resolves.toBe("unknown");
     });
   });
 
-  // Perf audit finding B8(2) — batched counterpart to isMasterAlive above:
-  // a single `systemctl --user list-units` spawn for the whole id batch,
-  // instead of one `is-active` spawn per id.
+  // Issue #1265 — the TOTAL tri-state batch primitive: every requested id
+  // always present in the result. isMasterAliveState above and
+  // isMasterAliveBatch below (the boolean wire adapter) are both thin reads
+  // off this.
+  describe("isMasterAliveStateBatch", () => {
+    it("includes every requested id, resolving the right state for each", async () => {
+      listUnitsReply = [ownedLine("1", sessionsDir), ownedLine("3", sessionsDir)];
+      await expect(manager.isMasterAliveStateBatch(["1", "2", "3"])).resolves.toEqual({
+        "1": "alive",
+        "2": "dead",
+        "3": "alive",
+      });
+    });
+
+    it("resolves an empty record for an empty id list without spawning anything", async () => {
+      vi.mocked(spawnChildProcess).mockClear();
+      await expect(manager.isMasterAliveStateBatch([])).resolves.toEqual({});
+      expect(vi.mocked(spawnChildProcess)).not.toHaveBeenCalled();
+    });
+
+    it('resolves "unknown" for every requested id (not "dead") when the spawn itself fails', async () => {
+      vi.mocked(spawnChildProcess).mockImplementationOnce(() => {
+        const ee = new EventEmitter();
+        setImmediate(() => ee.emit("error", new Error("ENOENT")));
+        return ee as unknown as ReturnType<typeof spawnChildProcess>;
+      });
+      await expect(manager.isMasterAliveStateBatch(["1", "2"])).resolves.toEqual({
+        "1": "unknown",
+        "2": "unknown",
+      });
+    });
+  });
+
+  // Perf audit finding B8(2) — wire-format adapter only (issue #1265): the
+  // boolean-with-omitted-keys shape `/internal/sessions/liveness` needs.
+  // Every other caller should use isMasterAliveStateBatch above instead.
   describe("isMasterAliveBatch", () => {
     it("resolves true only for ids whose scope this instance owns", async () => {
       listUnitsReply = [ownedLine("1", sessionsDir), ownedLine("3", sessionsDir)];

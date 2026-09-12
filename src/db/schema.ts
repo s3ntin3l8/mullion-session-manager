@@ -478,7 +478,7 @@ export const sessions = sqliteTable(
     // left behind by a not-yet-reconciled dead process (session-reconciler.ts's
     // sweep lags 5s-1h) — a caller that hits SQLITE_CONSTRAINT_UNIQUE here
     // is expected to re-run the same liveness check
-    // `findActiveStackSession` already trusts (`app.pty.isMasterAlive`),
+    // `findActiveStackSession` already trusts (`app.pty.isMasterAliveState`),
     // flip the stale row to `exited` if it's actually dead, and retry the
     // insert once (see `createSessionRecord`'s `unique-conflict` result
     // variant and `startStackSession`'s handling of it) — never treat the

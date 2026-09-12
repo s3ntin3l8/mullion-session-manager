@@ -4,17 +4,17 @@ import { spawn as spawnChildProcess } from "node:child_process";
 import type * as ChildProcess from "node:child_process";
 
 // This module owns only the systemd `--user` scope naming/lifecycle glue
-// (scopeUnitName, stopScope, isMasterAlive, isMasterAliveBatch,
-// listSessionProcesses, and — issue #1140 — the socket-path ownership check
-// they're all built on, listOwnedScopes/deriveInstanceId) extracted out of
-// pty-manager.ts — see that file's own header comment for why these are
-// plain functions (no per-Session state) rather than a class, and
-// session-process.ts's header for the full boundary. The end-to-end
-// behavior tests that exercise these through PtyManager's own delegating
-// methods (manager.isMasterAlive(), manager.terminate() calling
-// stopScope(), etc.) already live in pty-manager.test.ts and are unchanged
-// by this extraction; these tests exercise the extracted functions
-// directly.
+// (scopeUnitName, stopScope, isMasterAliveState, isMasterAliveStateBatch,
+// isMasterAliveBatch, listSessionProcesses, and — issue #1140 — the
+// socket-path ownership check they're all built on,
+// listOwnedScopes/deriveInstanceId) extracted out of pty-manager.ts — see
+// that file's own header comment for why these are plain functions (no
+// per-Session state) rather than a class, and session-process.ts's header
+// for the full boundary. The end-to-end behavior tests that exercise these
+// through PtyManager's own delegating methods (manager.isMasterAliveState(),
+// manager.terminate() calling stopScope(), etc.) already live in
+// pty-manager.test.ts and are unchanged by this extraction; these tests
+// exercise the extracted functions directly.
 
 const SESSIONS_DIR = "/tmp/some-sessions";
 const INSTANCE_ID = "aaaaaaaa";
@@ -158,8 +158,8 @@ const {
   listOwnedScopes,
   stopScope,
   describeScope,
-  isMasterAlive,
   isMasterAliveState,
+  isMasterAliveStateBatch,
   isMasterAliveBatch,
   listSessionProcesses,
   parseScopeUnitsListing,
@@ -338,9 +338,10 @@ describe("listOwnedScopes", () => {
 
   // Issue #1232 — this spawn used to have no timeout at all: a wedged
   // `--user` D-Bus bus left the returned promise pending forever, and every
-  // isMasterAlive/isMasterAliveBatch caller bottomed out here. `vi.useFakeTimers()`
-  // is scoped to each test with a try/finally so a failure here can't leak
-  // fake timers into later, unrelated tests in this file.
+  // isMasterAliveStateBatch/isMasterAliveBatch caller bottomed out here.
+  // `vi.useFakeTimers()` is scoped to each test with a try/finally so a
+  // failure here can't leak fake timers into later, unrelated tests in this
+  // file.
   describe("timeout (issue #1232)", () => {
     it("resolves failed:true, not hung, when systemctl never emits close/error", async () => {
       listUnitsShouldHang = true;
@@ -506,53 +507,10 @@ describe("stopScope", () => {
   });
 });
 
-describe("isMasterAlive", () => {
-  it("resolves true when this instance's scope for the id is owned and listed", async () => {
-    listUnitsReply = [ownedLine("1")];
-    await expect(isMasterAlive(SESSIONS_DIR, INSTANCE_ID, "1")).resolves.toBe(true);
-  });
-
-  it("resolves false when nothing in the listing claims this id", async () => {
-    listUnitsReply = [];
-    await expect(isMasterAlive(SESSIONS_DIR, INSTANCE_ID, "1")).resolves.toBe(false);
-  });
-
-  // Single-id posture, preserved on top of isMasterAliveBatch's batch-level
-  // "unknown stays unknown" — see isMasterAlive's own doc comment.
-  it("resolves false (not unknown) when a row names this id but ownership can't be confirmed", async () => {
-    listUnitsReply = [line("crs-session-1.scope", "not a dtach invocation")];
-    await expect(isMasterAlive(SESSIONS_DIR, INSTANCE_ID, "1")).resolves.toBe(false);
-  });
-
-  it("resolves false (not unknown), never rejects, when the underlying listing spawn fails", async () => {
-    listUnitsShouldError = true;
-    await expect(isMasterAlive(SESSIONS_DIR, INSTANCE_ID, "1")).resolves.toBe(false);
-  });
-
-  it("delegates to a single list-units spawn, not a per-unit is-active spawn", async () => {
-    listUnitsReply = [ownedLine("1")];
-    await isMasterAlive(SESSIONS_DIR, INSTANCE_ID, "1");
-    expect(vi.mocked(spawnChildProcess)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(spawnChildProcess)).toHaveBeenCalledWith(
-      "systemctl",
-      [
-        "--user",
-        "list-units",
-        "--type=scope",
-        "--state=active,deactivating",
-        "--no-legend",
-        "--plain",
-        "crs-session-*.scope",
-      ],
-      expect.objectContaining({ stdio: ["ignore", "pipe", "ignore"] }),
-    );
-  });
-});
-
-// Issue #1232 — the three-way counterpart to isMasterAlive() above, added
-// so a caller that takes a DESTRUCTIVE action on "not alive" (routes/
-// projects.ts's startStackSession/findActiveStackSession) can tell an
-// unverifiable/timed-out listing apart from a confident "dead" — see
+// Issue #1232 — the three-way single-id read off isMasterAliveStateBatch
+// below, added so a caller that takes a DESTRUCTIVE action on "not alive"
+// (routes/projects.ts's startStackSession/findActiveStackSession) can tell
+// an unverifiable/timed-out listing apart from a confident "dead" — see
 // isMasterAliveState's own doc comment in session-process.ts.
 describe("isMasterAliveState", () => {
   it('resolves "alive" for an id this instance owns and has listed', async () => {
@@ -574,19 +532,61 @@ describe("isMasterAliveState", () => {
     listUnitsShouldError = true;
     await expect(isMasterAliveState(SESSIONS_DIR, INSTANCE_ID, "1")).resolves.toBe("unknown");
   });
+});
 
-  // The whole reason this function exists: isMasterAlive()'s own `?? false`
-  // posture must NOT change — a caller that only needs the old boolean
-  // contract still gets it, byte-for-byte, on all three states above.
-  it("isMasterAlive's boolean answer is unaffected by this function's existence", async () => {
+// Issue #1265 — the TOTAL tri-state primitive: every requested id is
+// always present in the result, so there is no omitted key for a caller to
+// mistake for "dead." isMasterAliveState above and isMasterAliveBatch below
+// (the boolean wire adapter) are both thin reads off this.
+describe("isMasterAliveStateBatch", () => {
+  it("includes every requested id in the result, never omitting one", async () => {
     listUnitsReply = [ownedLine("1")];
-    await expect(isMasterAlive(SESSIONS_DIR, INSTANCE_ID, "1")).resolves.toBe(true);
+    const result = await isMasterAliveStateBatch(SESSIONS_DIR, INSTANCE_ID, ["1", "2", "3"]);
+    expect(Object.keys(result).sort()).toEqual(["1", "2", "3"]);
+  });
 
+  it('resolves "alive" for an id this instance owns and has listed', async () => {
+    listUnitsReply = [ownedLine("1")];
+    await expect(isMasterAliveStateBatch(SESSIONS_DIR, INSTANCE_ID, ["1"])).resolves.toEqual({
+      "1": "alive",
+    });
+  });
+
+  it('resolves "dead" (a confident negative) when nothing in the listing claims this id', async () => {
     listUnitsReply = [];
-    await expect(isMasterAlive(SESSIONS_DIR, INSTANCE_ID, "1")).resolves.toBe(false);
+    await expect(isMasterAliveStateBatch(SESSIONS_DIR, INSTANCE_ID, ["1"])).resolves.toEqual({
+      "1": "dead",
+    });
+  });
 
+  // Same "systemd forbids two units sharing a name" reasoning as
+  // isMasterAliveBatch's identical test below — a foreign-owned unit means
+  // THIS instance's own same-id session has already ended.
+  it('resolves "dead" (not "unknown") for a same-named unit owned by a different instance', async () => {
+    listUnitsReply = [ownedLine("1", "/some/other/instances/sessions")];
+    await expect(isMasterAliveStateBatch(SESSIONS_DIR, INSTANCE_ID, ["1"])).resolves.toEqual({
+      "1": "dead",
+    });
+  });
+
+  it('resolves "unknown" when a row names this id but ownership can\'t be confirmed', async () => {
     listUnitsReply = [line("crs-session-1.scope", "not a dtach invocation")];
-    await expect(isMasterAlive(SESSIONS_DIR, INSTANCE_ID, "1")).resolves.toBe(false);
+    await expect(isMasterAliveStateBatch(SESSIONS_DIR, INSTANCE_ID, ["1"])).resolves.toEqual({
+      "1": "unknown",
+    });
+  });
+
+  it('resolves "unknown" for every requested id, never rejects, when the underlying listing spawn fails', async () => {
+    listUnitsShouldError = true;
+    await expect(isMasterAliveStateBatch(SESSIONS_DIR, INSTANCE_ID, ["1", "2"])).resolves.toEqual({
+      "1": "unknown",
+      "2": "unknown",
+    });
+  });
+
+  it("resolves an empty record for an empty id list without spawning anything", async () => {
+    await expect(isMasterAliveStateBatch(SESSIONS_DIR, INSTANCE_ID, [])).resolves.toEqual({});
+    expect(vi.mocked(spawnChildProcess)).not.toHaveBeenCalled();
   });
 });
 
@@ -609,8 +609,8 @@ describe("describeScope", () => {
   });
 
   // Issue #988's same "deactivating is not yet gone" trust window
-  // isMasterAlive() relies on — a scope Mullion itself just asked to stop
-  // is still the genuine occupant of the name for a bootstrap collision's
+  // isMasterAliveStateBatch() relies on — a scope Mullion itself just asked
+  // to stop is still the genuine occupant of the name for a bootstrap collision's
   // purposes.
   it("resolves the Description when the unit is deactivating", async () => {
     showReplies[UNIT] = {
@@ -649,6 +649,10 @@ describe("describeScope", () => {
   });
 });
 
+// Issue #1265 — this function is now a thin wire-format adapter over
+// isMasterAliveStateBatch above ("unknown" -> omitted key), preserved
+// byte-for-byte for `/internal/sessions/liveness`'s existing boolean shape.
+// These tests now pin that adapter behavior specifically.
 describe("isMasterAliveBatch", () => {
   it("resolves true only for ids whose scope this instance owns", async () => {
     listUnitsReply = [ownedLine("1"), ownedLine("3")];

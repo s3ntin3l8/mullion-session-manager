@@ -53,10 +53,11 @@ import {
   stopScope,
   describeScope,
   deriveInstanceId,
-  isMasterAlive as isMasterAliveProcess,
   isMasterAliveState as isMasterAliveStateProcess,
+  isMasterAliveStateBatch as isMasterAliveStateBatchProcess,
   isMasterAliveBatch as isMasterAliveBatchProcess,
   listSessionProcesses as listSessionProcessesProcess,
+  type SessionLiveness,
 } from "./session-process.js";
 import { buildLaunchPlan } from "./launch-plan.js";
 import { sessionAgentGuidePath } from "./agent-guide.js";
@@ -3942,10 +3943,10 @@ export class PtyManager {
   // directly — see deriveInstanceId's own doc comment on why that could
   // disagree with the possibly-redirected `this.sessionsDir` above).
   // Threaded into every session-process.ts ownership check below
-  // (terminate()'s stopScope, isMasterAlive, isMasterAliveBatch,
-  // listSessionProcesses) so each can tell this instance's own
-  // `crs-session-*` scopes apart from another Mullion instance's on the
-  // same host by dtach socket path, not by unit name.
+  // (terminate()'s stopScope, isMasterAliveState, isMasterAliveStateBatch,
+  // isMasterAliveBatch, listSessionProcesses) so each can tell this
+  // instance's own `crs-session-*` scopes apart from another Mullion
+  // instance's on the same host by dtach socket path, not by unit name.
   private readonly instanceId: string;
   // Issue #271 — see stashSeed()/consumeSeed() below.
   private pendingSeeds = new Map<string, string>();
@@ -4395,7 +4396,7 @@ export class PtyManager {
    *
    * Callers are exactly the genuinely-terminal moments for `id`: this
    * class's own terminate() (below), the exited-session reconciler
-   * (session-reconciler.ts, once isMasterAlive confirms the process is
+   * (session-reconciler.ts, once its liveness check confirms the process is
    * actually gone), and the local-spawn-failure rollback
    * (session-lifecycle.ts, where the session row itself is deleted right
    * after). None of those has any live process left that could ever fire a
@@ -4552,51 +4553,53 @@ export class PtyManager {
   }
 
   /**
-   * Whether `id`'s systemd scope — the true owner of the dtach master and
-   * the program running inside it, per terminate()'s doc comment above — is
-   * still active. See isMasterAlive() in session-process.ts for the full
-   * doc comment (the "close" vs "exit" race, the false-vs-unknown
-   * collapse). Kept as a real instance method — not just a re-export of the
-   * imported function — so `app.pty.isMasterAlive` stays the one call
-   * surface session-reconciler.ts, session-backend.ts, and their tests
-   * (pty-manager.test.ts calls `manager.isMasterAlive` directly) already
-   * use.
+   * Issue #1232 — whether `id`'s systemd scope — the true owner of the
+   * dtach master and the program running inside it, per terminate()'s doc
+   * comment above — is confidently "alive"/"dead", or merely "unknown" (an
+   * unverifiable id, or the underlying listing timing out). See
+   * isMasterAliveState() in session-process.ts for the full doc comment on
+   * why a caller that takes a destructive action (mark-exited, kill,
+   * recreate) on "not alive" must treat "unknown" as "don't know," never
+   * fold it into "dead." Kept as a real instance method — not just a
+   * re-export of the imported function — so `app.pty.isMasterAliveState`
+   * stays the one call surface routes/projects.ts's
+   * startStackSession/findActiveStackSession and their tests use.
    */
-  isMasterAlive(id: string): Promise<boolean> {
-    return isMasterAliveProcess(this.sessionsDir, this.instanceId, id);
-  }
-
-  /**
-   * Issue #1232 — same lookup as isMasterAlive() above, but distinguishes
-   * "unknown" (an unverifiable id, or the underlying listing timing out)
-   * from a confident "dead." See isMasterAliveState() in session-process.ts
-   * for the full doc comment on why a caller that takes a destructive
-   * action on "not alive" must use this instead of isMasterAlive()'s own
-   * `?? false` collapse. Kept as a real instance method for the same
-   * reason as isMasterAlive() above — routes/projects.ts's
-   * startStackSession/findActiveStackSession call `app.pty.isMasterAliveState(id)`.
-   */
-  isMasterAliveState(id: string): Promise<"alive" | "dead" | "unknown"> {
+  isMasterAliveState(id: string): Promise<SessionLiveness> {
     return isMasterAliveStateProcess(this.sessionsDir, this.instanceId, id);
   }
 
   /**
    * Lists the genuine OS processes currently running inside `id`'s systemd
    * scope. See listSessionProcesses() in session-process.ts for the full
-   * doc comment; same "keep it a real method" reasoning as isMasterAlive()
-   * above — session-backend.ts calls `app.pty.listSessionProcesses(id)`.
+   * doc comment; same "keep it a real method" reasoning as
+   * isMasterAliveState() above — session-backend.ts calls
+   * `app.pty.listSessionProcesses(id)`.
    */
   listSessionProcesses(id: string): Promise<CgroupProcess[]> {
     return listSessionProcessesProcess(this.sessionsDir, this.instanceId, id);
   }
 
   /**
-   * Perf audit finding B8(2) — batched counterpart to isMasterAlive()
-   * above. See isMasterAliveBatch() in session-process.ts for the full doc
-   * comment (the trust-rule rationale for collapsing failures to an empty
-   * record rather than all-false). Kept as a real method for the same
-   * reason as isMasterAlive() above — session-reconciler.test.ts spies on
-   * `app.pty.isMasterAliveBatch` directly.
+   * Issue #1265 — the TOTAL tri-state batch liveness check: every requested
+   * id is always present in the result, so there's no omitted key for a
+   * caller to mistake for "dead." See isMasterAliveStateBatch() in
+   * session-process.ts for the full trust-rule doc comment. This is the
+   * primitive `session-backend.ts`'s `LocalBackend.liveness` and
+   * `session-reconciler.ts` (via that seam) consume — kept as a real method
+   * for the same reason as isMasterAliveState() above.
+   */
+  isMasterAliveStateBatch(ids: string[]): Promise<Record<string, SessionLiveness>> {
+    return isMasterAliveStateBatchProcess(this.sessionsDir, this.instanceId, ids);
+  }
+
+  /**
+   * Perf audit finding B8(2) — wire-format adapter ONLY. See
+   * isMasterAliveBatch() in session-process.ts for why this
+   * boolean-with-omitted-keys shape is preserved byte-for-byte (the
+   * `/internal/sessions/liveness` route this backs must keep working across
+   * a version-skewed primary/agent pair). Every other caller should use
+   * isMasterAliveStateBatch() above instead.
    */
   isMasterAliveBatch(ids: string[]): Promise<Record<string, boolean>> {
     return isMasterAliveBatchProcess(this.sessionsDir, this.instanceId, ids);

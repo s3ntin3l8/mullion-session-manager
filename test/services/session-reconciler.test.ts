@@ -4,6 +4,7 @@ import path from "node:path";
 import fs from "node:fs";
 import http from "node:http";
 import { EventEmitter } from "node:events";
+import type { SessionLiveness } from "../../src/services/session-process.js";
 
 // Session creation still spawns real OS processes (systemd-run, dtach) via
 // PtyManager — faked the same way as test/routes/sessions.test.ts, since
@@ -71,19 +72,20 @@ describe("reconcileExitedSessions", () => {
     mockSyncTaskTransition.mockClear();
   });
 
-  // Perf audit finding B8(2) — LocalSessionBackend.isMasterAlive(ids) now
-  // calls app.pty.isMasterAliveBatch(ids) (a single `systemctl --user
-  // list-units` call for the whole batch) instead of Promise.all-ing
-  // app.pty.isMasterAlive(id) once per id. Every test below used to stub
-  // the old per-id method uniformly (every id "alive" or every id "not
-  // alive") — this stubs the batch method the same uniform way, answering
-  // every id in whatever batch it's called with identically.
+  // Perf audit finding B8(2) — LocalBackend.liveness(ids) now calls
+  // app.pty.isMasterAliveStateBatch(ids) (a single `systemctl --user
+  // list-units` call for the whole batch) instead of Promise.all-ing a
+  // per-id check. Every test below stubs the batch method uniformly (every
+  // id "alive" or every id "dead") — issue #1265's TOTAL tri-state map,
+  // answering every id in whatever batch it's called with identically.
   function mockMasterAlive(app: Awaited<ReturnType<typeof buildApp>>, alive: boolean) {
-    return vi.spyOn(app.pty, "isMasterAliveBatch").mockImplementation(async (ids: string[]) => {
-      const result: Record<string, boolean> = Object.create(null);
-      for (const id of ids) result[id] = alive;
-      return result;
-    });
+    return vi
+      .spyOn(app.pty, "isMasterAliveStateBatch")
+      .mockImplementation(async (ids: string[]) => {
+        const result: Record<string, SessionLiveness> = Object.create(null);
+        for (const id of ids) result[id] = alive ? "alive" : "dead";
+        return result;
+      });
   }
 
   async function createSession(app: Awaited<ReturnType<typeof buildApp>>) {
@@ -129,18 +131,45 @@ describe("reconcileExitedSessions", () => {
     await app.close();
   });
 
-  // Perf audit finding B8(2), trust-rule regression — isMasterAliveBatch
-  // resolves an EMPTY record (not all-false) on a systemctl spawn/parse
-  // failure (see its own doc comment in pty-manager.ts). This pins that a
-  // local session's row is left alone in that case — the reconciler's
-  // `alive === undefined` -> skip branch must treat "the batch call itself
+  // Perf audit finding B8(2), trust-rule regression — isMasterAliveStateBatch
+  // resolves "unknown" for every id (not "dead") on a systemctl spawn/parse
+  // failure (see its own doc comment in session-process.ts). This pins that
+  // a local session's row is left alone in that case — the reconciler's
+  // `liveness !== "dead"` skip branch must treat "the batch call itself
   // failed" exactly like "a reachable host's response omitted this key,"
-  // not like "confirmed not alive." Getting this wrong would mass-exit
-  // every active local session on a single transient systemctl error.
-  it("leaves an active session alone when the batch liveness check itself fails (empty record, not all-false)", async () => {
+  // not like "confirmed dead." Getting this wrong would mass-exit every
+  // active local session on a single transient systemctl error.
+  it("leaves an active session alone when the batch liveness check itself fails (total map, every id explicitly unknown)", async () => {
     const app = await buildApp();
     const sessionId = await createSession(app);
-    vi.spyOn(app.pty, "isMasterAliveBatch").mockResolvedValue(Object.create(null));
+    vi.spyOn(app.pty, "isMasterAliveStateBatch").mockImplementation(async (ids: string[]) => {
+      const result: Record<string, SessionLiveness> = Object.create(null);
+      for (const id of ids) result[id] = "unknown";
+      return result;
+    });
+
+    await reconcileExitedSessions(app);
+
+    const res = await app.inject({ method: "GET", url: "/api/sessions" });
+    const row = (res.json() as Array<{ id: number; status: string }>).find(
+      (s) => s.id === sessionId,
+    );
+    expect(row?.status).toBe("active");
+
+    await app.close();
+  });
+
+  // Issue #1265 — isMasterAliveStateBatch's own contract is TOTAL (every
+  // requested id always present), but this reconciler consumes it through a
+  // `SessionBackend` seam a duck-typed stub or a version-skewed remote agent
+  // could still answer with an omitted key. `liveness !== "dead"` must skip
+  // in that case too, not just when the value is the well-formed "unknown" —
+  // there's no exhaustive switch to fall through, so an unrecognized/absent
+  // value fails safe rather than needing its own explicit branch.
+  it("leaves an active session alone when the liveness map itself omits the id (non-total stub, defensive fallback)", async () => {
+    const app = await buildApp();
+    const sessionId = await createSession(app);
+    vi.spyOn(app.pty, "isMasterAliveStateBatch").mockResolvedValue(Object.create(null));
 
     await reconcileExitedSessions(app);
 
@@ -169,7 +198,7 @@ describe("reconcileExitedSessions", () => {
     await app.close();
   });
 
-  // B9 — once isMasterAlive confirms the process is genuinely gone, any
+  // B9 — once the liveness check confirms the process is genuinely gone, any
   // seed stashed for this id (the promote flow) can never be picked up by a
   // SessionStart hook again — discard it rather than leaking it forever.
   // Deliberately NOT covered by plain kill()'s own behavior (see
@@ -194,7 +223,7 @@ describe("reconcileExitedSessions", () => {
   // Before the fix, a `/ws/terminal` upgrade landing in that window would
   // still see "active" (preValidation/attach re-check both just read that
   // column) and spawn a brand-new systemd-run scope for a program this
-  // function had already confirmed (via isMasterAlive) was dead — orphaning
+  // function had already confirmed (via the liveness check) was dead — orphaning
   // it the moment this function then flips the row underneath it.
   it("flips the row to exited BEFORE cleanupPreviewWorktree resolves, not after (A9)", async () => {
     const app = await buildApp();
@@ -216,8 +245,8 @@ describe("reconcileExitedSessions", () => {
     const reconcilePromise = reconcileExitedSessions(app);
 
     // Poll for the flip rather than assuming a fixed number of microtask
-    // ticks — isMasterAlive resolves through a couple of its own layers
-    // (LocalBackend.isMasterAlive -> app.pty.isMasterAliveBatch) before the
+    // ticks — the liveness check resolves through a couple of its own layers
+    // (LocalBackend.liveness -> app.pty.isMasterAliveStateBatch) before the
     // reconciler reaches the DB write, and hard-coding that depth would be
     // an implementation detail this test shouldn't need to know.
     let row: { status: string } | undefined;
@@ -310,7 +339,7 @@ describe("reconcileExitedSessions", () => {
     // systemd to stop (e.g. task-reseed.ts's force re-seed, terminating a
     // still-active session before spawning a fresh one) sits in
     // "deactivating" for up to systemd's own DefaultTimeoutStopSec before
-    // settling. isMasterAliveBatch() now folds that into "alive" (see
+    // settling. isMasterAliveStateBatch() now folds that into "alive" (see
     // session-process.test.ts for the unit-level coverage of the actual
     // systemctl `--state` widening); this pins the consequence one layer up
     // — the reconciler must not race that window and flip the task to
@@ -327,7 +356,7 @@ describe("reconcileExitedSessions", () => {
         .set({ worktreePath: "/tmp/.mullion-worktrees/mullion-task-988" })
         .where(eq(tasks.id, taskId))
         .run();
-      // Mimics what isMasterAliveBatch() itself now reports for a
+      // Mimics what isMasterAliveStateBatch() itself now reports for a
       // deactivating scope — "alive" — rather than re-deriving the
       // systemctl state string here.
       mockMasterAlive(app, true);
@@ -377,11 +406,11 @@ describe("reconcileExitedSessions", () => {
     // before some other writer (task-reseed.ts's force re-seed CAS'ing the
     // same session to "killed" before it awaits its own terminate()) wins
     // the race. If that other writer's target process responds to SIGTERM
-    // fast enough, THIS pass's own isMasterAlive check can legitimately
-    // report "not alive" against the now-stale snapshot. Simulated here by
-    // having the liveness mock itself flip the row to "killed" as a side
-    // effect before resolving `false` — reproducing "another writer already
-    // moved this row off 'active' while the liveness check was in flight."
+    // fast enough, THIS pass's own liveness check can legitimately report
+    // "dead" against the now-stale snapshot. Simulated here by having the
+    // liveness mock itself flip the row to "killed" as a side effect before
+    // resolving "dead" — reproducing "another writer already moved this row
+    // off 'active' while the liveness check was in flight."
     // The reconciler must lose its own CAS on that write and back off
     // entirely, not clobber "killed" back to "exited" and race ahead to
     // fail the task / delete the worktree out from under the in-flight
@@ -399,14 +428,14 @@ describe("reconcileExitedSessions", () => {
         .where(eq(tasks.id, taskId))
         .run();
 
-      vi.spyOn(app.pty, "isMasterAliveBatch").mockImplementation(async (ids: string[]) => {
+      vi.spyOn(app.pty, "isMasterAliveStateBatch").mockImplementation(async (ids: string[]) => {
         // Mimics task-reseed.ts's own kill-CAS landing while this exact
         // liveness check is in flight — after this pass's SELECT already
         // read the row as "active", before this pass's own flip-to-exited
         // write runs.
         app.db.update(sessions).set({ status: "killed" }).where(eq(sessions.id, sessionId)).run();
-        const result: Record<string, boolean> = Object.create(null);
-        for (const id of ids) result[id] = false;
+        const result: Record<string, SessionLiveness> = Object.create(null);
+        for (const id of ids) result[id] = "dead";
         return result;
       });
 
@@ -692,7 +721,7 @@ describe("reconcileExitedSessions", () => {
       // behind in this file's shared on-disk DB (no per-test cleanup) —
       // reconcileExitedSessions groups those into a "local" host group too,
       // and this file's child_process mock only ever emits "exit" (never
-      // "close"), which real isMasterAlive() waits on — so any test that
+      // "close"), which the real liveness check waits on — so any test that
       // doesn't stub it hangs forever on that leftover group. Every other
       // test here either stubs this or never leaves an active local
       // session; this one only cares about the remote group below.
@@ -767,6 +796,73 @@ describe("reconcileExitedSessions", () => {
       // server.close()'s callback otherwise hangs until every keep-alive
       // connection closes on its own — fetch()'s undici client holds one
       // open well past this test's assertions.
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await app.close();
+    });
+
+    // Issue #1265 — the coverage this file was missing: a REACHABLE remote
+    // host giving an explicit, confident "not alive" answer must still flip
+    // the row, exactly like the local path already does. Proves
+    // `RemoteBackend.liveness`'s wire-to-tri-state derivation maps a wire
+    // `false` to `"dead"` (not just that it maps an omitted key to
+    // "unknown" — the previous test already covered that half).
+    it("exits a session once a reachable remote host's liveness response confirms it's dead", async () => {
+      const app = await buildApp();
+      mockMasterAlive(app, true);
+
+      const server = http.createServer((req, res) => {
+        if (req.url !== "/internal/sessions/liveness") {
+          res.writeHead(404);
+          res.end();
+          return;
+        }
+        let body = "";
+        req.on("data", (chunk) => (body += chunk));
+        req.on("end", () => {
+          const { ids } = JSON.parse(body) as { ids: string[] };
+          const entries = ids.map((id) => [id, false] as const);
+          const payload = JSON.stringify(Object.fromEntries(entries));
+          res.writeHead(200, {
+            "content-type": "application/json",
+            "content-length": Buffer.byteLength(payload),
+          });
+          res.end(payload);
+        });
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const address = server.address();
+      if (address === null || typeof address === "string") throw new Error("expected a bound port");
+
+      const host = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: {
+          name: "confirmed-dead",
+          baseUrl: `http://127.0.0.1:${address.port}`,
+          token: "t",
+        },
+      });
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "p", cwd: "/x", hostId: host.json().id },
+      });
+      const { sessions } = await import("../../src/db/schema.js");
+      const [remoteRow] = app.db
+        .insert(sessions)
+        .values({ projectId: project.json().id, command: "bash" })
+        .returning()
+        .all();
+
+      await reconcileExitedSessions(app);
+
+      const res = await app.inject({ method: "GET", url: "/api/sessions" });
+      const rows = res.json() as Array<{ id: number; status: string }>;
+      // The row flip itself is unconditional on hostId — only the
+      // kill()/discardPendingSeed side effects above it are local-only.
+      expect(rows.find((s) => s.id === remoteRow.id)?.status).toBe("exited");
+
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
       await app.close();

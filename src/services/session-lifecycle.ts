@@ -371,7 +371,7 @@ export type CreateSessionResult =
   // ever trigger it — see the index's own doc comment in schema.ts.
   // Deliberately NOT resolved here: whether the conflicting row is a live
   // reuse candidate or a stale dead-process row requires the same
-  // `app.pty.isMasterAlive(...)` liveness check `findActiveStackSession`
+  // `app.pty.isMasterAliveState(...)` liveness check `findActiveStackSession`
   // already trusts (sessions.status records intent, not live process
   // state — AGENTS.md's session-model invariant), and that check belongs
   // in the caller that actually holds `withStackLock` (projects.ts's

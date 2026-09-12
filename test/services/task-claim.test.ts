@@ -423,7 +423,7 @@ describe("claimTask", () => {
         // No taskIdApplied — the agent is too old to know the field.
       }),
       liveStatus: vi.fn().mockResolvedValue({}),
-      isMasterAlive: vi.fn().mockResolvedValue({}),
+      liveness: vi.fn().mockResolvedValue({}),
       terminate: vi.fn().mockResolvedValue(undefined),
       getScrollback: vi.fn().mockResolvedValue(Buffer.alloc(0)),
       uploadImage: vi.fn().mockResolvedValue({ path: "/tmp/upload" }),
@@ -742,7 +742,7 @@ describe("claimTask", () => {
     const fakeBackend = {
       spawn: vi.fn().mockResolvedValue({ initialPromptApplied: true }),
       liveStatus: vi.fn().mockResolvedValue({}),
-      isMasterAlive: vi.fn().mockResolvedValue({}),
+      liveness: vi.fn().mockResolvedValue({}),
       terminate: vi.fn().mockResolvedValue(undefined),
       getScrollback: vi.fn().mockResolvedValue(Buffer.alloc(0)),
       uploadImage: vi.fn().mockResolvedValue({ path: "/remote/upload" }),
@@ -797,7 +797,7 @@ describe("claimTask", () => {
     const fakeBackend = {
       spawn: vi.fn().mockResolvedValue({ initialPromptApplied: true }),
       liveStatus: vi.fn().mockResolvedValue({}),
-      isMasterAlive: vi.fn().mockResolvedValue({}),
+      liveness: vi.fn().mockResolvedValue({}),
       terminate: vi.fn().mockResolvedValue(undefined),
       getScrollback: vi.fn().mockResolvedValue(Buffer.alloc(0)),
       uploadImage: vi.fn().mockResolvedValue({ path: "/remote/upload" }),
@@ -855,7 +855,7 @@ describe("claimTask", () => {
     const fakeBackend = {
       spawn: vi.fn().mockResolvedValue({ initialPromptApplied: true }),
       liveStatus: vi.fn().mockResolvedValue({}),
-      isMasterAlive: vi.fn().mockResolvedValue({}),
+      liveness: vi.fn().mockResolvedValue({}),
       terminate: vi.fn().mockResolvedValue(undefined),
       getScrollback: vi.fn().mockResolvedValue(Buffer.alloc(0)),
       uploadImage: vi.fn().mockResolvedValue({ path: "/remote/upload" }),
@@ -913,7 +913,7 @@ describe("claimTask", () => {
       // build is just `{ ok: true }`.
       spawn: vi.fn().mockResolvedValue({}),
       liveStatus: vi.fn().mockResolvedValue({}),
-      isMasterAlive: vi.fn().mockResolvedValue({}),
+      liveness: vi.fn().mockResolvedValue({}),
       terminate: vi.fn().mockResolvedValue(undefined),
       getScrollback: vi.fn().mockResolvedValue(Buffer.alloc(0)),
       uploadImage: vi.fn().mockResolvedValue({ path: "/remote/upload" }),
@@ -1105,7 +1105,7 @@ describe("retryTask (#483)", () => {
     const fakeBackend = {
       spawn: vi.fn().mockResolvedValue({ initialPromptApplied: true }),
       liveStatus: vi.fn().mockResolvedValue({}),
-      isMasterAlive: vi.fn().mockResolvedValue({}),
+      liveness: vi.fn().mockResolvedValue({}),
       terminate: vi.fn().mockResolvedValue(undefined),
       getScrollback: vi.fn().mockResolvedValue(Buffer.alloc(0)),
       uploadImage: vi.fn().mockResolvedValue({ path: "/remote/upload" }),
@@ -1166,7 +1166,7 @@ describe("retryTask (#483)", () => {
     const fakeBackend = {
       spawn: vi.fn().mockResolvedValue({ initialPromptApplied: true }),
       liveStatus: vi.fn().mockResolvedValue({}),
-      isMasterAlive: vi.fn().mockResolvedValue({}),
+      liveness: vi.fn().mockResolvedValue({}),
       terminate: vi.fn().mockResolvedValue(undefined),
       getScrollback: vi.fn().mockResolvedValue(Buffer.alloc(0)),
       uploadImage: vi.fn().mockResolvedValue({ path: "/remote/upload" }),

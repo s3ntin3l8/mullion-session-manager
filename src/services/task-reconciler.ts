@@ -2955,14 +2955,15 @@ export function resolveMaxAutoReturnRounds(project: {
  * path now flips the still-active session to "killed" — CAS'd — BEFORE
  * awaiting `terminate()`, not after, so it drops out of
  * `reconcileExitedSessions`'s own `status = "active"` candidate query for
- * the entire stop window rather than just after it; and
- * `isMasterAlive`/`isMasterAliveBatch` (session-process.ts) now treat
+ * the entire stop window rather than just after it; and the liveness
+ * primitives (`isMasterAliveState`/`isMasterAliveStateBatch`, formerly
+ * `isMasterAlive`/`isMasterAliveBatch` — session-process.ts) now treat
  * `deactivating` as alive, a second layer for any termination that doesn't
  * go through that kill-CAS. #988's follow-up closes the specific
  * SELECT-vs-kill-CAS staleness those two left open: `reconcileExitedSessions`'s
  * own SELECT can still cache an "active" snapshot of this exact session a
  * moment before the kill-CAS above lands, and if the terminating process
- * responds to SIGTERM fast enough, its later `isMasterAlive` check
+ * responds to SIGTERM fast enough, its later liveness check
  * legitimately observes "not alive" against that stale snapshot.
  * `session-reconciler.ts` now CASes its own flip-to-"exited" write on
  * `status = "active"` too, and skips the task-failure/worktree-removal block
@@ -2972,7 +2973,7 @@ export function resolveMaxAutoReturnRounds(project: {
  * closed — e.g. a `terminate()` call that itself throws (a remote host RPC
  * failure, not a slow-but-successful stop) reverts the kill-CAS back to
  * "active" so the standard reconciler can determine the truth on its own;
- * if that reconciler's own `isMasterAlive` then genuinely reports "not
+ * if that reconciler's own liveness check then genuinely reports "not
  * alive" for the same session, failing the task via session-death is the
  * correct outcome (the process really is gone), not a race this fix needs
  * to prevent — re-seeding already gave up by that point.

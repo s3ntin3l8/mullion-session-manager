@@ -37,9 +37,10 @@ const KILL_ESCALATION_MS = 2_000;
 
 /** Runs `git -C <cwd> status --porcelain=v2 --branch`, capturing stdout on
  * `'close'` (not `'exit'`) — the same stdout-delivery race documented in
- * pty-manager.ts's isMasterAlive and agent-detect.ts's probe(): `'exit'`
- * only guarantees the process ended, not that every stdout chunk has been
- * delivered. Resolves `null` on any non-zero exit, spawn error, or timeout
+ * session-process.ts's isMasterAliveStateBatch and agent-detect.ts's
+ * probe(): `'exit'` only guarantees the process ended, not that every
+ * stdout chunk has been delivered. Resolves `null` on any non-zero exit,
+ * spawn error, or timeout
  * — "git failed" and "not a git repo" are both just "nothing to show" here.
  *
  * Captures stderr (unlike the original version of this function, which

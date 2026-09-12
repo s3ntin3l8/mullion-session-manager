@@ -3,6 +3,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { projects, sessions, tasks } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { resolveBackend } from "./session-backend.js";
+import type { SessionLiveness } from "./session-process.js";
 import { HostRequestError } from "./remote-host-client.js";
 import { closeSessionBrowserBindings } from "./session-browsers.js";
 import { cleanupPreviewWorktree } from "./git-worktree.js";
@@ -16,11 +17,11 @@ import { recordTaskTransition } from "./task-state.js";
  * "active" forever, so the next getOrCreate() would silently bootstrap a
  * fresh program under the same id instead of surfacing that it had ended.
  *
- * Source of truth is each host's own isMasterAlive (the session's systemd
- * scope on whichever host owns it — local via app.pty, remote via
- * SessionBackend/RemoteHostClient), not anything tracked in this process's
- * memory — so this correctly catches a session that exited before this
- * process ever re-attached to it (e.g. right after a restart). Only
+ * Source of truth is each host's own liveness check (`SessionBackend.liveness`
+ * — the session's systemd scope on whichever host owns it, local via
+ * app.pty, remote via RemoteHostClient), not anything tracked in this
+ * process's memory — so this correctly catches a session that exited before
+ * this process ever re-attached to it (e.g. right after a restart). Only
  * "active" rows are checked: "killed" and previously-reconciled "exited"
  * rows are already-settled and skipped.
  *
@@ -51,9 +52,9 @@ export async function reconcileExitedSessions(app: FastifyInstance): Promise<voi
   await Promise.all(
     [...byHost.entries()].map(async ([hostId, rows]) => {
       const backend = resolveBackend(app, hostId);
-      let aliveById: Record<string, boolean>;
+      let livenessById: Record<string, SessionLiveness>;
       try {
-        aliveById = await backend.isMasterAlive(rows.map((r) => String(r.session.id)));
+        livenessById = await backend.liveness(rows.map((r) => String(r.session.id)));
       } catch (err) {
         // Still skip either way (no per-session data survives a thrown
         // bulk call, from either error) — but a HostRequestError means the
@@ -77,21 +78,23 @@ export async function reconcileExitedSessions(app: FastifyInstance): Promise<voi
       }
 
       for (const row of rows) {
-        const alive = aliveById[String(row.session.id)];
-        // A key this reachable host's response simply omitted (agent
-        // version skew, a partial/malformed body) is "unknown," not "not
-        // alive" — `alive === false` (an *explicit* answer) is the only
-        // thing allowed to flip a row to exited. Treating a missing key as
-        // false would hit the exact mass-exit landmine this PR exists to
-        // avoid, just one layer deeper than "host unreachable."
-        if (alive === undefined) {
+        const liveness = livenessById[String(row.session.id)];
+        // Issue #1265 — the destructive branch below requires an
+        // AFFIRMATIVE `=== "dead"`, never a fall-through default. "unknown"
+        // (agent version skew, a partial/malformed body, an unverifiable
+        // id) must never be treated as "not alive" — `liveness === "dead"`
+        // (an *explicit* answer) is the only thing allowed to flip a row to
+        // exited. Treating anything else as dead would hit the exact
+        // mass-exit landmine this function exists to avoid, just one layer
+        // deeper than "host unreachable" above.
+        if (liveness === "unknown") {
           app.log.warn(
             { hostId, sessionId: row.session.id },
             "session reconcile: host omitted liveness for this session, skipping",
           );
           continue;
         }
-        if (alive) continue;
+        if (liveness !== "dead") continue;
 
         // Stop tracking our now-orphaned attach-client, if any (only
         // meaningful for a local session — a remote agent's own PtyManager
@@ -99,7 +102,7 @@ export async function reconcileExitedSessions(app: FastifyInstance): Promise<voi
         // terminal.ts's preValidation stops offering to reattach to it.
         if (hostId === LOCAL_HOST_ID) {
           app.pty.kill(String(row.session.id));
-          // B9 — this loop already confirmed via isMasterAlive that the
+          // B9 — this loop already confirmed via the liveness check that the
           // process is genuinely gone (not just detached), so any seed
           // stashed for this id (the promote flow) can never be picked up
           // by a SessionStart hook now — discard it rather than leaking it
@@ -117,7 +120,7 @@ export async function reconcileExitedSessions(app: FastifyInstance): Promise<voi
         // future reconcile pass to retry. That protection is no longer
         // needed, and keeping it open a real orphan window: while the row
         // still reads "active", a `/ws/terminal` upgrade for this exact
-        // session — one this loop has already confirmed via isMasterAlive
+        // session — one this loop has already confirmed via the liveness check
         // is NOT alive — passes preValidation and the attach re-check (both
         // just read `active`), and bootstrapMaster() spins up a brand-new
         // systemd-run scope for it. This loop then finishes and flips the
@@ -138,13 +141,13 @@ export async function reconcileExitedSessions(app: FastifyInstance): Promise<voi
         //
         // CAS'd on `status = "active"` (issue #988's residual gap, on top
         // of #1001's fix) — this SELECT's own snapshot of "active" rows can
-        // go stale during the `isMasterAlive`/`isMasterAliveBatch` call
-        // above: task-reseed.ts's force re-seed (`reseedTaskIfSessionExited`)
+        // go stale during the `SessionBackend.liveness` call above:
+        // task-reseed.ts's force re-seed (`reseedTaskIfSessionExited`)
         // flips a still-active session to "killed" BEFORE it awaits its own
         // `terminate()`, precisely so a slow-to-stop scope stays out of this
         // sweep's reach for the whole stop window (#1001). But if that
         // terminate's target process responds to SIGTERM fast enough,
-        // `isMasterAlive` can legitimately observe "not alive" for a row
+        // the liveness check can legitimately observe "dead" for a row
         // this pass already fetched a moment earlier — i.e. the exact
         // moment BEFORE the kill-CAS landed. Writing here unconditionally
         // would silently overwrite that "killed" back to "exited" and, far
@@ -171,7 +174,7 @@ export async function reconcileExitedSessions(app: FastifyInstance): Promise<voi
         // Unconditional regardless of the CAS above — both are keyed to
         // this session id alone (a preview-worktree binding, a browser
         // binding), idempotent no-ops if already cleared, and correct to
-        // run either way since `isMasterAlive` already confirmed the real
+        // run either way since the liveness check already confirmed the real
         // OS-level process is gone: whether THIS pass or some other writer
         // owns the DB row's terminal transition doesn't change that.
         const cleaned = await cleanupPreviewWorktree(row.session.id, app.log);
