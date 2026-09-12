@@ -779,6 +779,11 @@ function DockColumn({
       const width = entries[0]?.contentRect.width;
       if (width === undefined) return;
       lastColumnWidthRef.current = width;
+      // Hermes review — `columnWidthPx` and `lastColumnWidthRef` mirror each
+      // other from exactly these two sites (here and `setColumnRef` below).
+      // Do not introduce a third writer (e.g. a future observer on a
+      // sibling element) without updating BOTH here — a write to one alone
+      // would let them silently drift apart.
       setColumnWidthPx(width);
       setSplitStacked(width < stackedThresholdRef.current);
     });
@@ -1657,6 +1662,16 @@ function DockColumn({
       // Checked unconditionally, before the running/not-running branch below
       // — starting a stream via `startAndSelect()` is just as much "making
       // this row the primary" as focusing an already-running one.
+      //
+      // Hermes review — technically redundant with the unconditional
+      // `pinnedKey === selectedKey` check further up this file (it would
+      // clear this same collision on the very next render regardless), but
+      // kept here too so the click that causes it also clears it in the
+      // SAME commit, with no one-render flash of a stale, colliding pin.
+      // That unconditional check is still the canonical cleanup, though —
+      // don't add a FOURTH copy of this same guard at some future call site
+      // that changes `selectedKey` outside `selectRow`/`startAndSelect`;
+      // let the unconditional check catch it instead.
       if (pinnedKey === rowKey) setPinnedKey(null);
       if (running) {
         setSelectedKey(rowKey);
