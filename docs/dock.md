@@ -270,7 +270,10 @@ per-service "Check for update" stays disabled and the stack header's ⋯ menu
 won't offer "Pull & restart stack" for that service — but this shape is
 vanishingly rare in practice (a `build:`-only service almost never also
 names an unqualified official Hub image), so it's accepted rather than
-worth the complexity of resolving unqualified refs against Hub.
+worth the complexity of resolving unqualified refs against Hub. (Splitting
+`buildOnly` into independent `buildable`/`pullable` facts, tracked as
+follow-up issue #1243, would let a service like this offer both actions
+correctly instead of trading one off against the other.)
 
 Every compose project discovered in a column also gets its own **stack
 header**, above that project's monitors, labelled with the compose project

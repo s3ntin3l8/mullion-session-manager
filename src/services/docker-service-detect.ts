@@ -383,10 +383,11 @@ async function probeBuildOnlyServices(
     //       single-segment OFFICIAL Hub image with no `pull_policy`
     //       override (e.g. `image: redis` next to a `build:` key) —
     //       vanishingly rare, intentionally not special-cased. A non-string
-    //       `image:` value falls through this sub-check to `false` (can't
-    //       inspect a shape it doesn't have), same "can't tell, assume
-    //       pullable" default the old predicate effectively used for any
-    //       defined-but-weird `image:` shape.
+    //       `image:` value narrows to `undefined` above, so `image !==
+    //       undefined` short-circuits this check straight to `false`
+    //       (can't inspect a shape it doesn't have) — same "can't tell,
+    //       assume pullable" default the old predicate effectively used for
+    //       any defined-but-weird `image:` shape.
     //
     // Kept as one `buildOnly` boolean, not split into separate
     // buildable/pullable flags — that split is out of scope here, filed as
