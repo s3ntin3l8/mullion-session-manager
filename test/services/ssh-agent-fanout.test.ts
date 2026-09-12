@@ -198,6 +198,51 @@ describe("startSshAgentFanout — connection lifecycle", () => {
     expect(getRemoteHostClientMock).toHaveBeenCalledTimes(3);
   });
 
+  it("re-logs a sustained ws-error failure streak periodically instead of only ever logging its first failure (regression: #1247)", () => {
+    listHostsMock.mockReturnValue([fakeHost("agent-a")]);
+    const sockets = Array.from({ length: 6 }, () => new MockSocket());
+    let i = 0;
+    openSshAgentStreamMock.mockImplementation(() => sockets[i++]);
+    const app = fakeApp(1);
+
+    startSshAgentFanout(app).reconcile();
+
+    // Five consecutive failures, backing off between each — a real outage
+    // that never resolves, not a single blip. Advances by RECONNECT_DELAYS_MS's
+    // own steps exactly (mirrors the "established backoff shape" test above)
+    // rather than a flat overshoot: overshooting past CONNECT_TIMEOUT_MS
+    // would let the freshly-reconnected socket's own connect-timeout timer
+    // fire within the same advance, terminating it and cascading into extra,
+    // untested reconnects.
+    const backoffStepsMs = [1_000, 2_000, 5_000, 10_000, 30_000];
+    for (let n = 0; n < 5; n++) {
+      sockets[n].emit("error", new Error("boom"));
+      sockets[n].emit("close");
+      vi.advanceTimersByTime(backoffStepsMs[n]);
+    }
+
+    const wsErrorCalls = (app.log.warn as ReturnType<typeof vi.fn>).mock.calls.filter(
+      ([, msg]) => msg === "[ssh-agent-fanout] ws error",
+    );
+    // FAILURE_RELOG_INTERVAL is 5 — logged on the 1st and 5th failure, not
+    // just the 1st, and not on every single one of the 5.
+    expect(wsErrorCalls).toHaveLength(2);
+    expect(wsErrorCalls[0][0]).toMatchObject({ consecutiveFailureCount: 1 });
+    expect(wsErrorCalls[1][0]).toMatchObject({ consecutiveFailureCount: 5 });
+
+    // A successful open resets the streak — the next failure logs
+    // immediately again rather than waiting out the rest of an interval
+    // from the PREVIOUS, now-resolved streak.
+    sockets[5].open();
+    sockets[5].emit("error", new Error("boom-again"));
+
+    const wsErrorCallsAfterReset = (app.log.warn as ReturnType<typeof vi.fn>).mock.calls.filter(
+      ([, msg]) => msg === "[ssh-agent-fanout] ws error",
+    );
+    expect(wsErrorCallsAfterReset).toHaveLength(3);
+    expect(wsErrorCallsAfterReset[2][0]).toMatchObject({ consecutiveFailureCount: 1 });
+  });
+
   it("fetches getRemoteHostClient fresh on every reconnect attempt rather than caching the client", () => {
     listHostsMock.mockReturnValue([fakeHost("agent-a")]);
     const first = new MockSocket();
