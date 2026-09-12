@@ -1442,9 +1442,10 @@ export async function projectsRoute(app: FastifyInstance) {
     // <composeProject>` session could get created — Hermes review caught
     // that `POST /api/sessions/:id/promote` (sessions.ts) creates a
     // replacement session carrying the source's own `name` forward with no
-    // kind/name guard at all, entirely outside this lock; tracked
-    // separately as issue #1233 rather than fixed here, since it's a
-    // different route with its own review surface.
+    // kind/name guard at all, entirely outside this lock; fixed as issue
+    // #1233 by rejecting promote outright for any `kind: "dock"` source,
+    // rather than folding it into this lock (different route, its own
+    // review surface).
     //
     // The lock is held across the WHOLE call below, including
     // createSessionRecord's actual process spawn (systemd-run) — not just
