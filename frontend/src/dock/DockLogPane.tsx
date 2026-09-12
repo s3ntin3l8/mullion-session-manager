@@ -19,6 +19,7 @@ export function DockLogPane({
   sessionId,
   minWidthPx,
   minHeightPx,
+  flex,
 }: {
   sessionId: number | null;
   // Both required, not optional the way DockMonitor's old minWidthPx/
@@ -28,9 +29,28 @@ export function DockLogPane({
   // dockMonitorMinHeightPx doc comments carry the full derivations).
   minWidthPx: number;
   minHeightPx: number;
+  // Issue #1244 — inline flex-basis override for the PRIMARY pane, set only
+  // while a second (pinned) pane renders alongside it, so the draggable
+  // divider between them can give each pane its own share of the two-pane
+  // area. `undefined` otherwise, falling back to `.dock-log-pane`'s own
+  // `flex: 1 1 0` CSS default (the pinned pane never gets this prop at all —
+  // it always uses that same default to absorb whatever the primary
+  // doesn't take). Always a PIXEL value (`0 0 ${px}px`), deliberately never
+  // a percentage: a percentage flex-basis resolves against `.dock-split`'s
+  // full width — rail and both dividers included — not just the two-pane
+  // area, so `50%` would size this pane against the wrong denominator and
+  // could push the pinned sibling below its own floor even at a legal ratio.
+  flex?: string;
 }) {
   return (
-    <div className="dock-log-pane" style={{ minWidth: minWidthPx, minHeight: minHeightPx }}>
+    <div
+      className="dock-log-pane"
+      style={{
+        minWidth: minWidthPx,
+        minHeight: minHeightPx,
+        ...(flex !== undefined ? { flex } : {}),
+      }}
+    >
       {sessionId === null ? (
         <div className="dock-log-pane-hint">Select a row to view its log</div>
       ) : (

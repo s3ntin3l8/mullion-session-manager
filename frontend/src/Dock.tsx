@@ -115,16 +115,20 @@ const RAIL_MIN_WIDTH = 216;
 // stacked-layout threshold below needs this same number in JS to reproduce
 // what the CSS actually costs.
 const RAIL_DIVIDER_WIDTH_PX = 6;
-// `.dock-log-pane + .dock-log-pane`'s own fixed CSS `margin-left` (dock.css)
-// — the gap between the primary and pinned panes when both render. Issue
-// #1239's `twoPaneThresholdPx` below needs this same number for the same
-// reason `RAIL_DIVIDER_WIDTH_PX` does: without it, a column sized exactly at
+// `.dock-pane-divider`'s own fixed CSS width (dock.css) — issue #1244's
+// draggable divider between the primary and pinned log panes, which
+// replaced #1239's fixed `.dock-log-pane + .dock-log-pane` margin rule (an
+// adjacent-sibling selector that stopped matching once a real divider
+// element sits between the two panes). `twoPaneThresholdPx` below needs
+// this same number for the same reason `RAIL_DIVIDER_WIDTH_PX` does:
+// without it, a column sized exactly at
 // `railWidth + RAIL_DIVIDER_WIDTH_PX + 2 * logPaneMinWidth` satisfies the
-// threshold in JS but is still `DOCK_LOG_PANE_GAP_PX` too narrow to actually
-// hold both panes side by side without one of them clipping below its own
-// `min-width` floor — mullion-reviewer caught this on the first version of
-// this threshold, which omitted the gap entirely.
-const DOCK_LOG_PANE_GAP_PX = 8;
+// threshold in JS but is still `PANE_DIVIDER_WIDTH_PX` too narrow to
+// actually hold both panes side by side without one of them clipping below
+// its own `min-width` floor — mullion-reviewer caught this on the first
+// version of this threshold (then measuring the CSS margin, not a divider),
+// which omitted the gap entirely.
+const PANE_DIVIDER_WIDTH_PX = 6;
 // How long `pendingSelectKeyRef` (DockColumn) exempts a just-requested row
 // from the reconciliation's "no matching row, fall back" rule before giving
 // up on it — generous relative to a normal local createSession round trip,
@@ -132,6 +136,22 @@ const DOCK_LOG_PANE_GAP_PX = 8;
 // timeout on this path) doesn't wedge the log pane on its empty hint
 // indefinitely.
 const PENDING_SELECT_TIMEOUT_MS = 15_000;
+
+// Issue #1244 — reads the shared pane-split ratio for a given workspace out
+// of `STORAGE_KEYS.dockPaneSplitRatio` (`Record<string, number>` keyed by
+// `String(workspaceId)`), falling back to an even 50/50 split when there's
+// no active workspace (`workspaceId === null`) OR no stored/valid entry for
+// this one yet. A stored value outside `(0, 1)` (corrupt/hand-edited
+// localStorage) collapses to the same 0.5 default rather than propagating a
+// nonsensical ratio into the render-time clamp below.
+function readPaneSplitRatio(workspaceId: number | null): number {
+  if (workspaceId === null) return 0.5;
+  const all = readJSON<Record<string, number>>(STORAGE_KEYS.dockPaneSplitRatio, {});
+  const stored = all[String(workspaceId)];
+  return typeof stored === "number" && Number.isFinite(stored) && stored > 0 && stored < 1
+    ? stored
+    : 0.5;
+}
 
 // Issue #1238 — shape of `STORAGE_KEYS.dockSelectedRows`'s stored value,
 // keyed by `String(projectId)`. `pinned` is carried in the type even though
@@ -222,6 +242,48 @@ export function Dock({
     const n = readNumber(STORAGE_KEYS.dockRailWidth, NaN);
     return Number.isFinite(n) && n > 0 ? clamp(n, RAIL_MIN_WIDTH, Infinity) : DEFAULT_RAIL_WIDTH;
   });
+
+  // Issue #1244 — the shared pane-split ratio lives here (one value for
+  // every column in the workspace, mirroring `railWidth` above), keyed by
+  // `activeWorkspaceId` rather than `projectId`: a workspace can hold
+  // several projects, and this ratio is meant to apply uniformly across
+  // that workspace's columns, not per-project like `dockSelectedRows`. Not
+  // read via `WorkspaceSwitcher.tsx`-style prop threading — `Dock` doesn't
+  // receive a workspace id as a prop today, but it already subscribes to
+  // other store fields via selectors (`projects`/`sessions` above), so this
+  // just adds one more.
+  const activeWorkspaceId = useDashboardStore((s) => s.activeWorkspaceId);
+  const [paneSplitRatio, setPaneSplitRatio] = useState<number>(() =>
+    readPaneSplitRatio(activeWorkspaceId),
+  );
+  // Switching workspaces while the dock stays mounted must re-read the
+  // ratio from storage for the NEW workspace, not carry the previous
+  // workspace's in-memory value over — the lazy initializer above only ever
+  // runs once, at Dock's own first mount, so a later workspace switch needs
+  // its own read. Deliberately does NOT also write here (see
+  // `persistPaneSplitRatio` below, called only from the drag's own
+  // `onCommit`): an effect keyed on `[activeWorkspaceId, paneSplitRatio]`
+  // that wrote unconditionally would, on the very commit a workspace switch
+  // lands, still see THIS render's stale (previous-workspace) `paneSplitRatio`
+  // value — since this read effect's own `setPaneSplitRatio` call only takes
+  // effect on a LATER render — and silently overwrite the new workspace's
+  // stored entry with the old workspace's ratio.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setPaneSplitRatio(readPaneSplitRatio(activeWorkspaceId));
+  }, [activeWorkspaceId]);
+  // Called only from the pane divider's own `onCommit` (DockColumn, per
+  // column) — never from a passive effect on `paneSplitRatio` itself, for
+  // the same reason the read above isn't paired with a symmetric write
+  // effect. `useDragResize`'s `onCommit` is read through a ref refreshed on
+  // every render (see that hook's own doc comment), so by the time a drag
+  // actually ends this closure always sees the CURRENT `activeWorkspaceId`,
+  // not a stale one from whenever the drag started.
+  const persistPaneSplitRatio = (ratio: number) => {
+    if (activeWorkspaceId === null) return;
+    const all = readJSON<Record<string, number>>(STORAGE_KEYS.dockPaneSplitRatio, {});
+    writeJSON(STORAGE_KEYS.dockPaneSplitRatio, { ...all, [String(activeWorkspaceId)]: ratio });
+  };
 
   const dockRef = useRef<HTMLDivElement>(null);
 
@@ -457,6 +519,9 @@ export function Dock({
                 width={widths[id]}
                 railWidth={railWidth}
                 onRailDividerMouseDown={onRailDividerMouseDown}
+                paneSplitRatio={paneSplitRatio}
+                onPaneSplitRatioChange={setPaneSplitRatio}
+                onPaneSplitRatioCommit={persistPaneSplitRatio}
                 onOpenGitHub={onOpenGitHub}
                 onOpenBrowser={onOpenBrowser}
                 onRemove={manualOnly(id) ? () => removeColumn(id) : undefined}
@@ -474,6 +539,9 @@ function DockColumn({
   width,
   railWidth,
   onRailDividerMouseDown,
+  paneSplitRatio,
+  onPaneSplitRatioChange,
+  onPaneSplitRatioCommit,
   onOpenGitHub,
   onOpenBrowser,
   onRemove,
@@ -484,6 +552,21 @@ function DockColumn({
   // `railWidth` state comment for why this isn't per-column.
   railWidth: number;
   onRailDividerMouseDown: (e: ReactMouseEvent, columnEl: HTMLElement | null) => void;
+  // Issue #1244 — the STORED, unclamped ratio, shared across every column
+  // in the workspace (Dock's own state, see its doc comment). Each
+  // DockColumn clamps this against its OWN measured width at render time
+  // (`effectiveRatio` below) rather than trusting it directly — see that
+  // derivation's own comment for why the clamp has to live here, per
+  // column, even though the value itself doesn't.
+  paneSplitRatio: number;
+  // Fired on every `mousemove` during a pane-divider drag — updates Dock's
+  // shared `paneSplitRatio` state so every column re-renders with (and
+  // re-clamps) the new value, mirroring `onRailDividerMouseDown`'s "one
+  // shared driver" shape.
+  onPaneSplitRatioChange: (ratio: number) => void;
+  // Fired once on drag end — Dock's own closure decides whether/where to
+  // persist (skipped while `activeWorkspaceId` is null).
+  onPaneSplitRatioCommit: (ratio: number) => void;
   onOpenGitHub: (projectId: number) => void;
   onOpenBrowser: (projectId: number) => void;
   // Present only for a manually-pinned column not also derived from the
@@ -721,18 +804,19 @@ function DockColumn({
   const stackedThresholdPx = railWidth + RAIL_DIVIDER_WIDTH_PX + logPaneMinWidth;
 
   // Issue #1239 — the second (pinned) pane needs room for the rail PLUS
-  // TWO log panes PLUS the CSS gap between them: same terms as
-  // `stackedThresholdPx` above, `logPaneMinWidth` counted twice (no drag
-  // divider between the two panes in this PR — a fixed 50/50 split, see
-  // .dock-split's own CSS comment) plus `DOCK_LOG_PANE_GAP_PX`, the ONE
-  // extra gap `.dock-log-pane + .dock-log-pane`'s own CSS margin actually
-  // costs between exactly two panes. mullion-reviewer caught an earlier
-  // version of this that omitted the gap term entirely: without it, a
+  // TWO log panes PLUS the divider between them: same terms as
+  // `stackedThresholdPx` above, `logPaneMinWidth` counted twice, plus
+  // `PANE_DIVIDER_WIDTH_PX` (issue #1244's draggable divider between the two
+  // panes — see that constant's own comment), the ONE extra divider this
+  // layout costs between exactly two panes. mullion-reviewer caught an
+  // earlier version of this that omitted that term entirely: without it, a
   // column sized exactly at the threshold satisfies this comparison but is
-  // still 8px too narrow to hold both panes without one clipping below its
-  // own `min-width` floor.
+  // still `PANE_DIVIDER_WIDTH_PX` too narrow to hold both panes without one
+  // clipping below its own `min-width` floor. Independent of the SHARED
+  // split ratio itself (#1244) — this only gates whether the second pane
+  // renders at all, not how the two panes divide whatever room they get.
   const twoPaneThresholdPx =
-    railWidth + RAIL_DIVIDER_WIDTH_PX + 2 * logPaneMinWidth + DOCK_LOG_PANE_GAP_PX;
+    railWidth + RAIL_DIVIDER_WIDTH_PX + 2 * logPaneMinWidth + PANE_DIVIDER_WIDTH_PX;
 
   // A ResizeObserver (not a CSS container query) drives the stacked flip —
   // this dock's overflow-x escape hatch for a too-narrow rail/column
@@ -820,6 +904,96 @@ function DockColumn({
   // rendering, keep the state" pattern elsewhere in this file).
   const canShowSecondPane =
     !splitStacked && columnWidthPx !== null && columnWidthPx >= twoPaneThresholdPx;
+
+  // ---- Pane-divider resize (issue #1244) ----
+  // The width actually available to the two log panes plus the divider
+  // between them — this column's own measured width, minus the rail and
+  // BOTH dividers (rail-to-primary and primary-to-pinned). `columnWidthPx`
+  // is `null` until this column's own ResizeObserver (above) fires its
+  // first callback, hence the `?? 0` floor rather than leaving this
+  // `null`-typed — nothing below renders on that first commit anyway
+  // (`canShowSecondPane` is false whenever `columnWidthPx` is null), and
+  // `Math.max(0, …)` keeps a not-yet-measured or genuinely-too-narrow
+  // column from going negative.
+  const paneAreaWidth = Math.max(
+    0,
+    (columnWidthPx ?? 0) - railWidth - RAIL_DIVIDER_WIDTH_PX - PANE_DIVIDER_WIDTH_PX,
+  );
+  // Render-time clamp — the part #1244's own issue text doesn't cover: ONE
+  // ratio is shared by every column in the workspace (Dock's own
+  // `paneSplitRatio` state), but a ratio that's legal in a wide column can
+  // push a pane below `logPaneMinWidth` in a narrower sibling, with no drag
+  // involved at all (a resize, or simply two projects' columns differing in
+  // width). Each column clamps the SHARED value against its OWN measured
+  // width here, at render — never in a `useState` lazy initializer, which
+  // would run before `columnWidthPx` is ever measured (same mount-time
+  // re-clamp hazard `height`'s own effect above, and UnifiedBoard.tsx's
+  // drawer width, both already guard against for a persisted value).
+  // Deliberately does NOT feed this clamped value back into `paneSplitRatio`
+  // itself: the STORED ratio stays whatever the user actually chose, so
+  // widening this column (or looking at a wider sibling column showing the
+  // same workspace) honors it again with no re-drag — the same "degrade the
+  // rendering, keep the state, reflow when room returns" posture
+  // `holdVanishedDockerControls` and `pinnedKey` (#1239) above already use.
+  // Capped at 0.5 (not left to exceed it): once `paneAreaWidth` drops below
+  // `2 * logPaneMinWidth`, neither pane can actually fit at its floor
+  // side by side at all — `Math.min(Math.max(r, floor), 1 - floor)` would
+  // otherwise INVERT (floor > 1 - floor) and return the LOWER bound,
+  // silently defeating the very floor it's supposed to enforce. Unreachable
+  // through the divider today (it only renders once `canShowSecondPane` is
+  // true, which already requires room for both panes plus their floors —
+  // see `twoPaneThresholdPx`), but `effectivePanePx` below is computed
+  // unconditionally on every render (the hook itself must be called
+  // unconditionally, per the rules of hooks), so this stays a defined,
+  // non-inverting value even on a render where the divider itself doesn't
+  // show.
+  const paneFloorRatio = paneAreaWidth > 0 ? Math.min(0.5, logPaneMinWidth / paneAreaWidth) : 0.5;
+  const effectiveRatio = Math.min(Math.max(paneSplitRatio, paneFloorRatio), 1 - paneFloorRatio);
+  // Rounded once here and reused for BOTH the hook's own `value` (below) and
+  // the rendered `flex-basis` (JSX below) — `effectiveRatio * paneAreaWidth`
+  // on its own is only rarely a whole number (division then remultiplication
+  // accumulates floating-point slop, e.g. 444.00000000000006), which would
+  // otherwise make the drag's own starting pixel differ from the previous
+  // render's actual `flex-basis` by a sub-pixel sliver, and would make an
+  // exact CSS pixel value impossible to assert on. A single shared,
+  // rounded source of truth keeps the two exactly in sync.
+  const effectivePanePx = Math.round(effectiveRatio * paneAreaWidth);
+
+  // `useDragResize` (see that hook's own doc comment) applies here the same
+  // way it does to the rail divider: "clamp one value, let the sibling's
+  // `flex: 1 1 0` absorb the remainder." Unlike the rail divider, this hook
+  // call lives HERE, per column, not once in Dock shared via a
+  // `draggingColumnElRef` indirection — `railWidth` is a plain px value with
+  // no per-column meaning, so one shared hook call and a ref telling
+  // `getMax` which column to measure is enough; this divider's `value` is
+  // derived from a RATIO converted through THIS column's own paneAreaWidth,
+  // and unlike `getMax` (called lazily, only at drag start), the hook's
+  // `value` prop is read directly off of whatever render most recently
+  // constructed its `onMouseDown` closure — so it has to already be correct
+  // for a specific column before any drag starts, which a shared,
+  // ref-indirected call site can't guarantee (the ref only reflects
+  // whichever column was dragged LAST, not the one about to be). Keeping the
+  // hook call per column sidesteps that entirely: `paneAreaWidth` above is
+  // already this column's own live measurement.
+  //
+  // `value`/`onChange`/`onCommit` all convert through `effectiveRatio`
+  // (the CLAMPED ratio), not the raw shared `paneSplitRatio` — starting a
+  // drag from the clamped, actually-rendered position, not a value this
+  // column can't currently honor, so the divider never jumps the instant a
+  // drag begins on a column narrower than the one that last set the ratio.
+  const { onMouseDown: onPaneDividerMouseDown } = useDragResize({
+    axis: "x",
+    min: logPaneMinWidth,
+    getMax: () => paneAreaWidth - logPaneMinWidth,
+    value: effectivePanePx,
+    onChange: (px) => {
+      if (paneAreaWidth > 0) onPaneSplitRatioChange(px / paneAreaWidth);
+    },
+    onCommit: (px) => {
+      if (paneAreaWidth > 0) onPaneSplitRatioCommit(px / paneAreaWidth);
+    },
+    cursor: "col-resize",
+  });
 
   const { githubStatus, prsStatus } = useDockGithubStatus(projectId, prsRefreshTrigger);
 
@@ -1997,6 +2171,8 @@ function DockColumn({
         {!splitStacked && (
           <div
             className="dock-rail-divider"
+            role="separator"
+            aria-orientation="vertical"
             onMouseDown={(e) => onRailDividerMouseDown(e, columnRef.current)}
           />
         )}
@@ -2005,7 +2181,34 @@ function DockColumn({
           sessionId={selectedSession?.id ?? null}
           minWidthPx={logPaneMinWidth}
           minHeightPx={logPaneMinHeight}
+          // Only overridden while the second pane actually renders (same
+          // condition as that pane and its divider, below) — otherwise this
+          // falls back to `.dock-log-pane`'s own `flex: 1 1 0` CSS default,
+          // unchanged from before #1244. A pixel value, not a percentage —
+          // see DockLogPane's own `flex` prop doc comment for why a
+          // percentage would resolve against the wrong denominator.
+          flex={pinnedKey !== null && canShowSecondPane ? `0 0 ${effectivePanePx}px` : undefined}
         />
+        {
+          // Issue #1244 — the draggable divider between the two panes,
+          // rendered under the exact same condition as the second pane
+          // itself (immediately below): no second pane, nothing to divide.
+          // Replaces #1239's fixed `.dock-log-pane + .dock-log-pane` CSS
+          // margin — see PANE_DIVIDER_WIDTH_PX's own comment for why that
+          // adjacent-sibling rule had to go once a real element sits
+          // between the two panes. No `tabIndex` — a non-focusable
+          // `role="separator"` is valid ARIA; keyboard-driven resize is
+          // filed separately as issue #1264, deliberately out of scope here.
+        }
+        {pinnedKey !== null && canShowSecondPane && (
+          <div
+            className="dock-pane-divider"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize log panes"
+            onMouseDown={onPaneDividerMouseDown}
+          />
+        )}
         {
           // Issue #1239 — the pinned second pane. Rendered only with room
           // for it (`canShowSecondPane`, gated on the SAME measured column
@@ -2015,9 +2218,10 @@ function DockColumn({
           // vertically-stacked pair (out of scope for this PR) or a
           // squeezed-below-floor pane; `pinnedKey` itself is untouched by
           // that, so widening the column back past the threshold restores
-          // it with no re-click. No drag divider between the two panes
-          // (fixed 50/50 split, `.dock-split`'s own CSS) — a follow-up,
-          // issue #1244.
+          // it with no re-click. Keeps its own `flex: 1 1 0` (no override
+          // here) and absorbs whatever the primary pane's `effectiveRatio`
+          // above doesn't take — issue #1244's draggable divider only ever
+          // overrides the PRIMARY pane's share.
         }
         {pinnedKey !== null && canShowSecondPane && (
           <DockLogPane

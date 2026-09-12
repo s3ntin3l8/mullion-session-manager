@@ -11,7 +11,7 @@
 // state, so a full render through a fake in-memory backend is the simplest
 // way to exercise the real wiring.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, act } from "@testing-library/react";
+import { render, screen, waitFor, act, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Dock } from "../Dock.js";
 import { useDashboardStore } from "../store/index.js";
@@ -419,13 +419,14 @@ describe("Dock", () => {
     // `twoPaneThresholdPx` (Dock.tsx) are: DEFAULT_RAIL_WIDTH 280 +
     // RAIL_DIVIDER_WIDTH_PX 6 + `dockMonitorMinWidthPx(14, 4)`, pinned at
     // 364 by dockHelpers.test.ts, plus (for two panes only)
-    // DOCK_LOG_PANE_GAP_PX 8 — the actual `.dock-log-pane + .dock-log-pane`
-    // CSS gap between the two panes, which an earlier version of this
-    // threshold omitted (mullion-reviewer). One pane's floor:
-    // 280 + 6 + 364 = 650. Two panes' floor: 280 + 6 + 364*2 + 8 = 1022.
+    // PANE_DIVIDER_WIDTH_PX 6 — issue #1244's draggable divider between the
+    // two panes, which replaced the earlier fixed `.dock-log-pane +
+    // .dock-log-pane` CSS margin an earlier version of this threshold
+    // omitted entirely (mullion-reviewer). One pane's floor:
+    // 280 + 6 + 364 = 650. Two panes' floor: 280 + 6 + 364*2 + 6 = 1020.
     const STACKED_WIDTH = 500; // below 650 — rail flips to stacked mode too
-    const ONE_PANE_WIDTH = 800; // between 650 and 1022 — one pane fits
-    const TWO_PANE_WIDTH = 1100; // above 1022 — both panes fit
+    const ONE_PANE_WIDTH = 800; // between 650 and 1020 — one pane fits
+    const TWO_PANE_WIDTH = 1100; // above 1020 — both panes fit
 
     it("pins a non-selected row as a second log pane, and unpins it on a second click", async () => {
       const sessions = twoRunningControls();
@@ -663,6 +664,273 @@ describe("Dock", () => {
       await waitFor(() => {
         const stored = JSON.parse(localStorage.getItem("crs.dockSelectedRows") ?? "{}");
         expect(stored["1"].pinned).toBeNull();
+      });
+    });
+
+    // Issue #1244 — the draggable divider between the two panes. Extends
+    // this suite (rather than a new sibling `describe`) to reuse its own
+    // `resizeTo()`/`resizeCallbacks` ResizeObserver fake and threshold
+    // constants above — the only other drag idiom in the repo is
+    // useDragResize.test.ts's own hand-rolled `window.dispatchEvent(new
+    // MouseEvent(...))` + fake mousedown pattern, reused here at component
+    // level for what's the first such test in this file.
+    //
+    // Numbers below are all derived from the SAME defaults `logPaneMinWidth`
+    // (364, dockHelpers.test.ts) and `railWidth`/`RAIL_DIVIDER_WIDTH_PX`/
+    // `PANE_DIVIDER_WIDTH_PX` (Dock.tsx: 280 + 6 + 6 = 292) that
+    // `ONE_PANE_WIDTH`/`TWO_PANE_WIDTH` above are: at TWO_PANE_WIDTH (1100),
+    // `paneAreaWidth` (the two panes + their divider) is 1100 - 292 = 808,
+    // so the legal ratio band is [364/808, 1 - 364/808] ≈ [0.4505, 0.5495].
+    describe("issue #1244 — draggable pane divider", () => {
+      function primaryPaneEl(): HTMLElement {
+        return document.querySelectorAll(".dock-log-pane")[0] as HTMLElement;
+      }
+
+      function dividerEl(): HTMLElement {
+        return document.querySelector(".dock-pane-divider") as HTMLElement;
+      }
+
+      it("drags the primary pane's flex-basis and persists a ratio keyed by the active workspace id", async () => {
+        const sessions = twoRunningControls();
+        useDashboardStore.setState({
+          projects: [PROJECT],
+          sessions,
+          sessionsLoaded: true,
+          activeWorkspaceId: 5,
+        });
+        const user = userEvent.setup();
+
+        render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+        resizeTo(TWO_PANE_WIDTH);
+        await screen.findByTestId("terminal-pane");
+        await user.click(screen.getByText("pin"));
+        expect(await screen.findAllByTestId("terminal-pane")).toHaveLength(2);
+
+        // Nothing stored yet for workspace 5 — starts at the 0.5 default:
+        // 0.5 * 808 = 404px.
+        expect(primaryPaneEl().style.flex).toBe("0 0 404px");
+
+        fireEvent.mouseDown(dividerEl(), { clientX: 0 });
+        act(() => {
+          window.dispatchEvent(new MouseEvent("mousemove", { clientX: 20 }));
+        });
+        // 404 + 20 = 424px, comfortably inside the legal band (max 444).
+        expect(primaryPaneEl().style.flex).toBe("0 0 424px");
+
+        act(() => {
+          window.dispatchEvent(new MouseEvent("mouseup"));
+        });
+
+        const stored = JSON.parse(localStorage.getItem("crs.dockPaneSplitRatio") ?? "{}");
+        expect(stored["5"]).toBeCloseTo(424 / 808);
+      });
+
+      it("clamps the drag so both panes stay at or above logPaneMinWidth", async () => {
+        const sessions = twoRunningControls();
+        useDashboardStore.setState({
+          projects: [PROJECT],
+          sessions,
+          sessionsLoaded: true,
+          activeWorkspaceId: 5,
+        });
+        const user = userEvent.setup();
+
+        render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+        resizeTo(TWO_PANE_WIDTH);
+        await screen.findByTestId("terminal-pane");
+        await user.click(screen.getByText("pin"));
+        expect(await screen.findAllByTestId("terminal-pane")).toHaveLength(2);
+
+        // Far past the LEFT edge — the primary pane's own floor wins
+        // (logPaneMinWidth, 364), not a negative/zero width.
+        fireEvent.mouseDown(dividerEl(), { clientX: 0 });
+        act(() => {
+          window.dispatchEvent(new MouseEvent("mousemove", { clientX: -100_000 }));
+        });
+        expect(primaryPaneEl().style.flex).toBe("0 0 364px");
+        act(() => {
+          window.dispatchEvent(new MouseEvent("mouseup"));
+        });
+
+        // Far past the RIGHT edge — the PINNED pane's floor wins instead:
+        // paneAreaWidth (808) - logPaneMinWidth (364) = 444.
+        fireEvent.mouseDown(dividerEl(), { clientX: 0 });
+        act(() => {
+          window.dispatchEvent(new MouseEvent("mousemove", { clientX: 100_000 }));
+        });
+        expect(primaryPaneEl().style.flex).toBe("0 0 444px");
+        act(() => {
+          window.dispatchEvent(new MouseEvent("mouseup"));
+        });
+      });
+
+      it("clamps an out-of-range STORED ratio at render time without touching the stored value, and restores it once a wider column has room", async () => {
+        const sessions = twoRunningControls();
+        // 0.75 is legal in a WIDE column but pushes the pinned pane below
+        // its floor at TWO_PANE_WIDTH (legal band there tops out at
+        // ≈0.5495) — seeded directly, no drag involved, the exact gap the
+        // issue's own scope statement misses.
+        localStorage.setItem("crs.dockPaneSplitRatio", JSON.stringify({ "9": 0.75 }));
+        useDashboardStore.setState({
+          projects: [PROJECT],
+          sessions,
+          sessionsLoaded: true,
+          activeWorkspaceId: 9,
+        });
+
+        render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+        resizeTo(TWO_PANE_WIDTH);
+        await screen.findByTestId("terminal-pane");
+        const user = userEvent.setup();
+        await user.click(screen.getByText("pin"));
+        expect(await screen.findAllByTestId("terminal-pane")).toHaveLength(2);
+
+        // RENDERED basis is clamped to the column's own ceiling (808 - 364
+        // = 444)...
+        expect(primaryPaneEl().style.flex).toBe("0 0 444px");
+        // ...while the STORED value is untouched — no drag happened, so
+        // nothing should have rewritten it.
+        expect(JSON.parse(localStorage.getItem("crs.dockPaneSplitRatio") ?? "{}")["9"]).toBe(0.75);
+
+        // Widen well past the point 0.75 becomes legal again (paneAreaWidth
+        // >= 364 / 0.25 = 1456, i.e. colWidth >= 1748): the user's actual
+        // chosen ratio is honored again with no re-drag. 1800 -> paneAreaWidth
+        // 1508 -> 0.75 * 1508 = 1131.
+        resizeTo(1800);
+        await waitFor(() => {
+          expect(primaryPaneEl().style.flex).toBe("0 0 1131px");
+        });
+        expect(JSON.parse(localStorage.getItem("crs.dockPaneSplitRatio") ?? "{}")["9"]).toBe(0.75);
+      });
+
+      it("shares the ratio across columns in one workspace, each clamping independently against its own width", async () => {
+        const PROJECT2 = makeProject({ id: 2, name: "second", cwd: "/home/x/second" });
+        dockByProject[1] = [
+          { id: "dev", title: "Dev server", command: "npm run dev" },
+          { id: "worker", title: "Worker", command: "npm run worker" },
+        ];
+        dockByProject[2] = [
+          { id: "dev", title: "Dev server", command: "npm run dev" },
+          { id: "worker", title: "Worker", command: "npm run worker" },
+        ];
+        const sessions = [
+          makeSession({
+            id: 10,
+            projectId: 1,
+            command: "npm run dev",
+            kind: "dock",
+            status: "active",
+          }),
+          makeSession({
+            id: 20,
+            projectId: 1,
+            command: "npm run worker",
+            kind: "dock",
+            status: "active",
+          }),
+          makeSession({
+            id: 30,
+            projectId: 2,
+            command: "npm run dev",
+            kind: "dock",
+            status: "active",
+          }),
+          makeSession({
+            id: 40,
+            projectId: 2,
+            command: "npm run worker",
+            kind: "dock",
+            status: "active",
+          }),
+        ];
+        localStorage.setItem("crs.dockPaneSplitRatio", JSON.stringify({ "3": 0.6 }));
+        useDashboardStore.setState({
+          projects: [PROJECT, PROJECT2],
+          sessions,
+          sessionsLoaded: true,
+          activeWorkspaceId: 3,
+        });
+        const user = userEvent.setup();
+
+        render(
+          <Dock workspaceProjectIds={[1, 2]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />,
+        );
+        // Assert there are exactly two columns, and identify them by their
+        // own `.dock-column-name` text (project name) — NOT by array index —
+        // before assuming `resizeCallbacks[0]`/`[1]` line up with
+        // project 1/2 in mount order. If that assumption were ever wrong,
+        // both `toBe` assertions below would still be plausible values (444
+        // and 905 both genuinely occur, just on the wrong column), so this
+        // anchors the mapping explicitly rather than trusting index
+        // arithmetic silently.
+        const columns = Array.from(document.querySelectorAll(".dock-column"));
+        expect(columns).toHaveLength(2);
+        const mullionColumnIndex = columns.findIndex((c) =>
+          c.querySelector(".dock-column-name")?.textContent?.includes("mullion"),
+        );
+        const secondColumnIndex = columns.findIndex((c) =>
+          c.querySelector(".dock-column-name")?.textContent?.includes("second"),
+        );
+        expect(mullionColumnIndex).not.toBe(-1);
+        expect(secondColumnIndex).not.toBe(-1);
+
+        // Column "mullion" (project 1) narrower (TWO_PANE_WIDTH,
+        // paneAreaWidth 808 — 0.6 is above that column's own ≈0.5495
+        // ceiling); column "second" (project 2) wider (paneAreaWidth 1508 —
+        // 0.6 is comfortably inside its own band). `resizeCallbacks` fires
+        // in the same order DockColumn instances mounted, which matches
+        // `columnIds`/mount order — asserted against the column identities
+        // above rather than assumed.
+        act(() => {
+          resizeCallbacks[mullionColumnIndex]?.([{ contentRect: { width: TWO_PANE_WIDTH } }]);
+          resizeCallbacks[secondColumnIndex]?.([{ contentRect: { width: 1800 } }]);
+        });
+
+        await screen.findAllByTestId("terminal-pane");
+        const pinTags = screen.getAllByText("pin");
+        expect(pinTags).toHaveLength(2);
+        await user.click(pinTags[0]);
+        await user.click(pinTags[1]);
+        expect(await screen.findAllByTestId("terminal-pane")).toHaveLength(4);
+
+        const mullionPrimaryPane = columns[mullionColumnIndex]!.querySelector(
+          ".dock-log-pane",
+        ) as HTMLElement;
+        const secondPrimaryPane = columns[secondColumnIndex]!.querySelector(
+          ".dock-log-pane",
+        ) as HTMLElement;
+        // "mullion"'s primary pane clamps to its own ceiling (444);
+        // "second"'s primary pane honors 0.6 unclamped: 0.6 * 1508 = 905
+        // (rounded).
+        expect(mullionPrimaryPane.style.flex).toBe("0 0 444px");
+        expect(secondPrimaryPane.style.flex).toBe("0 0 905px");
+      });
+
+      it("defaults to a 0.5 split and persists nothing when there is no active workspace", async () => {
+        const sessions = twoRunningControls();
+        useDashboardStore.setState({
+          projects: [PROJECT],
+          sessions,
+          sessionsLoaded: true,
+          activeWorkspaceId: null,
+        });
+        const user = userEvent.setup();
+
+        render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+        resizeTo(TWO_PANE_WIDTH);
+        await screen.findByTestId("terminal-pane");
+        await user.click(screen.getByText("pin"));
+        expect(await screen.findAllByTestId("terminal-pane")).toHaveLength(2);
+
+        expect(primaryPaneEl().style.flex).toBe("0 0 404px");
+
+        fireEvent.mouseDown(dividerEl(), { clientX: 0 });
+        act(() => {
+          window.dispatchEvent(new MouseEvent("mousemove", { clientX: 20 }));
+          window.dispatchEvent(new MouseEvent("mouseup"));
+        });
+
+        expect(localStorage.getItem("crs.dockPaneSplitRatio")).toBeNull();
       });
     });
   });
