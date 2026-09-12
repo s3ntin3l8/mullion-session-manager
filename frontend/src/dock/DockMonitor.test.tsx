@@ -11,7 +11,7 @@
 // state, so a full render through a fake in-memory backend is the simplest
 // way to exercise the real wiring.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Dock } from "../Dock.js";
 import { useDashboardStore } from "../store/index.js";
@@ -275,11 +275,27 @@ describe("Dock", () => {
     it("persists a new selection via read-modify-write — preserves this project's own pinned field and another project's entry untouched", async () => {
       const PROJECT2 = makeProject({ id: 2, name: "other", cwd: "/home/x/other" });
       const sessions = twoRunningControls();
+      // A third, non-running control (no session — its own row's existence
+      // is all this test needs) — issue #1239's own reconciliation now
+      // clears a pin that collides with the CURRENT (or, after the
+      // reconciliation's own neighbour-search, the ABOUT-TO-BE-current)
+      // primary selection, so with only "dev"/"worker" to choose from, any
+      // pinned value would necessarily equal one or the other at some point
+      // in this test (the initial selection, "dev", or the row clicked
+      // below, "worker"). "logs" is real (a genuine row DockColumn will
+      // render) but distinct from both, so the read-modify-write this test
+      // actually checks — the `pinned` field surviving untouched — isn't
+      // confounded by that collision guard.
+      dockByProject[1] = [
+        { id: "dev", title: "Dev server", command: "npm run dev" },
+        { id: "worker", title: "Worker", command: "npm run worker" },
+        { id: "logs", title: "Logs", command: "tail -f log" },
+      ];
       dockByProject[2] = [];
       localStorage.setItem(
         "crs.dockSelectedRows",
         JSON.stringify({
-          "1": { selected: "dock-config:dev", pinned: "keep-me" },
+          "1": { selected: "dock-config:dev", pinned: "dock-config:logs" },
           "2": { selected: "untouched" },
         }),
       );
@@ -299,12 +315,16 @@ describe("Dock", () => {
 
       // The write effect's own read-modify-write is what this test exists
       // to prove: project "1"'s entry picks up the new selection while its
-      // pre-existing `pinned` field (issue #1239's own field, untouched by
-      // this issue) survives, and project "2"'s entry — a second column
-      // tiled in the same dock — is never clobbered by project "1"'s write.
+      // pre-existing `pinned` field survives untouched (it names a
+      // different, still-live row — see the fixture's own comment above),
+      // and project "2"'s entry — a second column tiled in the same dock —
+      // is never clobbered by project "1"'s write.
       await waitFor(() => {
         const stored = JSON.parse(localStorage.getItem("crs.dockSelectedRows") ?? "{}");
-        expect(stored["1"]).toEqual({ selected: "dock-config:worker", pinned: "keep-me" });
+        expect(stored["1"]).toEqual({
+          selected: "dock-config:worker",
+          pinned: "dock-config:logs",
+        });
         expect(stored["2"]).toEqual({ selected: "untouched" });
       });
 
@@ -344,6 +364,293 @@ describe("Dock", () => {
       await screen.findByText("Select a row to view its log");
       const stored = JSON.parse(localStorage.getItem("crs.dockSelectedRows") ?? "{}");
       expect(stored["1"]).toEqual({ selected: "dock-config:dev", pinned: "keep-me" });
+    });
+  });
+
+  describe("issue #1239 — pinned second log pane", () => {
+    // Both rows already running — the same twoRunningControls() shape the
+    // #1238 suite above uses, duplicated rather than shared across
+    // describe blocks (each block's own beforeEach reassigns dockByProject
+    // independently, and this file's own convention — see the #1240 suite
+    // further down — is a per-suite local helper rather than a single
+    // shared one threaded through every describe).
+    function twoRunningControls() {
+      dockByProject[1] = [
+        { id: "dev", title: "Dev server", command: "npm run dev" },
+        { id: "worker", title: "Worker", command: "npm run worker" },
+      ];
+      return [
+        makeSession({ id: 10, command: "npm run dev", kind: "dock", status: "active" }),
+        makeSession({ id: 20, command: "npm run worker", kind: "dock", status: "active" }),
+      ];
+    }
+
+    // Overrides the outer beforeEach's own no-op ResizeObserver stub with
+    // one that captures every constructed observer's callback — this
+    // suite, unlike every other one in this file, actually needs to FIRE
+    // the callback to simulate the column crossing `twoPaneThresholdPx`
+    // (Dock.tsx). Runs after the outer beforeEach (nested `beforeEach`s run
+    // outer-to-inner), so this simply replaces the earlier stub.
+    let resizeCallbacks: Array<(entries: Array<{ contentRect: { width: number } }>) => void>;
+    beforeEach(() => {
+      resizeCallbacks = [];
+      vi.stubGlobal(
+        "ResizeObserver",
+        vi.fn(function (cb: (entries: Array<{ contentRect: { width: number } }>) => void) {
+          resizeCallbacks.push(cb);
+          return { observe: vi.fn(), unobserve: vi.fn(), disconnect: vi.fn() };
+        }),
+      );
+    });
+
+    // Fires every captured observer's callback with a synthetic
+    // contentRect width — jsdom never actually resizes anything, so this
+    // is the hand-driven equivalent of a real layout engine reporting a
+    // new column width.
+    function resizeTo(width: number) {
+      act(() => {
+        for (const cb of resizeCallbacks) {
+          cb([{ contentRect: { width } }]);
+        }
+      });
+    }
+
+    // Derived from the SAME defaults `stackedThresholdPx`/
+    // `twoPaneThresholdPx` (Dock.tsx) are: DEFAULT_RAIL_WIDTH 280 +
+    // RAIL_DIVIDER_WIDTH_PX 6 + `dockMonitorMinWidthPx(14, 4)`, pinned at
+    // 364 by dockHelpers.test.ts, plus (for two panes only)
+    // DOCK_LOG_PANE_GAP_PX 8 — the actual `.dock-log-pane + .dock-log-pane`
+    // CSS gap between the two panes, which an earlier version of this
+    // threshold omitted (mullion-reviewer). One pane's floor:
+    // 280 + 6 + 364 = 650. Two panes' floor: 280 + 6 + 364*2 + 8 = 1022.
+    const STACKED_WIDTH = 500; // below 650 — rail flips to stacked mode too
+    const ONE_PANE_WIDTH = 800; // between 650 and 1022 — one pane fits
+    const TWO_PANE_WIDTH = 1100; // above 1022 — both panes fit
+
+    it("pins a non-selected row as a second log pane, and unpins it on a second click", async () => {
+      const sessions = twoRunningControls();
+      useDashboardStore.setState({ projects: [PROJECT], sessions, sessionsLoaded: true });
+      const user = userEvent.setup();
+
+      render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+      resizeTo(TWO_PANE_WIDTH);
+
+      // Adopt-on-empty picks "dev" (first live row) as the primary
+      // selection — its pin affordance is hidden (it's the selected row),
+      // leaving "Worker"'s the only "pin" text on screen.
+      expect(await screen.findByTestId("terminal-pane")).toHaveAttribute("data-session-id", "10");
+
+      await user.click(screen.getByText("pin"));
+
+      const panes = await screen.findAllByTestId("terminal-pane");
+      expect(panes).toHaveLength(2);
+      expect(panes[1]).toHaveAttribute("data-session-id", "20");
+      expect(screen.getByText("pinned")).toBeInTheDocument();
+
+      await user.click(screen.getByText("pinned"));
+      await waitFor(() => {
+        expect(screen.getAllByTestId("terminal-pane")).toHaveLength(1);
+      });
+      expect(screen.getByText("pin")).toBeInTheDocument();
+    });
+
+    it("gates the second pane on column width in both directions, without ever clearing pinnedKey itself", async () => {
+      const sessions = twoRunningControls();
+      useDashboardStore.setState({ projects: [PROJECT], sessions, sessionsLoaded: true });
+      const user = userEvent.setup();
+
+      render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+      resizeTo(TWO_PANE_WIDTH);
+      await screen.findByTestId("terminal-pane");
+
+      await user.click(screen.getByText("pin"));
+      expect(await screen.findAllByTestId("terminal-pane")).toHaveLength(2);
+      expect(document.querySelector(".dock-monitor-pin--pinned")).not.toBeNull();
+      expect(document.querySelector(".dock-monitor-pin--hidden")).toBeNull();
+
+      // Narrow past `twoPaneThresholdPx` but still above `stackedThresholdPx`
+      // — the second pane disappears, but the pin itself survives: the
+      // indicator switches to its dimmed `--hidden` variant instead of
+      // reverting to a plain unpinned "pin" tag, proving the pin state
+      // (not just the pane) is what this asserts.
+      resizeTo(ONE_PANE_WIDTH);
+      await waitFor(() => {
+        expect(screen.getAllByTestId("terminal-pane")).toHaveLength(1);
+      });
+      expect(document.querySelector(".dock-monitor-pin--hidden")).not.toBeNull();
+      expect(document.querySelector(".dock-monitor-pin--pinned")).toBeNull();
+      expect(screen.getByText("pinned")).toBeInTheDocument();
+
+      // Widen back past the threshold — restores with no re-click.
+      resizeTo(TWO_PANE_WIDTH);
+      await waitFor(() => {
+        expect(screen.getAllByTestId("terminal-pane")).toHaveLength(2);
+      });
+      expect(document.querySelector(".dock-monitor-pin--pinned")).not.toBeNull();
+      expect(document.querySelector(".dock-monitor-pin--hidden")).toBeNull();
+    });
+
+    it("never shows the second pane in stacked mode, even with room-by-width-alone and an active pin", async () => {
+      const sessions = twoRunningControls();
+      useDashboardStore.setState({ projects: [PROJECT], sessions, sessionsLoaded: true });
+      const user = userEvent.setup();
+
+      render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+      resizeTo(TWO_PANE_WIDTH);
+      await screen.findByTestId("terminal-pane");
+      await user.click(screen.getByText("pin"));
+      expect(await screen.findAllByTestId("terminal-pane")).toHaveLength(2);
+
+      resizeTo(STACKED_WIDTH);
+      await waitFor(() => {
+        expect(document.querySelector(".dock-split--stacked")).not.toBeNull();
+      });
+      expect(screen.getAllByTestId("terminal-pane")).toHaveLength(1);
+      expect(document.querySelector(".dock-monitor-pin--hidden")).not.toBeNull();
+    });
+
+    it("clears pinnedKey (with no reassignment) when the pinned row's own control vanishes", async () => {
+      const sessions = twoRunningControls();
+      useDashboardStore.setState({ projects: [PROJECT], sessions, sessionsLoaded: true });
+      const user = userEvent.setup();
+
+      render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+      resizeTo(TWO_PANE_WIDTH);
+      await screen.findByTestId("terminal-pane");
+      await user.click(screen.getByText("pin"));
+      expect(await screen.findAllByTestId("terminal-pane")).toHaveLength(2);
+
+      // The pinned control ("worker") drops out of the next poll entirely —
+      // no orphan session survives it either (unlike issue #1240's own
+      // case), so the row itself disappears, not just its stream.
+      // `bumpDockConfigRefreshTrigger()` forces the `.../dock` poll to
+      // refetch immediately (same technique the PR2b "holding a docker
+      // control" suite above uses) rather than waiting out the real
+      // DOCKER_POLL_INTERVAL_MS.
+      dockByProject[1] = [{ id: "dev", title: "Dev server", command: "npm run dev" }];
+      useDashboardStore.setState({
+        projects: [PROJECT],
+        sessions: [sessions[0]],
+        sessionsLoaded: true,
+      });
+      useDashboardStore.getState().bumpDockConfigRefreshTrigger();
+
+      await waitFor(() => {
+        expect(screen.queryByText("Worker")).not.toBeInTheDocument();
+      });
+      // No neighbour reassignment — the second pane is simply gone, not
+      // reassigned to whatever row happens to remain.
+      expect(screen.getAllByTestId("terminal-pane")).toHaveLength(1);
+      const stored = JSON.parse(localStorage.getItem("crs.dockSelectedRows") ?? "{}");
+      expect(stored["1"].pinned).toBeNull();
+    });
+
+    it("clears the pin when the currently-pinned row is selected as the new primary — no auto-swap", async () => {
+      const sessions = twoRunningControls();
+      useDashboardStore.setState({ projects: [PROJECT], sessions, sessionsLoaded: true });
+      const user = userEvent.setup();
+
+      render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+      resizeTo(TWO_PANE_WIDTH);
+      await screen.findByTestId("terminal-pane");
+      await user.click(screen.getByText("pin"));
+      expect(await screen.findAllByTestId("terminal-pane")).toHaveLength(2);
+
+      // Selecting "Worker" (the pinned row) as the new primary clears the
+      // pin outright — it does NOT promote "dev" (the old primary) into
+      // the now-empty pin slot.
+      await user.click(screen.getByText("Worker"));
+
+      await waitFor(() => {
+        expect(screen.getAllByTestId("terminal-pane")).toHaveLength(1);
+      });
+      expect(screen.getByTestId("terminal-pane")).toHaveAttribute("data-session-id", "20");
+      expect(screen.queryByText("pinned")).not.toBeInTheDocument();
+    });
+
+    it("clears the pin when the PRIMARY row's own reconciliation (not a click) reassigns onto the pinned row", async () => {
+      // Regression coverage for a real bug caught in review: the primary
+      // selection's own neighbour-search reconciliation (this suite's
+      // "clears pinnedKey ... when the pinned row's own control vanishes"
+      // test above covers the reverse case) can land on the CURRENTLY
+      // PINNED row when the old primary's row vanishes instead — nothing
+      // upstream of this test's fix excluded the pinned row as a candidate
+      // neighbour. Before the fix, this rendered two `DockLogPane`s for the
+      // SAME session (a React duplicate-key warning) with no way to unpin
+      // it, since the pin affordance is hidden on the now-selected row.
+      const sessions = twoRunningControls();
+      useDashboardStore.setState({ projects: [PROJECT], sessions, sessionsLoaded: true });
+      const user = userEvent.setup();
+
+      render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+      resizeTo(TWO_PANE_WIDTH);
+      // Adopt-on-empty selects "dev" (first live row); pin "worker".
+      expect(await screen.findByTestId("terminal-pane")).toHaveAttribute("data-session-id", "10");
+      await user.click(screen.getByText("pin"));
+      expect(await screen.findAllByTestId("terminal-pane")).toHaveLength(2);
+
+      // "dev" — the PRIMARY selection, not the pin — drops out of
+      // discovery entirely (its own control removed, no session at all),
+      // leaving "worker" (the pinned row) as the only surviving row. The
+      // neighbour-search reconciliation has nowhere else to land but
+      // "worker", which is exactly the collision this test exists to catch.
+      dockByProject[1] = [{ id: "worker", title: "Worker", command: "npm run worker" }];
+      useDashboardStore.setState({
+        projects: [PROJECT],
+        sessions: [sessions[1]],
+        sessionsLoaded: true,
+      });
+      useDashboardStore.getState().bumpDockConfigRefreshTrigger();
+
+      await waitFor(() => {
+        expect(screen.queryByText("Dev server")).not.toBeInTheDocument();
+      });
+      // Exactly one pane (the newly-primary "worker"), never two for the
+      // same session, and the pin is gone rather than silently duplicated.
+      const panes = screen.getAllByTestId("terminal-pane");
+      expect(panes).toHaveLength(1);
+      expect(panes[0]).toHaveAttribute("data-session-id", "20");
+      expect(screen.queryByText("pinned")).not.toBeInTheDocument();
+      const stored = JSON.parse(localStorage.getItem("crs.dockSelectedRows") ?? "{}");
+      expect(stored["1"].pinned).toBeNull();
+    });
+
+    it("persists the pin across a remount, keyed by the same crs.dockSelectedRows entry #1238 already writes", async () => {
+      const sessions = twoRunningControls();
+      localStorage.setItem(
+        "crs.dockSelectedRows",
+        JSON.stringify({ "1": { selected: "dock-config:dev", pinned: "dock-config:worker" } }),
+      );
+      useDashboardStore.setState({ projects: [PROJECT], sessions, sessionsLoaded: true });
+
+      render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+      resizeTo(TWO_PANE_WIDTH);
+
+      const panes = await screen.findAllByTestId("terminal-pane");
+      expect(panes).toHaveLength(2);
+      expect(panes[0]).toHaveAttribute("data-session-id", "10");
+      expect(panes[1]).toHaveAttribute("data-session-id", "20");
+      expect(screen.getByText("pinned")).toBeInTheDocument();
+    });
+
+    it("falls back to unpinned when the previously-pinned control's identity no longer matches any row", async () => {
+      const sessions = twoRunningControls();
+      localStorage.setItem(
+        "crs.dockSelectedRows",
+        JSON.stringify({ "1": { selected: "dock-config:dev", pinned: "dock-config:ghost" } }),
+      );
+      useDashboardStore.setState({ projects: [PROJECT], sessions, sessionsLoaded: true });
+
+      render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+      resizeTo(TWO_PANE_WIDTH);
+
+      await screen.findByTestId("terminal-pane");
+      expect(screen.getAllByTestId("terminal-pane")).toHaveLength(1);
+      expect(screen.getByText("pin")).toBeInTheDocument();
+      await waitFor(() => {
+        const stored = JSON.parse(localStorage.getItem("crs.dockSelectedRows") ?? "{}");
+        expect(stored["1"].pinned).toBeNull();
+      });
     });
   });
 

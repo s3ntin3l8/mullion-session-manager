@@ -460,10 +460,33 @@ without a human clicking something, and even that never auto-applies it.
 | **Open GitHub panel**           | Click the GitHub status row in a project's column                                   |
 | **Open browser preview**        | Click the browser URL row in a project's column                                     |
 | **Check/pull a Docker service** | Click the ⋯ menu on a discovered Docker monitor                                     |
+| **Pin a second log pane**       | Click the "pin" tag on a rail row other than the one currently selected             |
+| **Unpin a second log pane**     | Click the "pinned" tag again (on the row it's pinned to)                            |
 
 Dock state persists to `localStorage` (collapsed state, region height,
-manually pinned project IDs, rail width, and each column's selected rail
-row). Column widths from divider drags are ephemeral and reset on reload.
+manually pinned project IDs, rail width, and each column's selected AND
+pinned rail row). Column widths from divider drags are ephemeral and reset
+on reload.
+
+Each column's log pane is normally a single terminal, showing whichever rail
+row is selected. Clicking the "pin" tag on a **different** row (it's hidden
+on the row that's currently selected — pinning yourself as your own second
+pane is meaningless) adds a second, independently-selected log pane to the
+right of the primary one, side by side, a fixed 50/50 split with no
+draggable divider between them. Only one row can be pinned at a time —
+pinning a different row replaces the previous pin, and selecting the
+currently-pinned row as the new primary selection simply clears the pin
+(no automatic swap promoting the old primary into the now-empty pin slot).
+
+The second pane needs enough width to hold two log panes side by side, on
+top of the rail itself — below that threshold it's hidden entirely (never
+stacked vertically), but the pin itself is **not** cleared: the "pinned" tag
+switches to a dimmed variant on its row instead of a plain unpinned "pin",
+so it stays clear the pin is still active, just out of room. A pin also
+survives a reload (or any other transient resize that hides it) via the
+same `crs.dockSelectedRows` storage key the primary selection uses, and
+falls back to unpinned if the previously-pinned control's identity no
+longer matches any row.
 
 ## Troubleshooting
 

@@ -1416,6 +1416,51 @@
   font-weight: 600;
   animation: cmuxAttn 1.4s ease-out infinite;
 }
+/* Issue #1239 — the pin-toggle affordance that adds/replaces the dock's
+   second (pinned) log pane. Same clickable-tag pattern as
+   `.dock-monitor-stream-toggle` above, same specificity (a second class on
+   the shared `.dock-monitor-tag` base, not a standalone rule) — mirrored
+   rather than shared outright because the two affordances' hover/focus
+   treatment is only accidentally identical today, and a future change to
+   one shouldn't have to reason about the other. Hidden outright (not
+   rendered) on the `selected` row and while `held` — see DockMonitor.tsx's
+   own comment — so there's no disabled state to style here either. */
+.dock-monitor-pin {
+  cursor: pointer;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  padding: 1px 5px;
+  margin: -1px -5px;
+}
+.dock-monitor-pin:hover {
+  border-color: var(--border-soft);
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+}
+.dock-monitor-pin:focus-visible {
+  outline: 2px solid var(--accent-solid);
+  outline-offset: 1px;
+}
+/* An active pin whose second pane IS currently rendered — same visual
+   register as `.dock-monitor-tag.dock-stack-action-running`'s "informational,
+   not something that needs the user's action" `--g` tone, not `.armed`'s
+   attention-red (nothing here needs confirming). */
+.dock-monitor-pin--pinned {
+  color: var(--g);
+  font-weight: 600;
+}
+/* Mutually exclusive with `--pinned` above (DockMonitor.tsx applies exactly
+   one of the two whenever `pinned` is true, never both) — the pin survives
+   a column too narrow to show its second pane (Dock.tsx's own
+   `canShowSecondPane` doc comment: the pin state itself is never cleared
+   for width alone), but must not silently LOOK unpinned while that's true.
+   Same neutral `--dim` tone `.dock-monitor-container-state`'s "recreating…"
+   label (PR2b) uses for its own transient-and-inert state, not a THIRD new
+   tone, so "still pinned, just no room right now" reads as visually
+   distinct from both the active `--pinned` tone above and a plain unpinned
+   tag. */
+.dock-monitor-pin--hidden {
+  color: var(--dim);
+}
 /* Hermes review (dock log-streaming resize fix) — a group's PERSISTENT
    stack-action indicator (DockStackHeader.tsx's `actionRunning`), distinct
    from the transient `.dock-monitor-check-status` tag right next to it:
