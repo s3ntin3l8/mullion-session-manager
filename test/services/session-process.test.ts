@@ -26,6 +26,14 @@ const INSTANCE_ID = "aaaaaaaa";
 // dtach socket path OUT of that Description, not the unit name.
 let listUnitsReply: string[] = [];
 let listUnitsShouldError = false;
+// Issue #1232 — a child that never emits 'close'/'error'/'exit' at all,
+// simulating a wedged `--user` D-Bus bus. Distinct from `*ShouldError`
+// (which resolves promptly with a spawn error): this one never resolves on
+// its own, so only the new SYSTEMCTL_TIMEOUT_MS/KILL_ESCALATION_MS timers in
+// session-process.ts can ever settle a promise built on it — exactly the
+// case those timers exist for.
+let listUnitsShouldHang = false;
+let stopShouldHang = false;
 
 // The fake `systemctl --user show <unit> -p Description -p ActiveState`
 // reply describeScope() should see, keyed by unit name. Defaults (unit
@@ -41,19 +49,54 @@ const showReplies: Record<string, { description: string; activeState: string }> 
 const stopCalls: string[][] = [];
 let stopShouldError = false;
 
+// Issue #1232 — the shape a real `child_process.ChildProcess` exposes that
+// the escalation-timer code in session-process.ts now reads/calls:
+// `kill()` (spied so a test can assert SIGTERM-then-SIGKILL) and
+// `exitCode`/`signalCode` (which the escalation check reads directly,
+// *not* `killed` — see session-process.ts's own comment on why). Every
+// branch below sets `exitCode = 0` right before its own natural
+// exit/close, mirroring a real child process; the hang branches leave both
+// `null` forever, exactly like a wedged process that never received or
+// acted on a signal.
+type MockChild = EventEmitter & {
+  stdout?: EventEmitter;
+  kill: (signal?: string) => boolean;
+  exitCode: number | null;
+  signalCode: string | null;
+};
+function createMockChild(): MockChild {
+  const ee = new EventEmitter() as MockChild;
+  ee.exitCode = null;
+  ee.signalCode = null;
+  // Records calls only — does NOT itself flip exitCode/signalCode. A real
+  // `kill()` merely SENDS a signal; the process might ignore it, so
+  // `signalCode` only becomes non-null once the process actually
+  // terminates (Node sets it alongside 'exit', not synchronously here).
+  // A test that wants "the child ignored SIGTERM" leaves these `null` and
+  // lets the escalation fire; a test that wants "the child died from it"
+  // sets `exitCode`/`signalCode` and/or emits 'exit'/'close' itself.
+  ee.kill = vi.fn(() => true);
+  return ee;
+}
+
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof ChildProcess>();
   return {
     ...actual,
     spawn: vi.fn((file: string, args: string[]) => {
-      const ee = new EventEmitter() as EventEmitter & { stdout?: EventEmitter };
+      const ee = createMockChild();
       if (file === "systemctl" && args[1] === "list-units") {
         if (listUnitsShouldError) {
           setImmediate(() => ee.emit("error", new Error("ENOENT")));
           return ee;
         }
+        if (listUnitsShouldHang) {
+          // Never emits anything — see this flag's own comment above.
+          return ee;
+        }
         ee.stdout = new EventEmitter();
         setImmediate(() => {
+          ee.exitCode = 0;
           ee.emit("exit", 0);
           setImmediate(() => {
             const lines = listUnitsReply.join("\n");
@@ -69,7 +112,14 @@ vi.mock("node:child_process", async (importOriginal) => {
           setImmediate(() => ee.emit("error", new Error("ENOENT")));
           return ee;
         }
-        setImmediate(() => ee.emit("exit", 0));
+        if (stopShouldHang) {
+          // Never emits anything — see listUnitsShouldHang's own comment.
+          return ee;
+        }
+        setImmediate(() => {
+          ee.exitCode = 0;
+          ee.emit("exit", 0);
+        });
         return ee;
       }
       if (file === "systemctl" && args[1] === "show") {
@@ -77,6 +127,7 @@ vi.mock("node:child_process", async (importOriginal) => {
         const unit = args[2];
         const reply = showReplies[unit] ?? { description: unit, activeState: "inactive" };
         setImmediate(() => {
+          ee.exitCode = 0;
           ee.emit("exit", 0);
           setImmediate(() => {
             ee.stdout?.emit(
@@ -88,7 +139,10 @@ vi.mock("node:child_process", async (importOriginal) => {
         });
         return ee;
       }
-      setImmediate(() => ee.emit("exit", 0));
+      setImmediate(() => {
+        ee.exitCode = 0;
+        ee.emit("exit", 0);
+      });
       return ee;
     }),
   };
@@ -105,6 +159,7 @@ const {
   stopScope,
   describeScope,
   isMasterAlive,
+  isMasterAliveState,
   isMasterAliveBatch,
   listSessionProcesses,
   parseScopeUnitsListing,
@@ -116,8 +171,10 @@ beforeEach(() => {
   for (const key of Object.keys(showReplies)) delete showReplies[key];
   listUnitsReply = [];
   listUnitsShouldError = false;
+  listUnitsShouldHang = false;
   stopCalls.length = 0;
   stopShouldError = false;
+  stopShouldHang = false;
   vi.mocked(spawnChildProcess).mockClear();
   vi.mocked(listScopeProcesses).mockClear();
 });
@@ -278,6 +335,75 @@ describe("listOwnedScopes", () => {
       expect.objectContaining({ stdio: ["ignore", "pipe", "ignore"] }),
     );
   });
+
+  // Issue #1232 — this spawn used to have no timeout at all: a wedged
+  // `--user` D-Bus bus left the returned promise pending forever, and every
+  // isMasterAlive/isMasterAliveBatch caller bottomed out here. `vi.useFakeTimers()`
+  // is scoped to each test with a try/finally so a failure here can't leak
+  // fake timers into later, unrelated tests in this file.
+  describe("timeout (issue #1232)", () => {
+    it("resolves failed:true, not hung, when systemctl never emits close/error", async () => {
+      listUnitsShouldHang = true;
+      vi.useFakeTimers();
+      try {
+        const promise = listOwnedScopes("/inst-a", INSTANCE_A, { all: true });
+        await vi.advanceTimersByTimeAsync(5_000);
+        await expect(promise).resolves.toEqual({
+          owned: new Map(),
+          unverifiable: new Set(),
+          failed: true,
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("sends SIGTERM at the timeout, then escalates to SIGKILL if the child is still alive", async () => {
+      listUnitsShouldHang = true;
+      vi.useFakeTimers();
+      try {
+        const promise = listOwnedScopes("/inst-a", INSTANCE_A, { all: true });
+        await vi.advanceTimersByTimeAsync(5_000);
+        await promise; // the outer promise already settles at the timeout
+        const child = vi.mocked(spawnChildProcess).mock.results[0]?.value as MockChild;
+        expect(child.kill).toHaveBeenCalledTimes(1);
+        expect(child.kill).toHaveBeenNthCalledWith(1); // SIGTERM — no args
+
+        // The mock's kill() never flips exitCode/signalCode on its own (see
+        // createMockChild's own comment) — this child is "still alive" from
+        // the escalation check's point of view, same as one that's ignoring
+        // SIGTERM for real.
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(child.kill).toHaveBeenCalledTimes(2);
+        expect(child.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not escalate to SIGKILL once the child is confirmed to have actually ended", async () => {
+      listUnitsShouldHang = true;
+      vi.useFakeTimers();
+      try {
+        const promise = listOwnedScopes("/inst-a", INSTANCE_A, { all: true });
+        await vi.advanceTimersByTimeAsync(5_000);
+        await promise;
+        const child = vi.mocked(spawnChildProcess).mock.results[0]?.value as MockChild;
+        expect(child.kill).toHaveBeenCalledTimes(1);
+
+        // The SIGTERM actually worked — simulate the child confirming that,
+        // same as a real 'close' event would (which also clears the pending
+        // escalation timer in the production code).
+        child.exitCode = 0;
+        child.emit("close", 0);
+
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(child.kill).toHaveBeenCalledTimes(1); // no SIGKILL escalation
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
 });
 
 describe("stopScope", () => {
@@ -340,6 +466,34 @@ describe("stopScope", () => {
     stopShouldError = true;
     await expect(stopScope(SESSIONS_DIR, INSTANCE_ID, "1")).resolves.toBeUndefined();
   });
+
+  // Issue #1232 — this spawn also had no timeout. Unlike listOwnedScopes'
+  // own listing, this is a mutating `systemctl --user stop` — the fix here
+  // is only "resolve instead of hanging," never "read as failed," since
+  // killing the child on timeout doesn't cancel the stop request itself
+  // (see stopScope's own comment on this in session-process.ts).
+  it("resolves (does not hang) when the stop spawn never exits", async () => {
+    listUnitsReply = [ownedLine("1")];
+    stopShouldHang = true;
+    const promise = stopScope(SESSIONS_DIR, INSTANCE_ID, "1");
+    // stopScope first does a real (unhung) listing via resolveOwningUnit,
+    // which resolves through this mock's own real setImmediate chain — let
+    // that settle, with real timers still in effect, before engaging fake
+    // timers for just the "stop" spawn's own timeout below. Faking
+    // setImmediate too (a plain vi.useFakeTimers() up front) would freeze
+    // that chain and hang the test itself, not just exercise the timeout
+    // under test.
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      await vi.advanceTimersByTimeAsync(5_000);
+      await expect(promise).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("isMasterAlive", () => {
@@ -382,6 +536,47 @@ describe("isMasterAlive", () => {
       ],
       expect.objectContaining({ stdio: ["ignore", "pipe", "ignore"] }),
     );
+  });
+});
+
+// Issue #1232 — the three-way counterpart to isMasterAlive() above, added
+// so a caller that takes a DESTRUCTIVE action on "not alive" (routes/
+// projects.ts's startStackSession/findActiveStackSession) can tell an
+// unverifiable/timed-out listing apart from a confident "dead" — see
+// isMasterAliveState's own doc comment in session-process.ts.
+describe("isMasterAliveState", () => {
+  it('resolves "alive" for an id this instance owns and has listed', async () => {
+    listUnitsReply = [ownedLine("1")];
+    await expect(isMasterAliveState(SESSIONS_DIR, INSTANCE_ID, "1")).resolves.toBe("alive");
+  });
+
+  it('resolves "dead" when nothing in the listing claims this id', async () => {
+    listUnitsReply = [];
+    await expect(isMasterAliveState(SESSIONS_DIR, INSTANCE_ID, "1")).resolves.toBe("dead");
+  });
+
+  it('resolves "unknown" (not "dead") when a row names this id but ownership can\'t be confirmed', async () => {
+    listUnitsReply = [line("crs-session-1.scope", "not a dtach invocation")];
+    await expect(isMasterAliveState(SESSIONS_DIR, INSTANCE_ID, "1")).resolves.toBe("unknown");
+  });
+
+  it('resolves "unknown" (not "dead"), never rejects, when the underlying listing spawn fails', async () => {
+    listUnitsShouldError = true;
+    await expect(isMasterAliveState(SESSIONS_DIR, INSTANCE_ID, "1")).resolves.toBe("unknown");
+  });
+
+  // The whole reason this function exists: isMasterAlive()'s own `?? false`
+  // posture must NOT change — a caller that only needs the old boolean
+  // contract still gets it, byte-for-byte, on all three states above.
+  it("isMasterAlive's boolean answer is unaffected by this function's existence", async () => {
+    listUnitsReply = [ownedLine("1")];
+    await expect(isMasterAlive(SESSIONS_DIR, INSTANCE_ID, "1")).resolves.toBe(true);
+
+    listUnitsReply = [];
+    await expect(isMasterAlive(SESSIONS_DIR, INSTANCE_ID, "1")).resolves.toBe(false);
+
+    listUnitsReply = [line("crs-session-1.scope", "not a dtach invocation")];
+    await expect(isMasterAlive(SESSIONS_DIR, INSTANCE_ID, "1")).resolves.toBe(false);
   });
 });
 
