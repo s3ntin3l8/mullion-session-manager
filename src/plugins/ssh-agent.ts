@@ -130,16 +130,21 @@ export const sshAgentPlugin = fp(async (app: FastifyInstance) => {
   // just fails safely as `Connection refused`, same as the documented
   // "dangling socket" behavior everywhere else in this feature.
   // Hermes review, PR #877 — skip the bind entirely (not just catch its
-  // failure) when `sshAuthSockBridgeExpected` is already `false`: whether
-  // that's because the preflight found the path occupied, or simply
-  // because `configured`/`ambient` already won this boot's precedence (the
-  // common case on most hosts), no session's SSH_AUTH_SOCK was ever going
-  // to point at this path either way — resolveSshAuthSock's result is
-  // frozen once, at construction, and can't retroactively start using a
-  // socket this plugin binds after the fact. Attempting the bind anyway
-  // was pointless work in the ordinary case and produced a second,
-  // redundant error log line stacked on top of pty.ts's own preflight log
-  // in the collision case.
+  // failure) when `sshAuthSockBridgeExpected` is already `false`. That flag
+  // is decorated by `plugins/pty.ts` BEFORE `resolveSshAuthSock`'s own
+  // `configured`/`ambient`/`bridge` precedence is evaluated (see pty.ts's
+  // own ordering), so it is narrowed *solely* by the socket-path preflight
+  // probe finding a live occupant already at this path — never by whether
+  // `configured`/`ambient` would go on to win precedence for actual session
+  // use. In practice the bridge socket is materialized on every host whose
+  // bridge-socket path is free, regardless of whether any session on that
+  // host ends up using it (see docs/multi-host.md). When the preflight DID
+  // find the path occupied, though, no session's SSH_AUTH_SOCK was ever
+  // going to point at this path — resolveSshAuthSock's result is frozen
+  // once, at construction, and can't retroactively start using a socket
+  // this plugin binds after the fact. Attempting the bind anyway was
+  // pointless work in that case and produced a second, redundant error log
+  // line stacked on top of pty.ts's own preflight log.
   let handle: Awaited<ReturnType<typeof materializeSshAgentSocket>> | null = null;
   if (app.sshAuthSockBridgeExpected) {
     try {
