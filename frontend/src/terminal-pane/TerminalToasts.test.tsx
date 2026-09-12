@@ -9,7 +9,7 @@ describe("TerminalToasts", () => {
       <TerminalToasts
         copied={false}
         copyToastKey={0}
-        copyFailed={false}
+        copyFailedMessage={null}
         copyFailedToastKey={0}
         uploadState="idle"
         paneTooSmall={false}
@@ -23,7 +23,7 @@ describe("TerminalToasts", () => {
       <TerminalToasts
         copied
         copyToastKey={0}
-        copyFailed={false}
+        copyFailedMessage={null}
         copyFailedToastKey={0}
         uploadState="idle"
         paneTooSmall={false}
@@ -37,7 +37,7 @@ describe("TerminalToasts", () => {
       <TerminalToasts
         copied={false}
         copyToastKey={0}
-        copyFailed
+        copyFailedMessage="Copy failed"
         copyFailedToastKey={0}
         uploadState="idle"
         paneTooSmall={false}
@@ -52,7 +52,7 @@ describe("TerminalToasts", () => {
       <TerminalToasts
         copied
         copyToastKey={0}
-        copyFailed={false}
+        copyFailedMessage={null}
         copyFailedToastKey={0}
         uploadState="idle"
         paneTooSmall={false}
@@ -66,7 +66,7 @@ describe("TerminalToasts", () => {
       <TerminalToasts
         copied={false}
         copyToastKey={0}
-        copyFailed={false}
+        copyFailedMessage={null}
         copyFailedToastKey={0}
         uploadState="uploading"
         paneTooSmall={false}
@@ -80,7 +80,7 @@ describe("TerminalToasts", () => {
       <TerminalToasts
         copied={false}
         copyToastKey={0}
-        copyFailed={false}
+        copyFailedMessage={null}
         copyFailedToastKey={0}
         uploadState="error"
         paneTooSmall={false}
@@ -95,7 +95,7 @@ describe("TerminalToasts", () => {
       <TerminalToasts
         copied
         copyToastKey={1}
-        copyFailed={false}
+        copyFailedMessage={null}
         copyFailedToastKey={0}
         uploadState="uploading"
         paneTooSmall={false}
@@ -114,7 +114,7 @@ describe("TerminalToasts", () => {
       <TerminalToasts
         copied
         copyToastKey={0}
-        copyFailed={false}
+        copyFailedMessage={null}
         copyFailedToastKey={0}
         uploadState="uploading"
         paneTooSmall
@@ -130,7 +130,7 @@ describe("TerminalToasts", () => {
       <TerminalToasts
         copied={false}
         copyToastKey={0}
-        copyFailed={false}
+        copyFailedMessage={null}
         copyFailedToastKey={0}
         uploadState="idle"
         paneTooSmall={false}
@@ -144,7 +144,7 @@ describe("TerminalToasts", () => {
       <TerminalToasts
         copied={false}
         copyToastKey={0}
-        copyFailed={false}
+        copyFailedMessage={null}
         copyFailedToastKey={0}
         uploadState="idle"
         paneTooSmall={false}
@@ -160,7 +160,7 @@ describe("TerminalToasts", () => {
       <TerminalToasts
         copied={false}
         copyToastKey={0}
-        copyFailed={false}
+        copyFailedMessage={null}
         copyFailedToastKey={0}
         uploadState="idle"
         paneTooSmall={false}

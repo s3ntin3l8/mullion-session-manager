@@ -1688,12 +1688,16 @@ describe("TerminalPane OSC 52 clipboard write", () => {
 });
 
 describe("TerminalPane copy failure toast", () => {
-  // "Copy on select" (copyToClipboard's own !hasClipboardApi() early return)
-  // — distinct from the opt-in Ctrl+C chord's "no Clipboard API" test above,
-  // which never reaches copyToClipboard at all because terminalKeys.ts gates
-  // on hasClipboardApi() before calling onCopy(). This is the path that
-  // previously only logged "clipboard API not available" to the console.
-  it("surfaces a failure toast when copy-on-select has no Clipboard API to write to", async () => {
+  // Hermes review — copyToClipboard's failure toast is deliberately NOT
+  // shown for "copy on select": that listener fires on every selection
+  // change, including an accidental drag, so in a non-secure-context deploy
+  // it would otherwise flash "Clipboard unavailable" on every incidental
+  // selection instead of a real, intentional copy. Distinct from the opt-in
+  // Ctrl+C chord's "no Clipboard API" test above, which never reaches
+  // copyToClipboard at all (terminalKeys.ts gates on hasClipboardApi()
+  // before calling onCopy()) — this one DOES reach copyToClipboard's own
+  // !hasClipboardApi() branch and confirms it stays silent anyway.
+  it("does not surface a failure toast when copy-on-select has no Clipboard API to write to", async () => {
     stubFakeWebSocket(true);
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
     renderPane();
@@ -1716,7 +1720,82 @@ describe("TerminalPane copy failure toast", () => {
       selectionChangeHandler();
     });
 
-    expect(screen.getByText("Copy failed")).toBeInTheDocument();
+    expect(screen.queryByText("Clipboard unavailable")).not.toBeInTheDocument();
+    expect(screen.queryByText("Copy failed")).not.toBeInTheDocument();
+  });
+
+  // The explicit-copy counterpart to the test above: Ctrl+Insert IS a
+  // deliberate "copy this" action (unlike copy-on-select), so the same "no
+  // Clipboard API" situation must surface here — with the message that
+  // distinguishes it from a genuinely rejected write (see the next test).
+  it("surfaces 'Clipboard unavailable' when Ctrl+Insert has no Clipboard API to write to", async () => {
+    stubFakeWebSocket(true);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+    renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+
+    const term = getLatestTermInstance() as unknown as {
+      hasSelection: ReturnType<typeof vi.fn>;
+      getSelection: ReturnType<typeof vi.fn>;
+      attachCustomKeyEventHandler: ReturnType<typeof vi.fn>;
+    };
+    term.hasSelection.mockReturnValue(true);
+    term.getSelection.mockReturnValue("selected text");
+    const calls = term.attachCustomKeyEventHandler.mock.calls;
+    const handler = calls[calls.length - 1]![0] as (event: unknown) => boolean;
+
+    act(() => {
+      handler({
+        type: "keydown",
+        key: "Insert",
+        ctrlKey: true,
+        shiftKey: false,
+        metaKey: false,
+        altKey: false,
+        preventDefault: vi.fn(),
+      });
+    });
+
+    expect(screen.getByText("Clipboard unavailable")).toBeInTheDocument();
+    expect(screen.queryByText("Copy failed")).not.toBeInTheDocument();
+  });
+
+  // A genuinely rejected write (permission denied, no transient user
+  // activation) is a different situation from "no API at all" and must read
+  // as one — this is the Ctrl+Insert counterpart to the opt-in Ctrl+C
+  // "clipboard write rejects" test above, confirming the message this time
+  // rather than just the absence of clearSelection().
+  it("surfaces 'Copy failed' (not 'Clipboard unavailable') when Ctrl+Insert's write is rejected", async () => {
+    stubFakeWebSocket(true);
+    const writeText = vi.fn().mockRejectedValue(new Error("permission denied"));
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+
+    const term = getLatestTermInstance() as unknown as {
+      hasSelection: ReturnType<typeof vi.fn>;
+      getSelection: ReturnType<typeof vi.fn>;
+      attachCustomKeyEventHandler: ReturnType<typeof vi.fn>;
+    };
+    term.hasSelection.mockReturnValue(true);
+    term.getSelection.mockReturnValue("selected text");
+    const calls = term.attachCustomKeyEventHandler.mock.calls;
+    const handler = calls[calls.length - 1]![0] as (event: unknown) => boolean;
+
+    act(() => {
+      handler({
+        type: "keydown",
+        key: "Insert",
+        ctrlKey: true,
+        shiftKey: false,
+        metaKey: false,
+        altKey: false,
+        preventDefault: vi.fn(),
+      });
+    });
+
+    await waitFor(() => expect(screen.getByText("Copy failed")).toBeInTheDocument());
+    expect(screen.queryByText("Clipboard unavailable")).not.toBeInTheDocument();
   });
 });
 

@@ -17,9 +17,12 @@ export interface TerminalToastsProps {
   // A copy attempt that didn't land — clipboard API unavailable (a
   // non-secure-context deploy) or the browser rejected the write. Previously
   // silent (console.warn only); see TerminalPane.tsx's own comment on
-  // copyFailed for why that made a clobbered/rejected copy undiagnosable
-  // from the UI. Same remount-key shape as copyToastKey, same reason.
-  copyFailed: boolean;
+  // copyFailedMessage for why that made a clobbered/rejected copy
+  // undiagnosable from the UI. Holds the message text itself (Hermes
+  // review) so the two situations read as distinct ("Clipboard unavailable"
+  // vs. "Copy failed") rather than one undifferentiated failure; null means
+  // no toast. Same remount-key shape as copyToastKey, same reason.
+  copyFailedMessage: string | null;
   copyFailedToastKey: number;
   uploadState: "idle" | "uploading" | "error";
   // Issue: small panes/floating windows ignoring input — true for as long as
@@ -45,7 +48,7 @@ export interface TerminalToastsProps {
 export function TerminalToasts({
   copied,
   copyToastKey,
-  copyFailed,
+  copyFailedMessage,
   copyFailedToastKey,
   uploadState,
   paneTooSmall,
@@ -58,9 +61,9 @@ export function TerminalToasts({
           Copied
         </div>
       )}
-      {copyFailed && (
+      {copyFailedMessage && (
         <div key={copyFailedToastKey} className="terminal-copy-indicator error">
-          Copy failed
+          {copyFailedMessage}
         </div>
       )}
       {uploadState !== "idle" && (

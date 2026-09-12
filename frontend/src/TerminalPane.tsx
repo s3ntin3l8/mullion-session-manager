@@ -196,9 +196,11 @@ export function TerminalPane(props: {
   // non-secure-context deploy) or the browser rejected the write (denied
   // permission, no transient user activation for an OSC 52 write). Previously
   // this was a console.warn only, which made "Copied" a lie a user had no way
-  // to notice from the UI itself. Same remount-key trick as copyToastKey
-  // above, for the same reason.
-  const [copyFailed, setCopyFailed] = useState(false);
+  // to notice from the UI itself. Holds the message itself (Hermes review),
+  // not just a boolean, so the toast can say which of the two situations
+  // actually happened — null means no failure toast is showing. Same
+  // remount-key trick as copyToastKey above, for the same reason.
+  const [copyFailedMessage, setCopyFailedMessage] = useState<string | null>(null);
   const [copyFailedToastKey, setCopyFailedToastKey] = useState(0);
   // Issue #68: surfaces the image-upload round trip (paste or the "attach
   // image" button below) as a small toast, same spirit as the copy toast
@@ -1065,17 +1067,21 @@ export function TerminalPane(props: {
 
     // The failure half of copyToClipboard below — previously a console.warn
     // only, which made a clobbered/rejected copy invisible from the UI (see
-    // copyFailed's own comment). Same transient-toast shape as the success
-    // path (1.5s, remount key so back-to-back failures each restart the
-    // fade), kept as its own function since it has two call sites.
-    function showCopyFailed(): void {
+    // copyFailedMessage's own comment). Same transient-toast shape as the
+    // success path (1.5s, remount key so back-to-back failures each restart
+    // the fade), kept as its own function since it has two call sites. Takes
+    // the message itself (Hermes review) rather than a fixed string, so a
+    // non-secure-context deploy ("Clipboard unavailable") and an actually
+    // rejected write ("Copy failed") read as the two distinct situations
+    // they are, instead of one undifferentiated failure toast.
+    function showCopyFailed(message: string): void {
       if (destroyed) return;
-      setCopyFailed(true);
+      setCopyFailedMessage(message);
       setCopyFailedToastKey((k) => k + 1);
       if (copyFailedToastTimer) clearTimeout(copyFailedToastTimer);
       copyFailedToastTimer = setTimeout(() => {
         if (destroyed) return;
-        setCopyFailed(false);
+        setCopyFailedMessage(null);
       }, 1500);
     }
 
@@ -1083,10 +1089,18 @@ export function TerminalPane(props: {
     // Ctrl+C handlers below. Returns whether the write actually landed — the
     // opt-in Ctrl+C path (attachKeyConflictHandler) needs that to decide
     // whether it's safe to clear the selection; the other callers ignore it.
-    function copyToClipboard(text: string): Promise<boolean> {
+    //
+    // `notifyOnFailure` (Hermes review) defaults to true for the three
+    // explicit-copy callers (OSC 52 live output, Ctrl+Insert, the opt-in
+    // Ctrl+C chord) — each is a deliberate "copy this" action, so a failure
+    // is worth surfacing. "Copy on select" below passes false: it fires on
+    // every selection change, including an accidental drag, so in a
+    // non-secure-context deploy it would otherwise flash a failure toast on
+    // every incidental selection rather than a real, intentional copy.
+    function copyToClipboard(text: string, notifyOnFailure = true): Promise<boolean> {
       if (!hasClipboardApi()) {
         console.warn("[terminal] clipboard API not available (not a secure context)");
-        showCopyFailed();
+        if (notifyOnFailure) showCopyFailed("Clipboard unavailable");
         return Promise.resolve(false);
       }
       return navigator.clipboard
@@ -1104,7 +1118,7 @@ export function TerminalPane(props: {
         })
         .catch((err: unknown) => {
           console.warn("[terminal] clipboard write failed:", err);
-          showCopyFailed();
+          if (notifyOnFailure) showCopyFailed("Copy failed");
           return false;
         });
     }
@@ -1116,7 +1130,7 @@ export function TerminalPane(props: {
     const selectionSub = term.onSelectionChange(() => {
       if (!prefsRef.current.copyOnSelect) return;
       const text = term.getSelection();
-      if (text) void copyToClipboard(text);
+      if (text) void copyToClipboard(text, false);
     });
 
     // OSC 52 — clipboard write requested by the foreground program. Claude
@@ -2164,7 +2178,7 @@ export function TerminalPane(props: {
       <TerminalToasts
         copied={copied}
         copyToastKey={copyToastKey}
-        copyFailed={copyFailed}
+        copyFailedMessage={copyFailedMessage}
         copyFailedToastKey={copyFailedToastKey}
         uploadState={uploadState}
         paneTooSmall={paneTooSmall}
