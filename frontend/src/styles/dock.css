@@ -345,6 +345,21 @@
 .dock-split--stacked {
   flex-direction: column;
 }
+/* Issue #1239 — a small visual gap between the two `.dock-log-pane`s when
+   the pinned second one is rendered alongside the primary. Deliberately an
+   adjacent-sibling rule (`.dock-log-pane + .dock-log-pane`), not a plain
+   `gap` on `.dock-split` itself: `.dock-split` also lays out `.dock-rail`
+   and `.dock-rail-divider` as flex children (both above), and a `gap` there
+   would add unwanted space between THOSE, not just between the two panes —
+   the rail already sits flush against its own divider by design. This rule
+   only ever matches when a second `.dock-log-pane` is actually adjacent to
+   the first, i.e. exactly when there are two to separate. No drag divider
+   between them in this PR (a fixed 50/50 split, both panes' own
+   `flex: 1 1 0` — see `.dock-log-pane`'s own comment, empty-states.css); a
+   draggable divider is deliberately out of scope, filed as issue #1244. */
+.dock-log-pane + .dock-log-pane {
+  margin-left: 8px;
+}
 /* Drag handle between the rail and the log pane — same look and mechanism
    as .dock-column-divider above, just col-resize between two DIFFERENT
    boxes within one column instead of between sibling columns. Persisted

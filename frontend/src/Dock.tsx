@@ -115,6 +115,16 @@ const RAIL_MIN_WIDTH = 216;
 // stacked-layout threshold below needs this same number in JS to reproduce
 // what the CSS actually costs.
 const RAIL_DIVIDER_WIDTH_PX = 6;
+// `.dock-log-pane + .dock-log-pane`'s own fixed CSS `margin-left` (dock.css)
+// — the gap between the primary and pinned panes when both render. Issue
+// #1239's `twoPaneThresholdPx` below needs this same number for the same
+// reason `RAIL_DIVIDER_WIDTH_PX` does: without it, a column sized exactly at
+// `railWidth + RAIL_DIVIDER_WIDTH_PX + 2 * logPaneMinWidth` satisfies the
+// threshold in JS but is still `DOCK_LOG_PANE_GAP_PX` too narrow to actually
+// hold both panes side by side without one of them clipping below its own
+// `min-width` floor — mullion-reviewer caught this on the first version of
+// this threshold, which omitted the gap entirely.
+const DOCK_LOG_PANE_GAP_PX = 8;
 // How long `pendingSelectKeyRef` (DockColumn) exempts a just-requested row
 // from the reconciliation's "no matching row, fall back" rule before giving
 // up on it — generous relative to a normal local createSession round trip,
@@ -655,6 +665,21 @@ function DockColumn({
   // stuck on its empty hint until the user clicks something else by hand.
   const pendingSelectKeyRef = useRef<{ key: string; setAt: number } | null>(null);
 
+  // ---- Pinned second rail row (issue #1239) ----
+  // dockRowKey(control) of whichever row DockLogPane's SECOND pane shows, or
+  // null when nothing is pinned. Unlike `selectedKey` above, this needs no
+  // adopt-on-empty fallback and no persisted-seed ref indirection: it's
+  // simple state, seeded once at mount from the same `crs.dockSelectedRows`
+  // object (`#1238`'s own storage key — purely additive, no new key), and
+  // pruned (never reassigned to a neighbour) by the SAME render-time
+  // reconciliation block below that already validates `selectedKey` — see
+  // that block's own comment for why "adjust state during render" is used
+  // instead of a passive `useEffect` here too.
+  const [pinnedKey, setPinnedKey] = useState<string | null>(() => {
+    const all = readJSON<PersistedDockSelection>(STORAGE_KEYS.dockSelectedRows, {});
+    return all[String(projectId)]?.pinned ?? null;
+  });
+
   // Recomputed from the user's LIVE terminal settings on every render
   // (cheap — a few arithmetic ops, no measurement) rather than trusting
   // `.dock-log-pane`'s own static CSS floor, which is only correct at the
@@ -695,6 +720,20 @@ function DockColumn({
   // making the real floor narrower than a stale threshold assumed).
   const stackedThresholdPx = railWidth + RAIL_DIVIDER_WIDTH_PX + logPaneMinWidth;
 
+  // Issue #1239 — the second (pinned) pane needs room for the rail PLUS
+  // TWO log panes PLUS the CSS gap between them: same terms as
+  // `stackedThresholdPx` above, `logPaneMinWidth` counted twice (no drag
+  // divider between the two panes in this PR — a fixed 50/50 split, see
+  // .dock-split's own CSS comment) plus `DOCK_LOG_PANE_GAP_PX`, the ONE
+  // extra gap `.dock-log-pane + .dock-log-pane`'s own CSS margin actually
+  // costs between exactly two panes. mullion-reviewer caught an earlier
+  // version of this that omitted the gap term entirely: without it, a
+  // column sized exactly at the threshold satisfies this comparison but is
+  // still 8px too narrow to hold both panes without one clipping below its
+  // own `min-width` floor.
+  const twoPaneThresholdPx =
+    railWidth + RAIL_DIVIDER_WIDTH_PX + 2 * logPaneMinWidth + DOCK_LOG_PANE_GAP_PX;
+
   // A ResizeObserver (not a CSS container query) drives the stacked flip —
   // this dock's overflow-x escape hatch for a too-narrow rail/column
   // depends on a child's min-content propagating up through several
@@ -717,6 +756,16 @@ function DockColumn({
   const [splitStacked, setSplitStacked] = useState(false);
   const lastColumnWidthRef = useRef<number | null>(null);
   const stackedThresholdRef = useRef(stackedThresholdPx);
+  // Issue #1239 — same last-measured width as `lastColumnWidthRef` above,
+  // but held as REACTIVE state rather than a ref: `canShowSecondPane` below
+  // has to re-derive on every resize that crosses `twoPaneThresholdPx` even
+  // when `splitStacked`'s own boolean doesn't flip (`twoPaneThresholdPx` is
+  // strictly above `stackedThresholdPx`, so a column can cross the former
+  // while staying on the same side of the latter, which wouldn't change
+  // `splitStacked` and so wouldn't otherwise trigger a re-render). Written
+  // from the SAME two call sites as `lastColumnWidthRef` (the observer
+  // callback and `setColumnRef` below) — not a second `ResizeObserver`.
+  const [columnWidthPx, setColumnWidthPx] = useState<number | null>(null);
   useEffect(() => {
     stackedThresholdRef.current = stackedThresholdPx;
     if (lastColumnWidthRef.current !== null) {
@@ -730,6 +779,12 @@ function DockColumn({
       const width = entries[0]?.contentRect.width;
       if (width === undefined) return;
       lastColumnWidthRef.current = width;
+      // Hermes review — `columnWidthPx` and `lastColumnWidthRef` mirror each
+      // other from exactly these two sites (here and `setColumnRef` below).
+      // Do not introduce a third writer (e.g. a future observer on a
+      // sibling element) without updating BOTH here — a write to one alone
+      // would let them silently drift apart.
+      setColumnWidthPx(width);
       setSplitStacked(width < stackedThresholdRef.current);
     });
     observer.observe(el);
@@ -750,8 +805,21 @@ function DockColumn({
     if (!el) return;
     const width = el.getBoundingClientRect().width;
     lastColumnWidthRef.current = width;
+    setColumnWidthPx(width);
     setSplitStacked(width < stackedThresholdRef.current);
   }, []);
+
+  // Issue #1239 — gates the SECOND `DockLogPane` (below): never alongside
+  // stacked mode (there's no side-by-side row left to split in a column
+  // layout), and only once the live column width actually clears
+  // `twoPaneThresholdPx`. Deliberately does NOT clear `pinnedKey` when this
+  // is false — narrowing back past the threshold hides the second pane
+  // without discarding the pin, so widening the column again restores it
+  // with no re-click (see `pinnedKey`'s own doc comment and this file's
+  // `holdVanishedDockerControls`/`splitStacked` for the same "degrade the
+  // rendering, keep the state" pattern elsewhere in this file).
+  const canShowSecondPane =
+    !splitStacked && columnWidthPx !== null && columnWidthPx >= twoPaneThresholdPx;
 
   const { githubStatus, prsStatus } = useDockGithubStatus(projectId, prsRefreshTrigger);
 
@@ -1179,17 +1247,56 @@ function DockColumn({
       }
       return liveRowKeys[0] ?? null;
     });
+    // Issue #1239 — same render-time reconciliation, same row-set change,
+    // but no neighbour-search/reassignment the way `selectedKey` above gets:
+    // a pin whose row vanished just drops, full stop. `rowKeys` (existence),
+    // not `liveRowKeys` (liveness) — same distinction `selectedKey`'s own
+    // reconciliation draws throughout this block; a pinned row that exists
+    // but isn't currently streaming is still a valid pin (DockLogPane's own
+    // empty state covers a not-currently-live pinned row exactly the way it
+    // already does for the primary pane). The OTHER half of this guard — a
+    // pin colliding with the primary selection — is handled separately,
+    // below, unconditionally on every render rather than folded into this
+    // signature-gated block; see that check's own comment for why.
+    if (pinnedKey !== null && !rowKeys.includes(pinnedKey)) {
+      setPinnedKey(null);
+    }
+  }
+  // Issue #1239 — a pin must never coincide with the PRIMARY selection
+  // (pinning "yourself" is meaningless — DockMonitor.tsx hides the pin
+  // affordance on the selected row for exactly this reason). Deliberately
+  // NOT folded into the row-set-gated block above: mullion-reviewer caught
+  // that `selectedKey`'s own neighbour-search reconciliation (above) can
+  // land the primary selection on the very row that's currently pinned
+  // (e.g. the old primary's control vanishes and reconciliation reassigns
+  // onto the pinned row) — a case a manual click already guards against
+  // (`selectRow` below), but reconciliation doesn't run through that
+  // handler. Capturing the reassigned value from inside `setSelectedKey`'s
+  // own updater above (an earlier version of this fix did exactly that) —
+  // trips this repo's `react-hooks/immutability` lint rule (mutating an
+  // outer variable from inside a state updater); reading either
+  // `pendingSelectKeyRef` or `initialPersistedKeyRef` OUTSIDE that updater
+  // to recompute the value independently trips `react-hooks/refs` instead
+  // (both rules assume a `setState` updater's body is only ever safe to
+  // read refs from in place, never mirrored elsewhere). Running this
+  // check unconditionally, one render later, sidesteps both: calling
+  // `setSelectedKey` during render (as the block above does) makes React
+  // immediately re-render this component with the new value BEFORE
+  // painting, so this check still resolves in the same commit a user
+  // would see, with no visible flash of the stale, colliding state.
+  if (pinnedKey !== null && pinnedKey === selectedKey) {
+    setPinnedKey(null);
   }
 
-  // Issue #1238 — persist this column's selection on change. Unlike the
-  // reconciliation above, this IS a legitimate `useEffect`: writing to
-  // `localStorage` is a genuine side effect, not derived render state.
-  // Read-modify-write against the existing stored object (rather than
-  // overwriting the whole thing) so multiple columns — multiple projects
-  // tiled in the dock at once — don't clobber each other's entries, and any
-  // existing `pinned` field on this project's own entry is preserved
-  // untouched (forward-compatible with #1239, which is not this issue's
-  // job — nothing here ever writes `pinned`).
+  // Issue #1238 (extended by #1239) — persist this column's selection AND
+  // pinned row on change. Unlike the reconciliation above, this IS a
+  // legitimate `useEffect`: writing to `localStorage` is a genuine side
+  // effect, not derived render state. Read-modify-write against the
+  // existing stored object (rather than overwriting the whole thing) so
+  // multiple columns — multiple projects tiled in the dock at once — don't
+  // clobber each other's entries; the `...all[String(projectId)]` spread
+  // keeps this forward-compatible with any future field the same way it
+  // already was for `pinned` itself before this issue.
   useEffect(() => {
     // See `hasSeenRows`'s own doc comment above — skips the write on the
     // very first commit(s) before `controls` has loaded at all, so a
@@ -1199,9 +1306,9 @@ function DockColumn({
     const all = readJSON<PersistedDockSelection>(STORAGE_KEYS.dockSelectedRows, {});
     writeJSON(STORAGE_KEYS.dockSelectedRows, {
       ...all,
-      [String(projectId)]: { ...all[String(projectId)], selected: selectedKey },
+      [String(projectId)]: { ...all[String(projectId)], selected: selectedKey, pinned: pinnedKey },
     });
-  }, [projectId, selectedKey, hasSeenRows]);
+  }, [projectId, selectedKey, pinnedKey, hasSeenRows]);
 
   // Hermes review, round 2 — a transient failure (backend blip, briefly out
   // of PTY slots) otherwise recorded `eligible: true` right alongside
@@ -1511,6 +1618,16 @@ function DockColumn({
     // affordance asked for it.
     const rowKey = dockRowKey(control);
     const startAndSelect = () => {
+      // Issue #1239 — unlike `selectRow` below, this doesn't inline-check
+      // "is `rowKey` the current pin" before calling `setSelectedKey` — a
+      // pinned-but-not-yet-running row's trailing tag reaches this via
+      // `toggleStream`, which is exactly that case. Still resolves
+      // correctly: the unconditional `pinnedKey === selectedKey` check
+      // further up this file (right after the render-time reconciliation
+      // block) catches the resulting collision on the very next render,
+      // before paint — see that check's own comment. No inline guard here
+      // to mirror `selectRow`'s, deliberately: that check already covers
+      // every path that can produce the collision, this one included.
       setSelectedKey(rowKey);
       pendingSelectKeyRef.current = { key: rowKey, setAt: Date.now() };
       bumpToggleGen(control.id);
@@ -1539,11 +1656,37 @@ function DockColumn({
     // was off. Selecting an already-running row is a pure focus change,
     // never a kill — that's the whole point of the split.
     const selectRow = () => {
+      // Issue #1239 — selecting the currently-pinned row as the new PRIMARY
+      // selection simply clears the pin (a deliberate simplification: no
+      // auto-swap promoting the old primary into the now-empty pin slot).
+      // Checked unconditionally, before the running/not-running branch below
+      // — starting a stream via `startAndSelect()` is just as much "making
+      // this row the primary" as focusing an already-running one.
+      //
+      // Hermes review — technically redundant with the unconditional
+      // `pinnedKey === selectedKey` check further up this file (it would
+      // clear this same collision on the very next render regardless), but
+      // kept here too so the click that causes it also clears it in the
+      // SAME commit, with no one-render flash of a stale, colliding pin.
+      // That unconditional check is still the canonical cleanup, though —
+      // don't add a FOURTH copy of this same guard at some future call site
+      // that changes `selectedKey` outside `selectRow`/`startAndSelect`;
+      // let the unconditional check catch it instead.
+      if (pinnedKey === rowKey) setPinnedKey(null);
       if (running) {
         setSelectedKey(rowKey);
         return;
       }
       startAndSelect();
+    };
+    // Wired to the pin-toggle affordance (DockMonitor.tsx's `onTogglePin`) —
+    // pins this row as the SECOND, independently-selected log pane,
+    // replacing any previous pin; clicking it again on the row that's
+    // already pinned unpins instead. Never touches `selectedKey` — pinning a
+    // row only adds/changes the second pane, it never changes what the
+    // primary pane shows.
+    const togglePin = () => {
+      setPinnedKey((prev) => (prev === rowKey ? null : rowKey));
     };
     // Wired to the trailing "logs on"/"logs off" tag (DockMonitor.tsx's
     // `onToggleStream`) — the ONLY place a running stream gets killed from,
@@ -1661,6 +1804,9 @@ function DockColumn({
         confirmBeforeKill={confirmBeforeKill}
         onSelect={selectRow}
         onToggleStream={toggleStream}
+        pinned={pinnedKey === rowKey}
+        canShowSecondPane={canShowSecondPane}
+        onTogglePin={togglePin}
         onCheckUpdate={() => void handleCheckUpdate(control)}
         onServiceRestart={() =>
           void handleServiceAction(control, api.restartDockerService, "Restart failed")
@@ -1684,6 +1830,12 @@ function DockColumn({
   // thinks is selected" can never disagree about which control they mean.
   const selectedControl = allRenderedControls.find((c) => dockRowKey(c) === selectedKey) ?? null;
   const selectedSession = selectedControl ? runningFor(selectedControl) : undefined;
+  // Issue #1239 — the pinned control/session, resolved the exact same way as
+  // `selectedControl`/`selectedSession` above (same `allRenderedControls`
+  // list, same "does a row exist for this key" source of truth the
+  // reconciliation block validates `pinnedKey` against).
+  const pinnedControl = allRenderedControls.find((c) => dockRowKey(c) === pinnedKey) ?? null;
+  const pinnedSession = pinnedControl ? runningFor(pinnedControl) : undefined;
 
   return (
     <div
@@ -1854,6 +2006,27 @@ function DockColumn({
           minWidthPx={logPaneMinWidth}
           minHeightPx={logPaneMinHeight}
         />
+        {
+          // Issue #1239 — the pinned second pane. Rendered only with room
+          // for it (`canShowSecondPane`, gated on the SAME measured column
+          // width and ResizeObserver that already drives `splitStacked` —
+          // see that boolean's own doc comment above) — below the
+          // threshold this renders NOTHING extra rather than a
+          // vertically-stacked pair (out of scope for this PR) or a
+          // squeezed-below-floor pane; `pinnedKey` itself is untouched by
+          // that, so widening the column back past the threshold restores
+          // it with no re-click. No drag divider between the two panes
+          // (fixed 50/50 split, `.dock-split`'s own CSS) — a follow-up,
+          // issue #1244.
+        }
+        {pinnedKey !== null && canShowSecondPane && (
+          <DockLogPane
+            key={pinnedSession?.id ?? "empty-pinned"}
+            sessionId={pinnedSession?.id ?? null}
+            minWidthPx={logPaneMinWidth}
+            minHeightPx={logPaneMinHeight}
+          />
+        )}
       </div>
     </div>
   );

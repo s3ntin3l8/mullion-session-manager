@@ -55,6 +55,9 @@ export function DockMonitor({
   confirmBeforeKill,
   onSelect,
   onToggleStream,
+  pinned,
+  canShowSecondPane,
+  onTogglePin,
   onCheckUpdate,
   onServiceRestart,
   onServiceStop,
@@ -93,6 +96,20 @@ export function DockMonitor({
   confirmBeforeKill: boolean;
   onSelect: () => void;
   onToggleStream: () => void;
+  // Issue #1239 — whether THIS row is DockColumn's current `pinnedKey`
+  // (drives the pin affordance's own visual state), never derived locally —
+  // same "the owner reconciles it against the live row set, this component
+  // just renders what it's told" posture as `selected` above.
+  pinned: boolean;
+  // Whether DockColumn currently has room to render the second (pinned)
+  // `DockLogPane` — used only to render a DIMMED variant of the pin
+  // affordance on the pinned row when the column is too narrow (the pin
+  // itself is never cleared for this — see Dock.tsx's own
+  // `canShowSecondPane` doc comment). Irrelevant to every OTHER row: the pin
+  // affordance is hidden outright on `selected` and otherwise unaffected by
+  // width regardless of `pinned`.
+  canShowSecondPane: boolean;
+  onTogglePin: () => void;
   onCheckUpdate: () => void;
   onServiceRestart: () => void;
   onServiceStop: () => void;
@@ -442,6 +459,55 @@ export function DockMonitor({
               </span>
             );
           })()}
+          {
+            // Issue #1239 — pins this row as the dock's SECOND, independently
+            // selected log pane. Hidden outright (not just disabled) on the
+            // currently `selected` row — pinning "yourself" as your own
+            // second pane is meaningless, same "hide entirely rather than a
+            // dead affordance" call the docker kebab above makes for `held`.
+            // Also hidden while `held`, same reasoning as the kebab: a held
+            // control's own identity can't be resolved against live
+            // discovery, so a click here has nothing real to act on.
+            !selected && !held && (
+              <span
+                className={`dock-monitor-tag dock-monitor-pin${
+                  pinned
+                    ? canShowSecondPane
+                      ? " dock-monitor-pin--pinned"
+                      : " dock-monitor-pin--hidden"
+                    : ""
+                }`}
+                role="button"
+                tabIndex={0}
+                // The dimmed `--hidden` modifier only ever applies to the
+                // ALREADY-pinned row (see the className above) — a plain
+                // unpinned row's title stays undefined regardless of
+                // `canShowSecondPane`, since clicking it to pin is always
+                // valid even when the column is currently too narrow to
+                // show the result (Dock.tsx's own `pinnedKey`/
+                // `canShowSecondPane` doc comments: the pin is never
+                // cleared for width alone).
+                title={
+                  pinned && !canShowSecondPane
+                    ? "Pinned — hidden until this column is wider"
+                    : undefined
+                }
+                aria-label={`${control.title} — ${pinned ? "unpin second log pane" : "pin as second log pane"}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onTogglePin();
+                }}
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter" && e.key !== " ") return;
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onTogglePin();
+                }}
+              >
+                {pinned ? "pinned" : "pin"}
+              </span>
+            )
+          }
         </div>
       </div>
     </Fragment>
