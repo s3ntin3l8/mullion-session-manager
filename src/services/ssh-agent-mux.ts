@@ -228,7 +228,14 @@ export interface MuxChannel {
   /** Fully closes this channel — idempotent, safe to call from either
    * side or after the underlying connection is already gone. */
   close(): void;
+  /** Safe to attach at any point after the channel is obtained, including
+   * asynchronously (e.g. after pairing this channel with a second,
+   * separately-opened one) — data that arrived before the first listener
+   * was attached is buffered and replayed to it, in order, rather than
+   * dropped. See `ChannelImpl`'s own `pendingData` for why this guarantee
+   * exists and the reproduction that found its absence. */
   onData(listener: (chunk: Buffer) => void): void;
+  /** Same deferred-replay guarantee as `onData` — see its own doc. */
   onEof(listener: () => void): void;
   onClose(listener: () => void): void;
   /** Fired when `sendWindow` grows from 0 (or grows at all after having
