@@ -1580,6 +1580,270 @@ describe("Dock", () => {
         );
       });
     });
+
+    describe("issue #1240 — an orphaned dock session (control dropped out of discovery)", () => {
+      it("a docker-logs:<containerName> session with no matching control renders as a marked-orphaned, standalone row", async () => {
+        dockByProject[1] = []; // no discovered services at all — the whole stack is gone
+        const orphanSession = makeSession({
+          id: 99,
+          kind: "dock",
+          name: "docker-logs:ghost-web-1",
+          command:
+            "docker compose -p 'ghost' --project-directory '/x/ghost' logs -f --tail=200 'web'",
+          status: "active",
+        });
+        useDashboardStore.setState({
+          projects: [PROJECT],
+          sessions: [orphanSession],
+          sessionsLoaded: true,
+        });
+        render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+        const nameEl = await screen.findByText("ghost-web-1");
+        const row = nameEl.closest(".dock-monitor") as HTMLElement;
+        expect(row).toHaveClass("dock-monitor--orphaned");
+        expect(row).toHaveAttribute(
+          "aria-label",
+          expect.stringContaining("orphaned, no matching service"),
+        );
+        // No discovered service behind it — not inside a stack group.
+        expect(row.closest(".dock-stack-group")).toBeNull();
+      });
+
+      it("ordering: a control still inside its RECREATE_GRACE_MS hold window renders ONLY as its held row, never also as a duplicate orphaned row", async () => {
+        // This is the ordering the implementation is required to get right —
+        // orphan detection must run AFTER holdVanishedDockerControls' own
+        // merge, so a control still within its hold window (already present
+        // in the rendered-controls list via the hold, matched by the same
+        // dockerSessionIdentity) is correctly excluded from the orphan set.
+        // Getting this backwards would render the same session as BOTH a
+        // held row (recreating…) AND a separate orphaned row in one commit.
+        const T0 = 1_700_000_000_000;
+        const dateSpy = vi.spyOn(Date, "now").mockReturnValue(T0);
+        try {
+          dockByProject[1] = [dockerControl()];
+          const runningSession = makeSession({
+            id: 42,
+            kind: "dock",
+            name: "docker-logs:sanctuary-web",
+            command: dockerControl().command,
+            status: "active",
+          });
+          useDashboardStore.setState({
+            projects: [PROJECT],
+            sessions: [runningSession],
+            sessionsLoaded: true,
+          });
+          render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+          await screen.findByText("web");
+
+          // The service drops out of discovery — still within the grace
+          // window, so it must be HELD, not orphaned.
+          dockByProject[1] = [];
+          useDashboardStore.getState().bumpDockConfigRefreshTrigger();
+          await screen.findByText("recreating…");
+
+          const monitors = document.querySelectorAll(".dock-monitor");
+          expect(monitors.length).toBe(1);
+          expect(monitors[0]).not.toHaveClass("dock-monitor--orphaned");
+          expect(document.querySelector(".dock-monitor--orphaned")).toBeNull();
+        } finally {
+          dateSpy.mockRestore();
+        }
+      });
+
+      it("selecting an orphan row shows its log in the log pane, and stopping its stream calls deleteSession — the row then disappears on the next poll", async () => {
+        dockByProject[1] = [];
+        const orphanSession = makeSession({
+          id: 77,
+          kind: "dock",
+          name: "docker-logs:ghost-web-1",
+          command:
+            "docker compose -p 'ghost' --project-directory '/x/ghost' logs -f --tail=200 'web'",
+          status: "active",
+        });
+        const deleteSession = vi.fn().mockResolvedValue(undefined);
+        useDashboardStore.setState({
+          projects: [PROJECT],
+          sessions: [orphanSession],
+          sessionsLoaded: true,
+          deleteSession,
+          settings: {
+            ...DEFAULT_SETTINGS,
+            sessions: { ...DEFAULT_SETTINGS.sessions, confirmBeforeKill: false },
+          },
+        });
+        const user = userEvent.setup();
+        render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+        const row = await screen.findByText("ghost-web-1");
+        await user.click(row);
+        await waitFor(() => {
+          expect(screen.getByTestId("terminal-pane")).toHaveAttribute("data-session-id", "77");
+        });
+
+        // No `.docker` field at all on a synthetic orphan control, so the
+        // stream-toggle tag reads "on"/"off" (not "logs on"/"logs off" —
+        // DockMonitor.tsx's own label logic keys off `control.docker`).
+        await user.click(screen.getByText("on"));
+        expect(deleteSession).toHaveBeenCalledWith(77);
+
+        // Simulate the next poll observing the session actually gone.
+        useDashboardStore.setState({ sessions: [] });
+        await waitFor(() => expect(screen.queryByText("ghost-web-1")).not.toBeInTheDocument());
+      });
+
+      it("attaches an orphan under its former stack's group when that group still has other live services", async () => {
+        dockByProject[1] = [dockerControl()]; // "web" service still live, group "sanctuary"
+        const orphanSession = makeSession({
+          id: 55,
+          kind: "dock",
+          // compose's own deterministic <project>-<service>-<replica> naming
+          // — "sanctuary-worker-1" parses back to project "sanctuary".
+          name: "docker-logs:sanctuary-worker-1",
+          command: "docker compose -p 'sanctuary' logs -f --tail=200 'worker'",
+          status: "active",
+        });
+        useDashboardStore.setState({
+          projects: [PROJECT],
+          sessions: [orphanSession],
+          sessionsLoaded: true,
+        });
+        render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+        await screen.findByText("web");
+        const orphanName = await screen.findByText("sanctuary-worker-1");
+        const group = document.querySelector(".dock-stack-group") as HTMLElement;
+        expect(group.contains(orphanName)).toBe(true);
+        expect(orphanName.closest(".dock-monitor")).toHaveClass("dock-monitor--orphaned");
+      });
+
+      it("renders standalone when the whole former stack is gone, not just this one service", async () => {
+        dockByProject[1] = []; // no live services in ANY compose project
+        const orphanSession = makeSession({
+          id: 56,
+          kind: "dock",
+          name: "docker-logs:sanctuary-web-1",
+          command: "docker compose -p 'sanctuary' logs -f --tail=200 'web'",
+          status: "active",
+        });
+        useDashboardStore.setState({
+          projects: [PROJECT],
+          sessions: [orphanSession],
+          sessionsLoaded: true,
+        });
+        render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+        const orphanName = await screen.findByText("sanctuary-web-1");
+        expect(orphanName.closest(".dock-stack-group")).toBeNull();
+      });
+
+      it("renders standalone when the container name doesn't match compose's <project>-<service>-<replica> convention (a container_name: override)", async () => {
+        // dockerControl()'s own "sanctuary" group is still live, but the
+        // orphan's container name doesn't parse against the naming
+        // convention at all (e.g. an explicit `container_name:` override in
+        // the compose file) — composeProjectFromContainerName returns null,
+        // so this must render standalone rather than guessing a group.
+        dockByProject[1] = [dockerControl()];
+        const orphanSession = makeSession({
+          id: 57,
+          kind: "dock",
+          name: "docker-logs:my-custom-name",
+          command: "docker compose -p 'sanctuary' logs -f --tail=200 'worker'",
+          status: "active",
+        });
+        useDashboardStore.setState({
+          projects: [PROJECT],
+          sessions: [orphanSession],
+          sessionsLoaded: true,
+        });
+        render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+        await screen.findByText("web");
+        const orphanName = await screen.findByText("my-custom-name");
+        expect(orphanName.closest(".dock-stack-group")).toBeNull();
+      });
+
+      it("does NOT mark a reconstructed live stack-action row (docker-stack:<composeProject>) as orphaned", async () => {
+        // Regression guard for the `!control.docker` gating mistake this
+        // issue's own implementation notes warn about: `reconstructedEphemeralControls`
+        // (Dock.tsx) also builds a `source: "docker"` control with no
+        // `.docker` field, for a completely different reason (a live stack
+        // action surviving a workspace switch, not an orphaned log
+        // session) — its id is always `docker-stack:<composeProject>`, a
+        // different, non-overlapping prefix from `docker-logs:`.
+        dockByProject[1] = [];
+        const rebuildCommand =
+          "docker compose -p 'sanctuary' build --pull && docker compose -p 'sanctuary' up -d";
+        const rebuildSession = makeSession({
+          id: 88,
+          kind: "dock",
+          name: "docker-stack:sanctuary",
+          command: rebuildCommand,
+          status: "active",
+        });
+        useDashboardStore.setState({
+          projects: [PROJECT],
+          sessions: [rebuildSession],
+          sessionsLoaded: true,
+        });
+        render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+        const reconstructedRow = await screen.findByText("Stack action running — sanctuary");
+        expect(reconstructedRow.closest(".dock-monitor")).not.toHaveClass("dock-monitor--orphaned");
+      });
+
+      it("code-review — does NOT mark a plain .crs/dock.json control as orphaned even when its id is crafted to match a docker-logs: session name (the documented override escape hatch)", async () => {
+        // docs/dock.md documents a dock.json control's own `id` colliding
+        // with a discovered control's id as a supported override escape
+        // hatch, and dockerSessionIdentity's own "never collides" test
+        // (dockHelpers.test.ts) crafts exactly this shape: a plain config
+        // control (source undefined, no `.docker`) whose `id` happens to
+        // equal a real `docker-logs:<containerName>` string. This control
+        // is ordinary and working — DockMonitor must not flag it as
+        // orphaned just because its `id` happens to start with
+        // "docker-logs:"; only a control whose `source` is also "docker"
+        // (the shape Dock.tsx's own synthetic orphan controls always carry)
+        // should ever get the orphaned marker.
+        dockByProject[1] = [
+          { id: "docker-logs:sanctuary-web", title: "My override", command: "npm run dev" },
+        ];
+        useDashboardStore.setState({
+          projects: [PROJECT],
+          sessions: [],
+          sessionsLoaded: true,
+        });
+        render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+        const row = await screen.findByText("My override");
+        expect(row.closest(".dock-monitor")).not.toHaveClass("dock-monitor--orphaned");
+      });
+
+      it("code-review — a SELECTED orphaned row still carries the selected class alongside orphaned, for CSS's compound override to key off", async () => {
+        dockByProject[1] = [];
+        const orphanSession = makeSession({
+          id: 66,
+          kind: "dock",
+          name: "docker-logs:ghost-web-1",
+          command: "docker compose -p 'ghost' logs -f --tail=200 'web'",
+          status: "active",
+        });
+        useDashboardStore.setState({
+          projects: [PROJECT],
+          sessions: [orphanSession],
+          sessionsLoaded: true,
+        });
+        const user = userEvent.setup();
+        render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+        const row = await screen.findByText("ghost-web-1");
+        await user.click(row);
+
+        const monitorRow = row.closest(".dock-monitor") as HTMLElement;
+        await waitFor(() => expect(monitorRow).toHaveClass("dock-monitor--selected"));
+        expect(monitorRow).toHaveClass("dock-monitor--orphaned");
+      });
+    });
   });
 
   // Helpers for interacting with CustomSelect in tests.

@@ -157,7 +157,27 @@ export function resolveSelectedValue(params: {
  * keeps matching by command string (see `runningFor` below).
  */
 export function dockerSessionIdentity(control: DockControl): string | null {
-  return control.docker ? `docker-logs:${control.docker.containerName}` : null;
+  if (control.docker) return `docker-logs:${control.docker.containerName}`;
+  // Issue #1240 — an orphaned session: its control has dropped out of
+  // discovery (compose down, or holdVanishedDockerControls' grace window
+  // expired) while its docker-logs:<containerName> session is still alive.
+  // The synthetic control built for it (Dock.tsx) sets its OWN id to the
+  // session's name directly, so recognizing that shape here is enough to
+  // make dockRowKey/runningSessionFor/selection/reconciliation treat it
+  // exactly like any other docker-sourced row, with zero other changes.
+  //
+  // Also requires `source === "docker"`, not just the id prefix: a
+  // dock.json control's own `id` is a supported override escape hatch
+  // allowed to collide with a real `docker-logs:<containerName>` string
+  // verbatim (docs/dock.md, and this file's own "never collides" test) —
+  // but `source`/`docker` are deliberately NOT settable from dock.json
+  // (project-config.ts's normalizeRawControl never forges them; see
+  // DockControl's own doc comment, shared/types.ts), so a plain config
+  // control can never satisfy this second check no matter what id it's
+  // given, which is what keeps that override escape hatch from colliding
+  // with a real orphaned session's identity here.
+  if (control.source === "docker" && control.id.startsWith("docker-logs:")) return control.id;
+  return null;
 }
 
 /**
@@ -256,6 +276,26 @@ export function composeProjectForControl(control: DockControl): string | null {
   if (!EPHEMERAL_STACK_ACTION_PREFIXES.includes(prefix)) return null;
   const composeProject = control.id.slice(colonIndex + 1);
   return composeProject.length > 0 ? composeProject : null;
+}
+
+/**
+ * Best-effort parse of compose's own deterministic
+ * `<project>-<service>-<replica>` container-naming convention (the same one
+ * `dockerSessionIdentity`'s own doc comment references) — used ONLY to
+ * cosmetically group an orphaned session (issue #1240, Dock.tsx's
+ * `orphanControls`) under its former stack's still-live group, never for
+ * identity or actions. Deliberately NOT exhaustive: a service whose compose
+ * file sets an explicit `container_name:` override doesn't follow this
+ * convention at all (verified during planning against two real stacks on
+ * this host — `nanokvm-manager` and `open-design` — both of which set
+ * `container_name:` and would NOT match this pattern), so such a container's
+ * orphaned session just renders as a standalone row instead of a phantom or
+ * mis-grouped one. That's an accepted, understood degradation, not a bug —
+ * see this repo's PR description for issue #1240.
+ */
+export function composeProjectFromContainerName(containerName: string): string | null {
+  const match = /^(.+)-([^-]+)-(\d+)$/.exec(containerName);
+  return match ? match[1] : null;
 }
 
 export interface DockerStackGroup {

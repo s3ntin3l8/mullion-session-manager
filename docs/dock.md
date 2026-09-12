@@ -319,6 +319,21 @@ exits. The per-service actions (restart/stop/start) run synchronously
 instead, since `restart`/`stop`/`start` are all bounded operations with
 nothing worth streaming.
 
+A discovered service's log-stream session can outlive the service's own
+rail row: a `docker compose down`, or discovery briefly missing the service
+past its own hold window (a few seconds mid-recreate, held so the row
+doesn't flicker), both drop the service from `controls` while its
+`docker-logs:<containerName>` session stays alive server-side. Rather than
+leaving that session unreachable, the dock synthesizes a standalone
+**orphaned** row for it — marked with a warning icon and a tinted border,
+grouped back under its former stack when the container name still parses
+against compose's own `<project>-<service>-<replica>` convention and that
+stack still has other live rows, otherwise standalone. Because the row has
+no discovered service behind it, it has no image pill, kebab, or
+start/restart/stop actions — the only thing you can do with it is view its
+log or stop its stream, which ends the session and lets the row disappear
+on the next poll.
+
 An action that can recreate the container(s) (`up -d`, either restart
 variant of pull/rebuild) checks the on-disk compose config against what the
 running container was actually created from, and surfaces a "will
