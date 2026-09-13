@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.20](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.19...v0.3.20) (2026-09-13)
+
+
+### Features
+
+* **dock:** unify per-project columns into one shared rail and log pane ([#1276](https://github.com/s3ntin3l8/mullion-session-manager/issues/1276)) ([b2ba67d](https://github.com/s3ntin3l8/mullion-session-manager/commit/b2ba67d2f05f98011ab67000fce09e1747825c4a))
+
+
+### Bug Fixes
+
+* **sessions:** clean up per-session workflow-conventions file on terminate ([#1275](https://github.com/s3ntin3l8/mullion-session-manager/issues/1275)) ([d443077](https://github.com/s3ntin3l8/mullion-session-manager/commit/d443077c9628fd23fb223d62a470fb89f1907432))
+
 ## [0.3.19](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.18...v0.3.19) (2026-09-13)
 
 
