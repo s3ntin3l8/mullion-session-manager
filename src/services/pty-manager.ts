@@ -62,6 +62,7 @@ import {
 import { buildLaunchPlan } from "./launch-plan.js";
 import { sessionAgentGuidePath } from "./agent-guide.js";
 import { sessionBriefingPath } from "./project-briefing.js";
+import { sessionWorkflowConventionsPath } from "./workflow-conventions.js";
 import { HOOK_HANDLERS, type SessionHookContext } from "./hook-handlers.js";
 // Re-exported so existing importers (src/routes/agents.ts, this module's own
 // tests) keep reaching these through pty-manager.js unchanged — PR 32 moved
@@ -4512,6 +4513,21 @@ export class PtyManager {
     } catch {
       // ENOENT (guide source never existed on this install, or the write
       // itself failed — see writeSessionAgentGuide's own doc comment).
+    }
+    // Issue #937 follow-up — same pre-existing-leak shape as the guide/
+    // briefing files immediately around it: writeSessionWorkflowConventions
+    // writes this unconditionally at spawn time (or unlinks it itself when
+    // nothing should be injected — see that function's own doc comment), but
+    // nothing removed a live copy at this genuinely-terminal moment. Confirmed
+    // live: dozens of stale `*.workflow-conventions.md` files accumulate
+    // under sessionsDir the same way `*.agent-guide.md` did before #405's fix
+    // above.
+    try {
+      unlinkSync(sessionWorkflowConventionsPath(this.sessionsDir, id));
+    } catch {
+      // ENOENT (this install has no global workflow-conventions text
+      // configured, this project opted out, or writeSessionWorkflowConventions
+      // already unlinked it once the resolved text went empty).
     }
     try {
       unlinkSync(sessionBriefingPath(this.sessionsDir, id));

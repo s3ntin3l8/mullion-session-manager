@@ -199,6 +199,59 @@ describeIfOpencode(
   },
 );
 
+// Issue #937 follow-up — a CI smoke test for the OTHER half of
+// hook-adapters/opencode.ts's prepareLaunch: the `instructions` array
+// that carries the workflow-conventions (and agent-guide/briefing/seed)
+// pointer files into opencode's context. hook-adapters/opencode.test.ts
+// already asserts the ADAPTER emits the right pointer; this asserts
+// opencode's own config resolution still honors an `instructions` entry
+// pointing OUTSIDE the project directory the same way the adapter relies
+// on (sessionsDir, never the session's own cwd). Config-resolution only
+// (`opencode debug config`) — deliberately no live model call, so this
+// stays fast and deterministic in CI. Not pinned to a specific opencode
+// version the way the permission-merge tests above are: this is a much
+// more basic, long-documented config feature (opencode.ts's own header
+// comment cites empirical verification across 1.18.26/1.18.27, and this
+// suite's version-pin philosophy is for behavior that could plausibly
+// regress, not every empirically-verified fact).
+describeIfOpencode("opencode instructions config entry (issue #937)", () => {
+  it("resolves an instructions entry pointing outside the project directory, the same way Mullion's own sessionsDir-based pointer files do", () => {
+    if (!probe.available) return;
+
+    const projectDir = mkdtempSync(path.join(tmpdir(), "mullion-opencode-instructions-project-"));
+    const outsideDir = mkdtempSync(path.join(tmpdir(), "mullion-opencode-instructions-outside-"));
+    try {
+      const conventionsPath = path.join(outsideDir, "1.workflow-conventions.md");
+      writeFileSync(
+        conventionsPath,
+        "> This Mullion install's own workflow conventions, set in Settings -> Sessions.\n\nNever commit directly to the default branch.",
+      );
+
+      const result = execFileSync("opencode", ["debug", "config"], {
+        cwd: projectDir,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        env: {
+          ...process.env,
+          OPENCODE_CONFIG_DIR: "",
+          OPENCODE_CONFIG_CONTENT: JSON.stringify({ instructions: [conventionsPath] }),
+        },
+      });
+      const resolved = JSON.parse(result);
+
+      // The path itself must survive resolution unchanged — the failure
+      // mode this guards against is opencode ever resolving `instructions`
+      // entries relative to the project cwd (which would silently break
+      // every sessionsDir-based pointer Mullion writes, workflow-
+      // conventions included).
+      expect(resolved.instructions).toContain(conventionsPath);
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+});
+
 // Stays as a real `describe` (not skipped) so the absence of an
 // opencode binary is itself visible in the test output — a developer
 // running `make test-e2e` locally will see "skipped: opencode binary
