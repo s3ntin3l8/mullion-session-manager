@@ -109,7 +109,6 @@ function clearBreakerEntry(key: string): void {
 export function __resetRateLimitBreakerForTests(): void {
   RATE_LIMIT_BREAKER.clear();
   globalRateLimitMax = null;
-  authExpiryInProgress = false;
 }
 
 // Reserved breaker key for the shared, per-IP global bucket (security.ts's

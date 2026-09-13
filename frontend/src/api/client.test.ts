@@ -141,9 +141,10 @@ describe("request() — forward-auth session expiry", () => {
     await expect(request("/api/sessions")).rejects.toBeInstanceOf(AuthExpiredError);
     expect(reloadSpy).toHaveBeenCalledOnce();
 
-    // A later successful request (e.g. after the reload actually completed
-    // the forward-auth dance and booted in a fresh page context) must clear the
-    // guard rather than leaving it armed for the rest of the 3-minute window.
+    // In a real browser, window.location.reload() tears down the JS context, so
+    // authExpiryInProgress starts as false in the reloaded page while sessionStorage
+    // persists. We call __resetAuthExpiryStateForTests() to model that fresh post-reload
+    // page context without clearing sessionStorage.
     __resetAuthExpiryStateForTests();
     fetchMock.mockResolvedValueOnce(jsonResponse(200, { ok: true }));
     await expect(request("/api/sessions")).resolves.toEqual({ ok: true });

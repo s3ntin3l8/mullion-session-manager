@@ -137,7 +137,6 @@ export const createSessionsSlice: StateCreator<DashboardState, [], [], SessionsS
         // "just retry" recovery left — only the explicit sign-in-again
         // action App.tsx renders for sessionExpired.
         if (err instanceof AuthExpiredError) {
-          refreshSessionsQueuedRun = null;
           set({ sessionExpired: true });
           throw err;
         }
@@ -159,9 +158,6 @@ export const createSessionsSlice: StateCreator<DashboardState, [], [], SessionsS
     // exists purely to normalize that outcome so the queued run always
     // starts, never inherits the current run's rejection).
     if (refreshSessionsActiveRun) {
-      if (get().sessionExpired) {
-        throw new AuthExpiredError();
-      }
       if (!refreshSessionsQueuedRun) {
         refreshSessionsQueuedRun = refreshSessionsActiveRun
           .catch(() => {})
