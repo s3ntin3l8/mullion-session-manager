@@ -85,6 +85,9 @@ export { TASK_STATUSES, type TaskStatus, LOCAL_HOST_ID };
 // ./types.ts's own header for why these didn't move to src/shared/.
 export type {
   AuthStatus,
+  SystemStats,
+  ResourceSeverity,
+  DockerStorageStatus,
   Project,
   CreateProjectDirOptions,
   CreateProjectResult,

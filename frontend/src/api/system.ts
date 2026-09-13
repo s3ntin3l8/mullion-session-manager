@@ -6,7 +6,15 @@
 // deviation note. Split out of the former flat frontend/src/api.ts (PR 22
 // of the refactoring roadmap).
 import { request, setGlobalRateLimitMax } from "./client.js";
-import type { Agent, ServerInfo, UpdateCheckResult, UpdateStatus, AuthStatus } from "./types.js";
+import type {
+  Agent,
+  ServerInfo,
+  UpdateCheckResult,
+  UpdateStatus,
+  AuthStatus,
+  SystemStats,
+  DockerStorageStatus,
+} from "./types.js";
 import type { Launcher } from "../../../src/shared/types.js";
 
 export function normalizeAgentId(id: string): string {
@@ -64,6 +72,11 @@ export const systemApi = {
     request<void>("/api/auth/login", { method: "POST", body: JSON.stringify({ token }) }),
 
   logout: () => request<void>("/api/auth/logout", { method: "POST" }),
+
+  getSystemStats: () => request<SystemStats>("/api/system-stats"),
+  getDockerStorage: () => request<DockerStorageStatus>("/api/storage/docker"),
+  pruneDockerStorage: () =>
+    request<{ output: string }>("/api/storage/docker/prune", { method: "POST" }),
 
   listOpenCodeModels: () => request<string[]>("/api/opencode/models"),
 };

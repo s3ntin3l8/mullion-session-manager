@@ -144,6 +144,12 @@ configured" and "reachable by anyone who can route to this host":
   reachable with no credential at all, since `src/plugins/auth.ts`'s
   `onRequest` gate installs no hook whatsoever in that case (see "Preview-host
   auth token" below for the one other place this same early-return matters).
+- **`MULLION_GATEWAY_LOGOUT_URL`** (default empty) — enables gateway logout
+  from Settings → Account and requires `MULLION_TRUST_GATEWAY=true`. Use
+  `/outpost.goauthentik.io/sign_out` for single-app Authentik forward auth,
+  or an absolute URL on the authentication host for domain-level mode.
+  Authentik logout ends all application sessions handled by that outpost.
+  Mullion accepts only a root-relative path or absolute HTTP(S) URL.
 
 Neither setting is a substitute for the other: `HOST=127.0.0.1` with
 `MULLION_TRUST_GATEWAY=true` and no gateway at all still means anything on
