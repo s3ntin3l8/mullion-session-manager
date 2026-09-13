@@ -7,6 +7,7 @@ import { inspectDockerStorage, pruneDockerStorage } from "../services/docker-sto
 import { sampleSystemStats, type MonitoredPath } from "../services/system-stats.js";
 
 const STATS_CACHE_MS = 10_000;
+const DOCKER_PRUNE_RATE_LIMIT = { max: 3, timeWindow: "1 minute" };
 
 function databaseDirectory(databaseUrl: string): string {
   const dbPath = databaseUrl.replace(/^file:/, "");
@@ -41,18 +42,22 @@ export async function systemResourcesRoute(app: FastifyInstance) {
 
   app.get("/api/storage/docker", async () => inspectDockerStorage());
 
-  app.post("/api/storage/docker/prune", async (_request, reply) => {
-    try {
-      const result = await pruneDockerStorage();
-      cached = null;
-      return result;
-    } catch (error) {
-      if (error instanceof Error && error.message === "DOCKER_PRUNE_IN_PROGRESS") {
-        return reply.conflict("Docker cleanup is already running");
+  app.post(
+    "/api/storage/docker/prune",
+    { config: { rateLimit: DOCKER_PRUNE_RATE_LIMIT } },
+    async (_request, reply) => {
+      try {
+        const result = await pruneDockerStorage();
+        cached = null;
+        return result;
+      } catch (error) {
+        if (error instanceof Error && error.message === "DOCKER_PRUNE_IN_PROGRESS") {
+          return reply.conflict("Docker cleanup is already running");
+        }
+        return reply.internalServerError(
+          error instanceof Error ? error.message : "Docker cleanup failed",
+        );
       }
-      return reply.internalServerError(
-        error instanceof Error ? error.message : "Docker cleanup failed",
-      );
-    }
-  });
+    },
+  );
 }

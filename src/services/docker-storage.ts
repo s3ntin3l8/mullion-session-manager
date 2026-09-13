@@ -128,6 +128,8 @@ export async function inspectDockerStorage(
   }
 }
 
+// This guard relies on this service being loaded once through Node's ESM
+// module cache; keep every route importing this canonical .js specifier.
 let pruneRunning = false;
 
 export async function pruneDockerStorage(spawnDocker?: SpawnDocker): Promise<{ output: string }> {
