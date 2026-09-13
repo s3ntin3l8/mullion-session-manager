@@ -512,7 +512,12 @@ describe("Dock", () => {
 
     it("clears pinnedKey (with no reassignment) when the pinned row's own control vanishes", async () => {
       const sessions = twoRunningControls();
-      useDashboardStore.setState({ projects: [PROJECT], sessions, sessionsLoaded: true });
+      useDashboardStore.setState({
+        projects: [PROJECT],
+        sessions,
+        sessionsLoaded: true,
+        activeWorkspaceId: 7,
+      });
       const user = userEvent.setup();
 
       render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
@@ -540,14 +545,23 @@ describe("Dock", () => {
         expect(screen.queryByText("Worker")).not.toBeInTheDocument();
       });
       // No neighbour reassignment — the second pane is simply gone, not
-      // reassigned to whatever row happens to remain.
-      expect(screen.getAllByTestId("terminal-pane")).toHaveLength(1);
-      // Wrapped in `waitFor` — the persist effect that writes `pinned` to
-      // `localStorage` is a genuine `useEffect`, so it can commit a tick
-      // after the DOM assertion above already settled.
+      // reassigned to whatever row happens to remain. Wrapped in its own
+      // `waitFor` — this clears via DockProjectGroup's own pin-vanish
+      // `useEffect` (rowKeys no longer includes the pinned key), which
+      // calls Dock's `onUnpin`, a genuine effect that lands one commit
+      // AFTER the render the `waitFor` above already observed, not the
+      // same one (unified-rail dock rework — the pin is Dock-level,
+      // cross-project state now, so this can no longer be corrected in the
+      // SAME render-phase pass `selectedKey`'s own reconciliation uses).
       await waitFor(() => {
-        const stored = JSON.parse(localStorage.getItem("crs.dockSelectedRows") ?? "{}");
-        expect(stored["1"].pinned).toBeNull();
+        expect(screen.getAllByTestId("terminal-pane")).toHaveLength(1);
+      });
+      // Persisted to `crs.dockPinnedRow` (unified-rail dock rework — keyed
+      // by workspace rather than folded into `crs.dockSelectedRows`'s
+      // per-project `pinned` field).
+      await waitFor(() => {
+        const stored = JSON.parse(localStorage.getItem("crs.dockPinnedRow") ?? "{}");
+        expect(stored["7"]).toBeNull();
       });
     });
 
@@ -585,7 +599,12 @@ describe("Dock", () => {
       // SAME session (a React duplicate-key warning) with no way to unpin
       // it, since the pin affordance is hidden on the now-selected row.
       const sessions = twoRunningControls();
-      useDashboardStore.setState({ projects: [PROJECT], sessions, sessionsLoaded: true });
+      useDashboardStore.setState({
+        projects: [PROJECT],
+        sessions,
+        sessionsLoaded: true,
+        activeWorkspaceId: 7,
+      });
       const user = userEvent.setup();
 
       render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
@@ -613,29 +632,56 @@ describe("Dock", () => {
       });
       // Exactly one pane (the newly-primary "worker"), never two for the
       // same session, and the pin is gone rather than silently duplicated.
-      const panes = screen.getAllByTestId("terminal-pane");
-      expect(panes).toHaveLength(1);
-      expect(panes[0]).toHaveAttribute("data-session-id", "20");
-      expect(screen.queryByText("pinned")).not.toBeInTheDocument();
-      // Wrapped in `waitFor`, not a synchronous read right after the render
-      // assertions above — the persist effect that writes `pinned` to
-      // `localStorage` is a genuine `useEffect` (Dock.tsx's own comment on
-      // it), so it can commit a tick after the DOM updates this test just
-      // asserted on. The "falls back to unpinned..." test further below
-      // uses the same wrapped pattern for the same reason.
+      // Wrapped in `waitFor`, not a synchronous read right after the
+      // reconciliation's own DOM update above — unlike the OLD per-column
+      // design (an unconditional check in the SAME render that moved
+      // `selectedKey`, so the correction landed in the identical commit),
+      // this now clears via DockProjectGroup's own pin effect (the row is
+      // still active AND now equals `selectedKey`, the collision case that
+      // effect exists to catch — see its own doc comment): a genuine
+      // `useEffect`, so its `onUnpin` call — and Dock's own re-render
+      // dropping the second pane — lands one commit AFTER the render this
+      // test's first `waitFor` above already observed, not the same one.
       await waitFor(() => {
-        const stored = JSON.parse(localStorage.getItem("crs.dockSelectedRows") ?? "{}");
-        expect(stored["1"].pinned).toBeNull();
+        const panes = screen.getAllByTestId("terminal-pane");
+        expect(panes).toHaveLength(1);
+        expect(panes[0]).toHaveAttribute("data-session-id", "20");
+      });
+      expect(screen.queryByText("pinned")).not.toBeInTheDocument();
+      // Persisted to `crs.dockPinnedRow` keyed by workspace (unified-rail
+      // dock rework — see this suite's earlier "control vanishes" test for
+      // why the key moved off `crs.dockSelectedRows`). The "falls back to
+      // unpinned..." test further below asserts the same key for the same
+      // reason.
+      await waitFor(() => {
+        const stored = JSON.parse(localStorage.getItem("crs.dockPinnedRow") ?? "{}");
+        expect(stored["7"]).toBeNull();
       });
     });
 
-    it("persists the pin across a remount, keyed by the same crs.dockSelectedRows entry #1238 already writes", async () => {
+    it("persists the pin across a remount, keyed by crs.dockPinnedRow under the active workspace (unified-rail dock rework)", async () => {
+      // Unified-rail dock rework — the pin used to live inside
+      // `crs.dockSelectedRows`'s own per-project `pinned` field (#1238's
+      // storage key, extended additively by #1239); it's now Dock-level,
+      // cross-project state, so it moved to its own key,
+      // `crs.dockPinnedRow`, carrying BOTH the owning project id and the
+      // row key (a bare row key alone is no longer enough — a plain
+      // `dock-config:<id>` key isn't unique across projects).
       const sessions = twoRunningControls();
       localStorage.setItem(
         "crs.dockSelectedRows",
-        JSON.stringify({ "1": { selected: "dock-config:dev", pinned: "dock-config:worker" } }),
+        JSON.stringify({ "1": { selected: "dock-config:dev" } }),
       );
-      useDashboardStore.setState({ projects: [PROJECT], sessions, sessionsLoaded: true });
+      localStorage.setItem(
+        "crs.dockPinnedRow",
+        JSON.stringify({ "7": { projectId: 1, rowKey: "dock-config:worker" } }),
+      );
+      useDashboardStore.setState({
+        projects: [PROJECT],
+        sessions,
+        sessionsLoaded: true,
+        activeWorkspaceId: 7,
+      });
 
       render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
       resizeTo(TWO_PANE_WIDTH);
@@ -647,13 +693,22 @@ describe("Dock", () => {
       expect(screen.getByText("pinned")).toBeInTheDocument();
     });
 
-    it("falls back to unpinned when the previously-pinned control's identity no longer matches any row", async () => {
+    it("falls back to unpinned when the previously-pinned row key no longer matches any row", async () => {
       const sessions = twoRunningControls();
       localStorage.setItem(
         "crs.dockSelectedRows",
-        JSON.stringify({ "1": { selected: "dock-config:dev", pinned: "dock-config:ghost" } }),
+        JSON.stringify({ "1": { selected: "dock-config:dev" } }),
       );
-      useDashboardStore.setState({ projects: [PROJECT], sessions, sessionsLoaded: true });
+      localStorage.setItem(
+        "crs.dockPinnedRow",
+        JSON.stringify({ "7": { projectId: 1, rowKey: "dock-config:ghost" } }),
+      );
+      useDashboardStore.setState({
+        projects: [PROJECT],
+        sessions,
+        sessionsLoaded: true,
+        activeWorkspaceId: 7,
+      });
 
       render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
       resizeTo(TWO_PANE_WIDTH);
@@ -662,8 +717,8 @@ describe("Dock", () => {
       expect(screen.getAllByTestId("terminal-pane")).toHaveLength(1);
       expect(screen.getByText("pin")).toBeInTheDocument();
       await waitFor(() => {
-        const stored = JSON.parse(localStorage.getItem("crs.dockSelectedRows") ?? "{}");
-        expect(stored["1"].pinned).toBeNull();
+        const stored = JSON.parse(localStorage.getItem("crs.dockPinnedRow") ?? "{}");
+        expect(stored["7"]).toBeNull();
       });
     });
 
@@ -878,16 +933,19 @@ describe("Dock", () => {
         expect(stored["5"]).toBeCloseTo(404 / 808);
       });
 
-      it("shares the ratio across columns in one workspace, each clamping independently against its own width", async () => {
+      it("unified-rail dock rework — the ratio clamps against the dock's OWN single measured width, not a per-project one, even when the pin belongs to a different project than the active one", async () => {
+        // Regression coverage for the unified-rail dock rework
+        // (.claude/plans/we-have-an-unintended-jaunty-globe.md): this used
+        // to assert two INDEPENDENT `.dock-column`s, each with its own
+        // ResizeObserver-driven ceiling — that premise no longer exists.
+        // There is exactly ONE `.dock-split` now, shared by every tiled
+        // project, and the pin can point at a row in a DIFFERENT project
+        // than the one currently active (the main point of this rework) —
+        // this proves the shared ratio's own clamp still applies correctly
+        // in exactly that cross-project case.
         const PROJECT2 = makeProject({ id: 2, name: "second", cwd: "/home/x/second" });
-        dockByProject[1] = [
-          { id: "dev", title: "Dev server", command: "npm run dev" },
-          { id: "worker", title: "Worker", command: "npm run worker" },
-        ];
-        dockByProject[2] = [
-          { id: "dev", title: "Dev server", command: "npm run dev" },
-          { id: "worker", title: "Worker", command: "npm run worker" },
-        ];
+        dockByProject[1] = [{ id: "dev", title: "Dev server", command: "npm run dev" }];
+        dockByProject[2] = [{ id: "dev2", title: "Second dev", command: "npm run second-dev" }];
         const sessions = [
           makeSession({
             id: 10,
@@ -897,23 +955,9 @@ describe("Dock", () => {
             status: "active",
           }),
           makeSession({
-            id: 20,
-            projectId: 1,
-            command: "npm run worker",
-            kind: "dock",
-            status: "active",
-          }),
-          makeSession({
             id: 30,
             projectId: 2,
-            command: "npm run dev",
-            kind: "dock",
-            status: "active",
-          }),
-          makeSession({
-            id: 40,
-            projectId: 2,
-            command: "npm run worker",
+            command: "npm run second-dev",
             kind: "dock",
             status: "active",
           }),
@@ -930,55 +974,30 @@ describe("Dock", () => {
         render(
           <Dock workspaceProjectIds={[1, 2]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />,
         );
-        // Assert there are exactly two columns, and identify them by their
-        // own `.dock-column-name` text (project name) — NOT by array index —
-        // before assuming `resizeCallbacks[0]`/`[1]` line up with
-        // project 1/2 in mount order. If that assumption were ever wrong,
-        // both `toBe` assertions below would still be plausible values (444
-        // and 905 both genuinely occur, just on the wrong column), so this
-        // anchors the mapping explicitly rather than trusting index
-        // arithmetic silently.
-        const columns = Array.from(document.querySelectorAll(".dock-column"));
-        expect(columns).toHaveLength(2);
-        const mullionColumnIndex = columns.findIndex((c) =>
-          c.querySelector(".dock-column-name")?.textContent?.includes("mullion"),
-        );
-        const secondColumnIndex = columns.findIndex((c) =>
-          c.querySelector(".dock-column-name")?.textContent?.includes("second"),
-        );
-        expect(mullionColumnIndex).not.toBe(-1);
-        expect(secondColumnIndex).not.toBe(-1);
+        // Exactly one shared split for both tiled projects — the whole
+        // point of the rework.
+        expect(document.querySelectorAll(".dock-split")).toHaveLength(1);
+        resizeTo(TWO_PANE_WIDTH);
 
-        // Column "mullion" (project 1) narrower (TWO_PANE_WIDTH,
-        // paneAreaWidth 808 — 0.6 is above that column's own ≈0.5495
-        // ceiling); column "second" (project 2) wider (paneAreaWidth 1508 —
-        // 0.6 is comfortably inside its own band). `resizeCallbacks` fires
-        // in the same order DockColumn instances mounted, which matches
-        // `columnIds`/mount order — asserted against the column identities
-        // above rather than assumed.
-        act(() => {
-          resizeCallbacks[mullionColumnIndex]?.([{ contentRect: { width: TWO_PANE_WIDTH } }]);
-          resizeCallbacks[secondColumnIndex]?.([{ contentRect: { width: 1800 } }]);
-        });
+        // Adopt-on-empty makes project 1 (the first column) active, with
+        // its own only row selected as the primary pane.
+        expect(await screen.findByTestId("terminal-pane")).toHaveAttribute("data-session-id", "10");
 
-        await screen.findAllByTestId("terminal-pane");
-        const pinTags = screen.getAllByText("pin");
-        expect(pinTags).toHaveLength(2);
-        await user.click(pinTags[0]);
-        await user.click(pinTags[1]);
-        expect(await screen.findAllByTestId("terminal-pane")).toHaveLength(4);
+        // Pin project 2's row — a DIFFERENT project than the active one.
+        await user.click(screen.getByText("pin"));
+        const panes = await screen.findAllByTestId("terminal-pane");
+        expect(panes).toHaveLength(2);
+        expect(panes[0]).toHaveAttribute("data-session-id", "10");
+        expect(panes[1]).toHaveAttribute("data-session-id", "30");
 
-        const mullionPrimaryPane = columns[mullionColumnIndex]!.querySelector(
-          ".dock-log-pane",
-        ) as HTMLElement;
-        const secondPrimaryPane = columns[secondColumnIndex]!.querySelector(
-          ".dock-log-pane",
-        ) as HTMLElement;
-        // "mullion"'s primary pane clamps to its own ceiling (444);
-        // "second"'s primary pane honors 0.6 unclamped: 0.6 * 1508 = 905
-        // (rounded).
-        expect(mullionPrimaryPane.style.flex).toBe("0 0 444px");
-        expect(secondPrimaryPane.style.flex).toBe("0 0 905px");
+        // 0.6 exceeds this split's own ≈0.5495 ceiling at TWO_PANE_WIDTH
+        // (paneAreaWidth 808), so it clamps to 444 — the SAME number the
+        // pre-rework per-column version of this test asserted for a
+        // column measured at this same width, since the underlying
+        // paneAreaWidth formula is unchanged, just no longer duplicated
+        // per project.
+        const primaryPane = document.querySelectorAll(".dock-log-pane")[0] as HTMLElement;
+        expect(primaryPane.style.flex).toBe("0 0 444px");
       });
 
       it("defaults to a 0.5 split and persists nothing when there is no active workspace", async () => {
@@ -3594,6 +3613,90 @@ describe("Dock", () => {
       // selecting "B"'s row.
       expect(screen.getByTestId("terminal-pane")).toHaveAttribute("data-session-id", "10");
       expect(bRow).not.toHaveClass("dock-monitor--selected");
+    });
+  });
+
+  // Unified-rail dock rework (.claude/plans/we-have-an-unintended-jaunty-globe.md)
+  // — every project's rows now render in one shared rail regardless of
+  // which project is "active"; only the active one's own selection drives
+  // the dock's single primary pane. This is the one path where
+  // `onActivate` and the primary-pane portal swap actually interact.
+  describe("unified-rail dock rework — active project switching", () => {
+    it("selecting a row in an inactive project's section makes that project active and moves the primary pane to it", async () => {
+      const PROJECT_2 = makeProject({ id: 2, name: "second", cwd: "/home/x/second" });
+      dockByProject[1] = [{ id: "dev", title: "Dev server", command: "npm run dev" }];
+      dockByProject[2] = [{ id: "dev2", title: "Second dev", command: "npm run second-dev" }];
+      const sessions = [
+        makeSession({
+          id: 10,
+          projectId: 1,
+          command: "npm run dev",
+          kind: "dock",
+          status: "active",
+        }),
+        makeSession({
+          id: 30,
+          projectId: 2,
+          command: "npm run second-dev",
+          kind: "dock",
+          status: "active",
+        }),
+      ];
+      useDashboardStore.setState({
+        projects: [PROJECT, PROJECT_2],
+        sessions,
+        sessionsLoaded: true,
+        activeWorkspaceId: 11,
+      });
+
+      render(<Dock workspaceProjectIds={[1, 2]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+      // Adopt-on-empty makes project 1 (the first tiled project, with no
+      // persisted `crs.dockActiveProject` entry yet) active by default,
+      // showing its own only row in the primary pane.
+      expect(await screen.findByTestId("terminal-pane")).toHaveAttribute("data-session-id", "10");
+      // Exactly one shared rail holding both projects' rows, regardless of
+      // which one is active.
+      expect(document.querySelectorAll(".dock-group")).toHaveLength(2);
+      expect(screen.getByText("Second dev")).toBeInTheDocument();
+
+      const user = userEvent.setup();
+      await user.click(screen.getByText("Second dev"));
+
+      await waitFor(() => {
+        expect(screen.getByTestId("terminal-pane")).toHaveAttribute("data-session-id", "30");
+      });
+      const stored = JSON.parse(localStorage.getItem("crs.dockActiveProject") ?? "{}");
+      expect(stored["11"]).toBe(2);
+    });
+  });
+
+  // Unified-rail dock rework — a project section can be collapsed to hide
+  // its own rows without affecting any other project's, or the dock's
+  // panes.
+  describe("unified-rail dock rework — collapsible project sections", () => {
+    it("collapsing a project section hides its rows and persists the flag per workspace", async () => {
+      dockByProject[1] = [{ id: "dev", title: "Dev server", command: "npm run dev" }];
+      useDashboardStore.setState({
+        projects: [PROJECT],
+        sessions: [],
+        sessionsLoaded: true,
+        activeWorkspaceId: 11,
+      });
+
+      render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+      await screen.findByText("Dev server");
+
+      const user = userEvent.setup();
+      await user.click(screen.getByTitle("Collapse"));
+
+      await waitFor(() => {
+        expect(screen.queryByText("Dev server")).not.toBeInTheDocument();
+      });
+      const stored = JSON.parse(localStorage.getItem("crs.dockCollapsedGroups") ?? "{}");
+      expect(stored["11"]).toEqual([1]);
+
+      await user.click(screen.getByTitle("Expand"));
+      expect(await screen.findByText("Dev server")).toBeInTheDocument();
     });
   });
 });

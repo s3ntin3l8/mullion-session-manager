@@ -206,53 +206,40 @@
   color: var(--dim);
   flex-shrink: 0;
 }
-/* Row of per-project columns (one DockColumn each), separated by draggable
-   dividers — the split view. Scrolls horizontally rather than crushing
-   columns below their min-width once more columns are pinned than fit. */
-.dock-columns {
-  flex: 1;
-  display: flex;
-  gap: 0;
-  min-height: 0;
-  overflow-x: auto;
-}
-.dock.collapsed .dock-columns {
-  display: none;
-}
-.dock-column-divider {
-  width: 6px;
-  flex-shrink: 0;
-  cursor: col-resize;
-  position: relative;
-}
-.dock-column-divider::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 2px;
-  width: 2px;
-  background: transparent;
-}
-.dock-column-divider:hover::after {
-  background: var(--ring, var(--muted));
-}
-.dock-column {
-  flex: 1 1 0;
-  min-width: 200px;
+/* Unified-rail dock rework — replaces what used to be one `.dock-column`
+   (its own rail AND its own log pane) per project, side by side, separated
+   by a draggable `.dock-column-divider`: two or more tiled projects made
+   the dock wider than the screen, exactly the bug this rework fixes (see
+   .claude/plans/we-have-an-unintended-jaunty-globe.md). `.dock-split`
+   (below) is now the ONLY split in the dock; a project's own section
+   (`.dock-group`) is a collapsible block of rail ROWS inside the single
+   `.dock-rail`, not a column of its own. */
+.dock-group {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 0 6px;
-  min-height: 0;
+  gap: 2px;
 }
-.dock-column-header {
+.dock-group-header {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   padding: 0 2px;
+  min-width: 0;
 }
-.dock-column-name {
+.dock-group-collapse-btn {
+  background: transparent;
+  border: none;
+  color: var(--dim);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  padding: 2px;
+  flex-shrink: 0;
+}
+.dock-group-collapse-btn:hover {
+  color: var(--fg);
+}
+.dock-group-name {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.09em;
@@ -262,6 +249,64 @@
   overflow: hidden;
   text-overflow: ellipsis;
   flex: 1;
+  min-width: 0;
+}
+/* The GitHub glance row, folded onto the project header's own line instead
+   of its own 26px row below it — a project section is now a rail row's
+   worth of vertical space, not a full column, so the border/margin/height
+   this component uses standalone (`.dock-github-row`'s own base rule,
+   above) would cost more of that budget than the header line has to spare.
+   `DockGithubRow.tsx` itself is untouched; this only overrides its sizing
+   when it renders here. */
+.dock-group-header .dock-github-row {
+  height: 20px;
+  padding: 0 6px;
+  margin: 0;
+  gap: 5px;
+  flex: 0 1 auto;
+  max-width: 55%;
+  min-width: 0;
+}
+.dock-group-header .dock-github-repo {
+  font-size: 10.5px;
+}
+.dock-group-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  /* Indents a project's own rows (and, one level deeper, a compose group's
+     `.dock-stack-monitors`) under its header — the visual nesting the
+     unified rail needs now that a project is a section within ONE rail
+     rather than a rail of its own. */
+  padding-left: 10px;
+}
+/* Per-project empty state — a single row matching `.dock-monitor`'s own
+   height, replacing the old 88px dashed `.dock-empty` card (still used
+   as-is for the whole-dock "nothing tiled" case, `.dock-empty-workspace`
+   below): a dashed card cost nothing when it was the only thing in an
+   otherwise-empty column, but multiplied by every project with no
+   monitors configured, it's exactly the kind of per-project width... now
+   HEIGHT... waste this rework exists to remove. */
+.dock-group-empty {
+  height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  color: var(--dim);
+  font-size: 11.5px;
+}
+button.dock-group-empty {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+  width: 100%;
+  color: var(--muted);
+}
+button.dock-group-empty:hover {
+  color: var(--fg);
 }
 .dock-column-remove {
   background: transparent;
@@ -312,8 +357,11 @@
   overflow-x: auto;
   overflow-y: auto;
 }
-/* The rail + divider + log pane, side by side inside a column — replaces
-   what used to be `.dock-body` alone. `overflow-y: auto` here is the same
+/* The rail + divider + log pane, side by side — replaces what used to be
+   `.dock-body` alone, and (unified-rail dock rework) is now the dock's ONLY
+   split: one `.dock-rail` holding every tiled project's own section
+   (`.dock-group`), not one `.dock-split` per project. `overflow-y: auto`
+   here is the same
    deliberate, EXPLICIT choice `.dock-rail` above (and `.dock-log-pane`
    below) make, not an unset axis silently defaulting to `auto` (the trap
    this comment's predecessor warned about): `.dock-log-pane`'s own explicit
@@ -344,6 +392,16 @@
 }
 .dock-split--stacked {
   flex-direction: column;
+}
+/* Unified-rail dock rework — the empty portal target(s) Dock renders for
+   whichever project group is active (or owns the pin) to render its own
+   `DockLogPane` into via `createPortal` (DockProjectGroup.tsx). `display:
+   contents` removes this element from the box tree entirely, so the
+   portaled `DockLogPane` — which carries its own `.dock-log-pane` sizing
+   (flex-basis, min-width/height) — becomes the true flex item of
+   `.dock-split` directly, exactly as if it had no wrapper at all. */
+.dock-pane-host {
+  display: contents;
 }
 /* Drag handle between the rail and the log pane — same look and mechanism
    as .dock-column-divider above, just col-resize between two DIFFERENT
@@ -406,22 +464,24 @@
   gap: 14px;
   color: var(--dim);
   font-size: 12px;
-  /* flex: 0 0 auto, not flex: 1 — .dock-rail is now a COLUMN, so `flex: 1`
-     would resolve this placeholder's HEIGHT from flex-grow instead of its
-     own 88px, stretching it to fill the rail's cross size. The old `flex: 1`
-     was correct only in the pre-rework row layout, where the cross axis
-     (height) was unaffected and flex only ever grew the placeholder's
-     width. */
+  /* flex: 0 0 auto — a fixed-height (88px) placeholder, not one that grows
+     to fill its container. `.dock-empty-workspace` below is this class's
+     only current user (unified-rail dock rework — a per-project empty rail
+     state is `.dock-group-empty` now, a single 28px row, not this dashed
+     card) and overrides this to `flex: 1` for its own different context
+     (sitting directly inside `.dock`, not a rail). */
   flex: 0 0 auto;
 }
-/* The whole-dock "nothing tiled yet" state sits directly in the row
-   (.dock-columns, still a ROW — unaffected by the rail's column flip above),
-   not inside a column — stretch it to fill available height rather than the
-   fixed 88px a per-column placeholder uses. `flex: 1` here is deliberately
-   re-declared, not inherited from `.dock-empty`'s own (now `0 0 auto`) rule:
-   in THIS row context flex's main axis is width, so growing here is exactly
-   what's wanted, unlike the per-column case above where growing would
-   stretch the placeholder's height instead. */
+/* The whole-dock "nothing tiled yet" state — rendered by Dock.tsx in place
+   of `.dock-split` entirely (no rail, no project section) when there are no
+   tiled/pinned projects at all, so this sits directly inside `.dock` itself
+   (a COLUMN, `.dock`'s own `flex-direction: column`), not inside any rail.
+   `flex: 1` here is deliberately re-declared, not inherited from
+   `.dock-empty`'s own (now `0 0 auto`) rule: in `.dock`'s column context
+   flex's main axis is HEIGHT, so growing here fills the dock's own region
+   height (`align-self: stretch` fills the cross axis, width, the same way),
+   unlike the per-project case above (`.dock-group-empty`, a single 28px
+   row inside the rail) where growing would be wrong. */
 .dock-empty-workspace {
   height: auto;
   align-self: stretch;
