@@ -60,6 +60,15 @@ const ME_RATE_LIMIT = { max: 30, timeWindow: "1 minute" };
 const OIDC_LOGIN_RATE_LIMIT = { max: 10, timeWindow: "1 minute" };
 const OIDC_CALLBACK_RATE_LIMIT = { max: 10, timeWindow: "1 minute" };
 
+function trustedHeader(headers: Record<string, unknown>, name: string): string | undefined {
+  const raw = headers[name];
+  if (typeof raw !== "string") return undefined;
+  const value = raw.trim();
+  // Forwarded identity is display-only, but still bound it so a broken
+  // gateway cannot inflate the response/UI with an arbitrary header value.
+  return value !== "" && value.length <= 512 ? value : undefined;
+}
+
 // All three routes live under /api/auth/ — src/plugins/auth.ts's onRequest
 // gate deliberately exempts that whole prefix (see its own comment), since
 // a request can't authenticate itself against a gate that also blocks the
@@ -116,13 +125,47 @@ export async function authRoute(app: FastifyInstance) {
   app.get("/api/auth/me", { config: { rateLimit: ME_RATE_LIMIT } }, async (request) => {
     const enabled = isAuthEnabled(app.config);
     const authenticated = enabled ? isRequestAuthenticated(request.headers, app.config) : true;
-    const identity = authenticated
+    const oidcIdentity = authenticated
       ? getSessionIdentity(app.config.MULLION_SESSION_SECRET, request.headers.cookie)
       : undefined;
+    const gatewayTrusted = app.config.MULLION_TRUST_GATEWAY;
+    const authentikUid = gatewayTrusted
+      ? trustedHeader(request.headers, "x-authentik-uid")
+      : undefined;
+    const gatewayUser = authentikUid
+      ? {
+          ...(trustedHeader(request.headers, "x-authentik-username")
+            ? { username: trustedHeader(request.headers, "x-authentik-username") }
+            : {}),
+          ...(trustedHeader(request.headers, "x-authentik-name")
+            ? { name: trustedHeader(request.headers, "x-authentik-name") }
+            : {}),
+          ...(trustedHeader(request.headers, "x-authentik-email")
+            ? { email: trustedHeader(request.headers, "x-authentik-email") }
+            : {}),
+        }
+      : undefined;
+    const authSource = gatewayUser
+      ? "authentik"
+      : oidcIdentity
+        ? "oidc"
+        : enabled && authenticated
+          ? "token"
+          : gatewayTrusted
+            ? "gateway"
+            : "none";
+    const logout =
+      gatewayTrusted && app.config.MULLION_GATEWAY_LOGOUT_URL.trim() !== ""
+        ? { kind: "gateway" as const, url: app.config.MULLION_GATEWAY_LOGOUT_URL.trim() }
+        : enabled
+          ? { kind: "local" as const }
+          : { kind: "unavailable" as const };
     return {
       methods: getAuthMethods(app.config),
       authenticated,
-      ...(identity ? { user: identity } : {}),
+      authSource,
+      logout,
+      ...(gatewayUser ? { user: gatewayUser } : oidcIdentity ? { user: oidcIdentity } : {}),
     };
   });
 

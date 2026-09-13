@@ -49,7 +49,41 @@ export type {
 export interface AuthStatus {
   methods: { token: boolean; oidc: boolean };
   authenticated: boolean;
-  user?: { sub: string; email?: string; name?: string; groups?: string[] };
+  authSource: "authentik" | "gateway" | "oidc" | "token" | "none";
+  user?: { sub?: string; username?: string; email?: string; name?: string };
+  logout: { kind: "gateway"; url: string } | { kind: "local" } | { kind: "unavailable" };
+}
+
+export type ResourceSeverity = "normal" | "warning" | "critical";
+
+export interface SystemStats {
+  sampledAt: string;
+  cpu: { logicalCores: number; loadAverage1m: number };
+  memory: { totalBytes: number; freeBytes: number };
+  filesystems: Array<{
+    labels: string[];
+    paths: string[];
+    available: boolean;
+    totalBytes?: number;
+    freeBytes?: number;
+    freePercent?: number;
+    severity?: ResourceSeverity;
+    error?: string;
+  }>;
+}
+
+export interface DockerStorageStatus {
+  available: boolean;
+  rows: Array<{
+    type: string;
+    totalCount: number;
+    activeCount: number;
+    sizeBytes: number;
+    reclaimableBytes: number;
+  }>;
+  totalSizeBytes: number;
+  reclaimableBytes: number;
+  error?: string;
 }
 
 export interface Project {

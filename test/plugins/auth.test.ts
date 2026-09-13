@@ -61,6 +61,7 @@ describe("auth plugin + routes (issues #19, #30)", () => {
     delete process.env.MULLION_OIDC_CLIENT_SECRET;
     delete process.env.MULLION_OIDC_REDIRECT_URI;
     delete process.env.PREVIEW_AUTH_REQUIRED;
+    delete process.env.MULLION_GATEWAY_LOGOUT_URL;
   });
 
   describe("auth disabled (default — MULLION_AUTH_TOKEN unset)", () => {
@@ -77,6 +78,8 @@ describe("auth plugin + routes (issues #19, #30)", () => {
       expect(res.json()).toEqual({
         methods: { token: false, oidc: false },
         authenticated: true,
+        authSource: "gateway",
+        logout: { kind: "unavailable" },
       });
       await app.close();
     });
@@ -517,6 +520,8 @@ describe("auth plugin + routes (issues #19, #30)", () => {
         expect(res.json()).toEqual({
           methods: { token: true, oidc: false },
           authenticated: true,
+          authSource: "token",
+          logout: { kind: "local" },
         });
         await app.close();
       });
@@ -527,6 +532,8 @@ describe("auth plugin + routes (issues #19, #30)", () => {
         expect(res.json()).toEqual({
           methods: { token: true, oidc: false },
           authenticated: false,
+          authSource: "gateway",
+          logout: { kind: "local" },
         });
         await app.close();
       });
@@ -542,6 +549,8 @@ describe("auth plugin + routes (issues #19, #30)", () => {
         expect(res.json()).toEqual({
           methods: { token: true, oidc: false },
           authenticated: false,
+          authSource: "gateway",
+          logout: { kind: "local" },
         });
         await app.close();
       });
@@ -1055,6 +1064,8 @@ describe("auth plugin + routes (issues #19, #30)", () => {
       expect(meRes.json()).toEqual({
         methods: { token: false, oidc: true },
         authenticated: true,
+        authSource: "oidc",
+        logout: { kind: "local" },
         user: { sub: "user-1", email: "user@example.com", name: "User One" },
       });
       await app.close();
@@ -1131,6 +1142,122 @@ describe("auth plugin + routes (issues #19, #30)", () => {
       });
       expect(res.headers.location).toBe("/");
       await app.close();
+    });
+  });
+
+  describe("trusted gateway account details", () => {
+    beforeEach(() => {
+      process.env.MULLION_TRUST_GATEWAY = "true";
+    });
+    afterEach(() => {
+      process.env.MULLION_TRUST_GATEWAY = "true";
+    });
+
+    it("surfaces only display-safe Authentik fields when gateway trust is enabled", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: "/api/auth/me",
+        headers: {
+          "x-authentik-uid": "uid-1",
+          "x-authentik-username": "alice",
+          "x-authentik-name": "Alice Example",
+          "x-authentik-email": "alice@example.com",
+          "x-authentik-groups": "admins|operators",
+        },
+      });
+      expect(res.json()).toEqual({
+        methods: { token: false, oidc: false },
+        authenticated: true,
+        authSource: "authentik",
+        logout: { kind: "unavailable" },
+        user: { username: "alice", name: "Alice Example", email: "alice@example.com" },
+      });
+      await app.close();
+    });
+
+    it("ignores Authentik headers when gateway trust is disabled", async () => {
+      process.env.MULLION_TRUST_GATEWAY = "false";
+      process.env.MULLION_AUTH_TOKEN = TEST_TOKEN;
+      process.env.MULLION_SESSION_SECRET = TEST_SECRET;
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: "/api/auth/me",
+        cookies: { [SESSION_COOKIE_NAME]: createSessionCookieValue(TEST_SECRET) },
+        headers: { "x-authentik-uid": "forged", "x-authentik-username": "mallory" },
+      });
+      expect(res.json()).toMatchObject({ authSource: "token", logout: { kind: "local" } });
+      expect(res.json()).not.toHaveProperty("user");
+      await app.close();
+    });
+
+    it("prefers a trusted gateway identity over the native OIDC cookie identity", async () => {
+      process.env.MULLION_SESSION_SECRET = TEST_SECRET;
+      process.env.MULLION_OIDC_ISSUER = TEST_OIDC_ISSUER;
+      process.env.MULLION_OIDC_CLIENT_ID = TEST_OIDC_CLIENT_ID;
+      process.env.MULLION_OIDC_CLIENT_SECRET = TEST_OIDC_CLIENT_SECRET;
+      process.env.MULLION_OIDC_REDIRECT_URI = TEST_OIDC_REDIRECT_URI;
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: "/api/auth/me",
+        cookies: {
+          [SESSION_COOKIE_NAME]: createSessionCookieValue(TEST_SECRET, {
+            sub: "oidc-user",
+            name: "OIDC Name",
+          }),
+        },
+        headers: {
+          "x-authentik-uid": "gateway-user",
+          "x-authentik-name": "Gateway Name",
+        },
+      });
+      expect(res.json()).toMatchObject({
+        authSource: "authentik",
+        user: { name: "Gateway Name" },
+      });
+      expect(res.json().user).not.toHaveProperty("sub");
+      await app.close();
+    });
+
+    it("treats missing or malformed UID as unavailable gateway identity", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: "/api/auth/me",
+        headers: { "x-authentik-uid": " ", "x-authentik-username": "ignored" },
+      });
+      expect(res.json()).toMatchObject({ authSource: "gateway" });
+      expect(res.json()).not.toHaveProperty("user");
+      await app.close();
+    });
+
+    it.each([
+      "/outpost.goauthentik.io/sign_out",
+      "https://auth.example.com/outpost.goauthentik.io/sign_out",
+    ])("accepts gateway logout URL %s and reports a gateway redirect", async (logoutUrl) => {
+      process.env.MULLION_GATEWAY_LOGOUT_URL = logoutUrl;
+      const app = await buildApp();
+      const res = await app.inject({ method: "GET", url: "/api/auth/me" });
+      expect(res.json().logout).toEqual({ kind: "gateway", url: logoutUrl });
+      await app.close();
+    });
+
+    it.each(["sign_out", "//evil.example/sign_out", "javascript:alert(1)"])(
+      "rejects invalid gateway logout URL %s",
+      async (logoutUrl) => {
+        process.env.MULLION_GATEWAY_LOGOUT_URL = logoutUrl;
+        await expect(buildApp()).rejects.toThrow(/MULLION_GATEWAY_LOGOUT_URL/);
+      },
+    );
+
+    it("requires gateway trust when a gateway logout URL is configured", async () => {
+      process.env.MULLION_TRUST_GATEWAY = "false";
+      process.env.MULLION_AUTH_TOKEN = TEST_TOKEN;
+      process.env.MULLION_SESSION_SECRET = TEST_SECRET;
+      process.env.MULLION_GATEWAY_LOGOUT_URL = "/sign_out";
+      await expect(buildApp()).rejects.toThrow(/requires MULLION_TRUST_GATEWAY/);
     });
   });
 });

@@ -1142,6 +1142,24 @@
   align-items: center;
   gap: 6px;
 }
+.settings-info-value.resource-warning {
+  color: var(--y);
+}
+.settings-info-value.resource-critical,
+.settings-info-value.resource-unavailable {
+  color: var(--r);
+}
+.resource-alert.warning {
+  border-color: color-mix(in srgb, var(--y) 45%, var(--border));
+}
+.resource-alert.critical {
+  border-color: color-mix(in srgb, var(--r) 55%, var(--border));
+  background: color-mix(in srgb, var(--r) 13%, var(--chrome));
+  color: var(--r);
+}
+.resource-alert.critical .update-banner-title {
+  color: var(--r);
+}
 .settings-stat-value-dot {
   width: 7px;
   height: 7px;

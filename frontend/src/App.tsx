@@ -66,6 +66,7 @@ import { usePanelOpener } from "./hooks/usePanelOpener.js";
 import { usePolling } from "./hooks/usePolling.js";
 import { ensurePushSubscribed } from "./pushClient.js";
 import { useRetriableLazy } from "./lib/retriableLazy.js";
+import { ResourceAlertBanner } from "./ResourceAlertBanner.js";
 
 // B2 — code-split Settings' ~2,700-line modal out of the initial bundle via
 // React.lazy (the two browser/preview panes and the Kanban board get the
@@ -1428,6 +1429,7 @@ export function App() {
               </button>
             </div>
           )}
+          <ResourceAlertBanner onOpenServer={() => openSettings("server")} />
           {updateCheck?.updateAvailable && updateCheck.latestVersion !== dismissedUpdateVersion && (
             <div
               className="update-banner"

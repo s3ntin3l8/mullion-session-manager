@@ -30,6 +30,7 @@ import { previewProxyPlugin } from "./plugins/preview-proxy.js";
 import { rootRoute } from "./routes/root.js";
 import { healthRoute } from "./routes/health.js";
 import { authRoute } from "./routes/auth.js";
+import { systemResourcesRoute } from "./routes/system-resources.js";
 import { terminalRoute } from "./routes/terminal.js";
 import { browserRoute } from "./routes/browser.js";
 import { browserAutomationRoute } from "./routes/browser-automation.js";
@@ -132,6 +133,28 @@ export async function buildApp() {
         "empty — refusing to boot with in-process auth half-configured (see issues " +
         "#19 and #30).",
     );
+  }
+
+  const gatewayLogoutUrl = app.config.MULLION_GATEWAY_LOGOUT_URL.trim();
+  if (app.config.MULLION_ROLE === "primary" && gatewayLogoutUrl !== "") {
+    if (!app.config.MULLION_TRUST_GATEWAY) {
+      throw new Error(
+        "MULLION_GATEWAY_LOGOUT_URL requires MULLION_TRUST_GATEWAY=true — refusing to trust a gateway logout target when gateway trust is disabled.",
+      );
+    }
+    const isRootRelative = gatewayLogoutUrl.startsWith("/") && !gatewayLogoutUrl.startsWith("//");
+    let isAbsoluteHttp = false;
+    try {
+      const parsed = new URL(gatewayLogoutUrl);
+      isAbsoluteHttp = parsed.protocol === "http:" || parsed.protocol === "https:";
+    } catch {
+      // Root-relative values intentionally do not parse without a base.
+    }
+    if (!isRootRelative && !isAbsoluteHttp) {
+      throw new Error(
+        "MULLION_GATEWAY_LOGOUT_URL must be a root-relative path or an absolute HTTP(S) URL.",
+      );
+    }
   }
 
   // A partial MULLION_OIDC_* set can't complete discovery or the code
@@ -483,6 +506,7 @@ export async function buildApp() {
   await app.register(bundleSyncRoute);
   await app.register(actionsRoute);
   await app.register(serverInfoRoute);
+  await app.register(systemResourcesRoute);
   await app.register(updatesRoute);
   await app.register(settingsRoute);
   await app.register(workflowConventionsRoute);

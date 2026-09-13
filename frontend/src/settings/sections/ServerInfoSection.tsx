@@ -1,11 +1,14 @@
 import { useEffect, useState } from "react";
 import { api, ApiError } from "../../api/index.js";
 import type { ServerInfo, UpdateCheckResult, UpdateStatus } from "../../api/index.js";
+import type { DockerStorageStatus, SystemStats } from "../../api/index.js";
 import { usePolling } from "../../hooks/usePolling.js";
 import { formatRelativeAge } from "../../relativeTime.js";
 import { Eyebrow, SecondaryButton } from "../../ui/primitives.js";
 import { ErrorText } from "../../ui/ErrorText.js";
 import { claimPostUpdateReload } from "../../postUpdateReload.js";
+import { formatBytes } from "../../formatBytes.js";
+import { ConfirmButton } from "../../ui/ConfirmButton.js";
 
 function formatUptime(seconds: number): string {
   const d = Math.floor(seconds / 86400);
@@ -18,11 +21,30 @@ function formatUptime(seconds: number): string {
 
 export function ServerInfoSection() {
   const [info, setInfo] = useState<ServerInfo | null>(null);
+  const [stats, setStats] = useState<SystemStats | null>(null);
+  const [docker, setDocker] = useState<DockerStorageStatus | null>(null);
+  const [resourceError, setResourceError] = useState<string | null>(null);
+  const [pruning, setPruning] = useState(false);
+  const [pruneResult, setPruneResult] = useState<string | null>(null);
+
+  const refreshResources = () => {
+    return Promise.all([api.getSystemStats(), api.getDockerStorage()])
+      .then(([nextStats, nextDocker]) => {
+        setStats(nextStats);
+        setDocker(nextDocker);
+        setResourceError(null);
+      })
+      .catch((error: unknown) => {
+        setResourceError(error instanceof ApiError ? error.message : "Could not load resources");
+      });
+  };
+
   useEffect(() => {
     api
       .getServerInfo()
       .then(setInfo)
       .catch(() => setInfo(null));
+    void refreshResources();
   }, []);
 
   if (!info) return <div className="settings-readonly-value">Loading…</div>;
@@ -37,6 +59,23 @@ export function ServerInfoSection() {
       </div>
 
       <div className="settings-stat-grid">
+        {stats && (
+          <>
+            <div className="settings-stat-card">
+              <div className="settings-stat-label">CPU</div>
+              <div className="settings-stat-value">
+                {stats.cpu.loadAverage1m.toFixed(2)} 1m load / {stats.cpu.logicalCores} logical
+                cores
+              </div>
+            </div>
+            <div className="settings-stat-card">
+              <div className="settings-stat-label">RAM</div>
+              <div className="settings-stat-value">
+                {formatBytes(stats.memory.freeBytes)} free / {formatBytes(stats.memory.totalBytes)}
+              </div>
+            </div>
+          </>
+        )}
         <div className="settings-stat-card">
           <div className="settings-stat-label">Version</div>
           <div className="settings-stat-value">{info.version}</div>
@@ -61,6 +100,94 @@ export function ServerInfoSection() {
           </div>
         </div>
       </div>
+
+      <Eyebrow title="Storage" desc="Relevant local filesystems, deduplicated by volume." />
+      {resourceError && <ErrorText>{resourceError}</ErrorText>}
+      {stats?.filesystems.map((filesystem) => (
+        <div className="settings-info-table" key={`${filesystem.paths[0]}:${filesystem.labels[0]}`}>
+          <div className="settings-info-row">
+            <span className="settings-info-key">{filesystem.labels.join(", ")}</span>
+            <span
+              className={`settings-info-value resource-${filesystem.severity ?? "unavailable"}`}
+            >
+              {filesystem.available &&
+              filesystem.freeBytes !== undefined &&
+              filesystem.totalBytes !== undefined &&
+              filesystem.freePercent !== undefined
+                ? `${formatBytes(filesystem.freeBytes)} free / ${formatBytes(filesystem.totalBytes)} (${filesystem.freePercent.toFixed(1)}%)`
+                : (filesystem.error ?? "Unavailable")}
+            </span>
+          </div>
+          <div className="settings-info-row zebra">
+            <span className="settings-info-key">Paths</span>
+            <span className="settings-info-value">{filesystem.paths.join(", ")}</span>
+          </div>
+        </div>
+      ))}
+      <div style={{ marginTop: 10 }}>
+        <SecondaryButton
+          onClick={() => {
+            setResourceError(null);
+            void refreshResources();
+          }}
+        >
+          Refresh resources
+        </SecondaryButton>
+      </div>
+
+      <Eyebrow title="Docker storage" desc="Analyzed only when this section opens or refreshes." />
+      {!docker && <div className="settings-readonly-value">Analyzing Docker…</div>}
+      {docker && !docker.available && (
+        <div className="settings-footer-note">
+          Docker cleanup unavailable:{" "}
+          {docker.error ?? "Docker is not installed or permission was denied."}
+        </div>
+      )}
+      {docker?.available && (
+        <>
+          <div className="settings-stat-grid">
+            <div className="settings-stat-card">
+              <div className="settings-stat-label">Docker usage</div>
+              <div className="settings-stat-value">{formatBytes(docker.totalSizeBytes)}</div>
+            </div>
+            <div className="settings-stat-card">
+              <div className="settings-stat-label">Potentially reclaimable</div>
+              <div className="settings-stat-value">{formatBytes(docker.reclaimableBytes)}</div>
+            </div>
+          </div>
+          <div className="settings-footer-note">
+            Safe cleanup may remove stopped containers, unused networks, dangling images, and build
+            cache older than 7 days. It never uses <code>--all</code> or <code>--volumes</code>, so
+            tagged unused images and volumes are preserved.
+          </div>
+          {pruneResult && <div className="settings-footer-note">{pruneResult}</div>}
+          <div style={{ marginTop: 10 }}>
+            <ConfirmButton
+              title="Remove eligible Docker objects older than 7 days"
+              disabled={pruning}
+              onConfirm={() => {
+                setPruning(true);
+                setPruneResult(null);
+                void (async () => {
+                  try {
+                    await api.pruneDockerStorage();
+                    setPruneResult("Docker cleanup completed.");
+                  } catch (error: unknown) {
+                    setPruneResult(
+                      error instanceof ApiError ? error.message : "Docker cleanup failed.",
+                    );
+                  } finally {
+                    await refreshResources();
+                    setPruning(false);
+                  }
+                })();
+              }}
+            >
+              {pruning ? "Cleaning up…" : "Clean up Docker…"}
+            </ConfirmButton>
+          </div>
+        </>
+      )}
 
       <div className="settings-info-table">
         <div className="settings-info-row zebra">

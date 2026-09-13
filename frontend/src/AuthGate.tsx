@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, ApiError, type AuthStatus } from "./api/index.js";
 import { App } from "./App.js";
 import { ErrorText } from "./ui/ErrorText.js";
+import { AuthStatusContext } from "./authContext.js";
 
 type GateState = "loading" | "unauthenticated" | "authenticated";
 
@@ -53,55 +54,12 @@ export function AuthGate() {
     // /api/auth/me from scratch (picking up `user`, if any, then). No
     // client-side re-fetch is needed here, and a token login never carries
     // an identity to populate a badge with anyway.
-    return <Login methods={status!.methods} onLoggedIn={() => setState("authenticated")} />;
+    return <Login methods={status!.methods} onLoggedIn={() => void checkStatus()} />;
   }
   return (
-    <>
-      {status?.user && <IdentityBadge user={status.user} />}
+    <AuthStatusContext.Provider value={status}>
       <App />
-    </>
-  );
-}
-
-/** A small, unobtrusive corner badge — only rendered once an OIDC session carries an identity to show. */
-function IdentityBadge({ user }: { user: NonNullable<AuthStatus["user"]> }) {
-  const [signingOut, setSigningOut] = useState(false);
-
-  return (
-    <div
-      style={{
-        position: "fixed",
-        bottom: 8,
-        right: 8,
-        zIndex: 1000,
-        display: "flex",
-        alignItems: "center",
-        gap: 8,
-        padding: "4px 8px",
-        borderRadius: 6,
-        border: "1px solid var(--border)",
-        background: "var(--border-soft)",
-        fontSize: 12,
-        color: "var(--muted)",
-      }}
-    >
-      <span title={user.email ?? user.sub}>{user.name ?? user.email ?? user.sub}</span>
-      <button
-        className="mono"
-        style={{
-          all: "unset",
-          cursor: "pointer",
-          textDecoration: "underline",
-        }}
-        disabled={signingOut}
-        onClick={() => {
-          setSigningOut(true);
-          void api.logout().finally(() => window.location.reload());
-        }}
-      >
-        Sign out
-      </button>
-    </div>
+    </AuthStatusContext.Provider>
   );
 }
 

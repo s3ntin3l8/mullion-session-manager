@@ -259,6 +259,14 @@ export const schema = {
       type: "boolean",
       default: false,
     },
+    // Optional sign-out target for a trusted forward-auth gateway. A
+    // root-relative path keeps single-app Authentik deployments on the
+    // dashboard origin; an absolute http(s) URL supports domain-level
+    // outposts on a dedicated authentication host.
+    MULLION_GATEWAY_LOGOUT_URL: {
+      type: "string",
+      default: "",
+    },
     // Native OIDC login (issue #30) — the second way (alongside
     // MULLION_AUTH_TOKEN above) to mint the same signed session cookie
     // src/plugins/auth.ts's gate checks. All four MULLION_OIDC_* keys must be
@@ -781,6 +789,7 @@ declare module "fastify" {
       MULLION_ENROLLMENT_ALLOWED_CIDRS: string;
       MULLION_AUTH_TOKEN: string;
       MULLION_TRUST_GATEWAY: boolean;
+      MULLION_GATEWAY_LOGOUT_URL: string;
       MULLION_SESSION_SECRET: string;
       MULLION_OIDC_ISSUER: string;
       MULLION_OIDC_CLIENT_ID: string;

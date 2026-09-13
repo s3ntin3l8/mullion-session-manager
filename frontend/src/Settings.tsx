@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useFocusTrap } from "./hooks/useFocusTrap.js";
-import { BASE_TITLE } from "./documentBadge.js";
 import {
+  AccountIcon,
   AppearanceIcon,
   BellIcon,
   BoltIcon,
@@ -31,8 +31,10 @@ import { IntegrationsSection } from "./settings/sections/IntegrationsSection.js"
 import { SkillsSection } from "./settings/sections/SkillsSection.js";
 import { ServerInfoSection } from "./settings/sections/ServerInfoSection.js";
 import { ModelsSection } from "./settings/sections/ModelsSection.js";
+import { AccountSection } from "./settings/sections/AccountSection.js";
 
 export type SettingsSection =
+  | "account"
   | "appearance"
   | "terminal"
   | "projects"
@@ -53,6 +55,12 @@ const SECTIONS: Array<{
   desc: string;
   icon: (size: number) => React.ReactNode;
 }> = [
+  {
+    id: "account",
+    title: "Account",
+    desc: "Your authenticated identity and sign-out options.",
+    icon: (size) => <AccountIcon size={size} />,
+  },
   {
     id: "appearance",
     title: "Appearance",
@@ -140,6 +148,7 @@ const SECTIONS: Array<{
 // DOM: simpler, and stays correct even for a section that isn't currently
 // mounted.
 const SEARCH_INDEX: Array<{ section: SettingsSection; text: string }> = [
+  { section: "account", text: "account identity username email authentication sign out logout" },
   { section: "appearance", text: "theme dark light system" },
   { section: "appearance", text: "terminal font family geist jetbrains ibm plex sf mono menlo" },
   { section: "appearance", text: "font size" },
@@ -394,16 +403,6 @@ export function Settings({
                 <div className="settings-nav-empty">No matching settings.</div>
               )}
             </div>
-            <div className="settings-nav-footer">
-              {/* Rich statuses (issue: extend surfaced session statuses) — was
-                  reading document.title[0] directly, which broke once
-                  documentBadge.ts started prefixing an attention count onto
-                  document.title ("(2) Mullion" -> "(" instead of "M"). Reads
-                  the app's own base title constant instead, so the two can't
-                  drift out of sync with each other again. */}
-              <span className="settings-nav-footer-badge">{BASE_TITLE[0] || "T"}</span>
-              <span className="settings-nav-footer-text">single-user</span>
-            </div>
           </div>
           <div className="settings-content">
             <div className="settings-content-header">
@@ -418,6 +417,7 @@ export function Settings({
               <div className="settings-content-desc">{meta.desc}</div>
             </div>
             <div className="cmux-scroll settings-content-body">
+              {section === "account" && <AccountSection />}
               {section === "appearance" && <AppearanceSection />}
               {section === "terminal" && <TerminalSection />}
               {section === "projects" && <ProjectsSection />}

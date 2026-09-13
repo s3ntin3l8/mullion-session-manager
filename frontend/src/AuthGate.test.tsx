@@ -119,13 +119,17 @@ describe("AuthGate", () => {
   });
 
   it("proceeds to the dashboard after a successful token login", async () => {
+    let loggedIn = false;
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       const method = init?.method ?? "GET";
       if (url === "/api/auth/me" && method === "GET") {
-        return Promise.resolve(jsonResponse(200, { methods: METHODS_TOKEN, authenticated: false }));
+        return Promise.resolve(
+          jsonResponse(200, { methods: METHODS_TOKEN, authenticated: loggedIn }),
+        );
       }
       if (url === "/api/auth/login" && method === "POST") {
+        loggedIn = true;
         return Promise.resolve(new Response(null, { status: 204 }));
       }
       return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
@@ -141,7 +145,7 @@ describe("AuthGate", () => {
     expect(await screen.findByTestId("dashboard")).toBeInTheDocument();
   });
 
-  it("shows an identity badge with sign-out once an OIDC session carries a user", async () => {
+  it("does not render the old floating identity badge for an OIDC user", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(() =>
@@ -158,8 +162,8 @@ describe("AuthGate", () => {
     render(<AuthGate />);
 
     expect(await screen.findByTestId("dashboard")).toBeInTheDocument();
-    expect(screen.getByText("User One")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Sign out" })).toBeInTheDocument();
+    expect(screen.queryByText("User One")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Sign out" })).not.toBeInTheDocument();
   });
 
   it("does not render an identity badge for a token-only session (no user identity)", async () => {
