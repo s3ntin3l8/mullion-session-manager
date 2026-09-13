@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.19](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.18...v0.3.19) (2026-09-13)
+
+
+### Bug Fixes
+
+* **auth:** prevent forward-auth state cookie clobbering on session expiry ([#1273](https://github.com/s3ntin3l8/mullion-session-manager/issues/1273)) ([03f3ec5](https://github.com/s3ntin3l8/mullion-session-manager/commit/03f3ec5a698f2a9057f7643ef4d1211dd668b9eb))
+
 ## [0.3.18](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.17...v0.3.18) (2026-09-12)
 
 
