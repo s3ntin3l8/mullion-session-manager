@@ -447,10 +447,20 @@ export function Dock({
   // ---- Pane-divider resize (issue #1244) ----
   // The width actually available to the two log panes plus the divider
   // between them — the dock's own measured split width, minus the rail and
-  // BOTH dividers.
+  // the rail-to-primary divider, minus the primary-to-pinned divider TOO
+  // but only when that divider actually renders (`showPinnedPane`). Hermes
+  // review — subtracting `PANE_DIVIDER_WIDTH_PX` unconditionally (as the
+  // pre-unified-rail per-column version of this also did) makes
+  // `paneAreaWidth`, and therefore `paneFloorRatio`, jump by 6px the moment
+  // a pin actually appears, a one-frame glitch a single-pane render never
+  // needed to pay for since there's no second divider to reserve room for
+  // yet.
   const paneAreaWidth = Math.max(
     0,
-    (splitWidthPx ?? 0) - railWidth - RAIL_DIVIDER_WIDTH_PX - PANE_DIVIDER_WIDTH_PX,
+    (splitWidthPx ?? 0) -
+      railWidth -
+      RAIL_DIVIDER_WIDTH_PX -
+      (showPinnedPane ? PANE_DIVIDER_WIDTH_PX : 0),
   );
   // Capped at 0.5 — once `paneAreaWidth` drops below `2 * logPaneMinWidth`,
   // neither pane can actually fit at its floor side by side at all; see the
@@ -501,7 +511,17 @@ export function Dock({
           </span>
         )}
         <div className="dock-header-rule" />
-        {!collapsed && (
+        {
+          // Hermes review — also gated on `!isCoarsePointer`, matching the
+          // split below: under a coarse pointer, nothing renders there at
+          // all (no DockProjectGroup ever mounts, so a newly-pinned
+          // project has nowhere to show up until the pointer changes
+          // back). Persisting `manualIds` from a control the user can't
+          // see the effect of is harmless but pointless — hiding it here
+          // matches that reality instead of offering an action with no
+          // visible result.
+        }
+        {!collapsed && !isCoarsePointer && (
           <AddColumnControl projects={projects} shownIds={columnIds} onAdd={addColumn} />
         )}
         <button

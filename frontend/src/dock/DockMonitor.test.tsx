@@ -3670,6 +3670,87 @@ describe("Dock", () => {
     });
   });
 
+  // Hermes review (PR #1276) — a dedicated cross-project regression test
+  // for DockProjectGroup's pin-vanish `useEffect`, separate from the
+  // same-project vanish/collision cases already covered in the "issue
+  // #1239" suite above: the pin belongs to a DIFFERENT project than the
+  // one currently active, so this is the one case where a render-phase
+  // "adjust state during render" correction (safe only for a component's
+  // own state) genuinely cannot apply — Dock (the pin's actual owner) only
+  // ever learns about a vanished pinned row via this effect's `onUnpin`
+  // call.
+  describe("unified-rail dock rework — cross-project pin", () => {
+    it("clears via the pin-vanish effect when the pinned row's project is different from the active one and its control disappears", async () => {
+      const PROJECT_2 = makeProject({ id: 2, name: "second", cwd: "/home/x/second" });
+      dockByProject[1] = [{ id: "dev", title: "Dev server", command: "npm run dev" }];
+      dockByProject[2] = [{ id: "dev2", title: "Second dev", command: "npm run second-dev" }];
+      const sessions = [
+        makeSession({
+          id: 10,
+          projectId: 1,
+          command: "npm run dev",
+          kind: "dock",
+          status: "active",
+        }),
+        makeSession({
+          id: 30,
+          projectId: 2,
+          command: "npm run second-dev",
+          kind: "dock",
+          status: "active",
+        }),
+      ];
+      useDashboardStore.setState({
+        projects: [PROJECT, PROJECT_2],
+        sessions,
+        sessionsLoaded: true,
+        activeWorkspaceId: 13,
+      });
+
+      render(<Dock workspaceProjectIds={[1, 2]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+      // Project 1 (the first tiled project) is active by default.
+      expect(await screen.findByTestId("terminal-pane")).toHaveAttribute("data-session-id", "10");
+
+      // Pin project 2's row while project 1 stays active — the pin
+      // affordance isn't gated on `canShowSecondPane` (only its dimmed
+      // styling is), so this doesn't need a wide enough dock to actually
+      // show a second pane.
+      const secondDevRow = screen.getByText("Second dev").closest(".dock-monitor") as HTMLElement;
+      const pinTag = secondDevRow.querySelector(".dock-monitor-pin") as HTMLElement;
+      const user = userEvent.setup();
+      await user.click(pinTag);
+
+      await waitFor(() => {
+        const stored = JSON.parse(localStorage.getItem("crs.dockPinnedRow") ?? "{}");
+        expect(stored["13"]).toEqual({ projectId: 2, rowKey: "dock-config:dev2" });
+      });
+      // Pinning a row in project 2 doesn't disturb project 1's own primary
+      // selection.
+      expect(screen.getByTestId("terminal-pane")).toHaveAttribute("data-session-id", "10");
+
+      // Project 2's pinned control disappears from discovery entirely (no
+      // orphan session survives it either).
+      dockByProject[2] = [];
+      useDashboardStore.setState({
+        projects: [PROJECT, PROJECT_2],
+        sessions: [sessions[0]],
+        sessionsLoaded: true,
+      });
+      useDashboardStore.getState().bumpDockConfigRefreshTrigger();
+
+      await waitFor(() => {
+        expect(screen.queryByText("Second dev")).not.toBeInTheDocument();
+      });
+      await waitFor(() => {
+        const stored = JSON.parse(localStorage.getItem("crs.dockPinnedRow") ?? "{}");
+        expect(stored["13"]).toBeNull();
+      });
+      // Project 1 stays active and its own primary pane is unaffected
+      // throughout.
+      expect(screen.getByTestId("terminal-pane")).toHaveAttribute("data-session-id", "10");
+    });
+  });
+
   // Unified-rail dock rework — a project section can be collapsed to hide
   // its own rows without affecting any other project's, or the dock's
   // panes.
