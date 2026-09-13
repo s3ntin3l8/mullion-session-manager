@@ -137,6 +137,7 @@ export const createSessionsSlice: StateCreator<DashboardState, [], [], SessionsS
         // "just retry" recovery left — only the explicit sign-in-again
         // action App.tsx renders for sessionExpired.
         if (err instanceof AuthExpiredError) {
+          refreshSessionsQueuedRun = null;
           set({ sessionExpired: true });
           throw err;
         }
@@ -158,11 +159,17 @@ export const createSessionsSlice: StateCreator<DashboardState, [], [], SessionsS
     // exists purely to normalize that outcome so the queued run always
     // starts, never inherits the current run's rejection).
     if (refreshSessionsActiveRun) {
+      if (get().sessionExpired) {
+        throw new AuthExpiredError();
+      }
       if (!refreshSessionsQueuedRun) {
         refreshSessionsQueuedRun = refreshSessionsActiveRun
           .catch(() => {})
           .then(() => {
             refreshSessionsQueuedRun = null;
+            if (get().sessionExpired) {
+              throw new AuthExpiredError();
+            }
             refreshSessionsActiveRun = runOnce().finally(() => {
               refreshSessionsActiveRun = null;
             });
@@ -229,6 +236,12 @@ export const createSessionsSlice: StateCreator<DashboardState, [], [], SessionsS
     const TASKS_REFRESH_EVERY_N_TICKS = 15;
 
     const tick = () => {
+      // If the gateway forward-auth session is expired, halt the cascade
+      // so repeated ticks do not send unauthenticated API calls or trigger
+      // competing reload flows.
+      if (get().sessionExpired) {
+        return;
+      }
       // 429 backoff (issue #959): while a Retry-After window is still in
       // the future, the entire cascade is skipped. The three calls below
       // all share the same 100/min bucket behind a Traefik-fronted

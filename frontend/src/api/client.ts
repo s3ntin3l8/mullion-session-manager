@@ -109,6 +109,7 @@ function clearBreakerEntry(key: string): void {
 export function __resetRateLimitBreakerForTests(): void {
   RATE_LIMIT_BREAKER.clear();
   globalRateLimitMax = null;
+  authExpiryInProgress = false;
 }
 
 // Reserved breaker key for the shared, per-IP global bucket (security.ts's
@@ -170,6 +171,32 @@ const DEFAULT_RETRY_AFTER_MS = 60_000;
 const AUTH_EXPIRY_RELOAD_GUARD_KEY = "mullion:authExpiryReloadAt";
 const AUTH_EXPIRY_RELOAD_GUARD_WINDOW_MS = 3 * 60 * 1000;
 
+// Once auth expiry is recognized on any in-flight request, this flag is
+// set so every other concurrent or queued request in the SPA immediately
+// fails fast with AuthExpiredError without touching the network.
+//
+// Behind a forward-auth proxy (Authentik proxy in forward_single mode),
+// an unauthenticated API fetch triggers a 302 with a Set-Cookie: authentik_session=<sid>
+// header. If subsequent fetches hit the network while window.location.reload()
+// is already in-flight, they overwrite the browser's cookie jar with a newer
+// session ID, causing Authentik Outpost to reject the top-level callback with
+// HTTP 400 "mismatched session ID / invalid state". Short-circuiting further
+// fetches here prevents that cookie-clobbering race condition.
+let authExpiryInProgress = false;
+
+export function __resetAuthExpiryStateForTests(): void {
+  authExpiryInProgress = false;
+}
+
+function isAuthExpiryInProgress(): boolean {
+  if (!authExpiryInProgress) return false;
+  if (!recentlyAttemptedAuthExpiryReload()) {
+    authExpiryInProgress = false;
+    return false;
+  }
+  return true;
+}
+
 function recentlyAttemptedAuthExpiryReload(): boolean {
   try {
     const last = sessionStorage.getItem(AUTH_EXPIRY_RELOAD_GUARD_KEY);
@@ -208,6 +235,7 @@ function recordAuthExpiryReloadAttempt(): boolean {
 // legitimate expiry inside that window would skip straight to the banner
 // even though a silent reload was available again.
 function clearAuthExpiryReloadGuard(): void {
+  authExpiryInProgress = false;
   try {
     sessionStorage.removeItem(AUTH_EXPIRY_RELOAD_GUARD_KEY);
   } catch {
@@ -225,6 +253,7 @@ function clearAuthExpiryReloadGuard(): void {
 // first-class, tested scenario, a reload just triggers the same reconnect
 // a network blip would"), so this isn't a new risk class for the app.
 function handleAuthExpiry(): never {
+  authExpiryInProgress = true;
   if (!recentlyAttemptedAuthExpiryReload() && recordAuthExpiryReloadAttempt()) {
     window.location.reload();
   }
@@ -232,6 +261,11 @@ function handleAuthExpiry(): never {
 }
 
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  // Fast fail when an auth-expiry reload is already in flight: do not dispatch
+  // any new HTTP requests that could clobber the gateway's forward-auth state cookie.
+  if (isAuthExpiryInProgress()) {
+    throw new AuthExpiredError();
+  }
   // Per-endpoint 429 breaker (issue #959). Checked before the fetch, so a
   // call to a key that was just 429'd never touches the network — the
   // cycle that produced the reload-blank-page symptom was each 4s tick

@@ -13,6 +13,7 @@ import {
   AuthExpiredError,
   RateLimitedError,
   __resetRateLimitBreakerForTests,
+  __resetAuthExpiryStateForTests,
   setGlobalRateLimitMax,
 } from "./client.js";
 
@@ -68,6 +69,7 @@ describe("request() — forward-auth session expiry", () => {
     reloadSpy.mockClear();
     vi.stubGlobal("location", { reload: reloadSpy });
     sessionStorage.clear();
+    __resetAuthExpiryStateForTests();
   });
 
   afterEach(() => {
@@ -79,6 +81,21 @@ describe("request() — forward-auth session expiry", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(opaqueRedirectResponse()));
 
     await expect(request("/api/sessions")).rejects.toBeInstanceOf(AuthExpiredError);
+    expect(reloadSpy).toHaveBeenCalledOnce();
+  });
+
+  it("short-circuits subsequent requests without touching fetch while auth-expiry reload is in flight", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(opaqueRedirectResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(request("/api/sessions")).rejects.toBeInstanceOf(AuthExpiredError);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(reloadSpy).toHaveBeenCalledOnce();
+
+    // A second request fired before the page unloads must fail fast without calling fetch(),
+    // preventing the forward-auth state cookie from being clobbered in the browser cookie jar.
+    await expect(request("/api/git/status")).rejects.toBeInstanceOf(AuthExpiredError);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(reloadSpy).toHaveBeenCalledOnce();
   });
 
@@ -125,10 +142,9 @@ describe("request() — forward-auth session expiry", () => {
     expect(reloadSpy).toHaveBeenCalledOnce();
 
     // A later successful request (e.g. after the reload actually completed
-    // the forward-auth dance) must clear the guard rather than leaving it
-    // armed for the rest of the 3-minute window — otherwise a second,
-    // unrelated expiry shortly after a real recovery would skip straight
-    // to the fallback banner instead of getting its own silent reload.
+    // the forward-auth dance and booted in a fresh page context) must clear the
+    // guard rather than leaving it armed for the rest of the 3-minute window.
+    __resetAuthExpiryStateForTests();
     fetchMock.mockResolvedValueOnce(jsonResponse(200, { ok: true }));
     await expect(request("/api/sessions")).resolves.toEqual({ ok: true });
 

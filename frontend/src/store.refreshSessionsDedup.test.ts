@@ -172,4 +172,38 @@ describe("store.refreshSessions in-flight coalescing (issue #1008)", () => {
     await useDashboardStore.getState().refreshSessions();
     expect(listSessions).toHaveBeenCalledTimes(2);
   });
+
+  it("a queued call does not fire a second network request if the in-flight call failed with AuthExpiredError", async () => {
+    let rejectInFlight: ((error: unknown) => void) | undefined;
+    const inFlightGate = new Promise<Session[]>((_resolve, reject) => {
+      rejectInFlight = reject;
+    });
+    const listSessions = vi
+      .spyOn(api, "listSessions")
+      .mockImplementationOnce(() => inFlightGate)
+      .mockResolvedValueOnce([session(1)]);
+
+    // The first fetch starts and is in flight.
+    const firstCall = useDashboardStore.getState().refreshSessions();
+    // A second call queues behind it.
+    const queuedCall = useDashboardStore.getState().refreshSessions();
+
+    expect(listSessions).toHaveBeenCalledTimes(1);
+
+    // The in-flight fetch fails with AuthExpiredError.
+    const authError = new (await import("./api/index.js")).AuthExpiredError();
+    rejectInFlight!(authError);
+
+    await expect(firstCall).rejects.toBeInstanceOf(
+      (await import("./api/index.js")).AuthExpiredError,
+    );
+
+    // The queued run must NOT fire a second network request once auth expiry is recognized;
+    // this prevents clobbering the Authentik forward-auth state cookie during page reload.
+    await expect(queuedCall).rejects.toBeInstanceOf(
+      (await import("./api/index.js")).AuthExpiredError,
+    );
+    expect(listSessions).toHaveBeenCalledTimes(1);
+    expect(useDashboardStore.getState().sessionExpired).toBe(true);
+  });
 });
