@@ -7,6 +7,7 @@ import { spawn as spawnChildProcess } from "node:child_process";
 import type * as ChildProcess from "node:child_process";
 import type { HookMessage } from "../../src/services/hook-protocol.js";
 import { buildAgentGuideBlock, sessionAgentGuidePath } from "../../src/services/agent-guide.js";
+import { sessionWorkflowConventionsPath } from "../../src/services/workflow-conventions.js";
 import { resolveMullionBundleDir } from "../../src/services/hook-adapters/mullion-bundle.js";
 import { buildOpenCodeMcpConfig } from "../../src/services/hook-adapters/opencode.js";
 import { buildCodexMcpFlags, buildCodexTrustFlag } from "../../src/services/hook-adapters/codex.js";
@@ -1844,6 +1845,46 @@ describe("PtyManager", () => {
       ["--user", "stop", "crs-session-1.scope"],
       expect.objectContaining({ stdio: "ignore" }),
     );
+  });
+
+  // Issue #937 follow-up — writeSessionWorkflowConventions (launch-plan.ts)
+  // writes this file unconditionally at spawn time; terminate() is the
+  // genuinely-terminal moment nothing else cleans it up, same shape as the
+  // pre-existing agent-guide/briefing leak #405 already fixed.
+  it("terminate() removes the session's own workflow-conventions copy, if one was written", async () => {
+    const session = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "bash",
+      cols: 80,
+      rows: 24,
+    });
+    await waitForSpawn(session);
+
+    const conventionsPath = sessionWorkflowConventionsPath(sessionsDir, "1");
+    fs.writeFileSync(conventionsPath, "Never commit directly to the default branch.");
+    expect(fs.existsSync(conventionsPath)).toBe(true);
+
+    listUnitsReply = [ownedLine("1", sessionsDir)];
+    await manager.terminate("1");
+
+    expect(fs.existsSync(conventionsPath)).toBe(false);
+  });
+
+  it("terminate() does not throw when the session had no workflow-conventions copy (opted out, or no global text configured)", async () => {
+    const session = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "bash",
+      cols: 80,
+      rows: 24,
+    });
+    await waitForSpawn(session);
+
+    expect(fs.existsSync(sessionWorkflowConventionsPath(sessionsDir, "1"))).toBe(false);
+
+    listUnitsReply = [ownedLine("1", sessionsDir)];
+    await expect(manager.terminate("1")).resolves.not.toThrow();
   });
 
   it("terminate() stops the scope even when the session was never tracked in this process", async () => {
