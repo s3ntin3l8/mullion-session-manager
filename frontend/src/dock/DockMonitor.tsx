@@ -65,10 +65,13 @@ export function DockMonitor({
 }: {
   control: DockControl;
   running: Session | undefined;
-  // Whether this row's identity (dockRowKey, dockHelpers.ts) is
-  // DockColumn's current selection — drives both the visual highlight and
-  // `aria-selected`. Never derived locally: DockColumn owns selection so it
-  // can reconcile it against the live control/session list on every render
+  // Whether this row's identity (dockRowKey, dockHelpers.ts) is BOTH this
+  // row's own project's current selection AND that project is the dock's
+  // ACTIVE one (unified-rail dock rework — DockProjectGroup passes
+  // `isActive && selectedKey === rowKey`, not the bare per-project
+  // selection) — drives both the visual highlight and `aria-selected`.
+  // Never derived locally: DockProjectGroup owns selection so it can
+  // reconcile it against the live control/session list on every render
   // (see its own selection-state comment).
   selected: boolean;
   showSelector: boolean;
@@ -96,14 +99,18 @@ export function DockMonitor({
   confirmBeforeKill: boolean;
   onSelect: () => void;
   onToggleStream: () => void;
-  // Issue #1239 — whether THIS row is DockColumn's current `pinnedKey`
-  // (drives the pin affordance's own visual state), never derived locally —
-  // same "the owner reconciles it against the live row set, this component
-  // just renders what it's told" posture as `selected` above.
+  // Issue #1239 — whether THIS row is the dock's current cross-project pin
+  // (`isPinOwner && pinnedRowKey === rowKey`, unified-rail dock rework —
+  // DockProjectGroup passes this, not a bare local `pinnedKey`) — drives
+  // the pin affordance's own visual state, never derived locally — same
+  // "the owner reconciles it against the live row set, this component just
+  // renders what it's told" posture as `selected` above.
   pinned: boolean;
-  // Whether DockColumn currently has room to render the second (pinned)
-  // `DockLogPane` — used only to render a DIMMED variant of the pin
-  // affordance on the pinned row when the column is too narrow (the pin
+  // Whether the DOCK (not this row's own project) currently has room to
+  // render the second (pinned) `DockLogPane` — a single shared width fact
+  // since the unified-rail dock rework (Dock.tsx's own `canShowSecondPane`),
+  // no longer a per-column one. Used only to render a DIMMED variant of the
+  // pin affordance on the pinned row when the dock is too narrow (the pin
   // itself is never cleared for this — see Dock.tsx's own
   // `canShowSecondPane` doc comment). Irrelevant to every OTHER row: the pin
   // affordance is hidden outright on `selected` and otherwise unaffected by

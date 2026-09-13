@@ -62,6 +62,29 @@ export const STORAGE_KEYS = {
   // be `null` (no active workspace) — callers use 0.5 and skip persisting
   // rather than writing under a `"null"` key.
   dockPaneSplitRatio: "crs.dockPaneSplitRatio",
+  // Unified-rail dock rework — which project's rail section drives the
+  // dock's single primary log pane. Value shape `Record<string, number>`
+  // keyed by `String(activeWorkspaceId)`, same "one shared value per
+  // workspace" pattern as `dockPaneSplitRatio` above (not `projectId`,
+  // since this key's whole VALUE is a projectId).
+  dockActiveProject: "crs.dockActiveProject",
+  // Unified-rail dock rework — the dock's single pinned (second) log pane
+  // can now point at a row in ANY tiled project, not just the active one,
+  // so a plain `dockRowKey` string (the old per-project `pinned` field in
+  // `dockSelectedRows`) is no longer enough to resolve it — this also
+  // records which project the row belongs to. Value shape
+  // `Record<string, { projectId: number; rowKey: string } | null>`, keyed
+  // by `String(activeWorkspaceId)` like `dockActiveProject` above. The old
+  // per-project `pinned` field inside `dockSelectedRows` goes stale (never
+  // read again) rather than migrated — same "add a field, don't migrate"
+  // posture `dockSelectedRows`'s own doc comment already established for
+  // `pinned` itself.
+  dockPinnedRow: "crs.dockPinnedRow",
+  // Unified-rail dock rework — which project sections are collapsed in the
+  // single shared rail. Value shape `Record<string, number[]>` (an array of
+  // collapsed projectIds), keyed by `String(activeWorkspaceId)`. Expanded
+  // (not present in the array) is the default for a project not yet seen.
+  dockCollapsedGroups: "crs.dockCollapsedGroups",
   projectCollapsed: "crs.projectCollapsed",
   expandedSessionRows: "crs.expandedSessionRows",
   expandedSubagentRows: "crs.expandedSubagentRows",

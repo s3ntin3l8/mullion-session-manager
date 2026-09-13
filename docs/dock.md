@@ -1,10 +1,13 @@
 # Dock
 
 The Dock is a persistent bottom panel showing per-project monitors — dev
-servers, logs, status watchers — one column per project currently tiled in
-the active workspace (plus any manually pinned). Each column can have
-multiple toggleable monitors, each running as a `kind: "dock"` session
-that stays out of the normal per-project session inventory.
+servers, logs, status watchers. A single shared rail lists every project
+currently tiled in the active workspace (plus any manually pinned) as its
+own collapsible section, and one primary (+ optional pinned) log pane —
+shared by every section, not duplicated per project — shows whichever
+row is currently selected. Each project's section can have multiple
+toggleable monitors, each running as a `kind: "dock"` session that stays
+out of the normal per-project session inventory.
 
 A monitor is just a shell command that runs on the host (the same
 `dtach` + `systemd --user` lifecycle as regular terminal sessions), so
@@ -13,7 +16,7 @@ a monitor — every one, whether configured in `dock.json` or auto-discovered
 (see [Docker Compose services](#docker-compose-services-issue-73) below),
 stays off until you click it.
 
-A project's column can also show:
+A project's own section can also show:
 
 - **GitHub status** — open issue/PR counts and a CI status dot, if a
   GitHub account is connected and the project has a `github.com` origin
@@ -48,9 +51,10 @@ Create `.crs/dock.json` in your project's repo (the path must be exactly `.crs/d
 }
 ```
 
-Refresh the dashboard — the Dock appears at the bottom with a column for
-your project, each monitor showing a toggle switch. Click a monitor to
-start it; its terminal output appears inline.
+Refresh the dashboard — the Dock appears at the bottom with a section for
+your project in its rail, each monitor showing a toggle switch. Click a
+monitor to select it (starting it if it's off); its terminal output
+appears in the dock's shared log pane.
 
 ## dock.json schema
 
@@ -63,7 +67,7 @@ team-shareable). A global fallback lives at `~/.config/crs/dock.json`
 | Field             | Type                    | Required | Description                                                                                                     |
 | ----------------- | ----------------------- | -------- | --------------------------------------------------------------------------------------------------------------- |
 | `id`              | `string`                | yes      | Unique identifier for this monitor                                                                              |
-| `title`           | `string`                | yes      | Display name shown in the column header                                                                         |
+| `title`           | `string`                | yes      | Display name shown on the monitor's own rail row                                                                |
 | `command`         | `string`                | yes      | Shell command to run (`npm run dev`, `tail -f log`, ...)                                                        |
 | `cwd`             | `string`                | no       | Working directory override (defaults to project root)                                                           |
 | `height`          | `number`                | no       | Initial terminal height in pixels for the monitor body                                                          |
@@ -173,7 +177,7 @@ since `dock.json` is small, fixed-shape data. A few things to know:
   fresh, valid config from, and saving replaces the broken file.
 - **Takes effect immediately**, not just on the next poll or a page reload
   (see the Troubleshooting note below) — a save is picked up by every
-  tiled/pinned Dock column right away.
+  tiled/pinned project's own section right away.
 
 ## Global vs. per-project config
 
@@ -293,11 +297,12 @@ residual case — the ref still has no `/`, so it's still classified
 `pullable: false` — it only fixes the DIFFERENT case above, where the
 `image:` ref is genuinely registry-qualified.
 
-Every compose project discovered in a column also gets its own **stack
-header**, above that project's monitors, labelled with the compose project
-name — a column can host more than one compose project at once (e.g. a dev
-`docker-compose.yml` and a separate prod `docker-compose.prod.yml`), so this
-is one header per project rather than one label for the whole column. Its
+Every compose project discovered in a project's own section also gets its
+own **stack header**, above that stack's monitors, labelled with the
+compose project name — a project's section can host more than one compose
+project at once (e.g. a dev `docker-compose.yml` and a separate prod
+`docker-compose.prod.yml`), so this is one header per compose project
+rather than one label for the whole section. Its
 own **⋯ menu** carries the actions that apply to the **whole** stack, not
 just one service — these used to repeat identically on every service row of
 the same stack; they're hoisted here instead so a two-service stack doesn't
@@ -472,60 +477,76 @@ without a human clicking something, and even that never auto-applies it.
 
 ## UI reference
 
-| Operation                       | How                                                                                 |
-| ------------------------------- | ----------------------------------------------------------------------------------- |
-| **Toggle a monitor on/off**     | Click the monitor's header row                                                      |
-| **Resize the Dock height**      | Drag the top border handle (`ns-resize` cursor)                                     |
-| **Collapse/expand the Dock**    | Click the chevron button (collapsed header shows live monitor count)                |
-| **Resize column widths**        | Drag the vertical dividers between columns                                          |
-| **Pin a project column**        | Use the "+ Add project column" dropdown in the Dock header                          |
-| **Remove a pinned column**      | Click the "x" on a manually pinned column (not shown for workspace-derived columns) |
-| **Open GitHub panel**           | Click the GitHub status row in a project's column                                   |
-| **Open browser preview**        | Click the browser URL row in a project's column                                     |
-| **Check/pull a Docker service** | Click the ⋯ menu on a discovered Docker monitor                                     |
-| **Pin a second log pane**       | Click the "pin" tag on a rail row other than the one currently selected             |
-| **Unpin a second log pane**     | Click the "pinned" tag again (on the row it's pinned to)                            |
-| **Resize the rail**             | Drag the divider between the rail and the log pane (`col-resize` cursor)            |
-| **Resize the two log panes**    | Drag the divider between the primary and pinned log panes (`col-resize` cursor)     |
+The dock is a single shared rail — one project per collapsible section —
+plus one primary (+ optional pinned) log pane, shared by every section
+rather than duplicated per project. Only one project is "active" at a
+time; its own row selection drives the primary pane. Before the
+unified-rail rework, the dock rendered one full rail-plus-pane column PER
+tiled project, side by side, which made two or more tiled projects blow
+out the dock's own width — that's what this design replaces.
 
-Dock state persists to `localStorage` (collapsed state, region height,
-manually pinned project IDs, rail width, each column's selected AND pinned
-rail row, and the primary/pinned pane split ratio — see below). Column
-widths from divider drags are ephemeral and reset on reload.
+| Operation                                   | How                                                                                                                                    |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| **Toggle a monitor on/off**                 | Click the monitor's own trailing "on"/"off" tag                                                                                        |
+| **Select a monitor / activate its project** | Click the monitor's row body — starts it too if it was off                                                                             |
+| **Resize the Dock height**                  | Drag the top border handle (`ns-resize` cursor)                                                                                        |
+| **Collapse/expand the Dock**                | Click the chevron button (collapsed header shows live monitor count)                                                                   |
+| **Collapse/expand a project's section**     | Click the chevron on that project's own rail header                                                                                    |
+| **Pin a project into the dock**             | Use the "+ Add project" dropdown in the Dock header                                                                                    |
+| **Remove a pinned project**                 | Click the "x" on a manually pinned section (not shown for workspace-derived ones)                                                      |
+| **Open GitHub panel**                       | Click the GitHub status glance on a project's own header row                                                                           |
+| **Open browser preview**                    | Click the browser URL row in a project's section                                                                                       |
+| **Check/pull a Docker service**             | Click the ⋯ menu on a discovered Docker monitor                                                                                        |
+| **Pin a second log pane**                   | Click the "pin" tag on any row — in ANY tiled project, not just the active one — other than the row currently driving the primary pane |
+| **Unpin a second log pane**                 | Click the "pinned" tag again (on the row it's pinned to)                                                                               |
+| **Resize the rail**                         | Drag the divider between the rail and the log pane (`col-resize` cursor)                                                               |
+| **Resize the two log panes**                | Drag the divider between the primary and pinned log panes (`col-resize` cursor)                                                        |
 
-Each column's log pane is normally a single terminal, showing whichever rail
-row is selected. Clicking the "pin" tag on a **different** row (it's hidden
-on the row that's currently selected — pinning yourself as your own second
-pane is meaningless) adds a second, independently-selected log pane to the
-right of the primary one, side by side, divided by a draggable divider
-(`col-resize` cursor) rather than a fixed 50/50 split. Dragging it resizes
-the primary pane's share of the two-pane area; the pinned pane absorbs
-whatever's left. The ratio persists per **workspace**, not per project —
-`crs.dockPaneSplitRatio` in `localStorage`, keyed by the active workspace id
-— since a workspace can hold several projects and a split chosen while
-looking at that workspace applies uniformly across all of its columns.
-Widening or narrowing a column doesn't reset it: each column independently
-clamps the same shared ratio against its own measured width, so a ratio
-that's legal in a wide column but would push a pane below its floor in a
-narrower one just degrades that column's rendering (without touching the
-stored value) until it — or a wider sibling column in the same workspace —
-has room to honor it exactly. The divider itself is mouse-only (a
+Dock state persists to `localStorage`: collapsed state, region height,
+manually pinned project IDs, rail width, each project's own selected rail
+row (`crs.dockSelectedRows`, per project), which project is active
+(`crs.dockActiveProject`), which project+row is pinned
+(`crs.dockPinnedRow`), which project sections are collapsed
+(`crs.dockCollapsedGroups`), and the primary/pinned pane split ratio (see
+below) — the last four keyed by the active **workspace**, not by project,
+mirroring the split ratio's own reasoning below.
+
+The dock's log pane is normally a single terminal, showing whichever rail
+row the ACTIVE project has selected. Clicking the "pin" tag on a row in any
+project (it's hidden on the row currently driving the primary pane —
+pinning yourself as your own second pane is meaningless) adds a second,
+independently-selected log pane to the right of the primary one, side by
+side, divided by a draggable divider (`col-resize` cursor) rather than a
+fixed 50/50 split — this pin can point at a row in a **different** project
+than the one currently active, so you can watch one project's log while
+browsing another's rail. Dragging the divider resizes the primary pane's
+share of the two-pane area; the pinned pane absorbs whatever's left. The
+ratio persists per **workspace**, not per project — `crs.dockPaneSplitRatio`
+in `localStorage`, keyed by the active workspace id — since a workspace can
+hold several projects and a split chosen while looking at that workspace
+applies uniformly regardless of which project is active. Widening or
+narrowing the dock doesn't reset it: the dock clamps the stored ratio
+against its own measured width at render time, so a ratio that's legal at
+one width but would push a pane below its floor at a narrower one just
+degrades the rendering (without touching the stored value) until the dock
+is wide enough to honor it exactly. The divider itself is mouse-only (a
 non-focusable `role="separator"`, deliberately with no `tabIndex`) —
 keyboard-driven resizing for both this divider and the rail's is tracked
-separately as issue #1264. Only one row can be pinned at a time —
-pinning a different row replaces the previous pin, and selecting the
-currently-pinned row as the new primary selection simply clears the pin
-(no automatic swap promoting the old primary into the now-empty pin slot).
+separately as issue #1264. Only one row can be pinned at a time, in at most
+one project — pinning a different row (in the same or a different project)
+replaces the previous pin, and selecting the currently-pinned row as the
+new primary selection simply clears the pin (no automatic swap promoting
+the old primary into the now-empty pin slot).
 
 The second pane needs enough width to hold two log panes side by side, on
 top of the rail itself — below that threshold it's hidden entirely (never
 stacked vertically), but the pin itself is **not** cleared: the "pinned" tag
 switches to a dimmed variant on its row instead of a plain unpinned "pin",
 so it stays clear the pin is still active, just out of room. A pin also
-survives a reload (or any other transient resize that hides it) via the
-same `crs.dockSelectedRows` storage key the primary selection uses, and
-falls back to unpinned if the previously-pinned control's identity no
-longer matches any row.
+survives a reload (or any other transient resize that hides it), via
+`crs.dockPinnedRow`, and falls back to unpinned if its project is no longer
+tiled or the previously-pinned control's identity no longer matches any row
+in it.
 
 ## Troubleshooting
 
@@ -536,7 +557,7 @@ longer matches any row.
   [Editing from the UI](#editing-from-the-ui) above) takes effect
   immediately — no wait. A **hand** edit to either `.crs/dock.json` or the
   global `<configDir>/dock.json` doesn't go through that same immediate
-  path, so it shows up once every tiled/pinned column's own poll catches up:
+  path, so it shows up once every tiled/pinned project's own poll catches up:
   `GET .../dock` every ~15s (issue #73's own Docker-discovery poll, which
   re-fetches the FULL merged list — configured controls included, not just
   discovered ones). Re-navigating to the project still works too, for an
