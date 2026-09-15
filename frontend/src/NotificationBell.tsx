@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { useVirtualizer } from "@tanstack/react-virtual";
+import { defaultRangeExtractor, useVirtualizer } from "@tanstack/react-virtual";
+import type { Range } from "@tanstack/react-virtual";
 import { eventKey, useDashboardStore } from "./store/index.js";
 import {
   describeEvent,
@@ -374,12 +375,47 @@ export function NotificationBell({
     [sessions, events, lastSeenSeq, dismissedEventKeys, mutedSessionIds],
   );
 
+  // Issue #1229 — sticky group headers. Plain CSS `position: sticky` can't
+  // work here: every row (headers included) is absolutely positioned with
+  // `transform: translateY(...)` below, which removes it from the sticky
+  // containing block entirely. This is TanStack Virtual's own documented
+  // workaround (its "Sticky" example) instead: every header's index goes in
+  // `stickyIndexes`; `rangeExtractor` — called on every scroll/resize — always
+  // adds "whichever sticky header index is the last one at or before the
+  // current top-of-viewport row" (activeStickyIndexRef) to the rendered
+  // range, REGARDLESS of whether that header's own row is actually scrolled
+  // into view. Without that forced inclusion, a header scrolled off the top
+  // would simply unmount once outside the normal overscan window (measured
+  // rows are only ever the ones the range extractor returns) — there'd be
+  // nothing left to pin. The render loop below is what actually turns the
+  // active sticky row's positioning from `absolute` (normal virtualized flow)
+  // to `sticky` (pinned to the scroll container's own top).
+  const stickyIndexes = useMemo(
+    () =>
+      items.reduce<number[]>((acc, item, index) => {
+        if (item.type === "header") acc.push(index);
+        return acc;
+      }, []),
+    [items],
+  );
+  const activeStickyIndexRef = useRef(0);
+  const rangeExtractor = useCallback(
+    (range: Range) => {
+      activeStickyIndexRef.current =
+        [...stickyIndexes].reverse().find((index) => range.startIndex >= index) ?? 0;
+      const next = new Set([activeStickyIndexRef.current, ...defaultRangeExtractor(range)]);
+      return [...next].sort((a, b) => a - b);
+    },
+    [stickyIndexes],
+  );
+
   const rowVirtualizer = useVirtualizer({
     count: items.length,
     getScrollElement: () => scrollRef.current,
     estimateSize: (index) =>
       items[index]?.type === "header" ? HEADER_ROW_HEIGHT : EVENT_ROW_ESTIMATE_HEIGHT,
     overscan: 8,
+    rangeExtractor,
   });
 
   useEffect(() => {
@@ -535,18 +571,31 @@ export function NotificationBell({
                 >
                   {rowVirtualizer.getVirtualItems().map((virtualRow) => {
                     const item = items[virtualRow.index];
+                    // Issue #1229 — the active sticky row (see rangeExtractor
+                    // above) switches from the normal virtualized "absolute +
+                    // translateY" positioning to `sticky`, pinning it to the
+                    // top of `.notif-feed-scroll` instead of wherever its own
+                    // measured offset would otherwise place it. Every OTHER
+                    // header keeps normal positioning — only one row is ever
+                    // sticky at a time.
+                    const isActiveSticky =
+                      item.type === "header" && virtualRow.index === activeStickyIndexRef.current;
                     return (
                       <div
                         key={virtualRow.key}
                         data-index={virtualRow.index}
                         ref={rowVirtualizer.measureElement}
-                        style={{
-                          position: "absolute",
-                          top: 0,
-                          left: 0,
-                          width: "100%",
-                          transform: `translateY(${virtualRow.start}px)`,
-                        }}
+                        style={
+                          isActiveSticky
+                            ? { position: "sticky", top: 0, left: 0, width: "100%", zIndex: 1 }
+                            : {
+                                position: "absolute",
+                                top: 0,
+                                left: 0,
+                                width: "100%",
+                                transform: `translateY(${virtualRow.start}px)`,
+                              }
+                        }
                       >
                         {item.type === "header" ? (
                           <div className="notif-group-header">
