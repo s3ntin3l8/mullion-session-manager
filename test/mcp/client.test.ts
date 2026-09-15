@@ -530,6 +530,31 @@ describe("MullionClient (issue #271)", () => {
         });
         await expect(client.listActions(undefined)).rejects.toThrow("something else entirely");
       });
+
+      // Hermes review, PR #1292 — the sessions.get lookup itself can fail
+      // (e.g. a stale/deleted MULLION_SESSION_ID); that failure must not
+      // mask the canonical "'projectId' is required" this whole retry
+      // exists to recover from.
+      it("listActions rethrows the original 400 when the sessions.get lookup itself fails", async () => {
+        const socketPath = await startControlServer((msg, socket) => {
+          if (msg.op === "sessions.get") {
+            socket.write(
+              `${JSON.stringify({ id: msg.id, ok: false, status: 404, error: "session not found" })}\n`,
+            );
+            return;
+          }
+          expect(msg.op).toBe("projects.actions");
+          expect(msg.body).toEqual({});
+          socket.write(
+            `${JSON.stringify({ id: msg.id, ok: false, status: 400, error: "'projectId' is required" })}\n`,
+          );
+        });
+        const client = new MullionClient({
+          MULLION_SOCKET_PATH: socketPath,
+          MULLION_SESSION_ID: "42",
+        });
+        await expect(client.listActions(undefined)).rejects.toThrow("'projectId' is required");
+      });
     });
 
     it("createPreview sends kind:project when projectId is given", async () => {

@@ -273,7 +273,17 @@ export class MullionClient {
       if (!isMissingIdError(err, "'projectId' is required") || this.ownSessionId === undefined) {
         throw err;
       }
-      const session = await this.controlRequest("sessions.get", { sessionId: this.ownSessionId });
+      // Hermes review, PR #1292 — the lookup itself can fail (e.g.
+      // MULLION_SESSION_ID names a stale/deleted session); that failure
+      // must never mask the canonical "'projectId' is required" this
+      // whole branch exists to recover from, so it's swallowed in favor
+      // of rethrowing `err`.
+      let session;
+      try {
+        session = await this.controlRequest("sessions.get", { sessionId: this.ownSessionId });
+      } catch {
+        throw err;
+      }
       const ownProjectId = (session ?? {}).projectId;
       if (ownProjectId === undefined || ownProjectId === null) throw err;
       return this.controlRequest("projects.actions", { projectId: String(ownProjectId) });
