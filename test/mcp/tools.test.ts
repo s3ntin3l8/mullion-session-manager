@@ -164,6 +164,18 @@ describe("session/project/preview tool handlers (issue #134 part 2)", () => {
     expect(JSON.parse(text)).toEqual({ id: 7, parentSessionId: 3 });
   });
 
+  // Issue #1291 — parentSessionId wasn't in this tool's schema at all
+  // before this fix, so it could never reach client.spawnChildSession's
+  // own (already-supported) explicit-override param.
+  it("spawn_child_session forwards an explicit parentSessionId", async () => {
+    const tool = TOOLS.find((t) => t.name === "spawn_child_session")!;
+    const spawnChildSession = vi.fn().mockResolvedValue({ id: 7 });
+    await tool.handler({ command: "bash", parentSessionId: "9" }, { spawnChildSession });
+    expect(spawnChildSession).toHaveBeenCalledWith(
+      expect.objectContaining({ command: "bash", parentSessionId: "9" }),
+    );
+  });
+
   it("stop_dock_session calls client.stopDockSession with sessionId", async () => {
     const tool = TOOLS.find((t) => t.name === "stop_dock_session")!;
     const stopDockSession = vi.fn().mockResolvedValue({ ok: true });

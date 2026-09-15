@@ -35,7 +35,11 @@ import { MullionSocketClient } from "../cli/client.mjs";
 // joins that short list, and is the first of the two that CREATES a
 // session rather than just reading one — sessions.spawn_child is
 // deliberately session-scope-reachable (see control-socket.ts's own
-// comment), unlike sessions.create above it.
+// comment), unlike sessions.create above it. Staying "fully usable" on an
+// auth-disabled host specifically relies on ownSessionId's env fallback
+// below (issue #1291): full scope has no connection-level pin to resolve
+// "self" from, so without that fallback all three would 400 on the exact
+// omit-it-to-target-yourself usage this paragraph describes.
 
 const PROMOTE_TIMEOUT_MS = 295_000;
 const BROWSER_ACTION_TIMEOUT_MS = 30_000;
@@ -45,6 +49,22 @@ export class MullionClient {
     this.hookSocketPath = env.MULLION_HOOK_SOCKET;
     this.hookToken = env.MULLION_HOOK_TOKEN;
     this._env = env;
+  }
+
+  /** Issue #1291 — the calling session's own id (`MULLION_SESSION_ID`,
+   * set in every spawned session's env by launch-plan.ts), used as a
+   * client-side fallback for "target the calling session/its project"
+   * when the control socket itself can't resolve that from the
+   * connection's own pin. `resolveHandshake` (control-socket.ts) collapses
+   * every connection to full scope — no pinned session at all — whenever
+   * auth is disabled entirely, which silently breaks the "omit it, get
+   * your own" shape of getScrollback/listActions/spawnChildSession below
+   * on such a host even though each is reachable at session scope by
+   * design. `undefined` when this MCP server isn't running as a session's
+   * own subprocess (e.g. `mullion mcp` run directly by an operator). */
+  get ownSessionId() {
+    const id = this._env.MULLION_SESSION_ID;
+    return typeof id === "string" && id.length > 0 ? id : undefined;
   }
 
   /** One-shot control-socket request: fresh MullionSocketClient, one
@@ -210,8 +230,26 @@ export class MullionClient {
   // deletePreview below), not an options object like listSessions/
   // createPreview — those two take more than one independent optional
   // field, everything else here takes exactly one.
-  listActions(projectId) {
-    return this.controlRequest("projects.actions", projectId !== undefined ? { projectId } : {});
+  /** Issue #1291 — when `projectId` is omitted and this client knows its
+   * own session (`ownSessionId`), resolves "own project" via a
+   * `sessions.get` lookup first, rather than sending an empty body and
+   * relying on the control socket's own pin (which doesn't exist under
+   * full scope). No `MULLION_PROJECT_ID` env var exists to shortcut this
+   * the way getScrollback/spawnChildSession do for a session id — a
+   * session's project lives on its own row, not its env — so this mirrors
+   * resolveTargetProjectId's own session-to-project derivation
+   * (control-socket.ts) client-side instead. */
+  async listActions(projectId) {
+    let target = projectId;
+    if (target === undefined && this.ownSessionId !== undefined) {
+      const session = await this.controlRequest("sessions.get", { sessionId: this.ownSessionId });
+      const ownProjectId = (session ?? {}).projectId;
+      if (ownProjectId !== undefined && ownProjectId !== null) target = String(ownProjectId);
+    }
+    return this.controlRequest(
+      "projects.actions",
+      target !== undefined ? { projectId: target } : {},
+    );
   }
 
   /** Mirrors `mullion dock start`'s own two-step logic (src/cli/core.mjs):
@@ -254,11 +292,12 @@ export class MullionClient {
 
   /** Phase 5 (Track B, issue #193 5.3b) — spawns a real child session (own
    * PTY, own dtach socket) of `parentSessionId`, or of the calling session
-   * itself when omitted (the session-scoped shape sessions.spawn_child
-   * resolves via its own pinned connection id). Unlike startDockSession/
-   * stopDockSession/listSessions above, this is reachable from a Claude
-   * Code session's own auto-injected MCP config: that config only ever
-   * carries the session-scoped MULLION_HOOK_TOKEN, and spawn_child (unlike
+   * itself when omitted — either via the session-scoped connection's own
+   * pin, or via `ownSessionId`'s env fallback when that pin doesn't exist
+   * (issue #1291). Unlike startDockSession/stopDockSession/listSessions
+   * above, this is reachable from a Claude Code session's own
+   * auto-injected MCP config: that config only ever carries the
+   * session-scoped MULLION_HOOK_TOKEN, and spawn_child (unlike
    * sessions.create) accepts that scope by design. */
   spawnChildSession({ command, name, cwd, kind, skipPermissions, parentSessionId } = {}) {
     const body = { command };
@@ -266,12 +305,22 @@ export class MullionClient {
     if (cwd !== undefined) body.cwd = cwd;
     if (kind !== undefined) body.kind = kind;
     if (skipPermissions !== undefined) body.skipPermissions = skipPermissions;
-    if (parentSessionId !== undefined) body.parentSessionId = parentSessionId;
+    // Issue #1291 — falls back to this client's own session id when the
+    // caller didn't name one, so "spawn a child of myself" (this method's
+    // whole documented point) still works when the control socket can't
+    // resolve that from the connection's own pin (see ownSessionId above).
+    const resolvedParentSessionId = parentSessionId ?? this.ownSessionId;
+    if (resolvedParentSessionId !== undefined) body.parentSessionId = resolvedParentSessionId;
     return this.controlRequest("sessions.spawn_child", body);
   }
 
+  // Issue #1291 — same ownSessionId fallback as spawnChildSession above.
   getScrollback(sessionId) {
-    return this.controlRequest("sessions.scrollback", sessionId !== undefined ? { sessionId } : {});
+    const resolvedSessionId = sessionId ?? this.ownSessionId;
+    return this.controlRequest(
+      "sessions.scrollback",
+      resolvedSessionId !== undefined ? { sessionId: resolvedSessionId } : {},
+    );
   }
 
   /** `projectId`/`url` are mutually exclusive, same as `mullion preview

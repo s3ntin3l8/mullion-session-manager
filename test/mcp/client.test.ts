@@ -340,6 +340,94 @@ describe("MullionClient (issue #271)", () => {
       });
     });
 
+    // Issue #1291 — ownSessionId (MULLION_SESSION_ID) fallback, for the
+    // auth-disabled-host case where the control socket itself has no
+    // pinned session to resolve "self" from.
+    describe("ownSessionId fallback (issue #1291)", () => {
+      it("getScrollback falls back to MULLION_SESSION_ID when sessionId is omitted", async () => {
+        const socketPath = await startControlServer((msg, socket) => {
+          expect(msg.op).toBe("sessions.scrollback");
+          expect(msg.body).toEqual({ sessionId: "42" });
+          socket.write(
+            `${JSON.stringify({ id: msg.id, ok: true, status: 200, result: { b64: "" } })}\n`,
+          );
+        });
+        const client = new MullionClient({
+          MULLION_SOCKET_PATH: socketPath,
+          MULLION_SESSION_ID: "42",
+        });
+        await client.getScrollback(undefined);
+      });
+
+      it("getScrollback prefers an explicit sessionId over MULLION_SESSION_ID", async () => {
+        const socketPath = await startControlServer((msg, socket) => {
+          expect(msg.body).toEqual({ sessionId: "7" });
+          socket.write(
+            `${JSON.stringify({ id: msg.id, ok: true, status: 200, result: { b64: "" } })}\n`,
+          );
+        });
+        const client = new MullionClient({
+          MULLION_SOCKET_PATH: socketPath,
+          MULLION_SESSION_ID: "42",
+        });
+        await client.getScrollback("7");
+      });
+
+      it("spawnChildSession falls back to MULLION_SESSION_ID when parentSessionId is omitted", async () => {
+        const socketPath = await startControlServer((msg, socket) => {
+          expect(msg.op).toBe("sessions.spawn_child");
+          expect(msg.body).toEqual({ command: "bash", parentSessionId: "42" });
+          socket.write(
+            `${JSON.stringify({ id: msg.id, ok: true, status: 201, result: { id: 5 } })}\n`,
+          );
+        });
+        const client = new MullionClient({
+          MULLION_SOCKET_PATH: socketPath,
+          MULLION_SESSION_ID: "42",
+        });
+        await client.spawnChildSession({ command: "bash" });
+      });
+
+      it("listActions resolves its own project via sessions.get when projectId is omitted", async () => {
+        const socketPath = await startControlServer((msg, socket) => {
+          if (msg.op === "sessions.get") {
+            expect(msg.body).toEqual({ sessionId: "42" });
+            socket.write(
+              `${JSON.stringify({ id: msg.id, ok: true, status: 200, result: { id: 42, projectId: 3 } })}\n`,
+            );
+            return;
+          }
+          expect(msg.op).toBe("projects.actions");
+          expect(msg.body).toEqual({ projectId: "3" });
+          socket.write(`${JSON.stringify({ id: msg.id, ok: true, status: 200, result: [] })}\n`);
+        });
+        const client = new MullionClient({
+          MULLION_SOCKET_PATH: socketPath,
+          MULLION_SESSION_ID: "42",
+        });
+        await client.listActions(undefined);
+      });
+
+      it("listActions sends an empty body when its own session has no project", async () => {
+        const socketPath = await startControlServer((msg, socket) => {
+          if (msg.op === "sessions.get") {
+            socket.write(
+              `${JSON.stringify({ id: msg.id, ok: true, status: 200, result: { id: 42, projectId: null } })}\n`,
+            );
+            return;
+          }
+          expect(msg.op).toBe("projects.actions");
+          expect(msg.body).toEqual({});
+          socket.write(`${JSON.stringify({ id: msg.id, ok: true, status: 200, result: [] })}\n`);
+        });
+        const client = new MullionClient({
+          MULLION_SOCKET_PATH: socketPath,
+          MULLION_SESSION_ID: "42",
+        });
+        await client.listActions(undefined);
+      });
+    });
+
     it("createPreview sends kind:project when projectId is given", async () => {
       const socketPath = await startControlServer((msg, socket) => {
         expect(msg.op).toBe("previews.create");

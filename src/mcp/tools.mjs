@@ -250,6 +250,13 @@ const spawnChildSession = {
           "for a full-scope caller — silently ignored from inside a normal agent session " +
           "(session scope).",
       },
+      parentSessionId: {
+        type: "string",
+        description:
+          "The session to spawn a child of. Defaults to the calling session — normally " +
+          "leave this unset. A session-scoped caller may only name its own session id here " +
+          "(anything else is rejected); a full-scope caller may name any session.",
+      },
     },
   },
   async handler(args, client) {
@@ -259,6 +266,7 @@ const spawnChildSession = {
       cwd: args?.cwd,
       kind: args?.kind,
       skipPermissions: args?.skipPermissions,
+      parentSessionId: args?.parentSessionId,
     });
     return JSON.stringify(result);
   },
