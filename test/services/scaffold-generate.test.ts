@@ -1131,7 +1131,7 @@ describe("persistAgentSandboxAuth", () => {
     });
   });
 
-  it("does NOT copy back when sandboxed auth.json matches real (no rotation)", () => {
+  it("does NOT copy back when sandboxed auth.json matches real (no rotation)", async () => {
     const realCodex = path.join(realHomeDir, ".codex");
     fs.mkdirSync(realCodex, { recursive: true });
     const sameAuth = JSON.stringify({ refresh_token: "test-fixture-same" });
@@ -1142,16 +1142,122 @@ describe("persistAgentSandboxAuth", () => {
     fs.mkdirSync(fakeCodex, { recursive: true });
     fs.writeFileSync(path.join(fakeCodex, "auth.json"), sameAuth);
 
+    // Wait one mtime tick before recording baseline — cheaper than
+    // busy-waiting, and not mtime-granularity dependent (CI filesystems
+    // often have second-level granularity, which would make a 50ms wait
+    // read the same mtime).
+    await new Promise((resolve) => setTimeout(resolve, 1100));
     const mtimeBefore = fs.statSync(path.join(realCodex, "auth.json")).mtimeMs;
-    // Sleep to ensure mtime would change if rewritten
-    const start = Date.now();
-    while (Date.now() - start < 50) {
-      // intentional busy-wait
-    }
+
     persistAgentSandboxAuth(fakeHome, { files: [path.join(fakeCodex, "auth.json")] });
 
     const mtimeAfter = fs.statSync(path.join(realCodex, "auth.json")).mtimeMs;
     expect(mtimeAfter).toBe(mtimeBefore);
+  });
+
+  it("does NOT copy back when sandboxed auth.json has a different key set (schema shape mismatch)", () => {
+    // Real file has the standard codex auth.json shape (refresh_token,
+    // access_token). A compromised turn writes a credential-shaped but
+    // structurally different document (e.g. adding or removing keys) —
+    // legitimate rotation changes values, never schema.
+    const realCodex = path.join(realHomeDir, ".codex");
+    fs.mkdirSync(realCodex, { recursive: true });
+    const realAuth = JSON.stringify({
+      refresh_token: "test-fixture-real-refresh",
+      access_token: "test-fixture-real-access",
+    });
+    fs.writeFileSync(path.join(realCodex, "auth.json"), realAuth);
+
+    const fakeHome = path.join(scratchDir, ".agent-home");
+    const fakeCodex = path.join(fakeHome, ".codex");
+    fs.mkdirSync(fakeCodex, { recursive: true });
+    // Different key set — adds a new key
+    const sandboxedAuth = JSON.stringify({
+      refresh_token: "test-fixture-rotated-refresh",
+      access_token: "test-fixture-rotated-access",
+      attacker_added: "malicious-value",
+    });
+    fs.writeFileSync(path.join(fakeCodex, "auth.json"), sandboxedAuth);
+
+    persistAgentSandboxAuth(fakeHome, { files: [path.join(fakeCodex, "auth.json")] });
+
+    // Real auth.json is unchanged — the key set differed
+    const realContent = fs.readFileSync(path.join(realCodex, "auth.json"), "utf8");
+    expect(JSON.parse(realContent)).toEqual({
+      refresh_token: "test-fixture-real-refresh",
+      access_token: "test-fixture-real-access",
+    });
+  });
+
+  it("does NOT copy back when sandboxed auth.json is missing a key", () => {
+    const realCodex = path.join(realHomeDir, ".codex");
+    fs.mkdirSync(realCodex, { recursive: true });
+    const realAuth = JSON.stringify({
+      refresh_token: "test-fixture-real-refresh",
+      access_token: "test-fixture-real-access",
+    });
+    fs.writeFileSync(path.join(realCodex, "auth.json"), realAuth);
+
+    const fakeHome = path.join(scratchDir, ".agent-home");
+    const fakeCodex = path.join(fakeHome, ".codex");
+    fs.mkdirSync(fakeCodex, { recursive: true });
+    // Missing the access_token key
+    const sandboxedAuth = JSON.stringify({ refresh_token: "test-fixture-rotated-refresh" });
+    fs.writeFileSync(path.join(fakeCodex, "auth.json"), sandboxedAuth);
+
+    persistAgentSandboxAuth(fakeHome, { files: [path.join(fakeCodex, "auth.json")] });
+
+    const realContent = fs.readFileSync(path.join(realCodex, "auth.json"), "utf8");
+    expect(JSON.parse(realContent)).toEqual({
+      refresh_token: "test-fixture-real-refresh",
+      access_token: "test-fixture-real-access",
+    });
+  });
+
+  it("does NOT copy back when real auth.json is not a JSON object (schema check inapplicable)", () => {
+    const realCodex = path.join(realHomeDir, ".codex");
+    fs.mkdirSync(realCodex, { recursive: true });
+    // Edge case: real auth.json is a JSON array (unusual but possible)
+    fs.writeFileSync(path.join(realCodex, "auth.json"), JSON.stringify(["legacy-format"]));
+
+    const fakeHome = path.join(scratchDir, ".agent-home");
+    const fakeCodex = path.join(fakeHome, ".codex");
+    fs.mkdirSync(fakeCodex, { recursive: true });
+    const sandboxedAuth = JSON.stringify({ refresh_token: "test-fixture-rotated" });
+    fs.writeFileSync(path.join(fakeCodex, "auth.json"), sandboxedAuth);
+
+    persistAgentSandboxAuth(fakeHome, { files: [path.join(fakeCodex, "auth.json")] });
+
+    // Real auth.json unchanged — schema check is inapplicable for non-object
+    // real files, so we skip rather than risk corrupting a non-standard layout.
+    const realContent = fs.readFileSync(path.join(realCodex, "auth.json"), "utf8");
+    expect(JSON.parse(realContent)).toEqual(["legacy-format"]);
+  });
+
+  it("atomic write leaves no orphaned .tmp files after a successful copy-back", () => {
+    const realCodex = path.join(realHomeDir, ".codex");
+    fs.mkdirSync(realCodex, { recursive: true });
+    const realAuth = JSON.stringify({
+      refresh_token: "test-fixture-real-refresh",
+      access_token: "test-fixture-real-access",
+    });
+    fs.writeFileSync(path.join(realCodex, "auth.json"), realAuth);
+
+    const fakeHome = path.join(scratchDir, ".agent-home");
+    const fakeCodex = path.join(fakeHome, ".codex");
+    fs.mkdirSync(fakeCodex, { recursive: true });
+    const rotatedAuth = JSON.stringify({
+      refresh_token: "test-fixture-rotated-refresh",
+      access_token: "test-fixture-rotated-access",
+    });
+    fs.writeFileSync(path.join(fakeCodex, "auth.json"), rotatedAuth);
+
+    persistAgentSandboxAuth(fakeHome, { files: [path.join(fakeCodex, "auth.json")] });
+
+    // No .tmp files should be left in the real HOME's codex dir
+    const files = fs.readdirSync(realCodex);
+    const orphans = files.filter((f) => f.includes(".tmp."));
+    expect(orphans).toEqual([]);
   });
 
   it("does NOT copy back when sandboxed auth.json is malformed JSON", () => {

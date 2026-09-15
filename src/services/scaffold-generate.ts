@@ -941,14 +941,24 @@ export function createAgentSandboxHome(
  * scratch worktree and the operator's real auth.json keeps re-seeding the
  * same (now potentially invalidated) original token.
  *
- * Security: the rotated auth.json is ONLY copied back if it passes a
- * basic JSON validity check (parseable, non-empty object). A compromised
- * turn that wrote malformed JSON, a non-object root, or anything other
- * than a credential-shaped document leaves the real auth.json untouched.
- * This is the exact "trust nothing the sandbox produced" posture this PR
- * took for every other state file — the real auth.json stays read-only
- * from the sandbox's perspective, and only valid rotated credentials
- * propagate back.
+ * Security: the rotated auth.json is ONLY copied back if it passes ALL
+ * of these checks:
+ *   1. Parses as valid JSON
+ *   2. Is a non-empty object (not array, primitive, or null)
+ *   3. Preserves the real file's top-level key set — legitimate rotation
+ *      changes values, never schema; this defense-in-depth check rejects
+ *      a compromised turn that writes a credential-shaped but structurally
+ *      different document
+ *
+ * A compromised turn that fails any check leaves the real auth.json
+ * untouched — the exact "trust nothing the sandbox produced" posture
+ * this PR took for every other state file. The real auth.json stays
+ * read-only from the sandbox's perspective, and only validated rotated
+ * credentials propagate back.
+ *
+ * The write is atomic: write to `<realAuth>.tmp.<random>` and `rename`
+ * to the target. A crash mid-write leaves the original real auth.json
+ * intact (the .tmp is orphaned, not a corruption of the live file).
  *
  * CodeQL's js/path-injection flags `fakeHome` / `realHome` here (same
  * "real mitigation, not a CodeQL-recognized sanitizer shape" pattern as
@@ -977,22 +987,60 @@ export function persistAgentSandboxAuth(
       const sandboxed = fs.readFileSync(f, "utf8");
       const real = fs.readFileSync(realAuth, "utf8");
       if (sandboxed === real) continue; // No rotation happened
-      // Validate before writing — a compromised turn writing malformed
-      // JSON, a JSON array, or an empty object fails these checks and
-      // leaves the real auth.json untouched.
-      const parsed: unknown = JSON.parse(sandboxed);
+      // Parse both — we need the real file's key set for shape matching.
+      const parsedSandboxed: unknown = JSON.parse(sandboxed);
+      const parsedReal: unknown = JSON.parse(real);
       if (
-        typeof parsed !== "object" ||
-        parsed === null ||
-        Array.isArray(parsed) ||
-        Object.keys(parsed as Record<string, unknown>).length === 0
+        typeof parsedSandboxed !== "object" ||
+        parsedSandboxed === null ||
+        Array.isArray(parsedSandboxed) ||
+        Object.keys(parsedSandboxed as Record<string, unknown>).length === 0
       ) {
+        // Malformed or empty — skip copy-back to avoid corrupting real auth.
         continue;
       }
-      fs.writeFileSync(realAuth, sandboxed, { mode: 0o600 });
+      // Schema shape check: the rotated document must preserve the real
+      // file's exact top-level key set. Legitimate rotation changes
+      // values, never adds/removes keys; a compromised turn that writes
+      // a credential-shaped but structurally different document fails
+      // this check and leaves the real auth.json untouched.
+      if (typeof parsedReal !== "object" || parsedReal === null || Array.isArray(parsedReal)) {
+        // Real file isn't a JSON object — schema check is inapplicable,
+        // skip rather than risk corrupting a non-standard layout.
+        continue;
+      }
+      const realKeys = Object.keys(parsedReal as Record<string, unknown>).sort();
+      const sandboxedKeys = Object.keys(parsedSandboxed as Record<string, unknown>).sort();
+      if (
+        realKeys.length !== sandboxedKeys.length ||
+        !realKeys.every((k, i) => k === sandboxedKeys[i])
+      ) {
+        // Key set differs — skip copy-back.
+        continue;
+      }
+      // Atomic write: tmp file + rename. A crash mid-write leaves the
+      // original real auth.json intact (the .tmp is orphaned, not a
+      // corruption of the live file). The random suffix avoids races
+      // between concurrent generation turns, which are not possible
+      // today (defaultSpawnGenerationTurn is awaited per turn) but the
+      // pattern is correct as a forward-compatible invariant.
+      const tmpPath = `${realAuth}.tmp.${randomUUID()}`;
+      fs.writeFileSync(tmpPath, sandboxed, { mode: 0o600 });
+      fs.renameSync(tmpPath, realAuth);
     } catch {
       // Best-effort — copy-back failure (missing file, parse error, I/O
-      // error) degrades to re-auth prompt, not a sandbox error.
+      // error) degrades to re-auth prompt, not a sandbox error. Clean
+      // up any orphaned .tmp from a partial write.
+      try {
+        const dir = path.dirname(realAuth);
+        for (const entry of fs.readdirSync(dir)) {
+          if (entry.startsWith(`${path.basename(realAuth)}.tmp.`)) {
+            fs.unlinkSync(path.join(dir, entry));
+          }
+        }
+      } catch {
+        // Best-effort cleanup — ignore.
+      }
     }
   }
 }
