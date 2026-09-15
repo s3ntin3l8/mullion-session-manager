@@ -342,12 +342,41 @@ describe("MullionClient (issue #271)", () => {
 
     // Issue #1291 — ownSessionId (MULLION_SESSION_ID) fallback, for the
     // auth-disabled-host case where the control socket itself has no
-    // pinned session to resolve "self" from.
+    // pinned session to resolve "self" from. Hermes review, PR #1292: the
+    // fallback is a RETRY on the specific "no pin" 400, never an eager
+    // substitution — so every "falls back" test below drives a first
+    // failing attempt, and a companion "does not retry" test locks in
+    // that the already-working (real session-scope) case takes no extra
+    // round trip at all.
     describe("ownSessionId fallback (issue #1291)", () => {
-      it("getScrollback falls back to MULLION_SESSION_ID when sessionId is omitted", async () => {
+      it("getScrollback retries with MULLION_SESSION_ID after the direct attempt 400s", async () => {
+        let calls = 0;
         const socketPath = await startControlServer((msg, socket) => {
           expect(msg.op).toBe("sessions.scrollback");
+          calls += 1;
+          if (calls === 1) {
+            expect(msg.body).toEqual({});
+            socket.write(
+              `${JSON.stringify({ id: msg.id, ok: false, status: 400, error: "'sessionId' is required" })}\n`,
+            );
+            return;
+          }
           expect(msg.body).toEqual({ sessionId: "42" });
+          socket.write(
+            `${JSON.stringify({ id: msg.id, ok: true, status: 200, result: { b64: "" } })}\n`,
+          );
+        });
+        const client = new MullionClient({
+          MULLION_SOCKET_PATH: socketPath,
+          MULLION_SESSION_ID: "42",
+        });
+        await client.getScrollback(undefined);
+        expect(calls).toBe(2);
+      });
+
+      it("getScrollback does not retry when the direct attempt already succeeds", async () => {
+        const socketPath = await startControlServer((msg, socket) => {
+          expect(msg.body).toEqual({});
           socket.write(
             `${JSON.stringify({ id: msg.id, ok: true, status: 200, result: { b64: "" } })}\n`,
           );
@@ -373,10 +402,34 @@ describe("MullionClient (issue #271)", () => {
         await client.getScrollback("7");
       });
 
-      it("spawnChildSession falls back to MULLION_SESSION_ID when parentSessionId is omitted", async () => {
+      it("spawnChildSession retries with MULLION_SESSION_ID after the direct attempt 400s", async () => {
+        let calls = 0;
         const socketPath = await startControlServer((msg, socket) => {
           expect(msg.op).toBe("sessions.spawn_child");
+          calls += 1;
+          if (calls === 1) {
+            expect(msg.body).toEqual({ command: "bash" });
+            socket.write(
+              `${JSON.stringify({ id: msg.id, ok: false, status: 400, error: "'parentSessionId' is required" })}\n`,
+            );
+            return;
+          }
           expect(msg.body).toEqual({ command: "bash", parentSessionId: "42" });
+          socket.write(
+            `${JSON.stringify({ id: msg.id, ok: true, status: 201, result: { id: 5 } })}\n`,
+          );
+        });
+        const client = new MullionClient({
+          MULLION_SOCKET_PATH: socketPath,
+          MULLION_SESSION_ID: "42",
+        });
+        await client.spawnChildSession({ command: "bash" });
+        expect(calls).toBe(2);
+      });
+
+      it("spawnChildSession does not retry when the direct attempt already succeeds", async () => {
+        const socketPath = await startControlServer((msg, socket) => {
+          expect(msg.body).toEqual({ command: "bash" });
           socket.write(
             `${JSON.stringify({ id: msg.id, ok: true, status: 201, result: { id: 5 } })}\n`,
           );
@@ -458,6 +511,24 @@ describe("MullionClient (issue #271)", () => {
           MULLION_SESSION_ID: "42",
         });
         await expect(client.listActions(undefined)).rejects.toThrow("'projectId' is required");
+      });
+
+      // Hermes review, PR #1292 — the retry must key off the exact
+      // "no pin" message, not just "any 400", so an unrelated 400 doesn't
+      // trigger a sessions.get lookup and mask the real error behind a
+      // different one.
+      it("listActions does not retry on an unrelated 400", async () => {
+        const socketPath = await startControlServer((msg, socket) => {
+          expect(msg.op).toBe("projects.actions");
+          socket.write(
+            `${JSON.stringify({ id: msg.id, ok: false, status: 400, error: "something else entirely" })}\n`,
+          );
+        });
+        const client = new MullionClient({
+          MULLION_SOCKET_PATH: socketPath,
+          MULLION_SESSION_ID: "42",
+        });
+        await expect(client.listActions(undefined)).rejects.toThrow("something else entirely");
       });
     });
 
