@@ -865,10 +865,12 @@ describe("NotificationBell virtualization smoke test", () => {
 function headerStyleFor(title: string): CSSStyleDeclaration | null {
   const titleEl = screen.queryByText(title);
   // The measured/positioned element is the `ref={rowVirtualizer.
-  // measureElement}` wrapper two levels up from `.notif-group-header-title`
-  // (title -> .notif-group-header -> the wrapper) — see NotificationBell.tsx's
-  // row loop.
-  const wrapper = titleEl?.parentElement?.parentElement;
+  // measureElement}` wrapper — walk up to the nearest ancestor carrying
+  // `data-index` (that wrapper's own attribute, set in NotificationBell.tsx's
+  // row loop) rather than a fixed parent-hop count, since FeedHeader's own
+  // internal nesting (title -> .notif-group-header-top -> .notif-group-header
+  // -> wrapper) isn't this test's concern and has already changed once.
+  const wrapper = titleEl?.closest("[data-index]");
   return wrapper instanceof HTMLElement ? wrapper.style : null;
 }
 
