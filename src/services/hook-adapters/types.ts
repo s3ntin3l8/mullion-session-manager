@@ -204,7 +204,12 @@ export interface HookAdapterContext {
    * already-live session sees `undefined` here, which is correct (the
    * opencode config was set when the session was first spawned; a reattach
    * never re-applies it). Absent for every other session kind — manual
-   * launches, dock controls, the promote flow's resumed target. */
+   * launches, dock controls, the promote flow's resumed target.
+   *
+   * agy is a permanent exclusion from this denial, not a gap to fill in:
+   * its data model has no per-skill disabled bit at all (binary inspection,
+   * `skills.ts:57-72`), only a plugin-level toggle that would suspend all of
+   * superpowers rather than the three skills that need denying. See #1283. */
   taskId?: number;
 }
 
