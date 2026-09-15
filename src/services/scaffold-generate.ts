@@ -948,7 +948,19 @@ export function createAgentSandboxHome(
  * This is the exact "trust nothing the sandbox produced" posture this PR
  * took for every other state file — the real auth.json stays read-only
  * from the sandbox's perspective, and only valid rotated credentials
- * propagate back. */
+ * propagate back.
+ *
+ * CodeQL's js/path-injection flags `fakeHome` / `realHome` here (same
+ * "real mitigation, not a CodeQL-recognized sanitizer shape" pattern as
+ * the existing dismissal at defaultSpawnGenerationTurn, lines 1036-1049):
+ * `fakeHome` is always `path.join(worktreePath, ".agent-home")` where
+ * `worktreePath` is the scratch generation worktree from `createWorktree`
+ * (validated via `isSafeAbsolutePath` + `sanitizeRefComponent`); `realHome`
+ * is `os.homedir()`, hardcoded server-side; the only request-derived input
+ * is `slug`, gated by `isValidScaffoldSlug` at the route boundary.
+ * Dismissed in GHAS as a false positive via the Security API rather than
+ * reshaping already-verified-safe code to chase a query that doesn't
+ * model manual containment checks as sanitizers. */
 export function persistAgentSandboxAuth(
   fakeHome: string,
   writablePaths: { files: string[] },
@@ -958,14 +970,16 @@ export function persistAgentSandboxAuth(
     if (!f.endsWith("auth.json")) continue;
     const realAuth = f.replace(fakeHome, realHome);
     try {
-      // Only copy back if the sandbox actually rotated the file (content
-      // differs from the seeded original) AND it parses as a non-empty
-      // JSON object. A compromised turn writing arbitrary content fails
-      // the JSON check and leaves the real auth.json untouched.
-      if (!fs.existsSync(f) || !fs.existsSync(realAuth)) continue;
+      // Read both files first — no pre-flight existsSync check, which
+      // would open a TOCTOU window (CodeQL js/file-system-race flagged
+      // exactly that pattern). If either is missing, the read throws
+      // and the catch skips this file.
       const sandboxed = fs.readFileSync(f, "utf8");
       const real = fs.readFileSync(realAuth, "utf8");
       if (sandboxed === real) continue; // No rotation happened
+      // Validate before writing — a compromised turn writing malformed
+      // JSON, a JSON array, or an empty object fails these checks and
+      // leaves the real auth.json untouched.
       const parsed: unknown = JSON.parse(sandboxed);
       if (
         typeof parsed !== "object" ||
@@ -973,13 +987,12 @@ export function persistAgentSandboxAuth(
         Array.isArray(parsed) ||
         Object.keys(parsed as Record<string, unknown>).length === 0
       ) {
-        // Malformed or empty — skip copy-back to avoid corrupting real auth.
         continue;
       }
       fs.writeFileSync(realAuth, sandboxed, { mode: 0o600 });
     } catch {
-      // Best-effort — copy-back failure degrades to re-auth prompt, not
-      // a sandbox error.
+      // Best-effort — copy-back failure (missing file, parse error, I/O
+      // error) degrades to re-auth prompt, not a sandbox error.
     }
   }
 }
