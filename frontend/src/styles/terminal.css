@@ -426,11 +426,18 @@
   min-height: 0;
   padding: 0 5px 5px;
 }
+/* Issue #1229 — `background` matches `.pane-tab-overflow-menu` (this
+   panel's own shell, see NotificationBell.tsx) so event rows scrolling
+   underneath a stuck header don't show through it, same reasoning
+   `.sidebar-filter-bar` (sidebar.css) already documents for its own sticky
+   bar. Harmless on every non-stuck header too — they already sit on that
+   same background. */
 .notif-group-header {
   display: flex;
   flex-direction: column;
   gap: 1px;
   padding: 8px 6px 3px;
+  background: var(--chrome);
 }
 .notif-group-header-top {
   display: flex;

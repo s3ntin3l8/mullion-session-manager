@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { NotificationBell } from "./NotificationBell.js";
 import type { NotificationEvent, Project, Session } from "./api/index.js";
@@ -156,6 +156,18 @@ function makeEvent(overrides: Partial<NotificationEvent> = {}): NotificationEven
   };
 }
 
+// Issue #1229 — header vs. event rows must report DIFFERENT heights for a
+// sticky-header scroll-position test's math to be predictable; every other
+// test in this file only needs SOME nonzero height, so this is additive, not
+// a behavior change for them (`this` is the `ref={rowVirtualizer.
+// measureElement}` wrapper, which carries no class of its own — see
+// NotificationBell.tsx's row loop — so headers are distinguished by their
+// rendered child instead). Matches HEADER_ROW_HEIGHT/EVENT_ROW_ESTIMATE_
+// HEIGHT in NotificationBell.tsx, though nothing here requires that beyond
+// realism.
+const STUB_HEADER_ROW_HEIGHT = 34;
+const STUB_EVENT_ROW_HEIGHT = 60;
+
 // The virtual list's scroll container and row wrappers need a non-zero
 // `offsetHeight` in jsdom (which never lays out CSS, so every element
 // reports 0 by default) — @tanstack/react-virtual reads `offsetHeight`
@@ -170,7 +182,10 @@ function stubVirtualizerLayout() {
   Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
     configurable: true,
     get(this: HTMLElement) {
-      return this.classList.contains("notif-feed-scroll") ? 400 : 50;
+      if (this.classList.contains("notif-feed-scroll")) return 400;
+      return this.querySelector(".notif-group-header")
+        ? STUB_HEADER_ROW_HEIGHT
+        : STUB_EVENT_ROW_HEIGHT;
     },
   });
   vi.stubGlobal(
@@ -179,6 +194,18 @@ function stubVirtualizerLayout() {
       return { observe: vi.fn(), unobserve: vi.fn(), disconnect: vi.fn() };
     }),
   );
+}
+
+// jsdom fires no real scroll from a layout/resize change — @tanstack/
+// virtual-core's default observeElementOffset just reads `element.scrollTop`
+// off a native "scroll" event (node_modules/@tanstack/virtual-core), so
+// driving it here means setting the property (jsdom allows any value, real
+// overflow or not) and dispatching the event ourselves.
+function scrollFeedTo(px: number) {
+  const el = document.querySelector(".notif-feed-scroll");
+  if (!(el instanceof HTMLElement)) throw new Error("`.notif-feed-scroll` not found");
+  el.scrollTop = px;
+  el.dispatchEvent(new Event("scroll"));
 }
 
 // Renders the bell and opens its dropdown, returning the onOpenSession spy
@@ -832,6 +859,103 @@ describe("NotificationBell virtualization smoke test", () => {
     const panel = document.querySelector(".notif-feed-scroll");
     expect(panel).not.toBeNull();
     expect(within(panel as HTMLElement).getByText("Bell")).toBeInTheDocument();
+  });
+});
+
+function headerStyleFor(title: string): CSSStyleDeclaration | null {
+  const titleEl = screen.queryByText(title);
+  // The measured/positioned element is the `ref={rowVirtualizer.
+  // measureElement}` wrapper — walk up to the nearest ancestor carrying
+  // `data-index` (that wrapper's own attribute, set in NotificationBell.tsx's
+  // row loop) rather than a fixed parent-hop count, since FeedHeader's own
+  // internal nesting (title -> .notif-group-header-top -> .notif-group-header
+  // -> wrapper) isn't this test's concern and has already changed once.
+  const wrapper = titleEl?.closest("[data-index]");
+  return wrapper instanceof HTMLElement ? wrapper.style : null;
+}
+
+// Issue #1229 — sticky group headers. Plain `position: sticky` can't work on
+// these rows (each is absolutely positioned with its own `translateY`, which
+// removes it from the sticky containing block) — these tests exercise the
+// active-sticky-index + custom rangeExtractor workaround instead, using the
+// height-differentiated stub above and manually driven scrollTop (see
+// scrollFeedTo's own comment for why jsdom needs both).
+describe("NotificationBell sticky group headers (issue #1229)", () => {
+  it("keeps a header rendered and pinned (position: sticky) even once scrolled far outside the normal overscan window", async () => {
+    // One session, 20 distinct events (varying `header` so none fold
+    // together — see foldConsecutiveRows) — 21 rows total (1 header + 20
+    // events), comfortably past `overscan: 8` once scrolled deep.
+    events = {
+      1: Array.from({ length: 20 }, (_, i) => ({
+        seq: i + 1,
+        sessionId: 1,
+        kind: "attention" as const,
+        ts: Date.now(),
+        payload: { attention: true, signal: "question", header: `Q${i}` },
+      })),
+    };
+    await openPanel();
+
+    // Rows sort newest-seq-first (buildFeedItems' own within-group sort),
+    // so scrolling to 900px lands well past the session's own header (which
+    // ends at 34px) — comfortably outside `overscan: 8`'s reach on its own.
+    // Asserted via the sticky style itself (not a specific event's text),
+    // since which exact row is "at the top" isn't this test's own claim.
+    scrollFeedTo(900);
+    await waitFor(() => {
+      expect(headerStyleFor("claude code")?.position).toBe("sticky");
+    });
+    expect(headerStyleFor("claude code")?.top).toBe("0px");
+  });
+
+  it("switches the active sticky header once scrolled past that group, and leaves the other absolutely positioned", async () => {
+    sessions = [
+      makeSession({ id: 1, name: "session one" }),
+      makeSession({ id: 2, name: "session two" }),
+    ];
+    // Session 1 sorts first (newer ts) with enough events (30) that
+    // scrolling partway into its own group keeps session two's header more
+    // than `overscan: 8` rows away — otherwise, on a short enough list, it
+    // would already be in the rendered window regardless of scroll, and
+    // "not visible yet" would prove nothing.
+    events = {
+      1: Array.from({ length: 30 }, (_, i) => ({
+        seq: i + 1,
+        sessionId: 1,
+        kind: "attention" as const,
+        ts: 2_000_000 + i,
+        payload: { attention: true, signal: "question", header: `S1-Q${i}` },
+      })),
+      2: [
+        {
+          seq: 1,
+          sessionId: 2,
+          kind: "attention" as const,
+          ts: 1_000_000,
+          payload: { attention: true, signal: "question", header: "S2-Q0" },
+        },
+      ],
+    };
+    await openPanel();
+
+    // Deep inside session one's own events, comfortably short of session
+    // two's group (which starts at 34 + 30*60 = 1834px) — session one's
+    // header should be the active sticky one, and session two's header
+    // shouldn't have rendered at all yet.
+    scrollFeedTo(500);
+    await waitFor(() => {
+      expect(headerStyleFor("session one")?.position).toBe("sticky");
+    });
+    expect(screen.queryByText("session two")).not.toBeInTheDocument();
+
+    // Scroll into session two's own group — session one's header, if still
+    // rendered nearby, must NOT still claim sticky.
+    scrollFeedTo(10_000);
+    await waitFor(() => {
+      expect(headerStyleFor("session two")?.position).toBe("sticky");
+    });
+    const sessionOneStyle = headerStyleFor("session one");
+    if (sessionOneStyle) expect(sessionOneStyle.position).not.toBe("sticky");
   });
 });
 
