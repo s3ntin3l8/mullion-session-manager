@@ -288,11 +288,23 @@ export function describeEvent(
         const outstandingCount = countOutstandingBackgroundTasksInPayload(
           event.payload.backgroundTasks,
         );
+        // Issue #1230 — the agent's own last turn-ending message (Claude
+        // Code's Stop hook always carried this; codex's Stop hook does too,
+        // just wasn't forwarded until this issue). Lowest-priority fallback:
+        // `detail` and the background-task count above are both more
+        // specific, deliberately-set context for a particular phase, and a
+        // "done" message won't usually carry more than one of the three.
+        const lastAssistantMessage =
+          typeof event.payload.lastAssistantMessage === "string" &&
+          event.payload.lastAssistantMessage.length > 0
+            ? event.payload.lastAssistantMessage
+            : null;
         const suffix =
           detail ??
           (outstandingCount > 0
             ? `${outstandingCount} background task${outstandingCount === 1 ? "" : "s"}`
-            : null);
+            : null) ??
+          lastAssistantMessage;
         return {
           text: suffix
             ? `Agent: ${event.payload.phase}: ${suffix}`
