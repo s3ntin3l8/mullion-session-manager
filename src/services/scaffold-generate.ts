@@ -876,7 +876,22 @@ export function ensureSandboxWritablePathsExist(paths: { dirs: string[]; files: 
  *
  * Returns the fake HOME path and the writable paths (dirs + files)
  * relative to it, ready for `ensureSandboxWritablePathsExist` and
- * `wrapWithSandbox`. */
+ * `wrapWithSandbox`.
+ *
+ * CodeQL's js/path-injection flags `worktreePath` here (the same
+ * "real mitigation, not a CodeQL-recognized sanitizer shape" pattern
+ * documented at defaultSpawnGenerationTurn's own comment, lines
+ * 1036-1049): `worktreePath` is always `cwd` from
+ * `defaultSpawnGenerationTurn`, which is the scratch generation worktree
+ * from `createWorktree` — never user-controlled; the only
+ * request-derived input is `slug`, gated by `isValidScaffoldSlug` at the
+ * route boundary. All paths here are `path.join(worktreePath,
+ * ".agent-home")` + hardcoded literal subpaths from
+ * `agentSandboxWritablePaths`, which itself joins a home override with
+ * hardcoded `[A-Za-z0-9/-_]+` subpaths. Dismissed in GHAS as a false
+ * positive via the Security API rather than reshaping already-verified-
+ * safe code to chase a query that doesn't model manual containment
+ * checks as sanitizers. */
 export function createAgentSandboxHome(
   worktreePath: string,
   agentCommand: string,
