@@ -259,6 +259,20 @@ describe("NotificationBell", () => {
     expect(screen.getByText("Needs permission")).toBeInTheDocument();
   });
 
+  // Hermes review, PR #1284 — there is no `.session-dot-exited` CSS class
+  // (styles/sidebar.css only defines attention/error/finished/idle/
+  // permission/plan/working); an "exited" status must render Sidebar.tsx's
+  // own CloseIcon substitute rather than an unstyled zero-width dot span.
+  it("issue #1229 — renders a CloseIcon instead of an unstyled dot for an exited session", async () => {
+    sessions = [makeSession({ sessionStatus: "exited", sessionStatusSeverity: "gone" })];
+    events = { 1: [makeEvent({ seq: 1, kind: "status_change", payload: { reason: "exited" } })] };
+    await openPanel();
+    expect(screen.getByText("exited")).toBeInTheDocument();
+    const statusEl = screen.getByText("exited").closest(".notif-group-header-status");
+    expect(statusEl?.querySelector("svg")).toBeInTheDocument();
+    expect(statusEl?.querySelector(".session-dot-exited")).not.toBeInTheDocument();
+  });
+
   it("issue #903 — a generic silence row shows the session's last file change; a specific question row keeps its own text", async () => {
     events = {
       1: [

@@ -611,7 +611,17 @@ function FeedHeader({ item, session }: { item: FeedHeaderItem; session: Session 
         <span className="notif-group-header-title">{item.title}</span>
         {presentation && (
           <span className="notif-group-header-status">
-            <span className={`session-dot-${presentation.tone}`} />
+            {/* Hermes review, PR #1284 — no `.session-dot-exited` class
+                exists (styles/sidebar.css only defines attention/error/
+                finished/idle/permission/plan/working), so an exited
+                session's dot would otherwise render as an unstyled
+                zero-width span. Mirrors Sidebar.tsx's own special-case:
+                CloseIcon instead of a colored dot for "exited". */}
+            {session?.sessionStatus === "exited" ? (
+              <CloseIcon size={10} style={{ color: "var(--dim)" }} />
+            ) : (
+              <span className={`session-dot-${presentation.tone}`} />
+            )}
             <span className={`session-status-label ${presentation.tone}`}>
               {formatStatusLabel(presentation, session?.sessionStatusDetail ?? null)}
             </span>
