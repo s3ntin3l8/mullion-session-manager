@@ -753,14 +753,15 @@ export function agentSandboxWritablePaths(agentCommand: string): AgentSandboxWri
           // created by codex at runtime; bwrap lacks glob support, so the
           // parent dir is the narrowest practical bind.
           path.join(codexHome, "sessions"),
+          // sqlite files experience unlink+recreate cycles (journal, tmp)
+          // that break under single-file --bind-try: unlinking detaches
+          // the source inode, and recreate lands on the read-only rootfs.
+          // Binding the parent dir is the narrowest option that survives
+          // this pattern while still excluding config.toml, hooks.json,
+          // and skills/.
+          codexHome,
         ],
-        files: [
-          path.join(codexHome, "queue_1.sqlite"),
-          path.join(codexHome, "queue_1.sqlite-wal"),
-          path.join(codexHome, "state_5.sqlite"),
-          path.join(codexHome, "state_5.sqlite-wal"),
-          path.join(codexHome, "auth.json"),
-        ],
+        files: [path.join(codexHome, "auth.json")],
       };
     }
     case "opencode": {
@@ -772,6 +773,10 @@ export function agentSandboxWritablePaths(agentCommand: string): AgentSandboxWri
           // opencode at runtime; same dir-level bind rationale as codex's
           // sessions/ above.
           path.join(opencodeData, "snapshot"),
+          // repos/ — created on first run; discovered via narrowed-set
+          // live test (the original strace ran under the wide dir bind
+          // where this directory already existed).
+          path.join(opencodeData, "repos"),
         ],
         files: [
           path.join(opencodeData, "opencode.db"),

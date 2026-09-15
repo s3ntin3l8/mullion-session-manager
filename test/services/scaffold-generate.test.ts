@@ -827,17 +827,17 @@ describe("agentSandboxWritablePaths", () => {
   it("returns narrowed file-level paths for codex (issue #1131)", () => {
     const paths = agentSandboxWritablePaths("codex");
     const home = os.homedir();
-    // Directories: cache, thread-writer-locks, sessions
-    expect(paths.dirs).toContain(path.join(home, ".codex", "cache", "remote_plugin_catalog"));
-    expect(paths.dirs).toContain(path.join(home, ".codex", "thread-writer-locks"));
-    expect(paths.dirs).toContain(path.join(home, ".codex", "sessions"));
-    // Files: sqlite databases, auth
-    expect(paths.files).toContain(path.join(home, ".codex", "queue_1.sqlite"));
-    expect(paths.files).toContain(path.join(home, ".codex", "queue_1.sqlite-wal"));
-    expect(paths.files).toContain(path.join(home, ".codex", "state_5.sqlite"));
-    expect(paths.files).toContain(path.join(home, ".codex", "state_5.sqlite-wal"));
-    expect(paths.files).toContain(path.join(home, ".codex", "auth.json"));
-    // Must NOT include config.toml, hooks.json, or skills/
+    const codexHome = path.join(home, ".codex");
+    // Directories: cache, thread-writer-locks, sessions, and the parent
+    // .codex dir itself (sqlite unlink+recreate cycles break single-file
+    // --bind-try — see the function's own comment).
+    expect(paths.dirs).toContain(path.join(codexHome, "cache", "remote_plugin_catalog"));
+    expect(paths.dirs).toContain(path.join(codexHome, "thread-writer-locks"));
+    expect(paths.dirs).toContain(path.join(codexHome, "sessions"));
+    expect(paths.dirs).toContain(codexHome);
+    // Files: auth.json (must stay writable for token rotation)
+    expect(paths.files).toContain(path.join(codexHome, "auth.json"));
+    // Must NOT include config.toml, hooks.json, or skills/ as separate entries
     expect(paths.dirs).not.toEqual(
       expect.arrayContaining([expect.stringContaining("config.toml")]),
     );
@@ -855,9 +855,10 @@ describe("agentSandboxWritablePaths", () => {
     const paths = agentSandboxWritablePaths("opencode");
     const home = os.homedir();
     const opencodeData = path.join(home, ".local", "share", "opencode");
-    // Directories: log, snapshot
+    // Directories: log, snapshot, repos
     expect(paths.dirs).toContain(path.join(opencodeData, "log"));
     expect(paths.dirs).toContain(path.join(opencodeData, "snapshot"));
+    expect(paths.dirs).toContain(path.join(opencodeData, "repos"));
     // Files: database, WAL/SHM, auth
     expect(paths.files).toContain(path.join(opencodeData, "opencode.db"));
     expect(paths.files).toContain(path.join(opencodeData, "opencode.db-wal"));
