@@ -388,7 +388,12 @@ describe("MullionClient (issue #271)", () => {
         await client.spawnChildSession({ command: "bash" });
       });
 
-      it("listActions resolves its own project via sessions.get when projectId is omitted", async () => {
+      // Hermes review, PR #1292 — the fallback must only fire after the
+      // direct (empty-body) attempt actually fails with the "no pin"
+      // 400, never unconditionally, so the already-working session-scope
+      // path never pays for or risks the sessions.get-derived lookup.
+      it("listActions retries via sessions.get only after the direct attempt 400s", async () => {
+        let actionsCalls = 0;
         const socketPath = await startControlServer((msg, socket) => {
           if (msg.op === "sessions.get") {
             expect(msg.body).toEqual({ sessionId: "42" });
@@ -398,6 +403,14 @@ describe("MullionClient (issue #271)", () => {
             return;
           }
           expect(msg.op).toBe("projects.actions");
+          actionsCalls += 1;
+          if (actionsCalls === 1) {
+            expect(msg.body).toEqual({});
+            socket.write(
+              `${JSON.stringify({ id: msg.id, ok: false, status: 400, error: "'projectId' is required" })}\n`,
+            );
+            return;
+          }
           expect(msg.body).toEqual({ projectId: "3" });
           socket.write(`${JSON.stringify({ id: msg.id, ok: true, status: 200, result: [] })}\n`);
         });
@@ -406,9 +419,27 @@ describe("MullionClient (issue #271)", () => {
           MULLION_SESSION_ID: "42",
         });
         await client.listActions(undefined);
+        expect(actionsCalls).toBe(2);
       });
 
-      it("listActions sends an empty body when its own session has no project", async () => {
+      it("listActions does not retry when the direct attempt already succeeds", async () => {
+        const socketPath = await startControlServer((msg, socket) => {
+          expect(msg.op).toBe("projects.actions");
+          expect(msg.body).toEqual({});
+          socket.write(`${JSON.stringify({ id: msg.id, ok: true, status: 200, result: [] })}\n`);
+        });
+        // MULLION_SESSION_ID is set (as it always is inside a real session),
+        // but with no failure to recover from, sessions.get must never fire —
+        // this is the genuinely-session-scoped case working exactly as it
+        // did before this fix, no extra round trip at all.
+        const client = new MullionClient({
+          MULLION_SOCKET_PATH: socketPath,
+          MULLION_SESSION_ID: "42",
+        });
+        await client.listActions(undefined);
+      });
+
+      it("listActions rethrows the original 400 when its own session has no project", async () => {
         const socketPath = await startControlServer((msg, socket) => {
           if (msg.op === "sessions.get") {
             socket.write(
@@ -418,13 +449,15 @@ describe("MullionClient (issue #271)", () => {
           }
           expect(msg.op).toBe("projects.actions");
           expect(msg.body).toEqual({});
-          socket.write(`${JSON.stringify({ id: msg.id, ok: true, status: 200, result: [] })}\n`);
+          socket.write(
+            `${JSON.stringify({ id: msg.id, ok: false, status: 400, error: "'projectId' is required" })}\n`,
+          );
         });
         const client = new MullionClient({
           MULLION_SOCKET_PATH: socketPath,
           MULLION_SESSION_ID: "42",
         });
-        await client.listActions(undefined);
+        await expect(client.listActions(undefined)).rejects.toThrow("'projectId' is required");
       });
     });
 

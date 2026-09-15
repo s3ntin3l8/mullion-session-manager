@@ -1,5 +1,5 @@
 import net from "node:net";
-import { MullionSocketClient } from "../cli/client.mjs";
+import { MullionSocketClient, MullionSocketError } from "../cli/client.mjs";
 
 // Issue #271 — the transport half of the `mullion mcp` server (issue #134's
 // eventual CLI/MCP surface starts here): a thin client wrapping however a
@@ -230,26 +230,41 @@ export class MullionClient {
   // deletePreview below), not an options object like listSessions/
   // createPreview — those two take more than one independent optional
   // field, everything else here takes exactly one.
-  /** Issue #1291 — when `projectId` is omitted and this client knows its
-   * own session (`ownSessionId`), resolves "own project" via a
-   * `sessions.get` lookup first, rather than sending an empty body and
-   * relying on the control socket's own pin (which doesn't exist under
-   * full scope). No `MULLION_PROJECT_ID` env var exists to shortcut this
-   * the way getScrollback/spawnChildSession do for a session id — a
-   * session's project lives on its own row, not its env — so this mirrors
-   * resolveTargetProjectId's own session-to-project derivation
-   * (control-socket.ts) client-side instead. */
+  /** Issue #1291 — when `projectId` is omitted, tries the empty body first
+   * (the control socket's own pin resolves it directly at real session
+   * scope — resolveTargetProjectId, control-socket.ts — with no extra
+   * round trip and no risk of diverging from that pin's own source of
+   * truth). Only on the specific "no pin to fall back on" 400 (full scope,
+   * which is what an auth-disabled host forces on every connection) does
+   * this fall back to a `sessions.get` lookup of its own session
+   * (`ownSessionId`) to derive a project id to retry with — no
+   * `MULLION_PROJECT_ID` env var exists to shortcut this the way
+   * getScrollback/spawnChildSession do for a session id, since a
+   * session's project lives on its own row, not its env. (Hermes review,
+   * PR #1292 — an earlier version of this fix always did the lookup,
+   * which could diverge from the pin's own `app.pty.get()`-sourced
+   * projectId if the REST-backed row and in-memory pty state ever
+   * disagreed; trying the direct path first removes that risk entirely
+   * for the already-working case.) */
   async listActions(projectId) {
-    let target = projectId;
-    if (target === undefined && this.ownSessionId !== undefined) {
+    if (projectId !== undefined) {
+      return this.controlRequest("projects.actions", { projectId });
+    }
+    try {
+      return await this.controlRequest("projects.actions", {});
+    } catch (err) {
+      if (
+        !(err instanceof MullionSocketError) ||
+        err.status !== 400 ||
+        this.ownSessionId === undefined
+      ) {
+        throw err;
+      }
       const session = await this.controlRequest("sessions.get", { sessionId: this.ownSessionId });
       const ownProjectId = (session ?? {}).projectId;
-      if (ownProjectId !== undefined && ownProjectId !== null) target = String(ownProjectId);
+      if (ownProjectId === undefined || ownProjectId === null) throw err;
+      return this.controlRequest("projects.actions", { projectId: String(ownProjectId) });
     }
-    return this.controlRequest(
-      "projects.actions",
-      target !== undefined ? { projectId: target } : {},
-    );
   }
 
   /** Mirrors `mullion dock start`'s own two-step logic (src/cli/core.mjs):
