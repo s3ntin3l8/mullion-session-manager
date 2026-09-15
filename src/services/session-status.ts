@@ -76,18 +76,29 @@ export interface DerivedSessionStatus {
   attentionRequired: boolean;
 }
 
-// A tab badge / sidebar row is a glanceable label, not a log line — a
-// `detail` sourced from `summarizeToolCall` (sized for the review-gate
-// prompt, GATE_PROMPT_MAX_CHARS) could otherwise be an entire shell
-// pipeline's worth of text, which both overflows the sidebar layout and
-// defeats the point of a short status. The untruncated string still reaches
-// the timeline event this same hook handler emits (pty-manager.ts's
-// tool_failure/stop_failure cases) — that's where the full detail belongs.
+// A tab badge / sidebar row is a glanceable label, not a log line — most
+// `detail` sources (an error category, an exit reason, a subagent count)
+// are already short, so 48 chars is plenty and keeps every surface that
+// doesn't opt into LONG_DETAIL_STATUSES below safely glanceable.
 const STATUS_DETAIL_MAX_CHARS = 48;
 
-function truncateDetail(detail: string | null): string | null {
-  if (detail === null || detail.length <= STATUS_DETAIL_MAX_CHARS) return detail;
-  return `${detail.slice(0, STATUS_DETAIL_MAX_CHARS)}…`;
+// Issue #1227 — `awaiting_review_gate`'s `gatePrompt` and
+// `awaiting_promote`'s `promoteSummary` are the two detail sources actually
+// meant to be read in full by a surface with room for it (Sidebar.tsx's
+// status label, TaskDetail.tsx's attention banner — see frontend/src/
+// sessionStatus.ts's compact/verbose `formatStatusLabel` split), so they get
+// a longer cap instead of the default 48. 200 mirrors forwarder-core.mjs's
+// own `GATE_PROMPT_MAX_CHARS` — the cap already applied to `gatePrompt`
+// upstream, before it ever reaches here — so this is a ceiling that matches
+// the longest value either field can actually carry, not an arbitrary
+// second number to keep in sync.
+const LONG_DETAIL_MAX_CHARS = 200;
+const LONG_DETAIL_STATUSES = new Set<SessionStatus>(["awaiting_review_gate", "awaiting_promote"]);
+
+function truncateDetail(status: SessionStatus, detail: string | null): string | null {
+  const max = LONG_DETAIL_STATUSES.has(status) ? LONG_DETAIL_MAX_CHARS : STATUS_DETAIL_MAX_CHARS;
+  if (detail === null || detail.length <= max) return detail;
+  return `${detail.slice(0, max)}…`;
 }
 
 function make(status: SessionStatus, detail: string | null = null): DerivedSessionStatus {
@@ -95,7 +106,7 @@ function make(status: SessionStatus, detail: string | null = null): DerivedSessi
   return {
     status,
     severity,
-    detail: truncateDetail(detail),
+    detail: truncateDetail(status, detail),
     attentionRequired: ATTENTION_SEVERITIES.has(severity),
   };
 }
@@ -123,9 +134,13 @@ export interface DeriveSessionStatusInput {
     | "permissionState"
     | "planState"
     | "gateState"
+    | "gatePrompt"
     | "promoteState"
+    | "promoteSummary"
     | "elicitationState"
+    | "elicitationServer"
     | "questionState"
+    | "questionHeader"
     | "errorState"
     | "errorDetail"
     | "endedReason"
@@ -158,9 +173,13 @@ export function defaultDeriveStatusInfo(
     permissionState: info?.permissionState ?? "idle",
     planState: info?.planState ?? "idle",
     gateState: info?.gateState ?? "idle",
+    gatePrompt: info?.gatePrompt ?? null,
     promoteState: info?.promoteState ?? "idle",
+    promoteSummary: info?.promoteSummary ?? null,
     elicitationState: info?.elicitationState ?? "idle",
+    elicitationServer: info?.elicitationServer ?? null,
     questionState: info?.questionState ?? "idle",
+    questionHeader: info?.questionHeader ?? null,
     errorState: info?.errorState ?? "idle",
     errorDetail: info?.errorDetail ?? null,
     endedReason: info?.endedReason ?? null,
@@ -222,12 +241,18 @@ export function deriveSessionStatus({
   // `tool_failure` does (see that check's own comment) — outranking a
   // possibly-stale error is the only way a real pending prompt doesn't get
   // hidden behind it.
+  // `awaiting_permission`/`awaiting_plan` have no per-instance detail source
+  // on SessionInfo (a permission/plan request carries no short summary
+  // field the way a gate prompt or promote summary does) — these two stay
+  // `detail: null`, same as before this issue.
   if (info.permissionState === "pending") return make("awaiting_permission");
   if (info.planState === "pending") return make("awaiting_plan");
-  if (info.gateState === "waiting") return make("awaiting_review_gate");
-  if (info.promoteState === "pending") return make("awaiting_promote");
-  if (info.questionState === "pending") return make("awaiting_question");
-  if (info.elicitationState === "pending") return make("awaiting_elicitation");
+  if (info.gateState === "waiting") return make("awaiting_review_gate", info.gatePrompt);
+  if (info.promoteState === "pending") return make("awaiting_promote", info.promoteSummary);
+  if (info.questionState === "pending") return make("awaiting_question", info.questionHeader);
+  if (info.elicitationState === "pending") {
+    return make("awaiting_elicitation", info.elicitationServer);
+  }
   if (info.errorState === "api_error") return make("api_error", info.errorDetail);
   // `tool_failure` only becomes the session's status once the agent has
   // stalled (`activity !== "working"`) — a failed tool call the agent is

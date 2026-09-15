@@ -23,9 +23,13 @@ const BASE: DeriveSessionStatusInput["info"] = {
   permissionState: "idle",
   planState: "idle",
   gateState: "idle",
+  gatePrompt: null,
   promoteState: "idle",
+  promoteSummary: null,
   questionState: "idle",
+  questionHeader: null,
   elicitationState: "idle",
+  elicitationServer: null,
   errorState: "idle",
   errorDetail: null,
   endedReason: null,
@@ -190,6 +194,36 @@ describe("deriveSessionStatus", () => {
       );
     });
 
+    // Issue #1227 — awaiting_review_gate/awaiting_promote get a longer cap
+    // (200 chars, matching forwarder-core.mjs's own GATE_PROMPT_MAX_CHARS)
+    // than every other status's 48, since gatePrompt/promoteSummary are
+    // meant to be read in full by a surface with room (Sidebar.tsx,
+    // TaskDetail.tsx) rather than stumped to the glanceable-badge length.
+    it("awaiting_review_gate keeps a gatePrompt beyond the default 48-char cap", () => {
+      const longPrompt = "x".repeat(150);
+      expect(derive({ gateState: "waiting", gatePrompt: longPrompt }).detail).toBe(longPrompt);
+    });
+
+    it("awaiting_promote keeps a promoteSummary beyond the default 48-char cap", () => {
+      const longSummary = "x".repeat(150);
+      expect(derive({ promoteState: "pending", promoteSummary: longSummary }).detail).toBe(
+        longSummary,
+      );
+    });
+
+    it("still truncates a gatePrompt beyond even the 200-char long cap", () => {
+      const longPrompt = "x".repeat(250);
+      const result = derive({ gateState: "waiting", gatePrompt: longPrompt });
+      expect(result.detail).toHaveLength(201); // 200 chars + ellipsis
+      expect(result.detail?.endsWith("…")).toBe(true);
+    });
+
+    it("awaiting_question stays on the default 48-char cap, not the long one", () => {
+      const longHeader = `Which env? ${"x".repeat(60)}`;
+      const result = derive({ questionState: "pending", questionHeader: longHeader });
+      expect(result.detail).toHaveLength(49); // 48 chars + ellipsis
+    });
+
     it("awaiting_permission outranks a pending plan", () => {
       expect(derive({ permissionState: "pending", planState: "pending" }).status).toBe(
         "awaiting_permission",
@@ -320,16 +354,20 @@ describe("deriveSessionStatus", () => {
       // targeted override, rather than re-deriving the table by hand —
       // this is the same "exercise every declared member" posture
       // attention-detect.test.ts uses for its own signal-kind tables.
+      // Issue #1227 — the four awaiting_* entries with a real detail source
+      // (gatePrompt/promoteSummary/questionHeader/elicitationServer) set it
+      // here too, so this sweep exercises the detail path rather than
+      // silently deriving from BASE's all-null defaults.
       const overridesByStatus: Record<string, Partial<DeriveSessionStatusInput["info"]>> = {
         exited: {},
         api_error: { errorState: "api_error" },
         tool_failure: { errorState: "tool_failure" },
         awaiting_permission: { permissionState: "pending" },
         awaiting_plan: { planState: "pending" },
-        awaiting_review_gate: { gateState: "waiting" },
-        awaiting_promote: { promoteState: "pending" },
-        awaiting_question: { questionState: "pending" },
-        awaiting_elicitation: { elicitationState: "pending" },
+        awaiting_review_gate: { gateState: "waiting", gatePrompt: "Approve this?" },
+        awaiting_promote: { promoteState: "pending", promoteSummary: "Ready to promote" },
+        awaiting_question: { questionState: "pending", questionHeader: "Which env?" },
+        awaiting_elicitation: { elicitationState: "pending", elicitationServer: "some-mcp" },
         finished: { lastTurnEndedAt: 123 },
         needs_input: { attention: true, attentionKind: "bell" },
         compacting: { compactState: "compacting" },
@@ -338,10 +376,19 @@ describe("deriveSessionStatus", () => {
         working: { activity: "working" },
         idle: {},
       };
+      const detailByStatus: Partial<Record<string, string>> = {
+        awaiting_review_gate: "Approve this?",
+        awaiting_promote: "Ready to promote",
+        awaiting_question: "Which env?",
+        awaiting_elicitation: "some-mcp",
+      };
       const dbStatus = _status === "exited" ? "exited" : "active";
       const result = derive(overridesByStatus[_status], dbStatus);
       expect(result.status).toBe(_status);
       expect(result.attentionRequired).toBe(expected);
+      if (_status in detailByStatus) {
+        expect(result.detail).toBe(detailByStatus[_status]);
+      }
     });
   });
 });
