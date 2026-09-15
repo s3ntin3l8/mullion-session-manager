@@ -818,32 +818,80 @@ describe("wrapWithSandbox", () => {
 
 // Issue #1081's second live re-check (this module's own header has the
 // full detail): the bare scratch-worktree bind isn't sufficient for every
-// agent — codex and opencode each write into a $HOME-relative state/log
-// directory on every invocation, live-confirmed to fail with EROFS inside
-// the sandbox without an extra writable bind for exactly that directory.
+// agent — codex and opencode each write into specific files under their
+// $HOME-relative state directories on every invocation, live-confirmed to
+// fail with EROFS inside the sandbox without writable binds for exactly
+// those files. Issue #1131's strace audit narrowed the whole-directory
+// binds to the minimal file set each agent actually writes to.
 describe("agentSandboxWritablePaths", () => {
-  it("returns ~/.codex for codex", () => {
+  it("returns narrowed file-level paths for codex (issue #1131)", () => {
     const paths = agentSandboxWritablePaths("codex");
-    expect(paths).toHaveLength(1);
-    expect(paths[0]).toBe(path.join(os.homedir(), ".codex"));
+    const home = os.homedir();
+    // Directories: cache, thread-writer-locks, sessions
+    expect(paths.dirs).toContain(path.join(home, ".codex", "cache", "remote_plugin_catalog"));
+    expect(paths.dirs).toContain(path.join(home, ".codex", "thread-writer-locks"));
+    expect(paths.dirs).toContain(path.join(home, ".codex", "sessions"));
+    // Files: sqlite databases, auth
+    expect(paths.files).toContain(path.join(home, ".codex", "queue_1.sqlite"));
+    expect(paths.files).toContain(path.join(home, ".codex", "queue_1.sqlite-wal"));
+    expect(paths.files).toContain(path.join(home, ".codex", "state_5.sqlite"));
+    expect(paths.files).toContain(path.join(home, ".codex", "state_5.sqlite-wal"));
+    expect(paths.files).toContain(path.join(home, ".codex", "auth.json"));
+    // Must NOT include config.toml, hooks.json, or skills/
+    expect(paths.dirs).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("config.toml")]),
+    );
+    expect(paths.dirs).not.toEqual(expect.arrayContaining([expect.stringContaining("hooks.json")]));
+    expect(paths.dirs).not.toEqual(expect.arrayContaining([expect.stringContaining("skills")]));
+    expect(paths.files).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("config.toml")]),
+    );
+    expect(paths.files).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("hooks.json")]),
+    );
   });
 
-  it("returns ~/.local/share/opencode for opencode", () => {
+  it("returns narrowed file-level paths for opencode (issue #1131)", () => {
     const paths = agentSandboxWritablePaths("opencode");
-    expect(paths).toHaveLength(1);
-    expect(paths[0]).toBe(path.join(os.homedir(), ".local", "share", "opencode"));
+    const home = os.homedir();
+    const opencodeData = path.join(home, ".local", "share", "opencode");
+    // Directories: log, snapshot
+    expect(paths.dirs).toContain(path.join(opencodeData, "log"));
+    expect(paths.dirs).toContain(path.join(opencodeData, "snapshot"));
+    // Files: database, WAL/SHM, auth
+    expect(paths.files).toContain(path.join(opencodeData, "opencode.db"));
+    expect(paths.files).toContain(path.join(opencodeData, "opencode.db-wal"));
+    expect(paths.files).toContain(path.join(opencodeData, "opencode.db-shm"));
+    expect(paths.files).toContain(path.join(opencodeData, "auth.json"));
+    // Must NOT include account.json, mcp-auth.json, plans/, tool-output/
+    expect(paths.dirs).not.toEqual(expect.arrayContaining([expect.stringContaining("plans")]));
+    expect(paths.dirs).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("tool-output")]),
+    );
+    expect(paths.files).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("account.json")]),
+    );
+    expect(paths.files).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("mcp-auth.json")]),
+    );
   });
 
-  it("returns no extra paths for claude (confirmed live to need none)", () => {
-    expect(agentSandboxWritablePaths("claude")).toEqual([]);
+  it("returns empty dirs/files for claude (confirmed live to need none)", () => {
+    const paths = agentSandboxWritablePaths("claude");
+    expect(paths.dirs).toEqual([]);
+    expect(paths.files).toEqual([]);
   });
 
-  it("returns no extra paths for agy (confirmed live, issue #1130, to need none)", () => {
-    expect(agentSandboxWritablePaths("agy")).toEqual([]);
+  it("returns empty dirs/files for agy (confirmed live, issue #1130, to need none)", () => {
+    const paths = agentSandboxWritablePaths("agy");
+    expect(paths.dirs).toEqual([]);
+    expect(paths.files).toEqual([]);
   });
 
-  it("returns no extra paths for an unrecognized agent command", () => {
-    expect(agentSandboxWritablePaths("some-future-agent")).toEqual([]);
+  it("returns empty dirs/files for an unrecognized agent command", () => {
+    const paths = agentSandboxWritablePaths("some-future-agent");
+    expect(paths.dirs).toEqual([]);
+    expect(paths.files).toEqual([]);
   });
 });
 
@@ -866,22 +914,41 @@ describe("ensureSandboxWritablePathsExist", () => {
     fs.rmSync(parentDir, { recursive: true, force: true });
   });
 
-  it("creates a nested path that does not exist yet", () => {
+  it("creates a nested directory path that does not exist yet", () => {
     const target = path.join(parentDir, "does", "not", "exist", "yet");
     expect(fs.existsSync(target)).toBe(false);
 
-    ensureSandboxWritablePathsExist([target]);
+    ensureSandboxWritablePathsExist({ dirs: [target], files: [] });
 
     expect(fs.existsSync(target)).toBe(true);
     expect(fs.statSync(target).isDirectory()).toBe(true);
   });
 
-  it("is a no-op (never throws) for a path that already exists", () => {
+  it("is a no-op (never throws) for a directory that already exists", () => {
     const target = path.join(parentDir, "already-here");
     fs.mkdirSync(target);
 
-    expect(() => ensureSandboxWritablePathsExist([target])).not.toThrow();
+    expect(() => ensureSandboxWritablePathsExist({ dirs: [target], files: [] })).not.toThrow();
     expect(fs.existsSync(target)).toBe(true);
+  });
+
+  it("creates a file under a nested parent that does not exist yet", () => {
+    const target = path.join(parentDir, "deep", "nested", "opencode.db");
+    expect(fs.existsSync(target)).toBe(false);
+
+    ensureSandboxWritablePathsExist({ dirs: [], files: [target] });
+
+    expect(fs.existsSync(target)).toBe(true);
+    expect(fs.statSync(target).isFile()).toBe(true);
+    expect(fs.statSync(target).size).toBe(0);
+  });
+
+  it("is a no-op (never throws) for a file that already exists", () => {
+    const target = path.join(parentDir, "existing-file.db");
+    fs.writeFileSync(target, "existing content");
+
+    expect(() => ensureSandboxWritablePathsExist({ dirs: [], files: [target] })).not.toThrow();
+    expect(fs.readFileSync(target, "utf8")).toBe("existing content");
   });
 
   it("never throws even when a path can't be created — best-effort by design", () => {
@@ -889,30 +956,29 @@ describe("ensureSandboxWritablePathsExist", () => {
     // this must degrade silently, not propagate.
     const blockingFile = path.join(parentDir, "im-a-file");
     fs.writeFileSync(blockingFile, "x");
-    const impossibleTarget = path.join(blockingFile, "child");
+    const impossibleDirTarget = path.join(blockingFile, "child");
+    const impossibleFileTarget = path.join(blockingFile, "child.db");
 
-    expect(() => ensureSandboxWritablePathsExist([impossibleTarget])).not.toThrow();
+    expect(() =>
+      ensureSandboxWritablePathsExist({
+        dirs: [impossibleDirTarget],
+        files: [impossibleFileTarget],
+      }),
+    ).not.toThrow();
   });
 
-  // Invariant for any future, narrower agentSandboxWritablePaths entry
-  // (issue #1131's eventual write-surface audit): every path handed to
-  // this function is assumed to be a DIRECTORY. `mkdirSync(p, { recursive:
-  // true })` on a path that doesn't exist yet creates a directory AT that
-  // exact path — so a future entry naming a specific FILE (e.g.
-  // opencode's own `opencode.db`, rather than its containing directory)
-  // would silently get a directory created in its place instead of the
-  // file's parent, corrupting the very state it was meant to preserve.
-  // agentSandboxWritablePaths only ever returns directory paths today, so
-  // this is not live — but the failure mode is not obvious from reading
-  // `ensureSandboxWritablePathsExist` alone, so it is demonstrated here
-  // rather than left to be rediscovered.
-  it("would wrongly create a directory at a path meant to be a file — any future file-shaped entry must route through a different call", () => {
-    const target = path.join(parentDir, "opencode.db");
-    expect(fs.existsSync(target)).toBe(false);
+  it("handles both dirs and files in a single call", () => {
+    const dir = path.join(parentDir, "log");
+    const file = path.join(parentDir, "opencode.db");
+    expect(fs.existsSync(dir)).toBe(false);
+    expect(fs.existsSync(file)).toBe(false);
 
-    ensureSandboxWritablePathsExist([target]);
+    ensureSandboxWritablePathsExist({ dirs: [dir], files: [file] });
 
-    expect(fs.statSync(target).isDirectory()).toBe(true);
+    expect(fs.existsSync(dir)).toBe(true);
+    expect(fs.statSync(dir).isDirectory()).toBe(true);
+    expect(fs.existsSync(file)).toBe(true);
+    expect(fs.statSync(file).isFile()).toBe(true);
   });
 });
 
@@ -960,7 +1026,7 @@ describeIfBwrap(
     });
 
     it("with ensureSandboxWritablePathsExist called first, the same write succeeds — proves the fix", async () => {
-      ensureSandboxWritablePathsExist([freshStateDir]);
+      ensureSandboxWritablePathsExist({ dirs: [freshStateDir], files: [] });
       expect(fs.existsSync(freshStateDir)).toBe(true);
 
       const target = path.join(freshStateDir, "written-by-agent.txt");

@@ -716,16 +716,73 @@ function buildBwrapBaseArgs(worktreePath: string, extraWritablePaths: string[]):
  * breaks the agent the first time its access token expires mid-turn: a
  * "works for two weeks, then breaks for everyone at once" failure. Any
  * narrower bind the audit lands on must leave the credential file
- * writable. */
-export function agentSandboxWritablePaths(agentCommand: string): string[] {
+ * writable.
+ *
+ * Issue #1131's strace audit (2026-09-15) narrowed these from whole-
+ * directory binds to the minimal file set each agent actually writes to
+ * during a non-interactive generation turn. The audit found:
+ *
+ * codex writes to: `queue_1.sqlite` + WAL, `state_5.sqlite` + WAL,
+ * `cache/remote_plugin_catalog/` (temp files), `thread-writer-locks/`
+ * (coordination lock), `sessions/<date>/rollout-*.jsonl` (session
+ * rollout), and unlinks `shell_snapshots/`, `*-sqlite-shm`,
+ * `*-sqlite-wal` for cleanup. It does NOT write to `auth.json` (read-
+ * only during generation), `config.toml`, `hooks.json`, or `skills/`.
+ *
+ * opencode writes to: `log/opencode.log`, `opencode.db` + WAL + SHM,
+ * `snapshot/<hash>/` (git snapshot data). It does NOT write to
+ * `auth.json` (read-only during generation), `account.json`, or
+ * `mcp-auth.json`.
+ *
+ * Both CLIs' credential files (`auth.json`) MUST remain writable for
+ * token rotation even though they're not written during a typical
+ * generation turn — an access token expiring mid-turn triggers an
+ * in-place credential update. */
+export type AgentSandboxWritablePaths = { dirs: string[]; files: string[] };
+
+export function agentSandboxWritablePaths(agentCommand: string): AgentSandboxWritablePaths {
   const home = os.homedir();
   switch (agentCommand) {
-    case "codex":
-      return [path.join(home, ".codex")];
-    case "opencode":
-      return [path.join(home, ".local", "share", "opencode")];
+    case "codex": {
+      const codexHome = path.join(home, ".codex");
+      return {
+        dirs: [
+          path.join(codexHome, "cache", "remote_plugin_catalog"),
+          path.join(codexHome, "thread-writer-locks"),
+          // sessions/<date>/rollout-*.jsonl — dynamic date subdirectories
+          // created by codex at runtime; bwrap lacks glob support, so the
+          // parent dir is the narrowest practical bind.
+          path.join(codexHome, "sessions"),
+        ],
+        files: [
+          path.join(codexHome, "queue_1.sqlite"),
+          path.join(codexHome, "queue_1.sqlite-wal"),
+          path.join(codexHome, "state_5.sqlite"),
+          path.join(codexHome, "state_5.sqlite-wal"),
+          path.join(codexHome, "auth.json"),
+        ],
+      };
+    }
+    case "opencode": {
+      const opencodeData = path.join(home, ".local", "share", "opencode");
+      return {
+        dirs: [
+          path.join(opencodeData, "log"),
+          // snapshot/<hash>/ — dynamic hash subdirectories created by
+          // opencode at runtime; same dir-level bind rationale as codex's
+          // sessions/ above.
+          path.join(opencodeData, "snapshot"),
+        ],
+        files: [
+          path.join(opencodeData, "opencode.db"),
+          path.join(opencodeData, "opencode.db-wal"),
+          path.join(opencodeData, "opencode.db-shm"),
+          path.join(opencodeData, "auth.json"),
+        ],
+      };
+    }
     default:
-      return [];
+      return { dirs: [], files: [] };
   }
 }
 
@@ -748,33 +805,42 @@ export function agentSandboxWritablePaths(agentCommand: string): string[] {
  * exactly the pre-existing `--bind-try`-skips-a-missing-path case, not a
  * new failure mode.
  *
- * `mkdirSync` here is a new filesystem-write sink in a module that already
- * carries a documented CodeQL js/path-injection dismissal (see
- * `defaultSpawnGenerationTurn`'s own comment on `cwd`) — worth a quick
- * mental check if GHAS flags it fresh, though it should not: every path
- * this is ever called with comes from `agentSandboxWritablePaths`, which
- * only ever returns `os.homedir()` joined with a hardcoded literal
- * subpath, never anything request- or agent-output-derived.
+ * `mkdirSync` and `writeFileSync` here are filesystem-write sinks in a
+ * module that already carries a documented CodeQL js/path-injection
+ * dismissal (see `defaultSpawnGenerationTurn`'s own comment on `cwd`) —
+ * worth a quick mental check if GHAS flags it fresh, though it should
+ * not: every path this is ever called with comes from
+ * `agentSandboxWritablePaths`, which only ever returns `os.homedir()`
+ * joined with a hardcoded literal subpath, never anything request- or
+ * agent-output-derived.
  *
- * Invariant every entry must satisfy: this function assumes every path is
- * a DIRECTORY. `mkdirSync(p, { recursive: true })` on a path that doesn't
- * exist yet creates a directory AT exactly that path — so a future,
- * narrower `agentSandboxWritablePaths` entry that names a specific FILE
- * (issue #1131's eventual write-surface audit; see that function's own
- * comment on why bind-mounting only opencode's `opencode.db` was
- * considered and deferred) must never be routed through this function
- * unmodified — it would silently create a directory in place of the file
- * it meant to preserve, which is worse than the EROFS failure it was
- * trying to prevent. Demonstrated in
- * test/services/scaffold-generate.test.ts's own
- * `ensureSandboxWritablePathsExist` suite rather than left to be
- * rediscovered. */
-export function ensureSandboxWritablePathsExist(paths: string[]): void {
-  for (const p of paths) {
+ * Issue #1131 narrowed `agentSandboxWritablePaths` from whole-directory
+ * binds to specific files (e.g. `opencode.db`, `auth.json`) and
+ * subdirectories (e.g. `log/`, `snapshot/`). This function now handles
+ * both: directories via `mkdirSync(p, { recursive: true })` (unchanged),
+ * and files via `mkdirSync` on the parent directory + `writeFileSync` to
+ * create an empty file if missing. The file MUST be created (not just the
+ * parent dir) because `--bind-try` binds the exact source path — if the
+ * source file doesn't exist, the bind is skipped entirely, and the
+ * destination stays read-only under `--ro-bind / /`. Creating an empty
+ * file is safe: the agent CLI will overwrite it on first write. */
+export function ensureSandboxWritablePathsExist(paths: { dirs: string[]; files: string[] }): void {
+  for (const p of paths.dirs) {
     try {
       fs.mkdirSync(p, { recursive: true });
     } catch {
       // Best-effort — see this function's own comment.
+    }
+  }
+  for (const p of paths.files) {
+    try {
+      fs.mkdirSync(path.dirname(p), { recursive: true });
+      // createFile if missing — not writeFileSync (which would clobber
+      // existing content). `wx` fails with EEXIST if the file already
+      // exists, which is the desired outcome.
+      fs.writeFileSync(p, "", { flag: "wx" });
+    } catch {
+      // Best-effort — same degradation as the dir case above.
     }
   }
 }
@@ -1054,7 +1120,12 @@ export const defaultSpawnGenerationTurn: SpawnGenerationTurn = async ({
   if (sandboxUsable) {
     const extraWritablePaths = agentSandboxWritablePaths(agentCommand);
     ensureSandboxWritablePathsExist(extraWritablePaths);
-    invocation = wrapWithSandbox(bin, args, cwd, extraWritablePaths);
+    // Spread dirs + files into a flat string[] — wrapWithSandbox and
+    // bwrap's --bind-try don't distinguish between them.
+    invocation = wrapWithSandbox(bin, args, cwd, [
+      ...extraWritablePaths.dirs,
+      ...extraWritablePaths.files,
+    ]);
   }
   return new Promise<string>((resolve, reject) => {
     execFile(
