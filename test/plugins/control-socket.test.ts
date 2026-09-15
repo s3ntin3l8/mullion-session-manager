@@ -6,6 +6,7 @@ import path from "node:path";
 import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
 import { vi } from "vitest";
+import { MullionClient } from "../../src/mcp/client.mjs";
 
 // Real integration test against the actual listening Unix socket — same
 // "app.inject() can't drive this, so build a real app and connect a real
@@ -2972,6 +2973,40 @@ describe("controlSocketPlugin (issue #185)", () => {
           });
           socket.destroy();
         });
+      });
+    });
+
+    // Hermes review, PR #1292 — MullionClient's own-session fallback
+    // (issue #1291) matches the exact error strings resolveTargetSessionId/
+    // resolveTargetProjectId/resolveParentSessionId produce above, hardcoded
+    // a second time in src/mcp/client.mjs with nothing tying the two
+    // together. Exercising the real MullionClient against this real,
+    // in-process server (not a hand-typed mock) means a future reword of
+    // any of those three error messages fails this test immediately,
+    // instead of silently disabling the fallback with no signal.
+    describe("MullionClient own-session fallback (issue #1291)", () => {
+      it("getScrollback/listActions/spawnChildSession all resolve via ownSessionId when full scope has no explicit id", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId } = await createRealSession();
+        const client = new MullionClient({
+          MULLION_SOCKET_PATH: app!.pty.controlSocketPath,
+          MULLION_AUTH_TOKEN: TEST_TOKEN,
+          MULLION_SESSION_ID: String(sessionId),
+        });
+
+        const scrollback = await client.getScrollback();
+        expect(Buffer.from(scrollback.b64, "base64").toString("utf8")).toContain(
+          `scrollback-marker-${sessionId}`,
+        );
+
+        const actions = await client.listActions();
+        expect(Array.isArray(actions)).toBe(true);
+
+        const before = fakePtyChildren.length;
+        const child = await client.spawnChildSession({ command: "bash" });
+        expect(child.parentSessionId).toBe(sessionId);
+        await waitUntil(() => fakePtyChildren.length > before);
       });
     });
   });

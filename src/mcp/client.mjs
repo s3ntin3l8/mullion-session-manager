@@ -1,5 +1,5 @@
 import net from "node:net";
-import { MullionSocketClient } from "../cli/client.mjs";
+import { MullionSocketClient, MullionSocketError } from "../cli/client.mjs";
 
 // Issue #271 — the transport half of the `mullion mcp` server (issue #134's
 // eventual CLI/MCP surface starts here): a thin client wrapping however a
@@ -35,16 +35,53 @@ import { MullionSocketClient } from "../cli/client.mjs";
 // joins that short list, and is the first of the two that CREATES a
 // session rather than just reading one — sessions.spawn_child is
 // deliberately session-scope-reachable (see control-socket.ts's own
-// comment), unlike sessions.create above it.
+// comment), unlike sessions.create above it. Staying "fully usable" on an
+// auth-disabled host specifically relies on ownSessionId's env fallback
+// below (issue #1291): full scope has no connection-level pin to resolve
+// "self" from, so without that fallback all three would 400 on the exact
+// omit-it-to-target-yourself usage this paragraph describes.
 
 const PROMOTE_TIMEOUT_MS = 295_000;
 const BROWSER_ACTION_TIMEOUT_MS = 30_000;
+
+/** Issue #1291 (Hermes review, PR #1292) — true only for the exact
+ * "no pin to resolve this id from" 400 a given op's resolve* helper
+ * (control-socket.ts) produces when its id is omitted and the connection
+ * has no session-scoped pin (full scope). Narrower than "any 400", so an
+ * unrelated failure (e.g. a genuinely bad explicit id) propagates as
+ * itself instead of triggering a same-shaped but unrelated retry. */
+function isMissingIdError(err, message) {
+  return err instanceof MullionSocketError && err.status === 400 && err.message === message;
+}
 
 export class MullionClient {
   constructor(env = process.env) {
     this.hookSocketPath = env.MULLION_HOOK_SOCKET;
     this.hookToken = env.MULLION_HOOK_TOKEN;
     this._env = env;
+  }
+
+  /** Issue #1291 — the calling session's own id (`MULLION_SESSION_ID`,
+   * set in every spawned session's env by launch-plan.ts), used as a
+   * client-side RETRY fallback (never an eager substitution — see
+   * getScrollback/listActions/spawnChildSession below, all of which try
+   * the direct, no-id request first) for "target the calling session/its
+   * project" when the control socket can't resolve that from the
+   * connection's own pin. `resolveHandshake` (control-socket.ts) collapses
+   * every connection to full scope — no pinned session at all — whenever
+   * auth is disabled entirely, which silently breaks the "omit it, get
+   * your own" shape of those three methods on such a host even though
+   * each is reachable at session scope by design. Trying the direct path
+   * first (Hermes review, PR #1292) means a healthy session-scoped
+   * connection never substitutes this at all, so a hypothetical
+   * MULLION_SESSION_ID/pin mismatch can't turn a working call into a 403 —
+   * only the exact "no pin" failure this issue targets triggers the
+   * fallback. `undefined` when this MCP server isn't running as a
+   * session's own subprocess (e.g. `mullion mcp` run directly by an
+   * operator). */
+  get ownSessionId() {
+    const id = this._env.MULLION_SESSION_ID;
+    return typeof id === "string" && id.length > 0 ? id : undefined;
   }
 
   /** One-shot control-socket request: fresh MullionSocketClient, one
@@ -210,8 +247,47 @@ export class MullionClient {
   // deletePreview below), not an options object like listSessions/
   // createPreview — those two take more than one independent optional
   // field, everything else here takes exactly one.
-  listActions(projectId) {
-    return this.controlRequest("projects.actions", projectId !== undefined ? { projectId } : {});
+  /** Issue #1291 — when `projectId` is omitted, tries the empty body first
+   * (the control socket's own pin resolves it directly at real session
+   * scope — resolveTargetProjectId, control-socket.ts — with no extra
+   * round trip and no risk of diverging from that pin's own source of
+   * truth). Only on the specific "no pin to fall back on" 400 (full scope,
+   * which is what an auth-disabled host forces on every connection) does
+   * this fall back to a `sessions.get` lookup of its own session
+   * (`ownSessionId`) to derive a project id to retry with — no
+   * `MULLION_PROJECT_ID` env var exists to shortcut this the way
+   * getScrollback/spawnChildSession do for a session id, since a
+   * session's project lives on its own row, not its env. (Hermes review,
+   * PR #1292 — an earlier version of this fix always did the lookup,
+   * which could diverge from the pin's own `app.pty.get()`-sourced
+   * projectId if the REST-backed row and in-memory pty state ever
+   * disagreed; trying the direct path first removes that risk entirely
+   * for the already-working case.) */
+  async listActions(projectId) {
+    if (projectId !== undefined) {
+      return this.controlRequest("projects.actions", { projectId });
+    }
+    try {
+      return await this.controlRequest("projects.actions", {});
+    } catch (err) {
+      if (!isMissingIdError(err, "'projectId' is required") || this.ownSessionId === undefined) {
+        throw err;
+      }
+      // Hermes review, PR #1292 — the lookup itself can fail (e.g.
+      // MULLION_SESSION_ID names a stale/deleted session); that failure
+      // must never mask the canonical "'projectId' is required" this
+      // whole branch exists to recover from, so it's swallowed in favor
+      // of rethrowing `err`.
+      let session;
+      try {
+        session = await this.controlRequest("sessions.get", { sessionId: this.ownSessionId });
+      } catch {
+        throw err;
+      }
+      const ownProjectId = (session ?? {}).projectId;
+      if (ownProjectId === undefined || ownProjectId === null) throw err;
+      return this.controlRequest("projects.actions", { projectId: String(ownProjectId) });
+    }
   }
 
   /** Mirrors `mullion dock start`'s own two-step logic (src/cli/core.mjs):
@@ -254,24 +330,56 @@ export class MullionClient {
 
   /** Phase 5 (Track B, issue #193 5.3b) — spawns a real child session (own
    * PTY, own dtach socket) of `parentSessionId`, or of the calling session
-   * itself when omitted (the session-scoped shape sessions.spawn_child
-   * resolves via its own pinned connection id). Unlike startDockSession/
+   * itself when omitted, via the session-scoped connection's own pin.
+   * Issue #1291 (Hermes review, PR #1292): only on the specific "no pin"
+   * 400 (full scope, e.g. an auth-disabled host) does this retry with
+   * `ownSessionId`'s env fallback — never substituted eagerly, so a
+   * healthy session-scoped call never risks a hypothetical
+   * MULLION_SESSION_ID/pin mismatch turning a working call into a 403 (see
+   * ownSessionId's own doc comment). Unlike startDockSession/
    * stopDockSession/listSessions above, this is reachable from a Claude
    * Code session's own auto-injected MCP config: that config only ever
    * carries the session-scoped MULLION_HOOK_TOKEN, and spawn_child (unlike
    * sessions.create) accepts that scope by design. */
-  spawnChildSession({ command, name, cwd, kind, skipPermissions, parentSessionId } = {}) {
+  async spawnChildSession({ command, name, cwd, kind, skipPermissions, parentSessionId } = {}) {
     const body = { command };
     if (name !== undefined) body.name = name;
     if (cwd !== undefined) body.cwd = cwd;
     if (kind !== undefined) body.kind = kind;
     if (skipPermissions !== undefined) body.skipPermissions = skipPermissions;
     if (parentSessionId !== undefined) body.parentSessionId = parentSessionId;
-    return this.controlRequest("sessions.spawn_child", body);
+    try {
+      return await this.controlRequest("sessions.spawn_child", body);
+    } catch (err) {
+      if (
+        parentSessionId !== undefined ||
+        !isMissingIdError(err, "'parentSessionId' is required") ||
+        this.ownSessionId === undefined
+      ) {
+        throw err;
+      }
+      return this.controlRequest("sessions.spawn_child", {
+        ...body,
+        parentSessionId: this.ownSessionId,
+      });
+    }
   }
 
-  getScrollback(sessionId) {
-    return this.controlRequest("sessions.scrollback", sessionId !== undefined ? { sessionId } : {});
+  /** Issue #1291 (Hermes review, PR #1292) — same "try direct, retry only
+   * on the specific no-pin 400" shape as listActions/spawnChildSession
+   * above; see ownSessionId's own doc comment for why. */
+  async getScrollback(sessionId) {
+    if (sessionId !== undefined) {
+      return this.controlRequest("sessions.scrollback", { sessionId });
+    }
+    try {
+      return await this.controlRequest("sessions.scrollback", {});
+    } catch (err) {
+      if (!isMissingIdError(err, "'sessionId' is required") || this.ownSessionId === undefined) {
+        throw err;
+      }
+      return this.controlRequest("sessions.scrollback", { sessionId: this.ownSessionId });
+    }
   }
 
   /** `projectId`/`url` are mutually exclusive, same as `mullion preview
