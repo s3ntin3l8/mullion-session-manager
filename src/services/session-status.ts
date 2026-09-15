@@ -96,9 +96,23 @@ const LONG_DETAIL_MAX_CHARS = 200;
 const LONG_DETAIL_STATUSES = new Set<SessionStatus>(["awaiting_review_gate", "awaiting_promote"]);
 
 function truncateDetail(status: SessionStatus, detail: string | null): string | null {
+  if (detail === null) return null;
+  // Hermes review, PR #1285 — `gatePrompt`/`promoteSummary` are free-form
+  // and can be multi-line; collapsing embedded whitespace before truncating
+  // keeps every surface glanceable regardless of its own `white-space` CSS
+  // (TaskDetail.tsx's attention banner is `white-space: normal` and would
+  // otherwise render a real line break per `\n`, ballooning a narrow inline
+  // row for what's meant to be a short label, not a log line).
+  const normalized = detail.replace(/\s+/g, " ").trim();
   const max = LONG_DETAIL_STATUSES.has(status) ? LONG_DETAIL_MAX_CHARS : STATUS_DETAIL_MAX_CHARS;
-  if (detail === null || detail.length <= max) return detail;
-  return `${detail.slice(0, max)}…`;
+  // Hermes review, PR #1285 — split by code point, not UTF-16 code unit: a
+  // plain `.slice(0, max)` can land mid-surrogate-pair for an emoji/non-BMP
+  // character, rendering U+FFFD. Far more likely to actually trigger now
+  // that LONG_DETAIL_MAX_CHARS (200) gives a free-form prompt much more
+  // room than the original 48 ever did.
+  const codePoints = Array.from(normalized);
+  if (codePoints.length <= max) return normalized;
+  return `${codePoints.slice(0, max).join("")}…`;
 }
 
 function make(status: SessionStatus, detail: string | null = null): DerivedSessionStatus {

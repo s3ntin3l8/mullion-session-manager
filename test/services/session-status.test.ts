@@ -224,6 +224,36 @@ describe("deriveSessionStatus", () => {
       expect(result.detail).toHaveLength(49); // 48 chars + ellipsis
     });
 
+    // Hermes review, PR #1285 — a free-form gatePrompt/promoteSummary can be
+    // multi-line; collapse embedded whitespace before surfacing so it reads
+    // as one glanceable line regardless of the consuming surface's own
+    // white-space CSS (TaskDetail.tsx's attention banner is white-space:
+    // normal and would otherwise render a real line break per \n).
+    it("collapses embedded newlines/whitespace in a gatePrompt to single spaces", () => {
+      const result = derive({
+        gateState: "waiting",
+        gatePrompt: "Approve this?\n\n  Run `rm -rf build/`  \nY/n",
+      });
+      expect(result.detail).toBe("Approve this? Run `rm -rf build/` Y/n");
+    });
+
+    it("trims leading/trailing whitespace from a gatePrompt", () => {
+      const result = derive({ gateState: "waiting", gatePrompt: "  padded  " });
+      expect(result.detail).toBe("padded");
+    });
+
+    // Hermes review, PR #1285 — a plain `.slice(0, max)` on UTF-16 code
+    // units can land mid-surrogate-pair for an emoji/non-BMP character,
+    // rendering U+FFFD; truncating by code point avoids that.
+    it("truncates a gatePrompt at a code point boundary, not mid-surrogate-pair", () => {
+      // 199 ASCII chars + one 2-code-unit emoji lands the emoji exactly on
+      // the 200-char boundary if truncation counted UTF-16 units.
+      const longPrompt = `${"x".repeat(199)}😀${"y".repeat(50)}`;
+      const result = derive({ gateState: "waiting", gatePrompt: longPrompt });
+      expect(result.detail).toBe(`${"x".repeat(199)}😀…`);
+      expect(result.detail).not.toContain("�");
+    });
+
     it("awaiting_permission outranks a pending plan", () => {
       expect(derive({ permissionState: "pending", planState: "pending" }).status).toBe(
         "awaiting_permission",
