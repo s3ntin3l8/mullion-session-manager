@@ -238,6 +238,27 @@ describe("NotificationBell", () => {
     expect(screen.getByText("Exited")).toBeInTheDocument();
   });
 
+  it("issue #1229 — the group header shows the session's current status, and tracks it live", async () => {
+    sessions = [makeSession({ sessionStatus: "working", sessionStatusSeverity: "busy" })];
+    events = { 1: [makeEvent({ seq: 1 })] };
+    const { rerender } = render(
+      <NotificationBell onOpenSession={vi.fn()} onOpenBrowser={vi.fn()} />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: /notifications/i }));
+    expect(screen.getByText("Working")).toBeInTheDocument();
+
+    // A poll tick gives `sessions` a fresh array identity (per this file's
+    // own store mock — the panel just reads whatever storeState() returns
+    // on the next render) — no extra plumbing should be needed for the
+    // header to pick up the change.
+    sessions = [
+      makeSession({ sessionStatus: "awaiting_permission", sessionStatusSeverity: "blocked" }),
+    ];
+    rerender(<NotificationBell onOpenSession={vi.fn()} onOpenBrowser={vi.fn()} />);
+    expect(screen.queryByText("Working")).not.toBeInTheDocument();
+    expect(screen.getByText("Needs permission")).toBeInTheDocument();
+  });
+
   it("issue #903 — a generic silence row shows the session's last file change; a specific question row keeps its own text", async () => {
     events = {
       1: [
