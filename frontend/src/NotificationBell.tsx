@@ -16,6 +16,7 @@ import { BellIcon, BlockedIcon, CheckIcon, CloseIcon, WarningTriangleIcon } from
 import { formatRelativeAge } from "./relativeTime.js";
 import { useFocusTrap } from "./hooks/useFocusTrap.js";
 import { truncateHead } from "./lib/truncatePath.js";
+import { formatStatusLabel, STATUS_PRESENTATION } from "./sessionStatus.js";
 
 // The toolbar bell, upgraded for issue #169 from a per-session "who's
 // currently ringing" list into an actual event feed: one row per buffered
@@ -549,10 +550,10 @@ export function NotificationBell({
                         }}
                       >
                         {item.type === "header" ? (
-                          <div className="notif-group-header">
-                            <span className="notif-group-header-title">{item.title}</span>
-                            <span className="notif-group-header-subtitle">{item.subtitle}</span>
-                          </div>
+                          <FeedHeader
+                            item={item}
+                            session={sessions.find((s) => s.id === item.sessionId)}
+                          />
                         ) : (
                           <EventRow
                             item={item}
@@ -592,6 +593,43 @@ export function NotificationBell({
           document.body,
         )}
     </>
+  );
+}
+
+// Issue #1229 — live status alongside the group header's title/subtitle,
+// answering "is this still stuck?" without leaving the panel. `session` is
+// looked up at render time by the caller (same `sessions.find(...)` idiom
+// EventRow already uses below), NOT snapshotted onto FeedHeaderItem — that
+// keeps buildFeedItems' memoized output identity untouched and lets the
+// status track the same 4s live-poll tick the rest of the panel already
+// rides on `sessions` for.
+function FeedHeader({ item, session }: { item: FeedHeaderItem; session: Session | undefined }) {
+  const presentation = session ? STATUS_PRESENTATION[session.sessionStatus] : null;
+  return (
+    <div className="notif-group-header">
+      <div className="notif-group-header-top">
+        <span className="notif-group-header-title">{item.title}</span>
+        {presentation && (
+          <span className="notif-group-header-status">
+            {/* Hermes review, PR #1284 — no `.session-dot-exited` class
+                exists (styles/sidebar.css only defines attention/error/
+                finished/idle/permission/plan/working), so an exited
+                session's dot would otherwise render as an unstyled
+                zero-width span. Mirrors Sidebar.tsx's own special-case:
+                CloseIcon instead of a colored dot for "exited". */}
+            {session?.sessionStatus === "exited" ? (
+              <CloseIcon size={10} style={{ color: "var(--dim)" }} />
+            ) : (
+              <span className={`session-dot-${presentation.tone}`} />
+            )}
+            <span className={`session-status-label ${presentation.tone}`}>
+              {formatStatusLabel(presentation, session?.sessionStatusDetail ?? null)}
+            </span>
+          </span>
+        )}
+      </div>
+      <span className="notif-group-header-subtitle">{item.subtitle}</span>
+    </div>
   );
 }
 
