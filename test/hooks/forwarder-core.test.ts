@@ -1670,6 +1670,29 @@ describe("mapCodexStop", () => {
   it("always maps to a done progress message", () => {
     expect(mapCodexStop()).toEqual({ kind: "progress", phase: "done" });
   });
+
+  // Issue #1230 — codex's Stop hook carries `last_assistant_message` as a
+  // required (nullable) field, confirmed live against installed codex-cli
+  // 0.154.0 (a real `codex exec` session, captured via a scratch CODEX_HOME
+  // + --dangerously-bypass-hook-trust). Never forwarded before this issue.
+  it("forwards a string last_assistant_message the same way mapClaudeCodeStop does", () => {
+    expect(mapCodexStop({ last_assistant_message: "All done." })).toEqual({
+      kind: "progress",
+      phase: "done",
+      lastAssistantMessage: "All done.",
+    });
+  });
+
+  it("omits lastAssistantMessage when last_assistant_message is null (the field's own nullable-but-required shape)", () => {
+    expect(mapCodexStop({ last_assistant_message: null })).toEqual({
+      kind: "progress",
+      phase: "done",
+    });
+  });
+
+  it("omits lastAssistantMessage when the payload is missing entirely", () => {
+    expect(mapCodexStop(undefined)).toEqual({ kind: "progress", phase: "done" });
+  });
 });
 
 describe("mapCodexPostToolUse (issue #252, live-verified against a real apply_patch firing — issue #846)", () => {
@@ -2239,7 +2262,12 @@ describe("hook adapter emits capability parity (issue: extend surfaced session s
     // pure mapper-parity test shouldn't need to touch. Matches the ten
     // events codex.ts's mergeCodexHooks registers.
     const payloadsByEvent = {
-      Stop: [{}],
+      // Issue #1230 — a Stop payload carrying last_assistant_message (the
+      // field this parity check's own kindsOf() can't distinguish from the
+      // bare-object case, since both still map to a single "progress" kind,
+      // but kept here as the same defensive-coverage precedent the codex
+      // PostToolUse/SubagentStop entries below already follow).
+      Stop: [{}, { last_assistant_message: "All done." }],
       SessionStart: [{ source: "startup" }],
       SessionEnd: [{ reason: "clear" }],
       PermissionRequest: [{ tool_name: "Bash", tool_input: { command: "npm test" } }],

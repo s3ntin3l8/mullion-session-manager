@@ -819,8 +819,16 @@ export function mapClaudeCodeEvent(kind, payload) {
 const APPLY_PATCH_HEADER_RE = /^\*\*\* (?:(Update|Add|Delete) File: (.+)|Move to: (.+))$/gm;
 const APPLY_PATCH_ACTION_BY_VERB = { Update: "modify", Add: "create", Delete: "delete" };
 
-export function mapCodexStop() {
-  return { kind: "progress", phase: "done" };
+// Issue #1230 — codex's own Stop hook carries `last_assistant_message` as a
+// required (nullable) field, confirmed live against the installed codex-cli
+// 0.154.0 (the same field name Claude Code's mapClaudeCodeStop reads), so
+// this now forwards it the same way instead of discarding it.
+export function mapCodexStop(payload) {
+  const result = { kind: "progress", phase: "done" };
+  if (payload && typeof payload.last_assistant_message === "string") {
+    result.lastAssistantMessage = payload.last_assistant_message;
+  }
+  return result;
 }
 
 export function mapCodexSessionStart(payload) {
@@ -972,7 +980,7 @@ export function mapCodexSubagentStop(payload) {
 function mapCodexEventCore(kind, payload) {
   switch (kind) {
     case "Stop":
-      return mapCodexStop();
+      return mapCodexStop(payload);
     case "SessionStart":
       return mapCodexSessionStart(payload);
     case "SessionEnd":

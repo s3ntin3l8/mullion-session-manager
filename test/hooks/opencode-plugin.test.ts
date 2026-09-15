@@ -19,7 +19,8 @@ import { openCodeAdapter } from "../../src/services/hook-adapters/opencode.js";
 // have exactly one top-level `export`, or OpenCode's real plugin loader
 // crashes the whole server on startup (see opencode-plugin.js's own
 // comment on this).
-const { mapOpenCodeEvent, promoteRequest, mapToolExecuteAfter } = MullionHookEmitter;
+const { mapOpenCodeEvent, promoteRequest, mapToolExecuteAfter, createAssistantTextTracker } =
+  MullionHookEmitter;
 
 describe("opencode-plugin.js module shape (regression: opencode startup crash)", () => {
   it("exports exactly one top-level binding (MullionHookEmitter)", async () => {
@@ -41,6 +42,21 @@ describe("mapOpenCodeEvent (issue #175)", () => {
   });
 
   it("omits the agent_session message when session.idle carries no sessionID", () => {
+    expect(mapOpenCodeEvent({ type: "session.idle", properties: {} })).toEqual([
+      { kind: "progress", phase: "done" },
+    ]);
+  });
+
+  // Issue #1230 — opencode has no Stop-analogue field carrying this, so it's
+  // passed in by the caller (createAssistantTextTracker, tested separately
+  // below) rather than reconstructed by mapOpenCodeEvent itself.
+  it("attaches a non-null lastAssistantMessage to session.idle's done message", () => {
+    expect(
+      mapOpenCodeEvent({ type: "session.idle", properties: {} }, undefined, "All done."),
+    ).toEqual([{ kind: "progress", phase: "done", lastAssistantMessage: "All done." }]);
+  });
+
+  it("omits lastAssistantMessage from session.idle's done message when null (the default)", () => {
     expect(mapOpenCodeEvent({ type: "session.idle", properties: {} })).toEqual([
       { kind: "progress", phase: "done" },
     ]);
@@ -217,6 +233,17 @@ describe("mapOpenCodeEvent (issue #175)", () => {
 
     it("returns null when properties.status itself is missing", () => {
       expect(mapOpenCodeEvent({ type: "session.status", properties: {} })).toBeNull();
+    });
+
+    // Issue #1230 — same attachment as session.idle above.
+    it("attaches a non-null lastAssistantMessage to an idle status's done message", () => {
+      expect(
+        mapOpenCodeEvent(
+          { type: "session.status", properties: { status: { type: "idle" } } },
+          undefined,
+          "All done.",
+        ),
+      ).toEqual([{ kind: "progress", phase: "done", lastAssistantMessage: "All done." }]);
     });
   });
 
@@ -632,6 +659,62 @@ describe("MullionHookEmitter (issue #175)", () => {
       kind: "file_change",
       path: "/repo/a.ts",
       action: "modify",
+    });
+  });
+
+  // Issue #1230 — end-to-end through the real event handler (not just
+  // mapOpenCodeEvent/createAssistantTextTracker in isolation), using a
+  // trimmed real event sequence captured live from installed opencode
+  // 1.18.31 (`opencode run` + a scratch OPENCODE_CONFIG_DIR plugin logging
+  // raw events) rather than a guessed shape: message.updated announcing the
+  // assistant message BEFORE its text streams in as "" then the final
+  // string, then session.idle.
+  it("attaches the reconstructed assistant text to session.idle's done message", async () => {
+    dir = mkdtempSync(path.join(os.tmpdir(), "mullion-opencode-"));
+    const socketPath = path.join(dir, "hooks.sock");
+    server = net.createServer();
+    await new Promise<void>((resolve) => server?.listen(socketPath, () => resolve()));
+    process.env.MULLION_HOOK_SOCKET = socketPath;
+    process.env.MULLION_HOOK_TOKEN = "tok-456";
+
+    const linesPromise = collectLines(2);
+    const hooks = await MullionHookEmitter();
+    await hooks.event?.({
+      event: {
+        type: "message.updated",
+        properties: { sessionID: "s1", info: { id: "msg-assistant-1", role: "assistant" } },
+      },
+    });
+    await hooks.event?.({
+      event: {
+        type: "message.part.updated",
+        properties: {
+          sessionID: "s1",
+          part: { id: "prt-1", messageID: "msg-assistant-1", type: "text", text: "" },
+        },
+      },
+    });
+    await hooks.event?.({
+      event: {
+        type: "message.part.updated",
+        properties: {
+          sessionID: "s1",
+          part: {
+            id: "prt-1",
+            messageID: "msg-assistant-1",
+            type: "text",
+            text: "hello there, this is a probe response",
+          },
+        },
+      },
+    });
+    await hooks.event?.({ event: { type: "session.idle", properties: { sessionID: "s1" } } });
+
+    const [, messageLine] = await linesPromise;
+    expect(JSON.parse(messageLine)).toEqual({
+      kind: "progress",
+      phase: "done",
+      lastAssistantMessage: "hello there, this is a probe response",
     });
   });
 
@@ -1240,6 +1323,103 @@ describe("MullionHookEmitter tool.execute.after hook (issue: sidebar worktree de
 // mapper directly instead. `promote_request` (the plugin's own tool, not an
 // `event` type) is asserted separately below — it has no mapper output to
 // drive through this table at all.
+// Issue #1230 — createAssistantTextTracker in isolation. Event shapes below
+// are trimmed from the same live capture (installed opencode 1.18.31)
+// MullionHookEmitter's own "attaches the reconstructed assistant text..."
+// test above drives end to end.
+describe("createAssistantTextTracker (issue #1230)", () => {
+  it("returns null before any assistant message is observed", () => {
+    expect(createAssistantTextTracker().current()).toBeNull();
+  });
+
+  it("ignores a text part belonging to the user's own message", () => {
+    const tracker = createAssistantTextTracker();
+    tracker.observe({
+      type: "message.updated",
+      properties: { info: { id: "msg-user-1", role: "user" } },
+    });
+    tracker.observe({
+      type: "message.part.updated",
+      properties: {
+        part: { id: "prt-1", messageID: "msg-user-1", type: "text", text: "the prompt" },
+      },
+    });
+    expect(tracker.current()).toBeNull();
+  });
+
+  it("tracks the assistant message's text, overwriting as it streams from empty to final", () => {
+    const tracker = createAssistantTextTracker();
+    tracker.observe({
+      type: "message.updated",
+      properties: { info: { id: "msg-a-1", role: "assistant" } },
+    });
+    tracker.observe({
+      type: "message.part.updated",
+      properties: { part: { id: "prt-1", messageID: "msg-a-1", type: "text", text: "" } },
+    });
+    expect(tracker.current()).toBe("");
+    tracker.observe({
+      type: "message.part.updated",
+      properties: { part: { id: "prt-1", messageID: "msg-a-1", type: "text", text: "hello" } },
+    });
+    expect(tracker.current()).toBe("hello");
+  });
+
+  it("joins more than one distinct text part for the same assistant message, in first-seen order", () => {
+    const tracker = createAssistantTextTracker();
+    tracker.observe({
+      type: "message.updated",
+      properties: { info: { id: "msg-a-1", role: "assistant" } },
+    });
+    tracker.observe({
+      type: "message.part.updated",
+      properties: { part: { id: "prt-1", messageID: "msg-a-1", type: "text", text: "first" } },
+    });
+    tracker.observe({
+      type: "message.part.updated",
+      properties: { part: { id: "prt-2", messageID: "msg-a-1", type: "text", text: "second" } },
+    });
+    expect(tracker.current()).toBe("first\n\nsecond");
+  });
+
+  it("resets once a new assistant message starts (a later turn)", () => {
+    const tracker = createAssistantTextTracker();
+    tracker.observe({
+      type: "message.updated",
+      properties: { info: { id: "msg-a-1", role: "assistant" } },
+    });
+    tracker.observe({
+      type: "message.part.updated",
+      properties: { part: { id: "prt-1", messageID: "msg-a-1", type: "text", text: "first turn" } },
+    });
+    tracker.observe({
+      type: "message.updated",
+      properties: { info: { id: "msg-a-2", role: "assistant" } },
+    });
+    expect(tracker.current()).toBeNull();
+    tracker.observe({
+      type: "message.part.updated",
+      properties: {
+        part: { id: "prt-9", messageID: "msg-a-2", type: "text", text: "second turn" },
+      },
+    });
+    expect(tracker.current()).toBe("second turn");
+  });
+
+  it("ignores a non-text part type (e.g. step-start/step-finish)", () => {
+    const tracker = createAssistantTextTracker();
+    tracker.observe({
+      type: "message.updated",
+      properties: { info: { id: "msg-a-1", role: "assistant" } },
+    });
+    tracker.observe({
+      type: "message.part.updated",
+      properties: { part: { id: "prt-1", messageID: "msg-a-1", type: "step-finish" } },
+    });
+    expect(tracker.current()).toBeNull();
+  });
+});
+
 describe("mapOpenCodeEvent emits capability parity (issue: extend surfaced session statuses)", () => {
   it("every handled event type's mapped kind(s) are declared in openCodeAdapter.emits", () => {
     const events = [
