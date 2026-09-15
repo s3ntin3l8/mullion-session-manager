@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.3.22](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.21...v0.3.22) (2026-09-15)
+
+
+### Features
+
+* **hooks:** forward and render lastAssistantMessage for codex/opencode ([#1286](https://github.com/s3ntin3l8/mullion-session-manager/issues/1286)) ([308c0e5](https://github.com/s3ntin3l8/mullion-session-manager/commit/308c0e581b1d5abf98a0cce953c87a36dd9a15ff))
+* **notifications:** show live session status in the group header ([#1284](https://github.com/s3ntin3l8/mullion-session-manager/issues/1284)) ([62fea6b](https://github.com/s3ntin3l8/mullion-session-manager/commit/62fea6bc18449b605ae545ae11feb2cd2e61a85d))
+* **notifications:** sticky group headers in the notification panel ([#1287](https://github.com/s3ntin3l8/mullion-session-manager/issues/1287)) ([ff3f942](https://github.com/s3ntin3l8/mullion-session-manager/commit/ff3f9425069cd6126cdd10a9d0a4fe1e833ee02c))
+* **status:** plumb gatePrompt/questionHeader/promoteSummary/elicitationServer into sessionStatusDetail ([#1285](https://github.com/s3ntin3l8/mullion-session-manager/issues/1285)) ([46b60cc](https://github.com/s3ntin3l8/mullion-session-manager/commit/46b60cc1296817d49325959ac49e40fa318722ad))
+
+
+### Bug Fixes
+
+* **mcp:** self-referencing tools break on auth-disabled hosts ([#1292](https://github.com/s3ntin3l8/mullion-session-manager/issues/1292)) ([6090dfc](https://github.com/s3ntin3l8/mullion-session-manager/commit/6090dfcb69b7d7bafb0e4ecd1627a5776a769184))
+
 ## [0.3.21](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.20...v0.3.21) (2026-09-15)
 
 
