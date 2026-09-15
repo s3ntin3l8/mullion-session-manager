@@ -897,6 +897,20 @@ export function createAgentSandboxHome(
   agentCommand: string,
 ): { fakeHome: string; writablePaths: { dirs: string[]; files: string[] } } {
   const fakeHome = path.join(worktreePath, ".agent-home");
+  // MUST materialize .agent-home unconditionally — bwrap's `--bind`
+  // (unlike `--bind-try`) refuses to start when its source is missing.
+  // For claude/agy the writablePaths list is empty (confirmed live to need
+  // none), so ensureSandboxWritablePathsExist alone wouldn't create it
+  // and every sandboxed claude/agy turn would hard-fail at bwrap startup.
+  // Best-effort: if the parent worktree doesn't exist or isn't writable
+  // (e.g. in tests that pass a nonexistent cwd to exercise error paths),
+  // bwrap's own spawn will surface the real failure — we don't mask it
+  // here.
+  try {
+    fs.mkdirSync(fakeHome, { recursive: true });
+  } catch {
+    // Fall through — bwrap's --bind will produce the real error.
+  }
   const writablePaths = agentSandboxWritablePaths(agentCommand, fakeHome);
   ensureSandboxWritablePathsExist(writablePaths);
   // Seed auth.json from the operator's real HOME if it exists — the CLI
@@ -918,6 +932,56 @@ export function createAgentSandboxHome(
     }
   }
   return { fakeHome, writablePaths };
+}
+
+/** Copies any rotated auth.json from the disposable fake HOME back to the
+ * operator's real HOME, so a provider with single-use refresh tokens (or
+ * any other in-place credential rotation) sees the fresh credentials on
+ * the next turn. Without this, the rotated token is discarded with the
+ * scratch worktree and the operator's real auth.json keeps re-seeding the
+ * same (now potentially invalidated) original token.
+ *
+ * Security: the rotated auth.json is ONLY copied back if it passes a
+ * basic JSON validity check (parseable, non-empty object). A compromised
+ * turn that wrote malformed JSON, a non-object root, or anything other
+ * than a credential-shaped document leaves the real auth.json untouched.
+ * This is the exact "trust nothing the sandbox produced" posture this PR
+ * took for every other state file — the real auth.json stays read-only
+ * from the sandbox's perspective, and only valid rotated credentials
+ * propagate back. */
+export function persistAgentSandboxAuth(
+  fakeHome: string,
+  writablePaths: { files: string[] },
+): void {
+  const realHome = os.homedir();
+  for (const f of writablePaths.files) {
+    if (!f.endsWith("auth.json")) continue;
+    const realAuth = f.replace(fakeHome, realHome);
+    try {
+      // Only copy back if the sandbox actually rotated the file (content
+      // differs from the seeded original) AND it parses as a non-empty
+      // JSON object. A compromised turn writing arbitrary content fails
+      // the JSON check and leaves the real auth.json untouched.
+      if (!fs.existsSync(f) || !fs.existsSync(realAuth)) continue;
+      const sandboxed = fs.readFileSync(f, "utf8");
+      const real = fs.readFileSync(realAuth, "utf8");
+      if (sandboxed === real) continue; // No rotation happened
+      const parsed: unknown = JSON.parse(sandboxed);
+      if (
+        typeof parsed !== "object" ||
+        parsed === null ||
+        Array.isArray(parsed) ||
+        Object.keys(parsed as Record<string, unknown>).length === 0
+      ) {
+        // Malformed or empty — skip copy-back to avoid corrupting real auth.
+        continue;
+      }
+      fs.writeFileSync(realAuth, sandboxed, { mode: 0o600 });
+    } catch {
+      // Best-effort — copy-back failure degrades to re-auth prompt, not
+      // a sandbox error.
+    }
+  }
 }
 
 /** Given the resolved binary, its args, and the scratch worktree's
@@ -1193,12 +1257,14 @@ export const defaultSpawnGenerationTurn: SpawnGenerationTurn = async ({
     );
   }
   let invocation = { bin, args };
+  let sandboxHome: { fakeHome: string; writablePaths: { files: string[] } } | undefined;
   if (sandboxUsable) {
     // Create a disposable HOME inside the scratch worktree so the CLI's
     // writes (state dirs, sqlite, tmp files) land here instead of the
     // operator's real HOME. The fake HOME is seeded with auth.json from
     // the real HOME (if it exists) so the CLI can reach its model API.
     const { fakeHome, writablePaths } = createAgentSandboxHome(cwd, agentCommand);
+    sandboxHome = { fakeHome, writablePaths };
     // Spread dirs + files into a flat string[] — wrapWithSandbox and
     // bwrap's --bind-try don't distinguish between them.
     invocation = wrapWithSandbox(
@@ -1215,6 +1281,14 @@ export const defaultSpawnGenerationTurn: SpawnGenerationTurn = async ({
       invocation.args,
       { cwd, env: gitEnv(), timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 },
       (err, stdout, stderr) => {
+        // Copy back any rotated auth.json from the disposable HOME to the
+        // real HOME — see persistAgentSandboxAuth's own comment for why
+        // this matters for single-use refresh tokens. Done on both success
+        // and failure paths: a turn that crashed after rotating auth still
+        // has fresh credentials worth propagating.
+        if (sandboxHome) {
+          persistAgentSandboxAuth(sandboxHome.fakeHome, sandboxHome.writablePaths);
+        }
         if (err) {
           reject(new GenerationSpawnError(agentCommand, stderr?.trim() || err.message));
           return;

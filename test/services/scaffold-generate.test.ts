@@ -17,6 +17,7 @@ import {
   agentSandboxWritablePaths,
   ensureSandboxWritablePathsExist,
   createAgentSandboxHome,
+  persistAgentSandboxAuth,
   isSandboxCapable,
   resetSandboxCapabilityCache,
   buildBwrapSmokeTestInvocation,
@@ -1068,6 +1069,188 @@ describe("createAgentSandboxHome", () => {
     const { writablePaths } = createAgentSandboxHome(scratchDir, "claude");
     expect(writablePaths.dirs).toEqual([]);
     expect(writablePaths.files).toEqual([]);
+    // .agent-home MUST exist even for empty-paths agents — bwrap's --bind
+    // refuses to start when its source is missing (this is why the rest of
+    // the module uses --bind-try for may-not-exist paths, and why the home
+    // bind itself must be unconditional).
+    expect(fs.existsSync(path.join(scratchDir, ".agent-home"))).toBe(true);
+  });
+
+  it("returns empty dirs/files for agy", () => {
+    const { writablePaths } = createAgentSandboxHome(scratchDir, "agy");
+    expect(writablePaths.dirs).toEqual([]);
+    expect(writablePaths.files).toEqual([]);
+    expect(fs.existsSync(path.join(scratchDir, ".agent-home"))).toBe(true);
+  });
+});
+
+describe("persistAgentSandboxAuth", () => {
+  let realHomeDir: string;
+  let scratchDir: string;
+
+  beforeEach(() => {
+    // Override HOME via a temp dir to avoid touching the real operator HOME
+    realHomeDir = fs.mkdtempSync(path.join(os.tmpdir(), "persist-auth-real-"));
+    scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), "persist-auth-fake-"));
+    vi.spyOn(os, "homedir").mockReturnValue(realHomeDir);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    fs.rmSync(realHomeDir, { recursive: true, force: true });
+    fs.rmSync(scratchDir, { recursive: true, force: true });
+  });
+
+  it("copies a rotated, valid auth.json from fake HOME to real HOME", () => {
+    // Set up real HOME with original auth.json
+    const realCodex = path.join(realHomeDir, ".codex");
+    fs.mkdirSync(realCodex, { recursive: true });
+    const originalAuth = JSON.stringify({
+      refresh_token: "test-fixture-original-refresh",
+      access_token: "test-fixture-original-access",
+    });
+    fs.writeFileSync(path.join(realCodex, "auth.json"), originalAuth);
+
+    // Set up fake HOME with rotated auth.json
+    const fakeHome = path.join(scratchDir, ".agent-home");
+    const fakeCodex = path.join(fakeHome, ".codex");
+    fs.mkdirSync(fakeCodex, { recursive: true });
+    const rotatedAuth = JSON.stringify({
+      refresh_token: "test-fixture-rotated-refresh",
+      access_token: "test-fixture-rotated-access",
+    });
+    fs.writeFileSync(path.join(fakeCodex, "auth.json"), rotatedAuth);
+
+    persistAgentSandboxAuth(fakeHome, { files: [path.join(fakeCodex, "auth.json")] });
+
+    // Real HOME now has the rotated auth.json
+    const realContent = fs.readFileSync(path.join(realCodex, "auth.json"), "utf8");
+    expect(JSON.parse(realContent)).toEqual({
+      refresh_token: "test-fixture-rotated-refresh",
+      access_token: "test-fixture-rotated-access",
+    });
+  });
+
+  it("does NOT copy back when sandboxed auth.json matches real (no rotation)", () => {
+    const realCodex = path.join(realHomeDir, ".codex");
+    fs.mkdirSync(realCodex, { recursive: true });
+    const sameAuth = JSON.stringify({ refresh_token: "test-fixture-same" });
+    fs.writeFileSync(path.join(realCodex, "auth.json"), sameAuth);
+
+    const fakeHome = path.join(scratchDir, ".agent-home");
+    const fakeCodex = path.join(fakeHome, ".codex");
+    fs.mkdirSync(fakeCodex, { recursive: true });
+    fs.writeFileSync(path.join(fakeCodex, "auth.json"), sameAuth);
+
+    const mtimeBefore = fs.statSync(path.join(realCodex, "auth.json")).mtimeMs;
+    // Sleep to ensure mtime would change if rewritten
+    const start = Date.now();
+    while (Date.now() - start < 50) {
+      // intentional busy-wait
+    }
+    persistAgentSandboxAuth(fakeHome, { files: [path.join(fakeCodex, "auth.json")] });
+
+    const mtimeAfter = fs.statSync(path.join(realCodex, "auth.json")).mtimeMs;
+    expect(mtimeAfter).toBe(mtimeBefore);
+  });
+
+  it("does NOT copy back when sandboxed auth.json is malformed JSON", () => {
+    const realCodex = path.join(realHomeDir, ".codex");
+    fs.mkdirSync(realCodex, { recursive: true });
+    const realAuth = JSON.stringify({ refresh_token: "test-fixture-real" });
+    fs.writeFileSync(path.join(realCodex, "auth.json"), realAuth);
+
+    const fakeHome = path.join(scratchDir, ".agent-home");
+    const fakeCodex = path.join(fakeHome, ".codex");
+    fs.mkdirSync(fakeCodex, { recursive: true });
+    // Compromised turn writes garbage
+    fs.writeFileSync(path.join(fakeCodex, "auth.json"), "not valid json {{{");
+
+    expect(() =>
+      persistAgentSandboxAuth(fakeHome, { files: [path.join(fakeCodex, "auth.json")] }),
+    ).not.toThrow();
+
+    // Real auth.json is unchanged
+    const realContent = fs.readFileSync(path.join(realCodex, "auth.json"), "utf8");
+    expect(JSON.parse(realContent)).toEqual({ refresh_token: "test-fixture-real" });
+  });
+
+  it("does NOT copy back when sandboxed auth.json is a JSON array (wrong shape)", () => {
+    const realCodex = path.join(realHomeDir, ".codex");
+    fs.mkdirSync(realCodex, { recursive: true });
+    fs.writeFileSync(
+      path.join(realCodex, "auth.json"),
+      JSON.stringify({ refresh_token: "test-fixture-real" }),
+    );
+
+    const fakeHome = path.join(scratchDir, ".agent-home");
+    const fakeCodex = path.join(fakeHome, ".codex");
+    fs.mkdirSync(fakeCodex, { recursive: true });
+    // Compromised turn writes an array
+    fs.writeFileSync(path.join(fakeCodex, "auth.json"), JSON.stringify(["malicious"]));
+
+    persistAgentSandboxAuth(fakeHome, { files: [path.join(fakeCodex, "auth.json")] });
+
+    const realContent = fs.readFileSync(path.join(realCodex, "auth.json"), "utf8");
+    expect(JSON.parse(realContent)).toEqual({ refresh_token: "test-fixture-real" });
+  });
+
+  it("does NOT copy back when sandboxed auth.json is an empty object", () => {
+    const realCodex = path.join(realHomeDir, ".codex");
+    fs.mkdirSync(realCodex, { recursive: true });
+    fs.writeFileSync(
+      path.join(realCodex, "auth.json"),
+      JSON.stringify({ refresh_token: "test-fixture-real" }),
+    );
+
+    const fakeHome = path.join(scratchDir, ".agent-home");
+    const fakeCodex = path.join(fakeHome, ".codex");
+    fs.mkdirSync(fakeCodex, { recursive: true });
+    fs.writeFileSync(path.join(fakeCodex, "auth.json"), JSON.stringify({}));
+
+    persistAgentSandboxAuth(fakeHome, { files: [path.join(fakeCodex, "auth.json")] });
+
+    const realContent = fs.readFileSync(path.join(realCodex, "auth.json"), "utf8");
+    expect(JSON.parse(realContent)).toEqual({ refresh_token: "test-fixture-real" });
+  });
+
+  it("is a no-op for files that don't end in auth.json", () => {
+    const realHome = path.join(realHomeDir, ".codex");
+    fs.mkdirSync(realHome, { recursive: true });
+    fs.writeFileSync(path.join(realHome, "opencode.db"), "original");
+
+    const fakeHome = path.join(scratchDir, ".agent-home");
+    const fakeCodex = path.join(fakeHome, ".codex");
+    fs.mkdirSync(fakeCodex, { recursive: true });
+    fs.writeFileSync(path.join(fakeCodex, "opencode.db"), "sandboxed content");
+
+    persistAgentSandboxAuth(fakeHome, { files: [path.join(fakeCodex, "opencode.db")] });
+
+    // Non-auth.json files are never copied back
+    expect(fs.readFileSync(path.join(realHome, "opencode.db"), "utf8")).toBe("original");
+  });
+
+  it("does NOT throw when sandboxed auth.json doesn't exist", () => {
+    const realCodex = path.join(realHomeDir, ".codex");
+    fs.mkdirSync(realCodex, { recursive: true });
+    fs.writeFileSync(
+      path.join(realCodex, "auth.json"),
+      JSON.stringify({ refresh_token: "test-fixture-real" }),
+    );
+
+    const fakeHome = path.join(scratchDir, ".agent-home");
+    const fakeCodex = path.join(fakeHome, ".codex");
+    fs.mkdirSync(fakeCodex, { recursive: true });
+    // No auth.json in fake HOME
+
+    expect(() =>
+      persistAgentSandboxAuth(fakeHome, { files: [path.join(fakeCodex, "auth.json")] }),
+    ).not.toThrow();
+
+    // Real auth.json is unchanged
+    expect(fs.readFileSync(path.join(realCodex, "auth.json"), "utf8")).toBe(
+      JSON.stringify({ refresh_token: "test-fixture-real" }),
+    );
   });
 });
 
