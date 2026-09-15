@@ -33,6 +33,58 @@
 import net from "node:net";
 import path from "node:path";
 
+/** Issue #1230 — opencode has no Stop-analogue field carrying the agent's
+ * own final turn text the way Claude Code/codex's Stop hook does, so this
+ * reconstructs one from opencode's own `message.updated`/`message.part.
+ * updated` event stream (confirmed live against installed opencode 1.18.31
+ * via a scratch OPENCODE_CONFIG_DIR + `opencode run`): a `message.updated`
+ * event with `info.role === "assistant"` announces a new assistant message
+ * BEFORE any of its `message.part.updated` text arrives, so tracking "the
+ * current assistant messageID" and resetting per-part text only when that
+ * ID changes stays correctly scoped to one turn — including discarding the
+ * PRECEDING `message.part.updated` for the user's own echoed prompt, whose
+ * `part.messageID` never matches an assistant message ID. Parts are kept in
+ * a Map keyed by `part.id` (not simply overwritten as one string) because
+ * opencode replaces a part's text in place as it streams (observed: "" then
+ * the full string, not incremental appends) but a turn can still produce
+ * more than one distinct text part; joining every part id ever seen for the
+ * current assistant message, in first-seen order, covers both.
+ *
+ * Kept as its own tracker object (not the module-level mutable state
+ * `mapOpenCodeEvent` below deliberately avoids) so `mapOpenCodeEvent` itself
+ * stays pure and single-call testable — `MullionHookEmitter` owns one
+ * instance per opencode session process (see its `event` handler below). */
+function createAssistantTextTracker() {
+  let assistantMessageId = null;
+  let parts = new Map();
+  return {
+    observe(event) {
+      if (event?.type === "message.updated" && event.properties?.info?.role === "assistant") {
+        const id = event.properties.info.id;
+        if (typeof id === "string" && id !== assistantMessageId) {
+          assistantMessageId = id;
+          parts = new Map();
+        }
+      } else if (
+        event?.type === "message.part.updated" &&
+        event.properties?.part?.type === "text"
+      ) {
+        const part = event.properties.part;
+        if (
+          assistantMessageId !== null &&
+          part.messageID === assistantMessageId &&
+          typeof part.text === "string"
+        ) {
+          parts.set(part.id, part.text);
+        }
+      }
+    },
+    current() {
+      return parts.size > 0 ? [...parts.values()].join("\n\n") : null;
+    },
+  };
+}
+
 /** Maps one OpenCode plugin `event` payload to an array of hook-protocol
  * messages, or `null` if this event type isn't forwarded (yet, or ever).
  * Most events produce a single-element array; branch/worktree events may
@@ -43,8 +95,13 @@ import path from "node:path";
  *
  * `cwd` — when provided, the opencode process's own cwd (process.cwd()),
  * included as a cwd_changed message alongside branch events so PtyManager's
- * liveCwd reflects the directory opencode is actually running from. */
-function mapOpenCodeEvent(event, cwd) {
+ * liveCwd reflects the directory opencode is actually running from.
+ *
+ * `lastAssistantMessage` — issue #1230, the current turn's assistant text
+ * reconstructed by createAssistantTextTracker above (or null); attached to
+ * the "done" progress messages below, the same field name Claude Code's/
+ * codex's Stop hook already carries it under. */
+function mapOpenCodeEvent(event, cwd, lastAssistantMessage = null) {
   if (event?.type === "session.idle") {
     // Issue #271 follow-up — session.idle's own payload already carries
     // opencode's internal session id (properties.sessionID) for free, so
@@ -54,7 +111,9 @@ function mapOpenCodeEvent(event, cwd) {
     // stored value each time. Lets a later promote export/import this
     // session's real conversation history into the new worktree session
     // instead of only a seed summary (see opencode-session-transfer.ts).
-    const messages = [{ kind: "progress", phase: "done" }];
+    const progress = { kind: "progress", phase: "done" };
+    if (lastAssistantMessage !== null) progress.lastAssistantMessage = lastAssistantMessage;
+    const messages = [progress];
     const sessionId = event.properties?.sessionID;
     if (typeof sessionId === "string" && sessionId.length > 0) {
       messages.push({ kind: "agent_session", sessionId });
@@ -251,7 +310,9 @@ function mapOpenCodeEvent(event, cwd) {
       return [{ kind: "turn_start" }, { kind: "progress", phase: "generating" }];
     }
     if (status?.type === "idle") {
-      return [{ kind: "progress", phase: "done" }];
+      const progress = { kind: "progress", phase: "done" };
+      if (lastAssistantMessage !== null) progress.lastAssistantMessage = lastAssistantMessage;
+      return [progress];
     }
     return null;
   }
@@ -634,6 +695,10 @@ function promoteRequest(summary, suggestedBaseRef) {
  * via a second top-level `export`. */
 export const MullionHookEmitter = async () => {
   const sender = createSender();
+  // Issue #1230 — one tracker per opencode session process (this factory
+  // runs once per plugin load), observing every event before mapOpenCodeEvent
+  // sees it so a "done" message can attach the turn's reconstructed text.
+  const assistantText = createAssistantTextTracker();
 
   // Lazy zod import for tool schema. Zod is available in OpenCode's own
   // runtime (it's a dependency of @opencode-ai/plugin) but not guaranteed
@@ -673,7 +738,8 @@ export const MullionHookEmitter = async () => {
   return {
     tool: promoteTool ? { promote_to_worktree: promoteTool } : {},
     event: async ({ event }) => {
-      const messages = mapOpenCodeEvent(event, process.cwd());
+      assistantText.observe(event);
+      const messages = mapOpenCodeEvent(event, process.cwd(), assistantText.current());
       if (messages) {
         for (const msg of messages) sender.send(msg);
       }
@@ -696,6 +762,7 @@ export const MullionHookEmitter = async () => {
 };
 
 MullionHookEmitter.mapOpenCodeEvent = mapOpenCodeEvent;
+MullionHookEmitter.createAssistantTextTracker = createAssistantTextTracker;
 MullionHookEmitter.promoteRequest = promoteRequest;
 MullionHookEmitter.parseGitWorktreeAdd = parseWorktreeAddCommand;
 MullionHookEmitter.parseGitCheckout = parseGitCheckoutCommand;

@@ -381,6 +381,60 @@ describe("eventDescriptions (Phase 2, issue #176)", () => {
         attention: false,
       });
     });
+
+    // Issue #1230 — lastAssistantMessage is the lowest-priority fallback:
+    // detail and the backgroundTasks count are both more specific,
+    // deliberately-set context for a particular phase.
+    it("appends lastAssistantMessage when neither detail nor an outstanding backgroundTasks count is present", () => {
+      const event = makeEvent({
+        kind: "status_change",
+        payload: { phase: "done", lastAssistantMessage: "All done here." },
+      });
+      expect(describeEvent(event)).toEqual({
+        text: "Agent: done: All done here.",
+        attention: false,
+      });
+    });
+
+    it("prefers detail over lastAssistantMessage when both are present", () => {
+      const event = makeEvent({
+        kind: "status_change",
+        payload: {
+          phase: "generating",
+          detail: "retry attempt 1: rate limited",
+          lastAssistantMessage: "ignored",
+        },
+      });
+      expect(describeEvent(event)).toEqual({
+        text: "Agent: generating: retry attempt 1: rate limited",
+        attention: false,
+      });
+    });
+
+    it("prefers an outstanding backgroundTasks count over lastAssistantMessage", () => {
+      const event = makeEvent({
+        kind: "status_change",
+        payload: {
+          phase: "done",
+          lastAssistantMessage: "ignored",
+          backgroundTasks: [
+            { id: "t1", type: "subagent", status: "running", description: "Explore agent" },
+          ],
+        },
+      });
+      expect(describeEvent(event)).toEqual({
+        text: "Agent: done: 1 background task",
+        attention: false,
+      });
+    });
+
+    it("ignores an empty-string lastAssistantMessage, same as an empty detail", () => {
+      const event = makeEvent({
+        kind: "status_change",
+        payload: { phase: "done", lastAssistantMessage: "" },
+      });
+      expect(describeEvent(event)).toEqual({ text: "Agent: done", attention: false });
+    });
   });
 
   describe("describeEvent — status_change subagent (Phase 5, Track A)", () => {
