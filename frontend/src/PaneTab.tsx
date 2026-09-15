@@ -294,7 +294,10 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
       dot = <CloseIcon size={10} className="pane-tab-dot-exited" style={{ color: "var(--r)" }} />;
     } else {
       const presentation = STATUS_PRESENTATION[session.sessionStatus];
-      const label = formatStatusLabel(presentation, session.sessionStatusDetail);
+      // Issue #1227 — "compact": no `title` fallback exists on this badge
+      // (see formatStatusLabel's own comment), so a long gatePrompt/
+      // promoteSummary detail must never land here.
+      const label = formatStatusLabel(presentation, session.sessionStatusDetail, "compact");
       if (session.sessionStatus === "exited") {
         dot = <CloseIcon size={10} className="pane-tab-dot-exited" />;
         badge = <span className="pane-tab-badge exited">{label}</span>;

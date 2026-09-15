@@ -672,7 +672,12 @@ function FeedHeader({ item, session }: { item: FeedHeaderItem; session: Session 
               <span className={`session-dot-${presentation.tone}`} />
             )}
             <span className={`session-status-label ${presentation.tone}`}>
-              {formatStatusLabel(presentation, session?.sessionStatusDetail ?? null)}
+              {/* Issue #1227 — "compact" explicit, not relying on
+                  showDetail being false for every awaiting_* status: once
+                  #1227 flips showDetail to true for four of them (with up to
+                  a 200-char gatePrompt/promoteSummary), this 380x380px
+                  popover has no room for the verbose form. */}
+              {formatStatusLabel(presentation, session?.sessionStatusDetail ?? null, "compact")}
             </span>
           </span>
         )}

@@ -145,6 +145,30 @@ describe("formatStatusLabel", () => {
       "Subagent: 2 running",
     );
   });
+
+  // Issue #1227 — awaiting_review_gate/awaiting_promote/awaiting_question/
+  // awaiting_elicitation now have a real detail source and showDetail: true.
+  it.each([
+    "awaiting_review_gate",
+    "awaiting_promote",
+    "awaiting_question",
+    "awaiting_elicitation",
+  ] as const)("%s appends its detail in verbose mode (the default)", (status) => {
+    expect(formatStatusLabel(STATUS_PRESENTATION[status], "some detail")).toBe(
+      `${STATUS_PRESENTATION[status].label}: some detail`,
+    );
+  });
+
+  it("mode: compact omits the detail even when showDetail is true", () => {
+    expect(formatStatusLabel(STATUS_PRESENTATION.exited, "clear", "compact")).toBe("exited");
+    expect(
+      formatStatusLabel(STATUS_PRESENTATION.awaiting_review_gate, "Approve this?", "compact"),
+    ).toBe("Needs review");
+  });
+
+  it("mode: verbose (explicit) behaves the same as the default", () => {
+    expect(formatStatusLabel(STATUS_PRESENTATION.exited, "clear", "verbose")).toBe("exited: clear");
+  });
 });
 
 describe("isStatusReachable", () => {

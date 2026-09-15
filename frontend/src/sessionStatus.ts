@@ -87,32 +87,38 @@ export const STATUS_PRESENTATION: Record<SessionStatus, StatusPresentation> = {
   // Same tone as awaiting_permission — all five are "the agent is blocked
   // pending a human decision" (severity: blocked); the label is what tells
   // them apart, not the color.
+  // Issue #1227 — these four now have a real detail source on the backend
+  // (session-status.ts's `deriveSessionStatus`: gatePrompt/promoteSummary/
+  // questionHeader/elicitationServer), so showDetail flips to true. A
+  // surface without room for it (PaneTab.tsx's tab badge) opts into
+  // formatStatusLabel's "compact" mode below instead of relying on
+  // showDetail: false the way it used to.
   awaiting_review_gate: {
     label: "Needs review",
     tone: "permission",
     colorToken: "--p",
-    showDetail: false,
+    showDetail: true,
     defaultNotify: true,
   },
   awaiting_promote: {
     label: "Promote pending",
     tone: "permission",
     colorToken: "--p",
-    showDetail: false,
+    showDetail: true,
     defaultNotify: true,
   },
   awaiting_question: {
     label: "Needs answer",
     tone: "permission",
     colorToken: "--p",
-    showDetail: false,
+    showDetail: true,
     defaultNotify: true,
   },
   awaiting_elicitation: {
     label: "Needs input (MCP)",
     tone: "permission",
     colorToken: "--p",
-    showDetail: false,
+    showDetail: true,
     defaultNotify: true,
   },
   finished: {
@@ -183,9 +189,25 @@ export const STATUS_PRESENTATION: Record<SessionStatus, StatusPresentation> = {
  * naturally there (see StatusPresentation.showDetail's doc comment), else
  * just the bare label. The one bit of per-session (not per-status)
  * formatting logic — kept here, next to the table it reads, rather than
- * duplicated in each of Sidebar.tsx/PaneTab.tsx/kanban card rendering. */
-export function formatStatusLabel(presentation: StatusPresentation, detail: string | null): string {
-  if (presentation.showDetail && detail) {
+ * duplicated in each of Sidebar.tsx/PaneTab.tsx/kanban card rendering.
+ *
+ * Issue #1227 — `mode` is the compact/verbose split: some detail sources
+ * (`awaiting_review_gate`'s gatePrompt, `awaiting_promote`'s promoteSummary)
+ * can now run up to 200 chars (session-status.ts's LONG_DETAIL_MAX_CHARS),
+ * which reads fine in a surface with room — Sidebar.tsx's status label,
+ * TaskDetail.tsx's full-width attention banner — but would overflow
+ * PaneTab.tsx's 9.5px uppercase tab badge, which has no `title` attribute to
+ * fall back on (unlike Sidebar's `.session-status-label`, which truncates
+ * safely with a tooltip). `mode` defaults to "verbose" so the pre-existing
+ * call sites (Sidebar.tsx, TaskSessionSlot.tsx, TaskDetail.tsx) keep their
+ * unchanged behavior without editing every call; a surface that can't afford
+ * a long detail passes "compact" explicitly instead. */
+export function formatStatusLabel(
+  presentation: StatusPresentation,
+  detail: string | null,
+  mode: "compact" | "verbose" = "verbose",
+): string {
+  if (mode === "verbose" && presentation.showDetail && detail) {
     return `${presentation.label}: ${detail}`;
   }
   return presentation.label;
