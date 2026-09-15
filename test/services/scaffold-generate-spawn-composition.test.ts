@@ -146,4 +146,44 @@ describe("defaultSpawnGenerationTurn — sandbox composition (issue #1081 covera
     expect(execFileMock).toHaveBeenCalledTimes(1);
     expect(execFileMock.mock.calls[0][0]).toBe("bwrap");
   });
+
+  // Issue #1131 — the call-site contract: defaultSpawnGenerationTurn must
+  // spread both dirs and files from agentSandboxWritablePaths into the
+  // flat string[] that wrapWithSandbox receives, producing --bind-try
+  // entries for every listed path. With the fake HOME fix, paths are
+  // relative to a disposable HOME inside the scratch worktree, not the
+  // operator's real HOME.
+  it("spreads both dirs and files into the bwrap arg list (issue #1131)", async () => {
+    smokeProbeSucceeds = true;
+
+    await defaultSpawnGenerationTurn({
+      agentCommand: "codex",
+      cwd: scratchDir,
+      prompt: "test narrowed binds",
+      timeoutMs: 5000,
+    });
+
+    expect(execFileMock).toHaveBeenCalledTimes(2);
+    const [mainBin, mainArgs] = execFileMock.mock.calls[1];
+    expect(mainBin).toBe("bwrap");
+
+    // The fake HOME is <scratchDir>/.agent-home — defaultSpawnGenerationTurn
+    // creates it, seeds it, and passes it to wrapWithSandbox which adds
+    // --bind <fakeHome> <fakeHome> and --setenv HOME <fakeHome>.
+    const fakeHome = path.join(scratchDir, ".agent-home");
+    expect(mainArgs).toContain(fakeHome);
+    expect(mainArgs).toContain("--setenv");
+    const homeIdx = mainArgs.indexOf("HOME");
+    expect(mainArgs[homeIdx + 1]).toBe(fakeHome);
+
+    // Every path from agentSandboxWritablePaths("codex", fakeHome) must
+    // appear as a --bind-try source in the bwrap args.
+    const { agentSandboxWritablePaths } = await import("../../src/services/scaffold-generate.js");
+    const { dirs, files } = agentSandboxWritablePaths("codex", fakeHome);
+    const allPaths = [...dirs, ...files];
+    const bindTrySources = mainArgs.filter((_, i) => mainArgs[i - 1] === "--bind-try");
+    for (const p of allPaths) {
+      expect(bindTrySources).toContain(p);
+    }
+  });
 });

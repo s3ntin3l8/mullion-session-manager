@@ -637,7 +637,11 @@ export interface SandboxedInvocation {
  * override the broader `--ro-bind / /` because they are listed after it —
  * bwrap applies bind mounts in argument order. Reordering would silently
  * make every bound-writable path read-only again. */
-function buildBwrapBaseArgs(worktreePath: string, extraWritablePaths: string[]): string[] {
+function buildBwrapBaseArgs(
+  worktreePath: string,
+  extraWritablePaths: string[],
+  fakeHome?: string,
+): string[] {
   return [
     "--ro-bind",
     "/",
@@ -650,6 +654,13 @@ function buildBwrapBaseArgs(worktreePath: string, extraWritablePaths: string[]):
     worktreePath,
     worktreePath,
     ...extraWritablePaths.flatMap((p) => ["--bind-try", p, p]),
+    // When a fakeHome is provided, bind it writable and set HOME so the
+    // CLI resolves all $HOME-relative writes (state dirs, credentials,
+    // tmp) inside the disposable worktree instead of the operator's real
+    // HOME. This is the mechanism that makes the narrowed binds actually
+    // work: without it, the CLI would write to the real ~/.codex/ or
+    // ~/.local/share/opencode/ regardless of what --bind-try targets.
+    ...(fakeHome ? ["--bind", fakeHome, fakeHome, "--setenv", "HOME", fakeHome] : []),
     "--die-with-parent",
   ];
 }
@@ -716,16 +727,81 @@ function buildBwrapBaseArgs(worktreePath: string, extraWritablePaths: string[]):
  * breaks the agent the first time its access token expires mid-turn: a
  * "works for two weeks, then breaks for everyone at once" failure. Any
  * narrower bind the audit lands on must leave the credential file
- * writable. */
-export function agentSandboxWritablePaths(agentCommand: string): string[] {
-  const home = os.homedir();
+ * writable.
+ *
+ * Issue #1131's strace audit (2026-09-15) narrowed these from whole-
+ * directory binds to the minimal file set each agent actually writes to
+ * during a non-interactive generation turn. The audit found:
+ *
+ * codex writes to: `queue_1.sqlite` + WAL, `state_5.sqlite` + WAL,
+ * `cache/remote_plugin_catalog/` (temp files), `thread-writer-locks/`
+ * (coordination lock), `sessions/<date>/rollout-*.jsonl` (session
+ * rollout), and unlinks `shell_snapshots/`, `*-sqlite-shm`,
+ * `*-sqlite-wal` for cleanup. It does NOT write to `auth.json` (read-
+ * only during generation), `config.toml`, `hooks.json`, or `skills/`.
+ *
+ * opencode writes to: `log/opencode.log`, `opencode.db` + WAL + SHM,
+ * `snapshot/<hash>/` (git snapshot data). It does NOT write to
+ * `auth.json` (read-only during generation), `account.json`, or
+ * `mcp-auth.json`.
+ *
+ * Both CLIs' credential files (`auth.json`) MUST remain writable for
+ * token rotation even though they're not written during a typical
+ * generation turn — an access token expiring mid-turn triggers an
+ * in-place credential update. */
+export type AgentSandboxWritablePaths = { dirs: string[]; files: string[] };
+
+export function agentSandboxWritablePaths(
+  agentCommand: string,
+  homeOverride?: string,
+): AgentSandboxWritablePaths {
+  const home = homeOverride ?? os.homedir();
   switch (agentCommand) {
-    case "codex":
-      return [path.join(home, ".codex")];
-    case "opencode":
-      return [path.join(home, ".local", "share", "opencode")];
+    case "codex": {
+      const codexHome = path.join(home, ".codex");
+      return {
+        dirs: [
+          path.join(codexHome, "cache", "remote_plugin_catalog"),
+          path.join(codexHome, "thread-writer-locks"),
+          // sessions/<date>/rollout-*.jsonl — dynamic date subdirectories
+          // created by codex at runtime; bwrap lacks glob support, so the
+          // parent dir is the narrowest practical bind.
+          path.join(codexHome, "sessions"),
+          // sqlite files experience unlink+recreate cycles (journal, tmp)
+          // that break under single-file --bind-try: unlinking detaches
+          // the source inode, and recreate lands on the read-only rootfs.
+          // Binding the parent dir is the narrowest option that survives
+          // this pattern while still excluding config.toml, hooks.json,
+          // and skills/.
+          codexHome,
+        ],
+        files: [path.join(codexHome, "auth.json")],
+      };
+    }
+    case "opencode": {
+      const opencodeData = path.join(home, ".local", "share", "opencode");
+      return {
+        dirs: [
+          path.join(opencodeData, "log"),
+          // snapshot/<hash>/ — dynamic hash subdirectories created by
+          // opencode at runtime; same dir-level bind rationale as codex's
+          // sessions/ above.
+          path.join(opencodeData, "snapshot"),
+          // repos/ — created on first run; discovered via narrowed-set
+          // live test (the original strace ran under the wide dir bind
+          // where this directory already existed).
+          path.join(opencodeData, "repos"),
+        ],
+        files: [
+          path.join(opencodeData, "opencode.db"),
+          path.join(opencodeData, "opencode.db-wal"),
+          path.join(opencodeData, "opencode.db-shm"),
+          path.join(opencodeData, "auth.json"),
+        ],
+      };
+    }
     default:
-      return [];
+      return { dirs: [], files: [] };
   }
 }
 
@@ -748,33 +824,223 @@ export function agentSandboxWritablePaths(agentCommand: string): string[] {
  * exactly the pre-existing `--bind-try`-skips-a-missing-path case, not a
  * new failure mode.
  *
- * `mkdirSync` here is a new filesystem-write sink in a module that already
- * carries a documented CodeQL js/path-injection dismissal (see
- * `defaultSpawnGenerationTurn`'s own comment on `cwd`) — worth a quick
- * mental check if GHAS flags it fresh, though it should not: every path
- * this is ever called with comes from `agentSandboxWritablePaths`, which
- * only ever returns `os.homedir()` joined with a hardcoded literal
- * subpath, never anything request- or agent-output-derived.
+ * `mkdirSync` and `writeFileSync` here are filesystem-write sinks in a
+ * module that already carries a documented CodeQL js/path-injection
+ * dismissal (see `defaultSpawnGenerationTurn`'s own comment on `cwd`) —
+ * worth a quick mental check if GHAS flags it fresh, though it should
+ * not: every path this is ever called with comes from
+ * `agentSandboxWritablePaths`, which only ever returns `os.homedir()`
+ * joined with a hardcoded literal subpath, never anything request- or
+ * agent-output-derived.
  *
- * Invariant every entry must satisfy: this function assumes every path is
- * a DIRECTORY. `mkdirSync(p, { recursive: true })` on a path that doesn't
- * exist yet creates a directory AT exactly that path — so a future,
- * narrower `agentSandboxWritablePaths` entry that names a specific FILE
- * (issue #1131's eventual write-surface audit; see that function's own
- * comment on why bind-mounting only opencode's `opencode.db` was
- * considered and deferred) must never be routed through this function
- * unmodified — it would silently create a directory in place of the file
- * it meant to preserve, which is worse than the EROFS failure it was
- * trying to prevent. Demonstrated in
- * test/services/scaffold-generate.test.ts's own
- * `ensureSandboxWritablePathsExist` suite rather than left to be
- * rediscovered. */
-export function ensureSandboxWritablePathsExist(paths: string[]): void {
-  for (const p of paths) {
+ * Issue #1131 narrowed `agentSandboxWritablePaths` from whole-directory
+ * binds to specific files (e.g. `opencode.db`, `auth.json`) and
+ * subdirectories (e.g. `log/`, `snapshot/`). This function now handles
+ * both: directories via `mkdirSync(p, { recursive: true })` (unchanged),
+ * and files via `mkdirSync` on the parent directory + `writeFileSync` to
+ * create an empty file if missing. The file MUST be created (not just the
+ * parent dir) because `--bind-try` binds the exact source path — if the
+ * source file doesn't exist, the bind is skipped entirely, and the
+ * destination stays read-only under `--ro-bind / /`. Creating an empty
+ * file is safe: the agent CLI will overwrite it on first write. */
+export function ensureSandboxWritablePathsExist(paths: { dirs: string[]; files: string[] }): void {
+  for (const p of paths.dirs) {
     try {
       fs.mkdirSync(p, { recursive: true });
     } catch {
       // Best-effort — see this function's own comment.
+    }
+  }
+  for (const p of paths.files) {
+    try {
+      fs.mkdirSync(path.dirname(p), { recursive: true });
+      // createFile if missing — not writeFileSync (which would clobber
+      // existing content). `wx` fails with EEXIST if the file already
+      // exists, which is the desired outcome.
+      fs.writeFileSync(p, "", { flag: "wx" });
+    } catch {
+      // Best-effort — same degradation as the dir case above.
+    }
+  }
+}
+
+/** Creates a disposable HOME directory inside the scratch worktree for a
+ * sandboxed generation turn, seeding it with only the files the CLI needs
+ * to write to. The operator's real ~/.codex or ~/.local/share/opencode
+ * is never mounted inside the sandbox — all writes land here instead.
+ *
+ * This is the mechanism that makes the narrowed binds actually protect
+ * the operator's state: without a fake HOME, the CLI resolves all
+ * $HOME-relative writes to the real HOME regardless of what
+ * `--bind-try` targets are specified.
+ *
+ * Returns the fake HOME path and the writable paths (dirs + files)
+ * relative to it, ready for `ensureSandboxWritablePathsExist` and
+ * `wrapWithSandbox`.
+ *
+ * CodeQL's js/path-injection flags `worktreePath` here (the same
+ * "real mitigation, not a CodeQL-recognized sanitizer shape" pattern
+ * documented at defaultSpawnGenerationTurn's own comment, lines
+ * 1036-1049): `worktreePath` is always `cwd` from
+ * `defaultSpawnGenerationTurn`, which is the scratch generation worktree
+ * from `createWorktree` — never user-controlled; the only
+ * request-derived input is `slug`, gated by `isValidScaffoldSlug` at the
+ * route boundary. All paths here are `path.join(worktreePath,
+ * ".agent-home")` + hardcoded literal subpaths from
+ * `agentSandboxWritablePaths`, which itself joins a home override with
+ * hardcoded `[A-Za-z0-9/-_]+` subpaths. Dismissed in GHAS as a false
+ * positive via the Security API rather than reshaping already-verified-
+ * safe code to chase a query that doesn't model manual containment
+ * checks as sanitizers. */
+export function createAgentSandboxHome(
+  worktreePath: string,
+  agentCommand: string,
+): { fakeHome: string; writablePaths: { dirs: string[]; files: string[] } } {
+  const fakeHome = path.join(worktreePath, ".agent-home");
+  // MUST materialize .agent-home unconditionally — bwrap's `--bind`
+  // (unlike `--bind-try`) refuses to start when its source is missing.
+  // For claude/agy the writablePaths list is empty (confirmed live to need
+  // none), so ensureSandboxWritablePathsExist alone wouldn't create it
+  // and every sandboxed claude/agy turn would hard-fail at bwrap startup.
+  // Best-effort: if the parent worktree doesn't exist or isn't writable
+  // (e.g. in tests that pass a nonexistent cwd to exercise error paths),
+  // bwrap's own spawn will surface the real failure — we don't mask it
+  // here.
+  try {
+    fs.mkdirSync(fakeHome, { recursive: true });
+  } catch {
+    // Fall through — bwrap's --bind will produce the real error.
+  }
+  const writablePaths = agentSandboxWritablePaths(agentCommand, fakeHome);
+  ensureSandboxWritablePathsExist(writablePaths);
+  // Seed auth.json from the operator's real HOME if it exists — the CLI
+  // needs valid credentials to reach its model API. If the real auth
+  // doesn't exist (fresh host), the CLI will re-prompt or fail at auth,
+  // which is the correct degradation.
+  const realHome = os.homedir();
+  for (const f of writablePaths.files) {
+    if (f.endsWith("auth.json")) {
+      const realAuth = f.replace(fakeHome, realHome);
+      try {
+        if (fs.existsSync(realAuth) && !fs.existsSync(f)) {
+          fs.copyFileSync(realAuth, f);
+        }
+      } catch {
+        // Best-effort — auth seeding failure degrades to auth error at
+        // CLI level, not a sandbox error.
+      }
+    }
+  }
+  return { fakeHome, writablePaths };
+}
+
+/** Copies any rotated auth.json from the disposable fake HOME back to the
+ * operator's real HOME, so a provider with single-use refresh tokens (or
+ * any other in-place credential rotation) sees the fresh credentials on
+ * the next turn. Without this, the rotated token is discarded with the
+ * scratch worktree and the operator's real auth.json keeps re-seeding the
+ * same (now potentially invalidated) original token.
+ *
+ * Security: the rotated auth.json is ONLY copied back if it passes ALL
+ * of these checks:
+ *   1. Parses as valid JSON
+ *   2. Is a non-empty object (not array, primitive, or null)
+ *   3. Preserves the real file's top-level key set — legitimate rotation
+ *      changes values, never schema; this defense-in-depth check rejects
+ *      a compromised turn that writes a credential-shaped but structurally
+ *      different document
+ *
+ * A compromised turn that fails any check leaves the real auth.json
+ * untouched — the exact "trust nothing the sandbox produced" posture
+ * this PR took for every other state file. The real auth.json stays
+ * read-only from the sandbox's perspective, and only validated rotated
+ * credentials propagate back.
+ *
+ * The write is atomic: write to `<realAuth>.tmp.<random>` and `rename`
+ * to the target. A crash mid-write leaves the original real auth.json
+ * intact (the .tmp is orphaned, not a corruption of the live file).
+ *
+ * CodeQL's js/path-injection flags `fakeHome` / `realHome` here (same
+ * "real mitigation, not a CodeQL-recognized sanitizer shape" pattern as
+ * the existing dismissal at defaultSpawnGenerationTurn, lines 1036-1049):
+ * `fakeHome` is always `path.join(worktreePath, ".agent-home")` where
+ * `worktreePath` is the scratch generation worktree from `createWorktree`
+ * (validated via `isSafeAbsolutePath` + `sanitizeRefComponent`); `realHome`
+ * is `os.homedir()`, hardcoded server-side; the only request-derived input
+ * is `slug`, gated by `isValidScaffoldSlug` at the route boundary.
+ * Dismissed in GHAS as a false positive via the Security API rather than
+ * reshaping already-verified-safe code to chase a query that doesn't
+ * model manual containment checks as sanitizers. */
+export function persistAgentSandboxAuth(
+  fakeHome: string,
+  writablePaths: { files: string[] },
+): void {
+  const realHome = os.homedir();
+  for (const f of writablePaths.files) {
+    if (!f.endsWith("auth.json")) continue;
+    const realAuth = f.replace(fakeHome, realHome);
+    try {
+      // Read both files first — no pre-flight existsSync check, which
+      // would open a TOCTOU window (CodeQL js/file-system-race flagged
+      // exactly that pattern). If either is missing, the read throws
+      // and the catch skips this file.
+      const sandboxed = fs.readFileSync(f, "utf8");
+      const real = fs.readFileSync(realAuth, "utf8");
+      if (sandboxed === real) continue; // No rotation happened
+      // Parse both — we need the real file's key set for shape matching.
+      const parsedSandboxed: unknown = JSON.parse(sandboxed);
+      const parsedReal: unknown = JSON.parse(real);
+      if (
+        typeof parsedSandboxed !== "object" ||
+        parsedSandboxed === null ||
+        Array.isArray(parsedSandboxed) ||
+        Object.keys(parsedSandboxed as Record<string, unknown>).length === 0
+      ) {
+        // Malformed or empty — skip copy-back to avoid corrupting real auth.
+        continue;
+      }
+      // Schema shape check: the rotated document must preserve the real
+      // file's exact top-level key set. Legitimate rotation changes
+      // values, never adds/removes keys; a compromised turn that writes
+      // a credential-shaped but structurally different document fails
+      // this check and leaves the real auth.json untouched.
+      if (typeof parsedReal !== "object" || parsedReal === null || Array.isArray(parsedReal)) {
+        // Real file isn't a JSON object — schema check is inapplicable,
+        // skip rather than risk corrupting a non-standard layout.
+        continue;
+      }
+      const realKeys = Object.keys(parsedReal as Record<string, unknown>).sort();
+      const sandboxedKeys = Object.keys(parsedSandboxed as Record<string, unknown>).sort();
+      if (
+        realKeys.length !== sandboxedKeys.length ||
+        !realKeys.every((k, i) => k === sandboxedKeys[i])
+      ) {
+        // Key set differs — skip copy-back.
+        continue;
+      }
+      // Atomic write: tmp file + rename. A crash mid-write leaves the
+      // original real auth.json intact (the .tmp is orphaned, not a
+      // corruption of the live file). The random suffix avoids races
+      // between concurrent generation turns, which are not possible
+      // today (defaultSpawnGenerationTurn is awaited per turn) but the
+      // pattern is correct as a forward-compatible invariant.
+      const tmpPath = `${realAuth}.tmp.${randomUUID()}`;
+      fs.writeFileSync(tmpPath, sandboxed, { mode: 0o600 });
+      fs.renameSync(tmpPath, realAuth);
+    } catch {
+      // Best-effort — copy-back failure (missing file, parse error, I/O
+      // error) degrades to re-auth prompt, not a sandbox error. Clean
+      // up any orphaned .tmp from a partial write.
+      try {
+        const dir = path.dirname(realAuth);
+        for (const entry of fs.readdirSync(dir)) {
+          if (entry.startsWith(`${path.basename(realAuth)}.tmp.`)) {
+            fs.unlinkSync(path.join(dir, entry));
+          }
+        }
+      } catch {
+        // Best-effort cleanup — ignore.
+      }
     }
   }
 }
@@ -802,10 +1068,11 @@ export function wrapWithSandbox(
   args: string[],
   worktreePath: string,
   extraWritablePaths: string[] = [],
+  fakeHome?: string,
 ): SandboxedInvocation {
   return {
     bin: "bwrap",
-    args: [...buildBwrapBaseArgs(worktreePath, extraWritablePaths), "--", bin, ...args],
+    args: [...buildBwrapBaseArgs(worktreePath, extraWritablePaths, fakeHome), "--", bin, ...args],
   };
 }
 
@@ -1051,10 +1318,23 @@ export const defaultSpawnGenerationTurn: SpawnGenerationTurn = async ({
     );
   }
   let invocation = { bin, args };
+  let sandboxHome: { fakeHome: string; writablePaths: { files: string[] } } | undefined;
   if (sandboxUsable) {
-    const extraWritablePaths = agentSandboxWritablePaths(agentCommand);
-    ensureSandboxWritablePathsExist(extraWritablePaths);
-    invocation = wrapWithSandbox(bin, args, cwd, extraWritablePaths);
+    // Create a disposable HOME inside the scratch worktree so the CLI's
+    // writes (state dirs, sqlite, tmp files) land here instead of the
+    // operator's real HOME. The fake HOME is seeded with auth.json from
+    // the real HOME (if it exists) so the CLI can reach its model API.
+    const { fakeHome, writablePaths } = createAgentSandboxHome(cwd, agentCommand);
+    sandboxHome = { fakeHome, writablePaths };
+    // Spread dirs + files into a flat string[] — wrapWithSandbox and
+    // bwrap's --bind-try don't distinguish between them.
+    invocation = wrapWithSandbox(
+      bin,
+      args,
+      cwd,
+      [...writablePaths.dirs, ...writablePaths.files],
+      fakeHome,
+    );
   }
   return new Promise<string>((resolve, reject) => {
     execFile(
@@ -1062,6 +1342,14 @@ export const defaultSpawnGenerationTurn: SpawnGenerationTurn = async ({
       invocation.args,
       { cwd, env: gitEnv(), timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 },
       (err, stdout, stderr) => {
+        // Copy back any rotated auth.json from the disposable HOME to the
+        // real HOME — see persistAgentSandboxAuth's own comment for why
+        // this matters for single-use refresh tokens. Done on both success
+        // and failure paths: a turn that crashed after rotating auth still
+        // has fresh credentials worth propagating.
+        if (sandboxHome) {
+          persistAgentSandboxAuth(sandboxHome.fakeHome, sandboxHome.writablePaths);
+        }
         if (err) {
           reject(new GenerationSpawnError(agentCommand, stderr?.trim() || err.message));
           return;

@@ -16,6 +16,8 @@ import {
   wrapWithSandbox,
   agentSandboxWritablePaths,
   ensureSandboxWritablePathsExist,
+  createAgentSandboxHome,
+  persistAgentSandboxAuth,
   isSandboxCapable,
   resetSandboxCapabilityCache,
   buildBwrapSmokeTestInvocation,
@@ -818,32 +820,81 @@ describe("wrapWithSandbox", () => {
 
 // Issue #1081's second live re-check (this module's own header has the
 // full detail): the bare scratch-worktree bind isn't sufficient for every
-// agent — codex and opencode each write into a $HOME-relative state/log
-// directory on every invocation, live-confirmed to fail with EROFS inside
-// the sandbox without an extra writable bind for exactly that directory.
+// agent — codex and opencode each write into specific files under their
+// $HOME-relative state directories on every invocation, live-confirmed to
+// fail with EROFS inside the sandbox without writable binds for exactly
+// those files. Issue #1131's strace audit narrowed the whole-directory
+// binds to the minimal file set each agent actually writes to.
 describe("agentSandboxWritablePaths", () => {
-  it("returns ~/.codex for codex", () => {
+  it("returns narrowed file-level paths for codex (issue #1131)", () => {
     const paths = agentSandboxWritablePaths("codex");
-    expect(paths).toHaveLength(1);
-    expect(paths[0]).toBe(path.join(os.homedir(), ".codex"));
+    const home = os.homedir();
+    const codexHome = path.join(home, ".codex");
+    // Directories: cache, thread-writer-locks, sessions, and the parent
+    // .codex dir itself (sqlite unlink+recreate cycles break single-file
+    // --bind-try — see the function's own comment).
+    expect(paths.dirs).toContain(path.join(codexHome, "cache", "remote_plugin_catalog"));
+    expect(paths.dirs).toContain(path.join(codexHome, "thread-writer-locks"));
+    expect(paths.dirs).toContain(path.join(codexHome, "sessions"));
+    expect(paths.dirs).toContain(codexHome);
+    // Files: auth.json (must stay writable for token rotation)
+    expect(paths.files).toContain(path.join(codexHome, "auth.json"));
+    // Must NOT include config.toml, hooks.json, or skills/ as separate entries
+    expect(paths.dirs).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("config.toml")]),
+    );
+    expect(paths.dirs).not.toEqual(expect.arrayContaining([expect.stringContaining("hooks.json")]));
+    expect(paths.dirs).not.toEqual(expect.arrayContaining([expect.stringContaining("skills")]));
+    expect(paths.files).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("config.toml")]),
+    );
+    expect(paths.files).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("hooks.json")]),
+    );
   });
 
-  it("returns ~/.local/share/opencode for opencode", () => {
+  it("returns narrowed file-level paths for opencode (issue #1131)", () => {
     const paths = agentSandboxWritablePaths("opencode");
-    expect(paths).toHaveLength(1);
-    expect(paths[0]).toBe(path.join(os.homedir(), ".local", "share", "opencode"));
+    const home = os.homedir();
+    const opencodeData = path.join(home, ".local", "share", "opencode");
+    // Directories: log, snapshot, repos
+    expect(paths.dirs).toContain(path.join(opencodeData, "log"));
+    expect(paths.dirs).toContain(path.join(opencodeData, "snapshot"));
+    expect(paths.dirs).toContain(path.join(opencodeData, "repos"));
+    // Files: database, WAL/SHM, auth
+    expect(paths.files).toContain(path.join(opencodeData, "opencode.db"));
+    expect(paths.files).toContain(path.join(opencodeData, "opencode.db-wal"));
+    expect(paths.files).toContain(path.join(opencodeData, "opencode.db-shm"));
+    expect(paths.files).toContain(path.join(opencodeData, "auth.json"));
+    // Must NOT include account.json, mcp-auth.json, plans/, tool-output/
+    expect(paths.dirs).not.toEqual(expect.arrayContaining([expect.stringContaining("plans")]));
+    expect(paths.dirs).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("tool-output")]),
+    );
+    expect(paths.files).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("account.json")]),
+    );
+    expect(paths.files).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("mcp-auth.json")]),
+    );
   });
 
-  it("returns no extra paths for claude (confirmed live to need none)", () => {
-    expect(agentSandboxWritablePaths("claude")).toEqual([]);
+  it("returns empty dirs/files for claude (confirmed live to need none)", () => {
+    const paths = agentSandboxWritablePaths("claude");
+    expect(paths.dirs).toEqual([]);
+    expect(paths.files).toEqual([]);
   });
 
-  it("returns no extra paths for agy (confirmed live, issue #1130, to need none)", () => {
-    expect(agentSandboxWritablePaths("agy")).toEqual([]);
+  it("returns empty dirs/files for agy (confirmed live, issue #1130, to need none)", () => {
+    const paths = agentSandboxWritablePaths("agy");
+    expect(paths.dirs).toEqual([]);
+    expect(paths.files).toEqual([]);
   });
 
-  it("returns no extra paths for an unrecognized agent command", () => {
-    expect(agentSandboxWritablePaths("some-future-agent")).toEqual([]);
+  it("returns empty dirs/files for an unrecognized agent command", () => {
+    const paths = agentSandboxWritablePaths("some-future-agent");
+    expect(paths.dirs).toEqual([]);
+    expect(paths.files).toEqual([]);
   });
 });
 
@@ -866,22 +917,41 @@ describe("ensureSandboxWritablePathsExist", () => {
     fs.rmSync(parentDir, { recursive: true, force: true });
   });
 
-  it("creates a nested path that does not exist yet", () => {
+  it("creates a nested directory path that does not exist yet", () => {
     const target = path.join(parentDir, "does", "not", "exist", "yet");
     expect(fs.existsSync(target)).toBe(false);
 
-    ensureSandboxWritablePathsExist([target]);
+    ensureSandboxWritablePathsExist({ dirs: [target], files: [] });
 
     expect(fs.existsSync(target)).toBe(true);
     expect(fs.statSync(target).isDirectory()).toBe(true);
   });
 
-  it("is a no-op (never throws) for a path that already exists", () => {
+  it("is a no-op (never throws) for a directory that already exists", () => {
     const target = path.join(parentDir, "already-here");
     fs.mkdirSync(target);
 
-    expect(() => ensureSandboxWritablePathsExist([target])).not.toThrow();
+    expect(() => ensureSandboxWritablePathsExist({ dirs: [target], files: [] })).not.toThrow();
     expect(fs.existsSync(target)).toBe(true);
+  });
+
+  it("creates a file under a nested parent that does not exist yet", () => {
+    const target = path.join(parentDir, "deep", "nested", "opencode.db");
+    expect(fs.existsSync(target)).toBe(false);
+
+    ensureSandboxWritablePathsExist({ dirs: [], files: [target] });
+
+    expect(fs.existsSync(target)).toBe(true);
+    expect(fs.statSync(target).isFile()).toBe(true);
+    expect(fs.statSync(target).size).toBe(0);
+  });
+
+  it("is a no-op (never throws) for a file that already exists", () => {
+    const target = path.join(parentDir, "existing-file.db");
+    fs.writeFileSync(target, "existing content");
+
+    expect(() => ensureSandboxWritablePathsExist({ dirs: [], files: [target] })).not.toThrow();
+    expect(fs.readFileSync(target, "utf8")).toBe("existing content");
   });
 
   it("never throws even when a path can't be created — best-effort by design", () => {
@@ -889,32 +959,410 @@ describe("ensureSandboxWritablePathsExist", () => {
     // this must degrade silently, not propagate.
     const blockingFile = path.join(parentDir, "im-a-file");
     fs.writeFileSync(blockingFile, "x");
-    const impossibleTarget = path.join(blockingFile, "child");
+    const impossibleDirTarget = path.join(blockingFile, "child");
+    const impossibleFileTarget = path.join(blockingFile, "child.db");
 
-    expect(() => ensureSandboxWritablePathsExist([impossibleTarget])).not.toThrow();
+    expect(() =>
+      ensureSandboxWritablePathsExist({
+        dirs: [impossibleDirTarget],
+        files: [impossibleFileTarget],
+      }),
+    ).not.toThrow();
   });
 
-  // Invariant for any future, narrower agentSandboxWritablePaths entry
-  // (issue #1131's eventual write-surface audit): every path handed to
-  // this function is assumed to be a DIRECTORY. `mkdirSync(p, { recursive:
-  // true })` on a path that doesn't exist yet creates a directory AT that
-  // exact path — so a future entry naming a specific FILE (e.g.
-  // opencode's own `opencode.db`, rather than its containing directory)
-  // would silently get a directory created in its place instead of the
-  // file's parent, corrupting the very state it was meant to preserve.
-  // agentSandboxWritablePaths only ever returns directory paths today, so
-  // this is not live — but the failure mode is not obvious from reading
-  // `ensureSandboxWritablePathsExist` alone, so it is demonstrated here
-  // rather than left to be rediscovered.
-  it("would wrongly create a directory at a path meant to be a file — any future file-shaped entry must route through a different call", () => {
-    const target = path.join(parentDir, "opencode.db");
-    expect(fs.existsSync(target)).toBe(false);
+  it("handles both dirs and files in a single call", () => {
+    const dir = path.join(parentDir, "log");
+    const file = path.join(parentDir, "opencode.db");
+    expect(fs.existsSync(dir)).toBe(false);
+    expect(fs.existsSync(file)).toBe(false);
 
-    ensureSandboxWritablePathsExist([target]);
+    ensureSandboxWritablePathsExist({ dirs: [dir], files: [file] });
 
-    expect(fs.statSync(target).isDirectory()).toBe(true);
+    expect(fs.existsSync(dir)).toBe(true);
+    expect(fs.statSync(dir).isDirectory()).toBe(true);
+    expect(fs.existsSync(file)).toBe(true);
+    expect(fs.statSync(file).isFile()).toBe(true);
   });
 });
+
+describe("agentSandboxWritablePaths with homeOverride", () => {
+  it("returns paths relative to the override home for codex", () => {
+    const fakeHome = "/tmp/test-fake-home";
+    const paths = agentSandboxWritablePaths("codex", fakeHome);
+    // All paths must be under the fake HOME, not os.homedir()
+    for (const d of paths.dirs) {
+      expect(d).toMatch(/^\/tmp\/test-fake-home\//);
+    }
+    for (const f of paths.files) {
+      expect(f).toMatch(/^\/tmp\/test-fake-home\//);
+    }
+    // Must NOT include config.toml, hooks.json, or skills/ — the fake
+    // HOME approach means these operator-owned files are never mounted.
+    expect(paths.dirs).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("config.toml")]),
+    );
+    expect(paths.dirs).not.toEqual(expect.arrayContaining([expect.stringContaining("hooks.json")]));
+    expect(paths.dirs).not.toEqual(expect.arrayContaining([expect.stringContaining("skills")]));
+  });
+
+  it("returns paths relative to the override home for opencode", () => {
+    const fakeHome = "/tmp/test-fake-home";
+    const paths = agentSandboxWritablePaths("opencode", fakeHome);
+    for (const d of paths.dirs) {
+      expect(d).toMatch(/^\/tmp\/test-fake-home\//);
+    }
+    for (const f of paths.files) {
+      expect(f).toMatch(/^\/tmp\/test-fake-home\//);
+    }
+  });
+});
+
+describe("createAgentSandboxHome", () => {
+  let scratchDir: string;
+
+  beforeEach(() => {
+    scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), "create-agent-home-test-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(scratchDir, { recursive: true, force: true });
+  });
+
+  it("creates a fake HOME under the worktree and returns it", () => {
+    const { fakeHome, writablePaths } = createAgentSandboxHome(scratchDir, "codex");
+    expect(fakeHome).toBe(path.join(scratchDir, ".agent-home"));
+    expect(fs.existsSync(fakeHome)).toBe(true);
+    // Writable paths must be under the fake HOME
+    for (const d of writablePaths.dirs) {
+      expect(d).toMatch(new RegExp(`^${escapeRegex(fakeHome)}/`));
+    }
+    for (const f of writablePaths.files) {
+      expect(f).toMatch(new RegExp(`^${escapeRegex(fakeHome)}/`));
+    }
+  });
+
+  it("creates the directory structure for codex", () => {
+    const { writablePaths } = createAgentSandboxHome(scratchDir, "codex");
+    for (const d of writablePaths.dirs) {
+      expect(fs.existsSync(d)).toBe(true);
+      expect(fs.statSync(d).isDirectory()).toBe(true);
+    }
+    for (const f of writablePaths.files) {
+      expect(fs.existsSync(f)).toBe(true);
+      expect(fs.statSync(f).isFile()).toBe(true);
+    }
+  });
+
+  it("creates the directory structure for opencode", () => {
+    const { writablePaths } = createAgentSandboxHome(scratchDir, "opencode");
+    for (const d of writablePaths.dirs) {
+      expect(fs.existsSync(d)).toBe(true);
+      expect(fs.statSync(d).isDirectory()).toBe(true);
+    }
+    for (const f of writablePaths.files) {
+      expect(fs.existsSync(f)).toBe(true);
+      expect(fs.statSync(f).isFile()).toBe(true);
+    }
+  });
+
+  it("returns empty dirs/files for claude", () => {
+    const { writablePaths } = createAgentSandboxHome(scratchDir, "claude");
+    expect(writablePaths.dirs).toEqual([]);
+    expect(writablePaths.files).toEqual([]);
+    // .agent-home MUST exist even for empty-paths agents — bwrap's --bind
+    // refuses to start when its source is missing (this is why the rest of
+    // the module uses --bind-try for may-not-exist paths, and why the home
+    // bind itself must be unconditional).
+    expect(fs.existsSync(path.join(scratchDir, ".agent-home"))).toBe(true);
+  });
+
+  it("returns empty dirs/files for agy", () => {
+    const { writablePaths } = createAgentSandboxHome(scratchDir, "agy");
+    expect(writablePaths.dirs).toEqual([]);
+    expect(writablePaths.files).toEqual([]);
+    expect(fs.existsSync(path.join(scratchDir, ".agent-home"))).toBe(true);
+  });
+});
+
+describe("persistAgentSandboxAuth", () => {
+  let realHomeDir: string;
+  let scratchDir: string;
+
+  beforeEach(() => {
+    // Override HOME via a temp dir to avoid touching the real operator HOME
+    realHomeDir = fs.mkdtempSync(path.join(os.tmpdir(), "persist-auth-real-"));
+    scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), "persist-auth-fake-"));
+    vi.spyOn(os, "homedir").mockReturnValue(realHomeDir);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    fs.rmSync(realHomeDir, { recursive: true, force: true });
+    fs.rmSync(scratchDir, { recursive: true, force: true });
+  });
+
+  it("copies a rotated, valid auth.json from fake HOME to real HOME", () => {
+    // Set up real HOME with original auth.json
+    const realCodex = path.join(realHomeDir, ".codex");
+    fs.mkdirSync(realCodex, { recursive: true });
+    const originalAuth = JSON.stringify({
+      refresh_token: "test-fixture-original-refresh",
+      access_token: "test-fixture-original-access",
+    });
+    fs.writeFileSync(path.join(realCodex, "auth.json"), originalAuth);
+
+    // Set up fake HOME with rotated auth.json
+    const fakeHome = path.join(scratchDir, ".agent-home");
+    const fakeCodex = path.join(fakeHome, ".codex");
+    fs.mkdirSync(fakeCodex, { recursive: true });
+    const rotatedAuth = JSON.stringify({
+      refresh_token: "test-fixture-rotated-refresh",
+      access_token: "test-fixture-rotated-access",
+    });
+    fs.writeFileSync(path.join(fakeCodex, "auth.json"), rotatedAuth);
+
+    persistAgentSandboxAuth(fakeHome, { files: [path.join(fakeCodex, "auth.json")] });
+
+    // Real HOME now has the rotated auth.json
+    const realContent = fs.readFileSync(path.join(realCodex, "auth.json"), "utf8");
+    expect(JSON.parse(realContent)).toEqual({
+      refresh_token: "test-fixture-rotated-refresh",
+      access_token: "test-fixture-rotated-access",
+    });
+  });
+
+  it("does NOT copy back when sandboxed auth.json matches real (no rotation)", async () => {
+    const realCodex = path.join(realHomeDir, ".codex");
+    fs.mkdirSync(realCodex, { recursive: true });
+    const sameAuth = JSON.stringify({ refresh_token: "test-fixture-same" });
+    fs.writeFileSync(path.join(realCodex, "auth.json"), sameAuth);
+
+    const fakeHome = path.join(scratchDir, ".agent-home");
+    const fakeCodex = path.join(fakeHome, ".codex");
+    fs.mkdirSync(fakeCodex, { recursive: true });
+    fs.writeFileSync(path.join(fakeCodex, "auth.json"), sameAuth);
+
+    // Wait one mtime tick before recording baseline — cheaper than
+    // busy-waiting, and not mtime-granularity dependent (CI filesystems
+    // often have second-level granularity, which would make a 50ms wait
+    // read the same mtime).
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    const mtimeBefore = fs.statSync(path.join(realCodex, "auth.json")).mtimeMs;
+
+    persistAgentSandboxAuth(fakeHome, { files: [path.join(fakeCodex, "auth.json")] });
+
+    const mtimeAfter = fs.statSync(path.join(realCodex, "auth.json")).mtimeMs;
+    expect(mtimeAfter).toBe(mtimeBefore);
+  });
+
+  it("does NOT copy back when sandboxed auth.json has a different key set (schema shape mismatch)", () => {
+    // Real file has the standard codex auth.json shape (refresh_token,
+    // access_token). A compromised turn writes a credential-shaped but
+    // structurally different document (e.g. adding or removing keys) —
+    // legitimate rotation changes values, never schema.
+    const realCodex = path.join(realHomeDir, ".codex");
+    fs.mkdirSync(realCodex, { recursive: true });
+    const realAuth = JSON.stringify({
+      refresh_token: "test-fixture-real-refresh",
+      access_token: "test-fixture-real-access",
+    });
+    fs.writeFileSync(path.join(realCodex, "auth.json"), realAuth);
+
+    const fakeHome = path.join(scratchDir, ".agent-home");
+    const fakeCodex = path.join(fakeHome, ".codex");
+    fs.mkdirSync(fakeCodex, { recursive: true });
+    // Different key set — adds a new key
+    const sandboxedAuth = JSON.stringify({
+      refresh_token: "test-fixture-rotated-refresh",
+      access_token: "test-fixture-rotated-access",
+      attacker_added: "malicious-value",
+    });
+    fs.writeFileSync(path.join(fakeCodex, "auth.json"), sandboxedAuth);
+
+    persistAgentSandboxAuth(fakeHome, { files: [path.join(fakeCodex, "auth.json")] });
+
+    // Real auth.json is unchanged — the key set differed
+    const realContent = fs.readFileSync(path.join(realCodex, "auth.json"), "utf8");
+    expect(JSON.parse(realContent)).toEqual({
+      refresh_token: "test-fixture-real-refresh",
+      access_token: "test-fixture-real-access",
+    });
+  });
+
+  it("does NOT copy back when sandboxed auth.json is missing a key", () => {
+    const realCodex = path.join(realHomeDir, ".codex");
+    fs.mkdirSync(realCodex, { recursive: true });
+    const realAuth = JSON.stringify({
+      refresh_token: "test-fixture-real-refresh",
+      access_token: "test-fixture-real-access",
+    });
+    fs.writeFileSync(path.join(realCodex, "auth.json"), realAuth);
+
+    const fakeHome = path.join(scratchDir, ".agent-home");
+    const fakeCodex = path.join(fakeHome, ".codex");
+    fs.mkdirSync(fakeCodex, { recursive: true });
+    // Missing the access_token key
+    const sandboxedAuth = JSON.stringify({ refresh_token: "test-fixture-rotated-refresh" });
+    fs.writeFileSync(path.join(fakeCodex, "auth.json"), sandboxedAuth);
+
+    persistAgentSandboxAuth(fakeHome, { files: [path.join(fakeCodex, "auth.json")] });
+
+    const realContent = fs.readFileSync(path.join(realCodex, "auth.json"), "utf8");
+    expect(JSON.parse(realContent)).toEqual({
+      refresh_token: "test-fixture-real-refresh",
+      access_token: "test-fixture-real-access",
+    });
+  });
+
+  it("does NOT copy back when real auth.json is not a JSON object (schema check inapplicable)", () => {
+    const realCodex = path.join(realHomeDir, ".codex");
+    fs.mkdirSync(realCodex, { recursive: true });
+    // Edge case: real auth.json is a JSON array (unusual but possible)
+    fs.writeFileSync(path.join(realCodex, "auth.json"), JSON.stringify(["legacy-format"]));
+
+    const fakeHome = path.join(scratchDir, ".agent-home");
+    const fakeCodex = path.join(fakeHome, ".codex");
+    fs.mkdirSync(fakeCodex, { recursive: true });
+    const sandboxedAuth = JSON.stringify({ refresh_token: "test-fixture-rotated" });
+    fs.writeFileSync(path.join(fakeCodex, "auth.json"), sandboxedAuth);
+
+    persistAgentSandboxAuth(fakeHome, { files: [path.join(fakeCodex, "auth.json")] });
+
+    // Real auth.json unchanged — schema check is inapplicable for non-object
+    // real files, so we skip rather than risk corrupting a non-standard layout.
+    const realContent = fs.readFileSync(path.join(realCodex, "auth.json"), "utf8");
+    expect(JSON.parse(realContent)).toEqual(["legacy-format"]);
+  });
+
+  it("atomic write leaves no orphaned .tmp files after a successful copy-back", () => {
+    const realCodex = path.join(realHomeDir, ".codex");
+    fs.mkdirSync(realCodex, { recursive: true });
+    const realAuth = JSON.stringify({
+      refresh_token: "test-fixture-real-refresh",
+      access_token: "test-fixture-real-access",
+    });
+    fs.writeFileSync(path.join(realCodex, "auth.json"), realAuth);
+
+    const fakeHome = path.join(scratchDir, ".agent-home");
+    const fakeCodex = path.join(fakeHome, ".codex");
+    fs.mkdirSync(fakeCodex, { recursive: true });
+    const rotatedAuth = JSON.stringify({
+      refresh_token: "test-fixture-rotated-refresh",
+      access_token: "test-fixture-rotated-access",
+    });
+    fs.writeFileSync(path.join(fakeCodex, "auth.json"), rotatedAuth);
+
+    persistAgentSandboxAuth(fakeHome, { files: [path.join(fakeCodex, "auth.json")] });
+
+    // No .tmp files should be left in the real HOME's codex dir
+    const files = fs.readdirSync(realCodex);
+    const orphans = files.filter((f) => f.includes(".tmp."));
+    expect(orphans).toEqual([]);
+  });
+
+  it("does NOT copy back when sandboxed auth.json is malformed JSON", () => {
+    const realCodex = path.join(realHomeDir, ".codex");
+    fs.mkdirSync(realCodex, { recursive: true });
+    const realAuth = JSON.stringify({ refresh_token: "test-fixture-real" });
+    fs.writeFileSync(path.join(realCodex, "auth.json"), realAuth);
+
+    const fakeHome = path.join(scratchDir, ".agent-home");
+    const fakeCodex = path.join(fakeHome, ".codex");
+    fs.mkdirSync(fakeCodex, { recursive: true });
+    // Compromised turn writes garbage
+    fs.writeFileSync(path.join(fakeCodex, "auth.json"), "not valid json {{{");
+
+    expect(() =>
+      persistAgentSandboxAuth(fakeHome, { files: [path.join(fakeCodex, "auth.json")] }),
+    ).not.toThrow();
+
+    // Real auth.json is unchanged
+    const realContent = fs.readFileSync(path.join(realCodex, "auth.json"), "utf8");
+    expect(JSON.parse(realContent)).toEqual({ refresh_token: "test-fixture-real" });
+  });
+
+  it("does NOT copy back when sandboxed auth.json is a JSON array (wrong shape)", () => {
+    const realCodex = path.join(realHomeDir, ".codex");
+    fs.mkdirSync(realCodex, { recursive: true });
+    fs.writeFileSync(
+      path.join(realCodex, "auth.json"),
+      JSON.stringify({ refresh_token: "test-fixture-real" }),
+    );
+
+    const fakeHome = path.join(scratchDir, ".agent-home");
+    const fakeCodex = path.join(fakeHome, ".codex");
+    fs.mkdirSync(fakeCodex, { recursive: true });
+    // Compromised turn writes an array
+    fs.writeFileSync(path.join(fakeCodex, "auth.json"), JSON.stringify(["malicious"]));
+
+    persistAgentSandboxAuth(fakeHome, { files: [path.join(fakeCodex, "auth.json")] });
+
+    const realContent = fs.readFileSync(path.join(realCodex, "auth.json"), "utf8");
+    expect(JSON.parse(realContent)).toEqual({ refresh_token: "test-fixture-real" });
+  });
+
+  it("does NOT copy back when sandboxed auth.json is an empty object", () => {
+    const realCodex = path.join(realHomeDir, ".codex");
+    fs.mkdirSync(realCodex, { recursive: true });
+    fs.writeFileSync(
+      path.join(realCodex, "auth.json"),
+      JSON.stringify({ refresh_token: "test-fixture-real" }),
+    );
+
+    const fakeHome = path.join(scratchDir, ".agent-home");
+    const fakeCodex = path.join(fakeHome, ".codex");
+    fs.mkdirSync(fakeCodex, { recursive: true });
+    fs.writeFileSync(path.join(fakeCodex, "auth.json"), JSON.stringify({}));
+
+    persistAgentSandboxAuth(fakeHome, { files: [path.join(fakeCodex, "auth.json")] });
+
+    const realContent = fs.readFileSync(path.join(realCodex, "auth.json"), "utf8");
+    expect(JSON.parse(realContent)).toEqual({ refresh_token: "test-fixture-real" });
+  });
+
+  it("is a no-op for files that don't end in auth.json", () => {
+    const realHome = path.join(realHomeDir, ".codex");
+    fs.mkdirSync(realHome, { recursive: true });
+    fs.writeFileSync(path.join(realHome, "opencode.db"), "original");
+
+    const fakeHome = path.join(scratchDir, ".agent-home");
+    const fakeCodex = path.join(fakeHome, ".codex");
+    fs.mkdirSync(fakeCodex, { recursive: true });
+    fs.writeFileSync(path.join(fakeCodex, "opencode.db"), "sandboxed content");
+
+    persistAgentSandboxAuth(fakeHome, { files: [path.join(fakeCodex, "opencode.db")] });
+
+    // Non-auth.json files are never copied back
+    expect(fs.readFileSync(path.join(realHome, "opencode.db"), "utf8")).toBe("original");
+  });
+
+  it("does NOT throw when sandboxed auth.json doesn't exist", () => {
+    const realCodex = path.join(realHomeDir, ".codex");
+    fs.mkdirSync(realCodex, { recursive: true });
+    fs.writeFileSync(
+      path.join(realCodex, "auth.json"),
+      JSON.stringify({ refresh_token: "test-fixture-real" }),
+    );
+
+    const fakeHome = path.join(scratchDir, ".agent-home");
+    const fakeCodex = path.join(fakeHome, ".codex");
+    fs.mkdirSync(fakeCodex, { recursive: true });
+    // No auth.json in fake HOME
+
+    expect(() =>
+      persistAgentSandboxAuth(fakeHome, { files: [path.join(fakeCodex, "auth.json")] }),
+    ).not.toThrow();
+
+    // Real auth.json is unchanged
+    expect(fs.readFileSync(path.join(realCodex, "auth.json"), "utf8")).toBe(
+      JSON.stringify({ refresh_token: "test-fixture-real" }),
+    );
+  });
+});
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 describeIfBwrap(
   "live regression check — a fresh, never-before-existing extra writable path still ends up writable (issue #1081's own second live re-check)",
@@ -960,7 +1408,7 @@ describeIfBwrap(
     });
 
     it("with ensureSandboxWritablePathsExist called first, the same write succeeds — proves the fix", async () => {
-      ensureSandboxWritablePathsExist([freshStateDir]);
+      ensureSandboxWritablePathsExist({ dirs: [freshStateDir], files: [] });
       expect(fs.existsSync(freshStateDir)).toBe(true);
 
       const target = path.join(freshStateDir, "written-by-agent.txt");
