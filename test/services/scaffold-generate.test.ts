@@ -16,6 +16,7 @@ import {
   wrapWithSandbox,
   agentSandboxWritablePaths,
   ensureSandboxWritablePathsExist,
+  createAgentSandboxHome,
   isSandboxCapable,
   resetSandboxCapabilityCache,
   buildBwrapSmokeTestInvocation,
@@ -982,6 +983,97 @@ describe("ensureSandboxWritablePathsExist", () => {
     expect(fs.statSync(file).isFile()).toBe(true);
   });
 });
+
+describe("agentSandboxWritablePaths with homeOverride", () => {
+  it("returns paths relative to the override home for codex", () => {
+    const fakeHome = "/tmp/test-fake-home";
+    const paths = agentSandboxWritablePaths("codex", fakeHome);
+    // All paths must be under the fake HOME, not os.homedir()
+    for (const d of paths.dirs) {
+      expect(d).toMatch(/^\/tmp\/test-fake-home\//);
+    }
+    for (const f of paths.files) {
+      expect(f).toMatch(/^\/tmp\/test-fake-home\//);
+    }
+    // Must NOT include config.toml, hooks.json, or skills/ — the fake
+    // HOME approach means these operator-owned files are never mounted.
+    expect(paths.dirs).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("config.toml")]),
+    );
+    expect(paths.dirs).not.toEqual(expect.arrayContaining([expect.stringContaining("hooks.json")]));
+    expect(paths.dirs).not.toEqual(expect.arrayContaining([expect.stringContaining("skills")]));
+  });
+
+  it("returns paths relative to the override home for opencode", () => {
+    const fakeHome = "/tmp/test-fake-home";
+    const paths = agentSandboxWritablePaths("opencode", fakeHome);
+    for (const d of paths.dirs) {
+      expect(d).toMatch(/^\/tmp\/test-fake-home\//);
+    }
+    for (const f of paths.files) {
+      expect(f).toMatch(/^\/tmp\/test-fake-home\//);
+    }
+  });
+});
+
+describe("createAgentSandboxHome", () => {
+  let scratchDir: string;
+
+  beforeEach(() => {
+    scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), "create-agent-home-test-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(scratchDir, { recursive: true, force: true });
+  });
+
+  it("creates a fake HOME under the worktree and returns it", () => {
+    const { fakeHome, writablePaths } = createAgentSandboxHome(scratchDir, "codex");
+    expect(fakeHome).toBe(path.join(scratchDir, ".agent-home"));
+    expect(fs.existsSync(fakeHome)).toBe(true);
+    // Writable paths must be under the fake HOME
+    for (const d of writablePaths.dirs) {
+      expect(d).toMatch(new RegExp(`^${escapeRegex(fakeHome)}/`));
+    }
+    for (const f of writablePaths.files) {
+      expect(f).toMatch(new RegExp(`^${escapeRegex(fakeHome)}/`));
+    }
+  });
+
+  it("creates the directory structure for codex", () => {
+    const { writablePaths } = createAgentSandboxHome(scratchDir, "codex");
+    for (const d of writablePaths.dirs) {
+      expect(fs.existsSync(d)).toBe(true);
+      expect(fs.statSync(d).isDirectory()).toBe(true);
+    }
+    for (const f of writablePaths.files) {
+      expect(fs.existsSync(f)).toBe(true);
+      expect(fs.statSync(f).isFile()).toBe(true);
+    }
+  });
+
+  it("creates the directory structure for opencode", () => {
+    const { writablePaths } = createAgentSandboxHome(scratchDir, "opencode");
+    for (const d of writablePaths.dirs) {
+      expect(fs.existsSync(d)).toBe(true);
+      expect(fs.statSync(d).isDirectory()).toBe(true);
+    }
+    for (const f of writablePaths.files) {
+      expect(fs.existsSync(f)).toBe(true);
+      expect(fs.statSync(f).isFile()).toBe(true);
+    }
+  });
+
+  it("returns empty dirs/files for claude", () => {
+    const { writablePaths } = createAgentSandboxHome(scratchDir, "claude");
+    expect(writablePaths.dirs).toEqual([]);
+    expect(writablePaths.files).toEqual([]);
+  });
+});
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 describeIfBwrap(
   "live regression check — a fresh, never-before-existing extra writable path still ends up writable (issue #1081's own second live re-check)",

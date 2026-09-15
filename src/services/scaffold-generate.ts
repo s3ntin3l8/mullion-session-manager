@@ -637,7 +637,11 @@ export interface SandboxedInvocation {
  * override the broader `--ro-bind / /` because they are listed after it —
  * bwrap applies bind mounts in argument order. Reordering would silently
  * make every bound-writable path read-only again. */
-function buildBwrapBaseArgs(worktreePath: string, extraWritablePaths: string[]): string[] {
+function buildBwrapBaseArgs(
+  worktreePath: string,
+  extraWritablePaths: string[],
+  fakeHome?: string,
+): string[] {
   return [
     "--ro-bind",
     "/",
@@ -650,6 +654,13 @@ function buildBwrapBaseArgs(worktreePath: string, extraWritablePaths: string[]):
     worktreePath,
     worktreePath,
     ...extraWritablePaths.flatMap((p) => ["--bind-try", p, p]),
+    // When a fakeHome is provided, bind it writable and set HOME so the
+    // CLI resolves all $HOME-relative writes (state dirs, credentials,
+    // tmp) inside the disposable worktree instead of the operator's real
+    // HOME. This is the mechanism that makes the narrowed binds actually
+    // work: without it, the CLI would write to the real ~/.codex/ or
+    // ~/.local/share/opencode/ regardless of what --bind-try targets.
+    ...(fakeHome ? ["--bind", fakeHome, fakeHome, "--setenv", "HOME", fakeHome] : []),
     "--die-with-parent",
   ];
 }
@@ -740,8 +751,11 @@ function buildBwrapBaseArgs(worktreePath: string, extraWritablePaths: string[]):
  * in-place credential update. */
 export type AgentSandboxWritablePaths = { dirs: string[]; files: string[] };
 
-export function agentSandboxWritablePaths(agentCommand: string): AgentSandboxWritablePaths {
-  const home = os.homedir();
+export function agentSandboxWritablePaths(
+  agentCommand: string,
+  homeOverride?: string,
+): AgentSandboxWritablePaths {
+  const home = homeOverride ?? os.homedir();
   switch (agentCommand) {
     case "codex": {
       const codexHome = path.join(home, ".codex");
@@ -850,6 +864,47 @@ export function ensureSandboxWritablePathsExist(paths: { dirs: string[]; files: 
   }
 }
 
+/** Creates a disposable HOME directory inside the scratch worktree for a
+ * sandboxed generation turn, seeding it with only the files the CLI needs
+ * to write to. The operator's real ~/.codex or ~/.local/share/opencode
+ * is never mounted inside the sandbox — all writes land here instead.
+ *
+ * This is the mechanism that makes the narrowed binds actually protect
+ * the operator's state: without a fake HOME, the CLI resolves all
+ * $HOME-relative writes to the real HOME regardless of what
+ * `--bind-try` targets are specified.
+ *
+ * Returns the fake HOME path and the writable paths (dirs + files)
+ * relative to it, ready for `ensureSandboxWritablePathsExist` and
+ * `wrapWithSandbox`. */
+export function createAgentSandboxHome(
+  worktreePath: string,
+  agentCommand: string,
+): { fakeHome: string; writablePaths: { dirs: string[]; files: string[] } } {
+  const fakeHome = path.join(worktreePath, ".agent-home");
+  const writablePaths = agentSandboxWritablePaths(agentCommand, fakeHome);
+  ensureSandboxWritablePathsExist(writablePaths);
+  // Seed auth.json from the operator's real HOME if it exists — the CLI
+  // needs valid credentials to reach its model API. If the real auth
+  // doesn't exist (fresh host), the CLI will re-prompt or fail at auth,
+  // which is the correct degradation.
+  const realHome = os.homedir();
+  for (const f of writablePaths.files) {
+    if (f.endsWith("auth.json")) {
+      const realAuth = f.replace(fakeHome, realHome);
+      try {
+        if (fs.existsSync(realAuth) && !fs.existsSync(f)) {
+          fs.copyFileSync(realAuth, f);
+        }
+      } catch {
+        // Best-effort — auth seeding failure degrades to auth error at
+        // CLI level, not a sandbox error.
+      }
+    }
+  }
+  return { fakeHome, writablePaths };
+}
+
 /** Given the resolved binary, its args, and the scratch worktree's
  * absolute path, returns the `bwrap`-wrapped invocation to hand to
  * `execFile` in place of the original. This is the EXACT confirmed
@@ -873,10 +928,11 @@ export function wrapWithSandbox(
   args: string[],
   worktreePath: string,
   extraWritablePaths: string[] = [],
+  fakeHome?: string,
 ): SandboxedInvocation {
   return {
     bin: "bwrap",
-    args: [...buildBwrapBaseArgs(worktreePath, extraWritablePaths), "--", bin, ...args],
+    args: [...buildBwrapBaseArgs(worktreePath, extraWritablePaths, fakeHome), "--", bin, ...args],
   };
 }
 
@@ -1123,14 +1179,20 @@ export const defaultSpawnGenerationTurn: SpawnGenerationTurn = async ({
   }
   let invocation = { bin, args };
   if (sandboxUsable) {
-    const extraWritablePaths = agentSandboxWritablePaths(agentCommand);
-    ensureSandboxWritablePathsExist(extraWritablePaths);
+    // Create a disposable HOME inside the scratch worktree so the CLI's
+    // writes (state dirs, sqlite, tmp files) land here instead of the
+    // operator's real HOME. The fake HOME is seeded with auth.json from
+    // the real HOME (if it exists) so the CLI can reach its model API.
+    const { fakeHome, writablePaths } = createAgentSandboxHome(cwd, agentCommand);
     // Spread dirs + files into a flat string[] — wrapWithSandbox and
     // bwrap's --bind-try don't distinguish between them.
-    invocation = wrapWithSandbox(bin, args, cwd, [
-      ...extraWritablePaths.dirs,
-      ...extraWritablePaths.files,
-    ]);
+    invocation = wrapWithSandbox(
+      bin,
+      args,
+      cwd,
+      [...writablePaths.dirs, ...writablePaths.files],
+      fakeHome,
+    );
   }
   return new Promise<string>((resolve, reject) => {
     execFile(
