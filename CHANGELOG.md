@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.21](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.20...v0.3.21) (2026-09-15)
+
+
+### Features
+
+* add account and server resource monitoring ([#1278](https://github.com/s3ntin3l8/mullion-session-manager/issues/1278)) ([71430ac](https://github.com/s3ntin3l8/mullion-session-manager/commit/71430ac275dd3916723ec3d862329371d2955913))
+* **security:** narrow scaffold-generate sandbox writable binds to minimal privilege ([#1280](https://github.com/s3ntin3l8/mullion-session-manager/issues/1280)) ([a8f6c5e](https://github.com/s3ntin3l8/mullion-session-manager/commit/a8f6c5e263943304d72aabc586b2c7477e194ef3))
+
 ## [0.3.20](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.19...v0.3.20) (2026-09-13)
 
 
