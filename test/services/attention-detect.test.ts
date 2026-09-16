@@ -14,6 +14,7 @@ import {
   INITIAL_MOUSE_TRACKING_STATE,
   type AttentionMachineState,
   type MouseTrackingState,
+  type AltScreenSwitch,
 } from "../../src/services/attention-detect.js";
 
 const ESC = "\x1b";
@@ -202,6 +203,25 @@ describe("applyMouseModeChanges", () => {
   });
 });
 
+describe("detectAltScreenSwitch", () => {
+  it("returns null for a chunk with no alt-screen switch", () => {
+    expect(detectAltScreenSwitch("just some regular output\n")).toBeNull();
+  });
+
+  it("reports endIndex right after the sequence's closing byte, not the whole chunk", () => {
+    const result = detectAltScreenSwitch(`${ESC}[?1049lbuild succeeded\r\n`);
+    expect(result?.mode).toBe("primary");
+    expect(result?.endIndex).toBe(`${ESC}[?1049l`.length);
+  });
+
+  it("reports the LAST match's endIndex when a chunk contains more than one switch", () => {
+    const chunk = `${ESC}[?1049h${ESC}[?1049ltrailing`;
+    const result = detectAltScreenSwitch(chunk);
+    expect(result?.mode).toBe("primary");
+    expect(result?.endIndex).toBe(chunk.length - "trailing".length);
+  });
+});
+
 describe("carryPartialEscape", () => {
   it("returns empty for a chunk with no escape byte at all", () => {
     expect(carryPartialEscape("just some regular output\n")).toBe("");
@@ -347,7 +367,7 @@ describe("chunk-boundary split sequences (the bug carryPartialEscape closes)", (
     data: string,
     carry: string,
     mouseState: MouseTrackingState,
-  ): { altScreenSwitch: "alt" | "primary" | null; mouseState: MouseTrackingState; carry: string } {
+  ): { altScreenSwitch: AltScreenSwitch | null; mouseState: MouseTrackingState; carry: string } {
     const combined = carry + data;
     return {
       altScreenSwitch: detectAltScreenSwitch(combined),
@@ -369,7 +389,7 @@ describe("chunk-boundary split sequences (the bug carryPartialEscape closes)", (
     expect(s1.carry).toBe(`${ESC}[?104`);
 
     const s2 = step("9h", s1.carry, s1.mouseState);
-    expect(s2.altScreenSwitch).toBe("alt");
+    expect(s2.altScreenSwitch?.mode).toBe("alt");
   });
 
   it("still detects the alt-screen switch when the split lands right after ESC", () => {
@@ -377,7 +397,7 @@ describe("chunk-boundary split sequences (the bug carryPartialEscape closes)", (
     const s2 = step(ESC, s1.carry, s1.mouseState);
     expect(s2.carry).toBe(ESC);
     const s3 = step("[?1049h", s2.carry, s2.mouseState);
-    expect(s3.altScreenSwitch).toBe("alt");
+    expect(s3.altScreenSwitch?.mode).toBe("alt");
   });
 
   it("still detects a split mouse-tracking DECSET across two reads", () => {
@@ -389,7 +409,7 @@ describe("chunk-boundary split sequences (the bug carryPartialEscape closes)", (
 
   it("does not double-detect when the sequence arrives whole (carry stays empty)", () => {
     const s1 = step(`${ESC}[?1049h`, "", INITIAL_MOUSE_TRACKING_STATE);
-    expect(s1.altScreenSwitch).toBe("alt");
+    expect(s1.altScreenSwitch?.mode).toBe("alt");
     expect(s1.carry).toBe("");
     const s2 = step("plain output, no escapes", s1.carry, s1.mouseState);
     expect(s2.altScreenSwitch).toBeNull();
@@ -398,13 +418,13 @@ describe("chunk-boundary split sequences (the bug carryPartialEscape closes)", (
   it("byte-at-a-time split still accumulates correctly across many reads", () => {
     const bytes = `${ESC}[?1049h`.split("");
     let carry = "";
-    let lastSwitch: "alt" | "primary" | null = null;
+    let lastSwitch: AltScreenSwitch | null = null;
     for (const b of bytes) {
       const r = step(b, carry, INITIAL_MOUSE_TRACKING_STATE);
       carry = r.carry;
       if (r.altScreenSwitch !== null) lastSwitch = r.altScreenSwitch;
     }
-    expect(lastSwitch).toBe("alt");
+    expect(lastSwitch?.mode).toBe("alt");
     expect(carry).toBe("");
   });
 });

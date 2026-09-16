@@ -3100,6 +3100,178 @@ describe("PtyManager", () => {
       expect(confirmed?.payload.context).toBe("build succeeded");
     });
 
+    it("issue #1303: still surfaces a real line that shares the SAME PTY chunk as the alt-screen exit sequence", async () => {
+      // Unlike the #1296 regression test above (exit sequence and the real
+      // line arrive in two separate onData chunks), this puts them in ONE
+      // chunk — exactly the shape #1296's own fix was conservative about:
+      // it watermarked at the whole chunk's end, so "build succeeded" here
+      // would have been excluded right along with the escape sequence.
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        const start = Date.now();
+        vi.setSystemTime(start);
+        fakePtyChildren[0].emitData("\x1b[?1049hTUI frame 1"); // enters alt-screen, streak starts
+
+        vi.setSystemTime(start + 1_200); // past SUSTAIN_MS -- a genuine streak
+        // Exit sequence AND the shell's next prompt text share one PTY read.
+        fakePtyChildren[0].emitData("\x1b[?1049lbuild succeeded\r\n");
+        session.write("y"); // clears the altScreenExit confirmation
+        expect(session.toInfo().attention).toBe(false);
+
+        session.tick(start + 1_200 + 10_000); // past SUSTAINED_SILENCE_MS
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(session.toInfo().attention).toBe(true);
+      const silenceEvents = session.getEvents().filter((e) => e.kind === "attention");
+      const confirmed = silenceEvents.find((e) => e.payload.signal === "silence");
+      expect(confirmed?.payload.context).toBe("build succeeded");
+    });
+
+    it("issue #1303: still surfaces a real line when the exit sequence itself is split across two PTY reads via detectCarry", async () => {
+      // Exercises the offsetInData = endIndex - this.detectCarry.length term
+      // directly: the exit sequence's closing byte arrives in a SEPARATE
+      // chunk from where it started, so detectChunk (this carry + data) is
+      // longer than `data` itself when the match is found. Getting the carry
+      // subtraction wrong (or dropping it) would misalign endIndex against
+      // `data` and either throw or chop into "build succeeded" itself.
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        const start = Date.now();
+        vi.setSystemTime(start);
+        fakePtyChildren[0].emitData("\x1b[?1049hTUI frame 1"); // enters alt-screen, streak starts
+
+        vi.setSystemTime(start + 1_200); // past SUSTAIN_MS -- a genuine streak
+        fakePtyChildren[0].emitData("\x1b[?1049"); // exit sequence missing its closing "l" -- carried
+        fakePtyChildren[0].emitData("lbuild succeeded\r\n"); // completes the exit, same read as the real line
+        session.write("y"); // clears the altScreenExit confirmation
+        expect(session.toInfo().attention).toBe(false);
+
+        session.tick(start + 1_200 + 10_000); // past SUSTAINED_SILENCE_MS
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(session.toInfo().attention).toBe(true);
+      const silenceEvents = session.getEvents().filter((e) => e.kind === "attention");
+      const confirmed = silenceEvents.find((e) => e.payload.signal === "silence");
+      expect(confirmed?.payload.context).toBe("build succeeded");
+    });
+
+    it("issue #1303: does not rewind the watermark into an earlier, already-buffered chunk when the exit itself lands during a redraw-nudge suppression window", async () => {
+      // requestRedraw()'s suppression window skips scrollbackBuffer.push()
+      // for whatever arrives while it's open (see redraw-nudge.ts). If the
+      // alt-screen exit sequence — with trailing bytes — arrives DURING that
+      // window, totalBytesEverPushed() doesn't include this chunk at all, so
+      // subtracting its trailing-byte count would walk the watermark
+      // backward into the PREVIOUS (already pushed, still alt-screen)
+      // chunk — reopening #1296's bug from the other direction.
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      try {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+        const pty = fakePtyChildren[0];
+
+        // Flush the spawn-time nudge so it doesn't interfere below.
+        await vi.advanceTimersByTimeAsync(700 + 500);
+
+        const start = Date.now();
+        vi.setSystemTime(start);
+        pty.emitData("\x1b[?1049hTUI frame 1"); // enters alt-screen, streak starts
+
+        vi.setSystemTime(start + 1_200); // past SUSTAIN_MS -- a genuine streak
+        pty.emitData("TUI frame 2"); // pushed normally, no suppression active yet
+
+        // Starts a suppression window -- `suppressed` flips synchronously,
+        // before the dip/restore timers even fire.
+        session.requestRedraw();
+        // The exit sequence plus some synthesized "repaint" bytes arrive
+        // while suppressed -- neither should land in the ring.
+        pty.emitData("\x1b[?1049lstale");
+        session.write("y"); // clears the altScreenExit confirmation
+        expect(session.toInfo().attention).toBe(false);
+
+        // Let the whole dip (300ms) + restore (400ms) + grace (500ms) cycle
+        // elapse so capture resumes as normal. Faking "Date" alongside the
+        // timers advances the mocked clock by the same amount, so the real
+        // post-nudge chunk below lands at start + 1_200 + 1_200, not
+        // start + 1_200 -- the final tick() target accounts for that.
+        await vi.advanceTimersByTimeAsync(300 + 400 + 500);
+
+        pty.emitData("build succeeded\r\n"); // genuine post-nudge output
+
+        session.tick(start + 1_200 + 1_200 + 10_000); // past SUSTAINED_SILENCE_MS
+        expect(session.toInfo().attention).toBe(true);
+        const silenceEvents = session.getEvents().filter((e) => e.kind === "attention");
+        const confirmed = silenceEvents.find((e) => e.payload.signal === "silence");
+        expect(confirmed?.payload.context).toBe("build succeeded");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("issue #1303: does not surface an escape-only trailing fragment as context when the exit sequence's trailing bytes are just a teardown repaint", async () => {
+      // A real TUI's teardown commonly writes clear-screen/cursor-home right
+      // alongside the alt-screen exit itself (e.g. `\x1b[?1049l\x1b[2J\x1b[H`,
+      // no real text at all). Narrowing the watermark to the sequence's own
+      // end offset (rather than the whole chunk) makes `sinceAltExit`
+      // positive here where it used to be exactly 0 -- this only stays safe
+      // because lastMeaningfulLine's own CSI-stripping (terminal-text.ts)
+      // already collapses pure escape bytes to nothing, same as it would for
+      // any other escape-only scrollback content.
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        const start = Date.now();
+        vi.setSystemTime(start);
+        fakePtyChildren[0].emitData("\x1b[?1049hTUI frame 1"); // enters alt-screen, streak starts
+
+        vi.setSystemTime(start + 1_200); // past SUSTAIN_MS -- a genuine streak
+        fakePtyChildren[0].emitData("\x1b[?1049l\x1b[2J\x1b[H"); // exit + escape-only teardown, no real text
+        session.write("y"); // clears the altScreenExit confirmation
+        expect(session.toInfo().attention).toBe(false);
+
+        session.tick(start + 1_200 + 10_000); // past SUSTAINED_SILENCE_MS
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(session.toInfo().attention).toBe(true);
+      const silenceEvents = session.getEvents().filter((e) => e.kind === "attention");
+      const confirmed = silenceEvents.find((e) => e.payload.signal === "silence");
+      expect(confirmed?.payload.context).toBeUndefined();
+    });
+
     it("tracks the most recent OSC 0/2 title-change payload", async () => {
       const session = manager.getOrCreate({
         id: "1",
