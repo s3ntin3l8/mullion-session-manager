@@ -139,7 +139,7 @@ export async function reseedTaskIfSessionExited(
     initialPrompt: seedCapable ? prompt : undefined,
     skipPermissions: taskMasterConfig.skipPermissions,
     // Mark this session as an unattended Task Master worker so the
-    // opencode adapter denies brainstorming / writing-plans /
+    // opencode and codex adapters deny brainstorming / writing-plans /
     // finishing-a-development-branch — same marker every other Task
     // Master spawn site sets, see task-claim.ts's own worker-spawn
     // comments. The re-seed worker is every bit as unattended as a fresh
