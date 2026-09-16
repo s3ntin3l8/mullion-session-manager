@@ -2,12 +2,7 @@ import { readFileSync, writeFileSync, mkdirSync, realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./types.js";
-import {
-  shellQuote,
-  escapeTomlBasicString,
-  resolveMcpServerPath,
-  SHELL_METACHARACTERS_RE,
-} from "./shared.js";
+import { shellQuote, tomlString, resolveMcpServerPath, SHELL_METACHARACTERS_RE } from "./shared.js";
 import { ensureForwarderShim, forwarderHookCommand } from "./forwarder-shim.js";
 import { installBundleSkills, uninstallBundleSkills } from "./mullion-bundle.js";
 
@@ -449,11 +444,12 @@ export function resolveCodexAgentsSkillsDir(): string {
 // Never calls `smol-toml`'s stringifier — these are new, synthesized `-c`
 // arguments, not an edit to a user's existing file, so there is nothing to
 // round-trip or preserve; each override is built as a small, independently
-// valid TOML literal and escaped via `escapeTomlBasicString` (shared.js,
-// hoisted from codex-skills.ts's own identical need) before being
-// shell-quoted as one argument. `escapeTomlBasicString` is applied to the
-// three env var names too even though they're compile-time-constant ASCII
-// identifiers that never need it — one code path, no special case.
+// valid TOML literal and escaped via `tomlString` (shared.js, hoisted here
+// after Hermes review, PR #1300, once a third `-c`-builder function
+// needed the identical wrapping) before being shell-quoted as one
+// argument. `tomlString` is applied to the three env var names too even
+// though they're compile-time-constant ASCII identifiers that never need
+// it — one code path, no special case.
 const CODEX_MCP_ENV_VAR_NAMES = [
   "MULLION_HOOK_SOCKET",
   "MULLION_HOOK_TOKEN",
@@ -464,7 +460,6 @@ export function buildCodexMcpFlags(
   mcpServerPath: string,
   execPath: string = process.execPath,
 ): string {
-  const tomlString = (value: string) => `"${escapeTomlBasicString(value)}"`;
   const envVarNames = CODEX_MCP_ENV_VAR_NAMES.map(tomlString).join(", ");
   const overrides = [
     `mcp_servers.mullion.command=${tomlString(execPath)}`,
@@ -550,7 +545,6 @@ export function buildCodexMcpFlags(
 // own outer catch (index.ts) — degrade to launching without hooks, not a
 // silently-wrong trust key.
 export function buildCodexTrustFlag(cwd: string): string {
-  const tomlString = (value: string) => `"${escapeTomlBasicString(value)}"`;
   const override = `projects={${tomlString(realpathSync(cwd))}={trust_level=${tomlString("trusted")}}}`;
   return `-c ${shellQuote(override)}`;
 }
@@ -591,7 +585,6 @@ const CODEX_TASK_MASTER_DENIED_SKILLS = [
 ] as const;
 
 export function buildCodexSkillDenyFlag(): string {
-  const tomlString = (value: string) => `"${escapeTomlBasicString(value)}"`;
   const entries = CODEX_TASK_MASTER_DENIED_SKILLS.map(
     (name) => `{name=${tomlString(name)},enabled=false}`,
   ).join(",");
