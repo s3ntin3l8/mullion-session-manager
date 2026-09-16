@@ -286,6 +286,28 @@ describe("NotificationBell", () => {
     expect(screen.getByText("Needs permission")).toBeInTheDocument();
   });
 
+  // Issue #1293 — PR #1284's group header deliberately calls
+  // formatStatusLabel(..., "compact") (NotificationBell.tsx) because this
+  // popover is a fixed 380x380px, too narrow for the verbose "label: detail"
+  // form PR #1285 enabled for four awaiting_* statuses. Every other
+  // FeedHeader test uses makeSession's default sessionStatusDetail: null, so
+  // compact and verbose render identically there — dropping the "compact"
+  // argument at the call site would leave this suite green. This test uses a
+  // long detail specifically so the two modes diverge visibly.
+  it("issue #1293 — the group header status stays in compact mode (bare label, no detail) even with a long sessionStatusDetail", async () => {
+    sessions = [
+      makeSession({
+        sessionStatus: "awaiting_review_gate",
+        sessionStatusSeverity: "blocked",
+        sessionStatusDetail: "x".repeat(180),
+      }),
+    ];
+    events = { 1: [makeEvent({ seq: 1 })] };
+    await openPanel();
+    expect(screen.getByText("Needs review")).toBeInTheDocument();
+    expect(screen.queryByText(/Needs review:/)).not.toBeInTheDocument();
+  });
+
   // Hermes review, PR #1284 — there is no `.session-dot-exited` CSS class
   // (styles/sidebar.css only defines attention/error/finished/idle/
   // permission/plan/working); an "exited" status must render Sidebar.tsx's
