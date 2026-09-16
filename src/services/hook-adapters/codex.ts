@@ -555,6 +555,49 @@ export function buildCodexTrustFlag(cwd: string): string {
   return `-c ${shellQuote(override)}`;
 }
 
+// Task Master (worker / review / retry / re-seed) — deny the superpowers
+// skills that gate on a human in the loop, the codex leg of the same
+// denial opencode.ts's prepareLaunch already applies (verified failing in
+// #66/#67, branchdam-mobile — see that file's own longer WHY-THESE-THREE
+// comment; identical reasoning, not repeated here). Codex selects skills
+// by frontmatter `name`, not directory basename (opposite of Claude Code)
+// — these three names are exactly what opencode denies today.
+//
+// Issue #965/#1282 — the channel is `-c skills.config=[...]`, an inline
+// TOML array-of-tables, NOT a managedInstall write to config.toml: codex
+// reads config.toml at process startup and managedInstall runs
+// fire-and-forget (see buildCodexTrustFlag's own comment for the
+// identical race), so only the ephemeral commandTransform channel can be
+// trusted to apply before this launch's own startup read.
+//
+// Unlike `-c projects={...}` (buildCodexTrustFlag above), whose own
+// comment documents that shape as a WHOLE-top-level-table clobber, this
+// does NOT clobber a user's existing on-disk `[[skills.config]]` entries
+// (e.g. one written by services/skills.ts's Skills Manager,
+// codex-skills.ts's own `writeCodexSkillEnabled`) — confirmed empirically
+// against a REAL interactive codex session (not `codex exec`/`codex debug
+// ...`, this repo's own stated bar, codex.ts:405-409), not just codex-cli
+// 0.154.0's rendered prompt input: a scratch CODEX_HOME with an on-disk
+// `[[skills.config]]` denial for `imagegen` plus this launch-time `-c`
+// override denying `openai-docs` produced a live session whose own
+// "list your available skills" answer omitted BOTH — the array merges by
+// `name`, last-wins, across the disk+override boundary, the same
+// semantics `codex-skills.ts` already documents within a single file.
+// See #1282 for the full probe methodology and raw evidence.
+const CODEX_TASK_MASTER_DENIED_SKILLS = [
+  "brainstorming",
+  "writing-plans",
+  "finishing-a-development-branch",
+] as const;
+
+export function buildCodexSkillDenyFlag(): string {
+  const tomlString = (value: string) => `"${escapeTomlBasicString(value)}"`;
+  const entries = CODEX_TASK_MASTER_DENIED_SKILLS.map(
+    (name) => `{name=${tomlString(name)},enabled=false}`,
+  ).join(",");
+  return `-c ${shellQuote(`skills.config=[${entries}]`)}`;
+}
+
 function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
   return {
     // Issue #906 — Codex's workspace-write sandbox marks .git read-only,
@@ -609,6 +652,9 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
       // ctx.skipPermissions && ctx.cwd — same gate as agy's
       // mergeAgyTrustedWorkspace, see buildCodexTrustFlag's own comment.
       if (ctx.skipPermissions && ctx.cwd) parts.push(buildCodexTrustFlag(ctx.cwd));
+      // Issue #965/#1282 — same taskId gate as opencode.ts's own deny
+      // list, see buildCodexSkillDenyFlag's own comment.
+      if (ctx.taskId !== undefined) parts.push(buildCodexSkillDenyFlag());
       return parts.join(" ");
     },
     // async, not a plain arrow wrapping a sync call: a synchronous throw

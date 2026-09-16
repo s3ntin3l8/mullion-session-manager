@@ -207,7 +207,7 @@ async function spawnReviewAgentNow(
       // in the same worktree as the worker, so they're just as exposed to
       // the brainstorming-skill failure mode verified in branchdam-mobile
       // tasks #66 / #67. Mark as a Task Master session so the opencode
-      // adapter denies the same three skills.
+      // and codex adapters deny the same three skills.
       taskId: task.id,
     });
     if (!result.ok) {

@@ -16,6 +16,7 @@ import {
   resolveCodexAgentsSkillsDir,
   buildCodexMcpFlags,
   buildCodexTrustFlag,
+  buildCodexSkillDenyFlag,
 } from "../../../src/services/hook-adapters/codex.js";
 import { forwarderHookCommand } from "../../../src/services/hook-adapters/forwarder-shim.js";
 import {
@@ -132,6 +133,32 @@ describe("buildCodexTrustFlag (codex folder-trust hang)", () => {
     mkdirSync(cwd);
     const inner = `projects={"${escapeTomlBasicString(cwd)}"={trust_level="trusted"}}`;
     expect(buildCodexTrustFlag(cwd)).toBe(`-c ${shellQuote(inner)}`);
+  });
+});
+
+// Issue #965/#1282 — the codex leg of the Task Master skill denial
+// opencode.ts's prepareLaunch already applies. Empirically confirmed
+// against a real interactive codex session (see buildCodexSkillDenyFlag's
+// own comment in codex.ts) that `-c skills.config=[...]` merges with
+// on-disk `[[skills.config]]` entries by name, last-wins, rather than
+// clobbering the whole array the way `-c projects={...}` does.
+describe("buildCodexSkillDenyFlag (Task Master skill denial, issue #965/#1282)", () => {
+  it("builds a shell-quoted -c override as a TOML inline array-of-tables, denying exactly the three superpowers skills opencode also denies", () => {
+    expect(buildCodexSkillDenyFlag()).toBe(
+      "-c " +
+        shellQuote(
+          'skills.config=[{name="brainstorming",enabled=false},' +
+            '{name="writing-plans",enabled=false},' +
+            '{name="finishing-a-development-branch",enabled=false}]',
+        ),
+    );
+  });
+
+  // No cwd/session-specific input — this flag is a fixed literal, so
+  // calling it twice must produce byte-identical output (nothing here
+  // should ever vary per-launch).
+  it("is deterministic", () => {
+    expect(buildCodexSkillDenyFlag()).toBe(buildCodexSkillDenyFlag());
   });
 });
 
@@ -433,6 +460,48 @@ describe("codexAdapter.prepareLaunch / managed hooks.json merge (issue #252)", (
         skipPermissions: true,
         cwd: "/srv/project",
       });
+      expect(plan.commandTransform!("codex && npm test")).toBe("codex && npm test --add-dir .git");
+    });
+
+    // Issue #965/#1282 — the codex leg of the Task Master skill denial.
+    // Same ctx.taskId !== undefined gate as opencode.ts's own deny list
+    // (see opencode.test.ts's "Task Master skill denials" describe block).
+    it("appends the skill-deny flag last when ctx.taskId is set", () => {
+      const plan = codexAdapter.prepareLaunch({ ...ctx(), taskId: 348423 });
+      expect(plan.commandTransform!("codex")).toBe(
+        `codex --add-dir .git ${mcpFlags()} ${buildCodexSkillDenyFlag()}`,
+      );
+    });
+
+    it("omits the skill-deny flag when ctx.taskId is not set (a non-Task-Master session is unaffected)", () => {
+      const plan = codexAdapter.prepareLaunch(ctx());
+      expect(plan.commandTransform!("codex")).toBe(`codex --add-dir .git ${mcpFlags()}`);
+    });
+
+    // The gate is `!== undefined`, not truthy — a task id of 0 is still a
+    // real Task Master session, same posture opencode.test.ts pins.
+    it("treats ctx.taskId of 0 the same as any other defined value", () => {
+      const plan = codexAdapter.prepareLaunch({ ...ctx(), taskId: 0 });
+      expect(plan.commandTransform!("codex")).toBe(
+        `codex --add-dir .git ${mcpFlags()} ${buildCodexSkillDenyFlag()}`,
+      );
+    });
+
+    it("composes the skill-deny flag with the trust flag, in trust-then-deny order", () => {
+      const realCwd = realpathSync(os.tmpdir());
+      const plan = codexAdapter.prepareLaunch({
+        ...ctx(),
+        skipPermissions: true,
+        cwd: realCwd,
+        taskId: 348423,
+      });
+      expect(plan.commandTransform!("codex")).toBe(
+        `codex --add-dir .git ${mcpFlags()} ${buildCodexTrustFlag(realCwd)} ${buildCodexSkillDenyFlag()}`,
+      );
+    });
+
+    it("omits the skill-deny flag on a chained/piped/redirected command, same as the MCP and trust flags", () => {
+      const plan = codexAdapter.prepareLaunch({ ...ctx(), taskId: 348423 });
       expect(plan.commandTransform!("codex && npm test")).toBe("codex && npm test --add-dir .git");
     });
   });
