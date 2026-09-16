@@ -1252,7 +1252,11 @@ export class Session {
   private inAltScreen = false;
   // Issue #1296 — the scrollbackBuffer's own monotonic
   // totalBytesEverPushed() reading at the moment alt-screen was last
-  // exited (the `altScreenExited` branch in onData below). Lets
+  // exited (the `altScreenExited` branch in onData below) — issue #1303
+  // narrowed this to the exit sequence's own end offset rather than the
+  // whole chunk's end, whenever that chunk actually landed in the ring
+  // (the unadjusted, whole-chunk reading is still used when it didn't —
+  // see onData's own `pushedToScrollback` branch). Lets
   // silenceContextFromScrollback() exclude every byte written while a TUI
   // was still in alt-screen, even past the point where inAltScreen itself
   // has flipped back to false — a signal-time-only check on inAltScreen
@@ -2388,7 +2392,8 @@ export class Session {
       const chunk = Buffer.from(data, "utf8");
       // Skipped during a redraw-nudge repaint window — see
       // redrawNudge's docstring above. Listeners below still get it live.
-      if (!this.redrawNudge.suppressingOutput) this.scrollbackBuffer.push(chunk);
+      const pushedToScrollback = !this.redrawNudge.suppressingOutput;
+      if (pushedToScrollback) this.scrollbackBuffer.push(chunk);
 
       // Prepend any carry from the previous chunk so a `?1049h`/mouse-mode
       // DECSET split across two PTY reads is still recognized — detection
@@ -2410,19 +2415,42 @@ export class Session {
         // mode) — only emit a status_change event on a genuine flip, so a
         // chatty program can't spam this session's 100-slot event ring
         // buffer with no-op repeats.
-        const nowInAltScreen = altScreenSwitch === "alt";
+        const nowInAltScreen = altScreenSwitch.mode === "alt";
         if (nowInAltScreen !== this.inAltScreen) {
           altScreenExited = this.inAltScreen && !nowInAltScreen;
           this.inAltScreen = nowInAltScreen;
           if (altScreenExited) {
-            // Issue #1296 — this chunk (escape sequence and everything else
-            // it carries) was already pushed to scrollbackBuffer above, so
-            // this watermark conservatively excludes the WHOLE chunk, not
-            // just the escape sequence itself — see issue #1303 for
-            // narrowing this to the sequence's own byte offset.
-            this.altScreenExitedAtBytes = this.scrollbackBuffer.totalBytesEverPushed();
+            // Issue #1303 — endIndex is relative to detectChunk (this carry +
+            // data); carryPartialEscape only ever carries an UNTERMINATED
+            // prefix (no closing h/l byte), so the match's closing byte, and
+            // therefore endIndex, always falls within `data` itself, never
+            // inside the carry. Map back to a `data`-relative offset by
+            // subtracting the carry's length, then measure everything before
+            // that offset in bytes (not chars) since scrollbackBuffer tracks
+            // byte offsets — `chunk` above is exactly `data` encoded as
+            // UTF-8. The result: trailing real text sharing this PTY read
+            // with the exit sequence stays after the watermark instead of
+            // being excluded along with the whole chunk (issue #1296's
+            // conservative chunk-boundary reading).
+            //
+            // Only meaningful when this chunk actually landed in the ring
+            // (pushedToScrollback): if it didn't (a redraw-nudge suppression
+            // window), there's no trailing text IN THE RING to preserve —
+            // subtracting trailingBytes from totalBytesEverPushed() would
+            // instead walk the watermark backward into bytes from an
+            // EARLIER, already-pushed chunk (still alt-screen redraw, since
+            // the TUI was up until this one), reopening #1296's bug.
+            if (pushedToScrollback) {
+              const offsetInData = altScreenSwitch.endIndex - this.detectCarry.length;
+              const bytesBeforeOffset = Buffer.byteLength(data.slice(0, offsetInData), "utf8");
+              const trailingBytes = chunk.length - bytesBeforeOffset;
+              this.altScreenExitedAtBytes =
+                this.scrollbackBuffer.totalBytesEverPushed() - trailingBytes;
+            } else {
+              this.altScreenExitedAtBytes = this.scrollbackBuffer.totalBytesEverPushed();
+            }
           }
-          this.emitEvent("status_change", { screen: altScreenSwitch });
+          this.emitEvent("status_change", { screen: altScreenSwitch.mode });
         }
       }
       this.mouseTracking = applyMouseModeChanges(detectChunk, this.mouseTracking);
@@ -3338,11 +3366,15 @@ export class Session {
     if (sinceAltExit <= 0) return null;
     const scanBytes = Math.min(SILENCE_SCAN_TAIL_BYTES, sinceAltExit);
     const tail = this.getScrollbackTail(scanBytes);
-    // Only the byte CAP (scanBytes) can leave a partial leading line — a
-    // cut at the alt-screen watermark lands on a whole PTY-chunk boundary
-    // (node-pty hands us complete strings) and must NOT itself count as
-    // truncated, or the first post-TUI line (often the only real one) gets
-    // discarded by lastMeaningfulLine's `truncated` handling. `available`
+    // Only the byte CAP (scanBytes) can leave a partial leading line — a cut
+    // at the alt-screen watermark (issue #1303: now the escape sequence's
+    // own end offset, not necessarily a whole-chunk boundary) is treated as
+    // NOT truncated on purpose: it lands at the start of whatever the
+    // program writes right after leaving alt-screen, which even in the rare
+    // case that isn't a fresh line is still the most meaningful thing this
+    // method can surface — worth the occasional fragment rather than letting
+    // lastMeaningfulLine's `truncated` handling discard the first, often
+    // only, post-TUI line outright. `available`
     // is how much of the post-watermark range is still actually buffered
     // (eviction may have dropped some of it) — comparing against THAT,
     // not the ring's full totalBufferedBytes(), is what keeps this

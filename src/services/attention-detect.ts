@@ -665,21 +665,36 @@ export function carryPartialOsc(chunk: string): string {
 // eslint-disable-next-line no-control-regex
 const ALT_SCREEN_SWITCH = /\x1b\[\?(?:1049|1047|47)([hl])/g;
 
+export interface AltScreenSwitch {
+  mode: "alt" | "primary";
+  /** Index in `chunk` immediately after the closing `h`/`l` byte of the LAST
+   * matched sequence — i.e. `chunk.slice(endIndex)` is real content that
+   * shares this chunk with the mode switch, not sequence bytes themselves.
+   * Callers that also prepend a `carryPartialEscape` carry to `chunk` before
+   * calling this need to subtract that carry's length to map back to an
+   * offset within their own uncarried chunk — see issue #1303. */
+  endIndex: number;
+}
+
 /**
  * Scans a chunk for alt-screen-buffer enter/exit sequences and returns which
- * side of the switch the LAST one in this chunk lands on, or null if the
- * chunk contains none at all (the common case — most output is plain
- * program text, not a screen-mode switch). Used by pty-manager.ts's Session
- * to track true screen-mode state across a session's lifetime, so scrollback
- * replay can synthesize a correct preamble instead of trusting the buffered
- * bytes to be a self-balanced enter/exit pair (see issue #83: FIFO eviction
- * of the ring buffer can strand a dangling exit, never a dangling enter, so
- * "just replay the raw bytes" silently drifts out of sync with reality).
+ * side of the switch the LAST one in this chunk lands on (plus where it
+ * ends), or null if the chunk contains none at all (the common case — most
+ * output is plain program text, not a screen-mode switch). Used by
+ * pty-manager.ts's Session to track true screen-mode state across a
+ * session's lifetime, so scrollback replay can synthesize a correct preamble
+ * instead of trusting the buffered bytes to be a self-balanced enter/exit
+ * pair (see issue #83: FIFO eviction of the ring buffer can strand a
+ * dangling exit, never a dangling enter, so "just replay the raw bytes"
+ * silently drifts out of sync with reality).
  */
-export function detectAltScreenSwitch(chunk: string): "alt" | "primary" | null {
-  let result: "alt" | "primary" | null = null;
+export function detectAltScreenSwitch(chunk: string): AltScreenSwitch | null {
+  let result: AltScreenSwitch | null = null;
   for (const match of chunk.matchAll(ALT_SCREEN_SWITCH)) {
-    result = match[1] === "h" ? "alt" : "primary";
+    result = {
+      mode: match[1] === "h" ? "alt" : "primary",
+      endIndex: match.index + match[0].length,
+    };
   }
   return result;
 }
