@@ -1884,8 +1884,8 @@ export async function internalRoutes(app: FastifyInstance) {
         injectMullionBundle,
         // Task Master marker — see CreateSessionOptions.taskId's own doc
         // comment (pty-manager.ts). Forwarded verbatim to getOrCreate
-        // below; the opencode adapter reads it back off the resulting
-        // Session at applyHookAdapters time and uses it to deny
+        // below; the opencode and codex adapters read it back off the
+        // resulting Session at applyHookAdapters time and use it to deny
         // superpowers skills that gate on a human in the loop.
         // Hermes review, PR #966 — version-skewed, same posture as
         // `initialPromptApplied` below: an older agent build (one that
@@ -1893,8 +1893,8 @@ export async function internalRoutes(app: FastifyInstance) {
         // before the handler runs (Fastify's `removeAdditional` with the
         // `additionalProperties: false` declared by spawnSessionSchema),
         // so `taskId` here is `undefined` for that case — the resulting
-        // Session therefore has `taskId: undefined`, the opencode adapter
-        // sees no denial list, and the primary learns this via the
+        // Session therefore has `taskId: undefined`, the adapter sees no
+        // denial list, and the primary learns this via the
         // `taskIdApplied` echo (below) being `false`.
         taskId,
       } = request.body;

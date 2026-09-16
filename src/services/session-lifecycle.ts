@@ -311,9 +311,9 @@ export type CreateSessionParams = CreateSessionBody & {
   // dispatchClaimedTask/retryTask, task-reconciler.ts's spawnReviewAgentNow,
   // task-reseed.ts's reseedTaskIfSessionExited) to signal "this session is
   // an unattended Task Master agent." Threaded all the way through to the
-  // opencode adapter's HookAdapterContext.taskId, which uses a positive
-  // value to deny superpowers skills that gate on a human in the loop
-  // (brainstorming / writing-plans / finishing-a-development-branch). See
+  // opencode and codex adapters' HookAdapterContext.taskId, which use a
+  // positive value to deny superpowers skills that gate on a human in the
+  // loop (brainstorming / writing-plans / finishing-a-development-branch). See
   // CreateSessionOptions.taskId's own doc comment (pty-manager.ts) for the
   // full rationale, including why this is spawn-time only (no sessions
   // column, no migration). Not part of CreateSessionBody, no public route
@@ -1114,7 +1114,7 @@ export async function createSessionRecord(
     // "requested false / echoed undefined" branch above is a
     // misnomer here. The two failure modes worth a warning for are:
     //   1. `taskIdApplied` is `undefined` on the response — the agent
-    //      pre-dates this field and the opencode skill denials are
+    //      pre-dates this field and the opencode/codex skill denials are
     //      silently not in effect (branchdam-mobile tasks #66/#67
     //      will recur on this agent).
     //   2. `taskIdApplied` is `false` even though `taskId` was sent —
@@ -1126,7 +1126,7 @@ export async function createSessionRecord(
     if (taskId !== undefined && spawnResult.taskIdApplied === undefined) {
       app.log.warn(
         { sessionId: created.id, hostId: project.hostId, requested: taskId },
-        "taskId: remote agent did not echo taskIdApplied, and likely predates the Task Master skill-denial fix — opencode brainstorming / writing-plans / finishing-a-development-branch are NOT being denied on this agent",
+        "taskId: remote agent did not echo taskIdApplied, and likely predates the Task Master skill-denial fix — opencode/codex brainstorming / writing-plans / finishing-a-development-branch are NOT being denied on this agent",
       );
     } else if (taskId !== undefined && spawnResult.taskIdApplied === false) {
       app.log.warn(
