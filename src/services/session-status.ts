@@ -305,6 +305,22 @@ export function deriveSessionStatus({
     // existing per-kind strings).
     return make("needs_input", info.attentionKind);
   }
+  // Issue #1226 — `compacting`/`working`/`idle` below stay `detail: null`
+  // by design, not by gap: a real per-instance signal for `working` DOES
+  // exist (the `todo` hook event — forwarder-core.mjs's own comment calls
+  // the todo list "the best signal available for what a session is
+  // actually doing"), but it's fire-and-forget today (hook-handlers.ts
+  // only emits it, nothing latches "the current in-progress todo" as a
+  // Session field the way subagentCount/outstandingBackgroundTasks do
+  // above). Wiring it would be a real four-touchpoint feature (a new
+  // Session field, threading it through toInfo()/SessionInfo and this
+  // file's DeriveSessionStatusInput, then flipping `working`'s
+  // showDetail in frontend/src/sessionStatus.ts) for a detail that would
+  // churn on nearly every keystroke/output burst — `working` is by far
+  // the highest-frequency status flip in this function, unlike the
+  // stable subagent/background counts below. Left undone until something
+  // actually needs it. `compacting`/`idle` have no comparable signal at
+  // all.
   if (info.compactState === "compacting") return make("compacting");
   if (info.subagentCount > 0) return make("subagent", `${info.subagentCount} running`);
   // Issue #428 — outranked by `subagent`: a Task-tool subagent already has
