@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.3.23](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.22...v0.3.23) (2026-09-16)
+
+
+### Features
+
+* **hooks:** deny superpowers skills for codex Task Master workers ([#1300](https://github.com/s3ntin3l8/mullion-session-manager/issues/1300)) ([9d36fe3](https://github.com/s3ntin3l8/mullion-session-manager/commit/9d36fe3adae70c03d3fd3cc77ddc6fb90036a0b3))
+* **notifications:** scrollback-derived context for hookless silence events ([42bbf7c](https://github.com/s3ntin3l8/mullion-session-manager/commit/42bbf7c7eec640ee8875b713410cf50a3eb5f4d7))
+
+
+### Bug Fixes
+
+* **notifications:** a silence context read can surface stale alt-screen redraw bytes right after exiting alt-screen ([26ea181](https://github.com/s3ntin3l8/mullion-session-manager/commit/26ea181bff42ecf608dc076e950fa7b4a8d61cbf))
+* **notifications:** narrow the alt-screen-exit watermark to the escape sequence's own end offset ([#1305](https://github.com/s3ntin3l8/mullion-session-manager/issues/1305)) ([5c8f324](https://github.com/s3ntin3l8/mullion-session-manager/commit/5c8f3242b7db9d21d19270e8a0ad02171d28fef9))
+
 ## [0.3.22](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.21...v0.3.22) (2026-09-15)
 
 
