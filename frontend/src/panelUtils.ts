@@ -5,7 +5,7 @@ import type {
   Position,
   SerializedDockview,
 } from "dockview";
-import type { Task, Workspace, TabletPaneCap } from "./api/index.js";
+import type { Task, Workspace, TabletPaneCap, CodexHookTrust } from "./api/index.js";
 import { positionToDirection } from "dockview";
 import type { Session } from "./api/index.js";
 import { initialPaneTitle } from "./paneTitle.js";
@@ -31,6 +31,31 @@ export function handleGlobalEscape(actions: {
   actions.clearPalette();
   actions.closeSettings();
   actions.clearSplitRequest();
+}
+
+// Issue #1189 — same "extracted here so it's directly unit-testable"
+// rationale as handleGlobalEscape above. App.tsx's codex `/hooks` trust
+// banner (issue #259) gates its own render behind this exact three-clause
+// AND — `codexSessionActive` (a currently-active session actually looks
+// like a codex launch), `codexHookTrust === "pending"` (the one-time grant
+// genuinely hasn't happened, as opposed to "trusted" or "not-installed"),
+// and not already dismissed for the CURRENT app version (a stale dismissal
+// from a prior version re-arms the banner, since a fresh release could be
+// exactly what fixed a codex/mullion incompatibility this was pending on).
+// #882's closing comment split this out rather than covering it in place,
+// same App.test.tsx-doesn't-exist reasoning as handleGlobalEscape's own
+// docstring.
+export function shouldShowCodexHookTrustBanner(input: {
+  codexSessionActive: boolean;
+  codexHookTrust: CodexHookTrust | null;
+  dismissedCodexHookTrustVersion: string | null;
+  currentVersion: string | null;
+}): boolean {
+  return (
+    input.codexSessionActive &&
+    input.codexHookTrust === "pending" &&
+    input.dismissedCodexHookTrustVersion !== input.currentVersion
+  );
 }
 
 // A workspace's `layout` is an opaque dockview blob — this walks it
