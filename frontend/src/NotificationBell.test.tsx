@@ -294,7 +294,7 @@ describe("NotificationBell", () => {
   // compact and verbose render identically there — dropping the "compact"
   // argument at the call site would leave this suite green. This test uses a
   // long detail specifically so the two modes diverge visibly.
-  it("issue #1293 — the group header status stays in compact mode (bare label, no detail) even with a long gatePrompt", async () => {
+  it("issue #1293 — the group header status stays in compact mode (bare label, no detail) even with a long sessionStatusDetail", async () => {
     sessions = [
       makeSession({
         sessionStatus: "awaiting_review_gate",
