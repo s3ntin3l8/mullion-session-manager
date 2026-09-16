@@ -2441,7 +2441,16 @@ export class Session {
             // EARLIER, already-pushed chunk (still alt-screen redraw, since
             // the TUI was up until this one), reopening #1296's bug.
             if (pushedToScrollback) {
-              const offsetInData = altScreenSwitch.endIndex - this.detectCarry.length;
+              // Clamped rather than trusted outright: this line rests on the
+              // implicit carryPartialEscape contract above never changing.
+              // Without the clamp, a future violation would pass a NEGATIVE
+              // end argument to data.slice() below, which JS reinterprets as
+              // "count back from the end" — a silently wrong bytesBeforeOffset
+              // rather than an obviously-wrong one. Clamping to 0 instead
+              // degrades to treating this whole chunk as post-exit content
+              // (trailingBytes = chunk.length), the same direction #1303's
+              // own fix already treats real trailing text.
+              const offsetInData = Math.max(0, altScreenSwitch.endIndex - this.detectCarry.length);
               const bytesBeforeOffset = Buffer.byteLength(data.slice(0, offsetInData), "utf8");
               const trailingBytes = chunk.length - bytesBeforeOffset;
               this.altScreenExitedAtBytes =
