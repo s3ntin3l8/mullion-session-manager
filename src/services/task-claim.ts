@@ -401,8 +401,8 @@ export async function dispatchClaimedTask(
       model,
       smallModel,
       // Mark this session as an unattended Task Master worker so the
-      // opencode adapter denies superpowers skills that gate on a human in
-      // the loop (brainstorming / writing-plans /
+      // opencode and codex adapters deny superpowers skills that gate on
+      // a human in the loop (brainstorming / writing-plans /
       // finishing-a-development-branch — verified failing in branchdam-
       // mobile tasks #66 / #67).
       taskId: task.id,

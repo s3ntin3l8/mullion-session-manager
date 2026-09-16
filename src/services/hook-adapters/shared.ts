@@ -142,3 +142,14 @@ export function escapeTomlBasicString(value: string): string {
       (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
     );
 }
+
+// Hermes review, PR #1300 — hoisted out of codex.ts, where an identical
+// local `const tomlString = ...` had been independently redefined in
+// buildCodexMcpFlags, buildCodexTrustFlag, and buildCodexSkillDenyFlag
+// (the third `-c`-builder Hermes flagged as the threshold for hoisting).
+// A quoted TOML basic string — `escapeTomlBasicString` plus the
+// surrounding `"..."` every one of those functions needs before
+// shell-quoting the whole `-c` argument.
+export function tomlString(value: string): string {
+  return `"${escapeTomlBasicString(value)}"`;
+}

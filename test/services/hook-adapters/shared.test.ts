@@ -4,6 +4,7 @@ import {
   resolveForwarderPath,
   resolveOpenCodePluginPath,
   escapeTomlBasicString,
+  tomlString,
 } from "../../../src/services/hook-adapters/shared.js";
 
 // Issue #259: Codex trusts the merged hook's command by hash, so a
@@ -71,5 +72,19 @@ describe("escapeTomlBasicString (issue #880 / Hermes review, PR #930)", () => {
     expect(escapeTomlBasicString("/opt/mullion/dist/mcp/server.mjs")).toBe(
       "/opt/mullion/dist/mcp/server.mjs",
     );
+  });
+});
+
+// Hermes review, PR #1300 — hoisted out of codex.ts, where an identical
+// local helper had been independently redefined in three separate
+// `-c`-builder functions (buildCodexMcpFlags, buildCodexTrustFlag,
+// buildCodexSkillDenyFlag).
+describe("tomlString", () => {
+  it("wraps escapeTomlBasicString's output in double quotes", () => {
+    expect(tomlString("plain")).toBe('"plain"');
+  });
+
+  it("escapes an embedded quote and backslash before wrapping", () => {
+    expect(tomlString('a"b\\c')).toBe(`"${escapeTomlBasicString('a"b\\c')}"`);
   });
 });

@@ -100,8 +100,8 @@ export interface SpawnSessionBody {
   injectMullionBundle?: boolean;
   // Set ONLY by Task Master spawn sites (task-claim.ts /
   // task-reconciler.ts / task-reseed.ts) to flag an unattended worker
-  // session, which the opencode adapter uses to deny superpowers skills
-  // that gate on a human in the loop (brainstorming / writing-plans /
+  // session, which the opencode and codex adapters use to deny superpowers
+  // skills that gate on a human in the loop (brainstorming / writing-plans /
   // finishing-a-development-branch). See CreateSessionOptions.taskId's own
   // doc comment (pty-manager.ts) for the full rationale — same posture
   // as injectAgentGuide/injectProjectBriefing above: a primary-resolved
