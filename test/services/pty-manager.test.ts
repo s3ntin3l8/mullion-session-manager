@@ -3022,6 +3022,84 @@ describe("PtyManager", () => {
       expect(confirmed?.payload.context).toBeUndefined();
     });
 
+    it("issue #1296: does not surface a stale alt-screen redraw fragment as silence context after exiting alt-screen with no further output", async () => {
+      // Regression test for the gap #1228's own !this.inAltScreen gate left
+      // open: that check is signal-time only, but getScrollbackTail() reads
+      // raw bytes regardless of screen mode — so a session that exits
+      // alt-screen and then produces genuinely zero further output could
+      // still walk backward into TUI redraw bytes physically still sitting
+      // in the ring.
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        const start = Date.now();
+        vi.setSystemTime(start);
+        fakePtyChildren[0].emitData("\x1b[?1049hTUI frame 1"); // enters alt-screen, streak starts
+
+        vi.setSystemTime(start + 1_200); // past SUSTAIN_MS -- a genuine streak
+        fakePtyChildren[0].emitData("TUI frame 2");
+
+        // Exits alt-screen with no further output. altScreenExited sets
+        // candidateKind = "altScreenExit", which CONFIRMS attention — tick()'s
+        // silence branch only ever runs from `state === "idle"`, so without
+        // clearing that confirmation first, the silence signal would never
+        // fire and this test would pass vacuously (no event at all) whether
+        // or not the fix actually works.
+        fakePtyChildren[0].emitData("\x1b[?1049l");
+        session.write("y"); // a genuine, non-immune userInput clears it
+        expect(session.toInfo().attention).toBe(false);
+
+        session.tick(start + 1_200 + 10_000); // past SUSTAINED_SILENCE_MS
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(session.toInfo().attention).toBe(true);
+      const silenceEvents = session.getEvents().filter((e) => e.kind === "attention");
+      const confirmed = silenceEvents.find((e) => e.payload.signal === "silence");
+      expect(confirmed?.payload.context).toBeUndefined();
+    });
+
+    it("issue #1296: still surfaces a real line written after exiting alt-screen (the watermark doesn't over-suppress)", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        const start = Date.now();
+        vi.setSystemTime(start);
+        fakePtyChildren[0].emitData("\x1b[?1049hTUI frame 1"); // enters alt-screen, streak starts
+
+        vi.setSystemTime(start + 1_200); // past SUSTAIN_MS -- a genuine streak
+        fakePtyChildren[0].emitData("\x1b[?1049l"); // exits alt-screen, no trailing text in this chunk
+        session.write("y"); // clears the altScreenExit confirmation
+        expect(session.toInfo().attention).toBe(false);
+
+        fakePtyChildren[0].emitData("build succeeded\r\n"); // real output after the exit
+
+        session.tick(start + 1_200 + 10_000); // past SUSTAINED_SILENCE_MS
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(session.toInfo().attention).toBe(true);
+      const silenceEvents = session.getEvents().filter((e) => e.kind === "attention");
+      const confirmed = silenceEvents.find((e) => e.payload.signal === "silence");
+      expect(confirmed?.payload.context).toBe("build succeeded");
+    });
+
     it("tracks the most recent OSC 0/2 title-change payload", async () => {
       const session = manager.getOrCreate({
         id: "1",

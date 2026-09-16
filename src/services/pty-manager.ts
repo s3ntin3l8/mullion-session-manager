@@ -1250,6 +1250,18 @@ export class Session {
   // restore fixes, and the live detector above self-corrects on the very
   // next real mode change either way.
   private inAltScreen = false;
+  // Issue #1296 — the scrollbackBuffer's own monotonic
+  // totalBytesEverPushed() reading at the moment alt-screen was last
+  // exited (the `altScreenExited` branch in onData below). Lets
+  // silenceContextFromScrollback() exclude every byte written while a TUI
+  // was still in alt-screen, even past the point where inAltScreen itself
+  // has flipped back to false — a signal-time-only check on inAltScreen
+  // can't do that, since a stale alt-screen redraw byte physically stays in
+  // the ring regardless of the CURRENT screen mode. Not restored from
+  // termModes on reattach (unlike inAltScreen itself): a freshly restored
+  // Session gets a brand-new, empty ScrollbackBuffer, so 0 — "nothing to
+  // exclude yet" — is already correct.
+  private altScreenExitedAtBytes = 0;
   // Tracked mouse-tracking-mode truth, the same deliberate way inAltScreen
   // above tracks screen mode — see MouseTrackingState's docstring in
   // attention-detect.ts for the full rationale (issue #93: a reconnecting
@@ -2402,6 +2414,14 @@ export class Session {
         if (nowInAltScreen !== this.inAltScreen) {
           altScreenExited = this.inAltScreen && !nowInAltScreen;
           this.inAltScreen = nowInAltScreen;
+          if (altScreenExited) {
+            // Issue #1296 — this chunk (escape sequence and everything else
+            // it carries) was already pushed to scrollbackBuffer above, so
+            // this watermark conservatively excludes the WHOLE chunk, not
+            // just the escape sequence itself — see issue #1303 for
+            // narrowing this to the sequence's own byte offset.
+            this.altScreenExitedAtBytes = this.scrollbackBuffer.totalBytesEverPushed();
+          }
           this.emitEvent("status_change", { screen: altScreenSwitch });
         }
       }
@@ -3296,22 +3316,41 @@ export class Session {
    * - `!this.inAltScreen` — an alt-screen TUI's own redraw is not a
    *   meaningful "last line"; attaching it would make the row worse, not
    *   better, for precisely the sessions most likely to be mid-redraw
-   *   right before falling silent. This is a signal-time check only,
-   *   though, not scan-time provenance: getScrollbackTail() reads raw
-   *   bytes regardless of screen mode, so a session that exits alt-screen
-   *   and then produces genuinely zero further output can still surface a
-   *   stale alt-screen redraw fragment here — tracked as issue #1296
-   *   rather than expanding this diff to track a byte-offset watermark.
+   *   right before falling silent. This alone is only a signal-time check,
+   *   though, not scan-time provenance — getScrollbackTail() reads raw
+   *   bytes regardless of the CURRENT screen mode, so without the
+   *   `altScreenExitedAtBytes` watermark below, a session that exits
+   *   alt-screen and then produces genuinely zero further output could
+   *   still surface a stale alt-screen redraw fragment (issue #1296).
    */
   private silenceContextFromScrollback(): string | null {
-    const tail = this.getScrollbackTail(SILENCE_SCAN_TAIL_BYTES);
-    // `tail.length === SILENCE_SCAN_TAIL_BYTES` alone can't tell "actually
-    // cut short" apart from "buffered total happens to equal the scan cap
-    // exactly" — both produce a tail of that same length. Comparing against
-    // the buffer's real total (ScrollbackBuffer.totalBufferedBytes()) is
-    // what tells them apart; only the former should discard a possibly
-    // partial first line.
-    const truncated = this.scrollbackBuffer.totalBufferedBytes() > tail.length;
+    // Issue #1296 — exclude every byte written at or before the last
+    // alt-screen exit, using the two monotonic totalBytesEverPushed()
+    // readings (never decremented by eviction, unlike totalBufferedBytes())
+    // rather than any index into the current ring, which eviction would
+    // silently invalidate. `sinceAltExit <= 0` when nothing has been
+    // written since the watermark was set (or none was ever set) — that
+    // one boundary also degrades correctly to "no context" rather than
+    // treating it as reading everything, since an ordinary hookless
+    // session's own silence is always the FIRST thing to fire this method,
+    // never zero.
+    const sinceAltExit = this.scrollbackBuffer.totalBytesEverPushed() - this.altScreenExitedAtBytes;
+    if (sinceAltExit <= 0) return null;
+    const scanBytes = Math.min(SILENCE_SCAN_TAIL_BYTES, sinceAltExit);
+    const tail = this.getScrollbackTail(scanBytes);
+    // Only the byte CAP (scanBytes) can leave a partial leading line — a
+    // cut at the alt-screen watermark lands on a whole PTY-chunk boundary
+    // (node-pty hands us complete strings) and must NOT itself count as
+    // truncated, or the first post-TUI line (often the only real one) gets
+    // discarded by lastMeaningfulLine's `truncated` handling. `available`
+    // is how much of the post-watermark range is still actually buffered
+    // (eviction may have dropped some of it) — comparing against THAT,
+    // not the ring's full totalBufferedBytes(), is what keeps this
+    // equivalent to #1228's original formula whenever no alt-screen was
+    // ever entered (altScreenExitedAtBytes stays 0, so
+    // sinceAltExit === totalBytesEverPushed() and available === totalBufferedBytes()).
+    const available = Math.min(this.scrollbackBuffer.totalBufferedBytes(), sinceAltExit);
+    const truncated = available > tail.length;
     const line = lastMeaningfulLine(tail.toString("utf8"), { truncated });
     return line ? collapseAndTruncate(line, SILENCE_CONTEXT_MAX_CHARS) : null;
   }

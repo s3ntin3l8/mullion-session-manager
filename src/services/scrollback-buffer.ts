@@ -66,6 +66,13 @@ export const SCROLLBACK_MAX_BYTES = 1024 * 1024;
 export class ScrollbackBuffer {
   private chunks: Buffer[] = [];
   private totalBytes = 0;
+  // Issue #1296 — a monotonic total, never decremented by eviction (unlike
+  // totalBytes above). A caller that needs to exclude everything written
+  // before some earlier moment (e.g. Session's alt-screen-exit watermark)
+  // needs a count that survives the ring's own FIFO eviction: an index into
+  // the current buffer would silently decay as eviction shifts every
+  // position underneath it.
+  private bytesEverPushed = 0;
 
   /**
    * Append `chunk`, then evict from the front (oldest first) until the
@@ -79,6 +86,7 @@ export class ScrollbackBuffer {
   push(chunk: Buffer): void {
     this.chunks.push(chunk);
     this.totalBytes += chunk.length;
+    this.bytesEverPushed += chunk.length;
     while (this.totalBytes > SCROLLBACK_MAX_BYTES && this.chunks.length > 1) {
       const dropped = this.chunks.shift();
       if (dropped) this.totalBytes -= dropped.length;
@@ -139,5 +147,18 @@ export class ScrollbackBuffer {
    */
   totalBufferedBytes(): number {
     return this.totalBytes;
+  }
+
+  /**
+   * Issue #1296 — the total bytes ever pushed, monotonically increasing
+   * regardless of eviction (unlike totalBufferedBytes() above, which
+   * shrinks when push()'s eviction loop drops old chunks). A caller can
+   * diff two readings of this to get "how many bytes have been written
+   * since moment X" even if the ring has evicted past that moment in the
+   * meantime — see Session.silenceContextFromScrollback()'s alt-screen-exit
+   * watermark, the reason this exists.
+   */
+  totalBytesEverPushed(): number {
+    return this.bytesEverPushed;
   }
 }
