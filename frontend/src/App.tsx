@@ -44,6 +44,7 @@ import {
   panelSessionId,
   isTiledPanel,
   canLaunchTerminal,
+  shouldShowCodexHookTrustBanner,
 } from "./panelUtils.js";
 import { unreadEventSummary } from "./eventDescriptions.js";
 import { useVisualViewportInset } from "./hooks/useVisualViewportInset.js";
@@ -1470,43 +1471,46 @@ export function App() {
               Mullion cannot grant this trust on the user's behalf (that's
               the whole point of Codex's gate), so this only informs and
               links to the one-time manual step. */}
-          {codexSessionActive &&
-            codexHookTrust === "pending" &&
-            dismissedCodexHookTrustVersion !== currentVersion && (
-              <div
-                className="update-banner"
-                onClick={() => openSettings("launchers")}
+          {shouldShowCodexHookTrustBanner({
+            codexSessionActive,
+            codexHookTrust,
+            dismissedCodexHookTrustVersion,
+            currentVersion,
+          }) && (
+            <div
+              className="update-banner"
+              onClick={() => openSettings("launchers")}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") openSettings("launchers");
+              }}
+            >
+              <RefreshIcon size={16} style={{ color: "var(--o)", flexShrink: 0 }} />
+              <span className="update-banner-title">Codex hooks not yet trusted</span>
+              <span className="update-banner-subtext">
+                Run /hooks in a Codex session to enable structured events · Click for details
+              </span>
+              <span
+                className="update-banner-dismiss"
                 role="button"
                 tabIndex={0}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") openSettings("launchers");
+                onClick={(e) => {
+                  e.stopPropagation();
+                  useDashboardStore.getState().dismissCodexHookTrust();
                 }}
-              >
-                <RefreshIcon size={16} style={{ color: "var(--o)", flexShrink: 0 }} />
-                <span className="update-banner-title">Codex hooks not yet trusted</span>
-                <span className="update-banner-subtext">
-                  Run /hooks in a Codex session to enable structured events · Click for details
-                </span>
-                <span
-                  className="update-banner-dismiss"
-                  role="button"
-                  tabIndex={0}
-                  onClick={(e) => {
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
                     e.stopPropagation();
                     useDashboardStore.getState().dismissCodexHookTrust();
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.stopPropagation();
-                      useDashboardStore.getState().dismissCodexHookTrust();
-                    }
-                  }}
-                  title="Dismiss until next version"
-                >
-                  ×
-                </span>
-              </div>
-            )}
+                  }
+                }}
+                title="Dismiss until next version"
+              >
+                ×
+              </span>
+            </div>
+          )}
           <div className={`grid-area-body${!backendReachable || sessionExpired ? " dimmed" : ""}`}>
             {/* Mobile UI/UX overhaul, item A — the single mobile pane
                 switcher (dockview's own tab strip is now hidden here, via

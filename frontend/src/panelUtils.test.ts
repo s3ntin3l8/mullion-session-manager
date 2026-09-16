@@ -32,6 +32,7 @@ import {
   resolveActiveProjectId,
   parseDeepLinkSessionId,
   handleGlobalEscape,
+  shouldShowCodexHookTrustBanner,
 } from "./panelUtils.js";
 import type { DockviewApi, DockviewGroupPanel, SerializedDockview } from "dockview-react";
 import { DEFAULT_SETTINGS } from "./api/index.js";
@@ -1995,5 +1996,60 @@ describe("handleGlobalEscape (U9)", () => {
     expect(closeSettings).toHaveBeenCalledTimes(1);
     // The actual regression: this used to never be called at all.
     expect(clearSplitRequest).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("shouldShowCodexHookTrustBanner (issue #1189)", () => {
+  const baseInput = {
+    codexSessionActive: true,
+    codexHookTrust: "pending" as const,
+    dismissedCodexHookTrustVersion: null,
+    currentVersion: "1.2.3",
+  };
+
+  it("shows the banner when all three clauses hold", () => {
+    expect(shouldShowCodexHookTrustBanner(baseInput)).toBe(true);
+  });
+
+  it("suppresses the banner when no codex session is active", () => {
+    expect(shouldShowCodexHookTrustBanner({ ...baseInput, codexSessionActive: false })).toBe(false);
+  });
+
+  it("suppresses the banner once trust is granted", () => {
+    expect(shouldShowCodexHookTrustBanner({ ...baseInput, codexHookTrust: "trusted" })).toBe(false);
+  });
+
+  it("suppresses the banner when codex hooks aren't installed at all", () => {
+    expect(shouldShowCodexHookTrustBanner({ ...baseInput, codexHookTrust: "not-installed" })).toBe(
+      false,
+    );
+  });
+
+  it("suppresses the banner when already dismissed for the current version", () => {
+    expect(
+      shouldShowCodexHookTrustBanner({
+        ...baseInput,
+        dismissedCodexHookTrustVersion: "1.2.3",
+      }),
+    ).toBe(false);
+  });
+
+  it("re-shows the banner when the dismissal was for an older version", () => {
+    expect(
+      shouldShowCodexHookTrustBanner({
+        ...baseInput,
+        dismissedCodexHookTrustVersion: "1.2.2",
+      }),
+    ).toBe(true);
+  });
+
+  it("pins current behavior: suppressed while currentVersion is still null, since null !== null is false", () => {
+    expect(
+      shouldShowCodexHookTrustBanner({
+        ...baseInput,
+        dismissedCodexHookTrustVersion: null,
+        currentVersion: null,
+      }),
+    ).toBe(false);
   });
 });
