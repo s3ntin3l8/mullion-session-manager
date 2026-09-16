@@ -26,13 +26,13 @@
 // frontend.
 
 import type { SessionInfo } from "./pty-manager.js";
+import { collapseAndTruncate } from "./terminal-text.js";
 // SessionStatus/SessionSeverity now physically live in src/shared/types.ts
 // (they're hand-mirrored 1:1 on the frontend — see frontend/src/api.ts's own
 // re-export). Re-exported below so every existing backend importer of this
 // module keeps working unchanged. See that file for the members' own doc
 // comments.
 import type { SessionStatus, SessionSeverity } from "../shared/types.js";
-import { collapseAndTruncate } from "./terminal-text.js";
 
 export type { SessionStatus, SessionSeverity };
 
