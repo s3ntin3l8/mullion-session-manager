@@ -55,6 +55,40 @@ describe("ScrollbackBuffer.push / totalBufferedBytes", () => {
   });
 });
 
+describe("ScrollbackBuffer.totalBytesEverPushed", () => {
+  it("starts at 0", () => {
+    const buf = new ScrollbackBuffer();
+    expect(buf.totalBytesEverPushed()).toBe(0);
+  });
+
+  it("tracks total bytes pushed, same as totalBufferedBytes when nothing has been evicted", () => {
+    const buf = new ScrollbackBuffer();
+    buf.push(Buffer.from("hello"));
+    buf.push(Buffer.from(" world"));
+    expect(buf.totalBytesEverPushed()).toBe(11);
+    expect(buf.totalBytesEverPushed()).toBe(buf.totalBufferedBytes());
+  });
+
+  it("issue #1296 — unlike totalBufferedBytes(), never decreases when eviction drops old chunks", () => {
+    // The whole reason this method exists: a caller (Session's alt-screen-
+    // exit watermark) needs to diff two readings to get "bytes written
+    // since moment X" even after the ring has evicted past X — an index
+    // into the current buffer would silently decay under eviction, but a
+    // monotonic total survives it.
+    const buf = new ScrollbackBuffer();
+    const chunkSize = 100 * 1024;
+    const chunkCount = Math.ceil(SCROLLBACK_MAX_BYTES / chunkSize) + 2;
+    for (let i = 0; i < chunkCount; i++) {
+      buf.push(Buffer.alloc(chunkSize, i % 256));
+    }
+    // Eviction has run (buffered total is capped)...
+    expect(buf.totalBufferedBytes()).toBeLessThan(chunkSize * chunkCount);
+    // ...but the monotonic total reflects every byte ever pushed, including
+    // the evicted ones.
+    expect(buf.totalBytesEverPushed()).toBe(chunkSize * chunkCount);
+  });
+});
+
 describe("ScrollbackBuffer.toBuffer", () => {
   it("prefixes buffered chunks with the given preamble", () => {
     const buf = new ScrollbackBuffer();
