@@ -2025,6 +2025,10 @@ describe("shouldShowCodexHookTrustBanner (issue #1189)", () => {
     );
   });
 
+  it("suppresses the banner when codexHookTrust hasn't loaded yet (null)", () => {
+    expect(shouldShowCodexHookTrustBanner({ ...baseInput, codexHookTrust: null })).toBe(false);
+  });
+
   it("suppresses the banner when already dismissed for the current version", () => {
     expect(
       shouldShowCodexHookTrustBanner({
