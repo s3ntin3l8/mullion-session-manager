@@ -2,12 +2,7 @@ import { readFileSync, writeFileSync, mkdirSync, realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./types.js";
-import {
-  shellQuote,
-  escapeTomlBasicString,
-  resolveMcpServerPath,
-  SHELL_METACHARACTERS_RE,
-} from "./shared.js";
+import { shellQuote, tomlString, resolveMcpServerPath, SHELL_METACHARACTERS_RE } from "./shared.js";
 import { ensureForwarderShim, forwarderHookCommand } from "./forwarder-shim.js";
 import { installBundleSkills, uninstallBundleSkills } from "./mullion-bundle.js";
 
@@ -449,11 +444,12 @@ export function resolveCodexAgentsSkillsDir(): string {
 // Never calls `smol-toml`'s stringifier — these are new, synthesized `-c`
 // arguments, not an edit to a user's existing file, so there is nothing to
 // round-trip or preserve; each override is built as a small, independently
-// valid TOML literal and escaped via `escapeTomlBasicString` (shared.js,
-// hoisted from codex-skills.ts's own identical need) before being
-// shell-quoted as one argument. `escapeTomlBasicString` is applied to the
-// three env var names too even though they're compile-time-constant ASCII
-// identifiers that never need it — one code path, no special case.
+// valid TOML literal and escaped via `tomlString` (shared.js, hoisted here
+// after Hermes review, PR #1300, once a third `-c`-builder function
+// needed the identical wrapping) before being shell-quoted as one
+// argument. `tomlString` is applied to the three env var names too even
+// though they're compile-time-constant ASCII identifiers that never need
+// it — one code path, no special case.
 const CODEX_MCP_ENV_VAR_NAMES = [
   "MULLION_HOOK_SOCKET",
   "MULLION_HOOK_TOKEN",
@@ -464,7 +460,6 @@ export function buildCodexMcpFlags(
   mcpServerPath: string,
   execPath: string = process.execPath,
 ): string {
-  const tomlString = (value: string) => `"${escapeTomlBasicString(value)}"`;
   const envVarNames = CODEX_MCP_ENV_VAR_NAMES.map(tomlString).join(", ");
   const overrides = [
     `mcp_servers.mullion.command=${tomlString(execPath)}`,
@@ -550,9 +545,50 @@ export function buildCodexMcpFlags(
 // own outer catch (index.ts) — degrade to launching without hooks, not a
 // silently-wrong trust key.
 export function buildCodexTrustFlag(cwd: string): string {
-  const tomlString = (value: string) => `"${escapeTomlBasicString(value)}"`;
   const override = `projects={${tomlString(realpathSync(cwd))}={trust_level=${tomlString("trusted")}}}`;
   return `-c ${shellQuote(override)}`;
+}
+
+// Task Master (worker / review / retry / re-seed) — deny the superpowers
+// skills that gate on a human in the loop, the codex leg of the same
+// denial opencode.ts's prepareLaunch already applies (verified failing in
+// #66/#67, branchdam-mobile — see that file's own longer WHY-THESE-THREE
+// comment; identical reasoning, not repeated here). Codex selects skills
+// by frontmatter `name`, not directory basename (opposite of Claude Code)
+// — these three names are exactly what opencode denies today.
+//
+// Issue #965/#1282 — the channel is `-c skills.config=[...]`, an inline
+// TOML array-of-tables, NOT a managedInstall write to config.toml: codex
+// reads config.toml at process startup and managedInstall runs
+// fire-and-forget (see buildCodexTrustFlag's own comment for the
+// identical race), so only the ephemeral commandTransform channel can be
+// trusted to apply before this launch's own startup read.
+//
+// Unlike `-c projects={...}` (buildCodexTrustFlag above), whose own
+// comment documents that shape as a WHOLE-top-level-table clobber, this
+// does NOT clobber a user's existing on-disk `[[skills.config]]` entries
+// (e.g. one written by services/skills.ts's Skills Manager,
+// codex-skills.ts's own `writeCodexSkillEnabled`) — confirmed empirically
+// against a REAL interactive codex session (not `codex exec`/`codex debug
+// ...`, this repo's own stated bar, codex.ts:405-409), not just codex-cli
+// 0.154.0's rendered prompt input: a scratch CODEX_HOME with an on-disk
+// `[[skills.config]]` denial for `imagegen` plus this launch-time `-c`
+// override denying `openai-docs` produced a live session whose own
+// "list your available skills" answer omitted BOTH — the array merges by
+// `name`, last-wins, across the disk+override boundary, the same
+// semantics `codex-skills.ts` already documents within a single file.
+// See #1282 for the full probe methodology and raw evidence.
+const CODEX_TASK_MASTER_DENIED_SKILLS = [
+  "brainstorming",
+  "writing-plans",
+  "finishing-a-development-branch",
+] as const;
+
+export function buildCodexSkillDenyFlag(): string {
+  const entries = CODEX_TASK_MASTER_DENIED_SKILLS.map(
+    (name) => `{name=${tomlString(name)},enabled=false}`,
+  ).join(",");
+  return `-c ${shellQuote(`skills.config=[${entries}]`)}`;
 }
 
 function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
@@ -609,6 +645,9 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
       // ctx.skipPermissions && ctx.cwd — same gate as agy's
       // mergeAgyTrustedWorkspace, see buildCodexTrustFlag's own comment.
       if (ctx.skipPermissions && ctx.cwd) parts.push(buildCodexTrustFlag(ctx.cwd));
+      // Issue #965/#1282 — same taskId gate as opencode.ts's own deny
+      // list, see buildCodexSkillDenyFlag's own comment.
+      if (ctx.taskId !== undefined) parts.push(buildCodexSkillDenyFlag());
       return parts.join(" ");
     },
     // async, not a plain arrow wrapping a sync call: a synchronous throw

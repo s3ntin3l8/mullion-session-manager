@@ -243,13 +243,14 @@ export interface CreateSessionOptions {
   /** Set ONLY for sessions spawned by Mullion's Task Master (worker, review
    * agent, retry, reject/auto-return re-seed — see task-claim.ts and
    * task-reconciler.ts's spawn sites). Threaded through to the opencode
-   * adapter's `HookAdapterContext.taskId` (opencode.ts's prepareLaunch),
-   * which uses a positive value to deny superpowers skills that gate on a
-   * human in the loop (brainstorming / writing-plans /
-   * finishing-a-development-branch). Spawn-time only: not persisted on
-   * `sessions` (no row column, no migration); a later reattach of a
-   * already-live session reads `undefined` here, which is correct since
-   * the opencode config was set when the session was first spawned.
+   * and codex adapters' `HookAdapterContext.taskId` (opencode.ts's and
+   * codex.ts's prepareLaunch), which use a positive value to deny
+   * superpowers skills that gate on a human in the loop (brainstorming /
+   * writing-plans / finishing-a-development-branch). Spawn-time only: not
+   * persisted on `sessions` (no row column, no migration); a later
+   * reattach of a already-live session reads `undefined` here, which is
+   * correct since the denial config was set when the session was first
+   * spawned.
    * Producer: session-lifecycle.ts's createSessionRecord (called from the
    * Task Master spawn sites). A caller that omits this leaves the adapter
    * with no taskId, which is the desired "not a Task Master session"
@@ -1191,10 +1192,10 @@ export class Session {
   // Set ONLY for Task Master worker/review/retry/re-seed sessions. Same
   // "spawn-time snapshot, consumed once in bootstrapMaster()" posture as
   // initialPrompt/seedPrompt/resumeAgentSessionId above; threaded through
-  // to HookAdapterContext.taskId, where the opencode adapter uses it to
-  // deny brainstorming/writing-plans/finishing-a-development-branch for
-  // unattended worker sessions. See CreateSessionOptions.taskId's own
-  // doc comment for the full rationale.
+  // to HookAdapterContext.taskId, where the opencode and codex adapters
+  // use it to deny brainstorming/writing-plans/finishing-a-development-
+  // branch for unattended worker sessions. See CreateSessionOptions.taskId's
+  // own doc comment for the full rationale.
   //
   // Public `readonly` (not `private`) — same posture as
   // `injectAgentGuide`/`injectProjectBriefing` above. LocalBackend.spawn
@@ -1202,7 +1203,7 @@ export class Session {
   // the `taskIdApplied` echo-back for version-skew detection (an older
   // agent build that strips the field from the request body has a
   // `taskId: undefined` Session, and the echo is the only signal a
-  // primary has to know that the opencode skill denials are not in
+  // primary has to know that the opencode/codex skill denials are not in
   // effect for that spawn — see session-lifecycle.ts's own version-skew
   // loop and PR #966's review thread). Not part of SessionInfo /
   // toInfo()'s public surface, just as injectAgentGuide is not.
