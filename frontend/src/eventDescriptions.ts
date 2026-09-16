@@ -137,8 +137,21 @@ export function describeEvent(
           return { text: "Finished — needs input", attention: true, generic: true };
         case "altScreenExit":
           return { text: "Exited full-screen — needs input", attention: true, generic: true };
-        case "silence":
+        case "silence": {
+          // Issue #1228 — the backend attaches this only for a hookless,
+          // non-alt-screen session (pty-manager.ts's Session.tick(), gated
+          // on !hooksActive && !inAltScreen) — a hooked agent session's
+          // silence row keeps relying on sessionContextMap's richer
+          // todo/file-change/diff context below instead, so the two
+          // mechanisms never compete for the same row. Same
+          // typeof-narrowing idiom as hookNotification's title/body read
+          // just below, and the same `generic` rule this file's own header
+          // comment states: real content must never carry `generic: true`,
+          // or sessionContextMap would overwrite it.
+          const context = typeof event.payload.context === "string" ? event.payload.context : null;
+          if (context) return { text: `Gone quiet — ${context}`, attention: true };
           return { text: "Gone quiet — needs input", attention: true, generic: true };
+        }
         case "notification":
           // The PTY-parsed OSC 9/777 signal — distinct from the hook-driven
           // "hookNotification" case below, and just as content-free (no

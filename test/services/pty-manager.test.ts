@@ -2887,6 +2887,141 @@ describe("PtyManager", () => {
       }
     });
 
+    it("issue #1228: a hookless session's silence event carries the last real scrollback line as context", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        const start = Date.now();
+        vi.setSystemTime(start);
+        // \r\n, not bare \n — a real pty's actual line terminator (node-pty,
+        // this repo's own backend). Regression coverage for a prior bug
+        // where the trailing \r before \n was misread as an overwrite
+        // marker, discarding every ordinary line as blank.
+        fakePtyChildren[0].emitData("build step 1\r\n"); // streak starts
+
+        vi.setSystemTime(start + 1_200); // past SUSTAIN_MS -- a genuine streak
+        fakePtyChildren[0].emitData(`${"\x1b[1m"}build succeeded${"\x1b[22m"}\r\n`);
+
+        session.tick(start + 1_200 + 10_000); // past SUSTAINED_SILENCE_MS
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(session.toInfo().attention).toBe(true);
+      const silenceEvents = session.getEvents().filter((e) => e.kind === "attention");
+      const confirmed = silenceEvents.find((e) => e.payload.signal === "silence");
+      expect(confirmed?.payload.context).toBe("build succeeded");
+    });
+
+    it("issue #1228: attaches real context even when total buffered scrollback exactly equals the scan cap (not a truncated read)", async () => {
+      // Regression test: getScrollbackTail(SILENCE_SCAN_TAIL_BYTES).length
+      // alone can't tell "the read was cut short" apart from "the session
+      // simply has exactly that many bytes buffered, no more" — both
+      // produce a tail of that same length. Sized so the two chunks below
+      // sum to EXACTLY 8192 (SILENCE_SCAN_TAIL_BYTES) in total, with a real,
+      // non-blank final line — a prior version of this code mistook this
+      // for a truncated read and discarded that final line as a possibly
+      // partial fragment, losing it entirely.
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        const start = Date.now();
+        vi.setSystemTime(start);
+        const filler = `${"x".repeat(8178)}\r\n`; // 8180 bytes
+        fakePtyChildren[0].emitData(filler); // streak starts
+
+        vi.setSystemTime(start + 1_200); // past SUSTAIN_MS -- a genuine streak
+        const finalLine = "final line\r\n"; // 12 bytes -- 8180 + 12 = 8192
+        fakePtyChildren[0].emitData(finalLine);
+
+        session.tick(start + 1_200 + 10_000); // past SUSTAINED_SILENCE_MS
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(session.toInfo().attention).toBe(true);
+      const silenceEvents = session.getEvents().filter((e) => e.kind === "attention");
+      const confirmed = silenceEvents.find((e) => e.payload.signal === "silence");
+      expect(confirmed?.payload.context).toBe("final line");
+    });
+
+    it("issue #1228: does not attach scrollback context for an alt-screen session (a TUI's redraw is not a meaningful line)", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        const start = Date.now();
+        vi.setSystemTime(start);
+        fakePtyChildren[0].emitData("\x1b[?1049hTUI frame 1"); // enters alt-screen, streak starts
+
+        vi.setSystemTime(start + 1_200);
+        fakePtyChildren[0].emitData("TUI frame 2");
+
+        session.tick(start + 1_200 + 10_000);
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(session.toInfo().attention).toBe(true);
+      const silenceEvents = session.getEvents().filter((e) => e.kind === "attention");
+      const confirmed = silenceEvents.find((e) => e.payload.signal === "silence");
+      expect(confirmed?.payload.context).toBeUndefined();
+    });
+
+    it("issue #1228: does not attach scrollback context for a hooksActive session (sessionContextMap already covers it on the frontend)", async () => {
+      // "claude" matches claudeCodeAdapter, so hooksActive is true from
+      // spawn — see the "PROVEN hook-active agent" test above for why this
+      // alone is enough to change tick()'s behavior, independent of
+      // hooksProven.
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "claude",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      session.markHooksProven();
+
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        const start = Date.now();
+        vi.setSystemTime(start);
+        fakePtyChildren[0].emitData("work output 1");
+
+        vi.setSystemTime(start + 1_200);
+        fakePtyChildren[0].emitData("work output 2");
+
+        session.tick(start + 1_200 + 60_000); // past HOOK_FALLBACK_SILENCE_MS
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(session.toInfo().attention).toBe(true);
+      const silenceEvents = session.getEvents().filter((e) => e.kind === "attention");
+      const confirmed = silenceEvents.find((e) => e.payload.signal === "silence");
+      expect(confirmed?.payload.context).toBeUndefined();
+    });
+
     it("tracks the most recent OSC 0/2 title-change payload", async () => {
       const session = manager.getOrCreate({
         id: "1",
