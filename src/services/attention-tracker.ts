@@ -146,8 +146,23 @@ export class AttentionTracker {
    * entries into real emitEvent("attention", ...) calls. The one place
    * onData/tick() ever touch `this.attentionState` — keeps every call site
    * from having to duplicate this bookkeeping.
+   *
+   * `extras`, issue #1228 — merged onto a CONFIRMING emit only (never a
+   * clear), for a caller that has some cheap, already-computed display
+   * context for this specific transition (e.g. tick()'s silence branch,
+   * which reads scrollback only for the one signal it's about to raise).
+   * Deliberately NOT a host callback read unconditionally inside this
+   * method — this method runs for every transition, confirm and clear
+   * alike, and a callback here would call something like
+   * getScrollbackTail() on clears too, for no reason. See
+   * emitAttentionSignalWithExtras below for the same "caller supplies
+   * extras, this class doesn't go fetch them" shape, used for the
+   * always-emit hook-confirmed signals.
    */
-  applyAttentionTransition(transition: AttentionTransition): void {
+  applyAttentionTransition(
+    transition: AttentionTransition,
+    extras?: Record<string, unknown>,
+  ): void {
     for (const entry of transition.log) {
       // Skip PENDING_ATTENTION churn (entering it from idle, or being
       // cancelled back to idle from it without ever confirming) — during
@@ -171,8 +186,15 @@ export class AttentionTracker {
     this.state = transition.next;
     // Spread into a plain object: AttentionEmit's fixed shape (no index
     // signature) doesn't structurally satisfy emitEvent's deliberately
-    // loose Record<string, unknown> payload type otherwise.
-    for (const emit of transition.emit) this.host.emitEvent("attention", { ...emit });
+    // loose Record<string, unknown> payload type otherwise. `extras` only
+    // ever applies to a confirming emit (`emit.attention === true`) — see
+    // this method's own doc comment above for why a clear never carries it.
+    for (const emit of transition.emit) {
+      this.host.emitEvent(
+        "attention",
+        emit.attention && extras ? { ...emit, ...extras } : { ...emit },
+      );
+    }
   }
 
   /**

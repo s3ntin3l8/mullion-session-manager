@@ -45,6 +45,7 @@ import type { HookMessageKind, HookMessage, BackgroundTask } from "./hook-protoc
 import { filterOutstandingBackgroundTasks } from "./background-tasks.js";
 import { getAdapterEmits } from "./hook-adapters/index.js";
 import { detectDevServerPortForPlainSession } from "./dev-server-detect.js";
+import { lastMeaningfulLine, collapseAndTruncate } from "./terminal-text.js";
 import { ScrollbackBuffer } from "./scrollback-buffer.js";
 import { SessionStateFile, stateFilePath, type StoredSessionState } from "./session-state-file.js";
 import { RedrawNudge } from "./redraw-nudge.js";
@@ -798,6 +799,26 @@ const HOOK_FALLBACK_SILENCE_MS = 60_000;
 // role too — gating it would silently strand every remote-agent session's
 // pending/silent attention signals unconfirmed forever.
 const ATTENTION_EVAL_INTERVAL_MS = 500;
+
+// Issue #1228 — how much of the tail to scan for a silence event's
+// attached context line. Much smaller than dev-server-detect.ts's own
+// DEV_SERVER_SCAN_TAIL_BYTES (64 KiB): that scan is hunting for a banner
+// line that can appear anywhere in a dev server's early startup output, but
+// this one only ever wants the single most recent real line, which — by
+// construction, since the signal only fires after SUSTAINED_SILENCE_MS/
+// HOOK_FALLBACK_SILENCE_MS of quiet — is always close to the end of the
+// buffer.
+const SILENCE_SCAN_TAIL_BYTES = 8 * 1024;
+
+// Notification-row text, not a tab badge — this repo's tightest existing
+// cap for a similar purpose is session-status.ts's STATUS_DETAIL_MAX_CHARS
+// (48), sized for a glanceable label; this is closer to a full line, and
+// the frontend's own notification row cap (NotificationBell.tsx's
+// NOTIF_ROW_TEXT_MAX) is 90. 120 gives some headroom above that for
+// context that's more informative pre-truncation, without being unbounded
+// — this matters because sessionEvents.payload (schema.ts) has no size cap
+// of its own once eventPersistence is on.
+const SILENCE_CONTEXT_MAX_CHARS = 120;
 
 // A gap of at least this long since the previous chunk starts a fresh
 // activity streak — see the streak tracking in onData. Deliberately larger
@@ -3222,6 +3243,15 @@ export class Session {
    * unconditionally inside, purely so tests can call this directly with a
    * synthetic clock instead of needing fake real timers — see
    * test/services/pty-manager.test.ts.
+   *
+   * Issue #1228: a hookless session's silence signal (the only kind that
+   * ever needed one — a `hooksActive` session already gets a richer
+   * hook-derived context line from the frontend's own sessionContextMap,
+   * see eventDescriptions.ts) is attached its own last real scrollback
+   * line as `context` here, at the exact moment the signal fires — see
+   * silenceContextFromScrollback()'s own doc comment for why this is the
+   * one and only read site rather than a host callback threaded through
+   * applyAttentionTransition unconditionally.
    */
   tick(now: number = Date.now()): void {
     this.attention.applyAttentionTransition(
@@ -3241,10 +3271,48 @@ export class Session {
       this.lastActivityAt !== null && now - this.lastActivityAt >= requiredSilenceMs;
 
     if (this.attention.state.state === "idle" && hadSustainedStreak && silentLongEnough) {
+      const context =
+        !this.hooksActive && !this.inAltScreen ? this.silenceContextFromScrollback() : null;
       this.attention.applyAttentionTransition(
         advanceAttention(this.attention.state, { type: "signal", kind: "silence", now }),
+        context !== null ? { context } : undefined,
       );
     }
+  }
+
+  /**
+   * Issue #1228 — the last real (non-blank) line in this session's recent
+   * scrollback, collapsed and truncated for display, or null if there's
+   * nothing usable. Only ever called from tick()'s silence branch above,
+   * and only for a hookless, non-alt-screen session:
+   *
+   * - `!this.hooksActive` — a hook-confirmed agent session already has a
+   *   richer, hook-derived context (todo/file-change/diff — see
+   *   eventDescriptions.ts's sessionContextMap on the frontend) for
+   *   exactly the sessions this would otherwise duplicate or override;
+   *   restricting to hookless sessions means the two mechanisms never
+   *   compete for the same row.
+   * - `!this.inAltScreen` — an alt-screen TUI's own redraw is not a
+   *   meaningful "last line"; attaching it would make the row worse, not
+   *   better, for precisely the sessions most likely to be mid-redraw
+   *   right before falling silent. This is a signal-time check only,
+   *   though, not scan-time provenance: getScrollbackTail() reads raw
+   *   bytes regardless of screen mode, so a session that exits alt-screen
+   *   and then produces genuinely zero further output can still surface a
+   *   stale alt-screen redraw fragment here — tracked as issue #1296
+   *   rather than expanding this diff to track a byte-offset watermark.
+   */
+  private silenceContextFromScrollback(): string | null {
+    const tail = this.getScrollbackTail(SILENCE_SCAN_TAIL_BYTES);
+    // `tail.length === SILENCE_SCAN_TAIL_BYTES` alone can't tell "actually
+    // cut short" apart from "buffered total happens to equal the scan cap
+    // exactly" — both produce a tail of that same length. Comparing against
+    // the buffer's real total (ScrollbackBuffer.totalBufferedBytes()) is
+    // what tells them apart; only the former should discard a possibly
+    // partial first line.
+    const truncated = this.scrollbackBuffer.totalBufferedBytes() > tail.length;
+    const line = lastMeaningfulLine(tail.toString("utf8"), { truncated });
+    return line ? collapseAndTruncate(line, SILENCE_CONTEXT_MAX_CHARS) : null;
   }
 
   /** Subscribe to this session's own notification events as they're emitted

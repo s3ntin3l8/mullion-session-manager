@@ -630,6 +630,29 @@ describe("eventDescriptions (Phase 2, issue #176)", () => {
       expect(describeEvent(event)).toEqual({ text: "Build done", attention: true });
     });
 
+    it("issue #1228 — a silence event with a scrollback-derived context is NOT content-free", () => {
+      const event = makeEvent({
+        kind: "attention",
+        payload: { attention: true, signal: "silence", context: "build succeeded" },
+      });
+      expect(describeEvent(event)).toEqual({
+        text: "Gone quiet — build succeeded",
+        attention: true,
+      });
+    });
+
+    it("issue #1228 — a silence event without context keeps the bare fallback text and stays content-free", () => {
+      const event = makeEvent({
+        kind: "attention",
+        payload: { attention: true, signal: "silence" },
+      });
+      expect(describeEvent(event)).toEqual({
+        text: "Gone quiet — needs input",
+        attention: true,
+        generic: true,
+      });
+    });
+
     it("does NOT mark a row whose own text already carries content", () => {
       const permission = makeEvent({
         kind: "attention",

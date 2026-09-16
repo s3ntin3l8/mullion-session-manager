@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { Session } from "./pty-manager.js";
+import { ANSI_ESCAPE_SEQUENCE } from "./terminal-text.js";
 
 // Scans a project's dock-session PTY output for the startup banner a dev
 // server prints once it's actually listening — issue #28's "pre-fill the
@@ -49,9 +50,10 @@ const DEV_SERVER_BANNER_LINE =
 // preamble at all) — without the `?`, that preamble's own `?` falls
 // outside `[0-9;]` and survives the strip, sitting as harmless junk ahead
 // of the real banner text but leaving the strip inconsistent about what
-// counts as a CSI sequence.
-// eslint-disable-next-line no-control-regex
-const ANSI_ESCAPE_SEQUENCE = /\x1b\[[0-9;?]*[a-zA-Z]/g;
+// counts as a CSI sequence. Moved to terminal-text.ts (issue #1228, which
+// needed the same CSI strip for a second, unrelated consumer) and
+// re-exported from there — this comment is kept here because it documents
+// real PTY behavior specific to this module's own regex usage.
 
 // Perf audit finding B8(1) — detectDevServerPortForPlainSession below runs
 // on a 10s timer (pty.ts's runDevServerDetectionSweep) for every eligible

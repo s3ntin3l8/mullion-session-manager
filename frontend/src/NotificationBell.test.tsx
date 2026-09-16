@@ -326,6 +326,26 @@ describe("NotificationBell", () => {
     expect(screen.queryByText("Gone quiet — needs input")).not.toBeInTheDocument();
   });
 
+  it("issue #1228 — a silence row carrying its own scrollback context is NOT overwritten by sessionContextMap's file-change substitution", async () => {
+    events = {
+      1: [
+        makeEvent({
+          seq: 1,
+          kind: "file_change",
+          payload: { path: "src/hooks/forwarder-core.mjs", action: "modify" },
+        }),
+        makeEvent({
+          seq: 2,
+          kind: "attention",
+          payload: { attention: true, signal: "silence", context: "build succeeded" },
+        }),
+      ],
+    };
+    await openPanel();
+    expect(screen.getByText("Gone quiet — build succeeded")).toBeInTheDocument();
+    expect(screen.queryByText("edited src/hooks/forwarder-core.mjs")).not.toBeInTheDocument();
+  });
+
   it("issue #903 — two consecutive generic rows with identical derived context still fold to a repeat count", async () => {
     events = {
       1: [

@@ -128,4 +128,16 @@ export class ScrollbackBuffer {
     // holds regardless of how large individual chunks are.
     return total > maxBytes ? result.subarray(total - maxBytes) : result;
   }
+
+  /**
+   * Issue #1228 — how much is buffered in total, so a caller of tail() can
+   * tell "cut short" apart from "happened to return exactly maxBytes
+   * because that's all there ever was." tail(maxBytes).length alone can't
+   * distinguish those two cases (both produce a buffer of length
+   * maxBytes), so a caller that needs to know whether a leading partial
+   * line might exist has to compare against this instead.
+   */
+  totalBufferedBytes(): number {
+    return this.totalBytes;
+  }
 }

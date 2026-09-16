@@ -215,11 +215,23 @@ describe("notification events (issue #166)", () => {
       vi.useRealTimers();
     }
 
+    // Issue #1228 — a hookless, non-alt-screen session's silence event now
+    // also carries the session's last real scrollback line as `context`
+    // (here, the two chunks emitted above, concatenated — nothing
+    // separates them by a newline). See test/services/pty-manager.test.ts's
+    // own #1228 tests for the alt-screen/hooksActive gates that keep this
+    // event context-free instead.
     const attentionEvents = session.getEvents().filter((e) => e.kind === "attention");
-    expect(attentionEvents.map((e) => e.payload)).toEqual([{ attention: true, signal: "silence" }]);
+    expect(attentionEvents.map((e) => e.payload)).toEqual([
+      { attention: true, signal: "silence", context: "agent output 1agent output 2" },
+    ]);
     // The manager-level fan-out (issue #166) picked it up too — not just
     // the session's own ring buffer.
-    expect(received.map((e) => e.payload)).toContainEqual({ attention: true, signal: "silence" });
+    expect(received.map((e) => e.payload)).toContainEqual({
+      attention: true,
+      signal: "silence",
+      context: "agent output 1agent output 2",
+    });
   });
 
   it("emits a title_change event only when the title actually changes", async () => {
