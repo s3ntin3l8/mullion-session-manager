@@ -32,6 +32,7 @@ import type { SessionInfo } from "./pty-manager.js";
 // module keeps working unchanged. See that file for the members' own doc
 // comments.
 import type { SessionStatus, SessionSeverity } from "../shared/types.js";
+import { collapseAndTruncate } from "./terminal-text.js";
 
 export type { SessionStatus, SessionSeverity };
 
@@ -97,22 +98,14 @@ const LONG_DETAIL_STATUSES = new Set<SessionStatus>(["awaiting_review_gate", "aw
 
 function truncateDetail(status: SessionStatus, detail: string | null): string | null {
   if (detail === null) return null;
-  // Hermes review, PR #1285 — `gatePrompt`/`promoteSummary` are free-form
-  // and can be multi-line; collapsing embedded whitespace before truncating
-  // keeps every surface glanceable regardless of its own `white-space` CSS
-  // (TaskDetail.tsx's attention banner is `white-space: normal` and would
-  // otherwise render a real line break per `\n`, ballooning a narrow inline
-  // row for what's meant to be a short label, not a log line).
-  const normalized = detail.replace(/\s+/g, " ").trim();
+  // The actual normalize/truncate work (whitespace-collapse before
+  // truncating, then a code-point- not UTF-16-code-unit-safe cut — see
+  // Hermes review, PR #1285, for why both of those matter for a free-form
+  // gatePrompt/promoteSummary) now lives in terminal-text.ts's
+  // collapseAndTruncate, issue #1228's near-identical text helper. This is
+  // just the SessionStatus-keyed `max` lookup on top of it (issue #1294).
   const max = LONG_DETAIL_STATUSES.has(status) ? LONG_DETAIL_MAX_CHARS : STATUS_DETAIL_MAX_CHARS;
-  // Hermes review, PR #1285 — split by code point, not UTF-16 code unit: a
-  // plain `.slice(0, max)` can land mid-surrogate-pair for an emoji/non-BMP
-  // character, rendering U+FFFD. Far more likely to actually trigger now
-  // that LONG_DETAIL_MAX_CHARS (200) gives a free-form prompt much more
-  // room than the original 48 ever did.
-  const codePoints = Array.from(normalized);
-  if (codePoints.length <= max) return normalized;
-  return `${codePoints.slice(0, max).join("")}…`;
+  return collapseAndTruncate(detail, max);
 }
 
 function make(status: SessionStatus, detail: string | null = null): DerivedSessionStatus {

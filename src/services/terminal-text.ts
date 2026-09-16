@@ -89,10 +89,9 @@ export function lastMeaningfulLine(text: string, opts: { truncated: boolean }): 
  * for an emoji/non-BMP character and render U+FFFD), appending `…` if
  * anything was cut.
  *
- * Mirrors session-status.ts's truncateDetail, which does the same three
- * steps but is keyed on SessionStatus for its own max-length lookup rather
- * than plain text — see issue #1294 for delegating that function to this
- * one instead of carrying the near-duplicate body twice.
+ * session-status.ts's truncateDetail (issue #1294) delegates here for
+ * exactly this — it only adds its own SessionStatus-keyed max-length lookup
+ * on top.
  */
 export function collapseAndTruncate(text: string, maxChars: number): string {
   const normalized = text.replace(/\s+/g, " ").trim();
