@@ -394,7 +394,11 @@ async function resolveReviewCi(
     if (!current) return undefined;
     const { headSha, status, runs: runSummaries, mergeable, mergeableState } = current;
 
+    const reviewingAtMs = task.reviewingAt?.getTime() ?? now;
+    const pastDeadline = now - reviewingAtMs >= waitMinutes * 60_000;
+
     if (mergeable === false || mergeableState === "dirty") {
+      if (!pastDeadline) return "wait";
       return {
         headSha,
         status: null,
@@ -413,8 +417,6 @@ async function resolveReviewCi(
     // `reviewingAt` is set in the very same DB write that put this task in
     // "reviewing" (both `→ reviewing` transition sites), so it's never
     // actually null here — the `?? now` is defensive, not load-bearing.
-    const reviewingAtMs = task.reviewingAt?.getTime() ?? now;
-    const pastDeadline = now - reviewingAtMs >= waitMinutes * 60_000;
     if (!pastDeadline) return "wait";
     return {
       headSha,
@@ -1244,11 +1246,10 @@ export const REBASE_ATTEMPT_STALE_MS = 30 * 60_000;
 
 /**
  * Spawns a worker to resolve a real merge conflict (`dirty` mergeableState)
- * found on a `done` task's PR — attemptMerge's own `case "dirty"` calls this
- * instead of only recording the error. Never transitions the task's status:
- * it stays `done` throughout (no outgoing edge exists — task-state.ts), so
- * this is a sibling to the merge sweep's retry loop, not a use of
- * autoReturnTask.
+ * found on a `done` or `reviewing` task's PR — attemptMerge's `case "dirty"` and
+ * attemptAutoApprove call this instead of only recording the error. Never
+ * transitions the task's status: it stays in its current status (`done` or
+ * `reviewing`) throughout, with rebaseStartedAt bounding attempt staleness.
  *
  * Gated on `project.autoApprove`, the same "nobody is watching" opt-in
  * `attemptAutoApprove`/`attemptReturnRedCiToWorker` use — spawning an

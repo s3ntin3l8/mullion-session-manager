@@ -3845,7 +3845,7 @@ describe("reconcileTasks", () => {
     it("attempts auto-rebase when reviewing task has merge conflicts and autoApprove is enabled", async () => {
       const app = await buildApp();
       vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined);
-      const { taskId } = await createAutoApproveCandidate(app, {
+      const { taskId, reviewSessionId } = await createAutoApproveCandidate(app, {
         branchName: "mullion/task-x",
         agentCommand: "claude",
       });
@@ -3866,6 +3866,45 @@ describe("reconcileTasks", () => {
       expect(row.rebaseStartedAt).not.toBeNull();
       expect(row.sessionId).not.toBeNull();
       expect(row.mergeError).toContain("in progress");
+
+      const { sessions } = await import("../../src/db/schema.js");
+      const [reviewSessionRow] = app.db
+        .select()
+        .from(sessions)
+        .where(eq(sessions.id, reviewSessionId))
+        .all();
+      expect(reviewSessionRow.status).toBe("killed");
+
+      await app.close();
+    });
+
+    it("continues auto-rebase when terminating the superseded review session fails", async () => {
+      const app = await buildApp();
+      vi.spyOn(app.pty, "terminate").mockRejectedValueOnce(new Error("pty kill failed"));
+      const warnSpy = vi.spyOn(app.log, "warn");
+      const { taskId, reviewSessionId } = await createAutoApproveCandidate(app, {
+        branchName: "mullion/task-x",
+        agentCommand: "claude",
+      });
+      mockGetPullRequestByNumber.mockResolvedValue(
+        mockPr({ mergeable: false, mergeableState: "dirty" }),
+      );
+      mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
+      mockResumeTaskWorktree.mockResolvedValue({
+        path: "/tmp/.mullion-worktrees/mullion-task-x",
+        branch: "mullion/task-x",
+      });
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.rebaseAttempts).toBe(1);
+      expect(row.rebaseStartedAt).not.toBeNull();
+      expect(row.sessionId).not.toBeNull();
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ taskId, reviewSessionId }),
+        "task auto-rebase: superseded review session could not be terminated after spawn",
+      );
 
       await app.close();
     });
@@ -7685,10 +7724,10 @@ describe("reconcileTasks", () => {
       await app.close();
     });
 
-    it("spawns immediately when PR has merge conflicts (dirty mergeableState), bypassing the wait", async () => {
+    it("waits for CI wait deadline when PR reports dirty mergeableState, then spawns with conflict note once past deadline", async () => {
       const app = await buildApp();
       const { taskId } = await claimWithPR(app);
-      mockGetPullRequestByNumber.mockResolvedValueOnce({
+      mockGetPullRequestByNumber.mockResolvedValue({
         number: 9,
         htmlUrl: "https://x/pull/9",
         nodeId: "n",
@@ -7697,12 +7736,24 @@ describe("reconcileTasks", () => {
         mergeable: false,
         mergeableState: "dirty",
       });
-      // CI has no runs yet, which normally waits:
-      mockFetchRunsForHead.mockResolvedValueOnce([]);
+      mockFetchRunsForHead.mockResolvedValue([]);
+
+      // Before deadline: should wait, not spawn on first tick
+      await reconcileTasks(app);
+      let row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+      expect(row.reviewSessionId).toBeNull();
+
+      // Past deadline: should spawn with conflict note
+      const { tasks } = await import("../../src/db/schema.js");
+      app.db
+        .update(tasks)
+        .set({ reviewingAt: new Date(Date.now() - 16 * 60_000) })
+        .where(eq(tasks.id, taskId))
+        .run();
 
       await reconcileTasks(app);
-
-      const row = await getTask(app, taskId);
+      row = await getTask(app, taskId);
       expect(row.status).toBe("reviewing");
       expect(row.reviewSessionId).not.toBeNull();
 

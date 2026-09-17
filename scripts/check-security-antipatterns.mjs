@@ -6,7 +6,7 @@
 //    - @fastify/cors configured with credentials: true and dynamic/wildcard origin
 // 2. Dangerous origin reflections without validation
 
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -144,8 +144,16 @@ export function scanDirectory(dir) {
 
 // Direct execution
 export function cli(args = process.argv.slice(2)) {
-  const targetDir = args[0] ? path.resolve(args[0]) : path.join(root, "src");
-  const findings = scanDirectory(targetDir);
+  const targetDirs =
+    args.length > 0
+      ? [path.resolve(args[0])]
+      : [path.join(root, "src"), path.join(root, "frontend/src")];
+  const findings = [];
+  for (const dir of targetDirs) {
+    if (existsSync(dir)) {
+      findings.push(...scanDirectory(dir));
+    }
+  }
 
   if (findings.length > 0) {
     console.error(`\nSecurity anti-pattern check failed with ${findings.length} finding(s):\n`);
