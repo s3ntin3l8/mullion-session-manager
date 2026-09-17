@@ -26,32 +26,23 @@ type BrowserPanelState =
   | { status: "unavailable"; message: string; retryable?: boolean }
   | { status: "ready"; src: string };
 
-// Anchored allowlist, not a denylist — deliberately fails *closed*. The
-// previous version parsed with `new URL()` and compared `.protocol`, which
-// silently treated any string the parser couldn't handle (no scheme, a
-// relative-looking typo, etc.) as "not dangerous" via its catch block,
-// undermining the very guard it existed to provide.
-//
-// Inlined as `.test()` directly in each `if` below rather than routed
-// through a shared boolean helper: CodeQL's JS taint-tracking barrier-guard
-// recognition operates on the guard expression's own AST shape at the point
-// it's evaluated, and a `new URL()`-based helper function call wasn't
-// recognized as a barrier at all — see alert #304 (js/xss-through-dom) on
-// PR #1320, whose SARIF codeFlow showed dataflow jumping straight from
-// resolvePreviewUrl's `targetUrl` parameter to its `return { src: targetUrl }`,
-// skipping the `isDangerousIframeSrc(targetUrl)` guard call in between
-// entirely. A regex `.test()` against the same tainted expression is one of
-// the guard shapes that recognition does support.
-const SAFE_IFRAME_SRC_RE = /^https?:\/\//i;
-
-// Mirrors DEV_SERVER_PORT_ONLY in src/routes/projects.ts's own
-// parseDevServerTarget/isValidDevServerUrl: a project's devServerUrl is
-// stored as either a bare 1-65535 port or a full http(s) URL, never any
-// other shape, so the devServerUrl guard below allows both — a bare port
-// wouldn't match SAFE_IFRAME_SRC_RE alone (BrowserPanel.test.tsx embeds one
-// directly as the iframe src, unprefixed, matching that stored shape).
-const DEV_SERVER_PORT_ONLY_RE = /^\d{1,5}$/;
-
+// The iframe-src scheme guard below (both call sites) is an anchored
+// allowlist, not a denylist — deliberately fails *closed*. Two prior
+// attempts at this exact guard failed to satisfy CodeQL's js/xss-through-dom
+// (alert #304 on PR #1320) even though each was runtime-safe:
+//   1. A `new URL(url).protocol` helper (isDangerousIframeSrc) whose catch
+//      block silently treated any unparseable string as "not dangerous" —
+//      also just a real fail-open bug independent of CodeQL.
+//   2. A regex `.test()` guard that WAS inlined directly in the `if`, but
+//      referenced a shared top-level `const ...regex literal` by name
+//      instead of writing the regex literal directly in the `.test()` call.
+// Both times the SARIF codeFlow for alert #304 showed dataflow jumping
+// straight from resolvePreviewUrl's `targetUrl` parameter to its
+// `return { src: targetUrl }`, skipping the guard entirely — CodeQL's
+// barrier-guard recognition for this query only fires when the regex
+// literal itself is syntactically inline in the `.test(...)`/`.exec(...)`
+// call (mirrors normalizeUrl's own inline `/^https?:\/\//i.test(trimmed)`
+// below), not when it's read from a named variable one hop away.
 function normalizeUrl(input: string): string {
   const trimmed = input.trim();
   if (!trimmed) return trimmed;
@@ -94,7 +85,7 @@ async function resolvePreviewUrl(
   targetUrl: string,
   existingSlug?: string,
 ): Promise<{ src: string } | { error: string }> {
-  if (!SAFE_IFRAME_SRC_RE.test(targetUrl)) {
+  if (!/^https?:\/\//i.test(targetUrl)) {
     return { error: "This URL's scheme can't be previewed here." };
   }
   try {
@@ -238,14 +229,16 @@ export function BrowserPanel({
             // Unlike the resolvePreviewUrl() paths (saved URLs, external URLs,
             // Follow Agent), this previewsEnabled=false fallback embeds
             // devServerUrl directly without going through that function's own
-            // SAFE_IFRAME_SRC_RE gate — it's project-settings-sourced rather
-            // than freshly typed, but the iframe sink shouldn't trust that;
-            // check it here too (CodeQL js/xss-through-dom, BrowserPanel.tsx
-            // iframe src).
-            if (
-              !DEV_SERVER_PORT_ONLY_RE.test(devServerUrl) &&
-              !SAFE_IFRAME_SRC_RE.test(devServerUrl)
-            ) {
+            // scheme gate — it's project-settings-sourced rather than freshly
+            // typed, but the iframe sink shouldn't trust that; check it here
+            // too (CodeQL js/xss-through-dom, BrowserPanel.tsx iframe src).
+            // A bare port is also accepted, mirroring DEV_SERVER_PORT_ONLY in
+            // src/routes/projects.ts's own parseDevServerTarget/
+            // isValidDevServerUrl — a project's devServerUrl is stored as
+            // either a bare 1-65535 port or a full http(s) URL, never any
+            // other shape (BrowserPanel.test.tsx embeds a bare port directly
+            // as the iframe src, unprefixed, matching that stored shape).
+            if (!/^\d{1,5}$/.test(devServerUrl) && !/^https?:\/\//i.test(devServerUrl)) {
               setPreviewViaProxy(false);
               setFetchState({
                 status: "unavailable",
