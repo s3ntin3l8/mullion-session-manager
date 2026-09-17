@@ -425,6 +425,37 @@ describe("pickBridge", () => {
       expect(picked?.bridgeId).toBe("bridge-newer-pong");
     });
 
+    // The `priority ?? 0` fallback (this module's own comment on why an
+    // absent priority must behave exactly like an explicit 0) is only
+    // exercised here by a MIXED pair — every other case in this describe
+    // block sets `priority` on every entry, so a future refactor that
+    // drops the stamp on one `trackBridge` call path (leaving that entry's
+    // `priority` field undefined instead of 0) would pass every existing
+    // test here. connectedAt is set so a broken fallback (e.g. reading
+    // `bridge.priority` directly and getting `undefined`, which compares
+    // as neither `<` nor `===` in the numeric comparisons above) picks the
+    // wrong bridge.
+    it("treats an entry with no priority field the same as an explicit priority: 0", () => {
+      const app = fakeApp(0);
+      app.connectedBridges.set("bridge-explicit-5", {
+        socket: {},
+        mux: {},
+        connectedAt: 999, // more recently connected — must not win anyway
+        lastPongAt: now,
+        priority: 5,
+      });
+      app.connectedBridges.set("bridge-no-priority", {
+        socket: {},
+        mux: {},
+        connectedAt: 1,
+        lastPongAt: now,
+        // priority intentionally omitted — must be treated as 0.
+      });
+
+      const picked = pickBridge(app);
+      expect(picked?.bridgeId).toBe("bridge-no-priority");
+    });
+
     it("prefers the lower-priority (higher-precedence) bridge among two otherwise-equal healthy bridges", () => {
       const app = fakeApp(0);
       app.connectedBridges.set("bridge-low-priority", {

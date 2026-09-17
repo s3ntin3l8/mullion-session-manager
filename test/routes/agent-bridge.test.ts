@@ -267,6 +267,42 @@ describe("agent-bridge routes (POST/GET/DELETE /api/bridges, GET /ws/agent-bridg
       ws.close();
     });
 
+    // Issue #1313 — trackBridge's "auth" call site passes `row.priority`
+    // (read a few lines above, in this same handshake handler) rather than
+    // hardcoding 0 the way the "pair" call site correctly does for a
+    // brand-new row. Every OTHER auth-handshake test above pairs a fresh
+    // bridge, which never leaves the column default (0) — so a regression
+    // that hardcoded 0 on this path too (copy-pasting the "pair" call)
+    // would pass every one of them. Reorder while disconnected, THEN
+    // reconnect, and assert the live entry picks up the non-zero DB value
+    // rather than silently reverting to 0.
+    it("stamps the bridge's current (possibly reordered) DB priority onto the live entry on reconnect, not a hardcoded 0", async () => {
+      const { app, port } = await buildAndListen();
+      const { bridge_id, session_id } = await pairFreshBridge(port);
+      await waitUntil(() => !app.connectedBridges.has(bridge_id)); // closed above
+
+      // Give this bridge a lower precedence (priority 1) by reordering it
+      // behind a second, unrelated bridge — while it's disconnected, so
+      // the only way its live entry can ever see the new value is via the
+      // "auth" handshake's own row read, not trackBridge's "pair" path.
+      const other = issuePairingCode(app);
+      const reorderRes = await app.inject({
+        method: "PATCH",
+        url: "/api/bridges/reorder",
+        payload: { ids: [other.bridgeId, bridge_id] },
+      });
+      expect(reorderRes.statusCode).toBe(204);
+
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/agent-bridge`);
+      await waitForOpen(ws);
+      const replyPromise = waitForMessage(ws);
+      ws.send(JSON.stringify({ type: "auth", bridge_id, session_id }));
+      await replyPromise;
+
+      expect(app.connectedBridges.get(bridge_id)?.priority).toBe(1);
+      ws.close();
+    });
+
     it("closes a superseded socket when a new connection re-authenticates for the same bridge before the old one has disconnected (regression: Hermes review, PR #860 — a reconnect landing before the old TCP connection fires its own close event used to orphan it, live but untracked, until TCP's own idle timeout eventually reaped it)", async () => {
       const { app, port } = await buildAndListen();
       const pairRes = await app.inject({ method: "POST", url: "/api/bridges" });
