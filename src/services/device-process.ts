@@ -72,9 +72,26 @@ export function deviceMarkerPath(sessionsDir: string, id: string): string {
 /** Creates the empty marker file — see this module's own header on why it
  * must be a real file, not just a string embedded in a scope Description.
  * Call before spawning the scope, so the marker exists by the time any
- * concurrent listing could race it. */
+ * concurrent listing could race it.
+ *
+ * Opens with the exclusive-create flag (`wx`, i.e. `O_CREAT | O_EXCL`)
+ * rather than a plain `w` (CodeQL `js/insecure-temporary-file`, PR #1324's
+ * follow-up review): `w` truncates and follows an existing path unconditionally,
+ * including a symlink an attacker pre-planted at this predictable
+ * `<sessionsDir>/<id>.device` path — a classic TOCTOU that would make this
+ * write land wherever that symlink points. A stale marker can legitimately
+ * still be on disk here too (a crash before removeDeviceMarker() ran on a
+ * scope getOrCreate() has already confirmed dead), so it's unlinked first —
+ * unlink never follows a symlink either, so a planted one is removed, not
+ * written through. */
 export function touchDeviceMarker(sessionsDir: string, id: string): void {
-  closeSync(openSync(deviceMarkerPath(sessionsDir, id), "w"));
+  const markerPath = deviceMarkerPath(sessionsDir, id);
+  try {
+    unlinkSync(markerPath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+  closeSync(openSync(markerPath, "wx"));
 }
 
 /** Best-effort cleanup — safe to call even if the marker was never created

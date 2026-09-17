@@ -1,493 +1,574 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
+// Must come before any import below that could itself trigger loading
+// "node-pty"/"node:child_process" — see test/helpers/mock-pty.ts's header
+// comment for the empirically confirmed hoisting/ordering failure mode.
+// DeviceManager's spawn()/kill() paths shell out to systemd-run/systemctl
+// exactly like PtyManager's own bootstrapMaster()/stopScope() — a test must
+// never let a real one fire (AGENTS.md, issue #1137's mocking invariant).
+import { mockChildProcessSpawn } from "../helpers/mock-spawn.js";
 import { EventEmitter } from "node:events";
 import { spawn as spawnChildProcess } from "node:child_process";
 import type * as ChildProcess from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import type { ScrcpyMediaStreamPacket } from "@yume-chan/scrcpy";
 
-// Covers DeviceManager.getOrCreate()'s reattach path (issue #1325's own
-// task) — a scope that survived a Mullion restart, with no in-memory Device
-// left to represent it. A test must never let a real systemd-run fire
-// (AGENTS.md) — faked below the same hand-rolled way
-// device-process.test.ts fakes `systemctl` (that file's own header explains
-// why a custom stdout-bearing fake is needed for `list-units`, which the
-// generic mock-spawn.js helper doesn't provide). This file additionally
-// fakes @yume-chan/adb's AdbServerClient and @yume-chan/adb-scrcpy's
-// AdbScrcpyClient, since Device.attach()/spawn() talk to those directly
-// (TCP/stream calls, not child_process) rather than shelling out.
+// Hermes review on PR #1324 — device-manager.ts (the feature's other
+// "highest-risk" module alongside device-process.ts) shipped with no test
+// coverage at all. This file drives Device/DeviceManager through a
+// realistic spawn lifecycle with @yume-chan/adb, @yume-chan/adb-server-
+// node-tcp, and @yume-chan/adb-scrcpy all mocked at the module level — no
+// real network, adb server, or systemd-run involved — covering the parts
+// that are this repo's own logic (lifecycle bookkeeping, cleanup-on-
+// failure, the config-packet replay, the port allocator) rather than
+// re-testing the vetted Tango ADB library's own internals.
 
-const SESSIONS_DIR = mkdtempSync(path.join(tmpdir(), "device-manager-test-"));
-afterAll(() => {
-  rmSync(SESSIONS_DIR, { recursive: true, force: true });
-});
-
-let listUnitsReply: string[] = [];
-let listUnitsShouldError = false;
-const systemdRunCalls: string[][] = [];
-const stopCalls: string[][] = [];
-
-type MockChild = EventEmitter & { stdout?: EventEmitter };
-function createMockChild(): MockChild {
-  return new EventEmitter() as MockChild;
-}
-
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof ChildProcess>();
-  return {
-    ...actual,
-    spawn: vi.fn((file: string, args: string[]) => {
-      const ee = createMockChild();
-      if (file === "systemctl" && args[1] === "list-units") {
-        if (listUnitsShouldError) {
-          setImmediate(() => ee.emit("error", new Error("ENOENT")));
-          return ee;
-        }
-        ee.stdout = new EventEmitter();
-        setImmediate(() => {
-          ee.emit("exit", 0);
-          setImmediate(() => {
-            const lines = listUnitsReply.join("\n");
-            ee.stdout?.emit("data", Buffer.from(lines ? `${lines}\n` : ""));
-            ee.emit("close", 0);
-          });
-        });
-        return ee;
-      }
-      if (file === "systemctl" && args[1] === "stop") {
-        stopCalls.push(args);
-        setImmediate(() => ee.emit("exit", 0));
-        return ee;
-      }
-      if (file === "systemd-run") {
-        systemdRunCalls.push(args);
-        setImmediate(() => ee.emit("exit", 0));
-        return ee;
-      }
-      // "adb start-server" (DeviceManager's constructor) and anything else —
-      // immediate no-op success.
-      setImmediate(() => ee.emit("exit", 0));
-      return ee;
-    }),
-  };
-});
-
-// Fakes for the @yume-chan packages Device talks to directly (TCP/stream
-// calls — no child_process involved, so mock-spawn.js's helper doesn't
-// cover these). Each is the minimal surface device-manager.ts actually
-// calls; controlled per-test via the mutable state below.
-//
-// getDevices() FAILS by default (mirrors the real behavior test/routes/
-// devices.test.ts already relies on — no real adb server is listening in
-// this test env, so a real AdbServerClient.getDevices() would reject
-// quickly, not hang). This matters specifically for
-// Device.spawn()'s waitForAdbSerial poll loop: if getDevices() resolved
-// successfully-but-empty by default instead, a test that never explicitly
-// satisfies the serial would poll every second for up to BOOT_TIMEOUT_MS
-// (120s) in the background, well past the test's own completion. Tests
-// that need a controlled, successful reattach opt in explicitly.
-let mockAdbDevices: Array<{ serial: string }> = [];
-let mockGetDevicesShouldFail = true;
+let mockDeviceList: Array<{ serial: string }> = [];
 let mockCreateAdbShouldFail = false;
-const mockGetDevices = vi.fn(async () => {
-  if (mockGetDevicesShouldFail) throw new Error("adb server connection refused");
-  return mockAdbDevices;
-});
-const mockCreateAdb = vi.fn(async ({ serial }: { serial: string }) => {
-  if (mockCreateAdbShouldFail) throw new Error("createAdb failed");
-  return { serial, close: vi.fn(async () => {}) };
-});
+const mockAdbClose = vi.fn(async () => {});
+const mockServerClient = {
+  getDevices: vi.fn(async () => mockDeviceList),
+  createAdb: vi.fn(async () => {
+    if (mockCreateAdbShouldFail) throw new Error("createAdb failed");
+    return { close: mockAdbClose };
+  }),
+};
 
 vi.mock("@yume-chan/adb", () => ({
-  AdbServerClient: class {
-    getDevices = mockGetDevices;
-    createAdb = mockCreateAdb;
-  },
+  // A plain function, not an arrow — `new AdbServerClient(...)` (device-
+  // manager.ts's constructor) needs `new` support, which an arrow function
+  // can never have regardless of vi.fn() wrapping. Returning an explicit
+  // object from a `new`-invoked plain function makes `new` yield THAT
+  // object instead of `this` (ordinary JS constructor semantics) — exactly
+  // what's needed here, since every test wants the same shared
+  // `mockServerClient` instance back.
+  AdbServerClient: vi.fn(function AdbServerClient() {
+    return mockServerClient;
+  }),
 }));
 
 vi.mock("@yume-chan/adb-server-node-tcp", () => ({
-  AdbServerNodeTcpConnector: class {},
+  AdbServerNodeTcpConnector: vi.fn(),
 }));
 
-const mockPushServer = vi.fn(async () => {});
-const mockStart = vi.fn(async () => ({
-  // Never resolves during a test — nothing here should race
-  // Device.handleExit() via this promise settling mid-assertion.
-  exited: new Promise(() => {}),
-  videoStream: Promise.resolve(null),
-  controller: {},
-  close: vi.fn(async () => {}),
-}));
+let mockPushServerShouldFail = false;
+let mockStartShouldFail = false;
+const mockScrcpyClose = vi.fn(async () => {});
+const mockController = {
+  injectText: vi.fn(async () => {}),
+  resetVideo: vi.fn(async () => {}),
+};
+// `exited` deliberately never resolves by default — a test that wants to
+// exercise handleExit() replaces this before calling spawn().
+let mockExited: Promise<void> = new Promise(() => {});
+// A real ReadableStream (not a fake), so Device.pumpVideo's own
+// `videoStream.stream.getReader()` + read-loop runs for real — this is
+// what actually exercises the lastConfigPacket cache-and-replay logic
+// (a private field pumpVideo alone writes to), not just a stub that skips
+// straight past it. Each test that cares assigns a fresh queue before
+// calling getOrCreate(); defaults to a single "configuration" packet then
+// closes.
+let mockVideoPackets: Array<{ type: "configuration" | "data"; data: Uint8Array }> = [
+  { type: "configuration", data: new Uint8Array([1, 2, 3]) },
+];
+function makeMockVideoStream() {
+  let i = 0;
+  return {
+    stream: new ReadableStream({
+      pull(controller) {
+        if (i < mockVideoPackets.length) {
+          controller.enqueue(mockVideoPackets[i]);
+          i++;
+        } else {
+          controller.close();
+        }
+      },
+    }),
+  };
+}
+const mockScrcpyClient = {
+  get controller() {
+    return mockController;
+  },
+  get videoStream() {
+    return Promise.resolve(makeMockVideoStream());
+  },
+  get exited() {
+    return mockExited;
+  },
+  close: mockScrcpyClose,
+};
 
 vi.mock("@yume-chan/adb-scrcpy", () => ({
-  AdbScrcpyClient: { pushServer: mockPushServer, start: mockStart },
-  AdbScrcpyOptionsLatest: class {
-    constructor(opts: unknown) {
-      Object.assign(this, opts as object);
-    }
+  AdbScrcpyClient: {
+    pushServer: vi.fn(async () => {
+      if (mockPushServerShouldFail) throw new Error("pushServer failed");
+    }),
+    start: vi.fn(async () => {
+      if (mockStartShouldFail) throw new Error("scrcpy start failed");
+      return mockScrcpyClient;
+    }),
   },
+  AdbScrcpyOptionsLatest: vi.fn(),
 }));
 
+type MockChild = EventEmitter & {
+  stdout?: EventEmitter;
+  kill: (signal?: string) => boolean;
+  exitCode: number | null;
+  signalCode: string | null;
+};
+function createMockChild(): MockChild {
+  const ee = new EventEmitter() as MockChild;
+  ee.exitCode = null;
+  ee.signalCode = null;
+  ee.kill = vi.fn(() => true);
+  return ee;
+}
+
+let systemdRunShouldFail = false;
+let listUnitsReply: string[] = [];
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof ChildProcess>();
+  return mockChildProcessSpawn(actual, { fake: ["systemd-run", "systemctl"] });
+});
+
+// The generic mockChildProcessSpawn fake above (an immediate blanket
+// success) is replaced per-command right after import, below, the same
+// "start from the generic fake, override specific commands" shape
+// device-process.test.ts uses — systemd-run needs to be able to FAIL on
+// demand (spawn() failure tests) and systemctl list-units needs to return
+// controllable content (the isScopeAlive()/getOrCreate() collision-guard
+// tests), neither of which the blanket fake supports.
+vi.mocked(spawnChildProcess).mockImplementation(((file: string, args: readonly string[]) => {
+  const ee = createMockChild();
+  if (file === "systemd-run") {
+    setImmediate(() => {
+      if (systemdRunShouldFail) {
+        ee.exitCode = 1;
+        ee.emit("exit", 1);
+      } else {
+        // Simulate the scope actually becoming visible to a later
+        // `systemctl list-units` call — buildDeviceLaunchPlan's own argv
+        // shape (device-process.ts) is fixed: [...,"-u",unitName,
+        // "--description",description,"--",...], so index 4/6 are always
+        // the unit name / full Description string. Without this, a test
+        // exercising teardown-after-spawn-failure would find NOTHING
+        // owning the id it just "created" and stopDeviceScope would
+        // (correctly, per its own ownership-only contract) skip the stop.
+        listUnitsReply.push(`${args[4]}.scope loaded active running ${args[6]}`);
+        ee.exitCode = 0;
+        ee.emit("exit", 0);
+      }
+    });
+    return ee as unknown as ChildProcess.ChildProcess;
+  }
+  if (file === "systemctl" && args[1] === "list-units") {
+    ee.stdout = new EventEmitter();
+    setImmediate(() => {
+      ee.exitCode = 0;
+      ee.emit("exit", 0);
+      setImmediate(() => {
+        const lines = listUnitsReply.join("\n");
+        ee.stdout?.emit("data", Buffer.from(lines ? `${lines}\n` : ""));
+        ee.emit("close", 0);
+      });
+    });
+    return ee as unknown as ChildProcess.ChildProcess;
+  }
+  if (file === "systemctl" && args[1] === "stop") {
+    // Mirrors real systemd: a stopped scope no longer appears in a later
+    // list-units call. `args[2]` is "<unit>.scope".
+    const unit = (args[2] as string)?.replace(/\.scope$/, "");
+    listUnitsReply = listUnitsReply.filter((line) => !line.startsWith(`${unit}.scope `));
+    setImmediate(() => {
+      ee.exitCode = 0;
+      ee.emit("exit", 0);
+    });
+    return ee as unknown as ChildProcess.ChildProcess;
+  }
+  // Anything else — immediate success, mirroring the generic fake.
+  setImmediate(() => {
+    ee.exitCode = 0;
+    ee.emit("exit", 0);
+  });
+  return ee as unknown as ChildProcess.ChildProcess;
+}) as typeof spawnChildProcess);
+
 const { DeviceManager } = await import("../../src/services/device-manager.js");
-const { deriveInstanceId, deviceMarkerPath } = await import("../../src/services/device-process.js");
+const { deviceScopeUnitName, deriveInstanceId, deviceMarkerPath } =
+  await import("../../src/services/device-process.js");
+const fs = await import("node:fs");
+const path = await import("node:path");
+const os = await import("node:os");
 
-const INSTANCE_ID = deriveInstanceId(SESSIONS_DIR);
+// A random, per-run directory rather than a hardcoded "/tmp/..." literal —
+// besides avoiding a collision between parallel test runs/shards sharing a
+// fixed path, a literal "/tmp/..." string is exactly what CodeQL's
+// js/insecure-temporary-file query treats as an insecure-temp-file taint
+// SOURCE; it then flags touchDeviceMarker()'s own openSync() call (a real,
+// already-hardened production sink — see that function's own comment) as
+// reachable from it, purely because this test happens to pass such a path
+// in. mkdtempSync(path.join(os.tmpdir(), ...)) is the query's own
+// documented-safe pattern (a fresh, unpredictable directory name), which is
+// why the sibling device-manager-reattach.test.ts's identical idiom doesn't
+// trigger it.
+const SESSIONS_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "device-manager-test-"));
+afterAll(() => {
+  fs.rmSync(SESSIONS_DIR, { recursive: true, force: true });
+});
+// AdbScrcpyClient.pushServer is mocked and never actually reads this file's
+// contents, but `createReadStream` (device-manager.ts) still tries to OPEN
+// it eagerly — a nonexistent path throws an unhandled 'error' event since
+// nothing consumes the stream in this mock. A real, empty fixture file
+// sidesteps that without needing to mock node:fs itself.
+const SCRCPY_SERVER_FIXTURE = path.join(SESSIONS_DIR, "fixture-scrcpy-server");
 
-function line(unit: string, description: string, state = "active"): string {
-  return `${unit} loaded ${state} running ${description}`;
-}
-
-function scopeAliveFor(id: string): void {
+/** Appends a `systemctl --user list-units`-shaped line to `listUnitsReply`
+ * claiming device `id`'s scope is alive — the mock harness's own
+ * `systemctl list-units` handler returns whatever's in that array
+ * verbatim, and stopDeviceScope()/isDeviceAliveState() (device-process.ts)
+ * only ever act on an id they can confirm OWNERSHIP of via this listing,
+ * never on the mere fact that `systemd-run` itself "succeeded" — see
+ * listOwnedDeviceScopes' own doc comment. Tests that need `stopDeviceScope`
+ * to actually reach a `systemctl stop` call must populate this first. */
+function registerLiveScope(id: string): void {
+  const instanceId = deriveInstanceId(SESSIONS_DIR);
   const marker = deviceMarkerPath(SESSIONS_DIR, id);
-  listUnitsReply = [line(`crs-device-${INSTANCE_ID}-${id}.scope`, `mullion-device -m ${marker}`)];
+  listUnitsReply.push(
+    `${deviceScopeUnitName(instanceId, id)}.scope loaded active running mullion-device -m ${marker}`,
+  );
 }
 
-function buildManager(overrides: { onPortAssigned?: ReturnType<typeof vi.fn> } = {}) {
-  return new DeviceManager({
+function baseOpts(overrides: Partial<ConstructorParameters<typeof DeviceManager>[0]> = {}) {
+  return {
     enabled: true,
     adbPath: "/usr/bin/adb",
     adbServerPort: 5037,
     emulatorPath: "/opt/android/emulator/emulator",
-    scrcpyServerPath: "/dev/null",
+    scrcpyServerPath: SCRCPY_SERVER_FIXTURE,
     sessionsDir: SESSIONS_DIR,
-    onSpawnError: vi.fn(),
-    onPortAssigned: overrides.onPortAssigned,
-  });
+    ...overrides,
+  };
 }
 
 beforeEach(() => {
-  listUnitsReply = [];
-  listUnitsShouldError = false;
-  systemdRunCalls.length = 0;
-  stopCalls.length = 0;
-  mockAdbDevices = [];
-  mockGetDevicesShouldFail = true;
+  mockDeviceList = [];
   mockCreateAdbShouldFail = false;
+  mockPushServerShouldFail = false;
+  mockStartShouldFail = false;
+  mockExited = new Promise(() => {});
+  mockVideoPackets = [{ type: "configuration", data: new Uint8Array([1, 2, 3]) }];
+  systemdRunShouldFail = false;
+  listUnitsReply = [];
+  mockAdbClose.mockClear();
+  mockScrcpyClose.mockClear();
+  mockController.injectText.mockClear();
+  mockController.resetVideo.mockClear();
   vi.mocked(spawnChildProcess).mockClear();
-  mockGetDevices.mockClear();
-  mockCreateAdb.mockClear();
-  mockPushServer.mockClear();
-  mockStart.mockClear();
+  fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+  fs.writeFileSync(SCRCPY_SERVER_FIXTURE, "");
 });
 
-describe("DeviceManager.getOrCreate() — reattach path", () => {
-  it("reattaches to a scope that survived a restart when a persisted port is present and the emulator is still live on adb", async () => {
-    scopeAliveFor("7");
-    mockGetDevicesShouldFail = false;
-    mockAdbDevices = [{ serial: "emulator-5556" }];
-    const manager = buildManager();
+async function waitForStatus(
+  manager: InstanceType<typeof DeviceManager>,
+  id: string,
+  status: string,
+  timeoutMs = 2000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const info = manager.get(id)?.toInfo();
+    if (info?.status === status) return;
+    if (Date.now() > deadline) {
+      throw new Error(
+        `timed out waiting for device ${id} to reach status "${status}" (last: ${info?.status})`,
+      );
+    }
+    await new Promise((r) => setTimeout(r, 5));
+  }
+}
 
+/** spawn()'s own catch block flips `status` to "error" BEFORE awaiting
+ * teardownProcess() (see that method's own comment) — so a test that has
+ * only awaited waitForStatus(..., "error") has no guarantee teardown
+ * (marker removal, the stopDeviceScope() call) has actually finished yet.
+ * Usually fast enough not to matter, but under heavy parallel-suite load
+ * the gap is observable — poll rather than assert once. */
+async function waitForCondition(
+  predicate: () => boolean,
+  description: string,
+  timeoutMs = 2000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (predicate()) return;
+    if (Date.now() > deadline) {
+      throw new Error(`timed out waiting for: ${description}`);
+    }
+    await new Promise((r) => setTimeout(r, 5));
+  }
+}
+
+describe("DeviceManager", () => {
+  it("throws on getOrCreate when disabled, per its own assertEnabled() posture (matches BrowserManager)", async () => {
+    const manager = new DeviceManager(baseOpts({ enabled: false }));
+    await expect(
+      manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null }),
+    ).rejects.toThrow(/disabled/);
+  });
+
+  it("getOrCreate spawns a device end to end and reaches status streaming", async () => {
+    mockDeviceList = [{ serial: "emulator-5554" }];
+    const manager = new DeviceManager(baseOpts());
     const device = await manager.getOrCreate({
-      id: "7",
+      id: "1",
+      avdName: "dev35",
+      label: "My Device",
+      port: null,
+    });
+    expect(device.id).toBe("1");
+    expect(device.avdName).toBe("dev35");
+    await waitForStatus(manager, "1", "streaming");
+    expect(manager.get("1")).toBe(device);
+    expect(manager.list().map((d) => d.id)).toEqual(["1"]);
+  });
+
+  it("getOrCreate is idempotent — a second call for the same alive id returns the SAME Device, no second spawn", async () => {
+    mockDeviceList = [{ serial: "emulator-5554" }];
+    const manager = new DeviceManager(baseOpts());
+    const first = await manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null });
+    await waitForStatus(manager, "1", "streaming");
+    const systemdRunCallsBefore = vi
+      .mocked(spawnChildProcess)
+      .mock.calls.filter((c) => c[0] === "systemd-run").length;
+    const second = await manager.getOrCreate({
+      id: "1",
       avdName: "dev35",
       label: null,
-      port: 5556,
+      port: null,
     });
-
-    // attach() is fire-and-forget (same shape as spawn()) — immediately
-    // after getOrCreate() returns, it's still in flight.
-    expect(device.toInfo().status).toBe("booting");
-
-    await vi.waitFor(() => expect(device.toInfo().status).toBe("streaming"));
-    expect(device.toInfo().serial).toBe("emulator-5556");
-    expect(mockStart).toHaveBeenCalledTimes(1);
-    expect(mockCreateAdb).toHaveBeenCalledWith({ serial: "emulator-5556" });
-    // Never touches systemd-run — the emulator process is already running.
-    expect(systemdRunCalls).toHaveLength(0);
+    expect(second).toBe(first);
+    const systemdRunCallsAfter = vi
+      .mocked(spawnChildProcess)
+      .mock.calls.filter((c) => c[0] === "systemd-run").length;
+    expect(systemdRunCallsAfter).toBe(systemdRunCallsBefore);
   });
 
-  it("rejects getOrCreate() itself, synchronously and without hanging, when the persisted port has no live adb devices entry (the emulator process itself died)", async () => {
-    scopeAliveFor("7");
-    mockGetDevicesShouldFail = false;
-    mockAdbDevices = []; // nothing live on adb — process is gone, not just Mullion
-    const manager = buildManager();
-
-    // Awaited/rejected, not polled — this must be a synchronous failure
-    // from getOrCreate() itself, the same as the no-persisted-port case:
-    // routes/device.ts's attachSocketToDevice only has an error channel
-    // back to the WS client for a getOrCreate() REJECTION, not for a
-    // fire-and-forget attach() failure it never observes.
-    await expect(
-      manager.getOrCreate({ id: "7", avdName: "dev35", label: null, port: 5556 }),
-    ).rejects.toThrow(/no longer reachable over adb/);
-    // Must never have gotten as far as creating an adb connection or
-    // starting scrcpy for a serial that was never confirmed live.
-    expect(mockCreateAdb).not.toHaveBeenCalled();
-    expect(mockStart).not.toHaveBeenCalled();
-    // No Device was ever constructed/registered for this attempt.
-    expect(manager.get("7")).toBeUndefined();
-    // The process is CONFIRMED gone — safe (and necessary, so a future
-    // spawn() for this id isn't wedged by the still-occupied unit name) to
-    // stop the now-empty scope.
-    expect(stopCalls.length).toBeGreaterThan(0);
-  });
-
-  it("does NOT stop the scope when the emulator is confirmed live but the reconnect itself fails (transient adb/scrcpy error)", async () => {
-    scopeAliveFor("7");
-    mockGetDevicesShouldFail = false;
-    mockAdbDevices = [{ serial: "emulator-5556" }]; // process is confirmed alive
-    mockCreateAdbShouldFail = true; // ...but establishing a NEW connection to it fails
-    const manager = buildManager();
-
-    const device = await manager.getOrCreate({
-      id: "7",
-      avdName: "dev35",
-      label: null,
-      port: 5556,
-    });
-
-    await vi.waitFor(() => expect(device.toInfo().status).toBe("error"));
-    expect(device.toInfo().error).toMatch(/createAdb failed/);
-    // Must NOT have stopped the scope — the emulator is still alive and
-    // running; only this attempt's own (never-established) connection
-    // failed. Stopping it here would destroy the exact thing reattach
-    // exists to preserve, on a failure unrelated to the emulator's own
-    // liveness.
-    expect(stopCalls).toEqual([]);
-
-    // A retry sees the scope still alive (never stopped) and the port still
-    // persisted — this doesn't collide the way a fresh spawn() would.
-    mockCreateAdbShouldFail = false;
-    const retried = await manager.getOrCreate({
-      id: "7",
-      avdName: "dev35",
-      label: null,
-      port: 5556,
-    });
-    await vi.waitFor(() => expect(retried.toInfo().status).toBe("streaming"));
-  });
-
-  it("rejects getOrCreate() without stopping the scope when getDevices() itself rejects (adb server unreachable — 'unknown', not 'confirmed gone')", async () => {
-    scopeAliveFor("7");
-    mockGetDevicesShouldFail = true; // rejects, rather than resolving with an empty list
-    const manager = buildManager();
-
-    await expect(
-      manager.getOrCreate({ id: "7", avdName: "dev35", label: null, port: 5556 }),
-    ).rejects.toThrow(/adb server connection refused/);
-    expect(stopCalls).toEqual([]);
-    expect(manager.get("7")).toBeUndefined();
-  });
-
-  it("rejects immediately with the clear manual-stop error when the scope survived but no port was ever persisted", async () => {
-    scopeAliveFor("7");
-    const manager = buildManager();
-
-    await expect(
-      manager.getOrCreate({ id: "7", avdName: "dev35", label: null, port: null }),
-    ).rejects.toThrow(/persisted port to reattach with/);
+  it("getOrCreate rejects with a clear, actionable error when a scope survived with no in-memory Device (the restart-collision guard)", async () => {
+    const manager = new DeviceManager(baseOpts());
+    const instanceId = deriveInstanceId(SESSIONS_DIR);
+    const marker = deviceMarkerPath(SESSIONS_DIR, "7");
+    listUnitsReply = [
+      `${deviceScopeUnitName(instanceId, "7")}.scope loaded active running mullion-device -m ${marker}`,
+    ];
     await expect(
       manager.getOrCreate({ id: "7", avdName: "dev35", label: null, port: null }),
     ).rejects.toThrow(/systemctl --user stop/);
-
-    // No Device was ever created for this id — the reject happens before
-    // any construction/registration.
-    expect(manager.get("7")).toBeUndefined();
+    // Never actually attempted to spawn a colliding scope.
+    expect(vi.mocked(spawnChildProcess).mock.calls.some((c) => c[0] === "systemd-run")).toBe(false);
   });
 
-  it("does not call onPortAssigned on the reattach path — the port was already persisted", async () => {
-    scopeAliveFor("7");
-    mockGetDevicesShouldFail = false;
-    mockAdbDevices = [{ serial: "emulator-5556" }];
-    const onPortAssigned = vi.fn();
-    const manager = buildManager({ onPortAssigned });
-
-    const device = await manager.getOrCreate({
-      id: "7",
-      avdName: "dev35",
-      label: null,
-      port: 5556,
-    });
-    await vi.waitFor(() => expect(device.toInfo().status).toBe("streaming"));
-
-    expect(onPortAssigned).not.toHaveBeenCalled();
-  });
-});
-
-describe("DeviceManager.getOrCreate() — normal spawn path is unaffected", () => {
-  it("still allocates a fresh port and bootstraps via systemd-run when no scope survived", async () => {
-    listUnitsReply = []; // no surviving scope for this id
-    const onPortAssigned = vi.fn();
-    const manager = buildManager({ onPortAssigned });
-
-    const device = await manager.getOrCreate({
-      id: "8",
-      avdName: "dev35",
-      label: null,
-      port: null,
-    });
-    expect(device.toInfo().status).toBe("starting");
-    expect(systemdRunCalls).toHaveLength(1);
-    expect(onPortAssigned).toHaveBeenCalledWith("8", expect.any(Number));
-
-    // getDevices() fails fast (mocked, no real adb server) — spawn() ends
-    // up in "error" quickly rather than polling waitForAdbSerial for up to
-    // BOOT_TIMEOUT_MS in the background after this test completes.
-    await vi.waitFor(() => expect(device.toInfo().status).toBe("error"));
-  });
-
-  it("still allocates a fresh port and bootstraps via systemd-run when the list-units query itself fails — 'unknown' liveness must not collapse to 'alive'", async () => {
-    listUnitsShouldError = true; // systemctl itself errors (e.g. ENOENT), not just "no matching scope"
-    const onPortAssigned = vi.fn();
-    const manager = buildManager({ onPortAssigned });
-
-    const device = await manager.getOrCreate({
-      id: "9",
-      avdName: "dev35",
-      label: null,
-      port: null,
-    });
-    expect(device.toInfo().status).toBe("starting");
-    // isScopeAlive() must have treated the failed liveness check as "not
-    // alive" (isDeviceAliveStateBatch maps a failed listing to "unknown",
-    // and isScopeAlive() only returns true for "alive") rather than
-    // throwing one of the reattach-path errors above or hanging — falls
-    // through to a normal spawn exactly like the no-surviving-scope case.
-    expect(systemdRunCalls).toHaveLength(1);
-    expect(onPortAssigned).toHaveBeenCalledWith("9", expect.any(Number));
-
-    await vi.waitFor(() => expect(device.toInfo().status).toBe("error"));
-  });
-
-  it("throws when manager is disabled", async () => {
-    const manager = new DeviceManager({
-      enabled: false,
-      adbPath: "/usr/bin/adb",
-      adbServerPort: 5037,
-      emulatorPath: "/opt/android/emulator/emulator",
-      scrcpyServerPath: "/dev/null",
-      sessionsDir: SESSIONS_DIR,
-    });
+  it("spawn() failure after the adb serial appears (createAdb rejects) tears down the scope/marker/port rather than leaking them", async () => {
+    // waitForAdbSerial's own timeout path (the serial never appearing at
+    // all) exercises the identical catch/teardown branch but takes
+    // BOOT_TIMEOUT_MS to fail — too slow for a unit test. Failing one step
+    // later instead (serial present, createAdb() itself rejects) reaches
+    // the same code path this test actually cares about.
+    mockDeviceList = [{ serial: "emulator-5554" }];
+    mockCreateAdbShouldFail = true;
+    // No manual registerLiveScope() needed here — the systemd-run mock
+    // handler itself records the scope as "now visible to a listing" the
+    // moment it reports success (see its own comment), the same causality
+    // a real systemctl list-units would have. teardownProcess()'s own
+    // stopDeviceScope() call, once createAdb fails below, finds it there.
+    const manager = new DeviceManager(baseOpts());
     await expect(
       manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null }),
-    ).rejects.toThrow("device panel is disabled");
+    ).resolves.toBeDefined(); // getOrCreate itself doesn't await spawn() — see its own doc comment
+    await waitForStatus(manager, "1", "error");
+    expect(manager.get("1")?.toInfo().error).toMatch(/createAdb failed/);
+
+    // Marker file removed, not left behind — polled (see waitForCondition's
+    // own comment): status flips to "error" before teardownProcess() is
+    // awaited, so it isn't guaranteed to have finished the instant
+    // waitForStatus above resolves.
+    await waitForCondition(
+      () => !fs.existsSync(deviceMarkerPath(SESSIONS_DIR, "1")),
+      "device 1's marker file to be removed",
+    );
+    // stopDeviceScope's own "systemctl stop <unit>" was issued.
+    await waitForCondition(
+      () =>
+        vi
+          .mocked(spawnChildProcess)
+          .mock.calls.some((c) => c[0] === "systemctl" && (c[1] as string[])[1] === "stop"),
+      "a systemctl stop call for device 1",
+    );
+
+    // The port is releasable again — a second attempt with the same id
+    // doesn't run out of ports (a real regression this fix prevents: an
+    // un-released port would eventually exhaust the fixed allocation range
+    // across enough failed attempts).
+    mockCreateAdbShouldFail = false;
+    await manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null });
+    await waitForStatus(manager, "1", "streaming");
   });
 
-  it("throws when emulator port range is exhausted", async () => {
-    const manager = buildManager();
-    // EMULATOR_PORT_BASE is 5554, EMULATOR_PORT_MAX is 5682 (step 2)
-    const allocatedPorts = (manager as unknown as { allocatedPorts: Set<number> }).allocatedPorts;
-    for (let port = 5554; port <= 5682; port += 2) {
-      allocatedPorts.add(port);
-    }
-    await expect(
-      manager.getOrCreate({ id: "100", avdName: "dev35", label: null, port: null }),
-    ).rejects.toThrow("no free emulator port in range");
+  it("spawn() failure when systemd-run itself exits non-zero tears down cleanly (CodeQL: exercises systemdRunShouldFail)", async () => {
+    systemdRunShouldFail = true;
+    const createAdbCallsBefore = mockServerClient.createAdb.mock.calls.length;
+    const manager = new DeviceManager(baseOpts());
+    await manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null });
+    await waitForStatus(manager, "1", "error");
+    expect(manager.get("1")?.toInfo().error).toMatch(/device bootstrap exited with code 1/);
+    await waitForCondition(
+      () => !fs.existsSync(deviceMarkerPath(SESSIONS_DIR, "1")),
+      "device 1's marker file to be removed",
+    );
+    // Never got far enough to even attempt an adb connection.
+    expect(mockServerClient.createAdb.mock.calls.length).toBe(createAdbCallsBefore);
+
+    // Port is releasable again — a second attempt doesn't collide.
+    systemdRunShouldFail = false;
+    mockDeviceList = [{ serial: "emulator-5554" }];
+    await manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null });
+    await waitForStatus(manager, "1", "streaming");
   });
 
-  it("supports list, get, kill, terminate, and killAll", async () => {
-    const manager = buildManager();
-    const dev1 = await manager.getOrCreate({
-      id: "10",
-      avdName: "dev35",
-      label: "Dev 1",
-      port: null,
-    });
-    const dev2 = await manager.getOrCreate({
-      id: "11",
-      avdName: "dev35",
-      label: "Dev 2",
-      port: null,
-    });
+  it("spawn() failure when pushing the scrcpy server rejects tears down cleanly (CodeQL: exercises mockPushServerShouldFail)", async () => {
+    mockDeviceList = [{ serial: "emulator-5554" }];
+    mockPushServerShouldFail = true;
+    const manager = new DeviceManager(baseOpts());
+    await manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null });
+    await waitForStatus(manager, "1", "error");
+    expect(manager.get("1")?.toInfo().error).toMatch(/pushServer failed/);
+    await waitForCondition(
+      () => !fs.existsSync(deviceMarkerPath(SESSIONS_DIR, "1")),
+      "device 1's marker file to be removed",
+    );
+    await waitForCondition(
+      () =>
+        vi
+          .mocked(spawnChildProcess)
+          .mock.calls.some((c) => c[0] === "systemctl" && (c[1] as string[])[1] === "stop"),
+      "a systemctl stop call for device 1",
+    );
 
-    expect(manager.get("10")).toBe(dev1);
-    expect(manager.get("11")).toBe(dev2);
-    expect(manager.get("99")).toBeUndefined();
-
-    const list = manager.list();
-    expect(list).toHaveLength(2);
-    expect(list.map((d) => d.id)).toContain("10");
-    expect(list.map((d) => d.id)).toContain("11");
-
-    // kill on nonexistent does not throw
-    await expect(manager.kill("99")).resolves.toBeUndefined();
-
-    // kill on dev1
-    await manager.kill("10");
-    expect(dev1.toInfo().status).toBe("exited");
-    expect(manager.get("10")).toBe(dev1); // still in map
-
-    // terminate on dev1 removes from map
-    await manager.terminate("10");
-    expect(manager.get("10")).toBeUndefined();
-    expect(manager.list()).toHaveLength(1);
-
-    // killAll kills remaining
-    await manager.killAll();
-    expect(dev2.toInfo().status).toBe("exited");
+    mockPushServerShouldFail = false;
+    await manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null });
+    await waitForStatus(manager, "1", "streaming");
   });
 
-  it("handles Device video listener registration and cached config replay", async () => {
-    const manager = buildManager();
-    const dev = await manager.getOrCreate({ id: "20", avdName: "dev35", label: null, port: null });
+  it("spawn() failure when starting the scrcpy server rejects tears down cleanly (CodeQL: exercises mockStartShouldFail)", async () => {
+    mockDeviceList = [{ serial: "emulator-5554" }];
+    mockStartShouldFail = true;
+    const manager = new DeviceManager(baseOpts());
+    await manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null });
+    await waitForStatus(manager, "1", "error");
+    expect(manager.get("1")?.toInfo().error).toMatch(/scrcpy start failed/);
+    await waitForCondition(
+      () => !fs.existsSync(deviceMarkerPath(SESSIONS_DIR, "1")),
+      "device 1's marker file to be removed",
+    );
+    await waitForCondition(
+      () =>
+        vi
+          .mocked(spawnChildProcess)
+          .mock.calls.some((c) => c[0] === "systemctl" && (c[1] as string[])[1] === "stop"),
+      "a systemctl stop call for device 1",
+    );
 
-    const received: unknown[] = [];
-    const unsubscribe = dev.onVideoPacket((pkt) => received.push(pkt));
-
-    // Manually set a lastConfigPacket and register a second listener
-    const configPacket = {
-      type: "configuration",
-      data: new Uint8Array([1, 2, 3]),
-    } as unknown as ScrcpyMediaStreamPacket;
-    (dev as unknown as { lastConfigPacket: unknown }).lastConfigPacket = configPacket;
-
-    const secondReceived: unknown[] = [];
-    const unsubscribe2 = dev.onVideoPacket((pkt) => secondReceived.push(pkt));
-
-    // Second listener synchronously receives the cached config packet
-    expect(secondReceived).toEqual([configPacket]);
-
-    unsubscribe();
-    unsubscribe2();
+    mockStartShouldFail = false;
+    await manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null });
+    await waitForStatus(manager, "1", "streaming");
   });
 
-  it("handles Device exit listeners and handleExit", async () => {
-    const manager = buildManager();
-    const dev = await manager.getOrCreate({ id: "21", avdName: "dev35", label: null, port: null });
-
-    let exitedFired = false;
-    const unsubscribe = dev.onExit(() => {
-      exitedFired = true;
-    });
-
-    (dev as unknown as { handleExit: () => void }).handleExit();
-    expect(exitedFired).toBe(true);
-    expect(dev.toInfo().status).toBe("exited");
-
-    unsubscribe();
+  it("onSpawnError fires (not an unhandled rejection) when the fire-and-forget spawn() fails", async () => {
+    mockDeviceList = [{ serial: "emulator-5554" }];
+    mockCreateAdbShouldFail = true;
+    const onSpawnError = vi.fn();
+    const manager = new DeviceManager(baseOpts({ onSpawnError }));
+    await manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null });
+    await waitForStatus(manager, "1", "error");
+    expect(onSpawnError).toHaveBeenCalledWith("1", expect.any(Error));
   });
 
-  it("handles Device pumpVideo streaming packets to listeners", async () => {
-    const manager = buildManager();
-    const dev = await manager.getOrCreate({ id: "22", avdName: "dev35", label: null, port: null });
+  it("kill() on a tracked, live device closes scrcpy/adb and stops its scope", async () => {
+    mockDeviceList = [{ serial: "emulator-5554" }];
+    const manager = new DeviceManager(baseOpts());
+    await manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null });
+    await waitForStatus(manager, "1", "streaming");
+    await manager.kill("1");
+    expect(mockScrcpyClose).toHaveBeenCalled();
+    expect(mockAdbClose).toHaveBeenCalled();
+    expect(manager.get("1")?.toInfo().status).toBe("exited");
+  });
 
-    const packets = [
-      { value: { type: "configuration", data: new Uint8Array([1]) }, done: false },
-      { value: { type: "data", data: new Uint8Array([2]), keyframe: true }, done: false },
-      { value: undefined, done: true },
+  it("kill() on an id with NO in-memory Device still stops the scope by derived unit name — the orphan-scope fix (Hermes review)", async () => {
+    // Simulates the post-restart case: nothing in the in-memory map, but a
+    // scope for id "9" is still alive. Before this fix, kill()/terminate()
+    // silently no-op'd here, leaving the row "killed" while the real
+    // emulator kept running with no way to ever stop it again.
+    const manager = new DeviceManager(baseOpts());
+    expect(manager.get("9")).toBeUndefined();
+    registerLiveScope("9");
+    await manager.kill("9");
+    const stopCall = vi
+      .mocked(spawnChildProcess)
+      .mock.calls.find(
+        (c) =>
+          c[0] === "systemctl" &&
+          (c[1] as string[])[1] === "stop" &&
+          (c[1] as string[])[2]?.includes("-9.scope"),
+      );
+    expect(stopCall).toBeDefined();
+  });
+
+  it("terminate() removes the device from the manager's own map", async () => {
+    mockDeviceList = [{ serial: "emulator-5554" }];
+    const manager = new DeviceManager(baseOpts());
+    await manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null });
+    await waitForStatus(manager, "1", "streaming");
+    await manager.terminate("1");
+    expect(manager.get("1")).toBeUndefined();
+  });
+
+  it("onVideoPacket replays the cached configuration packet to a NEW subscriber that attaches after streaming already started", async () => {
+    mockDeviceList = [{ serial: "emulator-5554" }];
+    mockVideoPackets = [
+      { type: "configuration", data: new Uint8Array([9, 9, 9]) },
+      { type: "data", data: new Uint8Array([1]) },
     ];
-    let idx = 0;
-    const mockReader = {
-      read: vi.fn(async () => packets[idx++]),
-      releaseLock: vi.fn(),
-    };
-    (dev as unknown as { scrcpyClient: unknown }).scrcpyClient = {
-      videoStream: Promise.resolve({
-        stream: {
-          getReader: () => mockReader,
-        },
-      }),
-    };
+    const manager = new DeviceManager(baseOpts());
+    const device = await manager.getOrCreate({
+      id: "1",
+      avdName: "dev35",
+      label: null,
+      port: null,
+    });
 
-    const received: Array<{ type?: string }> = [];
-    dev.onVideoPacket((pkt) => received.push(pkt));
+    // An early subscriber sees the real fan-out from pumpVideo's own read
+    // loop (a real ReadableStream this time, not a stub) — used here only
+    // to detect the moment the configuration packet has actually been
+    // pumped through and cached (a private field pumpVideo alone writes
+    // to), since polling `toInfo()`'s public status doesn't tell us that.
+    const seenTypes: string[] = [];
+    device.onVideoPacket((packet) => seenTypes.push(packet.type));
+    const deadline = Date.now() + 2000;
+    while (!seenTypes.includes("configuration") && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    expect(seenTypes).toContain("configuration");
 
-    await (dev as unknown as { pumpVideo: () => Promise<void> }).pumpVideo();
-
-    expect(received).toHaveLength(2);
-    expect(received[0].type).toBe("configuration");
-    expect(received[1].type).toBe("data");
-    expect(mockReader.releaseLock).toHaveBeenCalled();
+    // The actual assertion: a listener that subscribes AFTER the
+    // configuration packet already went out gets it replayed
+    // SYNCHRONOUSLY, inside the onVideoPacket() call itself — this is what
+    // lets a second panel (or a reconnect) configure its WebCodecs decoder
+    // without ever seeing raw "data" packets first.
+    const lateListener = vi.fn();
+    device.onVideoPacket(lateListener);
+    expect(lateListener).toHaveBeenCalledTimes(1);
+    expect(lateListener).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "configuration", data: new Uint8Array([9, 9, 9]) }),
+    );
   });
 });

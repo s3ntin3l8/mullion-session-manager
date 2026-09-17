@@ -195,12 +195,7 @@ function parseInputMessage(value: unknown): DeviceInputMessage | null {
   }
 }
 
-async function dispatchInput(
-  app: FastifyInstance,
-  device: Device,
-  deviceId: number,
-  message: DeviceInputMessage,
-): Promise<void> {
+async function dispatchInput(device: Device, message: DeviceInputMessage): Promise<void> {
   const controller = device.controller;
   if (!controller) return;
   switch (message.type) {
@@ -281,8 +276,6 @@ async function dispatchInput(
       await controller.backOrScreenOn(AndroidKeyEventAction.Up);
       break;
   }
-  void deviceId; // reserved for future per-device logging context
-  void app;
 }
 
 export interface AttachDeviceParams {
@@ -365,7 +358,7 @@ export async function attachSocketToDevice(
     }
     const message = parseInputMessage(parsed);
     if (!message) return;
-    dispatchInput(app, device, deviceId, message).catch((err) => {
+    dispatchInput(device, message).catch((err) => {
       app.log.warn({ err, deviceId }, "device input dispatch failed");
     });
   });

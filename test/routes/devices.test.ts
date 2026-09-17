@@ -273,6 +273,13 @@ describe("devices routes", () => {
             },
           },
         };
+        // "text" goes through the scrcpy control channel, not the adb shell
+        // (Hermes review — see routes/devices.ts's own shellQuoteArg
+        // comment) — `controller` is a getter derived from `scrcpyClient`.
+        const injectText = vi.fn().mockResolvedValue(undefined);
+        (device as unknown as { scrcpyClient: unknown }).scrcpyClient = {
+          controller: { injectText },
+        };
 
         // Screenshot
         const rScreen = await app.inject({
@@ -282,7 +289,7 @@ describe("devices routes", () => {
         });
         expect(rScreen.statusCode).toBe(200);
         expect(rScreen.json().screenshot).toBe(Buffer.from("fake-png").toString("base64"));
-        expect(spawnWait).toHaveBeenCalledWith(["screencap", "-p"]);
+        expect(spawnWait).toHaveBeenCalledWith(["'screencap'", "'-p'"]);
 
         // Tap
         const rTap = await app.inject({
@@ -292,7 +299,7 @@ describe("devices routes", () => {
         });
         expect(rTap.statusCode).toBe(200);
         expect(rTap.json()).toEqual({ ok: true });
-        expect(spawnWaitText).toHaveBeenCalledWith(["input", "tap", "10", "20"]);
+        expect(spawnWaitText).toHaveBeenCalledWith(["'input'", "'tap'", "'10'", "'20'"]);
 
         // Swipe (with duration)
         const rSwipe1 = await app.inject({
@@ -301,7 +308,15 @@ describe("devices routes", () => {
           payload: { action: "swipe", x1: 1, y1: 2, x2: 3, y2: 4, durationMs: 100 },
         });
         expect(rSwipe1.statusCode).toBe(200);
-        expect(spawnWaitText).toHaveBeenCalledWith(["input", "swipe", "1", "2", "3", "4", "100"]);
+        expect(spawnWaitText).toHaveBeenCalledWith([
+          "'input'",
+          "'swipe'",
+          "'1'",
+          "'2'",
+          "'3'",
+          "'4'",
+          "'100'",
+        ]);
 
         // Swipe (without duration)
         const rSwipe2 = await app.inject({
@@ -310,7 +325,14 @@ describe("devices routes", () => {
           payload: { action: "swipe", x1: 5, y1: 6, x2: 7, y2: 8 },
         });
         expect(rSwipe2.statusCode).toBe(200);
-        expect(spawnWaitText).toHaveBeenCalledWith(["input", "swipe", "5", "6", "7", "8"]);
+        expect(spawnWaitText).toHaveBeenCalledWith([
+          "'input'",
+          "'swipe'",
+          "'5'",
+          "'6'",
+          "'7'",
+          "'8'",
+        ]);
 
         // Text
         const rText = await app.inject({
@@ -319,7 +341,7 @@ describe("devices routes", () => {
           payload: { action: "text", text: "hello" },
         });
         expect(rText.statusCode).toBe(200);
-        expect(spawnWaitText).toHaveBeenCalledWith(["input", "text", "hello"]);
+        expect(injectText).toHaveBeenCalledWith("hello");
 
         // Key
         const rKey = await app.inject({
@@ -328,7 +350,7 @@ describe("devices routes", () => {
           payload: { action: "key", androidKeyCode: 4 },
         });
         expect(rKey.statusCode).toBe(200);
-        expect(spawnWaitText).toHaveBeenCalledWith(["input", "keyevent", "4"]);
+        expect(spawnWaitText).toHaveBeenCalledWith(["'input'", "'keyevent'", "'4'"]);
 
         // Logcat (default lines, no filter)
         const rLog1 = await app.inject({
@@ -338,7 +360,7 @@ describe("devices routes", () => {
         });
         expect(rLog1.statusCode).toBe(200);
         expect(rLog1.json()).toEqual({ logcat: "log output" });
-        expect(spawnWaitText).toHaveBeenCalledWith(["logcat", "-d", "-t", "200"]);
+        expect(spawnWaitText).toHaveBeenCalledWith(["'logcat'", "'-d'", "'-t'", "'200'"]);
 
         // Logcat (lines and filter)
         const rLog2 = await app.inject({
@@ -347,7 +369,85 @@ describe("devices routes", () => {
           payload: { action: "logcat", lines: 50, filter: "MyTag:D" },
         });
         expect(rLog2.statusCode).toBe(200);
-        expect(spawnWaitText).toHaveBeenCalledWith(["logcat", "-d", "-t", "50", "MyTag:D"]);
+        expect(spawnWaitText).toHaveBeenCalledWith([
+          "'logcat'",
+          "'-d'",
+          "'-t'",
+          "'50'",
+          "'MyTag:D'",
+        ]);
+      });
+
+      // Hermes follow-up review suggestion on PR #1324 — "a test that
+      // captures the args a mocked spawnWaitText receives (or asserts a
+      // shell-injecting `text` string stays a single quoted token) would
+      // lock the security fix in." The values below are exactly what the
+      // adb `exec:` transport re-tokenizes through the device's own shell
+      // (`sh -c`) if left unescaped: a space re-splits the token, `;`/`$()`
+      // execute, and an embedded `'` would otherwise terminate the quoting
+      // early. shellQuoteArg's `'...'.replace(/'/g, "'\\''")` handles all
+      // three — asserted here against the actual argv spawnWaitText
+      // receives, not just against shellQuoteArg in isolation, so a
+      // regression in how routes/devices.ts calls it is caught too.
+      it("neutralizes shell metacharacters in the logcat filter via POSIX single-quote escaping", async () => {
+        const app = await buildTestApp();
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/devices",
+          payload: { avdName: "dev35" },
+        });
+        const id = created.json().id;
+        const device = app.device.get(String(id))!;
+
+        const spawnWaitText = vi.fn().mockResolvedValue("log output");
+        (device as unknown as { adb: unknown }).adb = {
+          subprocess: { noneProtocol: { spawnWaitText } },
+        };
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/devices/${id}/action`,
+          payload: { action: "logcat", filter: "MyTag:D; rm -rf / #$(whoami)'" },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(spawnWaitText).toHaveBeenCalledWith([
+          "'logcat'",
+          "'-d'",
+          "'-t'",
+          "'200'",
+          // The embedded `'` closes and re-opens the quoted token
+          // (`'\''`) rather than breaking out of it — the whole filter
+          // still arrives at `sh -c` as ONE argument, never re-tokenized
+          // into `;`/`$()` as separate shell commands.
+          "'MyTag:D; rm -rf / #$(whoami)'\\'''",
+        ]);
+      });
+
+      it("400s on a logcat action whose optional fields have the wrong type", async () => {
+        const app = await buildTestApp();
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/devices",
+          payload: { avdName: "dev35" },
+        });
+        const id = created.json().id;
+        (app.device.get(String(id)) as unknown as { adb: unknown }).adb = {
+          subprocess: { noneProtocol: { spawnWaitText: vi.fn() } },
+        };
+
+        const badLines = await app.inject({
+          method: "POST",
+          url: `/api/devices/${id}/action`,
+          payload: { action: "logcat", lines: "200" },
+        });
+        expect(badLines.statusCode).toBe(400);
+
+        const badFilter = await app.inject({
+          method: "POST",
+          url: `/api/devices/${id}/action`,
+          payload: { action: "logcat", filter: 123 },
+        });
+        expect(badFilter.statusCode).toBe(400);
       });
     });
   });

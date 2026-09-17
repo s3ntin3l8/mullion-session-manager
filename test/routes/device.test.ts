@@ -472,6 +472,59 @@ describe("device route (/ws/device/:deviceId)", () => {
       expect(unsubscribeVideo).toHaveBeenCalledTimes(1);
       expect(unsubscribeExit).toHaveBeenCalledTimes(1);
     });
+
+    it("stops forwarding video packets once the socket has already closed", async () => {
+      const app = await buildTestApp();
+      let videoListener: ((pkt: ScrcpyMediaStreamPacket) => void) | undefined;
+      const fakeDevice = {
+        onVideoPacket: vi.fn((fn) => {
+          videoListener = fn;
+          return vi.fn();
+        }),
+        onExit: vi.fn(() => vi.fn()),
+      };
+      vi.spyOn(app.device, "getOrCreate").mockResolvedValueOnce(fakeDevice as any);
+
+      const socket = new MockWebSocket();
+      await attachSocketToDevice(app, socket as any, {
+        deviceId: 1,
+        avdName: "dev35",
+        label: null,
+        port: null,
+      });
+
+      socket.close();
+      videoListener!({ type: "data", keyframe: false, data: new Uint8Array([1]) });
+
+      expect(socket.sentMessages).toHaveLength(0);
+    });
+
+    it("logs a warning (and keeps the connection open) when input dispatch throws", async () => {
+      const app = await buildTestApp();
+      const mockController = {
+        injectText: vi.fn().mockRejectedValue(new Error("input failed")),
+      };
+      const fakeDevice = {
+        controller: mockController,
+        onVideoPacket: vi.fn(() => vi.fn()),
+        onExit: vi.fn(() => vi.fn()),
+      };
+      vi.spyOn(app.device, "getOrCreate").mockResolvedValueOnce(fakeDevice as any);
+      const warnSpy = vi.spyOn(app.log, "warn");
+
+      const socket = new MockWebSocket();
+      await attachSocketToDevice(app, socket as any, {
+        deviceId: 1,
+        avdName: "dev35",
+        label: null,
+        port: null,
+      });
+
+      socket.emit("message", Buffer.from(JSON.stringify({ type: "text", text: "fail" })), false);
+
+      await vi.waitFor(() => expect(warnSpy).toHaveBeenCalled());
+      expect(socket.readyState).toBe(socket.OPEN);
+    });
   });
 
   describe("real WebSocket upgrade handling", () => {
