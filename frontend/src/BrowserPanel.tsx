@@ -108,6 +108,17 @@ export function BrowserPanel({
 
   const initialUrl = params.url ? normalizeUrl(params.url) : "";
   const [fetchState, setFetchState] = useState<BrowserPanelState>({ status: "loading" });
+  // Whether the current project-bound fetchState went through the preview
+  // proxy (buildPreviewSrc/preview-<slug> subdomain) rather than embedding
+  // devServerUrl directly (the previewsEnabled/previewBaseHost-unset
+  // fallback, which predates the preview proxy entirely). Only the proxied
+  // path can produce the raw-JSON/HTML proxy error this feature targets —
+  // a direct embed's own connection failures are the iframe's native error
+  // page, already covered by the devServerOnline dot alone (see
+  // "Remediation Plan Additions" in BrowserPanel.test.tsx), and gating the
+  // devServerOnline-derived override on this keeps that existing dot+iframe
+  // behavior intact.
+  const [previewViaProxy, setPreviewViaProxy] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const [currentUrl, setCurrentUrl] = useState(initialUrl);
   const [addressInput, setAddressInput] = useState(initialUrl);
@@ -204,6 +215,7 @@ export function BrowserPanel({
           const info = await api.getServerInfo();
           if (cancelled) return;
           if (!info.previewsEnabled || !info.previewBaseHost) {
+            setPreviewViaProxy(false);
             setFetchState({ status: "ready", src: devServerUrl! });
             return;
           }
@@ -211,6 +223,7 @@ export function BrowserPanel({
           if (cancelled) return;
           const token = await mintPreviewTokenIfRequired(info, preview.slug);
           if (cancelled) return;
+          setPreviewViaProxy(true);
           setFetchState({
             status: "ready",
             src: buildPreviewSrc(
@@ -285,6 +298,26 @@ export function BrowserPanel({
   // Dev server status indicator
   const [devServerOnline, setDevServerOnline] = useState<boolean | null>(null);
 
+  // Whether the current iframe (this src + reloadKey combo) has ever fired
+  // `load`. Used below to gate the devServerOnline-derived error override:
+  // once something has loaded, a later poll tick that flips devServerOnline
+  // to false (a transient blip, or the dev server dying mid-session) must
+  // not tear down a frame the user may be actively interacting with — see
+  // this file's own note above on the poll's 5s cadence. Reset on every
+  // src/reloadKey change so a fresh attempt starts un-loaded again — done
+  // during render (React's documented "adjusting state when a prop
+  // changes" bailout), not a useEffect, since a setState synchronously
+  // inside an effect body trips this repo's react-hooks/set-state-in-effect
+  // lint rule.
+  const [frameLoaded, setFrameLoaded] = useState(false);
+  const readySrc = fetchState.status === "ready" ? fetchState.src : undefined;
+  const frameIdentity = `${reloadKey}:${readySrc ?? ""}`;
+  const [trackedFrameIdentity, setTrackedFrameIdentity] = useState(frameIdentity);
+  if (trackedFrameIdentity !== frameIdentity) {
+    setTrackedFrameIdentity(frameIdentity);
+    setFrameLoaded(false);
+  }
+
   // Behavior note: the pre-extraction effect's own dependency array was
   // `[isExternal, projectId]` only — `devServerUrl` gated the early return
   // but wasn't a listed dependency, so a `devServerUrl` that went from
@@ -345,6 +378,25 @@ export function BrowserPanel({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [dropdownOpen, favDropdownOpen]);
 
+  // A cross-origin preview iframe can't be probed for its response status
+  // from here (no CORS headers on either the dev server's own responses or
+  // the proxy's error branches, so a fetch() to the preview URL fails
+  // identically for a 200 and a 404/502/503 — see this PR's own commit
+  // message for why that rules out both options the originating issue
+  // proposed). devServerOnline (polled above, already same-origin via our
+  // own API) is the one signal already available for the dominant case:
+  // the proxy returning 502/503 because the dev server itself is down.
+  // Gated on `=== false` (not just falsy) so the null "haven't polled yet"
+  // state never flashes this, and on `!frameLoaded` so it never yanks away
+  // an iframe that's already showing something.
+  const devServerUnreachable =
+    !isExternal &&
+    activeSavedUrlId === null &&
+    !!devServerUrl &&
+    previewViaProxy &&
+    devServerOnline === false &&
+    !frameLoaded;
+
   const state: BrowserPanelState =
     !isExternal && activeSavedUrlId === null && !devServerUrl
       ? {
@@ -353,9 +405,15 @@ export function BrowserPanel({
             ? `This project has no dev server URL configured. Detected one running on port ${detectedDevServerPort} — set it in the project's settings.`
             : "This project has no dev server URL configured. Set one in the project's settings.",
         }
-      : isExternal && !currentUrl
-        ? { status: "empty" }
-        : fetchState;
+      : devServerUnreachable
+        ? {
+            status: "unavailable",
+            message:
+              "Dev server not reachable. It may have crashed or stopped — check the session, then retry.",
+          }
+        : isExternal && !currentUrl
+          ? { status: "empty" }
+          : fetchState;
 
   const pushToHistory = (url: string) => {
     const newHistory = urlHistory.slice(0, historyIndex + 1);
@@ -404,7 +462,24 @@ export function BrowserPanel({
       return <div className="browser-panel-empty">Loading…</div>;
     }
     if (state.status === "unavailable") {
-      return <div className="browser-panel-empty">{state.message}</div>;
+      // Retry only offered once there's actually a dev server/saved URL to
+      // retry against — the sibling "no dev server URL configured" message
+      // above needs a settings change, not a reload, to ever resolve.
+      const canRetry = !!devServerUrl || activeSavedUrlId !== null;
+      return (
+        <div className="browser-panel-empty">
+          <div>{state.message}</div>
+          {canRetry && (
+            <button
+              className="browser-panel-go"
+              style={{ marginTop: 8 }}
+              onClick={() => setReloadKey((k) => k + 1)}
+            >
+              Retry
+            </button>
+          )}
+        </div>
+      );
     }
     const currentLabel = activeSavedUrlLabel ?? "Dev server";
     const currentSrc = state.status === "ready" ? state.src : "";
@@ -515,7 +590,13 @@ export function BrowserPanel({
             <RefreshIcon size={13} />
           </button>
         </div>
-        <iframe key={reloadKey} className="browser-panel-frame" src={state.src} title="Preview" />
+        <iframe
+          key={reloadKey}
+          className="browser-panel-frame"
+          src={state.src}
+          title="Preview"
+          onLoad={() => setFrameLoaded(true)}
+        />
         {modalOpen && project && (
           <SavedUrlModal
             projectId={project.id}

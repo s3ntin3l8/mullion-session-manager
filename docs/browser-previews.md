@@ -243,3 +243,17 @@ agent's own loopback, never pivot into its LAN.
   (same open question as `/ws/terminal` — see `deploy/README.md`).
 - Port auto-discovery only works for projects running on the primary
   itself; it has no visibility into a remote agent's terminal scrollback.
+- The dashboard's own preview pane (`frontend/src/BrowserPanel.tsx`) shows a
+  readable "Dev server not reachable" state (with a retry button) instead of
+  the iframe only for a project's own dev server preview, and only once
+  `getDevServerStatus` polling actually observes it offline — a cross-origin
+  iframe can't read the framed response's status code, so a proxy error that
+  isn't "dev server down" (unknown slug, a 401 from `PREVIEW_AUTH_REQUIRED`,
+  429 rate-limiting) still renders as the raw JSON/HTML the proxy returned.
+  Detecting those from the parent page would need CORS headers on the
+  proxy's own error responses (safe to add, since those are Mullion's own
+  content, never the dev server's) — not done here; tracked in issue #1318.
+  The same "not reachable" state is deliberately _not_ shown for
+  a saved URL or the no-proxy direct-embed fallback (`previewsEnabled`
+  false): those already surface a connection failure via the iframe's own
+  browser-native error page plus the toolbar's online/offline dot.

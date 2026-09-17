@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { DockviewPanelApi } from "dockview-react";
 import { BrowserPanel } from "./BrowserPanel.js";
@@ -86,6 +86,7 @@ describe("BrowserPanel", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
     useDashboardStore.setState({ projects: [], sessions: [] });
@@ -274,6 +275,108 @@ describe("BrowserPanel", () => {
 
     await user.click(screen.getByTitle("Reload"));
     await vi.waitFor(() => expect(previewCalls).toBe(3));
+  });
+
+  it("shows a readable error with a retry button instead of the raw proxy response when the dev server is unreachable (issue #1309)", async () => {
+    vi.spyOn(api, "getDevServerStatus").mockResolvedValue({ online: false });
+    let previewCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url === "/api/projects/1/urls" && method === "GET") {
+          return Promise.resolve(jsonResponse(200, []));
+        }
+        if (url === "/api/server-info" && method === "GET") {
+          return Promise.resolve(
+            jsonResponse(200, {
+              ...SERVER_INFO_BASE,
+              previewsEnabled: true,
+              previewBaseHost: "preview.example.com",
+            }),
+          );
+        }
+        if (url === "/api/previews" && method === "POST") {
+          previewCalls += 1;
+          return Promise.resolve(
+            jsonResponse(201, {
+              slug: "abc123",
+              kind: "project",
+              projectId: 1,
+              externalUrl: null,
+              createdAt: "2026-01-01T00:00:00.000Z",
+            }),
+          );
+        }
+        return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
+      }),
+    );
+    useDashboardStore.setState({ projects: [PROJECT] });
+
+    const user = userEvent.setup();
+    render(<BrowserPanel params={{ projectId: 1 }} />);
+
+    expect(await screen.findByText(/Dev server not reachable/)).toBeInTheDocument();
+    expect(screen.queryByTitle("Preview")).not.toBeInTheDocument();
+
+    const callsBeforeRetry = previewCalls;
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await vi.waitFor(() => expect(previewCalls).toBeGreaterThan(callsBeforeRetry));
+  });
+
+  it("keeps an already-loaded iframe visible when a later poll tick reports the dev server offline", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(api, "getDevServerStatus")
+      .mockResolvedValueOnce({ online: true })
+      .mockResolvedValue({ online: false });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url === "/api/projects/1/urls" && method === "GET") {
+          return Promise.resolve(jsonResponse(200, []));
+        }
+        if (url === "/api/server-info" && method === "GET") {
+          return Promise.resolve(
+            jsonResponse(200, {
+              ...SERVER_INFO_BASE,
+              previewsEnabled: true,
+              previewBaseHost: "preview.example.com",
+            }),
+          );
+        }
+        if (url === "/api/previews" && method === "POST") {
+          return Promise.resolve(
+            jsonResponse(201, {
+              slug: "abc123",
+              kind: "project",
+              projectId: 1,
+              externalUrl: null,
+              createdAt: "2026-01-01T00:00:00.000Z",
+            }),
+          );
+        }
+        return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
+      }),
+    );
+    useDashboardStore.setState({ projects: [PROJECT] });
+
+    render(<BrowserPanel params={{ projectId: 1 }} />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const frame = screen.getByTitle("Preview");
+    fireEvent.load(frame);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+
+    expect(screen.getByTitle("Preview")).toBeInTheDocument();
   });
 
   describe("kind: external (issue #28 phase 5)", () => {
