@@ -27,11 +27,18 @@ function collectSourceFiles(dir, fileList = []) {
   return fileList;
 }
 
-// Strip single-line and multi-line comments to avoid false positives on documentation/comments
+// Strip single-line and multi-line comments to avoid false positives on documentation/comments.
+// Preserves string literals so URLs containing '//' (e.g. "https://...") are not truncated.
 function stripComments(content) {
-  return content
-    .replace(/\/\*[\s\S]*?\*\//g, (match) => " ".repeat(match.length))
-    .replace(/\/\/.*/g, (match) => " ".repeat(match.length));
+  return content.replace(
+    /("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)|(\/\*[\s\S]*?\*\/|\/\/[^\r\n]*)/g,
+    (match, _str, comment) => {
+      if (comment) {
+        return match.replace(/[^\r\n]/g, " ");
+      }
+      return match;
+    },
+  );
 }
 
 export function scanFileForAntipatterns(filePath, content) {
@@ -58,14 +65,29 @@ export function scanFileForAntipatterns(filePath, content) {
               /^.*?access-control-allow-origin['"]?\s*[,:]?\s*/i,
               "",
             );
-            if (
-              /^\*|['"]\*['"]/.test(afterHeader.trim()) ||
-              /\breq\.headers\b/.test(afterHeader) ||
-              /\bheaders\[['"]origin['"]\]/.test(afterHeader) ||
-              /\borigin\b/i.test(afterHeader)
-            ) {
-              hasWildcardOrReflectedOrigin = true;
-              break;
+            const trimmed = afterHeader
+              .trim()
+              .replace(/[,;)]*$/, "")
+              .trim();
+            const quotedMatch = /^(['"`])(.*)\1$/.exec(trimmed);
+            if (quotedMatch) {
+              // Quoted static literal — only dangerous if wildcard
+              if (quotedMatch[2] === "*") {
+                hasWildcardOrReflectedOrigin = true;
+                break;
+              }
+            } else {
+              // Unquoted dynamic/reflected origin expression
+              if (
+                /^\*|['"]\*['"]/.test(trimmed) ||
+                /\breq(\.|uest\.)headers\b/i.test(trimmed) ||
+                /\bheaders\[['"]origin['"]\]/i.test(trimmed) ||
+                /\breq(\.|uest\.)header\(['"]origin['"]\)/i.test(trimmed) ||
+                /\b(origin|clientOrigin|requestOrigin)\b/.test(trimmed)
+              ) {
+                hasWildcardOrReflectedOrigin = true;
+                break;
+              }
             }
           }
         }

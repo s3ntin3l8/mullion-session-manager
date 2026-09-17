@@ -1338,36 +1338,6 @@ async function attemptAutoRebase(
     }
   }
 
-  if (task.reviewSessionId !== null) {
-    const [reviewSession] = app.db
-      .select()
-      .from(sessions)
-      .where(eq(sessions.id, task.reviewSessionId))
-      .all();
-    if (reviewSession?.status === "active") {
-      try {
-        await backend.terminate(String(task.reviewSessionId));
-        app.db
-          .update(sessions)
-          .set({ status: "killed" })
-          .where(eq(sessions.id, task.reviewSessionId))
-          .run();
-        closeSessionBrowserBindings(app, task.reviewSessionId);
-      } catch (err) {
-        app.log.warn(
-          { err, taskId: task.id, reviewSessionId: task.reviewSessionId },
-          "task auto-rebase: active review session could not be terminated, leaving it for a later tick",
-        );
-        recordMergeError(
-          app,
-          task.id,
-          "Conflicts with main — active review session could not be stopped for auto-rebase, needs manual resolution",
-        );
-        return;
-      }
-    }
-  }
-
   // task.branchName should always be set by this point (retryTask's own
   // reservation transaction refuses a null branchName before a task can
   // even reach "done"), but fall back the same way task-claim.ts's resume
@@ -1494,6 +1464,34 @@ async function attemptAutoRebase(
       "task auto-rebase: lost a race with a concurrent transition — the freshly spawned session is orphaned, left for a human to notice",
     );
     return;
+  }
+
+  // Once spawn + CAS succeed, terminate the superseded review session (if any).
+  // Kept strictly after the CAS so a failure in resumeTaskWorktree, createSessionRecord,
+  // or the CAS itself does not kill an active reviewer while leaving the task in reviewing
+  // with a stranded dead session.
+  if (task.reviewSessionId !== null) {
+    const [reviewSession] = app.db
+      .select()
+      .from(sessions)
+      .where(eq(sessions.id, task.reviewSessionId))
+      .all();
+    if (reviewSession?.status === "active") {
+      try {
+        await backend.terminate(String(task.reviewSessionId));
+        app.db
+          .update(sessions)
+          .set({ status: "killed" })
+          .where(eq(sessions.id, task.reviewSessionId))
+          .run();
+        closeSessionBrowserBindings(app, task.reviewSessionId);
+      } catch (err) {
+        app.log.warn(
+          { err, taskId: task.id, reviewSessionId: task.reviewSessionId },
+          "task auto-rebase: superseded review session could not be terminated after spawn",
+        );
+      }
+    }
   }
 
   app.log.info(

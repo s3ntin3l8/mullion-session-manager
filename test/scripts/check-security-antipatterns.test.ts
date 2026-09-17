@@ -38,6 +38,32 @@ describe("check-security-antipatterns", () => {
     expect(findings).toHaveLength(0);
   });
 
+  it("allows fixed origin whose hostname contains 'origin' and URL with //", () => {
+    const code = `
+      function setHeaders(reply) {
+        reply.header("Access-Control-Allow-Origin", "https://origin.example.com//api");
+        reply.header("Access-Control-Allow-Credentials", "true");
+      }
+    `;
+    const findings = scanFileForAntipatterns("origin-word.ts", code);
+    expect(findings).toHaveLength(0);
+  });
+
+  it("flags dynamic variable origin reflection with credentials: true", () => {
+    const code = `
+      function setHeaders(reply, origin) {
+        reply.header("Access-Control-Allow-Origin", origin);
+        reply.header("Access-Control-Allow-Credentials", "true");
+      }
+    `;
+    const findings = scanFileForAntipatterns("dynamic-origin.ts", code);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({
+      file: "dynamic-origin.ts",
+      rule: "cors-misconfiguration-for-credentials",
+    });
+  });
+
   it("flags wildcard Access-Control-Allow-Origin with credentials: true", () => {
     const code = `
       function setHeaders(reply) {

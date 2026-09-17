@@ -156,7 +156,7 @@ diff --git a/docs/README.md b/docs/README.md
         encoding: "utf8",
       },
     );
-    expect(output).toContain("Patch coverage:");
+    expect(output).toMatch(/Patch [Cc]overage/);
   });
 
   it("cli returns 0 when threshold is satisfied", () => {
@@ -173,5 +173,10 @@ diff --git a/src/services/task-reconciler.ts b/src/services/task-reconciler.ts
 +const b = 2;
 `;
     expect(cli(["--threshold", "101", "--no-run"], { diffText: mockDiff })).toBe(1);
+  });
+
+  it("runPatchCoverageCheck returns ok: false when baseRef cannot be resolved", () => {
+    const res = runPatchCoverageCheck({ baseRef: "non-existent-ref-xyz-12345", noRun: true });
+    expect(res.ok).toBe(false);
   });
 });

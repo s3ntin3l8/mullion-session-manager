@@ -32,7 +32,7 @@ export function resolveBaseRef(explicitRef) {
       // try next
     }
   }
-  return "HEAD";
+  return null;
 }
 
 export function parseGitDiffHunks(diffText) {
@@ -217,6 +217,12 @@ export function runPatchCoverageCheck(options = {}) {
   // Get git diff
   let diffText = options.diffText;
   if (diffText === undefined) {
+    if (!baseRef) {
+      console.error(
+        "ERROR: Could not resolve a base ref (origin/main, main, HEAD~1) to compute patch diff against.",
+      );
+      return { ok: false, overallPercent: 0, error: "no-base-ref" };
+    }
     try {
       diffText = execFileSync("git", ["diff", "-U0", baseRef], {
         cwd: root,
@@ -224,16 +230,8 @@ export function runPatchCoverageCheck(options = {}) {
         maxBuffer: 10 * 1024 * 1024,
       });
     } catch (err) {
-      console.warn(`Failed to diff against ${baseRef}, falling back to HEAD:`, err.message);
-      try {
-        diffText = execFileSync("git", ["diff", "-U0", "HEAD"], {
-          cwd: root,
-          encoding: "utf8",
-          maxBuffer: 10 * 1024 * 1024,
-        });
-      } catch {
-        diffText = "";
-      }
+      console.error(`ERROR: Failed to diff against ${baseRef}:`, err.message);
+      return { ok: false, overallPercent: 0, error: "diff-failed" };
     }
   }
 
