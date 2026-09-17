@@ -360,7 +360,7 @@ mockPromoteTaskToPR.mockImplementation(actualTaskPromoteModule.promoteTaskToPR);
 
 const { buildApp } = await import("../../src/app.js");
 const { closeDb, getDb } = await import("../../src/db/client.js");
-const { reconcileTasks, resetAutoApproveBackoff } =
+const { reconcileTasks } =
   await import("../../src/services/task-reconciler.js");
 const { tasks, sessions, projects } = await import("../../src/db/schema.js");
 const { and, eq, isNull, isNotNull } = await import("drizzle-orm");
@@ -3910,7 +3910,9 @@ describe("reconcileTasks", () => {
       expect(row.reviewSessionId).toBeNull();
 
       // Third tick: PR rebase finishes on GitHub and is now clean.
-      resetAutoApproveBackoff(taskId);
+      // No manual backoff reset needed — processAutoApprovals resets it automatically
+      // when it sees rebaseStartedAt !== null, so the conflict resolution gets an
+      // immediate attempt without being throttled by the dirty-period backoff.
       mockGetPullRequestByNumber.mockResolvedValue(
         mockPr({ mergeable: true, mergeableState: "clean" }),
       );

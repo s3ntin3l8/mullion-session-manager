@@ -224,7 +224,23 @@ export function runPatchCoverageCheck(options = {}) {
       return { ok: false, overallPercent: 0, error: "no-base-ref" };
     }
     try {
-      diffText = execFileSync("git", ["diff", "-U0", baseRef], {
+      // Use the merge-base (common ancestor of baseRef and HEAD) rather than
+      // baseRef's tip, so the diff correctly reflects only what diverged from
+      // the branch point — not extra commits on main that advanced after the
+      // branch was cut. git diff origin/main..HEAD and a pre-rebase run would
+      // both over-count if baseRef has advanced past the fork point.
+      let diffBase = baseRef;
+      try {
+        diffBase = execFileSync("git", ["merge-base", baseRef, "HEAD"], {
+          cwd: root,
+          encoding: "utf8",
+        }).trim();
+      } catch {
+        // merge-base can fail (e.g. when baseRef IS HEAD, or for shallow clones);
+        // fall back to diffing against baseRef directly.
+        diffBase = baseRef;
+      }
+      diffText = execFileSync("git", ["diff", "-U0", diffBase], {
         cwd: root,
         encoding: "utf8",
         maxBuffer: 10 * 1024 * 1024,

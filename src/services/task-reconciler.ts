@@ -2701,7 +2701,8 @@ async function attemptAutoApprove(
   if (!current) return;
 
   // If a previous auto-rebase attempt resolved the conflict (PR is no longer dirty),
-  // clear rebaseStartedAt so processPendingReviewSpawns can spawn a fresh review agent.
+  // clear rebaseStartedAt so processPendingReviewSpawns can spawn a fresh review agent,
+  // and reset the auto-approve backoff so the task is not throttled after rebase.
   if (
     task.rebaseStartedAt !== null &&
     current.mergeable !== false &&
@@ -2714,6 +2715,7 @@ async function attemptAutoApprove(
       .run();
     task.rebaseStartedAt = null;
     task.mergeError = null;
+    resetAutoApproveBackoff(task.id);
   }
 
   if (
@@ -2840,6 +2842,14 @@ async function processAutoApprovals(app: FastifyInstance): Promise<void> {
   for (const { task, project } of rows) {
     if (attempted >= MAX_AUTO_APPROVALS_PER_SWEEP) return;
     if (isGitHubRateLimited()) return; // #759 — see the draft-PR sweep's own comment
+
+    // If a rebase attempt is in flight (rebaseStartedAt set), the backoff accrued
+    // during the dirty period must not throttle the first attempt after the conflict
+    // resolves. Reset it here so that once attemptAutoApprove clears rebaseStartedAt
+    // the reviewer is spawned (and auto-approve attempted) on the very next tick.
+    if (task.rebaseStartedAt !== null) {
+      resetAutoApproveBackoff(task.id);
+    }
 
     const state = autoApproveRetryState.get(task.id);
     if (
