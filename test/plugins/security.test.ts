@@ -46,6 +46,21 @@ describe("security plugin", () => {
     expect(csp).toContain("https://*.preview.example.com");
   });
 
+  it("also allows framing the bare PREVIEW_BASE_HOST itself, not just its *. wildcard", async () => {
+    // CSP host-source matching treats "*.example.com" and "example.com" as
+    // disjoint — a gateway forward-auth fronting the preview router (per
+    // docs/browser-previews.md's Setup step 5) commonly places its own OAuth
+    // callback on the bare base host, which the *.-only allowance above
+    // can't cover. Without this, that callback can never load inside the
+    // iframe even when forwardAuth itself is configured correctly.
+    process.env.PREVIEW_BASE_HOST = "preview.example.com";
+    const app = await buildTestApp();
+    const res = await app.inject({ method: "GET", url: "/health" });
+    const csp = res.headers["content-security-policy"] as string;
+    expect(csp).toContain("http://preview.example.com");
+    expect(csp).toContain("https://preview.example.com");
+  });
+
   it("blocks inline scripts (A5 — no 'unsafe-inline'/nonce/hash in script-src)", async () => {
     // Regression guard for A5: frontend/index.html's iOS status-bar theme
     // hint used to be an inline <script> block that this exact directive

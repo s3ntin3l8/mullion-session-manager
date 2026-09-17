@@ -2137,6 +2137,19 @@ extensive design comments.
   `state_reason`) — but an abandoned, still-open blocker does not. The
   board's blocked badge is the only signal; there is no timeout or cycle
   detection.
+- **`dependencyGate` only sees a blocker an issue actually declares as a
+  `blocked_by` edge — nothing cross-checks an issue's own prose against
+  another issue's or PR's real state.** Issue #1326 is the concrete case:
+  its body describes PR #1324 (`feat/android-device-panel`) as already
+  landed ("has a complete backend ... and a working frontend panel
+  component") and scopes an addition on top of it, but #1324 was still
+  open — `mergeable: CONFLICTING`, no reviews — when #1326 was labeled
+  `ready`. `blocked_by` on #1326 was empty, so the gate read `clear`, the
+  task was claimed, and the worker's worktree (branched from `origin/main`)
+  had none of the files the spec named. There is no code fix for this: an
+  issue whose scope depends on a not-yet-merged PR needs that PR's issue
+  declared as a `blocked_by` edge (or the `ready` label held off) at file
+  time — the gate has no way to infer a prose dependency claim.
 - **With webhooks off (or unreachable), a landed blocker's dependents wait
   up to the poll interval, not the ~1s the webhook push gives them** — the
   GitHub sync section's blocker-close read-back above requires a delivered

@@ -370,7 +370,7 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
     await app.close();
   });
 
-  it("404s an unknown slug", async () => {
+  it("404s an unknown slug, with framing headers already stripped (else Chrome blocks the error itself)", async () => {
     const app = await buildApp();
     const res = await app.inject({
       method: "GET",
@@ -378,10 +378,16 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
       headers: { host: `preview-does-not-exist.${PREVIEW_BASE_HOST}` },
     });
     expect(res.statusCode).toBe(404);
+    // Regression guard: this used to still carry helmet's own
+    // X-Frame-Options/CSP, so the iframe rendered Chrome's generic
+    // "content is blocked" interstitial instead of this 404 — see
+    // stripFramingHeaders's own doc comment.
+    expect(res.headers["x-frame-options"]).toBeUndefined();
+    expect(res.headers["content-security-policy"]).toBeUndefined();
     await app.close();
   });
 
-  it("503s when the project has no devServerUrl configured", async () => {
+  it("503s when the project has no devServerUrl configured, with framing headers stripped", async () => {
     const app = await buildApp();
     const projectId = await createProjectWithDevServer(app, null);
     const slug = await createProjectPreview(app, projectId);
@@ -392,10 +398,12 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
       headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
     });
     expect(res.statusCode).toBe(503);
+    expect(res.headers["x-frame-options"]).toBeUndefined();
+    expect(res.headers["content-security-policy"]).toBeUndefined();
     await app.close();
   });
 
-  it("502s when the dev server is unreachable", async () => {
+  it("502s when the dev server is unreachable, with framing headers stripped", async () => {
     const app = await buildApp();
     // Port 1 is a real, always-refused loopback port (same convention the
     // multi-host tests use for "unreachable").
@@ -408,6 +416,8 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
       headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
     });
     expect(res.statusCode).toBe(502);
+    expect(res.headers["x-frame-options"]).toBeUndefined();
+    expect(res.headers["content-security-policy"]).toBeUndefined();
     await app.close();
   });
 
@@ -485,6 +495,146 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
         expect.objectContaining({ slug }),
         expect.stringContaining("upstream unreachable"),
       );
+      await app.close();
+    });
+  });
+
+  // Issue #1318 — lets the dashboard's own page detect a proxy error
+  // (404/401/429/502/503) via a cross-origin fetch() of the resolved
+  // preview `src`, ahead of mounting the iframe (BrowserPanel.tsx). A
+  // cross-origin fetch can't read anything about a response with no
+  // Access-Control-Allow-Origin header at all — these responses must carry
+  // one, and relayFetchResponse's success path (the previewed dev server's
+  // own response) must never carry one. Responses deliberately do NOT set
+  // Access-Control-Allow-Credentials: true (CodeQL
+  // js/cors-misconfiguration-for-credentials); BrowserPanel.tsx probes with
+  // redirect: "manual" so credentials are not transferred or exposed.
+  describe("CORS headers on the proxy's own early-return errors only (issue #1318)", () => {
+    const DASHBOARD_ORIGIN = "https://dashboard.example.com";
+
+    it("404 for an unknown slug reflects the caller's Origin and varies on it", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: "/",
+        headers: {
+          host: `preview-does-not-exist.${PREVIEW_BASE_HOST}`,
+          origin: DASHBOARD_ORIGIN,
+        },
+      });
+      expect(res.statusCode).toBe(404);
+      expect(res.headers["access-control-allow-origin"]).toBe(DASHBOARD_ORIGIN);
+      expect(res.headers["access-control-allow-credentials"]).toBeUndefined();
+      expect(res.headers["vary"]).toBe("Origin");
+      await app.close();
+    });
+
+    it("503 for a project with no devServerUrl reflects the caller's Origin", async () => {
+      const app = await buildApp();
+      const projectId = await createProjectWithDevServer(app, null);
+      const slug = await createProjectPreview(app, projectId);
+
+      const res = await app.inject({
+        method: "GET",
+        url: "/",
+        headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}`, origin: DASHBOARD_ORIGIN },
+      });
+      expect(res.statusCode).toBe(503);
+      expect(res.headers["access-control-allow-origin"]).toBe(DASHBOARD_ORIGIN);
+      expect(res.headers["access-control-allow-credentials"]).toBeUndefined();
+      await app.close();
+    });
+
+    it("502 for an unreachable dev server reflects the caller's Origin", async () => {
+      const app = await buildApp();
+      const projectId = await createProjectWithDevServer(app, "1");
+      const slug = await createProjectPreview(app, projectId);
+
+      const res = await app.inject({
+        method: "GET",
+        url: "/",
+        headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}`, origin: DASHBOARD_ORIGIN },
+      });
+      expect(res.statusCode).toBe(502);
+      expect(res.headers["access-control-allow-origin"]).toBe(DASHBOARD_ORIGIN);
+      expect(res.headers["access-control-allow-credentials"]).toBeUndefined();
+      await app.close();
+    });
+
+    it("429 for a rate-limited caller reflects the caller's Origin", async () => {
+      process.env.PREVIEW_RATE_LIMIT_MAX = "1";
+      try {
+        const app = await buildApp();
+        const projectId = await createProjectWithDevServer(app, String(stubPort));
+        const slug = await createProjectPreview(app, projectId);
+        const REMOTE = "203.0.113.30";
+
+        await app.inject({
+          method: "GET",
+          url: "/",
+          headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
+          remoteAddress: REMOTE,
+        });
+        const res = await app.inject({
+          method: "GET",
+          url: "/",
+          headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}`, origin: DASHBOARD_ORIGIN },
+          remoteAddress: REMOTE,
+        });
+        expect(res.statusCode).toBe(429);
+        expect(res.headers["access-control-allow-origin"]).toBe(DASHBOARD_ORIGIN);
+        expect(res.headers["access-control-allow-credentials"]).toBeUndefined();
+        await app.close();
+      } finally {
+        delete process.env.PREVIEW_RATE_LIMIT_MAX;
+      }
+    });
+
+    it("does not set Access-Control-Allow-Origin at all when the caller sent no Origin header", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: "/",
+        headers: { host: `preview-does-not-exist.${PREVIEW_BASE_HOST}` },
+      });
+      expect(res.statusCode).toBe(404);
+      expect(res.headers["access-control-allow-origin"]).toBeUndefined();
+      expect(res.headers["access-control-allow-credentials"]).toBeUndefined();
+      await app.close();
+    });
+
+    it("does not set Access-Control-Allow-Origin when the caller sent an invalid Origin header", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: "/",
+        headers: { host: `preview-does-not-exist.${PREVIEW_BASE_HOST}`, origin: "null" },
+      });
+      expect(res.statusCode).toBe(404);
+      expect(res.headers["access-control-allow-origin"]).toBeUndefined();
+      expect(res.headers["access-control-allow-credentials"]).toBeUndefined();
+      await app.close();
+    });
+
+    // The security-critical half of this feature: a real, successful proxy
+    // response (relayFetchResponse's own path — the previewed dev server's
+    // actual content) must stay exactly as CORS-opaque as it already was.
+    // Setting this header there would let the dashboard origin read an
+    // arbitrary previewed app's response cross-origin — a content leak
+    // across the slug boundary, not just a status-code probe.
+    it("never sets Access-Control-Allow-Origin on a successful proxied response", async () => {
+      const app = await buildApp();
+      const projectId = await createProjectWithDevServer(app, String(stubPort));
+      const slug = await createProjectPreview(app, projectId);
+
+      const res = await app.inject({
+        method: "GET",
+        url: "/",
+        headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}`, origin: DASHBOARD_ORIGIN },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.headers["access-control-allow-origin"]).toBeUndefined();
+      expect(res.headers["access-control-allow-credentials"]).toBeUndefined();
       await app.close();
     });
   });
@@ -989,6 +1139,12 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
         });
         expect(res.statusCode).toBe(401);
         expect(res.headers["content-type"]).toMatch(/text\/html/);
+        // Same regression this whole feature was invisible to before
+        // stripFramingHeaders ran unconditionally: a browser rendering this
+        // 401 inside the preview iframe needs helmet's own
+        // X-Frame-Options/CSP gone, or it never sees this body at all.
+        expect(res.headers["x-frame-options"]).toBeUndefined();
+        expect(res.headers["content-security-policy"]).toBeUndefined();
         expect(res.body).toContain("requires authentication");
         expect(res.body).not.toContain("<a href");
         await app.close();
@@ -1013,11 +1169,117 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
             headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
           });
           expect(res.statusCode).toBe(401);
-          expect(res.body).toContain('<a href="https://mullion.test/?a=1&amp;b=2">');
+          expect(res.body).toContain(
+            '<a id="mullion-preview-dashboard-link" href="https://mullion.test/?a=1&amp;b=2">',
+          );
           await app.close();
         } finally {
           delete process.env.PREVIEW_AUTH_DASHBOARD_URL;
         }
+      });
+
+      // Issue #1316 — an already-authenticated dashboard session can
+      // complete the bootstrap-token exchange itself instead of the visitor
+      // manually re-finding this preview in the dashboard's own UI: the 401
+      // body's script rewrites the plain dashboardUrl link above to point at
+      // routes/previews.ts's GET /api/previews/:slug/open, using only the
+      // dashboard URL's origin (any path component is discarded) plus a
+      // slug it reads client-side, never one embedded server-side.
+      it("401 body's inline script points the link at the dashboard origin's open-preview route, with no server-side slug", async () => {
+        process.env.PREVIEW_AUTH_DASHBOARD_URL = "https://mullion.test/some/path?a=1";
+        try {
+          const app = await buildApp();
+          const projectId = await createProjectWithDevServer(
+            app,
+            String(stubPort),
+            DASHBOARD_AUTH_HEADERS,
+          );
+          const slug = await createProjectPreview(app, projectId, DASHBOARD_AUTH_HEADERS);
+
+          const res = await app.inject({
+            method: "GET",
+            url: "/",
+            headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
+          });
+          expect(res.statusCode).toBe(401);
+          const scriptMatch = res.body.match(/<script nonce="[^"]+">.*<\/script>/);
+          expect(scriptMatch).not.toBeNull();
+          const script = scriptMatch![0];
+          expect(script).toContain('"https://mullion.test"');
+          // Only the dashboard URL's origin is embedded — its path/query is
+          // discarded (see buildPreviewAuthUnauthorizedHtml's own comment),
+          // and no slug is server-templated in at all (see this file's
+          // own doc comment above).
+          expect(script).not.toContain("/some/path");
+          expect(script).not.toContain(slug);
+          expect(script).toContain('"/api/previews/"+encodeURIComponent(m[1])+"/open"');
+          await app.close();
+        } finally {
+          delete process.env.PREVIEW_AUTH_DASHBOARD_URL;
+        }
+      });
+
+      // Blocker from round 1 review: the inline <script> above is only ever
+      // executed by a real browser if this response's own
+      // content-security-policy header permits it — app.inject() doesn't
+      // enforce CSP at all, so a passing body/script assertion alone proved
+      // nothing about whether a browser would actually run it. This pins
+      // the header itself: a nonce that matches the one embedded in the
+      // script tag, and no 'unsafe-inline' (which would defeat the point of
+      // scoping this to one response).
+      it("401 response's own content-security-policy header permits exactly the embedded script nonce, scoped to this response only", async () => {
+        process.env.PREVIEW_AUTH_DASHBOARD_URL = "https://mullion.test";
+        try {
+          const app = await buildApp();
+          const projectId = await createProjectWithDevServer(
+            app,
+            String(stubPort),
+            DASHBOARD_AUTH_HEADERS,
+          );
+          const slug = await createProjectPreview(app, projectId, DASHBOARD_AUTH_HEADERS);
+
+          const res = await app.inject({
+            method: "GET",
+            url: "/",
+            headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
+          });
+          expect(res.statusCode).toBe(401);
+          const nonceMatch = res.body.match(/<script nonce="([^"]+)">/);
+          expect(nonceMatch).not.toBeNull();
+          const nonce = nonceMatch![1];
+          const csp = res.headers["content-security-policy"] as string;
+          expect(csp).toContain(`'nonce-${nonce}'`);
+          expect(csp).not.toMatch(/script-src[^;]*'unsafe-inline'/);
+          await app.close();
+        } finally {
+          delete process.env.PREVIEW_AUTH_DASHBOARD_URL;
+        }
+      });
+
+      // Issue #1318 — same CORS-readability requirement as the unauthenticated
+      // 404/429/502/503 cases above, so BrowserPanel.tsx's probe can tell a
+      // PREVIEW_AUTH_REQUIRED 401 apart from a real successful load too.
+      it("401 with no credential reflects the caller's Origin", async () => {
+        const app = await buildApp();
+        const projectId = await createProjectWithDevServer(
+          app,
+          String(stubPort),
+          DASHBOARD_AUTH_HEADERS,
+        );
+        const slug = await createProjectPreview(app, projectId, DASHBOARD_AUTH_HEADERS);
+
+        const res = await app.inject({
+          method: "GET",
+          url: "/",
+          headers: {
+            host: `preview-${slug}.${PREVIEW_BASE_HOST}`,
+            origin: "https://dashboard.example.com",
+          },
+        });
+        expect(res.statusCode).toBe(401);
+        expect(res.headers["access-control-allow-origin"]).toBe("https://dashboard.example.com");
+        expect(res.headers["access-control-allow-credentials"]).toBeUndefined();
+        await app.close();
       });
 
       it("a valid bootstrap token redirects, sets the preview cookie, and strips the token from the redirect Location", async () => {

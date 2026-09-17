@@ -394,20 +394,35 @@ the three placeholders above:
    `src/services/preview-host.ts` matches the incoming `Host` header
    against this string verbatim (case-insensitively), so any mismatch
    (trailing dot, different casing normalized differently, a port included
-   in one but not the other) means every preview 404s.
-4. **The same forwardAuth middleware on the preview router as the main
-   one** — already wired into `traefik-dynamic.yml`'s template. This is
-   still the default/only option when the opt-in `PREVIEW_AUTH_REQUIRED` env
-   var (issue #383, see [`docs/auth.md`](../docs/auth.md)) is off: without
-   either one, every preview is an unauthenticated open proxy on the
-   internet — for every HTTP method, not just reads (the preview proxy
-   forwards GET/HEAD/POST/PUT/PATCH/DELETE/etc. alike; see
+   in one but not the other) means a preview request falls through to
+   Mullion's own normal routing instead of the preview proxy
+   (`src/plugins/preview-proxy.ts`'s hook returns early when the `Host`
+   doesn't match its compiled pattern) — not a 404 from the preview feature
+   itself, so this class of misconfiguration tends to look like "the preview
+   panel shows the dashboard" rather than an obvious error.
+4. **Preview auth**, one of two options — either is non-negotiable, not a
+   "consider tightening later" item, since without either one every preview
+   is an unauthenticated open proxy on the internet for every HTTP method,
+   not just reads (see
    [`docs/browser-previews.md`](../docs/browser-previews.md)'s Security
-   section). Setting `PREVIEW_AUTH_REQUIRED=true` instead closes this
-   in-process, at the cost of a long-lived, weakly-revocable preview cookie
-   and a plain-http + cross-registrable-domain constraint — see
-   `docs/auth.md`'s Current limitations before relying on it in place of
-   forwardAuth.
+   section):
+   - **The same forward-auth _provider/session scope_ on the preview router
+     as the main one** — already wired into `traefik-dynamic.yml`'s template
+     by middleware _reference_, but referencing the same middleware name is
+     not sufficient on its own: see that file's own comment and
+     [`docs/browser-previews.md`](../docs/browser-previews.md)'s "Verifying
+     the preview router" section for the failure mode where an IdP treats
+     the preview wildcard as a different provider/session than the
+     dashboard, including a known upstream Authentik bug
+     ([goauthentik/authentik#26228](https://github.com/goauthentik/authentik/issues/26228))
+     that produces this exact symptom on a standalone outpost.
+   - **`PREVIEW_AUTH_REQUIRED=true`** (issue #383, see
+     [`docs/auth.md`](../docs/auth.md)) instead closes this in-process,
+     removing the IdP from the preview path entirely — **the recommended
+     option when your gateway is a self-hosted Authentik outpost**, at the
+     cost of a long-lived, weakly-revocable preview cookie and a plain-http +
+     cross-registrable-domain constraint; see `docs/auth.md`'s Current
+     limitations before relying on it.
 
 **Risks worth knowing about, not blockers:**
 
