@@ -360,8 +360,7 @@ mockPromoteTaskToPR.mockImplementation(actualTaskPromoteModule.promoteTaskToPR);
 
 const { buildApp } = await import("../../src/app.js");
 const { closeDb, getDb } = await import("../../src/db/client.js");
-const { reconcileTasks } =
-  await import("../../src/services/task-reconciler.js");
+const { reconcileTasks } = await import("../../src/services/task-reconciler.js");
 const { tasks, sessions, projects } = await import("../../src/db/schema.js");
 const { and, eq, isNull, isNotNull } = await import("drizzle-orm");
 const { taskReviewFindingsPath, taskCommitTitlePath } =
