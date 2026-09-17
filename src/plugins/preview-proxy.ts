@@ -15,6 +15,7 @@ import {
   buildUpstreamRequestBody,
   buildUpstreamRequestHeaders,
   relayFetchResponse,
+  stripFramingHeaders,
 } from "../services/http-proxy.js";
 import { pipeWsFrames, toWsUrl } from "../services/ws-pipe.js";
 import {
@@ -864,6 +865,16 @@ export const previewProxyPlugin = fp(async (app: FastifyInstance) => {
   app.addHook("onRequest", async (request, reply) => {
     const slug = extractPreviewSlug(request.headers.host, hostPattern);
     if (!slug) return; // not a preview host — fall through to normal routing
+
+    // Every response on a matched preview Host must clear helmet's own
+    // X-Frame-Options/CSP before anything below can return early — a
+    // preview origin is cross-origin from the dashboard by construction, so
+    // those headers block the iframe on a 404/503/502/429/401/redirect
+    // exactly as hard as they'd block a real 200, and every branch below
+    // this point can produce one of those before ever reaching
+    // handlePreviewRequest's own relayFetchResponse call (the only place
+    // this used to happen). See stripFramingHeaders's own doc comment.
+    stripFramingHeaders(reply);
 
     // Finding AS5 — applies unconditionally, before the PREVIEW_AUTH_REQUIRED
     // branch below: with that flag off (the default), preview-host traffic

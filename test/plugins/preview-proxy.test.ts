@@ -370,7 +370,7 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
     await app.close();
   });
 
-  it("404s an unknown slug", async () => {
+  it("404s an unknown slug, with framing headers already stripped (else Chrome blocks the error itself)", async () => {
     const app = await buildApp();
     const res = await app.inject({
       method: "GET",
@@ -378,10 +378,16 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
       headers: { host: `preview-does-not-exist.${PREVIEW_BASE_HOST}` },
     });
     expect(res.statusCode).toBe(404);
+    // Regression guard: this used to still carry helmet's own
+    // X-Frame-Options/CSP, so the iframe rendered Chrome's generic
+    // "content is blocked" interstitial instead of this 404 — see
+    // stripFramingHeaders's own doc comment.
+    expect(res.headers["x-frame-options"]).toBeUndefined();
+    expect(res.headers["content-security-policy"]).toBeUndefined();
     await app.close();
   });
 
-  it("503s when the project has no devServerUrl configured", async () => {
+  it("503s when the project has no devServerUrl configured, with framing headers stripped", async () => {
     const app = await buildApp();
     const projectId = await createProjectWithDevServer(app, null);
     const slug = await createProjectPreview(app, projectId);
@@ -392,10 +398,12 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
       headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
     });
     expect(res.statusCode).toBe(503);
+    expect(res.headers["x-frame-options"]).toBeUndefined();
+    expect(res.headers["content-security-policy"]).toBeUndefined();
     await app.close();
   });
 
-  it("502s when the dev server is unreachable", async () => {
+  it("502s when the dev server is unreachable, with framing headers stripped", async () => {
     const app = await buildApp();
     // Port 1 is a real, always-refused loopback port (same convention the
     // multi-host tests use for "unreachable").
@@ -408,6 +416,8 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
       headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
     });
     expect(res.statusCode).toBe(502);
+    expect(res.headers["x-frame-options"]).toBeUndefined();
+    expect(res.headers["content-security-policy"]).toBeUndefined();
     await app.close();
   });
 
@@ -989,6 +999,12 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
         });
         expect(res.statusCode).toBe(401);
         expect(res.headers["content-type"]).toMatch(/text\/html/);
+        // Same regression this whole feature was invisible to before
+        // stripFramingHeaders ran unconditionally: a browser rendering this
+        // 401 inside the preview iframe needs helmet's own
+        // X-Frame-Options/CSP gone, or it never sees this body at all.
+        expect(res.headers["x-frame-options"]).toBeUndefined();
+        expect(res.headers["content-security-policy"]).toBeUndefined();
         await app.close();
       });
 

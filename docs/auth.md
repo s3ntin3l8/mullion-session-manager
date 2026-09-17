@@ -214,6 +214,24 @@ own "Upgrading an existing bare deployment" callout.
   `/api/*` handler — see both plugins' own doc comments for the exact
   invariant.
 
+  **Gateway forwardAuth on a preview wildcard has a failure mode the
+  dashboard host doesn't.** The dashboard is one host behind one
+  forwardAuth session; the preview router is a wildcard
+  (`preview-<slug>.<PREVIEW_BASE_HOST>`) that an IdP typically has to treat
+  as a _different_ application/provider than the dashboard — which means a
+  _different_ session, and the callback for that session lands on the IdP's
+  configured callback host, not on the specific `preview-<slug>` host that
+  started the flow. If the two don't share a cookie correctly, the flow
+  breaks in a way the dashboard's own single-host forwardAuth setup never
+  exercises. See
+  [`docs/browser-previews.md`](browser-previews.md)'s "Verifying the preview
+  router" section for how to recognize this, including a known upstream
+  Authentik bug that produces exactly this symptom on a standalone outpost
+  serving multiple providers
+  ([goauthentik/authentik#26228](https://github.com/goauthentik/authentik/issues/26228)).
+  `PREVIEW_AUTH_REQUIRED=true` sidesteps the whole class of problem by
+  removing the IdP from the preview path entirely.
+
 ## Preview-host auth token (issue #383)
 
 Setting `PREVIEW_AUTH_REQUIRED=true` closes the preview-subdomain gap above
