@@ -44,17 +44,39 @@ export function scanFileForAntipatterns(filePath, content) {
     const line = lines[i];
     const strippedLine = strippedLines[i];
 
-    // Check 1: Access-Control-Allow-Credentials set to true
+    // Check 1: Access-Control-Allow-Credentials: true combined with wildcard or reflected origin
     if (/access-control-allow-credentials/i.test(strippedLine)) {
-      if (/['"]?true['"]?/i.test(strippedLine) || /true/i.test(strippedLine)) {
-        // Check if allowlisted
-        if (!line.includes("pragma: allowlist cors-credentials")) {
+      if (/['"]?true['"]?/i.test(strippedLine)) {
+        // Check surrounding lines (within 10 lines) for wildcard or reflected origin
+        const windowStart = Math.max(0, i - 8);
+        const windowEnd = Math.min(strippedLines.length, i + 9);
+
+        let hasWildcardOrReflectedOrigin = false;
+        for (const wLine of strippedLines.slice(windowStart, windowEnd)) {
+          if (/access-control-allow-origin/i.test(wLine)) {
+            const afterHeader = wLine.replace(
+              /^.*?access-control-allow-origin['"]?\s*[,:]?\s*/i,
+              "",
+            );
+            if (
+              /^\*|['"]\*['"]/.test(afterHeader.trim()) ||
+              /\breq\.headers\b/.test(afterHeader) ||
+              /\bheaders\[['"]origin['"]\]/.test(afterHeader) ||
+              /\borigin\b/i.test(afterHeader)
+            ) {
+              hasWildcardOrReflectedOrigin = true;
+              break;
+            }
+          }
+        }
+
+        if (hasWildcardOrReflectedOrigin && !line.includes("pragma: allowlist cors-credentials")) {
           findings.push({
             file: filePath,
             line: i + 1,
             rule: "cors-misconfiguration-for-credentials",
             message:
-              "Access-Control-Allow-Credentials must not be enabled when origins are reflected or unauthenticated (CodeQL js/cors-misconfiguration-for-credentials)",
+              "Access-Control-Allow-Credentials must not be enabled when origins are reflected or wildcard (CodeQL js/cors-misconfiguration-for-credentials)",
           });
         }
       }

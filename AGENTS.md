@@ -146,10 +146,15 @@ Skipping this lets stale references accumulate. Always run:
 2. `git push origin --delete <branch>` — delete the remote branch.
 3. `git worktree remove <path>` — remove the worktree, if one was used.
 
-## Secrets
+## Secrets and security linters
 
 Real credentials must never be committed. `detect-secrets` scans code in
 pre-commit/CI against `.secrets.baseline`; regenerate it with
 `detect-secrets scan > .secrets.baseline`. A `pragma: allowlist secret`
 comment must stay on the **same line** as the flagged string — Prettier can
 silently move it to its own line, which breaks the allowlist match.
+
+`scripts/check-security-antipatterns.mjs` enforces CORS security (e.g. no
+`Access-Control-Allow-Credentials: true` with wildcard or reflected origins).
+In the rare event intentional credentials reflection is needed, add
+`// pragma: allowlist cors-credentials` on the same line to bypass the check.

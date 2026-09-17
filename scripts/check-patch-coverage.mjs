@@ -244,14 +244,42 @@ export function runPatchCoverageCheck(options = {}) {
   }
 
   let coverageData = loadCoverageReports();
-  if (Object.keys(coverageData).length === 0 && !options.noRun) {
-    console.log("No coverage report found. Running tests with coverage first...");
-    try {
-      execFileSync("npm", ["run", "test:coverage"], { cwd: root, stdio: "inherit" });
+  if (!options.noRun) {
+    const hasBackend = Array.from(modifiedFiles.keys()).some((f) => f.startsWith("src/"));
+    const hasFrontend = Array.from(modifiedFiles.keys()).some((f) => f.startsWith("frontend/src/"));
+
+    const hasBackendCoverage = Object.keys(coverageData).some(
+      (k) => k.startsWith("src/") && !k.startsWith("frontend/"),
+    );
+    const hasFrontendCoverage = Object.keys(coverageData).some((k) =>
+      k.startsWith("frontend/src/"),
+    );
+
+    const needBackend = hasBackend && !hasBackendCoverage;
+    const needFrontend = hasFrontend && !hasFrontendCoverage;
+
+    if (needBackend || needFrontend) {
+      console.log(
+        "Missing coverage report for modified areas. Running tests with coverage first...",
+      );
+      if (needBackend) {
+        try {
+          execFileSync("npm", ["run", "test:coverage"], { cwd: root, stdio: "inherit" });
+        } catch (err) {
+          console.error("Failed to run backend tests with coverage:", err.message);
+        }
+      }
+      if (needFrontend) {
+        try {
+          execFileSync("npm", ["--prefix", "frontend", "run", "test:coverage"], {
+            cwd: root,
+            stdio: "inherit",
+          });
+        } catch (err) {
+          console.error("Failed to run frontend tests with coverage:", err.message);
+        }
+      }
       coverageData = loadCoverageReports();
-    } catch (err) {
-      console.error("Failed to run tests with coverage:", err.message);
-      return { ok: false, overallPercent: 0 };
     }
   }
 

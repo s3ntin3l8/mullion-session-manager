@@ -27,6 +27,41 @@ describe("check-security-antipatterns", () => {
     });
   });
 
+  it("allows safe fixed-origin Access-Control-Allow-Origin with credentials: true", () => {
+    const code = `
+      function setHeaders(reply) {
+        reply.header("Access-Control-Allow-Origin", "https://app.example.com");
+        reply.header("Access-Control-Allow-Credentials", "true");
+      }
+    `;
+    const findings = scanFileForAntipatterns("safe-fixed.ts", code);
+    expect(findings).toHaveLength(0);
+  });
+
+  it("flags wildcard Access-Control-Allow-Origin with credentials: true", () => {
+    const code = `
+      function setHeaders(reply) {
+        reply.header("Access-Control-Allow-Origin", "*");
+        reply.header("Access-Control-Allow-Credentials", "true");
+      }
+    `;
+    const findings = scanFileForAntipatterns("wildcard.ts", code);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({
+      file: "wildcard.ts",
+      rule: "cors-misconfiguration-for-credentials",
+    });
+  });
+
+  it("allows allowlisted Access-Control-Allow-Credentials with pragma", () => {
+    const code = `
+      reply.header("Access-Control-Allow-Origin", "*");
+      reply.header("Access-Control-Allow-Credentials", "true"); // pragma: allowlist cors-credentials
+    `;
+    const findings = scanFileForAntipatterns("allowlist.ts", code);
+    expect(findings).toHaveLength(0);
+  });
+
   it("flags Fastify CORS with credentials: true and origin: true", () => {
     const code = `
       fastify.register(cors, {
