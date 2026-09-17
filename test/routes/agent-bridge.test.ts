@@ -267,6 +267,42 @@ describe("agent-bridge routes (POST/GET/DELETE /api/bridges, GET /ws/agent-bridg
       ws.close();
     });
 
+    // Issue #1313 — trackBridge's "auth" call site passes `row.priority`
+    // (read a few lines above, in this same handshake handler) rather than
+    // hardcoding 0 the way the "pair" call site correctly does for a
+    // brand-new row. Every OTHER auth-handshake test above pairs a fresh
+    // bridge, which never leaves the column default (0) — so a regression
+    // that hardcoded 0 on this path too (copy-pasting the "pair" call)
+    // would pass every one of them. Reorder while disconnected, THEN
+    // reconnect, and assert the live entry picks up the non-zero DB value
+    // rather than silently reverting to 0.
+    it("stamps the bridge's current (possibly reordered) DB priority onto the live entry on reconnect, not a hardcoded 0", async () => {
+      const { app, port } = await buildAndListen();
+      const { bridge_id, session_id } = await pairFreshBridge(port);
+      await waitUntil(() => !app.connectedBridges.has(bridge_id)); // closed above
+
+      // Give this bridge a lower precedence (priority 1) by reordering it
+      // behind a second, unrelated bridge — while it's disconnected, so
+      // the only way its live entry can ever see the new value is via the
+      // "auth" handshake's own row read, not trackBridge's "pair" path.
+      const other = issuePairingCode(app);
+      const reorderRes = await app.inject({
+        method: "PATCH",
+        url: "/api/bridges/reorder",
+        payload: { ids: [other.bridgeId, bridge_id] },
+      });
+      expect(reorderRes.statusCode).toBe(204);
+
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/agent-bridge`);
+      await waitForOpen(ws);
+      const replyPromise = waitForMessage(ws);
+      ws.send(JSON.stringify({ type: "auth", bridge_id, session_id }));
+      await replyPromise;
+
+      expect(app.connectedBridges.get(bridge_id)?.priority).toBe(1);
+      ws.close();
+    });
+
     it("closes a superseded socket when a new connection re-authenticates for the same bridge before the old one has disconnected (regression: Hermes review, PR #860 — a reconnect landing before the old TCP connection fires its own close event used to orphan it, live but untracked, until TCP's own idle timeout eventually reaped it)", async () => {
       const { app, port } = await buildAndListen();
       const pairRes = await app.inject({ method: "POST", url: "/api/bridges" });
@@ -739,7 +775,16 @@ describe("agent-bridge routes (POST/GET/DELETE /api/bridges, GET /ws/agent-bridg
       // which would stay green even if a future edit reintroduced one of
       // these into the response.
       expect(Object.keys(entry!).sort()).toEqual(
-        ["connected", "createdAt", "hasLiveSession", "id", "lastSeenAt", "name", "platform"].sort(),
+        [
+          "connected",
+          "createdAt",
+          "hasLiveSession",
+          "id",
+          "lastSeenAt",
+          "name",
+          "platform",
+          "priority",
+        ].sort(),
       );
       ws.close();
     });
@@ -770,6 +815,92 @@ describe("agent-bridge routes (POST/GET/DELETE /api/bridges, GET /ws/agent-bridg
         (b) => b.id === reply.bridge_id,
       );
       expect(entry).toMatchObject({ hasLiveSession: true, connected: false });
+    });
+  });
+
+  describe("PATCH /api/bridges/reorder (issue #1313)", () => {
+    it("rejects a body with duplicate ids", async () => {
+      const app = await buildTestApp();
+      const a = issuePairingCode(app);
+      const res = await app.inject({
+        method: "PATCH",
+        url: "/api/bridges/reorder",
+        payload: { ids: [a.bridgeId, a.bridgeId] },
+      });
+      expect(res.statusCode).toBe(400);
+    });
+
+    it("rejects an id that doesn't name an existing bridge", async () => {
+      const app = await buildTestApp();
+      const a = issuePairingCode(app);
+      const res = await app.inject({
+        method: "PATCH",
+        url: "/api/bridges/reorder",
+        payload: { ids: [a.bridgeId, "does-not-exist"] },
+      });
+      expect(res.statusCode).toBe(400);
+    });
+
+    it("reindexes priority 0..N-1 in the given order and GET /api/bridges reflects it", async () => {
+      const app = await buildTestApp();
+      const a = issuePairingCode(app);
+      const b = issuePairingCode(app);
+      const c = issuePairingCode(app);
+
+      // Reverse the natural (creation) order: c, a, b.
+      const res = await app.inject({
+        method: "PATCH",
+        url: "/api/bridges/reorder",
+        payload: { ids: [c.bridgeId, a.bridgeId, b.bridgeId] },
+      });
+      expect(res.statusCode).toBe(204);
+
+      // This file's other describe blocks share ONE persistent DB (see
+      // the "GET /api/bridges" describe's own comment above) — filter to
+      // just this test's own three rows rather than assert the full
+      // list's exact contents.
+      const listRes = await app.inject({ method: "GET", url: "/api/bridges" });
+      const ours = new Set([a.bridgeId, b.bridgeId, c.bridgeId]);
+      const rows = (listRes.json() as Array<{ id: string; priority: number }>).filter((row) =>
+        ours.has(row.id),
+      );
+      // listBridges() orders by priority — the reorder response's own
+      // ordering must already be reflected, with no extra client-side
+      // re-sort needed.
+      expect(rows.map((row) => row.id)).toEqual([c.bridgeId, a.bridgeId, b.bridgeId]);
+      expect(rows.map((row) => row.priority)).toEqual([0, 1, 2]);
+    });
+
+    // The part with no existing PATCH .../reorder precedent to copy: a
+    // currently-CONNECTED bridge's live app.connectedBridges entry must
+    // pick up the new priority immediately — pickBridge (ssh-agent-fanout.ts)
+    // reads only that in-memory copy, so writing the DB row alone would make
+    // a reorder a no-op for a live bridge until its next reconnect.
+    it("updates a connected bridge's live app.connectedBridges entry immediately, without a reconnect", async () => {
+      const { app, port } = await buildAndListen();
+      const pairRes = await app.inject({ method: "POST", url: "/api/bridges" });
+      const { code } = decodePairingPayload(pairRes.json().pairing_payload)!;
+
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/agent-bridge`);
+      await waitForOpen(ws);
+      const replyPromise = waitForMessage(ws);
+      ws.send(JSON.stringify({ type: "pair", code }));
+      const reply = await replyPromise;
+      const bridgeId = reply.bridge_id!;
+      expect(app.connectedBridges.get(bridgeId)?.priority).toBe(0);
+
+      const other = issuePairingCode(app);
+      const res = await app.inject({
+        method: "PATCH",
+        url: "/api/bridges/reorder",
+        payload: { ids: [other.bridgeId, bridgeId] },
+      });
+      expect(res.statusCode).toBe(204);
+
+      // Live entry reflects the new priority (1) right away — no reconnect.
+      expect(app.connectedBridges.get(bridgeId)?.priority).toBe(1);
+
+      ws.close();
     });
   });
 
@@ -936,6 +1067,19 @@ describe("agent-bridge routes (POST/GET/DELETE /api/bridges, GET /ws/agent-bridg
     it("DELETE /api/bridges/:id requires the configured MULLION_AUTH_TOKEN", async () => {
       const app = await buildTestApp();
       const res = await app.inject({ method: "DELETE", url: "/api/bridges/does-not-exist" });
+      expect(res.statusCode).toBe(401);
+    });
+
+    // Issue #1313 — a new route under /api/bridges doesn't automatically
+    // inherit this gate; this block's own comment above says so (see this
+    // exact case just above for DELETE).
+    it("PATCH /api/bridges/reorder requires the configured MULLION_AUTH_TOKEN", async () => {
+      const app = await buildTestApp();
+      const res = await app.inject({
+        method: "PATCH",
+        url: "/api/bridges/reorder",
+        payload: { ids: ["does-not-exist"] },
+      });
       expect(res.statusCode).toBe(401);
     });
 

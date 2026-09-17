@@ -52,6 +52,7 @@ describe("PairBridgeModal", () => {
         hasLiveSession: true,
         lastSeenAt: null,
         createdAt: new Date().toISOString(),
+        priority: 0,
       },
     ]);
     render(<PairBridgeModal onClose={vi.fn()} onPaired={onPaired} />);

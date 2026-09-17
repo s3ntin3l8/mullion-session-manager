@@ -39,6 +39,17 @@ export interface ConnectedBridge {
    * key to the end on a re-`set()` (trackBridge re-`set()`s the same
    * bridgeId key on every reconnect). */
   readonly connectedAt: number;
+  /** The `bridges` row's own `priority` column at the moment this
+   * connection was tracked (issue #1313) — a user-set tiebreak among
+   * multiple enrolled bridges, consulted by ssh-agent-fanout.ts's
+   * `pickBridge` within each of its health partitions. Stamped at connect
+   * time (routes/agent-bridge.ts's `trackBridge`), the same "no DB read
+   * inside the hot pickBridge path" shape as `connectedAt`/`lastPongAt` —
+   * `pickBridge` runs on every SSH-agent channel open and must stay
+   * synchronous and DB-free. A live reorder (PATCH /api/bridges/reorder)
+   * updates this field on the live entry directly, in place, rather than
+   * waiting for a reconnect to pick up the new value. */
+  priority: number;
   /** `Date.now()` at the moment this bridge's MuxConnection last received
    * a PONG (issue #1051). `undefined` until the first PONG arrives — a
    * freshly-tracked bridge has never yet seen one (the first PING fires

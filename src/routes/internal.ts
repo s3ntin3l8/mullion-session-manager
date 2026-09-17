@@ -2319,10 +2319,10 @@ export async function internalRoutes(app: FastifyInstance) {
       // the time this fires, in which case clearing would incorrectly
       // drop the live replacement instead of the dead connection this
       // listener is actually for.
-      mux.onClose(() => {
+      mux.onClose((reason) => {
         if (holder.current === mux) {
           holder.current = null;
-          app.log.debug({}, "ssh-agent: primary<->agent connection closed");
+          app.log.debug({ reason }, "ssh-agent: primary<->agent connection closed");
         }
       });
     },
