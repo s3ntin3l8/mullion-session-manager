@@ -186,5 +186,169 @@ describe("devices routes", () => {
       });
       expect(res.statusCode).toBe(400);
     });
+
+    it("POST /api/devices rejects when avdName is missing", async () => {
+      const app = await buildTestApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/devices",
+        payload: { name: "no-avd" },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().message).toContain("avdName is required");
+    });
+
+    it("POST /api/devices rejects when getOrCreate throws", async () => {
+      const app = await buildTestApp();
+      vi.spyOn(app.device, "getOrCreate").mockRejectedValueOnce(new Error("boot failure"));
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/devices",
+        payload: { avdName: "dev35" },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().message).toContain("boot failure");
+    });
+
+    it("GET /api/devices/:id rejects non-integer id with 400", async () => {
+      const app = await buildTestApp();
+      const res = await app.inject({ method: "GET", url: "/api/devices/abc" });
+      expect(res.statusCode).toBe(400);
+    });
+
+    it("GET /api/devices/:id returns device info for valid row", async () => {
+      const app = await buildTestApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/devices",
+        payload: { avdName: "dev35", name: "Dev" },
+      });
+      const id = created.json().id;
+      const res = await app.inject({ method: "GET", url: `/api/devices/${id}` });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().id).toBe(id);
+    });
+
+    it("DELETE /api/devices/:id rejects non-integer id with 400", async () => {
+      const app = await buildTestApp();
+      const res = await app.inject({ method: "DELETE", url: "/api/devices/abc" });
+      expect(res.statusCode).toBe(400);
+    });
+
+    it("POST /api/devices/:id/action rejects non-integer id with 400 and nonexistent with 404", async () => {
+      const app = await buildTestApp();
+      const res1 = await app.inject({
+        method: "POST",
+        url: "/api/devices/abc/action",
+        payload: { action: "screenshot" },
+      });
+      expect(res1.statusCode).toBe(400);
+
+      const res2 = await app.inject({
+        method: "POST",
+        url: "/api/devices/999/action",
+        payload: { action: "screenshot" },
+      });
+      expect(res2.statusCode).toBe(404);
+    });
+
+    describe("action execution against live adbConnection", () => {
+      it("executes screenshot, tap, swipe, text, key, and logcat actions", async () => {
+        const app = await buildTestApp();
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/devices",
+          payload: { avdName: "dev35" },
+        });
+        const id = created.json().id;
+        const device = app.device.get(String(id))!;
+
+        const spawnWait = vi.fn().mockResolvedValue(Buffer.from("fake-png"));
+        const spawnWaitText = vi.fn().mockResolvedValue("log output");
+        (device as unknown as { adb: unknown }).adb = {
+          subprocess: {
+            noneProtocol: {
+              spawnWait,
+              spawnWaitText,
+            },
+          },
+        };
+
+        // Screenshot
+        const rScreen = await app.inject({
+          method: "POST",
+          url: `/api/devices/${id}/action`,
+          payload: { action: "screenshot" },
+        });
+        expect(rScreen.statusCode).toBe(200);
+        expect(rScreen.json().screenshot).toBe(Buffer.from("fake-png").toString("base64"));
+        expect(spawnWait).toHaveBeenCalledWith(["screencap", "-p"]);
+
+        // Tap
+        const rTap = await app.inject({
+          method: "POST",
+          url: `/api/devices/${id}/action`,
+          payload: { action: "tap", x: 10, y: 20 },
+        });
+        expect(rTap.statusCode).toBe(200);
+        expect(rTap.json()).toEqual({ ok: true });
+        expect(spawnWaitText).toHaveBeenCalledWith(["input", "tap", "10", "20"]);
+
+        // Swipe (with duration)
+        const rSwipe1 = await app.inject({
+          method: "POST",
+          url: `/api/devices/${id}/action`,
+          payload: { action: "swipe", x1: 1, y1: 2, x2: 3, y2: 4, durationMs: 100 },
+        });
+        expect(rSwipe1.statusCode).toBe(200);
+        expect(spawnWaitText).toHaveBeenCalledWith(["input", "swipe", "1", "2", "3", "4", "100"]);
+
+        // Swipe (without duration)
+        const rSwipe2 = await app.inject({
+          method: "POST",
+          url: `/api/devices/${id}/action`,
+          payload: { action: "swipe", x1: 5, y1: 6, x2: 7, y2: 8 },
+        });
+        expect(rSwipe2.statusCode).toBe(200);
+        expect(spawnWaitText).toHaveBeenCalledWith(["input", "swipe", "5", "6", "7", "8"]);
+
+        // Text
+        const rText = await app.inject({
+          method: "POST",
+          url: `/api/devices/${id}/action`,
+          payload: { action: "text", text: "hello" },
+        });
+        expect(rText.statusCode).toBe(200);
+        expect(spawnWaitText).toHaveBeenCalledWith(["input", "text", "hello"]);
+
+        // Key
+        const rKey = await app.inject({
+          method: "POST",
+          url: `/api/devices/${id}/action`,
+          payload: { action: "key", androidKeyCode: 4 },
+        });
+        expect(rKey.statusCode).toBe(200);
+        expect(spawnWaitText).toHaveBeenCalledWith(["input", "keyevent", "4"]);
+
+        // Logcat (default lines, no filter)
+        const rLog1 = await app.inject({
+          method: "POST",
+          url: `/api/devices/${id}/action`,
+          payload: { action: "logcat" },
+        });
+        expect(rLog1.statusCode).toBe(200);
+        expect(rLog1.json()).toEqual({ logcat: "log output" });
+        expect(spawnWaitText).toHaveBeenCalledWith(["logcat", "-d", "-t", "200"]);
+
+        // Logcat (lines and filter)
+        const rLog2 = await app.inject({
+          method: "POST",
+          url: `/api/devices/${id}/action`,
+          payload: { action: "logcat", lines: 50, filter: "MyTag:D" },
+        });
+        expect(rLog2.statusCode).toBe(200);
+        expect(spawnWaitText).toHaveBeenCalledWith(["logcat", "-d", "-t", "50", "MyTag:D"]);
+      });
+    });
   });
 });

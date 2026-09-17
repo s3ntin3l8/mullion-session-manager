@@ -400,3 +400,15 @@ describe("components.browserPane — 'Reload pane' recovers the real registered 
     expect(browserPaneImportAttempts).toBe(2);
   });
 });
+
+vi.mock("../DevicePane.js", () => ({
+  DevicePane: () => <div data-testid="device-pane-loaded" />,
+}));
+
+describe("components.device (PR #1324)", () => {
+  it("renders the device component", async () => {
+    const DeviceWrapper = components.device;
+    render(<DeviceWrapper {...makeProps({ deviceId: 1 })} />);
+    expect(await screen.findByTestId("device-pane-loaded")).toBeInTheDocument();
+  });
+});

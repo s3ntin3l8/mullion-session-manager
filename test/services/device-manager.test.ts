@@ -5,6 +5,7 @@ import type * as ChildProcess from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import type { ScrcpyMediaStreamPacket } from "@yume-chan/scrcpy";
 
 // Covers DeviceManager.getOrCreate()'s reattach path (issue #1325's own
 // task) — a scope that survived a Mullion restart, with no in-memory Device
@@ -347,5 +348,146 @@ describe("DeviceManager.getOrCreate() — normal spawn path is unaffected", () =
     expect(onPortAssigned).toHaveBeenCalledWith("9", expect.any(Number));
 
     await vi.waitFor(() => expect(device.toInfo().status).toBe("error"));
+  });
+
+  it("throws when manager is disabled", async () => {
+    const manager = new DeviceManager({
+      enabled: false,
+      adbPath: "/usr/bin/adb",
+      adbServerPort: 5037,
+      emulatorPath: "/opt/android/emulator/emulator",
+      scrcpyServerPath: "/dev/null",
+      sessionsDir: SESSIONS_DIR,
+    });
+    await expect(
+      manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null }),
+    ).rejects.toThrow("device panel is disabled");
+  });
+
+  it("throws when emulator port range is exhausted", async () => {
+    const manager = buildManager();
+    // EMULATOR_PORT_BASE is 5554, EMULATOR_PORT_MAX is 5682 (step 2)
+    const allocatedPorts = (manager as unknown as { allocatedPorts: Set<number> }).allocatedPorts;
+    for (let port = 5554; port <= 5682; port += 2) {
+      allocatedPorts.add(port);
+    }
+    await expect(
+      manager.getOrCreate({ id: "100", avdName: "dev35", label: null, port: null }),
+    ).rejects.toThrow("no free emulator port in range");
+  });
+
+  it("supports list, get, kill, terminate, and killAll", async () => {
+    const manager = buildManager();
+    const dev1 = await manager.getOrCreate({
+      id: "10",
+      avdName: "dev35",
+      label: "Dev 1",
+      port: null,
+    });
+    const dev2 = await manager.getOrCreate({
+      id: "11",
+      avdName: "dev35",
+      label: "Dev 2",
+      port: null,
+    });
+
+    expect(manager.get("10")).toBe(dev1);
+    expect(manager.get("11")).toBe(dev2);
+    expect(manager.get("99")).toBeUndefined();
+
+    const list = manager.list();
+    expect(list).toHaveLength(2);
+    expect(list.map((d) => d.id)).toContain("10");
+    expect(list.map((d) => d.id)).toContain("11");
+
+    // kill on nonexistent does not throw
+    await expect(manager.kill("99")).resolves.toBeUndefined();
+
+    // kill on dev1
+    await manager.kill("10");
+    expect(dev1.toInfo().status).toBe("exited");
+    expect(manager.get("10")).toBe(dev1); // still in map
+
+    // terminate on dev1 removes from map
+    await manager.terminate("10");
+    expect(manager.get("10")).toBeUndefined();
+    expect(manager.list()).toHaveLength(1);
+
+    // killAll kills remaining
+    await manager.killAll();
+    expect(dev2.toInfo().status).toBe("exited");
+  });
+
+  it("handles Device video listener registration and cached config replay", async () => {
+    const manager = buildManager();
+    const dev = await manager.getOrCreate({ id: "20", avdName: "dev35", label: null, port: null });
+
+    const received: unknown[] = [];
+    const unsubscribe = dev.onVideoPacket((pkt) => received.push(pkt));
+
+    // Manually set a lastConfigPacket and register a second listener
+    const configPacket = {
+      type: "configuration",
+      data: new Uint8Array([1, 2, 3]),
+    } as unknown as ScrcpyMediaStreamPacket;
+    (dev as unknown as { lastConfigPacket: unknown }).lastConfigPacket = configPacket;
+
+    const secondReceived: unknown[] = [];
+    const unsubscribe2 = dev.onVideoPacket((pkt) => secondReceived.push(pkt));
+
+    // Second listener synchronously receives the cached config packet
+    expect(secondReceived).toEqual([configPacket]);
+
+    unsubscribe();
+    unsubscribe2();
+  });
+
+  it("handles Device exit listeners and handleExit", async () => {
+    const manager = buildManager();
+    const dev = await manager.getOrCreate({ id: "21", avdName: "dev35", label: null, port: null });
+
+    let exitedFired = false;
+    const unsubscribe = dev.onExit(() => {
+      exitedFired = true;
+    });
+
+    (dev as unknown as { handleExit: () => void }).handleExit();
+    expect(exitedFired).toBe(true);
+    expect(dev.toInfo().status).toBe("exited");
+
+    unsubscribe();
+  });
+
+  it("handles Device pumpVideo streaming packets to listeners", async () => {
+    const manager = buildManager();
+    const dev = await manager.getOrCreate({ id: "22", avdName: "dev35", label: null, port: null });
+
+    const packets = [
+      { value: { type: "configuration", data: new Uint8Array([1]) }, done: false },
+      { value: { type: "data", data: new Uint8Array([2]), keyframe: true }, done: false },
+      { value: undefined, done: true },
+    ];
+    let idx = 0;
+    const mockReader = {
+      read: vi.fn(async () => packets[idx++]),
+      releaseLock: vi.fn(),
+    };
+    (dev as unknown as { scrcpyClient: unknown }).scrcpyClient = {
+      videoStream: Promise.resolve({
+        stream: {
+          getReader: () => mockReader,
+        },
+      }),
+    };
+
+    const received: Array<{ type?: string }> = [];
+    dev.onVideoPacket((pkt) => received.push(pkt));
+
+    await (dev as unknown as { pumpVideo: () => Promise<void> }).pumpVideo();
+
+    expect(received).toHaveLength(2);
+    expect(received[0].type).toBe("configuration");
+    expect(received[1].type).toBe("data");
+    expect(mockReader.releaseLock).toHaveBeenCalled();
   });
 });

@@ -4,6 +4,7 @@ import {
   openSessionPanel,
   openTimelinePanel,
   openBrowserPanePanel,
+  openDevicePanel,
   openTaskDetailPanel,
   openOrFocusProjectPanel,
   closeLegacyPanels,
@@ -37,7 +38,7 @@ import {
 import type { DockviewApi, DockviewGroupPanel, SerializedDockview } from "dockview-react";
 import { DEFAULT_SETTINGS } from "./api/index.js";
 import type { LayoutContext } from "./lib/layoutTier.js";
-import type { Session, Task } from "./api/index.js";
+import type { Session, Task, Device } from "./api/index.js";
 
 // `location.type` mirrors the live dockview panel API this module reads to
 // decide float-vs-dock (issue #121): "grid" for anything actually tiled
@@ -553,6 +554,77 @@ describe("openBrowserPanePanel", () => {
     expect(api.addPanel).toHaveBeenCalledWith(
       expect.objectContaining({ title: expect.stringContaining("codex") }),
     );
+  });
+});
+
+describe("openDevicePanel (PR #1324)", () => {
+  const TEST_DEVICE: Device = {
+    id: 1,
+    hostId: "local",
+    projectId: null,
+    name: "My Pixel",
+    avdName: "pixel_7",
+    status: "active",
+    createdAt: "2026-01-01T00:00:00Z",
+    live: null,
+  };
+
+  it("focuses an existing panel when already open", () => {
+    const api = mockDockviewApi();
+    api.addPanel({ id: "device-1", component: "device", params: { deviceId: 1 } });
+    const existing = api.getPanel("device-1")!;
+    existing.api.setActive = vi.fn();
+
+    openDevicePanel(api, TEST_DEVICE, DESKTOP_LAYOUT);
+
+    expect(existing.api.setActive).toHaveBeenCalledTimes(1);
+  });
+
+  it("adds a panel with id, component, and title", () => {
+    const api = mockDockviewApi();
+
+    openDevicePanel(api, TEST_DEVICE, DESKTOP_LAYOUT);
+
+    expect(api.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "device-1",
+        component: "device",
+        title: "My Pixel",
+        params: { deviceId: 1 },
+      }),
+    );
+  });
+
+  it("falls back to avdName when name is null", () => {
+    const api = mockDockviewApi();
+
+    openDevicePanel(api, { ...TEST_DEVICE, name: null }, DESKTOP_LAYOUT);
+
+    expect(api.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "pixel_7",
+      }),
+    );
+  });
+
+  it("maximizes when opened on phone layout", () => {
+    const api = mockDockviewApi();
+
+    openDevicePanel(api, TEST_DEVICE, PHONE_LAYOUT);
+
+    expect(api.maximizeGroup).toHaveBeenCalledTimes(1);
+  });
+
+  it("maximizes an existing panel when focused on phone layout", () => {
+    const api = mockDockviewApi();
+    api.addPanel({ id: "device-1", component: "device", params: { deviceId: 1 } });
+    const existing = api.getPanel("device-1")!;
+    existing.api.setActive = vi.fn();
+
+    openDevicePanel(api, TEST_DEVICE, PHONE_LAYOUT);
+
+    expect(existing.api.setActive).toHaveBeenCalledTimes(1);
+    expect(api.maximizeGroup).toHaveBeenCalledTimes(1);
   });
 });
 
