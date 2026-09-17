@@ -91,8 +91,24 @@ const UNPROTECTED_AUTH_PATHS = new Set([
   "/api/auth/oidc/callback",
 ]);
 
+// Issue #1316 — GET /api/previews/:slug/open is deliberately exempt from the
+// generic JSON-401 this hook otherwise sends: an unauthenticated visitor
+// reaching it (via the preview-auth 401 page's dashboard link,
+// preview-proxy.ts's buildPreviewAuthUnauthorizedHtml) needs to be
+// redirected to PREVIEW_AUTH_DASHBOARD_URL, not stranded on a raw
+// {"statusCode":401} body a plain `<a href>` navigation can't do anything
+// with. routes/previews.ts's own handler performs the equivalent
+// authenticated check (isRequestAuthenticated) itself before minting or
+// forwarding a bootstrap token, so this exemption opens no new capability —
+// it only changes the shape of the failure response for this one route. A
+// regex, not an exact-match Set entry like the routes above, since the slug
+// segment is dynamic; anchored on both ends so it can't accidentally widen
+// to match a sibling path (e.g. a hypothetical "/open/extra").
+const PREVIEW_OPEN_PATH_PATTERN = /^\/api\/previews\/[^/]+\/open$/;
+
 function isProtectedPath(pathname: string): boolean {
   if (UNPROTECTED_AUTH_PATHS.has(pathname)) return false;
+  if (PREVIEW_OPEN_PATH_PATTERN.test(pathname)) return false;
   if (pathname === "/api/internal/register") return false;
   if (pathname === "/api/internal/deregister") return false;
   if (pathname === "/api/webhooks/github") return false;
