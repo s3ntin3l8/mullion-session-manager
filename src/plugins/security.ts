@@ -44,9 +44,31 @@ export const securityPlugin = fp(async (app: FastifyInstance) => {
         //    dashboard (that's frame-ancestors, untouched here), so it isn't
         //    a same-origin exposure — just the minimal allowance any
         //    direct-embed browser pane needs.
+        //
+        // The bare base host (not just its *. wildcard) is also listed in
+        // proxy mode: CSP host-source matching treats "*.example.com" and
+        // "example.com" as disjoint, but a gateway forward-auth sitting in
+        // front of the preview router (docs/browser-previews.md's Setup
+        // step 5) commonly places its own OAuth callback on that bare host
+        // (e.g. Traefik + Authentik's
+        // "<PREVIEW_BASE_HOST>/outpost.goauthentik.io/callback"). Without
+        // it, that callback can never load inside the iframe even when
+        // forwardAuth itself is configured correctly — a same-origin-looking
+        // failure that's easy to mistake for a proxy/CSP bug on this app's
+        // own side. Harmless to include unconditionally: nothing is ever
+        // actually served in-app on the bare base host (previewProxyPlugin
+        // only matches "preview-<slug>.<base>", never "<base>" itself), so
+        // this doesn't widen what the dashboard's own pages could load from
+        // Mullion, only what a fronting gateway's own auth hop may need.
         frameSrc:
           previewBaseHost !== ""
-            ? ["'self'", `http://*.${previewBaseHost}`, `https://*.${previewBaseHost}`]
+            ? [
+                "'self'",
+                `http://*.${previewBaseHost}`,
+                `https://*.${previewBaseHost}`,
+                `http://${previewBaseHost}`,
+                `https://${previewBaseHost}`,
+              ]
             : ["'self'", "http:", "https:"],
       },
     },

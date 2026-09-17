@@ -141,6 +141,31 @@ const STRIPPED_RESPONSE_HEADERS = new Set([
 ]);
 
 /**
+ * Removes helmet's own framing/CSP headers (plus the encoding/length ones
+ * that no longer describe the body about to be sent) from a reply, clearing
+ * both Fastify's own header map and the raw Node response helmet wrote
+ * directly to. See relayFetchResponse's own comment for why both calls are
+ * required.
+ *
+ * Must run on *every* response to a preview-host request, not just the
+ * proxied-through-fetch success path relayFetchResponse handles — a preview
+ * origin is cross-origin from the dashboard by construction (that's the
+ * whole reason issue #28 uses a subdomain), so helmet's default
+ * X-Frame-Options: SAMEORIGIN / frame-ancestors 'self' block the iframe on
+ * *any* early return (404 unknown slug, 503 no dev server, 502 unreachable,
+ * 429 rate-limited, 401 unauthorized, or a bootstrap-token 302) exactly as
+ * hard as they'd block a real 200 — the browser can't tell "blocked because
+ * cross-origin" from "blocked because this particular response says no",
+ * it just renders the same "content is blocked" interstitial either way.
+ */
+export function stripFramingHeaders(reply: FastifyReply) {
+  for (const name of STRIPPED_RESPONSE_HEADERS) {
+    reply.removeHeader(name);
+    if (reply.raw.hasHeader(name)) reply.raw.removeHeader(name);
+  }
+}
+
+/**
  * Rewrites an upstream "Location" header into a browser-usable form when it
  * names the dev server's own loopback address — e.g.
  * "http://127.0.0.1:5173/en" — which a browser inside an HTTPS preview
@@ -206,11 +231,12 @@ export function relayFetchResponse(
   // @fastify/helmet sets its headers by calling the `helmet` npm package's
   // middleware directly against `reply.raw`, bypassing Fastify's
   // `reply.header()` API — and `reply.removeHeader()` only clears
-  // Fastify's own internal header map, never `reply.raw`'s.
-  for (const name of STRIPPED_RESPONSE_HEADERS) {
-    reply.removeHeader(name);
-    if (reply.raw.hasHeader(name)) reply.raw.removeHeader(name);
-  }
+  // Fastify's own internal header map, never `reply.raw`'s. Preview-proxy's
+  // own onRequest hook already calls stripFramingHeaders unconditionally
+  // before this ever runs (see its own comment) — this call stays anyway
+  // so relayFetchResponse is correct in isolation for the agent-hop caller
+  // in internal.ts, which never goes through that hook.
+  stripFramingHeaders(reply);
 
   const headersToSend = new Map<string, string[]>();
   for (const [key, value] of upstreamResponse.headers) {

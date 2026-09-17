@@ -112,16 +112,69 @@ steps below are only for turning on the subdomain proxy.
 4. `PREVIEW_BASE_HOST` in `.env` must exactly match
    `CHANGEME_PREVIEW_BASE_HOST` in `traefik-dynamic.yml` — same value,
    same case.
-5. **Put the same forwardAuth middleware on the preview router as the main
-   app**, unless `PREVIEW_AUTH_REQUIRED=true` is set (issue #383 — see
-   [`auth.md`](auth.md)). Gateway forwardAuth is still the default/only
-   option when that flag is off: without either one, every preview subdomain
-   is an open, unauthenticated proxy into whatever it's pointed at. With
+5. **Put the same forward-auth _provider/session scope_ on the preview
+   router as the main app — not merely the same middleware name** — unless
+   `PREVIEW_AUTH_REQUIRED=true` is set (issue #383 — see [`auth.md`](auth.md)).
+   Gateway forwardAuth is still the default/only option when that flag is
+   off: without either one, every preview subdomain is an open,
+   unauthenticated proxy into whatever it's pointed at. With
    `PREVIEW_AUTH_REQUIRED=true` and no gateway in front, a bookmarked/direct
    navigation straight to a preview URL 401s with no bootstrap token to
    redeem — set `PREVIEW_AUTH_DASHBOARD_URL` (issue #1310, see
    [`configuration.md`](configuration.md)) so that 401 page can at least
    link back to the dashboard instead of being a dead end.
+
+   **"Same middleware" is not the same thing as "same session," and this has
+   bitten a real deployment.** Referencing the identical Traefik middleware
+   name on both routers is necessary but not sufficient if the IdP behind it
+   treats the dashboard and the preview wildcard as two separate
+   applications/providers — which is the natural way to set this up, since
+   the preview host is a wildcard and typically needs its own provider mode
+   (Authentik's `forward_domain`, as opposed to the dashboard's
+   `forward_single`). Two separate providers means two separate sessions:
+   logging into the dashboard does not authorize the preview host, and every
+   preview then starts its own OAuth round trip through the IdP — one more
+   place for that round trip to break than the dashboard has.
+
+   In particular, if you're running a **standalone (non-embedded) Authentik
+   outpost** serving more than one Provider (which a homelab-style
+   `dev-01`-class deployment typically does — one outpost fronting several
+   apps), there's a known upstream bug where the outpost silently drops a
+   `forward_domain` Provider's `cookie_domain` whenever it shares the outpost
+   process with any other Provider — see
+   [goauthentik/authentik#26228](https://github.com/goauthentik/authentik/issues/26228)
+   for the root cause (a process-wide session-store singleton, not a
+   configuration mistake) and the "Verifying the preview router" subsection
+   below for how to recognize it. **`PREVIEW_AUTH_REQUIRED=true` is the
+   supported way to gate previews behind a self-hosted Authentik outpost** —
+   it removes Authentik from the preview path entirely, so this bug (and the
+   whole class of "two providers, two sessions" issue above) can't affect
+   previews at all.
+
+### Verifying the preview router
+
+However this is set up, confirm it actually works rather than assuming
+"same middleware referenced → same result":
+
+```bash
+curl -sS -I https://preview-<any-real-slug>.<PREVIEW_BASE_HOST>/
+```
+
+- **A `302` to your IdP** on a request that should already be authenticated
+  (e.g. from a browser with an active dashboard session) means forwardAuth
+  on the preview router isn't sharing a session with the dashboard — the
+  "two providers, two sessions" problem above.
+- **An empty-bodied `400` on the IdP's own callback host** (not the preview
+  slug host) after that redirect means the session cookie set during the
+  redirect never reached the callback — check the IdP's own logs for
+  something like `"invalid state"` or `"mismatched session ID … should:''"`;
+  the empty `should` value means the IdP found no session at all at the
+  callback, not merely the wrong one. This is the signature of the Authentik
+  singleton bug linked above.
+- **A `401` with an HTML body** (no redirect at all) is
+  `PREVIEW_AUTH_REQUIRED=true` working as designed — no bootstrap token was
+  present on this direct request, which is expected for a `curl` probe (see
+  "Preview-host auth token" in [`auth.md`](auth.md)).
 
 ### Worked example: `mullion.s3ntin3l8.de`
 
@@ -143,12 +196,21 @@ behind `https://mullion.s3ntin3l8.de` — filled in, not placeholders:
 - **Traefik**: fill in `deploy/traefik-dynamic.yml`'s already-templated
   `claude-remote-session-preview` router —
   `CHANGEME_PREVIEW_BASE_HOST` → `preview.s3ntin3l8.de`,
-  `CHANGEME_MIDDLEWARE` → the same Authentik forwardAuth reference as the
-  main router, `CHANGEME_CERTRESOLVER` → the DNS-01 resolver. Its `service:`
-  already points at the Mullion app itself
-  (`http://127.0.0.1:3450`) — **no per-dev-app Traefik config, ever**;
-  Mullion resolves each preview slug and proxies it internally, so adding a
-  new preview is just opening a project in Mullion.
+  `CHANGEME_CERTRESOLVER` → the DNS-01 resolver. Its `service:` already
+  points at the Mullion app itself (`http://127.0.0.1:3450`) — **no
+  per-dev-app Traefik config, ever**; Mullion resolves each preview slug and
+  proxies it internally, so adding a new preview is just opening a project
+  in Mullion.
+- **`CHANGEME_MIDDLEWARE`**: with a self-hosted Authentik fronting the main
+  app, set `PREVIEW_AUTH_REQUIRED=true` (issue #383) and **drop the
+  forwardAuth middleware from this router entirely** — see the Setup step 5
+  callout above for why reusing "the same middleware reference as the main
+  router" is the trap here, not the fix. If your gateway/IdP is something
+  other than a standalone Authentik outpost (a managed IdP, or Authentik run
+  embedded rather than as a standalone outpost) and you've confirmed via the
+  "Verifying the preview router" check above that a shared session actually
+  works, referencing the same forwardAuth middleware as the main router
+  remains a valid choice.
 - **Reachability**: the **Mullion host itself** (or its registered agent —
   see [`multi-host.md`](multi-host.md)) needs to reach the dev server's
   `ip:port`, not the browser — so a LAN or Tailscale address works as long

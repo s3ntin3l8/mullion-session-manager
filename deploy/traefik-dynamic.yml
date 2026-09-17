@@ -76,13 +76,27 @@ http:
     # .env.example), since that's what src/services/preview-host.ts matches
     # the incoming Host header against.
     #
-    # CHANGEME_MIDDLEWARE — the SAME forwardAuth middleware as the router
-    # above, not a lighter/absent one: every preview is, from Traefik's
-    # perspective, just another path into this same app, and skipping
-    # forwardAuth here would make every preview an unauthenticated open
-    # proxy on the internet (anyone who guesses or observes a slug gets
-    # your dev server's or external URL's content with zero login). This is
-    # non-negotiable, not a "consider tightening later" item.
+    # CHANGEME_MIDDLEWARE — every preview is, from Traefik's perspective,
+    # just another path into this same app, and reaching it with NEITHER
+    # forwardAuth here NOR PREVIEW_AUTH_REQUIRED=true set would make every
+    # preview an unauthenticated open proxy on the internet (anyone who
+    # guesses or observes a slug gets your dev server's or external URL's
+    # content with zero login). One of the two is non-negotiable, not a
+    # "consider tightening later" item — see deploy/README.md's "Optional:
+    # in-dashboard previews" section for the two supported options and when
+    # to pick each.
+    #
+    # If you pick forwardAuth here, it must be the SAME session as the
+    # router above, not merely the same middleware *name* — "same
+    # middleware reference, still broken" is a real failure mode when the
+    # IdP behind it treats this wildcard host as a different
+    # application/provider than the dashboard (its own session, its own
+    # OAuth callback). See docs/browser-previews.md's "Verifying the
+    # preview router" section, including a known upstream Authentik bug
+    # (goauthentik/authentik#26228) that produces exactly this symptom on a
+    # standalone outpost. If that's your setup, PREVIEW_AUTH_REQUIRED=true
+    # (dropping this middlewares: entry) is the supported alternative — it
+    # removes the IdP from the preview path entirely.
     #
     # Risk 3 (see the router above) applies doubly here: a preview's own
     # HMR websocket (phase 3) is a *second*, independent WS upgrade this
