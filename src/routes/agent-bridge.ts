@@ -239,6 +239,13 @@ function trackBridge(
     const entry = app.connectedBridges.get(bridgeId);
     if (entry && entry.mux === mux) entry.lastPongAt = at;
   });
+  // Issue #1311 — a bridge disconnect was previously silent as to cause
+  // (pong timeout vs. socket close vs. socket error, and — for a close —
+  // which code/reason). This is the one place every such teardown for this
+  // bridge funnels through.
+  mux.onClose((reason) => {
+    app.log.debug({ bridgeId, reason }, "ssh-agent bridge connection closed");
+  });
   // A bridge going from zero-connected to one-connected (or a genuinely
   // new bridge arriving) changes ssh-agent-fanout.ts's own desired set —
   // see its own reconcile() doc comment for why this can't wait for that
@@ -508,6 +515,7 @@ export async function agentBridgeRoute(app: FastifyInstance) {
           if (tracked.socket === socket) {
             app.connectedBridges.delete(bridgeId);
             removed = true;
+            app.log.debug({ bridgeId, removed }, "agent-bridge socket closed");
           }
         }
         // Only reconcile when THIS close actually removed a tracked entry

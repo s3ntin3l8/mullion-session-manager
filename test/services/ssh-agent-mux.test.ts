@@ -48,22 +48,40 @@ class FakeSocket {
     this.emit("message", data, isBinary);
   }
 
-  close(): void {
-    if (this.readyState === this.CLOSED) return;
-    this.readyState = this.CLOSED;
-    this.emit("close");
-    this.peer?.peerClosed();
+  emitError(err: Error): void {
+    this.emit("error", err);
   }
 
-  peerClosed(): void {
+  // Unlike `terminate()` below, this still emits "close" synchronously —
+  // real `ws`'s `close()` is async too, so a caller racing this against an
+  // explicit `teardown(...)` call immediately afterward (as
+  // `MuxConnection.close()`'s own "local close()" path does) will observe a
+  // different winning reason here than in production. Not fixed: every
+  // existing test in this file asserts synchronously right after calling
+  // `close()`, and none of them exercise that particular race.
+  close(code = 1000, reason: Buffer = Buffer.alloc(0)): void {
     if (this.readyState === this.CLOSED) return;
     this.readyState = this.CLOSED;
-    this.emit("close");
+    this.emit("close", code, reason);
+    this.peer?.peerClosed(code, reason);
   }
 
+  peerClosed(code = 1000, reason: Buffer = Buffer.alloc(0)): void {
+    if (this.readyState === this.CLOSED) return;
+    this.readyState = this.CLOSED;
+    this.emit("close", code, reason);
+  }
+
+  // Deliberately does NOT emit "close" itself — mirrors real `ws`, where
+  // terminate() closes the underlying TCP connection but the "close" event
+  // fires asynchronously afterward, not synchronously within the call. The
+  // pong-timeout path (ssh-agent-mux.ts) relies on this ordering: it calls
+  // `socket.terminate()` then `teardown("pong timeout")` synchronously right
+  // after, and that explicit call must be the one that fires onClose, not a
+  // same-tick "close" event racing ahead of it with a different reason.
   terminate(): void {
     this.terminated = true;
-    this.close();
+    this.readyState = this.CLOSED;
   }
 }
 
@@ -739,6 +757,65 @@ describe("ssh-agent-mux", () => {
       const pending = connA.openChannel();
       a.close();
       await expect(pending).rejects.toThrow(/connection closed while channel open was pending/);
+    });
+  });
+
+  // Issue #1311 — every teardown path must report a distinct, descriptive
+  // reason string to onClose listeners, so a production disconnect is no
+  // longer silent as to cause.
+  describe("teardown reason", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("reports 'pong timeout' when the liveness PONG times out", () => {
+      const a = new FakeSocket(); // deliberately unlinked — no peer ever answers the PING
+      const conn = createMuxConnection(a as never, { channelIdParity: "odd" });
+      const closeSpy = vi.fn();
+      conn.onClose(closeSpy);
+
+      vi.advanceTimersByTime(15_000); // PING_INTERVAL_MS — sends the PING
+      vi.advanceTimersByTime(10_000); // PONG_TIMEOUT_MS — no PONG arrives
+
+      expect(closeSpy).toHaveBeenCalledExactlyOnceWith("pong timeout");
+    });
+
+    it("reports the WS close code and reason when the socket closes normally", () => {
+      const a = new FakeSocket();
+      const conn = createMuxConnection(a as never, { channelIdParity: "odd" });
+      const closeSpy = vi.fn();
+      conn.onClose(closeSpy);
+
+      a.close(1001, Buffer.from("going away"));
+
+      expect(closeSpy).toHaveBeenCalledExactlyOnceWith(
+        "socket closed (code=1001, reason=going away)",
+      );
+    });
+
+    it("omits the reason clause when the socket closes with an empty reason", () => {
+      const a = new FakeSocket();
+      const conn = createMuxConnection(a as never, { channelIdParity: "odd" });
+      const closeSpy = vi.fn();
+      conn.onClose(closeSpy);
+
+      a.close(1006); // abnormal closure, no reason text — the common "network just died" case
+
+      expect(closeSpy).toHaveBeenCalledExactlyOnceWith("socket closed (code=1006)");
+    });
+
+    it("reports the underlying error's message when the socket errors", () => {
+      const a = new FakeSocket();
+      const conn = createMuxConnection(a as never, { channelIdParity: "odd" });
+      const closeSpy = vi.fn();
+      conn.onClose(closeSpy);
+
+      a.emitError(new Error("ECONNRESET"));
+
+      expect(closeSpy).toHaveBeenCalledExactlyOnceWith("socket error: ECONNRESET");
     });
   });
 
