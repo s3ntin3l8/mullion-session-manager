@@ -693,6 +693,14 @@
   color: var(--muted);
   flex-shrink: 0;
 }
+/* Issue #1313 — BridgesSection reuses sidebar.css's .ws-drag-handle (and
+   its dragging/dimmed/drop-indicator siblings) for its own drag-to-reorder
+   rather than duplicating that CSS; this is the one extra hover-reveal
+   rule needed since sidebar.css's own only targets .ws-group-header/
+   .workspace-item, not .settings-list-row. */
+.settings-list-row:hover .ws-drag-handle {
+  opacity: 1;
+}
 .settings-list-row-title {
   font-size: 13px;
   font-weight: 500;

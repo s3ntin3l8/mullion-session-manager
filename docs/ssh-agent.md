@@ -79,6 +79,14 @@ Choose **Revoke** beside a bridge in Mullion to delete its server-side
 credential and close its live connection immediately. Re-pairing afterward
 requires a new payload.
 
+When more than one laptop is paired, Mullion tries them in the order shown
+in Settings → Hosts → SSH agent bridges — drag a row to reorder the list and
+set which laptop should be preferred. Reordering takes effect immediately,
+including for a laptop that's already connected. A bridge that isn't
+currently reachable is skipped in favor of the next one, regardless of its
+position in the list, so a locked or sleeping top-priority laptop never
+stalls a session's SSH agent while a lower-priority laptop is available.
+
 ### Security model
 
 For sessions on an agent host, Mullion permits only identity listing

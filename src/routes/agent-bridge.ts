@@ -5,8 +5,10 @@ import {
   encodePairingPayload,
   getBridgeRow,
   issuePairingCode,
+  listBridgeIds,
   listBridges,
   redeemPairingCode,
+  reorderBridges,
   rotateBridgeSession,
   touchBridgeLastSeen,
   verifyBridgeSession,
@@ -117,7 +119,30 @@ interface BridgeListItem {
    * and Settings needs to tell those apart, not collapse them into one
    * status. */
   connected: boolean;
+  /** User-set tiebreak order among multiple enrolled bridges (issue
+   * #1313) — lower first. `GET /api/bridges` returns entries already
+   * sorted by this field (`listBridges`'s own `orderBy`), so the frontend
+   * never has to re-sort what it's handed. */
+  priority: number;
 }
+
+interface ReorderRequestBody {
+  ids: string[];
+}
+
+// Bridge ids are `text` UUIDs (unlike project-urls.ts's numeric
+// `projectUrls.id`, the closest precedent for this route's shape), so the
+// items schema is `string`, not `number`.
+const reorderSchema = {
+  body: {
+    type: "object",
+    required: ["ids"],
+    additionalProperties: false,
+    properties: {
+      ids: { type: "array", items: { type: "string", minLength: 1 }, minItems: 1 },
+    },
+  },
+};
 
 interface RenewRequestBody {
   bridge_id: string;
@@ -172,8 +197,18 @@ function sendError(socket: NodeWebSocket, message: string): void {
  * `MuxConnection.close()` (ssh-agent-mux.ts) closes every open channel on
  * the superseded connection AND its underlying WebSocket — a plain
  * `socket.close()` alone would leave any channels PR5c later opens on it
- * dangling with no `onClose` ever firing for their own local cleanup. */
-function trackBridge(app: FastifyInstance, bridgeId: string, socket: NodeWebSocket): void {
+ * dangling with no `onClose` ever firing for their own local cleanup.
+ *
+ * `priority` (issue #1313) is stamped onto the live entry the same
+ * DB-free way `connectedAt` already is — the caller has already read
+ * whatever row it needs (or knows a fresh pairing gets the column
+ * default), so this function itself never touches `app.db`. */
+function trackBridge(
+  app: FastifyInstance,
+  bridgeId: string,
+  socket: NodeWebSocket,
+  priority: number,
+): void {
   const previous = app.connectedBridges.get(bridgeId);
   if (previous && previous.socket !== socket) previous.mux.close();
   // Primary ACCEPTS this connection (the laptop helper dials out as the WS
@@ -189,6 +224,7 @@ function trackBridge(app: FastifyInstance, bridgeId: string, socket: NodeWebSock
     mux,
     connectedAt: Date.now(),
     lastPongAt: undefined,
+    priority,
   });
   // Issue #1051 — wire mux.onPong to stamp lastPongAt on the live entry
   // so ssh-agent-fanout.ts's pickBridge can prefer bridges with
@@ -226,6 +262,7 @@ export async function agentBridgeRoute(app: FastifyInstance) {
   );
 
   app.get("/api/bridges", async (): Promise<BridgeListItem[]> => {
+    // listBridges() already orders by priority — nothing to re-sort here.
     return listBridges(app).map((bridge) => ({
       id: bridge.id,
       name: bridge.name,
@@ -234,8 +271,46 @@ export async function agentBridgeRoute(app: FastifyInstance) {
       createdAt: bridge.createdAt.toISOString(),
       hasLiveSession: bridge.hasLiveSession,
       connected: app.connectedBridges.has(bridge.id),
+      priority: bridge.priority,
     }));
   });
+
+  // Issue #1313 — Settings' own drag-to-reorder. Mirrors
+  // project-urls.ts's PATCH /api/projects/:projectId/urls/reorder as
+  // closely as the shape allows: validate no duplicates and that every id
+  // names an existing bridge, then reindex priority to 0..N-1 in one
+  // transaction (reorderBridges, bridge-registry.ts).
+  //
+  // Unlike that precedent, a bridge can be CONNECTED right now — its
+  // `app.connectedBridges` entry's `priority` was stamped once, at
+  // connect time (trackBridge), and `pickBridge` (ssh-agent-fanout.ts)
+  // reads only that in-memory copy, never the DB row. Writing the DB row
+  // alone would make a reorder a no-op for any live bridge until it
+  // happens to reconnect — see DELETE /api/bridges/:id's own comment,
+  // same DB-row-vs-live-state precedent, just a mutate here instead of a
+  // close.
+  app.patch<{ Body: ReorderRequestBody }>(
+    "/api/bridges/reorder",
+    { schema: reorderSchema },
+    async (request, reply) => {
+      const { ids } = request.body;
+      if (new Set(ids).size !== ids.length) {
+        return reply.badRequest("ids must not contain duplicates");
+      }
+      const existingIds = new Set(listBridgeIds(app));
+      for (const id of ids) {
+        if (!existingIds.has(id)) {
+          return reply.badRequest(`bridge id ${id} does not exist`);
+        }
+      }
+      reorderBridges(app, ids);
+      ids.forEach((id, index) => {
+        const entry = app.connectedBridges.get(id);
+        if (entry) entry.priority = index;
+      });
+      return reply.code(204).send();
+    },
+  );
 
   // PR7b — revokes a bridge from Settings. Closes the live connection (if
   // any) AND deletes the row: a revoked helper must stop being able to
@@ -363,7 +438,12 @@ export async function agentBridgeRoute(app: FastifyInstance) {
             sendError(socket, "invalid or expired pairing code");
             return;
           }
-          trackBridge(app, session.bridgeId, socket);
+          // A freshly-paired bridge has no explicit order yet —
+          // redeemPairingCode's own BridgeSession carries no priority
+          // (the row was just created by issuePairingCode with the
+          // column default), so 0 here matches what a fresh row already
+          // has rather than requiring a second read.
+          trackBridge(app, session.bridgeId, socket, 0);
           socket.send(
             JSON.stringify({
               type: "ready",
@@ -408,7 +488,7 @@ export async function agentBridgeRoute(app: FastifyInstance) {
           return;
         }
         touchBridgeLastSeen(app, parsed.bridge_id);
-        trackBridge(app, parsed.bridge_id, socket);
+        trackBridge(app, parsed.bridge_id, socket, row.priority);
         socket.send(
           JSON.stringify({
             type: "ready",

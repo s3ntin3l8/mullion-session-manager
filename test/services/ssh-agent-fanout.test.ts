@@ -401,6 +401,97 @@ describe("pickBridge", () => {
     const picked = pickBridge(app);
     expect(picked?.bridgeId).toBe("bridge-healthy");
   });
+
+  // Issue #1313 — priority as a tiebreak within each health partition.
+  describe("priority tiebreak (issue #1313)", () => {
+    it("still breaks a priority TIE by liveness — unchanged pre-#1313 behavior", () => {
+      const app = fakeApp(0);
+      app.connectedBridges.set("bridge-older-pong", {
+        socket: {},
+        mux: {},
+        connectedAt: 100,
+        lastPongAt: now - 3_000,
+        priority: 0,
+      });
+      app.connectedBridges.set("bridge-newer-pong", {
+        socket: {},
+        mux: {},
+        connectedAt: 100,
+        lastPongAt: now - 1_000,
+        priority: 0,
+      });
+
+      const picked = pickBridge(app);
+      expect(picked?.bridgeId).toBe("bridge-newer-pong");
+    });
+
+    it("prefers the lower-priority (higher-precedence) bridge among two otherwise-equal healthy bridges", () => {
+      const app = fakeApp(0);
+      app.connectedBridges.set("bridge-low-priority", {
+        socket: {},
+        mux: {},
+        connectedAt: 1,
+        lastPongAt: now, // both healthy, both just PONG'd
+        priority: 0,
+      });
+      app.connectedBridges.set("bridge-high-priority", {
+        socket: {},
+        mux: {},
+        connectedAt: 999, // more recently connected — must not win anyway
+        lastPongAt: now,
+        priority: 5,
+      });
+
+      const picked = pickBridge(app);
+      expect(picked?.bridgeId).toBe("bridge-low-priority");
+    });
+
+    // The load-bearing constraint from the Design section of issue #1313:
+    // priority is a tiebreak WITHIN a partition, never an override of the
+    // healthy/stale partitioning itself — a locked laptop pinned at
+    // priority 0 must not reproduce the exact stall #1051 fixed.
+    it("still prefers a healthy LOW-priority bridge over a stale HIGH-priority one", () => {
+      const app = fakeApp(0);
+      app.connectedBridges.set("bridge-stale-top-priority", {
+        socket: {},
+        mux: {},
+        connectedAt: 999,
+        lastPongAt: now - 30_000, // stale — well past PONG_TIMEOUT_MS
+        priority: 0, // "tried first" — but must NOT win over a healthy bridge
+      });
+      app.connectedBridges.set("bridge-healthy-low-priority", {
+        socket: {},
+        mux: {},
+        connectedAt: 1,
+        lastPongAt: now, // healthy
+        priority: 9,
+      });
+
+      const picked = pickBridge(app);
+      expect(picked?.bridgeId).toBe("bridge-healthy-low-priority");
+    });
+
+    it("applies the same priority-then-connectedAt ordering within the all-stale fallback partition", () => {
+      const app = fakeApp(0);
+      app.connectedBridges.set("bridge-stale-low-priority", {
+        socket: {},
+        mux: {},
+        connectedAt: 1, // older connection — would lose on connectedAt alone
+        lastPongAt: now - 30_000,
+        priority: 0,
+      });
+      app.connectedBridges.set("bridge-stale-high-priority", {
+        socket: {},
+        mux: {},
+        connectedAt: 999, // more recently connected
+        lastPongAt: now - 30_000,
+        priority: 5,
+      });
+
+      const picked = pickBridge(app);
+      expect(picked?.bridgeId).toBe("bridge-stale-low-priority");
+    });
+  });
 });
 
 // --- channel fan-out: real MuxConnections on every leg ---

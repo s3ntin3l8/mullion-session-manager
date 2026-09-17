@@ -27,6 +27,11 @@ export interface BridgeSummary {
    * name yet. */
   hasLiveSession: boolean;
   createdAt: Date;
+  /** User-set tiebreak order among multiple enrolled bridges (issue
+   * #1313) — lower first. See `src/db/schema.ts`'s own comment on
+   * `bridges.priority` and `ssh-agent-fanout.ts`'s `pickBridge`, which is
+   * the sole consumer of the in-memory copy this value seeds. */
+  priority: number;
 }
 
 function toSummary(row: BridgeRow): BridgeSummary {
@@ -37,11 +42,12 @@ function toSummary(row: BridgeRow): BridgeSummary {
     lastSeenAt: row.lastSeenAt,
     hasLiveSession: row.sessionExpiresAt !== null && row.sessionExpiresAt.getTime() > Date.now(),
     createdAt: row.createdAt,
+    priority: row.priority,
   };
 }
 
 export function listBridges(app: FastifyInstance): BridgeSummary[] {
-  return app.db.select().from(bridges).all().map(toSummary);
+  return app.db.select().from(bridges).orderBy(bridges.priority).all().map(toSummary);
 }
 
 /** Internal use only — never send a raw row back over the API; it carries
@@ -53,6 +59,35 @@ export function getBridgeRow(app: FastifyInstance, id: string): BridgeRow | unde
 
 export function deleteBridge(app: FastifyInstance, id: string): void {
   app.db.delete(bridges).where(eq(bridges.id, id)).run();
+}
+
+/** Every currently-enrolled bridge id — PATCH /api/bridges/reorder's own
+ * validation reads this (rather than a full `listBridges()`, which would
+ * decrypt/shape rows it doesn't need) to check the incoming id list names
+ * only bridges that actually exist. */
+export function listBridgeIds(app: FastifyInstance): string[] {
+  return app.db
+    .select({ id: bridges.id })
+    .from(bridges)
+    .all()
+    .map((row) => row.id);
+}
+
+/** Reindexes `priority` to 0..N-1 for `ids`, in the given order — one
+ * transaction, same contiguous-reindex shape as project-urls.ts's own
+ * reorder route. The caller (routes/agent-bridge.ts) has already
+ * validated `ids` against `listBridgeIds()` and rejected duplicates; this
+ * function trusts that and just writes. Does not touch
+ * `app.connectedBridges` — the route layer owns updating any live entry,
+ * the same "DB row vs. live state, route merges the two" split the rest
+ * of this module's callers already follow (see DELETE
+ * /api/bridges/:id's own comment). */
+export function reorderBridges(app: FastifyInstance, ids: string[]): void {
+  app.db.transaction((tx) => {
+    ids.forEach((id, index) => {
+      tx.update(bridges).set({ priority: index }).where(eq(bridges.id, id)).run();
+    });
+  });
 }
 
 // Issue #1052 — `issuePairingCode()` inserts a brand-new row every call, and
