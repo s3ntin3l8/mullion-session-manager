@@ -477,10 +477,74 @@ const setProjectTooling = {
   },
 };
 
+// device.* ops (control-socket.ts) are reachable at session scope with no
+// full-scope requirement — unlike list_sessions/list_projects above, these
+// work from inside a normal agent session, closing the "verify your own UI
+// change" loop the whole device panel feature exists for. `deviceId` is
+// always required (see control-socket.ts's own comment on why there's no
+// "omit it, target your own" default the way get_scrollback has).
+const listDevices = {
+  name: "list_devices",
+  description:
+    "List Mullion-managed Android devices (emulators/physical, see the device panel), " +
+    "with each device's DB row and live status merged.",
+  inputSchema: { type: "object", properties: {} },
+  async handler(_args, client) {
+    return JSON.stringify(await client.listDevices());
+  },
+};
+
+const useDevice = {
+  name: "use_device",
+  description:
+    "Execute a one-shot Android device action (screenshot, tap, swipe, text, key, logcat) " +
+    "via plain `adb shell` commands — works independently of whether the device's video " +
+    "panel is currently open in the dashboard. Use list_devices to find a deviceId first.",
+  inputSchema: {
+    type: "object",
+    required: ["deviceId", "action"],
+    properties: {
+      deviceId: { type: "string", description: "The device's row id, from list_devices." },
+      action: {
+        type: "string",
+        enum: ["screenshot", "tap", "swipe", "text", "key", "logcat"],
+        description: "The device action to execute.",
+      },
+      x: { type: "number", description: "X coordinate, video-pixel space (tap)." },
+      y: { type: "number", description: "Y coordinate, video-pixel space (tap)." },
+      x1: { type: "number", description: "Start X, video-pixel space (swipe)." },
+      y1: { type: "number", description: "Start Y, video-pixel space (swipe)." },
+      x2: { type: "number", description: "End X, video-pixel space (swipe)." },
+      y2: { type: "number", description: "End Y, video-pixel space (swipe)." },
+      durationMs: { type: "number", description: "Swipe duration in milliseconds (swipe)." },
+      text: { type: "string", description: "Text to type (text)." },
+      androidKeyCode: {
+        type: "number",
+        description: "AOSP KEYCODE_* numeric value to send (key).",
+      },
+      lines: { type: "number", description: "Number of trailing log lines to return (logcat)." },
+      filter: {
+        type: "string",
+        description: "logcat filter expression, e.g. 'MyApp:D *:S' (logcat).",
+      },
+    },
+  },
+  async handler(args, client) {
+    const { deviceId, ...actionPayload } = args ?? {};
+    if (!deviceId) throw new Error("deviceId is required");
+    return JSON.stringify(await client.deviceAction(deviceId, actionPayload));
+  },
+};
+
+const deviceAction = { ...useDevice, name: "device_action" };
+
 export const TOOLS = [
   promoteToWorktree,
   useBrowser,
   browserAction,
+  listDevices,
+  useDevice,
+  deviceAction,
   listSessions,
   startDockSession,
   spawnChildSession,

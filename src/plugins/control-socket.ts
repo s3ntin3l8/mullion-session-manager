@@ -320,6 +320,17 @@ function extractProjectId(body: Record<string, unknown> | undefined): string | n
   return id.length === 0 ? null : id;
 }
 
+/** Same shape as extractSessionId/extractProjectId, for the device.* ops'
+ * always-explicit `body.deviceId` — see device.action's own comment on why
+ * there's no pinning/default to resolve here, unlike resolveTargetSessionId. */
+function extractDeviceId(body: Record<string, unknown> | undefined): string | null {
+  const rawId = body?.deviceId;
+  if (rawId === undefined || rawId === null) return null;
+  if (typeof rawId !== "string" && typeof rawId !== "number") return null;
+  const id = String(rawId);
+  return id.length === 0 ? null : id;
+}
+
 /**
  * Same "resolve + enforce the pin" shape as resolveTargetSessionId, but for
  * `projects.actions` — the one op the plan's per-scope allowlist puts at
@@ -970,6 +981,100 @@ const OPS: Record<string, OpSpec> = {
         await injectAndShape(app, {
           method: "GET",
           url: `/api/sessions/${encodeURIComponent(target.id)}/browser`,
+          headers: buildAuthHeaders(app),
+        }),
+      );
+    },
+  },
+  // Unlike browser.action/browser.bindings above, a device has no "belongs
+  // to this session" relationship to resolve — resolveTargetSessionId's
+  // whole point is pinning a session-scoped connection to ITS OWN session,
+  // and there is no analogous "this session's own device." So `deviceId` is
+  // always explicit, at either scope, and a session-scoped connection is
+  // NOT restricted to any particular device — a deliberate choice, not an
+  // oversight: closing the agent-facing "verify my own UI change" loop
+  // (the whole point of exposing this at session scope at all) requires
+  // acting on whichever device the agent is actually driving, which this
+  // socket has no way to know in advance the way it does for "my own
+  // session." Devices are a much lower blast-radius resource than the SSH
+  // agent traffic resolveTargetSessionId's pinning exists to protect
+  // (worst case here: an unrelated tap/screenshot, not a credential). Still
+  // reached via injectAndShape directly, never injectRoute, per this file's
+  // own structural rule for any op listing "session" in scopes.
+  "device.action": {
+    scopes: ["full", "session"],
+    handler: async ({ app, body, reply }) => {
+      const deviceId = extractDeviceId(body);
+      if (deviceId === null) {
+        reply({ ok: false, status: 400, error: "'deviceId' is required" });
+        return;
+      }
+      const { deviceId: _deviceId, ...actionBody } = body ?? {};
+      reply(
+        await injectAndShape(app, {
+          method: "POST",
+          url: `/api/devices/${encodeURIComponent(String(deviceId))}/action`,
+          headers: { ...buildAuthHeaders(app), "content-type": "application/json" },
+          payload: JSON.stringify(actionBody),
+        }),
+      );
+    },
+  },
+  "device.list": {
+    scopes: ["full", "session"],
+    handler: async ({ app, reply }) => {
+      reply(
+        await injectAndShape(app, {
+          method: "GET",
+          url: "/api/devices",
+          headers: buildAuthHeaders(app),
+        }),
+      );
+    },
+  },
+  // Same "explicit deviceId, no pinning" posture as device.action above.
+  "device.get": {
+    scopes: ["full", "session"],
+    handler: async ({ app, body, reply }) => {
+      const deviceId = extractDeviceId(body);
+      if (deviceId === null) {
+        reply({ ok: false, status: 400, error: "'deviceId' is required" });
+        return;
+      }
+      reply(
+        await injectAndShape(app, {
+          method: "GET",
+          url: `/api/devices/${encodeURIComponent(String(deviceId))}`,
+          headers: buildAuthHeaders(app),
+        }),
+      );
+    },
+  },
+  "device.create": {
+    scopes: ["full", "session"],
+    handler: async ({ app, body, reply }) => {
+      reply(
+        await injectAndShape(app, {
+          method: "POST",
+          url: "/api/devices",
+          headers: { ...buildAuthHeaders(app), "content-type": "application/json" },
+          payload: JSON.stringify(body ?? {}),
+        }),
+      );
+    },
+  },
+  "device.terminate": {
+    scopes: ["full", "session"],
+    handler: async ({ app, body, reply }) => {
+      const deviceId = extractDeviceId(body);
+      if (deviceId === null) {
+        reply({ ok: false, status: 400, error: "'deviceId' is required" });
+        return;
+      }
+      reply(
+        await injectAndShape(app, {
+          method: "DELETE",
+          url: `/api/devices/${encodeURIComponent(String(deviceId))}`,
           headers: buildAuthHeaders(app),
         }),
       );

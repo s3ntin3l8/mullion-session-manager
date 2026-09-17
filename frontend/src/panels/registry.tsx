@@ -19,6 +19,7 @@ import { SkillsPanel } from "../SkillsPanel.js";
 import type { SkillsPanelParams } from "../SkillsPanel.js";
 import type { BrowserPanelParams } from "../BrowserPanel.js";
 import type { BrowserPaneParams } from "../BrowserPane.js";
+import type { DevicePaneParams } from "../DevicePane.js";
 import { SessionTimeline } from "../SessionTimeline.js";
 import type { SessionTimelineParams } from "../SessionTimeline.js";
 import { TasksPanelRedirect } from "../TasksPanelRedirect.js";
@@ -53,6 +54,7 @@ const loadUnifiedBoard = () =>
 const loadBrowserPanel = () =>
   import("../BrowserPanel.js").then((m) => ({ default: m.BrowserPanel }));
 const loadBrowserPane = () => import("../BrowserPane.js").then((m) => ({ default: m.BrowserPane }));
+const loadDevicePane = () => import("../DevicePane.js").then((m) => ({ default: m.DevicePane }));
 
 // Shared Suspense fallback for the lazy dockview panels above (the Browser
 // panel/pane and the Kanban board overlay, all absolutely-positioned within
@@ -369,6 +371,24 @@ function BrowserPaneWrapper(props: IDockviewPanelProps<BrowserPaneParams>) {
   );
 }
 
+// Same shape as BrowserPaneWrapper just above (a stream-parsing/canvas
+// crash shouldn't blank the whole dashboard either), with no title reported
+// up — a device has no equivalent of a page title.
+function DevicePaneWrapper(props: IDockviewPanelProps<DevicePaneParams>) {
+  const [resetKey, resetPanel] = useResetKey();
+  const LazyDevicePane = useRetriableLazy(loadDevicePane, resetKey);
+  return (
+    <ErrorBoundary onReset={resetPanel}>
+      <div style={{ position: "relative", width: "100%", height: "100%" }}>
+        <Suspense fallback={<LazyPanelFallback />}>
+          {/* eslint-disable-next-line react-hooks/static-components */}
+          <LazyDevicePane key={resetKey} params={props.params} />
+        </Suspense>
+      </div>
+    </ErrorBoundary>
+  );
+}
+
 // B2 — the Kanban board overlay (not a dockview panel, see its render site's
 // own "overlay, not a conditionally-mounted replacement" comment for why
 // dockview stays untouched underneath). Same ErrorBoundary+resetKey pattern
@@ -478,6 +498,7 @@ export const components = {
   skills: SkillsPanelWrapper,
   browser: BrowserPanelWrapper,
   browserPane: BrowserPaneWrapper,
+  device: DevicePaneWrapper,
   timeline: SessionTimelineWrapper,
   tasks: TasksPanelRedirectWrapper,
   "task-detail": TaskDetailWrapper,

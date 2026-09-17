@@ -484,6 +484,13 @@
       "when": 1789638072825,
       "tag": "0068_early_pyro",
       "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "6",
+      "when": 1789648210436,
+      "tag": "0069_parched_sentinel",
+      "breakpoints": true
     }
   ]
 }

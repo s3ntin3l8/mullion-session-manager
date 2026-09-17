@@ -121,7 +121,16 @@ const TOP_LEVEL_ALIASES = {
 // instead — `history` has no noun/verb split at all, just flags, the same
 // shape `notify`/`config` already have.
 const STANDALONE_COMMANDS = new Set(["notify", "mcp", "config", "history"]);
-const NOUNS = new Set(["session", "browser", "project", "preview", "dock", "events", "bundle"]);
+const NOUNS = new Set([
+  "session",
+  "browser",
+  "project",
+  "preview",
+  "dock",
+  "events",
+  "bundle",
+  "device",
+]);
 
 /** Resolves the leading tokens of a (post-global-flag-extraction) argv into
  * `{noun, verb, args}`, expanding the `ps`/`kill`/`logs`/`exec` top-level
@@ -978,6 +987,94 @@ const dockCommands = {
   },
 };
 
+// `mullion device <verb> <id> ...` — every action verb takes the device's
+// numeric row id (from `device list`) as its first positional arg,
+// unconditionally. No implicit "default device"/ANDROID_SERIAL fallback in
+// this layer (v1 scope trim, tracked as a follow-up) — with more than one
+// device attached, an implicit default is exactly the kind of silent
+// ambiguity this CLI's own `requireOne`-everywhere convention avoids
+// elsewhere (see sessionCommands' own explicit-id verbs above).
+const deviceCommands = {
+  async list(client) {
+    return { json: await client.request("device.list", {}) };
+  },
+  async create(client, args) {
+    const avdName = requireOne(args, "avd name");
+    const { flags } = extractFlags(args.slice(1), { project: "string", name: "string" });
+    const body = { avdName };
+    if (flags.project !== undefined) body.projectId = flags.project;
+    if (flags.name !== undefined) body.name = flags.name;
+    return { json: await client.request("device.create", body) };
+  },
+  async stop(client, args) {
+    const deviceId = requireOne(args, "device id");
+    return { json: await client.request("device.terminate", { deviceId }) };
+  },
+  async screenshot(client, args) {
+    const deviceId = requireOne(args, "device id");
+    const { flags: cliFlags } = extractFlags(args.slice(1), { out: "string" });
+    const result = await client.request("device.action", { deviceId, action: "screenshot" });
+    return { screenshot: result.screenshot, outPath: cliFlags.out, json: result };
+  },
+  async tap(client, args) {
+    const deviceId = requireOne(args, "device id");
+    const [x, y] = args.slice(1);
+    if (x === undefined || y === undefined) throw new CliUsageError("x and y are required");
+    return {
+      json: await client.request("device.action", {
+        deviceId,
+        action: "tap",
+        x: Number(x),
+        y: Number(y),
+      }),
+    };
+  },
+  async swipe(client, args) {
+    const deviceId = requireOne(args, "device id");
+    const [x1, y1, x2, y2, durationMs] = args.slice(1);
+    if ([x1, y1, x2, y2].some((v) => v === undefined)) {
+      throw new CliUsageError("x1 y1 x2 y2 are required");
+    }
+    const body = {
+      deviceId,
+      action: "swipe",
+      x1: Number(x1),
+      y1: Number(y1),
+      x2: Number(x2),
+      y2: Number(y2),
+    };
+    if (durationMs !== undefined) body.durationMs = Number(durationMs);
+    return { json: await client.request("device.action", body) };
+  },
+  async text(client, args) {
+    const deviceId = requireOne(args, "device id");
+    const text = args.slice(1).join(" ");
+    if (text.length === 0) throw new CliUsageError("text is required");
+    return { json: await client.request("device.action", { deviceId, action: "text", text }) };
+  },
+  async key(client, args) {
+    const deviceId = requireOne(args, "device id");
+    const androidKeyCode = args[1];
+    if (androidKeyCode === undefined) throw new CliUsageError("androidKeyCode is required");
+    return {
+      json: await client.request("device.action", {
+        deviceId,
+        action: "key",
+        androidKeyCode: Number(androidKeyCode),
+      }),
+    };
+  },
+  async logcat(client, args) {
+    const deviceId = requireOne(args, "device id");
+    const { flags } = extractFlags(args.slice(1), { lines: "number", filter: "string" });
+    const body = { deviceId, action: "logcat" };
+    if (flags.lines !== undefined) body.lines = flags.lines;
+    if (flags.filter !== undefined) body.filter = flags.filter;
+    const result = await client.request("device.action", body);
+    return { json: result, text: result.logcat };
+  },
+};
+
 // Issue #944/#945 — thin passthroughs to the bundle.status/resync/remove
 // control-socket ops (see plugins/control-socket.ts), same shape as
 // previewCommands' own list/get/delete/create above: no client-side
@@ -1075,6 +1172,7 @@ export const COMMANDS = {
   preview: previewCommands,
   dock: dockCommands,
   bundle: bundleCommands,
+  device: deviceCommands,
   events: eventsCommands,
   notify: runNotify,
   config: runConfig,
@@ -1091,6 +1189,7 @@ Commands:
   project list|actions|dock
   preview create|get|delete|list
   dock start|stop|list
+  device list|create|stop|screenshot|tap|swipe|text|key|logcat
   bundle status|resync|remove
   events tail
   history [--session <id>] [--kind <k>] [--since <ms>] [--until <ms>]

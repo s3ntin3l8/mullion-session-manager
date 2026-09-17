@@ -202,6 +202,25 @@ servers, log tails — distinct from one-shot launchers).
   `project dock`, then creates a session from its command/cwd.
 - `dock stop <sessionId>`
 
+### device
+
+Android emulator/phone control — see [`device-panel.md`](device-panel.md) for
+the full architecture. Devices are host-global (a `deviceId`, not a
+sessionId), not scoped to any project or session.
+
+- `device list`
+- `device create <avdName> [--project <id>] [--name <label>]`
+- `device stop <id>`
+- `device screenshot <id> [--out <path>]`
+- `device tap <id> <x> <y>`
+- `device swipe <id> <x1> <y1> <x2> <y2> [<durationMs>]`
+- `device text <id> <text...>`
+- `device key <id> <androidKeyCode>`
+- `device logcat <id> [--lines <n>] [--filter <expr>]`
+
+`x`/`y` are in the device's video-pixel space, not CSS pixels. Every verb
+takes an explicit device id — there's no implicit default device.
+
 ### bundle
 
 Issue #944/#945 — status/troubleshooting for the host-local, boot-time sync
