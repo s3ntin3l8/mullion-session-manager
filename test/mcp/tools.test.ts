@@ -341,3 +341,47 @@ describe("session/project/preview tool handlers (issue #134 part 2)", () => {
     });
   });
 });
+
+describe("list_devices handler (PR #1324)", () => {
+  const tool = TOOLS.find((t) => t.name === "list_devices")!;
+
+  it("calls client.listDevices and returns JSON string", async () => {
+    const listDevices = vi.fn().mockResolvedValue([{ id: 1, name: "test-device" }]);
+    const result = await tool.handler({}, { listDevices });
+    expect(listDevices).toHaveBeenCalled();
+    expect(JSON.parse(result)).toEqual([{ id: 1, name: "test-device" }]);
+  });
+});
+
+describe("use_device and device_action handlers (PR #1324)", () => {
+  const useDevTool = TOOLS.find((t) => t.name === "use_device")!;
+  const devActionTool = TOOLS.find((t) => t.name === "device_action")!;
+
+  it("use_device calls client.deviceAction with deviceId and action payload", async () => {
+    const deviceAction = vi.fn().mockResolvedValue({ ok: true });
+    const result = await useDevTool.handler(
+      { deviceId: "1", action: "tap", x: 100, y: 200 },
+      { deviceAction },
+    );
+    expect(deviceAction).toHaveBeenCalledWith("1", { action: "tap", x: 100, y: 200 });
+    expect(JSON.parse(result)).toEqual({ ok: true });
+  });
+
+  it("use_device throws if deviceId is missing", async () => {
+    const deviceAction = vi.fn();
+    await expect(useDevTool.handler({ action: "screenshot" }, { deviceAction })).rejects.toThrow(
+      "deviceId is required",
+    );
+    expect(deviceAction).not.toHaveBeenCalled();
+  });
+
+  it("device_action is an alias with the same handler behavior", async () => {
+    const deviceAction = vi.fn().mockResolvedValue({ screenshot: "base64" });
+    const result = await devActionTool.handler(
+      { deviceId: "2", action: "screenshot" },
+      { deviceAction },
+    );
+    expect(deviceAction).toHaveBeenCalledWith("2", { action: "screenshot" });
+    expect(JSON.parse(result)).toEqual({ screenshot: "base64" });
+  });
+});

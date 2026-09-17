@@ -31,16 +31,38 @@ deliberately a **separate** implementation from `PtyManager`/
   `Map<string, Device>`. Starting a device runs the emulator inside a
   transient `systemd --user` scope (`crs-device-<instanceId>-<id>`, same
   per-instance namespacing as a session's `crs-session-*` scope) — the
-  underlying process does survive a Mullion redeploy, but **Mullion does
-  not yet reattach to it**: this app has no durable record of the port/
-  serial a restart-surviving emulator was assigned, only the in-memory
-  `Device` that goes away with the process. `getOrCreate()` checks for
-  exactly this case before spawning (`isScopeAlive()`) and fails with a
-  clear, actionable error (naming the `systemctl --user stop` command)
-  rather than silently colliding with the leftover scope's still-occupied
-  unit name. Stopping it manually and reopening the panel starts a fresh
-  one. Full reattach (recovering the port/serial and resuming the same
-  scrcpy session) is tracked as a follow-up, not yet implemented.
+  underlying process does survive a Mullion redeploy, and Mullion
+  **reattaches** to it: the `devices.port` DB column persists the adb port
+  `Device.spawn()` allocated (written immediately, before `systemd-run` even
+  runs, via `DeviceManagerOptions.onPortAssigned` — see that field's own
+  comment on why immediately rather than after boot succeeds). When
+  `getOrCreate()` finds a scope still running (`isScopeAlive()`) with no
+  in-memory `Device` to represent it, it reconstructs the `emulator-<port>`
+  serial from that persisted port and confirms the serial is still live on
+  `adb devices` — awaited, so a confirmed-gone process (the emulator itself
+  died, not just Mullion) rejects `getOrCreate()` immediately with a clear
+  error, the same way the WS route already surfaces a getOrCreate() failure
+  to the client, rather than hanging in a boot-wait poll loop that was never
+  going to succeed or failing silently inside a fire-and-forget call the
+  route would never observe. Once confirmed alive, it attaches a **fresh**
+  `AdbScrcpyClient` to the already-running emulator (`Device.attach()`,
+  fire-and-forget from here on, same as a normal spawn) — skipping
+  `systemd-run`/`buildDeviceLaunchPlan`/`touchDeviceMarker` entirely, since
+  the emulator process itself is already up; only the adb+scrcpy connection
+  needs (re)establishing. A failure past this point (a transient adb hiccup,
+  say) never stops the scope — `attach()` didn't create it, and the process
+  is already confirmed alive, so only the connection attempt itself gets
+  torn down; a later `getOrCreate()` call simply retries. The only case that
+  still needs a manual `systemctl --user stop` is a scope that survived with
+  **no persisted port to reattach with** (a row from before this column
+  existed, or one whose `Device` never got far enough to record one) —
+  `getOrCreate()` still surfaces that plainly, naming the command, rather
+  than colliding with the leftover scope's still-occupied unit name.
+  Reattaching does **not** resume the exact same scrcpy session state (e.g.
+  mid-gesture) — only that the emulator process is still running and worth
+  resuming a stream to; scrcpy is stateless from the client's perspective, so
+  starting a fresh connection against an already-running emulator is normal,
+  expected usage.
 - **Scope ownership**, unlike a session's, isn't anchored on a real dtach
   socket (an emulator has neither dtach nor a PTY) — `device-process.ts`
   makes `systemd-run` set the scope's `Description` explicitly to a
@@ -71,7 +93,11 @@ button in Settings or the pane menu yet — a device is opened today by
 constructing its panel id (`device-<id>`, `component: "device"`) via
 `openDevicePanel` (`panelUtils.ts`) from your own code, or by driving it
 entirely through the CLI/MCP surface below, which needs no panel open at
-all. A proper device list/create UI is tracked as a follow-up.
+all. A proper device list/create UI is tracked as a follow-up. Reopening a
+device panel after a Mullion restart now resumes streaming from the
+existing emulator (see the reattach behavior above) rather than requiring a
+manual `systemctl --user stop` first — no UI change needed for that; it's
+the same `openDevicePanel`/WS-connect path either way.
 
 ---
 

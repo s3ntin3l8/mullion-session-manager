@@ -1385,6 +1385,167 @@ describe("runCommand", () => {
     });
   });
 
+  describe("device commands (PR #1324)", () => {
+    it("device list calls device.list", async () => {
+      const client = fakeClient();
+      const io = fakeIo();
+      await runCommand(["device", "list"], { client, io });
+      expect(client.request).toHaveBeenCalledWith("device.list", {});
+    });
+
+    it("device create passes avdName and flags", async () => {
+      const client = fakeClient();
+      const io = fakeIo();
+      await runCommand(["device", "create", "dev35", "--project", "1", "--name", "My Em"], {
+        client,
+        io,
+      });
+      expect(client.request).toHaveBeenCalledWith("device.create", {
+        avdName: "dev35",
+        projectId: "1",
+        name: "My Em",
+      });
+    });
+
+    it("device create without avdName throws usage error (exit 2)", async () => {
+      const io = fakeIo();
+      expect(await runCommand(["device", "create"], { client: fakeClient(), io })).toBe(2);
+    });
+
+    it("device stop passes deviceId", async () => {
+      const client = fakeClient();
+      const io = fakeIo();
+      await runCommand(["device", "stop", "5"], { client, io });
+      expect(client.request).toHaveBeenCalledWith("device.terminate", { deviceId: "5" });
+    });
+
+    it("device stop without deviceId throws usage error (exit 2)", async () => {
+      const io = fakeIo();
+      expect(await runCommand(["device", "stop"], { client: fakeClient(), io })).toBe(2);
+    });
+
+    it("device screenshot passes deviceId and action", async () => {
+      const client = fakeClient({
+        request: vi.fn(async () => ({ screenshot: "aGVsbG8=" })),
+      });
+      const io = fakeIo();
+      await runCommand(["device", "screenshot", "5"], { client, io });
+      expect(client.request).toHaveBeenCalledWith("device.action", {
+        deviceId: "5",
+        action: "screenshot",
+      });
+    });
+
+    it("device screenshot writes to file with --out", async () => {
+      const tmpDir = mkdtempSync(path.join(os.tmpdir(), "mullion-cli-dev-"));
+      const outPath = path.join(tmpDir, "screen.png");
+      try {
+        const client = fakeClient({
+          request: vi.fn(async () => ({ screenshot: Buffer.from("png-bytes").toString("base64") })),
+        });
+        const io = fakeIo();
+        await runCommand(["device", "screenshot", "5", "--out", outPath], { client, io });
+        expect(readFileSync(outPath, "utf8")).toBe("png-bytes");
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it("device screenshot without deviceId throws usage error (exit 2)", async () => {
+      const io = fakeIo();
+      expect(await runCommand(["device", "screenshot"], { client: fakeClient(), io })).toBe(2);
+    });
+
+    it("device tap passes coordinates", async () => {
+      const client = fakeClient();
+      const io = fakeIo();
+      await runCommand(["device", "tap", "5", "100", "200"], { client, io });
+      expect(client.request).toHaveBeenCalledWith("device.action", {
+        deviceId: "5",
+        action: "tap",
+        x: 100,
+        y: 200,
+      });
+    });
+
+    it("device tap missing coordinates throws usage error (exit 2)", async () => {
+      const io = fakeIo();
+      expect(await runCommand(["device", "tap", "5", "100"], { client: fakeClient(), io })).toBe(2);
+    });
+
+    it("device swipe passes coordinates and durationMs", async () => {
+      const client = fakeClient();
+      const io = fakeIo();
+      await runCommand(["device", "swipe", "5", "10", "20", "30", "40", "300"], { client, io });
+      expect(client.request).toHaveBeenCalledWith("device.action", {
+        deviceId: "5",
+        action: "swipe",
+        x1: 10,
+        y1: 20,
+        x2: 30,
+        y2: 40,
+        durationMs: 300,
+      });
+    });
+
+    it("device swipe missing coordinates throws usage error (exit 2)", async () => {
+      const io = fakeIo();
+      expect(
+        await runCommand(["device", "swipe", "5", "10", "20", "30"], { client: fakeClient(), io }),
+      ).toBe(2);
+    });
+
+    it("device text passes text string", async () => {
+      const client = fakeClient();
+      const io = fakeIo();
+      await runCommand(["device", "text", "5", "hello", "world"], { client, io });
+      expect(client.request).toHaveBeenCalledWith("device.action", {
+        deviceId: "5",
+        action: "text",
+        text: "hello world",
+      });
+    });
+
+    it("device text missing text throws usage error (exit 2)", async () => {
+      const io = fakeIo();
+      expect(await runCommand(["device", "text", "5"], { client: fakeClient(), io })).toBe(2);
+    });
+
+    it("device key passes androidKeyCode", async () => {
+      const client = fakeClient();
+      const io = fakeIo();
+      await runCommand(["device", "key", "5", "4"], { client, io });
+      expect(client.request).toHaveBeenCalledWith("device.action", {
+        deviceId: "5",
+        action: "key",
+        androidKeyCode: 4,
+      });
+    });
+
+    it("device key missing androidKeyCode throws usage error (exit 2)", async () => {
+      const io = fakeIo();
+      expect(await runCommand(["device", "key", "5"], { client: fakeClient(), io })).toBe(2);
+    });
+
+    it("device logcat passes lines and filter", async () => {
+      const client = fakeClient({
+        request: vi.fn(async () => ({ logcat: "log line 1\nlog line 2" })),
+      });
+      const io = fakeIo();
+      await runCommand(["device", "logcat", "5", "--lines", "100", "--filter", "Test:*"], {
+        client,
+        io,
+      });
+      expect(client.request).toHaveBeenCalledWith("device.action", {
+        deviceId: "5",
+        action: "logcat",
+        lines: 100,
+        filter: "Test:*",
+      });
+      expect(io.stdout.write).toHaveBeenCalledWith(expect.stringContaining("log line 1"));
+    });
+  });
+
   describe("project tooling (issue #938)", () => {
     let tmpDir: string;
     beforeEach(() => {

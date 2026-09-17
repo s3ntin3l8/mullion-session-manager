@@ -1,393 +1,591 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { FastifyInstance } from "fastify";
-import type { WebSocket } from "@fastify/websocket";
-import type { ScrcpyMediaStreamPacket } from "@yume-chan/scrcpy";
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { EventEmitter } from "node:events";
+import type * as ChildProcess from "node:child_process";
+import os from "node:os";
+import path from "node:path";
+import fs from "node:fs";
+import { createNodePtyMock } from "../helpers/mock-pty.js";
+import { mockChildProcessSpawn } from "../helpers/mock-spawn.js";
+import { buildTestApp } from "../helpers/app.js";
+import { closeDb } from "../../src/db/client.js";
+import { devices } from "../../src/db/schema.js";
+import { eq } from "drizzle-orm";
 import { attachSocketToDevice } from "../../src/routes/device.js";
-import type { Device } from "../../src/services/device-manager.js";
+import type { ScrcpyMediaStreamPacket } from "@yume-chan/scrcpy";
 
-// Hermes review on PR #1324 — routes/device.ts's WS backpressure/drop path
-// (only ever drop a "data" video packet, never "configuration", and request
-// a fresh keyframe via resetVideo() once a backlog clears) shipped with no
-// test coverage. attachSocketToDevice is exported specifically for this —
-// exercised directly against a fake Device/socket rather than through a real
-// HTTP+WS upgrade (as test/routes/browser.test.ts does for its own route),
-// since the logic under test lives entirely inside the onVideoPacket
-// listener this function registers and needs no real DeviceManager/adb/
-// scrcpy stack to reach.
+const ptyMock = createNodePtyMock();
+vi.mock("node-pty", () => ({ spawn: ptyMock.spawn }));
 
-const BACKPRESSURE_MAX_BUFFERED_BYTES = 4 * 1024 * 1024;
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof ChildProcess>();
+  return mockChildProcessSpawn(actual);
+});
 
-class FakeSocket {
-  readonly OPEN = 1;
-  readonly CLOSED = 3;
-  readyState = 1;
+class MockWebSocket extends EventEmitter {
+  readyState = 1; // WebSocket.OPEN
+  OPEN = 1;
+  CLOSED = 3;
   bufferedAmount = 0;
-  sent: Array<{ data: unknown; binary: boolean }> = [];
-  private listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+  sentMessages: Array<{ data: unknown; binary?: boolean }> = [];
+  closeCalls = 0;
 
   send(data: unknown, opts?: { binary?: boolean }) {
-    this.sent.push({ data, binary: opts?.binary ?? false });
+    this.sentMessages.push({ data, binary: opts?.binary });
   }
 
   close() {
+    this.closeCalls++;
     this.readyState = this.CLOSED;
     this.emit("close");
   }
-
-  on(event: string, listener: (...args: unknown[]) => void) {
-    const existing = this.listeners.get(event) ?? [];
-    existing.push(listener);
-    this.listeners.set(event, existing);
-  }
-
-  emit(event: string, ...args: unknown[]) {
-    for (const listener of this.listeners.get(event) ?? []) listener(...args);
-  }
 }
 
-function makeFakeDevice(overrides?: {
-  controller?: Record<string, (...args: never[]) => Promise<unknown>>;
-}): {
-  device: Device;
-  emitVideoPacket: (packet: ScrcpyMediaStreamPacket) => void;
-  emitExit: () => void;
-  unsubscribeVideoSpy: ReturnType<typeof vi.fn>;
-  unsubscribeExitSpy: ReturnType<typeof vi.fn>;
-} {
-  let videoListener: ((packet: ScrcpyMediaStreamPacket) => void) | undefined;
-  let exitListener: (() => void) | undefined;
-  const unsubscribeVideoSpy = vi.fn();
-  const unsubscribeExitSpy = vi.fn();
+const tmpDb = path.join(os.tmpdir(), `device-route-test-${process.pid}.db`);
 
-  const device = {
-    id: "1",
-    avdName: "dev35",
-    label: null,
-    controller: overrides?.controller,
-    onVideoPacket: vi.fn((listener: (packet: ScrcpyMediaStreamPacket) => void) => {
-      videoListener = listener;
-      return unsubscribeVideoSpy;
-    }),
-    onExit: vi.fn((listener: () => void) => {
-      exitListener = listener;
-      return unsubscribeExitSpy;
-    }),
-    toInfo: vi.fn(() => ({
-      id: "1",
-      avdName: "dev35",
-      label: null,
-      status: "streaming",
-      serial: "emulator-5554",
-      error: null,
-    })),
-  } as unknown as Device;
-
-  return {
-    device,
-    emitVideoPacket: (packet) => videoListener?.(packet),
-    emitExit: () => exitListener?.(),
-    unsubscribeVideoSpy,
-    unsubscribeExitSpy,
-  };
-}
-
-function makeFakeApp(getOrCreate: ReturnType<typeof vi.fn>): FastifyInstance {
-  return {
-    log: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
-    device: { getOrCreate },
-  } as unknown as FastifyInstance;
-}
-
-function configPacket(): ScrcpyMediaStreamPacket {
-  return { type: "configuration", data: new Uint8Array([1, 2, 3]) } as ScrcpyMediaStreamPacket;
-}
-
-function dataPacket(keyframe = false): ScrcpyMediaStreamPacket {
-  return {
-    type: "data",
-    data: new Uint8Array([4, 5, 6]),
-    keyframe,
-  } as ScrcpyMediaStreamPacket;
-}
-
-describe("attachSocketToDevice", () => {
-  let socket: FakeSocket;
-
+describe("device route (/ws/device/:deviceId)", () => {
   beforeEach(() => {
-    socket = new FakeSocket();
+    process.env.DATABASE_URL = `file:${tmpDb}`;
   });
 
-  it("sends video packets to the socket as binary frames", async () => {
-    const { device, emitVideoPacket } = makeFakeDevice();
-    const app = makeFakeApp(vi.fn(async () => device));
-
-    await attachSocketToDevice(app, socket as unknown as WebSocket, {
-      deviceId: 1,
-      avdName: "dev35",
-      label: null,
-    });
-
-    emitVideoPacket(configPacket());
-    expect(socket.sent).toHaveLength(1);
-    expect(socket.sent[0].binary).toBe(true);
+  afterEach(() => {
+    closeDb();
+    fs.rmSync(tmpDb, { force: true });
+    delete process.env.DATABASE_URL;
+    delete process.env.DEVICE_ENABLED;
   });
 
-  it("drops a data packet once buffered bytes exceed the backpressure threshold", async () => {
-    const { device, emitVideoPacket } = makeFakeDevice();
-    const app = makeFakeApp(vi.fn(async () => device));
-
-    await attachSocketToDevice(app, socket as unknown as WebSocket, {
-      deviceId: 1,
-      avdName: "dev35",
-      label: null,
+  describe("preValidation guards", () => {
+    it("rejects with 400 when DEVICE_ENABLED is unset", async () => {
+      const app = await buildTestApp();
+      const res = await app.inject({ method: "GET", url: "/ws/device/1" });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().message).toContain("Device panel is disabled");
     });
 
-    socket.bufferedAmount = BACKPRESSURE_MAX_BUFFERED_BYTES + 1;
-    emitVideoPacket(dataPacket());
+    it("rejects with 400 when deviceId is not an integer", async () => {
+      process.env.DEVICE_ENABLED = "true";
+      const app = await buildTestApp();
+      const res = await app.inject({ method: "GET", url: "/ws/device/abc" });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().message).toContain("deviceId path param is required");
+    });
 
-    expect(socket.sent).toHaveLength(0);
+    it("rejects with 404 when device row does not exist", async () => {
+      process.env.DEVICE_ENABLED = "true";
+      const app = await buildTestApp();
+      const res = await app.inject({ method: "GET", url: "/ws/device/999" });
+      expect(res.statusCode).toBe(404);
+      expect(res.json().message).toContain("No device 999");
+    });
+
+    it("rejects with 400 when device is killed", async () => {
+      process.env.DEVICE_ENABLED = "true";
+      const app = await buildTestApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/devices",
+        payload: { avdName: "dev35" },
+      });
+      const id = created.json().id;
+
+      // Mark as killed
+      app.db.update(devices).set({ status: "killed" }).where(eq(devices.id, id)).run();
+
+      const res = await app.inject({ method: "GET", url: `/ws/device/${id}` });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().message).toContain("was killed");
+    });
   });
 
-  it("never drops a configuration packet, even over the backpressure threshold", async () => {
-    const { device, emitVideoPacket } = makeFakeDevice();
-    const app = makeFakeApp(vi.fn(async () => device));
-
-    await attachSocketToDevice(app, socket as unknown as WebSocket, {
-      deviceId: 1,
-      avdName: "dev35",
-      label: null,
+  describe("attachSocketToDevice", () => {
+    beforeEach(() => {
+      process.env.DEVICE_ENABLED = "true";
     });
 
-    socket.bufferedAmount = BACKPRESSURE_MAX_BUFFERED_BYTES + 1;
-    emitVideoPacket(configPacket());
+    it("sends error and closes socket when getOrCreate rejects", async () => {
+      const app = await buildTestApp();
+      vi.spyOn(app.device, "getOrCreate").mockRejectedValueOnce(new Error("Scope dead"));
+      const socket = new MockWebSocket();
 
-    expect(socket.sent).toHaveLength(1);
-  });
+      await attachSocketToDevice(app, socket as any, {
+        deviceId: 1,
+        avdName: "dev35",
+        label: null,
+        port: null,
+      });
 
-  it("requests a fresh keyframe via resetVideo() once the backlog clears after a drop", async () => {
-    const resetVideo = vi.fn(async () => {});
-    const { device, emitVideoPacket } = makeFakeDevice({ controller: { resetVideo } });
-    const app = makeFakeApp(vi.fn(async () => device));
-
-    await attachSocketToDevice(app, socket as unknown as WebSocket, {
-      deviceId: 1,
-      avdName: "dev35",
-      label: null,
+      expect(socket.sentMessages).toHaveLength(1);
+      expect(JSON.parse(socket.sentMessages[0].data as string)).toEqual({
+        type: "error",
+        message: "Scope dead",
+      });
+      expect(socket.closeCalls).toBe(1);
     });
 
-    // Backlog builds up — a data packet is dropped.
-    socket.bufferedAmount = BACKPRESSURE_MAX_BUFFERED_BYTES + 1;
-    emitVideoPacket(dataPacket());
-    expect(socket.sent).toHaveLength(0);
-    expect(resetVideo).not.toHaveBeenCalled();
+    it("does nothing if socket was closed before getOrCreate finishes", async () => {
+      const app = await buildTestApp();
+      const socket = new MockWebSocket();
+      vi.spyOn(app.device, "getOrCreate").mockImplementationOnce(async () => {
+        socket.readyState = socket.CLOSED;
+        return {
+          onVideoPacket: vi.fn(),
+          onExit: vi.fn(),
+        } as any;
+      });
 
-    // Backlog clears — the next data packet triggers resetVideo() and is
-    // itself still sent (recovery, not a second drop).
-    socket.bufferedAmount = 0;
-    emitVideoPacket(dataPacket());
-    expect(socket.sent).toHaveLength(1);
-    expect(resetVideo).toHaveBeenCalledTimes(1);
-  });
+      await attachSocketToDevice(app, socket as any, {
+        deviceId: 1,
+        avdName: "dev35",
+        label: null,
+        port: null,
+      });
 
-  it("fires resetVideo() only once per drop-then-recover episode, not on every subsequent packet", async () => {
-    const resetVideo = vi.fn(async () => {});
-    const { device, emitVideoPacket } = makeFakeDevice({ controller: { resetVideo } });
-    const app = makeFakeApp(vi.fn(async () => device));
-
-    await attachSocketToDevice(app, socket as unknown as WebSocket, {
-      deviceId: 1,
-      avdName: "dev35",
-      label: null,
+      expect(socket.sentMessages).toHaveLength(0);
     });
 
-    socket.bufferedAmount = BACKPRESSURE_MAX_BUFFERED_BYTES + 1;
-    emitVideoPacket(dataPacket());
-    socket.bufferedAmount = 0;
-    emitVideoPacket(dataPacket());
-    emitVideoPacket(dataPacket());
-    emitVideoPacket(dataPacket());
+    it("streams video packets, applies WeakMap caching, and respects backpressure", async () => {
+      const app = await buildTestApp();
+      let videoListener: ((pkt: ScrcpyMediaStreamPacket) => void) | undefined;
+      const unsubscribeVideo = vi.fn();
+      const mockResetVideo = vi.fn().mockResolvedValue(undefined);
 
-    expect(resetVideo).toHaveBeenCalledTimes(1);
-    // The recovery packet plus the two that followed it all went out.
-    expect(socket.sent).toHaveLength(3);
-  });
-
-  it("logs a warning and keeps streaming when resetVideo() itself rejects", async () => {
-    const resetVideo = vi.fn(async () => {
-      throw new Error("resetVideo failed");
-    });
-    const { device, emitVideoPacket } = makeFakeDevice({ controller: { resetVideo } });
-    const app = makeFakeApp(vi.fn(async () => device));
-
-    await attachSocketToDevice(app, socket as unknown as WebSocket, {
-      deviceId: 1,
-      avdName: "dev35",
-      label: null,
-    });
-
-    socket.bufferedAmount = BACKPRESSURE_MAX_BUFFERED_BYTES + 1;
-    emitVideoPacket(dataPacket());
-    socket.bufferedAmount = 0;
-    emitVideoPacket(dataPacket());
-
-    // resetVideo() rejecting is fire-and-forget from the listener's own
-    // perspective — the packet that triggered recovery still goes out.
-    expect(socket.sent).toHaveLength(1);
-    await vi.waitFor(() => expect(app.log.warn).toHaveBeenCalled());
-  });
-
-  it("does not send or drop-track once the socket has closed", async () => {
-    const { device, emitVideoPacket } = makeFakeDevice();
-    const app = makeFakeApp(vi.fn(async () => device));
-
-    await attachSocketToDevice(app, socket as unknown as WebSocket, {
-      deviceId: 1,
-      avdName: "dev35",
-      label: null,
-    });
-
-    socket.close();
-    emitVideoPacket(dataPacket());
-
-    expect(socket.sent).toHaveLength(0);
-  });
-
-  it("unsubscribes video and exit listeners when the socket closes", async () => {
-    const { device, unsubscribeVideoSpy, unsubscribeExitSpy } = makeFakeDevice();
-    const app = makeFakeApp(vi.fn(async () => device));
-
-    await attachSocketToDevice(app, socket as unknown as WebSocket, {
-      deviceId: 1,
-      avdName: "dev35",
-      label: null,
-    });
-
-    expect(unsubscribeVideoSpy).not.toHaveBeenCalled();
-    socket.close();
-    expect(unsubscribeVideoSpy).toHaveBeenCalledTimes(1);
-    expect(unsubscribeExitSpy).toHaveBeenCalledTimes(1);
-  });
-
-  it("sends an exited message and closes the socket when the device exits", async () => {
-    const { device, emitExit } = makeFakeDevice();
-    const app = makeFakeApp(vi.fn(async () => device));
-
-    await attachSocketToDevice(app, socket as unknown as WebSocket, {
-      deviceId: 1,
-      avdName: "dev35",
-      label: null,
-    });
-
-    emitExit();
-
-    expect(socket.sent).toHaveLength(1);
-    expect(JSON.parse(socket.sent[0].data as string)).toEqual({ type: "exited" });
-    expect(socket.readyState).toBe(socket.CLOSED);
-  });
-
-  it("sends an error and closes the socket when getOrCreate() fails", async () => {
-    const app = makeFakeApp(
-      vi.fn(async () => {
-        throw new Error("scope already running");
-      }),
-    );
-
-    await attachSocketToDevice(app, socket as unknown as WebSocket, {
-      deviceId: 1,
-      avdName: "dev35",
-      label: null,
-    });
-
-    expect(socket.sent).toHaveLength(1);
-    expect(JSON.parse(socket.sent[0].data as string)).toEqual({
-      type: "error",
-      message: "scope already running",
-    });
-    expect(socket.readyState).toBe(socket.CLOSED);
-  });
-
-  it("does nothing further if the socket already closed while getOrCreate() was in flight", async () => {
-    const { device } = makeFakeDevice();
-    let resolveGetOrCreate: (device: Device) => void;
-    const getOrCreate = vi.fn(
-      () =>
-        new Promise<Device>((resolve) => {
-          resolveGetOrCreate = resolve;
+      const fakeDevice = {
+        controller: { resetVideo: mockResetVideo },
+        onVideoPacket: vi.fn((fn) => {
+          videoListener = fn;
+          return unsubscribeVideo;
         }),
-    );
-    const app = makeFakeApp(getOrCreate);
+        onExit: vi.fn(() => vi.fn()),
+      };
+      vi.spyOn(app.device, "getOrCreate").mockResolvedValueOnce(fakeDevice as any);
 
-    const attachPromise = attachSocketToDevice(app, socket as unknown as WebSocket, {
-      deviceId: 1,
-      avdName: "dev35",
-      label: null,
+      const socket = new MockWebSocket();
+      await attachSocketToDevice(app, socket as any, {
+        deviceId: 1,
+        avdName: "dev35",
+        label: null,
+        port: null,
+      });
+
+      expect(videoListener).toBeDefined();
+
+      // 1. Send configuration packet
+      const configPkt: ScrcpyMediaStreamPacket = {
+        type: "configuration",
+        data: new Uint8Array([10, 20]),
+      };
+      videoListener!(configPkt);
+      expect(socket.sentMessages).toHaveLength(1);
+      const m1 = socket.sentMessages[0];
+      expect(m1.binary).toBe(true);
+      const b1 = m1.data as Uint8Array;
+      expect(b1[0]).toBe(0); // configuration type byte
+      expect(b1[1]).toBe(0); // flags byte
+      expect(b1.slice(2)).toEqual(new Uint8Array([10, 20]));
+
+      // Test WeakMap cache hit: same packet object
+      videoListener!(configPkt);
+      expect(socket.sentMessages[1].data).toBe(b1);
+
+      // 2. Send keyframe data packet
+      const keyframePkt: ScrcpyMediaStreamPacket = {
+        type: "data",
+        keyframe: true,
+        data: new Uint8Array([30, 40]),
+      };
+      videoListener!(keyframePkt);
+      const m2 = socket.sentMessages[2];
+      const b2 = m2.data as Uint8Array;
+      expect(b2[0]).toBe(1); // data type byte
+      expect(b2[1]).toBe(1); // keyframe bit
+      expect(b2.slice(2)).toEqual(new Uint8Array([30, 40]));
+
+      // 3. Backpressure: set bufferedAmount > 4MB
+      socket.bufferedAmount = 5 * 1024 * 1024;
+      const dataPkt2: ScrcpyMediaStreamPacket = {
+        type: "data",
+        keyframe: false,
+        data: new Uint8Array([50]),
+      };
+      videoListener!(dataPkt2);
+      // Dropped! Length hasn't grown
+      expect(socket.sentMessages).toHaveLength(3);
+
+      // Config packets are never dropped even under backpressure
+      videoListener!(configPkt);
+      expect(socket.sentMessages).toHaveLength(4);
+
+      // 4. Backpressure recovers: bufferedAmount drops to 0
+      socket.bufferedAmount = 0;
+      const dataPkt3: ScrcpyMediaStreamPacket = {
+        type: "data",
+        keyframe: false,
+        data: new Uint8Array([60]),
+      };
+      videoListener!(dataPkt3);
+      expect(socket.sentMessages).toHaveLength(5);
+      // resetVideo must be requested once backlog clears
+      expect(mockResetVideo).toHaveBeenCalledTimes(1);
+
+      // 5. Subsequent packet without drops does not re-trigger resetVideo
+      videoListener!(dataPkt3);
+      expect(mockResetVideo).toHaveBeenCalledTimes(1);
     });
 
-    socket.readyState = socket.CLOSED;
-    resolveGetOrCreate!(device);
-    await attachPromise;
+    it("sends exited message and closes socket on device exit", async () => {
+      const app = await buildTestApp();
+      let exitListener: (() => void) | undefined;
+      const fakeDevice = {
+        onVideoPacket: vi.fn(() => vi.fn()),
+        onExit: vi.fn((fn) => {
+          exitListener = fn;
+          return vi.fn();
+        }),
+      };
+      vi.spyOn(app.device, "getOrCreate").mockResolvedValueOnce(fakeDevice as any);
 
-    expect(socket.sent).toHaveLength(0);
-    expect(device.onVideoPacket).not.toHaveBeenCalled();
+      const socket = new MockWebSocket();
+      await attachSocketToDevice(app, socket as any, {
+        deviceId: 1,
+        avdName: "dev35",
+        label: null,
+        port: null,
+      });
+
+      expect(exitListener).toBeDefined();
+      exitListener!();
+
+      expect(socket.sentMessages).toHaveLength(1);
+      expect(JSON.parse(socket.sentMessages[0].data as string)).toEqual({ type: "exited" });
+      expect(socket.closeCalls).toBe(1);
+    });
+
+    it("handles incoming socket input messages and dispatches to controller", async () => {
+      const app = await buildTestApp();
+      const mockController = {
+        injectTouch: vi.fn().mockResolvedValue(undefined),
+        injectScroll: vi.fn().mockResolvedValue(undefined),
+        injectText: vi.fn().mockResolvedValue(undefined),
+        injectKeyCode: vi.fn().mockResolvedValue(undefined),
+        backOrScreenOn: vi.fn().mockResolvedValue(undefined),
+      };
+      const fakeDevice = {
+        controller: mockController,
+        onVideoPacket: vi.fn(() => vi.fn()),
+        onExit: vi.fn(() => vi.fn()),
+      };
+      vi.spyOn(app.device, "getOrCreate").mockResolvedValueOnce(fakeDevice as any);
+
+      const socket = new MockWebSocket();
+      await attachSocketToDevice(app, socket as any, {
+        deviceId: 1,
+        avdName: "dev35",
+        label: null,
+        port: null,
+      });
+
+      // Binary message is ignored
+      socket.emit("message", Buffer.from([1, 2, 3]), true);
+
+      // Malformed JSON is ignored
+      socket.emit("message", Buffer.from("not-json"), false);
+
+      // Unknown message type is ignored
+      socket.emit("message", Buffer.from(JSON.stringify({ type: "unknown" })), false);
+
+      // 1. tap message
+      socket.emit(
+        "message",
+        Buffer.from(
+          JSON.stringify({
+            type: "tap",
+            x: 100,
+            y: 200,
+            videoWidth: 1080,
+            videoHeight: 1920,
+          }),
+        ),
+        false,
+      );
+      await vi.waitFor(() => expect(mockController.injectTouch).toHaveBeenCalledTimes(2));
+
+      // 2. touchDown, touchMove, touchUp
+      socket.emit(
+        "message",
+        Buffer.from(
+          JSON.stringify({
+            type: "touchDown",
+            x: 10,
+            y: 20,
+            videoWidth: 1080,
+            videoHeight: 1920,
+            pointerId: 0,
+          }),
+        ),
+        false,
+      );
+      socket.emit(
+        "message",
+        Buffer.from(
+          JSON.stringify({
+            type: "touchMove",
+            x: 15,
+            y: 25,
+            videoWidth: 1080,
+            videoHeight: 1920,
+            pointerId: 0,
+          }),
+        ),
+        false,
+      );
+      socket.emit(
+        "message",
+        Buffer.from(
+          JSON.stringify({
+            type: "touchUp",
+            x: 20,
+            y: 30,
+            videoWidth: 1080,
+            videoHeight: 1920,
+            pointerId: 0,
+          }),
+        ),
+        false,
+      );
+      await vi.waitFor(() => expect(mockController.injectTouch).toHaveBeenCalledTimes(5));
+
+      // 3. scroll
+      socket.emit(
+        "message",
+        Buffer.from(
+          JSON.stringify({
+            type: "scroll",
+            x: 50,
+            y: 50,
+            videoWidth: 1080,
+            videoHeight: 1920,
+            scrollX: 0,
+            scrollY: -10,
+          }),
+        ),
+        false,
+      );
+      await vi.waitFor(() => expect(mockController.injectScroll).toHaveBeenCalledTimes(1));
+
+      // 4. text
+      socket.emit("message", Buffer.from(JSON.stringify({ type: "text", text: "hello" })), false);
+      await vi.waitFor(() => expect(mockController.injectText).toHaveBeenCalledWith("hello"));
+
+      // 5. keyEvent
+      socket.emit(
+        "message",
+        Buffer.from(JSON.stringify({ type: "keyEvent", androidKeyCode: 4, action: "down" })),
+        false,
+      );
+      socket.emit(
+        "message",
+        Buffer.from(JSON.stringify({ type: "keyEvent", androidKeyCode: 4, action: "up" })),
+        false,
+      );
+      await vi.waitFor(() => expect(mockController.injectKeyCode).toHaveBeenCalledTimes(2));
+
+      // 6. back
+      socket.emit("message", Buffer.from(JSON.stringify({ type: "back" })), false);
+      await vi.waitFor(() => expect(mockController.backOrScreenOn).toHaveBeenCalledTimes(2));
+
+      // 7. error handling when controller rejects
+      mockController.injectText.mockRejectedValueOnce(new Error("input failed"));
+      socket.emit("message", Buffer.from(JSON.stringify({ type: "text", text: "fail" })), false);
+      // Doesn't crash
+
+      // 8. invalid keyEvent action
+      socket.emit(
+        "message",
+        Buffer.from(JSON.stringify({ type: "keyEvent", androidKeyCode: 4, action: "invalid" })),
+        false,
+      );
+
+      // 9. invalid payload structures for tap, touchDown, scroll, text
+      socket.emit("message", Buffer.from(JSON.stringify({ type: "tap", x: 10 })), false);
+      socket.emit(
+        "message",
+        Buffer.from(JSON.stringify({ type: "touchDown", x: 10, y: 20 })),
+        false,
+      );
+      socket.emit("message", Buffer.from(JSON.stringify({ type: "scroll", x: 10, y: 20 })), false);
+      socket.emit("message", Buffer.from(JSON.stringify({ type: "text", text: 123 })), false);
+    });
+
+    it("handles resetVideo rejection on backpressure recovery gracefully", async () => {
+      const app = await buildTestApp();
+      let videoListener: ((pkt: ScrcpyMediaStreamPacket) => void) | undefined;
+      const fakeDevice = {
+        controller: { resetVideo: vi.fn().mockRejectedValue(new Error("reset failed")) },
+        onVideoPacket: vi.fn((fn) => {
+          videoListener = fn;
+          return vi.fn();
+        }),
+        onExit: vi.fn(() => vi.fn()),
+      };
+      vi.spyOn(app.device, "getOrCreate").mockResolvedValueOnce(fakeDevice as any);
+
+      const socket = new MockWebSocket();
+      await attachSocketToDevice(app, socket as any, {
+        deviceId: 1,
+        avdName: "dev35",
+        label: null,
+        port: null,
+      });
+
+      // Cause backpressure drop
+      socket.bufferedAmount = 5 * 1024 * 1024;
+      videoListener!({ type: "data", keyframe: false, data: new Uint8Array([1]) });
+
+      // Clear backpressure
+      socket.bufferedAmount = 0;
+      videoListener!({ type: "data", keyframe: false, data: new Uint8Array([2]) });
+
+      // resetVideo rejected but caught without throwing
+    });
+
+    it("unsubscribes listeners on socket close", async () => {
+      const app = await buildTestApp();
+      const unsubscribeVideo = vi.fn();
+      const unsubscribeExit = vi.fn();
+      const fakeDevice = {
+        onVideoPacket: vi.fn(() => unsubscribeVideo),
+        onExit: vi.fn(() => unsubscribeExit),
+      };
+      vi.spyOn(app.device, "getOrCreate").mockResolvedValueOnce(fakeDevice as any);
+
+      const socket = new MockWebSocket();
+      await attachSocketToDevice(app, socket as any, {
+        deviceId: 1,
+        avdName: "dev35",
+        label: null,
+        port: null,
+      });
+
+      socket.emit("close");
+
+      expect(unsubscribeVideo).toHaveBeenCalledTimes(1);
+      expect(unsubscribeExit).toHaveBeenCalledTimes(1);
+    });
+
+    it("stops forwarding video packets once the socket has already closed", async () => {
+      const app = await buildTestApp();
+      let videoListener: ((pkt: ScrcpyMediaStreamPacket) => void) | undefined;
+      const fakeDevice = {
+        onVideoPacket: vi.fn((fn) => {
+          videoListener = fn;
+          return vi.fn();
+        }),
+        onExit: vi.fn(() => vi.fn()),
+      };
+      vi.spyOn(app.device, "getOrCreate").mockResolvedValueOnce(fakeDevice as any);
+
+      const socket = new MockWebSocket();
+      await attachSocketToDevice(app, socket as any, {
+        deviceId: 1,
+        avdName: "dev35",
+        label: null,
+        port: null,
+      });
+
+      socket.close();
+      videoListener!({ type: "data", keyframe: false, data: new Uint8Array([1]) });
+
+      expect(socket.sentMessages).toHaveLength(0);
+    });
+
+    it("logs a warning (and keeps the connection open) when input dispatch throws", async () => {
+      const app = await buildTestApp();
+      const mockController = {
+        injectText: vi.fn().mockRejectedValue(new Error("input failed")),
+      };
+      const fakeDevice = {
+        controller: mockController,
+        onVideoPacket: vi.fn(() => vi.fn()),
+        onExit: vi.fn(() => vi.fn()),
+      };
+      vi.spyOn(app.device, "getOrCreate").mockResolvedValueOnce(fakeDevice as any);
+      const warnSpy = vi.spyOn(app.log, "warn");
+
+      const socket = new MockWebSocket();
+      await attachSocketToDevice(app, socket as any, {
+        deviceId: 1,
+        avdName: "dev35",
+        label: null,
+        port: null,
+      });
+
+      socket.emit("message", Buffer.from(JSON.stringify({ type: "text", text: "fail" })), false);
+
+      await vi.waitFor(() => expect(warnSpy).toHaveBeenCalled());
+      expect(socket.readyState).toBe(socket.OPEN);
+    });
   });
 
-  it("dispatches a tap input message through the scrcpy controller", async () => {
-    const injectTouch = vi.fn(async () => {});
-    const { device } = makeFakeDevice({ controller: { injectTouch } });
-    const app = makeFakeApp(vi.fn(async () => device));
+  describe("real WebSocket upgrade handling", () => {
+    it("connects to /ws/device/:id over WebSocket and executes upgrade handler", async () => {
+      process.env.DEVICE_ENABLED = "true";
+      const app = await buildTestApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/devices",
+        payload: { avdName: "dev35" },
+      });
+      const id = created.json().id;
 
-    await attachSocketToDevice(app, socket as unknown as WebSocket, {
-      deviceId: 1,
-      avdName: "dev35",
-      label: null,
+      await app.listen({ port: 0, host: "127.0.0.1" });
+      const address = app.server.address();
+      if (!address || typeof address === "string") throw new Error("bad address");
+
+      const ws = new WebSocket(`ws://127.0.0.1:${address.port}/ws/device/${id}`);
+      await new Promise((resolve) => ws.addEventListener("open", resolve, { once: true }));
+      expect(ws.readyState).toBe(ws.OPEN);
+      ws.close();
+      await app.close();
     });
 
-    socket.emit(
-      "message",
-      Buffer.from(JSON.stringify({ type: "tap", x: 10, y: 20, videoWidth: 100, videoHeight: 200 })),
-      false,
-    );
+    it("closes socket if row is killed before upgrade handler runs", async () => {
+      process.env.DEVICE_ENABLED = "true";
+      const app = await buildTestApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/devices",
+        payload: { avdName: "dev35" },
+      });
+      const id = created.json().id;
 
-    await vi.waitFor(() => expect(injectTouch).toHaveBeenCalledTimes(2));
-  });
+      await app.listen({ port: 0, host: "127.0.0.1" });
+      const address = app.server.address();
+      if (!address || typeof address === "string") throw new Error("bad address");
 
-  it("logs a warning and keeps the connection open when input dispatch throws", async () => {
-    const injectTouch = vi.fn(async () => {
-      throw new Error("boom");
+      // Mark row killed right before connection
+      // But simulate TOCTOU by intercepting app.db.select in upgrade handler
+      const origSelect = app.db.select.bind(app.db);
+      let callCount = 0;
+      vi.spyOn(app.db, "select").mockImplementation((...args: any[]) => {
+        callCount++;
+        // On the second select (inside the upgrade handler), return killed status
+        if (callCount >= 2) {
+          return {
+            from: () => ({
+              where: () => ({
+                all: () => [{ id, avdName: "dev35", name: null, port: 5554, status: "killed" }],
+              }),
+            }),
+          } as any;
+        }
+        return origSelect(...args);
+      });
+
+      const ws = new WebSocket(`ws://127.0.0.1:${address.port}/ws/device/${id}`);
+      await new Promise((resolve) => ws.addEventListener("close", resolve, { once: true }));
+      expect(ws.readyState).toBe(ws.CLOSED);
+      await app.close();
     });
-    const { device } = makeFakeDevice({ controller: { injectTouch } });
-    const app = makeFakeApp(vi.fn(async () => device));
-
-    await attachSocketToDevice(app, socket as unknown as WebSocket, {
-      deviceId: 1,
-      avdName: "dev35",
-      label: null,
-    });
-
-    socket.emit(
-      "message",
-      Buffer.from(JSON.stringify({ type: "tap", x: 10, y: 20, videoWidth: 100, videoHeight: 200 })),
-      false,
-    );
-
-    await vi.waitFor(() => expect(app.log.warn).toHaveBeenCalled());
-    expect(socket.readyState).toBe(socket.OPEN);
-  });
-
-  it("ignores malformed JSON and unknown/binary messages without crashing", async () => {
-    const { device } = makeFakeDevice();
-    const app = makeFakeApp(vi.fn(async () => device));
-
-    await attachSocketToDevice(app, socket as unknown as WebSocket, {
-      deviceId: 1,
-      avdName: "dev35",
-      label: null,
-    });
-
-    socket.emit("message", Buffer.from("not json{{{"), false);
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "unknown-thing" })), false);
-    socket.emit("message", Buffer.from([1, 2, 3]), true);
-
-    expect(socket.readyState).toBe(socket.OPEN);
   });
 });

@@ -5,6 +5,7 @@ import fs from "node:fs";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { previews } from "../../src/db/schema.js";
+import { verifyPreviewToken } from "../../src/services/preview-auth.js";
 
 const tmpDb = path.join(os.tmpdir(), `previews-test-${process.pid}.db`);
 
@@ -223,6 +224,31 @@ describe("previews route (issue #28)", () => {
     });
   });
 
+  describe("GET /api/previews/:slug/open (issue #1316)", () => {
+    it("redirects to the preview root with no token when PREVIEW_AUTH_REQUIRED is off", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/previews",
+        payload: { kind: "project", projectId },
+      });
+      const { slug } = created.json();
+
+      const res = await app.inject({ method: "GET", url: `/api/previews/${slug}/open` });
+      expect(res.statusCode).toBe(302);
+      expect(res.headers.location).toBe(`http://preview-${slug}.preview.example.com/`);
+      await app.close();
+    });
+
+    it("404s for an unknown slug", async () => {
+      const app = await buildApp();
+      const res = await app.inject({ method: "GET", url: "/api/previews/does-not-exist/open" });
+      expect(res.statusCode).toBe(404);
+      await app.close();
+    });
+  });
+
   it("orders results newest first (desc by createdAt)", async () => {
     const app = await buildApp();
 
@@ -253,6 +279,109 @@ describe("previews route (issue #28)", () => {
     const slugs = listed.json().map((r: { slug: string }) => r.slug);
     expect(slugs.indexOf("newer-preview")).toBeLessThan(slugs.indexOf("older-preview"));
 
+    await app.close();
+  });
+});
+
+describe("GET /api/previews/:slug/open with PREVIEW_AUTH_REQUIRED=true (issue #1316)", () => {
+  const localTmpDb = path.join(os.tmpdir(), `previews-open-auth-test-${process.pid}.db`);
+  const TEST_AUTH_TOKEN = "test-previews-open-dashboard-token-0123456789";
+  const DASHBOARD_AUTH_HEADERS = { authorization: `Bearer ${TEST_AUTH_TOKEN}` };
+
+  beforeAll(() => {
+    fs.rmSync(localTmpDb, { force: true });
+    process.env.DATABASE_URL = `file:${localTmpDb}`;
+    process.env.PREVIEW_BASE_HOST = "preview.example.com";
+    process.env.PREVIEW_AUTH_REQUIRED = "true";
+    process.env.MULLION_SESSION_SECRET = "test-previews-open-session-secret-0123456789"; // pragma: allowlist secret
+    process.env.MULLION_AUTH_TOKEN = TEST_AUTH_TOKEN;
+  });
+
+  afterAll(() => {
+    closeDb();
+    fs.rmSync(localTmpDb, { force: true });
+    delete process.env.DATABASE_URL;
+    delete process.env.PREVIEW_BASE_HOST;
+    delete process.env.PREVIEW_AUTH_REQUIRED;
+    delete process.env.MULLION_SESSION_SECRET;
+    delete process.env.MULLION_AUTH_TOKEN;
+  });
+
+  async function createAuthedProjectPreview(app: Awaited<ReturnType<typeof buildApp>>) {
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { createDir: true, name: "open-route-test", cwd: "/tmp/previews-open-test" },
+      headers: DASHBOARD_AUTH_HEADERS,
+    });
+    const projectId = created.json().id as number;
+    const preview = await app.inject({
+      method: "POST",
+      url: "/api/previews",
+      payload: { kind: "project", projectId },
+      headers: DASHBOARD_AUTH_HEADERS,
+    });
+    return preview.json().slug as string;
+  }
+
+  it("401s an unauthenticated request the same as the JSON gate would, when PREVIEW_AUTH_DASHBOARD_URL is unset", async () => {
+    // This route is exempted from src/plugins/auth.ts's generic /api/* gate
+    // (issue #1316, addressing review feedback that a raw JSON 401 was a
+    // dead end for a plain `<a href>` navigation) — but with no dashboard
+    // URL configured to redirect to, there's truly nowhere else to send an
+    // unauthenticated caller, so the handler itself falls back to the same
+    // plain-JSON 401 that gate would have sent.
+    const app = await buildApp();
+    const slug = await createAuthedProjectPreview(app);
+
+    const res = await app.inject({ method: "GET", url: `/api/previews/${slug}/open` });
+    expect(res.statusCode).toBe(401);
+    await app.close();
+  });
+
+  it("redirects an unauthenticated request to PREVIEW_AUTH_DASHBOARD_URL when configured (issue #1316)", async () => {
+    process.env.PREVIEW_AUTH_DASHBOARD_URL = "https://dashboard.example.com";
+    try {
+      const app = await buildApp();
+      const slug = await createAuthedProjectPreview(app);
+
+      const res = await app.inject({ method: "GET", url: `/api/previews/${slug}/open` });
+      expect(res.statusCode).toBe(302);
+      expect(res.headers.location).toBe("https://dashboard.example.com");
+      await app.close();
+    } finally {
+      delete process.env.PREVIEW_AUTH_DASHBOARD_URL;
+    }
+  });
+
+  it("mints a fresh bootstrap token and redirects an authenticated session to the preview, token in the query string", async () => {
+    const app = await buildApp();
+    const slug = await createAuthedProjectPreview(app);
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/previews/${slug}/open`,
+      headers: DASHBOARD_AUTH_HEADERS,
+    });
+    expect(res.statusCode).toBe(302);
+    const location = new URL(res.headers.location as string);
+    expect(location.origin).toBe(`http://preview-${slug}.preview.example.com`);
+    const token = location.searchParams.get("__mullion_preview");
+    expect(token).toBeTruthy();
+    expect(verifyPreviewToken(app.config.MULLION_SESSION_SECRET, token ?? undefined, slug)).toBe(
+      true,
+    );
+    await app.close();
+  });
+
+  it("404s for an unknown slug even when authenticated", async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/previews/does-not-exist/open",
+      headers: DASHBOARD_AUTH_HEADERS,
+    });
+    expect(res.statusCode).toBe(404);
     await app.close();
   });
 });

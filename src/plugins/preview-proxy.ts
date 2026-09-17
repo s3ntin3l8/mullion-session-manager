@@ -1,6 +1,7 @@
 import fp from "fastify-plugin";
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import type { CookieSerializeOptions } from "@fastify/cookie";
+import { randomBytes } from "node:crypto";
 import { eq } from "drizzle-orm";
 import type { Duplex } from "node:stream";
 import type { IncomingMessage } from "node:http";
@@ -15,6 +16,7 @@ import {
   buildUpstreamRequestBody,
   buildUpstreamRequestHeaders,
   relayFetchResponse,
+  stripFramingHeaders,
 } from "../services/http-proxy.js";
 import { pipeWsFrames, toWsUrl } from "../services/ws-pipe.js";
 import {
@@ -251,6 +253,45 @@ function resolvePreviewTarget(app: FastifyInstance, slug: string): PreviewResolu
 // error call alongside each call site below.
 const PREVIEW_UNAVAILABLE_MESSAGE = "preview unavailable";
 
+// Lets a cross-origin fetch() from the dashboard's own page (BrowserPanel.tsx's
+// probe of a resolved preview `src`, ahead of mounting the iframe) read one
+// of this file's own early-return error responses. A cross-origin fetch can
+// otherwise never observe anything about a response — not even its status —
+// so without this the frontend has no way to distinguish a proxy error
+// (404 unknown slug, 401 unauthenticated, 429 rate-limited, a 502/503
+// upstream failure) from a real successful load. Applied to every one of
+// those branches below and NEVER to relayFetchResponse's success path,
+// which must stay exactly as CORS-opaque as it already is — that's the
+// previewed dev server's own response body, not this proxy's, and letting
+// the dashboard origin read it would leak previewed-app content across the
+// slug boundary.
+//
+// Reflects the caller's own Origin header back verbatim rather than a fixed
+// value: this process has no way to know the dashboard's own hostname —
+// PREVIEW_BASE_HOST names the *preview* subdomain's own base, a sibling
+// host, not the dashboard's (see preview-host.ts's own comment and
+// docs/browser-previews.md's worked example, where the dashboard and its
+// preview base are two different subdomains). That's safe here
+// specifically because every response this is attached to carries the same
+// fixed, non-secret body regardless of who asks (PREVIEW_UNAVAILABLE_MESSAGE
+// or the fixed 401/429 bodies below) — reflecting the caller's Origin back
+// to it is exactly as permissive as a wildcard for this fixed set of
+// responses, and strictly narrower (no shared cache can serve one origin's
+// copy to another). `Vary: Origin` for that same caching reason. A request
+// with no Origin header (a real browser navigation, not a fetch() probe)
+// gets no header at all — there's nothing to reflect and nothing depends on
+// it. Responses do NOT set Access-Control-Allow-Credentials: true, so
+// credentials cannot be sent or read across origins, preventing CORS
+// credential leak risks (CodeQL js/cors-misconfiguration-for-credentials);
+// BrowserPanel.tsx's uncredentialed probe with redirect: "manual" reads
+// the status code without requiring credential transfer.
+function addPreviewErrorCorsHeaders(request: FastifyRequest, reply: FastifyReply): void {
+  const origin = request.headers.origin;
+  if (!origin || !/^https?:\/\//i.test(origin)) return;
+  reply.header("Access-Control-Allow-Origin", origin);
+  reply.header("Vary", "Origin");
+}
+
 async function handlePreviewRequest(
   app: FastifyInstance,
   request: FastifyRequest,
@@ -259,6 +300,7 @@ async function handlePreviewRequest(
 ) {
   const resolution = resolvePreviewTarget(app, slug);
   if (!resolution.ok) {
+    addPreviewErrorCorsHeaders(request, reply);
     // Hermes review, PR #579: reply.notFound() with no argument falls back
     // to @fastify/sensible's own default message, not the fixed
     // PREVIEW_UNAVAILABLE_MESSAGE the design comment above promises for
@@ -283,6 +325,7 @@ async function handlePreviewRequest(
     );
   } catch (err) {
     app.log.warn({ err, slug }, "preview proxy: preview has an invalid target URL");
+    addPreviewErrorCorsHeaders(request, reply);
     return reply.serviceUnavailable(PREVIEW_UNAVAILABLE_MESSAGE);
   }
 
@@ -320,6 +363,7 @@ async function handlePreviewRequest(
     } catch (err) {
       request.raw.resume();
       app.log.warn({ err, slug, hostId: target.hostId }, "preview proxy: upstream unreachable");
+      addPreviewErrorCorsHeaders(request, reply);
       return reply.badGateway(PREVIEW_UNAVAILABLE_MESSAGE);
     }
     // The loopback base this hop actually forced the connection to (see the
@@ -382,6 +426,7 @@ async function handlePreviewRequest(
         "preview proxy: upstream unreachable",
       );
     }
+    addPreviewErrorCorsHeaders(request, reply);
     return reply.badGateway(PREVIEW_UNAVAILABLE_MESSAGE);
   }
 
@@ -529,25 +574,100 @@ function escapeHtml(value: string): string {
 // dashboard tab's own iframe src, per docs/auth.md's Preview-host auth
 // token section) and, on a first visit, no preview cookie either — the bare
 // "401 Unauthorized" this used to send was a dead end with no way back to
-// the dashboard to mint one. This still can't auto-authenticate that
-// navigation (the dashboard session cookie is on a different origin than
-// the preview subdomain, which is the whole reason the bootstrap-token flow
-// exists — see issue #1316 for a possible redirect-through-the-dashboard
-// follow-up that mints a token without ever reading that cookie
-// cross-origin), but it can at least explain *why* and point back to the
+// the dashboard to mint one. It now explains why, and points back to the
 // dashboard when an operator has configured where that is.
-function buildPreviewAuthUnauthorizedHtml(dashboardUrl: string): string {
+//
+// Issue #1316 — an already-authenticated dashboard session CAN complete that
+// exchange itself, without the visitor having to manually re-find this
+// preview in the dashboard's own UI: routes/previews.ts's
+// GET /api/previews/:slug/open mints a fresh bootstrap token and
+// redirects straight back to this same preview, gated by the ordinary
+// same-site /api/* session-cookie check (src/plugins/auth.ts) — reachable
+// here as a same-site request because it's the DASHBOARD's own origin, not
+// this preview subdomain's. Reading the dashboard's session cookie
+// cross-origin from here instead (a fetch() from this very page) was
+// rejected: that cookie is httpOnly and not SameSite=None for the dashboard
+// host precisely so a cross-origin read like that can't happen — see
+// docs/auth.md's Preview-host auth token section. The script below only
+// ever REWRITES the plain dashboardUrl link already rendered above it into
+// that smarter target — it never auto-navigates, so a visitor with no
+// dashboard session just lands on a normal top-level navigation to
+// GET /api/previews/:slug/open, which (per routes/previews.ts's own doc
+// comment on that route) redirects an unauthenticated caller straight to
+// PREVIEW_AUTH_DASHBOARD_URL — the same destination the plain link above
+// already pointed at — rather than the raw-JSON 401 a `fetch()` to any
+// other protected /api/* route would get, which a plain `<a href>` click
+// has no script running to interpret.
+//
+// The preview slug is read from `location.hostname`, in the VISITOR'S OWN
+// browser — never server-templated/request-echoed here. This function's own
+// body stays exactly as free of request-derived content as it was before
+// this feature (see escapeHtml's doc comment above: the Host header that
+// produced the slug is attacker-controllable, and this whole response
+// deliberately never reflects it).
+//
+// `nonce` — this response's inline <script> would otherwise be silently
+// dropped by the browser: it inherits securityPlugin's app-wide CSP
+// (script-src 'self', no 'unsafe-inline'/nonce/hash — see
+// test/plugins/security.test.ts's own regression guard for why that stays
+// strict globally), and Fastify sends this body straight from an app-level
+// onRequest hook (previewProxyPlugin below), not a normal route — there's no
+// per-route `{ config: { helmet } }` override to hook into, since the
+// matched route (whatever Fastify's router resolved the preview Host's path
+// to) has no helmet config of its own. So this hop generates one nonce per
+// response instead, embeds it as the <script>'s `nonce` attribute, and the
+// caller (previewProxyPlugin's onRequest hook) sets a response-scoped
+// `content-security-policy` header — via reply.header(), which Fastify
+// flushes at writeHead time and so overrides whatever helmet already wrote
+// to the raw response — permitting only that one nonce for script-src, with
+// no other directive relaxed.
+function buildPreviewAuthUnauthorizedHtml(dashboardUrl: string, nonce: string): string {
   const explanation =
     "<p>This preview requires authentication and can't be opened by navigating to " +
     "it directly — a bookmarked or shared link to a preview doesn't carry the " +
     "credential a dashboard-opened preview does.</p>";
-  const link = dashboardUrl
-    ? `<p><a href="${escapeHtml(dashboardUrl)}">Open the Mullion dashboard</a> and open this preview from there instead.</p>`
-    : "<p>Open this preview from the Mullion dashboard instead.</p>";
+  if (!dashboardUrl) {
+    return (
+      "<!doctype html><html><head><title>401 Unauthorized</title></head>" +
+      `<body><h1>401 Unauthorized</h1>${explanation}` +
+      "<p>Open this preview from the Mullion dashboard instead.</p></body></html>"
+    );
+  }
+  const link =
+    '<p><a id="mullion-preview-dashboard-link" ' +
+    `href="${escapeHtml(dashboardUrl)}">Open the Mullion dashboard</a> and open this ` +
+    "preview from there instead.</p>";
+  // Only `dashboardUrl`'s origin is used — any path component an operator
+  // put in PREVIEW_AUTH_DASHBOARD_URL is intentionally discarded, since
+  // GET /api/previews/:slug/open is always an absolute path off that
+  // origin (routes/previews.ts). `dashboardUrl` was already boot-validated
+  // as an absolute http(s) URL (src/app.ts), so this can't throw. `.origin`
+  // can only ever contain a scheme, host, and port — none of which can
+  // contain `<`, `"`, or `</script>` — so, unlike `link` above, this needs
+  // no HTML/JS-context escaping before going straight into the inline
+  // script below.
+  const dashboardOrigin = new URL(dashboardUrl).origin;
+  const script =
+    `<script nonce="${nonce}">(function(){` +
+    "var m=/^preview-([a-z0-9-]+)\\./i.exec(location.hostname);" +
+    'var a=document.getElementById("mullion-preview-dashboard-link");' +
+    "if(m&&a){a.href=" +
+    JSON.stringify(dashboardOrigin) +
+    '+"/api/previews/"+encodeURIComponent(m[1])+"/open";}' +
+    "})();</script>";
   return (
     "<!doctype html><html><head><title>401 Unauthorized</title></head>" +
-    `<body><h1>401 Unauthorized</h1>${explanation}${link}</body></html>`
+    `<body><h1>401 Unauthorized</h1>${explanation}${link}${script}</body></html>`
   );
+}
+
+// One nonce per response — see buildPreviewAuthUnauthorizedHtml's own doc
+// comment. 16 random bytes, base64-encoded, matches @fastify/helmet's own
+// cspNonce generation shape (node_modules/@fastify/helmet/index.js) though
+// this is generated independently since that plugin's nonce support is only
+// wired up per-route, not for a global onRequest hook's own manual reply.
+function generateCspNonce(): string {
+  return randomBytes(16).toString("base64");
 }
 
 // No `domain` attribute, ever — host-only by design, so each
@@ -903,6 +1023,16 @@ export const previewProxyPlugin = fp(async (app: FastifyInstance) => {
     const slug = extractPreviewSlug(request.headers.host, hostPattern);
     if (!slug) return; // not a preview host — fall through to normal routing
 
+    // Every response on a matched preview Host must clear helmet's own
+    // X-Frame-Options/CSP before anything below can return early — a
+    // preview origin is cross-origin from the dashboard by construction, so
+    // those headers block the iframe on a 404/503/502/429/401/redirect
+    // exactly as hard as they'd block a real 200, and every branch below
+    // this point can produce one of those before ever reaching
+    // handlePreviewRequest's own relayFetchResponse call (the only place
+    // this used to happen). See stripFramingHeaders's own doc comment.
+    stripFramingHeaders(reply);
+
     // Finding AS5 — applies unconditionally, before the PREVIEW_AUTH_REQUIRED
     // branch below: with that flag off (the default), preview-host traffic
     // is otherwise metered by nothing at all (see isPreviewRequestRateLimited's
@@ -914,6 +1044,7 @@ export const previewProxyPlugin = fp(async (app: FastifyInstance) => {
         app.config.PREVIEW_RATE_LIMIT_MAX,
       )
     ) {
+      addPreviewErrorCorsHeaders(request, reply);
       return reply.tooManyRequests("too many preview requests — try again later");
     }
 
@@ -926,13 +1057,27 @@ export const previewProxyPlugin = fp(async (app: FastifyInstance) => {
     if (app.config.PREVIEW_AUTH_REQUIRED) {
       const decision = evaluatePreviewAuth(app, request, slug);
       if (decision.kind === "unauthorized") {
+        addPreviewErrorCorsHeaders(request, reply);
         if (isPreviewAuthRateLimited(app, request.raw.socket.remoteAddress)) {
           return reply.tooManyRequests("too many failed preview-auth attempts — try again later");
+        }
+        const dashboardUrl = app.config.PREVIEW_AUTH_DASHBOARD_URL.trim();
+        let nonce = "";
+        if (dashboardUrl) {
+          nonce = generateCspNonce();
+          // Overrides whatever securityPlugin's helmet registration already
+          // wrote to this response — see buildPreviewAuthUnauthorizedHtml's own
+          // doc comment for why a per-route helmet config can't reach this
+          // manually-sent reply, and why reply.header() reliably wins anyway.
+          reply.header(
+            "content-security-policy",
+            `default-src 'self'; script-src 'self' 'nonce-${nonce}'; object-src 'none'; base-uri 'none'`,
+          );
         }
         return reply
           .code(401)
           .type("text/html")
-          .send(buildPreviewAuthUnauthorizedHtml(app.config.PREVIEW_AUTH_DASHBOARD_URL.trim()));
+          .send(buildPreviewAuthUnauthorizedHtml(dashboardUrl, nonce));
       }
       if (decision.kind === "redirect") {
         reply.setCookie(

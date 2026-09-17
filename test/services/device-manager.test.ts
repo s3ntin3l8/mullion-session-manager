@@ -275,15 +275,20 @@ async function waitForStatus(
 describe("DeviceManager", () => {
   it("throws on getOrCreate when disabled, per its own assertEnabled() posture (matches BrowserManager)", async () => {
     const manager = new DeviceManager(baseOpts({ enabled: false }));
-    await expect(manager.getOrCreate({ id: "1", avdName: "dev35", label: null })).rejects.toThrow(
-      /disabled/,
-    );
+    await expect(
+      manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null }),
+    ).rejects.toThrow(/disabled/);
   });
 
   it("getOrCreate spawns a device end to end and reaches status streaming", async () => {
     mockDeviceList = [{ serial: "emulator-5554" }];
     const manager = new DeviceManager(baseOpts());
-    const device = await manager.getOrCreate({ id: "1", avdName: "dev35", label: "My Device" });
+    const device = await manager.getOrCreate({
+      id: "1",
+      avdName: "dev35",
+      label: "My Device",
+      port: null,
+    });
     expect(device.id).toBe("1");
     expect(device.avdName).toBe("dev35");
     await waitForStatus(manager, "1", "streaming");
@@ -294,12 +299,17 @@ describe("DeviceManager", () => {
   it("getOrCreate is idempotent — a second call for the same alive id returns the SAME Device, no second spawn", async () => {
     mockDeviceList = [{ serial: "emulator-5554" }];
     const manager = new DeviceManager(baseOpts());
-    const first = await manager.getOrCreate({ id: "1", avdName: "dev35", label: null });
+    const first = await manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null });
     await waitForStatus(manager, "1", "streaming");
     const systemdRunCallsBefore = vi
       .mocked(spawnChildProcess)
       .mock.calls.filter((c) => c[0] === "systemd-run").length;
-    const second = await manager.getOrCreate({ id: "1", avdName: "dev35", label: null });
+    const second = await manager.getOrCreate({
+      id: "1",
+      avdName: "dev35",
+      label: null,
+      port: null,
+    });
     expect(second).toBe(first);
     const systemdRunCallsAfter = vi
       .mocked(spawnChildProcess)
@@ -314,9 +324,9 @@ describe("DeviceManager", () => {
     listUnitsReply = [
       `${deviceScopeUnitName(instanceId, "7")}.scope loaded active running mullion-device -m ${marker}`,
     ];
-    await expect(manager.getOrCreate({ id: "7", avdName: "dev35", label: null })).rejects.toThrow(
-      /systemctl --user stop/,
-    );
+    await expect(
+      manager.getOrCreate({ id: "7", avdName: "dev35", label: null, port: null }),
+    ).rejects.toThrow(/systemctl --user stop/);
     // Never actually attempted to spawn a colliding scope.
     expect(vi.mocked(spawnChildProcess).mock.calls.some((c) => c[0] === "systemd-run")).toBe(false);
   });
@@ -336,7 +346,7 @@ describe("DeviceManager", () => {
     // stopDeviceScope() call, once createAdb fails below, finds it there.
     const manager = new DeviceManager(baseOpts());
     await expect(
-      manager.getOrCreate({ id: "1", avdName: "dev35", label: null }),
+      manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null }),
     ).resolves.toBeDefined(); // getOrCreate itself doesn't await spawn() — see its own doc comment
     await waitForStatus(manager, "1", "error");
     expect(manager.get("1")?.toInfo().error).toMatch(/createAdb failed/);
@@ -354,7 +364,7 @@ describe("DeviceManager", () => {
     // un-released port would eventually exhaust the fixed allocation range
     // across enough failed attempts).
     mockCreateAdbShouldFail = false;
-    await manager.getOrCreate({ id: "1", avdName: "dev35", label: null });
+    await manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null });
     await waitForStatus(manager, "1", "streaming");
   });
 
@@ -363,7 +373,7 @@ describe("DeviceManager", () => {
     mockCreateAdbShouldFail = true;
     const onSpawnError = vi.fn();
     const manager = new DeviceManager(baseOpts({ onSpawnError }));
-    await manager.getOrCreate({ id: "1", avdName: "dev35", label: null });
+    await manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null });
     await waitForStatus(manager, "1", "error");
     expect(onSpawnError).toHaveBeenCalledWith("1", expect.any(Error));
   });
@@ -371,7 +381,7 @@ describe("DeviceManager", () => {
   it("kill() on a tracked, live device closes scrcpy/adb and stops its scope", async () => {
     mockDeviceList = [{ serial: "emulator-5554" }];
     const manager = new DeviceManager(baseOpts());
-    await manager.getOrCreate({ id: "1", avdName: "dev35", label: null });
+    await manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null });
     await waitForStatus(manager, "1", "streaming");
     await manager.kill("1");
     expect(mockScrcpyClose).toHaveBeenCalled();
@@ -402,7 +412,7 @@ describe("DeviceManager", () => {
   it("terminate() removes the device from the manager's own map", async () => {
     mockDeviceList = [{ serial: "emulator-5554" }];
     const manager = new DeviceManager(baseOpts());
-    await manager.getOrCreate({ id: "1", avdName: "dev35", label: null });
+    await manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null });
     await waitForStatus(manager, "1", "streaming");
     await manager.terminate("1");
     expect(manager.get("1")).toBeUndefined();
@@ -415,7 +425,12 @@ describe("DeviceManager", () => {
       { type: "data", data: new Uint8Array([1]) },
     ];
     const manager = new DeviceManager(baseOpts());
-    const device = await manager.getOrCreate({ id: "1", avdName: "dev35", label: null });
+    const device = await manager.getOrCreate({
+      id: "1",
+      avdName: "dev35",
+      label: null,
+      port: null,
+    });
 
     // An early subscriber sees the real fan-out from pumpVideo's own read
     // loop (a real ReadableStream this time, not a stub) — used here only

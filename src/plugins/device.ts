@@ -1,6 +1,8 @@
 import fp from "fastify-plugin";
 import type { FastifyInstance } from "fastify";
+import { eq } from "drizzle-orm";
 import { DeviceManager } from "../services/device-manager.js";
+import { devices } from "../db/schema.js";
 import { ensureSessionsDir } from "./pty.js";
 
 // Decorates app.device with the emulator/adb-scrcpy manager (see
@@ -20,6 +22,19 @@ export const devicePlugin = fp(async (app: FastifyInstance) => {
     sessionsDir: ensureSessionsDir(app.config.SESSIONS_DIR),
     onSpawnError: (id, err) => {
       app.log.warn({ err, deviceId: id }, "device spawn failed");
+    },
+    // DeviceManager deliberately never touches app.db itself (see
+    // DeviceManagerOptions' own header comment) — this is the one place
+    // that crosses that line, wired here rather than per-route since the
+    // manager (and this callback) are constructed once, here. See
+    // onPortAssigned's own comment on why this fires immediately rather
+    // than after boot succeeds.
+    onPortAssigned: (id, port) => {
+      app.db
+        .update(devices)
+        .set({ port })
+        .where(eq(devices.id, Number(id)))
+        .run();
     },
   });
 

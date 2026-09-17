@@ -2445,6 +2445,47 @@ describe("controlSocketPlugin (issue #185)", () => {
         });
         socket.destroy();
       });
+
+      it("device.terminate (session scope): dispatches to DELETE /api/devices/:id with an explicit deviceId", async () => {
+        app = await buildApp();
+        await app.ready();
+        const deviceId = await createRealDevice();
+        const { hookToken } = await createRealSession();
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(`${JSON.stringify({ id: 1, op: "device.terminate", body: { deviceId } })}\n`);
+        const reply = await waitForReply(socket);
+        expect(reply.ok).toBe(true);
+        expect(reply.status).toBe(204);
+        socket.destroy();
+      });
+
+      it("device.get 400s with 'deviceId is required' when omitted", async () => {
+        app = await buildApp();
+        await app.ready();
+        const socket = await fullScopeSocket();
+        socket.write(`${JSON.stringify({ id: 1, op: "device.get" })}\n`);
+        expect(await waitForReply(socket)).toEqual({
+          id: 1,
+          ok: false,
+          status: 400,
+          error: "'deviceId' is required",
+        });
+        socket.destroy();
+      });
+
+      it("device.get (session scope): dispatches to GET /api/devices/:id with an explicit deviceId", async () => {
+        app = await buildApp();
+        await app.ready();
+        const deviceId = await createRealDevice();
+        const { hookToken } = await createRealSession();
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(`${JSON.stringify({ id: 1, op: "device.get", body: { deviceId } })}\n`);
+        const reply = await waitForReply(socket);
+        expect(reply.ok).toBe(true);
+        expect(reply.status).toBe(200);
+        expect((reply.result as { id: number }).id).toBe(deviceId);
+        socket.destroy();
+      });
     });
 
     describe("project/preview/agent ops (Phase 4, #134 PR6)", () => {
