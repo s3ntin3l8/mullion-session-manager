@@ -237,6 +237,10 @@ export interface MuxChannel {
   onData(listener: (chunk: Buffer) => void): void;
   /** Same deferred-replay guarantee as `onData` — see its own doc. */
   onEof(listener: () => void): void;
+  /** Channel-level close has no "reason" concept of its own (unlike
+   * `MuxConnection.onClose`, which threads through why the whole
+   * connection tore down) — a channel closes because CLOSE was sent or
+   * received, full stop. Deliberately kept zero-arg. */
   onClose(listener: () => void): void;
   /** Fired when `sendWindow` grows from 0 (or grows at all after having
    * been too small for a pending write) — the resume signal for a paused
@@ -299,8 +303,10 @@ export interface MuxConnection {
   onChannel(listener: (channel: MuxChannel) => void): void;
   /** Fired once, when the underlying WebSocket closes or a liveness
    * PING goes unanswered — after this, every open channel has already had
-   * its own `onClose` fired too. */
-  onClose(listener: () => void): void;
+   * its own `onClose` fired too. `reason` names which of the three teardown
+   * paths triggered it (pong timeout / socket close with code+reason /
+   * socket error with message) — see `teardown()`'s own call sites. */
+  onClose(listener: (reason: string) => void): void;
   /** Fired for every PONG received from the peer (issue #1051). Exposed so
    * `routes/agent-bridge.ts`'s `trackBridge` can stamp `lastPongAt` on the
    * ConnectedBridge entry, letting `ssh-agent-fanout.ts`'s `pickBridge`
@@ -571,7 +577,7 @@ export function createMuxConnection(
     { resolve: (ch: MuxChannel) => void; reject: (err: Error) => void }
   >();
   const channelListeners: Array<(channel: MuxChannel) => void> = [];
-  const closeListeners: Array<() => void> = [];
+  const closeListeners: Array<(reason: string) => void> = [];
   // Issue #1051 — fires every time this side receives a PONG. Consumed
   // by `routes/agent-bridge.ts`'s `trackBridge` to stamp `lastPongAt`
   // on the `ConnectedBridge` entry so `pickBridge` can prefer bridges
@@ -600,7 +606,7 @@ export function createMuxConnection(
     socket.send(frame);
   }
 
-  function teardown(): void {
+  function teardown(reason: string): void {
     if (closed) return;
     closed = true;
     if (pingTimer !== null) clearInterval(pingTimer);
@@ -611,7 +617,7 @@ export function createMuxConnection(
     pendingOpens.clear();
     for (const channel of channels.values()) channel.closeLocally();
     channels.clear();
-    for (const listener of closeListeners) invokeListener(listener);
+    for (const listener of closeListeners) invokeListener(listener, reason);
   }
 
   // Removes a locally-closed channel from `channels` — see `ChannelImpl`'s
@@ -815,8 +821,21 @@ export function createMuxConnection(
   }
 
   socket.on("message", handleMessage);
-  socket.on("close", teardown);
-  socket.on("error", teardown);
+  socket.on("close", (code, reason) => {
+    // `reason` is typed as an always-present `Buffer` by `ws`'s own types,
+    // but test doubles standing in for a WebSocket elsewhere in this
+    // codebase emit "close" with no arguments at all — guarded rather than
+    // trusted, since a malformed reason here must not crash the teardown
+    // path it's only meant to describe.
+    const reasonText = reason && reason.length > 0 ? `, reason=${reason}` : "";
+    teardown(`socket closed (code=${code}${reasonText})`);
+  });
+  socket.on("error", (err) => {
+    // Real `ws` always supplies an `Error` here — guarded anyway for the
+    // same reason the "close" handler above guards `reason`: a WS-shaped
+    // test double emitting a bare "error" must not crash teardown.
+    teardown(`socket error: ${err?.message ?? "unknown error"}`);
+  });
 
   // Liveness: a stalled TCP connection (laptop sleep, network drop without
   // a clean FIN) can leave a WebSocket reporting OPEN indefinitely with no
@@ -831,7 +850,7 @@ export function createMuxConnection(
     if (pongTimeoutTimer !== null) clearTimeout(pongTimeoutTimer);
     pongTimeoutTimer = setTimeout(() => {
       socket.terminate();
-      teardown();
+      teardown("pong timeout");
     }, PONG_TIMEOUT_MS);
     pongTimeoutTimer.unref?.();
   }, PING_INTERVAL_MS);
@@ -857,7 +876,7 @@ export function createMuxConnection(
       if (socket.readyState === socket.OPEN || socket.readyState === socket.CONNECTING) {
         socket.close();
       }
-      teardown();
+      teardown("local close()");
     },
   };
 }
