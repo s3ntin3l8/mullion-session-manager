@@ -325,4 +325,27 @@ describe("DeviceManager.getOrCreate() — normal spawn path is unaffected", () =
     // BOOT_TIMEOUT_MS in the background after this test completes.
     await vi.waitFor(() => expect(device.toInfo().status).toBe("error"));
   });
+
+  it("still allocates a fresh port and bootstraps via systemd-run when the list-units query itself fails — 'unknown' liveness must not collapse to 'alive'", async () => {
+    listUnitsShouldError = true; // systemctl itself errors (e.g. ENOENT), not just "no matching scope"
+    const onPortAssigned = vi.fn();
+    const manager = buildManager({ onPortAssigned });
+
+    const device = await manager.getOrCreate({
+      id: "9",
+      avdName: "dev35",
+      label: null,
+      port: null,
+    });
+    expect(device.toInfo().status).toBe("starting");
+    // isScopeAlive() must have treated the failed liveness check as "not
+    // alive" (isDeviceAliveStateBatch maps a failed listing to "unknown",
+    // and isScopeAlive() only returns true for "alive") rather than
+    // throwing one of the reattach-path errors above or hanging — falls
+    // through to a normal spawn exactly like the no-surviving-scope case.
+    expect(systemdRunCalls).toHaveLength(1);
+    expect(onPortAssigned).toHaveBeenCalledWith("9", expect.any(Number));
+
+    await vi.waitFor(() => expect(device.toInfo().status).toBe("error"));
+  });
 });
