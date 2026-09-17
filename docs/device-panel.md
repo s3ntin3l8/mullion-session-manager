@@ -70,11 +70,20 @@ deliberately a **separate** implementation from `PtyManager`/
   restart-surviving device sitting untouched since boot (nobody has called
   `getOrCreate()` for it yet, so `reservePort()` never fired) still keeps its
   port out of the pool a brand-new device's fresh `spawn()` draws from.
+  `getOrCreate()` releases a pre-populated port again as soon as it can
+  positively confirm that device's own scope/process is actually gone (both
+  the no-scope-survived fallthrough and the scope-alive-but-adb-can't-see-it
+  branch above) — otherwise a device whose emulator died independently of
+  Mullion (a host reboot, a crash) while its row stayed `status: "active"`
+  would strand that pool slot for the rest of the process's lifetime.
   Populated synchronously (better-sqlite3, no plugin-registration ordering
-  issue) and skipped entirely on the multi-host "agent" role, where `app.db`
-  doesn't exist — same posture as `hooksPlugin`'s own `app.db ? ... :`
-  fallback (`src/plugins/hooks.ts`), since an agent host doesn't run
-  `DeviceManager` against a `devices` table it has no connection to anyway.
+  issue). Currently a no-op on the multi-host "agent" role: `devicePlugin`
+  registers there too, but with no `app.db` to read a persisted port from at
+  all (same `app.db ? ... :` fallback posture as `hooksPlugin`,
+  `src/plugins/hooks.ts`) — every `devices` row today is `hostId: "local"`
+  anyway (`src/routes/devices.ts` never sets it from a request), so this is
+  a latent gap rather than an active one, not a claim that the agent role is
+  unaffected in principle.
 - **Scope ownership**, unlike a session's, isn't anchored on a real dtach
   socket (an emulator has neither dtach nor a PTY) — `device-process.ts`
   makes `systemd-run` set the scope's `Description` explicitly to a

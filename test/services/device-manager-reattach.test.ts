@@ -143,7 +143,9 @@ function scopeAliveFor(id: string): void {
   listUnitsReply = [line(`crs-device-${INSTANCE_ID}-${id}.scope`, `mullion-device -m ${marker}`)];
 }
 
-function buildManager(overrides: { onPortAssigned?: ReturnType<typeof vi.fn> } = {}) {
+function buildManager(
+  overrides: { onPortAssigned?: ReturnType<typeof vi.fn>; initialPorts?: number[] } = {},
+) {
   return new DeviceManager({
     enabled: true,
     adbPath: "/usr/bin/adb",
@@ -153,6 +155,7 @@ function buildManager(overrides: { onPortAssigned?: ReturnType<typeof vi.fn> } =
     sessionsDir: SESSIONS_DIR,
     onSpawnError: vi.fn(),
     onPortAssigned: overrides.onPortAssigned,
+    initialPorts: overrides.initialPorts,
   });
 }
 
@@ -489,5 +492,55 @@ describe("DeviceManager.getOrCreate() — normal spawn path is unaffected", () =
     expect(received[0].type).toBe("configuration");
     expect(received[1].type).toBe("data");
     expect(mockReader.releaseLock).toHaveBeenCalled();
+  });
+});
+
+describe("DeviceManager — releasing an initialPorts-seeded port once it's confirmed unused (issue #1328 follow-up)", () => {
+  // initialPorts (DeviceManagerOptions' own doc comment) seeds
+  // allocatedPorts from every persisted "active" row at construction, but
+  // nothing ever calls reservePort() for that seeding — getOrCreate() itself
+  // has to release it again once it can positively confirm the device is
+  // actually gone, or the seeded port is permanently stranded for the rest
+  // of this process's lifetime the first time that device turns out to have
+  // died independently of Mullion (a host reboot, a crash) while its row
+  // stayed `status: "active"`.
+
+  it("releases a port pre-seeded via initialPorts once it's confirmed gone (not just unreachable) — a later, unrelated fresh spawn() can reuse it", async () => {
+    scopeAliveFor("7");
+    mockGetDevicesShouldFail = false;
+    mockAdbDevices = []; // confirmed gone, not just unreachable
+    const onPortAssigned = vi.fn();
+    const manager = buildManager({ initialPorts: [5554], onPortAssigned });
+
+    await expect(
+      manager.getOrCreate({ id: "7", avdName: "dev35", label: null, port: 5554 }),
+    ).rejects.toThrow(/no longer reachable over adb/);
+
+    // A brand-new, unrelated device with no surviving scope of its own.
+    // mockGetDevicesShouldFail resets to true here so its own spawn() fails
+    // fast on waitForAdbSerial's first poll, rather than looping for up to
+    // BOOT_TIMEOUT_MS in the background after this test completes.
+    listUnitsReply = [];
+    mockGetDevicesShouldFail = true;
+    await manager.getOrCreate({ id: "8", avdName: "dev35", label: null, port: null });
+
+    // EMULATOR_PORT_BASE (5554) came back — released above, not
+    // permanently stranded in allocatedPorts for the rest of the process.
+    expect(onPortAssigned).toHaveBeenCalledWith("8", 5554);
+  });
+
+  it("releases a port pre-seeded via initialPorts when no scope survived for that id at all — a fresh spawn() reuses the SAME port rather than skipping past it", async () => {
+    listUnitsReply = []; // no surviving scope for id "7" whatsoever
+    const onPortAssigned = vi.fn();
+    const manager = buildManager({ initialPorts: [5554], onPortAssigned });
+
+    await manager.getOrCreate({ id: "7", avdName: "dev35", label: null, port: 5554 });
+
+    // EMULATOR_PORT_BASE (5554) — the very port this row was pre-seeded
+    // with — comes right back: released before allocatePort() ran, instead
+    // of being permanently stranded because nothing else here was ever
+    // going to release it.
+    expect(onPortAssigned).toHaveBeenCalledWith("7", 5554);
+    expect(systemdRunCalls).toHaveLength(1);
   });
 });

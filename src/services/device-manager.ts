@@ -80,7 +80,17 @@ export interface DeviceManagerOptions {
    * otherwise be invisible to allocatePort()'s round-robin scan, letting a
    * concurrent brand-new device's spawn() claim its still-bound port. Absent
    * (empty) on the multi-host "agent" role, where app.db doesn't exist — see
-   * this field's caller in device.ts. */
+   * this field's caller in device.ts.
+   *
+   * Nothing here ever calls reservePort() for a device seeded this way, so
+   * getOrCreate() itself is responsible for releasing a seeded port again
+   * once it can positively confirm that device's own scope/process is gone
+   * — see its own two releasePort() call sites (the no-scope-survived
+   * fallthrough and the scope-alive-but-adb-can't-see-it branch). Skipping
+   * that release would strand the port for the rest of this process's
+   * lifetime the first time a device seeded here turns out to have actually
+   * died independently of Mullion (a host reboot, a crash) while its row
+   * stayed `status: "active"`. */
   initialPorts?: number[];
 }
 
@@ -573,6 +583,14 @@ export class DeviceManager {
         const instanceId = deriveInstanceId(this.opts.sessionsDir);
         await stopDeviceScope(this.opts.sessionsDir, instanceId, opts.id).catch(() => {});
         removeDeviceMarker(this.opts.sessionsDir, opts.id);
+        // `port` may be reserved with nothing ever having called
+        // reservePort() for THIS attempt — DeviceManagerOptions.initialPorts
+        // pre-seeds it at construction from every persisted `active` row,
+        // this device's included. Now confirmed gone, so it's genuinely
+        // free; leaving it reserved would strand a pool slot for the rest of
+        // this process's lifetime (releasePort() is a no-op if it was never
+        // actually reserved).
+        this.releasePort(port);
         throw new Error(
           `device ${opts.id}'s emulator (${serial}) is no longer reachable over adb — the ` +
             `emulator process itself must have exited, not just Mullion`,
@@ -595,6 +613,18 @@ export class DeviceManager {
       return device;
     }
 
+    // isScopeAlive() above just confirmed NO scope survives for this id at
+    // all — if opts.port is set, it's a persisted value from a device whose
+    // scope died independently of Mullion (a host reboot, a crash) while its
+    // DB row stayed `status: "active"`. initialPorts (see that field's own
+    // comment) pre-seeded it into allocatedPorts at construction with
+    // nothing else ever tied to release it; freeing it here, before
+    // allocating fresh, keeps it from permanently stranding a pool slot for
+    // the rest of this process's lifetime. No-op if it was never actually
+    // reserved.
+    if (opts.port !== null) {
+      this.releasePort(opts.port);
+    }
     const port = this.allocatePort();
     const device = new Device(opts, this.opts, this.serverClient, this.releasePort.bind(this));
     this.devices.set(opts.id, device);
