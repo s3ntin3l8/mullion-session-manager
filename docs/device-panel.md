@@ -38,14 +38,21 @@ deliberately a **separate** implementation from `PtyManager`/
   comment on why immediately rather than after boot succeeds). When
   `getOrCreate()` finds a scope still running (`isScopeAlive()`) with no
   in-memory `Device` to represent it, it reconstructs the `emulator-<port>`
-  serial from that persisted port and attaches a **fresh** `AdbScrcpyClient`
-  to the already-running emulator (`Device.attach()`) — skipping
+  serial from that persisted port and confirms the serial is still live on
+  `adb devices` — awaited, so a confirmed-gone process (the emulator itself
+  died, not just Mullion) rejects `getOrCreate()` immediately with a clear
+  error, the same way the WS route already surfaces a getOrCreate() failure
+  to the client, rather than hanging in a boot-wait poll loop that was never
+  going to succeed or failing silently inside a fire-and-forget call the
+  route would never observe. Once confirmed alive, it attaches a **fresh**
+  `AdbScrcpyClient` to the already-running emulator (`Device.attach()`,
+  fire-and-forget from here on, same as a normal spawn) — skipping
   `systemd-run`/`buildDeviceLaunchPlan`/`touchDeviceMarker` entirely, since
   the emulator process itself is already up; only the adb+scrcpy connection
-  needs (re)establishing. If the persisted port has no live `adb devices`
-  entry at all (the emulator process itself died, not just Mullion),
-  `attach()` fails immediately with a clear error rather than hanging in a
-  boot-wait poll loop that was never going to succeed. The only case that
+  needs (re)establishing. A failure past this point (a transient adb hiccup,
+  say) never stops the scope — `attach()` didn't create it, and the process
+  is already confirmed alive, so only the connection attempt itself gets
+  torn down; a later `getOrCreate()` call simply retries. The only case that
   still needs a manual `systemctl --user stop` is a scope that survived with
   **no persisted port to reattach with** (a row from before this column
   existed, or one whose `Device` never got far enough to record one) —
