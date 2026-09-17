@@ -235,6 +235,37 @@ agent's own loopback, never pivot into its LAN.
   (the default), gateway forwardAuth remains the only thing standing between
   an open preview subdomain and the dev server behind it.
 
+## Verifying the preview router
+
+If a preview behind a gateway-forwardAuth Authentik outpost fails to load —
+Chrome reporting "This content is blocked", or a redirect loop back to
+Authentik's login screen — check the outpost's own logs before assuming a
+Mullion bug. The confirmed signature is an `invalid state` error alongside a
+session-ID mismatch line reading `mismatched session ID … should:""`; the
+empty `should:` value is diagnostic — it means the OAuth `state` cookie
+Authentik set never reached the callback host at all, not that Mullion sent
+the wrong one.
+
+Root cause, confirmed upstream and **not** fixable from this repo: on an
+outpost that fronts more than one Provider, `goauthentik/authentik`'s
+`filesystemstore.GetPersistentStore` returns a single process-wide store,
+and each Provider's own `getStore` call overwrites `globalStore.Options.Domain`
+on it — so only the last Provider loaded gets its `cookie_domain`
+applied, and every other Provider's login flow sets a state cookie scoped to
+the wrong domain. Filed upstream as
+[goauthentik/authentik#26228](https://github.com/goauthentik/authentik/issues/26228),
+with repro steps and source citations
+(`session.go:53-72`, `filesystemstore.go:167-195`).
+
+There is no workaround on Mullion's side — the bug lives in the outpost's
+shared session store, before any request reaches Mullion. If you hit this
+signature on a deployment that still routes preview auth through an
+Authentik outpost fronting multiple Providers, the fix is to stop depending
+on gateway forwardAuth for previews and set `PREVIEW_AUTH_REQUIRED=true`
+instead (issue #383, Setup step 5 above), so Mullion's own bootstrap-token
+flow handles preview auth in-process and bypasses the outpost's singleton
+store entirely.
+
 ## Current limitations
 
 - Direct-embed mode can't show an `http://` dev server once Mullion itself
