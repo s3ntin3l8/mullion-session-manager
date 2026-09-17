@@ -1029,7 +1029,87 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
             headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
           });
           expect(res.statusCode).toBe(401);
-          expect(res.body).toContain('<a href="https://mullion.test/?a=1&amp;b=2">');
+          expect(res.body).toContain(
+            '<a id="mullion-preview-dashboard-link" href="https://mullion.test/?a=1&amp;b=2">',
+          );
+          await app.close();
+        } finally {
+          delete process.env.PREVIEW_AUTH_DASHBOARD_URL;
+        }
+      });
+
+      // Issue #1316 — an already-authenticated dashboard session can
+      // complete the bootstrap-token exchange itself instead of the visitor
+      // manually re-finding this preview in the dashboard's own UI: the 401
+      // body's script rewrites the plain dashboardUrl link above to point at
+      // routes/previews.ts's GET /api/previews/:slug/open, using only the
+      // dashboard URL's origin (any path component is discarded) plus a
+      // slug it reads client-side, never one embedded server-side.
+      it("401 body's inline script points the link at the dashboard origin's open-preview route, with no server-side slug", async () => {
+        process.env.PREVIEW_AUTH_DASHBOARD_URL = "https://mullion.test/some/path?a=1";
+        try {
+          const app = await buildApp();
+          const projectId = await createProjectWithDevServer(
+            app,
+            String(stubPort),
+            DASHBOARD_AUTH_HEADERS,
+          );
+          const slug = await createProjectPreview(app, projectId, DASHBOARD_AUTH_HEADERS);
+
+          const res = await app.inject({
+            method: "GET",
+            url: "/",
+            headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
+          });
+          expect(res.statusCode).toBe(401);
+          const scriptMatch = res.body.match(/<script nonce="[^"]+">.*<\/script>/);
+          expect(scriptMatch).not.toBeNull();
+          const script = scriptMatch![0];
+          expect(script).toContain('"https://mullion.test"');
+          // Only the dashboard URL's origin is embedded — its path/query is
+          // discarded (see buildPreviewAuthUnauthorizedHtml's own comment),
+          // and no slug is server-templated in at all (see this file's
+          // own doc comment above).
+          expect(script).not.toContain("/some/path");
+          expect(script).not.toContain(slug);
+          expect(script).toContain('"/api/previews/"+encodeURIComponent(m[1])+"/open"');
+          await app.close();
+        } finally {
+          delete process.env.PREVIEW_AUTH_DASHBOARD_URL;
+        }
+      });
+
+      // Blocker from round 1 review: the inline <script> above is only ever
+      // executed by a real browser if this response's own
+      // content-security-policy header permits it — app.inject() doesn't
+      // enforce CSP at all, so a passing body/script assertion alone proved
+      // nothing about whether a browser would actually run it. This pins
+      // the header itself: a nonce that matches the one embedded in the
+      // script tag, and no 'unsafe-inline' (which would defeat the point of
+      // scoping this to one response).
+      it("401 response's own content-security-policy header permits exactly the embedded script nonce, scoped to this response only", async () => {
+        process.env.PREVIEW_AUTH_DASHBOARD_URL = "https://mullion.test";
+        try {
+          const app = await buildApp();
+          const projectId = await createProjectWithDevServer(
+            app,
+            String(stubPort),
+            DASHBOARD_AUTH_HEADERS,
+          );
+          const slug = await createProjectPreview(app, projectId, DASHBOARD_AUTH_HEADERS);
+
+          const res = await app.inject({
+            method: "GET",
+            url: "/",
+            headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
+          });
+          expect(res.statusCode).toBe(401);
+          const nonceMatch = res.body.match(/<script nonce="([^"]+)">/);
+          expect(nonceMatch).not.toBeNull();
+          const nonce = nonceMatch![1];
+          const csp = res.headers["content-security-policy"] as string;
+          expect(csp).toContain(`'nonce-${nonce}'`);
+          expect(csp).not.toMatch(/script-src[^;]*'unsafe-inline'/);
           await app.close();
         } finally {
           delete process.env.PREVIEW_AUTH_DASHBOARD_URL;

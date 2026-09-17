@@ -264,14 +264,62 @@ HTML response (no Host-derived content interpolated into it, since the Host
 header is attacker-controllable) explaining that the preview needs to be
 opened from the dashboard, with a link back to it when
 `PREVIEW_AUTH_DASHBOARD_URL` is configured (issue #1310 — see
-[`configuration.md`](configuration.md)). This can't auto-authenticate that
-navigation, only point the way back manually: the dashboard's own session
-cookie lives on a different origin than the preview subdomain, which is the
-whole reason the bootstrap-token scheme above exists rather than the preview
-proxy just trusting that cookie directly. Automatically completing that
-exchange for an already-authenticated dashboard visitor is tracked
-separately (issue #1316) rather than folded in here, since it needs its own
-review of the redirect target to avoid opening an open-redirect.
+[`configuration.md`](configuration.md)). The dashboard's own session cookie
+lives on a different origin than the preview subdomain — the whole reason
+the bootstrap-token scheme above exists rather than the preview proxy just
+trusting that cookie directly — so this page can't read it directly either.
+Instead (issue #1316), an inline script on the 401 page itself rewrites that
+plain dashboard link, client-side, to point at
+`GET /api/previews/:slug/open` on the dashboard's own origin instead of at
+`PREVIEW_AUTH_DASHBOARD_URL` directly. That script only runs in a real
+browser because the 401 response carries a per-response
+`content-security-policy` header naming that one inline script's nonce —
+overriding the strict, no-inline-script-anywhere-else policy
+`src/plugins/security.ts` sets app-wide (`src/plugins/preview-proxy.ts`'s
+`buildPreviewAuthUnauthorizedHtml`/`generateCspNonce`); `app.inject()`-based
+tests can't see this distinction (they don't enforce CSP at all), which is
+why this was initially missed and had to be added in review.
+
+1. The script reads the preview slug from `location.hostname` in the
+   visitor's own browser — never server-templated into the 401 response
+   itself, preserving the same "nothing Host-derived in this body" property
+   the plain static page already had.
+2. Clicking the (now-rewritten) link is a same-site, top-level GET
+   navigation to the dashboard's own origin, which is what makes the
+   dashboard's session cookie available at all (a `fetch()` from this page
+   couldn't carry it — see above). `GET /api/previews/:slug/open`
+   (`src/routes/previews.ts`) is exempted from `src/plugins/auth.ts`'s
+   generic `/api/*` gate and instead checks the same credential
+   (`isRequestAuthenticated`) itself, so it can respond differently on
+   failure than that gate's plain JSON body — see point 4.
+3. If that request is authenticated, the route mints a bootstrap token
+   exactly like `POST /api/previews/:slug/token` does and 302-redirects
+   straight back to this same preview with the token attached — completing
+   the exchange without the visitor ever having to manually re-find this
+   preview in the dashboard's own UI.
+4. If it isn't, the route redirects to `PREVIEW_AUTH_DASHBOARD_URL` itself
+   (the same URL the 401 page's own link already points at) rather than
+   returning the generic gate's raw JSON 401 — a `<a href>` navigation has no
+   script running to interpret a JSON body, so that would otherwise be a
+   dead end indistinguishable from a broken link. Only when
+   `PREVIEW_AUTH_DASHBOARD_URL` itself is unset (so there's truly nowhere
+   else to send the visitor — and per point 1's rewrite, the link couldn't
+   have pointed here in the first place without it configured) does the
+   route fall back to that same plain-JSON 401.
+
+This is deliberately click-driven, not automatic: the 401 page's default
+content and behavior are unchanged for a visitor with no dashboard session
+(or with JavaScript disabled) — clicking the link either way lands them on
+the dashboard, now just via a route that also completes the token exchange
+if it can. The open-redirect surface here is narrow by construction: the
+post-authentication redirect target's host is always
+`preview-<slug>.<PREVIEW_BASE_HOST>`, built from `PREVIEW_BASE_HOST` (fixed
+server config) and the resolved preview row's own `slug` column — never
+from the request's `:slug` param directly — so an unauthenticated caller
+can't steer it anywhere else, and an authenticated one already had
+equivalent reach via the pre-existing `POST /token` route. The
+unauthenticated-fallback redirect target is `PREVIEW_AUTH_DASHBOARD_URL`
+itself — operator-set, boot-time-validated config, never request-derived.
 
 **Opt-in, default off**: turning this on breaks direct/bookmarked navigation
 straight to a preview URL, since there's no bootstrap token in that case —

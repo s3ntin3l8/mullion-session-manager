@@ -122,7 +122,14 @@ steps below are only for turning on the subdomain proxy.
    navigation straight to a preview URL 401s with no bootstrap token to
    redeem — set `PREVIEW_AUTH_DASHBOARD_URL` (issue #1310, see
    [`configuration.md`](configuration.md)) so that 401 page can at least
-   link back to the dashboard instead of being a dead end.
+   link back to the dashboard instead of being a dead end. If the visitor
+   already has an authenticated dashboard session, clicking that link
+   completes the token exchange automatically and lands them straight back
+   on the preview (issue #1316, see [`auth.md`](auth.md)'s Preview-host auth
+   token section) — with no dashboard session, that same click is now a
+   normal top-level navigation to `PREVIEW_AUTH_DASHBOARD_URL` (a redirect,
+   not the raw-JSON 401 an unauthenticated `fetch()` to a protected `/api/*`
+   route gets), landing the visitor on the dashboard to sign in.
 
    **"Same middleware" is not the same thing as "same session," and this has
    bitten a real deployment.** Referencing the identical Traefik middleware
