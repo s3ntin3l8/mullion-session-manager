@@ -137,6 +137,26 @@ describe("BrowserPanel", () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
+  it("refuses to embed a project devServerUrl with a dangerous scheme (CodeQL: js/xss-through-dom)", async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(
+        jsonResponse(200, { ...SERVER_INFO_BASE, previewsEnabled: false, previewBaseHost: "" }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    useDashboardStore.setState({
+      projects: [{ ...PROJECT, devServerUrl: "javascript:alert(document.domain)" }],
+    });
+
+    render(<BrowserPanel params={{ projectId: 1 }} />);
+
+    expect(await screen.findByText(/scheme can't be previewed/i)).toBeInTheDocument();
+    expect(screen.queryByTitle("Preview")).not.toBeInTheDocument();
+    // A dangerous scheme is a settings problem, not a transient one — a
+    // reload would just re-run the identical, still-dangerous URL.
+    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+  });
+
   it("also embeds directly if previewsEnabled is true but previewBaseHost is somehow empty", async () => {
     // Defensive-only case (Hermes review, PR #46): server-info's two fields
     // should never actually disagree (previewsEnabled is derived from

@@ -20,7 +20,10 @@ export interface BrowserPanelParams {
 type BrowserPanelState =
   | { status: "empty" }
   | { status: "loading" }
-  | { status: "unavailable"; message: string }
+  // retryable defaults to true (see canRetry below) — only set false for an
+  // error a reload can never fix, e.g. a dangerous devServerUrl scheme that
+  // will just get rejected identically on every retry.
+  | { status: "unavailable"; message: string; retryable?: boolean }
   | { status: "ready"; src: string };
 
 function isDangerousIframeSrc(url: string): boolean {
@@ -215,8 +218,24 @@ export function BrowserPanel({
           const info = await api.getServerInfo();
           if (cancelled) return;
           if (!info.previewsEnabled || !info.previewBaseHost) {
+            // Unlike the resolvePreviewUrl() paths (saved URLs, external URLs,
+            // Follow Agent), this previewsEnabled=false fallback embeds
+            // devServerUrl directly without going through that function's own
+            // isDangerousIframeSrc gate — it's project-settings-sourced rather
+            // than freshly typed, but the iframe sink shouldn't trust that;
+            // check it here too (CodeQL js/xss-through-dom, BrowserPanel.tsx
+            // iframe src).
+            if (isDangerousIframeSrc(devServerUrl)) {
+              setPreviewViaProxy(false);
+              setFetchState({
+                status: "unavailable",
+                message: "This dev server URL's scheme can't be previewed here.",
+                retryable: false,
+              });
+              return;
+            }
             setPreviewViaProxy(false);
-            setFetchState({ status: "ready", src: devServerUrl! });
+            setFetchState({ status: "ready", src: devServerUrl });
             return;
           }
           const preview = await api.createProjectPreview(projectId!);
@@ -464,8 +483,11 @@ export function BrowserPanel({
     if (state.status === "unavailable") {
       // Retry only offered once there's actually a dev server/saved URL to
       // retry against — the sibling "no dev server URL configured" message
-      // above needs a settings change, not a reload, to ever resolve.
-      const canRetry = !!devServerUrl || activeSavedUrlId !== null;
+      // above needs a settings change, not a reload, to ever resolve. Same
+      // for state.retryable === false (e.g. a dangerous devServerUrl scheme):
+      // a reload re-runs the identical, still-dangerous URL through the same
+      // check every time.
+      const canRetry = (!!devServerUrl || activeSavedUrlId !== null) && state.retryable !== false;
       return (
         <div className="browser-panel-empty">
           <div>{state.message}</div>
