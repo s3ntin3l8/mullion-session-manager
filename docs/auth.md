@@ -261,7 +261,17 @@ transaction cookies already use:
 
 A request with neither a valid token nor a valid cookie gets a static 401
 HTML response (no Host-derived content interpolated into it, since the Host
-header is attacker-controllable).
+header is attacker-controllable) explaining that the preview needs to be
+opened from the dashboard, with a link back to it when
+`PREVIEW_AUTH_DASHBOARD_URL` is configured (issue #1310 — see
+[`configuration.md`](configuration.md)). This can't auto-authenticate that
+navigation, only point the way back manually: the dashboard's own session
+cookie lives on a different origin than the preview subdomain, which is the
+whole reason the bootstrap-token scheme above exists rather than the preview
+proxy just trusting that cookie directly. Automatically completing that
+exchange for an already-authenticated dashboard visitor is tracked
+separately (issue #1316) rather than folded in here, since it needs its own
+review of the redirect target to avoid opening an open-redirect.
 
 **Opt-in, default off**: turning this on breaks direct/bookmarked navigation
 straight to a preview URL, since there's no bootstrap token in that case —

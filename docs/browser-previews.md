@@ -117,7 +117,12 @@ steps below are only for turning on the subdomain proxy.
    `PREVIEW_AUTH_REQUIRED=true` is set (issue #383 — see [`auth.md`](auth.md)).
    Gateway forwardAuth is still the default/only option when that flag is
    off: without either one, every preview subdomain is an open,
-   unauthenticated proxy into whatever it's pointed at.
+   unauthenticated proxy into whatever it's pointed at. With
+   `PREVIEW_AUTH_REQUIRED=true` and no gateway in front, a bookmarked/direct
+   navigation straight to a preview URL 401s with no bootstrap token to
+   redeem — set `PREVIEW_AUTH_DASHBOARD_URL` (issue #1310, see
+   [`configuration.md`](configuration.md)) so that 401 page can at least
+   link back to the dashboard instead of being a dead end.
 
    **"Same middleware" is not the same thing as "same session," and this has
    bitten a real deployment.** Referencing the identical Traefik middleware
@@ -292,6 +297,37 @@ agent's own loopback, never pivot into its LAN.
   (the default), gateway forwardAuth remains the only thing standing between
   an open preview subdomain and the dev server behind it.
 
+## Verifying the preview router
+
+If a preview behind a gateway-forwardAuth Authentik outpost fails to load —
+Chrome reporting "This content is blocked", or a redirect loop back to
+Authentik's login screen — check the outpost's own logs before assuming a
+Mullion bug. The confirmed signature is an `invalid state` error alongside a
+session-ID mismatch line reading `mismatched session ID … should:""`; the
+empty `should:` value is diagnostic — it means the OAuth `state` cookie
+Authentik set never reached the callback host at all, not that Mullion sent
+the wrong one.
+
+Root cause, confirmed upstream and **not** fixable from this repo: on an
+outpost that fronts more than one Provider, `goauthentik/authentik`'s
+`filesystemstore.GetPersistentStore` returns a single process-wide store,
+and each Provider's own `getStore` call overwrites `globalStore.Options.Domain`
+on it — so only the last Provider loaded gets its `cookie_domain`
+applied, and every other Provider's login flow sets a state cookie scoped to
+the wrong domain. Filed upstream as
+[goauthentik/authentik#26228](https://github.com/goauthentik/authentik/issues/26228),
+with repro steps and source citations
+(`session.go:53-72`, `filesystemstore.go:167-195`).
+
+There is no workaround on Mullion's side — the bug lives in the outpost's
+shared session store, before any request reaches Mullion. If you hit this
+signature on a deployment that still routes preview auth through an
+Authentik outpost fronting multiple Providers, the fix is to stop depending
+on gateway forwardAuth for previews and set `PREVIEW_AUTH_REQUIRED=true`
+instead (issue #383, Setup step 5 above), so Mullion's own bootstrap-token
+flow handles preview auth in-process and bypasses the outpost's singleton
+store entirely.
+
 ## Current limitations
 
 - Direct-embed mode can't show an `http://` dev server once Mullion itself
@@ -305,3 +341,17 @@ agent's own loopback, never pivot into its LAN.
   (same open question as `/ws/terminal` — see `deploy/README.md`).
 - Port auto-discovery only works for projects running on the primary
   itself; it has no visibility into a remote agent's terminal scrollback.
+- The dashboard's own preview pane (`frontend/src/BrowserPanel.tsx`) shows a
+  readable "Dev server not reachable" state (with a retry button) instead of
+  the iframe only for a project's own dev server preview, and only once
+  `getDevServerStatus` polling actually observes it offline — a cross-origin
+  iframe can't read the framed response's status code, so a proxy error that
+  isn't "dev server down" (unknown slug, a 401 from `PREVIEW_AUTH_REQUIRED`,
+  429 rate-limiting) still renders as the raw JSON/HTML the proxy returned.
+  Detecting those from the parent page would need CORS headers on the
+  proxy's own error responses (safe to add, since those are Mullion's own
+  content, never the dev server's) — not done here; tracked in issue #1318.
+  The same "not reachable" state is deliberately _not_ shown for
+  a saved URL or the no-proxy direct-embed fallback (`previewsEnabled`
+  false): those already surface a connection failure via the iframe's own
+  browser-native error page plus the toolbar's online/offline dot.

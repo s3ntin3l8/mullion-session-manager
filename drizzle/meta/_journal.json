@@ -477,6 +477,13 @@
       "when": 1789160984992,
       "tag": "0067_hesitant_anthem",
       "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "6",
+      "when": 1789638072825,
+      "tag": "0068_early_pyro",
+      "breakpoints": true
     }
   ]
 }
