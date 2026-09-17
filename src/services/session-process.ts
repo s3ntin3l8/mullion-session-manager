@@ -130,8 +130,13 @@ export function scopeUnitName(instanceId: string, id: string): string {
 // class of call; KILL_ESCALATION_MS mirrors every other spawn-with-timeout
 // helper in this repo (git-status.ts, agent-detect.ts, ...) — SIGTERM first,
 // SIGKILL only if the process is still alive after a short grace period.
-const SYSTEMCTL_TIMEOUT_MS = 5_000;
-const KILL_ESCALATION_MS = 2_000;
+// Exported — device-process.ts (the devices/AVD analogue of this module,
+// same "crs-<kind>-<instanceId>-<id>" scope-naming/ownership shape, a
+// deliberately separate module rather than a generalization of this
+// high-risk one, see that file's own header) reuses this budget and the
+// escalation helper below rather than hand-copying them and risking drift.
+export const SYSTEMCTL_TIMEOUT_MS = 5_000;
+export const KILL_ESCALATION_MS = 2_000;
 
 /**
  * Arms the SIGTERM-then-SIGKILL escalation every timed spawn below needs —
@@ -151,7 +156,9 @@ const KILL_ESCALATION_MS = 2_000;
  * either way: clearing an already-fired `timeoutMs` timer is a no-op: only
  * the still-pending escalation timer, if any, actually gets cancelled.
  */
-function armKillEscalation(
+// Exported for device-process.ts's reuse — see the SYSTEMCTL_TIMEOUT_MS
+// comment above. No behavior change; this function is otherwise unmodified.
+export function armKillEscalation(
   child: Pick<ChildProcess, "kill" | "exitCode" | "signalCode">,
   timeoutMs: number,
   onTimeout: () => void,

@@ -810,5 +810,66 @@ describe("MullionClient (issue #271)", () => {
         client.setProjectTooling({ projectId: "3", briefing: "x" }),
       ).rejects.toMatchObject({ status: 400, message: "validation failed" });
     });
+
+    describe("device methods (PR #1324)", () => {
+      it("listDevices calls device.list", async () => {
+        const socketPath = await startControlServer((msg, socket) => {
+          expect(msg.op).toBe("device.list");
+          socket.write(`${JSON.stringify({ id: msg.id, ok: true, status: 200, result: [] })}\n`);
+        });
+        const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+        const result = await client.listDevices();
+        expect(result).toEqual([]);
+      });
+
+      it("getDevice calls device.get with deviceId", async () => {
+        const socketPath = await startControlServer((msg, socket) => {
+          expect(msg.op).toBe("device.get");
+          expect(msg.body).toEqual({ deviceId: "42" });
+          socket.write(
+            `${JSON.stringify({ id: msg.id, ok: true, status: 200, result: { id: 42 } })}\n`,
+          );
+        });
+        const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+        const result = await client.getDevice("42");
+        expect(result).toEqual({ id: 42 });
+      });
+
+      it("createDevice calls device.create with body", async () => {
+        const socketPath = await startControlServer((msg, socket) => {
+          expect(msg.op).toBe("device.create");
+          expect(msg.body).toEqual({ avdName: "dev35" });
+          socket.write(
+            `${JSON.stringify({ id: msg.id, ok: true, status: 201, result: { id: 1 } })}\n`,
+          );
+        });
+        const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+        const result = await client.createDevice({ avdName: "dev35" });
+        expect(result).toEqual({ id: 1 });
+      });
+
+      it("terminateDevice calls device.terminate with deviceId", async () => {
+        const socketPath = await startControlServer((msg, socket) => {
+          expect(msg.op).toBe("device.terminate");
+          expect(msg.body).toEqual({ deviceId: "1" });
+          socket.write(`${JSON.stringify({ id: msg.id, ok: true, status: 204 })}\n`);
+        });
+        const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+        await client.terminateDevice("1");
+      });
+
+      it("deviceAction calls device.action with deviceId and actionPayload", async () => {
+        const socketPath = await startControlServer((msg, socket) => {
+          expect(msg.op).toBe("device.action");
+          expect(msg.body).toEqual({ deviceId: "1", action: "screenshot" });
+          socket.write(
+            `${JSON.stringify({ id: msg.id, ok: true, status: 200, result: { screenshot: "abc" } })}\n`,
+          );
+        });
+        const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+        const result = await client.deviceAction("1", { action: "screenshot" });
+        expect(result).toEqual({ screenshot: "abc" });
+      });
+    });
   });
 });

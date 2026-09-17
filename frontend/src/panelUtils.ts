@@ -7,7 +7,7 @@ import type {
 } from "dockview";
 import type { Task, Workspace, TabletPaneCap, CodexHookTrust } from "./api/index.js";
 import { positionToDirection } from "dockview";
-import type { Session } from "./api/index.js";
+import type { Session, Device } from "./api/index.js";
 import { initialPaneTitle } from "./paneTitle.js";
 import type { LayoutContext, LayoutTier } from "./lib/layoutTier.js";
 
@@ -506,6 +506,30 @@ export function openBrowserPanePanel(
     component: "browserPane",
     title: `Agent Browser: ${session.name || session.command}`,
     params: { sessionId: session.id },
+    ...positioningForTier(api, layout),
+  });
+  if (layout.tier === "phone") maximizeIfTiled(api, panel);
+}
+
+// Opens (or focuses) a device's video/input panel (DevicePane.tsx, routes/
+// device.ts) — same open-or-focus-by-stable-id and tier-positioned shape as
+// openBrowserPanePanel above. A `device-<id>` panel id, not tied to any
+// session (a device is host-global, unlike a browser pane's per-project
+// binding — see the `devices` table's own schema.ts comment).
+export function openDevicePanel(api: DockviewApi, device: Device, layout: LayoutContext): void {
+  const panelId = `device-${device.id}`;
+  const existing = api.getPanel(panelId);
+  if (existing) {
+    existing.api.setActive();
+    if (layout.tier === "phone") maximizeIfTiled(api, existing);
+    return;
+  }
+
+  const panel = api.addPanel({
+    id: panelId,
+    component: "device",
+    title: device.name || device.avdName,
+    params: { deviceId: device.id },
     ...positioningForTier(api, layout),
   });
   if (layout.tier === "phone") maximizeIfTiled(api, panel);
