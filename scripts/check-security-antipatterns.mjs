@@ -60,17 +60,20 @@ export function scanFileForAntipatterns(filePath, content) {
       }
     }
 
-    // Check 2: Fastify CORS with credentials: true and origin: true / origin: '*' / regex /.*/
+    // Check 2: Fastify CORS with credentials: true and origin: true / origin: '*' / regex /.*/ or callback reflection
     if (/\bcredentials:\s*true\b/.test(strippedLine)) {
-      // Check surrounding lines (within 10 lines) for origin: true, origin: "*", or origin reflection
-      const windowStart = Math.max(0, i - 5);
-      const windowEnd = Math.min(strippedLines.length, i + 6);
+      // Check surrounding lines for origin: true, origin: "*", regex, or reflection callback cb(null, true)
+      const windowStart = Math.max(0, i - 8);
+      const windowEnd = Math.min(strippedLines.length, i + 9);
       const windowContent = strippedLines.slice(windowStart, windowEnd).join("\n");
 
-      if (
-        /origin:\s*(true|\*|['"]\*['"]|\/\.\*\/)/.test(windowContent) &&
-        !line.includes("pragma: allowlist cors-credentials")
-      ) {
+      const hasDangerousOrigin =
+        /origin:\s*(true|\*|['"]\*['"]|\/\.\*\/)/.test(windowContent) ||
+        /cb\(\s*null\s*,\s*true\s*\)/.test(windowContent) ||
+        /cb\(\s*undefined\s*,\s*true\s*\)/.test(windowContent) ||
+        /origin:\s*\([^)]*\)\s*=>\s*true/.test(windowContent);
+
+      if (hasDangerousOrigin && !line.includes("pragma: allowlist cors-credentials")) {
         findings.push({
           file: filePath,
           line: i + 1,
@@ -96,10 +99,8 @@ export function scanDirectory(dir) {
 }
 
 // Direct execution
-const isMain = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
-
-if (isMain) {
-  const targetDir = process.argv[2] ? path.resolve(process.argv[2]) : path.join(root, "src");
+export function cli(args = process.argv.slice(2)) {
+  const targetDir = args[0] ? path.resolve(args[0]) : path.join(root, "src");
   const findings = scanDirectory(targetDir);
 
   if (findings.length > 0) {
@@ -109,9 +110,15 @@ if (isMain) {
       console.error(`  ${relPath}:${f.line} [${f.rule}] ${f.message}`);
     }
     console.error("");
-    process.exit(1);
+    return 1;
   } else {
     console.log("OK — no security anti-patterns detected in source files.");
-    process.exit(0);
+    return 0;
   }
+}
+
+const isMain = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
+
+if (isMain) {
+  process.exit(cli());
 }

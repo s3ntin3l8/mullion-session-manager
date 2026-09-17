@@ -1338,6 +1338,36 @@ async function attemptAutoRebase(
     }
   }
 
+  if (task.reviewSessionId !== null) {
+    const [reviewSession] = app.db
+      .select()
+      .from(sessions)
+      .where(eq(sessions.id, task.reviewSessionId))
+      .all();
+    if (reviewSession?.status === "active") {
+      try {
+        await backend.terminate(String(task.reviewSessionId));
+        app.db
+          .update(sessions)
+          .set({ status: "killed" })
+          .where(eq(sessions.id, task.reviewSessionId))
+          .run();
+        closeSessionBrowserBindings(app, task.reviewSessionId);
+      } catch (err) {
+        app.log.warn(
+          { err, taskId: task.id, reviewSessionId: task.reviewSessionId },
+          "task auto-rebase: active review session could not be terminated, leaving it for a later tick",
+        );
+        recordMergeError(
+          app,
+          task.id,
+          "Conflicts with main — active review session could not be stopped for auto-rebase, needs manual resolution",
+        );
+        return;
+      }
+    }
+  }
+
   // task.branchName should always be set by this point (retryTask's own
   // reservation transaction refuses a null branchName before a task can
   // even reach "done"), but fall back the same way task-claim.ts's resume
@@ -1447,6 +1477,8 @@ async function attemptAutoRebase(
     .update(tasks)
     .set({
       sessionId: result.row.id,
+      reviewSessionId: null,
+      reviewFindingsIngestedSessionId: null,
       worktreePath: worktree.path,
       branchName: worktree.branch,
       seedDelivered,
@@ -2643,6 +2675,14 @@ async function attemptAutoApprove(
   if (await attemptReturnPrCommentsToWorker(app, task, project)) return;
   if (!current) return;
 
+  if (
+    task.reviewFindingsIngestedSessionId === null ||
+    task.reviewFindingsIngestedSessionId !== task.reviewSessionId
+  ) {
+    return;
+  }
+  if (task.lastReviewVerdict !== "clean") return;
+
   if (current.mergeable === false || current.mergeableState === "dirty") {
     if (project.autoApprove && task.rebaseAttempts < MAX_REBASE_ATTEMPTS) {
       await attemptAutoRebase(app, task, project, current.baseRef);
@@ -2658,15 +2698,7 @@ async function attemptAutoApprove(
     return;
   }
 
-  if (
-    task.reviewFindingsIngestedSessionId === null ||
-    task.reviewFindingsIngestedSessionId !== task.reviewSessionId
-  ) {
-    return;
-  }
-  if (task.lastReviewVerdict !== "clean") return;
-
-  if (!current || current.status !== "success") return;
+  if (current.status !== "success") return;
 
   const outcome = await approveTask(app, task, project, "auto-approve");
   if (outcome.ok) {

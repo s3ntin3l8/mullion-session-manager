@@ -3,7 +3,7 @@
 // Reads coverage/coverage-final.json (backend) and frontend/coverage/coverage-final.json (frontend).
 // Enforces minimum threshold (default 75%).
 
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,13 +11,22 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 export function resolveBaseRef(explicitRef) {
-  if (explicitRef) return explicitRef;
-  if (process.env.PATCH_BASE_REF) return process.env.PATCH_BASE_REF;
+  const sanitize = (ref) => {
+    if (!ref || typeof ref !== "string") return null;
+    const trimmed = ref.trim();
+    return /^[a-zA-Z0-9._~^/-]+$/.test(trimmed) ? trimmed : null;
+  };
+
+  const validExplicit = sanitize(explicitRef);
+  if (validExplicit) return validExplicit;
+
+  const envRef = sanitize(process.env.PATCH_BASE_REF);
+  if (envRef) return envRef;
 
   const candidates = ["origin/main", "main", "HEAD~1"];
   for (const ref of candidates) {
     try {
-      execSync(`git rev-parse --verify "${ref}"`, { cwd: root, stdio: "ignore" });
+      execFileSync("git", ["rev-parse", "--verify", ref], { cwd: root, stdio: "ignore" });
       return ref;
     } catch {
       // try next
@@ -115,20 +124,32 @@ export function evaluatePatchCoverage(modifiedFiles, coverageData) {
 
     if (!fileCoverage || !fileCoverage.statementMap) {
       // File modified but has no coverage entry at all.
-      // We check if it has code lines
+      // Check for executable lines, skipping imports, types, interfaces, and comments
       const absPath = path.join(root, relPath);
       if (existsSync(absPath)) {
         const fileContent = readFileSync(absPath, "utf8").split("\n");
         for (const lineNo of changedLines) {
           const lineText = fileContent[lineNo - 1];
+          if (!lineText) continue;
+          const trimmed = lineText.trim();
           if (
-            lineText &&
-            lineText.trim() &&
-            !lineText.trim().startsWith("//") &&
-            !lineText.trim().startsWith("/*")
+            !trimmed ||
+            trimmed.startsWith("//") ||
+            trimmed.startsWith("/*") ||
+            trimmed.startsWith("*") ||
+            trimmed.startsWith("import ") ||
+            trimmed.startsWith("export type ") ||
+            trimmed.startsWith("export interface ") ||
+            trimmed.startsWith("type ") ||
+            trimmed.startsWith("interface ") ||
+            trimmed === "}" ||
+            trimmed === "};" ||
+            trimmed === "})" ||
+            trimmed === "});"
           ) {
-            uncoveredLines.add(lineNo);
+            continue;
           }
+          uncoveredLines.add(lineNo);
         }
       }
     } else {
@@ -194,20 +215,26 @@ export function runPatchCoverageCheck(options = {}) {
   const baseRef = resolveBaseRef(options.baseRef);
 
   // Get git diff
-  let diffText;
-  try {
-    diffText = execSync(`git diff -U0 "${baseRef}"`, {
-      cwd: root,
-      encoding: "utf8",
-      maxBuffer: 10 * 1024 * 1024,
-    });
-  } catch (err) {
-    console.warn(`Failed to diff against ${baseRef}, falling back to HEAD~1:`, err.message);
-    diffText = execSync("git diff -U0 HEAD~1", {
-      cwd: root,
-      encoding: "utf8",
-      maxBuffer: 10 * 1024 * 1024,
-    });
+  let diffText = options.diffText;
+  if (diffText === undefined) {
+    try {
+      diffText = execFileSync("git", ["diff", "-U0", baseRef], {
+        cwd: root,
+        encoding: "utf8",
+        maxBuffer: 10 * 1024 * 1024,
+      });
+    } catch (err) {
+      console.warn(`Failed to diff against ${baseRef}, falling back to HEAD:`, err.message);
+      try {
+        diffText = execFileSync("git", ["diff", "-U0", "HEAD"], {
+          cwd: root,
+          encoding: "utf8",
+          maxBuffer: 10 * 1024 * 1024,
+        });
+      } catch {
+        diffText = "";
+      }
+    }
   }
 
   const modifiedFiles = parseGitDiffHunks(diffText);
@@ -220,7 +247,7 @@ export function runPatchCoverageCheck(options = {}) {
   if (Object.keys(coverageData).length === 0 && !options.noRun) {
     console.log("No coverage report found. Running tests with coverage first...");
     try {
-      execSync("npm run test:coverage", { cwd: root, stdio: "inherit" });
+      execFileSync("npm", ["run", "test:coverage"], { cwd: root, stdio: "inherit" });
       coverageData = loadCoverageReports();
     } catch (err) {
       console.error("Failed to run tests with coverage:", err.message);
@@ -256,8 +283,7 @@ export function runPatchCoverageCheck(options = {}) {
 // Direct execution
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
 
-if (isMain) {
-  const args = process.argv.slice(2);
+export function cli(args = process.argv.slice(2), testOptions = {}) {
   let threshold = 75.0;
   let baseRef = undefined;
   let noRun = false;
@@ -274,12 +300,16 @@ if (isMain) {
     }
   }
 
-  const res = runPatchCoverageCheck({ threshold, baseRef, noRun });
+  const res = runPatchCoverageCheck({ threshold, baseRef, noRun, ...testOptions });
   if (!res.ok) {
     console.error(
       `ERROR: Patch coverage ${res.overallPercent.toFixed(1)}% is below required ${threshold.toFixed(1)}% threshold.`,
     );
-    process.exit(1);
+    return 1;
   }
-  process.exit(0);
+  return 0;
+}
+
+if (isMain) {
+  process.exit(cli());
 }

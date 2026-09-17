@@ -1,8 +1,14 @@
+import { execFileSync } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+  cli,
   scanDirectory,
   scanFileForAntipatterns,
 } from "../../scripts/check-security-antipatterns.mjs";
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 describe("check-security-antipatterns", () => {
   it("flags Access-Control-Allow-Credentials set to true", () => {
@@ -36,6 +42,38 @@ describe("check-security-antipatterns", () => {
     });
   });
 
+  it("flags Fastify CORS callback reflection cb(null, true) with credentials: true", () => {
+    const code = `
+      fastify.register(cors, {
+        origin: (origin, cb) => {
+          cb(null, true);
+        },
+        credentials: true,
+      });
+    `;
+    const findings = scanFileForAntipatterns("cors-fn.ts", code);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({
+      file: "cors-fn.ts",
+      rule: "cors-misconfiguration-for-credentials",
+    });
+  });
+
+  it("flags Fastify CORS arrow returning true with credentials: true", () => {
+    const code = `
+      fastify.register(cors, {
+        origin: (origin) => true,
+        credentials: true,
+      });
+    `;
+    const findings = scanFileForAntipatterns("cors-arrow.ts", code);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({
+      file: "cors-arrow.ts",
+      rule: "cors-misconfiguration-for-credentials",
+    });
+  });
+
   it("ignores Access-Control-Allow-Credentials in comments", () => {
     const code = `
       // Responses do NOT set Access-Control-Allow-Credentials: true, so
@@ -57,5 +95,17 @@ describe("check-security-antipatterns", () => {
   it("scans current src directory cleanly", () => {
     const findings = scanDirectory(new URL("../../src", import.meta.url).pathname);
     expect(findings).toHaveLength(0);
+  });
+
+  it("executes CLI successfully on clean directory", () => {
+    const scriptPath = path.join(root, "scripts/check-security-antipatterns.mjs");
+    const output = execFileSync("node", [scriptPath, path.join(root, "src")], {
+      encoding: "utf8",
+    });
+    expect(output).toContain("OK — no security anti-patterns detected");
+  });
+
+  it("cli returns 0 on clean directory", () => {
+    expect(cli([path.join(root, "src")])).toBe(0);
   });
 });

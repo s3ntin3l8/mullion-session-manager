@@ -1,9 +1,17 @@
+import { execFileSync } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+  cli,
   evaluatePatchCoverage,
+  loadCoverageReports,
   parseGitDiffHunks,
   resolveBaseRef,
+  runPatchCoverageCheck,
 } from "../../scripts/check-patch-coverage.mjs";
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 describe("check-patch-coverage", () => {
   it("parses git diff hunks into file line sets, ignoring tests and non-src files", () => {
@@ -100,7 +108,70 @@ diff --git a/docs/README.md b/docs/README.md
     expect(summary.overallPercent).toBe(100);
   });
 
-  it("resolveBaseRef returns explicitRef if provided", () => {
+  it("skips non-executable lines (imports, types, comments, braces) in no-coverage fallback", () => {
+    // Test that the fallback correctly skips non-executable lines when reading an actual file
+    const modifiedFiles = new Map([["src/shared/types.ts", new Set([1, 2, 3, 4, 5])]]);
+
+    // No coverage data for this file
+    const summary = evaluatePatchCoverage(modifiedFiles, {});
+    // All lines in types.ts are imports/types/interfaces, so 0 executable lines
+    expect(summary.totalExecutableLines).toBe(0);
+    expect(summary.overallPercent).toBe(100);
+  });
+
+  it("resolveBaseRef returns sanitized explicitRef if provided", () => {
     expect(resolveBaseRef("feature-branch")).toBe("feature-branch");
+    expect(resolveBaseRef("origin/main")).toBe("origin/main");
+    expect(resolveBaseRef("HEAD~1")).toBe("HEAD~1");
+    // Invalid characters rejected and falls back
+    expect(resolveBaseRef("bad;rm -rf")).not.toBe("bad;rm -rf");
+  });
+
+  it("resolveBaseRef honors PATCH_BASE_REF environment variable", () => {
+    const old = process.env.PATCH_BASE_REF;
+    try {
+      process.env.PATCH_BASE_REF = "origin/main";
+      expect(resolveBaseRef()).toBe("origin/main");
+    } finally {
+      process.env.PATCH_BASE_REF = old;
+    }
+  });
+
+  it("loadCoverageReports reads coverage data if available", () => {
+    const data = loadCoverageReports();
+    expect(typeof data).toBe("object");
+  });
+
+  it("runPatchCoverageCheck executes cleanly with no-run option against HEAD", () => {
+    const res = runPatchCoverageCheck({ baseRef: "HEAD", threshold: 0.0, noRun: true });
+    expect(res.ok).toBe(true);
+  });
+
+  it("CLI executes successfully with --base HEAD", () => {
+    const scriptPath = path.join(root, "scripts/check-patch-coverage.mjs");
+    const output = execFileSync(
+      "node",
+      [scriptPath, "--base", "HEAD", "--threshold", "0", "--no-run"],
+      {
+        encoding: "utf8",
+      },
+    );
+    expect(output).toContain("Patch coverage:");
+  });
+
+  it("cli returns 0 when threshold is satisfied", () => {
+    expect(cli(["--base", "HEAD", "--threshold", "0", "--no-run"])).toBe(0);
+  });
+
+  it("cli returns 1 when threshold is not satisfied", () => {
+    const mockDiff = `
+diff --git a/src/services/task-reconciler.ts b/src/services/task-reconciler.ts
+--- a/src/services/task-reconciler.ts
++++ b/src/services/task-reconciler.ts
+@@ -10,0 +11,5 @@
++const a = 1;
++const b = 2;
+`;
+    expect(cli(["--threshold", "101", "--no-run"], { diffText: mockDiff })).toBe(1);
   });
 });

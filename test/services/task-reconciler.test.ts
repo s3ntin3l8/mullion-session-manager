@@ -3844,6 +3844,7 @@ describe("reconcileTasks", () => {
 
     it("attempts auto-rebase when reviewing task has merge conflicts and autoApprove is enabled", async () => {
       const app = await buildApp();
+      vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined);
       const { taskId } = await createAutoApproveCandidate(app, {
         branchName: "mullion/task-x",
         agentCommand: "claude",
@@ -3887,6 +3888,28 @@ describe("reconcileTasks", () => {
       const row = await getTask(app, taskId);
       expect(row.rebaseAttempts).toBe(2);
       expect(row.mergeError).toContain("needs manual resolution");
+
+      await app.close();
+    });
+
+    it("does not auto-rebase a reviewing task while its review is still in progress", async () => {
+      const app = await buildApp();
+      const { taskId } = await createAutoApproveCandidate(app, {
+        branchName: "mullion/task-x",
+        agentCommand: "claude",
+        reviewFindingsIngestedSessionId: null,
+      });
+      mockGetPullRequestByNumber.mockResolvedValue(
+        mockPr({ mergeable: false, mergeableState: "dirty" }),
+      );
+      mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
+
+      await reconcileTasks(app);
+
+      expect(mockResumeTaskWorktree).not.toHaveBeenCalled();
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+      expect(row.rebaseStartedAt).toBeNull();
 
       await app.close();
     });
