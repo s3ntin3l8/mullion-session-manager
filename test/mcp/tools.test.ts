@@ -179,6 +179,21 @@ describe("session/project/preview tool handlers (issue #134 part 2)", () => {
     );
   });
 
+  // Root-cause fix for the opencode `command`-embedded-prompt trap
+  // (opencode.ts's own comment on `initialPromptArgs`): before this,
+  // spawn_child_session had no way to reach that delivery channel at all.
+  it("spawn_child_session forwards initialPrompt", async () => {
+    const tool = TOOLS.find((t) => t.name === "spawn_child_session")!;
+    const spawnChildSession = vi.fn().mockResolvedValue({ id: 7 });
+    await tool.handler(
+      { command: "opencode", initialPrompt: "do the thing" },
+      { spawnChildSession },
+    );
+    expect(spawnChildSession).toHaveBeenCalledWith(
+      expect.objectContaining({ command: "opencode", initialPrompt: "do the thing" }),
+    );
+  });
+
   it("stop_dock_session calls client.stopDockSession with sessionId", async () => {
     const tool = TOOLS.find((t) => t.name === "stop_dock_session")!;
     const stopDockSession = vi.fn().mockResolvedValue({ ok: true });

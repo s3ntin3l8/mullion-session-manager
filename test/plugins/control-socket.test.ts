@@ -1178,6 +1178,30 @@ describe("controlSocketPlugin (issue #185)", () => {
         socket.destroy();
       });
 
+      // Root-cause fix for the opencode `command`-embedded-prompt trap —
+      // unlike skipPermissions/kind/env above, `seedPrompt` grants no extra
+      // privilege or visibility to the child (it only affects what the
+      // child's first turn says, which a session-scoped caller already
+      // fully controls via `command` itself), so it's deliberately NOT in
+      // the session-scope strip list.
+      it("session scope: does NOT strip seedPrompt — a session-scoped caller can still set a child's first turn", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession();
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(
+          `${JSON.stringify({
+            id: 1,
+            op: "sessions.spawn_child",
+            body: { command: "opencode", seedPrompt: "do the thing" },
+          })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        expect(reply.ok).toBe(true);
+        expect(reply.result).toMatchObject({ initialPromptApplied: true });
+        socket.destroy();
+      });
+
       it("full scope: honors an explicit env", async () => {
         app = await buildApp();
         await app.ready();

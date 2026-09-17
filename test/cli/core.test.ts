@@ -1188,6 +1188,23 @@ describe("runCommand", () => {
       expect(client.request).toHaveBeenCalledWith("sessions.spawn_child", { command: "bash" });
     });
 
+    // Root-cause fix for the opencode `command`-embedded-prompt trap. Sent
+    // as `seedPrompt` on the wire — POST /api/sessions' own field name for
+    // this (routes/sessions.ts's createSessionSchema) — named
+    // `--initial-prompt` here to match the MCP tool's `initialPrompt` param.
+    it("session spawn-child sends --initial-prompt as seedPrompt", async () => {
+      const client = fakeClient();
+      const io = fakeIo();
+      await runCommand(
+        ["session", "spawn-child", "--command", "opencode", "--initial-prompt", "do the thing"],
+        { client, io },
+      );
+      expect(client.request).toHaveBeenCalledWith("sessions.spawn_child", {
+        command: "opencode",
+        seedPrompt: "do the thing",
+      });
+    });
+
     it("session rename: two positionals, or one positional name with --session for the id", async () => {
       const client = fakeClient();
       const io = fakeIo();

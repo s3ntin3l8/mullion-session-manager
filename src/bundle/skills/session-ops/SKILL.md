@@ -22,9 +22,24 @@ This is a genuine child session — it survives if you're later killed, not a
 `Task`-tool subagent (no session, no PTY). A spawned child always starts as
 an ordinary, visible `terminal` session with permission prompts on; `kind`
 and `skipPermissions` are silently ignored from inside a session even if
-you pass them (only a full-scope operator can set either). Its panel
-doesn't auto-open unless a human turned that on separately — either way it
-shows in the sidebar.
+you pass them (only a full-scope operator can set either — unless this host
+has auth disabled entirely, in which case you already are one; see the
+Mullion host skill's scope caveat). If a child needs to act unattended
+(edit files, run tests, commit) rather than wait on a human, it needs
+`skipPermissions: true` to actually take effect. Its panel doesn't
+auto-open unless a human turned that on separately — either way it shows
+in the sidebar.
+
+**Don't bake prompt text into `command`.** Use `initialPrompt` (MCP) /
+`--initial-prompt` (CLI) instead — it's delivered via the target CLI's own
+first-turn flag (Claude Code/Codex: `-- <prompt>`; agy: `-i=<prompt>`;
+opencode: `--prompt <prompt>`), which actually submits a turn instead of
+sitting unread. This matters most for **opencode**: its bare positional is
+`[project]`, a start directory, not a prompt — `opencode "do the thing"`
+silently tries to `cd` into a directory named that and exits immediately.
+Keep `command` a bare invocation; only takes effect when it matches a known
+agent CLI — check the result's `initialPromptApplied` field (or a
+`warnings` entry) rather than assuming delivery.
 
 ## Notifying the human
 

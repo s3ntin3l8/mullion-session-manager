@@ -263,7 +263,29 @@ no PTY, and nothing this op could target. From inside a session, `kind` and
 `skipPermissions` are silently ignored even if you pass them — a child you
 spawn always starts as an ordinary, visible `terminal` session with
 permission prompts on. Only a full-scope caller (an operator running
-`mullion mcp`/CLI directly with `MULLION_AUTH_TOKEN`) can set either.
+`mullion mcp`/CLI directly with `MULLION_AUTH_TOKEN`) can set either — unless
+this host has in-app auth disabled entirely (see the scope caveat near the
+top of this file), in which case every connection, including yours, already
+resolves to full scope and both take effect. If a child you spawn needs to
+act unattended (edit files, run tests, commit) rather than just sit and wait
+for a human, pass `skipPermissions: true` (or check whether it actually took
+effect on this host before assuming it stalled on a permission prompt nobody
+is watching).
+
+**Do not bake prompt text into `command`.** Use `initialPrompt` (MCP) /
+`--initial-prompt` (CLI) instead — it's delivered via the target CLI's own
+first-turn flag (Claude Code/Codex's `-- <prompt>`, agy's `-i=<prompt>`,
+opencode's `--prompt <prompt>`), which actually starts a turn rather than
+sitting unread in the input box. This matters most for **opencode**: its
+bare positional argument is `[project]`, a directory to start in, not a
+prompt — `opencode "do the thing"` doesn't fail loudly, it just tries to
+`cd` into a directory named "do the thing" and exits immediately. `command`
+should stay a bare agent invocation (`opencode`, `claude`, `codex`, `agy`,
+`bash`, ...); prompt text always goes in `initialPrompt`. It only takes
+effect when `command` matches one of those four known agent CLIs — check
+the result's `initialPromptApplied` field (or a `warnings` entry) rather
+than assuming delivery; a plain shell command still launches either way,
+just without the prompt.
 
 ## Notifying the human
 

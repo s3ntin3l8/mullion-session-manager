@@ -228,13 +228,30 @@ const spawnChildSession = {
     type: "object",
     required: ["command"],
     properties: {
-      command: { type: "string", description: "Shell command line to run, e.g. 'claude', 'bash'." },
+      command: {
+        type: "string",
+        description:
+          "Shell command line to run, e.g. 'claude', 'bash'. Do NOT bake prompt text into " +
+          "this string — use 'initialPrompt' below instead. Some agent CLIs (opencode in " +
+          "particular) take a bare positional as a start directory, not a prompt, and will " +
+          "fail to launch if you append prompt text here.",
+      },
       name: { type: "string", description: "Optional cosmetic label for the new session." },
       cwd: {
         type: "string",
         description:
           "Optional working directory override. Must resolve inside the project's own " +
           "directory — a path outside it is rejected.",
+      },
+      initialPrompt: {
+        type: "string",
+        description:
+          "Optional first-turn prompt to submit to the child once it launches, delivered via " +
+          "the agent CLI's own flag (e.g. opencode's '--prompt', Claude Code/Codex's " +
+          "'-- <prompt>', agy's '-i='). Only takes effect when 'command' matches a known " +
+          "agent CLI — the result's 'initialPromptApplied' field tells you whether it was " +
+          "actually delivered; a plain shell command (e.g. 'bash') still launches, just " +
+          "without the prompt.",
       },
       kind: {
         type: "string",
@@ -265,6 +282,7 @@ const spawnChildSession = {
       name: args?.name,
       cwd: args?.cwd,
       kind: args?.kind,
+      initialPrompt: args?.initialPrompt,
       skipPermissions: args?.skipPermissions,
       parentSessionId: args?.parentSessionId,
     });
