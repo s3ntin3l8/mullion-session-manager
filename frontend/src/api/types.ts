@@ -270,6 +270,10 @@ export interface BridgeSummary {
    * request time on the primary). Can be `false` while `hasLiveSession` is
    * `true` — a paired bridge whose helper process isn't currently running. */
   connected: boolean;
+  /** User-set tiebreak order among multiple enrolled bridges (issue
+   * #1313) — lower first. The list this type describes (`GET
+   * /api/bridges`) already arrives sorted by this field. */
+  priority: number;
 }
 
 // The device panel — routes/devices.ts's response shape: the `devices` DB

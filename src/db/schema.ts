@@ -113,6 +113,14 @@ export const bridges = sqliteTable("bridges", {
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
     .$defaultFn(() => new Date()),
+  // Issue #1313 — user-set tiebreak order among multiple enrolled bridges.
+  // Lower number = tried first, mirroring projectUrls.order's own
+  // contiguous-reindex-on-reorder convention (PATCH /api/bridges/reorder).
+  // Only a TIEBREAK, never an override, of ssh-agent-fanout.ts's pickBridge
+  // health partition — see that function's own doc comment for why a
+  // stale high-priority bridge must still lose to a healthy low-priority
+  // one.
+  priority: integer("priority").notNull().default(0),
 });
 
 // A project is just a folder new sessions get created in — now on a specific

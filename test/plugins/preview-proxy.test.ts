@@ -973,7 +973,7 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
         delete process.env.MULLION_AUTH_TOKEN;
       });
 
-      it("401s with no credential at all", async () => {
+      it("401s with no credential at all, with an explanatory body and no dashboard link when PREVIEW_AUTH_DASHBOARD_URL is unset", async () => {
         const app = await buildApp();
         const projectId = await createProjectWithDevServer(
           app,
@@ -989,7 +989,35 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
         });
         expect(res.statusCode).toBe(401);
         expect(res.headers["content-type"]).toMatch(/text\/html/);
+        expect(res.body).toContain("requires authentication");
+        expect(res.body).not.toContain("<a href");
         await app.close();
+      });
+
+      // Issue #1310 — the same 401 page links back to the dashboard once an
+      // operator has configured where that is.
+      it("401 body links to PREVIEW_AUTH_DASHBOARD_URL when configured, HTML-escaped", async () => {
+        process.env.PREVIEW_AUTH_DASHBOARD_URL = "https://mullion.test/?a=1&b=2";
+        try {
+          const app = await buildApp();
+          const projectId = await createProjectWithDevServer(
+            app,
+            String(stubPort),
+            DASHBOARD_AUTH_HEADERS,
+          );
+          const slug = await createProjectPreview(app, projectId, DASHBOARD_AUTH_HEADERS);
+
+          const res = await app.inject({
+            method: "GET",
+            url: "/",
+            headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
+          });
+          expect(res.statusCode).toBe(401);
+          expect(res.body).toContain('<a href="https://mullion.test/?a=1&amp;b=2">');
+          await app.close();
+        } finally {
+          delete process.env.PREVIEW_AUTH_DASHBOARD_URL;
+        }
       });
 
       it("a valid bootstrap token redirects, sets the preview cookie, and strips the token from the redirect Location", async () => {

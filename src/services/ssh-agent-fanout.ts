@@ -87,7 +87,7 @@ export interface SshAgentFanoutHandle {
  * bridge isn't scoped to one agent host, so ANY live bridge serves EVERY
  * enrolled agent host.
  *
- * Issue #1051 — selection is now health-aware: a bridge whose underlying
+ * Issue #1051 — selection is health-aware: a bridge whose underlying
  * WebSocket has gone half-open (laptop sleep, network drop without a
  * clean FIN) reports OPEN until the mux's own PING/PONG timeout fires up
  * to `PONG_TIMEOUT_MS` after the next ping. Without a health check here,
@@ -97,11 +97,22 @@ export interface SshAgentFanoutHandle {
  * in routes/internal.ts's `/internal/ws/ssh-agent` handler. So we
  * partition the candidates into "healthy" (lastPongAt within
  * `PONG_TIMEOUT_MS` of now) and "stale" (no PONG yet, or last PONG older
- * than the window), prefer any healthy bridge (most-recently-PONG'd
- * within that set, with `connectedAt` as the tiebreaker), and fall back
- * to the most-recently-connected among ALL bridges when no healthy
- * bridge is connected — never return `null` when at least one bridge
- * entry exists, even if every entry is stale.
+ * than the window), prefer any healthy bridge over any stale one, and
+ * fall back to the stale partition only when no healthy bridge is
+ * connected — never return `null` when at least one bridge entry exists,
+ * even if every entry is stale.
+ *
+ * Issue #1313 — within EACH partition, a user-set `priority` (lower wins,
+ * `bridges.priority`, stamped onto the live entry at connect time by
+ * routes/agent-bridge.ts's `trackBridge` and kept current by PATCH
+ * /api/bridges/reorder) is now the PRIMARY sort key, with the
+ * partition's own liveness signal as the tiebreak: most-recent PONG (then
+ * `connectedAt`) within "healthy", `connectedAt` alone within "stale" —
+ * exactly the ordering each partition used before priority existed, just
+ * demoted to tiebreaker. Priority is deliberately never allowed to reach
+ * ACROSS partitions — a healthy low-priority bridge still beats a stale
+ * high-priority one, otherwise a locked laptop pinned at priority 0 would
+ * reproduce the exact stall #1051 fixed.
  *
  * Deliberately pure/stateless — no logging here. The ambiguous-pick log
  * (onChannel below) is throttled per-fanout-instance, which needs state
@@ -115,37 +126,62 @@ export function pickBridge(app: FastifyInstance): { bridgeId: string; mux: MuxCo
     connectedAt: number;
     mux: MuxConnection;
     lastPongAt: number;
+    priority: number;
   } | null = null;
-  let bestAny: { bridgeId: string; connectedAt: number; mux: MuxConnection } | null = null;
+  let bestAny: {
+    bridgeId: string;
+    connectedAt: number;
+    mux: MuxConnection;
+    priority: number;
+  } | null = null;
   for (const [bridgeId, bridge] of app.connectedBridges) {
+    // `priority` defaults to 0 (undefined) for any entry a test's fake app
+    // doesn't set it on — same default as the `bridges.priority` DB
+    // column, so an unset priority behaves exactly like an explicit 0.
+    const priority = bridge.priority ?? 0;
     // A PONG within the health window makes the bridge demonstrably live;
     // an undefined lastPongAt (just tracked, first PING not yet due) or a
     // PONG older than the window leaves it in the "stale" partition.
     const lastPongAt = bridge.lastPongAt;
-    if (bestAny === null || bridge.connectedAt > bestAny.connectedAt) {
-      // connectedAt is the only signal we have for the all-stale fallback
-      // (lastPongAt is either undefined or older than the health window
-      // for every entry in that partition), so it's what we sort on here.
-      bestAny = { bridgeId, connectedAt: bridge.connectedAt, mux: bridge.mux };
+    if (
+      bestAny === null ||
+      priority < bestAny.priority ||
+      (priority === bestAny.priority && bridge.connectedAt > bestAny.connectedAt)
+    ) {
+      // connectedAt is the only liveness signal we have for the all-stale
+      // fallback (lastPongAt is either undefined or older than the health
+      // window for every entry in that partition), so it's what we sort
+      // on here once priority ties.
+      bestAny = { bridgeId, connectedAt: bridge.connectedAt, mux: bridge.mux, priority };
     }
     if (lastPongAt !== undefined && lastPongAt >= healthCutoff) {
-      // Within the healthy set, prefer the bridge with the most-recent
-      // PONG (the actual liveness signal — a bridge that just responded
-      // to our last PING is the best bet that the next channel open will
-      // round-trip, which is exactly what we want to optimize). Tie on
-      // lastPongAt falls back to connectedAt for a deterministic choice.
+      // Within the healthy set, priority wins first; a priority tie falls
+      // back to the most-recent PONG (the actual liveness signal — a
+      // bridge that just responded to our last PING is the best bet that
+      // the next channel open will round-trip), and a PONG tie falls back
+      // to connectedAt for a deterministic choice.
       //
-      // Note the asymmetry with bestAny above: the healthy partition sorts
-      // on PONG freshness because we have one; the all-stale fallback
-      // sorts on connectedAt because it doesn't, and connectedAt is the
-      // best available signal there (more recent = more likely to recover
-      // than a long-idle bridge). This is intentional, not an oversight.
+      // Note the asymmetry with bestAny above: the healthy partition's
+      // tiebreak sorts on PONG freshness because we have one; the
+      // all-stale fallback's tiebreak sorts on connectedAt because it
+      // doesn't, and connectedAt is the best available signal there (more
+      // recent = more likely to recover than a long-idle bridge). This is
+      // intentional, not an oversight.
       if (
         bestHealthy === null ||
-        lastPongAt > bestHealthy.lastPongAt ||
-        (lastPongAt === bestHealthy.lastPongAt && bridge.connectedAt > bestHealthy.connectedAt)
+        priority < bestHealthy.priority ||
+        (priority === bestHealthy.priority &&
+          (lastPongAt > bestHealthy.lastPongAt ||
+            (lastPongAt === bestHealthy.lastPongAt &&
+              bridge.connectedAt > bestHealthy.connectedAt)))
       ) {
-        bestHealthy = { bridgeId, connectedAt: bridge.connectedAt, mux: bridge.mux, lastPongAt };
+        bestHealthy = {
+          bridgeId,
+          connectedAt: bridge.connectedAt,
+          mux: bridge.mux,
+          lastPongAt,
+          priority,
+        };
       }
     }
   }

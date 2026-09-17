@@ -401,6 +401,128 @@ describe("pickBridge", () => {
     const picked = pickBridge(app);
     expect(picked?.bridgeId).toBe("bridge-healthy");
   });
+
+  // Issue #1313 — priority as a tiebreak within each health partition.
+  describe("priority tiebreak (issue #1313)", () => {
+    it("still breaks a priority TIE by liveness — unchanged pre-#1313 behavior", () => {
+      const app = fakeApp(0);
+      app.connectedBridges.set("bridge-older-pong", {
+        socket: {},
+        mux: {},
+        connectedAt: 100,
+        lastPongAt: now - 3_000,
+        priority: 0,
+      });
+      app.connectedBridges.set("bridge-newer-pong", {
+        socket: {},
+        mux: {},
+        connectedAt: 100,
+        lastPongAt: now - 1_000,
+        priority: 0,
+      });
+
+      const picked = pickBridge(app);
+      expect(picked?.bridgeId).toBe("bridge-newer-pong");
+    });
+
+    // The `priority ?? 0` fallback (this module's own comment on why an
+    // absent priority must behave exactly like an explicit 0) is only
+    // exercised here by a MIXED pair — every other case in this describe
+    // block sets `priority` on every entry, so a future refactor that
+    // drops the stamp on one `trackBridge` call path (leaving that entry's
+    // `priority` field undefined instead of 0) would pass every existing
+    // test here. connectedAt is set so a broken fallback (e.g. reading
+    // `bridge.priority` directly and getting `undefined`, which compares
+    // as neither `<` nor `===` in the numeric comparisons above) picks the
+    // wrong bridge.
+    it("treats an entry with no priority field the same as an explicit priority: 0", () => {
+      const app = fakeApp(0);
+      app.connectedBridges.set("bridge-explicit-5", {
+        socket: {},
+        mux: {},
+        connectedAt: 999, // more recently connected — must not win anyway
+        lastPongAt: now,
+        priority: 5,
+      });
+      app.connectedBridges.set("bridge-no-priority", {
+        socket: {},
+        mux: {},
+        connectedAt: 1,
+        lastPongAt: now,
+        // priority intentionally omitted — must be treated as 0.
+      });
+
+      const picked = pickBridge(app);
+      expect(picked?.bridgeId).toBe("bridge-no-priority");
+    });
+
+    it("prefers the lower-priority (higher-precedence) bridge among two otherwise-equal healthy bridges", () => {
+      const app = fakeApp(0);
+      app.connectedBridges.set("bridge-low-priority", {
+        socket: {},
+        mux: {},
+        connectedAt: 1,
+        lastPongAt: now, // both healthy, both just PONG'd
+        priority: 0,
+      });
+      app.connectedBridges.set("bridge-high-priority", {
+        socket: {},
+        mux: {},
+        connectedAt: 999, // more recently connected — must not win anyway
+        lastPongAt: now,
+        priority: 5,
+      });
+
+      const picked = pickBridge(app);
+      expect(picked?.bridgeId).toBe("bridge-low-priority");
+    });
+
+    // The load-bearing constraint from the Design section of issue #1313:
+    // priority is a tiebreak WITHIN a partition, never an override of the
+    // healthy/stale partitioning itself — a locked laptop pinned at
+    // priority 0 must not reproduce the exact stall #1051 fixed.
+    it("still prefers a healthy LOW-priority bridge over a stale HIGH-priority one", () => {
+      const app = fakeApp(0);
+      app.connectedBridges.set("bridge-stale-top-priority", {
+        socket: {},
+        mux: {},
+        connectedAt: 999,
+        lastPongAt: now - 30_000, // stale — well past PONG_TIMEOUT_MS
+        priority: 0, // "tried first" — but must NOT win over a healthy bridge
+      });
+      app.connectedBridges.set("bridge-healthy-low-priority", {
+        socket: {},
+        mux: {},
+        connectedAt: 1,
+        lastPongAt: now, // healthy
+        priority: 9,
+      });
+
+      const picked = pickBridge(app);
+      expect(picked?.bridgeId).toBe("bridge-healthy-low-priority");
+    });
+
+    it("applies the same priority-then-connectedAt ordering within the all-stale fallback partition", () => {
+      const app = fakeApp(0);
+      app.connectedBridges.set("bridge-stale-low-priority", {
+        socket: {},
+        mux: {},
+        connectedAt: 1, // older connection — would lose on connectedAt alone
+        lastPongAt: now - 30_000,
+        priority: 0,
+      });
+      app.connectedBridges.set("bridge-stale-high-priority", {
+        socket: {},
+        mux: {},
+        connectedAt: 999, // more recently connected
+        lastPongAt: now - 30_000,
+        priority: 5,
+      });
+
+      const picked = pickBridge(app);
+      expect(picked?.bridgeId).toBe("bridge-stale-low-priority");
+    });
+  });
 });
 
 // --- channel fan-out: real MuxConnections on every leg ---

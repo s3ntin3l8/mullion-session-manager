@@ -281,6 +281,29 @@ export async function buildApp() {
     }
   }
 
+  // Issue #1310 — PREVIEW_AUTH_DASHBOARD_URL is optional (unlike the checks
+  // above, its absence doesn't leave anything half-configured — the 401
+  // page just omits its link), but a value that isn't an absolute http(s)
+  // URL can never resolve to anything useful from the preview subdomain's
+  // own origin, so this fails fast at boot rather than shipping a dead
+  // link an operator only discovers by clicking it.
+  const previewAuthDashboardUrl = app.config.PREVIEW_AUTH_DASHBOARD_URL.trim();
+  if (app.config.MULLION_ROLE === "primary" && previewAuthDashboardUrl !== "") {
+    let isAbsoluteHttp = false;
+    try {
+      isAbsoluteHttp = ["http:", "https:"].includes(new URL(previewAuthDashboardUrl).protocol);
+    } catch {
+      // Falls through to the throw below.
+    }
+    if (!isAbsoluteHttp) {
+      throw new Error(
+        "PREVIEW_AUTH_DASHBOARD_URL must be an absolute http(s) URL (e.g. " +
+          "https://mullion.example.com/) — refusing to boot with a value that can't " +
+          "resolve to anything from a preview subdomain's own origin (see issue #1310).",
+      );
+    }
+  }
+
   await app.register(loggingPlugin);
   await app.register(sensible);
   await app.register(securityPlugin);

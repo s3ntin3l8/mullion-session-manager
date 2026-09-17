@@ -368,6 +368,27 @@ export const schema = {
       default: 2000,
       minimum: 1,
     },
+    // Issue #1310 — optional link target for the static 401 page
+    // previewProxyPlugin sends a bookmarked/direct preview navigation that
+    // carries neither a bootstrap token nor a preview cookie (no path back
+    // to the dashboard otherwise, since the bootstrap token only ever
+    // arrives via an already-open dashboard tab's own iframe src — see
+    // preview-proxy.ts's buildPreviewAuthUnauthorizedHtml). Deliberately
+    // explicit config, not derived from the request (same reasoning as
+    // MULLION_OIDC_REDIRECT_URI above): PREVIEW_BASE_HOST is frequently a
+    // *sibling* label of the dashboard's own host (see
+    // docs/browser-previews.md's worked example, "preview.example.com" vs.
+    // "mullion.example.com"), not a suffix/prefix relationship this process
+    // could reliably strip its way back from. Empty by default: the 401
+    // page still explains the situation, just without a clickable link —
+    // this flag has never been required for PREVIEW_AUTH_REQUIRED to work,
+    // only for that page's UX. Validated at boot (src/app.ts) as an
+    // absolute http(s) URL when set — a bare host or root-relative path
+    // wouldn't resolve to anything from the preview subdomain's own origin.
+    PREVIEW_AUTH_DASHBOARD_URL: {
+      type: "string",
+      default: "",
+    },
     // Absolute path to the versioned-release install root (e.g.
     // ~/opt/mullion), i.e. the parent of `releases/`, `current` (a symlink
     // this process's WorkingDirectory points into), and `data/` — see
@@ -840,6 +861,7 @@ declare module "fastify" {
       GITHUB_OAUTH_CLIENT_ID: string;
       PREVIEW_BASE_HOST: string;
       PREVIEW_AUTH_REQUIRED: boolean;
+      PREVIEW_AUTH_DASHBOARD_URL: string;
       PREVIEW_RATE_LIMIT_MAX: number;
       MULLION_HOME: string;
       MULLION_UPDATE_REPO: string;
