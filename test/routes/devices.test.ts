@@ -377,6 +377,78 @@ describe("devices routes", () => {
           "'MyTag:D'",
         ]);
       });
+
+      // Hermes follow-up review suggestion on PR #1324 — "a test that
+      // captures the args a mocked spawnWaitText receives (or asserts a
+      // shell-injecting `text` string stays a single quoted token) would
+      // lock the security fix in." The values below are exactly what the
+      // adb `exec:` transport re-tokenizes through the device's own shell
+      // (`sh -c`) if left unescaped: a space re-splits the token, `;`/`$()`
+      // execute, and an embedded `'` would otherwise terminate the quoting
+      // early. shellQuoteArg's `'...'.replace(/'/g, "'\\''")` handles all
+      // three — asserted here against the actual argv spawnWaitText
+      // receives, not just against shellQuoteArg in isolation, so a
+      // regression in how routes/devices.ts calls it is caught too.
+      it("neutralizes shell metacharacters in the logcat filter via POSIX single-quote escaping", async () => {
+        const app = await buildTestApp();
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/devices",
+          payload: { avdName: "dev35" },
+        });
+        const id = created.json().id;
+        const device = app.device.get(String(id))!;
+
+        const spawnWaitText = vi.fn().mockResolvedValue("log output");
+        (device as unknown as { adb: unknown }).adb = {
+          subprocess: { noneProtocol: { spawnWaitText } },
+        };
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/devices/${id}/action`,
+          payload: { action: "logcat", filter: "MyTag:D; rm -rf / #$(whoami)'" },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(spawnWaitText).toHaveBeenCalledWith([
+          "'logcat'",
+          "'-d'",
+          "'-t'",
+          "'200'",
+          // The embedded `'` closes and re-opens the quoted token
+          // (`'\''`) rather than breaking out of it — the whole filter
+          // still arrives at `sh -c` as ONE argument, never re-tokenized
+          // into `;`/`$()` as separate shell commands.
+          "'MyTag:D; rm -rf / #$(whoami)'\\'''",
+        ]);
+      });
+
+      it("400s on a logcat action whose optional fields have the wrong type", async () => {
+        const app = await buildTestApp();
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/devices",
+          payload: { avdName: "dev35" },
+        });
+        const id = created.json().id;
+        (app.device.get(String(id)) as unknown as { adb: unknown }).adb = {
+          subprocess: { noneProtocol: { spawnWaitText: vi.fn() } },
+        };
+
+        const badLines = await app.inject({
+          method: "POST",
+          url: `/api/devices/${id}/action`,
+          payload: { action: "logcat", lines: "200" },
+        });
+        expect(badLines.statusCode).toBe(400);
+
+        const badFilter = await app.inject({
+          method: "POST",
+          url: `/api/devices/${id}/action`,
+          payload: { action: "logcat", filter: 123 },
+        });
+        expect(badFilter.statusCode).toBe(400);
+      });
     });
   });
 });

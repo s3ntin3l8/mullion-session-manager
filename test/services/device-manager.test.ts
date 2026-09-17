@@ -368,6 +368,60 @@ describe("DeviceManager", () => {
     await waitForStatus(manager, "1", "streaming");
   });
 
+  it("spawn() failure when systemd-run itself exits non-zero tears down cleanly (CodeQL: exercises systemdRunShouldFail)", async () => {
+    systemdRunShouldFail = true;
+    const createAdbCallsBefore = mockServerClient.createAdb.mock.calls.length;
+    const manager = new DeviceManager(baseOpts());
+    await manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null });
+    await waitForStatus(manager, "1", "error");
+    expect(manager.get("1")?.toInfo().error).toMatch(/device bootstrap exited with code 1/);
+    expect(fs.existsSync(deviceMarkerPath(SESSIONS_DIR, "1"))).toBe(false);
+    // Never got far enough to even attempt an adb connection.
+    expect(mockServerClient.createAdb.mock.calls.length).toBe(createAdbCallsBefore);
+
+    // Port is releasable again — a second attempt doesn't collide.
+    systemdRunShouldFail = false;
+    mockDeviceList = [{ serial: "emulator-5554" }];
+    await manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null });
+    await waitForStatus(manager, "1", "streaming");
+  });
+
+  it("spawn() failure when pushing the scrcpy server rejects tears down cleanly (CodeQL: exercises mockPushServerShouldFail)", async () => {
+    mockDeviceList = [{ serial: "emulator-5554" }];
+    mockPushServerShouldFail = true;
+    const manager = new DeviceManager(baseOpts());
+    await manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null });
+    await waitForStatus(manager, "1", "error");
+    expect(manager.get("1")?.toInfo().error).toMatch(/pushServer failed/);
+    expect(fs.existsSync(deviceMarkerPath(SESSIONS_DIR, "1"))).toBe(false);
+    const stopCall = vi
+      .mocked(spawnChildProcess)
+      .mock.calls.find((c) => c[0] === "systemctl" && (c[1] as string[])[1] === "stop");
+    expect(stopCall).toBeDefined();
+
+    mockPushServerShouldFail = false;
+    await manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null });
+    await waitForStatus(manager, "1", "streaming");
+  });
+
+  it("spawn() failure when starting the scrcpy server rejects tears down cleanly (CodeQL: exercises mockStartShouldFail)", async () => {
+    mockDeviceList = [{ serial: "emulator-5554" }];
+    mockStartShouldFail = true;
+    const manager = new DeviceManager(baseOpts());
+    await manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null });
+    await waitForStatus(manager, "1", "error");
+    expect(manager.get("1")?.toInfo().error).toMatch(/scrcpy start failed/);
+    expect(fs.existsSync(deviceMarkerPath(SESSIONS_DIR, "1"))).toBe(false);
+    const stopCall = vi
+      .mocked(spawnChildProcess)
+      .mock.calls.find((c) => c[0] === "systemctl" && (c[1] as string[])[1] === "stop");
+    expect(stopCall).toBeDefined();
+
+    mockStartShouldFail = false;
+    await manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null });
+    await waitForStatus(manager, "1", "streaming");
+  });
+
   it("onSpawnError fires (not an unhandled rejection) when the fire-and-forget spawn() fails", async () => {
     mockDeviceList = [{ serial: "emulator-5554" }];
     mockCreateAdbShouldFail = true;
