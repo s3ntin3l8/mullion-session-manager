@@ -1,4 +1,4 @@
-import { spawn as spawnChild, execFileSync } from "node:child_process";
+import { spawn as spawnChild } from "node:child_process";
 import type { Adb } from "@yume-chan/adb";
 import { AdbServerClient } from "@yume-chan/adb";
 import { AdbServerNodeTcpConnector } from "@yume-chan/adb-server-node-tcp";
@@ -108,6 +108,21 @@ export class Device {
   private scrcpyClient: AdbScrcpyClient<AdbScrcpyOptionsLatest<true>> | null = null;
   private videoListeners = new Set<(packet: ScrcpyMediaStreamPacket) => void>();
   private exitListeners = new Set<() => void>();
+  /** Set at the start of spawn(), read (and released) by teardownProcess() —
+   * whichever teardown path fires (an in-flight spawn() failing partway
+   * through, kill(), or handleExit() after an unexpected scrcpy exit) needs
+   * to release the SAME port, including a failure before `this.serial` was
+   * ever set (systemd-run itself failing, say) — deriving the port from
+   * `this.serial` alone (as kill() used to) misses exactly that case. */
+  private allocatedPort: number | null = null;
+  /** The stream's one-time SPS/PPS packet — @yume-chan/scrcpy's own parser
+   * emits this exactly once per connection, not per keyframe (see
+   * pumpVideo's own comment), so a listener that subscribes after it
+   * already went out (a second panel, or a reconnect after a network blip)
+   * would otherwise never get it and its WebCodecs decoder would never
+   * configure. Replayed synchronously to a new subscriber in
+   * onVideoPacket() below. */
+  private lastConfigPacket: ScrcpyMediaStreamPacket | null = null;
 
   constructor(
     opts: DeviceSpawnOptions,
@@ -157,6 +172,7 @@ export class Device {
    * whoever asked for this device, same as PtyManager.getOrCreate's
    * fire-and-forget `void session.spawn()` plus `spawnOutcome()` split. */
   async spawn(port: number): Promise<void> {
+    this.allocatedPort = port;
     try {
       this.status = "starting";
       touchDeviceMarker(this.manager.sessionsDir, this.id);
@@ -216,7 +232,45 @@ export class Device {
     } catch (err) {
       this.status = "error";
       this.lastError = err instanceof Error ? err.message : String(err);
+      // Whatever partially started (the systemd scope, the marker file, the
+      // allocated port) must not leak on failure — an uncleaned scope
+      // permanently blocks every future spawn() for this same id, since
+      // deviceScopeUnitName is purely id-derived and `systemd-run --collect`
+      // refuses a name that's still occupied.
+      await this.teardownProcess().catch(() => {
+        // Best-effort — a cleanup failure must not mask the original spawn
+        // error below.
+      });
       throw err;
+    }
+  }
+
+  /** Stops the scope, removes the marker, closes the scrcpy/adb connections,
+   * and releases the allocated port — the one teardown path every exit
+   * route (a failed spawn(), kill(), or handleExit() after an unexpected
+   * scrcpy exit) funnels through, so none of them can leak a subset of what
+   * the others clean up. Idempotent: safe to call on a Device that never
+   * got past `touchDeviceMarker`/port allocation. */
+  private async teardownProcess(): Promise<void> {
+    try {
+      await this.scrcpyClient?.close();
+    } catch {
+      // Best-effort — the process is going away regardless.
+    }
+    try {
+      await this.adb?.close();
+    } catch {
+      // Same best-effort posture.
+    }
+    await stopDeviceScope(
+      this.manager.sessionsDir,
+      deriveInstanceId(this.manager.sessionsDir),
+      this.id,
+    );
+    removeDeviceMarker(this.manager.sessionsDir, this.id);
+    if (this.allocatedPort !== null) {
+      this.releasePort(this.allocatedPort);
+      this.allocatedPort = null;
     }
   }
 
@@ -241,6 +295,10 @@ export class Device {
       for (;;) {
         const { value, done } = await reader.read();
         if (done) break;
+        // Cached so a listener that subscribes AFTER this went out (a
+        // second panel, or a reconnect) still gets it — see this field's
+        // own doc comment.
+        if (value.type === "configuration") this.lastConfigPacket = value;
         for (const listener of this.videoListeners) listener(value);
       }
     } catch {
@@ -254,12 +312,23 @@ export class Device {
   private handleExit(): void {
     this.status = "exited";
     for (const listener of this.exitListeners) listener();
+    // Best-effort — an unexpected scrcpy exit (the emulator crashed, adb
+    // dropped the connection) must still release the scope/marker/port the
+    // same way a deliberate kill() does, or this device id is stuck the
+    // same way a failed spawn() used to be (see teardownProcess's own
+    // comment).
+    void this.teardownProcess().catch(() => {});
   }
 
   /** Subscribes to video packets; returns an unsubscribe function — same
-   * shape as pty-manager.ts's Session.onData. */
+   * shape as pty-manager.ts's Session.onData. Replays the cached
+   * configuration packet (if any) synchronously to a NEW subscriber before
+   * returning, so a decoder that attaches after streaming already started
+   * still gets the SPS/PPS it needs to configure at all — see
+   * lastConfigPacket's own doc comment. */
   onVideoPacket(listener: (packet: ScrcpyMediaStreamPacket) => void): () => void {
     this.videoListeners.add(listener);
+    if (this.lastConfigPacket) listener(this.lastConfigPacket);
     return () => this.videoListeners.delete(listener);
   }
 
@@ -272,26 +341,7 @@ export class Device {
    * scope. Does NOT remove the device row — mirrors PtyManager.kill() vs
    * terminate()'s split; the DeviceManager caller decides which it wants. */
   async kill(): Promise<void> {
-    try {
-      await this.scrcpyClient?.close();
-    } catch {
-      // Best-effort — the process is going away regardless.
-    }
-    try {
-      await this.adb?.close();
-    } catch {
-      // Same best-effort posture.
-    }
-    await stopDeviceScope(
-      this.manager.sessionsDir,
-      deriveInstanceId(this.manager.sessionsDir),
-      this.id,
-    );
-    removeDeviceMarker(this.manager.sessionsDir, this.id);
-    if (this.serial) {
-      const port = Number(this.serial.replace("emulator-", ""));
-      if (Number.isFinite(port)) this.releasePort(port);
-    }
+    await this.teardownProcess();
     this.status = "exited";
   }
 }
@@ -306,14 +356,16 @@ export class DeviceManager {
       new AdbServerNodeTcpConnector({ host: "127.0.0.1", port: opts.adbServerPort }),
     );
     if (opts.enabled) {
-      // Idempotent — a no-op if a server is already listening. Best-effort:
-      // a failure here surfaces later, on the first real operation against
-      // `this.serverClient`, rather than blocking construction.
-      try {
-        execFileSync(opts.adbPath, ["start-server"], { stdio: "ignore" });
-      } catch {
-        // Surfaced on first real use instead — see comment above.
-      }
+      // Idempotent — a no-op if a server is already listening. Best-effort,
+      // fire-and-forget: a failure here surfaces later, on the first real
+      // operation against `this.serverClient`, rather than blocking
+      // construction. Deliberately async (spawn, not execFileSync) — this
+      // constructor runs during `app.register(devicePlugin)` at server
+      // boot, and a synchronous exec here would block the ENTIRE event
+      // loop (every other plugin registration, WS accept, and request)
+      // for however long `adb start-server` takes.
+      const child = spawnChild(opts.adbPath, ["start-server"], { stdio: "ignore" });
+      child.on("error", () => {});
     }
   }
 
@@ -345,15 +397,40 @@ export class DeviceManager {
     return [...this.devices.values()].map((d) => d.toInfo());
   }
 
-  /** Synchronous + idempotent, same shape as PtyManager.getOrCreate: creates
-   * only if absent, fires off `spawn()` without awaiting it — callers that
-   * need to know the outcome use `get(id)?.toInfo().status`/`.error` to
-   * poll, or wait on the device WS route's own connect (which naturally
-   * blocks until streaming or error). */
-  getOrCreate(opts: DeviceSpawnOptions): Device {
+  /** Idempotent, same shape as PtyManager.getOrCreate: creates only if
+   * absent, fires off `spawn()` without awaiting it — callers that need to
+   * know the outcome use `get(id)?.toInfo().status`/`.error` to poll, or
+   * wait on the device WS route's own connect (which naturally blocks
+   * until streaming or error). Async (unlike PtyManager's synchronous
+   * version) ONLY for the isScopeAlive() pre-check below — both current
+   * callers already run inside an async route handler.
+   *
+   * That pre-check exists because a scope for this id may have survived a
+   * Mullion restart with no in-memory Device left to represent it (see
+   * isScopeAlive's own doc comment on why this app doesn't yet reattach to
+   * one) — spawning anyway would collide with it (`systemd-run --collect
+   * -u <name>` refuses a name that's still occupied) and fail with a
+   * cryptic exit code, permanently wedging this device id until an
+   * operator manually stops the leftover scope. Surfacing that plainly
+   * here, before attempting the collision, is a deliberately bounded fix:
+   * it does not attempt to reattach to the surviving scope (that would
+   * need the original adb serial/port persisted somewhere durable, which
+   * nothing here does yet — tracked as a follow-up), only to fail clearly
+   * instead of confusingly. */
+  async getOrCreate(opts: DeviceSpawnOptions): Promise<Device> {
     this.assertEnabled();
     const existing = this.devices.get(opts.id);
     if (existing && existing.isAlive) return existing;
+
+    if (await this.isScopeAlive(opts.id)) {
+      const instanceId = deriveInstanceId(this.opts.sessionsDir);
+      throw new Error(
+        `device ${opts.id} has a systemd scope left running from before a restart, with no ` +
+          `live connection to it — stop it first: systemctl --user stop ` +
+          `crs-device-${instanceId}-${opts.id}.scope`,
+      );
+    }
+
     const port = this.allocatePort();
     const device = new Device(opts, this.opts, this.serverClient, this.releasePort.bind(this));
     this.devices.set(opts.id, device);

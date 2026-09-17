@@ -30,10 +30,17 @@ deliberately a **separate** implementation from `PtyManager`/
 - **`DeviceManager`** (`src/services/device-manager.ts`) — an in-memory
   `Map<string, Device>`. Starting a device runs the emulator inside a
   transient `systemd --user` scope (`crs-device-<instanceId>-<id>`, same
-  per-instance namespacing as a session's `crs-session-*` scope) so it
-  survives a Mullion redeploy, waits for adb to see the resulting
-  `emulator-<port>` serial, then pushes and starts the scrcpy server via
-  [`@yume-chan/adb-scrcpy`](https://github.com/yume-chan/ya-webadb).
+  per-instance namespacing as a session's `crs-session-*` scope) — the
+  underlying process does survive a Mullion redeploy, but **Mullion does
+  not yet reattach to it**: this app has no durable record of the port/
+  serial a restart-surviving emulator was assigned, only the in-memory
+  `Device` that goes away with the process. `getOrCreate()` checks for
+  exactly this case before spawning (`isScopeAlive()`) and fails with a
+  clear, actionable error (naming the `systemctl --user stop` command)
+  rather than silently colliding with the leftover scope's still-occupied
+  unit name. Stopping it manually and reopening the panel starts a fresh
+  one. Full reattach (recovering the port/serial and resuming the same
+  scrcpy session) is tracked as a follow-up, not yet implemented.
 - **Scope ownership**, unlike a session's, isn't anchored on a real dtach
   socket (an emulator has neither dtach nor a PTY) — `device-process.ts`
   makes `systemd-run` set the scope's `Description` explicitly to a

@@ -34,7 +34,11 @@ function decodeVideoFrame(data: ArrayBuffer): ScrcpyMediaStreamPacket | null {
 interface ExitedMessage {
   type: "exited";
 }
-type ControlMessage = ExitedMessage;
+interface ErrorMessage {
+  type: "error";
+  message: string;
+}
+type ControlMessage = ExitedMessage | ErrorMessage;
 
 function parseControlMessage(raw: string): ControlMessage | null {
   let parsed: unknown;
@@ -46,6 +50,9 @@ function parseControlMessage(raw: string): ControlMessage | null {
   if (typeof parsed !== "object" || parsed === null) return null;
   const v = parsed as Record<string, unknown>;
   if (v.type === "exited") return { type: "exited" };
+  if (v.type === "error" && typeof v.message === "string") {
+    return { type: "error", message: v.message };
+  }
   return null;
 }
 
@@ -76,6 +83,7 @@ export function DevicePane(props: {
     WebCodecsVideoDecoder.isSupported ? "connecting" : "unsupported",
   );
   const [reconnectAttempt, setReconnectAttempt] = useState(0);
+  const [lastError, setLastError] = useState<string | null>(null);
   const sendControlRef = useRef<(message: Record<string, unknown>) => void>(() => {});
   const retryRef = useRef<() => void>(() => {});
 
@@ -110,6 +118,11 @@ export function DevicePane(props: {
 
     function connect(): void {
       if (destroyed) return;
+      // Defensive: never let a still-open previous socket keep running
+      // once a new one is about to be created — see the "exited" handler's
+      // own comment on why this matters (a stray socket stays registered
+      // server-side as a live viewer until the OS times it out).
+      if (ws && ws.readyState !== WebSocket.CLOSED) ws.close();
       setStatus(reconnectAttempt === 0 ? "connecting" : "reconnecting");
       setReconnectAttempt(reconnectAttempt);
 
@@ -123,12 +136,33 @@ export function DevicePane(props: {
       socket.addEventListener("open", () => {
         reconnectAttempt = 0;
         setStatus("open");
+        setLastError(null);
       });
 
       socket.addEventListener("message", (event) => {
         if (typeof event.data === "string") {
           const message = parseControlMessage(event.data);
-          if (message?.type === "exited") setStatus("failed");
+          if (message?.type === "exited") {
+            setStatus("failed");
+            // The server closes its own end right after sending this (see
+            // routes/device.ts), but close() here too rather than relying
+            // on that round trip — Retry/reconnect must never race a
+            // still-open previous socket into existing alongside a new
+            // one (connect() below would otherwise overwrite `ws` and
+            // leave this one to linger as a phantom, still-subscribed
+            // viewer until the OS eventually times it out).
+            socket.close();
+          } else if (message?.type === "error") {
+            // getOrCreate() failed right after the upgrade (routes/
+            // device.ts) — most likely a scope left running from before a
+            // restart (device-manager.ts's own isScopeAlive comment).
+            // Shown, not silently dropped: this is actionable (the message
+            // names the exact `systemctl --user stop` command), unlike a
+            // one-bad-packet decode error.
+            setLastError(message.message);
+            setStatus("failed");
+            socket.close();
+          }
           return;
         }
         const packet = decodeVideoFrame(event.data as ArrayBuffer);
@@ -251,6 +285,7 @@ export function DevicePane(props: {
     <div className="browser-pane">
       <div className="browser-pane-canvas-wrap">
         <canvas ref={canvasRef} className="browser-pane-canvas" tabIndex={0} />
+        {lastError && <div className="browser-pane-error-toast">{lastError}</div>}
         {status !== "open" && status !== "unsupported" && (
           <div className={`terminal-status-overlay ${status}`}>
             {status === "connecting" && (

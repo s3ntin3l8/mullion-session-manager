@@ -34,13 +34,27 @@ const BACKPRESSURE_MAX_BUFFERED_BYTES = 4 * 1024 * 1024;
 // Deliberately doesn't carry `pts` — see the route's own header on why
 // receive-time pacing is enough for a live, audio-less stream; add it here
 // if audio ever lands and needs A/V sync.
+//
+// Cached per PACKET OBJECT (WeakMap, not a plain Map — no explicit eviction
+// needed, and no cross-device corruption risk: Device.pumpVideo emits a
+// fresh object per read, so a cache key is never reused across devices or
+// packets). Device.onVideoPacket fans the SAME packet out to every attached
+// socket's own listener (multiple panels/CLI viewers of one device is an
+// explicitly supported case — see docs/device-panel.md), so without this,
+// N listeners would each independently allocate-and-copy an identical
+// frame on the hottest path in the whole feature (every video frame).
+const encodedFrameCache = new WeakMap<ScrcpyMediaStreamPacket, Uint8Array>();
+
 function encodeVideoFrame(packet: ScrcpyMediaStreamPacket): Uint8Array {
+  const cached = encodedFrameCache.get(packet);
+  if (cached) return cached;
   const typeByte = packet.type === "configuration" ? 0 : 1;
   const flagsByte = packet.type === "data" && packet.keyframe ? 1 : 0;
   const out = new Uint8Array(2 + packet.data.byteLength);
   out[0] = typeByte;
   out[1] = flagsByte;
   out.set(packet.data, 2);
+  encodedFrameCache.set(packet, out);
   return out;
 }
 
@@ -285,7 +299,25 @@ export async function attachSocketToDevice(
   socket: WebSocket,
   { deviceId, avdName, label }: AttachDeviceParams,
 ): Promise<void> {
-  const device = app.device.getOrCreate({ id: String(deviceId), avdName, label });
+  let device;
+  try {
+    device = await app.device.getOrCreate({ id: String(deviceId), avdName, label });
+  } catch (err) {
+    // Same shape as routes/browser.ts's attachSocketToBrowser on a
+    // getOrLaunch() failure — most likely getOrCreate's own
+    // isScopeAlive() pre-check finding a scope left running from before a
+    // restart (see that method's own comment).
+    app.log.error({ err, deviceId }, "failed to get-or-create device");
+    if (socket.readyState === socket.OPEN) {
+      socket.send(JSON.stringify({ type: "error", message: (err as Error).message }));
+      socket.close();
+    }
+    return;
+  }
+
+  // The socket may already be gone by the time the (possibly slow)
+  // getOrCreate() above resolves.
+  if (socket.readyState !== socket.OPEN) return;
 
   let closed = false;
   let droppedSincePacket = false;
@@ -311,6 +343,13 @@ export async function attachSocketToDevice(
   const unsubscribeExit = device.onExit(() => {
     if (socket.readyState === socket.OPEN) {
       socket.send(JSON.stringify({ type: "exited" }));
+      // Nothing more will ever be sent on this socket — close it rather
+      // than leaving it dangling open. The client's own "close" handler
+      // (DevicePane.tsx) is what unsubscribes this route's video/exit
+      // listeners below (via the socket "close" handler further down), so
+      // not closing here would leak this Device's listener registrations
+      // until the client happens to notice on its own.
+      socket.close();
     }
   });
 
@@ -357,7 +396,19 @@ export async function deviceRoute(app: FastifyInstance): Promise<void> {
     },
     (socket, req) => {
       const deviceId = Number(req.params.deviceId);
+      // preValidation above already confirmed this row exists and isn't
+      // killed — re-checked here (the upgrade has already completed by this
+      // point, so a TOCTOU race — e.g. DELETE /api/devices/:id landing
+      // between preValidation and this handler — can't be reported as an
+      // HTTP error anymore) the same way terminal.ts's own
+      // resolveAndAttach does: close the socket rather than leaving it open
+      // with nothing wired up, or throwing on `row` being undefined.
       const [row] = app.db.select().from(devices).where(eq(devices.id, deviceId)).all();
+      if (!row || row.status === "killed") {
+        app.log.warn({ deviceId }, "device ws attach failed after upgrade, closing");
+        socket.close();
+        return;
+      }
       void attachSocketToDevice(app, socket, {
         deviceId,
         avdName: row.avdName,

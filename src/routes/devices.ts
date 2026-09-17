@@ -97,11 +97,17 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
         .returning()
         .all();
 
-      // Fire-and-forget — same shape as PtyManager.getOrCreate: the caller
-      // gets the row immediately, live status is polled via GET afterward
+      // Only the isScopeAlive() pre-check inside getOrCreate is awaited
+      // here — the emulator's actual boot is still fire-and-forget, same
+      // shape as PtyManager.getOrCreate: the caller gets the row back once
+      // that quick check clears, live status is polled via GET afterward
       // (or observed by connecting the WS route, which naturally blocks
       // until streaming or error).
-      app.device.getOrCreate({ id: String(row.id), avdName: row.avdName, label: row.name });
+      try {
+        await app.device.getOrCreate({ id: String(row.id), avdName: row.avdName, label: row.name });
+      } catch (err) {
+        return reply.badRequest(err instanceof Error ? err.message : String(err));
+      }
 
       reply.code(201);
       return toListItem(row, app.device.get(String(row.id))?.toInfo());

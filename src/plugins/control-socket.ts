@@ -320,6 +320,17 @@ function extractProjectId(body: Record<string, unknown> | undefined): string | n
   return id.length === 0 ? null : id;
 }
 
+/** Same shape as extractSessionId/extractProjectId, for the device.* ops'
+ * always-explicit `body.deviceId` — see device.action's own comment on why
+ * there's no pinning/default to resolve here, unlike resolveTargetSessionId. */
+function extractDeviceId(body: Record<string, unknown> | undefined): string | null {
+  const rawId = body?.deviceId;
+  if (rawId === undefined || rawId === null) return null;
+  if (typeof rawId !== "string" && typeof rawId !== "number") return null;
+  const id = String(rawId);
+  return id.length === 0 ? null : id;
+}
+
 /**
  * Same "resolve + enforce the pin" shape as resolveTargetSessionId, but for
  * `projects.actions` — the one op the plan's per-scope allowlist puts at
@@ -993,8 +1004,8 @@ const OPS: Record<string, OpSpec> = {
   "device.action": {
     scopes: ["full", "session"],
     handler: async ({ app, body, reply }) => {
-      const deviceId = body?.deviceId;
-      if (deviceId === undefined || deviceId === null || deviceId === "") {
+      const deviceId = extractDeviceId(body);
+      if (deviceId === null) {
         reply({ ok: false, status: 400, error: "'deviceId' is required" });
         return;
       }
@@ -1025,8 +1036,8 @@ const OPS: Record<string, OpSpec> = {
   "device.get": {
     scopes: ["full", "session"],
     handler: async ({ app, body, reply }) => {
-      const deviceId = body?.deviceId;
-      if (deviceId === undefined || deviceId === null || deviceId === "") {
+      const deviceId = extractDeviceId(body);
+      if (deviceId === null) {
         reply({ ok: false, status: 400, error: "'deviceId' is required" });
         return;
       }
@@ -1055,8 +1066,8 @@ const OPS: Record<string, OpSpec> = {
   "device.terminate": {
     scopes: ["full", "session"],
     handler: async ({ app, body, reply }) => {
-      const deviceId = body?.deviceId;
-      if (deviceId === undefined || deviceId === null || deviceId === "") {
+      const deviceId = extractDeviceId(body);
+      if (deviceId === null) {
         reply({ ok: false, status: 400, error: "'deviceId' is required" });
         return;
       }
