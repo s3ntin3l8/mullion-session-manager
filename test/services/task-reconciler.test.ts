@@ -3878,7 +3878,7 @@ describe("reconcileTasks", () => {
       await app.close();
     });
 
-    it("continues auto-rebase when terminating the superseded review session fails", async () => {
+    it("aborts auto-rebase when terminating the active review session fails", async () => {
       const app = await buildApp();
       vi.spyOn(app.pty, "terminate").mockRejectedValueOnce(new Error("pty kill failed"));
       const warnSpy = vi.spyOn(app.log, "warn");
@@ -3898,13 +3898,38 @@ describe("reconcileTasks", () => {
       await reconcileTasks(app);
 
       const row = await getTask(app, taskId);
-      expect(row.rebaseAttempts).toBe(1);
-      expect(row.rebaseStartedAt).not.toBeNull();
-      expect(row.sessionId).not.toBeNull();
+      expect(row.rebaseAttempts).toBe(0);
+      expect(row.rebaseStartedAt).toBeNull();
+      expect(row.mergeError).toContain(
+        "active review session appears stuck and could not be stopped",
+      );
+      expect(mockResumeTaskWorktree).not.toHaveBeenCalled();
       expect(warnSpy).toHaveBeenCalledWith(
         expect.objectContaining({ taskId, reviewSessionId }),
-        "task auto-rebase: superseded review session could not be terminated after spawn",
+        "task auto-rebase: active review session appears stuck and could not be stopped, leaving it for a later tick",
       );
+
+      await app.close();
+    });
+
+    it("clears reviewSessionId when resumeTaskWorktree fails during auto-rebase of a reviewing task", async () => {
+      const app = await buildApp();
+      vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined);
+      const { taskId } = await createAutoApproveCandidate(app, {
+        branchName: "mullion/task-x",
+        agentCommand: "claude",
+      });
+      mockGetPullRequestByNumber.mockResolvedValue(
+        mockPr({ mergeable: false, mergeableState: "dirty" }),
+      );
+      mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
+      mockResumeTaskWorktree.mockResolvedValue(null);
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.reviewSessionId).toBeNull();
+      expect(row.mergeError).toContain("could not recreate the worktree");
 
       await app.close();
     });

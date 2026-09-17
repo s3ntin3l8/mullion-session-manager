@@ -113,9 +113,13 @@ export function scanFileForAntipatterns(filePath, content) {
 
       const hasDangerousOrigin =
         /origin:\s*(true|\*|['"]\*['"]|\/\.\*\/)/.test(windowContent) ||
-        /cb\(\s*null\s*,\s*true\s*\)/.test(windowContent) ||
-        /cb\(\s*undefined\s*,\s*true\s*\)/.test(windowContent) ||
-        /origin:\s*\([^)]*\)\s*=>\s*true/.test(windowContent);
+        /cb\(\s*(?:null|undefined)\s*,\s*(?:true|origin|req(\.|uest\.)headers|headers\[['"]origin['"]\]|\w*[oO]rigin)\b/i.test(
+          windowContent,
+        ) ||
+        /origin:\s*\([^)]*\)\s*=>\s*(?:true|origin|req(\.|uest\.)headers|headers\[['"]origin['"]\]|\w*[oO]rigin)\b/i.test(
+          windowContent,
+        ) ||
+        /origin:\s*\([^)]*origin[^)]*\)\s*=>/i.test(windowContent);
 
       if (hasDangerousOrigin && !line.includes("pragma: allowlist cors-credentials")) {
         findings.push({

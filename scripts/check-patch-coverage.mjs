@@ -264,7 +264,8 @@ export function runPatchCoverageCheck(options = {}) {
         try {
           execFileSync("npm", ["run", "test:coverage"], { cwd: root, stdio: "inherit" });
         } catch (err) {
-          console.error("Failed to run backend tests with coverage:", err.message);
+          console.error("ERROR: Failed to run backend tests with coverage:", err.message);
+          return { ok: false, overallPercent: 0, error: "coverage-run-failed" };
         }
       }
       if (needFrontend) {
@@ -274,7 +275,8 @@ export function runPatchCoverageCheck(options = {}) {
             stdio: "inherit",
           });
         } catch (err) {
-          console.error("Failed to run frontend tests with coverage:", err.message);
+          console.error("ERROR: Failed to run frontend tests with coverage:", err.message);
+          return { ok: false, overallPercent: 0, error: "coverage-run-failed" };
         }
       }
       coverageData = loadCoverageReports();

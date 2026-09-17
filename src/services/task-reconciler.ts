@@ -392,20 +392,7 @@ async function resolveReviewCi(
   try {
     const current = await fetchCurrentCiStatus(app, task, project);
     if (!current) return undefined;
-    const { headSha, status, runs: runSummaries, mergeable, mergeableState } = current;
-
-    const reviewingAtMs = task.reviewingAt?.getTime() ?? now;
-    const pastDeadline = now - reviewingAtMs >= waitMinutes * 60_000;
-
-    if (mergeable === false || mergeableState === "dirty") {
-      if (!pastDeadline) return "wait";
-      return {
-        headSha,
-        status: null,
-        runs: runSummaries,
-        note: "PR has merge conflicts with base branch — CI cannot run",
-      };
-    }
+    const { headSha, status, runs: runSummaries } = current;
 
     if (status !== "in_progress" && status !== null) {
       return { headSha, status, runs: runSummaries };
@@ -417,6 +404,8 @@ async function resolveReviewCi(
     // `reviewingAt` is set in the very same DB write that put this task in
     // "reviewing" (both `→ reviewing` transition sites), so it's never
     // actually null here — the `?? now` is defensive, not load-bearing.
+    const reviewingAtMs = task.reviewingAt?.getTime() ?? now;
+    const pastDeadline = now - reviewingAtMs >= waitMinutes * 60_000;
     if (!pastDeadline) return "wait";
     return {
       headSha,
@@ -1353,6 +1342,40 @@ async function attemptAutoRebase(
     return;
   }
 
+  // Pre-removal cleanup: terminate an active review session before force-removing
+  // the worktree it is running in. On a reviewing task's first auto-rebase,
+  // rebaseStartedAt is null, but task.reviewSessionId points to the active reviewer.
+  // Terminating it before removeWorktree avoids removing the cwd from under a live process.
+  if (task.reviewSessionId !== null) {
+    const [reviewSession] = app.db
+      .select()
+      .from(sessions)
+      .where(eq(sessions.id, task.reviewSessionId))
+      .all();
+    if (reviewSession?.status === "active") {
+      try {
+        await backend.terminate(String(task.reviewSessionId));
+        app.db
+          .update(sessions)
+          .set({ status: "killed" })
+          .where(eq(sessions.id, task.reviewSessionId))
+          .run();
+        closeSessionBrowserBindings(app, task.reviewSessionId);
+      } catch (err) {
+        app.log.warn(
+          { err, taskId: task.id, reviewSessionId: task.reviewSessionId },
+          "task auto-rebase: active review session appears stuck and could not be stopped, leaving it for a later tick",
+        );
+        recordMergeError(
+          app,
+          task.id,
+          "Conflicts with main — active review session appears stuck and could not be stopped, needs manual resolution",
+        );
+        return;
+      }
+    }
+  }
+
   // Clear any leftover worktree from a prior attempt first. resumeTaskWorktree
   // targets a deterministic path (deriveWorktreePath), so a second attempt at
   // the same path fails outright unless the first attempt's worktree is gone.
@@ -1370,6 +1393,9 @@ async function attemptAutoRebase(
 
   const worktree = await backend.resumeTaskWorktree(project.cwd, branchName);
   if (!worktree) {
+    if (task.reviewSessionId !== null) {
+      app.db.update(tasks).set({ reviewSessionId: null }).where(eq(tasks.id, task.id)).run();
+    }
     // Branch missing or checked out elsewhere — not retryable by spawning
     // again. Surface for a human rather than looping (mirrors the plan's
     // "returns null -> surface for a human, not a retry").
@@ -1429,6 +1455,9 @@ async function attemptAutoRebase(
     taskId: task.id,
   });
   if (!result.ok) {
+    if (task.reviewSessionId !== null) {
+      app.db.update(tasks).set({ reviewSessionId: null }).where(eq(tasks.id, task.id)).run();
+    }
     recordMergeError(
       app,
       task.id,
@@ -1460,39 +1489,14 @@ async function attemptAutoRebase(
     .where(and(eq(tasks.id, task.id), inArray(tasks.status, ["done", "reviewing"])))
     .run();
   if (updated.changes === 0) {
+    if (task.reviewSessionId !== null) {
+      app.db.update(tasks).set({ reviewSessionId: null }).where(eq(tasks.id, task.id)).run();
+    }
     app.log.warn(
       { taskId: task.id, newSessionId: result.row.id },
       "task auto-rebase: lost a race with a concurrent transition — the freshly spawned session is orphaned, left for a human to notice",
     );
     return;
-  }
-
-  // Once spawn + CAS succeed, terminate the superseded review session (if any).
-  // Kept strictly after the CAS so a failure in resumeTaskWorktree, createSessionRecord,
-  // or the CAS itself does not kill an active reviewer while leaving the task in reviewing
-  // with a stranded dead session.
-  if (task.reviewSessionId !== null) {
-    const [reviewSession] = app.db
-      .select()
-      .from(sessions)
-      .where(eq(sessions.id, task.reviewSessionId))
-      .all();
-    if (reviewSession?.status === "active") {
-      try {
-        await backend.terminate(String(task.reviewSessionId));
-        app.db
-          .update(sessions)
-          .set({ status: "killed" })
-          .where(eq(sessions.id, task.reviewSessionId))
-          .run();
-        closeSessionBrowserBindings(app, task.reviewSessionId);
-      } catch (err) {
-        app.log.warn(
-          { err, taskId: task.id, reviewSessionId: task.reviewSessionId },
-          "task auto-rebase: superseded review session could not be terminated after spawn",
-        );
-      }
-    }
   }
 
   app.log.info(

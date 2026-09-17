@@ -120,6 +120,40 @@ describe("check-security-antipatterns", () => {
     });
   });
 
+  it("flags Fastify CORS callback reflection cb(null, origin) with credentials: true", () => {
+    const code = `
+      fastify.register(cors, {
+        origin: (origin, cb) => {
+          cb(null, origin);
+        },
+        credentials: true,
+      });
+    `;
+    const findings = scanFileForAntipatterns("cors-origin-cb.ts", code);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({
+      file: "cors-origin-cb.ts",
+      rule: "cors-misconfiguration-for-credentials",
+    });
+  });
+
+  it("flags Fastify CORS callback reflection with req.headers.origin", () => {
+    const code = `
+      fastify.register(cors, {
+        origin: (req, cb) => {
+          cb(null, req.headers.origin);
+        },
+        credentials: true,
+      });
+    `;
+    const findings = scanFileForAntipatterns("cors-req-headers.ts", code);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({
+      file: "cors-req-headers.ts",
+      rule: "cors-misconfiguration-for-credentials",
+    });
+  });
+
   it("flags Fastify CORS arrow returning true with credentials: true", () => {
     const code = `
       fastify.register(cors, {
