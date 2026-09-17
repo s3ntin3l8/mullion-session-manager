@@ -541,14 +541,14 @@ export function BrowserPanel({
       return <div className="browser-panel-empty">Loading…</div>;
     }
     if (state.status === "unavailable") {
-<<<<<<< HEAD
       // Retry only offered once there's actually a dev server/saved URL to
       // retry against — the sibling "no dev server URL configured" message
       // above needs a settings change, not a reload, to ever resolve. Same
       // for state.retryable === false (e.g. a dangerous devServerUrl scheme):
       // a reload re-runs the identical, still-dangerous URL through the same
       // check every time.
-      const canRetry = (!!devServerUrl || activeSavedUrlId !== null || isExternal) && state.retryable !== false;
+      const canRetry =
+        (!!devServerUrl || activeSavedUrlId !== null || isExternal) && state.retryable !== false;
       return (
         <div className="browser-panel-empty">
           <div>{state.message}</div>
