@@ -83,6 +83,43 @@ async function mintPreviewTokenIfRequired(
   return token;
 }
 
+// Shown when a fetch() probe of a resolved preview `src` (isPreviewProxyError
+// below) confirms one of the preview proxy's own early-return errors —
+// unknown slug, PREVIEW_AUTH_REQUIRED rejection, or rate-limiting, none of
+// which the devServerOnline poll above ever sees (that only covers a
+// project's own dev server going offline, a distinct 502/503 case the proxy
+// also produces, but same-origin-detectable another way — see this file's
+// own top-of-file issue reference). Deliberately generic: this fires for
+// several distinct proxy-side conditions and the probe itself can't tell
+// which (see isPreviewProxyError's own comment on why the frontend never
+// gets a real status code to distinguish 404 from 401 from 429).
+const PREVIEW_PROXY_ERROR_MESSAGE =
+  "This preview isn't reachable through the proxy right now (it may be misconfigured, " +
+  "require authentication, or be rate-limited). Try again in a moment.";
+
+// Issue #1318 — src/plugins/preview-proxy.ts now sends
+// Access-Control-Allow-Origin on exactly its own early-return error
+// responses (404 unknown slug, 401 PREVIEW_AUTH_REQUIRED, 429 rate-limited,
+// 502/503 dev server down) and NEVER on a real proxied response (the
+// previewed dev server's own content stays exactly as CORS-opaque as
+// before). That split is what makes this probe meaningful: a *readable*
+// non-2xx response is a genuine proxy error worth surfacing; a thrown fetch
+// (a network-level CORS failure — no ACAO header at all, the common case of
+// a real successful load) tells us nothing, so it's treated as "probably
+// fine" and the caller falls back to mounting the iframe exactly as it did
+// before this probe existed. `credentials: "include"` so an
+// already-established preview cookie (PREVIEW_AUTH_REQUIRED's sliding-
+// refresh case) is sent, the same as the iframe's own subsequent navigation
+// would.
+async function isPreviewProxyError(src: string): Promise<boolean> {
+  try {
+    const response = await fetch(src, { credentials: "include" });
+    return !response.ok;
+  } catch {
+    return false;
+  }
+}
+
 async function resolvePreviewUrl(
   targetUrl: string,
   existingSlug?: string,
@@ -98,7 +135,11 @@ async function resolvePreviewUrl(
     const scheme = window.location.protocol;
     const slug = existingSlug ?? (await api.createExternalPreview(targetUrl)).slug;
     const token = await mintPreviewTokenIfRequired(info, slug);
-    return { src: buildPreviewSrc(scheme, slug, info.previewBaseHost, token) };
+    const src = buildPreviewSrc(scheme, slug, info.previewBaseHost, token);
+    if (await isPreviewProxyError(src)) {
+      return { error: PREVIEW_PROXY_ERROR_MESSAGE };
+    }
+    return { src };
   } catch (err: unknown) {
     return { error: err instanceof ApiError ? err.message : "Couldn't open this URL." };
   }
@@ -258,15 +299,19 @@ export function BrowserPanel({
           const token = await mintPreviewTokenIfRequired(info, preview.slug);
           if (cancelled) return;
           setPreviewViaProxy(true);
-          setFetchState({
-            status: "ready",
-            src: buildPreviewSrc(
-              window.location.protocol,
-              preview.slug,
-              info.previewBaseHost,
-              token,
-            ),
-          });
+          const src = buildPreviewSrc(
+            window.location.protocol,
+            preview.slug,
+            info.previewBaseHost,
+            token,
+          );
+          if (await isPreviewProxyError(src)) {
+            if (cancelled) return;
+            setFetchState({ status: "unavailable", message: PREVIEW_PROXY_ERROR_MESSAGE });
+            return;
+          }
+          if (cancelled) return;
+          setFetchState({ status: "ready", src });
         } catch (err: unknown) {
           if (cancelled) return;
           setFetchState({
@@ -496,13 +541,14 @@ export function BrowserPanel({
       return <div className="browser-panel-empty">Loading…</div>;
     }
     if (state.status === "unavailable") {
+<<<<<<< HEAD
       // Retry only offered once there's actually a dev server/saved URL to
       // retry against — the sibling "no dev server URL configured" message
       // above needs a settings change, not a reload, to ever resolve. Same
       // for state.retryable === false (e.g. a dangerous devServerUrl scheme):
       // a reload re-runs the identical, still-dangerous URL through the same
       // check every time.
-      const canRetry = (!!devServerUrl || activeSavedUrlId !== null) && state.retryable !== false;
+      const canRetry = (!!devServerUrl || activeSavedUrlId !== null || isExternal) && state.retryable !== false;
       return (
         <div className="browser-panel-empty">
           <div>{state.message}</div>
