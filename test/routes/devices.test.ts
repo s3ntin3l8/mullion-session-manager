@@ -120,6 +120,52 @@ describe("devices routes", () => {
       expect(typeof row.port).toBe("number");
     });
 
+    it("a fresh spawn() on a NEW app instance (simulating a Mullion restart) skips a port persisted by a still-active, not-yet-reattached row (issue #1328)", async () => {
+      // Plain buildApp(), not buildTestApp() — this test closes app1 itself,
+      // mid-test, to force devicePlugin's own DeviceManager construction on
+      // app2 to start from a genuinely empty `allocatedPorts` (see
+      // buildTestApp's own header on why manual closes use buildApp
+      // directly, e.g. test/routes/actions.test.ts). Imported dynamically,
+      // not as a top-level static import — see mock-pty.ts's own header on
+      // why a static import of anything that transitively loads "node-pty"
+      // must never land above this file's own vi.mock("node:child_process",
+      // ...) factory in evaluation order.
+      const { buildApp } = await import("../../src/app.js");
+      const app1 = await buildApp();
+      const created = await app1.inject({
+        method: "POST",
+        url: "/api/devices",
+        payload: { avdName: "dev35" },
+      });
+      const [row] = app1.db.select().from(devices).where(eq(devices.id, created.json().id)).all();
+      const survivingPort = row.port;
+      expect(typeof survivingPort).toBe("number");
+
+      // Simulate a restart: close WITHOUT ever calling DELETE — the row
+      // stays `status: "active"` with its port persisted, and (crucially)
+      // nobody calls getOrCreate() for this id again, so reservePort()
+      // never fires for it on the next app's manager either.
+      await app1.close();
+
+      const app2 = await buildApp();
+      // devicePlugin's construction-time read (src/plugins/device.ts) must
+      // have already reserved `survivingPort` on app2's DeviceManager
+      // BEFORE this second, unrelated device's own allocatePort() call.
+      const secondCreated = await app2.inject({
+        method: "POST",
+        url: "/api/devices",
+        payload: { avdName: "dev35" },
+      });
+      const [secondRow] = app2.db
+        .select()
+        .from(devices)
+        .where(eq(devices.id, secondCreated.json().id))
+        .all();
+      expect(secondRow.port).not.toBe(survivingPort);
+
+      await app2.close();
+    });
+
     it("GET /api/devices lists a created row", async () => {
       const app = await buildTestApp();
       await app.inject({ method: "POST", url: "/api/devices", payload: { avdName: "dev35" } });

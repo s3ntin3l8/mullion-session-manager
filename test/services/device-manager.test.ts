@@ -353,6 +353,28 @@ describe("DeviceManager", () => {
     expect(systemdRunCallsAfter).toBe(systemdRunCallsBefore);
   });
 
+  it("allocatePort() skips a port reserved via initialPorts at construction — a restart-surviving, not-yet-reattached device's port isn't handed to a fresh spawn()", async () => {
+    // The port a fresh spawn() should now be forced onto (5556, the next
+    // even port after EMULATOR_PORT_BASE) has to already be the one
+    // waitForAdbSerial() sees on adb, or spawn() would poll forever waiting
+    // for a serial (emulator-5556) that never appears.
+    mockDeviceList = [{ serial: "emulator-5556" }];
+    // Simulates devicePlugin's own construction-time read of every
+    // `status: "active"` row's persisted port (issue #1328) — this device
+    // (say, id "7") hasn't had getOrCreate() called for it yet since boot,
+    // so nothing has reservePort()'d 5554 the "normal" way; initialPorts is
+    // the only thing standing between it and a collision.
+    const onPortAssigned = vi.fn();
+    const manager = new DeviceManager(baseOpts({ initialPorts: [5554], onPortAssigned }));
+
+    await manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null });
+    await waitForStatus(manager, "1", "streaming");
+
+    // EMULATOR_PORT_BASE (5554) was pre-reserved, so the round-robin scan
+    // must have skipped straight to the next even port instead.
+    expect(onPortAssigned).toHaveBeenCalledWith("1", 5556);
+  });
+
   it("getOrCreate rejects with a clear, actionable error when a scope survived with no in-memory Device (the restart-collision guard)", async () => {
     const manager = new DeviceManager(baseOpts());
     const instanceId = deriveInstanceId(SESSIONS_DIR);

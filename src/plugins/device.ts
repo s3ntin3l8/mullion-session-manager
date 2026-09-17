@@ -10,6 +10,26 @@ import { ensureSessionsDir } from "./pty.js";
 // registers regardless of DEVICE_ENABLED — the manager itself stays inert
 // (every method throws) when the flag is off, so callers get a clear,
 // consistent error rather than a missing decorator.
+
+// Read synchronously (better-sqlite3, no async gap between this and
+// `new DeviceManager()` below) so allocatePort()'s round-robin scan can
+// never run before these ports are reserved — see
+// DeviceManagerOptions.initialPorts's own comment. `undefined` app.db (the
+// multi-host "agent" role, which registers this plugin too — see
+// src/app.ts's role branch) means no `devices` table to read at all, same
+// `app.db ? ... : ` fallback posture as hooksPlugin's own settings lookup
+// (src/plugins/hooks.ts).
+function readActiveDevicePorts(app: FastifyInstance): number[] {
+  if (!app.db) return [];
+  return app.db
+    .select({ port: devices.port })
+    .from(devices)
+    .where(eq(devices.status, "active"))
+    .all()
+    .map((row) => row.port)
+    .filter((port): port is number => port !== null);
+}
+
 export const devicePlugin = fp(async (app: FastifyInstance) => {
   const manager = new DeviceManager({
     enabled: app.config.DEVICE_ENABLED,
@@ -20,6 +40,7 @@ export const devicePlugin = fp(async (app: FastifyInstance) => {
     // Same input, same pure function pty.ts's own plugin already calls —
     // see ensureSessionsDir's own comment on why this must match exactly.
     sessionsDir: ensureSessionsDir(app.config.SESSIONS_DIR),
+    initialPorts: readActiveDevicePorts(app),
     onSpawnError: (id, err) => {
       app.log.warn({ err, deviceId: id }, "device spawn failed");
     },
