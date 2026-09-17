@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
 // Must come before any import below that could itself trigger loading
 // "node-pty"/"node:child_process" — see test/helpers/mock-pty.ts's header
 // comment for the empirically confirmed hoisting/ordering failure mode.
@@ -198,8 +198,23 @@ const { deviceScopeUnitName, deriveInstanceId, deviceMarkerPath } =
   await import("../../src/services/device-process.js");
 const fs = await import("node:fs");
 const path = await import("node:path");
+const os = await import("node:os");
 
-const SESSIONS_DIR = "/tmp/device-manager-test-sessions";
+// A random, per-run directory rather than a hardcoded "/tmp/..." literal —
+// besides avoiding a collision between parallel test runs/shards sharing a
+// fixed path, a literal "/tmp/..." string is exactly what CodeQL's
+// js/insecure-temporary-file query treats as an insecure-temp-file taint
+// SOURCE; it then flags touchDeviceMarker()'s own openSync() call (a real,
+// already-hardened production sink — see that function's own comment) as
+// reachable from it, purely because this test happens to pass such a path
+// in. mkdtempSync(path.join(os.tmpdir(), ...)) is the query's own
+// documented-safe pattern (a fresh, unpredictable directory name), which is
+// why the sibling device-manager-reattach.test.ts's identical idiom doesn't
+// trigger it.
+const SESSIONS_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "device-manager-test-"));
+afterAll(() => {
+  fs.rmSync(SESSIONS_DIR, { recursive: true, force: true });
+});
 // AdbScrcpyClient.pushServer is mocked and never actually reads this file's
 // contents, but `createReadStream` (device-manager.ts) still tries to OPEN
 // it eagerly — a nonexistent path throws an unhandled 'error' event since
@@ -267,6 +282,27 @@ async function waitForStatus(
       throw new Error(
         `timed out waiting for device ${id} to reach status "${status}" (last: ${info?.status})`,
       );
+    }
+    await new Promise((r) => setTimeout(r, 5));
+  }
+}
+
+/** spawn()'s own catch block flips `status` to "error" BEFORE awaiting
+ * teardownProcess() (see that method's own comment) — so a test that has
+ * only awaited waitForStatus(..., "error") has no guarantee teardown
+ * (marker removal, the stopDeviceScope() call) has actually finished yet.
+ * Usually fast enough not to matter, but under heavy parallel-suite load
+ * the gap is observable — poll rather than assert once. */
+async function waitForCondition(
+  predicate: () => boolean,
+  description: string,
+  timeoutMs = 2000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (predicate()) return;
+    if (Date.now() > deadline) {
+      throw new Error(`timed out waiting for: ${description}`);
     }
     await new Promise((r) => setTimeout(r, 5));
   }
@@ -351,13 +387,22 @@ describe("DeviceManager", () => {
     await waitForStatus(manager, "1", "error");
     expect(manager.get("1")?.toInfo().error).toMatch(/createAdb failed/);
 
-    // Marker file removed, not left behind.
-    expect(fs.existsSync(deviceMarkerPath(SESSIONS_DIR, "1"))).toBe(false);
+    // Marker file removed, not left behind — polled (see waitForCondition's
+    // own comment): status flips to "error" before teardownProcess() is
+    // awaited, so it isn't guaranteed to have finished the instant
+    // waitForStatus above resolves.
+    await waitForCondition(
+      () => !fs.existsSync(deviceMarkerPath(SESSIONS_DIR, "1")),
+      "device 1's marker file to be removed",
+    );
     // stopDeviceScope's own "systemctl stop <unit>" was issued.
-    const stopCall = vi
-      .mocked(spawnChildProcess)
-      .mock.calls.find((c) => c[0] === "systemctl" && (c[1] as string[])[1] === "stop");
-    expect(stopCall).toBeDefined();
+    await waitForCondition(
+      () =>
+        vi
+          .mocked(spawnChildProcess)
+          .mock.calls.some((c) => c[0] === "systemctl" && (c[1] as string[])[1] === "stop"),
+      "a systemctl stop call for device 1",
+    );
 
     // The port is releasable again — a second attempt with the same id
     // doesn't run out of ports (a real regression this fix prevents: an
@@ -375,7 +420,10 @@ describe("DeviceManager", () => {
     await manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null });
     await waitForStatus(manager, "1", "error");
     expect(manager.get("1")?.toInfo().error).toMatch(/device bootstrap exited with code 1/);
-    expect(fs.existsSync(deviceMarkerPath(SESSIONS_DIR, "1"))).toBe(false);
+    await waitForCondition(
+      () => !fs.existsSync(deviceMarkerPath(SESSIONS_DIR, "1")),
+      "device 1's marker file to be removed",
+    );
     // Never got far enough to even attempt an adb connection.
     expect(mockServerClient.createAdb.mock.calls.length).toBe(createAdbCallsBefore);
 
@@ -393,11 +441,17 @@ describe("DeviceManager", () => {
     await manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null });
     await waitForStatus(manager, "1", "error");
     expect(manager.get("1")?.toInfo().error).toMatch(/pushServer failed/);
-    expect(fs.existsSync(deviceMarkerPath(SESSIONS_DIR, "1"))).toBe(false);
-    const stopCall = vi
-      .mocked(spawnChildProcess)
-      .mock.calls.find((c) => c[0] === "systemctl" && (c[1] as string[])[1] === "stop");
-    expect(stopCall).toBeDefined();
+    await waitForCondition(
+      () => !fs.existsSync(deviceMarkerPath(SESSIONS_DIR, "1")),
+      "device 1's marker file to be removed",
+    );
+    await waitForCondition(
+      () =>
+        vi
+          .mocked(spawnChildProcess)
+          .mock.calls.some((c) => c[0] === "systemctl" && (c[1] as string[])[1] === "stop"),
+      "a systemctl stop call for device 1",
+    );
 
     mockPushServerShouldFail = false;
     await manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null });
@@ -411,11 +465,17 @@ describe("DeviceManager", () => {
     await manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null });
     await waitForStatus(manager, "1", "error");
     expect(manager.get("1")?.toInfo().error).toMatch(/scrcpy start failed/);
-    expect(fs.existsSync(deviceMarkerPath(SESSIONS_DIR, "1"))).toBe(false);
-    const stopCall = vi
-      .mocked(spawnChildProcess)
-      .mock.calls.find((c) => c[0] === "systemctl" && (c[1] as string[])[1] === "stop");
-    expect(stopCall).toBeDefined();
+    await waitForCondition(
+      () => !fs.existsSync(deviceMarkerPath(SESSIONS_DIR, "1")),
+      "device 1's marker file to be removed",
+    );
+    await waitForCondition(
+      () =>
+        vi
+          .mocked(spawnChildProcess)
+          .mock.calls.some((c) => c[0] === "systemctl" && (c[1] as string[])[1] === "stop"),
+      "a systemctl stop call for device 1",
+    );
 
     mockStartShouldFail = false;
     await manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null });
