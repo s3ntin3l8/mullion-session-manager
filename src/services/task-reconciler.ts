@@ -322,6 +322,8 @@ async function fetchCurrentCiStatus(
   // `getPullRequestByNumber` call below — one fewer redundant GitHub call.
   repoRef: GitHubRepoRef;
   baseRef: string;
+  mergeable: boolean | null;
+  mergeableState: string;
 } | null> {
   if (task.prNumber === null) return null;
   const repoRef = await resolveRepoRef(app, project);
@@ -338,7 +340,15 @@ async function fetchCurrentCiStatus(
     conclusion: r.conclusion,
     htmlUrl: r.htmlUrl,
   }));
-  return { headSha: pr.headSha, status, runs: runSummaries, repoRef, baseRef: pr.baseRef };
+  return {
+    headSha: pr.headSha,
+    status,
+    runs: runSummaries,
+    repoRef,
+    baseRef: pr.baseRef,
+    mergeable: pr.mergeable,
+    mergeableState: pr.mergeableState,
+  };
 }
 
 /**
@@ -382,7 +392,16 @@ async function resolveReviewCi(
   try {
     const current = await fetchCurrentCiStatus(app, task, project);
     if (!current) return undefined;
-    const { headSha, status, runs: runSummaries } = current;
+    const { headSha, status, runs: runSummaries, mergeable, mergeableState } = current;
+
+    if (mergeable === false || mergeableState === "dirty") {
+      return {
+        headSha,
+        status: null,
+        runs: runSummaries,
+        note: "PR has merge conflicts with base branch — CI cannot run",
+      };
+    }
 
     if (status !== "in_progress" && status !== null) {
       return { headSha, status, runs: runSummaries };
@@ -1422,10 +1441,8 @@ async function attemptAutoRebase(
     result.initialPromptApplied,
   );
 
-  // CAS on status = "done" — the one guard against a concurrent transition
-  // (nothing legitimately moves a done task elsewhere today, but this stays
-  // consistent with every other write in this file's own paranoia about
-  // races rather than assuming that never changes).
+  // CAS on status in ["done", "reviewing"] — guards against a concurrent transition
+  // out of reviewing or done while spawning.
   const updated = app.db
     .update(tasks)
     .set({
@@ -1437,7 +1454,7 @@ async function attemptAutoRebase(
       rebaseStartedAt: new Date(now),
       mergeError: "Conflicts with main — an auto-rebase attempt is in progress",
     })
-    .where(and(eq(tasks.id, task.id), eq(tasks.status, "done")))
+    .where(and(eq(tasks.id, task.id), inArray(tasks.status, ["done", "reviewing"])))
     .run();
   if (updated.changes === 0) {
     app.log.warn(
@@ -2625,6 +2642,21 @@ async function attemptAutoApprove(
   if (current && (await attemptReturnRedCiToWorker(app, task, project, current))) return;
   if (await attemptReturnPrCommentsToWorker(app, task, project)) return;
   if (!current) return;
+
+  if (current.mergeable === false || current.mergeableState === "dirty") {
+    if (project.autoApprove && task.rebaseAttempts < MAX_REBASE_ATTEMPTS) {
+      await attemptAutoRebase(app, task, project, current.baseRef);
+      return;
+    }
+    recordMergeError(
+      app,
+      task.id,
+      task.rebaseAttempts >= MAX_REBASE_ATTEMPTS
+        ? `Conflicts with ${current.baseRef} — auto-rebase gave up after ${MAX_REBASE_ATTEMPTS} attempt(s), needs manual resolution`
+        : `Conflicts with ${current.baseRef} — needs manual resolution`,
+    );
+    return;
+  }
 
   if (
     task.reviewFindingsIngestedSessionId === null ||

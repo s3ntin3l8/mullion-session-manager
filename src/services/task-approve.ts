@@ -142,6 +142,8 @@ export async function approveTask(
       // up-to-date branch and green checks that a just-pushed commit almost
       // never has yet.
       mergeRequestedAt: project.mergeOnApprove ? new Date() : null,
+      mergeError: null,
+      rebaseStartedAt: null,
     })
     .where(and(eq(tasks.id, task.id), eq(tasks.status, "reviewing")))
     .returning()

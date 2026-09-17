@@ -25,7 +25,9 @@ context if you're running inside a Mullion-hosted session.
   `main` — an unprefixed title silently drops out of the changelog.
 - **Before pushing, run the full gate:**
   `make lint && make typecheck && make test && make format-check`
-  (repo-wide — covers `frontend/` too).
+  (repo-wide — covers `frontend/` too). Verify patch coverage with
+  `make test-patch-coverage` ($\ge 75\%$ required) and ensure the branch is
+  rebased cleanly onto the latest `origin/main`.
 - **Get a review, and close the loop on it.** Hermes reviews automatically
   on open (`.github/workflows/hermes.yml`'s `auto-review` job) — don't also
   `@s3ntin3l8-hermes Review` right after opening the PR, or you'll trigger a
@@ -99,12 +101,20 @@ context if you're running inside a Mullion-hosted session.
   is a product feature (`src/services/git-worktree.ts`, end-user session
   isolation, managed by the backend); `.wt/` is _your own_ developer
   workspace, described above.
+- **Patch test coverage ($\ge 75\%$) and clean mergeability.** PR branches
+  must cleanly rebase onto `origin/main` without merge conflicts. Any new or
+  modified executable lines in `src/` or `frontend/src/` must meet $\ge 75\%$
+  patch test coverage (`make test-patch-coverage`).
+- **Security anti-patterns & CORS credentials.** Never enable
+  `Access-Control-Allow-Credentials: true` with wildcard or reflected origins
+  (`scripts/check-security-antipatterns.mjs`, enforced in `make lint`).
 
 ## Everyday commands
 
 - `make dev` — backend (`tsx watch`) + frontend (Vite, HMR) together.
 - `make test-backend` — backend tests only, the fast inner loop; `make test`
   runs both workspaces.
+- `make test-patch-coverage` — verify $\ge 75\%$ patch test coverage on modified lines against `origin/main`.
 - `make format` — fixes a failing `make format-check` in place (repo-wide,
   covers `frontend/` too).
 - `npm run db:generate` — after any `src/db/schema.ts` edit.

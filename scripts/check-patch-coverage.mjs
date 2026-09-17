@@ -1,0 +1,285 @@
+#!/usr/bin/env node
+// Calculates patch test coverage for modified/added lines against base branch (origin/main).
+// Reads coverage/coverage-final.json (backend) and frontend/coverage/coverage-final.json (frontend).
+// Enforces minimum threshold (default 75%).
+
+import { execSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+export function resolveBaseRef(explicitRef) {
+  if (explicitRef) return explicitRef;
+  if (process.env.PATCH_BASE_REF) return process.env.PATCH_BASE_REF;
+
+  const candidates = ["origin/main", "main", "HEAD~1"];
+  for (const ref of candidates) {
+    try {
+      execSync(`git rev-parse --verify "${ref}"`, { cwd: root, stdio: "ignore" });
+      return ref;
+    } catch {
+      // try next
+    }
+  }
+  return "HEAD";
+}
+
+export function parseGitDiffHunks(diffText) {
+  // Returns Map<filePath, Set<lineNumber>>
+  const files = new Map();
+  let currentFile = null;
+
+  const lines = diffText.split("\n");
+  for (const line of lines) {
+    if (line.startsWith("diff --git ")) {
+      currentFile = null;
+    } else if (line.startsWith("+++ b/")) {
+      currentFile = line.slice(6).trim();
+      // Only check source files, ignore tests and fixtures
+      const isSource =
+        (currentFile.startsWith("src/") || currentFile.startsWith("frontend/src/")) &&
+        /\.(ts|tsx|js|jsx|mjs|cjs)$/.test(currentFile) &&
+        !currentFile.includes(".test.") &&
+        !currentFile.includes(".spec.") &&
+        !currentFile.includes("/fixtures/");
+
+      if (!isSource) {
+        currentFile = null;
+      } else if (!files.has(currentFile)) {
+        files.set(currentFile, new Set());
+      }
+    } else if (currentFile && line.startsWith("@@ ")) {
+      // Format: @@ -oldStart[,oldCount] +newStart[,newCount] @@
+      const match = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/);
+      if (match) {
+        const start = parseInt(match[1], 10);
+        const count = match[2] !== undefined ? parseInt(match[2], 10) : 1;
+        for (let i = 0; i < count; i++) {
+          files.get(currentFile).add(start + i);
+        }
+      }
+    }
+  }
+
+  return files;
+}
+
+export function loadCoverageReports() {
+  const coverageData = {};
+
+  const paths = [
+    path.join(root, "coverage/coverage-final.json"),
+    path.join(root, "frontend/coverage/coverage-final.json"),
+  ];
+
+  for (const p of paths) {
+    if (existsSync(p)) {
+      try {
+        const content = JSON.parse(readFileSync(p, "utf8"));
+        for (const [key, val] of Object.entries(content)) {
+          // Normalize to path relative to root
+          const relPath = path.isAbsolute(key) ? path.relative(root, key) : key;
+          coverageData[relPath] = val;
+        }
+      } catch (err) {
+        console.warn(`Warning: failed to parse coverage file ${p}:`, err);
+      }
+    }
+  }
+
+  return coverageData;
+}
+
+export function evaluatePatchCoverage(modifiedFiles, coverageData) {
+  const results = [];
+  let totalExecutableLines = 0;
+  let totalCoveredLines = 0;
+
+  for (const [relPath, changedLines] of modifiedFiles.entries()) {
+    // Find matching entry in coverageData
+    let fileCoverage = coverageData[relPath];
+    if (!fileCoverage) {
+      // Try finding by base name or relative matching
+      for (const [covPath, val] of Object.entries(coverageData)) {
+        if (covPath.endsWith(relPath) || relPath.endsWith(covPath)) {
+          fileCoverage = val;
+          break;
+        }
+      }
+    }
+
+    const coveredLines = new Set();
+    const uncoveredLines = new Set();
+
+    if (!fileCoverage || !fileCoverage.statementMap) {
+      // File modified but has no coverage entry at all.
+      // We check if it has code lines
+      const absPath = path.join(root, relPath);
+      if (existsSync(absPath)) {
+        const fileContent = readFileSync(absPath, "utf8").split("\n");
+        for (const lineNo of changedLines) {
+          const lineText = fileContent[lineNo - 1];
+          if (
+            lineText &&
+            lineText.trim() &&
+            !lineText.trim().startsWith("//") &&
+            !lineText.trim().startsWith("/*")
+          ) {
+            uncoveredLines.add(lineNo);
+          }
+        }
+      }
+    } else {
+      const statementMap = fileCoverage.statementMap;
+      const s = fileCoverage.s || {};
+
+      // Map line numbers to statements
+      for (const lineNo of changedLines) {
+        const statementsOnLine = [];
+        for (const [stmtId, stmt] of Object.entries(statementMap)) {
+          const startLine = stmt.start.line;
+          const endLine = stmt.end.line || startLine;
+          if (startLine <= lineNo && lineNo <= endLine) {
+            statementsOnLine.push({ id: stmtId, isStart: startLine === lineNo });
+          }
+        }
+
+        if (statementsOnLine.length === 0) {
+          // Not an executable statement line (comment, type, blank, etc.)
+          continue;
+        }
+
+        // Prefer statements starting on this line if any
+        const primary = statementsOnLine.filter((s) => s.isStart);
+        const toCheck = primary.length > 0 ? primary : statementsOnLine;
+
+        const isCovered = toCheck.some((item) => (s[item.id] || 0) > 0);
+        if (isCovered) {
+          coveredLines.add(lineNo);
+        } else {
+          uncoveredLines.add(lineNo);
+        }
+      }
+    }
+
+    const executableCount = coveredLines.size + uncoveredLines.size;
+    totalExecutableLines += executableCount;
+    totalCoveredLines += coveredLines.size;
+
+    results.push({
+      file: relPath,
+      totalExecutable: executableCount,
+      covered: coveredLines.size,
+      uncovered: uncoveredLines.size,
+      uncoveredLines: [...uncoveredLines].sort((a, b) => a - b),
+      coveragePercent: executableCount > 0 ? (coveredLines.size / executableCount) * 100 : 100,
+    });
+  }
+
+  const overallPercent =
+    totalExecutableLines > 0 ? (totalCoveredLines / totalExecutableLines) * 100 : 100;
+
+  return {
+    results,
+    totalExecutableLines,
+    totalCoveredLines,
+    overallPercent,
+  };
+}
+
+export function runPatchCoverageCheck(options = {}) {
+  const threshold = options.threshold ?? 75.0;
+  const baseRef = resolveBaseRef(options.baseRef);
+
+  // Get git diff
+  let diffText;
+  try {
+    diffText = execSync(`git diff -U0 "${baseRef}"`, {
+      cwd: root,
+      encoding: "utf8",
+      maxBuffer: 10 * 1024 * 1024,
+    });
+  } catch (err) {
+    console.warn(`Failed to diff against ${baseRef}, falling back to HEAD~1:`, err.message);
+    diffText = execSync("git diff -U0 HEAD~1", {
+      cwd: root,
+      encoding: "utf8",
+      maxBuffer: 10 * 1024 * 1024,
+    });
+  }
+
+  const modifiedFiles = parseGitDiffHunks(diffText);
+  if (modifiedFiles.size === 0) {
+    console.log("No source changes found in patch. Patch coverage: 100.0% (0/0 lines).");
+    return { ok: true, overallPercent: 100 };
+  }
+
+  let coverageData = loadCoverageReports();
+  if (Object.keys(coverageData).length === 0 && !options.noRun) {
+    console.log("No coverage report found. Running tests with coverage first...");
+    try {
+      execSync("npm run test:coverage", { cwd: root, stdio: "inherit" });
+      coverageData = loadCoverageReports();
+    } catch (err) {
+      console.error("Failed to run tests with coverage:", err.message);
+      return { ok: false, overallPercent: 0 };
+    }
+  }
+
+  const summary = evaluatePatchCoverage(modifiedFiles, coverageData);
+
+  console.log(`\nPatch Coverage Report (against ${baseRef}):`);
+  console.log("----------------------------------------------------------------------");
+  for (const r of summary.results) {
+    if (r.totalExecutable === 0) {
+      console.log(`  ${r.file.padEnd(50)} 100.0% (0/0 executable lines)`);
+    } else {
+      const pctStr = `${r.coveragePercent.toFixed(1)}%`.padStart(6);
+      const counts = `(${r.covered}/${r.totalExecutable} lines)`;
+      const uncovered =
+        r.uncoveredLines.length > 0 ? `Uncovered: ${r.uncoveredLines.join(", ")}` : "";
+      console.log(`  ${r.file.padEnd(45)} ${pctStr} ${counts.padEnd(14)} ${uncovered}`);
+    }
+  }
+  console.log("----------------------------------------------------------------------");
+  console.log(
+    `Overall Patch Coverage: ${summary.overallPercent.toFixed(1)}% ` +
+      `(${summary.totalCoveredLines}/${summary.totalExecutableLines} lines, threshold: ${threshold.toFixed(1)}%)\n`,
+  );
+
+  const ok = summary.overallPercent >= threshold;
+  return { ok, ...summary };
+}
+
+// Direct execution
+const isMain = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
+
+if (isMain) {
+  const args = process.argv.slice(2);
+  let threshold = 75.0;
+  let baseRef = undefined;
+  let noRun = false;
+
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--threshold" && args[i + 1]) {
+      threshold = parseFloat(args[i + 1]);
+      i++;
+    } else if (args[i] === "--base" && args[i + 1]) {
+      baseRef = args[i + 1];
+      i++;
+    } else if (args[i] === "--no-run") {
+      noRun = true;
+    }
+  }
+
+  const res = runPatchCoverageCheck({ threshold, baseRef, noRun });
+  if (!res.ok) {
+    console.error(
+      `ERROR: Patch coverage ${res.overallPercent.toFixed(1)}% is below required ${threshold.toFixed(1)}% threshold.`,
+    );
+    process.exit(1);
+  }
+  process.exit(0);
+}

@@ -3555,6 +3555,8 @@ describe("reconcileTasks", () => {
         prNumber: number | null;
         autoApprove: boolean;
         worktreePath: string | null;
+        branchName: string | null;
+        rebaseAttempts: number;
         agentCommand: string | null;
         autoReturnRounds: number;
         sessionId: number | null;
@@ -3836,6 +3838,55 @@ describe("reconcileTasks", () => {
       expect(mockPromoteTaskToPR).not.toHaveBeenCalled();
       const row = await getTask(app, taskId);
       expect(row.status).toBe("reviewing");
+
+      await app.close();
+    });
+
+    it("attempts auto-rebase when reviewing task has merge conflicts and autoApprove is enabled", async () => {
+      const app = await buildApp();
+      const { taskId } = await createAutoApproveCandidate(app, {
+        branchName: "mullion/task-x",
+        agentCommand: "claude",
+      });
+      mockGetPullRequestByNumber.mockResolvedValue(
+        mockPr({ mergeable: false, mergeableState: "dirty" }),
+      );
+      mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
+      mockResumeTaskWorktree.mockResolvedValue({
+        path: "/tmp/.mullion-worktrees/mullion-task-x",
+        branch: "mullion/task-x",
+      });
+
+      await reconcileTasks(app);
+
+      expect(mockResumeTaskWorktree).toHaveBeenCalledWith("/tmp", "mullion/task-x");
+      const row = await getTask(app, taskId);
+      expect(row.rebaseAttempts).toBe(1);
+      expect(row.rebaseStartedAt).not.toBeNull();
+      expect(row.sessionId).not.toBeNull();
+      expect(row.mergeError).toContain("in progress");
+
+      await app.close();
+    });
+
+    it("records mergeError when reviewing task has merge conflicts and rebaseAttempts has reached maximum", async () => {
+      const app = await buildApp();
+      const { taskId } = await createAutoApproveCandidate(app, {
+        branchName: "mullion/task-x",
+        agentCommand: "claude",
+        rebaseAttempts: 2,
+      });
+      mockGetPullRequestByNumber.mockResolvedValue(
+        mockPr({ mergeable: false, mergeableState: "dirty" }),
+      );
+      mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
+
+      await reconcileTasks(app);
+
+      expect(mockResumeTaskWorktree).not.toHaveBeenCalled();
+      const row = await getTask(app, taskId);
+      expect(row.rebaseAttempts).toBe(2);
+      expect(row.mergeError).toContain("needs manual resolution");
 
       await app.close();
     });
@@ -7601,6 +7652,30 @@ describe("reconcileTasks", () => {
           headSha: "sha1",
         },
       ]);
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+      expect(row.reviewSessionId).not.toBeNull();
+
+      await app.close();
+    });
+
+    it("spawns immediately when PR has merge conflicts (dirty mergeableState), bypassing the wait", async () => {
+      const app = await buildApp();
+      const { taskId } = await claimWithPR(app);
+      mockGetPullRequestByNumber.mockResolvedValueOnce({
+        number: 9,
+        htmlUrl: "https://x/pull/9",
+        nodeId: "n",
+        draft: true,
+        headSha: "sha1",
+        mergeable: false,
+        mergeableState: "dirty",
+      });
+      // CI has no runs yet, which normally waits:
+      mockFetchRunsForHead.mockResolvedValueOnce([]);
 
       await reconcileTasks(app);
 

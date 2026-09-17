@@ -22,7 +22,7 @@
     "test:coverage": "vitest run --coverage",
     "test:e2e": "vitest run -c vitest.e2e.config.ts",
     "test:all": "concurrently -n backend,frontend -c blue,green \"npm:test\" \"npm --prefix frontend run test\"",
-    "lint": "eslint . && npm run check:env-docs && npm run check:scaffold-region-sync && npm run check:ssh-agent-filter-vectors",
+    "lint": "eslint . && npm run check:env-docs && npm run check:scaffold-region-sync && npm run check:ssh-agent-filter-vectors && npm run check:security-antipatterns",
     "lint:all": "concurrently -n backend,frontend -c blue,green \"npm:lint\" \"npm --prefix frontend run lint\"",
     "typecheck": "tsc --noEmit",
     "typecheck:all": "concurrently -n backend,frontend -c blue,green \"npm:typecheck\" \"npm --prefix frontend run typecheck\"",
@@ -35,6 +35,8 @@
     "check:scaffold-region-sync": "node scripts/check-scaffold-region-sync.mjs",
     "check:ssh-agent-filter-vectors": "tsx scripts/generate-ssh-agent-filter-vectors.ts --check",
     "generate:ssh-agent-filter-vectors": "tsx scripts/generate-ssh-agent-filter-vectors.ts",
+    "check:security-antipatterns": "node scripts/check-security-antipatterns.mjs",
+    "test:patch-coverage": "node scripts/check-patch-coverage.mjs",
     "check:scope-leaks": "tsx scripts/check-scope-leaks.ts"
   },
   "dependencies": {
