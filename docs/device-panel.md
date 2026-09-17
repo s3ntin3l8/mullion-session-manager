@@ -62,7 +62,19 @@ deliberately a **separate** implementation from `PtyManager`/
   mid-gesture) — only that the emulator process is still running and worth
   resuming a stream to; scrcpy is stateless from the client's perspective, so
   starting a fresh connection against an already-running emulator is normal,
-  expected usage.
+  expected usage. Port reservation isn't limited to devices that have
+  actually been reattached to, either: `allocatePort()`'s round-robin scan
+  only sees ports recorded in its own in-memory set, which starts empty on
+  every boot, so `src/plugins/device.ts` pre-populates it at construction
+  from every `status: "active"` row's persisted `port` column — a
+  restart-surviving device sitting untouched since boot (nobody has called
+  `getOrCreate()` for it yet, so `reservePort()` never fired) still keeps its
+  port out of the pool a brand-new device's fresh `spawn()` draws from.
+  Populated synchronously (better-sqlite3, no plugin-registration ordering
+  issue) and skipped entirely on the multi-host "agent" role, where `app.db`
+  doesn't exist — same posture as `hooksPlugin`'s own `app.db ? ... :`
+  fallback (`src/plugins/hooks.ts`), since an agent host doesn't run
+  `DeviceManager` against a `devices` table it has no connection to anyway.
 - **Scope ownership**, unlike a session's, isn't anchored on a real dtach
   socket (an emulator has neither dtach nor a PTY) — `device-process.ts`
   makes `systemd-run` set the scope's `Description` explicitly to a

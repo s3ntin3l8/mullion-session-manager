@@ -70,6 +70,18 @@ export interface DeviceManagerOptions {
    * .set({ port })...` call rather than each route doing it individually,
    * since the manager (and this callback) are constructed once, there. */
   onPortAssigned?: (id: string, port: number) => void;
+  /** Ports already in use by every persisted `status: "active"` device row,
+   * read synchronously by src/plugins/device.ts (better-sqlite3, no async
+   * gap) BEFORE constructing this manager. `allocatedPorts` otherwise starts
+   * empty on every boot and only gains an entry via allocatePort() (a fresh
+   * spawn()) or reservePort() (getOrCreate()'s reattach branch) — the latter
+   * only once something actually calls getOrCreate() for that device id. A
+   * restart-surviving device nobody has touched yet since boot would
+   * otherwise be invisible to allocatePort()'s round-robin scan, letting a
+   * concurrent brand-new device's spawn() claim its still-bound port. Absent
+   * (empty) on the multi-host "agent" role, where app.db doesn't exist — see
+   * this field's caller in device.ts. */
+  initialPorts?: number[];
 }
 
 export interface DeviceSpawnOptions {
@@ -441,6 +453,11 @@ export class DeviceManager {
     this.serverClient = new AdbServerClient(
       new AdbServerNodeTcpConnector({ host: "127.0.0.1", port: opts.adbServerPort }),
     );
+    // See DeviceManagerOptions.initialPorts's own comment — reserved up
+    // front, not just for devices reservePort() has been called for.
+    for (const port of opts.initialPorts ?? []) {
+      this.allocatedPorts.add(port);
+    }
     if (opts.enabled) {
       // Idempotent — a no-op if a server is already listening. Best-effort,
       // fire-and-forget: a failure here surfaces later, on the first real
