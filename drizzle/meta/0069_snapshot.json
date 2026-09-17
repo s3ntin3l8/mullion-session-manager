@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "9afb5f13-43f5-4898-8faa-cce3041e36f1",
+  "id": "86539f3d-9629-4872-a51b-b5b8b2205fc0",
   "prevId": "02d7650a-7348-4b65-92f4-0508d431dd13",
   "tables": {
     "bridges": {
@@ -76,6 +76,14 @@
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
+        },
+        "priority": {
+          "name": "priority",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
         }
       },
       "indexes": {},
