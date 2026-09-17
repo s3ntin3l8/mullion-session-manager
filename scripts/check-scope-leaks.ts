@@ -10,6 +10,10 @@
 // diagnostic this same issue added for that failure). This script finds
 // such leaks BEFORE they collide with anything.
 //
+// Also checks `crs-device-*` scopes (device-process.ts, the emulator
+// analogue) with the identical two heuristics — a leaked emulator holds a
+// KVM handle and several GB, materially worse than a leaked shell.
+//
 // A `.ts` file run via `tsx` (precedent: generate-ssh-agent-filter-
 // vectors.ts) rather than `.mjs` like this directory's other scripts — it
 // needs the real, typed parseScopeUnitsListing/extractDtachSocketPath
@@ -42,8 +46,15 @@ import {
   extractDtachSocketPath,
   isSystemctlUserAvailable,
 } from "../src/services/session-process.js";
+// device-process.ts's crs-device-* scopes use the identical "socket path
+// missing on disk, or under the OS tmp dir" leak signature — its own marker
+// file is a real file for exactly this reason (see that module's header).
+// extractDeviceMarkerPath plays the same role extractDtachSocketPath does
+// here; the two are checked as one combined pattern list below rather than
+// two near-duplicate script bodies.
+import { extractDeviceMarkerPath } from "../src/services/device-process.js";
 
-const SCOPE_PATTERN = "crs-session-*.scope";
+const SCOPE_PATTERNS = ["crs-session-*.scope", "crs-device-*.scope"];
 
 if (!isSystemctlUserAvailable()) {
   console.log(
@@ -64,12 +75,12 @@ let listing: string;
 try {
   listing = execFileSync(
     "systemctl",
-    ["--user", "list-units", "--type=scope", "--all", "--no-legend", "--plain", SCOPE_PATTERN],
+    ["--user", "list-units", "--type=scope", "--all", "--no-legend", "--plain", ...SCOPE_PATTERNS],
     { encoding: "utf8" },
   );
 } catch (err) {
   console.log(
-    `OK — could not list ${SCOPE_PATTERN} units (${(err as Error).message}). Nothing to check.`,
+    `OK — could not list ${SCOPE_PATTERNS.join(" / ")} units (${(err as Error).message}). Nothing to check.`,
   );
   process.exit(0);
 }
@@ -90,15 +101,19 @@ const rows = parseScopeUnitsListing(listing);
 //      SESSIONS_DIR is a persistent, checked-in-config path; only a
 //      test/scratch instance's own throwaway tmpdir lands there.
 //
-// A scope whose Description doesn't parse as a dtach invocation at all
-// (extractDtachSocketPath returns null — some other app's own
-// crs-session-*-shaped unit, or a systemd rendering this hasn't seen) is
-// left alone rather than guessed at either way.
+// A scope whose Description doesn't parse as either a dtach invocation or a
+// device marker at all (both extractors return null — some other app's own
+// crs-session-*/crs-device-*-shaped unit, or a systemd rendering this
+// hasn't seen) is left alone rather than guessed at either way.
 const tmpdir = os.tmpdir();
 const suspects: Array<{ unit: string; socketPath: string; reason: string }> = [];
 
 for (const { unit, description } of rows) {
-  const socketPath = extractDtachSocketPath(description);
+  // `crs-session-*` carries a dtach socket path; `crs-device-*` carries this
+  // module's own marker path (device-process.ts) — different unit-name
+  // prefixes never collide, so trying both extractors unconditionally is
+  // safe: at most one of them ever matches a given description.
+  const socketPath = extractDtachSocketPath(description) ?? extractDeviceMarkerPath(description);
   if (!socketPath) continue;
   if (!existsSync(socketPath)) {
     suspects.push({ unit, socketPath, reason: "socket file no longer exists on disk" });
@@ -108,7 +123,9 @@ for (const { unit, description } of rows) {
 }
 
 if (suspects.length === 0) {
-  console.log(`OK — no suspect ${SCOPE_PATTERN} units found (${rows.length} checked).`);
+  console.log(
+    `OK — no suspect ${SCOPE_PATTERNS.join(" / ")} units found (${rows.length} checked).`,
+  );
   process.exit(0);
 }
 

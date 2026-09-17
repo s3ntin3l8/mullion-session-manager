@@ -243,6 +243,35 @@ export class MullionClient {
     return this.controlRequest("previews.list", {});
   }
 
+  // device.* ops are reachable at session scope (control-socket.ts) with no
+  // "omit it, target your own" fallback the way get_scrollback/list_actions
+  // have — a device has no "belongs to this session" relationship to
+  // default from (see that file's own comment on device.action), so
+  // `deviceId` is always required here, unlike ownSessionId's retry
+  // pattern below.
+  listDevices() {
+    return this.controlRequest("device.list", {});
+  }
+
+  getDevice(deviceId) {
+    return this.controlRequest("device.get", { deviceId });
+  }
+
+  createDevice({ avdName, projectId, name }) {
+    const body = { avdName };
+    if (projectId !== undefined) body.projectId = projectId;
+    if (name !== undefined) body.name = name;
+    return this.controlRequest("device.create", body);
+  }
+
+  terminateDevice(deviceId) {
+    return this.controlRequest("device.terminate", { deviceId });
+  }
+
+  deviceAction(deviceId, actionPayload) {
+    return this.controlRequest("device.action", { deviceId, ...actionPayload });
+  }
+
   // A bare positional arg here (and on stopDockSession/getScrollback/
   // deletePreview below), not an options object like listSessions/
   // createPreview — those two take more than one independent optional

@@ -489,6 +489,43 @@ export const sessions = sqliteTable(
   ],
 );
 
+// One row per emulator (AVD) instance Mullion has been asked to run.
+// `status` records INTENT (has this been explicitly stopped?), not live
+// process state — same split as `sessions` above: whether the emulator's
+// systemd scope is actually alive right now is only known by
+// DeviceManager, in-memory, in whichever Node process currently holds it;
+// routes merge the two rather than trusting this column alone. Unlike
+// `sessions`, a PHYSICAL device (a phone connected over adb) never gets a
+// row here — Mullion doesn't own its lifecycle (there's nothing to
+// "start"/"stop"), so DeviceManager surfaces those purely from adb's own
+// live device list, with no DB-backed intent to merge against.
+export const devices = sqliteTable(
+  "devices",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    hostId: text("host_id")
+      .notNull()
+      .default("local")
+      .references(() => hosts.id),
+    // Optional association with a project — e.g. so a project's "Build &
+    // Run" action can target this device by default. Nullable: like an
+    // external `previews` row, one emulator can serve every project on the
+    // host, not just one.
+    projectId: integer("project_id").references(() => projects.id, { onDelete: "cascade" }),
+    // Cosmetic label the user can rename; falls back to `avdName` when unset.
+    name: text("name"),
+    // The AVD name passed to `emulator -avd <avdName>`.
+    avdName: text("avd_name").notNull(),
+    status: text("status", { enum: ["active", "killed"] })
+      .notNull()
+      .default("active"),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+  },
+  (table) => [index("devices_project_id_idx").on(table.projectId)],
+);
+
 // Phase 3, issue #182 — records which project browser (src/services/
 // browser-manager.ts's BrowserManager, #179) a session's browser pane(s)
 // are bound to, so the agent automation API (#183) can target "this

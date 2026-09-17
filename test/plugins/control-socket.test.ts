@@ -2312,6 +2312,141 @@ describe("controlSocketPlugin (issue #185)", () => {
       });
     });
 
+    describe("device ops", () => {
+      beforeEach(() => {
+        process.env.DEVICE_ENABLED = "true";
+      });
+      afterEach(() => {
+        delete process.env.DEVICE_ENABLED;
+      });
+
+      async function createRealDevice(): Promise<number> {
+        const authHeaders = { authorization: `Bearer ${TEST_TOKEN}` };
+        const created = await app!.inject({
+          method: "POST",
+          url: "/api/devices",
+          headers: authHeaders,
+          payload: { avdName: "dev35" },
+        });
+        return created.json().id as number;
+      }
+
+      it("device.list (full scope): dispatches to GET /api/devices", async () => {
+        app = await buildApp();
+        await app.ready();
+        await createRealDevice();
+        const socket = await fullScopeSocket();
+        socket.write(`${JSON.stringify({ id: 1, op: "device.list" })}\n`);
+        const reply = await waitForReply(socket);
+        expect(reply.ok).toBe(true);
+        expect(Array.isArray(reply.result)).toBe(true);
+        expect(reply.result).toHaveLength(1);
+        socket.destroy();
+      });
+
+      it("device.action (full scope): dispatches to POST /api/devices/:id/action with an explicit deviceId", async () => {
+        app = await buildApp();
+        await app.ready();
+        const deviceId = await createRealDevice();
+        const socket = await fullScopeSocket();
+        socket.write(
+          `${JSON.stringify({
+            id: 1,
+            op: "device.action",
+            body: { deviceId, action: "screenshot" },
+          })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        // No live adb connection in this test environment — the point of
+        // this test is that the op DISPATCHES with deviceId correctly
+        // stripped from the forwarded action body, not that the action
+        // itself succeeds.
+        expect(reply.ok).toBe(false);
+        expect(reply.status).toBe(400);
+        socket.destroy();
+      });
+
+      it("device.action 400s with 'deviceId is required' when omitted, at either scope", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession();
+        const fullSocket = await fullScopeSocket();
+        fullSocket.write(
+          `${JSON.stringify({ id: 1, op: "device.action", body: { action: "screenshot" } })}\n`,
+        );
+        expect(await waitForReply(fullSocket)).toEqual({
+          id: 1,
+          ok: false,
+          status: 400,
+          error: "'deviceId' is required",
+        });
+        fullSocket.destroy();
+
+        const sessionSocket = await sessionScopeSocket(hookToken);
+        sessionSocket.write(
+          `${JSON.stringify({ id: 1, op: "device.action", body: { action: "screenshot" } })}\n`,
+        );
+        expect(await waitForReply(sessionSocket)).toEqual({
+          id: 1,
+          ok: false,
+          status: 400,
+          error: "'deviceId' is required",
+        });
+        sessionSocket.destroy();
+      });
+
+      it("device.action (session scope): an explicit deviceId is NOT restricted to any 'own' device — devices have no per-session ownership", async () => {
+        app = await buildApp();
+        await app.ready();
+        const deviceId = await createRealDevice();
+        const { hookToken } = await createRealSession();
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(
+          `${JSON.stringify({
+            id: 1,
+            op: "device.action",
+            body: { deviceId, action: "screenshot" },
+          })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        // Reaches the real route (400 for "no live adb connection", not 403
+        // for an ownership check that doesn't exist for devices) — see
+        // control-socket.ts's own comment on device.action for why.
+        expect(reply.ok).toBe(false);
+        expect(reply.status).toBe(400);
+        expect(reply.error).not.toMatch(/own session/);
+        socket.destroy();
+      });
+
+      it("device.create (session scope): reachable with no full-scope requirement", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession();
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(
+          `${JSON.stringify({ id: 1, op: "device.create", body: { avdName: "dev35" } })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        expect(reply.ok).toBe(true);
+        expect(reply.status).toBe(201);
+        socket.destroy();
+      });
+
+      it("device.terminate 400s with 'deviceId is required' when omitted", async () => {
+        app = await buildApp();
+        await app.ready();
+        const socket = await fullScopeSocket();
+        socket.write(`${JSON.stringify({ id: 1, op: "device.terminate" })}\n`);
+        expect(await waitForReply(socket)).toEqual({
+          id: 1,
+          ok: false,
+          status: 400,
+          error: "'deviceId' is required",
+        });
+        socket.destroy();
+      });
+    });
+
     describe("project/preview/agent ops (Phase 4, #134 PR6)", () => {
       describe("projects.actions", () => {
         it("full scope: dispatches to GET /api/projects/:id/actions with an explicit projectId", async () => {

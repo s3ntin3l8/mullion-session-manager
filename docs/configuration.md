@@ -139,6 +139,18 @@ See [`browser-automation.md`](browser-automation.md) for the full design.
 | `BROWSER_FRAMERATE`     | `10`              | target frames-per-second for the CDP screenshot stream                                                                                                                                                                                                                          |
 | `BROWSER_DATA_DIR`      | `./data/browsers` | where per-project Playwright storage state (cookies/localStorage) is written so a project's browser starts already-authenticated across restarts; cwd-relative like `SESSIONS_DIR` — a versioned-release install overrides this to an absolute path (see `deploy/install.sh`)   |
 
+## Android device panel
+
+See [`device-panel.md`](device-panel.md) for the full design.
+
+| Variable                    | Default | Description                                                                                                                                                                        |
+| --------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DEVICE_ENABLED`            | `false` | gates the whole Android device panel feature; needs real host provisioning (adb, emulator + a system image, KVM passthrough, the scrcpy-server binary) most deployments won't have |
+| `DEVICE_ADB_PATH`           | (empty) | absolute path to the `adb` binary, used only for one idempotent `adb start-server` call at startup — empty means "not configured"                                                  |
+| `DEVICE_ADB_SERVER_PORT`    | `5037`  | TCP port the local adb server listens on — adb's own universal default                                                                                                             |
+| `DEVICE_EMULATOR_PATH`      | (empty) | absolute path to the `emulator` binary (Android SDK's `emulator/` package) — empty means "not configured"                                                                          |
+| `DEVICE_SCRCPY_SERVER_PATH` | (empty) | absolute path to the scrcpy-server binary pushed onto the device — empty means "not configured"                                                                                    |
+
 ## Deploy and update (versioned-release installs only)
 
 Only relevant to a `deploy/install.sh`-provisioned host — see

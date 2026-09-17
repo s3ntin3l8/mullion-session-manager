@@ -7,6 +7,7 @@ import { securityPlugin } from "./plugins/security.js";
 import { dbPlugin } from "./plugins/db.js";
 import { ptyPlugin } from "./plugins/pty.js";
 import { browserPlugin } from "./plugins/browser.js";
+import { devicePlugin } from "./plugins/device.js";
 import { hooksPlugin } from "./plugins/hooks.js";
 import { bundleSyncPlugin } from "./plugins/bundle-sync.js";
 import { sshAgentPlugin } from "./plugins/ssh-agent.js";
@@ -33,6 +34,8 @@ import { authRoute } from "./routes/auth.js";
 import { systemResourcesRoute } from "./routes/system-resources.js";
 import { terminalRoute } from "./routes/terminal.js";
 import { browserRoute } from "./routes/browser.js";
+import { deviceRoute } from "./routes/device.js";
+import { devicesRoute } from "./routes/devices.js";
 import { browserAutomationRoute } from "./routes/browser-automation.js";
 import { eventsRoute } from "./routes/events.js";
 import { projectsRoute } from "./routes/projects.js";
@@ -347,6 +350,10 @@ export async function buildApp() {
     // falls back to defaults when there's no settings DB to read.
     await app.register(ptyPlugin);
     await app.register(browserPlugin);
+    // No ordering dependency beyond ptyPlugin having already registered
+    // (device.ts calls the same pure ensureSessionsDir() pty.ts exports —
+    // see that function's own comment). Stays inert unless DEVICE_ENABLED.
+    await app.register(devicePlugin);
     await app.register(hooksPlugin);
     // Issue #941 — an agent host spawns sessions and owns a filesystem
     // exactly like the primary does, so it needs its own boot-time bundle
@@ -401,6 +408,9 @@ export async function buildApp() {
   // session/runtime-infra plugins together. See src/plugins/browser.ts;
   // stays inert (BrowserManager throws on every call) unless BROWSER_ENABLED.
   await app.register(browserPlugin);
+  // Same posture as browserPlugin just above — see the agent-role branch's
+  // own comment on devicePlugin for its ordering requirement.
+  await app.register(devicePlugin);
   // hooksPlugin must register after ptyPlugin: it reads app.pty.hookSocketPath
   // and app.pty.resolveToken(), both only available once ptyPlugin has
   // decorated app.pty.
@@ -540,6 +550,8 @@ export async function buildApp() {
   await app.register(githubWSRoute);
   await app.register(tasksWSRoute);
   await app.register(browserRoute);
+  await app.register(deviceRoute);
+  await app.register(devicesRoute);
   await app.register(browserAutomationRoute);
   await app.register(eventsRoute);
 

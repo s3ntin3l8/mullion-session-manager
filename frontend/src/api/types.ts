@@ -272,6 +272,32 @@ export interface BridgeSummary {
   connected: boolean;
 }
 
+// The device panel — routes/devices.ts's response shape: the `devices` DB
+// row's own intent merged with DeviceManager's live status at the route
+// layer, same "row is intent, manager is live truth" split as
+// BridgeSummary/Host above.
+export type DeviceLiveStatus = "starting" | "booting" | "streaming" | "exited" | "error";
+
+export interface DeviceInfo {
+  id: string;
+  avdName: string;
+  label: string | null;
+  status: DeviceLiveStatus;
+  serial: string | null;
+  error: string | null;
+}
+
+export interface Device {
+  id: number;
+  hostId: string;
+  projectId: number | null;
+  name: string | null;
+  avdName: string;
+  status: "active" | "killed";
+  createdAt: string;
+  live: DeviceInfo | null;
+}
+
 // Mirrors POST /api/bridges's response shape 1:1 (src/routes/agent-bridge.ts's
 // PairResponse) — snake_case field names, unlike every other type in this
 // file, because this is also exactly the wire shape Mullion Helper decodes

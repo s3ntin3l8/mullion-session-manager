@@ -592,6 +592,48 @@ export const schema = {
       type: "string",
       default: "",
     },
+    // Device panel (Android emulator/phone streaming, src/services/
+    // device-manager.ts) — same "real feature, off by default" posture as
+    // BROWSER_ENABLED above. Requires host-side provisioning (adb,
+    // emulator + a system image, KVM passthrough, the scrcpy-server binary)
+    // that most deployments won't have.
+    DEVICE_ENABLED: {
+      type: "boolean",
+      default: false,
+    },
+    // Absolute path to the `adb` binary — used only to run `adb start-server`
+    // idempotently at startup (device-manager.ts talks to the running
+    // server directly over TCP via @yume-chan/adb-server-node-tcp after
+    // that, never shells out to `adb` again). Empty (the default) means
+    // "not configured" — DEVICE_ENABLED with this unset fails loudly rather
+    // than guessing a path.
+    DEVICE_ADB_PATH: {
+      type: "string",
+      default: "",
+    },
+    // TCP port the local adb server listens on — 5037 is adb's own
+    // universal default; overridable for a host already running an adb
+    // server on a nonstandard port.
+    DEVICE_ADB_SERVER_PORT: {
+      type: "number",
+      default: 5037,
+    },
+    // Absolute path to the `emulator` binary (Android SDK's `emulator/`
+    // package — see ansible-playbooks' `android-sdk` role). Empty means
+    // "not configured," same posture as DEVICE_ADB_PATH.
+    DEVICE_EMULATOR_PATH: {
+      type: "string",
+      default: "",
+    },
+    // Absolute path to the scrcpy-server binary pushed onto the device
+    // (ansible-playbooks' `android-sdk` role downloads and pins this — see
+    // that role's own comment on why it's a plain checksummed download, not
+    // the @yume-chan/fetch-scrcpy-server package). Empty means "not
+    // configured," same posture as DEVICE_ADB_PATH.
+    DEVICE_SCRCPY_SERVER_PATH: {
+      type: "string",
+      default: "",
+    },
     // Absolute path to a unix socket implementing the SSH agent protocol,
     // injected as SSH_AUTH_SOCK into every spawned session (see
     // session-env.ts's "deliberately NOT stripped" comment and
@@ -814,6 +856,11 @@ declare module "fastify" {
       BROWSER_MAX_INSTANCES: number;
       BROWSER_FRAMERATE: number;
       BROWSER_DATA_DIR: string;
+      DEVICE_ENABLED: boolean;
+      DEVICE_ADB_PATH: string;
+      DEVICE_ADB_SERVER_PORT: number;
+      DEVICE_EMULATOR_PATH: string;
+      DEVICE_SCRCPY_SERVER_PATH: string;
       MULLION_SOCKET_PATH: string;
       MULLION_SSH_AUTH_SOCK: string;
       MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED: boolean;

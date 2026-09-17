@@ -1,0 +1,368 @@
+import type { FastifyInstance } from "fastify";
+import type { WebSocket } from "@fastify/websocket";
+import { eq } from "drizzle-orm";
+import { AndroidKeyEventAction } from "@yume-chan/scrcpy";
+import { AndroidMotionEventAction, AndroidMotionEventButton } from "@yume-chan/scrcpy";
+import type { AndroidKeyCode, ScrcpyMediaStreamPacket } from "@yume-chan/scrcpy";
+import { devices } from "../db/schema.js";
+import type { Device } from "../services/device-manager.js";
+
+// Streams a device's screen to the frontend DevicePane as binary H.264
+// packets over WebSocket, and proxies touch/key/scroll input back —
+// modeled on routes/browser.ts's attachSocketToBrowser (same preValidation-
+// rejects-before-upgrade, per-connection-state-torn-down-on-close shape),
+// but PUSH-based rather than poll-based: browser.ts captures a JPEG
+// screenshot on a timer; a device's scrcpy stream instead delivers packets
+// as they arrive from the emulator/phone's own encoder, fanned out from the
+// one live Device (device-manager.ts) to however many WS clients are
+// currently attached.
+//
+// Backpressure is NOT a blind "drop this tick" like browser.ts's — see
+// DEVICE_ENABLED's own design note in the plan this shipped from: a JPEG
+// screenshot is self-contained (the next tick fully repaints), but an H.264
+// inter-frame is not — dropping one corrupts decode until the next IDR.  So
+// this route only ever drops a `type: "data"` packet (never a
+// `"configuration"` one, which carries SPS/PPS the decoder needs to even
+// start), and once the backlog clears, asks the device for a fresh keyframe
+// via `resetVideo()` rather than leaving the decoder to free-run corrupted
+// until whatever the stream's own next natural keyframe interval is.
+
+const BACKPRESSURE_MAX_BUFFERED_BYTES = 4 * 1024 * 1024;
+
+// Wire framing for a video packet: [1 byte type][1 byte flags][payload].
+// type: 0 = configuration (SPS/PPS), 1 = data. flags bit0 = keyframe.
+// Deliberately doesn't carry `pts` — see the route's own header on why
+// receive-time pacing is enough for a live, audio-less stream; add it here
+// if audio ever lands and needs A/V sync.
+function encodeVideoFrame(packet: ScrcpyMediaStreamPacket): Uint8Array {
+  const typeByte = packet.type === "configuration" ? 0 : 1;
+  const flagsByte = packet.type === "data" && packet.keyframe ? 1 : 0;
+  const out = new Uint8Array(2 + packet.data.byteLength);
+  out[0] = typeByte;
+  out[1] = flagsByte;
+  out.set(packet.data, 2);
+  return out;
+}
+
+interface TapMessage {
+  type: "tap";
+  x: number;
+  y: number;
+  videoWidth: number;
+  videoHeight: number;
+}
+
+interface TouchMessage {
+  type: "touchDown" | "touchMove" | "touchUp";
+  x: number;
+  y: number;
+  videoWidth: number;
+  videoHeight: number;
+  pointerId: number;
+}
+
+interface ScrollMessage {
+  type: "scroll";
+  x: number;
+  y: number;
+  videoWidth: number;
+  videoHeight: number;
+  scrollX: number;
+  scrollY: number;
+}
+
+interface TextMessage {
+  type: "text";
+  text: string;
+}
+
+/** `androidKeyCode` is an AOSP `KEYCODE_*` numeric value — the frontend owns
+ * mapping a browser KeyboardEvent to this, same division of labor as
+ * `injectKeyCode`'s own doc comment implies (this route is a thin proxy,
+ * not a keymap). */
+interface KeyEventMessage {
+  type: "keyEvent";
+  androidKeyCode: number;
+  action: "down" | "up";
+}
+
+interface BackMessage {
+  type: "back";
+}
+
+type DeviceInputMessage =
+  TapMessage | TouchMessage | ScrollMessage | TextMessage | KeyEventMessage | BackMessage;
+
+function isFiniteNumber(v: unknown): v is number {
+  return typeof v === "number" && Number.isFinite(v);
+}
+
+function parseInputMessage(value: unknown): DeviceInputMessage | null {
+  const v = value as Partial<DeviceInputMessage> | null;
+  if (typeof v !== "object" || v === null || typeof v.type !== "string") return null;
+  switch (v.type) {
+    case "tap": {
+      const m = v as Partial<TapMessage>;
+      if (
+        isFiniteNumber(m.x) &&
+        isFiniteNumber(m.y) &&
+        isFiniteNumber(m.videoWidth) &&
+        isFiniteNumber(m.videoHeight)
+      ) {
+        return {
+          type: "tap",
+          x: m.x,
+          y: m.y,
+          videoWidth: m.videoWidth,
+          videoHeight: m.videoHeight,
+        };
+      }
+      return null;
+    }
+    case "touchDown":
+    case "touchMove":
+    case "touchUp": {
+      const m = v as Partial<TouchMessage>;
+      if (
+        isFiniteNumber(m.x) &&
+        isFiniteNumber(m.y) &&
+        isFiniteNumber(m.videoWidth) &&
+        isFiniteNumber(m.videoHeight) &&
+        isFiniteNumber(m.pointerId)
+      ) {
+        return {
+          type: v.type,
+          x: m.x,
+          y: m.y,
+          videoWidth: m.videoWidth,
+          videoHeight: m.videoHeight,
+          pointerId: m.pointerId,
+        };
+      }
+      return null;
+    }
+    case "scroll": {
+      const m = v as Partial<ScrollMessage>;
+      if (
+        isFiniteNumber(m.x) &&
+        isFiniteNumber(m.y) &&
+        isFiniteNumber(m.videoWidth) &&
+        isFiniteNumber(m.videoHeight) &&
+        isFiniteNumber(m.scrollX) &&
+        isFiniteNumber(m.scrollY)
+      ) {
+        return {
+          type: "scroll",
+          x: m.x,
+          y: m.y,
+          videoWidth: m.videoWidth,
+          videoHeight: m.videoHeight,
+          scrollX: m.scrollX,
+          scrollY: m.scrollY,
+        };
+      }
+      return null;
+    }
+    case "text": {
+      const m = v as Partial<TextMessage>;
+      return typeof m.text === "string" ? { type: "text", text: m.text } : null;
+    }
+    case "keyEvent": {
+      const m = v as Partial<KeyEventMessage>;
+      if (isFiniteNumber(m.androidKeyCode) && (m.action === "down" || m.action === "up")) {
+        return { type: "keyEvent", androidKeyCode: m.androidKeyCode, action: m.action };
+      }
+      return null;
+    }
+    case "back":
+      return { type: "back" };
+    default:
+      return null;
+  }
+}
+
+async function dispatchInput(
+  app: FastifyInstance,
+  device: Device,
+  deviceId: number,
+  message: DeviceInputMessage,
+): Promise<void> {
+  const controller = device.controller;
+  if (!controller) return;
+  switch (message.type) {
+    case "tap":
+      await controller.injectTouch({
+        action: AndroidMotionEventAction.Down,
+        pointerId: 0n,
+        pointerX: message.x,
+        pointerY: message.y,
+        videoWidth: message.videoWidth,
+        videoHeight: message.videoHeight,
+        pressure: 1,
+        actionButton: AndroidMotionEventButton.Primary,
+        buttons: AndroidMotionEventButton.Primary,
+      });
+      await controller.injectTouch({
+        action: AndroidMotionEventAction.Up,
+        pointerId: 0n,
+        pointerX: message.x,
+        pointerY: message.y,
+        videoWidth: message.videoWidth,
+        videoHeight: message.videoHeight,
+        pressure: 0,
+        actionButton: AndroidMotionEventButton.Primary,
+        buttons: AndroidMotionEventButton.None,
+      });
+      break;
+    case "touchDown":
+    case "touchMove":
+    case "touchUp": {
+      const action =
+        message.type === "touchDown"
+          ? AndroidMotionEventAction.Down
+          : message.type === "touchMove"
+            ? AndroidMotionEventAction.Move
+            : AndroidMotionEventAction.Up;
+      const down = message.type !== "touchUp";
+      await controller.injectTouch({
+        action,
+        pointerId: BigInt(message.pointerId),
+        pointerX: message.x,
+        pointerY: message.y,
+        videoWidth: message.videoWidth,
+        videoHeight: message.videoHeight,
+        pressure: down ? 1 : 0,
+        actionButton: down ? AndroidMotionEventButton.Primary : AndroidMotionEventButton.None,
+        buttons: down ? AndroidMotionEventButton.Primary : AndroidMotionEventButton.None,
+      });
+      break;
+    }
+    case "scroll":
+      await controller.injectScroll({
+        pointerX: message.x,
+        pointerY: message.y,
+        videoWidth: message.videoWidth,
+        videoHeight: message.videoHeight,
+        scrollX: message.scrollX,
+        scrollY: message.scrollY,
+        buttons: AndroidMotionEventButton.None,
+      });
+      break;
+    case "text":
+      await controller.injectText(message.text);
+      break;
+    case "keyEvent":
+      await controller.injectKeyCode({
+        action: message.action === "down" ? AndroidKeyEventAction.Down : AndroidKeyEventAction.Up,
+        // The frontend owns mapping a browser key to an AOSP KEYCODE_* value
+        // — this route just proxies whatever numeric value it's given, so
+        // there's no closed set to validate against here.
+        keyCode: message.androidKeyCode as AndroidKeyCode,
+        repeat: 0,
+        metaState: 0,
+      });
+      break;
+    case "back":
+      await controller.backOrScreenOn(AndroidKeyEventAction.Down);
+      await controller.backOrScreenOn(AndroidKeyEventAction.Up);
+      break;
+  }
+  void deviceId; // reserved for future per-device logging context
+  void app;
+}
+
+export interface AttachDeviceParams {
+  deviceId: number;
+  avdName: string;
+  label: string | null;
+}
+
+/** Attaches a device WS socket to the live Device: gets-or-creates it via
+ * DeviceManager, fans out video packets, proxies input. Exported for
+ * tests. */
+export async function attachSocketToDevice(
+  app: FastifyInstance,
+  socket: WebSocket,
+  { deviceId, avdName, label }: AttachDeviceParams,
+): Promise<void> {
+  const device = app.device.getOrCreate({ id: String(deviceId), avdName, label });
+
+  let closed = false;
+  let droppedSincePacket = false;
+
+  const unsubscribeVideo = device.onVideoPacket((packet) => {
+    if (closed || socket.readyState !== socket.OPEN) return;
+    if (packet.type === "data" && socket.bufferedAmount > BACKPRESSURE_MAX_BUFFERED_BYTES) {
+      droppedSincePacket = true;
+      return;
+    }
+    if (droppedSincePacket && packet.type === "data") {
+      // Backlog just cleared — ask for a fresh keyframe rather than let the
+      // frontend decoder free-run against a stream with a hole in it. Fire
+      // once per drop-then-recover episode, not on every packet.
+      droppedSincePacket = false;
+      device.controller?.resetVideo().catch((err) => {
+        app.log.warn({ err, deviceId }, "device resetVideo after backpressure drop failed");
+      });
+    }
+    socket.send(encodeVideoFrame(packet), { binary: true });
+  });
+
+  const unsubscribeExit = device.onExit(() => {
+    if (socket.readyState === socket.OPEN) {
+      socket.send(JSON.stringify({ type: "exited" }));
+    }
+  });
+
+  socket.on("message", (data, isBinary) => {
+    if (isBinary) return;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(data.toString("utf8"));
+    } catch {
+      app.log.warn({ deviceId }, "dropped malformed device control message");
+      return;
+    }
+    const message = parseInputMessage(parsed);
+    if (!message) return;
+    dispatchInput(app, device, deviceId, message).catch((err) => {
+      app.log.warn({ err, deviceId }, "device input dispatch failed");
+    });
+  });
+
+  socket.on("close", () => {
+    closed = true;
+    unsubscribeVideo();
+    unsubscribeExit();
+  });
+}
+
+export async function deviceRoute(app: FastifyInstance): Promise<void> {
+  app.get<{ Params: { deviceId: string } }>(
+    "/ws/device/:deviceId",
+    {
+      websocket: true,
+      preValidation: async (request, reply) => {
+        if (!app.config.DEVICE_ENABLED) {
+          return reply.badRequest("Device panel is disabled — set DEVICE_ENABLED=true.");
+        }
+        const deviceId = Number(request.params.deviceId);
+        if (!Number.isInteger(deviceId)) {
+          return reply.badRequest("deviceId path param is required");
+        }
+        const [row] = app.db.select().from(devices).where(eq(devices.id, deviceId)).all();
+        if (!row) return reply.notFound(`No device ${deviceId}`);
+        if (row.status === "killed") return reply.badRequest(`Device ${deviceId} was killed`);
+      },
+    },
+    (socket, req) => {
+      const deviceId = Number(req.params.deviceId);
+      const [row] = app.db.select().from(devices).where(eq(devices.id, deviceId)).all();
+      void attachSocketToDevice(app, socket, {
+        deviceId,
+        avdName: row.avdName,
+        label: row.name,
+      });
+    },
+  );
+}

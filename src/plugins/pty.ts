@@ -150,7 +150,13 @@ function runDevServerDetectionSweep(app: FastifyInstance, manager: PtyManager): 
 // push the socket path over this limit. When that happens, redirect the
 // entire sessionsDir to a deterministic short path under /tmp/ so Unix
 // socket creation always succeeds regardless of project layout.
-function ensureSessionsDir(configured: string): string {
+// Exported — src/plugins/device.ts calls this with the identical
+// app.config.SESSIONS_DIR input so DeviceManager's scope-ownership
+// namespace (deriveInstanceId, device-process.ts) always agrees with
+// PtyManager's, rather than each plugin risking drift by deriving its own
+// notion of "the real sessionsDir" independently. Pure function of its one
+// input, so calling it a second time here is safe — no shared state.
+export function ensureSessionsDir(configured: string): string {
   const resolved = path.resolve(configured);
   // Check worst-case socket path: hooks.sock (10 bytes) or a 12-digit
   // session-ID socket (15 bytes + ".sock"). If both fit within 1 byte of
