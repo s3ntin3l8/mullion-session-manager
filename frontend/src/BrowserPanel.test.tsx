@@ -219,6 +219,155 @@ describe("BrowserPanel", () => {
     );
   });
 
+  // Issue #1318 — src/plugins/preview-proxy.ts now sends
+  // Access-Control-Allow-Origin on its own early-return error responses
+  // (404/401/429/502/503), so a fetch() of the resolved preview `src` can
+  // read a genuine proxy error's status *before* the iframe ever mounts.
+  // One test per status this file's own scope calls out (404/401/429) —
+  // the frontend can't and doesn't need to distinguish between them (see
+  // isPreviewProxyError's own comment), so all three assert the same
+  // generic message and retry affordance.
+  describe("detects a preview-proxy error via a readable probe status (issue #1318)", () => {
+    const previewSrc = `${window.location.protocol}//preview-abc123.preview.example.com/`;
+
+    function buildFetchMock(probeStatus: number) {
+      return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url === "/api/projects/1/urls" && method === "GET") {
+          return Promise.resolve(jsonResponse(200, []));
+        }
+        if (url === "/api/server-info" && method === "GET") {
+          const info: ServerInfo = {
+            ...SERVER_INFO_BASE,
+            previewsEnabled: true,
+            previewBaseHost: "preview.example.com",
+          };
+          return Promise.resolve(jsonResponse(200, info));
+        }
+        if (url === "/api/previews" && method === "POST") {
+          return Promise.resolve(
+            jsonResponse(201, {
+              slug: "abc123",
+              kind: "project",
+              projectId: 1,
+              externalUrl: null,
+              createdAt: "2026-01-01T00:00:00.000Z",
+            }),
+          );
+        }
+        if (url === previewSrc) {
+          expect(init?.redirect).toBe("manual");
+          return Promise.resolve(jsonResponse(probeStatus, { message: "preview unavailable" }));
+        }
+        return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
+      });
+    }
+
+    it.each([404, 401, 429])(
+      "shows the unavailable state with a retry button on a probed %i",
+      async (probeStatus) => {
+        vi.stubGlobal("fetch", buildFetchMock(probeStatus));
+        useDashboardStore.setState({ projects: [PROJECT] });
+
+        render(<BrowserPanel params={{ projectId: 1 }} />);
+
+        expect(
+          await screen.findByText(/preview isn't reachable through the proxy/),
+        ).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+        expect(screen.queryByTitle("Preview")).not.toBeInTheDocument();
+      },
+    );
+
+    it("shows the unavailable state for an external preview when probed with a proxy error", async () => {
+      const extPreviewSrc = `${window.location.protocol}//preview-ext123.preview.example.com/`;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+          const url = String(input);
+          const method = init?.method ?? "GET";
+          if (url === "/api/server-info" && method === "GET") {
+            const info: ServerInfo = {
+              ...SERVER_INFO_BASE,
+              previewsEnabled: true,
+              previewBaseHost: "preview.example.com",
+            };
+            return Promise.resolve(jsonResponse(200, info));
+          }
+          if (url === "/api/previews" && method === "POST") {
+            return Promise.resolve(
+              jsonResponse(201, {
+                slug: "ext123",
+                kind: "external",
+                projectId: null,
+                externalUrl: "https://example.com",
+                createdAt: "2026-01-01T00:00:00.000Z",
+              }),
+            );
+          }
+          if (url === extPreviewSrc) {
+            expect(init?.redirect).toBe("manual");
+            return Promise.resolve(jsonResponse(404, { message: "preview unavailable" }));
+          }
+          return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
+        }),
+      );
+
+      render(<BrowserPanel params={{ kind: "external", url: "https://example.com" }} />);
+
+      expect(
+        await screen.findByText(/preview isn't reachable through the proxy/),
+      ).toBeInTheDocument();
+      expect(screen.queryByTitle("Preview")).not.toBeInTheDocument();
+    });
+
+    it("mounts the iframe when the probe returns a redirect", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+          const url = String(input);
+          const method = init?.method ?? "GET";
+          if (url === "/api/projects/1/urls" && method === "GET") {
+            return Promise.resolve(jsonResponse(200, []));
+          }
+          if (url === "/api/server-info" && method === "GET") {
+            const info: ServerInfo = {
+              ...SERVER_INFO_BASE,
+              previewsEnabled: true,
+              previewBaseHost: "preview.example.com",
+            };
+            return Promise.resolve(jsonResponse(200, info));
+          }
+          if (url === "/api/previews" && method === "POST") {
+            return Promise.resolve(
+              jsonResponse(201, {
+                slug: "abc123",
+                kind: "project",
+                projectId: 1,
+                externalUrl: null,
+                createdAt: "2026-01-01T00:00:00.000Z",
+              }),
+            );
+          }
+          if (url === previewSrc) {
+            expect(init?.redirect).toBe("manual");
+            return Promise.resolve(new Response(null, { status: 302 }));
+          }
+          return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
+        }),
+      );
+      useDashboardStore.setState({ projects: [PROJECT] });
+
+      render(<BrowserPanel params={{ projectId: 1 }} />);
+
+      expect(await screen.findByTitle("Preview")).toBeInTheDocument();
+      expect(
+        screen.queryByText(/preview isn't reachable through the proxy/),
+      ).not.toBeInTheDocument();
+    });
+  });
+
   it("degrades to an error message when creating the preview fails", async () => {
     vi.stubGlobal(
       "fetch",

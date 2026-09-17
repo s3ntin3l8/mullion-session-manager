@@ -252,6 +252,45 @@ function resolvePreviewTarget(app: FastifyInstance, slug: string): PreviewResolu
 // error call alongside each call site below.
 const PREVIEW_UNAVAILABLE_MESSAGE = "preview unavailable";
 
+// Lets a cross-origin fetch() from the dashboard's own page (BrowserPanel.tsx's
+// probe of a resolved preview `src`, ahead of mounting the iframe) read one
+// of this file's own early-return error responses. A cross-origin fetch can
+// otherwise never observe anything about a response — not even its status —
+// so without this the frontend has no way to distinguish a proxy error
+// (404 unknown slug, 401 unauthenticated, 429 rate-limited, a 502/503
+// upstream failure) from a real successful load. Applied to every one of
+// those branches below and NEVER to relayFetchResponse's success path,
+// which must stay exactly as CORS-opaque as it already is — that's the
+// previewed dev server's own response body, not this proxy's, and letting
+// the dashboard origin read it would leak previewed-app content across the
+// slug boundary.
+//
+// Reflects the caller's own Origin header back verbatim rather than a fixed
+// value: this process has no way to know the dashboard's own hostname —
+// PREVIEW_BASE_HOST names the *preview* subdomain's own base, a sibling
+// host, not the dashboard's (see preview-host.ts's own comment and
+// docs/browser-previews.md's worked example, where the dashboard and its
+// preview base are two different subdomains). That's safe here
+// specifically because every response this is attached to carries the same
+// fixed, non-secret body regardless of who asks (PREVIEW_UNAVAILABLE_MESSAGE
+// or the fixed 401/429 bodies below) — reflecting the caller's Origin back
+// to it is exactly as permissive as a wildcard for this fixed set of
+// responses, and strictly narrower (no shared cache can serve one origin's
+// copy to another). `Vary: Origin` for that same caching reason. A request
+// with no Origin header (a real browser navigation, not a fetch() probe)
+// gets no header at all — there's nothing to reflect and nothing depends on
+// it. Responses do NOT set Access-Control-Allow-Credentials: true, so
+// credentials cannot be sent or read across origins, preventing CORS
+// credential leak risks (CodeQL js/cors-misconfiguration-for-credentials);
+// BrowserPanel.tsx's uncredentialed probe with redirect: "manual" reads
+// the status code without requiring credential transfer.
+function addPreviewErrorCorsHeaders(request: FastifyRequest, reply: FastifyReply): void {
+  const origin = request.headers.origin;
+  if (!origin || !/^https?:\/\//i.test(origin)) return;
+  reply.header("Access-Control-Allow-Origin", origin);
+  reply.header("Vary", "Origin");
+}
+
 async function handlePreviewRequest(
   app: FastifyInstance,
   request: FastifyRequest,
@@ -260,6 +299,7 @@ async function handlePreviewRequest(
 ) {
   const resolution = resolvePreviewTarget(app, slug);
   if (!resolution.ok) {
+    addPreviewErrorCorsHeaders(request, reply);
     // Hermes review, PR #579: reply.notFound() with no argument falls back
     // to @fastify/sensible's own default message, not the fixed
     // PREVIEW_UNAVAILABLE_MESSAGE the design comment above promises for
@@ -284,6 +324,7 @@ async function handlePreviewRequest(
     );
   } catch (err) {
     app.log.warn({ err, slug }, "preview proxy: preview has an invalid target URL");
+    addPreviewErrorCorsHeaders(request, reply);
     return reply.serviceUnavailable(PREVIEW_UNAVAILABLE_MESSAGE);
   }
 
@@ -321,6 +362,7 @@ async function handlePreviewRequest(
     } catch (err) {
       request.raw.resume();
       app.log.warn({ err, slug, hostId: target.hostId }, "preview proxy: upstream unreachable");
+      addPreviewErrorCorsHeaders(request, reply);
       return reply.badGateway(PREVIEW_UNAVAILABLE_MESSAGE);
     }
     // The loopback base this hop actually forced the connection to (see the
@@ -383,6 +425,7 @@ async function handlePreviewRequest(
         "preview proxy: upstream unreachable",
       );
     }
+    addPreviewErrorCorsHeaders(request, reply);
     return reply.badGateway(PREVIEW_UNAVAILABLE_MESSAGE);
   }
 
@@ -925,6 +968,7 @@ export const previewProxyPlugin = fp(async (app: FastifyInstance) => {
         app.config.PREVIEW_RATE_LIMIT_MAX,
       )
     ) {
+      addPreviewErrorCorsHeaders(request, reply);
       return reply.tooManyRequests("too many preview requests — try again later");
     }
 
@@ -937,6 +981,7 @@ export const previewProxyPlugin = fp(async (app: FastifyInstance) => {
     if (app.config.PREVIEW_AUTH_REQUIRED) {
       const decision = evaluatePreviewAuth(app, request, slug);
       if (decision.kind === "unauthorized") {
+        addPreviewErrorCorsHeaders(request, reply);
         if (isPreviewAuthRateLimited(app, request.raw.socket.remoteAddress)) {
           return reply.tooManyRequests("too many failed preview-auth attempts — try again later");
         }
