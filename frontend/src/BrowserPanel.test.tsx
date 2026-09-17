@@ -257,7 +257,7 @@ describe("BrowserPanel", () => {
           );
         }
         if (url === previewSrc) {
-          expect(init?.credentials).toBe("include");
+          expect(init?.redirect).toBe("manual");
           return Promise.resolve(jsonResponse(probeStatus, { message: "preview unavailable" }));
         }
         return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
@@ -279,6 +279,93 @@ describe("BrowserPanel", () => {
         expect(screen.queryByTitle("Preview")).not.toBeInTheDocument();
       },
     );
+
+    it("shows the unavailable state for an external preview when probed with a proxy error", async () => {
+      const extPreviewSrc = `${window.location.protocol}//preview-ext123.preview.example.com/`;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+          const url = String(input);
+          const method = init?.method ?? "GET";
+          if (url === "/api/server-info" && method === "GET") {
+            const info: ServerInfo = {
+              ...SERVER_INFO_BASE,
+              previewsEnabled: true,
+              previewBaseHost: "preview.example.com",
+            };
+            return Promise.resolve(jsonResponse(200, info));
+          }
+          if (url === "/api/previews" && method === "POST") {
+            return Promise.resolve(
+              jsonResponse(201, {
+                slug: "ext123",
+                kind: "external",
+                projectId: null,
+                externalUrl: "https://example.com",
+                createdAt: "2026-01-01T00:00:00.000Z",
+              }),
+            );
+          }
+          if (url === extPreviewSrc) {
+            expect(init?.redirect).toBe("manual");
+            return Promise.resolve(jsonResponse(404, { message: "preview unavailable" }));
+          }
+          return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
+        }),
+      );
+
+      render(<BrowserPanel params={{ kind: "external", url: "https://example.com" }} />);
+
+      expect(
+        await screen.findByText(/preview isn't reachable through the proxy/),
+      ).toBeInTheDocument();
+      expect(screen.queryByTitle("Preview")).not.toBeInTheDocument();
+    });
+
+    it("mounts the iframe when the probe returns a redirect", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+          const url = String(input);
+          const method = init?.method ?? "GET";
+          if (url === "/api/projects/1/urls" && method === "GET") {
+            return Promise.resolve(jsonResponse(200, []));
+          }
+          if (url === "/api/server-info" && method === "GET") {
+            const info: ServerInfo = {
+              ...SERVER_INFO_BASE,
+              previewsEnabled: true,
+              previewBaseHost: "preview.example.com",
+            };
+            return Promise.resolve(jsonResponse(200, info));
+          }
+          if (url === "/api/previews" && method === "POST") {
+            return Promise.resolve(
+              jsonResponse(201, {
+                slug: "abc123",
+                kind: "project",
+                projectId: 1,
+                externalUrl: null,
+                createdAt: "2026-01-01T00:00:00.000Z",
+              }),
+            );
+          }
+          if (url === previewSrc) {
+            expect(init?.redirect).toBe("manual");
+            return Promise.resolve(new Response(null, { status: 302 }));
+          }
+          return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
+        }),
+      );
+      useDashboardStore.setState({ projects: [PROJECT] });
+
+      render(<BrowserPanel params={{ projectId: 1 }} />);
+
+      expect(await screen.findByTitle("Preview")).toBeInTheDocument();
+      expect(
+        screen.queryByText(/preview isn't reachable through the proxy/),
+      ).not.toBeInTheDocument();
+    });
   });
 
   it("degrades to an error message when creating the preview fails", async () => {

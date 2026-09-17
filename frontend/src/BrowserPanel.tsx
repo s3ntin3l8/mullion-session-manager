@@ -107,13 +107,16 @@ const PREVIEW_PROXY_ERROR_MESSAGE =
 // (a network-level CORS failure — no ACAO header at all, the common case of
 // a real successful load) tells us nothing, so it's treated as "probably
 // fine" and the caller falls back to mounting the iframe exactly as it did
-// before this probe existed. `credentials: "include"` so an
-// already-established preview cookie (PREVIEW_AUTH_REQUIRED's sliding-
-// refresh case) is sent, the same as the iframe's own subsequent navigation
-// would.
+// before this probe existed. The probe uses redirect: "manual" (without
+// credentials: "include") so credentials are not transferred cross-origin
+// (avoiding CodeQL js/cors-misconfiguration-for-credentials alerts), while
+// allowing the uncredentialed error status to be read.
 async function isPreviewProxyError(src: string): Promise<boolean> {
   try {
-    const response = await fetch(src, { credentials: "include" });
+    const response = await fetch(src, { redirect: "manual" });
+    if (response.type === "opaqueredirect" || response.status === 302) {
+      return false;
+    }
     return !response.ok;
   } catch {
     return false;

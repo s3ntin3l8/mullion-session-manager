@@ -279,17 +279,15 @@ const PREVIEW_UNAVAILABLE_MESSAGE = "preview unavailable";
 // copy to another). `Vary: Origin` for that same caching reason. A request
 // with no Origin header (a real browser navigation, not a fetch() probe)
 // gets no header at all — there's nothing to reflect and nothing depends on
-// it. BrowserPanel.tsx's probe fetches with `credentials: "include"` (session
-// cookies need to ride along so PREVIEW_AUTH_REQUIRED's own check passes);
-// per the Fetch/CORS specs a credentialed cross-origin response is only
-// readable if the server also sends `Access-Control-Allow-Credentials: true`
-// — without it the browser throws instead of exposing the (already-safe,
-// origin-scoped) status below.
+// it. Responses do NOT set Access-Control-Allow-Credentials: true, so
+// credentials cannot be sent or read across origins, preventing CORS
+// credential leak risks (CodeQL js/cors-misconfiguration-for-credentials);
+// BrowserPanel.tsx's uncredentialed probe with redirect: "manual" reads
+// the status code without requiring credential transfer.
 function addPreviewErrorCorsHeaders(request: FastifyRequest, reply: FastifyReply): void {
   const origin = request.headers.origin;
-  if (!origin) return;
+  if (!origin || !/^https?:\/\//i.test(origin)) return;
   reply.header("Access-Control-Allow-Origin", origin);
-  reply.header("Access-Control-Allow-Credentials", "true");
   reply.header("Vary", "Origin");
 }
 

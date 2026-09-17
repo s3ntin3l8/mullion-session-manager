@@ -505,11 +505,10 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
   // cross-origin fetch can't read anything about a response with no
   // Access-Control-Allow-Origin header at all — these responses must carry
   // one, and relayFetchResponse's success path (the previewed dev server's
-  // own response) must never carry one. BrowserPanel.tsx's probe fetches
-  // credentialed (`credentials: "include"`, so PREVIEW_AUTH_REQUIRED's own
-  // check can pass), which per the Fetch spec means the response is only
-  // readable if Access-Control-Allow-Credentials: true is present too — so
-  // every case below checks both headers together, not ACAO alone.
+  // own response) must never carry one. Responses deliberately do NOT set
+  // Access-Control-Allow-Credentials: true (CodeQL
+  // js/cors-misconfiguration-for-credentials); BrowserPanel.tsx probes with
+  // redirect: "manual" so credentials are not transferred or exposed.
   describe("CORS headers on the proxy's own early-return errors only (issue #1318)", () => {
     const DASHBOARD_ORIGIN = "https://dashboard.example.com";
 
@@ -525,7 +524,7 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
       });
       expect(res.statusCode).toBe(404);
       expect(res.headers["access-control-allow-origin"]).toBe(DASHBOARD_ORIGIN);
-      expect(res.headers["access-control-allow-credentials"]).toBe("true");
+      expect(res.headers["access-control-allow-credentials"]).toBeUndefined();
       expect(res.headers["vary"]).toBe("Origin");
       await app.close();
     });
@@ -542,7 +541,7 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
       });
       expect(res.statusCode).toBe(503);
       expect(res.headers["access-control-allow-origin"]).toBe(DASHBOARD_ORIGIN);
-      expect(res.headers["access-control-allow-credentials"]).toBe("true");
+      expect(res.headers["access-control-allow-credentials"]).toBeUndefined();
       await app.close();
     });
 
@@ -558,7 +557,7 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
       });
       expect(res.statusCode).toBe(502);
       expect(res.headers["access-control-allow-origin"]).toBe(DASHBOARD_ORIGIN);
-      expect(res.headers["access-control-allow-credentials"]).toBe("true");
+      expect(res.headers["access-control-allow-credentials"]).toBeUndefined();
       await app.close();
     });
 
@@ -584,7 +583,7 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
         });
         expect(res.statusCode).toBe(429);
         expect(res.headers["access-control-allow-origin"]).toBe(DASHBOARD_ORIGIN);
-        expect(res.headers["access-control-allow-credentials"]).toBe("true");
+        expect(res.headers["access-control-allow-credentials"]).toBeUndefined();
         await app.close();
       } finally {
         delete process.env.PREVIEW_RATE_LIMIT_MAX;
@@ -597,6 +596,19 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
         method: "GET",
         url: "/",
         headers: { host: `preview-does-not-exist.${PREVIEW_BASE_HOST}` },
+      });
+      expect(res.statusCode).toBe(404);
+      expect(res.headers["access-control-allow-origin"]).toBeUndefined();
+      expect(res.headers["access-control-allow-credentials"]).toBeUndefined();
+      await app.close();
+    });
+
+    it("does not set Access-Control-Allow-Origin when the caller sent an invalid Origin header", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: "/",
+        headers: { host: `preview-does-not-exist.${PREVIEW_BASE_HOST}`, origin: "null" },
       });
       expect(res.statusCode).toBe(404);
       expect(res.headers["access-control-allow-origin"]).toBeUndefined();
@@ -1186,7 +1198,7 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
         });
         expect(res.statusCode).toBe(401);
         expect(res.headers["access-control-allow-origin"]).toBe("https://dashboard.example.com");
-        expect(res.headers["access-control-allow-credentials"]).toBe("true");
+        expect(res.headers["access-control-allow-credentials"]).toBeUndefined();
         await app.close();
       });
 
