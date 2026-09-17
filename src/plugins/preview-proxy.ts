@@ -246,7 +246,7 @@ function resolvePreviewTarget(app: FastifyInstance, slug: string): PreviewResolu
 // response sends to the client, regardless of which internal condition
 // triggered it (unknown slug, no devServerUrl, blocked/unreachable upstream,
 // an unparsable target URL). Same "don't reflect attacker/internal state
-// into the response" posture as PREVIEW_AUTH_UNAUTHORIZED_HTML above — the
+// into the response" posture as buildPreviewAuthUnauthorizedHtml above — the
 // actual reason is always still available server-side, in the app.log.warn/
 // error call alongside each call site below.
 const PREVIEW_UNAVAILABLE_MESSAGE = "preview unavailable";
@@ -503,14 +503,52 @@ async function handlePreviewWsUpgrade(
   });
 }
 
+// Minimal, non-library escape — the only caller (buildPreviewAuthUnauthorizedHtml
+// below) uses this for a single boot-time-validated absolute-http(s)-URL config
+// value (never request-derived), so this only needs to cover the characters
+// that matter in an href attribute/text-node context, not full HTML entity
+// coverage.
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 // Never any request-derived value interpolated in — the slug comes from an
-// attacker-controllable Host header, so this stays a fixed, static body no
-// matter what Host the caller sent (same "don't reflect attacker input"
-// posture routes/settings.ts's own reply.type("application/json") call
-// documents for a different content-type-confusion concern).
-const PREVIEW_AUTH_UNAUTHORIZED_HTML =
-  "<!doctype html><html><head><title>401 Unauthorized</title></head>" +
-  "<body><h1>401 Unauthorized</h1><p>This preview requires authentication.</p></body></html>";
+// attacker-controllable Host header, so this stays built only from a fixed
+// string plus PREVIEW_AUTH_DASHBOARD_URL (issue #1310), an operator-set,
+// boot-time-validated config value (src/app.ts), no matter what Host the
+// caller sent (same "don't reflect attacker input" posture routes/settings.ts's
+// own reply.type("application/json") call documents for a different
+// content-type-confusion concern).
+//
+// Issue #1310 — a direct/bookmarked top-level navigation to a preview URL
+// has no bootstrap token (that only ever arrives via an already-open
+// dashboard tab's own iframe src, per docs/auth.md's Preview-host auth
+// token section) and, on a first visit, no preview cookie either — the bare
+// "401 Unauthorized" this used to send was a dead end with no way back to
+// the dashboard to mint one. This still can't auto-authenticate that
+// navigation (the dashboard session cookie is on a different origin than
+// the preview subdomain, which is the whole reason the bootstrap-token flow
+// exists — see issue #1316 for a possible redirect-through-the-dashboard
+// follow-up that mints a token without ever reading that cookie
+// cross-origin), but it can at least explain *why* and point back to the
+// dashboard when an operator has configured where that is.
+function buildPreviewAuthUnauthorizedHtml(dashboardUrl: string): string {
+  const explanation =
+    "<p>This preview requires authentication and can't be opened by navigating to " +
+    "it directly — a bookmarked or shared link to a preview doesn't carry the " +
+    "credential a dashboard-opened preview does.</p>";
+  const link = dashboardUrl
+    ? `<p><a href="${escapeHtml(dashboardUrl)}">Open the Mullion dashboard</a> and open this preview from there instead.</p>`
+    : "<p>Open this preview from the Mullion dashboard instead.</p>";
+  return (
+    "<!doctype html><html><head><title>401 Unauthorized</title></head>" +
+    `<body><h1>401 Unauthorized</h1>${explanation}${link}</body></html>`
+  );
+}
 
 // No `domain` attribute, ever — host-only by design, so each
 // "preview-<slug>.<PREVIEW_BASE_HOST>" subdomain gets its own independent
@@ -891,7 +929,10 @@ export const previewProxyPlugin = fp(async (app: FastifyInstance) => {
         if (isPreviewAuthRateLimited(app, request.raw.socket.remoteAddress)) {
           return reply.tooManyRequests("too many failed preview-auth attempts — try again later");
         }
-        return reply.code(401).type("text/html").send(PREVIEW_AUTH_UNAUTHORIZED_HTML);
+        return reply
+          .code(401)
+          .type("text/html")
+          .send(buildPreviewAuthUnauthorizedHtml(app.config.PREVIEW_AUTH_DASHBOARD_URL.trim()));
       }
       if (decision.kind === "redirect") {
         reply.setCookie(

@@ -978,6 +978,59 @@ describe("auth plugin + routes (issues #19, #30)", () => {
     });
   });
 
+  describe("PREVIEW_AUTH_DASHBOARD_URL boot invariant (issue #1310)", () => {
+    // The "MULLION_TRUST_GATEWAY boot invariant" describe block above leaves
+    // this deleted in its own afterEach for the rest of the file — set it
+    // explicitly here (same as the PREVIEW_AUTH_REQUIRED block's own
+    // MULLION_AUTH_TOKEN/MULLION_SESSION_SECRET) so these cases boot far
+    // enough to reach the check this block actually exercises, rather than
+    // tripping the unrelated "no in-process auth configured" invariant.
+    beforeEach(() => {
+      process.env.MULLION_TRUST_GATEWAY = "true";
+    });
+
+    afterEach(() => {
+      delete process.env.PREVIEW_AUTH_DASHBOARD_URL;
+      delete process.env.MULLION_TRUST_GATEWAY;
+      delete process.env.MULLION_ROLE;
+      delete process.env.MULLION_AGENT_TOKEN;
+    });
+
+    it("boots fine with PREVIEW_AUTH_DASHBOARD_URL unset — this flag has never been required", async () => {
+      const app = await buildApp();
+      await app.close();
+    });
+
+    it("boots fine with an absolute http(s) URL", async () => {
+      process.env.PREVIEW_AUTH_DASHBOARD_URL = "https://mullion.example.com/";
+      const app = await buildApp();
+      await app.close();
+    });
+
+    it("refuses to boot with a root-relative path — that can't resolve to anything from a preview subdomain's own origin", async () => {
+      process.env.PREVIEW_AUTH_DASHBOARD_URL = "/";
+      await expect(buildApp()).rejects.toThrow(/PREVIEW_AUTH_DASHBOARD_URL must be an absolute/);
+    });
+
+    it("refuses to boot with an unparsable value", async () => {
+      process.env.PREVIEW_AUTH_DASHBOARD_URL = "not a url";
+      await expect(buildApp()).rejects.toThrow(/PREVIEW_AUTH_DASHBOARD_URL must be an absolute/);
+    });
+
+    it("refuses to boot with a non-http(s) scheme", async () => {
+      process.env.PREVIEW_AUTH_DASHBOARD_URL = "ftp://mullion.example.com/";
+      await expect(buildApp()).rejects.toThrow(/PREVIEW_AUTH_DASHBOARD_URL must be an absolute/);
+    });
+
+    it("does not refuse to boot as an agent even with a bad PREVIEW_AUTH_DASHBOARD_URL — the check only applies to the primary role", async () => {
+      process.env.PREVIEW_AUTH_DASHBOARD_URL = "not a url";
+      process.env.MULLION_ROLE = "agent";
+      process.env.MULLION_AGENT_TOKEN = "test-agent-token";
+      const app = await buildApp();
+      await app.close();
+    });
+  });
+
   describe("GET /api/auth/oidc/login (issue #30)", () => {
     beforeEach(() => {
       process.env.MULLION_SESSION_SECRET = TEST_SECRET;
