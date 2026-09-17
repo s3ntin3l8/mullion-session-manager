@@ -116,7 +116,12 @@ steps below are only for turning on the subdomain proxy.
    app**, unless `PREVIEW_AUTH_REQUIRED=true` is set (issue #383 — see
    [`auth.md`](auth.md)). Gateway forwardAuth is still the default/only
    option when that flag is off: without either one, every preview subdomain
-   is an open, unauthenticated proxy into whatever it's pointed at.
+   is an open, unauthenticated proxy into whatever it's pointed at. With
+   `PREVIEW_AUTH_REQUIRED=true` and no gateway in front, a bookmarked/direct
+   navigation straight to a preview URL 401s with no bootstrap token to
+   redeem — set `PREVIEW_AUTH_DASHBOARD_URL` (issue #1310, see
+   [`configuration.md`](configuration.md)) so that 401 page can at least
+   link back to the dashboard instead of being a dead end.
 
 ### Worked example: `mullion.s3ntin3l8.de`
 
