@@ -445,11 +445,26 @@ export class DeviceManager {
   }
 
   /** Tears down the live device without removing it from the map — mirrors
-   * PtyManager.kill(). */
+   * PtyManager.kill(). Hermes review: the in-memory map being empty is NOT
+   * the same as "nothing to stop" — a scope that survived a Mullion
+   * restart has no in-memory `Device` to represent it (same case
+   * `isScopeAlive()`/`getOrCreate()`'s pre-check exists for), and this
+   * method used to silently no-op for exactly that id, leaving the row
+   * flipped to "killed" while the real emulator (a KVM handle + several
+   * GB) kept running with no API path left to ever stop it again — the
+   * `getOrCreate()` collision-guard would throw on it forever. Falls back
+   * to stopping by DERIVED unit name/marker directly (the same thing
+   * `stopDeviceScope` already does when it can't confirm ownership any
+   * other way — see its own doc comment), rather than requiring a live
+   * `Device` instance to call `.kill()` through. */
   async kill(id: string): Promise<void> {
     const device = this.devices.get(id);
-    if (!device) return;
-    await device.kill();
+    if (device) {
+      await device.kill();
+      return;
+    }
+    await stopDeviceScope(this.opts.sessionsDir, deriveInstanceId(this.opts.sessionsDir), id);
+    removeDeviceMarker(this.opts.sessionsDir, id);
   }
 
   /** kill() plus dropping this manager's own reference — the in-memory-map

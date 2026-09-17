@@ -238,6 +238,42 @@ export function DevicePane(props: {
     canvas.addEventListener("wheel", onWheel, { passive: false });
     canvas.addEventListener("contextmenu", onContextMenu);
 
+    // Touch support (Hermes review — canvasPoint already accepted a Touch,
+    // but nothing sent one). Single-touch only: `pointerId: 0` throughout,
+    // matching the tap gesture's own single-pointer convention above — a
+    // second simultaneous touch is silently ignored (`event.touches[0]`),
+    // not tracked as a distinct pointer. `{ passive: false }` +
+    // preventDefault on all three so a drag on the canvas doesn't also
+    // scroll the page.
+    const onTouchStart = (event: TouchEvent) => {
+      event.preventDefault();
+      canvas!.focus();
+      const touch = event.touches[0];
+      if (!touch) return;
+      const { x, y } = canvasPoint(touch);
+      sendControl({ type: "touchDown", x, y, videoWidth, videoHeight, pointerId: 0 });
+    };
+    const onTouchMove = (event: TouchEvent) => {
+      event.preventDefault();
+      const touch = event.touches[0];
+      if (!touch) return;
+      const { x, y } = canvasPoint(touch);
+      sendControl({ type: "touchMove", x, y, videoWidth, videoHeight, pointerId: 0 });
+    };
+    const onTouchEnd = (event: TouchEvent) => {
+      event.preventDefault();
+      // `changedTouches`, not `touches` — by "touchend" the lifted touch
+      // has already been removed from `touches`.
+      const touch = event.changedTouches[0];
+      if (!touch) return;
+      const { x, y } = canvasPoint(touch);
+      sendControl({ type: "touchUp", x, y, videoWidth, videoHeight, pointerId: 0 });
+    };
+    canvas.addEventListener("touchstart", onTouchStart, { passive: false });
+    canvas.addEventListener("touchmove", onTouchMove, { passive: false });
+    canvas.addEventListener("touchend", onTouchEnd, { passive: false });
+    canvas.addEventListener("touchcancel", onTouchEnd, { passive: false });
+
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Backspace") {
         event.preventDefault();
@@ -270,6 +306,10 @@ export function DevicePane(props: {
       canvas.removeEventListener("mousedown", onMouseDown);
       canvas.removeEventListener("wheel", onWheel);
       canvas.removeEventListener("contextmenu", onContextMenu);
+      canvas.removeEventListener("touchstart", onTouchStart);
+      canvas.removeEventListener("touchmove", onTouchMove);
+      canvas.removeEventListener("touchend", onTouchEnd);
+      canvas.removeEventListener("touchcancel", onTouchEnd);
       canvas.removeEventListener("keydown", onKeyDown);
       ws?.close();
       writer.close().catch(() => {});
