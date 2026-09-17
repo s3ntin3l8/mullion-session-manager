@@ -196,30 +196,30 @@ describe("DeviceManager.getOrCreate() — reattach path", () => {
     expect(systemdRunCalls).toHaveLength(0);
   });
 
-  it("fails clearly, without hanging, when the persisted port has no live adb devices entry (the emulator process itself died)", async () => {
+  it("rejects getOrCreate() itself, synchronously and without hanging, when the persisted port has no live adb devices entry (the emulator process itself died)", async () => {
     scopeAliveFor("7");
     mockGetDevicesShouldFail = false;
     mockAdbDevices = []; // nothing live on adb — process is gone, not just Mullion
     const manager = buildManager();
 
-    const device = await manager.getOrCreate({
-      id: "7",
-      avdName: "dev35",
-      label: null,
-      port: 5556,
-    });
-
-    await vi.waitFor(() => expect(device.toInfo().status).toBe("error"));
-    expect(device.toInfo().error).toMatch(/no live adb connection/);
-    expect(device.toInfo().error).toMatch(/emulator-5556/);
+    // Awaited/rejected, not polled — this must be a synchronous failure
+    // from getOrCreate() itself, the same as the no-persisted-port case:
+    // routes/device.ts's attachSocketToDevice only has an error channel
+    // back to the WS client for a getOrCreate() REJECTION, not for a
+    // fire-and-forget attach() failure it never observes.
+    await expect(
+      manager.getOrCreate({ id: "7", avdName: "dev35", label: null, port: 5556 }),
+    ).rejects.toThrow(/no longer reachable over adb/);
     // Must never have gotten as far as creating an adb connection or
     // starting scrcpy for a serial that was never confirmed live.
     expect(mockCreateAdb).not.toHaveBeenCalled();
     expect(mockStart).not.toHaveBeenCalled();
+    // No Device was ever constructed/registered for this attempt.
+    expect(manager.get("7")).toBeUndefined();
     // The process is CONFIRMED gone — safe (and necessary, so a future
     // spawn() for this id isn't wedged by the still-occupied unit name) to
     // stop the now-empty scope.
-    await vi.waitFor(() => expect(stopCalls.length).toBeGreaterThan(0));
+    expect(stopCalls.length).toBeGreaterThan(0);
   });
 
   it("does NOT stop the scope when the emulator is confirmed live but the reconnect itself fails (transient adb/scrcpy error)", async () => {
@@ -257,21 +257,16 @@ describe("DeviceManager.getOrCreate() — reattach path", () => {
     await vi.waitFor(() => expect(retried.toInfo().status).toBe("streaming"));
   });
 
-  it("does NOT stop the scope when getDevices() itself rejects (adb server unreachable — 'unknown', not 'confirmed gone')", async () => {
+  it("rejects getOrCreate() without stopping the scope when getDevices() itself rejects (adb server unreachable — 'unknown', not 'confirmed gone')", async () => {
     scopeAliveFor("7");
     mockGetDevicesShouldFail = true; // rejects, rather than resolving with an empty list
     const manager = buildManager();
 
-    const device = await manager.getOrCreate({
-      id: "7",
-      avdName: "dev35",
-      label: null,
-      port: 5556,
-    });
-
-    await vi.waitFor(() => expect(device.toInfo().status).toBe("error"));
-    expect(device.toInfo().error).toMatch(/adb server connection refused/);
+    await expect(
+      manager.getOrCreate({ id: "7", avdName: "dev35", label: null, port: 5556 }),
+    ).rejects.toThrow(/adb server connection refused/);
     expect(stopCalls).toEqual([]);
+    expect(manager.get("7")).toBeUndefined();
   });
 
   it("rejects immediately with the clear manual-stop error when the scope survived but no port was ever persisted", async () => {

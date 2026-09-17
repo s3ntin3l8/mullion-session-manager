@@ -8,8 +8,10 @@ import type * as ChildProcess from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import { eq } from "drizzle-orm";
 import { buildTestApp } from "../helpers/app.js";
 import { closeDb } from "../../src/db/client.js";
+import { devices } from "../../src/db/schema.js";
 
 // A device's spawn() bootstraps a real systemd-run scope the same way a
 // session's master does — faked here for the same reason
@@ -98,6 +100,24 @@ describe("devices routes", () => {
         projectId: null,
       });
       expect(typeof body.id).toBe("number");
+    });
+
+    it("POST /api/devices persists the allocated port on the row via onPortAssigned (issue #1325's reattach durability)", async () => {
+      const app = await buildTestApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/devices",
+        payload: { avdName: "dev35" },
+      });
+      const id = created.json().id;
+
+      // onPortAssigned fires synchronously at the very start of spawn(),
+      // before the fire-and-forget systemd-run bootstrap even starts (see
+      // that field's own comment in device-manager.ts) — already reflected
+      // in the row by the time getOrCreate() (awaited by this route) has
+      // returned, not just eventually.
+      const [row] = app.db.select().from(devices).where(eq(devices.id, id)).all();
+      expect(typeof row.port).toBe("number");
     });
 
     it("GET /api/devices lists a created row", async () => {

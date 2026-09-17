@@ -257,66 +257,37 @@ export class Device {
    * DB column spawn() recorded via onPortAssigned. Skips
    * systemd-run/buildDeviceLaunchPlan/touchDeviceMarker entirely: the
    * emulator process is already running (that's the whole premise of this
-   * path — getOrCreate() only calls this after isScopeAlive() confirmed the
-   * scope), so only the adb+scrcpy connection needs (re)establishing.
+   * path), so only the adb+scrcpy connection needs (re)establishing.
    * scrcpy itself is stateless from the client's perspective — starting a
    * fresh scrcpy server connection against an already-running emulator is
    * normal, expected usage, not a special case scrcpy needs to support.
    *
-   * Rejects immediately (never calls waitForAdbSerial, which polls for up
-   * to BOOT_TIMEOUT_MS) if the persisted serial has no live `adb devices`
-   * entry at all — that means the emulator PROCESS itself died, not just
-   * Mullion, and there is nothing to reattach to; silently hanging until a
-   * timeout would misrepresent that as "still booting."
+   * Liveness (does this serial actually still show up on `adb devices`?)
+   * is deliberately NOT checked here — getOrCreate() already confirmed that
+   * BEFORE constructing this Device or calling attach() at all, specifically
+   * so a dead-process failure is a synchronous reject from getOrCreate()
+   * itself (the route's existing error handling surfaces it to the caller
+   * — see routes/device.ts's attachSocketToDevice) rather than a fire-and-
+   * forget failure this WS route would never observe: unlike spawn(),
+   * nothing here ever produces an onExit() firing (no scrcpyClient was ever
+   * created) to signal it another way.
    *
    * Deliberately NOT the same full-teardown-on-any-failure posture as
    * spawn()'s own catch: spawn() owns the scope it just created, so
-   * stopping it on failure only cleans up spawn()'s own mess. attach()
-   * did NOT create this scope — it may be a perfectly healthy, still-running
-   * emulator that this attempt merely failed to CONNECT to (a transient adb
-   * hiccup, `createAdb` failing, scrcpy's own push/start failing). Stopping
-   * the scope in that case would destroy the exact thing this feature
-   * exists to preserve, on a failure that has nothing to do with whether
-   * the emulator itself is still alive. So only the one case that is a
-   * CONFIRMED "the process itself is gone" (see above) tears the scope
-   * down; every other failure here leaves it running and only tears down
-   * the (partial) adb/scrcpy connection this attempt itself opened — a
-   * later getOrCreate() call sees isScopeAlive() still true and the port
-   * still persisted, and simply retries attach() against the same scope.
-   * This also means `serverClient.getDevices()` itself REJECTING (adb
-   * server unreachable, say) must never be treated as "confirmed gone" —
-   * "unknown" must never collapse to "dead" for a caller about to take a
-   * destructive action, the same trust rule device-process.ts's own
-   * DeviceScopeOwnershipListing documents. */
+   * stopping it on failure only cleans up spawn()'s own mess. attach() did
+   * NOT create this scope — by the time this runs, the emulator is
+   * confirmed alive; a failure here (a transient adb hiccup, `createAdb`
+   * failing, scrcpy's own push/start failing) is a failure to CONNECT to
+   * it, not evidence it's gone. Stopping the scope on that basis would
+   * destroy the exact thing this feature exists to preserve. So this only
+   * ever tears down the (partial) adb/scrcpy connection THIS attempt itself
+   * opened — a later getOrCreate() call sees isScopeAlive() still true and
+   * the port still persisted, and simply retries attach() against the same
+   * scope. */
   async attach(port: number): Promise<void> {
     this.allocatedPort = port;
     this.serial = `emulator-${port}`;
     this.status = "booting";
-
-    let liveDevices: Awaited<ReturnType<AdbServerClient["getDevices"]>>;
-    try {
-      liveDevices = await this.serverClient.getDevices();
-    } catch (err) {
-      // Could not even ask adb whether the emulator is still alive — see
-      // this method's own comment on why that must not be treated as
-      // "confirmed gone." No teardown.
-      this.status = "error";
-      this.lastError = err instanceof Error ? err.message : String(err);
-      throw err;
-    }
-
-    if (!liveDevices.some((d) => d.serial === this.serial)) {
-      this.status = "error";
-      this.lastError =
-        `emulator ${this.serial} (device ${this.id}) has no live adb connection — the emulator ` +
-        `process itself must have exited, not just Mullion`;
-      // Confirmed gone, not just unreachable — safe, and necessary (so a
-      // future spawn() for this id isn't wedged by the still-occupied unit
-      // name), to fully tear down: nothing here is actually still running.
-      await this.teardownProcess().catch(() => {});
-      throw new Error(this.lastError);
-    }
-
     try {
       this.adb = await this.serverClient.createAdb({ serial: this.serial });
       await this.startScrcpySession(this.adb);
@@ -324,9 +295,8 @@ export class Device {
     } catch (err) {
       this.status = "error";
       this.lastError = err instanceof Error ? err.message : String(err);
-      // The emulator is confirmed alive (the check above passed) — only
-      // close whatever THIS attempt itself opened, never the scope. See
-      // this method's own comment.
+      // See this method's own comment — only what THIS attempt opened,
+      // never the scope.
       await this.adb?.close().catch(() => {});
       this.adb = null;
       this.scrcpyClient = null;
@@ -559,12 +529,49 @@ export class DeviceManager {
         );
       }
       const port = opts.port;
+      const serial = `emulator-${port}`;
+      // Awaited (unlike attach()'s own connection work below, which is
+      // fire-and-forget) so a CONFIRMED-gone emulator process rejects
+      // getOrCreate() itself, synchronously, the same clear way the
+      // no-persisted-port case above does — both current callers already
+      // surface a getOrCreate() rejection to whoever's waiting (routes/
+      // device.ts's attachSocketToDevice sends it down the WS before ever
+      // subscribing to anything; routes/devices.ts's POST handler
+      // badRequests with it). A fire-and-forget failure here would instead
+      // leave a WS socket open with no video and no error — attach()
+      // itself never produces an onExit() firing for this case (no
+      // scrcpyClient is ever created), so nothing would ever tell the
+      // client. If this call itself REJECTS (adb server unreachable, say)
+      // that propagates too, WITHOUT stopping the scope — "unknown" must
+      // never collapse to "dead" for a caller about to take a destructive
+      // action, the same trust rule device-process.ts's own
+      // DeviceScopeOwnershipListing documents.
+      const liveDevices = await this.serverClient.getDevices();
+      if (!liveDevices.some((d) => d.serial === serial)) {
+        // Confirmed gone, not just unreachable — safe, and necessary (so a
+        // future spawn() for this id isn't wedged by the still-occupied
+        // unit name), to fully tear down: nothing here is actually still
+        // running. Nothing was ever reserved/constructed for this attempt,
+        // so there's nothing else to release.
+        const instanceId = deriveInstanceId(this.opts.sessionsDir);
+        await stopDeviceScope(this.opts.sessionsDir, instanceId, opts.id).catch(() => {});
+        removeDeviceMarker(this.opts.sessionsDir, opts.id);
+        throw new Error(
+          `device ${opts.id}'s emulator (${serial}) is no longer reachable over adb — the ` +
+            `emulator process itself must have exited, not just Mullion`,
+        );
+      }
+
       const device = new Device(opts, this.opts, this.serverClient, this.releasePort.bind(this));
       this.devices.set(opts.id, device);
       this.reservePort(port);
       // Device.attach() rejects on failure (its own doc comment) — caught
       // here for the same reason spawn()'s own fire-and-forget call below
-      // is: see DeviceManagerOptions.onSpawnError's own comment.
+      // is: see DeviceManagerOptions.onSpawnError's own comment. Unlike the
+      // liveness check just above, a failure past this point is a
+      // connection failure against a CONFIRMED-alive emulator (see
+      // attach()'s own comment on why that stays fire-and-forget rather
+      // than blocking getOrCreate() on the full adb+scrcpy handshake).
       device.attach(port).catch((err) => {
         this.opts.onSpawnError?.(opts.id, err instanceof Error ? err : new Error(String(err)));
       });
