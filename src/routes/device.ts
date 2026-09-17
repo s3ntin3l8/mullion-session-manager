@@ -289,6 +289,7 @@ export interface AttachDeviceParams {
   deviceId: number;
   avdName: string;
   label: string | null;
+  port: number | null;
 }
 
 /** Attaches a device WS socket to the live Device: gets-or-creates it via
@@ -297,11 +298,11 @@ export interface AttachDeviceParams {
 export async function attachSocketToDevice(
   app: FastifyInstance,
   socket: WebSocket,
-  { deviceId, avdName, label }: AttachDeviceParams,
+  { deviceId, avdName, label, port }: AttachDeviceParams,
 ): Promise<void> {
   let device;
   try {
-    device = await app.device.getOrCreate({ id: String(deviceId), avdName, label });
+    device = await app.device.getOrCreate({ id: String(deviceId), avdName, label, port });
   } catch (err) {
     // Same shape as routes/browser.ts's attachSocketToBrowser on a
     // getOrLaunch() failure — most likely getOrCreate's own
@@ -413,6 +414,7 @@ export async function deviceRoute(app: FastifyInstance): Promise<void> {
         deviceId,
         avdName: row.avdName,
         label: row.name,
+        port: row.port,
       });
     },
   );

@@ -104,7 +104,12 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
       // (or observed by connecting the WS route, which naturally blocks
       // until streaming or error).
       try {
-        await app.device.getOrCreate({ id: String(row.id), avdName: row.avdName, label: row.name });
+        await app.device.getOrCreate({
+          id: String(row.id),
+          avdName: row.avdName,
+          label: row.name,
+          port: row.port,
+        });
       } catch (err) {
         return reply.badRequest(err instanceof Error ? err.message : String(err));
       }

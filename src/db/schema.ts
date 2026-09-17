@@ -524,6 +524,14 @@ export const devices = sqliteTable(
     name: text("name"),
     // The AVD name passed to `emulator -avd <avdName>`.
     avdName: text("avd_name").notNull(),
+    // The adb port Device.spawn() allocated for this AVD's `emulator-<port>`
+    // serial — set once, immediately, by DeviceManagerOptions.onPortAssigned
+    // (see that field's own comment on why immediately rather than after
+    // boot succeeds). Null until a device has spawned at least once. This
+    // is the durable record `DeviceManager.getOrCreate()`'s reattach path
+    // needs to recover a restart-surviving scope's serial — see that
+    // method's own comment.
+    port: integer("port"),
     status: text("status", { enum: ["active", "killed"] })
       .notNull()
       .default("active"),

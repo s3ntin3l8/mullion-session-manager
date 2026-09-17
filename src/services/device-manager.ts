@@ -57,12 +57,34 @@ export interface DeviceManagerOptions {
    * records the failure in its own `status`/`error` fields, so this is a
    * log line, not the source of truth. */
   onSpawnError?: (id: string, err: Error) => void;
+  /** Fired synchronously from the very start of Device.spawn(), before
+   * `systemd-run` is even invoked — NOT after boot succeeds — so that a
+   * Mullion restart at ANY point afterward (including mid-boot, which can
+   * take up to BOOT_TIMEOUT_MS) leaves a durable, accurate record of the
+   * port the surviving scope is actually bound to. DeviceManager
+   * deliberately never touches `app.db` itself (routes own the DB row; this
+   * manager owns process lifecycle only — see this interface's own header),
+   * so persisting the port is the CALLER's job; this callback is the only
+   * hook back across that line, mirroring onSpawnError's own shape.
+   * src/plugins/device.ts wires this to an `app.db.update(devices)
+   * .set({ port })...` call rather than each route doing it individually,
+   * since the manager (and this callback) are constructed once, there. */
+  onPortAssigned?: (id: string, port: number) => void;
 }
 
 export interface DeviceSpawnOptions {
   id: string;
   avdName: string;
   label: string | null;
+  /** The persisted `devices.port` DB column (null until a device has
+   * spawned at least once). getOrCreate() reads this ONLY on the reattach
+   * path (isScopeAlive() true, no in-memory Device) to reconstruct the
+   * `emulator-<port>` serial of a scope that survived a Mullion restart —
+   * see that method's own comment. Ignored otherwise: a normal spawn()
+   * always allocates a FRESH port via DeviceManager.allocatePort(); it has
+   * no existing emulator to match a serial against, so reusing a stale
+   * persisted value here would be wrong. */
+  port: number | null;
 }
 
 export type DeviceLiveStatus = "starting" | "booting" | "streaming" | "exited" | "error";
@@ -173,6 +195,10 @@ export class Device {
    * fire-and-forget `void session.spawn()` plus `spawnOutcome()` split. */
   async spawn(port: number): Promise<void> {
     this.allocatedPort = port;
+    // Persisted immediately — see DeviceManagerOptions.onPortAssigned's own
+    // comment on why this fires before `systemd-run` even runs, not after
+    // boot succeeds.
+    this.manager.onPortAssigned?.(this.id, port);
     try {
       this.status = "starting";
       touchDeviceMarker(this.manager.sessionsDir, this.id);
@@ -206,27 +232,7 @@ export class Device {
       await this.waitForAdbSerial(this.serial);
 
       this.adb = await this.serverClient.createAdb({ serial: this.serial });
-
-      // Node's own web-streams ReadableStream and @yume-chan/stream-extra's
-      // (a structurally-identical, DOM-independent redeclaration — see that
-      // package's own types.d.ts) are not nominally the same type, hence
-      // the cast; MaybeConsumable<Uint8Array> accepts a plain Uint8Array
-      // directly (MaybeConsumable<T> = T | Consumable<T>), so no chunk
-      // wrapping is needed.
-      const scrcpyServerStream = NodeWebReadableStream.from(
-        createReadStream(this.manager.scrcpyServerPath),
-      ) as unknown as YumeReadableStream<MaybeConsumable<Uint8Array>>;
-      await AdbScrcpyClient.pushServer(this.adb, scrcpyServerStream);
-
-      const options = new AdbScrcpyOptionsLatest({ video: true, audio: false, control: true });
-      this.scrcpyClient = await AdbScrcpyClient.start(
-        this.adb,
-        "/data/local/tmp/scrcpy-server.jar",
-        options,
-      );
-
-      void this.scrcpyClient.exited.then(() => this.handleExit());
-      void this.pumpVideo();
+      await this.startScrcpySession(this.adb);
 
       this.status = "streaming";
     } catch (err) {
@@ -243,6 +249,116 @@ export class Device {
       });
       throw err;
     }
+  }
+
+  /** Reattaches to an emulator scope that survived a Mullion restart —
+   * DeviceManager.getOrCreate()'s reattach path, fired the same
+   * fire-and-forget way spawn() is. `port` is the persisted `devices.port`
+   * DB column spawn() recorded via onPortAssigned. Skips
+   * systemd-run/buildDeviceLaunchPlan/touchDeviceMarker entirely: the
+   * emulator process is already running (that's the whole premise of this
+   * path — getOrCreate() only calls this after isScopeAlive() confirmed the
+   * scope), so only the adb+scrcpy connection needs (re)establishing.
+   * scrcpy itself is stateless from the client's perspective — starting a
+   * fresh scrcpy server connection against an already-running emulator is
+   * normal, expected usage, not a special case scrcpy needs to support.
+   *
+   * Rejects immediately (never calls waitForAdbSerial, which polls for up
+   * to BOOT_TIMEOUT_MS) if the persisted serial has no live `adb devices`
+   * entry at all — that means the emulator PROCESS itself died, not just
+   * Mullion, and there is nothing to reattach to; silently hanging until a
+   * timeout would misrepresent that as "still booting."
+   *
+   * Deliberately NOT the same full-teardown-on-any-failure posture as
+   * spawn()'s own catch: spawn() owns the scope it just created, so
+   * stopping it on failure only cleans up spawn()'s own mess. attach()
+   * did NOT create this scope — it may be a perfectly healthy, still-running
+   * emulator that this attempt merely failed to CONNECT to (a transient adb
+   * hiccup, `createAdb` failing, scrcpy's own push/start failing). Stopping
+   * the scope in that case would destroy the exact thing this feature
+   * exists to preserve, on a failure that has nothing to do with whether
+   * the emulator itself is still alive. So only the one case that is a
+   * CONFIRMED "the process itself is gone" (see above) tears the scope
+   * down; every other failure here leaves it running and only tears down
+   * the (partial) adb/scrcpy connection this attempt itself opened — a
+   * later getOrCreate() call sees isScopeAlive() still true and the port
+   * still persisted, and simply retries attach() against the same scope.
+   * This also means `serverClient.getDevices()` itself REJECTING (adb
+   * server unreachable, say) must never be treated as "confirmed gone" —
+   * "unknown" must never collapse to "dead" for a caller about to take a
+   * destructive action, the same trust rule device-process.ts's own
+   * DeviceScopeOwnershipListing documents. */
+  async attach(port: number): Promise<void> {
+    this.allocatedPort = port;
+    this.serial = `emulator-${port}`;
+    this.status = "booting";
+
+    let liveDevices: Awaited<ReturnType<AdbServerClient["getDevices"]>>;
+    try {
+      liveDevices = await this.serverClient.getDevices();
+    } catch (err) {
+      // Could not even ask adb whether the emulator is still alive — see
+      // this method's own comment on why that must not be treated as
+      // "confirmed gone." No teardown.
+      this.status = "error";
+      this.lastError = err instanceof Error ? err.message : String(err);
+      throw err;
+    }
+
+    if (!liveDevices.some((d) => d.serial === this.serial)) {
+      this.status = "error";
+      this.lastError =
+        `emulator ${this.serial} (device ${this.id}) has no live adb connection — the emulator ` +
+        `process itself must have exited, not just Mullion`;
+      // Confirmed gone, not just unreachable — safe, and necessary (so a
+      // future spawn() for this id isn't wedged by the still-occupied unit
+      // name), to fully tear down: nothing here is actually still running.
+      await this.teardownProcess().catch(() => {});
+      throw new Error(this.lastError);
+    }
+
+    try {
+      this.adb = await this.serverClient.createAdb({ serial: this.serial });
+      await this.startScrcpySession(this.adb);
+      this.status = "streaming";
+    } catch (err) {
+      this.status = "error";
+      this.lastError = err instanceof Error ? err.message : String(err);
+      // The emulator is confirmed alive (the check above passed) — only
+      // close whatever THIS attempt itself opened, never the scope. See
+      // this method's own comment.
+      await this.adb?.close().catch(() => {});
+      this.adb = null;
+      this.scrcpyClient = null;
+      throw err;
+    }
+  }
+
+  /** Pushes and starts the scrcpy server against the already-established
+   * `this.adb` connection, and wires up the exit/video-pump plumbing both
+   * spawn() (a fresh emulator) and attach() (a restart-surviving one) need
+   * identically once they reach this point. */
+  private async startScrcpySession(adb: Adb): Promise<void> {
+    // Node's own web-streams ReadableStream and @yume-chan/stream-extra's
+    // (a structurally-identical, DOM-independent redeclaration — see that
+    // package's own types.d.ts) are not nominally the same type, hence
+    // the cast; MaybeConsumable<Uint8Array> accepts a plain Uint8Array
+    // directly (MaybeConsumable<T> = T | Consumable<T>), so no chunk
+    // wrapping is needed.
+    const scrcpyServerStream = NodeWebReadableStream.from(
+      createReadStream(this.manager.scrcpyServerPath),
+    ) as unknown as YumeReadableStream<MaybeConsumable<Uint8Array>>;
+    await AdbScrcpyClient.pushServer(adb, scrcpyServerStream);
+
+    const options = new AdbScrcpyOptionsLatest({ video: true, audio: false, control: true });
+    this.scrcpyClient = await AdbScrcpyClient.start(
+      adb,
+      "/data/local/tmp/scrcpy-server.jar",
+      options,
+    );
+
+    void this.scrcpyClient.exited.then(() => this.handleExit());
+    void this.pumpVideo();
   }
 
   /** Stops the scope, removes the marker, closes the scrcpy/adb connections,
@@ -389,6 +505,16 @@ export class DeviceManager {
     this.allocatedPorts.delete(port);
   }
 
+  /** Marks a port in-use WITHOUT taking it from the round-robin scan —
+   * used only by getOrCreate()'s reattach path, where the port comes from a
+   * persisted DB column (a scope that survived a restart) rather than a
+   * fresh allocatePort() call. Without this, a concurrent normal spawn()
+   * could hand this same port to an unrelated new device while the
+   * reattached one is still using it. */
+  private reservePort(port: number): void {
+    this.allocatedPorts.add(port);
+  }
+
   get(id: string): Device | undefined {
     return this.devices.get(id);
   }
@@ -398,37 +524,51 @@ export class DeviceManager {
   }
 
   /** Idempotent, same shape as PtyManager.getOrCreate: creates only if
-   * absent, fires off `spawn()` without awaiting it — callers that need to
-   * know the outcome use `get(id)?.toInfo().status`/`.error` to poll, or
-   * wait on the device WS route's own connect (which naturally blocks
-   * until streaming or error). Async (unlike PtyManager's synchronous
-   * version) ONLY for the isScopeAlive() pre-check below — both current
-   * callers already run inside an async route handler.
+   * absent, fires off `spawn()`/`attach()` without awaiting it — callers
+   * that need to know the outcome use `get(id)?.toInfo().status`/`.error`
+   * to poll, or wait on the device WS route's own connect (which naturally
+   * blocks until streaming or error). Async (unlike PtyManager's
+   * synchronous version) ONLY for the isScopeAlive() pre-check below — both
+   * current callers already run inside an async route handler.
    *
    * That pre-check exists because a scope for this id may have survived a
-   * Mullion restart with no in-memory Device left to represent it (see
-   * isScopeAlive's own doc comment on why this app doesn't yet reattach to
-   * one) — spawning anyway would collide with it (`systemd-run --collect
-   * -u <name>` refuses a name that's still occupied) and fail with a
-   * cryptic exit code, permanently wedging this device id until an
-   * operator manually stops the leftover scope. Surfacing that plainly
-   * here, before attempting the collision, is a deliberately bounded fix:
-   * it does not attempt to reattach to the surviving scope (that would
-   * need the original adb serial/port persisted somewhere durable, which
-   * nothing here does yet — tracked as a follow-up), only to fail clearly
-   * instead of confusingly. */
+   * Mullion restart with no in-memory Device left to represent it. Spawning
+   * anyway would collide with it (`systemd-run --collect -u <name>` refuses
+   * a name that's still occupied) and fail with a cryptic exit code,
+   * permanently wedging this device id until an operator manually stops the
+   * leftover scope. When `opts.port` has a persisted value to reattach
+   * with, this reattaches (`Device.attach()`) instead of spawning fresh —
+   * see that method's own comment. When it doesn't (a row from before the
+   * `port` column existed, or one whose Device never got past
+   * touchDeviceMarker before a spawn() failure recorded no port), there is
+   * nothing to reconstruct a serial from, so this still falls back to the
+   * original clear-and-actionable error naming the manual `systemctl --user
+   * stop` command. */
   async getOrCreate(opts: DeviceSpawnOptions): Promise<Device> {
     this.assertEnabled();
     const existing = this.devices.get(opts.id);
     if (existing && existing.isAlive) return existing;
 
     if (await this.isScopeAlive(opts.id)) {
-      const instanceId = deriveInstanceId(this.opts.sessionsDir);
-      throw new Error(
-        `device ${opts.id} has a systemd scope left running from before a restart, with no ` +
-          `live connection to it — stop it first: systemctl --user stop ` +
-          `crs-device-${instanceId}-${opts.id}.scope`,
-      );
+      if (opts.port === null) {
+        const instanceId = deriveInstanceId(this.opts.sessionsDir);
+        throw new Error(
+          `device ${opts.id} has a systemd scope left running from before a restart, with no ` +
+            `persisted port to reattach with — stop it manually: systemctl --user stop ` +
+            `crs-device-${instanceId}-${opts.id}.scope`,
+        );
+      }
+      const port = opts.port;
+      const device = new Device(opts, this.opts, this.serverClient, this.releasePort.bind(this));
+      this.devices.set(opts.id, device);
+      this.reservePort(port);
+      // Device.attach() rejects on failure (its own doc comment) — caught
+      // here for the same reason spawn()'s own fire-and-forget call below
+      // is: see DeviceManagerOptions.onSpawnError's own comment.
+      device.attach(port).catch((err) => {
+        this.opts.onSpawnError?.(opts.id, err instanceof Error ? err : new Error(String(err)));
+      });
+      return device;
     }
 
     const port = this.allocatePort();
@@ -466,12 +606,11 @@ export class DeviceManager {
 
   /** Reconciliation liveness check for a device whose scope may have
    * survived a Mullion restart with no in-memory Device to represent it —
-   * same role session-reconciler.ts's sweep plays for sessions. Devices
-   * don't currently auto-reattach across a restart (unlike a session's
-   * dtach master, an emulator's scrcpy connection can't be "reattached" —
-   * only the scope's liveness can be confirmed); a restart-surviving
-   * emulator is visible here as "alive" but requires a fresh
-   * getOrCreate()-driven scrcpy (re)connect to actually stream again. */
+   * same role session-reconciler.ts's sweep plays for sessions. Unlike a
+   * session's dtach master, an emulator's scrcpy connection itself can't be
+   * "reattached" (scrcpy is stateless from the client's perspective) —
+   * only the scope's liveness can be confirmed here. getOrCreate() is what
+   * turns "alive" into an actual resumed stream, via Device.attach(). */
   async isScopeAlive(id: string): Promise<boolean> {
     const state = await isDeviceAliveState(
       this.opts.sessionsDir,
