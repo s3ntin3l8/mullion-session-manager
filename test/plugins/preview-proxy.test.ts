@@ -499,6 +499,146 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
     });
   });
 
+  // Issue #1318 — lets the dashboard's own page detect a proxy error
+  // (404/401/429/502/503) via a cross-origin fetch() of the resolved
+  // preview `src`, ahead of mounting the iframe (BrowserPanel.tsx). A
+  // cross-origin fetch can't read anything about a response with no
+  // Access-Control-Allow-Origin header at all — these responses must carry
+  // one, and relayFetchResponse's success path (the previewed dev server's
+  // own response) must never carry one. Responses deliberately do NOT set
+  // Access-Control-Allow-Credentials: true (CodeQL
+  // js/cors-misconfiguration-for-credentials); BrowserPanel.tsx probes with
+  // redirect: "manual" so credentials are not transferred or exposed.
+  describe("CORS headers on the proxy's own early-return errors only (issue #1318)", () => {
+    const DASHBOARD_ORIGIN = "https://dashboard.example.com";
+
+    it("404 for an unknown slug reflects the caller's Origin and varies on it", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: "/",
+        headers: {
+          host: `preview-does-not-exist.${PREVIEW_BASE_HOST}`,
+          origin: DASHBOARD_ORIGIN,
+        },
+      });
+      expect(res.statusCode).toBe(404);
+      expect(res.headers["access-control-allow-origin"]).toBe(DASHBOARD_ORIGIN);
+      expect(res.headers["access-control-allow-credentials"]).toBeUndefined();
+      expect(res.headers["vary"]).toBe("Origin");
+      await app.close();
+    });
+
+    it("503 for a project with no devServerUrl reflects the caller's Origin", async () => {
+      const app = await buildApp();
+      const projectId = await createProjectWithDevServer(app, null);
+      const slug = await createProjectPreview(app, projectId);
+
+      const res = await app.inject({
+        method: "GET",
+        url: "/",
+        headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}`, origin: DASHBOARD_ORIGIN },
+      });
+      expect(res.statusCode).toBe(503);
+      expect(res.headers["access-control-allow-origin"]).toBe(DASHBOARD_ORIGIN);
+      expect(res.headers["access-control-allow-credentials"]).toBeUndefined();
+      await app.close();
+    });
+
+    it("502 for an unreachable dev server reflects the caller's Origin", async () => {
+      const app = await buildApp();
+      const projectId = await createProjectWithDevServer(app, "1");
+      const slug = await createProjectPreview(app, projectId);
+
+      const res = await app.inject({
+        method: "GET",
+        url: "/",
+        headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}`, origin: DASHBOARD_ORIGIN },
+      });
+      expect(res.statusCode).toBe(502);
+      expect(res.headers["access-control-allow-origin"]).toBe(DASHBOARD_ORIGIN);
+      expect(res.headers["access-control-allow-credentials"]).toBeUndefined();
+      await app.close();
+    });
+
+    it("429 for a rate-limited caller reflects the caller's Origin", async () => {
+      process.env.PREVIEW_RATE_LIMIT_MAX = "1";
+      try {
+        const app = await buildApp();
+        const projectId = await createProjectWithDevServer(app, String(stubPort));
+        const slug = await createProjectPreview(app, projectId);
+        const REMOTE = "203.0.113.30";
+
+        await app.inject({
+          method: "GET",
+          url: "/",
+          headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
+          remoteAddress: REMOTE,
+        });
+        const res = await app.inject({
+          method: "GET",
+          url: "/",
+          headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}`, origin: DASHBOARD_ORIGIN },
+          remoteAddress: REMOTE,
+        });
+        expect(res.statusCode).toBe(429);
+        expect(res.headers["access-control-allow-origin"]).toBe(DASHBOARD_ORIGIN);
+        expect(res.headers["access-control-allow-credentials"]).toBeUndefined();
+        await app.close();
+      } finally {
+        delete process.env.PREVIEW_RATE_LIMIT_MAX;
+      }
+    });
+
+    it("does not set Access-Control-Allow-Origin at all when the caller sent no Origin header", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: "/",
+        headers: { host: `preview-does-not-exist.${PREVIEW_BASE_HOST}` },
+      });
+      expect(res.statusCode).toBe(404);
+      expect(res.headers["access-control-allow-origin"]).toBeUndefined();
+      expect(res.headers["access-control-allow-credentials"]).toBeUndefined();
+      await app.close();
+    });
+
+    it("does not set Access-Control-Allow-Origin when the caller sent an invalid Origin header", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: "/",
+        headers: { host: `preview-does-not-exist.${PREVIEW_BASE_HOST}`, origin: "null" },
+      });
+      expect(res.statusCode).toBe(404);
+      expect(res.headers["access-control-allow-origin"]).toBeUndefined();
+      expect(res.headers["access-control-allow-credentials"]).toBeUndefined();
+      await app.close();
+    });
+
+    // The security-critical half of this feature: a real, successful proxy
+    // response (relayFetchResponse's own path — the previewed dev server's
+    // actual content) must stay exactly as CORS-opaque as it already was.
+    // Setting this header there would let the dashboard origin read an
+    // arbitrary previewed app's response cross-origin — a content leak
+    // across the slug boundary, not just a status-code probe.
+    it("never sets Access-Control-Allow-Origin on a successful proxied response", async () => {
+      const app = await buildApp();
+      const projectId = await createProjectWithDevServer(app, String(stubPort));
+      const slug = await createProjectPreview(app, projectId);
+
+      const res = await app.inject({
+        method: "GET",
+        url: "/",
+        headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}`, origin: DASHBOARD_ORIGIN },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.headers["access-control-allow-origin"]).toBeUndefined();
+      expect(res.headers["access-control-allow-credentials"]).toBeUndefined();
+      await app.close();
+    });
+  });
+
   it("leaves ordinary dashboard-host requests unaffected", async () => {
     const app = await buildApp();
     const res = await app.inject({ method: "GET", url: "/api/server-info" });
@@ -1114,6 +1254,32 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
         } finally {
           delete process.env.PREVIEW_AUTH_DASHBOARD_URL;
         }
+      });
+
+      // Issue #1318 — same CORS-readability requirement as the unauthenticated
+      // 404/429/502/503 cases above, so BrowserPanel.tsx's probe can tell a
+      // PREVIEW_AUTH_REQUIRED 401 apart from a real successful load too.
+      it("401 with no credential reflects the caller's Origin", async () => {
+        const app = await buildApp();
+        const projectId = await createProjectWithDevServer(
+          app,
+          String(stubPort),
+          DASHBOARD_AUTH_HEADERS,
+        );
+        const slug = await createProjectPreview(app, projectId, DASHBOARD_AUTH_HEADERS);
+
+        const res = await app.inject({
+          method: "GET",
+          url: "/",
+          headers: {
+            host: `preview-${slug}.${PREVIEW_BASE_HOST}`,
+            origin: "https://dashboard.example.com",
+          },
+        });
+        expect(res.statusCode).toBe(401);
+        expect(res.headers["access-control-allow-origin"]).toBe("https://dashboard.example.com");
+        expect(res.headers["access-control-allow-credentials"]).toBeUndefined();
+        await app.close();
       });
 
       it("a valid bootstrap token redirects, sets the preview cookie, and strips the token from the redirect Location", async () => {
