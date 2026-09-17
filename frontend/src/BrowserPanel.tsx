@@ -27,22 +27,24 @@ type BrowserPanelState =
   | { status: "ready"; src: string };
 
 // The iframe-src scheme guard below (both call sites) is an anchored
-// allowlist, not a denylist — deliberately fails *closed*. Two prior
-// attempts at this exact guard failed to satisfy CodeQL's js/xss-through-dom
-// (alert #304 on PR #1320) even though each was runtime-safe:
-//   1. A `new URL(url).protocol` helper (isDangerousIframeSrc) whose catch
-//      block silently treated any unparseable string as "not dangerous" —
-//      also just a real fail-open bug independent of CodeQL.
-//   2. A regex `.test()` guard that WAS inlined directly in the `if`, but
-//      referenced a shared top-level `const ...regex literal` by name
-//      instead of writing the regex literal directly in the `.test()` call.
-// Both times the SARIF codeFlow for alert #304 showed dataflow jumping
-// straight from resolvePreviewUrl's `targetUrl` parameter to its
-// `return { src: targetUrl }`, skipping the guard entirely — CodeQL's
-// barrier-guard recognition for this query only fires when the regex
-// literal itself is syntactically inline in the `.test(...)`/`.exec(...)`
-// call (mirrors normalizeUrl's own inline `/^https?:\/\//i.test(trimmed)`
-// below), not when it's read from a named variable one hop away.
+// allowlist, not a denylist — deliberately fails *closed*.
+//
+// Dismissed in GHAS as alert #304 (js/xss-through-dom, false positive) —
+// same posture as isSymlinkPath's alert #188 in src/services/dock-config.ts:
+// a `codeql[...]` line comment alone would NOT have dismissed this, since
+// this repo's codeql.yml has no dismiss-alerts follow-up step that reads
+// SARIF suppression annotations and calls the code-scanning API; the actual
+// dismissal only happened via that API directly. Three independently
+// runtime-safe guard shapes were tried against this exact alert, all
+// producing an identical SARIF codeFlow (dataflow jumping straight from
+// resolvePreviewUrl's `targetUrl` parameter to its `return { src: targetUrl }`,
+// skipping the guard entirely): a `new URL(url).protocol` helper, a regex
+// `.test()` referencing a shared top-level `const` by name, and finally an
+// inline regex literal `.test()` matching normalizeUrl's own barrier-guard
+// style below. Since guard *shape* provably wasn't the variable, this is a
+// static-analysis gap in how this query's dataflow models the
+// async-function → Promise → React `setState` → JSX-render indirection this
+// code goes through, not an ineffective guard.
 function normalizeUrl(input: string): string {
   const trimmed = input.trim();
   if (!trimmed) return trimmed;
