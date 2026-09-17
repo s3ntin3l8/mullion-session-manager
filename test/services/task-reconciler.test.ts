@@ -360,7 +360,8 @@ mockPromoteTaskToPR.mockImplementation(actualTaskPromoteModule.promoteTaskToPR);
 
 const { buildApp } = await import("../../src/app.js");
 const { closeDb, getDb } = await import("../../src/db/client.js");
-const { reconcileTasks } = await import("../../src/services/task-reconciler.js");
+const { reconcileTasks, resetAutoApproveBackoff } =
+  await import("../../src/services/task-reconciler.js");
 const { tasks, sessions, projects } = await import("../../src/db/schema.js");
 const { and, eq, isNull, isNotNull } = await import("drizzle-orm");
 const { taskReviewFindingsPath, taskCommitTitlePath } =
@@ -3558,6 +3559,7 @@ describe("reconcileTasks", () => {
         branchName: string | null;
         rebaseAttempts: number;
         agentCommand: string | null;
+        reviewAgent: string | null;
         autoReturnRounds: number;
         sessionId: number | null;
         lastPrReviewCommentAt: Date | null;
@@ -3874,6 +3876,48 @@ describe("reconcileTasks", () => {
         .where(eq(sessions.id, reviewSessionId))
         .all();
       expect(reviewSessionRow.status).toBe("killed");
+      expect(row.reviewSessionId).toBeNull();
+
+      await app.close();
+    });
+
+    it("does not spawn reviewer while auto-rebase is in flight, then spawns reviewer once conflict is resolved", async () => {
+      const app = await buildApp();
+      vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined);
+      const { taskId } = await createAutoApproveCandidate(app, {
+        branchName: "mullion/task-x",
+        agentCommand: "claude",
+        reviewAgent: "claude",
+      });
+      mockGetPullRequestByNumber.mockResolvedValue(
+        mockPr({ mergeable: false, mergeableState: "dirty" }),
+      );
+      mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
+      mockResumeTaskWorktree.mockResolvedValue({
+        path: "/tmp/.mullion-worktrees/mullion-task-x",
+        branch: "mullion/task-x",
+      });
+
+      // First tick: auto-rebase worker is spawned, reviewSessionId is null, and rebaseStartedAt is set.
+      await reconcileTasks(app);
+      let row = await getTask(app, taskId);
+      expect(row.rebaseStartedAt).not.toBeNull();
+      expect(row.reviewSessionId).toBeNull();
+
+      // Second tick with conflict still present: processPendingReviewSpawns must NOT spawn a reviewer.
+      await reconcileTasks(app);
+      row = await getTask(app, taskId);
+      expect(row.reviewSessionId).toBeNull();
+
+      // Third tick: PR rebase finishes on GitHub and is now clean.
+      resetAutoApproveBackoff(taskId);
+      mockGetPullRequestByNumber.mockResolvedValue(
+        mockPr({ mergeable: true, mergeableState: "clean" }),
+      );
+      await reconcileTasks(app);
+      row = await getTask(app, taskId);
+      expect(row.rebaseStartedAt).toBeNull();
+      expect(row.reviewSessionId).not.toBeNull();
 
       await app.close();
     });

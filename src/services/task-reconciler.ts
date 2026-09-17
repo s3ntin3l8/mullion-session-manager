@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNotNull, isNull, lt, or } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, lt, lte, or } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { projects, sessions, tasks } from "../db/schema.js";
 import type { SessionInfo } from "./pty-manager.js";
@@ -493,15 +493,27 @@ async function processPendingReviewSpawns(app: FastifyInstance): Promise<void> {
   // reviewer normally on the next tick once re-enabled.
   if (!resolvedTaskMaster.enabled) return;
 
+  const now = Date.now();
+
   const rows = app.db
     .select({ task: tasks, project: projects })
     .from(tasks)
     .innerJoin(projects, eq(tasks.projectId, projects.id))
-    .where(and(eq(tasks.status, "reviewing"), isNull(tasks.reviewSessionId)))
+    .where(
+      and(
+        eq(tasks.status, "reviewing"),
+        isNull(tasks.reviewSessionId),
+        // Exclude tasks with an in-flight auto-rebase attempt (which runs a worker
+        // in task.worktreePath). Spawning a reviewer concurrently would put two autonomous
+        // agent PTYs writing to one worktree simultaneously.
+        or(
+          isNull(tasks.rebaseStartedAt),
+          lte(tasks.rebaseStartedAt, new Date(now - REBASE_ATTEMPT_STALE_MS)),
+        ),
+      ),
+    )
     .all();
   if (rows.length === 0) return;
-
-  const now = Date.now();
 
   // Host-grouped and concurrent, same shape as retryStrandedDraftPRs above
   // — a CI lookup or a spawn on one host must not serialize behind a slow
@@ -527,6 +539,12 @@ async function processPendingReviewSpawns(app: FastifyInstance): Promise<void> {
     [...byHost.values()].map(async (hostRows) => {
       for (const { task, project } of hostRows) {
         if (!task.worktreePath) continue;
+        if (
+          task.rebaseStartedAt !== null &&
+          now - task.rebaseStartedAt.getTime() < REBASE_ATTEMPT_STALE_MS
+        ) {
+          continue;
+        }
         const reviewCommand = resolveReviewAgentCommand(app, {
           taskReviewAgent: task.reviewAgent,
           issueBody: task.body,
@@ -2201,6 +2219,10 @@ function autoApproveRetryBackoffMs(attempts: number): number {
   return Math.min(AUTO_APPROVE_RETRY_TTL_MS * 2 ** (attempts - 1), AUTO_APPROVE_RETRY_MAX_TTL_MS);
 }
 
+export function resetAutoApproveBackoff(taskId: number): void {
+  autoApproveRetryState.delete(taskId);
+}
+
 /**
  * #755 — a red REQUIRED check on a task's PR sends it back to the worker
  * for one automatic round, same mechanism as a "changes-requested" review
@@ -2677,6 +2699,22 @@ async function attemptAutoApprove(
   if (current && (await attemptReturnRedCiToWorker(app, task, project, current))) return;
   if (await attemptReturnPrCommentsToWorker(app, task, project)) return;
   if (!current) return;
+
+  // If a previous auto-rebase attempt resolved the conflict (PR is no longer dirty),
+  // clear rebaseStartedAt so processPendingReviewSpawns can spawn a fresh review agent.
+  if (
+    task.rebaseStartedAt !== null &&
+    current.mergeable !== false &&
+    current.mergeableState !== "dirty"
+  ) {
+    app.db
+      .update(tasks)
+      .set({ rebaseStartedAt: null, mergeError: null })
+      .where(eq(tasks.id, task.id))
+      .run();
+    task.rebaseStartedAt = null;
+    task.mergeError = null;
+  }
 
   if (
     task.reviewFindingsIngestedSessionId === null ||
