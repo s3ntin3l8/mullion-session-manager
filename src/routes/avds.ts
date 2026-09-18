@@ -17,7 +17,10 @@ import {
 // AVD name, as accepted by `avdmanager create avd -n`. Deliberately an
 // allowlist matching avdmanager's own accepted charset (alphanumerics,
 // dots, underscores, hyphens), not a "reject metacharacters" denylist.
-const AVD_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
+// Harmless either way since argv is never shelled, but requiring at least
+// one alphanumeric (Hermes review) keeps a bare "." or ".." — meaningless
+// as an AVD name — from passing.
+const AVD_NAME_PATTERN = /^[A-Za-z0-9._-]*[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 interface CreateAvdBody {
   name?: string;

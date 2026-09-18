@@ -23,7 +23,7 @@ import { PlusIcon } from "../../ui/icons.js";
 // Same allowlist as src/routes/avds.ts's own AVD_NAME_PATTERN — checked
 // client-side too so a bad name fails fast instead of round-tripping to the
 // server first; the server's own check is still authoritative.
-const AVD_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
+const AVD_NAME_PATTERN = /^[A-Za-z0-9._-]*[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 function describeSystemImage(image: SystemImage): string {
   if (image.apiLevel && image.tagDisplay) {
@@ -222,13 +222,27 @@ export function DevicesSection() {
         systemImage: selectedSystemImage,
         deviceProfile: selectedDeviceProfile,
       })
-      .then(() => api.listAvds())
-      .then(({ avds: list }) => {
-        setAvds(list);
-        setAvdsLoaded(true);
-        setAvdName(trimmedName);
+      .then(() => {
+        // Creation itself succeeded — close the sub-form and select the new
+        // AVD unconditionally from here on. A failure to refresh the
+        // picker's own list past this point is a separate, lesser problem
+        // (surfaced via avdsError, the same channel the picker's own load
+        // effect uses) and must NOT be reported as "could not create this
+        // AVD" (Hermes review) — the AVD was created; the picker is just
+        // stale until the next refresh.
         setNewAvdOpen(false);
         setNewAvdName("");
+        setAvdName(trimmedName);
+        return api
+          .listAvds()
+          .then(({ avds: list }) => {
+            setAvds(list);
+            setAvdsLoaded(true);
+            setAvdsError(null);
+          })
+          .catch((err: unknown) => {
+            setAvdsError(err instanceof ApiError ? err.message : "Could not refresh the AVD list");
+          });
       })
       .catch((err: unknown) => {
         setCreateAvdError(err instanceof ApiError ? err.message : "Could not create this AVD");

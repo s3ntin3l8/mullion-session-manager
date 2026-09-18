@@ -1,24 +1,18 @@
 // AVD (Android Virtual Device) listing/creation — the counterpart to
-// device-manager.ts's *running* half. Mirrors src/services/opencode-models.ts's
-// `ExecFn`-injection pattern for the two commands that just list things
-// (listAvds, listDeviceProfiles): a real exec is the default, tests inject a
-// fake, no real `avdmanager` process ever runs in CI. `createAvd` needs its
-// own, different shape — see that function's own comment on why.
+// device-manager.ts's *running* half.
 import { readdirSync, readFileSync } from "node:fs";
 import { execFile as execFileCb } from "node:child_process";
-import { promisify } from "node:util";
 import path from "node:path";
+import { armKillEscalation } from "./session-process.js";
 
-const execFileP = promisify(execFileCb);
-
-export type ExecFn = (
-  file: string,
-  args: string[],
-  options: { signal?: AbortSignal },
-) => Promise<{ stdout: string; stderr: string }>;
-
-const defaultExec: ExecFn = (file, args, options) =>
-  execFileP(file, args, { signal: options.signal });
+// A raw `child_process.execFile` reference (callback style, not
+// promisified) — every exec-based function below needs the
+// synchronously-returned ChildProcess itself, both to arm the
+// SIGTERM-then-SIGKILL escalation every other timed subprocess in this repo
+// uses (armKillEscalation, session-process.ts) and, for createAvd, to close
+// stdin immediately (see that function's own comment). Tests inject a fake
+// matching this same shape so no real `avdmanager` process ever runs in CI.
+export type ExecFileFn = typeof execFileCb;
 
 const LIST_TIMEOUT_MS = 15_000;
 // avdmanager's own `create avd` step reaches out to fetch/refresh its local
@@ -28,29 +22,46 @@ const LIST_TIMEOUT_MS = 15_000;
 // from routes/avds.ts, not a background job.
 const CREATE_AVD_TIMEOUT_MS = 120_000;
 
-// Self-review (mullion-reviewer) caught a real bug in an earlier version of
-// this function: racing `exec()` against a second, separately-scheduled
-// `setTimeout` that rejected on its own left THAT timer's handle uncleared
-// on the success path, leaking a pending timer for up to LIST_TIMEOUT_MS
-// after every single call — confirmed empirically to add up to 15s to a
-// script's exit. `execFile`'s own `signal` option is sufficient on its
-// own — a real `execFile` given a firing AbortSignal already rejects the
-// promise — so there is no need for a second, independent timeout
-// mechanism at all: one timer, captured and cleared in `finally`.
-async function runList(exec: ExecFn, avdmanagerPath: string, args: string[]): Promise<string> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), LIST_TIMEOUT_MS);
-  try {
-    const { stdout } = await exec(avdmanagerPath, args, { signal: controller.signal });
-    return stdout;
-  } catch (err) {
-    if (controller.signal.aborted) {
-      throw new Error(`avdmanager ${args.join(" ")} timed out`, { cause: err });
-    }
-    throw err;
-  } finally {
-    clearTimeout(timer);
-  }
+// Runs `file args...` via execFile, arming the same SIGTERM-then-SIGKILL
+// escalation every other timed subprocess in this repo uses
+// (armKillEscalation, session-process.ts's own doc comment on why) rather
+// than execFile's own `timeout` option: Node's `timeout` only ever sends
+// SIGTERM and leaves the returned promise unsettled until the child
+// actually exits — a stalled `avdmanager` (its `create` step does network
+// I/O) can hold a SIGTERM'd-but-still-alive child past the caller's own
+// timeout indefinitely, defeating the point of having one at all (Hermes
+// review). `onSpawn`, if given, runs synchronously against the live child
+// before any output arrives — createAvd uses it to close stdin immediately.
+function execFileWithEscalation(
+  execFileFn: ExecFileFn,
+  file: string,
+  args: string[],
+  timeoutMs: number,
+  onSpawn?: (child: ReturnType<ExecFileFn>) => void,
+): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const child = execFileFn(file, args, (error, stdout, stderr) => {
+      if (settled) return;
+      settled = true;
+      armed.clearOnSettle();
+      if (error) {
+        const message = typeof stderr === "string" && stderr.trim() ? stderr.trim() : error.message;
+        reject(new Error(message));
+        return;
+      }
+      resolve({
+        stdout: typeof stdout === "string" ? stdout : "",
+        stderr: typeof stderr === "string" ? stderr : "",
+      });
+    });
+    onSpawn?.(child);
+    const armed = armKillEscalation(child, timeoutMs, () => {
+      if (settled) return;
+      settled = true;
+      reject(new Error(`${file} ${args.join(" ")} timed out after ${timeoutMs}ms`));
+    });
+  });
 }
 
 // `avdmanager list avd` output shape (verified against a real SDK
@@ -76,9 +87,14 @@ const AVD_NAME_LINE = /^\s*Name:\s*(.+)$/gm;
 
 export async function listAvds(
   avdmanagerPath: string,
-  opts: { exec?: ExecFn } = {},
+  opts: { execFileFn?: ExecFileFn } = {},
 ): Promise<string[]> {
-  const stdout = await runList(opts.exec ?? defaultExec, avdmanagerPath, ["list", "avd"]);
+  const { stdout } = await execFileWithEscalation(
+    opts.execFileFn ?? execFileCb,
+    avdmanagerPath,
+    ["list", "avd"],
+    LIST_TIMEOUT_MS,
+  );
   return [...stdout.matchAll(AVD_NAME_LINE)].map((m) => m[1].trim());
 }
 
@@ -100,9 +116,14 @@ const DEVICE_PROFILE_ID_LINE = /^id:\s*\d+\s*or\s*"([^"]+)"/gm;
 
 export async function listDeviceProfiles(
   avdmanagerPath: string,
-  opts: { exec?: ExecFn } = {},
+  opts: { execFileFn?: ExecFileFn } = {},
 ): Promise<string[]> {
-  const stdout = await runList(opts.exec ?? defaultExec, avdmanagerPath, ["list", "device"]);
+  const { stdout } = await execFileWithEscalation(
+    opts.execFileFn ?? execFileCb,
+    avdmanagerPath,
+    ["list", "device"],
+    LIST_TIMEOUT_MS,
+  );
   return [...stdout.matchAll(DEVICE_PROFILE_ID_LINE)].map((m) => m[1]);
 }
 
@@ -142,6 +163,10 @@ function parseProperties(content: string): Map<string, string> {
 // already-installed packages, and `--offline` is rejected alongside that
 // flag — unusable for a route that just fills a dropdown. Offline, instant,
 // and trivially testable against a fixture directory tree instead.
+//
+// Sorted by packagePath before returning (Hermes review) — readdirSync's
+// own order is unspecified, so without this the system-image picker's
+// option order would be nondeterministic across hosts/filesystems.
 export function listInstalledSystemImages(sdkRoot: string): SystemImage[] {
   const systemImagesDir = path.join(sdkRoot, "system-images");
   const images: SystemImage[] = [];
@@ -168,7 +193,7 @@ export function listInstalledSystemImages(sdkRoot: string): SystemImage[] {
       }
     }
   }
-  return images;
+  return images.sort((a, b) => a.packagePath.localeCompare(b.packagePath));
 }
 
 function safeReaddir(dir: string): string[] {
@@ -184,12 +209,6 @@ function safeReaddir(dir: string): string[] {
   }
 }
 
-// A raw `child_process.execFile` reference, NOT promisified — unlike
-// `ExecFn` above (listAvds/listDeviceProfiles), createAvd needs the
-// synchronously-returned ChildProcess itself to close its stdin immediately
-// (see below), which promisify's callback-to-Promise wrapper doesn't expose.
-export type ExecFileFn = typeof execFileCb;
-
 export interface CreateAvdOptions {
   avdmanagerPath: string;
   name: string;
@@ -202,32 +221,19 @@ export interface CreateAvdOptions {
 // `avdmanager create avd -k <systemImage> -d <deviceProfile>` — verified
 // empirically against a real SDK install: passing `-d` unconditionally
 // suppresses the "do you wish to create a custom hardware profile?" prompt
-// that appears when it's omitted, and stdin closed immediately means any
-// OTHER prompt this binary might ever ask (also verified: re-creating an
-// existing AVD name without `--force` asks one) fails fast on EOF instead of
-// hanging until timeoutMs. Deliberately does NOT pass `--force` — a
-// duplicate name should surface as a clear "already exists" error, not
-// silently overwrite an existing AVD.
-//
-// `execFile` (not `exec`) — argv array, never a shell — and the `timeout`
-// option is execFile's own hard cap (SIGTERMs the child), on top of the
-// stdin-close defense above.
-export function createAvd(opts: CreateAvdOptions): Promise<void> {
-  const timeoutMs = opts.timeoutMs ?? CREATE_AVD_TIMEOUT_MS;
-  const execFileFn = opts.execFileFn ?? execFileCb;
-  return new Promise((resolve, reject) => {
-    const child = execFileFn(
-      opts.avdmanagerPath,
-      ["create", "avd", "-n", opts.name, "-k", opts.systemImage, "-d", opts.deviceProfile],
-      { timeout: timeoutMs },
-      (error, _stdout, stderr) => {
-        if (error) {
-          reject(new Error(stderr.trim() || error.message));
-          return;
-        }
-        resolve();
-      },
-    );
-    child.stdin?.end();
-  });
+// that appears when it's omitted, and closing stdin immediately (via
+// execFileWithEscalation's own `onSpawn` hook) means any OTHER prompt this
+// binary might ever ask (also verified: re-creating an existing AVD name
+// without `--force` asks one) fails fast on EOF instead of hanging until
+// timeoutMs. Deliberately does NOT pass `--force` — a duplicate name should
+// surface as a clear "already exists" error, not silently overwrite an
+// existing AVD.
+export async function createAvd(opts: CreateAvdOptions): Promise<void> {
+  await execFileWithEscalation(
+    opts.execFileFn ?? execFileCb,
+    opts.avdmanagerPath,
+    ["create", "avd", "-n", opts.name, "-k", opts.systemImage, "-d", opts.deviceProfile],
+    opts.timeoutMs ?? CREATE_AVD_TIMEOUT_MS,
+    (child) => child.stdin?.end(),
+  );
 }

@@ -223,6 +223,24 @@ describe("avds routes", () => {
         expect(vi.mocked(createAvd)).not.toHaveBeenCalled();
       });
 
+      // Hermes review — a bare "." or ".." is meaningless as an AVD name
+      // (harmless either way, since argv is never shelled, but the
+      // allowlist's own purpose is matching avdmanager's accepted charset).
+      it("POST /api/avds rejects a bare-dot name", async () => {
+        const app = await buildTestApp();
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/avds",
+          payload: {
+            name: "..",
+            systemImage: "system-images;android-35;google_apis;x86_64",
+            deviceProfile: "pixel_6",
+          },
+        });
+        expect(res.statusCode).toBe(400);
+        expect(vi.mocked(createAvd)).not.toHaveBeenCalled();
+      });
+
       it("POST /api/avds rejects a systemImage not in the installed allowlist", async () => {
         const app = await buildTestApp();
         const res = await app.inject({

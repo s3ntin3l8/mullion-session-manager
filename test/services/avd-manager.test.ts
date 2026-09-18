@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { ExecFileFn } from "../../src/services/avd-manager.js";
 import {
   createAvd,
   listAvds,
@@ -45,50 +46,87 @@ id: 2 or "pixel_6"
     OEM : Google
 `;
 
+// Every exec-based function in avd-manager.ts now goes through the same
+// execFile(file, args, callback) shape (armKillEscalation, session-
+// process.ts, needs the synchronously-returned ChildProcess) — these two
+// fakes cover the two behaviors every test below needs: settle almost
+// immediately (the ordinary case — fast enough that armKillEscalation's own
+// timer never fires), or never settle at all (to exercise the timeout/
+// escalation path deterministically under fake timers).
+interface FakeChild {
+  kill: ReturnType<typeof vi.fn>;
+  exitCode: number | null;
+  signalCode: string | null;
+  stdin: { end: ReturnType<typeof vi.fn> };
+}
+
+function makeFakeChild(): FakeChild {
+  return { kill: vi.fn(), exitCode: null, signalCode: null, stdin: { end: vi.fn() } };
+}
+
+function fakeExecFileResolving(
+  child: FakeChild,
+  result: { error?: Error; stdout?: string; stderr?: string } = {},
+): ExecFileFn {
+  return vi.fn((_file: string, _args: string[], callback: unknown) => {
+    queueMicrotask(() =>
+      (callback as (error: Error | null, stdout: string, stderr: string) => void)(
+        result.error ?? null,
+        result.stdout ?? "",
+        result.stderr ?? "",
+      ),
+    );
+    return child;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the fake matches execFile's (file, args, callback) shape, not its full overload set
+  }) as any;
+}
+
+function fakeExecFileHanging(child: FakeChild): ExecFileFn {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- see fakeExecFileResolving's own comment
+  return vi.fn(() => child) as any;
+}
+
 describe("listAvds", () => {
   it("parses real avdmanager list avd output into AVD names, ignoring the SDK XML warning line", async () => {
-    const exec = vi.fn().mockResolvedValue({ stdout: REAL_LIST_AVD_OUTPUT, stderr: "" });
-    const result = await listAvds("/opt/sdk/avdmanager", { exec });
-    expect(exec).toHaveBeenCalledWith(
+    const child = makeFakeChild();
+    const execFileFn = fakeExecFileResolving(child, { stdout: REAL_LIST_AVD_OUTPUT });
+    const result = await listAvds("/opt/sdk/avdmanager", { execFileFn });
+    expect(execFileFn).toHaveBeenCalledWith(
       "/opt/sdk/avdmanager",
       ["list", "avd"],
-      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      expect.any(Function),
     );
     expect(result).toEqual(["pixel_7", "pixel_6_tablet"]);
   });
 
   it("returns an empty array when no AVDs exist", async () => {
-    const exec = vi
-      .fn()
-      .mockResolvedValue({ stdout: "Available Android Virtual Devices:\n", stderr: "" });
-    expect(await listAvds("/opt/sdk/avdmanager", { exec })).toEqual([]);
+    const child = makeFakeChild();
+    const execFileFn = fakeExecFileResolving(child, {
+      stdout: "Available Android Virtual Devices:\n",
+    });
+    expect(await listAvds("/opt/sdk/avdmanager", { execFileFn })).toEqual([]);
   });
 
-  // Self-review (mullion-reviewer) caught a real bug an earlier version of
-  // runList() had: a second, separately-scheduled timer raced against
-  // `exec()` was never cleared on the success path, leaking a pending timer
-  // for the full LIST_TIMEOUT_MS after every call — confirmed empirically
-  // to add up to 15s of wall-clock hang. This test exercises the actual
-  // timeout PATH (not just the happy path the other tests cover) and
-  // asserts no timer is left pending afterward — the exact regression that
-  // bug would reintroduce. The fake `exec` mimics what a real `execFile`
-  // does when handed a signal that fires (reject), which is what runList()'s
-  // timeout mechanism now depends on entirely, having dropped the
-  // redundant second mechanism.
-  it("times out and leaves no dangling timer when exec never resolves on its own", async () => {
+  // Hermes review — createAvd's timeout used to rely on execFile's own
+  // `timeout` option, which only ever sends SIGTERM and leaves the promise
+  // unsettled until the child actually exits; a stalled child can hold it
+  // past the cap indefinitely. Every exec-based function here now arms
+  // armKillEscalation (session-process.ts) instead, which this test
+  // exercises via a child that never invokes its callback: the promise
+  // must still reject with a clear "timed out" message, and the SIGTERM
+  // escalation must actually have been sent — armKillEscalation's own
+  // SIGTERM-then-SIGKILL timer mechanics are its own module's tested
+  // responsibility (session-process.test.ts), not re-verified here.
+  it("times out and sends SIGTERM via armKillEscalation when the process never responds", async () => {
     vi.useFakeTimers();
     try {
-      const exec = vi.fn(
-        (_file: string, _args: string[], options: { signal?: AbortSignal }) =>
-          new Promise<{ stdout: string; stderr: string }>((_resolve, reject) => {
-            options.signal?.addEventListener("abort", () => reject(new Error("aborted")));
-          }),
-      );
-      const promise = listAvds("/opt/sdk/avdmanager", { exec });
+      const child = makeFakeChild();
+      const execFileFn = fakeExecFileHanging(child);
+      const promise = listAvds("/opt/sdk/avdmanager", { execFileFn });
       const assertion = expect(promise).rejects.toThrow(/timed out/);
       await vi.advanceTimersByTimeAsync(20_000);
       await assertion;
-      expect(vi.getTimerCount()).toBe(0);
+      expect(child.kill).toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
@@ -97,12 +135,13 @@ describe("listAvds", () => {
 
 describe("listDeviceProfiles", () => {
   it("parses the quoted id token (the -d-compatible identifier), not the display Name", async () => {
-    const exec = vi.fn().mockResolvedValue({ stdout: REAL_LIST_DEVICE_OUTPUT, stderr: "" });
-    const result = await listDeviceProfiles("/opt/sdk/avdmanager", { exec });
-    expect(exec).toHaveBeenCalledWith(
+    const child = makeFakeChild();
+    const execFileFn = fakeExecFileResolving(child, { stdout: REAL_LIST_DEVICE_OUTPUT });
+    const result = await listDeviceProfiles("/opt/sdk/avdmanager", { execFileFn });
+    expect(execFileFn).toHaveBeenCalledWith(
       "/opt/sdk/avdmanager",
       ["list", "device"],
-      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      expect.any(Function),
     );
     expect(result).toEqual(["automotive_1024p_landscape", "Galaxy Nexus", "pixel_6"]);
   });
@@ -187,15 +226,16 @@ describe("listInstalledSystemImages", () => {
     expect(listInstalledSystemImages("/nonexistent/sdk/root")).toEqual([]);
   });
 
-  it("lists multiple installed images", () => {
+  // Hermes review — readdirSync's own order is unspecified, so without an
+  // explicit sort the picker's option order would be nondeterministic
+  // across hosts/filesystems.
+  it("returns images sorted by packagePath, regardless of directory scan order", () => {
     withFixtureSdkRoot((sdkRoot) => {
       makeImageDir(sdkRoot, "android-35", "google_apis", "x86_64");
       makeImageDir(sdkRoot, "android-35", "google_apis", "arm64-v8a");
       makeImageDir(sdkRoot, "android-34", "default", "x86_64");
 
-      const packagePaths = listInstalledSystemImages(sdkRoot)
-        .map((img) => img.packagePath)
-        .sort();
+      const packagePaths = listInstalledSystemImages(sdkRoot).map((img) => img.packagePath);
       expect(packagePaths).toEqual([
         "system-images;android-34;default;x86_64",
         "system-images;android-35;google_apis;arm64-v8a",
@@ -206,30 +246,16 @@ describe("listInstalledSystemImages", () => {
 });
 
 describe("createAvd", () => {
-  // A minimal fake matching execFile's (file, args, options, callback)
-  // shape closely enough for this test: it must (a) synchronously return
-  // something with a `.stdin.end()` on it, so createAvd's own stdin-close
-  // call doesn't throw, and (b) invoke the callback asynchronously, the
-  // same way the real one does.
-  function fakeExecFile(result: { error: Error | null; stdout?: string; stderr?: string }) {
-    const stdinEnd = vi.fn();
-    const execFileFn = vi.fn((_file, _args, _options, callback) => {
-      queueMicrotask(() => callback(result.error, result.stdout ?? "", result.stderr ?? ""));
-      return { stdin: { end: stdinEnd } };
-    });
-    return { execFileFn, stdinEnd };
-  }
-
   it("builds argv as -n/-k/-d, closes stdin immediately, and never passes --force", async () => {
-    const { execFileFn, stdinEnd } = fakeExecFile({ error: null });
+    const child = makeFakeChild();
+    const execFileFn = fakeExecFileResolving(child);
 
     await createAvd({
       avdmanagerPath: "/opt/sdk/avdmanager",
       name: "pixel_7",
       systemImage: "system-images;android-35;google_apis;x86_64",
       deviceProfile: "pixel_6",
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- fake matches execFile's (file, args, options, cb) shape, not its full overload set
-      execFileFn: execFileFn as any,
+      execFileFn,
     });
 
     expect(execFileFn).toHaveBeenCalledWith(
@@ -244,16 +270,16 @@ describe("createAvd", () => {
         "-d",
         "pixel_6",
       ],
-      expect.objectContaining({ timeout: expect.any(Number) }),
       expect.any(Function),
     );
     expect(execFileFn.mock.calls[0][1]).not.toContain("--force");
     expect(execFileFn.mock.calls[0][1]).not.toContain("-f");
-    expect(stdinEnd).toHaveBeenCalled();
+    expect(child.stdin.end).toHaveBeenCalled();
   });
 
   it("rejects with the process's own stderr on failure (e.g. duplicate AVD name)", async () => {
-    const { execFileFn } = fakeExecFile({
+    const child = makeFakeChild();
+    const execFileFn = fakeExecFileResolving(child, {
       error: new Error("Command failed"),
       stderr:
         "Error: Android Virtual Device 'pixel_7' already exists.\nUse --force if you want to replace it.\n",
@@ -265,25 +291,30 @@ describe("createAvd", () => {
         name: "pixel_7",
         systemImage: "system-images;android-35;google_apis;x86_64",
         deviceProfile: "pixel_6",
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- see comment above
-        execFileFn: execFileFn as any,
+        execFileFn,
       }),
     ).rejects.toThrow(/already exists/);
   });
 
-  it("never invokes a shell (execFile, not exec) — no real avdmanager process runs in this test", async () => {
-    const { execFileFn } = fakeExecFile({ error: null });
-    await createAvd({
-      avdmanagerPath: "/opt/sdk/avdmanager",
-      name: "pixel_7",
-      systemImage: "system-images;android-35;google_apis;x86_64",
-      deviceProfile: "pixel_6",
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- see comment above
-      execFileFn: execFileFn as any,
-    });
-    // No call ever carries `shell: true`.
-    for (const call of execFileFn.mock.calls) {
-      expect((call[2] as Record<string, unknown>).shell).not.toBe(true);
+  it("times out and sends SIGTERM via armKillEscalation when avdmanager never responds (Hermes review)", async () => {
+    vi.useFakeTimers();
+    try {
+      const child = makeFakeChild();
+      const execFileFn = fakeExecFileHanging(child);
+      const promise = createAvd({
+        avdmanagerPath: "/opt/sdk/avdmanager",
+        name: "pixel_7",
+        systemImage: "system-images;android-35;google_apis;x86_64",
+        deviceProfile: "pixel_6",
+        timeoutMs: 5_000,
+        execFileFn,
+      });
+      const assertion = expect(promise).rejects.toThrow(/timed out/);
+      await vi.advanceTimersByTimeAsync(5_000);
+      await assertion;
+      expect(child.kill).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
     }
   });
 });

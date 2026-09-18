@@ -22,6 +22,7 @@ describe("Settings -> Devices (issue #1326)", () => {
   let pairCalls: unknown[];
   let avdsDb: string[];
   let avdsShouldFail: boolean;
+  let avdsRefreshShouldFailAfterCreate: boolean;
   let systemImagesDb: SystemImage[];
   let deviceProfilesDb: string[];
   let avdCreateCalls: unknown[];
@@ -38,6 +39,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     // that don't specifically exercise the empty-AVDs state.
     avdsDb = ["pixel_7"];
     avdsShouldFail = false;
+    avdsRefreshShouldFailAfterCreate = false;
     systemImagesDb = [
       {
         packagePath: "system-images;android-35;google_apis;x86_64",
@@ -81,6 +83,9 @@ describe("Settings -> Devices (issue #1326)", () => {
         };
         avdCreateCalls.push(body);
         avdsDb = [...avdsDb, body.name];
+        // Simulates creation succeeding but the picker's own post-create
+        // refresh failing — a separate failure mode from creation itself.
+        if (avdsRefreshShouldFailAfterCreate) avdsShouldFail = true;
         return jsonResponse(201, { name: body.name });
       },
       "POST /api/devices": ({ init }) => {
@@ -395,5 +400,40 @@ describe("Settings -> Devices (issue #1326)", () => {
         deviceProfile: "pixel_6",
       },
     ]);
+  });
+
+  // Hermes review — a failure of the post-create picker refresh used to be
+  // reported as "Could not create this AVD" even though creation itself
+  // succeeded, leaving the sub-form open with a stale picker (a retry would
+  // then hit a duplicate-name 400 from the server). Creation succeeding
+  // must close the sub-form and select the new AVD regardless of whether
+  // the refresh that follows succeeds.
+  it("still closes the sub-form and selects the new AVD when creation succeeds but the picker refresh fails", async () => {
+    avdsRefreshShouldFailAfterCreate = true;
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(await screen.findByText("New device"));
+    await user.click(screen.getByRole("button", { name: "+ New AVD" }));
+    await screen.findByDisplayValue("pixel_6");
+    await user.type(screen.getByPlaceholderText("Pixel_8_API_35"), "pixel_9_new");
+    await user.click(screen.getByRole("button", { name: "Create AVD" }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Create AVD" })).not.toBeInTheDocument();
+    });
+    expect(avdCreateCalls).toEqual([
+      {
+        name: "pixel_9_new",
+        systemImage: "system-images;android-35;google_apis;x86_64",
+        deviceProfile: "pixel_6",
+      },
+    ]);
+    // The refresh failure surfaces as avdsError, not createAvdError — the
+    // AVD was created; only the picker's own list is stale.
+    expect(
+      await screen.findByText("DEVICE_AVDMANAGER_PATH is not configured."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Could not create this AVD")).not.toBeInTheDocument();
   });
 });
