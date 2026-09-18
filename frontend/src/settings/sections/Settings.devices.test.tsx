@@ -4,7 +4,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Settings } from "../../Settings.js";
 import { useDashboardStore } from "../../store/index.js";
-import type { Device } from "../../api/index.js";
+import type { Device, SystemImage } from "../../api/index.js";
 import { jsonResponse } from "../../test/jsonResponse.js";
 import { mockFetch } from "../../test/mockFetch.js";
 import { resetStore } from "../../test/resetStore.js";
@@ -20,6 +20,12 @@ describe("Settings -> Devices (issue #1326)", () => {
   let deviceEnabled: boolean;
   let createCounter: number;
   let pairCalls: unknown[];
+  let avdsDb: string[];
+  let avdsShouldFail: boolean;
+  let avdsRefreshShouldFailAfterCreate: boolean;
+  let systemImagesDb: SystemImage[];
+  let deviceProfilesDb: string[];
+  let avdCreateCalls: unknown[];
   let fetchMock: ReturnType<typeof vi.fn>;
   let unexpectedCalls: string[];
 
@@ -29,6 +35,21 @@ describe("Settings -> Devices (issue #1326)", () => {
     deviceEnabled = true;
     createCounter = 0;
     pairCalls = [];
+    // Seeded with one AVD by default so the picker isn't empty in tests
+    // that don't specifically exercise the empty-AVDs state.
+    avdsDb = ["pixel_7"];
+    avdsShouldFail = false;
+    avdsRefreshShouldFailAfterCreate = false;
+    systemImagesDb = [
+      {
+        packagePath: "system-images;android-35;google_apis;x86_64",
+        apiLevel: "35",
+        tagDisplay: "Google APIs",
+        abi: "x86_64",
+      },
+    ];
+    deviceProfilesDb = ["pixel_6"];
+    avdCreateCalls = [];
 
     ({ fetchMock, unexpectedCalls } = mockFetch({
       "GET /api/hosts": () => jsonResponse(200, []),
@@ -38,6 +59,35 @@ describe("Settings -> Devices (issue #1326)", () => {
         devicesShouldFail
           ? jsonResponse(500, { message: "internal error" })
           : jsonResponse(200, devicesDb),
+      // Deliberately unconditional on `deviceEnabled`, unlike the POST
+      // routes below — the real backend does gate these too (see
+      // test/routes/avds.test.ts for that coverage), but this file's own
+      // "create surfaces DEVICE_ENABLED=false" test needs the picker
+      // populated to even reach a POST /api/devices attempt.
+      "GET /api/avds": () =>
+        avdsShouldFail
+          ? jsonResponse(400, { message: "DEVICE_AVDMANAGER_PATH is not configured." })
+          : jsonResponse(200, { avds: avdsDb }),
+      "GET /api/system-images": () => jsonResponse(200, { systemImages: systemImagesDb }),
+      "GET /api/device-profiles": () => jsonResponse(200, { deviceProfiles: deviceProfilesDb }),
+      "POST /api/avds": ({ init }) => {
+        if (!deviceEnabled) {
+          return jsonResponse(400, {
+            message: "Device panel is disabled — set DEVICE_ENABLED=true.",
+          });
+        }
+        const body = JSON.parse(init?.body as string) as {
+          name: string;
+          systemImage: string;
+          deviceProfile: string;
+        };
+        avdCreateCalls.push(body);
+        avdsDb = [...avdsDb, body.name];
+        // Simulates creation succeeding but the picker's own post-create
+        // refresh failing — a separate failure mode from creation itself.
+        if (avdsRefreshShouldFailAfterCreate) avdsShouldFail = true;
+        return jsonResponse(201, { name: body.name });
+      },
       "POST /api/devices": ({ init }) => {
         if (!deviceEnabled) {
           return jsonResponse(400, {
@@ -147,7 +197,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
     await user.click(await screen.findByText("New device"));
-    await user.type(screen.getByPlaceholderText("Pixel_8_API_34"), "pixel_7");
+    await screen.findByDisplayValue("pixel_7"); // wait for the AVD picker to load
     await user.click(screen.getByRole("button", { name: "Create" }));
 
     expect(
@@ -169,7 +219,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
     await user.click(await screen.findByText("New device"));
-    await user.type(screen.getByPlaceholderText("Pixel_8_API_34"), "pixel_7");
+    await screen.findByDisplayValue("pixel_7"); // wait for the AVD picker to load
     await user.click(screen.getByRole("button", { name: "Create" }));
 
     await screen.findByTestId("device-row-1");
@@ -228,9 +278,11 @@ describe("Settings -> Devices (issue #1326)", () => {
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
     await user.click(await screen.findByText("New device"));
+    await screen.findByDisplayValue("pixel_7"); // emulator mode's AVD picker, before switching away
     await user.click(screen.getByRole("button", { name: "Physical" }));
 
-    expect(screen.queryByPlaceholderText("Pixel_8_API_34")).not.toBeInTheDocument();
+    expect(screen.queryByText("+ New AVD")).not.toBeInTheDocument();
+    expect(screen.queryByDisplayValue("pixel_7")).not.toBeInTheDocument();
     expect(screen.getByPlaceholderText("192.168.1.23:41234")).toBeInTheDocument();
     expect(screen.getByPlaceholderText("123456")).toBeInTheDocument();
     expect(screen.getByPlaceholderText("192.168.1.23:37251")).toBeInTheDocument();
@@ -273,5 +325,115 @@ describe("Settings -> Devices (issue #1326)", () => {
         status: "active",
       }),
     ]);
+  });
+
+  it("AVD picker lists the host's installed AVDs", async () => {
+    avdsDb = ["pixel_7", "pixel_6_tablet"];
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(await screen.findByText("New device"));
+    const picker = await screen.findByDisplayValue("pixel_7");
+    expect(within(picker).getByText("pixel_6_tablet")).toBeInTheDocument();
+  });
+
+  it("shows an empty-AVDs message and no picker when the host has no AVDs", async () => {
+    avdsDb = [];
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(await screen.findByText("New device"));
+    expect(await screen.findByText(/No AVDs on this host yet/)).toBeInTheDocument();
+    expect(screen.queryByDisplayValue("pixel_7")).not.toBeInTheDocument();
+  });
+
+  // Hermes review (round 1) — a load failure used to leave `avds` empty
+  // while `avdsLoaded` was still set true, so the empty-state text ("No
+  // AVDs on this host yet") rendered ALONGSIDE the actual error, telling
+  // the user to "create one below" when the real problem is a
+  // misconfigured DEVICE_AVDMANAGER_PATH.
+  it("shows only the error, not the empty-AVDs message, when GET /api/avds fails", async () => {
+    avdsShouldFail = true;
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(await screen.findByText("New device"));
+    expect(
+      await screen.findByText("DEVICE_AVDMANAGER_PATH is not configured."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/No AVDs on this host yet/)).not.toBeInTheDocument();
+  });
+
+  it("+ New AVD reveals the system image and device profile pickers", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(await screen.findByText("New device"));
+    await user.click(screen.getByRole("button", { name: "+ New AVD" }));
+
+    expect(await screen.findByDisplayValue("API 35 — Google APIs (x86_64)")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("pixel_6")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Pixel_8_API_35")).toBeInTheDocument();
+  });
+
+  it("creating a new AVD posts to /api/avds, then selects it in the picker and closes the sub-form", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(await screen.findByText("New device"));
+    await user.click(screen.getByRole("button", { name: "+ New AVD" }));
+    await screen.findByDisplayValue("pixel_6"); // wait for device profiles to load
+    await user.type(screen.getByPlaceholderText("Pixel_8_API_35"), "pixel_9_new");
+    await user.click(screen.getByRole("button", { name: "Create AVD" }));
+
+    // Sub-form closes and the picker now shows the freshly created AVD as
+    // selected — proving the frontend re-fetched GET /api/avds rather than
+    // just optimistically appending a local guess.
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Create AVD" })).not.toBeInTheDocument();
+    });
+    expect(screen.getByDisplayValue("pixel_9_new")).toBeInTheDocument();
+    expect(avdCreateCalls).toEqual([
+      {
+        name: "pixel_9_new",
+        systemImage: "system-images;android-35;google_apis;x86_64",
+        deviceProfile: "pixel_6",
+      },
+    ]);
+  });
+
+  // Hermes review — a failure of the post-create picker refresh used to be
+  // reported as "Could not create this AVD" even though creation itself
+  // succeeded, leaving the sub-form open with a stale picker (a retry would
+  // then hit a duplicate-name 400 from the server). Creation succeeding
+  // must close the sub-form and select the new AVD regardless of whether
+  // the refresh that follows succeeds.
+  it("still closes the sub-form and selects the new AVD when creation succeeds but the picker refresh fails", async () => {
+    avdsRefreshShouldFailAfterCreate = true;
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(await screen.findByText("New device"));
+    await user.click(screen.getByRole("button", { name: "+ New AVD" }));
+    await screen.findByDisplayValue("pixel_6");
+    await user.type(screen.getByPlaceholderText("Pixel_8_API_35"), "pixel_9_new");
+    await user.click(screen.getByRole("button", { name: "Create AVD" }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Create AVD" })).not.toBeInTheDocument();
+    });
+    expect(avdCreateCalls).toEqual([
+      {
+        name: "pixel_9_new",
+        systemImage: "system-images;android-35;google_apis;x86_64",
+        deviceProfile: "pixel_6",
+      },
+    ]);
+    // The refresh failure surfaces as avdsError, not createAvdError — the
+    // AVD was created; only the picker's own list is stale.
+    expect(
+      await screen.findByText("DEVICE_AVDMANAGER_PATH is not configured."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Could not create this AVD")).not.toBeInTheDocument();
   });
 });

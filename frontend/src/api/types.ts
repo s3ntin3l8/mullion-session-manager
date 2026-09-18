@@ -309,6 +309,18 @@ export interface Device {
   live: DeviceInfo | null;
 }
 
+// An installed Android system image (src/services/avd-manager.ts's own
+// SystemImage) — `packagePath` is both the stable identifier and the exact
+// `-k`/`--package` value `avdmanager create avd` accepts; the rest is
+// enrichment-only display info that may be null if a host's
+// source.properties is missing/corrupt.
+export interface SystemImage {
+  packagePath: string;
+  apiLevel: string | null;
+  tagDisplay: string | null;
+  abi: string | null;
+}
+
 // Mirrors POST /api/bridges's response shape 1:1 (src/routes/agent-bridge.ts's
 // PairResponse) — snake_case field names, unlike every other type in this
 // file, because this is also exactly the wire shape Mullion Helper decodes

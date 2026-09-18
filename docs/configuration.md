@@ -151,6 +151,8 @@ See [`device-panel.md`](device-panel.md) for the full design.
 | `DEVICE_ADB_SERVER_PORT`    | `5037`  | TCP port the local adb server listens on — adb's own universal default                                                                                                             |
 | `DEVICE_EMULATOR_PATH`      | (empty) | absolute path to the `emulator` binary (Android SDK's `emulator/` package) — empty means "not configured"                                                                          |
 | `DEVICE_SCRCPY_SERVER_PATH` | (empty) | absolute path to the scrcpy-server binary pushed onto the device — empty means "not configured"                                                                                    |
+| `DEVICE_AVDMANAGER_PATH`    | (empty) | absolute path to the `avdmanager` binary (Android SDK cmdline-tools), used to list/create AVDs — empty means "not configured"                                                      |
+| `DEVICE_ANDROID_SDK_ROOT`   | (empty) | Android SDK root, for scanning installed system images (`<root>/system-images/...`) — empty means "not configured"                                                                 |
 
 ## Deploy and update (versioned-release installs only)
 

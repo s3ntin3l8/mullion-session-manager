@@ -1,13 +1,14 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useDashboardStore } from "../../store/index.js";
 import { useShallow } from "zustand/react/shallow";
-import { ApiError } from "../../api/index.js";
-import type { Device } from "../../api/index.js";
+import { api, ApiError } from "../../api/index.js";
+import type { Device, SystemImage } from "../../api/index.js";
 import { deviceDotClass } from "../../deviceStatus.js";
 import { usePolling } from "../../hooks/usePolling.js";
 import { DEVICES_POLL_MS } from "../../SidebarDevices.js";
 import {
   AddButton,
+  Dropdown,
   GroupHeading,
   ListRow,
   Row,
@@ -18,6 +19,22 @@ import {
 import { ConfirmButton } from "../../ui/ConfirmButton.js";
 import { ErrorText } from "../../ui/ErrorText.js";
 import { PlusIcon } from "../../ui/icons.js";
+
+// Same allowlist as src/routes/avds.ts's own AVD_NAME_PATTERN — checked
+// client-side too so a bad name fails fast instead of round-tripping to the
+// server first; the server's own check is still authoritative. Two
+// independent, single-pass regexes (not one combined pattern) — see that
+// file's own comment on the catastrophic-backtracking regex CodeQL caught
+// in an earlier, combined version of this check.
+const AVD_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
+const AVD_NAME_HAS_ALPHANUMERIC = /[A-Za-z0-9]/;
+
+function describeSystemImage(image: SystemImage): string {
+  if (image.apiLevel && image.tagDisplay) {
+    return `API ${image.apiLevel} — ${image.tagDisplay} (${image.abi ?? image.packagePath})`;
+  }
+  return image.packagePath;
+}
 
 // Settings -> Devices (issue #1326) — the management surface (create/stop/
 // delete) for the Android device panel. Deliberately NOT where a device is
@@ -91,6 +108,74 @@ export function DevicesSection() {
   const [connecting, setConnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
 
+  // The AVD picker (GET /api/avds) — fetched lazily, only once the create
+  // form is actually open in emulator mode, not eagerly at mount (these
+  // routes shell out to avdmanager on the host). `avdName` above is REUSED
+  // as this picker's selected value, not free text anymore — submitCreate's
+  // own logic (POST /api/devices {avdName}) is unchanged either way.
+  const [avds, setAvds] = useState<string[]>([]);
+  const [avdsLoaded, setAvdsLoaded] = useState(false);
+  const [avdsError, setAvdsError] = useState<string | null>(null);
+
+  // The "New AVD" sub-form — system images/device profiles are fetched
+  // lazily too, only once this sub-form is actually opened.
+  const [newAvdOpen, setNewAvdOpen] = useState(false);
+  const [newAvdName, setNewAvdName] = useState("");
+  const [systemImages, setSystemImages] = useState<SystemImage[]>([]);
+  const [deviceProfiles, setDeviceProfiles] = useState<string[]>([]);
+  const [selectedSystemImage, setSelectedSystemImage] = useState("");
+  const [selectedDeviceProfile, setSelectedDeviceProfile] = useState("");
+  const [provisioningLoaded, setProvisioningLoaded] = useState(false);
+  const [creatingAvd, setCreatingAvd] = useState(false);
+  const [createAvdError, setCreateAvdError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!createOpen || createMode !== "emulator") return;
+    let cancelled = false;
+    api
+      .listAvds()
+      .then(({ avds: list }) => {
+        if (cancelled) return;
+        setAvds(list);
+        setAvdsLoaded(true);
+        setAvdsError(null);
+        setAvdName((prev) => (list.includes(prev) ? prev : (list[0] ?? "")));
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setAvdsError(err instanceof ApiError ? err.message : "Could not load AVDs");
+        setAvdsLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [createOpen, createMode]);
+
+  useEffect(() => {
+    if (!newAvdOpen) return;
+    let cancelled = false;
+    Promise.all([api.listSystemImages(), api.listDeviceProfiles()])
+      .then(([imagesResult, profilesResult]) => {
+        if (cancelled) return;
+        setSystemImages(imagesResult.systemImages);
+        setDeviceProfiles(profilesResult.deviceProfiles);
+        setProvisioningLoaded(true);
+        setCreateAvdError(null);
+        setSelectedSystemImage((prev) => prev || (imagesResult.systemImages[0]?.packagePath ?? ""));
+        setSelectedDeviceProfile((prev) => prev || (profilesResult.deviceProfiles[0] ?? ""));
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setCreateAvdError(
+          err instanceof ApiError ? err.message : "Could not load system images/device profiles",
+        );
+        setProvisioningLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [newAvdOpen]);
+
   const refresh = () => {
     refreshDevices()
       .then(() => {
@@ -125,6 +210,53 @@ export function DevicesSection() {
         setCreateError(err instanceof ApiError ? err.message : "Could not create this device");
       })
       .finally(() => setCreating(false));
+  };
+
+  const submitCreateAvd = () => {
+    if (creatingAvd) return;
+    const trimmedName = newAvdName.trim();
+    if (
+      !AVD_NAME_PATTERN.test(trimmedName) ||
+      !AVD_NAME_HAS_ALPHANUMERIC.test(trimmedName) ||
+      !selectedSystemImage ||
+      !selectedDeviceProfile
+    ) {
+      return;
+    }
+    setCreateAvdError(null);
+    setCreatingAvd(true);
+    api
+      .createAvd({
+        name: trimmedName,
+        systemImage: selectedSystemImage,
+        deviceProfile: selectedDeviceProfile,
+      })
+      .then(() => {
+        // Creation itself succeeded — close the sub-form and select the new
+        // AVD unconditionally from here on. A failure to refresh the
+        // picker's own list past this point is a separate, lesser problem
+        // (surfaced via avdsError, the same channel the picker's own load
+        // effect uses) and must NOT be reported as "could not create this
+        // AVD" (Hermes review) — the AVD was created; the picker is just
+        // stale until the next refresh.
+        setNewAvdOpen(false);
+        setNewAvdName("");
+        setAvdName(trimmedName);
+        return api
+          .listAvds()
+          .then(({ avds: list }) => {
+            setAvds(list);
+            setAvdsLoaded(true);
+            setAvdsError(null);
+          })
+          .catch((err: unknown) => {
+            setAvdsError(err instanceof ApiError ? err.message : "Could not refresh the AVD list");
+          });
+      })
+      .catch((err: unknown) => {
+        setCreateAvdError(err instanceof ApiError ? err.message : "Could not create this AVD");
+      })
+      .finally(() => setCreatingAvd(false));
   };
 
   const submitPair = () => {
@@ -240,6 +372,8 @@ export function DevicesSection() {
             setPairError(null);
             setConnectError(null);
             setPaired(false);
+            setCreateAvdError(null);
+            setNewAvdOpen(false);
             setCreateOpen((open) => !open);
           }}
         >
@@ -275,34 +409,118 @@ export function DevicesSection() {
 
           {createMode === "emulator" && (
             <>
-              {/* There is no GET /api/avds — no route lists available AVDs on
-                  this host, so this is a free-text field, not a picker. */}
-              <Row label="AVD name" desc="Must match an AVD already provisioned on the host.">
-                <div className="settings-numberfield" style={{ width: 220 }}>
-                  <input
-                    style={{ flex: 1, textAlign: "left", width: "auto" }}
-                    placeholder="Pixel_8_API_34"
+              {!avdsLoaded && (
+                <div className="settings-readonly-value" style={{ marginTop: 4 }}>
+                  Loading AVDs…
+                </div>
+              )}
+              {avdsLoaded && avds.length > 0 && (
+                <Row label="AVD name" desc="An AVD already provisioned on the host.">
+                  <Dropdown
+                    options={avds.map((n) => ({ value: n, label: n }))}
                     value={avdName}
-                    onChange={(e) => setAvdName(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") submitCreate();
-                    }}
+                    onChange={setAvdName}
                   />
+                </Row>
+              )}
+              {avdsLoaded && !avdsError && avds.length === 0 && !newAvdOpen && (
+                <div style={{ fontSize: 11.5, color: "var(--dim)", marginTop: 4 }}>
+                  No AVDs on this host yet — create one below.
                 </div>
-              </Row>
-              <Row label="Name" desc="Optional — falls back to the AVD name.">
-                <div className="settings-numberfield" style={{ width: 220 }}>
-                  <input
-                    style={{ flex: 1, textAlign: "left", width: "auto" }}
-                    placeholder="Pixel 8"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") submitCreate();
-                    }}
-                  />
+              )}
+              {avdsError && <ErrorText style={{ marginTop: 8 }}>{avdsError}</ErrorText>}
+
+              <div style={{ marginTop: 8 }}>
+                <SecondaryButton onClick={() => setNewAvdOpen((open) => !open)}>
+                  {newAvdOpen ? "Cancel new AVD" : "+ New AVD"}
+                </SecondaryButton>
+              </div>
+
+              {newAvdOpen && (
+                <div style={{ marginTop: 10 }}>
+                  <Row label="New AVD name" desc="Letters, digits, '.', '_', and '-' only.">
+                    <div className="settings-numberfield" style={{ width: 220 }}>
+                      <input
+                        style={{ flex: 1, textAlign: "left", width: "auto" }}
+                        placeholder="Pixel_8_API_35"
+                        value={newAvdName}
+                        onChange={(e) => setNewAvdName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") submitCreateAvd();
+                        }}
+                      />
+                    </div>
+                  </Row>
+                  {!provisioningLoaded && (
+                    <div className="settings-readonly-value" style={{ marginTop: 4 }}>
+                      Loading system images and device profiles…
+                    </div>
+                  )}
+                  {provisioningLoaded && systemImages.length > 0 && (
+                    <Row
+                      label="System image"
+                      desc="An Android system image already installed on the host."
+                    >
+                      <Dropdown
+                        options={systemImages.map((img) => ({
+                          value: img.packagePath,
+                          label: describeSystemImage(img),
+                        }))}
+                        value={selectedSystemImage}
+                        onChange={setSelectedSystemImage}
+                      />
+                    </Row>
+                  )}
+                  {provisioningLoaded && !createAvdError && systemImages.length === 0 && (
+                    <div style={{ fontSize: 11.5, color: "var(--dim)", marginTop: 4 }}>
+                      No system images installed on this host — install one via the SDK's sdkmanager
+                      first.
+                    </div>
+                  )}
+                  {provisioningLoaded && deviceProfiles.length > 0 && (
+                    <Row label="Device profile" desc="A hardware profile avdmanager knows about.">
+                      <Dropdown
+                        options={deviceProfiles.map((p) => ({ value: p, label: p }))}
+                        value={selectedDeviceProfile}
+                        onChange={setSelectedDeviceProfile}
+                      />
+                    </Row>
+                  )}
+                  <div style={{ marginTop: 8 }}>
+                    <SecondaryButton
+                      onClick={submitCreateAvd}
+                      disabled={
+                        creatingAvd ||
+                        !AVD_NAME_PATTERN.test(newAvdName.trim()) ||
+                        !AVD_NAME_HAS_ALPHANUMERIC.test(newAvdName.trim()) ||
+                        !selectedSystemImage ||
+                        !selectedDeviceProfile
+                      }
+                    >
+                      {creatingAvd ? "Creating AVD…" : "Create AVD"}
+                    </SecondaryButton>
+                  </div>
+                  {createAvdError && (
+                    <ErrorText style={{ marginTop: 8 }}>{createAvdError}</ErrorText>
+                  )}
                 </div>
-              </Row>
+              )}
+
+              <div style={{ marginTop: 14 }}>
+                <Row label="Name" desc="Optional — falls back to the AVD name.">
+                  <div className="settings-numberfield" style={{ width: 220 }}>
+                    <input
+                      style={{ flex: 1, textAlign: "left", width: "auto" }}
+                      placeholder="Pixel 8"
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") submitCreate();
+                      }}
+                    />
+                  </div>
+                </Row>
+              </div>
               <div style={{ marginTop: 8 }}>
                 <SecondaryButton onClick={submitCreate} disabled={creating || !avdName.trim()}>
                   {creating ? "Creating…" : "Create"}

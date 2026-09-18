@@ -176,6 +176,7 @@ export type {
   Device,
   DeviceInfo,
   DeviceLiveStatus,
+  SystemImage,
 } from "./types.js";
 
 export { ApiError, AuthExpiredError, RateLimitedError } from "./client.js";
@@ -198,6 +199,7 @@ import { browserApi } from "./browser.js";
 import { systemApi } from "./system.js";
 import { bundleSyncApi } from "./bundleSync.js";
 import { devicesApi } from "./device.js";
+import { avdsApi } from "./avds.js";
 
 // The single flat namespace object every call site in the frontend calls
 // through (`api.listProjects()`, `api.createSession(...)`, etc.) — assembled
@@ -221,4 +223,5 @@ export const api = {
   ...systemApi,
   ...bundleSyncApi,
   ...devicesApi,
+  ...avdsApi,
 };

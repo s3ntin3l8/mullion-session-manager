@@ -36,6 +36,7 @@ import { terminalRoute } from "./routes/terminal.js";
 import { browserRoute } from "./routes/browser.js";
 import { deviceRoute } from "./routes/device.js";
 import { devicesRoute } from "./routes/devices.js";
+import { avdsRoute } from "./routes/avds.js";
 import { browserAutomationRoute } from "./routes/browser-automation.js";
 import { eventsRoute } from "./routes/events.js";
 import { projectsRoute } from "./routes/projects.js";
@@ -575,6 +576,7 @@ export async function buildApp() {
   await app.register(browserRoute);
   await app.register(deviceRoute);
   await app.register(devicesRoute);
+  await app.register(avdsRoute);
   await app.register(browserAutomationRoute);
   await app.register(eventsRoute);
 
