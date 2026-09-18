@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.3.24](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.23...v0.3.24) (2026-09-18)
+
+
+### Features
+
+* dashboard UI entry point for the Android device panel ([bca9c31](https://github.com/s3ntin3l8/mullion-session-manager/commit/bca9c31ddfe7b0a1bb6097f27478748784ee00da))
+* implement systemic preventive measures for PR merge conflicts, coverage, and security ([#1330](https://github.com/s3ntin3l8/mullion-session-manager/issues/1330)) ([071ff25](https://github.com/s3ntin3l8/mullion-session-manager/commit/071ff2535ccb884a34f8b410d0e6595317cddf9c))
+* let an authenticated dashboard session satisfy a direct preview navigation ([38d8353](https://github.com/s3ntin3l8/mullion-session-manager/commit/38d835336fc55ba76121fb87ba0959a56aa1ae9f))
+* let user set priority order among enrolled SSH-agent bridges ([#1315](https://github.com/s3ntin3l8/mullion-session-manager/issues/1315)) ([3b0d7cd](https://github.com/s3ntin3l8/mullion-session-manager/commit/3b0d7cd6431d5f9a9dc5c966cdecf715f9abf5ae))
+* native Android device panel — emulator/phone streaming, CLI, MCP ([#1324](https://github.com/s3ntin3l8/mullion-session-manager/issues/1324)) ([f96ca0e](https://github.com/s3ntin3l8/mullion-session-manager/commit/f96ca0e75e892621aa781d5ebf8a633a84d38aba))
+* **preview:** detect 404/401/429 preview-proxy errors via CORS on the proxy's own error responses ([b94ab80](https://github.com/s3ntin3l8/mullion-session-manager/commit/b94ab801468d9c3dd8825f6f04607f429e6ee6f3))
+* **preview:** PREVIEW_AUTH_REQUIRED's 401 is a dead end for bookmarked/direct preview navigation ([fa2ed50](https://github.com/s3ntin3l8/mullion-session-manager/commit/fa2ed50937dcab1dbc1dfecd09b0e86eb84deba9))
+* **preview:** surface a proxy error in the preview panel instead of a blank/raw-JSON frame ([1970cf5](https://github.com/s3ntin3l8/mullion-session-manager/commit/1970cf568969e1ebddca2c763766227d5a6efb62))
+* reattach to a device's systemd scope that survived a Mullion restart ([1cb0a65](https://github.com/s3ntin3l8/mullion-session-manager/commit/1cb0a656b8d21938e552102113cacbd375a42839))
+* **sessions:** let spawn_child_session deliver a real first-turn prompt ([#1333](https://github.com/s3ntin3l8/mullion-session-manager/issues/1333)) ([b5a48b8](https://github.com/s3ntin3l8/mullion-session-manager/commit/b5a48b8a423e932dabe770b717fbab8c5e31446e))
+
+
+### Bug Fixes
+
+* **devices:** pre-reserve ports of active devices at DeviceManager construction ([d2def1e](https://github.com/s3ntin3l8/mullion-session-manager/commit/d2def1e70602d0dfaf87d488921ed17c90ec0ae1))
+* **preview:** strip framing headers on every preview response, not just success ([#1312](https://github.com/s3ntin3l8/mullion-session-manager/issues/1312)) ([169ea0c](https://github.com/s3ntin3l8/mullion-session-manager/commit/169ea0c56e75200129fd53a1c0ea341f2c56be30))
+* SSH-agent bridge disconnects/reconnects with no logged reason ([c77d9a0](https://github.com/s3ntin3l8/mullion-session-manager/commit/c77d9a0185680097483e1d4a780742fb5587f2c0))
+
 ## [0.3.23](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.22...v0.3.23) (2026-09-16)
 
 
