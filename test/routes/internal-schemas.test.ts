@@ -97,6 +97,10 @@ describe("internal-schemas.ts — byte-identical output regression guard", () =>
           // Issue #1089 — see CreateSessionOptions.injectMullionBundle's
           // own doc comment (pty-manager.ts).
           injectMullionBundle: { type: "boolean" },
+          // Issue #1337 — opencode model overrides forwarded from spawn_child_session
+          // MCP tool.
+          model: { type: "string" },
+          smallModel: { type: "string" },
           // Hermes review, PR #966 — Task Master marker, see
           // CreateSessionOptions.taskId's own doc comment (pty-manager.ts).
           taskId: { type: "integer" },
