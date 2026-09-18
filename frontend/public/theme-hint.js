@@ -39,12 +39,16 @@
 // outside .cmux-root, so none of that file's custom properties resolve on
 // it directly, hence the plain hex fallback colors in tokens.css. Without
 // this, a dark-theme user gets a flash of the browser's default white
-// background while GET /api/auth/me is in flight. When the hint key is
-// absent entirely (a genuinely first-ever visit, the common case for a
-// login page), this resolves prefers-color-scheme right here rather than
-// leaving <html> unset — matching the same OS-preference fallback AuthGate
-// itself uses once React mounts, so the two never disagree about a visit
-// theme-hint.js can't see a stored preference for.
+// background while GET /api/auth/me is in flight.
+//
+// Only a genuinely ABSENT key (localStorage.getItem returning null — a
+// first-ever visit, the common case for a login page) consults
+// prefers-color-scheme here, matching the same OS-preference fallback
+// AuthGate itself uses once React mounts. A present-but-unrecognized value
+// resolves to dark, same as the iOS branch above treats anything that
+// isn't exactly "light" — the two branches must agree on that, or a
+// corrupted/legacy value would flip <html>'s background one way while
+// leaving the status-bar meta tag the other.
 (function () {
   function systemPrefersLight() {
     return (
@@ -58,7 +62,13 @@
       if (meta) meta.setAttribute("content", "default");
     }
     var resolved =
-      hint === "light" || hint === "dark" ? hint : systemPrefersLight() ? "light" : "dark";
+      hint === null
+        ? systemPrefersLight()
+          ? "light"
+          : "dark"
+        : hint === "light"
+          ? "light"
+          : "dark";
     document.documentElement.setAttribute("data-theme-hint", resolved);
   } catch {
     /* localStorage/matchMedia unavailable — keep the static black-translucent

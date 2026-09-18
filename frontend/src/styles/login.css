@@ -11,10 +11,29 @@
    every `var(--x)` below only resolves inside that class. */
 
 .login-root {
+  position: relative;
+  overflow: hidden;
   min-height: 100dvh;
-  display: grid;
-  place-items: center;
-  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  /* justify-content, not `display: grid; place-items: center`: grid's
+     implicit auto-rows STRETCH to consume the container's free block space
+     under the default `align-content: normal` (which computes to `stretch`
+     for grid), so each of the two rows below (.login-brand, .login-card)
+     grew to roughly half the viewport height, with `place-items: center`
+     only centering each child WITHIN its own now-oversized row — pinning
+     the logo near the top and the card well below true center instead of
+     centering the pair as one group. Flex's main-axis sizing hugs content
+     by default, so `justify-content: center` centers the stack correctly. */
+  justify-content: center;
+  background:
+    radial-gradient(
+      circle at 50% 34%,
+      color-mix(in srgb, var(--accent-solid) 16%, transparent),
+      transparent 58%
+    ),
+    var(--bg);
   color: var(--fg);
   font-size: 14px;
   padding: 24px;
@@ -24,7 +43,25 @@
   padding-right: calc(24px + env(safe-area-inset-right));
 }
 
+/* Faint dot grid, faded out toward the edges via mask-image so it reads as
+   ambient texture rather than a hard-edged tile. A pseudo-element (not a
+   second background layer on .login-root) so the radial mask can fade it
+   independently of the accent glow above, which should stay unmasked. */
+.login-root::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(
+    color-mix(in srgb, var(--fg) 16%, transparent) 1px,
+    transparent 1px
+  );
+  background-size: 22px 22px;
+  mask-image: radial-gradient(ellipse 60% 50% at 50% 38%, black 0%, transparent 72%);
+  pointer-events: none;
+}
+
 .login-brand {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -39,6 +76,12 @@
 }
 
 .login-card {
+  /* Stacked above .login-root::before's dot grid: a positioned element
+     (position != static) always paints above a static sibling in the same
+     stacking context, regardless of DOM order — without this, the
+     absolutely-positioned dot layer, though first in the markup, would
+     paint OVER this card instead of behind it. */
+  position: relative;
   width: 100%;
   max-width: 380px;
   background: var(--chrome);
