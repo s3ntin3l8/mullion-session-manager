@@ -635,13 +635,15 @@ async function processPendingReviewSpawns(app: FastifyInstance): Promise<void> {
 //
 // Fixed by requiring the finish signal to postdate this specific
 // claimed/in_progress spell, anchored on `claimedAt`: it's already reset to
-// `now` on every fresh entry into that pool — a new claim, Retry, AND Reject
+// `now` on every fresh entry into that pool — a new claim, Retry, Reject
 // (routes/tasks.ts's own reject handler, already documented there as the
-// budget-deadline anchor) — so one comparison covers all three without a new
-// column. A small tolerance guards against clock skew between this process
-// and a remote-hosted project's own host (#484) — both are NTP-synced in
-// practice, but a bare `>` would let a few hundred ms of skew wrongly stick
-// a task in "in_progress" forever.
+// budget-deadline anchor), AND autoReturnTask (issue #1357 — the shared
+// auto-return mechanism behind changes-requested review feedback, #755's
+// CI-red return, and the PR-comment return) — so one comparison covers all
+// four without a new column. A small tolerance guards against clock skew
+// between this process and a remote-hosted project's own host (#484) — both
+// are NTP-synced in practice, but a bare `>` would let a few hundred ms of
+// skew wrongly stick a task in "in_progress" forever.
 const CLOCK_SKEW_TOLERANCE_MS = 5_000;
 
 function turnFinishedSinceClaim(
