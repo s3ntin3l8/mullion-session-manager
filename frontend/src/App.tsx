@@ -1728,7 +1728,6 @@ export function App() {
           }}
           onLaunched={handleLaunched}
           onOpenSession={onOpenSession}
-          onOpenTasks={onOpenTasks}
           onOpenGitHub={onOpenGitHub}
           onOpenGit={onOpenGit}
           onOpenAgentRules={onOpenAgentRules}
