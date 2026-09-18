@@ -115,6 +115,26 @@ deliberately a **separate** implementation from `PtyManager`/
   without it), and requests a fresh keyframe (`resetVideo()`) once a
   backlog clears, instead of leaving the frontend decoder to free-run
   against a stream with a hole in it.
+
+  **Wire protocol.** Server→client video frames are binary:
+  `[1 byte type][1 byte flags][payload]` — `type` `0` = configuration
+  (SPS/PPS), `1` = data; `flags` bit 0 = keyframe. There is deliberately no
+  `pts` field — receive-time pacing is enough for a live, audio-less stream.
+  Frames are cached per packet object (a `WeakMap`), so N attached sockets
+  fanned out from one `Device` don't each re-encode the same packet. The
+  server can also send out-of-band **JSON text frames** on the same socket:
+  `{"type":"error","message":string}` (a `getOrCreate()` failure, socket
+  closed right after) and `{"type":"exited"}` (the device process died,
+  socket closed right after). Client→server messages are JSON text frames, a
+  `type`-discriminated union: `tap`/`touchDown`/`touchMove`/`touchUp`/
+  `scroll` (all carry `x`/`y` plus `videoWidth`/`videoHeight` — the device's
+  **video-pixel space**, see §1 below — touch messages also carry
+  `pointerId`), `text` (`{text: string}`), `keyEvent`
+  (`{androidKeyCode: number, action: "down"|"up"}`), and `back` (no fields).
+  Neither a malformed (unparseable JSON, server-logged) nor an unrecognized
+  (valid JSON, wrong shape, silently ignored) message ever produces an error
+  frame back to the client — see `parseInputMessage`'s own comment.
+
 - **`DevicePane.tsx`** decodes with
   [`@yume-chan/scrcpy-decoder-webcodecs`](https://www.npmjs.com/package/@yume-chan/scrcpy-decoder-webcodecs)
   (WebCodecs `VideoDecoder` under the hood) onto a `<canvas>` — needs a
@@ -134,7 +154,11 @@ through the CLI/MCP surface below (no panel ever opened) still makes the
 section appear without a reload. Settings → Devices is the lifecycle
 surface — create, stop, and delete a device there, including devices whose
 row has since flipped to `killed`, which the sidebar list omits but
-Settings still shows. Reopening a device panel after a Mullion restart
+Settings still shows. It's also where a phone gets paired (`adb pair`) and
+connected by address (the `kind: "physical"` counterpart to an emulator
+`create`, see §1 below), and where a new AVD can be provisioned from an
+installed system image (see "AVD provisioning" below) before a device is
+ever created from it. Reopening a device panel after a Mullion restart
 resumes streaming from the existing emulator (see the reattach behavior
 above) rather than requiring a manual `systemctl --user stop` first — no UI
 change needed for that; it's the same `openDevicePanel`/WS-connect path
@@ -174,11 +198,17 @@ and is the `kind: "physical"` counterpart to `create`.
 CSS pixels — the same coordinate space `DevicePane.tsx` rescales mouse events
 into before sending them.
 
-`tap`/`swipe`/`text`/`key`/`screenshot`/`logcat` all run as plain `adb shell`
+`tap`/`swipe`/`key`/`screenshot`/`logcat` all run as plain `adb shell`
 commands against the device's live adb connection
 (`Device.adbConnection`) — they work independently of whether the device's
 video panel is currently open anywhere, and do **not** go through the
-scrcpy control channel the live panel uses.
+scrcpy control channel the live panel uses. **`text` is the one exception**:
+`routes/devices.ts` routes it through `device.controller.injectText()` — the
+same scrcpy control channel the live WS panel's own "text" input message
+uses (`routes/device.ts`'s `dispatchInput`) — rather than `adb shell input
+text`, since `injectText` needs no shell at all. It 400s if no scrcpy
+controller exists yet (a narrow window during boot, after adb comes up but
+before scrcpy does) rather than falling back to the shell.
 
 ## 2. `mullion mcp` tools
 
@@ -213,3 +243,63 @@ projectId?, name?}` (physical); `POST /api/devices/pair` takes
 above are thin wrappers over these same routes (`injectAndShape`), same
 "CLI/MCP piggyback on the REST layer" pattern the browser automation ops
 use.
+
+## 4. AVD provisioning
+
+Gated by `DEVICE_ENABLED` like everything else above, plus two more
+`DEVICE_*` config vars this half of the feature needs on top of it:
+`DEVICE_AVDMANAGER_PATH` (the `avdmanager` binary from the SDK's
+cmdline-tools) and `DEVICE_ANDROID_SDK_ROOT` (the SDK root, for scanning
+installed system images). Both empty by default, same "not configured"
+posture as `DEVICE_ADB_PATH`/`DEVICE_EMULATOR_PATH` — see
+[`configuration.md`](configuration.md).
+
+This is provisioning state on the host's **SDK install**, not a `devices`
+DB row — `src/services/avd-manager.ts` is the counterpart to
+`device-manager.ts`'s _running_ half, and deliberately lives in its own
+route module, `src/routes/avds.ts` (the "one file per route module"
+convention `devices.ts`'s own header documents). **Creating an AVD here
+does not create a `devices` row** — a user still adds a device for it
+afterward via `POST /api/devices {avdName}` (§3 above), the same way
+`kind: "emulator"` has always worked.
+
+- **`GET /api/avds`** — `avdmanager list avd`, parsed from its `Name:` lines.
+  This is what feeds the "New device" form's AVD picker.
+- **`GET /api/device-profiles`** — `avdmanager list device`, parsed from its
+  `id: N or "..."` lines (the token `-d` actually accepts, not the
+  human-readable `Name:` line below it, which can contain spaces/parens
+  `-d` doesn't take verbatim).
+- **`GET /api/system-images`** — lists system images **already installed**
+  on this host, by scanning `<sdkRoot>/system-images/<api>/<tag>/<abi>/`
+  directly on disk rather than shelling out to `avdmanager`/`sdkmanager` —
+  measured empirically: `sdkmanager --list_installed` performs a remote
+  repository fetch even for already-installed packages, and `--offline` is
+  rejected alongside that flag, making it unusable for a route that just
+  fills a dropdown. The three path segments under `system-images/` **are**
+  the `-k`/`--package` value `avdmanager create avd` expects
+  (`system-images;<api>;<tag>;<abi>`), so no separate package-id registry is
+  needed; each leaf directory's `source.properties` is read for
+  enrichment-only display fields (API level, tag, ABI) that fall back to
+  `null` — never dropping the image — if that file is missing or corrupt.
+- **`POST /api/avds`** — `{name, systemImage, deviceProfile}` →
+  `avdmanager create avd -n <name> -k <systemImage> -d <deviceProfile>`.
+  `name` is allowlisted against avdmanager's own accepted charset
+  (alphanumerics, `.`, `_`, `-`); `systemImage`/`deviceProfile` are
+  allowlisted against what `GET /api/system-images`/`GET /api/device-profiles`
+  themselves just reported for this host, not regex-validated — strictly
+  stronger, and free, since that data is already being fetched to populate
+  the picker that produced these values in the first place. Always passes
+  `-d` (suppresses avdmanager's "create a custom hardware profile?" prompt)
+  and closes the child's stdin immediately, so any _other_ prompt it might
+  ask (e.g. re-creating an existing name without `--force`, which this route
+  deliberately never passes) fails fast on EOF instead of hanging until the
+  route's own timeout. A name collision therefore surfaces as a clear
+  "already exists" error rather than silently overwriting an existing AVD.
+
+**Not yet possible from the UI or this API:** installing a system image
+that isn't already on the host. Today that still requires running
+`sdkmanager` by hand on the host — see issue #1348 for the planned
+follow-up (list installable packages from Google's repository, drive an
+install with progress, and surface SDK license acceptance), which is the
+reason the two GET routes above return only what's on disk already rather
+than the full installable set.

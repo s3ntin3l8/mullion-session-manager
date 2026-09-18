@@ -339,9 +339,9 @@ Tools exposed, beyond `promote_to_worktree`/`use_browser`/`browser_action`
 (both hook-socket, see [`docs/agent-hooks.md`](agent-hooks.md)):
 `list_sessions`, `start_dock_session`, `stop_dock_session`, `get_scrollback`,
 `list_projects`, `list_actions`, `get_project_tooling`, `set_project_tooling`,
-`create_preview`, `delete_preview`,
-`list_previews` — each a thin wrapper over the matching control-socket op
-(`src/mcp/tools.mjs`). The two `*_project_tooling` tools are full-scope only
+`create_preview`, `delete_preview`, `list_previews`, `list_devices`,
+`use_device` (alias `device_action`) — each a thin wrapper over the matching
+control-socket op (`src/mcp/tools.mjs`). The two `*_project_tooling` tools are full-scope only
 — they're operator-side, for automating the same per-project row the
 Mullion Briefing panel edits in the UI; see
 [`docs/agent-context.md`](agent-context.md). Note: the

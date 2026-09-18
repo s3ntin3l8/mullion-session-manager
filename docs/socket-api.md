@@ -106,40 +106,46 @@ condensed for an in-session agent, alongside the scope caveats most likely
 to trip one up (the auth-disabled full-scope-for-everyone mode in
 particular).
 
-| Op                     | Scope         | REST equivalent                                          |
-| ---------------------- | ------------- | -------------------------------------------------------- |
-| `ping`                 | full, session | — (answered in-process, no REST call)                    |
-| `sessions.list`        | full          | `GET /api/sessions`                                      |
-| `sessions.get`         | full, session | `GET /api/sessions/:id`                                  |
-| `sessions.create`      | full          | `POST /api/sessions`                                     |
-| `sessions.spawn_child` | full, session | `POST /api/sessions`                                     |
-| `sessions.kill`        | full          | `DELETE /api/sessions/:id`                               |
-| `sessions.rename`      | full, session | `PATCH /api/sessions/:id`                                |
-| `sessions.scrollback`  | full, session | `GET /api/sessions/:id/scrollback`                       |
-| `sessions.attach`      | full, session | stream — see below                                       |
-| `sessions.input`       | full, session | stream — see below                                       |
-| `sessions.resize`      | full, session | stream — see below                                       |
-| `sessions.detach`      | full, session | stream — see below                                       |
-| `events.subscribe`     | full, session | stream — see below                                       |
-| `events.seen`          | full, session | stream — see below                                       |
-| `events.unsubscribe`   | full, session | stream — see below                                       |
-| `events.query`         | full, session | `GET /api/events`                                        |
-| `browser.action`       | full, session | `POST /api/sessions/:id/browser`                         |
-| `browser.find`         | full, session | `POST /api/sessions/:id/browser/find`                    |
-| `browser.bindings`     | full, session | `GET /api/sessions/:id/browser`                          |
-| `projects.list`        | full          | `GET /api/projects`                                      |
-| `projects.actions`     | full, session | `GET /api/projects/:id/actions`                          |
-| `projects.dock`        | full          | `GET /api/projects/:id/dock`                             |
-| `projects.get_tooling` | full, session | `GET /api/projects/:id/tooling`                          |
-| `projects.set_tooling` | full          | `PUT /api/projects/:id/tooling[/{skill,reviewer-agent}]` |
-| `previews.create`      | full          | `POST /api/previews`                                     |
-| `previews.get`         | full          | `GET /api/previews/:slug`                                |
-| `previews.delete`      | full          | `DELETE /api/previews/:slug`                             |
-| `previews.list`        | full          | `GET /api/previews`                                      |
-| `agents.list`          | full          | `GET /api/agents`                                        |
-| `bundle.status`        | full          | `GET /api/bundle-sync/status`                            |
-| `bundle.resync`        | full          | `POST /api/bundle-sync/resync`                           |
-| `bundle.remove`        | full          | `POST /api/bundle-sync/remove`                           |
+| Op                     | Scope           | REST equivalent                                          |
+| ---------------------- | --------------- | -------------------------------------------------------- |
+| `ping`                 | full, session   | — (answered in-process, no REST call)                    |
+| `sessions.list`        | full            | `GET /api/sessions`                                      |
+| `sessions.get`         | full, session   | `GET /api/sessions/:id`                                  |
+| `sessions.create`      | full            | `POST /api/sessions`                                     |
+| `sessions.spawn_child` | full, session   | `POST /api/sessions`                                     |
+| `sessions.kill`        | full            | `DELETE /api/sessions/:id`                               |
+| `sessions.rename`      | full, session   | `PATCH /api/sessions/:id`                                |
+| `sessions.scrollback`  | full, session   | `GET /api/sessions/:id/scrollback`                       |
+| `sessions.attach`      | full, session   | stream — see below                                       |
+| `sessions.input`       | full, session   | stream — see below                                       |
+| `sessions.resize`      | full, session   | stream — see below                                       |
+| `sessions.detach`      | full, session   | stream — see below                                       |
+| `events.subscribe`     | full, session   | stream — see below                                       |
+| `events.seen`          | full, session   | stream — see below                                       |
+| `events.unsubscribe`   | full, session   | stream — see below                                       |
+| `events.query`         | full, session   | `GET /api/events`                                        |
+| `browser.action`       | full, session   | `POST /api/sessions/:id/browser`                         |
+| `browser.find`         | full, session   | `POST /api/sessions/:id/browser/find`                    |
+| `browser.bindings`     | full, session   | `GET /api/sessions/:id/browser`                          |
+| `device.list`          | full, session   | `GET /api/devices`                                       |
+| `device.get`           | full, session   | `GET /api/devices/:id`                                   |
+| `device.create`        | full, session\* | `POST /api/devices`                                      |
+| `device.action`        | full, session   | `POST /api/devices/:id/action`                           |
+| `device.terminate`     | full, session   | `DELETE /api/devices/:id`                                |
+| `device.pair`          | full            | `POST /api/devices/pair`                                 |
+| `projects.list`        | full            | `GET /api/projects`                                      |
+| `projects.actions`     | full, session   | `GET /api/projects/:id/actions`                          |
+| `projects.dock`        | full            | `GET /api/projects/:id/dock`                             |
+| `projects.get_tooling` | full, session   | `GET /api/projects/:id/tooling`                          |
+| `projects.set_tooling` | full            | `PUT /api/projects/:id/tooling[/{skill,reviewer-agent}]` |
+| `previews.create`      | full            | `POST /api/previews`                                     |
+| `previews.get`         | full            | `GET /api/previews/:slug`                                |
+| `previews.delete`      | full            | `DELETE /api/previews/:slug`                             |
+| `previews.list`        | full            | `GET /api/previews`                                      |
+| `agents.list`          | full            | `GET /api/agents`                                        |
+| `bundle.status`        | full            | `GET /api/bundle-sync/status`                            |
+| `bundle.resync`        | full            | `POST /api/bundle-sync/resync`                           |
+| `bundle.remove`        | full            | `POST /api/bundle-sync/remove`                           |
 
 `events.query` (issue #213, roadmap 4.7) is a one-shot request/response query
 over the _persisted_ `session_events` table — distinct from `events.subscribe`
@@ -484,6 +490,70 @@ adds no restriction beyond what `POST /api/sessions/:id/browser` itself
 already allows an authenticated caller to do; see that route's own doc
 comment for the trust-boundary reasoning (same tier as shell access through
 a terminal session, scoped to whatever the browser can reach).
+
+## Device automation ops (`device.*`)
+
+See [device-panel.md](device-panel.md) for the full design; this section
+covers only the socket transport, and — the one thing that makes this family
+different from every other op above — its **three-tier scope story**.
+
+```jsonc
+{ "id": 30, "op": "device.list" }
+{ "id": 30, "ok": true, "status": 200, "result": { "devices": [ /* ... */ ] } }
+
+{ "id": 31, "op": "device.create", "body": { "avdName": "pixel_7", "name": "Pixel 7" } }
+{ "id": 31, "ok": true, "status": 201, "result": { "id": 3, "avdName": "pixel_7", /* ... */ } }
+
+{ "id": 32, "op": "device.action", "body": { "deviceId": 3, "action": "screenshot" } }
+{ "id": 32, "ok": true, "status": 200, "result": { "screenshot": "<base64>" } }
+
+{ "id": 33, "op": "device.pair", "body": { "pairingAddress": "192.168.1.5:41235", "pairingCode": "123456" } }
+{ "id": 33, "ok": true, "status": 200, "result": { "ok": true } }
+```
+
+- **`device.list`** / **`device.get`** — `body.deviceId` required for `get`
+  (a device has no "belongs to this session" relationship the way a browser
+  pane's project does, so unlike `sessions.get`/`browser.action` there is no
+  "omit it, default to my own" — `deviceId` is always explicit, at either
+  scope).
+- **`device.action`** — `body.deviceId` plus the same `action` union
+  `POST /api/devices/:id/action` accepts (`screenshot`/`tap`/`swipe`/`text`/
+  `key`/`logcat`); `deviceId` is stripped before forwarding, the rest is the
+  action body verbatim.
+- **`device.create`** — `body` is either `{avdName, projectId?, name?}`
+  (emulator) or `{kind: "physical", address, projectId?, name?}` (physical).
+  Reachable at **session scope for an emulator**, but a `kind: "physical"`
+  body is rejected with a 403 at **session** scope — see the scope table
+  below.
+- **`device.terminate`** — `body.deviceId`; flips the row to `killed` and
+  tears down the live process/scope.
+- **`device.pair`** — **full scope only**, no exceptions. `body` is
+  `{pairingAddress, pairingCode}`, forwarded to `POST /api/devices/pair`.
+
+**Why `device.*` is reachable at session scope at all**, unlike most
+control-socket ops: the device panel exists so an agent can screenshot, tap,
+and read logcat to verify its own UI changes, the same way `browser.action`
+closes that loop for the web. A device is a much lower blast-radius resource
+than the session/SSH-agent traffic the rest of this file's scope pinning
+exists to protect — worst case for `device.action` is an unrelated
+tap/screenshot, not a leaked credential.
+
+**Two exceptions carve out a bigger blast radius, both full-scope only:**
+
+- **`device.pair`**, unconditionally — pairing authorizes the _host's_ adb
+  server to trust a new piece of hardware, a materially bigger act than
+  driving a device Mullion already manages.
+- **`device.create` when `body.kind === "physical"`** — `wireless.connect()`
+  makes the host's adb server dial an arbitrary network address a caller
+  supplies, an outbound-dial/internal-network-probe primitive the emulator
+  path never had. An ordinary emulator `device.create` is unaffected — the
+  gate only applies to the physical branch. Once paired, a physical device
+  is driven through the already-session-scope `device.action` like any other.
+
+MCP does not expose `device.create` or `device.pair` at all (`src/mcp/tools.mjs`
+has no wrapper for either, even though `src/mcp/client.mjs` carries a
+`createDevice()` method) — only the CLI and REST do; see
+[`docs/cli.md`](cli.md).
 
 ## Security notes
 
