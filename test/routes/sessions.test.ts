@@ -242,6 +242,30 @@ describe("sessions route", () => {
     await app.close();
   });
 
+  // Hermes review, PR #1333 — a whitespace-only seedPrompt has length > 0
+  // before trimming, which would otherwise deliver a literal `--prompt
+  // '   '` to the child instead of cleanly falling through to no delivery.
+  it("treats a whitespace-only seedPrompt as no seed at all", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app);
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: { projectId, command: "opencode", seedPrompt: "   " },
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.json().initialPromptApplied).toBeUndefined();
+
+    const call = vi
+      .mocked(spawnChildProcess)
+      .mock.calls.findLast(([command]) => command === "systemd-run");
+    const args = call?.[1] as string[];
+    expect(args[args.length - 1]).toBe("opencode");
+
+    await app.close();
+  });
+
   // Hermes review, this PR (issue #822) — a direct full-scope POST
   // /api/sessions call never goes through dock-config.ts's validateOneControl
   // (that's the .crs/dock.json write path only), so the reserved-key check

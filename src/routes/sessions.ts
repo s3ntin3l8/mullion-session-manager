@@ -101,6 +101,15 @@ const createSessionSchema = {
       // createSessionRecord's `initialPrompt`/`seedPrompt` params (those are
       // a different, ALREADY-DECIDED pair of fields, not part of
       // CreateSessionBody, despite the name collision with this one).
+      //
+      // Hermes review, PR #1333 — deliberately no `maxLength`, unlike
+      // `env`'s per-value cap above: this carries the same "arbitrary
+      // issue/task text with no sane upper bound" content as the internal
+      // Task Master spawn route's own `initialPrompt`/`seedPrompt`
+      // (routes/internal-schemas.ts's spawnSessionSchema, see its own
+      // comment), which set that precedent for exactly this reason. Fastify's
+      // default 1 MB request body limit already bounds a genuinely
+      // pathological payload.
       seedPrompt: { type: "string" },
     },
   },
@@ -442,7 +451,13 @@ export async function sessionsRoute(app: FastifyInstance) {
       // full reasoning (never send both `initialPrompt` and `seedPrompt` to
       // createSessionRecord; a resumed/transferred session isn't a concept
       // here, unlike promote, so there's no third branch to consider).
-      const { seedPrompt: callerSeedPrompt, ...restBody } = body;
+      const { seedPrompt: rawSeedPrompt, ...restBody } = body;
+      // Hermes review, PR #1333 — trim before the emptiness check: an
+      // untrimmed `"   "` has length > 0, so without this a whitespace-only
+      // prompt would count as "wants a seed" and land as a literal
+      // `--prompt '   '` in the child's argv instead of cleanly falling
+      // through to no delivery at all.
+      const callerSeedPrompt = rawSeedPrompt?.trim();
       const wantsSeed = callerSeedPrompt !== undefined && callerSeedPrompt.length > 0;
       const deliverAsInitialPrompt = wantsSeed && commandSupportsSeed(restBody.command);
       const result = await createSessionRecord(app, {
