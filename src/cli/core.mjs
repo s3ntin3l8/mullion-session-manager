@@ -1014,6 +1014,30 @@ const deviceCommands = {
     if (flags.name !== undefined) body.name = flags.name;
     return { json: await client.request("device.create", body) };
   },
+  // A separate verb from `create` rather than an optional flag on it:
+  // `create` does `requireOne(args, "avd name")` unconditionally (this
+  // file's own explicit-verb convention, see this const's header comment),
+  // and pairing/connecting take entirely different arguments (a pairing
+  // address + code, or a connect address) with no AVD name at all — making
+  // that conditional would fight the shape every other verb here follows.
+  async pair(client, args) {
+    const pairingAddress = requireOne(args, "pairing address (host:port)");
+    const pairingCode = args[1];
+    if (pairingCode === undefined) throw new CliUsageError("pairing code is required");
+    return { json: await client.request("device.pair", { pairingAddress, pairingCode }) };
+  },
+  // Registers a physical device row and connects to it — the `kind:
+  // "physical"` counterpart to `create` above. Requires a prior `pair`
+  // against this phone (or any address already in the host adb server's
+  // keystore); this alone does not authorize anything new.
+  async connect(client, args) {
+    const address = requireOne(args, "device address (host:port)");
+    const { flags } = extractFlags(args.slice(1), { project: "string", name: "string" });
+    const body = { kind: "physical", address };
+    if (flags.project !== undefined) body.projectId = flags.project;
+    if (flags.name !== undefined) body.name = flags.name;
+    return { json: await client.request("device.create", body) };
+  },
   async stop(client, args) {
     const deviceId = requireOne(args, "device id");
     return { json: await client.request("device.terminate", { deviceId }) };
@@ -1197,7 +1221,7 @@ Commands:
   project list|actions|dock
   preview create|get|delete|list
   dock start|stop|list
-  device list|create|stop|screenshot|tap|swipe|text|key|logcat
+  device list|create|pair|connect|stop|screenshot|tap|swipe|text|key|logcat
   bundle status|resync|remove
   events tail
   history [--session <id>] [--kind <k>] [--since <ms>] [--until <ms>]

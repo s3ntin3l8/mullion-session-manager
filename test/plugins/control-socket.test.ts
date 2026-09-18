@@ -2456,6 +2456,48 @@ describe("controlSocketPlugin (issue #185)", () => {
         socket.destroy();
       });
 
+      it("device.pair (full scope): dispatches to POST /api/devices/pair", async () => {
+        app = await buildApp();
+        await app.ready();
+        const socket = await fullScopeSocket();
+        socket.write(
+          `${JSON.stringify({
+            id: 1,
+            op: "device.pair",
+            body: { pairingAddress: "192.168.1.23:41234", pairingCode: "123456" },
+          })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        // No real adb server in this test environment — pair() itself
+        // rejects, surfacing as a 400 from routes/devices.ts's own catch.
+        // The point of this test is that the op DISPATCHES at full scope at
+        // all, not that pairing against real hardware succeeds.
+        expect(reply.ok).toBe(false);
+        expect(reply.status).toBe(400);
+        socket.destroy();
+      });
+
+      it("device.pair (session scope): rejected — unlike every other device.* op, this one is full-scope only", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession();
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(
+          `${JSON.stringify({
+            id: 1,
+            op: "device.pair",
+            body: { pairingAddress: "192.168.1.23:41234", pairingCode: "123456" },
+          })}\n`,
+        );
+        expect(await waitForReply(socket)).toEqual({
+          id: 1,
+          ok: false,
+          status: 403,
+          error: "not permitted for this connection's scope",
+        });
+        socket.destroy();
+      });
+
       it("device.terminate 400s with 'deviceId is required' when omitted", async () => {
         app = await buildApp();
         await app.ready();

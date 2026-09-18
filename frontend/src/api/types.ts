@@ -281,10 +281,12 @@ export interface BridgeSummary {
 // layer, same "row is intent, manager is live truth" split as
 // BridgeSummary/Host above.
 export type DeviceLiveStatus = "starting" | "booting" | "streaming" | "exited" | "error";
+export type DeviceKind = "emulator" | "physical";
 
 export interface DeviceInfo {
   id: string;
-  avdName: string;
+  kind: DeviceKind;
+  avdName: string | null;
   label: string | null;
   status: DeviceLiveStatus;
   serial: string | null;
@@ -296,7 +298,12 @@ export interface Device {
   hostId: string;
   projectId: number | null;
   name: string | null;
-  avdName: string;
+  kind: DeviceKind;
+  // Set for `kind: "emulator"`, null for `kind: "physical"`.
+  avdName: string | null;
+  // Set for `kind: "physical"` (its adb TCP address), null for
+  // `kind: "emulator"`.
+  serial: string | null;
   status: "active" | "killed";
   createdAt: string;
   live: DeviceInfo | null;

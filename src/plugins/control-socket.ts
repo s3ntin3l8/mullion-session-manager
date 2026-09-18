@@ -1072,6 +1072,26 @@ const OPS: Record<string, OpSpec> = {
       );
     },
   },
+  // Deliberately `["full"]` ONLY — unlike every other device.* op above,
+  // which mirrors device.action's "worst case: an unrelated tap/screenshot,
+  // not a credential" reasoning (see that op's own comment), pairing
+  // authorizes the HOST's adb server to trust a new piece of hardware.
+  // That's a materially bigger blast radius than driving a device Mullion
+  // already manages, so it doesn't get the session-scope carve-out the rest
+  // of this family does.
+  "device.pair": {
+    scopes: ["full"],
+    handler: async ({ app, body, reply }) => {
+      reply(
+        await injectAndShape(app, {
+          method: "POST",
+          url: "/api/devices/pair",
+          headers: { ...buildAuthHeaders(app), "content-type": "application/json" },
+          payload: JSON.stringify(body ?? {}),
+        }),
+      );
+    },
+  },
   "device.terminate": {
     scopes: ["full", "session"],
     handler: async ({ app, body, reply }) => {

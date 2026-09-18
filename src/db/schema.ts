@@ -497,16 +497,26 @@ export const sessions = sqliteTable(
   ],
 );
 
-// One row per emulator (AVD) instance Mullion has been asked to run.
-// `status` records INTENT (has this been explicitly stopped?), not live
-// process state — same split as `sessions` above: whether the emulator's
-// systemd scope is actually alive right now is only known by
-// DeviceManager, in-memory, in whichever Node process currently holds it;
-// routes merge the two rather than trusting this column alone. Unlike
-// `sessions`, a PHYSICAL device (a phone connected over adb) never gets a
-// row here — Mullion doesn't own its lifecycle (there's nothing to
-// "start"/"stop"), so DeviceManager surfaces those purely from adb's own
-// live device list, with no DB-backed intent to merge against.
+// One row per Android device Mullion has been asked to manage — either an
+// emulator (AVD) instance it spawns itself, or a physical device (a phone)
+// it has connected to over adb wireless debugging. `status` records INTENT
+// (has this been explicitly stopped?), not live process state — same split
+// as `sessions` above: whether an emulator's systemd scope is actually
+// alive right now, or a phone is actually reachable over adb right now, is
+// only known by DeviceManager, in-memory, in whichever Node process
+// currently holds it; routes merge the two rather than trusting this
+// column alone.
+//
+// `kind` distinguishes the two, and the columns below split accordingly:
+// an emulator has an `avdName` (never a bare `serial` — its serial is
+// synthesized as `emulator-<port>`) and Mullion owns spawning it inside a
+// systemd scope; a physical device has a `serial` (the adb TCP address,
+// `host:port`) and no `avdName`, `port`, or scope — Mullion never spawns
+// it, only calls `adb connect` against an address the user already paired.
+// A killed physical row does NOT disconnect the phone from the host's adb
+// server (that server's connection state is shared with the user's own
+// tooling, outside Mullion's ownership) — see DeviceManager.kill()'s own
+// comment.
 export const devices = sqliteTable(
   "devices",
   {
@@ -520,17 +530,30 @@ export const devices = sqliteTable(
     // external `previews` row, one emulator can serve every project on the
     // host, not just one.
     projectId: integer("project_id").references(() => projects.id, { onDelete: "cascade" }),
-    // Cosmetic label the user can rename; falls back to `avdName` when unset.
+    // Cosmetic label the user can rename; falls back to `avdName`/`serial`
+    // when unset.
     name: text("name"),
-    // The AVD name passed to `emulator -avd <avdName>`.
-    avdName: text("avd_name").notNull(),
+    kind: text("kind", { enum: ["emulator", "physical"] })
+      .notNull()
+      .default("emulator"),
+    // The AVD name passed to `emulator -avd <avdName>`. Only set for
+    // `kind: "emulator"` — null for a physical device.
+    avdName: text("avd_name"),
+    // The adb TCP address ("host:port") a physical device was connected
+    // at, passed to `adb connect <serial>`/used as its adb serial
+    // directly. Only set for `kind: "physical"` — null for an emulator
+    // (whose serial is always `emulator-<port>`, synthesized rather than
+    // stored).
+    serial: text("serial"),
     // The adb port Device.spawn() allocated for this AVD's `emulator-<port>`
     // serial — set once, immediately, by DeviceManagerOptions.onPortAssigned
     // (see that field's own comment on why immediately rather than after
     // boot succeeds). Null until a device has spawned at least once. This
     // is the durable record `DeviceManager.getOrCreate()`'s reattach path
     // needs to recover a restart-surviving scope's serial — see that
-    // method's own comment.
+    // method's own comment. Always null for `kind: "physical"` — a
+    // physical device has no emulator port pool slot to reserve; see
+    // readActiveDevicePorts()'s own filter in src/plugins/device.ts.
     port: integer("port"),
     status: text("status", { enum: ["active", "killed"] })
       .notNull()

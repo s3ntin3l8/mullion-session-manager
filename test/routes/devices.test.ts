@@ -76,6 +76,16 @@ describe("devices routes", () => {
       });
       expect(res.statusCode).toBe(400);
     });
+
+    it("POST /api/devices/pair rejects with 400", async () => {
+      const app = await buildTestApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/devices/pair",
+        payload: { pairingAddress: "192.168.1.23:41234", pairingCode: "123456" },
+      });
+      expect(res.statusCode).toBe(400);
+    });
   });
 
   describe("with DEVICE_ENABLED=true", () => {
@@ -494,6 +504,119 @@ describe("devices routes", () => {
           payload: { action: "logcat", filter: 123 },
         });
         expect(badFilter.statusCode).toBe(400);
+      });
+    });
+
+    describe("physical devices", () => {
+      it("POST /api/devices with kind: physical creates a row with kind/serial persisted, avdName/port null", async () => {
+        const app = await buildTestApp();
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/devices",
+          payload: { kind: "physical", address: "192.168.1.23:37251", name: "My Pixel" },
+        });
+        expect(res.statusCode).toBe(201);
+        const body = res.json();
+        expect(body).toMatchObject({
+          kind: "physical",
+          serial: "192.168.1.23:37251",
+          avdName: null,
+          name: "My Pixel",
+          status: "active",
+        });
+
+        const [row] = app.db.select().from(devices).where(eq(devices.id, body.id)).all();
+        expect(row.port).toBeNull();
+      });
+
+      it("POST /api/devices with kind: physical rejects a malformed address", async () => {
+        const app = await buildTestApp();
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/devices",
+          payload: { kind: "physical", address: "not-an-address" },
+        });
+        expect(res.statusCode).toBe(400);
+      });
+
+      it("POST /api/devices with kind: physical rejects an out-of-range port", async () => {
+        const app = await buildTestApp();
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/devices",
+          payload: { kind: "physical", address: "192.168.1.23:99999" },
+        });
+        expect(res.statusCode).toBe(400);
+      });
+
+      it("POST /api/devices with kind: physical rejects a body that also sets avdName", async () => {
+        const app = await buildTestApp();
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/devices",
+          payload: { kind: "physical", address: "192.168.1.23:37251", avdName: "dev35" },
+        });
+        expect(res.statusCode).toBe(400);
+      });
+
+      it("POST /api/devices without kind: physical rejects a body that sets address", async () => {
+        const app = await buildTestApp();
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/devices",
+          payload: { avdName: "dev35", address: "192.168.1.23:37251" },
+        });
+        expect(res.statusCode).toBe(400);
+      });
+
+      it("POST /api/devices/pair delegates to app.device.pair with the validated address/code", async () => {
+        const app = await buildTestApp();
+        const pair = vi.spyOn(app.device, "pair").mockResolvedValueOnce(undefined);
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/devices/pair",
+          payload: { pairingAddress: "192.168.1.23:41234", pairingCode: "123456" },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toEqual({ ok: true });
+        expect(pair).toHaveBeenCalledWith("192.168.1.23:41234", "123456");
+      });
+
+      it("POST /api/devices/pair rejects a malformed pairing code", async () => {
+        const app = await buildTestApp();
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/devices/pair",
+          payload: { pairingAddress: "192.168.1.23:41234", pairingCode: "12" },
+        });
+        expect(res.statusCode).toBe(400);
+      });
+
+      it("POST /api/devices/pair surfaces a pair() failure as 400", async () => {
+        const app = await buildTestApp();
+        vi.spyOn(app.device, "pair").mockRejectedValueOnce(new Error("bad pairing code"));
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/devices/pair",
+          payload: { pairingAddress: "192.168.1.23:41234", pairingCode: "123456" },
+        });
+        expect(res.statusCode).toBe(400);
+        expect(res.json().message).toContain("bad pairing code");
+      });
+
+      it("DELETE /api/devices/:id passes the row's own kind through to terminate() — not a hardcoded emulator assumption", async () => {
+        const app = await buildTestApp();
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/devices",
+          payload: { kind: "physical", address: "192.168.1.23:37251" },
+        });
+        const id = created.json().id;
+        const terminate = vi.spyOn(app.device, "terminate").mockResolvedValueOnce(undefined);
+
+        const res = await app.inject({ method: "DELETE", url: `/api/devices/${id}` });
+        expect(res.statusCode).toBe(204);
+        expect(terminate).toHaveBeenCalledWith(String(id), "physical");
       });
     });
   });

@@ -94,9 +94,21 @@ export interface DeviceManagerOptions {
   initialPorts?: number[];
 }
 
+export type DeviceKind = "emulator" | "physical";
+
 export interface DeviceSpawnOptions {
   id: string;
-  avdName: string;
+  kind: DeviceKind;
+  /** The AVD name passed to `emulator -avd <avdName>`. Set only for
+   * `kind: "emulator"` — null (and ignored) for `kind: "physical"`. */
+  avdName: string | null;
+  /** The persisted `devices.serial` DB column — a physical device's adb TCP
+   * address (`host:port`), used both as the address `wireless.connect()`
+   * dials and, once connected, directly as the device's adb serial (a
+   * physical device over wireless debugging has no separate synthesized
+   * serial the way an emulator's `emulator-<port>` is). Set only for
+   * `kind: "physical"` — null (and ignored) for `kind: "emulator"`. */
+  serial: string | null;
   label: string | null;
   /** The persisted `devices.port` DB column (null until a device has
    * spawned at least once). getOrCreate() reads this ONLY on the reattach
@@ -105,7 +117,8 @@ export interface DeviceSpawnOptions {
    * see that method's own comment. Ignored otherwise: a normal spawn()
    * always allocates a FRESH port via DeviceManager.allocatePort(); it has
    * no existing emulator to match a serial against, so reusing a stale
-   * persisted value here would be wrong. */
+   * persisted value here would be wrong. Always null for `kind: "physical"`
+   * — a physical device has no emulator port pool slot to reserve. */
   port: number | null;
 }
 
@@ -113,7 +126,8 @@ export type DeviceLiveStatus = "starting" | "booting" | "streaming" | "exited" |
 
 export interface DeviceInfo {
   id: string;
-  avdName: string;
+  kind: DeviceKind;
+  avdName: string | null;
   label: string | null;
   status: DeviceLiveStatus;
   serial: string | null;
@@ -122,6 +136,11 @@ export interface DeviceInfo {
 
 const BOOT_POLL_INTERVAL_MS = 1_000;
 const BOOT_TIMEOUT_MS = 120_000;
+// A physical device is either reachable within a few seconds or not at all
+// (no cold-boot analogue to wait out) — BOOT_TIMEOUT_MS's two minutes is
+// tuned for an emulator's actual boot time and would make a wrong/stale
+// wireless-debugging address hang the UI for far longer than useful.
+const PHYSICAL_CONNECT_TIMEOUT_MS = 15_000;
 
 // adb's own even-port convention for emulator serials (`emulator-<port>`,
 // port 5554 + 2*N) — see AOSP's `console_auth_token`/emulator docs. Bounded
@@ -142,7 +161,8 @@ function sleep(ms: number): Promise<void> {
 
 export class Device {
   readonly id: string;
-  readonly avdName: string;
+  readonly kind: DeviceKind;
+  readonly avdName: string | null;
   readonly label: string | null;
 
   private status: DeviceLiveStatus = "starting";
@@ -175,6 +195,7 @@ export class Device {
     private readonly releasePort: (port: number) => void,
   ) {
     this.id = opts.id;
+    this.kind = opts.kind;
     this.avdName = opts.avdName;
     this.label = opts.label;
   }
@@ -182,6 +203,7 @@ export class Device {
   toInfo(): DeviceInfo {
     return {
       id: this.id,
+      kind: this.kind,
       avdName: this.avdName,
       label: this.label,
       status: this.status,
@@ -216,6 +238,15 @@ export class Device {
    * whoever asked for this device, same as PtyManager.getOrCreate's
    * fire-and-forget `void session.spawn()` plus `spawnOutcome()` split. */
   async spawn(port: number): Promise<void> {
+    // Emulator-only — connectPhysical() is the physical-device equivalent
+    // entry point and never calls this. Guarded at runtime (not just by the
+    // DeviceManager.getOrCreate() branch that decides which to call) so a
+    // caller mistake fails loudly here rather than passing `null` into
+    // buildDeviceLaunchPlan as a bare string.
+    if (this.avdName === null) {
+      throw new Error(`device ${this.id} has kind "${this.kind}" — spawn() is emulator-only`);
+    }
+    const avdName = this.avdName;
     this.allocatedPort = port;
     // Persisted immediately — see DeviceManagerOptions.onPortAssigned's own
     // comment on why this fires before `systemd-run` even runs, not after
@@ -228,7 +259,7 @@ export class Device {
         id: this.id,
         sessionsDir: this.manager.sessionsDir,
         emulatorPath: this.manager.emulatorPath,
-        avdName: this.avdName,
+        avdName,
         extraArgs: [
           "-port",
           String(port),
@@ -251,7 +282,7 @@ export class Device {
 
       this.status = "booting";
       this.serial = `emulator-${port}`;
-      await this.waitForAdbSerial(this.serial);
+      await this.waitForAdbSerial(this.serial, BOOT_TIMEOUT_MS);
 
       this.adb = await this.serverClient.createAdb({ serial: this.serial });
       await this.startScrcpySession(this.adb);
@@ -326,10 +357,55 @@ export class Device {
     }
   }
 
+  /** Connects to a physical device over adb wireless debugging at the given
+   * adb TCP address, then starts a scrcpy session — the `kind: "physical"`
+   * analogue of attach() (a restart-surviving emulator): startScrcpySession()
+   * below is serial-agnostic, so the two differ only in HOW the connection
+   * is established. No scope, no marker, no port allocation: Mullion never
+   * spawns a physical device the way it spawns an emulator, only connects to
+   * one the user has already paired (DeviceManager.pair(), a separate call —
+   * pairing has no "device" object to attach to yet, just the adb server's
+   * own keystore).
+   *
+   * `AdbServerClient.AlreadyConnectedError` from wireless.connect() is NOT
+   * treated as a failure here: it means this exact address is already in
+   * the adb server's connection table (e.g. Mullion itself connected it on
+   * a previous getOrCreate() and never disconnected — kill() deliberately
+   * never calls wireless.disconnect(), see its own comment), so this
+   * proceeds exactly as if connect() had just succeeded. Any OTHER error
+   * (UnauthorizedError — the phone hasn't approved this pairing/host key;
+   * NetworkError — nothing listening at that address) propagates and
+   * leaves `status: "error"`, same as attach()'s own catch. */
+  async connectPhysical(address: string): Promise<void> {
+    this.allocatedPort = null;
+    this.serial = address;
+    this.status = "booting";
+    try {
+      try {
+        await this.serverClient.wireless.connect(address);
+      } catch (err) {
+        if (!(err instanceof AdbServerClient.AlreadyConnectedError)) throw err;
+      }
+      await this.waitForAdbSerial(address, PHYSICAL_CONNECT_TIMEOUT_MS);
+      this.adb = await this.serverClient.createAdb({ serial: address });
+      await this.startScrcpySession(this.adb);
+      this.status = "streaming";
+    } catch (err) {
+      this.status = "error";
+      this.lastError = err instanceof Error ? err.message : String(err);
+      // See attach()'s own comment — only what THIS attempt opened; there is
+      // no scope to leave alone here in the first place.
+      await this.adb?.close().catch(() => {});
+      this.adb = null;
+      this.scrcpyClient = null;
+      throw err;
+    }
+  }
+
   /** Pushes and starts the scrcpy server against the already-established
-   * `this.adb` connection, and wires up the exit/video-pump plumbing both
-   * spawn() (a fresh emulator) and attach() (a restart-surviving one) need
-   * identically once they reach this point. */
+   * `this.adb` connection, and wires up the exit/video-pump plumbing every
+   * connection path (spawn(), attach(), connectPhysical()) needs
+   * identically once it reaches this point. */
   private async startScrcpySession(adb: Adb): Promise<void> {
     // Node's own web-streams ReadableStream and @yume-chan/stream-extra's
     // (a structurally-identical, DOM-independent redeclaration — see that
@@ -358,7 +434,16 @@ export class Device {
    * route (a failed spawn(), kill(), or handleExit() after an unexpected
    * scrcpy exit) funnels through, so none of them can leak a subset of what
    * the others clean up. Idempotent: safe to call on a Device that never
-   * got past `touchDeviceMarker`/port allocation. */
+   * got past `touchDeviceMarker`/port allocation.
+   *
+   * Skips the scope/marker/port steps entirely for `kind: "physical"` —
+   * not merely an optimization: connectPhysical() never touches any of the
+   * three (no `systemd-run`, no marker file, no port ever allocated for a
+   * device Mullion didn't spawn), so calling stopDeviceScope()/
+   * removeDeviceMarker() here would be resolving ownership for a scope that
+   * was never created under this id in the first place. The adb server
+   * connection itself is deliberately left alone too — see kill()'s own
+   * comment on why disconnect() never happens here either. */
   private async teardownProcess(): Promise<void> {
     try {
       await this.scrcpyClient?.close();
@@ -370,25 +455,27 @@ export class Device {
     } catch {
       // Same best-effort posture.
     }
-    await stopDeviceScope(
-      this.manager.sessionsDir,
-      deriveInstanceId(this.manager.sessionsDir),
-      this.id,
-    );
-    removeDeviceMarker(this.manager.sessionsDir, this.id);
+    if (this.kind === "emulator") {
+      await stopDeviceScope(
+        this.manager.sessionsDir,
+        deriveInstanceId(this.manager.sessionsDir),
+        this.id,
+      );
+      removeDeviceMarker(this.manager.sessionsDir, this.id);
+    }
     if (this.allocatedPort !== null) {
       this.releasePort(this.allocatedPort);
       this.allocatedPort = null;
     }
   }
 
-  private async waitForAdbSerial(serial: string): Promise<void> {
-    const deadline = Date.now() + BOOT_TIMEOUT_MS;
+  private async waitForAdbSerial(serial: string, timeoutMs: number): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
     for (;;) {
       const devices = await this.serverClient.getDevices();
       if (devices.some((d) => d.serial === serial)) return;
       if (Date.now() > deadline) {
-        throw new Error(`emulator ${serial} did not appear on adb within ${BOOT_TIMEOUT_MS}ms`);
+        throw new Error(`device ${serial} did not appear on adb within ${timeoutMs}ms`);
       }
       await sleep(BOOT_POLL_INTERVAL_MS);
     }
@@ -445,9 +532,11 @@ export class Device {
     return () => this.exitListeners.delete(listener);
   }
 
-  /** Tears down the scrcpy/adb connection and stops the emulator's systemd
-   * scope. Does NOT remove the device row — mirrors PtyManager.kill() vs
-   * terminate()'s split; the DeviceManager caller decides which it wants. */
+  /** Tears down the scrcpy/adb connection and — for `kind: "emulator"` only
+   * — stops the emulator's systemd scope (see teardownProcess()'s own
+   * comment on why a physical device skips that). Does NOT remove the
+   * device row — mirrors PtyManager.kill() vs terminate()'s split; the
+   * DeviceManager caller decides which it wants. */
   async kill(): Promise<void> {
     await this.teardownProcess();
     this.status = "exited";
@@ -540,11 +629,36 @@ export class DeviceManager {
    * touchDeviceMarker before a spawn() failure recorded no port), there is
    * nothing to reconstruct a serial from, so this still falls back to the
    * original clear-and-actionable error naming the manual `systemctl --user
-   * stop` command. */
+   * stop` command.
+   *
+   * `kind: "physical"` branches off BEFORE any of the above: isScopeAlive()
+   * asks whether a systemd scope exists for this id, and a physical device
+   * never has one (Mullion never spawns it), so it would simply come back
+   * "dead" and fall through to the allocatePort()/spawn() branch at the
+   * bottom — trying to boot an emulator from a null avdName. There is
+   * nothing to reattach to and nothing to reconcile against a systemd
+   * listing; connectPhysical() is unconditionally the right (and only)
+   * thing to do for every call with this kind. */
   async getOrCreate(opts: DeviceSpawnOptions): Promise<Device> {
     this.assertEnabled();
     const existing = this.devices.get(opts.id);
     if (existing && existing.isAlive) return existing;
+
+    if (opts.kind === "physical") {
+      if (opts.serial === null) {
+        throw new Error(`physical device ${opts.id} has no persisted adb address to connect to`);
+      }
+      const serial = opts.serial;
+      const device = new Device(opts, this.opts, this.serverClient, this.releasePort.bind(this));
+      this.devices.set(opts.id, device);
+      // Fire-and-forget, same shape as spawn()/attach() below — a caller
+      // polls get(id)?.toInfo().status/.error, or waits on the device WS
+      // route's own connect.
+      device.connectPhysical(serial).catch((err) => {
+        this.opts.onSpawnError?.(opts.id, err instanceof Error ? err : new Error(String(err)));
+      });
+      return device;
+    }
 
     if (await this.isScopeAlive(opts.id)) {
       if (opts.port === null) {
@@ -650,13 +764,30 @@ export class DeviceManager {
    * to stopping by DERIVED unit name/marker directly (the same thing
    * `stopDeviceScope` already does when it can't confirm ownership any
    * other way — see its own doc comment), rather than requiring a live
-   * `Device` instance to call `.kill()` through. */
-  async kill(id: string): Promise<void> {
+   * `Device` instance to call `.kill()` through.
+   *
+   * `kind` is only consulted on THAT fallback path — a live in-memory
+   * `Device` already knows its own kind (see teardownProcess()'s own
+   * check) and this trusts it over whatever the caller passed. For
+   * `kind: "physical"` with no in-memory Device, there is nothing to stop:
+   * a physical device never gets a systemd scope in the first place (see
+   * connectPhysical()'s own comment), so falling through to
+   * stopDeviceScope()/removeDeviceMarker() would be resolving ownership
+   * for a scope that could never have existed under this id. This also
+   * deliberately never calls `wireless.disconnect()` — the adb server's
+   * connection table is host-global state shared with the user's own adb
+   * tooling outside this session, not Mullion's to tear down; a killed
+   * physical row simply stops being tracked here while the phone stays
+   * connected to the host's adb server (re-adding it later hits the
+   * AlreadyConnectedError path connectPhysical() already treats as
+   * success). */
+  async kill(id: string, kind: DeviceKind): Promise<void> {
     const device = this.devices.get(id);
     if (device) {
       await device.kill();
       return;
     }
+    if (kind === "physical") return;
     await stopDeviceScope(this.opts.sessionsDir, deriveInstanceId(this.opts.sessionsDir), id);
     removeDeviceMarker(this.opts.sessionsDir, id);
   }
@@ -664,13 +795,36 @@ export class DeviceManager {
   /** kill() plus dropping this manager's own reference — the in-memory-map
    * half of PtyManager.terminate(); the DB row deletion is the route's own
    * job, same split routes/sessions.ts's killSession keeps today. */
-  async terminate(id: string): Promise<void> {
-    await this.kill(id);
+  async terminate(id: string, kind: DeviceKind): Promise<void> {
+    await this.kill(id, kind);
     this.devices.delete(id);
   }
 
   async killAll(): Promise<void> {
-    await Promise.all([...this.devices.keys()].map((id) => this.kill(id)));
+    // Every id here already has a live in-memory Device (this.devices'
+    // own keys), so kill()'s `kind` argument only matters on its
+    // no-in-memory-Device fallback path and is never actually consulted
+    // here — passed through anyway (rather than a placeholder) so this
+    // reads correctly on its own, without relying on that fact.
+    await Promise.all(
+      [...this.devices.entries()].map(([id, device]) => this.kill(id, device.kind)),
+    );
+  }
+
+  /** Pairs with a device over adb wireless debugging (Android 11+'s
+   * `adb pair <host:port> <code>`) — the one-time step that authorizes the
+   * host's adb server to connect to this phone at all, ahead of an actual
+   * `connect()` (which getOrCreate()'s `kind: "physical"` branch performs,
+   * via connectPhysical()). Deliberately NOT tied to any `devices` row —
+   * pairing writes a key into the adb SERVER's own keystore, which outlives
+   * both this call and any particular device row (see the schema's own
+   * comment on `devices.kind`), so there is nothing here for Mullion to
+   * persist. `address`/`password` are validated by the route before this is
+   * reached — see routes/devices.ts's own comment on why that validation is
+   * an allowlist, not shell-style escaping (this never touches a shell). */
+  async pair(address: string, password: string): Promise<void> {
+    this.assertEnabled();
+    await this.serverClient.wireless.pair(address, password);
   }
 
   /** Reconciliation liveness check for a device whose scope may have

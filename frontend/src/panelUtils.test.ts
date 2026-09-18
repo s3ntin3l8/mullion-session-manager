@@ -563,7 +563,9 @@ describe("openDevicePanel (PR #1324)", () => {
     hostId: "local",
     projectId: null,
     name: "My Pixel",
+    kind: "emulator",
     avdName: "pixel_7",
+    serial: null,
     status: "active",
     createdAt: "2026-01-01T00:00:00Z",
     live: null,
@@ -603,6 +605,25 @@ describe("openDevicePanel (PR #1324)", () => {
     expect(api.addPanel).toHaveBeenCalledWith(
       expect.objectContaining({
         title: "pixel_7",
+      }),
+    );
+  });
+
+  it("falls back to serial when name and avdName are both null (a physical device)", () => {
+    const api = mockDockviewApi();
+    const physicalDevice: Device = {
+      ...TEST_DEVICE,
+      name: null,
+      kind: "physical",
+      avdName: null,
+      serial: "192.168.1.23:37251",
+    };
+
+    openDevicePanel(api, physicalDevice, DESKTOP_LAYOUT);
+
+    expect(api.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "192.168.1.23:37251",
       }),
     );
   });

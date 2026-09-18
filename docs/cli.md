@@ -209,7 +209,16 @@ the full architecture. Devices are host-global (a `deviceId`, not a
 sessionId), not scoped to any project or session.
 
 - `device list`
-- `device create <avdName> [--project <id>] [--name <label>]`
+- `device create <avdName> [--project <id>] [--name <label>]` — spawn a new
+  emulator instance.
+- `device pair <pairingAddress> <code>` — one-time `adb pair` against a phone's
+  Wireless debugging pairing address/code (Android 11+). Doesn't create a
+  device row; the adb server remembers the pairing across Mullion restarts.
+- `device connect <address> [--project <id>] [--name <label>]` — registers and
+  connects a physical device already paired, at its (separate) connect
+  address. `address` and `pairingAddress` are typically different ports on the
+  same phone — Android shows both under Developer options → Wireless
+  debugging.
 - `device stop <id>`
 - `device screenshot <id> [--out <path>]`
 - `device tap <id> <x> <y>`
