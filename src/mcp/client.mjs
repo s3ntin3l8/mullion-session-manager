@@ -378,6 +378,8 @@ export class MullionClient {
     initialPrompt,
     skipPermissions,
     parentSessionId,
+    model,
+    smallModel,
   } = {}) {
     const body = { command };
     if (name !== undefined) body.name = name;
@@ -396,6 +398,8 @@ export class MullionClient {
     if (initialPrompt !== undefined) body.seedPrompt = initialPrompt;
     if (skipPermissions !== undefined) body.skipPermissions = skipPermissions;
     if (parentSessionId !== undefined) body.parentSessionId = parentSessionId;
+    if (model !== undefined) body.model = model;
+    if (smallModel !== undefined) body.smallModel = smallModel;
     try {
       return await this.controlRequest("sessions.spawn_child", body);
     } catch (err) {

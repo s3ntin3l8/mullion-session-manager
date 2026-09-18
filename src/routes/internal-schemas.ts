@@ -108,6 +108,11 @@ export interface SpawnSessionBody {
   // value forwarded verbatim to a remote agent host. Spawn-time only, no
   // maxLength needed (a positive integer).
   taskId?: number;
+  // Issue #1337 — opencode model overrides forwarded from spawn_child_session
+  // MCP tool. When omitted and parentSessionId is set on the public POST
+  // /api/sessions route, the parent session's model/smallModel are inherited.
+  model?: string;
+  smallModel?: string;
 }
 
 export const spawnSessionSchema = {
@@ -175,6 +180,11 @@ export const spawnSessionSchema = {
       injectProjectBriefing: { type: "boolean" },
       // Issue #1089 — see the interface's own doc comment above.
       injectMullionBundle: { type: "boolean" },
+      // Issue #1337 — opencode model overrides forwarded from spawn_child_session
+      // MCP tool. When omitted and parentSessionId is set on the public POST
+      // /api/sessions route, the parent session's model/smallModel are inherited.
+      model: { type: "string" },
+      smallModel: { type: "string" },
       // Spawn-time-only Task Master marker, forwarded verbatim from
       // SessionTarget (remote-host-client.ts) on the wire. See
       // CreateSessionOptions.taskId's own doc comment (pty-manager.ts) for

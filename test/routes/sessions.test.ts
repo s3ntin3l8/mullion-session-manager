@@ -3826,6 +3826,113 @@ describe("sessions route", () => {
 
       await app.close();
     });
+
+    // Issue #1337 — when parentSessionId is set and model/smallModel are
+    // not explicitly supplied by the caller, the child inherits the parent
+    // session's model/smallModel before falling through to install-wide
+    // defaults.
+    it("inherits parent's model when child omits it", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+      const parentId = await createActiveSession(app, projectId, {
+        command: "opencode",
+        model: "openrouter/anthropic/claude-sonnet-4-5",
+        smallModel: "openrouter/anthropic/claude-haiku-3.5",
+      });
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: {
+          projectId,
+          command: "opencode",
+          parentSessionId: parentId,
+        },
+      });
+
+      expect(res.statusCode).toBe(201);
+      expect(res.json().model).toBe("openrouter/anthropic/claude-sonnet-4-5");
+      expect(res.json().smallModel).toBe("openrouter/anthropic/claude-haiku-3.5");
+
+      await app.close();
+    });
+
+    it("does not inherit parent's model when child supplies its own", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+      const parentId = await createActiveSession(app, projectId, {
+        command: "opencode",
+        model: "openrouter/anthropic/claude-sonnet-4-5",
+        smallModel: "openrouter/anthropic/claude-haiku-3.5",
+      });
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: {
+          projectId,
+          command: "opencode",
+          parentSessionId: parentId,
+          model: "openrouter/minimax-m3",
+        },
+      });
+
+      expect(res.statusCode).toBe(201);
+      expect(res.json().model).toBe("openrouter/minimax-m3");
+      // smallModel is still inherited since it was not explicitly set
+      expect(res.json().smallModel).toBe("openrouter/anthropic/claude-haiku-3.5");
+
+      await app.close();
+    });
+
+    it("does not inherit parent's model for non-opencode commands", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+      const parentId = await createActiveSession(app, projectId, {
+        command: "opencode",
+        model: "openrouter/anthropic/claude-sonnet-4-5",
+      });
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: {
+          projectId,
+          command: "bash",
+          parentSessionId: parentId,
+        },
+      });
+
+      expect(res.statusCode).toBe(201);
+      // Non-opencode commands don't get model stamping at all
+      expect(res.json().model).toBeNull();
+
+      await app.close();
+    });
+
+    it("does not inherit when parent has no model", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+      const parentId = await createActiveSession(app, projectId, {
+        command: "opencode",
+      });
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: {
+          projectId,
+          command: "opencode",
+          parentSessionId: parentId,
+        },
+      });
+
+      expect(res.statusCode).toBe(201);
+      // No parent model, so it falls through to install-wide default (or null)
+      expect(res.json().model).toBeNull();
+
+      await app.close();
+    });
   });
 
   // Phase 5 (Track B, issue #196 5.6) — killSession's cascade parameter,
