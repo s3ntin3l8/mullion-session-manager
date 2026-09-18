@@ -152,13 +152,13 @@ devices, so it stays out of the way on a host that never touches Android;
 its poll runs unconditionally regardless, so a device created purely
 through the CLI/MCP surface below (no panel ever opened) still makes the
 section appear without a reload. Settings → Devices is the lifecycle
-surface — create, stop, and delete a device there, including devices whose
-row has since flipped to `killed`, which the sidebar list omits but
-Settings still shows. It's also where a phone gets paired (`adb pair`) and
+surface — create, stop, delete, and (for an active physical row) edit a
+device's adb address there. It's also where a phone gets paired (`adb pair`) and
 connected by address (the `kind: "physical"` counterpart to an emulator
 `create`, see §1 below), and where a new AVD can be provisioned from an
 installed system image (see "AVD provisioning" below) before a device is
-ever created from it. Reopening a device panel after a Mullion restart
+ever created from it, including devices whose row has since flipped to `killed`, which the sidebar list omits but
+Settings still shows. Reopening a device panel after a Mullion restart
 resumes streaming from the existing emulator (see the reattach behavior
 above) rather than requiring a manual `systemctl --user stop` first — no UI
 change needed for that; it's the same `openDevicePanel`/WS-connect path
@@ -234,15 +234,28 @@ and REST do.
 ## 3. REST API
 
 `src/routes/devices.ts` — `GET/POST /api/devices`, `POST /api/devices/pair`,
-`GET/DELETE /api/devices/:id`, `POST /api/devices/:id/action` (body:
+`GET/PATCH/DELETE /api/devices/:id`, `POST /api/devices/:id/action` (body:
 `{action: "screenshot"|"tap"|"swipe"|"text"|"key"|"logcat", ...}`, same shape
 the CLI/MCP surface forwards). `POST /api/devices` takes either
 `{avdName, projectId?, name?}` (emulator) or `{kind: "physical", address,
 projectId?, name?}` (physical); `POST /api/devices/pair` takes
-`{pairingAddress, pairingCode}` and creates no row. The control-socket ops
-above are thin wrappers over these same routes (`injectAndShape`), same
-"CLI/MCP piggyback on the REST layer" pattern the browser automation ops
-use.
+`{pairingAddress, pairingCode}` and creates no row. `PATCH /api/devices/:id`
+(issue #1347) takes `{address}` and is **physical-only** (an emulator's
+`serial` is synthesized from its own `port` column, not user-supplied) — it
+rewrites the row's `serial` in place (keeping `id`/`name`/`projectId`/
+history) and reconnects at the new address, tearing down any existing live
+`Device` first so a stale connection at the old address can't linger. Only
+valid against a `status: "active"` row — there is no un-kill path anywhere
+in this API, so a killed row's address can't usefully be edited. No CLI/MCP
+counterpart: `wireless.connect()` on an arbitrary caller-supplied address is
+the same "bigger blast radius" outbound-dial primitive `device.create`
+(`kind: "physical"`) and `device.pair` are already gated `["full"]`-scope
+only for (see `src/plugins/control-socket.ts`'s own comments on both) — a
+control-socket `device.update` op would need that same gate plus its own
+review, descoped here as a REST/Settings-only feature (issue #1347 named
+Settings → Devices explicitly). The control-socket ops above are thin
+wrappers over these same routes (`injectAndShape`), same "CLI/MCP piggyback
+on the REST layer" pattern the browser automation ops use.
 
 ## 4. AVD provisioning
 

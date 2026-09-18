@@ -86,6 +86,16 @@ describe("devices routes", () => {
       });
       expect(res.statusCode).toBe(400);
     });
+
+    it("PATCH /api/devices/:id rejects with 400", async () => {
+      const app = await buildTestApp();
+      const res = await app.inject({
+        method: "PATCH",
+        url: "/api/devices/1",
+        payload: { address: "192.168.1.23:37251" },
+      });
+      expect(res.statusCode).toBe(400);
+    });
   });
 
   describe("with DEVICE_ENABLED=true", () => {
@@ -661,6 +671,127 @@ describe("devices routes", () => {
         const res = await app.inject({ method: "DELETE", url: `/api/devices/${id}` });
         expect(res.statusCode).toBe(204);
         expect(terminate).toHaveBeenCalledWith(String(id), "physical");
+      });
+
+      describe("PATCH /api/devices/:id (issue #1347)", () => {
+        it("rewrites serial in place — reconnecting via getOrCreate with the NEW address, without touching id/name/projectId/createdAt", async () => {
+          const app = await buildTestApp();
+          const created = await app.inject({
+            method: "POST",
+            url: "/api/devices",
+            payload: { kind: "physical", address: "192.168.1.23:37251", name: "My Pixel" },
+          });
+          const before = created.json();
+
+          const terminate = vi.spyOn(app.device, "terminate").mockResolvedValueOnce(undefined);
+          const getOrCreate = vi.spyOn(app.device, "getOrCreate");
+
+          const res = await app.inject({
+            method: "PATCH",
+            url: `/api/devices/${before.id}`,
+            payload: { address: "192.168.1.23:41999" },
+          });
+
+          expect(res.statusCode).toBe(200);
+          const after = res.json();
+          expect(after).toMatchObject({
+            id: before.id,
+            name: before.name,
+            projectId: before.projectId,
+            kind: "physical",
+            serial: "192.168.1.23:41999",
+            status: "active",
+          });
+          expect(after.createdAt).toBe(before.createdAt);
+
+          // The stale connection (still pointed at the OLD address) must be
+          // torn down BEFORE reconnecting — getOrCreate()'s own
+          // `existing.isAlive` early-return would otherwise make the new
+          // address a silent no-op. See routes/devices.ts's own comment.
+          expect(terminate).toHaveBeenCalledWith(String(before.id), "physical");
+          expect(getOrCreate).toHaveBeenCalledWith(
+            expect.objectContaining({
+              id: String(before.id),
+              kind: "physical",
+              serial: "192.168.1.23:41999",
+            }),
+          );
+
+          const [row] = app.db.select().from(devices).where(eq(devices.id, before.id)).all();
+          expect(row.serial).toBe("192.168.1.23:41999");
+        });
+
+        it("rejects editing an emulator row with 400", async () => {
+          const app = await buildTestApp();
+          const created = await app.inject({
+            method: "POST",
+            url: "/api/devices",
+            payload: { avdName: "dev35" },
+          });
+          const id = created.json().id;
+
+          const res = await app.inject({
+            method: "PATCH",
+            url: `/api/devices/${id}`,
+            payload: { address: "192.168.1.23:41999" },
+          });
+          expect(res.statusCode).toBe(400);
+        });
+
+        it("rejects a malformed address with 400", async () => {
+          const app = await buildTestApp();
+          const created = await app.inject({
+            method: "POST",
+            url: "/api/devices",
+            payload: { kind: "physical", address: "192.168.1.23:37251" },
+          });
+          const id = created.json().id;
+
+          const res = await app.inject({
+            method: "PATCH",
+            url: `/api/devices/${id}`,
+            payload: { address: "not-an-address" },
+          });
+          expect(res.statusCode).toBe(400);
+        });
+
+        it("rejects editing a killed (stopped) row with 400 — no un-kill path exists", async () => {
+          const app = await buildTestApp();
+          const created = await app.inject({
+            method: "POST",
+            url: "/api/devices",
+            payload: { kind: "physical", address: "192.168.1.23:37251" },
+          });
+          const id = created.json().id;
+          await app.inject({ method: "DELETE", url: `/api/devices/${id}` });
+
+          const res = await app.inject({
+            method: "PATCH",
+            url: `/api/devices/${id}`,
+            payload: { address: "192.168.1.23:41999" },
+          });
+          expect(res.statusCode).toBe(400);
+        });
+
+        it("404s for a nonexistent row", async () => {
+          const app = await buildTestApp();
+          const res = await app.inject({
+            method: "PATCH",
+            url: "/api/devices/999",
+            payload: { address: "192.168.1.23:41999" },
+          });
+          expect(res.statusCode).toBe(404);
+        });
+
+        it("rejects a non-integer id with 400", async () => {
+          const app = await buildTestApp();
+          const res = await app.inject({
+            method: "PATCH",
+            url: "/api/devices/abc",
+            payload: { address: "192.168.1.23:41999" },
+          });
+          expect(res.statusCode).toBe(400);
+        });
       });
     });
   });

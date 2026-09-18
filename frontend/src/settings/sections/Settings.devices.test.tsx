@@ -135,6 +135,17 @@ describe("Settings -> Devices (issue #1326)", () => {
         devicesDb = devicesDb.map((d) => (d.id === id ? { ...d, status: "killed" } : d));
         return jsonResponse(204);
       },
+      "PATCH /api/devices/:id": ({ params, init }) => {
+        const id = Number(params.id);
+        const existing = devicesDb.find((d) => d.id === id);
+        if (!existing) return jsonResponse(404, { message: "not found" });
+        const body = JSON.parse(init?.body as string) as { address?: string };
+        // Mirrors routes/devices.ts's own PATCH handler: rewrites `serial`
+        // in place, keeps `id`/`name`/`status`/`createdAt` unchanged.
+        const updated: Device = { ...existing, serial: body.address ?? existing.serial };
+        devicesDb = devicesDb.map((d) => (d.id === id ? updated : d));
+        return jsonResponse(200, updated);
+      },
     }));
     vi.stubGlobal("fetch", fetchMock);
 
@@ -435,5 +446,75 @@ describe("Settings -> Devices (issue #1326)", () => {
       await screen.findByText("DEVICE_AVDMANAGER_PATH is not configured."),
     ).toBeInTheDocument();
     expect(screen.queryByText("Could not create this AVD")).not.toBeInTheDocument();
+  });
+
+  // Issue #1347 — the regression this feature exists to prevent: editing a
+  // physical device's address must update the SAME shared-store row (same
+  // id/name), not delete-and-recreate it.
+  it("editing a physical device's address updates the shared store's serial in place, keeping id/name unchanged", async () => {
+    devicesDb = [
+      {
+        id: 1,
+        hostId: "local",
+        projectId: null,
+        name: "My Pixel",
+        kind: "physical",
+        avdName: null,
+        serial: "192.168.1.23:37251",
+        status: "active",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        live: null,
+      },
+    ];
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    const row = await screen.findByTestId("device-row-1");
+    await user.click(within(row).getByRole("button", { name: "Edit address" }));
+    // Pre-filled with the existing address — clear before typing the new one.
+    const input = screen.getByPlaceholderText("192.168.1.23:37251");
+    await user.clear(input);
+    await user.type(input, "192.168.1.23:41999");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(useDashboardStore.getState().devices).toEqual([
+        expect.objectContaining({
+          id: 1,
+          name: "My Pixel",
+          kind: "physical",
+          serial: "192.168.1.23:41999",
+          status: "active",
+        }),
+      ]);
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/devices/1",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ address: "192.168.1.23:41999" }),
+      }),
+    );
+  });
+
+  it("an emulator device row shows no 'Edit address' button", async () => {
+    devicesDb = [
+      {
+        id: 1,
+        hostId: "local",
+        projectId: null,
+        name: "My Emulator",
+        kind: "emulator",
+        avdName: "pixel_7",
+        serial: null,
+        status: "active",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        live: null,
+      },
+    ];
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    const row = await screen.findByTestId("device-row-1");
+    expect(within(row).queryByRole("button", { name: "Edit address" })).not.toBeInTheDocument();
   });
 });

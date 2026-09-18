@@ -70,5 +70,14 @@ export const createDevicesSlice: StateCreator<DashboardState, [], [], DevicesSli
         .refreshDevices()
         .catch(() => {});
     },
+
+    updateDeviceAddress: async (id, address) => {
+      const device = await api.updateDeviceAddress(id, address);
+      // Same reasoning as createDevice above.
+      void get()
+        .refreshDevices()
+        .catch(() => {});
+      return device;
+    },
   };
 };

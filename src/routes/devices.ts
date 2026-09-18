@@ -313,6 +313,79 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
     return toListItem(row, app.device.get(String(row.id))?.toInfo());
   });
 
+  // Edits a physical device's stored adb address in place — issue #1347,
+  // the follow-up to the v1 wireless-debugging support (kind: "physical"
+  // above): Android randomizes the wireless-debugging port every time the
+  // toggle is cycled, and a reboot drops the connection entirely, so the
+  // persisted `serial` routinely goes stale. Without this, the only fix was
+  // delete-and-recreate, losing the row's `id`/history. Physical only — an
+  // emulator's `serial` is synthesized (`emulator-<port>`) from its own
+  // `port` column, not user-supplied, so there is nothing here for an
+  // emulator row to edit.
+  app.patch<{ Params: { id: string }; Body: { address?: string } }>(
+    "/api/devices/:id",
+    async (request, reply) => {
+      if (!app.config.DEVICE_ENABLED) {
+        return reply.badRequest("Device panel is disabled — set DEVICE_ENABLED=true.");
+      }
+      const id = Number(request.params.id);
+      if (!Number.isInteger(id)) return reply.badRequest("id path param is required");
+      const [row] = app.db.select().from(devices).where(eq(devices.id, id)).all();
+      if (!row) return reply.notFound(`No device ${id}`);
+      if (row.kind !== "physical") {
+        return reply.badRequest("only a physical device's address can be edited");
+      }
+      // No un-kill path exists anywhere in this API (DELETE only ever flips
+      // status forward, never back) — an address edit on a killed row would
+      // have nothing reachable to reconnect, so this rejects rather than
+      // silently rewriting a dead row's address.
+      if (row.status !== "active") {
+        return reply.badRequest("cannot edit the address of a stopped device");
+      }
+      const { address } = request.body ?? {};
+      if (!isValidDeviceAddress(address)) {
+        return reply.badRequest("address must be host:port (e.g. 192.168.1.23:37251)");
+      }
+
+      // Row records intent BEFORE the reconnect below — same ordering
+      // DELETE uses (see its own comment) — and is never rolled back if the
+      // reconnect fails: a transient adb hiccup must not discard the user's
+      // edit, same reasoning Device.attach()'s own comment gives for why a
+      // connection failure there doesn't tear down what it didn't create.
+      const [updated] = app.db
+        .update(devices)
+        .set({ serial: address })
+        .where(eq(devices.id, id))
+        .returning()
+        .all();
+
+      // The existing live Device (if any) is still connected at the OLD,
+      // now-stale address — getOrCreate() below is a no-op against it
+      // (existing.isAlive is true for "booting"/"streaming", same guard
+      // POST's create path relies on), so it must be torn down first or
+      // this PATCH would silently persist the new address while leaving
+      // the live connection pointed at the dead one. terminate() never
+      // touches the DB row (only the in-memory map), so `updated.status`
+      // stays "active" throughout.
+      await app.device.terminate(String(id), "physical");
+
+      try {
+        await app.device.getOrCreate({
+          id: String(id),
+          kind: "physical",
+          avdName: null,
+          serial: address,
+          label: updated.name,
+          port: null,
+        });
+      } catch (err) {
+        return reply.badRequest(err instanceof Error ? err.message : String(err));
+      }
+
+      return toListItem(updated, app.device.get(String(id))?.toInfo());
+    },
+  );
+
   app.delete<{ Params: { id: string } }>("/api/devices/:id", async (request, reply) => {
     const id = Number(request.params.id);
     if (!Number.isInteger(id)) return reply.badRequest("id path param is required");
