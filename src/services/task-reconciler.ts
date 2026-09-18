@@ -2434,7 +2434,18 @@ async function attemptReturnRedCiToWorker(
           // says so plainly rather than sending an operator on a fix that
           // does nothing.
           app.log.warn(
-            { taskId: task.id, owner: current.repoRef.owner, repo: current.repoRef.repo },
+            {
+              taskId: task.id,
+              owner: current.repoRef.owner,
+              repo: current.repoRef.repo,
+              // Second self-review pass — the throttle key and the
+              // underlying condition are both owner/repo/BRANCH, not just
+              // owner/repo; omitting it made two tasks on the same repo
+              // but different base branches (main vs. a release branch,
+              // say) produce textually identical log lines, undermining
+              // the whole point of a visibility fix.
+              branch: current.baseRef,
+            },
             "task reconcile: CI-auto-return (#755) can't tell a required check apart from a non-required one — the GitHub App's read-scope token never requests the `administration` permission this needs, by design (see docs/ci-cd.md's Branch protection section); granting the App broader permissions on GitHub does NOT fix this — it needs a Mullion code change. A red CI check on this task's PR will never auto-return the worker until that ships.",
           );
         }

@@ -792,6 +792,25 @@ export type RequiredStatusContextsFailureReason = "forbidden" | "not-found" | "o
 const MAX_REQUIRED_STATUS_CONTEXTS_FAILURE_ENTRIES = 200;
 const requiredStatusContextsLastFailure = new Map<string, RequiredStatusContextsFailureReason>();
 
+// Both of fetchRequiredStatusContexts's own failure paths (the `!res.ok`
+// branch and the outer `catch`) need the identical eviction-then-set
+// sequence — factored out so a fix to one can't accidentally miss the
+// other, same "second self-review pass" reasoning as the catch branch's
+// own comment.
+function setRequiredStatusContextsFailure(
+  key: string,
+  reason: RequiredStatusContextsFailureReason,
+): void {
+  if (
+    !requiredStatusContextsLastFailure.has(key) &&
+    requiredStatusContextsLastFailure.size >= MAX_REQUIRED_STATUS_CONTEXTS_FAILURE_ENTRIES
+  ) {
+    const oldestKey = requiredStatusContextsLastFailure.keys().next().value;
+    if (oldestKey !== undefined) requiredStatusContextsLastFailure.delete(oldestKey);
+  }
+  requiredStatusContextsLastFailure.set(key, reason);
+}
+
 /** See `requiredStatusContextsLastFailure`'s own comment above. `null` means
  * either the last lookup for this key succeeded, or no lookup has been made
  * yet — callers should only consult this right after `fetchRequiredStatusContexts`
@@ -866,15 +885,7 @@ export async function fetchRequiredStatusContexts(
           : res.status === 404
             ? "not-found"
             : "other";
-      if (!requiredStatusContextsLastFailure.has(key)) {
-        if (
-          requiredStatusContextsLastFailure.size >= MAX_REQUIRED_STATUS_CONTEXTS_FAILURE_ENTRIES
-        ) {
-          const oldestKey = requiredStatusContextsLastFailure.keys().next().value;
-          if (oldestKey !== undefined) requiredStatusContextsLastFailure.delete(oldestKey);
-        }
-      }
-      requiredStatusContextsLastFailure.set(key, reason);
+      setRequiredStatusContextsFailure(key, reason);
       return null;
     }
     const data = (await res.json()) as {
@@ -892,7 +903,13 @@ export async function fetchRequiredStatusContexts(
     requiredStatusContextsLastFailure.delete(key);
     return contexts;
   } catch {
-    requiredStatusContextsLastFailure.set(key, "other");
+    // Second self-review pass — this path was missing the same eviction
+    // guard the sibling `!res.ok` branch above uses: a network error or a
+    // thrown GitHubRateLimitError (githubApiFetch's own isGitHubRateLimited
+    // fast-path) reaches here just as easily as an ordinary `!res.ok`, and
+    // these are exactly the keys that "never succeed" (this function's own
+    // doc comment) and so would never get cleared either.
+    setRequiredStatusContextsFailure(key, "other");
     return null;
   }
 }
