@@ -22,8 +22,12 @@ import { PlusIcon } from "../../ui/icons.js";
 
 // Same allowlist as src/routes/avds.ts's own AVD_NAME_PATTERN — checked
 // client-side too so a bad name fails fast instead of round-tripping to the
-// server first; the server's own check is still authoritative.
-const AVD_NAME_PATTERN = /^[A-Za-z0-9._-]*[A-Za-z0-9][A-Za-z0-9._-]*$/;
+// server first; the server's own check is still authoritative. Two
+// independent, single-pass regexes (not one combined pattern) — see that
+// file's own comment on the catastrophic-backtracking regex CodeQL caught
+// in an earlier, combined version of this check.
+const AVD_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
+const AVD_NAME_HAS_ALPHANUMERIC = /[A-Za-z0-9]/;
 
 function describeSystemImage(image: SystemImage): string {
   if (image.apiLevel && image.tagDisplay) {
@@ -211,7 +215,12 @@ export function DevicesSection() {
   const submitCreateAvd = () => {
     if (creatingAvd) return;
     const trimmedName = newAvdName.trim();
-    if (!AVD_NAME_PATTERN.test(trimmedName) || !selectedSystemImage || !selectedDeviceProfile) {
+    if (
+      !AVD_NAME_PATTERN.test(trimmedName) ||
+      !AVD_NAME_HAS_ALPHANUMERIC.test(trimmedName) ||
+      !selectedSystemImage ||
+      !selectedDeviceProfile
+    ) {
       return;
     }
     setCreateAvdError(null);
@@ -483,6 +492,7 @@ export function DevicesSection() {
                       disabled={
                         creatingAvd ||
                         !AVD_NAME_PATTERN.test(newAvdName.trim()) ||
+                        !AVD_NAME_HAS_ALPHANUMERIC.test(newAvdName.trim()) ||
                         !selectedSystemImage ||
                         !selectedDeviceProfile
                       }

@@ -241,6 +241,31 @@ describe("avds routes", () => {
         expect(vi.mocked(createAvd)).not.toHaveBeenCalled();
       });
 
+      // CodeQL (js/polynomial-redos) — an earlier version of the bare-dot
+      // fix above combined the charset check and the alphanumeric
+      // requirement into one regex with two overlapping `*` groups, which
+      // is catastrophically slow on exactly this shape of input (many
+      // repeats of a character the pattern accepts, followed by one it
+      // doesn't). This pins the fix: validation must stay linear-time.
+      it("rejects a pathological name in linear time, not catastrophic-backtracking time", async () => {
+        const app = await buildTestApp();
+        const pathologicalName = "0".repeat(50_000) + "!";
+        const start = Date.now();
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/avds",
+          payload: {
+            name: pathologicalName,
+            systemImage: "system-images;android-35;google_apis;x86_64",
+            deviceProfile: "pixel_6",
+          },
+        });
+        const elapsedMs = Date.now() - start;
+        expect(res.statusCode).toBe(400);
+        expect(vi.mocked(createAvd)).not.toHaveBeenCalled();
+        expect(elapsedMs).toBeLessThan(1_000);
+      });
+
       it("POST /api/avds rejects a systemImage not in the installed allowlist", async () => {
         const app = await buildTestApp();
         const res = await app.inject({

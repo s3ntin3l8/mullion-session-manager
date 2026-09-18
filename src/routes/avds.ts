@@ -17,10 +17,16 @@ import {
 // AVD name, as accepted by `avdmanager create avd -n`. Deliberately an
 // allowlist matching avdmanager's own accepted charset (alphanumerics,
 // dots, underscores, hyphens), not a "reject metacharacters" denylist.
-// Harmless either way since argv is never shelled, but requiring at least
-// one alphanumeric (Hermes review) keeps a bare "." or ".." — meaningless
-// as an AVD name — from passing.
-const AVD_NAME_PATTERN = /^[A-Za-z0-9._-]*[A-Za-z0-9][A-Za-z0-9._-]*$/;
+//
+// CodeQL (js/polynomial-redos) — an earlier version of this combined the
+// charset check and the "at least one alphanumeric" (Hermes review, keeps a
+// bare "." or ".." from passing) into a SINGLE regex with two overlapping
+// `[A-Za-z0-9._-]*` groups around a middle character — classic catastrophic
+// backtracking on user-controlled input (e.g. many "0"s followed by one
+// invalid character). Two independent, single-pass regexes below achieve
+// the same validation with no ambiguity for the engine to backtrack over.
+const AVD_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
+const AVD_NAME_HAS_ALPHANUMERIC = /[A-Za-z0-9]/;
 
 interface CreateAvdBody {
   name?: string;
@@ -95,7 +101,7 @@ export async function avdsRoute(app: FastifyInstance): Promise<void> {
     }
 
     const { name, systemImage, deviceProfile } = request.body ?? {};
-    if (!name || !AVD_NAME_PATTERN.test(name)) {
+    if (!name || !AVD_NAME_PATTERN.test(name) || !AVD_NAME_HAS_ALPHANUMERIC.test(name)) {
       return reply.badRequest(
         "name is required and may only contain letters, digits, '.', '_', and '-'",
       );

@@ -41,10 +41,21 @@ function execFileWithEscalation(
 ): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     let settled = false;
+    // Declared (as `let`, not `const`) BEFORE execFileFn() is even called —
+    // the settle-callback below references `armed` even though it's only
+    // assigned AFTER that call returns. Safe today only because a real
+    // execFile's callback always fires asynchronously; this ordering
+    // removes the temporal-dead-zone fragility entirely rather than relying
+    // on that timing assumption never changing (Hermes review). Exactly one
+    // assignment follows, but it can't happen at declaration time — that's
+    // the whole point of splitting it out — so `prefer-const` doesn't apply
+    // here despite the usual "only assigned once" signal it looks for.
+    // eslint-disable-next-line prefer-const
+    let armed: ReturnType<typeof armKillEscalation> | undefined;
     const child = execFileFn(file, args, (error, stdout, stderr) => {
       if (settled) return;
       settled = true;
-      armed.clearOnSettle();
+      armed?.clearOnSettle();
       if (error) {
         const message = typeof stderr === "string" && stderr.trim() ? stderr.trim() : error.message;
         reject(new Error(message));
@@ -56,7 +67,7 @@ function execFileWithEscalation(
       });
     });
     onSpawn?.(child);
-    const armed = armKillEscalation(child, timeoutMs, () => {
+    armed = armKillEscalation(child, timeoutMs, () => {
       if (settled) return;
       settled = true;
       reject(new Error(`${file} ${args.join(" ")} timed out after ${timeoutMs}ms`));
