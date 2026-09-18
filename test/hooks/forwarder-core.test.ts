@@ -2101,6 +2101,86 @@ describe("mapAgyEvent (issue #253)", () => {
     expect(idleAgain[0].backgroundTasks).toEqual([]);
   });
 
+  // Issue #1356 — agy has no `error_type` enum of its own the way Claude
+  // Code does; mapAgyEvent's Stop case matches its own `error` string
+  // against agy's real, observed quota wording to set `errorType:
+  // "rate_limit"`, letting isRateLimitGraceActive (task-rate-limit-grace.ts)
+  // recognize it exactly the way it already does for Claude Code's own
+  // rate_limit error_type. This ONLY covers the case where agy's Stop
+  // mapping fires at all (terminationReason === "error") — the actual
+  // incident that motivated #1356 was agy blocking on a NEEDS INPUT
+  // prompt with NO Stop hook firing, tracked separately in #1363.
+  describe("Stop with terminationReason: error (issue #1356)", () => {
+    it("classifies agy's real RESOURCE_EXHAUSTED quota wording as errorType: rate_limit", () => {
+      const result = mapAgyEvent("Stop", {
+        terminationReason: "error",
+        error:
+          "RESOURCE_EXHAUSTED (code 429): Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 54m44s.",
+        fullyIdle: true,
+      });
+      expect(result).toEqual([
+        { kind: "progress", phase: "done", backgroundTasks: [] },
+        {
+          kind: "stop_failure",
+          error:
+            "RESOURCE_EXHAUSTED (code 429): Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 54m44s.",
+          terminationReason: "error",
+          fullyIdle: true,
+          errorType: "rate_limit",
+        },
+      ]);
+    });
+
+    it("classifies the shorter 'quota reached' wording the same way", () => {
+      const result = mapAgyEvent("Stop", {
+        terminationReason: "error",
+        error: "quota reached for this project",
+      });
+      expect(result[1]).toMatchObject({ errorType: "rate_limit" });
+    });
+
+    it("does NOT set errorType on an unrelated error — must not misclassify a normal failure as recoverable", () => {
+      const result = mapAgyEvent("Stop", { terminationReason: "error", error: "boom" });
+      expect(result).toEqual([
+        { kind: "progress", phase: "done", backgroundTasks: [] },
+        { kind: "stop_failure", error: "boom", terminationReason: "error", fullyIdle: false },
+      ]);
+      expect(result[1]).not.toHaveProperty("errorType");
+    });
+
+    // The real NEEDS INPUT incident (#1363) never reaches this code at
+    // all — agy never calls Stop with any payload in that case. This just
+    // confirms the existing "clean stop, no stop_failure" behavior for a
+    // non-"error" terminationReason is unaffected by this change; it does
+    // NOT model that incident.
+    it("still emits no stop_failure at all when terminationReason isn't 'error'", () => {
+      expect(mapAgyEvent("Stop", { fullyIdle: true })).toEqual([
+        { kind: "progress", phase: "done", backgroundTasks: [] },
+      ]);
+    });
+
+    it("feeds isRateLimitGraceActive end-to-end: the resulting errorType makes it return true", async () => {
+      const { isRateLimitGraceActive } =
+        await import("../../src/services/task-rate-limit-grace.js");
+      const [, stopFailure] = mapAgyEvent("Stop", {
+        terminationReason: "error",
+        error: "RESOURCE_EXHAUSTED (code 429): Individual quota reached.",
+      });
+      // Mirrors hook-handlers.ts's own stop_failure handler exactly:
+      // `ctx.errorDetail = sf.errorType ?? sf.errorDetails ?? null` — the
+      // one real derivation this fix has to land on, not a hand-rolled
+      // approximation of it.
+      const errorDetail = stopFailure.errorType ?? stopFailure.errorDetails ?? null;
+      expect(
+        isRateLimitGraceActive(
+          { errorState: "api_error", errorDetail },
+          { lastRateLimitAt: new Date() },
+          { graceMinutes: 5, hasCommitsPastBase: false },
+        ),
+      ).toBe(true);
+    });
+  });
+
   it("returns null for PostToolUse when payload lacks toolCall info", () => {
     expect(mapAgyEvent("PostToolUse", {})).toBeNull();
   });

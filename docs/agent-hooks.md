@@ -617,7 +617,16 @@ escalations for worktree sessions.
 
 **agy** (Antigravity CLI) also reuses the shared forwarder (`agy` as its
 agent argv), registering `Stop` (→ `progress: done`, plus `stop_failure` when
-`terminationReason === "error"`), `PreToolUse` on `run_command`
+`terminationReason === "error"` — issue #1356: when that `stop_failure`'s
+own `error` string carries agy's real quota-exhaustion wording
+(`RESOURCE_EXHAUSTED`/`quota reached`), it's classified as
+`errorType: "rate_limit"`, the same short label Claude Code's own
+`error_type` enum uses, so `isRateLimitGraceActive`
+(`task-rate-limit-grace.ts`) can recognize it. **This only covers the case
+where agy's Stop hook fires at all** — a quota exhaustion that instead
+blocks agy on a `NEEDS INPUT` "continue" prompt fires no hook of any kind
+and isn't reachable by this classification; see issue #1363), `PreToolUse`
+on `run_command`
 (observational only — `git_branch`/`cwd_changed` for worktree/branch
 detection; issue #264 removed the `review_gate` it used to also emit, since
 agy has no `PermissionRequest`-equivalent hook to build a gate on), and

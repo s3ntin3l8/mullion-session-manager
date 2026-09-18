@@ -1126,12 +1126,39 @@ export function mapAgyEvent(kind, payload) {
       const reason =
         typeof payload?.terminationReason === "string" ? payload.terminationReason : null;
       if (reason === "error") {
-        messages.push({
+        const error = typeof payload?.error === "string" ? payload.error : "";
+        const stopFailure = {
           kind: "stop_failure",
-          error: typeof payload?.error === "string" ? payload.error : "",
+          error,
           terminationReason: reason,
           fullyIdle: payload?.fullyIdle === true,
-        });
+        };
+        // Issue #1356 — agy has no `error_type` enum of its own the way
+        // Claude Code does (mapClaudeCodeStopFailure above reads
+        // `payload.error_type` directly); this is agy's own `error` string
+        // carrying GCP/Antigravity's literal quota-exhaustion wording,
+        // confirmed verbatim from a real occurrence: "RESOURCE_EXHAUSTED
+        // (code 429): Individual quota reached...". Setting `errorType`
+        // here (not `errorDetail` — hook-protocol.ts's own
+        // StopFailureHookMessage derives errorDetail FROM errorType, same
+        // as Claude Code's path) lets isRateLimitGraceActive
+        // (task-rate-limit-grace.ts) recognize this exactly the way it
+        // already does for Claude Code's own rate_limit error_type.
+        // Deliberately narrow (this exact substring only) — task-reconciler.ts
+        // special-cases only the precise "rate_limit" label, "every other
+        // value is treated as a normal failure," so a broader match here
+        // would risk misclassifying an unrelated agy error as recoverable.
+        //
+        // This closes only PART of #1356's own gap (see that issue and its
+        // follow-up #1363): the actual incident that motivated it was agy
+        // blocking on a `NEEDS INPUT` prompt with NO Stop hook firing at
+        // all, which this fix cannot reach — `reason === "error"` never
+        // becomes true in that case. This branch only helps the narrower
+        // case where agy's Stop mapping does fire with a reported error.
+        if (error.includes("RESOURCE_EXHAUSTED") || error.includes("quota reached")) {
+          stopFailure.errorType = "rate_limit";
+        }
+        messages.push(stopFailure);
       }
       return messages;
     }
