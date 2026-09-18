@@ -2700,12 +2700,20 @@ async function attemptAutoApprove(
   if (await attemptReturnPrCommentsToWorker(app, task, project)) return;
   if (!current) return;
 
-  // If a previous auto-rebase attempt resolved the conflict (PR is no longer dirty),
-  // clear rebaseStartedAt so processPendingReviewSpawns can spawn a fresh review agent,
-  // and reset the auto-approve backoff so the task is not throttled after rebase.
+  // If a previous auto-rebase attempt resolved the conflict (PR is now cleanly
+  // mergeable), clear rebaseStartedAt so processPendingReviewSpawns can spawn
+  // a fresh review agent, and reset the auto-approve backoff so the task gets
+  // an immediate attempt without being throttled by the dirty-period backoff.
+  //
+  // Requires mergeable === true (strict) rather than !== false: GitHub sets
+  // mergeable to null ("unknown") right after a push while it recomputes
+  // mergeability, and the rebase worker session may still be active in that
+  // window. Accepting null here would drop the processPendingReviewSpawns
+  // guard while the worker is still running, putting two agent PTYs in one
+  // worktree — exactly the hazard the rebaseStartedAt gate was added to close.
   if (
     task.rebaseStartedAt !== null &&
-    current.mergeable !== false &&
+    current.mergeable === true &&
     current.mergeableState !== "dirty"
   ) {
     app.db
@@ -2715,6 +2723,8 @@ async function attemptAutoApprove(
       .run();
     task.rebaseStartedAt = null;
     task.mergeError = null;
+    // Reset the backoff so the auto-approve attempt on the next tick is not
+    // throttled by the attempts accumulated during the dirty/rebase period.
     resetAutoApproveBackoff(task.id);
   }
 
@@ -2843,10 +2853,15 @@ async function processAutoApprovals(app: FastifyInstance): Promise<void> {
     if (attempted >= MAX_AUTO_APPROVALS_PER_SWEEP) return;
     if (isGitHubRateLimited()) return; // #759 — see the draft-PR sweep's own comment
 
-    // If a rebase attempt is in flight (rebaseStartedAt set), the backoff accrued
-    // during the dirty period must not throttle the first attempt after the conflict
-    // resolves. Reset it here so that once attemptAutoApprove clears rebaseStartedAt
-    // the reviewer is spawned (and auto-approve attempted) on the very next tick.
+    // While a rebase is in flight (rebaseStartedAt !== null), the backoff
+    // accumulated during the dirty period would otherwise block
+    // attemptAutoApprove — preventing it from ever seeing the resolved
+    // mergeable:true state and clearing rebaseStartedAt. Reset before the gate
+    // on every tick so attemptAutoApprove remains reachable throughout the
+    // rebase window. The blast radius of the extra getPullRequestByNumber
+    // polls is bounded by isGitHubRateLimited() (line above). The single
+    // reset inside attemptAutoApprove's clearing block (mergeable===true path)
+    // handles the post-conflict immediate-attempt case.
     if (task.rebaseStartedAt !== null) {
       resetAutoApproveBackoff(task.id);
     }

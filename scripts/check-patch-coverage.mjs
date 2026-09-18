@@ -110,9 +110,15 @@ export function evaluatePatchCoverage(modifiedFiles, coverageData) {
     // Find matching entry in coverageData
     let fileCoverage = coverageData[relPath];
     if (!fileCoverage) {
-      // Try finding by base name or relative matching
+      // Istanbul keys are absolute paths; try normalizing before suffix-matching.
+      // Prefer an exact match on the normalized key (strip any leading root prefix)
+      // to avoid attributing coverage from src/a/tasks.ts to src/b/tasks.ts when
+      // both share the same filename but differ in directory.
       for (const [covPath, val] of Object.entries(coverageData)) {
-        if (covPath.endsWith(relPath) || relPath.endsWith(covPath)) {
+        const normalizedCov = covPath.replace(/\\/g, "/");
+        // Exact match: covPath ends with /<relPath> (absolute path → relative tail)
+        if (normalizedCov === `${root.replace(/\\/g, "/")}/${relPath}` ||
+            normalizedCov.endsWith(`/${relPath}`)) {
           fileCoverage = val;
           break;
         }

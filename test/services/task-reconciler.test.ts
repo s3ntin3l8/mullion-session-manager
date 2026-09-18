@@ -3908,10 +3908,21 @@ describe("reconcileTasks", () => {
       row = await getTask(app, taskId);
       expect(row.reviewSessionId).toBeNull();
 
-      // Third tick: PR rebase finishes on GitHub and is now clean.
-      // No manual backoff reset needed — processAutoApprovals resets it automatically
-      // when it sees rebaseStartedAt !== null, so the conflict resolution gets an
-      // immediate attempt without being throttled by the dirty-period backoff.
+      // Third tick: GitHub returns mergeable:null (unknown — recomputing after push).
+      // rebaseStartedAt must NOT be cleared: null is not yet confirmed clean.
+      mockGetPullRequestByNumber.mockResolvedValue(
+        mockPr({ mergeable: null, mergeableState: "unknown" }),
+      );
+      await reconcileTasks(app);
+      row = await getTask(app, taskId);
+      expect(row.rebaseStartedAt).not.toBeNull();
+      expect(row.reviewSessionId).toBeNull();
+
+      // Fourth tick: PR is now confirmed cleanly mergeable (mergeable === true).
+      // processAutoApprovals caps the backoff at REBASE_POLL_INTERVAL_MS during
+      // the rebase window, so this tick is allowed through. attemptAutoApprove
+      // clears rebaseStartedAt and resets the backoff; processPendingReviewSpawns
+      // then spawns the reviewer on the same tick.
       mockGetPullRequestByNumber.mockResolvedValue(
         mockPr({ mergeable: true, mergeableState: "clean" }),
       );
