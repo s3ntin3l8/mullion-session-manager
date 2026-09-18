@@ -655,6 +655,52 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
       // comment in hook-protocol.ts), falling back to the free-text detail
       // when the adapter couldn't classify the failure.
       ctx.errorDetail = sf.errorType ?? sf.errorDetails ?? null;
+      // Issue #1364 self-review finding — for Claude Code, Stop and
+      // StopFailure are two SEPARATE hook registrations (forwarder-core.mjs's
+      // mapClaudeCodeEvent), so a real StopFailure never has an accompanying
+      // "done" progress message for the same turn, and lastTurnEndedAt
+      // (SessionInfo's own doc comment, pty-manager.ts) is never set while a
+      // stop_failure is live — exactly what
+      // isRateLimitGraceActive/task-rate-limit-grace.ts's whole design
+      // depends on ("A `stop_failure` never sets `lastTurnEndedAt`", per
+      // task-reconciler.ts's own comment on the outer reconcile gate). agy
+      // breaks that by construction: mapAgyEvent's Stop case bundles ONE
+      // `progress: done` (which latches lastTurnEndedAt, unconditionally,
+      // whenever phase === "done") together with the `stop_failure` for the
+      // very same error-terminated turn, and forwarder.mjs's
+      // writeHandshakeAndMessages sends them as separate lines in that
+      // array's order — so the "done" handler above always runs and sets
+      // lastTurnEndedAt BEFORE this handler runs. Left uncorrected, once
+      // `staleErrorSeconds` (default 30 min — shorter than agy's own
+      // observed ~55-minute quota reset) TTLs `errorState` back to idle,
+      // the session would already read as `finished` from the stale
+      // lastTurnEndedAt latch, bypassing the grace window entirely and
+      // silently reintroducing the exact "treated as a genuine completion
+      // with zero real progress" failure mode issue #722 built this whole
+      // mechanism to prevent — just for agy specifically. Clearing it here
+      // is adapter-agnostic and a no-op for every OTHER adapter (Claude
+      // Code/Codex/opencode never set it before their own StopFailure/
+      // equivalent fires), so this restores the invariant unconditionally
+      // rather than special-casing agy.
+      ctx.lastTurnEndedAt = null;
+      // Second self-review pass — clearing lastTurnEndedAt alone fixes
+      // STATUS derivation but not the NOTIFICATION layer: the same
+      // preceding `progress: done` that just latched it also unconditionally
+      // called resolveDeferredTurnEnd() (attention-tracker.ts), which
+      // schedules an "agentIdle" ping ~3s out (ATTENTION_SETTLE_MS) with no
+      // re-check of anything at drain time — drainDeferred() fires purely
+      // off `dueAt`. Left uncancelled, the session would still emit a
+      // "turn finished" agentIdle ping on top of the "apiError" one this
+      // handler emits below, even though `lastTurnEndedAt` now correctly
+      // reads "not finished." Same cancellation the `progress` case's own
+      // non-"done" branch already does when the agent resumes work
+      // (`ctx.cancelDeferred("agentIdle")` above) — a stop_failure is
+      // exactly as much a retraction of "the turn is over" as that is.
+      // Safe to call whether or not anything is actually pending
+      // (`cancelDeferred`'s own doc comment, attention-tracker.ts), so this
+      // is a no-op for every adapter that never scheduled one in the first
+      // place.
+      ctx.cancelDeferred("agentIdle");
       // The NotificationEvent itself stays immediate — the user wants
       // failures in the timeline as history regardless of whether the agent
       // then recovers on its own. Only the ATTENTION ping is deferred (D1

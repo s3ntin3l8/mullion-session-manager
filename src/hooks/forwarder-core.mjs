@@ -1126,12 +1126,49 @@ export function mapAgyEvent(kind, payload) {
       const reason =
         typeof payload?.terminationReason === "string" ? payload.terminationReason : null;
       if (reason === "error") {
-        messages.push({
+        const error = typeof payload?.error === "string" ? payload.error : "";
+        const stopFailure = {
           kind: "stop_failure",
-          error: typeof payload?.error === "string" ? payload.error : "",
+          error,
           terminationReason: reason,
           fullyIdle: payload?.fullyIdle === true,
-        });
+        };
+        // Issue #1356 — agy has no `error_type` enum of its own the way
+        // Claude Code does (mapClaudeCodeStopFailure above reads
+        // `payload.error_type` directly); this is agy's own `error` string
+        // carrying GCP/Antigravity's literal quota-exhaustion wording,
+        // confirmed verbatim from a real occurrence: "RESOURCE_EXHAUSTED
+        // (code 429): Individual quota reached...". Setting `errorType`
+        // here (not `errorDetail` — hook-protocol.ts's own
+        // StopFailureHookMessage derives errorDetail FROM errorType, same
+        // as Claude Code's path) lets isRateLimitGraceActive
+        // (task-rate-limit-grace.ts) recognize this exactly the way it
+        // already does for Claude Code's own rate_limit error_type.
+        // Deliberately narrow — only the exact, confirmed gRPC status
+        // token, not a looser "quota"/"limit" wording match: task-reconciler.ts
+        // special-cases only the precise "rate_limit" label, "every other
+        // value is treated as a normal failure," so a broader match here
+        // would risk misclassifying an unrelated agy error (a disk/storage
+        // quota, some other resource-exhaustion condition) as recoverable.
+        // `RESOURCE_EXHAUSTED` is Google Cloud's own gRPC status code name
+        // (grpc.StatusCode.RESOURCE_EXHAUSTED, code 429 in agy's own HTTP
+        // mapping) — specific enough on its own without an additional
+        // "quota reached" match that would just be unanchored English.
+        //
+        // See hook-handlers.ts's stop_failure handler for the companion fix
+        // this needs to actually be reachable in practice: mapAgyEvent's
+        // Stop case (below) also emits a `progress: done` message for the
+        // SAME error-terminated turn, which — unlike Claude Code, where Stop
+        // and StopFailure are separate hooks and this never happens
+        // together — latches `lastTurnEndedAt` at the same moment as this
+        // `stop_failure`, which task-reconciler.ts's own comments document
+        // as an invariant this violates ("A `stop_failure` never sets
+        // `lastTurnEndedAt`"). Without that companion fix, this
+        // classification alone doesn't survive `staleErrorSeconds`'s TTL.
+        if (error.includes("RESOURCE_EXHAUSTED")) {
+          stopFailure.errorType = "rate_limit";
+        }
+        messages.push(stopFailure);
       }
       return messages;
     }

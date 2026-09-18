@@ -617,7 +617,8 @@ escalations for worktree sessions.
 
 **agy** (Antigravity CLI) also reuses the shared forwarder (`agy` as its
 agent argv), registering `Stop` (→ `progress: done`, plus `stop_failure` when
-`terminationReason === "error"`), `PreToolUse` on `run_command`
+`terminationReason === "error"`), `PreToolUse`
+on `run_command`
 (observational only — `git_branch`/`cwd_changed` for worktree/branch
 detection; issue #264 removed the `review_gate` it used to also emit, since
 agy has no `PermissionRequest`-equivalent hook to build a gate on), and
@@ -637,6 +638,40 @@ hook never actually fires — `strings` on the installed agy binary lists
 `SessionStart` among its recognized hook event keys but not `SessionEnd`,
 and a live `agy --print` run confirmed it empirically (SessionStart/
 PostToolUse/Stop all fired on a clean exit, SessionEnd never did).
+
+**Issue #1356 — agy quota-exhaustion classification, plus a companion fix
+it needs to actually work.** When a `stop_failure`'s own `error` string
+carries agy's real, confirmed quota-exhaustion wording (the exact gRPC
+status token `RESOURCE_EXHAUSTED`), it's classified as
+`errorType: "rate_limit"`, the same short label Claude Code's own
+`error_type` enum uses, so `isRateLimitGraceActive`
+(`task-rate-limit-grace.ts`) can recognize it. This alone isn't enough,
+though: **agy's Stop always bundles `progress: done` together with
+`stop_failure` for one error-terminated turn** — unlike Claude Code, whose
+`Stop` and `StopFailure` are two entirely separate hook registrations, so a
+real Claude Code `stop_failure` never has an accompanying "done" for the
+same turn. Since `progress: done` unconditionally latches
+`lastTurnEndedAt` (`hook-handlers.ts`'s `progress` case) and the two
+messages are sent as separate lines in that array's own order
+(`forwarder.mjs`'s `writeHandshakeAndMessages`), `lastTurnEndedAt` would
+otherwise get set at the same moment as the error — violating the "a
+`stop_failure` never sets `lastTurnEndedAt`" invariant
+`isRateLimitGraceActive`'s whole TTL-survival design depends on
+(task-reconciler.ts's own comment on the outer reconcile gate).
+`hook-handlers.ts`'s `stop_failure` handler now clears `lastTurnEndedAt`
+back to `null` unconditionally to restore that invariant — a no-op for
+every other adapter, since none of them set it before their own
+`stop_failure`/equivalent fires.
+
+This still only covers the case where agy's Stop hook actually fires with
+`terminationReason === "error"`. Whether a genuinely different agy
+termination path can also occur during quota exhaustion is tracked
+separately as issue #1363 — which does **not** claim agy blocks on a
+`NEEDS INPUT`/"continue" prompt during quota exhaustion; an earlier draft
+of this fix asserted that based on a screenshot later confirmed to be from
+an unrelated session with no connection to quota-exhaustion behavior at
+all, and the claim has been retracted.
+
 PermissionRequest and compaction/subagent/elicitation were checked and do
 not exist in agy's hook surface as of this writing (see
 `forwarder-core.mjs`'s `mapAgyEvent` for the authoritative list). Config
