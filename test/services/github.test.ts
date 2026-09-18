@@ -5,6 +5,7 @@ import {
   getCacheSizeForTests,
   MAX_CACHE_ENTRIES,
   fetchRequiredStatusContexts,
+  getRequiredStatusContextsFailureReason,
   fetchCheckRunsForHead,
   getDefaultBranch,
   detectReleasePleaseConfig,
@@ -318,6 +319,59 @@ describe("fetchRequiredStatusContexts", () => {
     await expect(
       fetchRequiredStatusContexts("tok", "o", "network-down-repo", "main"),
     ).resolves.toBeNull();
+  });
+
+  // #1360 — getRequiredStatusContextsFailureReason lets a caller with a
+  // logger (task-reconciler.ts's attemptReturnRedCiToWorker) distinguish
+  // the permanent "App lacks administration" 403 from the ordinary 404
+  // without fetchRequiredStatusContexts itself taking on a logging
+  // dependency it has nowhere else in this file.
+  describe("getRequiredStatusContextsFailureReason", () => {
+    it("returns null before any lookup has been made for a key", () => {
+      expect(
+        getRequiredStatusContextsFailureReason("o", "never-looked-up-repo", "main"),
+      ).toBeNull();
+    });
+
+    it("reports 'forbidden' after a 403", async () => {
+      fetchMock.mockResolvedValue(new Response("nope", { status: 403 }));
+      await fetchRequiredStatusContexts("tok", "o", "reason-forbidden-repo", "main");
+      expect(getRequiredStatusContextsFailureReason("o", "reason-forbidden-repo", "main")).toBe(
+        "forbidden",
+      );
+    });
+
+    it("reports 'not-found' after a 404, distinctly from 'forbidden'", async () => {
+      fetchMock.mockResolvedValue(new Response("nope", { status: 404 }));
+      await fetchRequiredStatusContexts("tok", "o", "reason-not-found-repo", "main");
+      expect(getRequiredStatusContextsFailureReason("o", "reason-not-found-repo", "main")).toBe(
+        "not-found",
+      );
+    });
+
+    it("reports 'other' after a network failure", async () => {
+      fetchMock.mockRejectedValue(new Error("network down"));
+      await fetchRequiredStatusContexts("tok", "o", "reason-network-down-repo", "main");
+      expect(getRequiredStatusContextsFailureReason("o", "reason-network-down-repo", "main")).toBe(
+        "other",
+      );
+    });
+
+    it("clears a prior failure once a later lookup for the same key succeeds", async () => {
+      fetchMock.mockResolvedValueOnce(new Response("nope", { status: 403 }));
+      await fetchRequiredStatusContexts("tok", "o", "reason-recovers-repo", "main");
+      expect(getRequiredStatusContextsFailureReason("o", "reason-recovers-repo", "main")).toBe(
+        "forbidden",
+      );
+
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(200, { required_status_checks: { contexts: ["CI"] } }),
+      );
+      await fetchRequiredStatusContexts("tok", "o", "reason-recovers-repo", "main");
+      expect(
+        getRequiredStatusContextsFailureReason("o", "reason-recovers-repo", "main"),
+      ).toBeNull();
+    });
   });
 
   it("caches a successful lookup — a second call for the same repo/branch makes no further request", async () => {

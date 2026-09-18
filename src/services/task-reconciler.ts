@@ -75,6 +75,7 @@ import {
   computeCiStatus,
   fetchRunsForHead,
   fetchRequiredStatusContexts,
+  getRequiredStatusContextsFailureReason,
   fetchCheckRunsForHead,
   getPRsStatus,
 } from "./github.js";
@@ -2269,6 +2270,34 @@ export function resetAutoApproveBackoff(taskId: number): void {
 const MAX_CI_CAP_COMMENTED_ENTRIES = 500;
 const ciCapCommentedRounds = new Map<number, number>();
 
+// #1360 — `fetchRequiredStatusContexts` returning `null` because the GitHub
+// App's token lacks `administration` (`getRequiredStatusContextsFailureReason`
+// === "forbidden") is a permanent, install-wide condition, not a per-task
+// blip — warning on every reconcile tick for every red-CI candidate task
+// would spam the log forever for one static fact. Same eviction-cap Map
+// shape as ciCapCommentedRounds above, keyed by `owner/repo/branch` (the
+// same key fetchRequiredStatusContexts itself uses) rather than by task id —
+// this condition belongs to the repo/branch, not to any one task, so two
+// different tasks on the same repo should share one warning, not each emit
+// their own. Re-warns once per REQUIRED_STATUS_CONTEXTS_WARN_INTERVAL_MS
+// (matching the underlying lookup's own hour-long success-cache TTL,
+// github.ts) rather than only ever once — an operator who fixed the App's
+// permissions and later regresses it should hear about it again, not have
+// this go silent forever after the first occurrence.
+const REQUIRED_STATUS_CONTEXTS_WARN_INTERVAL_MS = 60 * 60_000;
+const MAX_REQUIRED_STATUS_CONTEXTS_WARNED_ENTRIES = 500;
+const requiredStatusContextsForbiddenWarnedAt = new Map<string, number>();
+
+/** Exported for tests only — production never needs to clear this. Every
+ * test in this file resolves `owner/repo/branch` to the same fixed value
+ * (a real git-remote lookup against a shared fixture cwd), so without this
+ * a warning fired by one test's assertions would still be inside this map's
+ * throttle window by the time a later, unrelated test's own assertions run
+ * in the same process. */
+export function resetRequiredStatusContextsForbiddenWarningsForTests(): void {
+  requiredStatusContextsForbiddenWarnedAt.clear();
+}
+
 // #1035 — curated set of CI check names that flag a non-conventional PR
 // title. Curated short list (not substring/heuristic match) — see
 // `attemptSelfHealPrTitle`'s JSDoc for the full behavior contract.
@@ -2359,7 +2388,44 @@ async function attemptReturnRedCiToWorker(
     current.baseRef,
   );
   // Fail closed — see this function's own doc comment.
-  if (requiredContexts === null || requiredContexts.length === 0) return false;
+  if (requiredContexts === null) {
+    // #1360 — distinguish the permanent, install-wide "the App's read
+    // token lacks administration" case from an ordinary transient/
+    // not-configured one, and surface ONLY the former: a 404 (no branch
+    // protection configured) is an expected, unremarkable outcome this
+    // function already handles correctly by returning `false` here, and
+    // warning about it would just be noise about nothing being wrong.
+    if (
+      getRequiredStatusContextsFailureReason(
+        current.repoRef.owner,
+        current.repoRef.repo,
+        current.baseRef,
+      ) === "forbidden"
+    ) {
+      const key = `${current.repoRef.owner}/${current.repoRef.repo}/${current.baseRef}`;
+      const lastWarnedAt = requiredStatusContextsForbiddenWarnedAt.get(key);
+      if (
+        lastWarnedAt === undefined ||
+        Date.now() - lastWarnedAt >= REQUIRED_STATUS_CONTEXTS_WARN_INTERVAL_MS
+      ) {
+        if (
+          !requiredStatusContextsForbiddenWarnedAt.has(key) &&
+          requiredStatusContextsForbiddenWarnedAt.size >=
+            MAX_REQUIRED_STATUS_CONTEXTS_WARNED_ENTRIES
+        ) {
+          const oldest = requiredStatusContextsForbiddenWarnedAt.keys().next().value;
+          if (oldest !== undefined) requiredStatusContextsForbiddenWarnedAt.delete(oldest);
+        }
+        requiredStatusContextsForbiddenWarnedAt.set(key, Date.now());
+        app.log.warn(
+          { taskId: task.id, owner: current.repoRef.owner, repo: current.repoRef.repo },
+          "task reconcile: CI-auto-return (#755) can't tell a required check apart from a non-required one — the GitHub App's read token lacks the `administration` permission this needs (see docs/ci-cd.md's Branch protection section); a red CI check on this task's PR will never auto-return the worker until that's granted",
+        );
+      }
+    }
+    return false;
+  }
+  if (requiredContexts.length === 0) return false;
 
   const checkRuns = await fetchCheckRunsForHead(
     token,

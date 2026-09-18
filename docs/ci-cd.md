@@ -59,3 +59,19 @@ Verify the current contexts via:
 ```bash
 gh api repos/s3ntin3l8/mullion-session-manager/branches/main/protection --jq '.required_status_checks.contexts'
 ```
+
+**Issue #1360 — this same lookup is a silent no-op for Task Master's own
+CI-auto-return (`#755`, `attemptReturnRedCiToWorker`) on the default GitHub
+App permission set.** That feature needs to read exactly this endpoint
+(`fetchRequiredStatusContexts`, `src/services/github.ts`) to tell a red
+_required_ check apart from a red _non-required_ one (this repo's own
+`test-e2e` above is a real example) — but the endpoint requires the
+`administration` permission, which the App's `READ_PERMISSIONS`
+(`src/services/github-app.ts`) deliberately doesn't request, to avoid
+unrequested scope creep for one feature. Without it, a required check can
+sit red on a `clean`-verdict task's PR indefinitely with no automatic
+return-to-worker and (as of #1360) one throttled warning in the reconcile
+log — a human still has to notice and act. Grant the App's installation
+`administration: read` if this feature matters for your project; the
+command above returning a 403 (rather than the contexts list, or a 404 for
+"no protection configured") is the same signal Mullion's own code sees.

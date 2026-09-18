@@ -134,6 +134,7 @@ const {
   mockUpdatePullRequestTitle,
   mockFetchRunsForHead,
   mockFetchRequiredStatusContexts,
+  mockGetRequiredStatusContextsFailureReason,
   mockFetchCheckRunsForHead,
   mockCreatePullRequestReview,
   mockGetPullRequestReviewDecision,
@@ -182,6 +183,15 @@ const {
   mockUpdatePullRequestTitle: vi.fn(),
   mockFetchRunsForHead: vi.fn(),
   mockFetchRequiredStatusContexts: vi.fn(),
+  // #1360 — mocked wholesale, same reasoning as mockFetchRequiredStatusContexts
+  // itself: since that mock never calls the real implementation, the real
+  // module's own requiredStatusContextsLastFailure map (github.ts) is never
+  // populated through it, so the real getRequiredStatusContextsFailureReason
+  // would just always see null here. Defaults to null every beforeEach
+  // ("no recorded failure reason") so every pre-existing test — none of
+  // which know about #1360 — never takes the new warn branch; only the
+  // dedicated #1360 tests override this.
+  mockGetRequiredStatusContextsFailureReason: vi.fn(),
   mockFetchCheckRunsForHead: vi.fn(),
   mockCreatePullRequestReview: vi.fn(),
   // #737 — no pass-through default, same reasoning as
@@ -307,6 +317,7 @@ vi.mock("../../src/services/github.js", async (importOriginal) => {
     ...actual,
     fetchRunsForHead: mockFetchRunsForHead,
     fetchRequiredStatusContexts: mockFetchRequiredStatusContexts,
+    getRequiredStatusContextsFailureReason: mockGetRequiredStatusContextsFailureReason,
     fetchCheckRunsForHead: mockFetchCheckRunsForHead,
     getDefaultBranch: mockGetDefaultBranch,
     detectReleasePleaseConfig: mockDetectReleasePleaseConfig,
@@ -340,6 +351,8 @@ mockDetectReleasePleaseConfig.mockImplementation(actualGithubModule.detectReleas
 // same "don't return the worker" behavior they always have. Only the
 // dedicated #755 tests below override this.
 mockFetchRequiredStatusContexts.mockResolvedValue(null);
+// #1360 — see this mock's own declaration comment above.
+mockGetRequiredStatusContextsFailureReason.mockReturnValue(null);
 // Never a real pass-through either — only reached once requiredContexts is
 // non-null/non-empty, which no pre-existing test triggers. Defaults to []
 // so an accidental reach still can't match anything.
@@ -360,8 +373,11 @@ mockPromoteTaskToPR.mockImplementation(actualTaskPromoteModule.promoteTaskToPR);
 
 const { buildApp } = await import("../../src/app.js");
 const { closeDb, getDb } = await import("../../src/db/client.js");
-const { reconcileTasks, DEFAULT_MAX_AUTO_RETURN_ROUNDS } =
-  await import("../../src/services/task-reconciler.js");
+const {
+  reconcileTasks,
+  DEFAULT_MAX_AUTO_RETURN_ROUNDS,
+  resetRequiredStatusContextsForbiddenWarningsForTests,
+} = await import("../../src/services/task-reconciler.js");
 const { tasks, sessions, projects } = await import("../../src/db/schema.js");
 const { and, eq, isNull, isNotNull } = await import("drizzle-orm");
 const { taskReviewFindingsPath, taskCommitTitlePath } =
@@ -545,6 +561,8 @@ describe("reconcileTasks", () => {
     // never reached outside the dedicated describe block below, but a
     // leaked call count from one #755 test must not bleed into the next.
     mockFetchRequiredStatusContexts.mockClear();
+    // #1360 — same reasoning as mockFetchRequiredStatusContexts above.
+    mockGetRequiredStatusContextsFailureReason.mockClear();
     mockFetchCheckRunsForHead.mockClear();
     mockCreatePullRequestReview.mockClear();
     // #737 — reset (not just clear) so a leaked .mockResolvedValueOnce from
@@ -4386,6 +4404,117 @@ describe("reconcileTasks", () => {
         expect(row.lastAutoReturnReason).toBe("ci");
 
         await app.close();
+      });
+
+      // Issue #1360 — a `null` from fetchRequiredStatusContexts (the same
+      // fail-closed outcome #1035/companion regression guards above already
+      // cover from the OTHER side) used to be completely silent regardless
+      // of WHY it happened. Found live: task 410656 sat with a clean review
+      // verdict and a red REQUIRED CI check for 2+ hours with no auto-return
+      // and no operator-facing signal at all, because the GitHub App's own
+      // "read" token can never carry the `administration` permission this
+      // lookup needs (see fetchRequiredStatusContexts's own doc comment,
+      // github.ts). This warns ONCE the underlying cause is confirmed to be
+      // that permanent 403, not the ordinary "no protection configured" 404.
+      describe("warns once when the null is a permission 403, not a 404 (#1360)", () => {
+        // Every test in this whole file resolves owner/repo/branch to the
+        // same fixed "o"/"r"/"main" (a real git-remote lookup against a
+        // shared /tmp fixture cwd — see createAutoApproveCandidate above),
+        // so the module-scope throttle map this feature adds
+        // (requiredStatusContextsForbiddenWarnedAt, task-reconciler.ts)
+        // would otherwise carry a "just warned" state from one test's
+        // assertions into the next, in the same process. Same reasoning as
+        // this file's mockFetchRequiredStatusContexts.mockClear() calls
+        // above, just for a cache this feature owns rather than a mock.
+        beforeEach(() => {
+          resetRequiredStatusContextsForbiddenWarningsForTests();
+        });
+
+        it("warns when getRequiredStatusContextsFailureReason says 'forbidden'", async () => {
+          const app = await buildApp();
+          const { taskId } = await createRedCiCandidate(app);
+          mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+          mockFetchRunsForHead.mockResolvedValue(workflowRun("CI/CD", "failure"));
+          mockFetchRequiredStatusContexts.mockResolvedValue(null);
+          mockGetRequiredStatusContextsFailureReason.mockReturnValue("forbidden");
+          const warnSpy = vi.spyOn(app.log, "warn");
+
+          await reconcileTasks(app);
+
+          expect(warnSpy).toHaveBeenCalledWith(
+            expect.objectContaining({ taskId, owner: "o", repo: "r" }),
+            expect.stringContaining("administration"),
+          );
+          // Still fails closed exactly like before this issue — this is a
+          // visibility fix, not a behavior change to the gate itself.
+          const row = await getTask(app, taskId);
+          expect(row.status).toBe("reviewing");
+          expect(row.autoReturnRounds).toBe(0);
+
+          await app.close();
+        });
+
+        it("does NOT warn when the reason is 'not-found' — an ordinary, unremarkable 404", async () => {
+          const app = await buildApp();
+          await createRedCiCandidate(app);
+          mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+          mockFetchRunsForHead.mockResolvedValue(workflowRun("CI/CD", "failure"));
+          mockFetchRequiredStatusContexts.mockResolvedValue(null);
+          mockGetRequiredStatusContextsFailureReason.mockReturnValue("not-found");
+          const warnSpy = vi.spyOn(app.log, "warn");
+
+          await reconcileTasks(app);
+
+          expect(warnSpy).not.toHaveBeenCalledWith(
+            expect.anything(),
+            expect.stringContaining("administration"),
+          );
+
+          await app.close();
+        });
+
+        it("does NOT warn when no failure reason was recorded at all (the pre-#1360 default)", async () => {
+          const app = await buildApp();
+          await createRedCiCandidate(app);
+          mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+          mockFetchRunsForHead.mockResolvedValue(workflowRun("CI/CD", "failure"));
+          mockFetchRequiredStatusContexts.mockResolvedValue(null);
+          mockGetRequiredStatusContextsFailureReason.mockReturnValue(null);
+          const warnSpy = vi.spyOn(app.log, "warn");
+
+          await reconcileTasks(app);
+
+          expect(warnSpy).not.toHaveBeenCalledWith(
+            expect.anything(),
+            expect.stringContaining("administration"),
+          );
+
+          await app.close();
+        });
+
+        it("does not re-warn for the same repo/branch within the throttle window, across two different tasks", async () => {
+          const app = await buildApp();
+          const first = await createRedCiCandidate(app);
+          const second = await createRedCiCandidate(app);
+          mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+          mockFetchRunsForHead.mockResolvedValue(workflowRun("CI/CD", "failure"));
+          mockFetchRequiredStatusContexts.mockResolvedValue(null);
+          mockGetRequiredStatusContextsFailureReason.mockReturnValue("forbidden");
+          const warnSpy = vi.spyOn(app.log, "warn");
+
+          await reconcileTasks(app);
+
+          const adminWarnings = warnSpy.mock.calls.filter(
+            (call) => typeof call[1] === "string" && call[1].includes("administration"),
+          );
+          // Both tasks share the same repo/branch (createAutoApproveCandidate's
+          // own default project/repo), so this is keyed by repo/branch, not
+          // by task id — exactly one warning for both, not two.
+          expect(adminWarnings).toHaveLength(1);
+          expect(first.taskId).not.toBe(second.taskId);
+
+          await app.close();
+        });
       });
     });
 

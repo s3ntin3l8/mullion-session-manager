@@ -1780,7 +1780,14 @@ hour — branch protection changes about never). The protection lookup needs
 deliberately does **not** grant (scope creep for one feature); a 403/404
 there fails **closed** — "don't know" is never read as "nothing is
 required," and the task is simply left in `reviewing` exactly as it would
-be without `#755` at all.
+be without `#755` at all. On the default permission set this means `#755`
+is silently a no-op for every task, every time — issue `#1360` adds a
+throttled reconcile-log warning (once per repo/branch/hour) the first time
+this 403 is actually seen, distinguished from the ordinary "no protection
+configured" 404 (`getRequiredStatusContextsFailureReason`, `github.ts`), but
+does not change the fail-closed behavior itself. See
+[`docs/ci-cd.md`](ci-cd.md)'s "Branch protection" section for the operator
+side of this.
 
 **Matched against Check Runs, not Workflow Runs — a fresh-review catch on
 the first version of this feature.** `required_status_checks.contexts`

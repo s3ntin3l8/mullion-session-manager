@@ -769,6 +769,32 @@ const requiredStatusContextsCache = new Map<string, RequiredStatusContextsCacheE
 // processAutoApprovals tick for every candidate task otherwise (#755).
 const REQUIRED_STATUS_CONTEXTS_CACHE_TTL_MS = 60 * 60_000;
 
+// #1360 — this file has no logger dependency anywhere else (grepped: zero
+// `app.log`/FastifyInstance usage in this module), so `fetchRequiredStatusContexts`
+// itself stays log-free rather than becoming the first function here to take
+// one. Instead it records WHY the last lookup for a given key failed in this
+// small side-map (same "parallel Map, same key shape as the main cache"
+// pattern task-reconciler.ts's own ciCapCommentedRounds/prCommentCapCommentedRounds
+// use) so the one caller that already has app.log
+// (attemptReturnRedCiToWorker, task-reconciler.ts) can decide whether it's
+// worth surfacing. Not cached with a TTL like the success cache above — this
+// is cheap process-local state, not a rate-limit-avoidance mechanism, so it's
+// simply overwritten (or cleared, on a later success) every call.
+export type RequiredStatusContextsFailureReason = "forbidden" | "not-found" | "other";
+const requiredStatusContextsLastFailure = new Map<string, RequiredStatusContextsFailureReason>();
+
+/** See `requiredStatusContextsLastFailure`'s own comment above. `null` means
+ * either the last lookup for this key succeeded, or no lookup has been made
+ * yet — callers should only consult this right after `fetchRequiredStatusContexts`
+ * itself returned `null` for the same `owner/repo/branch`. */
+export function getRequiredStatusContextsFailureReason(
+  owner: string,
+  repo: string,
+  branch: string,
+): RequiredStatusContextsFailureReason | null {
+  return requiredStatusContextsLastFailure.get(`${owner}/${repo}/${branch}`) ?? null;
+}
+
 /**
  * Reads `required_status_checks.contexts` from branch protection for a
  * branch — the subset of check names that actually gate a merge, as
@@ -787,7 +813,10 @@ const REQUIRED_STATUS_CONTEXTS_CACHE_TTL_MS = 60 * 60_000;
  * both collapse to `null`. Callers must fail CLOSED on `null` — treating it
  * as "nothing is required" would let a task stalled on a red
  * non-required-only check look identical to one this gate has an actual
- * opinion on.
+ * opinion on. #1360 — WHICH of those two collapsed into this `null` is now
+ * separately recoverable via `getRequiredStatusContextsFailureReason` for a
+ * caller that wants to warn about the (permanent, install-wide) 403 case
+ * without confusing it for the (ordinary, per-repo) 404 case.
  *
  * Cached per `owner/repo/branch` for `REQUIRED_STATUS_CONTEXTS_CACHE_TTL_MS`.
  * Only successes are cached — a failure is retried on the next call rather
@@ -809,7 +838,13 @@ export async function fetchRequiredStatusContexts(
       `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/branches/${encodeURIComponent(branch)}/protection`,
       { headers: { Authorization: `Bearer ${token}` } },
     );
-    if (!res.ok) return null;
+    if (!res.ok) {
+      requiredStatusContextsLastFailure.set(
+        key,
+        res.status === 403 ? "forbidden" : res.status === 404 ? "not-found" : "other",
+      );
+      return null;
+    }
     const data = (await res.json()) as {
       required_status_checks?: { contexts?: string[] } | null;
     };
@@ -818,8 +853,14 @@ export async function fetchRequiredStatusContexts(
       contexts,
       expiresAt: Date.now() + REQUIRED_STATUS_CONTEXTS_CACHE_TTL_MS,
     });
+    // A prior failure (e.g. a 403 while the App's permissions were still
+    // being granted) is stale now that this key has a real success — don't
+    // let a caller who only checks the failure map on a LATER, unrelated
+    // `null` (from some other transient blip) see a resolved condition.
+    requiredStatusContextsLastFailure.delete(key);
     return contexts;
   } catch {
+    requiredStatusContextsLastFailure.set(key, "other");
     return null;
   }
 }
