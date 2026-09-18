@@ -13,7 +13,6 @@ import {
   GitHubIcon,
   GlobeIcon,
   GridIcon,
-  LayersIcon,
   SearchIcon,
   SkillIcon,
   TerminalPromptIcon,
@@ -74,11 +73,6 @@ interface CommandPaletteProps {
   // split-request/new-panel placement — irrelevant here, the panel already
   // exists).
   onOpenSession: (session: Session) => void;
-  // Phase 6 (6.5/#218) — same "Integrations" section, opening the task
-  // board. Project-independent (unlike every other entry below): the task
-  // board is the first *global* panel, so this is the only handler here
-  // that takes no argument.
-  onOpenTasks: () => void;
   // Issue #27: the palette's own "Integrations" section, opening the
   // per-project GitHub panel or the Settings -> Integrations section
   // (App.tsx owns both dockviewApi and the Settings modal, neither of
@@ -132,7 +126,6 @@ export function CommandPalette({
   onClose,
   onLaunched,
   onOpenSession,
-  onOpenTasks,
   onOpenGitHub,
   onOpenGit,
   onOpenAgentRules,
@@ -713,29 +706,6 @@ export function CommandPalette({
             {query.trim() === "" && (
               <>
                 <div className="cmd-palette-group-label">Integrations</div>
-                {/* Phase 6 (6.5/#218) — the first entry not gated on
-                    effectiveProjectId: the task board is global, not
-                    scoped to any one project. Since the Kanban/TaskPanel
-                    merge, `onOpenTasks` switches to the unified Kanban
-                    view (UnifiedBoard.tsx) rather than opening a panel. */}
-                <button
-                  className="cmd-row"
-                  onClick={() => {
-                    onOpenTasks();
-                    closeAfterAction();
-                  }}
-                >
-                  <span
-                    className="cmd-row-icon"
-                    style={{ background: "color-mix(in srgb, var(--fg) 8%, transparent)" }}
-                  >
-                    <LayersIcon size={13} style={{ color: "var(--muted)" }} />
-                  </span>
-                  <span className="cmd-row-body">
-                    <span className="cmd-row-title">Tasks</span>
-                    <span className="cmd-row-subtitle">Task board — Kanban view</span>
-                  </span>
-                </button>
                 {effectiveProjectId !== null && (
                   <button
                     className="cmd-row"
