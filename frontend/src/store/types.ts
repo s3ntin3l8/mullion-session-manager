@@ -3,6 +3,7 @@ import type {
   CodexHookTrust,
   CreateProjectDirOptions,
   CreateProjectResult,
+  Device,
   GitBranchesResult,
   GitDiffStats,
   GitHubPRsStatus,
@@ -442,6 +443,18 @@ export interface HostsSlice {
   pingHost: (id: string) => Promise<boolean>;
 }
 
+export interface DevicesSlice {
+  // Android device panel rows (issue #1326) — host-global like Host above,
+  // fetched independently of projects/sessions. Unfiltered: includes killed
+  // rows (GET /api/devices never drops them, see routes/devices.ts's own
+  // comment on the DELETE endpoint only flipping `status`, never removing
+  // the row) — consumers filter as their own surface requires.
+  devices: Device[];
+  refreshDevices: () => Promise<void>;
+  createDevice: (avdName: string, name?: string) => Promise<Device>;
+  terminateDevice: (id: number) => Promise<void>;
+}
+
 export interface UiSlice {
   // The full server-persisted preferences blob (Settings modal's "Everything
   // wired now" rework — see .claude/plans/i-want-to-rework-delegated-bonbon.md).
@@ -611,4 +624,5 @@ export type DashboardState = ProjectsSlice &
   EventsSlice &
   WorkspacesSlice &
   HostsSlice &
+  DevicesSlice &
   UiSlice;

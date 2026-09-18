@@ -570,3 +570,16 @@ export function ContainerIcon(props: IconProps) {
     </Svg>
   );
 }
+
+// Issue #1326 — Android device panel's sidebar/Settings entry point. No
+// existing icon in this file fits a phone/device (checked all of the
+// above); a plain phone outline mirrors ContainerIcon's own bare-shape
+// style rather than trying to evoke Android specifically.
+export function DeviceIcon(props: IconProps) {
+  return (
+    <Svg strokeWidth={1.6} {...props}>
+      <rect x="6" y="2.5" width="12" height="19" rx="2" />
+      <line x1="10" y1="18.5" x2="14" y2="18.5" />
+    </Svg>
+  );
+}

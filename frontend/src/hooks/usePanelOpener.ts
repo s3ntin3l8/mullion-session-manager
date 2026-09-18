@@ -1,12 +1,13 @@
 import { useCallback } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import type { DockviewApi } from "dockview-react";
-import type { Project, Session, Workspace } from "../api/index.js";
+import type { Device, Project, Session, Workspace } from "../api/index.js";
 import { useDashboardStore } from "../store/index.js";
 import { randomPanelId } from "../random-id.js";
 import {
   findSessionWorkspace,
   maximizeIfTiled,
+  openDevicePanel,
   openOrFocusProjectPanel,
   openSessionPanel,
   openTimelinePanel,
@@ -151,6 +152,12 @@ export interface UsePanelOpenerResult {
   // Issue #28's general-purpose blank browser tile (CommandPalette's "New
   // browser tab"). Always creates a fresh panel, same as onOpenBrowserUrl.
   onOpenBlankBrowser: () => void;
+  // Issue #1326 — opens (or focuses) an Android device's video/input panel
+  // (SidebarDevices.tsx). Host-global like onOpenBlankBrowser above (no
+  // projectId), but open-or-focus-by-id like onOpenSession/onOpenGitHub/etc
+  // rather than always-fresh — see openDevicePanel's own comment in
+  // panelUtils.ts.
+  onOpenDevice: (device: Device) => void;
 }
 
 // Extracted from App.tsx (PR 34h of the hook-extraction series, the final PR
@@ -373,6 +380,16 @@ export function usePanelOpener({
     setSidebarOpen(false);
   }, [dockviewApi, layout, setSidebarOpen, leaveTaskView]);
 
+  const onOpenDevice = useCallback(
+    (device: Device) => {
+      if (!dockviewApi) return;
+      leaveTaskView();
+      openDevicePanel(dockviewApi, device, layout);
+      setSidebarOpen(false);
+    },
+    [dockviewApi, layout, setSidebarOpen, leaveTaskView],
+  );
+
   return {
     onOpenSession,
     onOpenSessionAsFloat,
@@ -388,5 +405,6 @@ export function usePanelOpener({
     onOpenTasks,
     onOpenBrowserUrl,
     onOpenBlankBrowser,
+    onOpenDevice,
   };
 }

@@ -4,6 +4,7 @@ import { renderHook } from "@testing-library/react";
 import type { SetStateAction } from "react";
 import { usePanelOpener } from "./usePanelOpener.js";
 import type { DockviewApi } from "dockview-react";
+import type { Device } from "../api/index.js";
 import type { LayoutContext } from "../lib/layoutTier.js";
 import { makeProject, makeSession, makeWorkspace } from "../test/fixtures.js";
 
@@ -59,6 +60,20 @@ function mockDockviewApi(): DockviewApi {
 
 const PROJECTS = [makeProject({ id: 1, name: "project-alpha" })];
 const SESSION = makeSession({ id: 1, projectId: 1 });
+// Same shape as panelUtils.test.ts's own TEST_DEVICE — that file already
+// covers openDevicePanel's own branching (focus-vs-add, tier positioning,
+// name fallback); these tests only need to prove usePanelOpener wires it up
+// correctly (dockviewApi guard, leaveTaskView, setSidebarOpen).
+const DEVICE: Device = {
+  id: 1,
+  hostId: "local",
+  projectId: null,
+  name: "My Pixel",
+  avdName: "pixel_7",
+  status: "active",
+  createdAt: "2026-01-01T00:00:00Z",
+  live: null,
+};
 
 let setSidebarOpen: ReturnType<typeof vi.fn<(value: SetStateAction<boolean>) => void>>;
 
@@ -378,6 +393,13 @@ describe("usePanelOpener — leaveTaskView (issue: no way back from Tasks)", () 
     expect(setViewMode).toHaveBeenCalledWith("list");
   });
 
+  it("onOpenDevice resets viewMode to list before opening", () => {
+    const api = mockDockviewApi();
+    const { result } = setup({ dockviewApi: api });
+    result.current.onOpenDevice(DEVICE);
+    expect(setViewMode).toHaveBeenCalledWith("list");
+  });
+
   it.each([
     "onOpenGitHub",
     "onOpenGit",
@@ -526,5 +548,45 @@ describe("usePanelOpener — onOpenBlankBrowser", () => {
 
     expect(() => result.current.onOpenBlankBrowser()).not.toThrow();
     expect(api.maximizeGroup).not.toHaveBeenCalled();
+  });
+});
+
+// Self-review (code-review high) — every other opener in this hook gets its
+// own describe block; onOpenDevice had none.
+describe("usePanelOpener — onOpenDevice", () => {
+  it("opens the device's panel and closes the sidebar", () => {
+    const api = mockDockviewApi();
+    const { result } = setup({ dockviewApi: api });
+
+    result.current.onOpenDevice(DEVICE);
+
+    expect(api.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "device-1",
+        component: "device",
+        title: "My Pixel",
+        params: { deviceId: 1 },
+      }),
+    );
+    expect(setSidebarOpen).toHaveBeenCalledWith(false);
+  });
+
+  it("focuses an already-open panel instead of adding a second one", () => {
+    const api = mockDockviewApi();
+    api.addPanel({ id: "device-1", component: "device", params: { deviceId: 1 } });
+    const existing = api.getPanel("device-1")!;
+    existing.api.setActive = vi.fn();
+    const { result } = setup({ dockviewApi: api });
+
+    result.current.onOpenDevice(DEVICE);
+
+    expect(existing.api.setActive).toHaveBeenCalledTimes(1);
+    expect(api.addPanel).toHaveBeenCalledTimes(1); // only the setup call above
+  });
+
+  it("no-ops when dockviewApi is null", () => {
+    const { result } = setup({ dockviewApi: null });
+    expect(() => result.current.onOpenDevice(DEVICE)).not.toThrow();
+    expect(setSidebarOpen).not.toHaveBeenCalled();
   });
 });

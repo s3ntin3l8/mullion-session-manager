@@ -27,6 +27,7 @@ import { createTasksSlice, clearTaskMasterEnvCacheForTests } from "./slices/task
 import { createEventsSlice } from "./slices/events.js";
 import { createWorkspacesSlice } from "./slices/workspaces.js";
 import { createHostsSlice } from "./slices/hosts.js";
+import { createDevicesSlice } from "./slices/devices.js";
 import { createUiSlice } from "./slices/ui.js";
 
 export const useDashboardStore = create<DashboardState>()((...a) => ({
@@ -38,6 +39,7 @@ export const useDashboardStore = create<DashboardState>()((...a) => ({
   ...createEventsSlice(...a),
   ...createWorkspacesSlice(...a),
   ...createHostsSlice(...a),
+  ...createDevicesSlice(...a),
   ...createUiSlice(...a),
 }));
 
