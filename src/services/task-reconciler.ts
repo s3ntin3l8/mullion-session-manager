@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNotNull, isNull, lt, or } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, lt, lte, or } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { projects, sessions, tasks } from "../db/schema.js";
 import type { SessionInfo } from "./pty-manager.js";
@@ -322,6 +322,8 @@ async function fetchCurrentCiStatus(
   // `getPullRequestByNumber` call below — one fewer redundant GitHub call.
   repoRef: GitHubRepoRef;
   baseRef: string;
+  mergeable: boolean | null;
+  mergeableState: string;
 } | null> {
   if (task.prNumber === null) return null;
   const repoRef = await resolveRepoRef(app, project);
@@ -338,7 +340,15 @@ async function fetchCurrentCiStatus(
     conclusion: r.conclusion,
     htmlUrl: r.htmlUrl,
   }));
-  return { headSha: pr.headSha, status, runs: runSummaries, repoRef, baseRef: pr.baseRef };
+  return {
+    headSha: pr.headSha,
+    status,
+    runs: runSummaries,
+    repoRef,
+    baseRef: pr.baseRef,
+    mergeable: pr.mergeable,
+    mergeableState: pr.mergeableState,
+  };
 }
 
 /**
@@ -483,15 +493,27 @@ async function processPendingReviewSpawns(app: FastifyInstance): Promise<void> {
   // reviewer normally on the next tick once re-enabled.
   if (!resolvedTaskMaster.enabled) return;
 
+  const now = Date.now();
+
   const rows = app.db
     .select({ task: tasks, project: projects })
     .from(tasks)
     .innerJoin(projects, eq(tasks.projectId, projects.id))
-    .where(and(eq(tasks.status, "reviewing"), isNull(tasks.reviewSessionId)))
+    .where(
+      and(
+        eq(tasks.status, "reviewing"),
+        isNull(tasks.reviewSessionId),
+        // Exclude tasks with an in-flight auto-rebase attempt (which runs a worker
+        // in task.worktreePath). Spawning a reviewer concurrently would put two autonomous
+        // agent PTYs writing to one worktree simultaneously.
+        or(
+          isNull(tasks.rebaseStartedAt),
+          lte(tasks.rebaseStartedAt, new Date(now - REBASE_ATTEMPT_STALE_MS)),
+        ),
+      ),
+    )
     .all();
   if (rows.length === 0) return;
-
-  const now = Date.now();
 
   // Host-grouped and concurrent, same shape as retryStrandedDraftPRs above
   // — a CI lookup or a spawn on one host must not serialize behind a slow
@@ -517,6 +539,12 @@ async function processPendingReviewSpawns(app: FastifyInstance): Promise<void> {
     [...byHost.values()].map(async (hostRows) => {
       for (const { task, project } of hostRows) {
         if (!task.worktreePath) continue;
+        if (
+          task.rebaseStartedAt !== null &&
+          now - task.rebaseStartedAt.getTime() < REBASE_ATTEMPT_STALE_MS
+        ) {
+          continue;
+        }
         const reviewCommand = resolveReviewAgentCommand(app, {
           taskReviewAgent: task.reviewAgent,
           issueBody: task.body,
@@ -1225,11 +1253,10 @@ export const REBASE_ATTEMPT_STALE_MS = 30 * 60_000;
 
 /**
  * Spawns a worker to resolve a real merge conflict (`dirty` mergeableState)
- * found on a `done` task's PR — attemptMerge's own `case "dirty"` calls this
- * instead of only recording the error. Never transitions the task's status:
- * it stays `done` throughout (no outgoing edge exists — task-state.ts), so
- * this is a sibling to the merge sweep's retry loop, not a use of
- * autoReturnTask.
+ * found on a `done` or `reviewing` task's PR — attemptMerge's `case "dirty"` and
+ * attemptAutoApprove call this instead of only recording the error. Never
+ * transitions the task's status: it stays in its current status (`done` or
+ * `reviewing`) throughout, with rebaseStartedAt bounding attempt staleness.
  *
  * Gated on `project.autoApprove`, the same "nobody is watching" opt-in
  * `attemptAutoApprove`/`attemptReturnRedCiToWorker` use — spawning an
@@ -1333,6 +1360,40 @@ async function attemptAutoRebase(
     return;
   }
 
+  // Pre-removal cleanup: terminate an active review session before force-removing
+  // the worktree it is running in. On a reviewing task's first auto-rebase,
+  // rebaseStartedAt is null, but task.reviewSessionId points to the active reviewer.
+  // Terminating it before removeWorktree avoids removing the cwd from under a live process.
+  if (task.reviewSessionId !== null) {
+    const [reviewSession] = app.db
+      .select()
+      .from(sessions)
+      .where(eq(sessions.id, task.reviewSessionId))
+      .all();
+    if (reviewSession?.status === "active") {
+      try {
+        await backend.terminate(String(task.reviewSessionId));
+        app.db
+          .update(sessions)
+          .set({ status: "killed" })
+          .where(eq(sessions.id, task.reviewSessionId))
+          .run();
+        closeSessionBrowserBindings(app, task.reviewSessionId);
+      } catch (err) {
+        app.log.warn(
+          { err, taskId: task.id, reviewSessionId: task.reviewSessionId },
+          "task auto-rebase: active review session appears stuck and could not be stopped, leaving it for a later tick",
+        );
+        recordMergeError(
+          app,
+          task.id,
+          "Conflicts with main — active review session appears stuck and could not be stopped, needs manual resolution",
+        );
+        return;
+      }
+    }
+  }
+
   // Clear any leftover worktree from a prior attempt first. resumeTaskWorktree
   // targets a deterministic path (deriveWorktreePath), so a second attempt at
   // the same path fails outright unless the first attempt's worktree is gone.
@@ -1350,6 +1411,9 @@ async function attemptAutoRebase(
 
   const worktree = await backend.resumeTaskWorktree(project.cwd, branchName);
   if (!worktree) {
+    if (task.reviewSessionId !== null) {
+      app.db.update(tasks).set({ reviewSessionId: null }).where(eq(tasks.id, task.id)).run();
+    }
     // Branch missing or checked out elsewhere — not retryable by spawning
     // again. Surface for a human rather than looping (mirrors the plan's
     // "returns null -> surface for a human, not a retry").
@@ -1409,6 +1473,9 @@ async function attemptAutoRebase(
     taskId: task.id,
   });
   if (!result.ok) {
+    if (task.reviewSessionId !== null) {
+      app.db.update(tasks).set({ reviewSessionId: null }).where(eq(tasks.id, task.id)).run();
+    }
     recordMergeError(
       app,
       task.id,
@@ -1422,14 +1489,14 @@ async function attemptAutoRebase(
     result.initialPromptApplied,
   );
 
-  // CAS on status = "done" — the one guard against a concurrent transition
-  // (nothing legitimately moves a done task elsewhere today, but this stays
-  // consistent with every other write in this file's own paranoia about
-  // races rather than assuming that never changes).
+  // CAS on status in ["done", "reviewing"] — guards against a concurrent transition
+  // out of reviewing or done while spawning.
   const updated = app.db
     .update(tasks)
     .set({
       sessionId: result.row.id,
+      reviewSessionId: null,
+      reviewFindingsIngestedSessionId: null,
       worktreePath: worktree.path,
       branchName: worktree.branch,
       seedDelivered,
@@ -1437,9 +1504,12 @@ async function attemptAutoRebase(
       rebaseStartedAt: new Date(now),
       mergeError: "Conflicts with main — an auto-rebase attempt is in progress",
     })
-    .where(and(eq(tasks.id, task.id), eq(tasks.status, "done")))
+    .where(and(eq(tasks.id, task.id), inArray(tasks.status, ["done", "reviewing"])))
     .run();
   if (updated.changes === 0) {
+    if (task.reviewSessionId !== null) {
+      app.db.update(tasks).set({ reviewSessionId: null }).where(eq(tasks.id, task.id)).run();
+    }
     app.log.warn(
       { taskId: task.id, newSessionId: result.row.id },
       "task auto-rebase: lost a race with a concurrent transition — the freshly spawned session is orphaned, left for a human to notice",
@@ -2149,6 +2219,10 @@ function autoApproveRetryBackoffMs(attempts: number): number {
   return Math.min(AUTO_APPROVE_RETRY_TTL_MS * 2 ** (attempts - 1), AUTO_APPROVE_RETRY_MAX_TTL_MS);
 }
 
+export function resetAutoApproveBackoff(taskId: number): void {
+  autoApproveRetryState.delete(taskId);
+}
+
 /**
  * #755 — a red REQUIRED check on a task's PR sends it back to the worker
  * for one automatic round, same mechanism as a "changes-requested" review
@@ -2626,6 +2700,39 @@ async function attemptAutoApprove(
   if (await attemptReturnPrCommentsToWorker(app, task, project)) return;
   if (!current) return;
 
+  // If a previous auto-rebase attempt resolved the conflict (PR is now cleanly
+  // mergeable), clear mergeError and reset the auto-approve backoff so the
+  // task gets an immediate attempt without being throttled by the
+  // dirty-period backoff.
+  //
+  // Deliberately does NOT also clear rebaseStartedAt here. GitHub can
+  // compute mergeable: true before the rebase worker's own session actually
+  // exits — it may still be running post-push verification in the same
+  // worktree a freshly-spawned reviewer would target (processPendingReviewSpawns
+  // gates its spawn on rebaseStartedAt being null/stale, exactly to keep a
+  // reviewer out of that worktree while a rebase attempt might still be in
+  // flight). Clearing it the instant mergeable flips true would reopen that
+  // gate before the worker is actually done, racing two agent PTYs into one
+  // worktree — the hazard rebaseStartedAt exists to prevent. Session status
+  // can't substitute for this check either (see REBASE_ATTEMPT_STALE_MS's own
+  // doc comment: a Task Master worker stays "active" long after finishing).
+  // So rebaseStartedAt is left to age out via REBASE_ATTEMPT_STALE_MS, the
+  // same time-based signal every other "is an attempt still in flight" check
+  // in this file already trusts; approveTask clears it for good once the
+  // task is actually approved. Cost: up to REBASE_ATTEMPT_STALE_MS of extra
+  // latency before the fresh reviewer spawns, not a correctness gap.
+  if (
+    task.rebaseStartedAt !== null &&
+    current.mergeable === true &&
+    current.mergeableState !== "dirty"
+  ) {
+    app.db.update(tasks).set({ mergeError: null }).where(eq(tasks.id, task.id)).run();
+    task.mergeError = null;
+    // Reset the backoff so the auto-approve attempt on the next tick is not
+    // throttled by the attempts accumulated during the dirty/rebase period.
+    resetAutoApproveBackoff(task.id);
+  }
+
   if (
     task.reviewFindingsIngestedSessionId === null ||
     task.reviewFindingsIngestedSessionId !== task.reviewSessionId
@@ -2634,7 +2741,22 @@ async function attemptAutoApprove(
   }
   if (task.lastReviewVerdict !== "clean") return;
 
-  if (!current || current.status !== "success") return;
+  if (current.mergeable === false || current.mergeableState === "dirty") {
+    if (project.autoApprove && task.rebaseAttempts < MAX_REBASE_ATTEMPTS) {
+      await attemptAutoRebase(app, task, project, current.baseRef);
+      return;
+    }
+    recordMergeError(
+      app,
+      task.id,
+      task.rebaseAttempts >= MAX_REBASE_ATTEMPTS
+        ? `Conflicts with ${current.baseRef} — auto-rebase gave up after ${MAX_REBASE_ATTEMPTS} attempt(s), needs manual resolution`
+        : `Conflicts with ${current.baseRef} — needs manual resolution`,
+    );
+    return;
+  }
+
+  if (current.status !== "success") return;
 
   const outcome = await approveTask(app, task, project, "auto-approve");
   if (outcome.ok) {
@@ -2735,6 +2857,19 @@ async function processAutoApprovals(app: FastifyInstance): Promise<void> {
   for (const { task, project } of rows) {
     if (attempted >= MAX_AUTO_APPROVALS_PER_SWEEP) return;
     if (isGitHubRateLimited()) return; // #759 — see the draft-PR sweep's own comment
+
+    // While a rebase is in flight (rebaseStartedAt !== null), the backoff
+    // accumulated during the dirty period would otherwise block
+    // attemptAutoApprove — preventing it from ever seeing the resolved
+    // mergeable:true state and clearing rebaseStartedAt. Reset before the gate
+    // on every tick so attemptAutoApprove remains reachable throughout the
+    // rebase window. The blast radius of the extra getPullRequestByNumber
+    // polls is bounded by isGitHubRateLimited() (line above). The single
+    // reset inside attemptAutoApprove's clearing block (mergeable===true path)
+    // handles the post-conflict immediate-attempt case.
+    if (task.rebaseStartedAt !== null) {
+      resetAutoApproveBackoff(task.id);
+    }
 
     const state = autoApproveRetryState.get(task.id);
     if (

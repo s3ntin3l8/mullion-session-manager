@@ -61,3 +61,22 @@ worktrees do.
 
 See `AGENTS.md`. Tests use `app.inject()` — not a real HTTP server — for
 route tests.
+
+## Clean mergeability onto `origin/main`
+
+A PR branch must cleanly rebase or merge onto the latest `origin/main`
+without conflicts. A review pass must check mergeability against `origin/main`.
+If there are merge conflicts, a reviewer must NEVER issue a `clean` verdict;
+it must return `changes-requested` so the worker rebases before approval.
+
+## Patch test coverage ($\ge 75\%$)
+
+New or modified executable lines in `src/` and `frontend/src/` must meet
+at least $75\%$ patch coverage (`make test-patch-coverage`). A PR that drops
+patch coverage fails CI on Codecov.
+
+## Security anti-patterns & CORS credentials
+
+Never set `Access-Control-Allow-Credentials: true` alongside wildcard or
+dynamically reflected origins (CodeQL `js/cors-misconfiguration-for-credentials`).
+Run `npm run check:security-antipatterns` (part of `make lint`).

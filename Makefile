@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help install install-hooks dev test test-backend test-coverage test-e2e lint typecheck format format-check build clean wt review check-scope-leaks
+.PHONY: help install install-hooks dev test test-backend test-coverage test-patch-coverage test-e2e lint typecheck format format-check build clean wt review check-scope-leaks
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -23,6 +23,9 @@ test-backend: ## Run backend tests only (fast inner loop)
 
 test-coverage: ## Run tests with coverage (backend only)
 	npm run test:coverage
+
+test-patch-coverage: ## Verify >=75% patch coverage on changes against origin/main
+	npm run test:patch-coverage
 
 test-e2e: ## Run the opt-in Phase 4 socket API e2e suite (real browser/sockets, not part of `make test`)
 	npm run test:e2e
