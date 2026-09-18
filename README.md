@@ -79,6 +79,14 @@ CI/CD. Frontend: React + [dockview](https://dockview.dev/) (tiled splits/tabs)
   eval, snapshot, screenshot) or stream its interactive display over WebSockets.
   Import cookie profiles from Chrome/Firefox to start authenticated. See
   [`docs/browser-automation.md`](docs/browser-automation.md) for details.
+- **Android device panel.** Run an Android emulator (or attach to a physical
+  phone over adb) on the host and stream its screen into a native dockview
+  panel next to your terminals — the Android analogue of the Controllable
+  Browser above. A `mullion device` CLI/MCP surface lets an agent
+  screenshot, tap, and read logcat to verify its own UI changes. Off by
+  default (`DEVICE_ENABLED`) — needs real host provisioning (`/dev/kvm`, an
+  Android SDK emulator + system image, `scrcpy-server`). See
+  [`docs/device-panel.md`](docs/device-panel.md) for setup.
 - **GitHub integration.** Connect a PAT or GitHub OAuth device flow once,
   and any project with a github.com `origin` gets a Dock status widget and
   panel for open issues/PRs and Actions/CI status — with optional webhook-

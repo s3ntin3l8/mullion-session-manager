@@ -158,8 +158,8 @@ you're working:
   spawn, structured input/output, and it's what's already registered for a
   Claude Code session (`mullion mcp`, auto-wired into `--mcp-config`). Prefer
   this for `get_scrollback`, `list_actions`, `browser_action`, `use_browser`,
-  `promote_to_worktree`, and `spawn_child_session` — the ops actually
-  reachable at session scope.
+  `promote_to_worktree`, `spawn_child_session`, `list_devices`, and
+  `use_device`/`device_action` — the ops actually reachable at session scope.
 - **`mullion` CLI** — better when you need to reason about `--json` output
   directly in a shell pipeline, run something interactively (`mullion
 session exec`), or you're not running under an agent with MCP wired up at

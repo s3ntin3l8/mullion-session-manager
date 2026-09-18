@@ -46,7 +46,10 @@ way as a namespaced one.
   the general-purpose control socket behind the `mullion` CLI; dispatches
   by re-entering the routes below via `app.inject()` rather than
   duplicating their logic — see [`socket-api.md`](socket-api.md)), `browser`
-  (Playwright browser-control lifecycle backing the routes below),
+  (Playwright browser-control lifecycle backing the routes below), `device`
+  (the Android emulator/scrcpy `DeviceManager` backing the routes below —
+  registers regardless of `DEVICE_ENABLED`, inert until it's set, same
+  posture as `browser` — see [`device-panel.md`](device-panel.md)),
   `event-store` (wires the persisted-history query surface behind
   `GET /api/events`), `push` (web-push subscription lifecycle),
   `host-heartbeat`, `github-pr-poller`, `webhook-reconciler`, `task-watcher`,
@@ -121,7 +124,10 @@ way as a namespaced one.
   `browser-automation`/`browser-cookies`/`browser-urls` (the Playwright
   browser-control REST surface, `/ws/browser/:sessionId` streaming, and
   cookie-profile import — see [`browser-automation.md`](browser-automation.md)),
-  `project-urls` (per-project saved external-URL shortcuts), `project-tooling`
+  `device`/`devices` (`/ws/device/:deviceId` H.264 streaming + input proxy,
+  and the `devices` CRUD/action/pair REST surface, respectively) and `avds`
+  (AVD listing/creation and installed-system-image/device-profile listing —
+  see [`device-panel.md`](device-panel.md)), `project-urls` (per-project saved external-URL shortcuts), `project-tooling`
   (`GET`/`PUT`/`DELETE /api/projects/:id/tooling[/skill|/reviewer-agent]` —
   a project's DB-authored pinned note/skill/reviewer subagent, primary-only,
   no host branching — see [`agent-context.md`](agent-context.md)),
@@ -219,7 +225,15 @@ way as a namespaced one.
   `browser-manager`/`browser-cookie-import`/`session-browsers` (the
   Playwright pool, per-project storage state, and cookie-profile import
   behind [`browser-automation.md`](browser-automation.md)), `oidc`
-  (native OIDC login — see [`auth.md`](auth.md)), `systemd-unit`
+  (native OIDC login — see [`auth.md`](auth.md)), `device-manager`/
+  `device-process` (the Android emulator/scrcpy lifecycle — spawn under a
+  transient `systemd --user` scope, adb+scrcpy attach, restart-survival
+  reattach, port allocation — and its scope-naming/marker-file/liveness
+  plumbing, deliberately a separate implementation from
+  `pty-manager`/`session-process`, not a generalization of them),
+  `avd-manager` (AVD listing/creation and installed-system-image scanning —
+  the provisioning counterpart to `device-manager`'s running half; see
+  [`device-panel.md`](device-panel.md)), `systemd-unit`
   (cgroup-based autodetection of the running unit for self-update),
   `update-checker` (Settings → Server info's update surface).
 - `src/mcp/` — the MCP server Mullion exposes over the same control socket

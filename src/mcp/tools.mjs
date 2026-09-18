@@ -532,8 +532,9 @@ const useDevice = {
   name: "use_device",
   description:
     "Execute a one-shot Android device action (screenshot, tap, swipe, text, key, logcat) " +
-    "via plain `adb shell` commands — works independently of whether the device's video " +
-    "panel is currently open in the dashboard. Use list_devices to find a deviceId first.",
+    "against the device's live adb/scrcpy connection — works independently of whether the " +
+    "device's video panel is currently open in the dashboard. Use list_devices to find a " +
+    "deviceId first.",
   inputSchema: {
     type: "object",
     required: ["deviceId", "action"],
