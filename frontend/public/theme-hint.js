@@ -30,13 +30,39 @@
 // script per the above). Defaults to the black-translucent/dark-theme value
 // on any error (missing localStorage, disabled storage, etc.) rather than
 // guessing light.
+//
+// Second, independent job added for the sign-in screen (AuthGate.tsx):
+// mirror the resolved theme onto <html data-theme-hint="light"|"dark">,
+// written UNCONDITIONALLY (not just on "light" like the iOS branch above),
+// because tokens.css uses it to paint <html>'s background before <body> and
+// AuthGate's own themed .login-root have painted anything — <html> sits
+// outside .cmux-root, so none of that file's custom properties resolve on
+// it directly, hence the plain hex fallback colors in tokens.css. Without
+// this, a dark-theme user gets a flash of the browser's default white
+// background while GET /api/auth/me is in flight. When the hint key is
+// absent entirely (a genuinely first-ever visit, the common case for a
+// login page), this resolves prefers-color-scheme right here rather than
+// leaving <html> unset — matching the same OS-preference fallback AuthGate
+// itself uses once React mounts, so the two never disagree about a visit
+// theme-hint.js can't see a stored preference for.
 (function () {
+  function systemPrefersLight() {
+    return (
+      !!window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches === false
+    );
+  }
   try {
-    if (localStorage.getItem("crs.themeHint") === "light") {
+    var hint = localStorage.getItem("crs.themeHint");
+    if (hint === "light") {
       var meta = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');
       if (meta) meta.setAttribute("content", "default");
     }
+    var resolved =
+      hint === "light" || hint === "dark" ? hint : systemPrefersLight() ? "light" : "dark";
+    document.documentElement.setAttribute("data-theme-hint", resolved);
   } catch {
-    /* localStorage unavailable — keep the static black-translucent default */
+    /* localStorage/matchMedia unavailable — keep the static black-translucent
+       default above, and fall back to dark for the <html> background too. */
+    document.documentElement.setAttribute("data-theme-hint", "dark");
   }
 })();

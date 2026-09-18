@@ -1,0 +1,179 @@
+/* The sign-in screen (AuthGate.tsx's Login). Self-contained `.login-*`
+   namespace, deliberately NOT built on the `create-modal-*` shell it used to
+   reuse — this renders standalone, in place of <App/>, with no dashboard
+   behind it to dim, so it needs page layout (centered, real background)
+   rather than dialog-overlay layout (top-anchored, scrim backdrop). Sharing
+   classes with CreateProjectModal/CreateHostModal/HostConfigModal/
+   GitHubDeviceFlowModal/PairBridgeModal/PromoteDialog/Settings would have
+   made any tweak here a blast-radius risk for all seven.
+
+   `.login-root` re-applies `cmux-root`/`light` itself (see AuthGate.tsx) —
+   every `var(--x)` below only resolves inside that class. */
+
+.login-root {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 14px;
+  padding: 24px;
+  padding-top: calc(24px + env(safe-area-inset-top));
+  padding-bottom: calc(24px + env(safe-area-inset-bottom));
+  padding-left: calc(24px + env(safe-area-inset-left));
+  padding-right: calc(24px + env(safe-area-inset-right));
+}
+
+.login-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 22px;
+  color: var(--fg);
+}
+
+.login-wordmark {
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.login-card {
+  width: 100%;
+  max-width: 380px;
+  background: var(--chrome);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 24px;
+  box-shadow: 0 30px 80px -16px rgba(0, 0, 0, 0.45);
+  animation: cmuxPop 0.13s ease-out;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.login-title {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.login-subtitle {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.45;
+  margin: -12px 0 0;
+}
+
+.login-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 36px;
+  background: var(--accent-solid);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.login-btn:hover {
+  filter: brightness(1.08);
+}
+
+.login-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.login-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--dim);
+}
+
+.login-divider::before,
+.login-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border-soft);
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.login-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.login-field-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.login-input-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 11px;
+  border: 1px solid var(--border-soft);
+  border-radius: 9px;
+  background: var(--field);
+}
+
+.login-input-row:focus-within {
+  border-color: var(--accent-solid);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-solid) 18%, transparent);
+}
+
+.login-input-row input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font-size: 12.5px;
+  outline: none;
+  padding: 0;
+}
+
+.login-input-row input.mono {
+  font-family: "Geist Mono", monospace;
+}
+
+.login-hint {
+  font-size: 11px;
+  color: var(--dim);
+  text-align: center;
+}
+
+@media (max-width: 480px) {
+  .login-root {
+    padding: 16px;
+  }
+
+  .login-card {
+    padding: 20px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .login-card {
+    animation: none;
+  }
+}

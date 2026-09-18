@@ -39,8 +39,14 @@ export function resolveTheme(pref: ThemePreference): Theme {
 // slices/ui.ts), but waiting on that fetch before the very first render
 // would flash the wrong theme. This one key is written every time the
 // resolved theme changes and read once, synchronously, at module load.
-export function readThemeHint(): Theme {
-  return readString(STORAGE_KEYS.themeHint, "dark") === "light" ? "light" : "dark";
+//
+// `fallback` defaults to "dark" (the store's own call site relies on that
+// default, matching this app's dark-by-default design) but AuthGate.tsx
+// passes the OS `prefers-color-scheme` result instead — a login screen has
+// no prior resolved-theme write to fall back on for a genuinely first-ever
+// visit, so guessing dark there would be wrong for a light-OS visitor.
+export function readThemeHint(fallback: Theme = "dark"): Theme {
+  return readString(STORAGE_KEYS.themeHint, fallback) === "light" ? "light" : "dark";
 }
 
 // The composite key `dismissedEventKeys` and PaneTab.tsx's own

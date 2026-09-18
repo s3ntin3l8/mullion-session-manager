@@ -93,6 +93,21 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* Pre-paint background for the sign-in screen (AuthGate.tsx's Login), set
+   by public/theme-hint.js's parser-blocking script before React has mounted
+   anything. <html> sits outside .cmux-root, so the custom properties above
+   don't resolve here — hence the literal hex, which must stay in sync with
+   --bg's two values. Only matters while GET /api/auth/me is in flight (and
+   AuthGate returns null); once <App/> or .login-root mounts, .cmux-root's
+   own --bg takes over and this is moot. */
+html[data-theme-hint="light"] {
+  background: #fafafa;
+}
+
+html[data-theme-hint="dark"] {
+  background: #0a0a0a;
+}
+
 .cmux-mono {
   font-family: "Geist Mono", monospace;
 }

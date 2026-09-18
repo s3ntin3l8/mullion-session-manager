@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError, type AuthStatus } from "./api/index.js";
 import { App } from "./App.js";
+import { MullionMark } from "./assets/MullionMark.js";
+import { readThemeHint, systemPrefersDark } from "./store/helpers.js";
 import { ErrorText } from "./ui/ErrorText.js";
 import { AuthStatusContext } from "./authContext.js";
 
@@ -79,6 +81,14 @@ function Login({
     if (methods.token) inputRef.current?.focus();
   }, [methods.token]);
 
+  // Resolved once per mount, not reactively — there's no store/context to
+  // subscribe to yet (that's the whole reason AuthGate exists: App, and the
+  // theme state that lives inside it, hasn't mounted). A user who flips their
+  // OS theme while sitting on this exact screen won't see it update live;
+  // they will on next reload, same as any other "system" preference before
+  // the dashboard's own watcher (slices/ui.ts) takes over.
+  const [theme] = useState(() => readThemeHint(systemPrefersDark() ? "dark" : "light"));
+
   const submit = () => {
     const trimmed = token.trim();
     if (!trimmed) {
@@ -101,66 +111,63 @@ function Login({
   };
 
   return (
-    // Reuses CreateHostModal's create-modal-* shell for a consistent look —
-    // there's no dashboard mounted behind this to dim, so the backdrop's
-    // own centering/padding just becomes this screen's layout.
-    <div className="create-modal-backdrop">
-      <div className="create-modal">
-        <div className="create-modal-header">
-          <span className="create-modal-header-text">
-            <span className="create-modal-title">Sign in</span>
-            <span className="create-modal-subtitle">This Mullion instance requires sign-in.</span>
-          </span>
-        </div>
+    // `cmux-root`/`light` re-applied here the same way portaled surfaces do
+    // it (ui/KebabMenu.tsx, NotificationBell.tsx's overflow panel) — this
+    // renders instead of <App/>, outside the element that normally carries
+    // those classes, so none of tokens.css's custom properties (--chrome,
+    // --accent-solid, --muted, ...) would otherwise resolve at all.
+    <div className={`login-root cmux-root${theme === "light" ? " light" : ""}`}>
+      <div className="login-brand">
+        <MullionMark size={26} />
+        <span className="login-wordmark">Mullion</span>
+      </div>
 
-        <div className="create-modal-body">
-          {methods.oidc && (
-            // Full-page navigation, not a fetch — the OIDC redirect chain
-            // (this app -> provider -> back to /api/auth/oidc/callback) is a
-            // real browser navigation, not something an SPA can do via XHR.
-            <a
-              href="/api/auth/oidc/login"
-              className="create-modal-submit"
-              style={{ textAlign: "center" }}
-            >
-              Sign in with SSO
-            </a>
-          )}
+      <div className="login-card">
+        <h1 className="login-title">Sign in</h1>
+        <p className="login-subtitle">This Mullion instance requires sign-in.</p>
 
-          {methods.oidc && methods.token && (
-            <div style={{ fontSize: 12, color: "var(--muted)", textAlign: "center" }}>or</div>
-          )}
+        {methods.oidc && (
+          // Full-page navigation, not a fetch — the OIDC redirect chain
+          // (this app -> provider -> back to /api/auth/oidc/callback) is a
+          // real browser navigation, not something an SPA can do via XHR.
+          // Stays an <a>, not a <button> — AuthGate.test.tsx asserts
+          // role="link" with this exact href.
+          <a href="/api/auth/oidc/login" className="login-btn">
+            Sign in with SSO
+          </a>
+        )}
 
-          {methods.token && (
-            <label className="create-modal-field">
-              <span className="create-modal-field-label">Access token</span>
-              <span className="create-modal-input-row">
+        {methods.oidc && methods.token && <div className="login-divider">or</div>}
+
+        {methods.token && (
+          <form
+            className="login-form"
+            onSubmit={(e) => {
+              e.preventDefault();
+              submit();
+            }}
+          >
+            <label className="login-field">
+              <span className="login-field-label">Access token</span>
+              <span className="login-input-row">
                 <input
                   ref={inputRef}
                   className="mono"
                   type="password"
+                  autoComplete="current-password"
                   value={token}
                   onChange={(e) => setToken(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") submit();
-                  }}
                 />
               </span>
             </label>
-          )}
 
-          {error && <ErrorText>{error}</ErrorText>}
-        </div>
+            {error && <ErrorText>{error}</ErrorText>}
 
-        {methods.token && (
-          <div className="create-modal-footer">
-            <span className="create-modal-footer-hint">
-              Matches this server's MULLION_AUTH_TOKEN.
-            </span>
-            <button className="create-modal-submit" onClick={submit} disabled={submitting}>
+            <button type="submit" className="login-btn" disabled={submitting}>
               Sign in
             </button>
-          </div>
+            <span className="login-hint">Matches this server's MULLION_AUTH_TOKEN.</span>
+          </form>
         )}
       </div>
     </div>
