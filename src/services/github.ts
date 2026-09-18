@@ -6,7 +6,7 @@
 // this module never imports that service itself, keeping the two
 // independently testable).
 
-import { githubApiFetch, GitHubApiError } from "./github-fetch.js";
+import { githubApiFetch, GitHubApiError, classifyRateLimit } from "./github-fetch.js";
 export { GitHubApiError };
 
 // GitHub repo/owner naming constraints: alphanumeric + hyphens for owners
@@ -781,6 +781,15 @@ const REQUIRED_STATUS_CONTEXTS_CACHE_TTL_MS = 60 * 60_000;
 // is cheap process-local state, not a rate-limit-avoidance mechanism, so it's
 // simply overwritten (or cleared, on a later success) every call.
 export type RequiredStatusContextsFailureReason = "forbidden" | "not-found" | "other";
+// Self-review finding — bounded the same way every other cache in this file
+// is (MAX_CACHE_ENTRIES/cacheSet above, prsCache's own copy of the same
+// pattern): this map's key space (owner/repo/branch) is realistically small
+// on any one install, but nothing stops an unbounded number of DISTINCT
+// keys from accumulating over a long-lived process — a repo/branch that
+// never has branch protection (an ordinary, common "not-found" case per
+// this function's own doc comment) never succeeds, so its entry here would
+// otherwise never get cleared by the success path either.
+const MAX_REQUIRED_STATUS_CONTEXTS_FAILURE_ENTRIES = 200;
 const requiredStatusContextsLastFailure = new Map<string, RequiredStatusContextsFailureReason>();
 
 /** See `requiredStatusContextsLastFailure`'s own comment above. `null` means
@@ -839,10 +848,33 @@ export async function fetchRequiredStatusContexts(
       { headers: { Authorization: `Bearer ${token}` } },
     );
     if (!res.ok) {
-      requiredStatusContextsLastFailure.set(
-        key,
-        res.status === 403 ? "forbidden" : res.status === 404 ? "not-found" : "other",
-      );
+      // Self-review finding — `githubApiFetch` always returns a rate-limited
+      // response as-is rather than throwing on its FIRST occurrence (its own
+      // doc comment: "a caller with its own bespoke 403 handling still gets
+      // the response returned as-is"), so a transient GitHub rate limit can
+      // itself present as a bare 403 here, indistinguishable from the
+      // permission problem this function otherwise reports on 403 — without
+      // this check, that would misclassify as the permanent "forbidden"
+      // case and mislead attemptReturnRedCiToWorker's operator-facing
+      // warning. Reuses the same detection githubApiFetch itself already
+      // ran (classifyRateLimit reads only status/headers, safe to call
+      // again on the same Response before its body is read).
+      const reason: RequiredStatusContextsFailureReason = classifyRateLimit(res)
+        ? "other"
+        : res.status === 403
+          ? "forbidden"
+          : res.status === 404
+            ? "not-found"
+            : "other";
+      if (!requiredStatusContextsLastFailure.has(key)) {
+        if (
+          requiredStatusContextsLastFailure.size >= MAX_REQUIRED_STATUS_CONTEXTS_FAILURE_ENTRIES
+        ) {
+          const oldestKey = requiredStatusContextsLastFailure.keys().next().value;
+          if (oldestKey !== undefined) requiredStatusContextsLastFailure.delete(oldestKey);
+        }
+      }
+      requiredStatusContextsLastFailure.set(key, reason);
       return null;
     }
     const data = (await res.json()) as {

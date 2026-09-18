@@ -1776,18 +1776,24 @@ present in `required_status_checks.contexts` from
 `GET /repos/{owner}/{repo}/branches/{branch}/protection`
 (`fetchRequiredStatusContexts`, `github.ts`, cached per repo/branch for an
 hour — branch protection changes about never). The protection lookup needs
-`administration: read` on the GitHub App token, which `READ_PERMISSIONS`
-deliberately does **not** grant (scope creep for one feature); a 403/404
-there fails **closed** — "don't know" is never read as "nothing is
-required," and the task is simply left in `reviewing` exactly as it would
-be without `#755` at all. On the default permission set this means `#755`
-is silently a no-op for every task, every time — issue `#1360` adds a
-throttled reconcile-log warning (once per repo/branch/hour) the first time
-this 403 is actually seen, distinguished from the ordinary "no protection
-configured" 404 (`getRequiredStatusContextsFailureReason`, `github.ts`), but
-does not change the fail-closed behavior itself. See
-[`docs/ci-cd.md`](ci-cd.md)'s "Branch protection" section for the operator
-side of this.
+`administration: read` on the GitHub App token, and `mintInstallationToken`
+(`github-app.ts`) never requests it for this scope — `READ_PERMISSIONS`
+deliberately excludes it (scope creep for one feature), and an installation
+token can only ever carry what's both granted on GitHub's side AND
+requested at mint time, so granting the App broader permissions changes
+nothing without also widening `READ_PERMISSIONS`; a 403/404 there fails
+**closed** — "don't know" is never read as "nothing is required," and the
+task is simply left in `reviewing` exactly as it would be without `#755`
+at all. This means `#755` is silently a no-op for every task, every time,
+on **every** install, with no operator-side remediation — only a code
+change (widening `READ_PERMISSIONS`, or a new dedicated scope) fixes it,
+which is deliberately out of scope for issue `#1360`. That issue instead
+adds a throttled reconcile-log warning (once per repo/branch/hour) the
+first time this 403 is actually seen, distinguished from the ordinary "no
+protection configured" 404 (`getRequiredStatusContextsFailureReason`,
+`github.ts`), so the silence is at least visible — it does not change the
+fail-closed behavior itself. See [`docs/ci-cd.md`](ci-cd.md)'s "Branch
+protection" section for the full writeup.
 
 **Matched against Check Runs, not Workflow Runs — a fresh-review catch on
 the first version of this feature.** `required_status_checks.contexts`

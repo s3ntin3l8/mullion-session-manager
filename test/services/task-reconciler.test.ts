@@ -4515,6 +4515,55 @@ describe("reconcileTasks", () => {
 
           await app.close();
         });
+
+        // Self-review finding — every other test in this describe block
+        // mocks fetchRequiredStatusContexts and
+        // getRequiredStatusContextsFailureReason independently, which
+        // proves this function's OWN consumption of a "forbidden" signal
+        // but not that the two real github.ts functions actually agree
+        // with each other end-to-end (github.test.ts covers that pairing
+        // in isolation from this file's own consumption of it). This test
+        // un-mocks both back to their real implementations and drives a
+        // genuine 403 through the real HTTP layer (stubbed at the global
+        // `fetch`, the same boundary github.test.ts's own tests stub),
+        // proving the full wire from a real 403 to the operator-facing
+        // warning, not just each half in isolation.
+        it("fires the warning end-to-end against the REAL fetchRequiredStatusContexts + getRequiredStatusContextsFailureReason pairing, given a genuine 403", async () => {
+          const fetchMock = vi.fn().mockResolvedValue(new Response("nope", { status: 403 }));
+          vi.stubGlobal("fetch", fetchMock);
+          mockFetchRequiredStatusContexts.mockImplementation(
+            actualGithubModule.fetchRequiredStatusContexts,
+          );
+          mockGetRequiredStatusContextsFailureReason.mockImplementation(
+            actualGithubModule.getRequiredStatusContextsFailureReason,
+          );
+          try {
+            const app = await buildApp();
+            const { taskId } = await createRedCiCandidate(app);
+            mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+            mockFetchRunsForHead.mockResolvedValue(workflowRun("CI/CD", "failure"));
+            const warnSpy = vi.spyOn(app.log, "warn");
+
+            await reconcileTasks(app);
+
+            expect(warnSpy).toHaveBeenCalledWith(
+              expect.objectContaining({ taskId, owner: "o", repo: "r" }),
+              expect.stringContaining("administration"),
+            );
+            expect(fetchMock).toHaveBeenCalledWith(
+              expect.stringContaining("/branches/main/protection"),
+              expect.anything(),
+            );
+
+            await app.close();
+          } finally {
+            vi.unstubAllGlobals();
+            // Restore this file's own fail-closed defaults for every test
+            // after this one (see this mock's own declaration comment).
+            mockFetchRequiredStatusContexts.mockReset().mockResolvedValue(null);
+            mockGetRequiredStatusContextsFailureReason.mockReset().mockReturnValue(null);
+          }
+        });
       });
     });
 

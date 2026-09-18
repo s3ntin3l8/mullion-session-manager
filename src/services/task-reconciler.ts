@@ -2271,21 +2271,27 @@ const MAX_CI_CAP_COMMENTED_ENTRIES = 500;
 const ciCapCommentedRounds = new Map<number, number>();
 
 // #1360 — `fetchRequiredStatusContexts` returning `null` because the GitHub
-// App's token lacks `administration` (`getRequiredStatusContextsFailureReason`
-// === "forbidden") is a permanent, install-wide condition, not a per-task
-// blip — warning on every reconcile tick for every red-CI candidate task
-// would spam the log forever for one static fact. Same eviction-cap Map
-// shape as ciCapCommentedRounds above, keyed by `owner/repo/branch` (the
-// same key fetchRequiredStatusContexts itself uses) rather than by task id —
-// this condition belongs to the repo/branch, not to any one task, so two
+// App's read-scope token lacks `administration`
+// (`getRequiredStatusContextsFailureReason` === "forbidden") is a
+// permanent, install-wide condition, not a per-task blip — warning on
+// every reconcile tick for every red-CI candidate task would spam the log
+// forever for one static fact. Keyed by `owner/repo/branch` (the same key
+// `fetchRequiredStatusContexts` itself uses) rather than by task id — this
+// condition belongs to the repo/branch, not to any one task, so two
 // different tasks on the same repo should share one warning, not each emit
 // their own. Re-warns once per REQUIRED_STATUS_CONTEXTS_WARN_INTERVAL_MS
 // (matching the underlying lookup's own hour-long success-cache TTL,
-// github.ts) rather than only ever once — an operator who fixed the App's
-// permissions and later regresses it should hear about it again, not have
-// this go silent forever after the first occurrence.
+// github.ts) rather than only ever once — a regression (a genuinely new
+// permission problem after this was previously working) should still
+// surface again eventually, not go silent forever after the first
+// occurrence. Self-review finding — deliberately NOT given the
+// eviction-cap treatment `ciCapCommentedRounds` above has: that map is
+// keyed by task id, which can genuinely grow large over an install's
+// lifetime; this one is keyed by owner/repo/branch, bounded by how many
+// distinct repos one install actually manages (realistically a handful) —
+// an eviction cap here would be unreachable dead code guarding a condition
+// that can't occur in practice.
 const REQUIRED_STATUS_CONTEXTS_WARN_INTERVAL_MS = 60 * 60_000;
-const MAX_REQUIRED_STATUS_CONTEXTS_WARNED_ENTRIES = 500;
 const requiredStatusContextsForbiddenWarnedAt = new Map<string, number>();
 
 /** Exported for tests only — production never needs to clear this. Every
@@ -2395,33 +2401,49 @@ async function attemptReturnRedCiToWorker(
     // protection configured) is an expected, unremarkable outcome this
     // function already handles correctly by returning `false` here, and
     // warning about it would just be noise about nothing being wrong.
-    if (
-      getRequiredStatusContextsFailureReason(
-        current.repoRef.owner,
-        current.repoRef.repo,
-        current.baseRef,
-      ) === "forbidden"
-    ) {
-      const key = `${current.repoRef.owner}/${current.repoRef.repo}/${current.baseRef}`;
-      const lastWarnedAt = requiredStatusContextsForbiddenWarnedAt.get(key);
+    // Wrapped in try/catch (self-review finding) — this block used to be a
+    // single infallible comparison; Map operations plus a logger call
+    // aren't guaranteed to stay that way, and this function's only caller
+    // chain (attemptAutoApprove -> the sequential loop in
+    // processAutoApprovals -> reconcileTasks) has no per-task catch of its
+    // own, so an uncaught throw here would abort the ENTIRE reconcile tick,
+    // not just this one task's return-to-worker check.
+    try {
       if (
-        lastWarnedAt === undefined ||
-        Date.now() - lastWarnedAt >= REQUIRED_STATUS_CONTEXTS_WARN_INTERVAL_MS
+        getRequiredStatusContextsFailureReason(
+          current.repoRef.owner,
+          current.repoRef.repo,
+          current.baseRef,
+        ) === "forbidden"
       ) {
+        const key = `${current.repoRef.owner}/${current.repoRef.repo}/${current.baseRef}`;
+        const lastWarnedAt = requiredStatusContextsForbiddenWarnedAt.get(key);
         if (
-          !requiredStatusContextsForbiddenWarnedAt.has(key) &&
-          requiredStatusContextsForbiddenWarnedAt.size >=
-            MAX_REQUIRED_STATUS_CONTEXTS_WARNED_ENTRIES
+          lastWarnedAt === undefined ||
+          Date.now() - lastWarnedAt >= REQUIRED_STATUS_CONTEXTS_WARN_INTERVAL_MS
         ) {
-          const oldest = requiredStatusContextsForbiddenWarnedAt.keys().next().value;
-          if (oldest !== undefined) requiredStatusContextsForbiddenWarnedAt.delete(oldest);
+          requiredStatusContextsForbiddenWarnedAt.set(key, Date.now());
+          // Self-review finding — this used to say "grant the App
+          // administration:read and it'll work," which is false:
+          // mintInstallationToken (github-app.ts) only ever requests
+          // READ_PERMISSIONS for this token, which never includes
+          // administration regardless of what's granted on the
+          // installation itself. There is currently no operator-side fix —
+          // only a Mullion code change (deliberately out of scope here,
+          // per #755's own original design notes) closes this. The warning
+          // says so plainly rather than sending an operator on a fix that
+          // does nothing.
+          app.log.warn(
+            { taskId: task.id, owner: current.repoRef.owner, repo: current.repoRef.repo },
+            "task reconcile: CI-auto-return (#755) can't tell a required check apart from a non-required one — the GitHub App's read-scope token never requests the `administration` permission this needs, by design (see docs/ci-cd.md's Branch protection section); granting the App broader permissions on GitHub does NOT fix this — it needs a Mullion code change. A red CI check on this task's PR will never auto-return the worker until that ships.",
+          );
         }
-        requiredStatusContextsForbiddenWarnedAt.set(key, Date.now());
-        app.log.warn(
-          { taskId: task.id, owner: current.repoRef.owner, repo: current.repoRef.repo },
-          "task reconcile: CI-auto-return (#755) can't tell a required check apart from a non-required one — the GitHub App's read token lacks the `administration` permission this needs (see docs/ci-cd.md's Branch protection section); a red CI check on this task's PR will never auto-return the worker until that's granted",
-        );
       }
+    } catch (err) {
+      app.log.warn(
+        { err, taskId: task.id },
+        "task reconcile: #1360's forbidden-permission warning check itself failed — ignoring, the red-CI-return gate still fails closed",
+      );
     }
     return false;
   }
