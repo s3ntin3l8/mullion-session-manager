@@ -2701,27 +2701,32 @@ async function attemptAutoApprove(
   if (!current) return;
 
   // If a previous auto-rebase attempt resolved the conflict (PR is now cleanly
-  // mergeable), clear rebaseStartedAt so processPendingReviewSpawns can spawn
-  // a fresh review agent, and reset the auto-approve backoff so the task gets
-  // an immediate attempt without being throttled by the dirty-period backoff.
+  // mergeable), clear mergeError and reset the auto-approve backoff so the
+  // task gets an immediate attempt without being throttled by the
+  // dirty-period backoff.
   //
-  // Requires mergeable === true (strict) rather than !== false: GitHub sets
-  // mergeable to null ("unknown") right after a push while it recomputes
-  // mergeability, and the rebase worker session may still be active in that
-  // window. Accepting null here would drop the processPendingReviewSpawns
-  // guard while the worker is still running, putting two agent PTYs in one
-  // worktree — exactly the hazard the rebaseStartedAt gate was added to close.
+  // Deliberately does NOT also clear rebaseStartedAt here. GitHub can
+  // compute mergeable: true before the rebase worker's own session actually
+  // exits — it may still be running post-push verification in the same
+  // worktree a freshly-spawned reviewer would target (processPendingReviewSpawns
+  // gates its spawn on rebaseStartedAt being null/stale, exactly to keep a
+  // reviewer out of that worktree while a rebase attempt might still be in
+  // flight). Clearing it the instant mergeable flips true would reopen that
+  // gate before the worker is actually done, racing two agent PTYs into one
+  // worktree — the hazard rebaseStartedAt exists to prevent. Session status
+  // can't substitute for this check either (see REBASE_ATTEMPT_STALE_MS's own
+  // doc comment: a Task Master worker stays "active" long after finishing).
+  // So rebaseStartedAt is left to age out via REBASE_ATTEMPT_STALE_MS, the
+  // same time-based signal every other "is an attempt still in flight" check
+  // in this file already trusts; approveTask clears it for good once the
+  // task is actually approved. Cost: up to REBASE_ATTEMPT_STALE_MS of extra
+  // latency before the fresh reviewer spawns, not a correctness gap.
   if (
     task.rebaseStartedAt !== null &&
     current.mergeable === true &&
     current.mergeableState !== "dirty"
   ) {
-    app.db
-      .update(tasks)
-      .set({ rebaseStartedAt: null, mergeError: null })
-      .where(eq(tasks.id, task.id))
-      .run();
-    task.rebaseStartedAt = null;
+    app.db.update(tasks).set({ mergeError: null }).where(eq(tasks.id, task.id)).run();
     task.mergeError = null;
     // Reset the backoff so the auto-approve attempt on the next tick is not
     // throttled by the attempts accumulated during the dirty/rebase period.

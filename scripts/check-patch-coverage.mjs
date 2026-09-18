@@ -244,8 +244,17 @@ export function runPatchCoverageCheck(options = {}) {
           encoding: "utf8",
         }).trim();
       } catch {
-        // merge-base can fail (e.g. when baseRef IS HEAD, or for shallow clones);
-        // diffBase retains the baseRef fallback set above.
+        // merge-base can fail (e.g. when baseRef IS HEAD, or — the common
+        // Task Master worktree case — a shallow clone with no common
+        // ancestor in its history). diffBase falls back to baseRef's tip,
+        // which over-counts if baseRef has advanced past the fork point;
+        // surfaced loudly rather than silently, since a shallow clone makes
+        // this the norm, not the exception, for automated worktrees.
+        console.warn(
+          `WARNING: could not compute merge-base with ${baseRef} (shallow clone?) — ` +
+            `falling back to diffing against ${baseRef}'s tip, which over-counts patch size ` +
+            "if it has advanced past this branch's fork point.",
+        );
       }
       diffText = execFileSync("git", ["diff", "-U0", diffBase], {
         cwd: root,

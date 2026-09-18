@@ -3919,16 +3919,34 @@ describe("reconcileTasks", () => {
       expect(row.reviewSessionId).toBeNull();
 
       // Fourth tick: PR is now confirmed cleanly mergeable (mergeable === true).
-      // processAutoApprovals caps the backoff at REBASE_POLL_INTERVAL_MS during
-      // the rebase window, so this tick is allowed through. attemptAutoApprove
-      // clears rebaseStartedAt and resets the backoff; processPendingReviewSpawns
-      // then spawns the reviewer on the same tick.
+      // attemptAutoApprove clears mergeError and resets the backoff, but
+      // deliberately leaves rebaseStartedAt set: GitHub can report
+      // mergeable: true before the rebase worker's own session has actually
+      // finished touching the worktree, so clearing it here would let
+      // processPendingReviewSpawns spawn a second agent into the same
+      // worktree while the worker might still be running. reviewSessionId
+      // must stay null — no reviewer spawns on this tick.
       mockGetPullRequestByNumber.mockResolvedValue(
         mockPr({ mergeable: true, mergeableState: "clean" }),
       );
       await reconcileTasks(app);
       row = await getTask(app, taskId);
-      expect(row.rebaseStartedAt).toBeNull();
+      expect(row.rebaseStartedAt).not.toBeNull();
+      expect(row.mergeError).toBeNull();
+      expect(row.reviewSessionId).toBeNull();
+
+      // Fifth tick: rebaseStartedAt has aged past REBASE_ATTEMPT_STALE_MS —
+      // the same time-based staleness check every other in-flight-rebase
+      // gate in this file trusts — so processPendingReviewSpawns now treats
+      // the attempt as no longer in flight and spawns the fresh reviewer.
+      const { tasks } = await import("../../src/db/schema.js");
+      app.db
+        .update(tasks)
+        .set({ rebaseStartedAt: new Date(Date.now() - 31 * 60_000) })
+        .where(eq(tasks.id, taskId))
+        .run();
+      await reconcileTasks(app);
+      row = await getTask(app, taskId);
       expect(row.reviewSessionId).not.toBeNull();
 
       await app.close();
