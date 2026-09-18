@@ -63,6 +63,36 @@ describe("listAvds", () => {
       .mockResolvedValue({ stdout: "Available Android Virtual Devices:\n", stderr: "" });
     expect(await listAvds("/opt/sdk/avdmanager", { exec })).toEqual([]);
   });
+
+  // Self-review (mullion-reviewer) caught a real bug an earlier version of
+  // runList() had: a second, separately-scheduled timer raced against
+  // `exec()` was never cleared on the success path, leaking a pending timer
+  // for the full LIST_TIMEOUT_MS after every call — confirmed empirically
+  // to add up to 15s of wall-clock hang. This test exercises the actual
+  // timeout PATH (not just the happy path the other tests cover) and
+  // asserts no timer is left pending afterward — the exact regression that
+  // bug would reintroduce. The fake `exec` mimics what a real `execFile`
+  // does when handed a signal that fires (reject), which is what runList()'s
+  // timeout mechanism now depends on entirely, having dropped the
+  // redundant second mechanism.
+  it("times out and leaves no dangling timer when exec never resolves on its own", async () => {
+    vi.useFakeTimers();
+    try {
+      const exec = vi.fn(
+        (_file: string, _args: string[], options: { signal?: AbortSignal }) =>
+          new Promise<{ stdout: string; stderr: string }>((_resolve, reject) => {
+            options.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+          }),
+      );
+      const promise = listAvds("/opt/sdk/avdmanager", { exec });
+      const assertion = expect(promise).rejects.toThrow(/timed out/);
+      await vi.advanceTimersByTimeAsync(20_000);
+      await assertion;
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("listDeviceProfiles", () => {

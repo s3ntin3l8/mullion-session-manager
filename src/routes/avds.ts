@@ -33,8 +33,17 @@ export async function avdsRoute(app: FastifyInstance): Promise<void> {
     if (!app.config.DEVICE_AVDMANAGER_PATH) {
       return reply.badRequest("DEVICE_AVDMANAGER_PATH is not configured.");
     }
-    const avds = await listAvds(app.config.DEVICE_AVDMANAGER_PATH);
-    return { avds };
+    // Self-review (mullion-reviewer) — an exec failure (a misconfigured
+    // path, ENOENT, or the timeout path) used to fall through uncaught to a
+    // generic 500, unlike every other misconfiguration case in this file,
+    // which produces an actionable 400. Same fix applied to the sibling GET
+    // handlers below and to the POST handler's own listDeviceProfiles call.
+    try {
+      const avds = await listAvds(app.config.DEVICE_AVDMANAGER_PATH);
+      return { avds };
+    } catch (err) {
+      return reply.badRequest(err instanceof Error ? err.message : String(err));
+    }
   });
 
   app.get("/api/system-images", async (_request, reply) => {
@@ -44,6 +53,8 @@ export async function avdsRoute(app: FastifyInstance): Promise<void> {
     if (!app.config.DEVICE_ANDROID_SDK_ROOT) {
       return reply.badRequest("DEVICE_ANDROID_SDK_ROOT is not configured.");
     }
+    // listInstalledSystemImages is pure fs (no exec) and never throws — see
+    // its own safeReaddir() comment — so no try/catch is needed here.
     const systemImages = listInstalledSystemImages(app.config.DEVICE_ANDROID_SDK_ROOT);
     return { systemImages };
   });
@@ -61,8 +72,12 @@ export async function avdsRoute(app: FastifyInstance): Promise<void> {
     if (!app.config.DEVICE_AVDMANAGER_PATH) {
       return reply.badRequest("DEVICE_AVDMANAGER_PATH is not configured.");
     }
-    const deviceProfiles = await listDeviceProfiles(app.config.DEVICE_AVDMANAGER_PATH);
-    return { deviceProfiles };
+    try {
+      const deviceProfiles = await listDeviceProfiles(app.config.DEVICE_AVDMANAGER_PATH);
+      return { deviceProfiles };
+    } catch (err) {
+      return reply.badRequest(err instanceof Error ? err.message : String(err));
+    }
   });
 
   app.post<{ Body: CreateAvdBody }>("/api/avds", async (request, reply) => {
@@ -88,10 +103,16 @@ export async function avdsRoute(app: FastifyInstance): Promise<void> {
     // data is already being fetched to populate the frontend picker that
     // produced these values in the first place). Fetched in parallel: two
     // independent listings, not a data dependency between them.
-    const [installedImages, deviceProfiles] = await Promise.all([
-      listInstalledSystemImages(app.config.DEVICE_ANDROID_SDK_ROOT),
-      listDeviceProfiles(app.config.DEVICE_AVDMANAGER_PATH),
-    ]);
+    let installedImages;
+    let deviceProfiles;
+    try {
+      [installedImages, deviceProfiles] = await Promise.all([
+        listInstalledSystemImages(app.config.DEVICE_ANDROID_SDK_ROOT),
+        listDeviceProfiles(app.config.DEVICE_AVDMANAGER_PATH),
+      ]);
+    } catch (err) {
+      return reply.badRequest(err instanceof Error ? err.message : String(err));
+    }
     if (!systemImage || !installedImages.some((img) => img.packagePath === systemImage)) {
       return reply.badRequest("systemImage must be one of the host's installed system images");
     }

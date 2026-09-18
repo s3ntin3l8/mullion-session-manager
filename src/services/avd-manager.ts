@@ -28,23 +28,28 @@ const LIST_TIMEOUT_MS = 15_000;
 // from routes/avds.ts, not a background job.
 const CREATE_AVD_TIMEOUT_MS = 120_000;
 
+// Self-review (mullion-reviewer) caught a real bug in an earlier version of
+// this function: racing `exec()` against a second, separately-scheduled
+// `setTimeout` that rejected on its own left THAT timer's handle uncleared
+// on the success path, leaking a pending timer for up to LIST_TIMEOUT_MS
+// after every single call — confirmed empirically to add up to 15s to a
+// script's exit. `execFile`'s own `signal` option is sufficient on its
+// own — a real `execFile` given a firing AbortSignal already rejects the
+// promise — so there is no need for a second, independent timeout
+// mechanism at all: one timer, captured and cleared in `finally`.
 async function runList(exec: ExecFn, avdmanagerPath: string, args: string[]): Promise<string> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), LIST_TIMEOUT_MS);
   try {
-    const { stdout } = await Promise.race([
-      exec(avdmanagerPath, args, { signal: controller.signal }),
-      new Promise<never>((_, reject) =>
-        setTimeout(
-          () => reject(new Error(`avdmanager ${args.join(" ")} timed out`)),
-          LIST_TIMEOUT_MS,
-        ),
-      ),
-    ]);
+    const { stdout } = await exec(avdmanagerPath, args, { signal: controller.signal });
     return stdout;
+  } catch (err) {
+    if (controller.signal.aborted) {
+      throw new Error(`avdmanager ${args.join(" ")} timed out`, { cause: err });
+    }
+    throw err;
   } finally {
     clearTimeout(timer);
-    controller.abort();
   }
 }
 

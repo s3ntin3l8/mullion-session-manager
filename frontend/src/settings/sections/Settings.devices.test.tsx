@@ -21,6 +21,7 @@ describe("Settings -> Devices (issue #1326)", () => {
   let createCounter: number;
   let pairCalls: unknown[];
   let avdsDb: string[];
+  let avdsShouldFail: boolean;
   let systemImagesDb: SystemImage[];
   let deviceProfilesDb: string[];
   let avdCreateCalls: unknown[];
@@ -36,6 +37,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     // Seeded with one AVD by default so the picker isn't empty in tests
     // that don't specifically exercise the empty-AVDs state.
     avdsDb = ["pixel_7"];
+    avdsShouldFail = false;
     systemImagesDb = [
       {
         packagePath: "system-images;android-35;google_apis;x86_64",
@@ -60,7 +62,10 @@ describe("Settings -> Devices (issue #1326)", () => {
       // test/routes/avds.test.ts for that coverage), but this file's own
       // "create surfaces DEVICE_ENABLED=false" test needs the picker
       // populated to even reach a POST /api/devices attempt.
-      "GET /api/avds": () => jsonResponse(200, { avds: avdsDb }),
+      "GET /api/avds": () =>
+        avdsShouldFail
+          ? jsonResponse(400, { message: "DEVICE_AVDMANAGER_PATH is not configured." })
+          : jsonResponse(200, { avds: avdsDb }),
       "GET /api/system-images": () => jsonResponse(200, { systemImages: systemImagesDb }),
       "GET /api/device-profiles": () => jsonResponse(200, { deviceProfiles: deviceProfilesDb }),
       "POST /api/avds": ({ init }) => {
@@ -335,6 +340,23 @@ describe("Settings -> Devices (issue #1326)", () => {
     await user.click(await screen.findByText("New device"));
     expect(await screen.findByText(/No AVDs on this host yet/)).toBeInTheDocument();
     expect(screen.queryByDisplayValue("pixel_7")).not.toBeInTheDocument();
+  });
+
+  // Hermes review (round 1) — a load failure used to leave `avds` empty
+  // while `avdsLoaded` was still set true, so the empty-state text ("No
+  // AVDs on this host yet") rendered ALONGSIDE the actual error, telling
+  // the user to "create one below" when the real problem is a
+  // misconfigured DEVICE_AVDMANAGER_PATH.
+  it("shows only the error, not the empty-AVDs message, when GET /api/avds fails", async () => {
+    avdsShouldFail = true;
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(await screen.findByText("New device"));
+    expect(
+      await screen.findByText("DEVICE_AVDMANAGER_PATH is not configured."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/No AVDs on this host yet/)).not.toBeInTheDocument();
   });
 
   it("+ New AVD reveals the system image and device profile pickers", async () => {

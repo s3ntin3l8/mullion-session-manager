@@ -400,7 +400,7 @@ export function DevicesSection() {
                   />
                 </Row>
               )}
-              {avdsLoaded && avds.length === 0 && !newAvdOpen && (
+              {avdsLoaded && !avdsError && avds.length === 0 && !newAvdOpen && (
                 <div style={{ fontSize: 11.5, color: "var(--dim)", marginTop: 4 }}>
                   No AVDs on this host yet — create one below.
                 </div>
@@ -448,7 +448,7 @@ export function DevicesSection() {
                       />
                     </Row>
                   )}
-                  {provisioningLoaded && systemImages.length === 0 && (
+                  {provisioningLoaded && !createAvdError && systemImages.length === 0 && (
                     <div style={{ fontSize: 11.5, color: "var(--dim)", marginTop: 4 }}>
                       No system images installed on this host — install one via the SDK's sdkmanager
                       first.

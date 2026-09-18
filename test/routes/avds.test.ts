@@ -133,6 +133,18 @@ describe("avds routes", () => {
         expect(vi.mocked(listAvds)).toHaveBeenCalledWith("/opt/sdk/avdmanager");
       });
 
+      // Self-review (mullion-reviewer) — an exec failure (a misconfigured
+      // DEVICE_AVDMANAGER_PATH, ENOENT, a timeout) used to fall through
+      // uncaught to a generic 500, unlike every other error case this file
+      // handles as a 400.
+      it("GET /api/avds surfaces a listAvds failure as 400, not an uncaught 500", async () => {
+        vi.mocked(listAvds).mockRejectedValueOnce(new Error("spawn avdmanager ENOENT"));
+        const app = await buildTestApp();
+        const res = await app.inject({ method: "GET", url: "/api/avds" });
+        expect(res.statusCode).toBe(400);
+        expect(res.json().message).toContain("ENOENT");
+      });
+
       it("GET /api/system-images lists installed images from the service", async () => {
         const app = await buildTestApp();
         const res = await app.inject({ method: "GET", url: "/api/system-images" });
@@ -146,6 +158,31 @@ describe("avds routes", () => {
         const res = await app.inject({ method: "GET", url: "/api/device-profiles" });
         expect(res.statusCode).toBe(200);
         expect(res.json()).toEqual({ deviceProfiles: ["pixel_6"] });
+      });
+
+      it("GET /api/device-profiles surfaces a listDeviceProfiles failure as 400, not an uncaught 500", async () => {
+        vi.mocked(listDeviceProfiles).mockRejectedValueOnce(new Error("spawn avdmanager ENOENT"));
+        const app = await buildTestApp();
+        const res = await app.inject({ method: "GET", url: "/api/device-profiles" });
+        expect(res.statusCode).toBe(400);
+        expect(res.json().message).toContain("ENOENT");
+      });
+
+      it("POST /api/avds surfaces a listDeviceProfiles/listInstalledSystemImages failure as 400", async () => {
+        vi.mocked(listDeviceProfiles).mockRejectedValueOnce(new Error("spawn avdmanager ENOENT"));
+        const app = await buildTestApp();
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/avds",
+          payload: {
+            name: "pixel_7",
+            systemImage: "system-images;android-35;google_apis;x86_64",
+            deviceProfile: "pixel_6",
+          },
+        });
+        expect(res.statusCode).toBe(400);
+        expect(res.json().message).toContain("ENOENT");
+        expect(vi.mocked(createAvd)).not.toHaveBeenCalled();
       });
 
       it("POST /api/avds creates an AVD and returns 201", async () => {
