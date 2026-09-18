@@ -237,7 +237,7 @@ export function runPatchCoverageCheck(options = {}) {
       // the branch point — not extra commits on main that advanced after the
       // branch was cut. git diff origin/main..HEAD and a pre-rebase run would
       // both over-count if baseRef has advanced past the fork point.
-      let diffBase = baseRef;
+      let diffBase = baseRef; // fallback: diff against baseRef tip if merge-base fails
       try {
         diffBase = execFileSync("git", ["merge-base", baseRef, "HEAD"], {
           cwd: root,
@@ -245,8 +245,7 @@ export function runPatchCoverageCheck(options = {}) {
         }).trim();
       } catch {
         // merge-base can fail (e.g. when baseRef IS HEAD, or for shallow clones);
-        // fall back to diffing against baseRef directly.
-        diffBase = baseRef;
+        // diffBase retains the baseRef fallback set above.
       }
       diffText = execFileSync("git", ["diff", "-U0", diffBase], {
         cwd: root,
