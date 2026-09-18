@@ -498,6 +498,13 @@
       "when": 1789654295629,
       "tag": "0070_awesome_toad_men",
       "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "6",
+      "when": 1789727252297,
+      "tag": "0071_steep_red_skull",
+      "breakpoints": true
     }
   ]
 }

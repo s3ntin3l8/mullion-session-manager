@@ -959,6 +959,32 @@ export const tasks = sqliteTable(
     // read it back later, not just at ingestion time — re-parsing the
     // rendered reviewFindings prose is not a gate worth betting a merge on.
     lastReviewVerdict: text("last_review_verdict"),
+    // Task 409707 — when `lastReviewVerdict` above was last written, stamped
+    // in the SAME ingest write. Exists only to anchor the inconclusive-review
+    // re-arm sweep's grace window (`reannounceInconclusiveReviewsAfterGrace`,
+    // task-reconciler.ts): a review agent that goes silently idle mid-review
+    // (no `errorState`, so `isRateLimitGraceActive` never engages — see that
+    // function's own doc comment) previously landed on `lastReviewVerdict =
+    // "inconclusive"` with no automatic path back, because
+    // `reviewFindingsIngestedSessionId` latches permanently against the
+    // stalled session. `updatedAt` can't stand in for this: it bumps on
+    // every unrelated write to the row (drizzle's `$onUpdate`), not just a
+    // verdict ingest.
+    lastReviewVerdictAt: integer("last_review_verdict_at", { mode: "timestamp" }),
+    // Task 409707 — bounds `reannounceInconclusiveReviewsAfterGrace` to a
+    // small, fixed number of automatic re-arm attempts per review round, so
+    // a genuinely-broken review adapter that goes idle-with-no-signal on
+    // every attempt can't loop forever burning fresh review sessions with no
+    // human in the loop. Deliberately NOT the same counter as
+    // `autoReturnRounds`: an inconclusive verdict never calls `autoReturnTask`
+    // (see `processReviewingTasks`'s own `wantsAutoReturn` gate, which
+    // requires `verdict === "changes-requested"`), so `autoReturnRounds`
+    // never advances on a repeatedly-inconclusive review and can't be reused
+    // as this bound. Reset to 0 at the one site that starts a genuinely fresh
+    // review round (`task-reconciler.ts`'s `in_progress -> reviewing`
+    // transition) — same reasoning as `autoReturnCapAnnouncedAt`'s reset
+    // there — so a later round's own stall gets its own automatic attempt.
+    inconclusiveReviewRearmCount: integer("inconclusive_review_rearm_count").notNull().default(0),
     // Retired dead weight — PR #989's sequential-review-phase design (issues
     // #981/#982/#991, closed as superseded) used these two columns to
     // sequence a task's PR undraft around an external, GitHub-Actions-

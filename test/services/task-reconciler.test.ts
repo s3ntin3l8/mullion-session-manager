@@ -360,7 +360,8 @@ mockPromoteTaskToPR.mockImplementation(actualTaskPromoteModule.promoteTaskToPR);
 
 const { buildApp } = await import("../../src/app.js");
 const { closeDb, getDb } = await import("../../src/db/client.js");
-const { reconcileTasks } = await import("../../src/services/task-reconciler.js");
+const { reconcileTasks, DEFAULT_MAX_AUTO_RETURN_ROUNDS } =
+  await import("../../src/services/task-reconciler.js");
 const { tasks, sessions, projects } = await import("../../src/db/schema.js");
 const { and, eq, isNull, isNotNull } = await import("drizzle-orm");
 const { taskReviewFindingsPath, taskCommitTitlePath } =
@@ -7684,6 +7685,225 @@ describe("reconcileTasks", () => {
       expect(row.lastReviewedHeadSha).toBe("sha-old");
 
       await app.close();
+    });
+  });
+
+  // Task 409707 — a review agent that goes silently idle mid-review (no
+  // reported errorState/errorDetail at all, so isRateLimitGraceActive never
+  // engages) gets ingested as `lastReviewVerdict = "inconclusive"` by
+  // processReviewingTasks, and reviewFindingsIngestedSessionId then latches
+  // permanently against that stalled session with no automatic way back —
+  // unlike a capped task, an inconclusive verdict never calls autoReturnTask,
+  // so autoReturnRounds never reaches the cap and
+  // reannounceCappedTasksAfterHumanPush never fires either.
+  describe("inconclusive-review re-arm after a grace period (reannounceInconclusiveReviewsAfterGrace)", () => {
+    async function createStalledInconclusiveTask(
+      app: Awaited<ReturnType<typeof buildApp>>,
+      overrides: Partial<typeof tasks.$inferInsert> = {},
+    ) {
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: {
+          createDir: true,
+          name: `p-inconclusive-rearm-${Date.now()}-${Math.random()}`,
+          cwd: "/tmp",
+        },
+      });
+      const workerSession = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId: project.json().id, command: "bash" },
+      });
+      const reviewSession = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId: project.json().id, command: "bash" },
+      });
+      const [task] = app.db
+        .insert(tasks)
+        .values({
+          projectId: project.json().id,
+          title: "silently-stalled review, awaiting an automatic re-arm",
+          status: "reviewing",
+          sessionId: workerSession.json().id,
+          reviewSessionId: reviewSession.json().id,
+          reviewFindingsIngestedSessionId: reviewSession.json().id,
+          lastReviewVerdict: "inconclusive",
+          lastReviewVerdictAt: new Date(Date.now() - 61 * 60_000),
+          inconclusiveReviewRearmCount: 0,
+          autoReturnRounds: 0,
+          autoReturnCapAnnouncedAt: null,
+          worktreePath: "/tmp",
+          agentCommand: "claude",
+          claimedAt: new Date(),
+          ...overrides,
+        })
+        .returning()
+        .all();
+      return { project: project.json(), task, reviewSessionId: reviewSession.json().id as number };
+    }
+
+    it("re-arms a silently-stalled inconclusive review once the grace period has elapsed", async () => {
+      const app = await buildApp();
+      const { task, reviewSessionId } = await createStalledInconclusiveTask(app);
+      const sessionsModule = await import("../../src/services/session-lifecycle.js");
+      const killSpy = vi.spyOn(sessionsModule, "killSession").mockResolvedValue(undefined);
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, task.id);
+      expect(row.reviewSessionId).toBeNull();
+      expect(row.reviewFindingsIngestedSessionId).toBeNull();
+      expect(row.reviewSeedDelivered).toBeNull();
+      expect(row.reviewSpawnClaimedAt).toBeNull();
+      expect(row.inconclusiveReviewRearmCount).toBe(1);
+      expect(row.status).toBe("reviewing");
+      // Not spent — this is a fresh review attempt, not a worker round.
+      expect(row.autoReturnRounds).toBe(0);
+      // Left as-is: the board still shows what the stalled round found (or
+      // didn't) until the fresh review round ingests its own verdict.
+      expect(row.lastReviewVerdict).toBe("inconclusive");
+      expect(killSpy).toHaveBeenCalledWith(app, reviewSessionId);
+
+      killSpy.mockRestore();
+      await app.close();
+    });
+
+    // Same reasoning as the in_progress -> reviewing transition's own kill
+    // failure test above — a failed kill must not roll back or block the
+    // re-arm write itself (already durable), just warn.
+    it("still re-arms even when killing the stalled review session fails", async () => {
+      const app = await buildApp();
+      const { task, reviewSessionId } = await createStalledInconclusiveTask(app);
+      const sessionsModule = await import("../../src/services/session-lifecycle.js");
+      const killSpy = vi
+        .spyOn(sessionsModule, "killSession")
+        .mockRejectedValueOnce(new Error("boom"));
+      const warnSpy = vi.spyOn(app.log, "warn");
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, task.id);
+      expect(row.reviewSessionId).toBeNull();
+      expect(row.inconclusiveReviewRearmCount).toBe(1);
+      // Fire-and-forget — flush microtasks before asserting the warn fired.
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ taskId: task.id, reviewSessionId }),
+        "task reconcile: failed to kill the stalled review session",
+      );
+
+      killSpy.mockRestore();
+      await app.close();
+    });
+
+    it("does not re-arm while still within the grace period", async () => {
+      const app = await buildApp();
+      const { task } = await createStalledInconclusiveTask(app, {
+        lastReviewVerdictAt: new Date(Date.now() - 60_000),
+      });
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, task.id);
+      expect(row.reviewSessionId).not.toBeNull();
+      expect(row.inconclusiveReviewRearmCount).toBe(0);
+
+      await app.close();
+    });
+
+    it("does not re-arm once the automatic re-arm budget is already spent", async () => {
+      const app = await buildApp();
+      const { task } = await createStalledInconclusiveTask(app, {
+        inconclusiveReviewRearmCount: 1,
+      });
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, task.id);
+      expect(row.reviewSessionId).not.toBeNull();
+      expect(row.inconclusiveReviewRearmCount).toBe(1);
+
+      await app.close();
+    });
+
+    it("does not re-arm a task that has already spent its auto-return round budget", async () => {
+      const app = await buildApp();
+      const { task } = await createStalledInconclusiveTask(app, {
+        autoReturnRounds: DEFAULT_MAX_AUTO_RETURN_ROUNDS,
+      });
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, task.id);
+      expect(row.reviewSessionId).not.toBeNull();
+      expect(row.inconclusiveReviewRearmCount).toBe(0);
+
+      await app.close();
+    });
+
+    // A capped, announced task is reannounceCappedTasksAfterHumanPush's own
+    // territory (requires an actual human push, not a timer) — the two
+    // sweeps must never both touch the same row.
+    it("does not re-arm a capped, announced task", async () => {
+      const app = await buildApp();
+      const { task } = await createStalledInconclusiveTask(app, {
+        autoReturnRounds: DEFAULT_MAX_AUTO_RETURN_ROUNDS,
+        autoReturnCapAnnouncedAt: new Date(Date.now() - 60_000),
+      });
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, task.id);
+      expect(row.reviewSessionId).not.toBeNull();
+      expect(row.inconclusiveReviewRearmCount).toBe(0);
+      expect(row.autoReturnCapAnnouncedAt).not.toBeNull();
+
+      await app.close();
+    });
+
+    it("does not re-arm a task whose most recent verdict isn't inconclusive", async () => {
+      const app = await buildApp();
+      const { task } = await createStalledInconclusiveTask(app, { lastReviewVerdict: "clean" });
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, task.id);
+      expect(row.reviewSessionId).not.toBeNull();
+      expect(row.inconclusiveReviewRearmCount).toBe(0);
+
+      await app.close();
+    });
+
+    it("does nothing while Task Master is disabled", async () => {
+      const app = await buildApp();
+      try {
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { taskMaster: { enabled: "off" } },
+        });
+        const { task } = await createStalledInconclusiveTask(app);
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, task.id);
+        expect(row.reviewSessionId).not.toBeNull();
+        expect(row.inconclusiveReviewRearmCount).toBe(0);
+      } finally {
+        // "off" is a durable settings-row write, not per-app state — the
+        // whole file shares one DB (test/setup.ts), so leaving it here would
+        // silently disable Task Master for every later test in the file
+        // (see the pre-existing "does not transition a finished task..."
+        // test above for the same reset-in-finally convention).
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { taskMaster: { enabled: "inherit" } },
+        });
+        await app.close();
+      }
     });
   });
 
