@@ -192,11 +192,14 @@ is not restricted to any particular device (see `control-socket.ts`'s own
 comment on `device.action` for the full reasoning). This is what actually
 closes the "verify your own UI change" loop the feature exists for — an
 agent inside a normal session can call these with no elevated credential.
-`device.pair` is the one exception — **full scope only**: pairing authorizes
-the host's adb server to trust a new piece of hardware, a bigger blast
-radius than driving a device Mullion already manages (see that op's own
-comment in `control-socket.ts`). MCP does not expose `device pair`/`connect`
-— only the CLI and REST do.
+Two exceptions are **full scope only**, both gated on the same "bigger blast
+radius than driving a device Mullion already manages" reasoning: `device.pair`
+always, and `device.create` when its body sets `kind: "physical"` (session
+scope still works for an ordinary emulator `device.create`) — `wireless.connect()`
+lets the caller dial an arbitrary address, an outbound-dial/internal-network-
+probe primitive the emulator path never had (see `control-socket.ts`'s own
+comments on both). MCP does not expose `device pair`/`connect` — only the CLI
+and REST do.
 
 ## 3. REST API
 

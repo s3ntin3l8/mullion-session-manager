@@ -649,6 +649,13 @@ export class DeviceManager {
         throw new Error(`physical device ${opts.id} has no persisted adb address to connect to`);
       }
       const serial = opts.serial;
+      // If `existing` above was present but !isAlive, this REPLACES it —
+      // safe only because a non-alive Device has already released whatever
+      // it held: an `error` one nulled its adb/scrcpy in connectPhysical()'s
+      // own catch, an `exited` one went through kill()'s teardownProcess().
+      // No separate "allow reconnect" re-entry path here the way the
+      // emulator branch below has for a restart-surviving scope — nothing
+      // to reconnect an old physical Device instance TO.
       const device = new Device(opts, this.opts, this.serverClient, this.releasePort.bind(this));
       this.devices.set(opts.id, device);
       // Fire-and-forget, same shape as spawn()/attach() below — a caller
