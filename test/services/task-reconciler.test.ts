@@ -561,8 +561,13 @@ describe("reconcileTasks", () => {
     // never reached outside the dedicated describe block below, but a
     // leaked call count from one #755 test must not bleed into the next.
     mockFetchRequiredStatusContexts.mockClear();
-    // #1360 — same reasoning as mockFetchRequiredStatusContexts above.
-    mockGetRequiredStatusContextsFailureReason.mockClear();
+    // Hermes review — reset (not just clear), same reasoning as
+    // mockGetPullRequestReviewDecision/mockResolveReviewerToken below: a
+    // leaked `.mockReturnValue("forbidden")` from one #1360 test must not
+    // persist into a later, unrelated test via this shared beforeEach — a
+    // bare mockClear() only resets call history, not the configured return
+    // value.
+    mockGetRequiredStatusContextsFailureReason.mockReset().mockReturnValue(null);
     mockFetchCheckRunsForHead.mockClear();
     mockCreatePullRequestReview.mockClear();
     // #737 — reset (not just clear) so a leaked .mockResolvedValueOnce from
