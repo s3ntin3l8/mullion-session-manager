@@ -3152,6 +3152,17 @@ export async function autoReturnTask(
       // it explicitly anyway so this write is the one place that can never
       // leave a stale announcement behind if that invariant ever slips.
       autoReturnCapAnnouncedAt: null,
+      // Issue #1357 — this is a fresh worker spell (a new session, per
+      // reseedTaskIfSessionExited's force:true just below), same reasoning
+      // as reject's own claimedAt reset (routes/tasks.ts): leaving the
+      // ORIGINAL claimedAt here would let the budget-exceeded check
+      // (below, in the main reconcile loop) measure its deadline from
+      // whenever the task first entered in_progress — potentially hours
+      // before this review round even started — and fail the freshly
+      // re-seeded session before it ever gets a turn. claimedAt's own doc
+      // comment (schema.ts) calls this "when did its current spell start";
+      // this IS a new spell.
+      claimedAt: new Date(),
     })
     .where(and(eq(tasks.id, task.id), eq(tasks.status, "reviewing")))
     .run();
@@ -3197,6 +3208,11 @@ export async function autoReturnTask(
         // above) — restores the pre-attempt value rather than assuming
         // null, though every designed caller already had it null here.
         autoReturnCapAnnouncedAt: task.autoReturnCapAnnouncedAt,
+        // Issue #1357 — claimedAt rolls back too: a failed re-seed means no
+        // new spell actually started, so the clock the budget check reads
+        // must not have moved either. Same "roll back together" reasoning
+        // as every other field in this write.
+        claimedAt: task.claimedAt,
       })
       // Adding `status = "in_progress"` here (issue #973) is a real
       // semantic change, not just a tighter guard: status and the round now

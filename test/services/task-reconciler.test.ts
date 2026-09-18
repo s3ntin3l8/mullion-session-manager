@@ -6354,6 +6354,59 @@ describe("reconcileTasks", () => {
       await app.close();
     });
 
+    // Issue #1357 — a task that sat in "reviewing" long enough for its
+    // ORIGINAL claimedAt to already be past the budget deadline (real
+    // incident: task 410657, review round revived by #1346's own rearm
+    // sweep hours after the original claim) used to have its freshly
+    // auto-returned worker session immediately killed by the SAME
+    // reconcileTasks() tick's own budget-exceeded check
+    // (reconcileTasks runs processReviewingTasks, which calls
+    // autoReturnTask, before its own claimed/in_progress budget-check pass
+    // further down — both in one call, confirmed by reading
+    // reconcileTasks's own body). autoReturnTask must reset claimedAt so
+    // this doesn't happen.
+    it("does not get budget-killed by the same tick's own budget check after an auto-return (issue #1357)", async () => {
+      process.env.MULLION_TASK_BUDGET_MINUTES = "1";
+      try {
+        const app = await buildApp();
+        const { taskId, workerSessionId } = await claimIntoReviewing(app, "codex");
+        // Simulate a task that has sat in "reviewing" long enough for its
+        // original claimedAt to already be outside the (tightened) budget
+        // window by the time a real verdict finally lands — exactly what
+        // #1346's rearm sweep produces on a task that stalled for a while.
+        const longAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+        app.db.update(tasks).set({ claimedAt: longAgo }).where(eq(tasks.id, taskId)).run();
+        writeFindings(
+          app,
+          taskId,
+          0,
+          JSON.stringify({
+            verdict: "changes-requested",
+            summary: "One thing to fix.",
+            findings: [{ path: "a.ts", line: 1, body: "fix this" }],
+          }),
+        );
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        // Before the fix: this task would be "failed" with
+        // failureReason containing "budget exceeded" — the freshly
+        // re-seeded worker session killed within the same tick, before it
+        // ever got a turn.
+        expect(row.status).toBe("in_progress");
+        expect(row.autoReturnRounds).toBe(1);
+        expect(row.failureReason).toBeNull();
+        expect(row.sessionId).not.toBe(workerSessionId);
+        expect(row.claimedAt).not.toBeNull();
+        expect(row.claimedAt!.getTime()).toBeGreaterThan(longAgo.getTime());
+
+        await app.close();
+      } finally {
+        process.env.MULLION_TASK_BUDGET_MINUTES = "120";
+      }
+    });
+
     it("does not re-ingest (or re-comment) an already-processed review session's output on a later tick", async () => {
       const app = await buildApp();
       const { taskId } = await claimIntoReviewing(app, "codex");
@@ -7430,6 +7483,7 @@ describe("reconcileTasks", () => {
     it("rolls back the spent auto-return round AND status when the re-seed itself fails", async () => {
       const app = await buildApp();
       const { taskId, reviewSessionId } = await claimIntoReviewing(app, "codex");
+      const originalClaimedAt = (await getTask(app, taskId)).claimedAt;
       writeFindings(app, taskId, 0, "This should not cost the task its one round.");
       mockReseedTaskIfSessionExited.mockResolvedValueOnce(false);
       const warnSpy = vi.spyOn(app.log, "warn");
@@ -7447,6 +7501,10 @@ describe("reconcileTasks", () => {
       // roll back to whatever it was before too (null, here), not linger
       // at "review" for a round that never happened.
       expect(row.lastAutoReturnReason).toBeNull();
+      // Issue #1357 — a rolled-back attempt didn't actually start a new
+      // worker spell either, so claimedAt must roll back too, not stay at
+      // whatever autoReturnTask's own forward CAS bumped it to.
+      expect(row.claimedAt?.getTime()).toBe(originalClaimedAt?.getTime());
       expect(warnSpy).toHaveBeenCalledWith(
         expect.objectContaining({ taskId, rolledBack: true }),
         expect.stringContaining("rolled back the spent auto-return round"),
