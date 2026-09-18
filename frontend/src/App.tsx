@@ -854,6 +854,7 @@ export function App() {
     onOpenTasks,
     onOpenBrowserUrl,
     onOpenBlankBrowser,
+    onOpenDevice,
   } = usePanelOpener({
     dockviewApi,
     layout,
@@ -1370,6 +1371,7 @@ export function App() {
             onOpenTasks={onOpenTasks}
             onOpenGit={onOpenGit}
             onOpenProjectSetup={onOpenProjectSetup}
+            onOpenDevice={onOpenDevice}
           />
         </div>
         <div className="grid-area">

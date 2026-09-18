@@ -8,6 +8,7 @@ import {
   BotIcon,
   ChevronLeftIcon,
   CloseIcon,
+  DeviceIcon,
   DockIcon,
   FolderIcon,
   GitHubIcon,
@@ -32,6 +33,7 @@ import { SkillsSection } from "./settings/sections/SkillsSection.js";
 import { ServerInfoSection } from "./settings/sections/ServerInfoSection.js";
 import { ModelsSection } from "./settings/sections/ModelsSection.js";
 import { AccountSection } from "./settings/sections/AccountSection.js";
+import { DevicesSection } from "./settings/sections/DevicesSection.js";
 
 export type SettingsSection =
   | "account"
@@ -47,7 +49,8 @@ export type SettingsSection =
   | "integrations"
   | "skills"
   | "server"
-  | "models";
+  | "models"
+  | "devices";
 
 const SECTIONS: Array<{
   id: SettingsSection;
@@ -139,6 +142,12 @@ const SECTIONS: Array<{
     desc: "Read-only deployment diagnostics.",
     icon: (size) => <ServerRackIcon size={size} />,
   },
+  {
+    id: "devices",
+    title: "Devices",
+    desc: "Android emulators and physical phones streamed into the dashboard.",
+    icon: (size) => <DeviceIcon size={size} />,
+  },
 ];
 
 // A real (not cosmetic) filter over control labels — the nav rail's search
@@ -212,6 +221,8 @@ const SEARCH_INDEX: Array<{ section: SettingsSection; text: string }> = [
   { section: "server", text: "version environment port encryption uptime role primary agent" },
   { section: "server", text: "sessions directory database rate limit" },
   { section: "server", text: "updates update now release latest apply auto-update" },
+  { section: "devices", text: "android emulator avd adb scrcpy device panel phone" },
+  { section: "devices", text: "new device create stop delete" },
 ];
 
 // Ported 1:1 from the design's settings modal: an accented nav rail (1a's
@@ -431,6 +442,7 @@ export function Settings({
               {section === "integrations" && <IntegrationsSection />}
               {section === "skills" && <SkillsSection />}
               {section === "server" && <ServerInfoSection />}
+              {section === "devices" && <DevicesSection />}
             </div>
           </div>
         </div>

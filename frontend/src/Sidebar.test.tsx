@@ -6,7 +6,7 @@ import { Virtualizer } from "@tanstack/react-virtual";
 import { Sidebar } from "./Sidebar.js";
 import { ApiError } from "./api/index.js";
 import type * as ApiModule from "./api/index.js";
-import type { Host, Project, Session, Task } from "./api/index.js";
+import type { Device, Host, Project, Session, Task } from "./api/index.js";
 import { makeSession, makeProject, makeHost, makeTask } from "./test/fixtures.js";
 
 // U3 (audit finding — "nothing degrades gracefully past ~20 sessions") —
@@ -21,6 +21,7 @@ import { makeSession, makeProject, makeHost, makeTask } from "./test/fixtures.js
 let projects: Project[];
 let sessions: Session[];
 let hosts: Host[];
+let devices: Device[];
 let hideEndedSessions: boolean;
 let showTaskSessions: boolean;
 let tasks: Task[];
@@ -29,6 +30,7 @@ const setShowTaskSessions = vi.fn();
 const refreshProjects = vi.fn().mockResolvedValue(undefined);
 const refreshSessions = vi.fn().mockResolvedValue(undefined);
 const refreshHosts = vi.fn().mockResolvedValue(undefined);
+const refreshDevices = vi.fn().mockResolvedValue(undefined);
 const refreshTasks = vi.fn().mockResolvedValue(undefined);
 const createProject = vi.fn().mockResolvedValue(undefined);
 const deleteProject = vi.fn().mockResolvedValue(undefined);
@@ -45,6 +47,8 @@ function storeState() {
     projects,
     sessions,
     hosts,
+    devices,
+    refreshDevices,
     tasks,
     hideEndedSessions,
     showTaskSessions,
@@ -115,6 +119,7 @@ const NOOP_PROPS = {
   onOpenTasks: vi.fn(),
   onOpenGit: vi.fn(),
   onOpenProjectSetup: vi.fn(),
+  onOpenDevice: vi.fn(),
 };
 
 // App.tsx always renders <Sidebar> as the sole child of `.sidebar-wrapper`
@@ -183,6 +188,7 @@ beforeEach(() => {
   projects = [PROJECT];
   sessions = [];
   hosts = [];
+  devices = [];
   tasks = [];
   hideEndedSessions = false;
   showTaskSessions = false;

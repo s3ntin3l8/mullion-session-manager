@@ -6,7 +6,8 @@ import { useShallow } from "zustand/react/shallow";
 import { CreateProjectModal } from "./CreateProjectModal.js";
 import { KebabMenu } from "./ui/KebabMenu.js";
 import { api, ApiError, LOCAL_HOST_ID } from "./api/index.js";
-import type { DiscoveredProject, Host, Project, Session } from "./api/index.js";
+import type { Device, DiscoveredProject, Host, Project, Session } from "./api/index.js";
+import { SidebarDevices } from "./SidebarDevices.js";
 import { describeLatestEvent } from "./eventDescriptions.js";
 import {
   formatStatusLabel,
@@ -103,6 +104,9 @@ interface SidebarProps {
   // callback (for the palette's own entry) but never threaded it down to
   // Sidebar until now, so the project's own kebab menu can offer it too.
   onOpenProjectSetup: (projectId: number) => void;
+  // Issue #1326 — opens (or focuses) an Android device's video/input panel.
+  // See SidebarDevices.tsx for why this lives here rather than Settings.
+  onOpenDevice: (device: Device) => void;
 }
 
 export function Sidebar({
@@ -114,6 +118,7 @@ export function Sidebar({
   onOpenTasks,
   onOpenGit,
   onOpenProjectSetup,
+  onOpenDevice,
 }: SidebarProps) {
   // P1 perf fix — was a single bare `useDashboardStore()` (whole-store
   // subscription); split into one selector per rendered field (via
@@ -412,6 +417,7 @@ export function Sidebar({
           <span className="project-attn-pill">{actionableTaskCount}</span>
         )}
       </button>
+      <SidebarDevices onOpenDevice={onOpenDevice} />
       <div className="sidebar-section-header">
         <span className="sidebar-section-title">Projects</span>
         <span className="project-session-count">sessions</span>

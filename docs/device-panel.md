@@ -109,16 +109,24 @@ deliberately a **separate** implementation from `PtyManager`/
   current Chromium-based browser; shows an explicit "unsupported" state
   otherwise.
 
-**Not yet wired into the dashboard UI.** There's no "open a device panel"
-button in Settings or the pane menu yet — a device is opened today by
-constructing its panel id (`device-<id>`, `component: "device"`) via
-`openDevicePanel` (`panelUtils.ts`) from your own code, or by driving it
-entirely through the CLI/MCP surface below, which needs no panel open at
-all. A proper device list/create UI is tracked as a follow-up. Reopening a
-device panel after a Mullion restart now resumes streaming from the
-existing emulator (see the reattach behavior above) rather than requiring a
-manual `systemctl --user stop` first — no UI change needed for that; it's
-the same `openDevicePanel`/WS-connect path either way.
+**Wired into the dashboard UI (issue #1326).** The sidebar shows a "Devices"
+section, above Projects, listing every device whose DB row is still
+`active` — there's no manual expand/collapse for it; the section simply
+doesn't render at all while there are zero active devices (see below). A
+row's status dot reflects its live state, and
+clicking it opens (or focuses) that device's panel via `openDevicePanel`
+(`panelUtils.ts`). The section renders nothing while there are zero active
+devices, so it stays out of the way on a host that never touches Android;
+its poll runs unconditionally regardless, so a device created purely
+through the CLI/MCP surface below (no panel ever opened) still makes the
+section appear without a reload. Settings → Devices is the lifecycle
+surface — create, stop, and delete a device there, including devices whose
+row has since flipped to `killed`, which the sidebar list omits but
+Settings still shows. Reopening a device panel after a Mullion restart
+resumes streaming from the existing emulator (see the reattach behavior
+above) rather than requiring a manual `systemctl --user stop` first — no UI
+change needed for that; it's the same `openDevicePanel`/WS-connect path
+either way.
 
 ---
 
