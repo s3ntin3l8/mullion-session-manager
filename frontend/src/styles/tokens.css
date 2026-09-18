@@ -1,3 +1,14 @@
+/* --bg-dark/--bg-light live at :root (not .cmux-root) specifically so
+   html[data-theme-hint] below can read the same two values .cmux-root's
+   own --bg resolves to — <html> sits outside .cmux-root entirely (see that
+   rule's own comment), so without a shared :root source the pre-paint
+   background would need its own hand-copied hex, silently drifting from
+   --bg the next time either one changes. */
+:root {
+  --bg-dark: #0a0a0a;
+  --bg-light: #fafafa;
+}
+
 /* Design tokens ported 1:1 from the Claude Design "Cmux design integration"
    project (Cmux Redesign.dc.html / Cmux States.dc.html) — see
    .claude/plans/ok-i-m-thinking-of-merry-corbato.md's Phase 4b section and
@@ -8,7 +19,7 @@
    system) — everything else here is still the original cmux surface/status
    palette. */
 .cmux-root {
-  --bg: #0a0a0a;
+  --bg: var(--bg-dark);
   --chrome: #1c1c1e;
   --sidebar: #161617;
   --sidebar-2: #1b1b1d;
@@ -35,7 +46,7 @@
 }
 
 .cmux-root.light {
-  --bg: #fafafa;
+  --bg: var(--bg-light);
   --chrome: #eeeeec;
   --sidebar: #f4f4f2;
   --sidebar-2: #efefec;
@@ -91,6 +102,22 @@ body {
     Roboto,
     sans-serif;
   -webkit-font-smoothing: antialiased;
+}
+
+/* Pre-paint background for the sign-in screen (AuthGate.tsx's Login), set
+   by public/theme-hint.js's parser-blocking script before React has mounted
+   anything. <html> sits outside .cmux-root, so .cmux-root's own --bg doesn't
+   resolve here — but the shared :root --bg-dark/--bg-light above do, so this
+   stays in sync with --bg automatically rather than needing a hand-copied
+   hex. Only matters while GET /api/auth/me is in flight (and AuthGate
+   returns null); once <App/> or .login-root mounts, .cmux-root's own --bg
+   takes over and this is moot. */
+html[data-theme-hint="light"] {
+  background: var(--bg-light);
+}
+
+html[data-theme-hint="dark"] {
+  background: var(--bg-dark);
 }
 
 .cmux-mono {

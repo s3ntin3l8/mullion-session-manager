@@ -1,9 +1,29 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AuthGate } from "./AuthGate.js";
 import { jsonResponse } from "./test/jsonResponse.js";
+
+// Stubs `matchMedia("(prefers-color-scheme: dark)")` to a fixed answer —
+// the theme-resolution tests below need to control the OS-preference
+// fallback independently of testSetup.ts's own `matches: false` default,
+// which callers elsewhere in this suite may have already overridden.
+function stubPrefersDark(matches: boolean) {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn((query: string) => ({
+      matches: query === "(prefers-color-scheme: dark)" ? matches : false,
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    })),
+  );
+}
 
 // App itself is heavy (workspaces/sessions/settings all fetched on mount) and
 // already out of scope for this test — AuthGate's own job is deciding
@@ -19,6 +39,10 @@ const METHODS_OIDC = { token: false, oidc: true };
 const METHODS_BOTH = { token: true, oidc: true };
 
 describe("AuthGate", () => {
+  beforeEach(() => {
+    localStorage.removeItem("crs.themeHint");
+  });
+
   afterEach(() => {
     vi.unstubAllGlobals();
   });
@@ -178,5 +202,96 @@ describe("AuthGate", () => {
 
     expect(await screen.findByTestId("dashboard")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Sign out" })).not.toBeInTheDocument();
+  });
+
+  describe("theme resolution", () => {
+    it("applies the light class when crs.themeHint is 'light'", async () => {
+      localStorage.setItem("crs.themeHint", "light");
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(() =>
+          Promise.resolve(jsonResponse(200, { methods: METHODS_TOKEN, authenticated: false })),
+        ),
+      );
+
+      render(<AuthGate />);
+
+      const root = (await screen.findByLabelText("Access token")).closest(".login-root");
+      expect(root).toHaveClass("cmux-root", "light");
+    });
+
+    it("stays on the bare dark cmux-root class when crs.themeHint is 'dark'", async () => {
+      localStorage.setItem("crs.themeHint", "dark");
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(() =>
+          Promise.resolve(jsonResponse(200, { methods: METHODS_TOKEN, authenticated: false })),
+        ),
+      );
+
+      render(<AuthGate />);
+
+      const root = (await screen.findByLabelText("Access token")).closest(".login-root");
+      expect(root).toHaveClass("cmux-root");
+      expect(root).not.toHaveClass("light");
+    });
+
+    it("falls back to the OS preference when no hint has ever been stored", async () => {
+      // beforeEach already clears crs.themeHint — this is the genuinely
+      // first-ever-visit case theme-hint.js's own absent-key branch mirrors.
+      stubPrefersDark(false);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(() =>
+          Promise.resolve(jsonResponse(200, { methods: METHODS_TOKEN, authenticated: false })),
+        ),
+      );
+
+      render(<AuthGate />);
+
+      const root = (await screen.findByLabelText("Access token")).closest(".login-root");
+      expect(root).toHaveClass("cmux-root", "light");
+    });
+  });
+
+  it("keeps the SSO control a real link, not a button, once restyled", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(jsonResponse(200, { methods: METHODS_OIDC, authenticated: false })),
+      ),
+    );
+
+    render(<AuthGate />);
+
+    const link = await screen.findByRole("link", { name: "Sign in with SSO" });
+    expect(link).toHaveAttribute("href", "/api/auth/oidc/login");
+    expect(link.tagName).toBe("A");
+  });
+
+  it("submits the token form on Enter, via native form submission", async () => {
+    let loggedIn = false;
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url === "/api/auth/me" && method === "GET") {
+        return Promise.resolve(
+          jsonResponse(200, { methods: METHODS_TOKEN, authenticated: loggedIn }),
+        );
+      }
+      if (url === "/api/auth/login" && method === "POST") {
+        loggedIn = true;
+        return Promise.resolve(new Response(null, { status: 204 }));
+      }
+      return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const user = userEvent.setup();
+    render(<AuthGate />);
+
+    await user.type(await screen.findByLabelText("Access token"), "correct-token{Enter}");
+
+    expect(await screen.findByTestId("dashboard")).toBeInTheDocument();
   });
 });
