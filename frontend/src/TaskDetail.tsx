@@ -774,6 +774,7 @@ function TaskActions({ task }: { task: Task }) {
     rejectTask,
     retryTask,
     giveUpTask,
+    reReviewTask,
     updateTask,
     refreshTasks,
     tasks,
@@ -1054,6 +1055,30 @@ function TaskActions({ task }: { task: Task }) {
       >
         Approve
       </button>
+      {/* Issue #1345 — visible only for exactly the state #1346's own
+          automatic sweep targets (lastReviewVerdict === "inconclusive").
+          No free-text reason needed (unlike reject/give-up below), so this
+          fires directly on click rather than opening the pendingAction
+          confirm flow. */}
+      {task.lastReviewVerdict === "inconclusive" && (
+        <button
+          className="notif-gate-btn"
+          disabled={submitting}
+          onClick={async () => {
+            setSubmitting(true);
+            setError(null);
+            try {
+              await reReviewTask(task.id);
+            } catch (err) {
+              setError(err instanceof ApiError ? err.message : "Failed to re-review task");
+            } finally {
+              setSubmitting(false);
+            }
+          }}
+        >
+          Re-review
+        </button>
+      )}
       <button
         className="notif-gate-btn notif-gate-deny"
         disabled={submitting}

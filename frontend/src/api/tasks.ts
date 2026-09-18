@@ -134,4 +134,12 @@ export const tasksApi = {
       method: "POST",
       body: JSON.stringify(reason ? { reason } : {}),
     }),
+
+  // Issue #1345 — reviewing -> reviewing: re-arms a task stuck on
+  // lastReviewVerdict === "inconclusive", the operator-facing counterpart
+  // to #1346's automatic reannounceInconclusiveReviewsAfterGrace sweep
+  // (task-reconciler.ts). Kills the stale review session and re-spawns a
+  // fresh one, without that sweep's own hour-long grace or one-shot
+  // inconclusiveReviewRearmCount bound.
+  reReviewTask: (id: number) => request<Task>(`/api/tasks/${id}/re-review`, { method: "POST" }),
 };

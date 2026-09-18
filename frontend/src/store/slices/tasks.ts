@@ -202,6 +202,16 @@ export const createTasksSlice: StateCreator<DashboardState, [], [], TasksSlice> 
       return task;
     },
 
+    reReviewTask: async (id) => {
+      const task = await api.reReviewTask(id);
+      // Kills the stale review session and spawns a fresh one server-side
+      // (same reasoning as claimTask/retryTask/rejectTask's own dual
+      // refresh above) — the sessions list needs to pick that up too, not
+      // just the task's own status/verdict fields.
+      void Promise.all([get().refreshSessions(), get().refreshTasks()]).catch(() => {});
+      return task;
+    },
+
     startTasksStream: () => {
       // Debounced refetch, not payload-driven patching — refreshTasks()
       // already has queue-once-more semantics (tasksRefreshQueued, above)

@@ -23,6 +23,7 @@ const mergeTask = vi.fn(async () => makeTask({}));
 const rejectTask = vi.fn(async () => makeTask({}));
 const retryTask = vi.fn(async () => makeSession({ id: 100 }));
 const giveUpTask = vi.fn(async () => makeTask({}));
+const reReviewTask = vi.fn(async () => makeTask({}));
 const refreshTasks = vi.fn(async () => {});
 const deleteTask = vi.fn(async () => {});
 const updateTask = vi.fn(async () => makeTask({}));
@@ -40,6 +41,7 @@ function storeState() {
     rejectTask,
     retryTask,
     giveUpTask,
+    reReviewTask,
     refreshTasks,
     deleteTask,
     updateTask,
@@ -199,6 +201,7 @@ beforeEach(() => {
   rejectTask.mockClear();
   retryTask.mockClear();
   giveUpTask.mockClear();
+  reReviewTask.mockClear();
   refreshTasks.mockClear();
   deleteTask.mockClear();
   updateTask.mockClear();
@@ -1012,6 +1015,49 @@ describe("TaskDetail approve/reject actions", () => {
     await user.click(screen.getByRole("button", { name: "Give up" }));
 
     expect(giveUpTask).toHaveBeenCalledWith(1, undefined);
+  });
+
+  // Issue #1345
+  it("shows Re-review only when lastReviewVerdict is inconclusive, and calls reReviewTask directly with no reason prompt", async () => {
+    tasks = [makeTask({ id: 1, status: "reviewing", lastReviewVerdict: "inconclusive" })];
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Re-review" }));
+
+    expect(reReviewTask).toHaveBeenCalledWith(1);
+    // Unlike Reject/Give up, no reason field ever appears.
+    expect(screen.queryByPlaceholderText("Reason (optional)")).not.toBeInTheDocument();
+  });
+
+  it("does not show Re-review for a clean or changes-requested verdict", () => {
+    tasks = [makeTask({ id: 1, status: "reviewing", lastReviewVerdict: "clean" })];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    expect(screen.queryByRole("button", { name: "Re-review" })).not.toBeInTheDocument();
+  });
+
+  it("Re-review stays enabled when taskMasterEnabled is off, same escape hatch as Reject/Give up", async () => {
+    taskMasterEnabled = false;
+    tasks = [makeTask({ id: 1, status: "reviewing", lastReviewVerdict: "inconclusive" })];
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    expect(screen.getByRole("button", { name: "Re-review" })).not.toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Re-review" }));
+
+    expect(reReviewTask).toHaveBeenCalledWith(1);
+  });
+
+  it("surfaces an error if reReviewTask fails", async () => {
+    reReviewTask.mockRejectedValueOnce(new ApiError("nope", 409));
+    tasks = [makeTask({ id: 1, status: "reviewing", lastReviewVerdict: "inconclusive" })];
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Re-review" }));
+
+    expect(await screen.findByText("nope")).toBeInTheDocument();
   });
 });
 

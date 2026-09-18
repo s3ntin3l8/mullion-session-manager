@@ -1589,6 +1589,113 @@ export async function tasksRoute(app: FastifyInstance) {
     },
   );
 
+  // Issue #1345 — the operator-facing half of #1346's fix. That issue's own
+  // automatic sweep, reannounceInconclusiveReviewsAfterGrace
+  // (task-reconciler.ts), re-arms a task stuck on lastReviewVerdict ===
+  // "inconclusive" once an hour after the verdict, bounded to
+  // inconclusiveReviewRearmCount < 1 so a genuinely-broken review adapter
+  // can't loop forever unattended. Once that one-shot budget is spent — or
+  // before the hour has passed and a human wants to act now — nothing
+  // re-arms the task at all; #1346's own investigation confirmed reject
+  // doesn't already solve this (it resets the WORKER's claim, never touches
+  // reviewSessionId/the review agent). This route does exactly what the
+  // sweep does — kill the stale review session, null the same four columns
+  // — with the two differences appropriate to a human explicitly choosing
+  // this over the sweep's own conservative heuristics: no time grace, and
+  // no inconclusiveReviewRearmCount upper bound (see this route's own CAS
+  // below — it increments the same counter the sweep uses, purely as a
+  // durable "this has been re-armed N times" audit trail, but never checks
+  // it as a limit).
+  app.post<{ Params: { id: string } }>("/api/tasks/:id/re-review", async (request, reply) => {
+    // Deliberately NOT gated on "enabled" — same reasoning as reject/give-up
+    // above (Hermes review, PR #480): a human decision to re-arm an
+    // in-flight task, not new autonomous work, and it's the one action that
+    // keeps a disabled install from permanently stranding a task stuck on
+    // inconclusive.
+    const taskId = Number(request.params.id);
+    if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
+    const existing = getLocalTaskOr404(taskId);
+    if (!existing) return reply.notFound();
+    // Direct field checks, not canTransition — status doesn't change here
+    // (reviewing -> reviewing, mirroring reannounceInconclusiveReviewsAfterGrace's
+    // own write, which likewise never calls recordTaskTransition since
+    // there's no status edge to record), so canTransition's table has
+    // nothing to say about this action at all. This route only makes sense
+    // for exactly the state #1346's sweep targets — a task merely
+    // "reviewing" with a clean/changes-requested verdict, or one not
+    // reviewing at all, gets a 409.
+    if (existing.status !== "reviewing") {
+      return reply.conflict(`Cannot re-review a task in status "${existing.status}"`);
+    }
+    if (existing.lastReviewVerdict !== "inconclusive") {
+      return reply.conflict(
+        `Cannot re-review a task whose last review verdict is "${existing.lastReviewVerdict ?? "none"}", not "inconclusive"`,
+      );
+    }
+    if (existing.reviewSessionId === null) {
+      return reply.conflict("Task has no review session to re-arm");
+    }
+    // Hermes review finding — the automatic sweep's own eligibility query
+    // (reannounceInconclusiveReviewsAfterGrace, task-reconciler.ts)
+    // requires isNotNull(reviewFindingsIngestedSessionId), and this route
+    // must too: a PRIOR re-review (this route, or the automatic sweep)
+    // already nulled it, and a review agent's own findings-ingest is what
+    // sets it again — atomically alongside lastReviewVerdict
+    // (processReviewingTasks). Until that happens, reviewSessionId can
+    // still point at a FRESH, not-yet-stalled review session (spawned to
+    // replace the one this route or the sweep already killed) while
+    // lastReviewVerdict is still the OLD "inconclusive" left over from
+    // before — the two columns go stale independently. Without this check,
+    // a second click during that window passes every other gate here and
+    // kills a legitimately-running review agent for no reason.
+    if (existing.reviewFindingsIngestedSessionId === null) {
+      return reply.conflict(
+        "Task's review session hasn't produced a result yet — nothing stale to re-arm",
+      );
+    }
+    const staleReviewSessionId = existing.reviewSessionId;
+    const [updated] = app.db
+      .update(tasks)
+      .set({
+        reviewSessionId: null,
+        reviewFindingsIngestedSessionId: null,
+        reviewSeedDelivered: null,
+        reviewSpawnClaimedAt: null,
+        inconclusiveReviewRearmCount: existing.inconclusiveReviewRearmCount + 1,
+      })
+      .where(
+        and(
+          eq(tasks.id, taskId),
+          eq(tasks.status, "reviewing"),
+          eq(tasks.lastReviewVerdict, "inconclusive"),
+          eq(tasks.reviewSessionId, staleReviewSessionId),
+          // Same reasoning as the read-time check above, re-applied at the
+          // write for the same defense-in-depth reason the other three CAS
+          // conditions already are — a concurrent write between the read
+          // and this write could otherwise still let a stale
+          // reviewSessionId match while an ingest raced in behind it.
+          isNotNull(tasks.reviewFindingsIngestedSessionId),
+        ),
+      )
+      .returning()
+      .all();
+    if (!updated) {
+      return reply.conflict("Task's review state changed before this ran");
+    }
+    // Killed AFTER the CAS succeeds, not before — same ordering and race
+    // reasoning as reannounceInconclusiveReviewsAfterGrace's own kill call
+    // (task-reconciler.ts): a lost race against a concurrent approve/
+    // reject/give-up must not leave a session killed out from under a row
+    // this route no longer actually touched.
+    void killSession(app, staleReviewSessionId).catch((err) => {
+      app.log.warn(
+        { err, taskId, reviewSessionId: staleReviewSessionId },
+        "re-review: failed to kill the stale review session",
+      );
+    });
+    return updated;
+  });
+
   interface GiveUpBody {
     reason?: string;
   }
