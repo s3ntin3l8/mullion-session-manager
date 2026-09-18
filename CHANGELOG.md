@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.3.25](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.24...v0.3.25) (2026-09-18)
+
+
+### Features
+
+* dashboard UI entry point for the Android device panel ([#1341](https://github.com/s3ntin3l8/mullion-session-manager/issues/1341)) ([4c9e796](https://github.com/s3ntin3l8/mullion-session-manager/commit/4c9e79694b3c329219f2e5e70b1285ac0de70dbb))
+
+
+### Bug Fixes
+
+* a silently-stalled review agent produces an unrecoverable inconclusive verdict ([233ecce](https://github.com/s3ntin3l8/mullion-session-manager/commit/233ecceeeb5cfc6ad8ca22702ac11868f6dd7ffe))
+* propagate parent session model to spawned child sessions ([12f3741](https://github.com/s3ntin3l8/mullion-session-manager/commit/12f374116695f0a4d1e5c2c465bb51e74da87b16))
+* **task-reconciler:** treat mergeable:null as blocked in attemptAutoApprove ([13f3a2a](https://github.com/s3ntin3l8/mullion-session-manager/commit/13f3a2a1eb7e30be048f23b99da9282509e55306))
+
 ## [0.3.24](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.23...v0.3.24) (2026-09-18)
 
 
