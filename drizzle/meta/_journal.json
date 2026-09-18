@@ -505,6 +505,13 @@
       "when": 1789727252297,
       "tag": "0071_steep_red_skull",
       "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "6",
+      "when": 1789738645304,
+      "tag": "0072_short_morlun",
+      "breakpoints": true
     }
   ]
 }

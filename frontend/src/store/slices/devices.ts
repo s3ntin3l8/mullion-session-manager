@@ -47,6 +47,22 @@ export const createDevicesSlice: StateCreator<DashboardState, [], [], DevicesSli
       return device;
     },
 
+    pairDevice: async (pairingAddress, pairingCode) => {
+      await api.pairDevice({ pairingAddress, pairingCode });
+      // No row is created by pairing itself, so no refreshDevices() here —
+      // unlike createDevice/connectPhysicalDevice/terminateDevice, there is
+      // nothing in `devices` for this call to have changed.
+    },
+
+    connectPhysicalDevice: async (address, name) => {
+      const device = await api.connectPhysicalDevice({ address, name });
+      // Same reasoning as createDevice above.
+      void get()
+        .refreshDevices()
+        .catch(() => {});
+      return device;
+    },
+
     terminateDevice: async (id) => {
       await api.terminateDevice(id);
       // Same reasoning as createDevice above.

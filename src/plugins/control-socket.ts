@@ -1061,11 +1061,49 @@ const OPS: Record<string, OpSpec> = {
   },
   "device.create": {
     scopes: ["full", "session"],
-    handler: async ({ app, body, reply }) => {
+    handler: async ({ app, conn, body, reply }) => {
+      // Hermes review on this PR: `kind: "physical"` (routed to
+      // wireless.connect() with `serial: address`, device-manager.ts's
+      // connectPhysical()) is NOT the same blast radius as the emulator
+      // path below it — it makes the host's adb server dial an ARBITRARY
+      // network address a session-scoped caller supplies, an outbound-dial/
+      // internal-network-probe primitive the emulator branch never had, and
+      // then that same session-scope connection can drive it via the
+      // already-session-scope device.action ops. That is exactly the
+      // "bigger blast radius" reasoning device.pair (below) is gated
+      // full-scope-only for, so the same gate applies here — checked
+      // inline, not via injectRoute, since (per this file's own structural
+      // rule for any op listing "session" in scopes) only the EMULATOR
+      // half of this op may still go through injectAndShape directly for a
+      // session-scoped caller.
+      if ((body as { kind?: string } | undefined)?.kind === "physical" && conn.scope !== "full") {
+        reply({ ok: false, status: 403, error: "this operation requires full-scope credentials" });
+        return;
+      }
       reply(
         await injectAndShape(app, {
           method: "POST",
           url: "/api/devices",
+          headers: { ...buildAuthHeaders(app), "content-type": "application/json" },
+          payload: JSON.stringify(body ?? {}),
+        }),
+      );
+    },
+  },
+  // Deliberately `["full"]` ONLY — unlike every other device.* op above,
+  // which mirrors device.action's "worst case: an unrelated tap/screenshot,
+  // not a credential" reasoning (see that op's own comment), pairing
+  // authorizes the HOST's adb server to trust a new piece of hardware.
+  // That's a materially bigger blast radius than driving a device Mullion
+  // already manages, so it doesn't get the session-scope carve-out the rest
+  // of this family does.
+  "device.pair": {
+    scopes: ["full"],
+    handler: async ({ app, body, reply }) => {
+      reply(
+        await injectAndShape(app, {
+          method: "POST",
+          url: "/api/devices/pair",
           headers: { ...buildAuthHeaders(app), "content-type": "application/json" },
           payload: JSON.stringify(body ?? {}),
         }),

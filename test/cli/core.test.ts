@@ -1429,6 +1429,48 @@ describe("runCommand", () => {
       expect(await runCommand(["device", "create"], { client: fakeClient(), io })).toBe(2);
     });
 
+    it("device pair passes pairingAddress and code", async () => {
+      const client = fakeClient();
+      const io = fakeIo();
+      await runCommand(["device", "pair", "192.168.1.23:41234", "123456"], { client, io });
+      expect(client.request).toHaveBeenCalledWith("device.pair", {
+        pairingAddress: "192.168.1.23:41234",
+        pairingCode: "123456",
+      });
+    });
+
+    it("device pair without a code throws usage error (exit 2)", async () => {
+      const io = fakeIo();
+      expect(
+        await runCommand(["device", "pair", "192.168.1.23:41234"], { client: fakeClient(), io }),
+      ).toBe(2);
+    });
+
+    it("device pair without an address throws usage error (exit 2)", async () => {
+      const io = fakeIo();
+      expect(await runCommand(["device", "pair"], { client: fakeClient(), io })).toBe(2);
+    });
+
+    it("device connect passes kind/address and flags through device.create — the kind: physical counterpart to create", async () => {
+      const client = fakeClient();
+      const io = fakeIo();
+      await runCommand(
+        ["device", "connect", "192.168.1.23:37251", "--project", "1", "--name", "My Pixel"],
+        { client, io },
+      );
+      expect(client.request).toHaveBeenCalledWith("device.create", {
+        kind: "physical",
+        address: "192.168.1.23:37251",
+        projectId: "1",
+        name: "My Pixel",
+      });
+    });
+
+    it("device connect without an address throws usage error (exit 2)", async () => {
+      const io = fakeIo();
+      expect(await runCommand(["device", "connect"], { client: fakeClient(), io })).toBe(2);
+    });
+
     it("device stop passes deviceId", async () => {
       const client = fakeClient();
       const io = fakeIo();

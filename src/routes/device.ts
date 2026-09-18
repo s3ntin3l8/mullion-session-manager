@@ -5,7 +5,7 @@ import { AndroidKeyEventAction } from "@yume-chan/scrcpy";
 import { AndroidMotionEventAction, AndroidMotionEventButton } from "@yume-chan/scrcpy";
 import type { AndroidKeyCode, ScrcpyMediaStreamPacket } from "@yume-chan/scrcpy";
 import { devices } from "../db/schema.js";
-import type { Device } from "../services/device-manager.js";
+import type { Device, DeviceKind } from "../services/device-manager.js";
 
 // Streams a device's screen to the frontend DevicePane as binary H.264
 // packets over WebSocket, and proxies touch/key/scroll input back —
@@ -280,7 +280,9 @@ async function dispatchInput(device: Device, message: DeviceInputMessage): Promi
 
 export interface AttachDeviceParams {
   deviceId: number;
-  avdName: string;
+  kind: DeviceKind;
+  avdName: string | null;
+  serial: string | null;
   label: string | null;
   port: number | null;
 }
@@ -291,11 +293,18 @@ export interface AttachDeviceParams {
 export async function attachSocketToDevice(
   app: FastifyInstance,
   socket: WebSocket,
-  { deviceId, avdName, label, port }: AttachDeviceParams,
+  { deviceId, kind, avdName, serial, label, port }: AttachDeviceParams,
 ): Promise<void> {
   let device;
   try {
-    device = await app.device.getOrCreate({ id: String(deviceId), avdName, label, port });
+    device = await app.device.getOrCreate({
+      id: String(deviceId),
+      kind,
+      avdName,
+      serial,
+      label,
+      port,
+    });
   } catch (err) {
     // Same shape as routes/browser.ts's attachSocketToBrowser on a
     // getOrLaunch() failure — most likely getOrCreate's own
@@ -405,7 +414,9 @@ export async function deviceRoute(app: FastifyInstance): Promise<void> {
       }
       void attachSocketToDevice(app, socket, {
         deviceId,
+        kind: row.kind,
         avdName: row.avdName,
+        serial: row.serial,
         label: row.name,
         port: row.port,
       });

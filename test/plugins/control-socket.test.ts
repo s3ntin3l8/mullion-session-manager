@@ -2442,7 +2442,7 @@ describe("controlSocketPlugin (issue #185)", () => {
         socket.destroy();
       });
 
-      it("device.create (session scope): reachable with no full-scope requirement", async () => {
+      it("device.create (session scope): reachable with no full-scope requirement for an EMULATOR", async () => {
         app = await buildApp();
         await app.ready();
         const { hookToken } = await createRealSession();
@@ -2453,6 +2453,91 @@ describe("controlSocketPlugin (issue #185)", () => {
         const reply = await waitForReply(socket);
         expect(reply.ok).toBe(true);
         expect(reply.status).toBe(201);
+        socket.destroy();
+      });
+
+      // Hermes review on this PR: `kind: "physical"` makes the host's adb
+      // server dial an ARBITRARY address a caller supplies — an outbound-
+      // dial/internal-network-probe primitive the emulator branch above
+      // never had — so it gets the same full-scope-only gate as device.pair
+      // below, unlike every other device.* op's session-scope reachability.
+      it("device.create (session scope): rejected for kind: physical — a bigger blast radius than the emulator path", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession();
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(
+          `${JSON.stringify({
+            id: 1,
+            op: "device.create",
+            body: { kind: "physical", address: "192.168.1.23:37251" },
+          })}\n`,
+        );
+        expect(await waitForReply(socket)).toEqual({
+          id: 1,
+          ok: false,
+          status: 403,
+          error: "this operation requires full-scope credentials",
+        });
+        socket.destroy();
+      });
+
+      it("device.create (full scope): kind: physical dispatches to POST /api/devices", async () => {
+        app = await buildApp();
+        await app.ready();
+        const socket = await fullScopeSocket();
+        socket.write(
+          `${JSON.stringify({
+            id: 1,
+            op: "device.create",
+            body: { kind: "physical", address: "192.168.1.23:37251" },
+          })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        expect(reply.ok).toBe(true);
+        expect(reply.status).toBe(201);
+        socket.destroy();
+      });
+
+      it("device.pair (full scope): dispatches to POST /api/devices/pair", async () => {
+        app = await buildApp();
+        await app.ready();
+        const socket = await fullScopeSocket();
+        socket.write(
+          `${JSON.stringify({
+            id: 1,
+            op: "device.pair",
+            body: { pairingAddress: "192.168.1.23:41234", pairingCode: "123456" },
+          })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        // No real adb server in this test environment — pair() itself
+        // rejects, surfacing as a 400 from routes/devices.ts's own catch.
+        // The point of this test is that the op DISPATCHES at full scope at
+        // all, not that pairing against real hardware succeeds.
+        expect(reply.ok).toBe(false);
+        expect(reply.status).toBe(400);
+        socket.destroy();
+      });
+
+      it("device.pair (session scope): rejected — unlike every other device.* op, this one is full-scope only", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession();
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(
+          `${JSON.stringify({
+            id: 1,
+            op: "device.pair",
+            body: { pairingAddress: "192.168.1.23:41234", pairingCode: "123456" },
+          })}\n`,
+        );
+        expect(await waitForReply(socket)).toEqual({
+          id: 1,
+          ok: false,
+          status: 403,
+          error: "not permitted for this connection's scope",
+        });
         socket.destroy();
       });
 

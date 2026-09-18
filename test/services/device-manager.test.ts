@@ -23,15 +23,40 @@ import type * as ChildProcess from "node:child_process";
 let mockDeviceList: Array<{ serial: string }> = [];
 let mockCreateAdbShouldFail = false;
 const mockAdbClose = vi.fn(async () => {});
+
+// Mirrors @yume-chan/adb's own AdbServerClient.AlreadyConnectedError — the
+// production code (Device.connectPhysical()) branches on `err instanceof
+// AdbServerClient.AlreadyConnectedError`, a STATIC property on the real
+// constructor, not a free-standing export — see this file's own
+// `AdbServerClientCtor.AlreadyConnectedError = ...` assignment below for
+// why a plain Error class here isn't enough on its own.
+class MockAlreadyConnectedError extends Error {}
+
+let mockWirelessConnectAlreadyConnected = false;
+let mockWirelessConnectError: Error | null = null;
+const mockWirelessPair = vi.fn(async () => {});
+const mockWirelessConnect = vi.fn(async (address: string) => {
+  if (mockWirelessConnectAlreadyConnected) {
+    throw new MockAlreadyConnectedError(`already connected to ${address}`);
+  }
+  if (mockWirelessConnectError) throw mockWirelessConnectError;
+});
+const mockWirelessDisconnect = vi.fn(async () => {});
+
 const mockServerClient = {
   getDevices: vi.fn(async () => mockDeviceList),
   createAdb: vi.fn(async () => {
     if (mockCreateAdbShouldFail) throw new Error("createAdb failed");
     return { close: mockAdbClose };
   }),
+  wireless: {
+    pair: mockWirelessPair,
+    connect: mockWirelessConnect,
+    disconnect: mockWirelessDisconnect,
+  },
 };
 
-vi.mock("@yume-chan/adb", () => ({
+vi.mock("@yume-chan/adb", () => {
   // A plain function, not an arrow — `new AdbServerClient(...)` (device-
   // manager.ts's constructor) needs `new` support, which an arrow function
   // can never have regardless of vi.fn() wrapping. Returning an explicit
@@ -39,10 +64,14 @@ vi.mock("@yume-chan/adb", () => ({
   // object instead of `this` (ordinary JS constructor semantics) — exactly
   // what's needed here, since every test wants the same shared
   // `mockServerClient` instance back.
-  AdbServerClient: vi.fn(function AdbServerClient() {
+  const AdbServerClientCtor = vi.fn(function AdbServerClient() {
     return mockServerClient;
-  }),
-}));
+  }) as unknown as { new (): typeof mockServerClient } & {
+    AlreadyConnectedError: typeof MockAlreadyConnectedError;
+  };
+  AdbServerClientCtor.AlreadyConnectedError = MockAlreadyConnectedError;
+  return { AdbServerClient: AdbServerClientCtor };
+});
 
 vi.mock("@yume-chan/adb-server-node-tcp", () => ({
   AdbServerNodeTcpConnector: vi.fn(),
@@ -263,6 +292,11 @@ beforeEach(() => {
   mockScrcpyClose.mockClear();
   mockController.injectText.mockClear();
   mockController.resetVideo.mockClear();
+  mockWirelessConnectAlreadyConnected = false;
+  mockWirelessConnectError = null;
+  mockWirelessPair.mockClear();
+  mockWirelessConnect.mockClear();
+  mockWirelessDisconnect.mockClear();
   vi.mocked(spawnChildProcess).mockClear();
   fs.mkdirSync(SESSIONS_DIR, { recursive: true });
   fs.writeFileSync(SCRCPY_SERVER_FIXTURE, "");
@@ -312,7 +346,14 @@ describe("DeviceManager", () => {
   it("throws on getOrCreate when disabled, per its own assertEnabled() posture (matches BrowserManager)", async () => {
     const manager = new DeviceManager(baseOpts({ enabled: false }));
     await expect(
-      manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null }),
+      manager.getOrCreate({
+        id: "1",
+        kind: "emulator" as const,
+        avdName: "dev35",
+        serial: null,
+        label: null,
+        port: null,
+      }),
     ).rejects.toThrow(/disabled/);
   });
 
@@ -321,7 +362,9 @@ describe("DeviceManager", () => {
     const manager = new DeviceManager(baseOpts());
     const device = await manager.getOrCreate({
       id: "1",
+      kind: "emulator",
       avdName: "dev35",
+      serial: null,
       label: "My Device",
       port: null,
     });
@@ -335,14 +378,23 @@ describe("DeviceManager", () => {
   it("getOrCreate is idempotent — a second call for the same alive id returns the SAME Device, no second spawn", async () => {
     mockDeviceList = [{ serial: "emulator-5554" }];
     const manager = new DeviceManager(baseOpts());
-    const first = await manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null });
+    const first = await manager.getOrCreate({
+      id: "1",
+      kind: "emulator" as const,
+      avdName: "dev35",
+      serial: null,
+      label: null,
+      port: null,
+    });
     await waitForStatus(manager, "1", "streaming");
     const systemdRunCallsBefore = vi
       .mocked(spawnChildProcess)
       .mock.calls.filter((c) => c[0] === "systemd-run").length;
     const second = await manager.getOrCreate({
       id: "1",
+      kind: "emulator",
       avdName: "dev35",
+      serial: null,
       label: null,
       port: null,
     });
@@ -367,7 +419,14 @@ describe("DeviceManager", () => {
     const onPortAssigned = vi.fn();
     const manager = new DeviceManager(baseOpts({ initialPorts: [5554], onPortAssigned }));
 
-    await manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null });
+    await manager.getOrCreate({
+      id: "1",
+      kind: "emulator" as const,
+      avdName: "dev35",
+      serial: null,
+      label: null,
+      port: null,
+    });
     await waitForStatus(manager, "1", "streaming");
 
     // EMULATOR_PORT_BASE (5554) was pre-reserved, so the round-robin scan
@@ -383,7 +442,14 @@ describe("DeviceManager", () => {
       `${deviceScopeUnitName(instanceId, "7")}.scope loaded active running mullion-device -m ${marker}`,
     ];
     await expect(
-      manager.getOrCreate({ id: "7", avdName: "dev35", label: null, port: null }),
+      manager.getOrCreate({
+        id: "7",
+        kind: "emulator" as const,
+        avdName: "dev35",
+        serial: null,
+        label: null,
+        port: null,
+      }),
     ).rejects.toThrow(/systemctl --user stop/);
     // Never actually attempted to spawn a colliding scope.
     expect(vi.mocked(spawnChildProcess).mock.calls.some((c) => c[0] === "systemd-run")).toBe(false);
@@ -404,7 +470,14 @@ describe("DeviceManager", () => {
     // stopDeviceScope() call, once createAdb fails below, finds it there.
     const manager = new DeviceManager(baseOpts());
     await expect(
-      manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null }),
+      manager.getOrCreate({
+        id: "1",
+        kind: "emulator" as const,
+        avdName: "dev35",
+        serial: null,
+        label: null,
+        port: null,
+      }),
     ).resolves.toBeDefined(); // getOrCreate itself doesn't await spawn() — see its own doc comment
     await waitForStatus(manager, "1", "error");
     expect(manager.get("1")?.toInfo().error).toMatch(/createAdb failed/);
@@ -431,7 +504,14 @@ describe("DeviceManager", () => {
     // un-released port would eventually exhaust the fixed allocation range
     // across enough failed attempts).
     mockCreateAdbShouldFail = false;
-    await manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null });
+    await manager.getOrCreate({
+      id: "1",
+      kind: "emulator" as const,
+      avdName: "dev35",
+      serial: null,
+      label: null,
+      port: null,
+    });
     await waitForStatus(manager, "1", "streaming");
   });
 
@@ -439,7 +519,14 @@ describe("DeviceManager", () => {
     systemdRunShouldFail = true;
     const createAdbCallsBefore = mockServerClient.createAdb.mock.calls.length;
     const manager = new DeviceManager(baseOpts());
-    await manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null });
+    await manager.getOrCreate({
+      id: "1",
+      kind: "emulator" as const,
+      avdName: "dev35",
+      serial: null,
+      label: null,
+      port: null,
+    });
     await waitForStatus(manager, "1", "error");
     expect(manager.get("1")?.toInfo().error).toMatch(/device bootstrap exited with code 1/);
     await waitForCondition(
@@ -452,7 +539,14 @@ describe("DeviceManager", () => {
     // Port is releasable again — a second attempt doesn't collide.
     systemdRunShouldFail = false;
     mockDeviceList = [{ serial: "emulator-5554" }];
-    await manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null });
+    await manager.getOrCreate({
+      id: "1",
+      kind: "emulator" as const,
+      avdName: "dev35",
+      serial: null,
+      label: null,
+      port: null,
+    });
     await waitForStatus(manager, "1", "streaming");
   });
 
@@ -460,7 +554,14 @@ describe("DeviceManager", () => {
     mockDeviceList = [{ serial: "emulator-5554" }];
     mockPushServerShouldFail = true;
     const manager = new DeviceManager(baseOpts());
-    await manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null });
+    await manager.getOrCreate({
+      id: "1",
+      kind: "emulator" as const,
+      avdName: "dev35",
+      serial: null,
+      label: null,
+      port: null,
+    });
     await waitForStatus(manager, "1", "error");
     expect(manager.get("1")?.toInfo().error).toMatch(/pushServer failed/);
     await waitForCondition(
@@ -476,7 +577,14 @@ describe("DeviceManager", () => {
     );
 
     mockPushServerShouldFail = false;
-    await manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null });
+    await manager.getOrCreate({
+      id: "1",
+      kind: "emulator" as const,
+      avdName: "dev35",
+      serial: null,
+      label: null,
+      port: null,
+    });
     await waitForStatus(manager, "1", "streaming");
   });
 
@@ -484,7 +592,14 @@ describe("DeviceManager", () => {
     mockDeviceList = [{ serial: "emulator-5554" }];
     mockStartShouldFail = true;
     const manager = new DeviceManager(baseOpts());
-    await manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null });
+    await manager.getOrCreate({
+      id: "1",
+      kind: "emulator" as const,
+      avdName: "dev35",
+      serial: null,
+      label: null,
+      port: null,
+    });
     await waitForStatus(manager, "1", "error");
     expect(manager.get("1")?.toInfo().error).toMatch(/scrcpy start failed/);
     await waitForCondition(
@@ -500,7 +615,14 @@ describe("DeviceManager", () => {
     );
 
     mockStartShouldFail = false;
-    await manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null });
+    await manager.getOrCreate({
+      id: "1",
+      kind: "emulator" as const,
+      avdName: "dev35",
+      serial: null,
+      label: null,
+      port: null,
+    });
     await waitForStatus(manager, "1", "streaming");
   });
 
@@ -509,7 +631,14 @@ describe("DeviceManager", () => {
     mockCreateAdbShouldFail = true;
     const onSpawnError = vi.fn();
     const manager = new DeviceManager(baseOpts({ onSpawnError }));
-    await manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null });
+    await manager.getOrCreate({
+      id: "1",
+      kind: "emulator" as const,
+      avdName: "dev35",
+      serial: null,
+      label: null,
+      port: null,
+    });
     await waitForStatus(manager, "1", "error");
     expect(onSpawnError).toHaveBeenCalledWith("1", expect.any(Error));
   });
@@ -517,9 +646,16 @@ describe("DeviceManager", () => {
   it("kill() on a tracked, live device closes scrcpy/adb and stops its scope", async () => {
     mockDeviceList = [{ serial: "emulator-5554" }];
     const manager = new DeviceManager(baseOpts());
-    await manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null });
+    await manager.getOrCreate({
+      id: "1",
+      kind: "emulator" as const,
+      avdName: "dev35",
+      serial: null,
+      label: null,
+      port: null,
+    });
     await waitForStatus(manager, "1", "streaming");
-    await manager.kill("1");
+    await manager.kill("1", "emulator");
     expect(mockScrcpyClose).toHaveBeenCalled();
     expect(mockAdbClose).toHaveBeenCalled();
     expect(manager.get("1")?.toInfo().status).toBe("exited");
@@ -533,7 +669,7 @@ describe("DeviceManager", () => {
     const manager = new DeviceManager(baseOpts());
     expect(manager.get("9")).toBeUndefined();
     registerLiveScope("9");
-    await manager.kill("9");
+    await manager.kill("9", "emulator");
     const stopCall = vi
       .mocked(spawnChildProcess)
       .mock.calls.find(
@@ -548,9 +684,16 @@ describe("DeviceManager", () => {
   it("terminate() removes the device from the manager's own map", async () => {
     mockDeviceList = [{ serial: "emulator-5554" }];
     const manager = new DeviceManager(baseOpts());
-    await manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null });
+    await manager.getOrCreate({
+      id: "1",
+      kind: "emulator" as const,
+      avdName: "dev35",
+      serial: null,
+      label: null,
+      port: null,
+    });
     await waitForStatus(manager, "1", "streaming");
-    await manager.terminate("1");
+    await manager.terminate("1", "emulator");
     expect(manager.get("1")).toBeUndefined();
   });
 
@@ -563,7 +706,9 @@ describe("DeviceManager", () => {
     const manager = new DeviceManager(baseOpts());
     const device = await manager.getOrCreate({
       id: "1",
+      kind: "emulator",
       avdName: "dev35",
+      serial: null,
       label: null,
       port: null,
     });
@@ -592,5 +737,111 @@ describe("DeviceManager", () => {
     expect(lateListener).toHaveBeenCalledWith(
       expect.objectContaining({ type: "configuration", data: new Uint8Array([9, 9, 9]) }),
     );
+  });
+
+  // A physical device is never spawned (no systemd-run, no marker, no port
+  // pool slot) — the load-bearing assertions here are all NEGATIVE, proving
+  // getOrCreate()'s `kind: "physical"` branch really does short-circuit
+  // BEFORE any of the emulator machinery, not merely that connectPhysical()
+  // itself behaves.
+  describe("physical devices", () => {
+    const PHYSICAL_ADDRESS = "192.168.1.23:37251";
+
+    it("getOrCreate connects a physical device — zero systemd-run invocations, port allocator untouched", async () => {
+      mockDeviceList = [{ serial: PHYSICAL_ADDRESS }];
+      const onPortAssigned = vi.fn();
+      const manager = new DeviceManager(baseOpts({ onPortAssigned }));
+      const device = await manager.getOrCreate({
+        id: "1",
+        kind: "physical",
+        avdName: null,
+        serial: PHYSICAL_ADDRESS,
+        label: null,
+        port: null,
+      });
+      await waitForStatus(manager, "1", "streaming");
+
+      expect(device.toInfo()).toMatchObject({
+        kind: "physical",
+        avdName: null,
+        serial: PHYSICAL_ADDRESS,
+      });
+      expect(mockWirelessConnect).toHaveBeenCalledWith(PHYSICAL_ADDRESS);
+      expect(vi.mocked(spawnChildProcess).mock.calls.some((c) => c[0] === "systemd-run")).toBe(
+        false,
+      );
+      // onPortAssigned is spawn()'s own hook (device-manager.ts) — never
+      // fired for a device that was never spawned.
+      expect(onPortAssigned).not.toHaveBeenCalled();
+    });
+
+    it("getOrCreate on a physical device treats wireless.connect()'s AlreadyConnectedError as success, not a failure", async () => {
+      mockDeviceList = [{ serial: PHYSICAL_ADDRESS }];
+      mockWirelessConnectAlreadyConnected = true;
+      const manager = new DeviceManager(baseOpts());
+      await manager.getOrCreate({
+        id: "1",
+        kind: "physical",
+        avdName: null,
+        serial: PHYSICAL_ADDRESS,
+        label: null,
+        port: null,
+      });
+      await waitForStatus(manager, "1", "streaming");
+      expect(mockWirelessConnect).toHaveBeenCalledWith(PHYSICAL_ADDRESS);
+    });
+
+    it("getOrCreate on a physical device surfaces a genuine wireless.connect() failure (e.g. UnauthorizedError) as status error", async () => {
+      mockWirelessConnectError = new Error("failed to connect to " + PHYSICAL_ADDRESS);
+      const manager = new DeviceManager(baseOpts());
+      await manager.getOrCreate({
+        id: "1",
+        kind: "physical",
+        avdName: null,
+        serial: PHYSICAL_ADDRESS,
+        label: null,
+        port: null,
+      });
+      await waitForStatus(manager, "1", "error");
+      expect(manager.get("1")?.toInfo().error).toMatch(/failed to connect/);
+    });
+
+    it("kill() on a physical id with NO in-memory Device issues no systemctl call — there was never a scope to stop", async () => {
+      const manager = new DeviceManager(baseOpts());
+      expect(manager.get("1")).toBeUndefined();
+      await manager.kill("1", "physical");
+      expect(vi.mocked(spawnChildProcess).mock.calls.some((c) => c[0] === "systemctl")).toBe(false);
+    });
+
+    it("kill() on a tracked, live physical device closes adb/scrcpy but never touches systemd/systemctl", async () => {
+      mockDeviceList = [{ serial: PHYSICAL_ADDRESS }];
+      const manager = new DeviceManager(baseOpts());
+      await manager.getOrCreate({
+        id: "1",
+        kind: "physical",
+        avdName: null,
+        serial: PHYSICAL_ADDRESS,
+        label: null,
+        port: null,
+      });
+      await waitForStatus(manager, "1", "streaming");
+      await manager.kill("1", "physical");
+      expect(mockScrcpyClose).toHaveBeenCalled();
+      expect(mockAdbClose).toHaveBeenCalled();
+      expect(manager.get("1")?.toInfo().status).toBe("exited");
+      expect(vi.mocked(spawnChildProcess).mock.calls.some((c) => c[0] === "systemctl")).toBe(false);
+    });
+
+    it("pair() delegates to wireless.pair(address, password) in that argument order", async () => {
+      const manager = new DeviceManager(baseOpts());
+      await manager.pair(PHYSICAL_ADDRESS, "123456");
+      expect(mockWirelessPair).toHaveBeenCalledWith(PHYSICAL_ADDRESS, "123456");
+    });
+
+    it("pair() throws when disabled, same assertEnabled() posture as getOrCreate", async () => {
+      const manager = new DeviceManager(baseOpts({ enabled: false }));
+      await expect(manager.pair(PHYSICAL_ADDRESS, "123456")).rejects.toThrow(/disabled/);
+      expect(mockWirelessPair).not.toHaveBeenCalled();
+    });
   });
 });

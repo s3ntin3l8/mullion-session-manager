@@ -12,5 +12,20 @@ export const devicesApi = {
   createDevice: (body: { avdName: string; projectId?: number; name?: string }) =>
     request<Device>("/api/devices", { method: "POST", body: JSON.stringify(body) }),
 
+  // The `kind: "physical"` counterpart to createDevice — requires `address`
+  // to already be paired (see pairDevice below); this is what actually
+  // calls `adb connect`.
+  connectPhysicalDevice: (body: { address: string; projectId?: number; name?: string }) =>
+    request<Device>("/api/devices", {
+      method: "POST",
+      body: JSON.stringify({ kind: "physical", ...body }),
+    }),
+
+  // One-time `adb pair` against a phone's Wireless debugging pairing
+  // address/code. Creates no device row — see routes/devices.ts's own
+  // comment on why this is a separate, stateless endpoint.
+  pairDevice: (body: { pairingAddress: string; pairingCode: string }) =>
+    request<{ ok: true }>("/api/devices/pair", { method: "POST", body: JSON.stringify(body) }),
+
   terminateDevice: (id: number) => request<void>(`/api/devices/${id}`, { method: "DELETE" }),
 };

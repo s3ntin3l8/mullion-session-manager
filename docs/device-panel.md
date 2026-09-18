@@ -23,10 +23,22 @@ deliberately a **separate** implementation from `PtyManager`/
 `session-process.ts`, not a generalization of them (see
 `src/services/device-process.ts`'s own header for why).
 
-- **`devices` table** (`src/db/schema.ts`) — one row per AVD Mullion has been
-  asked to run. A **physical** device (a phone over adb) never gets a row:
-  Mullion doesn't own its lifecycle, so `DeviceManager` surfaces it purely
-  from adb's own live device list.
+- **`devices` table** (`src/db/schema.ts`) — one row per Android device
+  Mullion manages, either kind. `kind: "emulator"` rows work as described
+  below; `kind: "physical"` rows (a phone connected over adb **wireless
+  debugging**) get a row too, keyed on `serial` (the adb TCP address)
+  instead of `avdName`/`port` — every route, the WS panel, the CLI, and MCP
+  all address a device by its numeric row id, so a row-less physical device
+  would need a parallel identifier scheme through all of them. Mullion never
+  _spawns_ a physical device (no systemd scope, no marker, no port pool
+  slot) — only connects to one the user already paired; see
+  `Device.connectPhysical()`'s own comment. Pairing (`adb pair`) writes into
+  the adb **server's** own keystore, which outlives Mullion restarts, so
+  reconnect-after-restart needs nothing persisted beyond the address itself:
+  `getOrCreate()` just calls `wireless.connect()` again. A killed physical
+  row does **not** disconnect the phone from the host's adb server — that
+  connection table is shared with the user's own adb tooling, outside
+  Mullion's ownership.
 - **`DeviceManager`** (`src/services/device-manager.ts`) — an in-memory
   `Map<string, Device>`. Starting a device runs the emulator inside a
   transient `systemd --user` scope (`crs-device-<instanceId>-<id>`, same
@@ -141,6 +153,8 @@ CLI's own explicit-id convention avoids elsewhere).
 ```bash
 mullion device list
 mullion device create <avdName> [--project <id>] [--name <label>]
+mullion device pair <pairingAddress> <code>
+mullion device connect <address> [--project <id>] [--name <label>]
 mullion device stop <id>
 mullion device screenshot <id> [--out <path>]
 mullion device tap <id> <x> <y>
@@ -149,6 +163,12 @@ mullion device text <id> <text...>
 mullion device key <id> <androidKeyCode>
 mullion device logcat <id> [--lines <n>] [--filter <expr>]
 ```
+
+`pair`/`connect` are two separate steps because Android's Wireless debugging
+screen shows two separate addresses — a one-time pairing address/code, and a
+longer-lived connect address — and they're not the same port. `pair` doesn't
+create a device row (see the `devices` table bullet above); `connect` does,
+and is the `kind: "physical"` counterpart to `create`.
 
 `x`/`y` (and `x1 y1 x2 y2`) are in the device's **video-pixel space**, not
 CSS pixels — the same coordinate space `DevicePane.tsx` rescales mouse events
@@ -172,12 +192,24 @@ is not restricted to any particular device (see `control-socket.ts`'s own
 comment on `device.action` for the full reasoning). This is what actually
 closes the "verify your own UI change" loop the feature exists for — an
 agent inside a normal session can call these with no elevated credential.
+Two exceptions are **full scope only**, both gated on the same "bigger blast
+radius than driving a device Mullion already manages" reasoning: `device.pair`
+always, and `device.create` when its body sets `kind: "physical"` (session
+scope still works for an ordinary emulator `device.create`) — `wireless.connect()`
+lets the caller dial an arbitrary address, an outbound-dial/internal-network-
+probe primitive the emulator path never had (see `control-socket.ts`'s own
+comments on both). MCP does not expose `device pair`/`connect` — only the CLI
+and REST do.
 
 ## 3. REST API
 
-`src/routes/devices.ts` — `GET/POST /api/devices`, `GET/DELETE
-/api/devices/:id`, `POST /api/devices/:id/action` (body: `{action:
-"screenshot"|"tap"|"swipe"|"text"|"key"|"logcat", ...}`, same shape the CLI/
-MCP surface forwards). The control-socket ops above are thin wrappers over
-these same routes (`injectAndShape`), same "CLI/MCP piggyback on the REST
-layer" pattern the browser automation ops use.
+`src/routes/devices.ts` — `GET/POST /api/devices`, `POST /api/devices/pair`,
+`GET/DELETE /api/devices/:id`, `POST /api/devices/:id/action` (body:
+`{action: "screenshot"|"tap"|"swipe"|"text"|"key"|"logcat", ...}`, same shape
+the CLI/MCP surface forwards). `POST /api/devices` takes either
+`{avdName, projectId?, name?}` (emulator) or `{kind: "physical", address,
+projectId?, name?}` (physical); `POST /api/devices/pair` takes
+`{pairingAddress, pairingCode}` and creates no row. The control-socket ops
+above are thin wrappers over these same routes (`injectAndShape`), same
+"CLI/MCP piggyback on the REST layer" pattern the browser automation ops
+use.

@@ -19,6 +19,7 @@ describe("Settings -> Devices (issue #1326)", () => {
   let devicesShouldFail: boolean;
   let deviceEnabled: boolean;
   let createCounter: number;
+  let pairCalls: unknown[];
   let fetchMock: ReturnType<typeof vi.fn>;
   let unexpectedCalls: string[];
 
@@ -27,6 +28,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     devicesShouldFail = false;
     deviceEnabled = true;
     createCounter = 0;
+    pairCalls = [];
 
     ({ fetchMock, unexpectedCalls } = mockFetch({
       "GET /api/hosts": () => jsonResponse(200, []),
@@ -42,20 +44,37 @@ describe("Settings -> Devices (issue #1326)", () => {
             message: "Device panel is disabled — set DEVICE_ENABLED=true.",
           });
         }
-        const body = JSON.parse(init?.body as string) as { avdName: string; name?: string };
+        const body = JSON.parse(init?.body as string) as {
+          kind?: "physical";
+          avdName?: string;
+          address?: string;
+          name?: string;
+        };
         createCounter += 1;
+        const isPhysical = body.kind === "physical";
         const device: Device = {
           id: createCounter,
           hostId: "local",
           projectId: null,
           name: body.name ?? null,
-          avdName: body.avdName,
+          kind: isPhysical ? "physical" : "emulator",
+          avdName: isPhysical ? null : (body.avdName ?? null),
+          serial: isPhysical ? (body.address ?? null) : null,
           status: "active",
           createdAt: "2026-01-01T00:00:00.000Z",
           live: null,
         };
         devicesDb = [...devicesDb, device];
         return jsonResponse(201, device);
+      },
+      "POST /api/devices/pair": ({ init }) => {
+        if (!deviceEnabled) {
+          return jsonResponse(400, {
+            message: "Device panel is disabled — set DEVICE_ENABLED=true.",
+          });
+        }
+        pairCalls.push(JSON.parse(init?.body as string));
+        return jsonResponse(200, { ok: true });
       },
       "DELETE /api/devices/:id": ({ params }) => {
         const id = Number(params.id);
@@ -98,11 +117,14 @@ describe("Settings -> Devices (issue #1326)", () => {
         hostId: "local",
         projectId: null,
         name: "My Pixel",
+        kind: "emulator",
         avdName: "pixel_7",
+        serial: null,
         status: "active",
         createdAt: "2026-01-01T00:00:00.000Z",
         live: {
           id: "1",
+          kind: "emulator",
           avdName: "pixel_7",
           label: "My Pixel",
           status: "streaming",
@@ -163,11 +185,14 @@ describe("Settings -> Devices (issue #1326)", () => {
         hostId: "local",
         projectId: null,
         name: "My Pixel",
+        kind: "emulator",
         avdName: "pixel_7",
+        serial: null,
         status: "active",
         createdAt: "2026-01-01T00:00:00.000Z",
         live: {
           id: "1",
+          kind: "emulator",
           avdName: "pixel_7",
           label: "My Pixel",
           status: "streaming",
@@ -195,6 +220,58 @@ describe("Settings -> Devices (issue #1326)", () => {
     ).not.toBeInTheDocument();
     expect(useDashboardStore.getState().devices).toEqual([
       expect.objectContaining({ id: 1, status: "killed" }),
+    ]);
+  });
+
+  it("switching to Physical mode shows the pairing/connect fields instead of the AVD name field", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(await screen.findByText("New device"));
+    await user.click(screen.getByRole("button", { name: "Physical" }));
+
+    expect(screen.queryByPlaceholderText("Pixel_8_API_34")).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText("192.168.1.23:41234")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("123456")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("192.168.1.23:37251")).toBeInTheDocument();
+  });
+
+  it("pairing posts to /api/devices/pair with the entered address and code, without creating a device row", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(await screen.findByText("New device"));
+    await user.click(screen.getByRole("button", { name: "Physical" }));
+    await user.type(screen.getByPlaceholderText("192.168.1.23:41234"), "192.168.1.23:41234");
+    await user.type(screen.getByPlaceholderText("123456"), "123456");
+    await user.click(screen.getByRole("button", { name: "Pair" }));
+
+    await screen.findByText("Paired — connect below.");
+    expect(pairCalls).toEqual([{ pairingAddress: "192.168.1.23:41234", pairingCode: "123456" }]);
+    // Pairing alone creates no device row — see api/device.ts's own comment.
+    expect(useDashboardStore.getState().devices).toEqual([]);
+  });
+
+  it("connecting a physical device updates the shared store with kind: physical and its address", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(await screen.findByText("New device"));
+    await user.click(screen.getByRole("button", { name: "Physical" }));
+    await user.type(screen.getByPlaceholderText("192.168.1.23:37251"), "192.168.1.23:37251");
+    await user.type(screen.getByPlaceholderText("My Pixel"), "My Pixel");
+    await user.click(screen.getByRole("button", { name: "Connect" }));
+
+    await screen.findByTestId("device-row-1");
+    expect(useDashboardStore.getState().devices).toEqual([
+      expect.objectContaining({
+        id: 1,
+        kind: "physical",
+        serial: "192.168.1.23:37251",
+        avdName: null,
+        name: "My Pixel",
+        status: "active",
+      }),
     ]);
   });
 });

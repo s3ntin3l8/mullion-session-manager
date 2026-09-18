@@ -69,7 +69,9 @@ export function SidebarDevices({ onOpenDevice }: { onOpenDevice: (device: Device
           onClick={() => onOpenDevice(device)}
         >
           <DeviceIcon size={14} />
-          <span className="sidebar-tasks-entry-label">{device.name || device.avdName}</span>
+          <span className="sidebar-tasks-entry-label">
+            {device.name || device.avdName || device.serial}
+          </span>
           <span className={`settings-status-dot ${deviceDotClass(device)}`} />
         </button>
       ))}

@@ -452,6 +452,10 @@ export interface DevicesSlice {
   devices: Device[];
   refreshDevices: () => Promise<void>;
   createDevice: (avdName: string, name?: string) => Promise<Device>;
+  // One-time `adb pair` — creates no row, see api/device.ts's own comment.
+  pairDevice: (pairingAddress: string, pairingCode: string) => Promise<void>;
+  // The `kind: "physical"` counterpart to createDevice.
+  connectPhysicalDevice: (address: string, name?: string) => Promise<Device>;
   terminateDevice: (id: number) => Promise<void>;
 }
 

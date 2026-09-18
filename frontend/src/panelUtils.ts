@@ -528,7 +528,7 @@ export function openDevicePanel(api: DockviewApi, device: Device, layout: Layout
   const panel = api.addPanel({
     id: panelId,
     component: "device",
-    title: device.name || device.avdName,
+    title: device.name || device.avdName || device.serial || undefined,
     params: { deviceId: device.id },
     ...positioningForTier(api, layout),
   });

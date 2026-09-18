@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { eq } from "drizzle-orm";
 import { devices } from "../db/schema.js";
-import type { DeviceInfo } from "../services/device-manager.js";
+import type { DeviceInfo, DeviceKind } from "../services/device-manager.js";
 
 // CRUD + one-shot action execution for devices (the `devices` DB table's
 // own route — routes/device.ts, singular, is the separate live WS video/
@@ -25,7 +25,9 @@ interface DeviceListItem {
   hostId: string;
   projectId: number | null;
   name: string | null;
-  avdName: string;
+  kind: DeviceKind;
+  avdName: string | null;
+  serial: string | null;
   status: "active" | "killed";
   createdAt: string;
   live: DeviceInfo | null;
@@ -40,11 +42,41 @@ function toListItem(
     hostId: row.hostId,
     projectId: row.projectId,
     name: row.name,
+    kind: row.kind,
     avdName: row.avdName,
+    serial: row.serial,
     status: row.status,
     createdAt: row.createdAt.toISOString(),
     live: live ?? null,
   };
+}
+
+// A physical device's adb TCP address, as both the one-time pairing address
+// (`adb pair <host:port>`) and the ongoing connect address (`adb connect
+// <host:port>`) — Android shows a DIFFERENT port for each, but both are the
+// same "host:port" shape. Validated as an allowlist, not shell-escaped:
+// DeviceManager.pair()/getOrCreate() pass this straight into
+// AdbServerClient.wireless.pair()/connect(), which builds an adb SERVICE
+// STRING (`host:pair:<password>:<address>`), not a shell command — a stray
+// `:` or newline here corrupts that framing, so shellQuoteArg (below, used
+// only for the on-device `adb shell` action route) is the wrong tool for
+// this input.
+const DEVICE_ADDRESS_PATTERN = /^([A-Za-z0-9.-]+):(\d{1,5})$/;
+
+function isValidDeviceAddress(address: unknown): address is string {
+  if (typeof address !== "string") return false;
+  const match = DEVICE_ADDRESS_PATTERN.exec(address);
+  if (!match) return false;
+  const port = Number(match[2]);
+  return port >= 1 && port <= 65535;
+}
+
+// The 6-digit code Android's Wireless debugging screen shows during
+// pairing.
+const PAIRING_CODE_PATTERN = /^\d{6}$/;
+
+function isValidPairingCode(code: unknown): code is string {
+  return typeof code === "string" && PAIRING_CODE_PATTERN.test(code);
 }
 
 // Hermes review — @yume-chan/adb's `AdbNoneProtocolSubprocessService`
@@ -113,34 +145,53 @@ function isDeviceAction(value: unknown): value is DeviceAction {
   }
 }
 
+interface CreateDeviceBody {
+  kind?: DeviceKind;
+  // Emulator form.
+  avdName?: string;
+  // Physical form — the adb connect address ("host:port").
+  address?: string;
+  projectId?: number;
+  name?: string;
+}
+
 export async function devicesRoute(app: FastifyInstance): Promise<void> {
-  app.post<{ Body: { avdName: string; projectId?: number; name?: string } }>(
-    "/api/devices",
-    async (request, reply) => {
-      if (!app.config.DEVICE_ENABLED) {
-        return reply.badRequest("Device panel is disabled — set DEVICE_ENABLED=true.");
+  app.post<{ Body: CreateDeviceBody }>("/api/devices", async (request, reply) => {
+    if (!app.config.DEVICE_ENABLED) {
+      return reply.badRequest("Device panel is disabled — set DEVICE_ENABLED=true.");
+    }
+    const { kind = "emulator", avdName, address, projectId, name } = request.body ?? {};
+
+    if (kind === "physical") {
+      if (avdName !== undefined) {
+        return reply.badRequest("avdName must not be set for a physical device");
       }
-      const { avdName, projectId, name } = request.body;
-      if (!avdName) return reply.badRequest("avdName is required");
+      if (!isValidDeviceAddress(address)) {
+        return reply.badRequest("address must be host:port (e.g. 192.168.1.23:37251)");
+      }
 
       const [row] = app.db
         .insert(devices)
-        .values({ avdName, projectId: projectId ?? null, name: name ?? null })
+        .values({
+          kind: "physical",
+          serial: address,
+          avdName: null,
+          projectId: projectId ?? null,
+          name: name ?? null,
+        })
         .returning()
         .all();
 
-      // Only the isScopeAlive() pre-check inside getOrCreate is awaited
-      // here — the emulator's actual boot is still fire-and-forget, same
-      // shape as PtyManager.getOrCreate: the caller gets the row back once
-      // that quick check clears, live status is polled via GET afterward
-      // (or observed by connecting the WS route, which naturally blocks
-      // until streaming or error).
+      // Same fire-and-forget-past-the-quick-check shape as the emulator
+      // branch below — see that branch's own comment.
       try {
         await app.device.getOrCreate({
           id: String(row.id),
-          avdName: row.avdName,
+          kind: "physical",
+          avdName: null,
+          serial: address,
           label: row.name,
-          port: row.port,
+          port: null,
         });
       } catch (err) {
         return reply.badRequest(err instanceof Error ? err.message : String(err));
@@ -148,6 +199,74 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
 
       reply.code(201);
       return toListItem(row, app.device.get(String(row.id))?.toInfo());
+    }
+
+    if (address !== undefined) {
+      return reply.badRequest("address must not be set for an emulator device");
+    }
+    if (!avdName) return reply.badRequest("avdName is required");
+
+    const [row] = app.db
+      .insert(devices)
+      .values({
+        kind: "emulator",
+        avdName,
+        serial: null,
+        projectId: projectId ?? null,
+        name: name ?? null,
+      })
+      .returning()
+      .all();
+
+    // Only the isScopeAlive() pre-check inside getOrCreate is awaited
+    // here — the emulator's actual boot is still fire-and-forget, same
+    // shape as PtyManager.getOrCreate: the caller gets the row back once
+    // that quick check clears, live status is polled via GET afterward
+    // (or observed by connecting the WS route, which naturally blocks
+    // until streaming or error).
+    try {
+      await app.device.getOrCreate({
+        id: String(row.id),
+        kind: "emulator",
+        avdName,
+        serial: null,
+        label: row.name,
+        port: row.port,
+      });
+    } catch (err) {
+      return reply.badRequest(err instanceof Error ? err.message : String(err));
+    }
+
+    reply.code(201);
+    return toListItem(row, app.device.get(String(row.id))?.toInfo());
+  });
+
+  // Stateless — pairing writes a key into the adb SERVER's own keystore,
+  // outside Mullion's ownership (see the schema's own comment on
+  // `devices.kind`), so this creates no `devices` row. A separate
+  // `POST /api/devices` call (kind: "physical") does the actual `adb
+  // connect` afterward. Deliberately off the CRUD resource rather than a
+  // sub-route of it, since it doesn't touch one.
+  app.post<{ Body: { pairingAddress?: string; pairingCode?: string } }>(
+    "/api/devices/pair",
+    async (request, reply) => {
+      if (!app.config.DEVICE_ENABLED) {
+        return reply.badRequest("Device panel is disabled — set DEVICE_ENABLED=true.");
+      }
+      const { pairingAddress, pairingCode } = request.body ?? {};
+      if (!isValidDeviceAddress(pairingAddress)) {
+        return reply.badRequest("pairingAddress must be host:port (e.g. 192.168.1.23:41234)");
+      }
+      if (!isValidPairingCode(pairingCode)) {
+        return reply.badRequest("pairingCode must be the 6-digit code shown on the device");
+      }
+      try {
+        await app.device.pair(pairingAddress, pairingCode);
+      } catch (err) {
+        return reply.badRequest(err instanceof Error ? err.message : String(err));
+      }
+      reply.code(200);
+      return { ok: true };
     },
   );
 
@@ -175,7 +294,7 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
     // a concurrent WS connect that lands mid-terminate must see "killed",
     // not a stale "active" row.
     app.db.update(devices).set({ status: "killed" }).where(eq(devices.id, id)).run();
-    await app.device.terminate(String(id));
+    await app.device.terminate(String(id), row.kind);
 
     reply.code(204);
   });
