@@ -117,8 +117,10 @@ export function evaluatePatchCoverage(modifiedFiles, coverageData) {
       for (const [covPath, val] of Object.entries(coverageData)) {
         const normalizedCov = covPath.replace(/\\/g, "/");
         // Exact match: covPath ends with /<relPath> (absolute path → relative tail)
-        if (normalizedCov === `${root.replace(/\\/g, "/")}/${relPath}` ||
-            normalizedCov.endsWith(`/${relPath}`)) {
+        if (
+          normalizedCov === `${root.replace(/\\/g, "/")}/${relPath}` ||
+          normalizedCov.endsWith(`/${relPath}`)
+        ) {
           fileCoverage = val;
           break;
         }
