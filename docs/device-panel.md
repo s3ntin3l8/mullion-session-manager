@@ -153,14 +153,15 @@ its poll runs unconditionally regardless, so a device created purely
 through the CLI/MCP surface below (no panel ever opened) still makes the
 section appear without a reload. Settings → Devices is the lifecycle
 surface — create, stop, delete, and (for an active physical row) edit a
-device's adb address there. It's also where a phone gets paired (`adb pair`) and
-connected by address (the `kind: "physical"` counterpart to an emulator
-`create`, see §1 below), and where a new AVD can be provisioned from an
-installed system image (see "AVD provisioning" below) before a device is
-ever created from it, including devices whose row has since flipped to `killed`, which the sidebar list omits but
-Settings still shows. Reopening a device panel after a Mullion restart
-resumes streaming from the existing emulator (see the reattach behavior
-above) rather than requiring a manual `systemctl --user stop` first — no UI
+device's adb address there. It's also where a phone gets paired
+(`adb pair`) and connected by address (the `kind: "physical"` counterpart
+to an emulator `create`, see §1 below), and where a new AVD can be
+provisioned from an installed system image (see "AVD provisioning" below)
+before a device is ever created from it, including devices whose row has
+since flipped to `killed`, which the sidebar list omits but Settings
+still shows. Reopening a device panel after a Mullion restart resumes
+streaming from the existing emulator (see the reattach behavior above)
+rather than requiring a manual `systemctl --user stop` first — no UI
 change needed for that; it's the same `openDevicePanel`/WS-connect path
 either way.
 
