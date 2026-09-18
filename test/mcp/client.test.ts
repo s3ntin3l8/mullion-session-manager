@@ -340,6 +340,21 @@ describe("MullionClient (issue #271)", () => {
       });
     });
 
+    // Root-cause fix for the opencode `command`-embedded-prompt trap. Sent
+    // over the wire as `seedPrompt`, not `initialPrompt` — POST
+    // /api/sessions' own field name for this (routes/sessions.ts's
+    // createSessionSchema), which the route handler translates into a real
+    // argv turn only when the target command's hook adapter supports it.
+    it("spawnChildSession sends an initialPrompt arg as seedPrompt on the wire", async () => {
+      const socketPath = await startControlServer((msg, socket) => {
+        expect(msg.op).toBe("sessions.spawn_child");
+        expect(msg.body).toEqual({ command: "opencode", seedPrompt: "do the thing" });
+        socket.write(`${JSON.stringify({ id: msg.id, ok: true, status: 201 })}\n`);
+      });
+      const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+      await client.spawnChildSession({ command: "opencode", initialPrompt: "do the thing" });
+    });
+
     // Issue #1291 — ownSessionId (MULLION_SESSION_ID) fallback, for the
     // auth-disabled-host case where the control socket itself has no
     // pinned session to resolve "self" from. Hermes review, PR #1292: the

@@ -92,6 +92,25 @@ const createSessionSchema = {
       },
       model: { type: "string" },
       smallModel: { type: "string" },
+      // Issue: spawn_child_session had no prompt-delivery channel at all,
+      // unlike the promote route's own `seedPrompt` (that route's separate
+      // schema, not this one). Same public name and same "route handler
+      // decides real-turn vs. context-only via commandSupportsSeed"
+      // translation as promote's handler below — see this route's own
+      // handler for why the raw value is never passed straight through to
+      // createSessionRecord's `initialPrompt`/`seedPrompt` params (those are
+      // a different, ALREADY-DECIDED pair of fields, not part of
+      // CreateSessionBody, despite the name collision with this one).
+      //
+      // Hermes review, PR #1333 — deliberately no `maxLength`, unlike
+      // `env`'s per-value cap above: this carries the same "arbitrary
+      // issue/task text with no sane upper bound" content as the internal
+      // Task Master spawn route's own `initialPrompt`/`seedPrompt`
+      // (routes/internal-schemas.ts's spawnSessionSchema, see its own
+      // comment), which set that precedent for exactly this reason. Fastify's
+      // default 1 MB request body limit already bounds a genuinely
+      // pathological payload.
+      seedPrompt: { type: "string" },
     },
   },
 };
@@ -417,7 +436,35 @@ export async function sessionsRoute(app: FastifyInstance) {
                 undefined,
             }
           : request.body;
-      const result = await createSessionRecord(app, body);
+
+      // Issue: spawn_child_session (the one session-scoped spawn path an
+      // agent can reach) had no way to submit a first turn to its child at
+      // all — an opencode-hosted parent worked around it by baking prompt
+      // text straight into `command`, which opencode's CLI misreads as a
+      // `[project]` start-directory positional and fails to launch on
+      // (opencode.ts's own comment documents this exact trap). `seedPrompt`
+      // is the fix: same public field name and the same
+      // commandSupportsSeed-gated "deliver as a real argv turn when the
+      // command's hook adapter supports it, else fall back to a
+      // context-only stash" translation the promote route already performs
+      // just below in this file — see that handler's own comment for the
+      // full reasoning (never send both `initialPrompt` and `seedPrompt` to
+      // createSessionRecord; a resumed/transferred session isn't a concept
+      // here, unlike promote, so there's no third branch to consider).
+      const { seedPrompt: rawSeedPrompt, ...restBody } = body;
+      // Hermes review, PR #1333 — trim before the emptiness check: an
+      // untrimmed `"   "` has length > 0, so without this a whitespace-only
+      // prompt would count as "wants a seed" and land as a literal
+      // `--prompt '   '` in the child's argv instead of cleanly falling
+      // through to no delivery at all.
+      const callerSeedPrompt = rawSeedPrompt?.trim();
+      const wantsSeed = callerSeedPrompt !== undefined && callerSeedPrompt.length > 0;
+      const deliverAsInitialPrompt = wantsSeed && commandSupportsSeed(restBody.command);
+      const result = await createSessionRecord(app, {
+        ...restBody,
+        initialPrompt: deliverAsInitialPrompt ? callerSeedPrompt : undefined,
+        seedPrompt: wantsSeed && !deliverAsInitialPrompt ? callerSeedPrompt : undefined,
+      });
       if (!result.ok) {
         if (result.reason === "unknown-project") return reply.badRequest("Unknown projectId");
         if (result.reason === "worktree-failed") {
@@ -449,7 +496,38 @@ export async function sessionsRoute(app: FastifyInstance) {
 
       reply.code(201);
       const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
-      return withLiveStatus(app, result.row, idleThresholdMs, result.project.hostId);
+      const liveStatus = await withLiveStatus(
+        app,
+        result.row,
+        idleThresholdMs,
+        result.project.hostId,
+      );
+      if (!wantsSeed) return liveStatus;
+
+      // Same `initialPromptApplied`/version-skew reasoning as the promote
+      // route's own `seedDelivered` below — `resolveSeedDelivered` treats a
+      // remote host's silently-missing `initialPromptApplied` (an old
+      // build's route handler that doesn't know the field exists yet) as
+      // undelivered, not as success. `deliverAsInitialPrompt: false` (the
+      // command has no matching hook adapter at all) short-circuits to
+      // `false` too — the caller gets an honest signal either way, without
+      // needing to guess from the command string itself whether one of the
+      // four known agent CLIs was actually spawned.
+      const seedDelivered = resolveSeedDelivered(
+        deliverAsInitialPrompt,
+        result.project.hostId,
+        result.initialPromptApplied,
+      );
+      if (deliverAsInitialPrompt && !seedDelivered) {
+        return {
+          ...liveStatus,
+          initialPromptApplied: false,
+          warnings: [
+            "The session is running, but its seed prompt could not be submitted as a first turn — it may be sitting idle until you send it a message.",
+          ],
+        };
+      }
+      return { ...liveStatus, initialPromptApplied: seedDelivered };
     },
   );
 

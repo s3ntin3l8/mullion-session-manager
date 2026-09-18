@@ -169,6 +169,103 @@ describe("sessions route", () => {
     await app.close();
   });
 
+  // Root-cause fix for the opencode `command`-embedded-prompt trap: before
+  // this, spawn_child_session (and any other caller of POST /api/sessions)
+  // had no channel to submit a real first turn at all, so an opencode-hosted
+  // caller baked prompt text straight into `command` — which opencode's CLI
+  // misreads as its `[project]` start-directory positional and fails to
+  // launch on (opencode.ts's own comment documents this exact trap).
+  // `seedPrompt` is the fix, mirroring the promote route's own
+  // commandSupportsSeed-gated "argv turn vs. context-only" translation (see
+  // "delivers the promote seed as initialPrompt argv..." above for the
+  // promote-route version of this same test).
+  it("delivers a direct-create seedPrompt as initialPrompt argv for a seed-capable command (opencode)", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app);
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: { projectId, command: "opencode", seedPrompt: "do the thing" },
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.json().initialPromptApplied).toBe(true);
+
+    const call = vi
+      .mocked(spawnChildProcess)
+      .mock.calls.findLast(([command]) => command === "systemd-run");
+    const args = call?.[1] as string[];
+    expect(args[args.length - 1]).toBe("opencode --prompt 'do the thing'");
+
+    await app.close();
+  });
+
+  // The other half of the same fix: a command with no matched hook adapter
+  // at all (plain `bash`) has no argv channel and no hook round trip either
+  // — the session must still launch normally (no 400, no crash), just
+  // without the prompt, and the caller must be told so via
+  // `initialPromptApplied: false` rather than a silent no-op that looks
+  // identical to success.
+  it("still creates the session when seedPrompt is set on a command with no matched adapter, and reports it as not applied", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app);
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: { projectId, command: "bash", seedPrompt: "do the thing" },
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.json().initialPromptApplied).toBe(false);
+
+    const call = vi
+      .mocked(spawnChildProcess)
+      .mock.calls.findLast(([command]) => command === "systemd-run");
+    const args = call?.[1] as string[];
+    expect(args[args.length - 1]).toBe("bash");
+
+    await app.close();
+  });
+
+  it("omits initialPromptApplied when no seedPrompt is given at all", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app);
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: { projectId, command: "bash" },
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.json().initialPromptApplied).toBeUndefined();
+
+    await app.close();
+  });
+
+  // Hermes review, PR #1333 — a whitespace-only seedPrompt has length > 0
+  // before trimming, which would otherwise deliver a literal `--prompt
+  // '   '` to the child instead of cleanly falling through to no delivery.
+  it("treats a whitespace-only seedPrompt as no seed at all", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app);
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: { projectId, command: "opencode", seedPrompt: "   " },
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.json().initialPromptApplied).toBeUndefined();
+
+    const call = vi
+      .mocked(spawnChildProcess)
+      .mock.calls.findLast(([command]) => command === "systemd-run");
+    const args = call?.[1] as string[];
+    expect(args[args.length - 1]).toBe("opencode");
+
+    await app.close();
+  });
+
   // Hermes review, this PR (issue #822) — a direct full-scope POST
   // /api/sessions call never goes through dock-config.ts's validateOneControl
   // (that's the .crs/dock.json write path only), so the reserved-key check

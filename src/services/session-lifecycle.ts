@@ -151,6 +151,18 @@ export interface CreateSessionBody {
   // Issue #958 — opencode's `small_model` config key (lightweight tasks
   // like title generation). Same threading posture as `model` above.
   smallModel?: string;
+  // A caller-supplied first-turn prompt, RAW and NOT YET translated — same
+  // public name and meaning as the promote route's own `seedPrompt` body
+  // field (that route has its own separate schema; this is
+  // POST /api/sessions' first prompt-delivery affordance). Deliberately
+  // NOT the same thing as CreateSessionParams.seedPrompt below despite the
+  // identical name: that one is a resolved, ALREADY-DECIDED "deliver as
+  // context only" value computed by this interface's own route handler
+  // (routes/sessions.ts), which destructures this field out of the request
+  // body before ever constructing a CreateSessionParams — the two never
+  // coexist on the same object. See that handler for the
+  // commandSupportsSeed-gated translation.
+  seedPrompt?: string;
 }
 
 // Issue #271 — resolves a WorktreeIntent into an actual worktree path,
@@ -272,11 +284,19 @@ export type CreateSessionParams = CreateSessionBody & {
   // a TS function, bypassing route body validation entirely — the public
   // launcher/promote flows have no equivalent of an unattended "first turn."
   initialPrompt?: string;
-  // Issue #678 — the promote flow's seed prompt (POST
-  // /api/sessions/:id/promote's `seedPrompt` body field). Also NOT part of
-  // CreateSessionBody: only the promote route ever sets this, the same
-  // "internal callers pass extra fields the public schema doesn't expose"
-  // shape as initialPrompt above. See stashSeed's own doc comment
+  // Issue #678 — the context-only seed prompt: stashed for a hook-based
+  // agent's SessionStart `additionalContext` or opencode's static
+  // `instructions` file, never submitted as an argv turn. This is the
+  // RESOLVED value, already decided by a route handler — NOT the same
+  // thing as CreateSessionBody.seedPrompt above despite the identical
+  // name, which is that field's raw, untranslated caller input. Two
+  // callers construct this today, both via their own commandSupportsSeed
+  // gate deciding between this field and `initialPrompt` above: the
+  // promote route (POST /api/sessions/:id/promote's own `seedPrompt` body
+  // field) and, since the spawn_child_session fix, POST /api/sessions
+  // itself (which destructures CreateSessionBody.seedPrompt out of the
+  // request body before ever building this object — the two fields never
+  // coexist on the same value). See stashSeed's own doc comment
   // (pty-manager.ts) for why this is stashed BEFORE spawn() is called, not
   // after — that ordering is the actual race fix this issue is about.
   seedPrompt?: string;

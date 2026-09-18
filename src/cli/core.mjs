@@ -696,6 +696,13 @@ const SESSION_SPAWN_CHILD_SPEC = {
   cwd: "string",
   kind: "string",
   "skip-permissions": "boolean",
+  // Sent over the wire as `seedPrompt` (POST /api/sessions' own field name
+  // for this, per routes/sessions.ts's createSessionSchema) — named
+  // `--initial-prompt` here to match the MCP tool's `initialPrompt` param,
+  // the clearer name from a caller's point of view. See
+  // spawn_child_session's own description for why prompt text belongs
+  // here, not appended to `--command`.
+  "initial-prompt": "string",
 };
 const SESSION_KILL_SPEC = { cascade: "string" };
 
@@ -768,6 +775,7 @@ const sessionCommands = {
     if (flags.cwd !== undefined) body.cwd = flags.cwd;
     if (flags.kind !== undefined) body.kind = flags.kind;
     if (flags["skip-permissions"] === true) body.skipPermissions = true;
+    if (flags["initial-prompt"] !== undefined) body.seedPrompt = flags["initial-prompt"];
     const result = await client.request("sessions.spawn_child", body);
     return { json: result };
   },

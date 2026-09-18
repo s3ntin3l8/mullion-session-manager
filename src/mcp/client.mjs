@@ -370,11 +370,30 @@ export class MullionClient {
    * Code session's own auto-injected MCP config: that config only ever
    * carries the session-scoped MULLION_HOOK_TOKEN, and spawn_child (unlike
    * sessions.create) accepts that scope by design. */
-  async spawnChildSession({ command, name, cwd, kind, skipPermissions, parentSessionId } = {}) {
+  async spawnChildSession({
+    command,
+    name,
+    cwd,
+    kind,
+    initialPrompt,
+    skipPermissions,
+    parentSessionId,
+  } = {}) {
     const body = { command };
     if (name !== undefined) body.name = name;
     if (cwd !== undefined) body.cwd = cwd;
     if (kind !== undefined) body.kind = kind;
+    // Sent as `seedPrompt`, not `initialPrompt` — POST /api/sessions (what
+    // this control op ultimately forwards to) only accepts the former; the
+    // route handler decides whether the command's hook adapter can turn it
+    // into a real first-turn `initialPrompt` or must fall back to
+    // context-only delivery. See routes/sessions.ts's createSessionSchema
+    // and this same translation in its promote handler. Kept as
+    // `initialPrompt` at the MCP-tool/client boundary because that's the
+    // clearer name for an agent choosing to spawn a child — "seed" is
+    // internal terminology carried over from the promote flow (see
+    // task-agent-resolve.ts's own doc comment on why "seed" stuck).
+    if (initialPrompt !== undefined) body.seedPrompt = initialPrompt;
     if (skipPermissions !== undefined) body.skipPermissions = skipPermissions;
     if (parentSessionId !== undefined) body.parentSessionId = parentSessionId;
     try {

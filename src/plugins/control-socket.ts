@@ -558,6 +558,15 @@ const OPS: Record<string, OpSpec> = {
         delete rest.kind;
         delete rest.env;
       }
+      // `seedPrompt` (the MCP tool's `initialPrompt` param, translated by
+      // the client — see spawnChildSession's own comment) is deliberately
+      // NOT in the session-scope strip list above: unlike
+      // skipPermissions/kind/env it grants no extra privilege or visibility
+      // to the child — it only affects what the child agent's first turn
+      // says, which a session-scoped caller already fully controls via
+      // `command` itself (e.g. `claude -- '<anything>'`). See this op's own
+      // module doc comment for why spawn_child is reachable at session
+      // scope at all.
       const payload = {
         ...rest,
         projectId: parentProjectId,
