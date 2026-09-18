@@ -27,41 +27,37 @@
 //
 // "crs.themeHint" must match store.ts's THEME_HINT_KEY — this script can't
 // import it (it's not part of Vite's module graph, and must stay a classic
-// script per the above). Defaults to the black-translucent/dark-theme value
-// on any error (missing localStorage, disabled storage, etc.) rather than
-// guessing light.
+// script per the above).
 //
 // Second, independent job added for the sign-in screen (AuthGate.tsx):
 // mirror the resolved theme onto <html data-theme-hint="light"|"dark">,
-// written UNCONDITIONALLY (not just on "light" like the iOS branch above),
-// because tokens.css uses it to paint <html>'s background before <body> and
-// AuthGate's own themed .login-root have painted anything — <html> sits
-// outside .cmux-root, so none of that file's custom properties resolve on
-// it directly, hence the plain hex fallback colors in tokens.css. Without
-// this, a dark-theme user gets a flash of the browser's default white
-// background while GET /api/auth/me is in flight.
+// written UNCONDITIONALLY, because tokens.css uses it to paint <html>'s
+// background before <body> and AuthGate's own themed .login-root have
+// painted anything — <html> sits outside .cmux-root, so none of that
+// file's custom properties resolve on it directly. Without this, a
+// dark-theme user gets a flash of the browser's default white background
+// while GET /api/auth/me is in flight.
 //
-// Only a genuinely ABSENT key (localStorage.getItem returning null — a
-// first-ever visit, the common case for a login page) consults
-// prefers-color-scheme here, matching the same OS-preference fallback
-// AuthGate itself uses once React mounts. A present-but-unrecognized value
-// resolves to dark, same as the iOS branch above treats anything that
-// isn't exactly "light" — the two branches must agree on that, or a
-// corrupted/legacy value would flip <html>'s background one way while
-// leaving the status-bar meta tag the other.
+// `resolved` is computed ONCE and drives BOTH jobs — the iOS meta fix above
+// used to check `hint === "light"` directly, which only reacted to a
+// *stored* "light" and, on a genuinely first-ever visit (no stored hint at
+// all, the common case for a login page), left the status bar at its
+// black-translucent default even when prefers-color-scheme resolved this
+// same visit to light for <html>'s background. Driving both off the one
+// `resolved` value means a first-ever light-OS visit gets a light <html>
+// background AND a corrected status bar, not one without the other.
+// Any error (missing localStorage, disabled storage, etc.) defaults
+// `resolved` to dark rather than guessing light.
 (function () {
   function systemPrefersLight() {
     return (
       !!window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches === false
     );
   }
+  var resolved = "dark";
   try {
     var hint = localStorage.getItem("crs.themeHint");
-    if (hint === "light") {
-      var meta = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');
-      if (meta) meta.setAttribute("content", "default");
-    }
-    var resolved =
+    resolved =
       hint === null
         ? systemPrefersLight()
           ? "light"
@@ -69,10 +65,12 @@
         : hint === "light"
           ? "light"
           : "dark";
-    document.documentElement.setAttribute("data-theme-hint", resolved);
   } catch {
-    /* localStorage/matchMedia unavailable — keep the static black-translucent
-       default above, and fall back to dark for the <html> background too. */
-    document.documentElement.setAttribute("data-theme-hint", "dark");
+    /* localStorage/matchMedia unavailable — resolved stays "dark". */
   }
+  if (resolved === "light") {
+    var meta = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');
+    if (meta) meta.setAttribute("content", "default");
+  }
+  document.documentElement.setAttribute("data-theme-hint", resolved);
 })();

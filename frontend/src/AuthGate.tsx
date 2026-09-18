@@ -154,7 +154,11 @@ function Login({
                   ref={inputRef}
                   className="mono"
                   type="password"
-                  autoComplete="current-password"
+                  // Not "current-password" — this is one shared server
+                  // secret (MULLION_AUTH_TOKEN), not a per-user site
+                  // credential, and offering to save/fill it as one would
+                  // be misleading to a password manager and its user.
+                  autoComplete="off"
                   value={token}
                   onChange={(e) => setToken(e.target.value)}
                 />
