@@ -3723,6 +3723,9 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
             reviewFindings: appendedFindings,
             reviewFindingsIngestedSessionId: task.reviewSessionId,
             lastReviewVerdict: verdict,
+            // Task 409707 — anchors reannounceInconclusiveReviewsAfterGrace's
+            // grace window; see that column's own doc comment in schema.ts.
+            lastReviewVerdictAt: new Date(now),
             ...(announcingCap ? { autoReturnCapAnnouncedAt: new Date() } : {}),
             ...(cachedHeadSha !== undefined ? { lastReviewedHeadSha: cachedHeadSha } : {}),
           })
@@ -3953,6 +3956,108 @@ async function reannounceCappedTasksAfterHumanPush(app: FastifyInstance): Promis
   }
 }
 
+// Task 409707 — a review agent can stall silently: no reported
+// `errorState`/`errorDetail` at all (the adapter gap this issue tracks — a
+// REPORTED `rate_limit` is already covered by `isRateLimitGraceActive`/
+// `isTaskInRateLimitGrace` above), just `idle` with no turn-end payload.
+// `processReviewingTasks` above correctly ingests that as
+// `lastReviewVerdict = "inconclusive"` once `REVIEW_FINDINGS_GRACE_MS`
+// elapses, but `reviewFindingsIngestedSessionId` then latches permanently
+// against that same stalled session (see that column's own doc comment in
+// schema.ts) — re-prompting it after quota/whatever recovers has no effect,
+// since nothing ever reads its output again. Unlike a capped task
+// (`reannounceCappedTasksAfterHumanPush` above), an inconclusive verdict
+// never calls `autoReturnTask` (`wantsAutoReturn` requires
+// `verdict === "changes-requested"`), so `autoReturnRounds` never reaches
+// the project's cap on its own — a task stuck on repeated silent review
+// stalls would otherwise never become "capped and announced" either, and so
+// never picked up by that sweep. This is the sole automatic recovery path
+// for exactly that case.
+const INCONCLUSIVE_REVIEW_REARM_GRACE_MS = 60 * 60_000;
+
+// See `tasks.inconclusiveReviewRearmCount`'s own doc comment (schema.ts) for
+// why this can't reuse `autoReturnRounds`/`resolveMaxAutoReturnRounds` as its
+// bound. Deliberately small and fixed, not project-configurable like the
+// round cap — this sweep exists to survive one bad adapter tick, not to
+// negotiate indefinitely with a genuinely broken reviewer.
+const MAX_AUTOMATIC_INCONCLUSIVE_REARMS = 1;
+
+async function reannounceInconclusiveReviewsAfterGrace(app: FastifyInstance): Promise<void> {
+  const resolvedTaskMaster = resolveTaskMasterConfig(app);
+  if (!resolvedTaskMaster.enabled) return;
+
+  const now = Date.now();
+  const rows = app.db
+    .select({ task: tasks, project: projects })
+    .from(tasks)
+    .innerJoin(projects, eq(tasks.projectId, projects.id))
+    .where(
+      and(
+        eq(tasks.status, "reviewing"),
+        eq(tasks.lastReviewVerdict, "inconclusive"),
+        isNotNull(tasks.reviewFindingsIngestedSessionId),
+        // Nothing stalled left to re-arm otherwise — also keeps this bound
+        // an "attempts," not "ticks": right after a successful re-arm this
+        // is null again until the next spawn, so a second tick landing
+        // before that spawn can't double-fire even at a higher MAX than 1.
+        isNotNull(tasks.reviewSessionId),
+        // A capped, announced task is reannounceCappedTasksAfterHumanPush's
+        // own territory — it requires an actual human push, not a timer;
+        // excluded here so the two sweeps never both touch the same row.
+        isNull(tasks.autoReturnCapAnnouncedAt),
+        lt(tasks.inconclusiveReviewRearmCount, MAX_AUTOMATIC_INCONCLUSIVE_REARMS),
+      ),
+    )
+    .all();
+  if (rows.length === 0) return;
+
+  for (const { task, project } of rows) {
+    if (task.reviewSessionId === null) continue; // guaranteed by the query above; narrows the type only
+    if (task.lastReviewVerdictAt === null) continue;
+    if (now - task.lastReviewVerdictAt.getTime() < INCONCLUSIVE_REVIEW_REARM_GRACE_MS) continue;
+    // Defensive, independent of the query's own isNull(autoReturnCapAnnouncedAt)
+    // filter above — the round budget is the scope's own second signal for
+    // "still has life left," worth checking directly rather than trusting a
+    // single derived flag.
+    if (task.autoReturnRounds >= resolveMaxAutoReturnRounds(project)) continue;
+
+    const staleReviewSessionId = task.reviewSessionId;
+    const updated = app.db
+      .update(tasks)
+      .set({
+        reviewSessionId: null,
+        reviewFindingsIngestedSessionId: null,
+        reviewSeedDelivered: null,
+        reviewSpawnClaimedAt: null,
+        inconclusiveReviewRearmCount: task.inconclusiveReviewRearmCount + 1,
+      })
+      .where(
+        and(
+          eq(tasks.id, task.id),
+          eq(tasks.status, "reviewing"),
+          eq(tasks.lastReviewVerdict, "inconclusive"),
+          eq(tasks.reviewSessionId, staleReviewSessionId),
+          eq(tasks.inconclusiveReviewRearmCount, task.inconclusiveReviewRearmCount),
+        ),
+      )
+      .run();
+    if (updated.changes === 0) continue;
+
+    // Same reasoning as the in_progress -> reviewing transition's own kill
+    // call (#772) — the write above just nulled reviewSessionId, orphaning
+    // the stalled session with no task row pointing at it anymore. Killed
+    // AFTER the CAS succeeds, not before: a lost race against a concurrent
+    // approve/reject/give-up must not leave a session killed out from under
+    // a row this sweep no longer actually touched.
+    void killSession(app, staleReviewSessionId).catch((err) => {
+      app.log.warn(
+        { err, taskId: task.id, reviewSessionId: staleReviewSessionId },
+        "task reconcile: failed to kill the stalled review session",
+      );
+    });
+  }
+}
+
 /**
  * Phase 6 Task Master (6.2/#215) — the automatic-transition half of the
  * state machine (task-state.ts owns the legal-transition table; this is
@@ -4027,6 +4132,10 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
   // to keep being retried regardless of what's currently claimed/in_progress.
   await processReleaseRequests(app);
   await reannounceCappedTasksAfterHumanPush(app);
+  // Task 409707 — same independence reasoning as the sweeps above: a task
+  // stuck on a silently-stalled, never-capped inconclusive review needs to
+  // keep being retried regardless of what's currently claimed/in_progress.
+  await reannounceInconclusiveReviewsAfterGrace(app);
   await processConventionalTitlesAutoEnable(app);
 
   const rows = app.db
@@ -4370,6 +4479,10 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                 // design), so any prior announcement is stale the instant
                 // this lands, same as the sibling session-id fields above.
                 autoReturnCapAnnouncedAt: null,
+                // Task 409707 — a fresh review round earns its own automatic
+                // inconclusive-rearm attempt, same reasoning as
+                // autoReturnCapAnnouncedAt's own reset just above.
+                inconclusiveReviewRearmCount: 0,
                 // #761 — `?? task.prTitle`, not a bare overwrite: a later
                 // round that doesn't rewrite the title file (see
                 // `taskCommitTitlePath`'s own doc comment on why that's

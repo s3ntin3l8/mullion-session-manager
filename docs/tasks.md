@@ -2165,3 +2165,28 @@ extensive design comments.
   whose release workflow is `workflow_dispatch`-only (no `on: push` trigger)
   never gets a release PR out of a task landing at all — a human still
   needs the manual Run button there.
+- **A silently-stalled review agent gets exactly one automatic re-arm per
+  review round (issue `#1344`/task 409707).** A review agent that goes idle
+  with no reported `errorState`/`errorDetail` at all (unlike a reported
+  `rate_limit`, which `isRateLimitGraceActive` already grace-windows) is
+  ingested as `lastReviewVerdict = "inconclusive"` once
+  `REVIEW_FINDINGS_GRACE_MS` elapses, and previously had no automatic way
+  back: `reviewFindingsIngestedSessionId` latches against that stalled
+  session permanently, and an inconclusive verdict never calls
+  `autoReturnTask`, so the task never reaches the round cap that would let
+  `reannounceCappedTasksAfterHumanPush` pick it up either.
+  `reannounceInconclusiveReviewsAfterGrace` (`task-reconciler.ts`) now
+  re-arms such a task once `tasks.lastReviewVerdictAt` is more than an hour
+  old, killing the stalled review session and clearing the same four columns
+  the capped-task re-arm clears. Bounded to
+  `tasks.inconclusiveReviewRearmCount < 1` so a genuinely-broken review
+  adapter (one that stalls the same way on every attempt) can't loop
+  forever — a task that exhausts this budget still has no automatic or
+  operator-facing recovery today; a human has to intervene on the DB
+  directly, the same gap this issue describes for the capped case before
+  `#1039`. Deliberately does NOT widen `isRateLimitGraceActive` itself to
+  cover the no-signal-at-all case: that would make it indistinguishable from
+  the ordinary quiet-review-still-running case `REVIEW_FINDINGS_GRACE_MS`
+  and the `severity !== "busy"` guard already exist to tolerate (`#754`),
+  regressing that fix. Tracked as a follow-up in
+  [#1345](https://github.com/s3ntin3l8/mullion-session-manager/issues/1345).
