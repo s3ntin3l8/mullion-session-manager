@@ -2131,12 +2131,16 @@ describe("mapAgyEvent (issue #253)", () => {
       ]);
     });
 
-    it("classifies the shorter 'quota reached' wording the same way", () => {
+    // Self-review finding — a looser "quota"/"limit" wording match risked
+    // misclassifying an unrelated agy error (a disk/storage quota, some
+    // other resource-exhaustion condition) as recoverable. Only the exact,
+    // confirmed gRPC status token is matched.
+    it("does NOT classify a generic quota-sounding message that lacks the exact RESOURCE_EXHAUSTED token", () => {
       const result = mapAgyEvent("Stop", {
         terminationReason: "error",
         error: "quota reached for this project",
       });
-      expect(result[1]).toMatchObject({ errorType: "rate_limit" });
+      expect(result[1]).not.toHaveProperty("errorType");
     });
 
     it("does NOT set errorType on an unrelated error — must not misclassify a normal failure as recoverable", () => {

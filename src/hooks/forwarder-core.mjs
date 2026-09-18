@@ -1144,18 +1144,28 @@ export function mapAgyEvent(kind, payload) {
         // as Claude Code's path) lets isRateLimitGraceActive
         // (task-rate-limit-grace.ts) recognize this exactly the way it
         // already does for Claude Code's own rate_limit error_type.
-        // Deliberately narrow (this exact substring only) — task-reconciler.ts
+        // Deliberately narrow — only the exact, confirmed gRPC status
+        // token, not a looser "quota"/"limit" wording match: task-reconciler.ts
         // special-cases only the precise "rate_limit" label, "every other
         // value is treated as a normal failure," so a broader match here
-        // would risk misclassifying an unrelated agy error as recoverable.
+        // would risk misclassifying an unrelated agy error (a disk/storage
+        // quota, some other resource-exhaustion condition) as recoverable.
+        // `RESOURCE_EXHAUSTED` is Google Cloud's own gRPC status code name
+        // (grpc.StatusCode.RESOURCE_EXHAUSTED, code 429 in agy's own HTTP
+        // mapping) — specific enough on its own without an additional
+        // "quota reached" match that would just be unanchored English.
         //
-        // This closes only PART of #1356's own gap (see that issue and its
-        // follow-up #1363): the actual incident that motivated it was agy
-        // blocking on a `NEEDS INPUT` prompt with NO Stop hook firing at
-        // all, which this fix cannot reach — `reason === "error"` never
-        // becomes true in that case. This branch only helps the narrower
-        // case where agy's Stop mapping does fire with a reported error.
-        if (error.includes("RESOURCE_EXHAUSTED") || error.includes("quota reached")) {
+        // See hook-handlers.ts's stop_failure handler for the companion fix
+        // this needs to actually be reachable in practice: mapAgyEvent's
+        // Stop case (below) also emits a `progress: done` message for the
+        // SAME error-terminated turn, which — unlike Claude Code, where Stop
+        // and StopFailure are separate hooks and this never happens
+        // together — latches `lastTurnEndedAt` at the same moment as this
+        // `stop_failure`, which task-reconciler.ts's own comments document
+        // as an invariant this violates ("A `stop_failure` never sets
+        // `lastTurnEndedAt`"). Without that companion fix, this
+        // classification alone doesn't survive `staleErrorSeconds`'s TTL.
+        if (error.includes("RESOURCE_EXHAUSTED")) {
           stopFailure.errorType = "rate_limit";
         }
         messages.push(stopFailure);

@@ -4596,6 +4596,64 @@ describe("PtyManager", () => {
       expect(events[events.length - 1].kind).toBe("attention");
     });
 
+    // Issue #1364 self-review finding — for Claude Code, Stop and
+    // StopFailure are separate hook registrations, so a real stop_failure
+    // never arrives alongside a "done" progress message for the same turn,
+    // and lastTurnEndedAt is never set while one is live. agy breaks that:
+    // mapAgyEvent's Stop case emits BOTH a `progress: done` (which always
+    // latches lastTurnEndedAt) and the `stop_failure` for one error-terminated
+    // turn, as two separate hook messages in that order (forwarder.mjs's
+    // writeHandshakeAndMessages sends them as separate lines, array order).
+    // Without stop_failure explicitly clearing it back, the session would
+    // read as "finished" (not "in an ongoing error") the moment
+    // staleErrorSeconds later TTLs errorState back to idle — silently
+    // defeating the rate-limit grace window's whole reason for existing.
+    it("stop_failure clears lastTurnEndedAt even when a same-turn progress:done just latched it (agy's Stop shape)", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      // Mirrors mapAgyEvent's Stop case exactly: progress:done first, then
+      // stop_failure, as two separate emitHookEvent calls (matching two
+      // separate socket lines in production).
+      session.emitHookEvent({ kind: "progress", phase: "done", backgroundTasks: [] });
+      expect(session.toInfo().lastTurnEndedAt).not.toBeNull();
+
+      session.emitHookEvent({
+        kind: "stop_failure",
+        error: "RESOURCE_EXHAUSTED (code 429): Individual quota reached.",
+        errorType: "rate_limit",
+      });
+
+      expect(session.toInfo().errorState).toBe("api_error");
+      // Real derivation, not hand-computed — same code path
+      // isRateLimitGraceActive (task-rate-limit-grace.ts) reads.
+      expect(session.toInfo().errorDetail).toBe("rate_limit");
+      expect(session.toInfo().lastTurnEndedAt).toBeNull();
+    });
+
+    it("stop_failure with no preceding progress:done leaves lastTurnEndedAt at its already-null default (Claude Code's real shape, unaffected)", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      expect(session.toInfo().lastTurnEndedAt).toBeNull();
+
+      session.emitHookEvent({ kind: "stop_failure", error: "rate_limit", errorType: "rate_limit" });
+
+      expect(session.toInfo().errorState).toBe("api_error");
+      expect(session.toInfo().lastTurnEndedAt).toBeNull();
+    });
+
     it("tool_failure: sets errorState to tool_failure and emits a tool_failure event", async () => {
       const session = manager.getOrCreate({
         id: "1",
