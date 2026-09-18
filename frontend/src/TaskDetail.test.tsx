@@ -1018,8 +1018,20 @@ describe("TaskDetail approve/reject actions", () => {
   });
 
   // Issue #1345
+  // reviewSessionId/reviewFindingsIngestedSessionId both set — the state
+  // where the backend route (routes/tasks.ts) will actually accept the
+  // request, not just where lastReviewVerdict happens to read
+  // "inconclusive".
   it("shows Re-review only when lastReviewVerdict is inconclusive, and calls reReviewTask directly with no reason prompt", async () => {
-    tasks = [makeTask({ id: 1, status: "reviewing", lastReviewVerdict: "inconclusive" })];
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "reviewing",
+        lastReviewVerdict: "inconclusive",
+        reviewSessionId: 5,
+        reviewFindingsIngestedSessionId: 5,
+      }),
+    ];
     const user = userEvent.setup();
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
 
@@ -1031,7 +1043,37 @@ describe("TaskDetail approve/reject actions", () => {
   });
 
   it("does not show Re-review for a clean or changes-requested verdict", () => {
-    tasks = [makeTask({ id: 1, status: "reviewing", lastReviewVerdict: "clean" })];
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "reviewing",
+        lastReviewVerdict: "clean",
+        reviewSessionId: 5,
+        reviewFindingsIngestedSessionId: 5,
+      }),
+    ];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    expect(screen.queryByRole("button", { name: "Re-review" })).not.toBeInTheDocument();
+  });
+
+  // Self-review finding — the backend route 409s on this exact shape (a
+  // fresh reviewSessionId with no findings ingested yet: a prior
+  // re-review, or the automatic sweep, already fired and the reconciler
+  // hasn't finished a fresh review round). lastReviewVerdict is still the
+  // stale "inconclusive" left over from before. Without this guard, the
+  // button stayed enabled and clicking it deterministically 409ed against
+  // a legitimately-running review session.
+  it("does not show Re-review while a fresh review session hasn't produced a result yet (reviewFindingsIngestedSessionId null)", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "reviewing",
+        lastReviewVerdict: "inconclusive",
+        reviewSessionId: 6,
+        reviewFindingsIngestedSessionId: null,
+      }),
+    ];
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
 
     expect(screen.queryByRole("button", { name: "Re-review" })).not.toBeInTheDocument();
@@ -1039,7 +1081,15 @@ describe("TaskDetail approve/reject actions", () => {
 
   it("Re-review stays enabled when taskMasterEnabled is off, same escape hatch as Reject/Give up", async () => {
     taskMasterEnabled = false;
-    tasks = [makeTask({ id: 1, status: "reviewing", lastReviewVerdict: "inconclusive" })];
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "reviewing",
+        lastReviewVerdict: "inconclusive",
+        reviewSessionId: 5,
+        reviewFindingsIngestedSessionId: 5,
+      }),
+    ];
     const user = userEvent.setup();
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
 
@@ -1051,7 +1101,15 @@ describe("TaskDetail approve/reject actions", () => {
 
   it("surfaces an error if reReviewTask fails", async () => {
     reReviewTask.mockRejectedValueOnce(new ApiError("nope", 409));
-    tasks = [makeTask({ id: 1, status: "reviewing", lastReviewVerdict: "inconclusive" })];
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "reviewing",
+        lastReviewVerdict: "inconclusive",
+        reviewSessionId: 5,
+        reviewFindingsIngestedSessionId: 5,
+      }),
+    ];
     const user = userEvent.setup();
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
 

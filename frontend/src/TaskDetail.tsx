@@ -1055,30 +1055,40 @@ function TaskActions({ task }: { task: Task }) {
       >
         Approve
       </button>
-      {/* Issue #1345 — visible only for exactly the state #1346's own
-          automatic sweep targets (lastReviewVerdict === "inconclusive").
-          No free-text reason needed (unlike reject/give-up below), so this
-          fires directly on click rather than opening the pendingAction
-          confirm flow. */}
-      {task.lastReviewVerdict === "inconclusive" && (
-        <button
-          className="notif-gate-btn"
-          disabled={submitting}
-          onClick={async () => {
-            setSubmitting(true);
-            setError(null);
-            try {
-              await reReviewTask(task.id);
-            } catch (err) {
-              setError(err instanceof ApiError ? err.message : "Failed to re-review task");
-            } finally {
-              setSubmitting(false);
-            }
-          }}
-        >
-          Re-review
-        </button>
-      )}
+      {/* Issue #1345 — visible only for exactly the state the backend
+          route will actually accept, mirroring its own three checks
+          (routes/tasks.ts): lastReviewVerdict === "inconclusive",
+          reviewSessionId set, AND reviewFindingsIngestedSessionId set —
+          the last of which rules out the window right after a re-review
+          (or the automatic sweep) already fired, where reviewSessionId
+          points at a FRESH session with no result yet but
+          lastReviewVerdict is still the stale "inconclusive" from before.
+          Self-review finding: without the third check, the button stayed
+          enabled during that window and clicking it deterministically
+          409ed. No free-text reason needed (unlike reject/give-up below),
+          so this fires directly on click rather than opening the
+          pendingAction confirm flow. */}
+      {task.lastReviewVerdict === "inconclusive" &&
+        task.reviewSessionId !== null &&
+        task.reviewFindingsIngestedSessionId !== null && (
+          <button
+            className="notif-gate-btn"
+            disabled={submitting}
+            onClick={async () => {
+              setSubmitting(true);
+              setError(null);
+              try {
+                await reReviewTask(task.id);
+              } catch (err) {
+                setError(err instanceof ApiError ? err.message : "Failed to re-review task");
+              } finally {
+                setSubmitting(false);
+              }
+            }}
+          >
+            Re-review
+          </button>
+        )}
       <button
         className="notif-gate-btn notif-gate-deny"
         disabled={submitting}
