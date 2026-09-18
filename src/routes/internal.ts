@@ -1897,6 +1897,11 @@ export async function internalRoutes(app: FastifyInstance) {
         // denial list, and the primary learns this via the
         // `taskIdApplied` echo (below) being `false`.
         taskId,
+        // Issue #1337 — opencode model overrides forwarded from spawn_child_session
+        // MCP tool. When omitted, the parent session's model/smallModel are inherited
+        // by the POST /api/sessions route handler (server-side fallback).
+        model,
+        smallModel,
       } = request.body;
       const session = app.pty.getOrCreate({
         id,
@@ -1917,6 +1922,8 @@ export async function internalRoutes(app: FastifyInstance) {
         injectProjectBriefing,
         injectMullionBundle,
         taskId,
+        model,
+        smallModel,
       });
       reply.code(201);
       // Hermes review, PR #538 — an agent build too old to have this route's

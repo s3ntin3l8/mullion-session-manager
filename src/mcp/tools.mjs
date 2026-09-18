@@ -274,6 +274,20 @@ const spawnChildSession = {
           "leave this unset. A session-scoped caller may only name its own session id here " +
           "(anything else is rejected); a full-scope caller may name any session.",
       },
+      model: {
+        type: "string",
+        description:
+          "Optional opencode model override for the child session. When omitted and " +
+          "parentSessionId is set, inherits the parent session's model. Only honored " +
+          "when command resolves to an opencode adapter.",
+      },
+      smallModel: {
+        type: "string",
+        description:
+          "Optional opencode small_model override for the child session. When omitted " +
+          "and parentSessionId is set, inherits the parent session's smallModel. Only " +
+          "honored when command resolves to an opencode adapter.",
+      },
     },
   },
   async handler(args, client) {
@@ -285,6 +299,8 @@ const spawnChildSession = {
       initialPrompt: args?.initialPrompt,
       skipPermissions: args?.skipPermissions,
       parentSessionId: args?.parentSessionId,
+      model: args?.model,
+      smallModel: args?.smallModel,
     });
     return JSON.stringify(result);
   },

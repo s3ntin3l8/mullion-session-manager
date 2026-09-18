@@ -418,13 +418,38 @@ export async function sessionsRoute(app: FastifyInstance) {
       // is meaningless for a non-opencode command, and an unguarded stamp
       // renders a misleading model badge on a row whose agent will never
       // read it (Hermes review warning, PR #961 round 2).
+      //
+      // Issue #1337 — when parentSessionId is set and model/smallModel are
+      // still unresolved after explicit caller-supplied values, inherit from
+      // the parent session's stored model/smallModel before falling through
+      // to the install-wide defaults. This lets a spawn_child_session MCP
+      // call propagate the parent's model choice to its children without
+      // the agent needing to pass them explicitly.
       const isOpencode = commandIsOpencode(request.body.command);
+      let parentModel: string | undefined;
+      let parentSmallModel: string | undefined;
+      if (
+        isOpencode &&
+        request.body.parentSessionId !== undefined &&
+        (request.body.model === undefined || request.body.smallModel === undefined)
+      ) {
+        const [parentRow] = app.db
+          .select({ model: sessions.model, smallModel: sessions.smallModel })
+          .from(sessions)
+          .where(eq(sessions.id, request.body.parentSessionId))
+          .all();
+        if (parentRow) {
+          parentModel = parentRow.model ?? undefined;
+          parentSmallModel = parentRow.smallModel ?? undefined;
+        }
+      }
       const body =
         isOpencode && (request.body.model === undefined || request.body.smallModel === undefined)
           ? {
               ...request.body,
               model:
                 request.body.model ??
+                parentModel ??
                 resolveOpenCodeModel(app, {
                   issueBody: null,
                   role: "implementer",
@@ -432,6 +457,7 @@ export async function sessionsRoute(app: FastifyInstance) {
                 undefined,
               smallModel:
                 request.body.smallModel ??
+                parentSmallModel ??
                 resolveOpenCodeSmallModel(app, { issueBody: null }) ??
                 undefined,
             }
