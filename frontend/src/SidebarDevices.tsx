@@ -42,7 +42,13 @@ export function SidebarDevices({ onOpenDevice }: { onOpenDevice: (device: Device
   // no-clutter goal is served entirely by the render gate below, not by
   // disabling the fetch. `immediate` defaults to true, so this also covers
   // the mount-time fetch — no separate effect needed.
-  usePolling(() => refreshDevices(), DEVICES_POLL_MS, {
+  //
+  // Hermes review (PR #1341) — `.catch` is required here, not optional:
+  // this component is always mounted (unlike DevicesSection, only mounted
+  // while Settings is open), so an uncaught rejection on a transient
+  // /api/devices failure (e.g. a server restart) would otherwise fire every
+  // DEVICES_POLL_MS for as long as the tab stays visible.
+  usePolling(() => refreshDevices().catch(() => {}), DEVICES_POLL_MS, {
     pauseWhenHidden: true,
     deps: [refreshDevices],
   });

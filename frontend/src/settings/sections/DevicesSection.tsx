@@ -145,7 +145,14 @@ export function DevicesSection() {
                   </span>
                   {device.status === "active" && (
                     <ConfirmButton
-                      title={`Stop ${device.name || device.avdName} — its panel closes and its emulator/scrcpy session is torn down`}
+                      // Hermes review (PR #1341) — softened from "its panel
+                      // closes": nothing in this action closes an already-open
+                      // device-<id> panel (that would need a DockviewApi this
+                      // Settings-owned slice doesn't have, per the design's
+                      // own "Settings owns no DockviewApi" reasoning above);
+                      // DevicePane just goes on to show a disconnected/stopped
+                      // state once its emulator/scrcpy session is torn down.
+                      title={`Stop ${device.name || device.avdName} — its emulator/scrcpy session is torn down; any open panel for it shows disconnected instead of closing`}
                       onConfirm={() => remove(device)}
                       disabled={deleting[device.id] ?? false}
                     >
