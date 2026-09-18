@@ -683,6 +683,24 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
       // equivalent fires), so this restores the invariant unconditionally
       // rather than special-casing agy.
       ctx.lastTurnEndedAt = null;
+      // Second self-review pass — clearing lastTurnEndedAt alone fixes
+      // STATUS derivation but not the NOTIFICATION layer: the same
+      // preceding `progress: done` that just latched it also unconditionally
+      // called resolveDeferredTurnEnd() (attention-tracker.ts), which
+      // schedules an "agentIdle" ping ~3s out (ATTENTION_SETTLE_MS) with no
+      // re-check of anything at drain time — drainDeferred() fires purely
+      // off `dueAt`. Left uncancelled, the session would still emit a
+      // "turn finished" agentIdle ping on top of the "apiError" one this
+      // handler emits below, even though `lastTurnEndedAt` now correctly
+      // reads "not finished." Same cancellation the `progress` case's own
+      // non-"done" branch already does when the agent resumes work
+      // (`ctx.cancelDeferred("agentIdle")` above) — a stop_failure is
+      // exactly as much a retraction of "the turn is over" as that is.
+      // Safe to call whether or not anything is actually pending
+      // (`cancelDeferred`'s own doc comment, attention-tracker.ts), so this
+      // is a no-op for every adapter that never scheduled one in the first
+      // place.
+      ctx.cancelDeferred("agentIdle");
       // The NotificationEvent itself stays immediate — the user wants
       // failures in the timeline as history regardless of whether the agent
       // then recovers on its own. Only the ATTENTION ping is deferred (D1

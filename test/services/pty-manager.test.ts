@@ -4637,6 +4637,48 @@ describe("PtyManager", () => {
       expect(session.toInfo().lastTurnEndedAt).toBeNull();
     });
 
+    // Second self-review pass — clearing lastTurnEndedAt alone fixes STATUS
+    // derivation but not the NOTIFICATION layer: the preceding progress:done
+    // already scheduled a 3s-deferred "agentIdle" ping
+    // (resolveDeferredTurnEnd, attention-tracker.ts) that drains purely off
+    // its own dueAt, with no re-check of lastTurnEndedAt/errorState at drain
+    // time. Without the stop_failure handler's own cancelDeferred("agentIdle")
+    // call, the session would still emit a spurious "turn finished" ping on
+    // top of the genuine "apiError" one, even though status derivation now
+    // correctly says the turn isn't over.
+    it("stop_failure cancels the already-scheduled agentIdle deferred ping from the same-turn progress:done (agy's Stop shape)", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      session.emitHookEvent({ kind: "progress", phase: "done", backgroundTasks: [] });
+      session.emitHookEvent({
+        kind: "stop_failure",
+        error: "RESOURCE_EXHAUSTED (code 429): Individual quota reached.",
+        errorType: "rate_limit",
+      });
+
+      // Advance well past agentIdle's own 3s settle window — if it wasn't
+      // cancelled, it would confirm here.
+      session.tick(Date.now() + 3_000);
+
+      const agentIdleSignals = session
+        .getEvents()
+        .filter((e) => e.kind === "attention" && e.payload?.signal === "agentIdle");
+      expect(agentIdleSignals).toHaveLength(0);
+      // The apiError ping (this handler's own genuine deferred signal)
+      // still fires normally — cancelling agentIdle must not swallow it.
+      const apiErrorSignals = session
+        .getEvents()
+        .filter((e) => e.kind === "attention" && e.payload?.signal === "apiError");
+      expect(apiErrorSignals).toHaveLength(1);
+    });
+
     it("stop_failure with no preceding progress:done leaves lastTurnEndedAt at its already-null default (Claude Code's real shape, unaffected)", async () => {
       const session = manager.getOrCreate({
         id: "1",
