@@ -655,6 +655,24 @@ export const schema = {
       type: "string",
       default: "",
     },
+    // Absolute path to the `avdmanager` binary (Android SDK cmdline-tools) —
+    // used by src/services/avd-manager.ts to list and create AVDs. Empty
+    // means "not configured," same posture as DEVICE_ADB_PATH.
+    DEVICE_AVDMANAGER_PATH: {
+      type: "string",
+      default: "",
+    },
+    // Android SDK root, for scanning installed system images
+    // (<root>/system-images/...) — deliberately explicit rather than derived
+    // from DEVICE_AVDMANAGER_PATH (e.g. via a fixed dirname() chain): that
+    // breaks the moment avdmanager is symlinked or cmdline-tools nests
+    // differently, and every other DEVICE_*_PATH here is already
+    // explicit-with-empty-means-unconfigured. Empty means "not configured,"
+    // same posture as DEVICE_ADB_PATH.
+    DEVICE_ANDROID_SDK_ROOT: {
+      type: "string",
+      default: "",
+    },
     // Absolute path to a unix socket implementing the SSH agent protocol,
     // injected as SSH_AUTH_SOCK into every spawned session (see
     // session-env.ts's "deliberately NOT stripped" comment and
@@ -883,6 +901,8 @@ declare module "fastify" {
       DEVICE_ADB_SERVER_PORT: number;
       DEVICE_EMULATOR_PATH: string;
       DEVICE_SCRCPY_SERVER_PATH: string;
+      DEVICE_AVDMANAGER_PATH: string;
+      DEVICE_ANDROID_SDK_ROOT: string;
       MULLION_SOCKET_PATH: string;
       MULLION_SSH_AUTH_SOCK: string;
       MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED: boolean;
