@@ -2756,6 +2756,16 @@ async function attemptAutoApprove(
     return;
   }
 
+  // #1334 — `mergeable === null` ("unknown", GitHub still computing after a
+  // push) is neither confirmed-clean nor confirmed-dirty. The clearing block
+  // above already requires `=== true` before trusting a resolved conflict as
+  // gone; this gate mirrors that strictness rather than falling through on
+  // merely `!== false`, so an unconfirmed state can't get auto-approved.
+  // Same posture as the merge sweep's own "computing" case: wait and retry
+  // on a later tick, no error recorded — this is a common, transient window,
+  // not a stuck task.
+  if (current.mergeable !== true) return;
+
   if (current.status !== "success") return;
 
   const outcome = await approveTask(app, task, project, "auto-approve");

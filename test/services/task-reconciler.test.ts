@@ -3843,6 +3843,29 @@ describe("reconcileTasks", () => {
       await app.close();
     });
 
+    // #1334 — `mergeable: null` ("unknown", GitHub still computing after a
+    // push) must not be treated as "not blocked" just because it's `!==
+    // false`. It also must not be recorded as a hard mergeError: this is a
+    // common, transient window right after a push, and it resolves on its
+    // own within a tick or two.
+    it("waits (does not approve, records no error) while mergeable is unknown (null)", async () => {
+      const app = await buildApp();
+      const { taskId } = await createAutoApproveCandidate(app);
+      mockGetPullRequestByNumber.mockResolvedValue(
+        mockPr({ mergeable: null, mergeableState: "unknown" }),
+      );
+      mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
+
+      await reconcileTasks(app);
+
+      expect(mockPromoteTaskToPR).not.toHaveBeenCalled();
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+      expect(row.mergeError).toBeNull();
+
+      await app.close();
+    });
+
     it("attempts auto-rebase when reviewing task has merge conflicts and autoApprove is enabled", async () => {
       const app = await buildApp();
       vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined);
