@@ -816,6 +816,78 @@ describe("PaneTab", () => {
       expect(props.api.setTitle).not.toHaveBeenCalled();
     });
   });
+
+  // Issue: rename input stuck at small size — `<input>` elements have an
+  // intrinsic preferred width from their UA `size=20` (~190px) that the flex
+  // container will try to honor even when `flex: 1` says "grow". Pinning
+  // `size={1}` on the JSX plus `width: 100%` on the CSS is what makes the
+  // input fill its parent in the rendered DOM. This test asserts both the
+  // JSX pin and the rendered structure (.pane-tab-actions wraps close +
+  // kebab so the grid keeps them at the right edge — see terminal.css's
+  // own grid-template-columns note).
+  describe("rename input rendering", () => {
+    it("replaces the title span with an input that pins size=1 (no UA-default ~190px intrinsic)", async () => {
+      const props = makeProps();
+      render(<PaneTab {...props} />);
+
+      // Enter rename mode by double-clicking the title.
+      const title = screen.getByText("claude code");
+      await userEvent.dblClick(title);
+
+      const input = screen.getByDisplayValue("claude code");
+      expect(input.tagName).toBe("INPUT");
+      // `size={1}` on the JSX side — the CSS `width: 100%` is a separate
+      // assertion below against the rendered element.
+      expect(input).toHaveAttribute("size", "1");
+    });
+
+    it("commits a typed name on Enter, exercising the input's onChange + onKeyDown arms", async () => {
+      session = { ...BASE_SESSION, nameLocked: true };
+      const props = makeProps();
+      render(<PaneTab {...props} />);
+
+      await userEvent.dblClick(screen.getByText("claude code"));
+      const input = screen.getByDisplayValue("claude code") as HTMLInputElement;
+
+      await userEvent.clear(input);
+      await userEvent.type(input, "renamed");
+      await userEvent.keyboard("{Enter}");
+
+      // commitRename() calls props.api.setTitle BEFORE renameSession()
+      // (per its own comment). The dockview API sync is the only assertable
+      // side effect from this test's POV without coupling to the mock
+      // store's own renameSession shape — that's covered separately by the
+      // existing "syncs the dockview tab title when the store session name
+      // changes" / "does not call setTitle when the titles already match"
+      // block above.
+      expect(props.api.setTitle).toHaveBeenCalledWith("renamed");
+      // Exits rename mode on Enter.
+      expect(screen.queryByDisplayValue("renamed")).not.toBeInTheDocument();
+      expect(screen.getByText("claude code")).toBeInTheDocument();
+    });
+
+    it("renders close + PaneActionsMenu inside .pane-tab-actions so the grid can pin them right", () => {
+      const props = makeProps();
+      const { container } = render(<PaneTab {...props} />);
+
+      const actions = container.querySelector(".pane-tab-actions");
+      expect(actions).toBeInTheDocument();
+      // Close button + kebab trigger, in DOM order.
+      expect(actions?.querySelector('[aria-label="Close pane"]')).toBeInTheDocument();
+      expect(actions?.querySelector('[aria-label="More actions"]')).toBeInTheDocument();
+    });
+
+    it("renders leading content (dot + name) inside .pane-tab-leading", () => {
+      const props = makeProps();
+      const { container } = render(<PaneTab {...props} />);
+
+      const leading = container.querySelector(".pane-tab-leading");
+      expect(leading).toBeInTheDocument();
+      // Status dot is always rendered (even if it's invisible for idle).
+      expect(leading?.querySelector(".pane-tab-dot-idle")).toBeInTheDocument();
+      expect(leading?.querySelector(".pane-tab-name")).toBeInTheDocument();
+    });
+  });
 });
 
 // P11 — the overflow menu previously had no focus management at all and

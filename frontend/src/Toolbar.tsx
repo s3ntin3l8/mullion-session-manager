@@ -96,6 +96,14 @@ export function Toolbar({
           <>
             <LayersIcon size={14} />
             <span className="toolbar-center-name">Tasks</span>
+            <button
+              className="toolbar-icon-btn toolbar-back-to-workspace"
+              onClick={() => useDashboardStore.getState().setViewMode("list")}
+              title="Back to workspace"
+            >
+              <ChevronLeftIcon size={17} />
+              <span>Back</span>
+            </button>
           </>
         ) : (
           activeWorkspaceName !== null && (
@@ -122,16 +130,6 @@ export function Toolbar({
           <span style={{ fontSize: 12 }}>Run command…</span>
           <span className="kbd">⌘K</span>
         </button>
-        {viewMode === "kanban" && (
-          <button
-            className="toolbar-icon-btn toolbar-back-to-workspace"
-            onClick={() => useDashboardStore.getState().setViewMode("list")}
-            title="Back to workspace"
-          >
-            <ChevronLeftIcon size={17} />
-            <span>Back</span>
-          </button>
-        )}
         <button
           className="toolbar-icon-btn"
           onClick={() => useDashboardStore.getState().toggleTheme()}
