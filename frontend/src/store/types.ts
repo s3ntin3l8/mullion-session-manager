@@ -325,6 +325,10 @@ export interface TasksSlice {
   ) => Promise<Session>;
   // #483 — reviewing -> failed: the other resolver of a reviewing task.
   giveUpTask: (id: number, reason?: string) => Promise<Task>;
+  // Issue #1345 — reviewing -> reviewing: re-arms a task stuck on
+  // lastReviewVerdict === "inconclusive", the operator-facing counterpart
+  // to #1346's automatic rearm sweep.
+  reReviewTask: (id: number) => Promise<Task>;
   // #488 — connects the single /ws/tasks channel once (App.tsx's mount
   // effect, alongside startEventsStream), triggering a debounced
   // refreshTasks() on every live transition event. Not a data channel like

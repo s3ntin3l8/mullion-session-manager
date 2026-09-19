@@ -2181,12 +2181,16 @@ extensive design comments.
   the capped-task re-arm clears. Bounded to
   `tasks.inconclusiveReviewRearmCount < 1` so a genuinely-broken review
   adapter (one that stalls the same way on every attempt) can't loop
-  forever — a task that exhausts this budget still has no automatic or
-  operator-facing recovery today; a human has to intervene on the DB
-  directly, the same gap this issue describes for the capped case before
-  `#1039`. Deliberately does NOT widen `isRateLimitGraceActive` itself to
+  forever. Deliberately does NOT widen `isRateLimitGraceActive` itself to
   cover the no-signal-at-all case: that would make it indistinguishable from
   the ordinary quiet-review-still-running case `REVIEW_FINDINGS_GRACE_MS`
   and the `severity !== "busy"` guard already exist to tolerate (`#754`),
-  regressing that fix. Tracked as a follow-up in
-  [#1345](https://github.com/s3ntin3l8/mullion-session-manager/issues/1345).
+  regressing that fix. **A task that exhausts this one-shot automatic budget
+  is no longer a DB-edit-only situation (issue `#1345`):**
+  `POST /api/tasks/:id/re-review` does exactly what the automatic sweep
+  does — kill the stale review session, clear the same four columns — but
+  with no time grace and no `inconclusiveReviewRearmCount` upper bound, a
+  human explicitly choosing this being a stronger signal than the automatic
+  sweep's own conservative heuristics. Surfaced in the UI as a "Re-review"
+  button on a `reviewing` task whose `lastReviewVerdict` is `"inconclusive"`
+  (`TaskDetail.tsx`).
