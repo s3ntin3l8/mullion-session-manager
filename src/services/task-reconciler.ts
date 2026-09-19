@@ -2284,15 +2284,38 @@ const ciCapCommentedRounds = new Map<number, number>();
 // github.ts) rather than only ever once — a regression (a genuinely new
 // permission problem after this was previously working) should still
 // surface again eventually, not go silent forever after the first
-// occurrence. Self-review finding — deliberately NOT given the
-// eviction-cap treatment `ciCapCommentedRounds` above has: that map is
-// keyed by task id, which can genuinely grow large over an install's
-// lifetime; this one is keyed by owner/repo/branch, bounded by how many
-// distinct repos one install actually manages (realistically a handful) —
-// an eviction cap here would be unreachable dead code guarding a condition
-// that can't occur in practice.
+// occurrence. Self-review finding — given the same eviction-cap treatment
+// `ciCapCommentedRounds` above has: that map is keyed by task id, which
+// can genuinely grow large over an install's lifetime; this one is keyed
+// by owner/repo/branch, bounded by how many distinct repos one install
+// actually manages (realistically a handful) — the cap is a defense-in-
+// depth belt-and-suspenders rather than a realistic overflow guard.
 const REQUIRED_STATUS_CONTEXTS_WARN_INTERVAL_MS = 60 * 60_000;
+// Hermes review, PR #1361 — capped the same way the sibling failure map
+// in github.ts is (MAX_REQUIRED_STATUS_CONTEXTS_FAILURE_ENTRIES=200):
+// even though the throttle key space (owner/repo/branch) is realistically
+// small on any one install, the install-wide 403 means entries accumulate
+// per probed owner/repo/branch and are never cleared except by this map's
+// own next-write eviction. Without a cap, an install that scans many
+// distinct repos over its lifetime could grow this without bound.
+const MAX_REQUIRED_STATUS_CONTEXTS_FORBIDDEN_WARN_ENTRIES = 200;
 const requiredStatusContextsForbiddenWarnedAt = new Map<string, number>();
+
+/** Single write site for `requiredStatusContextsForbiddenWarnedAt` —
+ * factored so the eviction-then-set sequence can't drift between this
+ * helper's callers. Mirrors `setRequiredStatusContextsFailure` (github.ts)
+ * exactly. */
+function setRequiredStatusContextsForbiddenWarnedAt(key: string, at: number): void {
+  if (
+    !requiredStatusContextsForbiddenWarnedAt.has(key) &&
+    requiredStatusContextsForbiddenWarnedAt.size >=
+      MAX_REQUIRED_STATUS_CONTEXTS_FORBIDDEN_WARN_ENTRIES
+  ) {
+    const oldestKey = requiredStatusContextsForbiddenWarnedAt.keys().next().value;
+    if (oldestKey !== undefined) requiredStatusContextsForbiddenWarnedAt.delete(oldestKey);
+  }
+  requiredStatusContextsForbiddenWarnedAt.set(key, at);
+}
 
 /** Exported for tests only — production never needs to clear this. Every
  * test in this file resolves `owner/repo/branch` to the same fixed value
@@ -2422,17 +2445,26 @@ async function attemptReturnRedCiToWorker(
           lastWarnedAt === undefined ||
           Date.now() - lastWarnedAt >= REQUIRED_STATUS_CONTEXTS_WARN_INTERVAL_MS
         ) {
-          requiredStatusContextsForbiddenWarnedAt.set(key, Date.now());
+          setRequiredStatusContextsForbiddenWarnedAt(key, Date.now());
           // Self-review finding — this used to say "grant the App
-          // administration:read and it'll work," which is false:
-          // mintInstallationToken (github-app.ts) only ever requests
-          // READ_PERMISSIONS for this token, which never includes
-          // administration regardless of what's granted on the
-          // installation itself. There is currently no operator-side fix —
-          // only a Mullion code change (deliberately out of scope here,
-          // per #755's own original design notes) closes this. The warning
-          // says so plainly rather than sending an operator on a fix that
-          // does nothing.
+          // administration:read and it'll work," which is false for App
+          // installation tokens: mintInstallationToken (github-app.ts)
+          // only ever requests READ_PERMISSIONS for this token, which
+          // never includes administration regardless of what's granted
+          // on the installation itself. **For App installation tokens,
+          // there is currently no operator-side fix** — only a Mullion
+          // code change (deliberately out of scope here, per #755's own
+          // original design notes) closes this. The warning says so
+          // plainly rather than sending an operator on a fix that does
+          // nothing.
+          //
+          // Hermes review, PR #1361 — qualified for PAT installs:
+          // resolveGitHubToken("read") falls back to a PAT on installs
+          // with no App configured, and a scope-starved PAT 403s this
+          // endpoint too — but that case IS fixable in the GitHub UI by
+          // widening the PAT's scope. The parenthetical in the warning
+          // below tells a PAT-backed operator what to actually do,
+          // instead of telling them a Mullion code change is required.
           app.log.warn(
             {
               taskId: task.id,
@@ -2446,7 +2478,7 @@ async function attemptReturnRedCiToWorker(
               // the whole point of a visibility fix.
               branch: current.baseRef,
             },
-            "task reconcile: CI-auto-return (#755) can't tell a required check apart from a non-required one — the GitHub App's read-scope token never requests the `administration` permission this needs, by design (see docs/ci-cd.md's Branch protection section); granting the App broader permissions on GitHub does NOT fix this — it needs a Mullion code change. A red CI check on this task's PR will never auto-return the worker until that ships.",
+            "task reconcile: CI-auto-return (#755) can't tell a required check apart from a non-required one — for an App installation token, the read-scope token never requests the `administration` permission this needs, by design (see docs/ci-cd.md's Branch protection section); granting the GitHub App installation broader permissions on GitHub does NOT fix this for App installs — it needs a Mullion code change. (For a PAT-backed install, the same 403 fires when the PAT's own scope lacks `repo`/`admin:repo_hook`; that case IS fixable in the GitHub UI by widening the PAT's scope.) A red CI check on this task's PR will never auto-return the worker until that ships.",
           );
         }
       }

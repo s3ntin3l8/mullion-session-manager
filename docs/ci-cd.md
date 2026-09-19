@@ -70,15 +70,20 @@ a red _required_ check apart from a red _non-required_ one (this repo's own
 never requests it: `mintInstallationToken` (`src/services/github-app.ts`)
 sends only `READ_PERMISSIONS` (`actions`/`metadata`/`pull_requests`) in the
 token-exchange request body, deliberately, to avoid unrequested scope creep
-for one feature. **Granting the GitHub App installation broader
-permissions on GitHub's own side does nothing here** — an installation
-token can only ever carry what's both granted AND explicitly requested at
-mint time, and `administration` is never requested. Closing this gap needs
-a Mullion code change (widening `READ_PERMISSIONS` for this scope, or a new
-dedicated scope), which is an open decision, not something this repo has
-done. Without it, a required check can sit red on a `clean`-verdict task's
+for one feature. **For GitHub App installation tokens, granting the App
+installation broader permissions on GitHub's own side does nothing here**
+— an installation token can only ever carry what's both granted AND
+explicitly requested at mint time, and `administration` is never
+requested. Closing this gap needs a Mullion code change (widening
+`READ_PERMISSIONS` for this scope, or a new dedicated scope), which is an
+open decision, not something this repo has done. **For PAT-backed installs
+(no App configured), the situation is different** — a scope-starved PAT
+403s this endpoint too, and that case IS fixable in the GitHub UI by
+widening the PAT's scope to include `repo` (and `admin:repo_hook` for
+private-repo branch protection). Without resolving the underlying
+permission issue, a required check can sit red on a `clean`-verdict task's
 PR indefinitely with no automatic return-to-worker and (as of #1360) one
 throttled warning in the reconcile log — a human still has to notice and
 act. The command above returning a 403 (rather than the contexts list, or a
 404 for "no protection configured") is the same signal Mullion's own code
-sees, but is not by itself something you can fix from GitHub's side.
+sees.
