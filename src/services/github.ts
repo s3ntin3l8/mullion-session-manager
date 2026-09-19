@@ -6,7 +6,7 @@
 // this module never imports that service itself, keeping the two
 // independently testable).
 
-import { githubApiFetch, GitHubApiError } from "./github-fetch.js";
+import { githubApiFetch, GitHubApiError, classifyRateLimit } from "./github-fetch.js";
 export { GitHubApiError };
 
 // GitHub repo/owner naming constraints: alphanumeric + hyphens for owners
@@ -769,6 +769,60 @@ const requiredStatusContextsCache = new Map<string, RequiredStatusContextsCacheE
 // processAutoApprovals tick for every candidate task otherwise (#755).
 const REQUIRED_STATUS_CONTEXTS_CACHE_TTL_MS = 60 * 60_000;
 
+// #1360 — this file has no logger dependency anywhere else (grepped: zero
+// `app.log`/FastifyInstance usage in this module), so `fetchRequiredStatusContexts`
+// itself stays log-free rather than becoming the first function here to take
+// one. Instead it records WHY the last lookup for a given key failed in this
+// small side-map (same "parallel Map, same key shape as the main cache"
+// pattern task-reconciler.ts's own ciCapCommentedRounds/prCommentCapCommentedRounds
+// use) so the one caller that already has app.log
+// (attemptReturnRedCiToWorker, task-reconciler.ts) can decide whether it's
+// worth surfacing. Not cached with a TTL like the success cache above — this
+// is cheap process-local state, not a rate-limit-avoidance mechanism, so it's
+// simply overwritten (or cleared, on a later success) every call.
+export type RequiredStatusContextsFailureReason = "forbidden" | "not-found" | "other";
+// Self-review finding — bounded the same way every other cache in this file
+// is (MAX_CACHE_ENTRIES/cacheSet above, prsCache's own copy of the same
+// pattern): this map's key space (owner/repo/branch) is realistically small
+// on any one install, but nothing stops an unbounded number of DISTINCT
+// keys from accumulating over a long-lived process — a repo/branch that
+// never has branch protection (an ordinary, common "not-found" case per
+// this function's own doc comment) never succeeds, so its entry here would
+// otherwise never get cleared by the success path either.
+const MAX_REQUIRED_STATUS_CONTEXTS_FAILURE_ENTRIES = 200;
+const requiredStatusContextsLastFailure = new Map<string, RequiredStatusContextsFailureReason>();
+
+// Both of fetchRequiredStatusContexts's own failure paths (the `!res.ok`
+// branch and the outer `catch`) need the identical eviction-then-set
+// sequence — factored out so a fix to one can't accidentally miss the
+// other, same "second self-review pass" reasoning as the catch branch's
+// own comment.
+function setRequiredStatusContextsFailure(
+  key: string,
+  reason: RequiredStatusContextsFailureReason,
+): void {
+  if (
+    !requiredStatusContextsLastFailure.has(key) &&
+    requiredStatusContextsLastFailure.size >= MAX_REQUIRED_STATUS_CONTEXTS_FAILURE_ENTRIES
+  ) {
+    const oldestKey = requiredStatusContextsLastFailure.keys().next().value;
+    if (oldestKey !== undefined) requiredStatusContextsLastFailure.delete(oldestKey);
+  }
+  requiredStatusContextsLastFailure.set(key, reason);
+}
+
+/** See `requiredStatusContextsLastFailure`'s own comment above. `null` means
+ * either the last lookup for this key succeeded, or no lookup has been made
+ * yet — callers should only consult this right after `fetchRequiredStatusContexts`
+ * itself returned `null` for the same `owner/repo/branch`. */
+export function getRequiredStatusContextsFailureReason(
+  owner: string,
+  repo: string,
+  branch: string,
+): RequiredStatusContextsFailureReason | null {
+  return requiredStatusContextsLastFailure.get(`${owner}/${repo}/${branch}`) ?? null;
+}
+
 /**
  * Reads `required_status_checks.contexts` from branch protection for a
  * branch — the subset of check names that actually gate a merge, as
@@ -787,7 +841,10 @@ const REQUIRED_STATUS_CONTEXTS_CACHE_TTL_MS = 60 * 60_000;
  * both collapse to `null`. Callers must fail CLOSED on `null` — treating it
  * as "nothing is required" would let a task stalled on a red
  * non-required-only check look identical to one this gate has an actual
- * opinion on.
+ * opinion on. #1360 — WHICH of those two collapsed into this `null` is now
+ * separately recoverable via `getRequiredStatusContextsFailureReason` for a
+ * caller that wants to warn about the (permanent, install-wide) 403 case
+ * without confusing it for the (ordinary, per-repo) 404 case.
  *
  * Cached per `owner/repo/branch` for `REQUIRED_STATUS_CONTEXTS_CACHE_TTL_MS`.
  * Only successes are cached — a failure is retried on the next call rather
@@ -809,7 +866,28 @@ export async function fetchRequiredStatusContexts(
       `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/branches/${encodeURIComponent(branch)}/protection`,
       { headers: { Authorization: `Bearer ${token}` } },
     );
-    if (!res.ok) return null;
+    if (!res.ok) {
+      // Self-review finding — `githubApiFetch` always returns a rate-limited
+      // response as-is rather than throwing on its FIRST occurrence (its own
+      // doc comment: "a caller with its own bespoke 403 handling still gets
+      // the response returned as-is"), so a transient GitHub rate limit can
+      // itself present as a bare 403 here, indistinguishable from the
+      // permission problem this function otherwise reports on 403 — without
+      // this check, that would misclassify as the permanent "forbidden"
+      // case and mislead attemptReturnRedCiToWorker's operator-facing
+      // warning. Reuses the same detection githubApiFetch itself already
+      // ran (classifyRateLimit reads only status/headers, safe to call
+      // again on the same Response before its body is read).
+      const reason: RequiredStatusContextsFailureReason = classifyRateLimit(res)
+        ? "other"
+        : res.status === 403
+          ? "forbidden"
+          : res.status === 404
+            ? "not-found"
+            : "other";
+      setRequiredStatusContextsFailure(key, reason);
+      return null;
+    }
     const data = (await res.json()) as {
       required_status_checks?: { contexts?: string[] } | null;
     };
@@ -818,8 +896,20 @@ export async function fetchRequiredStatusContexts(
       contexts,
       expiresAt: Date.now() + REQUIRED_STATUS_CONTEXTS_CACHE_TTL_MS,
     });
+    // A prior failure (e.g. a 403 while the App's permissions were still
+    // being granted) is stale now that this key has a real success — don't
+    // let a caller who only checks the failure map on a LATER, unrelated
+    // `null` (from some other transient blip) see a resolved condition.
+    requiredStatusContextsLastFailure.delete(key);
     return contexts;
   } catch {
+    // Second self-review pass — this path was missing the same eviction
+    // guard the sibling `!res.ok` branch above uses: a network error or a
+    // thrown GitHubRateLimitError (githubApiFetch's own isGitHubRateLimited
+    // fast-path) reaches here just as easily as an ordinary `!res.ok`, and
+    // these are exactly the keys that "never succeed" (this function's own
+    // doc comment) and so would never get cleared either.
+    setRequiredStatusContextsFailure(key, "other");
     return null;
   }
 }

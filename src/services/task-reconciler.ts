@@ -75,6 +75,7 @@ import {
   computeCiStatus,
   fetchRunsForHead,
   fetchRequiredStatusContexts,
+  getRequiredStatusContextsFailureReason,
   fetchCheckRunsForHead,
   getPRsStatus,
 } from "./github.js";
@@ -2269,6 +2270,63 @@ export function resetAutoApproveBackoff(taskId: number): void {
 const MAX_CI_CAP_COMMENTED_ENTRIES = 500;
 const ciCapCommentedRounds = new Map<number, number>();
 
+// #1360 — `fetchRequiredStatusContexts` returning `null` because the GitHub
+// App's read-scope token lacks `administration`
+// (`getRequiredStatusContextsFailureReason` === "forbidden") is a
+// permanent, install-wide condition, not a per-task blip — warning on
+// every reconcile tick for every red-CI candidate task would spam the log
+// forever for one static fact. Keyed by `owner/repo/branch` (the same key
+// `fetchRequiredStatusContexts` itself uses) rather than by task id — this
+// condition belongs to the repo/branch, not to any one task, so two
+// different tasks on the same repo should share one warning, not each emit
+// their own. Re-warns once per REQUIRED_STATUS_CONTEXTS_WARN_INTERVAL_MS
+// (matching the underlying lookup's own hour-long success-cache TTL,
+// github.ts) rather than only ever once — a regression (a genuinely new
+// permission problem after this was previously working) should still
+// surface again eventually, not go silent forever after the first
+// occurrence. Self-review finding — given the same eviction-cap treatment
+// `ciCapCommentedRounds` above has: that map is keyed by task id, which
+// can genuinely grow large over an install's lifetime; this one is keyed
+// by owner/repo/branch, bounded by how many distinct repos one install
+// actually manages (realistically a handful) — the cap is a defense-in-
+// depth belt-and-suspenders rather than a realistic overflow guard.
+const REQUIRED_STATUS_CONTEXTS_WARN_INTERVAL_MS = 60 * 60_000;
+// Hermes review, PR #1361 — capped the same way the sibling failure map
+// in github.ts is (MAX_REQUIRED_STATUS_CONTEXTS_FAILURE_ENTRIES=200):
+// even though the throttle key space (owner/repo/branch) is realistically
+// small on any one install, the install-wide 403 means entries accumulate
+// per probed owner/repo/branch and are never cleared except by this map's
+// own next-write eviction. Without a cap, an install that scans many
+// distinct repos over its lifetime could grow this without bound.
+const MAX_REQUIRED_STATUS_CONTEXTS_FORBIDDEN_WARN_ENTRIES = 200;
+const requiredStatusContextsForbiddenWarnedAt = new Map<string, number>();
+
+/** Single write site for `requiredStatusContextsForbiddenWarnedAt` —
+ * factored so the eviction-then-set sequence can't drift between this
+ * helper's callers. Mirrors `setRequiredStatusContextsFailure` (github.ts)
+ * exactly. */
+function setRequiredStatusContextsForbiddenWarnedAt(key: string, at: number): void {
+  if (
+    !requiredStatusContextsForbiddenWarnedAt.has(key) &&
+    requiredStatusContextsForbiddenWarnedAt.size >=
+      MAX_REQUIRED_STATUS_CONTEXTS_FORBIDDEN_WARN_ENTRIES
+  ) {
+    const oldestKey = requiredStatusContextsForbiddenWarnedAt.keys().next().value;
+    if (oldestKey !== undefined) requiredStatusContextsForbiddenWarnedAt.delete(oldestKey);
+  }
+  requiredStatusContextsForbiddenWarnedAt.set(key, at);
+}
+
+/** Exported for tests only — production never needs to clear this. Every
+ * test in this file resolves `owner/repo/branch` to the same fixed value
+ * (a real git-remote lookup against a shared fixture cwd), so without this
+ * a warning fired by one test's assertions would still be inside this map's
+ * throttle window by the time a later, unrelated test's own assertions run
+ * in the same process. */
+export function resetRequiredStatusContextsForbiddenWarningsForTests(): void {
+  requiredStatusContextsForbiddenWarnedAt.clear();
+}
+
 // #1035 — curated set of CI check names that flag a non-conventional PR
 // title. Curated short list (not substring/heuristic match) — see
 // `attemptSelfHealPrTitle`'s JSDoc for the full behavior contract.
@@ -2359,7 +2417,80 @@ async function attemptReturnRedCiToWorker(
     current.baseRef,
   );
   // Fail closed — see this function's own doc comment.
-  if (requiredContexts === null || requiredContexts.length === 0) return false;
+  if (requiredContexts === null) {
+    // #1360 — distinguish the permanent, install-wide "the App's read
+    // token lacks administration" case from an ordinary transient/
+    // not-configured one, and surface ONLY the former: a 404 (no branch
+    // protection configured) is an expected, unremarkable outcome this
+    // function already handles correctly by returning `false` here, and
+    // warning about it would just be noise about nothing being wrong.
+    // Wrapped in try/catch (self-review finding) — this block used to be a
+    // single infallible comparison; Map operations plus a logger call
+    // aren't guaranteed to stay that way, and this function's only caller
+    // chain (attemptAutoApprove -> the sequential loop in
+    // processAutoApprovals -> reconcileTasks) has no per-task catch of its
+    // own, so an uncaught throw here would abort the ENTIRE reconcile tick,
+    // not just this one task's return-to-worker check.
+    try {
+      if (
+        getRequiredStatusContextsFailureReason(
+          current.repoRef.owner,
+          current.repoRef.repo,
+          current.baseRef,
+        ) === "forbidden"
+      ) {
+        const key = `${current.repoRef.owner}/${current.repoRef.repo}/${current.baseRef}`;
+        const lastWarnedAt = requiredStatusContextsForbiddenWarnedAt.get(key);
+        if (
+          lastWarnedAt === undefined ||
+          Date.now() - lastWarnedAt >= REQUIRED_STATUS_CONTEXTS_WARN_INTERVAL_MS
+        ) {
+          setRequiredStatusContextsForbiddenWarnedAt(key, Date.now());
+          // Self-review finding — this used to say "grant the App
+          // administration:read and it'll work," which is false for App
+          // installation tokens: mintInstallationToken (github-app.ts)
+          // only ever requests READ_PERMISSIONS for this token, which
+          // never includes administration regardless of what's granted
+          // on the installation itself. **For App installation tokens,
+          // there is currently no operator-side fix** — only a Mullion
+          // code change (deliberately out of scope here, per #755's own
+          // original design notes) closes this. The warning says so
+          // plainly rather than sending an operator on a fix that does
+          // nothing.
+          //
+          // Hermes review, PR #1361 — qualified for PAT installs:
+          // resolveGitHubToken("read") falls back to a PAT on installs
+          // with no App configured, and a scope-starved PAT 403s this
+          // endpoint too — but that case IS fixable in the GitHub UI by
+          // widening the PAT's scope. The parenthetical in the warning
+          // below tells a PAT-backed operator what to actually do,
+          // instead of telling them a Mullion code change is required.
+          app.log.warn(
+            {
+              taskId: task.id,
+              owner: current.repoRef.owner,
+              repo: current.repoRef.repo,
+              // Second self-review pass — the throttle key and the
+              // underlying condition are both owner/repo/BRANCH, not just
+              // owner/repo; omitting it made two tasks on the same repo
+              // but different base branches (main vs. a release branch,
+              // say) produce textually identical log lines, undermining
+              // the whole point of a visibility fix.
+              branch: current.baseRef,
+            },
+            "task reconcile: CI-auto-return (#755) can't tell a required check apart from a non-required one — for an App installation token, the read-scope token never requests the `administration` permission this needs, by design (see docs/ci-cd.md's Branch protection section); granting the GitHub App installation broader permissions on GitHub does NOT fix this for App installs — it needs a Mullion code change. (For a PAT-backed install, the same 403 fires when the PAT's own scope lacks `repo`/`admin:repo_hook`; that case IS fixable in the GitHub UI by widening the PAT's scope.) A red CI check on this task's PR will never auto-return the worker until that ships.",
+          );
+        }
+      }
+    } catch (err) {
+      app.log.warn(
+        { err, taskId: task.id },
+        "task reconcile: #1360's forbidden-permission warning check itself failed — ignoring, the red-CI-return gate still fails closed",
+      );
+    }
+    return false;
+  }
+  if (requiredContexts.length === 0) return false;
 
   const checkRuns = await fetchCheckRunsForHead(
     token,
