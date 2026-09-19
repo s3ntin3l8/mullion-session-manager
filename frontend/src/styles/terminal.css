@@ -40,7 +40,14 @@
   align-items: center;
   gap: 8px;
   min-width: 0;
-  overflow: hidden;
+  /* Hermes review, PR #1366, line 43 — the `overflow: hidden` here clipped
+     the rename input's 3px `box-shadow` focus ring, which extends beyond
+     the wrapper's content-box on focus. The parent `.pane-tab` is now a
+     `1fr/auto` grid (line 20), so the 1fr column already constrains this
+     wrapper's width — `overflow: hidden` is redundant for text-overflow
+     purposes and can be removed. The title's own `overflow: hidden;
+     text-overflow: ellipsis; min-width: 0` (line 86-93) still handles
+     title truncation within the wrapper. */
 }
 /* Right-column cluster: close + ⋯ kebab. Auto-sized to its children so
    the grid's `auto` track keeps them anchored at the tab's right edge
