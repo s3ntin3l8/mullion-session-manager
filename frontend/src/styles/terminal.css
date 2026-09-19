@@ -2,7 +2,17 @@
 /* Terminal pane chrome (custom dockview tab)                     */
 /* ============================================================ */
 .pane-tab {
-  display: flex;
+  display: grid;
+  /* Two-column grid — left column (`1fr`) holds dot/agent-logo/title/branch/
+     badge/unread, right column (`auto`) holds the close + kebab actions.
+     Issue: long taskmaster titles push close/kebab off the right edge —
+     flex siblings with their own intrinsic sizes competed for space, and a
+     long title text could blow past the action buttons (the prior comment
+     below called this out as "still not ideal"). Anchoring the actions in
+     their own column guarantees they're always at the right edge, and
+     `1fr` on the left column means the title ellipsizes into whatever's
+     left instead of overflowing into the actions. */
+  grid-template-columns: 1fr auto;
   align-items: center;
   gap: 8px;
   height: 100%;
@@ -18,6 +28,37 @@
      boundary (issue #103, previously only "masked" by dockview's own
      tab-strip clipping per .pane-tab-badge's own comment above). */
   overflow: hidden;
+}
+/* Inner flex container for the left-column content (dot, agent logo,
+   title/rename input, branch, status badge, unread badge). Preserves the
+   original flex-row layout these elements were tuned for so the
+   narrow/tight thresholds and gap math stay byte-identical — the change
+   is purely the outer .pane-tab switching from one flex row to a
+   1fr/auto grid that splits content from actions. */
+.pane-tab-leading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  /* Hermes review, PR #1366, line 43 — the `overflow: hidden` here clipped
+     the rename input's 3px `box-shadow` focus ring, which extends beyond
+     the wrapper's content-box on focus. The parent `.pane-tab` is now a
+     `1fr/auto` grid (line 20), so the 1fr column already constrains this
+     wrapper's width — `overflow: hidden` is redundant for text-overflow
+     purposes and can be removed. The title's own `overflow: hidden;
+     text-overflow: ellipsis; min-width: 0` (line 86-93) still handles
+     title truncation within the wrapper. */
+}
+/* Right-column cluster: close + ⋯ kebab. Auto-sized to its children so
+   the grid's `auto` track keeps them anchored at the tab's right edge
+   regardless of title width. Gap matches the original single-row
+   `.pane-tab`'s `gap: 8px` (where it governed every sibling pair
+   including close↔kebab) — keeps the action cluster visually identical
+   to before the grid split. */
+.pane-tab-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 .pane-tab-dot-working {
   width: 7px;
@@ -51,6 +92,12 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  /* `flex: 1` is NOT a no-op here — even though `.pane-tab` is now a
+     `1fr/auto` grid, this title is a flex item of `.pane-tab-leading`
+     (the inner flex wrapper that holds dot, logo, title, branch, badge,
+     unread), not of the grid itself. Without `flex: 1` the title would
+     size to its content width and short titles would leave dead space
+     before the close/kebab cluster (Hermes review, PR #1366, line 90). */
   flex: 1;
   min-width: 0;
 }
@@ -66,6 +113,18 @@
   flex-shrink: 0;
 }
 .pane-tab-rename-input {
+  /* Hermes review, PR #1366, line 117 — `width: 100%; box-sizing: border-box`
+     added in PR #1366 are inert (`flex: 1` here sets `flex-basis: 0%`,
+     which overrides `width`) and the matching `size={1}` JSX is also
+     inert (`min-width: 0` below overrides the UA `min-width: auto`,
+     so the input can already shrink below the size-attribute preferred
+     width). The original user-reported "input field stays this small
+     size" repro couldn't be reproduced in jsdom or any browser
+     viewport tested — these were cargo-culted defensive declarations
+     rather than fixes. Reverting both rather than shipping no-op CSS.
+     If the bug resurfaces, the next step is to capture a real DOM
+     snapshot first (Playwright's `BoundingBox`) so the cause isn't
+     guesswork. */
   flex: 1;
   min-width: 0;
   font-family: inherit;

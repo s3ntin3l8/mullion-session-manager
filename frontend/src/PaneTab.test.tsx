@@ -816,6 +816,72 @@ describe("PaneTab", () => {
       expect(props.api.setTitle).not.toHaveBeenCalled();
     });
   });
+
+  // The .pane-tab-actions cluster keeps close + ⋯ pinned to the right
+  // edge of the dockview tab strip regardless of title length — the
+  // 1fr/auto grid split guarantees it. These tests assert the rendered
+  // structure rather than specific computed widths because jsdom can't
+  // lay out CSS; the live-viewport Playwright check in the original PR's
+  // /tmp/opencode/verify.mjs is what proves the visual effect.
+  describe("rename input rendering", () => {
+    it("replaces the title span with an input on rename entry", async () => {
+      const props = makeProps();
+      render(<PaneTab {...props} />);
+
+      const title = screen.getByText("claude code");
+      await userEvent.dblClick(title);
+
+      const input = screen.getByDisplayValue("claude code");
+      expect(input.tagName).toBe("INPUT");
+    });
+
+    it("commits a typed name on Enter, exercising the input's onChange + onKeyDown arms", async () => {
+      session = { ...BASE_SESSION, nameLocked: true };
+      const props = makeProps();
+      render(<PaneTab {...props} />);
+
+      await userEvent.dblClick(screen.getByText("claude code"));
+      const input = screen.getByDisplayValue("claude code") as HTMLInputElement;
+
+      await userEvent.clear(input);
+      await userEvent.type(input, "renamed");
+      await userEvent.keyboard("{Enter}");
+
+      // commitRename() calls props.api.setTitle BEFORE renameSession()
+      // (per its own comment). The dockview API sync is the only assertable
+      // side effect from this test's POV without coupling to the mock
+      // store's own renameSession shape — that's covered separately by the
+      // existing "syncs the dockview tab title when the store session name
+      // changes" / "does not call setTitle when the titles already match"
+      // block above.
+      expect(props.api.setTitle).toHaveBeenCalledWith("renamed");
+      // Exits rename mode on Enter.
+      expect(screen.queryByDisplayValue("renamed")).not.toBeInTheDocument();
+      expect(screen.getByText("claude code")).toBeInTheDocument();
+    });
+
+    it("renders close + PaneActionsMenu inside .pane-tab-actions so the grid can pin them right", () => {
+      const props = makeProps();
+      const { container } = render(<PaneTab {...props} />);
+
+      const actions = container.querySelector(".pane-tab-actions");
+      expect(actions).toBeInTheDocument();
+      // Close button + kebab trigger, in DOM order.
+      expect(actions?.querySelector('[aria-label="Close pane"]')).toBeInTheDocument();
+      expect(actions?.querySelector('[aria-label="More actions"]')).toBeInTheDocument();
+    });
+
+    it("renders leading content (dot + name) inside .pane-tab-leading", () => {
+      const props = makeProps();
+      const { container } = render(<PaneTab {...props} />);
+
+      const leading = container.querySelector(".pane-tab-leading");
+      expect(leading).toBeInTheDocument();
+      // Status dot is always rendered (even if it's invisible for idle).
+      expect(leading?.querySelector(".pane-tab-dot-idle")).toBeInTheDocument();
+      expect(leading?.querySelector(".pane-tab-name")).toBeInTheDocument();
+    });
+  });
 });
 
 // P11 — the overflow menu previously had no focus management at all and

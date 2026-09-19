@@ -34,6 +34,7 @@ import {
   HostsIcon,
   LayersIcon,
   PlusIcon,
+  PullIcon,
   RenameIcon,
   SearchAlertIcon,
   SearchIcon,
@@ -653,6 +654,35 @@ function ProjectGitHubSubscription({ projectId }: { projectId: number }) {
 // "you're working from a very stale checkout".
 const BEHIND_STALE_THRESHOLD = 10;
 
+// Issue #431-adjacent — short, user-facing copy for `git pull` refusal
+// reasons. Mirrors the message shape SourceControlSection.tsx already uses
+// for the same backend response, but trimmed to the one-line slot the
+// kebab-error affordance has. Kept inline here rather than promoted to a
+// shared helper because the two surfaces have different copy needs and a
+// premature consolidation would just drag them both around.
+function formatPullReasonMessage(reason: string | undefined, detail?: string): string {
+  switch (reason) {
+    case "not-a-repo":
+      return "Not a git repository.";
+    case "unborn-head":
+      return "Cannot pull in an unborn branch.";
+    case "detached-head":
+      return "Cannot pull in a detached HEAD state.";
+    case "no-upstream":
+      return "No upstream tracking branch configured.";
+    case "dirty-tree":
+      return "Working tree has uncommitted changes — commit or stash them first.";
+    case "not-fast-forward":
+      return "Local branch has diverged from origin — pull cannot fast-forward.";
+    case "already-up-to-date":
+      return "Already up to date with tracking branch.";
+    case "pull-failed":
+      return detail ? `Pull failed: ${detail}` : "The pull operation failed.";
+    default:
+      return detail ? `Pull failed: ${detail}` : "Pull failed — try again.";
+  }
+}
+
 // U3 — persisted per-project collapse state. Same serialization/
 // hydrate-once-at-module-load shape as readExpandedSessionRows below (read
 // that block first) — the one difference is the data structure: expand
@@ -778,6 +808,11 @@ function ProjectHeader({
   // UnifiedBoard.tsx's TasksToolbar — rendered as a second line under this
   // header, same slot SessionRow's own eventLine/endError use.
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  // Issue #431-adjacent — Git pull shortcut's own inline error, mirroring
+  // deleteError's slot. A pull can fail for visible reasons (dirty tree,
+  // detached HEAD, conflicts), and SourceControlSection's Pull button already
+  // surfaces the same shape there — keep parity.
+  const [pullError, setPullError] = useState<string | null>(null);
 
   const attentionCount = sessions.filter((s) => s.attention).length;
   // Only a remote project needs a badge at all — the common single-host
@@ -943,6 +978,70 @@ function ProjectHeader({
                 onClick: () => setEditOpen(true),
               },
               {
+                key: "git-pull",
+                // Issue #431-adjacent — sidebar shortcut for `git pull`,
+                // mirrors the disabled-gating on SourceControlSection's Pull
+                // button (which only enables when behind > 0, i.e. only when
+                // the operation would do something). Disabled-state messages
+                // route through KebabMenu's `title` field (issue #1106), so a
+                // user hovering an inert item sees why it's inert — not the
+                // "looks enabled but does nothing" surprise the same issue
+                // fixed for the kill-session overflow item.
+                label: "Git pull",
+                icon: <PullIcon size={14} style={{ color: "var(--muted)" }} />,
+                disabled: !gitStatus || gitStatus.behind === 0,
+                // gitStatuses[id] === null collapses three distinct states
+                // (SourceControlSection.tsx:188-194): durably not a repo,
+                // never fetched yet, and — for a remote-hosted project only
+                // — the agent host being unreachable. A local project's
+                // host is this process itself, so "not a repo" is the
+                // honest read there; a remote-hosted project's null is
+                // genuinely ambiguous, so its label says so rather than
+                // asserting a specific cause that might be wrong (Hermes
+                // review, PR #1366). The branch must key on
+                // `project.hostId !== LOCAL_HOST_ID`, NOT on the `host`
+                // lookup at line 821 — the latter is `hosts.find(...)`,
+                // which is `undefined` whenever the hosts list hasn't
+                // loaded yet, collapsing the "remote ambiguous" case back
+                // to "not a repo" on first mount and defeating the fix
+                // (Hermes review, PR #1366, line 1006). SourceControlSection.tsx:193
+                // uses the same direct-property check.
+                title: !gitStatus
+                  ? project.hostId !== LOCAL_HOST_ID
+                    ? "Not a git repository, or the host is unreachable."
+                    : "Not a git repository"
+                  : gitStatus.behind === 0
+                    ? "Already up to date with tracking branch"
+                    : `Pull ${gitStatus.behind} commit${gitStatus.behind === 1 ? "" : "s"} from tracking branch`,
+                onClick: async () => {
+                  setPullError(null);
+                  try {
+                    const result = await useDashboardStore.getState().pullProjectGit(project.id);
+                    if (!result.pulled) {
+                      // No `&& result.reason` guard — let formatPullReasonMessage's
+                      // default branch fire on `{pulled: false}` without a reason,
+                      // matching SourceControlSection.tsx's unconditional shape so
+                      // a missing-reason response never falls through silently.
+                      setPullError(formatPullReasonMessage(result.reason, result.detail));
+                    }
+                    // Hermes review, PR #1366, line 1023 — other pull
+                    // surfaces invalidate refs too (SourceControlSection.tsx:254
+                    // and GitPanel.tsx:280 both fire `refreshGitRefs` after a
+                    // successful pull). Without this call, branch labels and
+                    // diff stats stay stale until their own poll tick lands.
+                    // SourceControlSection also writes a fresh status
+                    // into the store inline; refreshGitStatuses covers the
+                    // same data path here without the per-project round-trip.
+                    await Promise.all([
+                      useDashboardStore.getState().refreshGitStatuses(),
+                      useDashboardStore.getState().refreshGitRefs([project.id]),
+                    ]);
+                  } catch (err) {
+                    setPullError(err instanceof Error ? err.message : "Pull failed — try again.");
+                  }
+                },
+              },
+              {
                 key: "scaffold-mullion",
                 label: "Scaffold Mullion",
                 icon: <SkillIcon size={14} style={{ color: "var(--muted)" }} />,
@@ -1030,6 +1129,11 @@ function ProjectHeader({
       {deleteError && (
         <div className="project-row-error" title={deleteError}>
           {deleteError}
+        </div>
+      )}
+      {pullError && (
+        <div className="project-row-error" title={pullError}>
+          {pullError}
         </div>
       )}
     </>

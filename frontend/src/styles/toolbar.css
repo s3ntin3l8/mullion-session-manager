@@ -70,6 +70,22 @@
   font-family: inherit;
 }
 
+/* Issue: Back button is now rendered twice — once behind the "Tasks"
+   title in `.toolbar-center` (the visually-coherent desktop position),
+   once in `.toolbar-actions` (the original phone escape hatch from
+   Tasks view, kept because mobile.css:30 hides `.toolbar-center`
+   entirely below 700px). Each variant carries a --center/--actions
+   modifier so exactly one is visible per breakpoint — the phone's
+   --center one is auto-hidden by `.toolbar-center { display: none }`,
+   the desktop's --actions one needs an explicit hide here. The min-width
+   threshold mirrors mobile.css's own (max-width: 699.98px) query so the
+   two breakpoints never both show or both hide at once. */
+@media (min-width: 700px) {
+  .toolbar-back-to-workspace--actions {
+    display: none;
+  }
+}
+
 /* Phase 5 (Track B, issue #195 5.5b) — hierarchical/flat sidebar toggle
    (HierarchyToggle.tsx). Independent review finding (PR #430): this was
    missing entirely, so the toggle rendered with no grouping/pill despite

@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Virtualizer } from "@tanstack/react-virtual";
 import { Sidebar } from "./Sidebar.js";
 import { ApiError } from "./api/index.js";
 import type * as ApiModule from "./api/index.js";
-import type { Device, Host, Project, Session, Task } from "./api/index.js";
+import type { Device, GitStatus, Host, Project, Session, Task } from "./api/index.js";
 import { makeSession, makeProject, makeHost, makeTask } from "./test/fixtures.js";
 
 // U3 (audit finding — "nothing degrades gracefully past ~20 sessions") —
@@ -26,12 +26,16 @@ let hideEndedSessions: boolean;
 let showTaskSessions: boolean;
 let tasks: Task[];
 let viewMode: string;
+let gitStatuses: Record<number, GitStatus | null>;
 const setShowTaskSessions = vi.fn();
 const refreshProjects = vi.fn().mockResolvedValue(undefined);
 const refreshSessions = vi.fn().mockResolvedValue(undefined);
 const refreshHosts = vi.fn().mockResolvedValue(undefined);
 const refreshDevices = vi.fn().mockResolvedValue(undefined);
 const refreshTasks = vi.fn().mockResolvedValue(undefined);
+const refreshGitStatuses = vi.fn().mockResolvedValue(undefined);
+const refreshGitRefs = vi.fn().mockResolvedValue(undefined);
+const pullProjectGit = vi.fn().mockResolvedValue({ pulled: true });
 const createProject = vi.fn().mockResolvedValue(undefined);
 const deleteProject = vi.fn().mockResolvedValue(undefined);
 const updateProject = vi.fn().mockResolvedValue(undefined);
@@ -61,7 +65,7 @@ function storeState() {
     setViewMode,
     theme: "dark",
     events: {},
-    gitStatuses: {},
+    gitStatuses,
     sessionGitStatuses: {},
     gitDiffStats: {},
     gitBranchesByProject: {},
@@ -71,6 +75,9 @@ function storeState() {
     refreshSessions,
     refreshHosts,
     refreshTasks,
+    refreshGitStatuses,
+    refreshGitRefs,
+    pullProjectGit,
     createProject,
     deleteProject,
     updateProject,
@@ -193,7 +200,12 @@ beforeEach(() => {
   hideEndedSessions = false;
   showTaskSessions = false;
   viewMode = "list";
+  gitStatuses = {};
   setViewMode.mockClear();
+  refreshGitStatuses.mockClear();
+  refreshGitRefs.mockClear();
+  pullProjectGit.mockClear();
+  pullProjectGit.mockResolvedValue({ pulled: true });
   localStorage.clear();
 });
 
@@ -680,6 +692,205 @@ describe("Sidebar P9 — inline error on a failed delete", () => {
     await user.click(screen.getByTitle("End this session (the program will be terminated)"));
 
     expect(await screen.findByText(/unreachable/i)).toBeInTheDocument();
+  });
+});
+
+// Issue #431-adjacent — sidebar shortcut for `git pull` from the project's
+// kebab menu. Disabled-gating mirrors SourceControlSection's Pull button
+// (only enabled when behind > 0), and a refused pull surfaces an inline
+// error rather than failing silently — same P9 posture deleteProject uses.
+describe("Sidebar git pull kebab entry", () => {
+  function makeGitStatus(overrides: Partial<GitStatus> = {}): GitStatus {
+    return {
+      branch: "main",
+      hash: "abc1234",
+      ahead: 0,
+      behind: 0,
+      files: [],
+      isClean: true,
+      hasConflicts: false,
+      ...overrides,
+    };
+  }
+
+  it("renders the Git pull item in the project kebab menu", async () => {
+    renderSidebar();
+    const user = userEvent.setup();
+    await user.click(screen.getByTitle("More…"));
+
+    expect(await screen.findByText("Git pull")).toBeInTheDocument();
+  });
+
+  it("disables Git pull when the project has no git status (not a repo / not yet polled)", async () => {
+    gitStatuses = { [PROJECT.id]: null };
+    renderSidebar();
+    const user = userEvent.setup();
+    await user.click(screen.getByTitle("More…"));
+
+    const item = await screen.findByText("Git pull");
+    expect(item.closest("button")).toHaveAttribute("aria-disabled", "true");
+    // ProjectHeader's PROJECT fixture has hostId: "local" (default), so
+    // `host === null` here — the honest read is "not a git repository".
+    // The remote-project case is tested separately below.
+    expect(item.closest("button")).toHaveAttribute("title", "Not a git repository");
+
+    // Clicking an inert item must NOT fire pullProjectGit — KebabMenu's
+    // handleItemClick guards on `item.disabled` (see ui/KebabMenu.tsx),
+    // and this consumer-level assertion keeps that contract pinned.
+    await user.click(item);
+    expect(pullProjectGit).not.toHaveBeenCalled();
+  });
+
+  it("disables Git pull on a remote-hosted project with no git status, hedging between not-a-repo and host-unreachable", async () => {
+    // gitStatuses[id] === null collapses three distinct states for a
+    // remote-hosted project (SourceControlSection.tsx:188-194): durably
+    // not a repo, never fetched yet, and the agent host being unreachable.
+    // Hermes review, PR #1366 — the kebab item's title must NOT assert
+    // "Not a git repository" alone there; match SourceControlSection's own
+    // ambiguous copy. Branches on `project.hostId !== LOCAL_HOST_ID`
+    // (direct property check), NOT on the `host` variable (which is
+    // `hosts.find(...)` and is `undefined` when the hosts list hasn't
+    // loaded yet — the original implementation's bug). No need to seed
+    // `hosts` here: the production condition reads `project.hostId` directly.
+    projects = [makeProject({ id: PROJECT.id, hostId: "remote-host-id" })];
+    gitStatuses = { [PROJECT.id]: null };
+    renderSidebar();
+    const user = userEvent.setup();
+    await user.click(screen.getByTitle("More…"));
+
+    const item = await screen.findByText("Git pull");
+    expect(item.closest("button")).toHaveAttribute("aria-disabled", "true");
+    expect(item.closest("button")).toHaveAttribute(
+      "title",
+      "Not a git repository, or the host is unreachable.",
+    );
+  });
+
+  it("disables Git pull when the project is already up to date with origin", async () => {
+    gitStatuses = { [PROJECT.id]: makeGitStatus({ behind: 0, ahead: 0 }) };
+    renderSidebar();
+    const user = userEvent.setup();
+    await user.click(screen.getByTitle("More…"));
+
+    const item = await screen.findByText("Git pull");
+    expect(item.closest("button")).toHaveAttribute("aria-disabled", "true");
+    expect(item.closest("button")).toHaveAttribute(
+      "title",
+      "Already up to date with tracking branch",
+    );
+
+    await user.click(item);
+    expect(pullProjectGit).not.toHaveBeenCalled();
+  });
+
+  it("enables Git pull when the project is behind origin, with a count in the title", async () => {
+    gitStatuses = { [PROJECT.id]: makeGitStatus({ behind: 3 }) };
+    renderSidebar();
+    const user = userEvent.setup();
+    await user.click(screen.getByTitle("More…"));
+
+    const item = await screen.findByText("Git pull");
+    expect(item.closest("button")).not.toHaveAttribute("aria-disabled");
+    expect(item.closest("button")).toHaveAttribute("title", "Pull 3 commits from tracking branch");
+  });
+
+  it("calls pullProjectGit, refreshGitStatuses, and refreshGitRefs when clicked", async () => {
+    gitStatuses = { [PROJECT.id]: makeGitStatus({ behind: 1 }) };
+    renderSidebar();
+    const user = userEvent.setup();
+    await user.click(screen.getByTitle("More…"));
+    await user.click(await screen.findByText("Git pull"));
+
+    await waitFor(() => {
+      expect(pullProjectGit).toHaveBeenCalledWith(PROJECT.id);
+    });
+    // Hermes review, PR #1366 — other pull surfaces invalidate refs too
+    // (SourceControlSection.tsx:254, GitPanel.tsx:280), so without this
+    // call branch labels and diff stats stay stale until their own poll.
+    expect(refreshGitStatuses).toHaveBeenCalled();
+    expect(refreshGitRefs).toHaveBeenCalledWith([PROJECT.id]);
+  });
+
+  it("surfaces a refused pull as an inline error (dirty tree / not-fast-forward / etc.)", async () => {
+    gitStatuses = { [PROJECT.id]: makeGitStatus({ behind: 5 }) };
+    pullProjectGit.mockResolvedValueOnce({
+      pulled: false,
+      reason: "dirty-tree",
+    });
+    renderSidebar();
+    const user = userEvent.setup();
+    await user.click(screen.getByTitle("More…"));
+    await user.click(await screen.findByText("Git pull"));
+
+    expect(await screen.findByText(/Working tree has uncommitted changes/i)).toBeInTheDocument();
+  });
+
+  it("surfaces a thrown pull as an inline error", async () => {
+    gitStatuses = { [PROJECT.id]: makeGitStatus({ behind: 1 }) };
+    pullProjectGit.mockRejectedValueOnce(new Error("connection refused"));
+    renderSidebar();
+    const user = userEvent.setup();
+    await user.click(screen.getByTitle("More…"));
+    await user.click(await screen.findByText("Git pull"));
+
+    expect(await screen.findByText(/connection refused/i)).toBeInTheDocument();
+  });
+
+  // Critical-fix coverage — Sidebar.tsx dropped the `&& result.reason` guard
+  // so `{pulled: false}` without a reason still produces a default-branch
+  // message rather than falling through silently. This test pins that
+  // contract: the backend's `pull-failed` reason with detail also routes
+  // through the helper's `pull-failed` branch, which is what the no-reason
+  // path defaults to.
+  it("surfaces an empty `{pulled: false}` (no reason) via the helper's default branch", async () => {
+    gitStatuses = { [PROJECT.id]: makeGitStatus({ behind: 1 }) };
+    pullProjectGit.mockResolvedValueOnce({ pulled: false });
+    renderSidebar();
+    const user = userEvent.setup();
+    await user.click(screen.getByTitle("More…"));
+    await user.click(await screen.findByText("Git pull"));
+
+    expect(await screen.findByText(/Pull failed/i)).toBeInTheDocument();
+  });
+
+  // Closes the formatPullReasonMessage coverage hole (was 1/8 reasons
+  // exercised). Single it.each over the full GitPullReason union plus the
+  // unknown-reason default — cheap, locks down copy drift.
+  describe("formatPullReasonMessage copy", () => {
+    const cases: Array<{
+      reason: string;
+      detail?: string;
+      matches: RegExp;
+    }> = [
+      { reason: "not-a-repo", matches: /Not a git repository/i },
+      { reason: "unborn-head", matches: /unborn branch/i },
+      { reason: "detached-head", matches: /detached HEAD/i },
+      { reason: "no-upstream", matches: /no upstream/i },
+      { reason: "dirty-tree", matches: /Working tree has uncommitted changes/i },
+      { reason: "not-fast-forward", matches: /diverged from origin/i },
+      { reason: "already-up-to-date", matches: /Already up to date/i },
+      {
+        reason: "pull-failed",
+        detail: "conflict on README.md",
+        matches: /conflict on README\.md/i,
+      },
+      { reason: "pull-failed", matches: /The pull operation failed/i },
+      { reason: "totally-unknown-reason", detail: "boom", matches: /Pull failed: boom/i },
+      { reason: "totally-unknown-reason", matches: /Pull failed/i },
+    ];
+
+    for (const c of cases) {
+      it(`surfaces copy for ${c.reason}${c.detail ? ` (with detail "${c.detail}")` : ""}`, async () => {
+        gitStatuses = { [PROJECT.id]: makeGitStatus({ behind: 1 }) };
+        pullProjectGit.mockResolvedValueOnce({ pulled: false, reason: c.reason, detail: c.detail });
+        renderSidebar();
+        const user = userEvent.setup();
+        await user.click(screen.getByTitle("More…"));
+        await user.click(await screen.findByText("Git pull"));
+
+        expect(await screen.findByText(c.matches)).toBeInTheDocument();
+      });
+    }
   });
 });
 

@@ -474,6 +474,20 @@ export function GitBranchIcon(props: IconProps) {
   );
 }
 
+// Git pull (issue #431-adjacent sidebar shortcut) — a down-arrow-into-tray
+// glyph: a vertical line with a downward arrowhead and a baseline at the
+// bottom, generic line icon matching the rest of this module. Pairs visually
+// with GitBranchIcon above.
+export function PullIcon(props: IconProps) {
+  return (
+    <Svg strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M12 3 v12" />
+      <path d="M7 10 l5 5 5-5" />
+      <path d="M5 21 h14" />
+    </Svg>
+  );
+}
+
 // Browser preview pane trigger (issue #28) — a generic line glyph, matching
 // this file's usual convention (unlike GitHubIcon's brand mark above).
 export function GlobeIcon(props: IconProps) {

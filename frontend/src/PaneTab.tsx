@@ -328,60 +328,75 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
       ref={setTabRef}
       className={`pane-tab${ringClass}${groupHasAttention ? " pane-tab-group-attention" : ""}${highlightFlash ? " highlight-flash" : ""}`}
     >
-      {dot}
-      {!tight && agentLogo && (
-        <img src={agentLogo} alt="" width={14} height={14} className="pane-tab-agent-logo" />
-      )}
-      {renaming ? (
-        <input
-          ref={renameInputRef}
-          className="pane-tab-rename-input"
-          value={draftName}
-          onChange={(e) => setDraftName(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") commitRename();
-            else if (e.key === "Escape") setRenaming(false);
-          }}
-          onBlur={commitRename}
-        />
-      ) : (
-        <span className="pane-tab-name" title="Double-click to rename" onDoubleClick={beginRename}>
-          {props.api.title}
-        </span>
-      )}
-      {!narrow && branchLabel && <span className="pane-tab-branch">{branchLabel}</span>}
-      {!narrow && badge}
-      {unreadCount > 0 && unreadIconKind && (
-        <span
-          className={`pane-tab-unread-badge ${unreadIconKind}${tight ? " compact" : ""}`}
-          title={`${unreadCount} unread ${unreadIconKind === "attention" ? "attention " : ""}notification${unreadCount === 1 ? "" : "s"}`}
+      <div className="pane-tab-leading">
+        {dot}
+        {!tight && agentLogo && (
+          <img src={agentLogo} alt="" width={14} height={14} className="pane-tab-agent-logo" />
+        )}
+        {renaming ? (
+          <input
+            ref={renameInputRef}
+            className="pane-tab-rename-input"
+            // Hermes review, PR #1366, line 117 — `size={1}` was added in
+            // PR #1366 alongside a `width: 100%` CSS declaration, both
+            // intended to fix a "rename input stuck at small size" bug.
+            // Both turned out to be inert (`flex: 1` + `min-width: 0` on
+            // the CSS already covers what they were trying to add, and the
+            // repro couldn't be captured). Reverting the JSX pin too —
+            // see terminal.css's own comment on the matching CSS revert.
+            value={draftName}
+            onChange={(e) => setDraftName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commitRename();
+              else if (e.key === "Escape") setRenaming(false);
+            }}
+            onBlur={commitRename}
+          />
+        ) : (
+          <span
+            className="pane-tab-name"
+            title="Double-click to rename"
+            onDoubleClick={beginRename}
+          >
+            {props.api.title}
+          </span>
+        )}
+        {!narrow && branchLabel && <span className="pane-tab-branch">{branchLabel}</span>}
+        {!narrow && badge}
+        {unreadCount > 0 && unreadIconKind && (
+          <span
+            className={`pane-tab-unread-badge ${unreadIconKind}${tight ? " compact" : ""}`}
+            title={`${unreadCount} unread ${unreadIconKind === "attention" ? "attention " : ""}notification${unreadCount === 1 ? "" : "s"}`}
+          >
+            {unreadIconKind === "attention" ? <BellIcon size={9} /> : <CheckIcon size={9} />}
+            {/* Issue: narrow headers overflow — this badge (unlike the branch
+                label/status badge above) was never gated by `narrow` at all,
+                so it stayed at full pill width (icon + count digits) all the
+                way down to .dv-tab's own min-width. Below TIGHT_TAB_
+                THRESHOLD_PX, drop the count text and let the `.compact`
+                modifier (terminal.css) shrink the pill to a bare dot around
+                the icon — the tooltip above still carries the actual count. */}
+            {!tight && unreadCount}
+          </span>
+        )}
+      </div>
+      <div className="pane-tab-actions">
+        <button
+          className="pane-tab-btn"
+          title="Close pane — detaches your view, session keeps running"
+          aria-label="Close pane"
+          onClick={() => props.api.close()}
         >
-          {unreadIconKind === "attention" ? <BellIcon size={9} /> : <CheckIcon size={9} />}
-          {/* Issue: narrow headers overflow — this badge (unlike the branch
-              label/status badge above) was never gated by `narrow` at all,
-              so it stayed at full pill width (icon + count digits) all the
-              way down to .dv-tab's own min-width. Below TIGHT_TAB_
-              THRESHOLD_PX, drop the count text and let the `.compact`
-              modifier (terminal.css) shrink the pill to a bare dot around
-              the icon — the tooltip above still carries the actual count. */}
-          {!tight && unreadCount}
-        </span>
-      )}
-      <button
-        className="pane-tab-btn"
-        title="Close pane — detaches your view, session keeps running"
-        aria-label="Close pane"
-        onClick={() => props.api.close()}
-      >
-        <CloseIcon size={14} />
-      </button>
-      <PaneActionsMenu
-        api={props.api}
-        params={props.params}
-        containerApi={props.containerApi}
-        onRename={beginRename}
-        triggerClassName="pane-tab-btn"
-      />
+          <CloseIcon size={14} />
+        </button>
+        <PaneActionsMenu
+          api={props.api}
+          params={props.params}
+          containerApi={props.containerApi}
+          onRename={beginRename}
+          triggerClassName="pane-tab-btn"
+        />
+      </div>
     </div>
   );
 }
