@@ -529,6 +529,50 @@ describe("devices routes", () => {
         expect(row.port).toBeNull();
       });
 
+      it("POST /api/devices with kind: physical rejects a second row for an address an active row already owns (issue #1350)", async () => {
+        const app = await buildTestApp();
+        const first = await app.inject({
+          method: "POST",
+          url: "/api/devices",
+          payload: { kind: "physical", address: "192.168.1.23:37251" },
+        });
+        expect(first.statusCode).toBe(201);
+
+        const second = await app.inject({
+          method: "POST",
+          url: "/api/devices",
+          payload: { kind: "physical", address: "192.168.1.23:37251" },
+        });
+        expect(second.statusCode).toBe(409);
+
+        const rows = app.db
+          .select()
+          .from(devices)
+          .where(eq(devices.serial, "192.168.1.23:37251"))
+          .all();
+        expect(rows).toHaveLength(1);
+      });
+
+      it("POST /api/devices with kind: physical allows re-adding an address once the prior row is killed", async () => {
+        const app = await buildTestApp();
+        const first = await app.inject({
+          method: "POST",
+          url: "/api/devices",
+          payload: { kind: "physical", address: "192.168.1.23:37251" },
+        });
+        const firstId = first.json().id;
+
+        await app.inject({ method: "DELETE", url: `/api/devices/${firstId}` });
+
+        const second = await app.inject({
+          method: "POST",
+          url: "/api/devices",
+          payload: { kind: "physical", address: "192.168.1.23:37251" },
+        });
+        expect(second.statusCode).toBe(201);
+        expect(second.json().id).not.toBe(firstId);
+      });
+
       it("POST /api/devices with kind: physical rejects a malformed address", async () => {
         const app = await buildTestApp();
         const res = await app.inject({

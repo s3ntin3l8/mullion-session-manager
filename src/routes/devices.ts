@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { devices } from "../db/schema.js";
 import type { DeviceInfo, DeviceKind } from "../services/device-manager.js";
 
@@ -168,6 +168,36 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
       }
       if (!isValidDeviceAddress(address)) {
         return reply.badRequest("address must be host:port (e.g. 192.168.1.23:37251)");
+      }
+
+      // Guard against two `devices` rows racing to own the same adb
+      // address — Device.connectPhysical() deliberately treats
+      // AlreadyConnectedError as success (needed for the restart-reattach
+      // case, where the adb server already has this address connected from
+      // before a Mullion restart), so a second insert for the same address
+      // would otherwise succeed too and produce a second in-memory Device
+      // independently pushing/starting its own scrcpy server against the
+      // same live serial. Emulators get an equivalent guard for free via
+      // allocatePort() (see readActiveDevicePorts()); physical devices have
+      // no port to collide on, so this checks the address directly.
+      // Synchronous, no `await` in between, and better-sqlite3 is
+      // synchronous too — this check-then-insert can't interleave with
+      // another request's.
+      const [existingActive] = app.db
+        .select({ id: devices.id })
+        .from(devices)
+        .where(
+          and(
+            eq(devices.status, "active"),
+            eq(devices.kind, "physical"),
+            eq(devices.serial, address),
+          ),
+        )
+        .all();
+      if (existingActive) {
+        return reply.conflict(
+          `device ${existingActive.id} is already active for address ${address}`,
+        );
       }
 
       const [row] = app.db
