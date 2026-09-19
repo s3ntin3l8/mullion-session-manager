@@ -640,7 +640,18 @@ describe("DeviceManager", () => {
       port: null,
     });
     await waitForStatus(manager, "1", "error");
-    expect(onSpawnError).toHaveBeenCalledWith("1", expect.any(Error));
+    // Race-prone assertion: Device.spawn() flips `status` to "error"
+    // BEFORE awaiting teardown/throw, and the `.catch()` that fires
+    // `onSpawnError` is a microtask scheduled by that throw — under
+    // CI load, the immediate `expect(...)` below occasionally runs
+    // before the microtask has fired. waitForStatus only polls
+    // `status === "error"`, so it doesn't gate the callback. Pin the
+    // assertion with vi.waitFor() the same way waitForCondition (above)
+    // gates the marker-removal/scope-stop assertions — same shape, same
+    // timeout, just on the mock call rather than a state value.
+    await vi.waitFor(() => expect(onSpawnError).toHaveBeenCalledWith("1", expect.any(Error)), {
+      timeout: 2000,
+    });
   });
 
   it("kill() on a tracked, live device closes scrcpy/adb and stops its scope", async () => {
