@@ -81,8 +81,38 @@ describe("Toolbar — Tasks view (viewMode === kanban)", () => {
   it('shows a Back to workspace button that calls setViewMode("list")', async () => {
     const user = userEvent.setup();
     render(<Toolbar {...NOOP_PROPS} />);
-    const back = screen.getByTitle("Back to workspace");
-    await user.click(back);
+    // Two buttons render in kanban view (--center + --actions); either
+    // works for this assertion, so click the desktop one explicitly.
+    const backs = screen.getAllByTitle("Back to workspace");
+    const desktopBack = backs.find((b) =>
+      b.classList.contains("toolbar-back-to-workspace--center"),
+    )!;
+    await user.click(desktopBack);
+    expect(setViewMode).toHaveBeenCalledWith("list");
+  });
+
+  // Hermes review, PR #1366 — the Back button is rendered TWICE in the
+  // kanban view: once in `.toolbar-center` (desktop, behind the Tasks
+  // title — `.toolbar-back-to-workspace--center`) and once in
+  // `.toolbar-actions` (mobile escape hatch — `--actions`). Both render
+  // every Tasks entry, but exactly one is visible per breakpoint via
+  // CSS, and the kanban-view escape hatch on phone relies on the second
+  // instance being reachable. Verify both exist and that clicking EITHER
+  // calls setViewMode("list") — the mobile one would otherwise be an
+  // untested branch.
+  it('renders both desktop and mobile Back instances, each calling setViewMode("list")', async () => {
+    const user = userEvent.setup();
+    render(<Toolbar {...NOOP_PROPS} />);
+
+    const backs = screen.getAllByTitle("Back to workspace");
+    expect(backs.length).toBe(2);
+    expect(backs.some((b) => b.classList.contains("toolbar-back-to-workspace--center"))).toBe(true);
+    expect(backs.some((b) => b.classList.contains("toolbar-back-to-workspace--actions"))).toBe(
+      true,
+    );
+
+    setViewMode.mockClear();
+    await user.click(backs[1]!);
     expect(setViewMode).toHaveBeenCalledWith("list");
   });
 

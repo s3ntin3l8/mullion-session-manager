@@ -96,8 +96,15 @@ export function Toolbar({
           <>
             <LayersIcon size={14} />
             <span className="toolbar-center-name">Tasks</span>
+            {/* Desktop-only Back button — sits behind the Tasks title. On
+               phone, `.toolbar-center` is `display: none` (mobile.css:30),
+               so the sibling mobile instance rendered in `.toolbar-actions`
+               below (also marked .toolbar-back-to-workspace) carries the
+               Tasks-view escape hatch instead. tablet.css:217-227 keeps
+               this button's own `width: auto; height: 44px` override on
+               coarse pointers, so its "Back" label still fits. */}
             <button
-              className="toolbar-icon-btn toolbar-back-to-workspace"
+              className="toolbar-icon-btn toolbar-back-to-workspace toolbar-back-to-workspace--center"
               onClick={() => useDashboardStore.getState().setViewMode("list")}
               title="Back to workspace"
             >
@@ -118,6 +125,25 @@ export function Toolbar({
         )}
       </div>
       <div className="toolbar-actions">
+        {/* Mobile-only Back button — the phone's escape hatch from Tasks
+           view. mobile.css hides `.toolbar-center` entirely below 700px,
+           so the desktop instance above disappears; toolbar.css hides this
+           one above 700px via `.toolbar-back-to-workspace--actions`. The
+           duplication is intentional — both render every Tasks entry, but
+           exactly one is visible per breakpoint, and on desktop the
+           visible one is the visually-coherent "right of Tasks" placement,
+           on phone it's the right-edge toolbar slot UnifiedBoard.tsx was
+           relying on. */}
+        {viewMode === "kanban" && (
+          <button
+            className="toolbar-icon-btn toolbar-back-to-workspace toolbar-back-to-workspace--actions"
+            onClick={() => useDashboardStore.getState().setViewMode("list")}
+            title="Back to workspace"
+          >
+            <ChevronLeftIcon size={17} />
+            <span>Back</span>
+          </button>
+        )}
         <button
           className="run-cmd-btn"
           onClick={onOpenLauncher}

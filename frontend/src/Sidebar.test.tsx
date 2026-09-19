@@ -726,6 +726,9 @@ describe("Sidebar git pull kebab entry", () => {
 
     const item = await screen.findByText("Git pull");
     expect(item.closest("button")).toHaveAttribute("aria-disabled", "true");
+    // ProjectHeader's PROJECT fixture has hostId: "local" (default), so
+    // `host === null` here — the honest read is "not a git repository".
+    // The remote-project case is tested separately below.
     expect(item.closest("button")).toHaveAttribute("title", "Not a git repository");
 
     // Clicking an inert item must NOT fire pullProjectGit — KebabMenu's
@@ -733,6 +736,29 @@ describe("Sidebar git pull kebab entry", () => {
     // and this consumer-level assertion keeps that contract pinned.
     await user.click(item);
     expect(pullProjectGit).not.toHaveBeenCalled();
+  });
+
+  it("disables Git pull on a remote-hosted project with no git status, hedging between not-a-repo and host-unreachable", async () => {
+    // gitStatuses[id] === null collapses three distinct states for a
+    // remote-hosted project (SourceControlSection.tsx:188-194): durably
+    // not a repo, never fetched yet, and the agent host being unreachable.
+    // Hermes review, PR #1366 — the kebab item's title must NOT assert
+    // "Not a git repository" alone there; match SourceControlSection's own
+    // ambiguous copy.
+    const remoteHost = makeHost({ id: "remote-1", name: "agent-box" });
+    hosts = [remoteHost];
+    projects = [makeProject({ id: PROJECT.id, hostId: "remote-1" })];
+    gitStatuses = { [PROJECT.id]: null };
+    renderSidebar();
+    const user = userEvent.setup();
+    await user.click(screen.getByTitle("More…"));
+
+    const item = await screen.findByText("Git pull");
+    expect(item.closest("button")).toHaveAttribute("aria-disabled", "true");
+    expect(item.closest("button")).toHaveAttribute(
+      "title",
+      "Not a git repository, or the host is unreachable.",
+    );
   });
 
   it("disables Git pull when the project is already up to date with origin", async () => {

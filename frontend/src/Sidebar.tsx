@@ -990,8 +990,22 @@ function ProjectHeader({
                 label: "Git pull",
                 icon: <PullIcon size={14} style={{ color: "var(--muted)" }} />,
                 disabled: !gitStatus || gitStatus.behind === 0,
+                // gitStatuses[id] === null collapses three distinct states
+                // (SourceControlSection.tsx:188-194): durably not a repo,
+                // never fetched yet, and — for a remote-hosted project only
+                // — the agent host being unreachable. A local project's
+                // host is this process itself, so "not a repo" is the
+                // honest read there; a remote-hosted project's null is
+                // genuinely ambiguous, so its label says so rather than
+                // asserting a specific cause that might be wrong (Hermes
+                // review, PR #1366). The store's gitStatuses type is
+                // `Record<number, GitStatus | null>` — no `undefined`
+                // distinction to branch on — so widening the copy is the
+                // only option here.
                 title: !gitStatus
-                  ? "Not a git repository"
+                  ? host
+                    ? "Not a git repository, or the host is unreachable."
+                    : "Not a git repository"
                   : gitStatus.behind === 0
                     ? "Already up to date with tracking branch"
                     : `Pull ${gitStatus.behind} commit${gitStatus.behind === 1 ? "" : "s"} from tracking branch`,
