@@ -998,12 +998,16 @@ function ProjectHeader({
                 // honest read there; a remote-hosted project's null is
                 // genuinely ambiguous, so its label says so rather than
                 // asserting a specific cause that might be wrong (Hermes
-                // review, PR #1366). The store's gitStatuses type is
-                // `Record<number, GitStatus | null>` — no `undefined`
-                // distinction to branch on — so widening the copy is the
-                // only option here.
+                // review, PR #1366). The branch must key on
+                // `project.hostId !== LOCAL_HOST_ID`, NOT on the `host`
+                // lookup at line 821 — the latter is `hosts.find(...)`,
+                // which is `undefined` whenever the hosts list hasn't
+                // loaded yet, collapsing the "remote ambiguous" case back
+                // to "not a repo" on first mount and defeating the fix
+                // (Hermes review, PR #1366, line 1006). SourceControlSection.tsx:193
+                // uses the same direct-property check.
                 title: !gitStatus
-                  ? host
+                  ? project.hostId !== LOCAL_HOST_ID
                     ? "Not a git repository, or the host is unreachable."
                     : "Not a git repository"
                   : gitStatus.behind === 0
@@ -1020,7 +1024,18 @@ function ProjectHeader({
                       // a missing-reason response never falls through silently.
                       setPullError(formatPullReasonMessage(result.reason, result.detail));
                     }
-                    await useDashboardStore.getState().refreshGitStatuses();
+                    // Hermes review, PR #1366, line 1023 — other pull
+                    // surfaces invalidate refs too (SourceControlSection.tsx:254
+                    // and GitPanel.tsx:280 both fire `refreshGitRefs` after a
+                    // successful pull). Without this call, branch labels and
+                    // diff stats stay stale until their own poll tick lands.
+                    // SourceControlSection also writes a fresh status
+                    // into the store inline; refreshGitStatuses covers the
+                    // same data path here without the per-project round-trip.
+                    await Promise.all([
+                      useDashboardStore.getState().refreshGitStatuses(),
+                      useDashboardStore.getState().refreshGitRefs([project.id]),
+                    ]);
                   } catch (err) {
                     setPullError(err instanceof Error ? err.message : "Pull failed — try again.");
                   }

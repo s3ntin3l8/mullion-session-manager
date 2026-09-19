@@ -34,6 +34,7 @@ const refreshHosts = vi.fn().mockResolvedValue(undefined);
 const refreshDevices = vi.fn().mockResolvedValue(undefined);
 const refreshTasks = vi.fn().mockResolvedValue(undefined);
 const refreshGitStatuses = vi.fn().mockResolvedValue(undefined);
+const refreshGitRefs = vi.fn().mockResolvedValue(undefined);
 const pullProjectGit = vi.fn().mockResolvedValue({ pulled: true });
 const createProject = vi.fn().mockResolvedValue(undefined);
 const deleteProject = vi.fn().mockResolvedValue(undefined);
@@ -75,6 +76,7 @@ function storeState() {
     refreshHosts,
     refreshTasks,
     refreshGitStatuses,
+    refreshGitRefs,
     pullProjectGit,
     createProject,
     deleteProject,
@@ -201,6 +203,7 @@ beforeEach(() => {
   gitStatuses = {};
   setViewMode.mockClear();
   refreshGitStatuses.mockClear();
+  refreshGitRefs.mockClear();
   pullProjectGit.mockClear();
   pullProjectGit.mockResolvedValue({ pulled: true });
   localStorage.clear();
@@ -744,10 +747,12 @@ describe("Sidebar git pull kebab entry", () => {
     // not a repo, never fetched yet, and the agent host being unreachable.
     // Hermes review, PR #1366 — the kebab item's title must NOT assert
     // "Not a git repository" alone there; match SourceControlSection's own
-    // ambiguous copy.
-    const remoteHost = makeHost({ id: "remote-1", name: "agent-box" });
-    hosts = [remoteHost];
-    projects = [makeProject({ id: PROJECT.id, hostId: "remote-1" })];
+    // ambiguous copy. Branches on `project.hostId !== LOCAL_HOST_ID`
+    // (direct property check), NOT on the `host` variable (which is
+    // `hosts.find(...)` and is `undefined` when the hosts list hasn't
+    // loaded yet — the original implementation's bug). No need to seed
+    // `hosts` here: the production condition reads `project.hostId` directly.
+    projects = [makeProject({ id: PROJECT.id, hostId: "remote-host-id" })];
     gitStatuses = { [PROJECT.id]: null };
     renderSidebar();
     const user = userEvent.setup();
@@ -789,7 +794,7 @@ describe("Sidebar git pull kebab entry", () => {
     expect(item.closest("button")).toHaveAttribute("title", "Pull 3 commits from tracking branch");
   });
 
-  it("calls pullProjectGit and refreshGitStatuses when clicked", async () => {
+  it("calls pullProjectGit, refreshGitStatuses, and refreshGitRefs when clicked", async () => {
     gitStatuses = { [PROJECT.id]: makeGitStatus({ behind: 1 }) };
     renderSidebar();
     const user = userEvent.setup();
@@ -799,7 +804,11 @@ describe("Sidebar git pull kebab entry", () => {
     await waitFor(() => {
       expect(pullProjectGit).toHaveBeenCalledWith(PROJECT.id);
     });
+    // Hermes review, PR #1366 — other pull surfaces invalidate refs too
+    // (SourceControlSection.tsx:254, GitPanel.tsx:280), so without this
+    // call branch labels and diff stats stay stale until their own poll.
     expect(refreshGitStatuses).toHaveBeenCalled();
+    expect(refreshGitRefs).toHaveBeenCalledWith([PROJECT.id]);
   });
 
   it("surfaces a refused pull as an inline error (dirty tree / not-fast-forward / etc.)", async () => {

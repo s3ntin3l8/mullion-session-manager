@@ -337,10 +337,13 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
           <input
             ref={renameInputRef}
             className="pane-tab-rename-input"
-            // Belt-and-suspenders with terminal.css's `width: 100%` — pin
-            // the JSX size too so the UA `size=20` intrinsic hint can't
-            // fight the CSS on its own. See terminal.css for the why.
-            size={1}
+            // Hermes review, PR #1366, line 117 — `size={1}` was added in
+            // PR #1366 alongside a `width: 100%` CSS declaration, both
+            // intended to fix a "rename input stuck at small size" bug.
+            // Both turned out to be inert (`flex: 1` + `min-width: 0` on
+            // the CSS already covers what they were trying to add, and the
+            // repro couldn't be captured). Reverting the JSX pin too —
+            // see terminal.css's own comment on the matching CSS revert.
             value={draftName}
             onChange={(e) => setDraftName(e.target.value)}
             onKeyDown={(e) => {

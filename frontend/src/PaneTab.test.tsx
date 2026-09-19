@@ -817,28 +817,22 @@ describe("PaneTab", () => {
     });
   });
 
-  // Issue: rename input stuck at small size — `<input>` elements have an
-  // intrinsic preferred width from their UA `size=20` (~190px) that the flex
-  // container will try to honor even when `flex: 1` says "grow". Pinning
-  // `size={1}` on the JSX plus `width: 100%` on the CSS is what makes the
-  // input fill its parent in the rendered DOM. This test asserts both the
-  // JSX pin and the rendered structure (.pane-tab-actions wraps close +
-  // kebab so the grid keeps them at the right edge — see terminal.css's
-  // own grid-template-columns note).
+  // The .pane-tab-actions cluster keeps close + ⋯ pinned to the right
+  // edge of the dockview tab strip regardless of title length — the
+  // 1fr/auto grid split guarantees it. These tests assert the rendered
+  // structure rather than specific computed widths because jsdom can't
+  // lay out CSS; the live-viewport Playwright check in the original PR's
+  // /tmp/opencode/verify.mjs is what proves the visual effect.
   describe("rename input rendering", () => {
-    it("replaces the title span with an input that pins size=1 (no UA-default ~190px intrinsic)", async () => {
+    it("replaces the title span with an input on rename entry", async () => {
       const props = makeProps();
       render(<PaneTab {...props} />);
 
-      // Enter rename mode by double-clicking the title.
       const title = screen.getByText("claude code");
       await userEvent.dblClick(title);
 
       const input = screen.getByDisplayValue("claude code");
       expect(input.tagName).toBe("INPUT");
-      // `size={1}` on the JSX side — the CSS `width: 100%` is a separate
-      // assertion below against the rendered element.
-      expect(input).toHaveAttribute("size", "1");
     });
 
     it("commits a typed name on Enter, exercising the input's onChange + onKeyDown arms", async () => {
