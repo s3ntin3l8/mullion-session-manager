@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { useDashboardStore } from "../../store/index.js";
 import { useShallow } from "zustand/react/shallow";
 import { api, ApiError } from "../../api/index.js";
@@ -73,6 +73,7 @@ export function DevicesSection() {
   const pairDevice = useDashboardStore((s) => s.pairDevice);
   const connectPhysicalDevice = useDashboardStore((s) => s.connectPhysicalDevice);
   const terminateDevice = useDashboardStore((s) => s.terminateDevice);
+  const updateDeviceAddress = useDashboardStore((s) => s.updateDeviceAddress);
 
   // Distinguishes "not loaded yet" from "loaded and genuinely empty" — the
   // store's `devices` starts as `[]`, so (unlike BridgesSection's own
@@ -175,6 +176,15 @@ export function DevicesSection() {
       cancelled = true;
     };
   }, [newAvdOpen]);
+
+  // Issue #1347 — editing a physical device's stored adb address in place,
+  // without delete-and-recreate. Keyed by device id (not a boolean) so only
+  // one row's form is open at a time, same "single open form" shape the
+  // create form above already has.
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editAddress, setEditAddress] = useState("");
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
 
   const refresh = () => {
     refreshDevices()
@@ -314,6 +324,35 @@ export function DevicesSection() {
       });
   };
 
+  const startEdit = (device: Device) => {
+    setEditingId(device.id);
+    setEditAddress(device.serial ?? "");
+    setEditError(null);
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditError(null);
+  };
+
+  const submitEdit = (device: Device) => {
+    if (editSaving) return;
+    const address = editAddress.trim();
+    if (!address) return;
+    setEditError(null);
+    setEditSaving(true);
+    updateDeviceAddress(device.id, address)
+      .then(() => {
+        setEditingId(null);
+      })
+      .catch((err: unknown) => {
+        setEditError(
+          err instanceof ApiError ? err.message : "Could not update this device's address",
+        );
+      })
+      .finally(() => setEditSaving(false));
+  };
+
   return (
     <>
       <GroupHeading
@@ -324,37 +363,75 @@ export function DevicesSection() {
       {loaded && devices.length > 0 && (
         <StyledList>
           {devices.map((device) => (
-            <ListRow
-              key={device.id}
-              testId={`device-row-${device.id}`}
-              dot={deviceDotClass(device)}
-              title={device.name || device.avdName || device.serial}
-              subtitle={device.avdName ?? device.serial}
-              unavailable={device.status === "killed"}
-              trailing={
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span style={{ fontSize: 10.5, color: "var(--dim)" }}>
-                    {describeDevice(device)}
-                  </span>
-                  {device.status === "active" && (
-                    <ConfirmButton
-                      // Hermes review (PR #1341) — softened from "its panel
-                      // closes": nothing in this action closes an already-open
-                      // device-<id> panel (that would need a DockviewApi this
-                      // Settings-owned slice doesn't have, per the design's
-                      // own "Settings owns no DockviewApi" reasoning above);
-                      // DevicePane just goes on to show a disconnected/stopped
-                      // state once its emulator/scrcpy session is torn down.
-                      title={`Stop ${device.name || device.avdName || device.serial} — its emulator/scrcpy session is torn down; any open panel for it shows disconnected instead of closing`}
-                      onConfirm={() => remove(device)}
-                      disabled={deleting[device.id] ?? false}
+            <Fragment key={device.id}>
+              <ListRow
+                testId={`device-row-${device.id}`}
+                dot={deviceDotClass(device)}
+                title={device.name || device.avdName || device.serial}
+                subtitle={device.avdName ?? device.serial}
+                unavailable={device.status === "killed"}
+                trailing={
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontSize: 10.5, color: "var(--dim)" }}>
+                      {describeDevice(device)}
+                    </span>
+                    {device.kind === "physical" && device.status === "active" && (
+                      <SecondaryButton
+                        onClick={() => (editingId === device.id ? cancelEdit() : startEdit(device))}
+                      >
+                        {editingId === device.id ? "Cancel" : "Edit address"}
+                      </SecondaryButton>
+                    )}
+                    {device.status === "active" && (
+                      <ConfirmButton
+                        // Hermes review (PR #1341) — softened from "its panel
+                        // closes": nothing in this action closes an already-open
+                        // device-<id> panel (that would need a DockviewApi this
+                        // Settings-owned slice doesn't have, per the design's
+                        // own "Settings owns no DockviewApi" reasoning above);
+                        // DevicePane just goes on to show a disconnected/stopped
+                        // state once its emulator/scrcpy session is torn down.
+                        title={`Stop ${device.name || device.avdName || device.serial} — its emulator/scrcpy session is torn down; any open panel for it shows disconnected instead of closing`}
+                        onConfirm={() => remove(device)}
+                        disabled={deleting[device.id] ?? false}
+                      >
+                        Delete
+                      </ConfirmButton>
+                    )}
+                  </div>
+                }
+              />
+              {editingId === device.id && (
+                <div style={{ padding: "8px 12px" }}>
+                  <Row
+                    label="New address"
+                    desc="From the phone's Developer options -> Wireless debugging screen — host:port, e.g. 192.168.1.23:37251. Re-pair above first if the phone requires a fresh pairing code."
+                  >
+                    <div className="settings-numberfield" style={{ width: 220 }}>
+                      <input
+                        style={{ flex: 1, textAlign: "left", width: "auto" }}
+                        placeholder="192.168.1.23:37251"
+                        value={editAddress}
+                        onChange={(e) => setEditAddress(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") submitEdit(device);
+                        }}
+                        autoFocus
+                      />
+                    </div>
+                  </Row>
+                  <div style={{ marginTop: 8 }}>
+                    <SecondaryButton
+                      onClick={() => submitEdit(device)}
+                      disabled={editSaving || !editAddress.trim()}
                     >
-                      Delete
-                    </ConfirmButton>
-                  )}
+                      {editSaving ? "Saving…" : "Save"}
+                    </SecondaryButton>
+                  </div>
+                  {editError && <ErrorText style={{ marginTop: 8 }}>{editError}</ErrorText>}
                 </div>
-              }
-            />
+              )}
+            </Fragment>
           ))}
         </StyledList>
       )}

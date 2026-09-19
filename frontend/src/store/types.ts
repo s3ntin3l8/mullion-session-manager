@@ -461,6 +461,10 @@ export interface DevicesSlice {
   // The `kind: "physical"` counterpart to createDevice.
   connectPhysicalDevice: (address: string, name?: string) => Promise<Device>;
   terminateDevice: (id: number) => Promise<void>;
+  // Edits a physical device's stored adb address in place (issue #1347) —
+  // reconnects against the new address without losing the row's id/name/
+  // history, unlike terminateDevice+createDevice.
+  updateDeviceAddress: (id: number, address: string) => Promise<Device>;
 }
 
 export interface UiSlice {

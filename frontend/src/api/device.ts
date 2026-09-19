@@ -28,4 +28,13 @@ export const devicesApi = {
     request<{ ok: true }>("/api/devices/pair", { method: "POST", body: JSON.stringify(body) }),
 
   terminateDevice: (id: number) => request<void>(`/api/devices/${id}`, { method: "DELETE" }),
+
+  // Physical-only — edits a device's stored adb address in place and
+  // reconnects against it, without losing the row's id/name/history. See
+  // routes/devices.ts's own comment on why an emulator row rejects this.
+  updateDeviceAddress: (id: number, address: string) =>
+    request<Device>(`/api/devices/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ address }),
+    }),
 };
