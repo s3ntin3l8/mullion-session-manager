@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.3.26](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.25...v0.3.26) (2026-09-20)
+
+
+### Features
+
+* attach a physical Android device over wireless debugging ([#1349](https://github.com/s3ntin3l8/mullion-session-manager/issues/1349)) ([62fc63a](https://github.com/s3ntin3l8/mullion-session-manager/commit/62fc63ab0670cf2d07b60ec5d39cb9d7a48a36f7))
+* create an AVD from the UI ([#1354](https://github.com/s3ntin3l8/mullion-session-manager/issues/1354)) ([befb8bb](https://github.com/s3ntin3l8/mullion-session-manager/commit/befb8bb385550530dd1b432c45ef861526408791))
+* edit a physical device's adb address without recreating the row ([#1355](https://github.com/s3ntin3l8/mullion-session-manager/issues/1355)) ([b60c6eb](https://github.com/s3ntin3l8/mullion-session-manager/commit/b60c6eb2c0ba0c1798b1a9dc3380c4ea94c0d474))
+* explicit operator "Re-review" action for a stalled review agent ([#1362](https://github.com/s3ntin3l8/mullion-session-manager/issues/1362)) ([914c89e](https://github.com/s3ntin3l8/mullion-session-manager/commit/914c89e3519e4a0fd773ee1039e571619f531dd2))
+* install, uninstall, and manage Android system images from the UI ([24759ab](https://github.com/s3ntin3l8/mullion-session-manager/commit/24759abd899535eb7e317fa2cd8edcc47b84d98e))
+* polish tab chrome ([29a48aa](https://github.com/s3ntin3l8/mullion-session-manager/commit/29a48aa997870cbcc4f8e66712edd1853a1b3937))
+* restyle the sign-in screen to match Mullion's design system ([#1351](https://github.com/s3ntin3l8/mullion-session-manager/issues/1351)) ([7e01d9f](https://github.com/s3ntin3l8/mullion-session-manager/commit/7e01d9fbc954a068469edaf0a1893aefd9530103))
+
+
+### Bug Fixes
+
+* autoReturnTask doesn't reset claimedAt, so a returned worker can be budget-killed instantly ([#1359](https://github.com/s3ntin3l8/mullion-session-manager/issues/1359)) ([ed1bddf](https://github.com/s3ntin3l8/mullion-session-manager/commit/ed1bddf8703eabb12f423ec1714567706fff0c6e))
+* classify agy quota exhaustion as a rate_limit stop_failure (partial fix for [#1356](https://github.com/s3ntin3l8/mullion-session-manager/issues/1356)) ([#1364](https://github.com/s3ntin3l8/mullion-session-manager/issues/1364)) ([a18da3f](https://github.com/s3ntin3l8/mullion-session-manager/commit/a18da3ffcae175372de067b5ca1fe7dbc25e4360))
+* pin onSpawnError assertion in the fire-and-forget spawn() test (flaky on CI) ([#1367](https://github.com/s3ntin3l8/mullion-session-manager/issues/1367)) ([f00be36](https://github.com/s3ntin3l8/mullion-session-manager/commit/f00be36af48992a48a10d1dabd897addba217f0b))
+* reject a second physical device row for an adb address already active ([#1353](https://github.com/s3ntin3l8/mullion-session-manager/issues/1353)) ([a9ede07](https://github.com/s3ntin3l8/mullion-session-manager/commit/a9ede07e9944e9f3523106d09c9f1ebe4d3fc522))
+* surface CI-auto-return ([#755](https://github.com/s3ntin3l8/mullion-session-manager/issues/755)) is a silent no-op on the default GitHub App permission set ([#1361](https://github.com/s3ntin3l8/mullion-session-manager/issues/1361)) ([3ce9f32](https://github.com/s3ntin3l8/mullion-session-manager/commit/3ce9f327c60ffa2cce329f1b0fcf82e20c3fffa8))
+
 ## [0.3.25](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.24...v0.3.25) (2026-09-18)
 
 
