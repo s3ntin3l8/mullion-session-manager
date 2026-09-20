@@ -11,6 +11,7 @@ interface UseSystemImageInstallReturn {
   status: Status;
   progress: string[];
   error: string | null;
+  errorCode: string | null;
   reset: () => void;
 }
 
@@ -18,6 +19,7 @@ export function useSystemImageInstall(): UseSystemImageInstallReturn {
   const [status, setStatus] = useState<Status>("idle");
   const [progress, setProgress] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [errorCode, setErrorCode] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
   const cleanup = useCallback(() => {
@@ -33,6 +35,7 @@ export function useSystemImageInstall(): UseSystemImageInstallReturn {
       setStatus("running");
       setProgress([]);
       setError(null);
+      setErrorCode(null);
 
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const ws = new WebSocket(`${protocol}//${window.location.host}/ws/system-image-install`);
@@ -56,6 +59,7 @@ export function useSystemImageInstall(): UseSystemImageInstallReturn {
             case "error":
               setStatus("error");
               setError(msg.message);
+              setErrorCode(msg.code ?? null);
               cleanup();
               break;
           }
@@ -92,11 +96,12 @@ export function useSystemImageInstall(): UseSystemImageInstallReturn {
     setStatus("idle");
     setProgress([]);
     setError(null);
+    setErrorCode(null);
   }, [cleanup]);
 
   // Close the socket on unmount so the server-side op isn't left running
   // while the component that owns it is gone (e.g. tab-switch in Settings).
   useEffect(() => cleanup, [cleanup]);
 
-  return { install, uninstall, status, progress, error, reset };
+  return { install, uninstall, status, progress, error, errorCode, reset };
 }

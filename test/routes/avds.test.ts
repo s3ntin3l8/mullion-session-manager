@@ -427,7 +427,7 @@ describe("avds routes", () => {
         expect(vi.mocked(listAvailableSystemImages)).toHaveBeenCalledTimes(1);
 
         // 2) Complete an install via WS — this clears the cache.
-        vi.mocked(installSystemImage).mockResolvedValue({ ok: true });
+        vi.mocked(installSystemImage).mockResolvedValue(undefined);
         const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/system-image-install`);
         const msgs = collectJsonMessages(ws);
         await waitForOpen(ws);

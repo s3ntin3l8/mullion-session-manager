@@ -16,6 +16,4 @@ export const avdsApi = {
 
   createAvd: (body: { name: string; systemImage: string; deviceProfile: string }) =>
     request<{ name: string }>("/api/avds", { method: "POST", body: JSON.stringify(body) }),
-
-  getLicenseStatus: () => request<{ pending: boolean }>("/api/sdk-licenses/status"),
 };

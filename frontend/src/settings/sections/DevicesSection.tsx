@@ -234,18 +234,13 @@ export function DevicesSection() {
   };
 
   // Detect license rejection errors from install and open the license modal.
-  // sdkmanager --install fails with a license-related message when licenses
-  // haven't been accepted yet — this is the only time we need the modal.
+  // The backend signals license errors with a structured code field.
   useEffect(() => {
-    if (
-      installOp.status === "error" &&
-      installOp.error &&
-      /accept|license|not accepted/i.test(installOp.error)
-    ) {
+    if (installOp.status === "error" && installOp.errorCode === "license") {
       setPendingInstallPath(pendingInstallRef.current);
       setShowLicenseModal(true);
     }
-  }, [installOp.status, installOp.error]);
+  }, [installOp.status, installOp.errorCode]);
 
   const handleLicenseAccept = () => {
     licenseOp.accept(() => {

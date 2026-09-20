@@ -315,6 +315,9 @@ export async function avdsRoute(app: FastifyInstance): Promise<void> {
             JSON.stringify({
               type: "error",
               message: err instanceof Error ? err.message : String(err),
+              ...(err instanceof Error && "code" in err
+                ? { code: (err as { code?: string }).code }
+                : {}),
             }),
           );
         }

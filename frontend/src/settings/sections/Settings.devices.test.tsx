@@ -72,7 +72,6 @@ describe("Settings -> Devices (issue #1326)", () => {
     installed: boolean;
   }>;
   let availableImagesShouldFail: boolean;
-  let sdkLicensesPending: boolean;
   let fetchMock: ReturnType<typeof vi.fn>;
   let unexpectedCalls: string[];
 
@@ -108,7 +107,6 @@ describe("Settings -> Devices (issue #1326)", () => {
       },
     ];
     availableImagesShouldFail = false;
-    sdkLicensesPending = false;
 
     ({ fetchMock, unexpectedCalls } = mockFetch({
       "GET /api/hosts": () => jsonResponse(200, []),
@@ -209,7 +207,6 @@ describe("Settings -> Devices (issue #1326)", () => {
         availableImagesShouldFail
           ? jsonResponse(500, { message: "sdkmanager not found" })
           : jsonResponse(200, { systemImages: availableImagesDb }),
-      "GET /api/sdk-licenses/status": () => jsonResponse(200, { pending: sdkLicensesPending }),
     }));
     vi.stubGlobal("fetch", fetchMock);
 
@@ -794,7 +791,9 @@ describe("Settings -> Devices (issue #1326)", () => {
     )!;
     act(() => installWs.triggerOpen());
     act(() =>
-      installWs.triggerMessage(JSON.stringify({ type: "error", message: "licenses not accepted" })),
+      installWs.triggerMessage(
+        JSON.stringify({ type: "error", message: "licenses not accepted", code: "license" }),
+      ),
     );
 
     // License modal should appear after the license-related error
@@ -831,7 +830,11 @@ describe("Settings -> Devices (issue #1326)", () => {
     act(() => installWs.triggerOpen());
     act(() =>
       installWs.triggerMessage(
-        JSON.stringify({ type: "error", message: "Accept? (y/N): licenses not accepted" }),
+        JSON.stringify({
+          type: "error",
+          message: "Accept? (y/N): licenses not accepted",
+          code: "license",
+        }),
       ),
     );
     await screen.findByText("Accept SDK licenses");
@@ -877,7 +880,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     act(() => installWs.triggerOpen());
     act(() =>
       installWs.triggerMessage(
-        JSON.stringify({ type: "error", message: "license acceptance required" }),
+        JSON.stringify({ type: "error", message: "license acceptance required", code: "license" }),
       ),
     );
     await screen.findByText("Accept SDK licenses");

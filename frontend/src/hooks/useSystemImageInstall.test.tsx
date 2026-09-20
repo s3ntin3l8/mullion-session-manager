@@ -125,6 +125,29 @@ describe("useSystemImageInstall", () => {
 
     expect(result.current.status).toBe("error");
     expect(result.current.error).toBe("Install failed");
+    expect(result.current.errorCode).toBeNull();
+  });
+
+  it("error message with code surfaces errorCode", () => {
+    const { result } = renderHook(() => useSystemImageInstall());
+
+    act(() => result.current.install("system-images;android-35;google_apis;x86_64"));
+    const ws = MockWebSocket.instances[0];
+    act(() => ws.triggerOpen());
+
+    act(() =>
+      ws.triggerMessage(
+        JSON.stringify({
+          type: "error",
+          message: "licenses not accepted",
+          code: "license",
+        }),
+      ),
+    );
+
+    expect(result.current.status).toBe("error");
+    expect(result.current.error).toBe("licenses not accepted");
+    expect(result.current.errorCode).toBe("license");
   });
 
   it("WebSocket error sets error state", () => {

@@ -373,15 +373,21 @@ export async function installSystemImage(
     const child = execFileFn(
       sdkmanagerPath,
       ["--install", packagePath, "--sdk_root", sdkRoot],
-      (error, _stdout, stderr) => {
+      (error, stdout, stderr) => {
         if (settled) return;
         settled = true;
         armed?.clearOnSettle();
         if (error) {
-          // Prefer stderr over the generic Node error message — sdkmanager
-          // writes the real reason (e.g. license rejection) to stderr.
-          const msg = typeof stderr === "string" && stderr.trim() ? stderr.trim() : error.message;
-          reject(new Error(msg));
+          // Combine stdout and stderr — the license rejection message
+          // may appear on either stream depending on SDK version.
+          const stdoutStr = typeof stdout === "string" ? stdout.trim() : "";
+          const stderrStr = typeof stderr === "string" ? stderr.trim() : "";
+          const msg = [stdoutStr, stderrStr].filter(Boolean).join("\n") || error.message;
+          const err = new Error(msg);
+          if (/accept|license|not accepted/i.test(msg)) {
+            (err as Error & { code?: string }).code = "license";
+          }
+          reject(err);
           return;
         }
         resolve();
@@ -429,12 +435,14 @@ export async function uninstallSystemImage(
     const child = execFileFn(
       sdkmanagerPath,
       ["--uninstall", packagePath, "--sdk_root", sdkRoot],
-      (error, _stdout, stderr) => {
+      (error, stdout, stderr) => {
         if (settled) return;
         settled = true;
         armed?.clearOnSettle();
         if (error) {
-          const msg = typeof stderr === "string" && stderr.trim() ? stderr.trim() : error.message;
+          const stdoutStr = typeof stdout === "string" ? stdout.trim() : "";
+          const stderrStr = typeof stderr === "string" ? stderr.trim() : "";
+          const msg = [stdoutStr, stderrStr].filter(Boolean).join("\n") || error.message;
           reject(new Error(msg));
           return;
         }
