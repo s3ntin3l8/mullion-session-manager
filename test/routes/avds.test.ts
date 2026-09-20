@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { WebSocket } from "ws";
 // Must come before any import below that could itself trigger loading
 // "node-pty"/"node:child_process" — see test/helpers/mock-pty.ts's header
 // comment for the empirically confirmed hoisting/ordering failure mode.
@@ -433,5 +434,558 @@ describe("avds routes", () => {
       expect(res.json()).toEqual({ pending: true });
       expect(vi.mocked(hasPendingLicenses)).toHaveBeenCalledWith("/opt/sdk");
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WebSocket integration tests — real listening server, real WS client.
+// app.inject() can't drive a full WebSocket upgrade; these tests build +
+// listen on a random port and connect with a `ws` client, same harness
+// shape as test/routes/ws-tasks.test.ts.
+// ---------------------------------------------------------------------------
+
+function collectJsonMessages(ws: WebSocket): unknown[] {
+  const messages: unknown[] = [];
+  ws.on("message", (data) => {
+    messages.push(JSON.parse(String(data)));
+  });
+  return messages;
+}
+
+function waitForOpen(ws: WebSocket): Promise<void> {
+  return new Promise((resolve) => ws.on("open", () => resolve(), { once: true }));
+}
+
+async function waitUntil(check: () => boolean, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (check()) return;
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  throw new Error("condition never became true within timeout");
+}
+
+describe("WS /ws/system-image-install", () => {
+  async function buildAndListen() {
+    const app = await buildTestApp();
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    const address = app.server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("expected a real bound address");
+    }
+    return { app, port: address.port };
+  }
+
+  beforeEach(() => {
+    vi.mocked(listInstalledSystemImages).mockReturnValue([
+      { packagePath: "system-images;android-35;google_apis;x86_64" },
+    ]);
+    vi.mocked(listAvailableSystemImages).mockResolvedValue([
+      {
+        packagePath: "system-images;android-35;google_apis;x86_64",
+        installed: false,
+        apiLevel: 35,
+        tag: "google_apis",
+        abi: "x86_64",
+      },
+    ]);
+  });
+
+  afterEach(() => {
+    delete process.env.DEVICE_ENABLED;
+    delete process.env.DEVICE_SDKMANAGER_PATH;
+    delete process.env.DEVICE_ANDROID_SDK_ROOT;
+  });
+
+  it("rejects invalid JSON", async () => {
+    process.env.DEVICE_ENABLED = "true";
+    process.env.DEVICE_SDKMANAGER_PATH = "/opt/sdk/sdkmanager";
+    process.env.DEVICE_ANDROID_SDK_ROOT = "/opt/sdk";
+    const { app, port } = await buildAndListen();
+    try {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/system-image-install`);
+      const msgs = collectJsonMessages(ws);
+      await waitForOpen(ws);
+      ws.send("not json");
+      await waitUntil(() => msgs.length > 0);
+      expect(msgs[0]).toEqual({ type: "error", message: "Invalid JSON" });
+      ws.close();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects unknown message type", async () => {
+    process.env.DEVICE_ENABLED = "true";
+    process.env.DEVICE_SDKMANAGER_PATH = "/opt/sdk/sdkmanager";
+    process.env.DEVICE_ANDROID_SDK_ROOT = "/opt/sdk";
+    const { app, port } = await buildAndListen();
+    try {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/system-image-install`);
+      const msgs = collectJsonMessages(ws);
+      await waitForOpen(ws);
+      ws.send(
+        JSON.stringify({
+          type: "delete",
+          packagePath: "system-images;android-35;google_apis;x86_64",
+        }),
+      );
+      await waitUntil(() => msgs.length > 0);
+      expect(msgs[0]).toEqual({ type: "error", message: 'type must be "install" or "uninstall"' });
+      ws.close();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects missing/invalid packagePath", async () => {
+    process.env.DEVICE_ENABLED = "true";
+    process.env.DEVICE_SDKMANAGER_PATH = "/opt/sdk/sdkmanager";
+    process.env.DEVICE_ANDROID_SDK_ROOT = "/opt/sdk";
+    const { app, port } = await buildAndListen();
+    try {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/system-image-install`);
+      const msgs = collectJsonMessages(ws);
+      await waitForOpen(ws);
+      ws.send(JSON.stringify({ type: "install", packagePath: "not-a-system-image" }));
+      await waitUntil(() => msgs.length > 0);
+      expect(msgs[0]).toEqual({ type: "error", message: "Invalid packagePath" });
+      ws.close();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects when DEVICE_ENABLED is not set", async () => {
+    process.env.DEVICE_SDKMANAGER_PATH = "/opt/sdk/sdkmanager";
+    process.env.DEVICE_ANDROID_SDK_ROOT = "/opt/sdk";
+    const { app, port } = await buildAndListen();
+    try {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/system-image-install`);
+      const msgs = collectJsonMessages(ws);
+      await waitForOpen(ws);
+      ws.send(
+        JSON.stringify({
+          type: "install",
+          packagePath: "system-images;android-35;google_apis;x86_64",
+        }),
+      );
+      await waitUntil(() => msgs.length > 0);
+      expect(msgs[0]).toEqual({
+        type: "error",
+        message: "Device panel is disabled or DEVICE_SDKMANAGER_PATH is not configured",
+      });
+      ws.close();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects when DEVICE_ANDROID_SDK_ROOT is not set", async () => {
+    process.env.DEVICE_ENABLED = "true";
+    process.env.DEVICE_SDKMANAGER_PATH = "/opt/sdk/sdkmanager";
+    const { app, port } = await buildAndListen();
+    try {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/system-image-install`);
+      const msgs = collectJsonMessages(ws);
+      await waitForOpen(ws);
+      ws.send(
+        JSON.stringify({
+          type: "install",
+          packagePath: "system-images;android-35;google_apis;x86_64",
+        }),
+      );
+      await waitUntil(() => msgs.length > 0);
+      expect(msgs[0]).toEqual({
+        type: "error",
+        message: "DEVICE_ANDROID_SDK_ROOT is not configured",
+      });
+      ws.close();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects packagePath not in installed or available list", async () => {
+    process.env.DEVICE_ENABLED = "true";
+    process.env.DEVICE_SDKMANAGER_PATH = "/opt/sdk/sdkmanager";
+    process.env.DEVICE_ANDROID_SDK_ROOT = "/opt/sdk";
+    vi.mocked(listAvailableSystemImages).mockResolvedValue([]);
+    const { app, port } = await buildAndListen();
+    try {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/system-image-install`);
+      const msgs = collectJsonMessages(ws);
+      await waitForOpen(ws);
+      ws.send(
+        JSON.stringify({ type: "install", packagePath: "system-images;android-99;fake;x86_64" }),
+      );
+      await waitUntil(() => msgs.length > 0);
+      expect(msgs[0]).toEqual({
+        type: "error",
+        message: "packagePath is not in the installed or available images list",
+      });
+      ws.close();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("successful install streams progress and done", async () => {
+    process.env.DEVICE_ENABLED = "true";
+    process.env.DEVICE_SDKMANAGER_PATH = "/opt/sdk/sdkmanager";
+    process.env.DEVICE_ANDROID_SDK_ROOT = "/opt/sdk";
+    vi.mocked(installSystemImage).mockImplementation(async (_sdkmanager, _sdkRoot, _pkg, opts) => {
+      opts?.onLine?.("Installing...");
+      opts?.onLine?.("Done.");
+    });
+    const { app, port } = await buildAndListen();
+    try {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/system-image-install`);
+      const msgs = collectJsonMessages(ws);
+      await waitForOpen(ws);
+      ws.send(
+        JSON.stringify({
+          type: "install",
+          packagePath: "system-images;android-35;google_apis;x86_64",
+        }),
+      );
+      await waitUntil(() => msgs.some((m) => (m as { type: string }).type === "done"));
+      expect(msgs).toEqual([
+        { type: "progress", message: "Installing..." },
+        { type: "progress", message: "Done." },
+        { type: "done" },
+      ]);
+      ws.close();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("successful uninstall streams progress and done", async () => {
+    process.env.DEVICE_ENABLED = "true";
+    process.env.DEVICE_SDKMANAGER_PATH = "/opt/sdk/sdkmanager";
+    process.env.DEVICE_ANDROID_SDK_ROOT = "/opt/sdk";
+    vi.mocked(uninstallSystemImage).mockImplementation(
+      async (_sdkmanager, _sdkRoot, _pkg, opts) => {
+        opts?.onLine?.("Removing...");
+        opts?.onLine?.("Removed.");
+      },
+    );
+    const { app, port } = await buildAndListen();
+    try {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/system-image-install`);
+      const msgs = collectJsonMessages(ws);
+      await waitForOpen(ws);
+      ws.send(
+        JSON.stringify({
+          type: "uninstall",
+          packagePath: "system-images;android-35;google_apis;x86_64",
+        }),
+      );
+      await waitUntil(() => msgs.some((m) => (m as { type: string }).type === "done"));
+      expect(msgs).toEqual([
+        { type: "progress", message: "Removing..." },
+        { type: "progress", message: "Removed." },
+        { type: "done" },
+      ]);
+      ws.close();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("install error sends error message", async () => {
+    process.env.DEVICE_ENABLED = "true";
+    process.env.DEVICE_SDKMANAGER_PATH = "/opt/sdk/sdkmanager";
+    process.env.DEVICE_ANDROID_SDK_ROOT = "/opt/sdk";
+    vi.mocked(installSystemImage).mockRejectedValue(new Error("Package not found"));
+    const { app, port } = await buildAndListen();
+    try {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/system-image-install`);
+      const msgs = collectJsonMessages(ws);
+      await waitForOpen(ws);
+      ws.send(
+        JSON.stringify({
+          type: "install",
+          packagePath: "system-images;android-35;google_apis;x86_64",
+        }),
+      );
+      await waitUntil(() => msgs.some((m) => (m as { type: string }).type === "error"));
+      expect(msgs[0]).toEqual({ type: "error", message: "Package not found" });
+      ws.close();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects concurrent operations from different sockets", async () => {
+    process.env.DEVICE_ENABLED = "true";
+    process.env.DEVICE_SDKMANAGER_PATH = "/opt/sdk/sdkmanager";
+    process.env.DEVICE_ANDROID_SDK_ROOT = "/opt/sdk";
+    vi.mocked(installSystemImage).mockImplementation(async (_sdkmanager, _sdkRoot, _pkg, opts) => {
+      opts?.onLine?.("starting");
+      return new Promise(() => {});
+    });
+    const { app, port } = await buildAndListen();
+    try {
+      const ws1 = new WebSocket(`ws://127.0.0.1:${port}/ws/system-image-install`);
+      const msgs1 = collectJsonMessages(ws1);
+      await waitForOpen(ws1);
+      ws1.send(
+        JSON.stringify({
+          type: "install",
+          packagePath: "system-images;android-35;google_apis;x86_64",
+        }),
+      );
+      await waitUntil(() => msgs1.length >= 1);
+      const ws2 = new WebSocket(`ws://127.0.0.1:${port}/ws/system-image-install`);
+      const msgs2 = collectJsonMessages(ws2);
+      await waitForOpen(ws2);
+      ws2.send(
+        JSON.stringify({
+          type: "install",
+          packagePath: "system-images;android-35;google_apis;x86_64",
+        }),
+      );
+      await waitUntil(() => msgs2.length >= 1);
+      expect(msgs1[0]).toEqual({ type: "progress", message: "starting" });
+      expect(msgs2[0]).toEqual({
+        type: "error",
+        message: "An SDK operation is already in progress",
+      });
+      ws1.close();
+      ws2.close();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("second message while active=true on same socket is rejected", async () => {
+    process.env.DEVICE_ENABLED = "true";
+    process.env.DEVICE_SDKMANAGER_PATH = "/opt/sdk/sdkmanager";
+    process.env.DEVICE_ANDROID_SDK_ROOT = "/opt/sdk";
+    vi.mocked(installSystemImage).mockImplementation(async (_sdkmanager, _sdkRoot, _pkg, opts) => {
+      opts?.onLine?.("starting");
+      return new Promise(() => {});
+    });
+    const { app, port } = await buildAndListen();
+    try {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/system-image-install`);
+      const msgs = collectJsonMessages(ws);
+      await waitForOpen(ws);
+      ws.send(
+        JSON.stringify({
+          type: "install",
+          packagePath: "system-images;android-35;google_apis;x86_64",
+        }),
+      );
+      await waitUntil(() => msgs.length >= 1);
+      ws.send(
+        JSON.stringify({
+          type: "install",
+          packagePath: "system-images;android-35;google_apis;x86_64",
+        }),
+      );
+      await waitUntil(() => msgs.length >= 2);
+      expect(msgs[1]).toEqual({ type: "error", message: "Operation already in progress" });
+      ws.close();
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+describe("WS /ws/sdk-licenses", () => {
+  async function buildAndListen() {
+    const app = await buildTestApp();
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    const address = app.server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("expected a real bound address");
+    }
+    return { app, port: address.port };
+  }
+
+  afterEach(() => {
+    delete process.env.DEVICE_ENABLED;
+    delete process.env.DEVICE_SDKMANAGER_PATH;
+    delete process.env.DEVICE_ANDROID_SDK_ROOT;
+  });
+
+  it("rejects invalid JSON", async () => {
+    process.env.DEVICE_ENABLED = "true";
+    process.env.DEVICE_SDKMANAGER_PATH = "/opt/sdk/sdkmanager";
+    process.env.DEVICE_ANDROID_SDK_ROOT = "/opt/sdk";
+    const { app, port } = await buildAndListen();
+    try {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/sdk-licenses`);
+      const msgs = collectJsonMessages(ws);
+      await waitForOpen(ws);
+      ws.send("not json");
+      await waitUntil(() => msgs.length > 0);
+      expect(msgs[0]).toEqual({ type: "error", message: "Invalid JSON" });
+      ws.close();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects unknown message type", async () => {
+    process.env.DEVICE_ENABLED = "true";
+    process.env.DEVICE_SDKMANAGER_PATH = "/opt/sdk/sdkmanager";
+    process.env.DEVICE_ANDROID_SDK_ROOT = "/opt/sdk";
+    const { app, port } = await buildAndListen();
+    try {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/sdk-licenses`);
+      const msgs = collectJsonMessages(ws);
+      await waitForOpen(ws);
+      ws.send(JSON.stringify({ type: "reject-licenses" }));
+      await waitUntil(() => msgs.length > 0);
+      expect(msgs[0]).toEqual({ type: "error", message: 'type must be "accept-licenses"' });
+      ws.close();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects when DEVICE_ENABLED is not set", async () => {
+    process.env.DEVICE_SDKMANAGER_PATH = "/opt/sdk/sdkmanager";
+    process.env.DEVICE_ANDROID_SDK_ROOT = "/opt/sdk";
+    const { app, port } = await buildAndListen();
+    try {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/sdk-licenses`);
+      const msgs = collectJsonMessages(ws);
+      await waitForOpen(ws);
+      ws.send(JSON.stringify({ type: "accept-licenses" }));
+      await waitUntil(() => msgs.length > 0);
+      expect(msgs[0]).toEqual({
+        type: "error",
+        message: "Device panel is disabled or DEVICE_SDKMANAGER_PATH is not configured",
+      });
+      ws.close();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects when DEVICE_ANDROID_SDK_ROOT is not set", async () => {
+    process.env.DEVICE_ENABLED = "true";
+    process.env.DEVICE_SDKMANAGER_PATH = "/opt/sdk/sdkmanager";
+    const { app, port } = await buildAndListen();
+    try {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/sdk-licenses`);
+      const msgs = collectJsonMessages(ws);
+      await waitForOpen(ws);
+      ws.send(JSON.stringify({ type: "accept-licenses" }));
+      await waitUntil(() => msgs.length > 0);
+      expect(msgs[0]).toEqual({
+        type: "error",
+        message: "DEVICE_ANDROID_SDK_ROOT is not configured",
+      });
+      ws.close();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("successful acceptance streams progress and done", async () => {
+    process.env.DEVICE_ENABLED = "true";
+    process.env.DEVICE_SDKMANAGER_PATH = "/opt/sdk/sdkmanager";
+    process.env.DEVICE_ANDROID_SDK_ROOT = "/opt/sdk";
+    vi.mocked(acceptLicenses).mockImplementation(async (_sdkmanager, _sdkRoot, opts) => {
+      opts?.onLine?.("Accepting licenses...");
+      opts?.onLine?.("All SDK package licenses accepted");
+    });
+    const { app, port } = await buildAndListen();
+    try {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/sdk-licenses`);
+      const msgs = collectJsonMessages(ws);
+      await waitForOpen(ws);
+      ws.send(JSON.stringify({ type: "accept-licenses" }));
+      await waitUntil(() => msgs.some((m) => (m as { type: string }).type === "done"));
+      expect(msgs).toEqual([
+        { type: "progress", message: "Accepting licenses..." },
+        { type: "progress", message: "All SDK package licenses accepted" },
+        { type: "done" },
+      ]);
+      ws.close();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("acceptance error sends error message", async () => {
+    process.env.DEVICE_ENABLED = "true";
+    process.env.DEVICE_SDKMANAGER_PATH = "/opt/sdk/sdkmanager";
+    process.env.DEVICE_ANDROID_SDK_ROOT = "/opt/sdk";
+    vi.mocked(acceptLicenses).mockRejectedValue(new Error("sdkmanager not found"));
+    const { app, port } = await buildAndListen();
+    try {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/sdk-licenses`);
+      const msgs = collectJsonMessages(ws);
+      await waitForOpen(ws);
+      ws.send(JSON.stringify({ type: "accept-licenses" }));
+      await waitUntil(() => msgs.some((m) => (m as { type: string }).type === "error"));
+      expect(msgs[0]).toEqual({ type: "error", message: "sdkmanager not found" });
+      ws.close();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects concurrent operations from different sockets", async () => {
+    process.env.DEVICE_ENABLED = "true";
+    process.env.DEVICE_SDKMANAGER_PATH = "/opt/sdk/sdkmanager";
+    process.env.DEVICE_ANDROID_SDK_ROOT = "/opt/sdk";
+    vi.mocked(acceptLicenses).mockImplementation(async (_sdkmanager, _sdkRoot, opts) => {
+      opts?.onLine?.("starting");
+      return new Promise(() => {});
+    });
+    const { app, port } = await buildAndListen();
+    try {
+      const ws1 = new WebSocket(`ws://127.0.0.1:${port}/ws/sdk-licenses`);
+      const msgs1 = collectJsonMessages(ws1);
+      await waitForOpen(ws1);
+      ws1.send(JSON.stringify({ type: "accept-licenses" }));
+      await waitUntil(() => msgs1.length >= 1);
+      const ws2 = new WebSocket(`ws://127.0.0.1:${port}/ws/sdk-licenses`);
+      const msgs2 = collectJsonMessages(ws2);
+      await waitForOpen(ws2);
+      ws2.send(JSON.stringify({ type: "accept-licenses" }));
+      await waitUntil(() => msgs2.length >= 1);
+      expect(msgs1[0]).toEqual({ type: "progress", message: "starting" });
+      expect(msgs2[0]).toEqual({
+        type: "error",
+        message: "An SDK operation is already in progress",
+      });
+      ws1.close();
+      ws2.close();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("second message while active=true on same socket is rejected", async () => {
+    process.env.DEVICE_ENABLED = "true";
+    process.env.DEVICE_SDKMANAGER_PATH = "/opt/sdk/sdkmanager";
+    process.env.DEVICE_ANDROID_SDK_ROOT = "/opt/sdk";
+    vi.mocked(acceptLicenses).mockImplementation(async (_sdkmanager, _sdkRoot, opts) => {
+      opts?.onLine?.("starting");
+      return new Promise(() => {});
+    });
+    const { app, port } = await buildAndListen();
+    try {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/sdk-licenses`);
+      const msgs = collectJsonMessages(ws);
+      await waitForOpen(ws);
+      ws.send(JSON.stringify({ type: "accept-licenses" }));
+      await waitUntil(() => msgs.length >= 1);
+      ws.send(JSON.stringify({ type: "accept-licenses" }));
+      await waitUntil(() => msgs.length >= 2);
+      expect(msgs[1]).toEqual({ type: "error", message: "License acceptance already in progress" });
+      ws.close();
+    } finally {
+      await app.close();
+    }
   });
 });

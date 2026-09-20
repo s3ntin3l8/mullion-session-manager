@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import { EventEmitter } from "node:events";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -546,6 +547,107 @@ describe("uninstallSystemImage", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// Streaming variant: fake child with EventEmitter-based stdout/stderr so
+// the `child.stdout.on("data")` / `child.stderr.on("data")` handlers in
+// installSystemImage/uninstallSystemImage are exercised. The execFileFn
+// captures the callback and invokes it after emitting stream data.
+interface StreamingFakeChild extends FakeChild {
+  stdout: EventEmitter;
+  stderr: EventEmitter;
+}
+
+function makeStreamingFakeChild(): StreamingFakeChild {
+  return {
+    kill: vi.fn(),
+    exitCode: null,
+    signalCode: null,
+    stdin: { end: vi.fn() },
+    stdout: new EventEmitter(),
+    stderr: new EventEmitter(),
+  };
+}
+
+function fakeExecFileStreaming(
+  child: StreamingFakeChild,
+  opts: { error?: Error; stdoutData?: string; stderrData?: string } = {},
+): ExecFileFn {
+  return vi.fn((_file: string, _args: string[], callback: unknown) => {
+    queueMicrotask(() => {
+      if (opts.stdoutData) child.stdout.emit("data", Buffer.from(opts.stdoutData));
+      if (opts.stderrData) child.stderr.emit("data", Buffer.from(opts.stderrData));
+      (callback as (error: Error | null, stdout: string, stderr: string) => void)(
+        opts.error ?? null,
+        "",
+        "",
+      );
+    });
+    return child;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- matches execFile's shape, not full overload set
+  }) as any;
+}
+
+describe("installSystemImage — stdout/stderr streaming", () => {
+  it("streams stdout lines via onLine callback", async () => {
+    const child = makeStreamingFakeChild();
+    const onLine = vi.fn();
+    const execFileFn = fakeExecFileStreaming(child, { stdoutData: "Installing package\nDone.\n" });
+
+    await installSystemImage(
+      "/opt/sdk/sdkmanager",
+      "/opt/sdk",
+      "system-images;android-35;google_apis;x86_64",
+      { execFileFn, onLine },
+    );
+    expect(onLine).toHaveBeenCalledWith("Installing package");
+    expect(onLine).toHaveBeenCalledWith("Done.");
+  });
+
+  it("streams stderr lines via onLine callback", async () => {
+    const child = makeStreamingFakeChild();
+    const onLine = vi.fn();
+    const execFileFn = fakeExecFileStreaming(child, { stderrData: "Warning: old version\n" });
+
+    await installSystemImage(
+      "/opt/sdk/sdkmanager",
+      "/opt/sdk",
+      "system-images;android-35;google_apis;x86_64",
+      { execFileFn, onLine },
+    );
+    expect(onLine).toHaveBeenCalledWith("Warning: old version");
+  });
+});
+
+describe("uninstallSystemImage — stdout/stderr streaming", () => {
+  it("streams stdout lines via onLine callback", async () => {
+    const child = makeStreamingFakeChild();
+    const onLine = vi.fn();
+    const execFileFn = fakeExecFileStreaming(child, { stdoutData: "Removing package\nDone.\n" });
+
+    await uninstallSystemImage(
+      "/opt/sdk/sdkmanager",
+      "/opt/sdk",
+      "system-images;android-35;google_apis;x86_64",
+      { execFileFn, onLine },
+    );
+    expect(onLine).toHaveBeenCalledWith("Removing package");
+    expect(onLine).toHaveBeenCalledWith("Done.");
+  });
+
+  it("streams stderr lines via onLine callback", async () => {
+    const child = makeStreamingFakeChild();
+    const onLine = vi.fn();
+    const execFileFn = fakeExecFileStreaming(child, { stderrData: "Warning: not installed\n" });
+
+    await uninstallSystemImage(
+      "/opt/sdk/sdkmanager",
+      "/opt/sdk",
+      "system-images;android-35;google_apis;x86_64",
+      { execFileFn, onLine },
+    );
+    expect(onLine).toHaveBeenCalledWith("Warning: not installed");
   });
 });
 

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor, within, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Settings } from "../../Settings.js";
 import { useDashboardStore } from "../../store/index.js";
@@ -14,6 +14,43 @@ import { resetStore } from "../../test/resetStore.js";
 // backend (through the real `devices` store slice, not a mocked one), so the
 // component/store/api wiring the plan's own risk list calls out is what's
 // under test here, not a hand-picked mock.
+// Mock WebSocket for the install/license WS hooks.
+class MockWebSocket {
+  static instances: MockWebSocket[] = [];
+  url: string;
+  readyState = 0;
+  sent: string[] = [];
+  onopen: (() => void) | null = null;
+  onmessage: ((event: { data: string }) => void) | null = null;
+  onerror: (() => void) | null = null;
+  onclose: (() => void) | null = null;
+
+  constructor(url: string) {
+    this.url = url;
+    MockWebSocket.instances.push(this);
+  }
+  triggerOpen() {
+    this.readyState = 1;
+    this.onopen?.();
+  }
+  triggerMessage(data: string) {
+    this.onmessage?.({ data });
+  }
+  triggerError() {
+    this.onerror?.();
+  }
+  triggerClose() {
+    this.readyState = 3;
+    this.onclose?.();
+  }
+  send(data: string) {
+    this.sent.push(data);
+  }
+  close() {
+    this.triggerClose();
+  }
+}
+
 describe("Settings -> Devices (issue #1326)", () => {
   let devicesDb: Device[];
   let devicesShouldFail: boolean;
@@ -26,6 +63,16 @@ describe("Settings -> Devices (issue #1326)", () => {
   let systemImagesDb: SystemImage[];
   let deviceProfilesDb: string[];
   let avdCreateCalls: unknown[];
+  let availableImagesDb: Array<{
+    packagePath: string;
+    apiLevel: string;
+    tag: string;
+    tagDisplay: string;
+    abi: string;
+    installed: boolean;
+  }>;
+  let availableImagesShouldFail: boolean;
+  let sdkLicensesPending: boolean;
   let fetchMock: ReturnType<typeof vi.fn>;
   let unexpectedCalls: string[];
 
@@ -50,6 +97,18 @@ describe("Settings -> Devices (issue #1326)", () => {
     ];
     deviceProfilesDb = ["pixel_6"];
     avdCreateCalls = [];
+    availableImagesDb = [
+      {
+        packagePath: "system-images;android-35;google_apis;x86_64",
+        apiLevel: "35",
+        tag: "google_apis",
+        tagDisplay: "Google APIs",
+        abi: "x86_64",
+        installed: true,
+      },
+    ];
+    availableImagesShouldFail = false;
+    sdkLicensesPending = false;
 
     ({ fetchMock, unexpectedCalls } = mockFetch({
       "GET /api/hosts": () => jsonResponse(200, []),
@@ -147,23 +206,18 @@ describe("Settings -> Devices (issue #1326)", () => {
         return jsonResponse(200, updated);
       },
       "GET /api/system-images/available": () =>
-        jsonResponse(200, {
-          systemImages: [
-            {
-              packagePath: "system-images;android-35;google_apis;x86_64",
-              apiLevel: "35",
-              tag: "google_apis",
-              tagDisplay: "Google APIs",
-              abi: "x86_64",
-              installed: true,
-            },
-          ],
-        }),
-      "GET /api/sdk-licenses/status": () => jsonResponse(200, { pending: false }),
+        availableImagesShouldFail
+          ? jsonResponse(500, { message: "sdkmanager not found" })
+          : jsonResponse(200, { systemImages: availableImagesDb }),
+      "GET /api/sdk-licenses/status": () => jsonResponse(200, { pending: sdkLicensesPending }),
     }));
     vi.stubGlobal("fetch", fetchMock);
 
     resetStore({ devices: [] });
+
+    // Mock WebSocket for the system image install and SDK license hooks.
+    MockWebSocket.instances = [];
+    vi.stubGlobal("WebSocket", MockWebSocket);
   });
 
   afterEach(() => {
@@ -530,5 +584,324 @@ describe("Settings -> Devices (issue #1326)", () => {
 
     const row = await screen.findByTestId("device-row-1");
     expect(within(row).queryByRole("button", { name: "Edit address" })).not.toBeInTheDocument();
+  });
+
+  // ---------------------------------------------------------------------------
+  // SDK system images section
+  // ---------------------------------------------------------------------------
+
+  it("SDK section shows 'Load available images' button initially", async () => {
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+    expect(
+      await screen.findByRole("button", { name: "Load available images" }),
+    ).toBeInTheDocument();
+  });
+
+  it("clicking 'Load available images' fetches and shows the list with Install/Uninstall buttons", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(await screen.findByRole("button", { name: "Load available images" }));
+
+    // The installed image shows an Uninstall button; filter tabs appear.
+    await waitFor(() => {
+      expect(screen.getByText(/Google APIs/)).toBeInTheDocument();
+    });
+    expect(screen.getByText("Not installed")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Uninstall/ })).toBeInTheDocument();
+  });
+
+  it("shows available images error when the fetch fails", async () => {
+    availableImagesShouldFail = true;
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(screen.getByRole("button", { name: "Load available images" }));
+
+    expect(await screen.findByText("sdkmanager not found")).toBeInTheDocument();
+  });
+
+  it("filter tabs switch between All / Not installed / Installed", async () => {
+    availableImagesDb = [
+      {
+        packagePath: "system-images;android-35;google_apis;x86_64",
+        apiLevel: "35",
+        tag: "google_apis",
+        tagDisplay: "Google APIs",
+        abi: "x86_64",
+        installed: true,
+      },
+      {
+        packagePath: "system-images;android-35;google_apis;arm64-v8a",
+        apiLevel: "35",
+        tag: "google_apis",
+        tagDisplay: "Google APIs",
+        abi: "arm64-v8a",
+        installed: false,
+      },
+    ];
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(await screen.findByRole("button", { name: "Load available images" }));
+
+    // "All" is default — both images visible (wait for the list to load)
+    await waitFor(() => {
+      expect(screen.getAllByText(/Google APIs/).length).toBeGreaterThanOrEqual(2);
+    });
+
+    // "Not installed" filter — only arm64-v8a image remains
+    await user.click(screen.getByRole("button", { name: "Not installed" }));
+    await waitFor(() => {
+      expect(screen.getAllByText(/arm64-v8a/).length).toBeGreaterThanOrEqual(1);
+      expect(screen.queryByText(/x86_64.*Uninstall/)).not.toBeInTheDocument();
+    });
+
+    // "Installed" filter — only x86_64 image remains
+    await user.click(screen.getByRole("button", { name: "Installed" }));
+    await waitFor(() => {
+      expect(screen.getAllByText(/x86_64/).length).toBeGreaterThanOrEqual(1);
+      expect(screen.queryByText(/arm64-v8a.*Install/)).not.toBeInTheDocument();
+    });
+  });
+
+  it("empty filter state shows correct message when no images match", async () => {
+    availableImagesDb = [];
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(await screen.findByRole("button", { name: "Load available images" }));
+
+    expect(await screen.findByText("No system images available.")).toBeInTheDocument();
+  });
+
+  it("installing an image opens the WS connection and shows progress", async () => {
+    availableImagesDb = [
+      {
+        packagePath: "system-images;android-35;google_apis;x86_64",
+        apiLevel: "35",
+        tag: "google_apis",
+        tagDisplay: "Google APIs",
+        abi: "x86_64",
+        installed: false,
+      },
+    ];
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(await screen.findByRole("button", { name: "Load available images" }));
+    await user.click(await screen.findByRole("button", { name: "Install" }));
+
+    // WS should have been created for the install operation
+    await waitFor(() => {
+      expect(
+        MockWebSocket.instances.some((ws) => ws.url.includes("/ws/system-image-install")),
+      ).toBe(true);
+    });
+
+    // Trigger the WS open and progress
+    const installWs = MockWebSocket.instances.find((ws) =>
+      ws.url.includes("/ws/system-image-install"),
+    )!;
+    act(() => installWs.triggerOpen());
+    act(() =>
+      installWs.triggerMessage(JSON.stringify({ type: "progress", message: "Installing..." })),
+    );
+    act(() => installWs.triggerMessage(JSON.stringify({ type: "progress", message: "Done." })));
+
+    expect(screen.getByText("Installing...")).toBeInTheDocument();
+    expect(screen.getByText("Done.")).toBeInTheDocument();
+  });
+
+  it("install done shows completion message", async () => {
+    availableImagesDb = [
+      {
+        packagePath: "system-images;android-35;google_apis;x86_64",
+        apiLevel: "35",
+        tag: "google_apis",
+        tagDisplay: "Google APIs",
+        abi: "x86_64",
+        installed: false,
+      },
+    ];
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(await screen.findByRole("button", { name: "Load available images" }));
+    await user.click(await screen.findByRole("button", { name: "Install" }));
+
+    const installWs = MockWebSocket.instances.find((ws) =>
+      ws.url.includes("/ws/system-image-install"),
+    )!;
+    act(() => installWs.triggerOpen());
+    act(() => installWs.triggerMessage(JSON.stringify({ type: "done" })));
+
+    expect(await screen.findByText("Operation complete.")).toBeInTheDocument();
+  });
+
+  it("install error shows the error message", async () => {
+    availableImagesDb = [
+      {
+        packagePath: "system-images;android-35;google_apis;x86_64",
+        apiLevel: "35",
+        tag: "google_apis",
+        tagDisplay: "Google APIs",
+        abi: "x86_64",
+        installed: false,
+      },
+    ];
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(await screen.findByRole("button", { name: "Load available images" }));
+    await user.click(await screen.findByRole("button", { name: "Install" }));
+
+    const installWs = MockWebSocket.instances.find((ws) =>
+      ws.url.includes("/ws/system-image-install"),
+    )!;
+    act(() => installWs.triggerOpen());
+    act(() =>
+      installWs.triggerMessage(JSON.stringify({ type: "error", message: "Package not found" })),
+    );
+
+    expect(await screen.findByText("Package not found")).toBeInTheDocument();
+  });
+
+  it("license modal appears when licenses are pending and install is clicked", async () => {
+    sdkLicensesPending = true;
+    availableImagesDb = [
+      {
+        packagePath: "system-images;android-35;google_apis;x86_64",
+        apiLevel: "35",
+        tag: "google_apis",
+        tagDisplay: "Google APIs",
+        abi: "x86_64",
+        installed: false,
+      },
+    ];
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(await screen.findByRole("button", { name: "Load available images" }));
+    await user.click(await screen.findByRole("button", { name: "Install" }));
+
+    // License modal should appear
+    expect(await screen.findByText("Accept SDK licenses")).toBeInTheDocument();
+    expect(screen.getByText(/Some SDK packages require accepting/)).toBeInTheDocument();
+  });
+
+  it("clicking 'Accept licenses' in modal opens the license WS", async () => {
+    sdkLicensesPending = true;
+    availableImagesDb = [
+      {
+        packagePath: "system-images;android-35;google_apis;x86_64",
+        apiLevel: "35",
+        tag: "google_apis",
+        tagDisplay: "Google APIs",
+        abi: "x86_64",
+        installed: false,
+      },
+    ];
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(await screen.findByRole("button", { name: "Load available images" }));
+    await user.click(await screen.findByRole("button", { name: "Install" }));
+    await screen.findByText("Accept SDK licenses");
+
+    await user.click(screen.getByRole("button", { name: "Accept licenses" }));
+
+    // WS should have been created for the license operation
+    await waitFor(() => {
+      expect(MockWebSocket.instances.some((ws) => ws.url.includes("/ws/sdk-licenses"))).toBe(true);
+    });
+
+    const licenseWs = MockWebSocket.instances.find((ws) => ws.url.includes("/ws/sdk-licenses"))!;
+    act(() => licenseWs.triggerOpen());
+    expect(licenseWs.sent).toEqual([JSON.stringify({ type: "accept-licenses" })]);
+  });
+
+  it("license accept done closes modal and triggers install", async () => {
+    sdkLicensesPending = true;
+    availableImagesDb = [
+      {
+        packagePath: "system-images;android-35;google_apis;x86_64",
+        apiLevel: "35",
+        tag: "google_apis",
+        tagDisplay: "Google APIs",
+        abi: "x86_64",
+        installed: false,
+      },
+    ];
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(await screen.findByRole("button", { name: "Load available images" }));
+    await user.click(await screen.findByRole("button", { name: "Install" }));
+    await screen.findByText("Accept SDK licenses");
+
+    await user.click(screen.getByRole("button", { name: "Accept licenses" }));
+
+    const licenseWs = MockWebSocket.instances.find((ws) => ws.url.includes("/ws/sdk-licenses"))!;
+    act(() => licenseWs.triggerOpen());
+    act(() => licenseWs.triggerMessage(JSON.stringify({ type: "done" })));
+
+    // Modal should close, license WS done triggers install
+    await waitFor(() => {
+      expect(screen.queryByText("Accept SDK licenses")).not.toBeInTheDocument();
+    });
+
+    // Install WS should have been created
+    await waitFor(() => {
+      expect(
+        MockWebSocket.instances.some((ws) => ws.url.includes("/ws/system-image-install")),
+      ).toBe(true);
+    });
+  });
+
+  it("license check failure proceeds with install anyway", async () => {
+    // Make the license status endpoint fail — the handler should catch and proceed.
+    // We need to override just the license status route. Since mockFetch doesn't
+    // support per-route replacement after creation, we rely on the fact that the
+    // default `availableImagesShouldFail = false` means the available-images
+    // endpoint works, but we need a separate mechanism for the license status.
+    // The simplest approach: make the fetch mock throw for that specific path.
+    const originalFetchMock = fetchMock as unknown as (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => Promise<Response>;
+    const overrideFetch = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/sdk-licenses/status") {
+        return Promise.reject(new Error("Network error"));
+      }
+      return originalFetchMock(input, init);
+    });
+    fetchMock = overrideFetch as typeof fetchMock;
+    vi.stubGlobal("fetch", fetchMock);
+
+    availableImagesDb = [
+      {
+        packagePath: "system-images;android-35;google_apis;x86_64",
+        apiLevel: "35",
+        tag: "google_apis",
+        tagDisplay: "Google APIs",
+        abi: "x86_64",
+        installed: false,
+      },
+    ];
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(await screen.findByRole("button", { name: "Load available images" }));
+    await user.click(await screen.findByRole("button", { name: "Install" }));
+
+    // No license modal should appear — the catch branch proceeds directly
+    await waitFor(() => {
+      expect(
+        MockWebSocket.instances.some((ws) => ws.url.includes("/ws/system-image-install")),
+      ).toBe(true);
+    });
+    expect(screen.queryByText("Accept SDK licenses")).not.toBeInTheDocument();
   });
 });
