@@ -328,7 +328,9 @@ as the other `DEVICE_*_PATH` vars.
   Validates `packagePath` against the allowlist from `GET /api/system-images/available`
   before spawning the subprocess. Streams `{type: "progress", message}` lines
   from `sdkmanager --install`/`--uninstall` stdout, and `{type: "done"}` or
-  `{type: "error", message}` on completion. Only one SDK operation at a time
+  `{type: "error", message, code?}` on completion. The optional `code` field
+  is set to `"license"` when the failure is a license rejection — the frontend
+  uses this to open the accept-licenses modal. Only one SDK operation at a time
   is allowed (concurrent requests get rejected with `{type: "error"}`).
 - **`/ws/sdk-licenses`** — WebSocket endpoint for license acceptance.
   Accepts `{type: "accept-licenses"}` messages. Runs `yes | sdkmanager --licenses`

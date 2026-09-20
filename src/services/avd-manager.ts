@@ -380,11 +380,15 @@ export async function installSystemImage(
         if (error) {
           // Combine stdout and stderr — the license rejection message
           // may appear on either stream depending on SDK version.
+          // Bound to the last 10 lines to avoid flooding the UI with
+          // the full license text sdkmanager prints to stdout.
           const stdoutStr = typeof stdout === "string" ? stdout.trim() : "";
           const stderrStr = typeof stderr === "string" ? stderr.trim() : "";
-          const msg = [stdoutStr, stderrStr].filter(Boolean).join("\n") || error.message;
+          const combined = [stdoutStr, stderrStr].filter(Boolean).join("\n") || error.message;
+          const lines = combined.split("\n");
+          const msg = lines.slice(-10).join("\n");
           const err = new Error(msg);
-          if (/accept|license|not accepted/i.test(msg)) {
+          if (/accept|license|not accepted/i.test(combined)) {
             (err as Error & { code?: string }).code = "license";
           }
           reject(err);
@@ -442,7 +446,9 @@ export async function uninstallSystemImage(
         if (error) {
           const stdoutStr = typeof stdout === "string" ? stdout.trim() : "";
           const stderrStr = typeof stderr === "string" ? stderr.trim() : "";
-          const msg = [stdoutStr, stderrStr].filter(Boolean).join("\n") || error.message;
+          const combined = [stdoutStr, stderrStr].filter(Boolean).join("\n") || error.message;
+          const lines = combined.split("\n");
+          const msg = lines.slice(-10).join("\n");
           reject(new Error(msg));
           return;
         }
