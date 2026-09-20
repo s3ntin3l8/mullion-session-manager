@@ -336,6 +336,6 @@ as the other `DEVICE_*_PATH` vars.
   on the host, streams progress lines, and reports done/error. Handles the
   quirk where `sdkmanager --licenses` exits 1 on some SDK versions even on
   success by checking stderr for the "accepted" string instead.
-- **`GET /api/sdk-licenses/status`** — returns `{pending: boolean}`. Runs
-  `sdkmanager --licenses --simulate` to check whether any licenses are
-  still pending without actually accepting them.
+- **`GET /api/sdk-licenses/status`** — returns `{pending: boolean}`. Checks
+  whether the `licenses/` directory under the SDK root exists and is
+  non-empty to determine if licenses still need acceptance.
