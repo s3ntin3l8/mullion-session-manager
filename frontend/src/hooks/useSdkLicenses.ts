@@ -1,7 +1,7 @@
 // WebSocket hook for SDK license acceptance. Manages the WS lifecycle,
 // accumulates progress lines, and surfaces done/error states.
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 type Status = "idle" | "running" | "done" | "error";
 
@@ -86,6 +86,9 @@ export function useSdkLicenses(): UseSdkLicensesReturn {
     setProgress([]);
     setError(null);
   }, [cleanup]);
+
+  // Close the socket on unmount so the server-side op isn't left running.
+  useEffect(() => cleanup, [cleanup]);
 
   return { accept, status, progress, error, reset };
 }

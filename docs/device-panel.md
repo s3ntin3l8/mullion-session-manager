@@ -319,10 +319,9 @@ as the other `DEVICE_*_PATH` vars.
 - **`GET /api/system-images/available`** — runs `sdkmanager --list` against
   Google's repository, parses the tabular output into structured objects
   (`{packagePath, apiLevel, tag, tagDisplay, abi, installed}`), auto-filters
-  by host ABI (`process.arch` → Android ABI mapping), deduplicates by
-  `{apiLevel, tag}` (picks newest API if duplicates exist), and marks
+  by host ABI (`process.arch` → Android ABI mapping), and marks
   which are already installed locally. Results are cached in-memory for 5
-  minutes to avoid repeated network fetches. Falls back to empty list if
+  minutes to avoid repeated network fetches. Returns 400 if
   `sdkmanager --list` times out (60s) or fails.
 - **`/ws/system-image-install`** — WebSocket endpoint for install/uninstall
   operations. Accepts `{type: "install"|"uninstall", packagePath}` messages.

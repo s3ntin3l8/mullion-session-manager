@@ -324,7 +324,7 @@ describe("createAvd", () => {
   });
 });
 
-const REAL_SDKMANAGER_LIST_OUTPUT = `Available packages:
+const REAL_SDKMANAGER_LIST_OUTPUT = `Available Packages:
   Path                      | Version | Description
   -------                   | ------- | -----------
   system-images;android-35;google_apis;x86_64 | 7 | Google APIs x86_64 System Image
@@ -335,9 +335,9 @@ const REAL_SDKMANAGER_LIST_OUTPUT = `Available packages:
 
 describe("parseSdkManagerList", () => {
   it("parses sdkmanager --list output into AvailableSystemImage objects for host ABI", () => {
-    const result = parseSdkManagerList(REAL_SDKMANAGER_LIST_OUTPUT, []);
-    // Only host-ABI images are returned (process.arch dependent)
-    expect(result.every((img) => img.packagePath.startsWith("system-images;"))).toBe(true);
+    const result = parseSdkManagerList(REAL_SDKMANAGER_LIST_OUTPUT, [], "x86_64");
+    expect(result.length).toBe(2);
+    expect(result.every((img) => img.abi === "x86_64")).toBe(true);
   });
 
   it("marks images as installed when they appear in the installed set", () => {
@@ -349,20 +349,20 @@ describe("parseSdkManagerList", () => {
         abi: "x86_64",
       },
     ];
-    const result = parseSdkManagerList(REAL_SDKMANAGER_LIST_OUTPUT, installed);
+    const result = parseSdkManagerList(REAL_SDKMANAGER_LIST_OUTPUT, installed, "x86_64");
     const x86Img = result.find((img) => img.abi === "x86_64");
     expect(x86Img?.installed).toBe(true);
   });
 
   it("returns empty array when output has no matching lines", () => {
-    const result = parseSdkManagerList("no system images here\n", []);
+    const result = parseSdkManagerList("no system images here\n", [], "x86_64");
     expect(result).toEqual([]);
   });
 
   it("handles output without Available Packages: header", () => {
     const output = `  system-images;android-35;google_apis;x86_64 | 7 | Google APIs x86_64 System Image\n`;
-    const result = parseSdkManagerList(output, []);
-    expect(result.length).toBeGreaterThanOrEqual(0);
+    const result = parseSdkManagerList(output, [], "x86_64");
+    expect(result.length).toBe(1);
   });
 
   it("sorts by API level descending, then tag alphabetically", () => {
@@ -371,11 +371,10 @@ describe("parseSdkManagerList", () => {
       "  system-images;android-34;default;x86_64 | 6 | Default x86_64",
       "  system-images;android-35;google_apis;x86_64 | 7 | Google APIs x86_64",
     ].join("\n");
-    const result = parseSdkManagerList(output, []);
-    if (result.length === 2) {
-      expect(result[0].apiLevel).toBe("35");
-      expect(result[1].apiLevel).toBe("34");
-    }
+    const result = parseSdkManagerList(output, [], "x86_64");
+    expect(result.length).toBe(2);
+    expect(result[0].apiLevel).toBe("35");
+    expect(result[1].apiLevel).toBe("34");
   });
 
   it("sorts tags alphabetically when API levels are equal", () => {
@@ -384,11 +383,10 @@ describe("parseSdkManagerList", () => {
       "  system-images;android-35;google_apis_playstore;x86_64 | 7 | Play Store x86_64",
       "  system-images;android-35;google_apis;x86_64 | 7 | Google APIs x86_64",
     ].join("\n");
-    const result = parseSdkManagerList(output, []);
-    if (result.length === 2) {
-      expect(result[0].tag).toBe("google_apis");
-      expect(result[1].tag).toBe("google_apis_playstore");
-    }
+    const result = parseSdkManagerList(output, [], "x86_64");
+    expect(result.length).toBe(2);
+    expect(result[0].tag).toBe("google_apis");
+    expect(result[1].tag).toBe("google_apis_playstore");
   });
 });
 
@@ -552,41 +550,8 @@ describe("uninstallSystemImage", () => {
 });
 
 describe("hasPendingLicenses", () => {
-  function withFixtureSdkRoot(build: (sdkRoot: string) => void): void {
-    const sdkRoot = mkdtempSync(path.join(os.tmpdir(), "avd-manager-license-test-"));
-    try {
-      build(sdkRoot);
-    } finally {
-      rmSync(sdkRoot, { recursive: true, force: true });
-    }
-  }
-
-  it("returns true when licenses directory does not exist", () => {
-    withFixtureSdkRoot((sdkRoot) => {
-      expect(hasPendingLicenses(sdkRoot)).toBe(true);
-    });
-  });
-
-  it("returns true when licenses directory is empty", () => {
-    withFixtureSdkRoot((sdkRoot) => {
-      mkdirSync(path.join(sdkRoot, "licenses"), { recursive: true });
-      expect(hasPendingLicenses(sdkRoot)).toBe(true);
-    });
-  });
-
-  it("returns false when licenses directory has entries", () => {
-    withFixtureSdkRoot((sdkRoot) => {
-      const licensesDir = path.join(sdkRoot, "licenses");
-      mkdirSync(licensesDir, { recursive: true });
-      writeFileSync(
-        path.join(licensesDir, "android-sdk-license"),
-        "d56f5187479451eabf01fb78af6dfcb131a6481e\n",
-      );
-      expect(hasPendingLicenses(sdkRoot)).toBe(false);
-    });
-  });
-
-  it("returns true for nonexistent SDK root", () => {
+  it("always returns true (conservative: can't know which hashes are needed without running sdkmanager)", () => {
+    expect(hasPendingLicenses("/any/sdk/root")).toBe(true);
     expect(hasPendingLicenses("/nonexistent/sdk/root")).toBe(true);
   });
 });

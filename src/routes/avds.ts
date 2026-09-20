@@ -321,6 +321,10 @@ export async function avdsRoute(app: FastifyInstance): Promise<void> {
       } finally {
         sdkOperationInProgress = false;
         active = false;
+        // Invalidate the available-images cache so the next GET refreshes
+        // from the network — the just-installed/uninstalled image's
+        // `installed` flag would otherwise stay stale for up to 5 min.
+        availableImagesCache.clear();
       }
     });
 

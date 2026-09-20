@@ -1,7 +1,7 @@
 // WebSocket hook for system image install/uninstall operations. Manages the
 // WS lifecycle, accumulates progress lines, and surfaces done/error states.
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 type Status = "idle" | "running" | "done" | "error";
 
@@ -93,6 +93,10 @@ export function useSystemImageInstall(): UseSystemImageInstallReturn {
     setProgress([]);
     setError(null);
   }, [cleanup]);
+
+  // Close the socket on unmount so the server-side op isn't left running
+  // while the component that owns it is gone (e.g. tab-switch in Settings).
+  useEffect(() => cleanup, [cleanup]);
 
   return { install, uninstall, status, progress, error, reset };
 }

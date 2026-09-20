@@ -1,6 +1,6 @@
 // AVD (Android Virtual Device) listing/creation — the counterpart to
 // device-manager.ts's *running* half.
-import { readdirSync, readFileSync, existsSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { execFile as execFileCb } from "node:child_process";
 import path from "node:path";
 import { armKillEscalation } from "./session-process.js";
@@ -285,13 +285,15 @@ const AVAILABLE_HEADER = "Available Packages:";
 
 // Parses `sdkmanager --list` output and returns system image entries filtered
 // to the host's architecture. Cross-references with the installed images set
-// to set the `installed` flag.
+// to set the `installed` flag. Pass `hostAbi` to override the default
+// `process.arch` → ABI mapping (useful for deterministic tests).
 export function parseSdkManagerList(
   output: string,
   installedImages: SystemImage[],
+  hostAbi?: string,
 ): AvailableSystemImage[] {
   const installedPaths = new Set(installedImages.map((img) => img.packagePath));
-  const hostAbi = ARCH_TO_ABI[process.arch] ?? process.arch;
+  const resolvedAbi = hostAbi ?? ARCH_TO_ABI[process.arch] ?? process.arch;
   const images: AvailableSystemImage[] = [];
 
   // Find the "Available Packages:" section — everything before it is
@@ -307,7 +309,7 @@ export function parseSdkManagerList(
     if (parts.length !== 4) continue;
     const [, apiRaw, tag, abi] = parts;
     // Filter: only host-ABI images.
-    if (abi !== hostAbi) continue;
+    if (abi !== resolvedAbi) continue;
     // Extract numeric API level from "android-35" or "android-VanillaIceCream".
     const apiLevel = apiRaw.replace(/^android-/, "");
     images.push({
@@ -376,8 +378,8 @@ export async function installSystemImage(
         settled = true;
         armed?.clearOnSettle();
         if (error) {
-          // sdkmanager --install with `yes | --licenses` exits 1 on some
-          // SDK versions even when licenses are accepted — check stderr.
+          // sdkmanager --install exits 1 on some SDK versions even on
+          // success — fall through to stderr-based message below.
           const msg = typeof stderr === "string" && stderr.trim() ? stderr.trim() : error.message;
           reject(new Error(msg));
           return;
@@ -466,7 +468,7 @@ export async function uninstallSystemImage(
 // Streams each stdout/stderr line to the caller via `onLine`.
 //
 // sdkmanager --licenses exits with code 1 on some SDK versions even when
-// licenses ARE accepted — the caller should check for the "accepted" string
+// licenses ARE accepted — the caller should check for the success line
 // in the output rather than trusting the exit code alone.
 const ACCEPT_LICENSES_TIMEOUT_MS = 30_000;
 export async function acceptLicenses(
@@ -492,20 +494,22 @@ export async function acceptLicenses(
       reject(new Error(`sdkmanager --licenses timed out after ${ACCEPT_LICENSES_TIMEOUT_MS}ms`));
     });
 
-    // Pipe "yes" to stdin to auto-accept all licenses.
+    // Pipe "yes" to stdin to auto-accept all licenses. Unlike a hardcoded
+    // count, this keeps stdin open so every prompt (typically ~7 on a fresh
+    // SDK) gets answered regardless of how many there are.
     child.stdin.write("y\n");
-    child.stdin.write("y\n");
-    child.stdin.write("y\n");
-    child.stdin.write("y\n");
-    child.stdin.write("y\n");
-    child.stdin.end();
 
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (data: Buffer) => {
       const text = data.toString();
       stdout += text;
+      // Answer each prompt line with "y\n" — detectable by the trailing
+      // ": " that sdkmanager prints before waiting for input.
       for (const line of text.split("\n")) {
+        if (line.includes(": ")) {
+          child.stdin.write("y\n");
+        }
         if (line.trim()) opts.onLine?.(line.trim());
       }
     });
@@ -520,8 +524,10 @@ export async function acceptLicenses(
       if (settled) return;
       settled = true;
       armed?.clearOnSettle();
-      // Treat as success if "accepted" appears in output, regardless of exit code.
-      if (stdout.includes("accepted") || stderr.includes("accepted")) {
+      child.stdin.end();
+      // Match the known success message rather than a loose substring
+      // check — includes("accepted") would also match "not accepted".
+      if (/^All SDK package licenses accepted\b/m.test(stdout)) {
         resolve();
         return;
       }
@@ -544,16 +550,11 @@ export async function acceptLicenses(
   });
 }
 
-// Checks whether SDK licenses have been accepted by looking for the
-// `licenses/` directory under the SDK root. If the directory doesn't exist
-// or is empty, licenses are pending.
-export function hasPendingLicenses(sdkRoot: string): boolean {
-  const licensesDir = path.join(sdkRoot, "licenses");
-  if (!existsSync(licensesDir)) return true;
-  try {
-    const entries = readdirSync(licensesDir, { withFileTypes: true });
-    return entries.length === 0;
-  } catch {
-    return true;
-  }
+// Checks whether SDK licenses might still need acceptance. We can't know
+// which specific license hashes a fresh SDK requires without actually running
+// `sdkmanager --licenses`, so we conservatively always return `true`. The
+// `acceptLicenses` call is idempotent — if licenses are already accepted it's
+// a fast no-op — so the only cost of a false positive is one extra dialog.
+export function hasPendingLicenses(_sdkRoot: string): boolean {
+  return true;
 }

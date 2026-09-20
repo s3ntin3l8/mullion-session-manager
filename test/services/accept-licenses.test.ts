@@ -76,30 +76,30 @@ describe("acceptLicenses", () => {
     expect(onLine).toHaveBeenCalledWith("Done");
   });
 
-  it("resolves when stdout contains 'accepted' even with exit code 1", async () => {
+  it("resolves when stdout contains the exact success line even with exit code 1", async () => {
     const child = createMockChild();
     vi.mocked(spawn).mockReturnValue(child);
 
     const done = acceptLicenses("/opt/sdk/sdkmanager", "/opt/sdk");
     await new Promise((r) => setTimeout(r, 10));
 
-    child.stdout.emit("data", Buffer.from("All SDK licenses accepted.\n"));
+    child.stdout.emit("data", Buffer.from("All SDK package licenses accepted.\n"));
     child.emit("close", 1);
 
     await expect(done).resolves.toBeUndefined();
   });
 
-  it("resolves when stderr contains 'accepted'", async () => {
+  it("does not resolve on loose 'not accepted' substring in stdout", async () => {
     const child = createMockChild();
     vi.mocked(spawn).mockReturnValue(child);
 
     const done = acceptLicenses("/opt/sdk/sdkmanager", "/opt/sdk");
     await new Promise((r) => setTimeout(r, 10));
 
-    child.stderr.emit("data", Buffer.from("All SDK licenses accepted.\n"));
+    child.stdout.emit("data", Buffer.from("2 licenses not accepted\n"));
     child.emit("close", 1);
 
-    await expect(done).resolves.toBeUndefined();
+    await expect(done).rejects.toThrow();
   });
 
   it("resolves on exit code 0 without 'accepted' string", async () => {
@@ -141,20 +141,27 @@ describe("acceptLicenses", () => {
     await expect(done).rejects.toThrow(/spawn ENOENT/);
   });
 
-  it("writes multiple y lines to stdin for auto-accept", async () => {
+  it("answers each prompt line with y and writes initial y", async () => {
     const child = createMockChild();
     vi.mocked(spawn).mockReturnValue(child);
 
     const done = acceptLicenses("/opt/sdk/sdkmanager", "/opt/sdk");
     await new Promise((r) => setTimeout(r, 10));
 
-    child.stdout.emit("data", Buffer.from("accepted\n"));
+    // Simulate prompt lines — each containing ": " triggers a y response.
+    child.stdout.emit(
+      "data",
+      Buffer.from(
+        "Accept license? (y/N): \nAnother license? (y/N): \nAll SDK package licenses accepted.\n",
+      ),
+    );
     child.emit("close", 0);
 
     await done;
 
-    expect(child.stdin.write).toHaveBeenCalledTimes(5);
+    // 1 initial write + 2 prompt-triggered writes = 3 total
     expect(child.stdin.write).toHaveBeenCalledWith("y\n");
+    expect(child.stdin.write).toHaveBeenCalledTimes(3);
     expect(child.stdin.end).toHaveBeenCalled();
   });
 

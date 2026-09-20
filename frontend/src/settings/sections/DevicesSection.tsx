@@ -195,10 +195,11 @@ export function DevicesSection() {
     };
   }, [newAvdOpen]);
 
-  // Available system images — fetched once when the component mounts (not
-  // lazily gated behind a toggle like provisioning data, since the browser
-  // is always visible in the SDK section).
+  // Available system images — fetched lazily, only once the SDK section is
+  // actually expanded (same pattern as the AVD picker and provisioning data).
+  const [sdkImagesOpen, setSdkImagesOpen] = useState(false);
   useEffect(() => {
+    if (!sdkImagesOpen) return;
     let cancelled = false;
     api
       .listAvailableSystemImages()
@@ -218,7 +219,7 @@ export function DevicesSection() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [sdkImagesOpen]);
 
   const filteredAvailable = availableImages.filter((img) => {
     if (availableFilter === "installable") return !img.installed;
@@ -259,10 +260,16 @@ export function DevicesSection() {
   // Refresh available images after a successful install/uninstall.
   useEffect(() => {
     if (installOp.status === "done") {
-      api.listAvailableSystemImages().then(({ systemImages: images }) => {
-        setAvailableImages(images);
-        setAvailableLoaded(true);
-      });
+      api
+        .listAvailableSystemImages()
+        .then(({ systemImages: images }) => {
+          setAvailableImages(images);
+          setAvailableLoaded(true);
+        })
+        .catch(() => {
+          // Non-critical — the stale list will still render; the user can
+          // re-open the section to retry.
+        });
     }
   }, [installOp.status]);
 
@@ -796,8 +803,18 @@ export function DevicesSection() {
           desc="Install and manage Android system images from Google's repository. Required for creating AVDs."
         />
 
-        {!availableLoaded && (
-          <div className="settings-readonly-value">Loading available images…</div>
+        {!sdkImagesOpen && (
+          <div style={{ marginTop: 8 }}>
+            <SecondaryButton onClick={() => setSdkImagesOpen(true)}>
+              Load available images
+            </SecondaryButton>
+          </div>
+        )}
+
+        {sdkImagesOpen && !availableLoaded && (
+          <div className="settings-readonly-value" style={{ marginTop: 8 }}>
+            Loading available images…
+          </div>
         )}
         {availableError && <ErrorText style={{ marginTop: 8 }}>{availableError}</ErrorText>}
 
