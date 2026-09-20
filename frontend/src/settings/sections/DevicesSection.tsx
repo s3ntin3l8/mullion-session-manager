@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { useDashboardStore } from "../../store/index.js";
 import { useShallow } from "zustand/react/shallow";
 import { api, ApiError } from "../../api/index.js";
@@ -147,6 +147,7 @@ export function DevicesSection() {
   const licenseOp = useSdkLicenses();
   const [showLicenseModal, setShowLicenseModal] = useState(false);
   const [pendingInstallPath, setPendingInstallPath] = useState<string | null>(null);
+  const pendingInstallRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!createOpen || createMode !== "emulator") return;
@@ -228,24 +229,23 @@ export function DevicesSection() {
   });
 
   const handleInstall = (packagePath: string) => {
-    // Check for pending licenses first — if there are any, show the
-    // license modal before proceeding with the install.
-    api
-      .getLicenseStatus()
-      .then(({ pending }) => {
-        if (pending) {
-          setPendingInstallPath(packagePath);
-          setShowLicenseModal(true);
-        } else {
-          installOp.install(packagePath);
-        }
-      })
-      .catch(() => {
-        // If the status check fails, proceed anyway — the backend will
-        // reject if licenses are actually required.
-        installOp.install(packagePath);
-      });
+    pendingInstallRef.current = packagePath;
+    installOp.install(packagePath);
   };
+
+  // Detect license rejection errors from install and open the license modal.
+  // sdkmanager --install fails with a license-related message when licenses
+  // haven't been accepted yet — this is the only time we need the modal.
+  useEffect(() => {
+    if (
+      installOp.status === "error" &&
+      installOp.error &&
+      /accept|license|not accepted/i.test(installOp.error)
+    ) {
+      setPendingInstallPath(pendingInstallRef.current);
+      setShowLicenseModal(true);
+    }
+  }, [installOp.status, installOp.error]);
 
   const handleLicenseAccept = () => {
     licenseOp.accept(() => {

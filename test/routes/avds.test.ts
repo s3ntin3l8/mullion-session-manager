@@ -32,7 +32,7 @@ vi.mock("../../src/services/avd-manager.js", () => ({
   installSystemImage: vi.fn(),
   uninstallSystemImage: vi.fn(),
   acceptLicenses: vi.fn(),
-  hasPendingLicenses: vi.fn(),
+  licensesMayBePending: vi.fn(),
 }));
 
 // buildTestApp (not a static `import { buildApp } from "../../src/app.js"`)
@@ -53,7 +53,7 @@ import {
   installSystemImage,
   uninstallSystemImage,
   acceptLicenses,
-  hasPendingLicenses,
+  licensesMayBePending,
 } from "../../src/services/avd-manager.js";
 
 describe("avds routes", () => {
@@ -86,7 +86,7 @@ describe("avds routes", () => {
     vi.mocked(installSystemImage).mockReset().mockResolvedValue(undefined);
     vi.mocked(uninstallSystemImage).mockReset().mockResolvedValue(undefined);
     vi.mocked(acceptLicenses).mockReset().mockResolvedValue(undefined);
-    vi.mocked(hasPendingLicenses).mockReset().mockReturnValue(false);
+    vi.mocked(licensesMayBePending).mockReset().mockReturnValue(true);
   });
 
   afterEach(() => {
@@ -408,6 +408,47 @@ describe("avds routes", () => {
       expect(res.statusCode).toBe(400);
       expect(res.json().message).toContain("ENOENT");
     });
+
+    it("cache is invalidated after a successful install via WS", async () => {
+      process.env.DEVICE_ENABLED = "true";
+      process.env.DEVICE_SDKMANAGER_PATH = "/opt/sdk/sdkmanager";
+      process.env.DEVICE_ANDROID_SDK_ROOT = "/opt/sdk";
+      const app = await buildTestApp();
+      await app.listen({ port: 0, host: "127.0.0.1" });
+      const address = app.server.address();
+      if (address === null || typeof address === "string") {
+        throw new Error("expected a real bound address");
+      }
+      const port = address.port;
+      try {
+        // 1) Populate the cache with a GET request.
+        const first = await app.inject({ method: "GET", url: "/api/system-images/available" });
+        expect(first.statusCode).toBe(200);
+        expect(vi.mocked(listAvailableSystemImages)).toHaveBeenCalledTimes(1);
+
+        // 2) Complete an install via WS — this clears the cache.
+        vi.mocked(installSystemImage).mockResolvedValue({ ok: true });
+        const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/system-image-install`);
+        const msgs = collectJsonMessages(ws);
+        await waitForOpen(ws);
+        ws.send(
+          JSON.stringify({
+            type: "install",
+            packagePath: "system-images;android-35;google_apis;x86_64",
+          }),
+        );
+        await waitUntil(() => msgs.some((m) => (m as { type?: string }).type === "done"));
+        ws.close();
+
+        // 3) The next GET should call the service again (cache was cleared).
+        const second = await app.inject({ method: "GET", url: "/api/system-images/available" });
+        expect(second.statusCode).toBe(200);
+        // Count is 3: first GET (1), WS validation (2), second GET re-fetches (3).
+        expect(vi.mocked(listAvailableSystemImages)).toHaveBeenCalledTimes(3);
+      } finally {
+        await app.close();
+      }
+    });
   });
 
   describe("GET /api/sdk-licenses/status", () => {
@@ -417,22 +458,13 @@ describe("avds routes", () => {
       expect(res.statusCode).toBe(400);
     });
 
-    it("rejects with 400 when DEVICE_ANDROID_SDK_ROOT is unset", async () => {
-      process.env.DEVICE_ENABLED = "true";
-      const app = await buildTestApp();
-      const res = await app.inject({ method: "GET", url: "/api/sdk-licenses/status" });
-      expect(res.statusCode).toBe(400);
-    });
-
     it("returns pending status when config is set", async () => {
       process.env.DEVICE_ENABLED = "true";
-      process.env.DEVICE_ANDROID_SDK_ROOT = "/opt/sdk";
-      vi.mocked(hasPendingLicenses).mockReturnValue(true);
       const app = await buildTestApp();
       const res = await app.inject({ method: "GET", url: "/api/sdk-licenses/status" });
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual({ pending: true });
-      expect(vi.mocked(hasPendingLicenses)).toHaveBeenCalledWith("/opt/sdk");
+      expect(vi.mocked(licensesMayBePending)).toHaveBeenCalled();
     });
   });
 });
@@ -484,8 +516,9 @@ describe("WS /ws/system-image-install", () => {
       {
         packagePath: "system-images;android-35;google_apis;x86_64",
         installed: false,
-        apiLevel: 35,
+        apiLevel: "35",
         tag: "google_apis",
+        tagDisplay: "Google APIs",
         abi: "x86_64",
       },
     ]);

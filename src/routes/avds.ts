@@ -9,7 +9,7 @@ import {
   installSystemImage,
   uninstallSystemImage,
   acceptLicenses,
-  hasPendingLicenses,
+  licensesMayBePending,
 } from "../services/avd-manager.js";
 import type { AvailableSystemImage } from "../services/avd-manager.js";
 
@@ -435,9 +435,6 @@ export async function avdsRoute(app: FastifyInstance): Promise<void> {
     if (!app.config.DEVICE_ENABLED) {
       return reply.badRequest("Device panel is disabled — set DEVICE_ENABLED=true.");
     }
-    if (!app.config.DEVICE_ANDROID_SDK_ROOT) {
-      return reply.badRequest("DEVICE_ANDROID_SDK_ROOT is not configured.");
-    }
-    return { pending: hasPendingLicenses(app.config.DEVICE_ANDROID_SDK_ROOT) };
+    return { pending: licensesMayBePending() };
   });
 }

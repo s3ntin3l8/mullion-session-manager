@@ -766,9 +766,7 @@ describe("Settings -> Devices (issue #1326)", () => {
 
     expect(await screen.findByText("Package not found")).toBeInTheDocument();
   });
-
-  it("license modal appears when licenses are pending and install is clicked", async () => {
-    sdkLicensesPending = true;
+  it("license modal appears on license rejection error from install", async () => {
     availableImagesDb = [
       {
         packagePath: "system-images;android-35;google_apis;x86_64",
@@ -785,13 +783,26 @@ describe("Settings -> Devices (issue #1326)", () => {
     await user.click(await screen.findByRole("button", { name: "Load available images" }));
     await user.click(await screen.findByRole("button", { name: "Install" }));
 
-    // License modal should appear
+    // Install WS opens first
+    await waitFor(() => {
+      expect(
+        MockWebSocket.instances.some((ws) => ws.url.includes("/ws/system-image-install")),
+      ).toBe(true);
+    });
+    const installWs = MockWebSocket.instances.find((ws) =>
+      ws.url.includes("/ws/system-image-install"),
+    )!;
+    act(() => installWs.triggerOpen());
+    act(() =>
+      installWs.triggerMessage(JSON.stringify({ type: "error", message: "licenses not accepted" })),
+    );
+
+    // License modal should appear after the license-related error
     expect(await screen.findByText("Accept SDK licenses")).toBeInTheDocument();
     expect(screen.getByText(/Some SDK packages require accepting/)).toBeInTheDocument();
   });
 
   it("clicking 'Accept licenses' in modal opens the license WS", async () => {
-    sdkLicensesPending = true;
     availableImagesDb = [
       {
         packagePath: "system-images;android-35;google_apis;x86_64",
@@ -807,11 +818,27 @@ describe("Settings -> Devices (issue #1326)", () => {
 
     await user.click(await screen.findByRole("button", { name: "Load available images" }));
     await user.click(await screen.findByRole("button", { name: "Install" }));
+
+    // Trigger install WS with license error
+    await waitFor(() => {
+      expect(
+        MockWebSocket.instances.some((ws) => ws.url.includes("/ws/system-image-install")),
+      ).toBe(true);
+    });
+    const installWs = MockWebSocket.instances.find((ws) =>
+      ws.url.includes("/ws/system-image-install"),
+    )!;
+    act(() => installWs.triggerOpen());
+    act(() =>
+      installWs.triggerMessage(
+        JSON.stringify({ type: "error", message: "Accept? (y/N): licenses not accepted" }),
+      ),
+    );
     await screen.findByText("Accept SDK licenses");
 
     await user.click(screen.getByRole("button", { name: "Accept licenses" }));
 
-    // WS should have been created for the license operation
+    // License WS should have been created for the license operation
     await waitFor(() => {
       expect(MockWebSocket.instances.some((ws) => ws.url.includes("/ws/sdk-licenses"))).toBe(true);
     });
@@ -821,8 +848,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     expect(licenseWs.sent).toEqual([JSON.stringify({ type: "accept-licenses" })]);
   });
 
-  it("license accept done closes modal and triggers install", async () => {
-    sdkLicensesPending = true;
+  it("license accept done closes modal and triggers install retry", async () => {
     availableImagesDb = [
       {
         packagePath: "system-images;android-35;google_apis;x86_64",
@@ -838,6 +864,22 @@ describe("Settings -> Devices (issue #1326)", () => {
 
     await user.click(await screen.findByRole("button", { name: "Load available images" }));
     await user.click(await screen.findByRole("button", { name: "Install" }));
+
+    // Trigger install WS with license error
+    await waitFor(() => {
+      expect(
+        MockWebSocket.instances.some((ws) => ws.url.includes("/ws/system-image-install")),
+      ).toBe(true);
+    });
+    const installWs = MockWebSocket.instances.find((ws) =>
+      ws.url.includes("/ws/system-image-install"),
+    )!;
+    act(() => installWs.triggerOpen());
+    act(() =>
+      installWs.triggerMessage(
+        JSON.stringify({ type: "error", message: "license acceptance required" }),
+      ),
+    );
     await screen.findByText("Accept SDK licenses");
 
     await user.click(screen.getByRole("button", { name: "Accept licenses" }));
@@ -846,40 +888,21 @@ describe("Settings -> Devices (issue #1326)", () => {
     act(() => licenseWs.triggerOpen());
     act(() => licenseWs.triggerMessage(JSON.stringify({ type: "done" })));
 
-    // Modal should close, license WS done triggers install
+    // Modal should close, license WS done triggers install retry
     await waitFor(() => {
       expect(screen.queryByText("Accept SDK licenses")).not.toBeInTheDocument();
     });
 
-    // Install WS should have been created
+    // A second install WS should have been created for the retry
     await waitFor(() => {
-      expect(
-        MockWebSocket.instances.some((ws) => ws.url.includes("/ws/system-image-install")),
-      ).toBe(true);
+      const installWsInstances = MockWebSocket.instances.filter((ws) =>
+        ws.url.includes("/ws/system-image-install"),
+      );
+      expect(installWsInstances.length).toBe(2);
     });
   });
 
-  it("license check failure proceeds with install anyway", async () => {
-    // Make the license status endpoint fail — the handler should catch and proceed.
-    // We need to override just the license status route. Since mockFetch doesn't
-    // support per-route replacement after creation, we rely on the fact that the
-    // default `availableImagesShouldFail = false` means the available-images
-    // endpoint works, but we need a separate mechanism for the license status.
-    // The simplest approach: make the fetch mock throw for that specific path.
-    const originalFetchMock = fetchMock as unknown as (
-      input: RequestInfo | URL,
-      init?: RequestInit,
-    ) => Promise<Response>;
-    const overrideFetch = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url === "/api/sdk-licenses/status") {
-        return Promise.reject(new Error("Network error"));
-      }
-      return originalFetchMock(input, init);
-    });
-    fetchMock = overrideFetch as typeof fetchMock;
-    vi.stubGlobal("fetch", fetchMock);
-
+  it("non-license install error does not open the license modal", async () => {
     availableImagesDb = [
       {
         packagePath: "system-images;android-35;google_apis;x86_64",
@@ -896,12 +919,25 @@ describe("Settings -> Devices (issue #1326)", () => {
     await user.click(await screen.findByRole("button", { name: "Load available images" }));
     await user.click(await screen.findByRole("button", { name: "Install" }));
 
-    // No license modal should appear — the catch branch proceeds directly
+    // Trigger install WS with a non-license error
     await waitFor(() => {
       expect(
         MockWebSocket.instances.some((ws) => ws.url.includes("/ws/system-image-install")),
       ).toBe(true);
     });
-    expect(screen.queryByText("Accept SDK licenses")).not.toBeInTheDocument();
+    const installWs = MockWebSocket.instances.find((ws) =>
+      ws.url.includes("/ws/system-image-install"),
+    )!;
+    act(() => installWs.triggerOpen());
+    act(() =>
+      installWs.triggerMessage(
+        JSON.stringify({ type: "error", message: "Package not found in repository" }),
+      ),
+    );
+
+    // No license modal should appear for a non-license error
+    await waitFor(() => {
+      expect(screen.queryByText("Accept SDK licenses")).not.toBeInTheDocument();
+    });
   });
 });

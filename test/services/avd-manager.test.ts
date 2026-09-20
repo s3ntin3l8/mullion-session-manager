@@ -13,7 +13,7 @@ import {
   listAvailableSystemImages,
   installSystemImage,
   uninstallSystemImage,
-  hasPendingLicenses,
+  licensesMayBePending,
 } from "../../src/services/avd-manager.js";
 
 // Real `avdmanager list avd` output, captured against an actual SDK
@@ -651,9 +651,8 @@ describe("uninstallSystemImage — stdout/stderr streaming", () => {
   });
 });
 
-describe("hasPendingLicenses", () => {
+describe("licensesMayBePending", () => {
   it("always returns true (conservative: can't know which hashes are needed without running sdkmanager)", () => {
-    expect(hasPendingLicenses("/any/sdk/root")).toBe(true);
-    expect(hasPendingLicenses("/nonexistent/sdk/root")).toBe(true);
+    expect(licensesMayBePending()).toBe(true);
   });
 });

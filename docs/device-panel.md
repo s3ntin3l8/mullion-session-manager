@@ -332,9 +332,15 @@ as the other `DEVICE_*_PATH` vars.
   is allowed (concurrent requests get rejected with `{type: "error"}`).
 - **`/ws/sdk-licenses`** — WebSocket endpoint for license acceptance.
   Accepts `{type: "accept-licenses"}` messages. Runs `yes | sdkmanager --licenses`
-  on the host, streams progress lines, and reports done/error. Handles the
-  quirk where `sdkmanager --licenses` exits 1 on some SDK versions even on
-  success by checking stderr for the "accepted" string instead.
-- **`GET /api/sdk-licenses/status`** — returns `{pending: boolean}`. Checks
-  whether the `licenses/` directory under the SDK root exists and is
-  non-empty to determine if licenses still need acceptance.
+  on the host, streams progress lines, and reports done/error. Feeds stdin
+  reactively (one `y\n` per `: ` prompt line, plus an initial `y\n` for the
+  non-prompt "Review licenses" header) so it handles any number of pending
+  licenses. Matches the exact stdout line `/^All SDK package licenses accepted\b/`
+  for the success heuristic — not a loose `includes("accepted")` — and uses
+  `armKillEscalation` (30 s) to prevent a hung process from latching the
+  global SDK-operation lock.
+- **`GET /api/sdk-licenses/status`** — returns `{pending: true}`. The license
+  acceptance check is conservative: we can't know which hashes a fresh SDK
+  requires without actually running `sdkmanager --licenses`, so the endpoint
+  always reports licenses as potentially pending. The `acceptLicenses` call is
+  idempotent — a fast no-op when licenses are already accepted.

@@ -378,8 +378,8 @@ export async function installSystemImage(
         settled = true;
         armed?.clearOnSettle();
         if (error) {
-          // sdkmanager --install exits 1 on some SDK versions even on
-          // success — fall through to stderr-based message below.
+          // Prefer stderr over the generic Node error message — sdkmanager
+          // writes the real reason (e.g. license rejection) to stderr.
           const msg = typeof stderr === "string" && stderr.trim() ? stderr.trim() : error.message;
           reject(new Error(msg));
           return;
@@ -555,6 +555,6 @@ export async function acceptLicenses(
 // `sdkmanager --licenses`, so we conservatively always return `true`. The
 // `acceptLicenses` call is idempotent — if licenses are already accepted it's
 // a fast no-op — so the only cost of a false positive is one extra dialog.
-export function hasPendingLicenses(_sdkRoot: string): boolean {
+export function licensesMayBePending(): boolean {
   return true;
 }
