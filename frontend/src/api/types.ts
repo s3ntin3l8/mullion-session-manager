@@ -321,6 +321,19 @@ export interface SystemImage {
   abi: string | null;
 }
 
+// An available (not necessarily installed) system image from Google's
+// repository — extends SystemImage with the `installed` flag and structured
+// tag/apiLevel fields (always non-null since they're parsed from the
+// packagePath, not from optional source.properties).
+export interface AvailableSystemImage {
+  packagePath: string;
+  apiLevel: string;
+  tag: string;
+  tagDisplay: string;
+  abi: string;
+  installed: boolean;
+}
+
 // Mirrors POST /api/bridges's response shape 1:1 (src/routes/agent-bridge.ts's
 // PairResponse) — snake_case field names, unlike every other type in this
 // file, because this is also exactly the wire shape Mullion Helper decodes

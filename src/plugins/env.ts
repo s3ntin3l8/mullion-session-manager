@@ -662,6 +662,14 @@ export const schema = {
       type: "string",
       default: "",
     },
+    // Absolute path to the `sdkmanager` binary (Android SDK cmdline-tools) —
+    // used by src/services/avd-manager.ts to list/install/uninstall system
+    // images and accept licenses. Empty means "not configured," same posture
+    // as DEVICE_ADB_PATH.
+    DEVICE_SDKMANAGER_PATH: {
+      type: "string",
+      default: "",
+    },
     // Android SDK root, for scanning installed system images
     // (<root>/system-images/...) — deliberately explicit rather than derived
     // from DEVICE_AVDMANAGER_PATH (e.g. via a fixed dirname() chain): that
@@ -902,6 +910,7 @@ declare module "fastify" {
       DEVICE_EMULATOR_PATH: string;
       DEVICE_SCRCPY_SERVER_PATH: string;
       DEVICE_AVDMANAGER_PATH: string;
+      DEVICE_SDKMANAGER_PATH: string;
       DEVICE_ANDROID_SDK_ROOT: string;
       MULLION_SOCKET_PATH: string;
       MULLION_SSH_AUTH_SOCK: string;

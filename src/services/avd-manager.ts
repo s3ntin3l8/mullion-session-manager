@@ -248,3 +248,327 @@ export async function createAvd(opts: CreateAvdOptions): Promise<void> {
     (child) => child.stdin?.end(),
   );
 }
+
+// ---------------------------------------------------------------------------
+// System image management — install, uninstall, license acceptance, and
+// listing available (not just installed) images from Google's repository.
+// ---------------------------------------------------------------------------
+
+const SDKMANAGER_LIST_TIMEOUT_MS = 60_000;
+const SDKMANAGER_INSTALL_TIMEOUT_MS = 600_000; // 10 min — large downloads
+const SDKMANAGER_UNINSTALL_TIMEOUT_MS = 120_000;
+
+// Maps Node.js `process.arch` to Android SDK ABI names. Only architectures
+// that both Node.js and the Android SDK support are listed — no MIPS (dead)
+// and no 32-bit ARM on 64-bit hosts.
+const ARCH_TO_ABI: Record<string, string> = {
+  x64: "x86_64",
+  ia32: "x86",
+  arm64: "arm64-v8a",
+  arm: "armeabi-v7a",
+};
+
+export interface AvailableSystemImage {
+  packagePath: string;
+  apiLevel: string;
+  tag: string;
+  tagDisplay: string;
+  abi: string;
+  installed: boolean;
+}
+
+// Parses a single line from `sdkmanager --list`'s pipe-delimited table.
+// Returns [path, version, description] or null if the line doesn't match.
+//   | system-images;android-35;google_apis;x86_64  | 7 | Google APIs ... |
+const SDKMANAGER_LINE_RE = /^\s+(system-images;\S+)\s+\|\s+(\S+)\s+\|\s+(.+)$/;
+const AVAILABLE_HEADER = "Available Packages:";
+
+// Parses `sdkmanager --list` output and returns system image entries filtered
+// to the host's architecture. Cross-references with the installed images set
+// to set the `installed` flag. Pass `hostAbi` to override the default
+// `process.arch` → ABI mapping (useful for deterministic tests).
+export function parseSdkManagerList(
+  output: string,
+  installedImages: SystemImage[],
+  hostAbi?: string,
+): AvailableSystemImage[] {
+  const installedPaths = new Set(installedImages.map((img) => img.packagePath));
+  const resolvedAbi = hostAbi ?? ARCH_TO_ABI[process.arch] ?? process.arch;
+  const images: AvailableSystemImage[] = [];
+
+  // Find the "Available Packages:" section — everything before it is
+  // installed packages or header text we don't need.
+  const availableIdx = output.indexOf(AVAILABLE_HEADER);
+  const section = availableIdx >= 0 ? output.slice(availableIdx + AVAILABLE_HEADER.length) : output;
+
+  for (const line of section.split("\n")) {
+    const match = SDKMANAGER_LINE_RE.exec(line);
+    if (!match) continue;
+    const [, packagePath, _version, tagDisplay] = match;
+    const parts = packagePath.split(";");
+    if (parts.length !== 4) continue;
+    const [, apiRaw, tag, abi] = parts;
+    // Filter: only host-ABI images.
+    if (abi !== resolvedAbi) continue;
+    // Extract numeric API level from "android-35" or "android-VanillaIceCream".
+    const apiLevel = apiRaw.replace(/^android-/, "");
+    images.push({
+      packagePath,
+      apiLevel,
+      tag,
+      tagDisplay: tagDisplay.trim(),
+      abi,
+      installed: installedPaths.has(packagePath),
+    });
+  }
+
+  // Sort by API level descending (newest first), then tag alphabetically.
+  // Codename levels (e.g. "VanillaIceCream") sort to the top since they
+  // represent unreleased previews and are numerically NaN.
+  return images.sort((a, b) => {
+    const aNum = parseInt(a.apiLevel, 10);
+    const bNum = parseInt(b.apiLevel, 10);
+    const aIsNaN = Number.isNaN(aNum);
+    const bIsNaN = Number.isNaN(bNum);
+    if (aIsNaN && !bIsNaN) return -1;
+    if (!aIsNaN && bIsNaN) return 1;
+    if (aIsNaN && bIsNaN) return a.apiLevel.localeCompare(b.apiLevel);
+    const apiNum = bNum - aNum;
+    if (apiNum !== 0) return apiNum;
+    return a.tag.localeCompare(b.tag);
+  });
+}
+
+// Lists available system images from Google's repository by shelling out to
+// `sdkmanager --list`. This hits the network — callers should cache the
+// result (the route layer caches with a 5-min TTL).
+export async function listAvailableSystemImages(
+  sdkmanagerPath: string,
+  sdkRoot: string,
+  opts: { execFileFn?: ExecFileFn } = {},
+): Promise<AvailableSystemImage[]> {
+  const { stdout } = await execFileWithEscalation(
+    opts.execFileFn ?? execFileCb,
+    sdkmanagerPath,
+    ["--list", "--sdk_root", sdkRoot],
+    SDKMANAGER_LIST_TIMEOUT_MS,
+  );
+  const installed = listInstalledSystemImages(sdkRoot);
+  return parseSdkManagerList(stdout, installed);
+}
+
+// Installs a system image by shelling out to `sdkmanager --install`. Streams
+// each stdout/stderr line to the caller via `onLine` for progress display.
+export async function installSystemImage(
+  sdkmanagerPath: string,
+  sdkRoot: string,
+  packagePath: string,
+  opts: { onLine?: (line: string) => void; execFileFn?: ExecFileFn } = {},
+): Promise<void> {
+  const execFileFn = opts.execFileFn ?? execFileCb;
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    // eslint-disable-next-line prefer-const
+    let armed: ReturnType<typeof armKillEscalation> | undefined;
+    const child = execFileFn(
+      sdkmanagerPath,
+      ["--install", packagePath, "--sdk_root", sdkRoot],
+      (error, stdout, stderr) => {
+        if (settled) return;
+        settled = true;
+        armed?.clearOnSettle();
+        if (error) {
+          // Combine stdout and stderr — the license rejection message
+          // may appear on either stream depending on SDK version.
+          // Bound to the last 10 lines to avoid flooding the UI with
+          // the full license text sdkmanager prints to stdout.
+          const stdoutStr = typeof stdout === "string" ? stdout.trim() : "";
+          const stderrStr = typeof stderr === "string" ? stderr.trim() : "";
+          const combined = [stdoutStr, stderrStr].filter(Boolean).join("\n") || error.message;
+          const lines = combined.split("\n");
+          const msg = lines.slice(-10).join("\n");
+          const err = new Error(msg);
+          if (/accept|license|not accepted/i.test(combined)) {
+            (err as Error & { code?: string }).code = "license";
+          }
+          reject(err);
+          return;
+        }
+        resolve();
+      },
+    );
+    // Close stdin immediately to prevent interactive prompts (same defense
+    // as createAvd).
+    child.stdin?.end();
+    // Stream stdout/stderr lines to the caller.
+    child.stdout?.on("data", (data: Buffer) => {
+      for (const line of data.toString().split("\n")) {
+        if (line.trim()) opts.onLine?.(line.trim());
+      }
+    });
+    child.stderr?.on("data", (data: Buffer) => {
+      for (const line of data.toString().split("\n")) {
+        if (line.trim()) opts.onLine?.(line.trim());
+      }
+    });
+    armed = armKillEscalation(child, SDKMANAGER_INSTALL_TIMEOUT_MS, () => {
+      if (settled) return;
+      settled = true;
+      reject(
+        new Error(
+          `sdkmanager --install ${packagePath} timed out after ${SDKMANAGER_INSTALL_TIMEOUT_MS}ms`,
+        ),
+      );
+    });
+  });
+}
+
+// Uninstalls a system image by shelling out to `sdkmanager --uninstall`.
+// Streams each stdout/stderr line to the caller via `onLine`.
+export async function uninstallSystemImage(
+  sdkmanagerPath: string,
+  sdkRoot: string,
+  packagePath: string,
+  opts: { onLine?: (line: string) => void; execFileFn?: ExecFileFn } = {},
+): Promise<void> {
+  const execFileFn = opts.execFileFn ?? execFileCb;
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    // eslint-disable-next-line prefer-const
+    let armed: ReturnType<typeof armKillEscalation> | undefined;
+    const child = execFileFn(
+      sdkmanagerPath,
+      ["--uninstall", packagePath, "--sdk_root", sdkRoot],
+      (error, stdout, stderr) => {
+        if (settled) return;
+        settled = true;
+        armed?.clearOnSettle();
+        if (error) {
+          const stdoutStr = typeof stdout === "string" ? stdout.trim() : "";
+          const stderrStr = typeof stderr === "string" ? stderr.trim() : "";
+          const combined = [stdoutStr, stderrStr].filter(Boolean).join("\n") || error.message;
+          const lines = combined.split("\n");
+          const msg = lines.slice(-10).join("\n");
+          reject(new Error(msg));
+          return;
+        }
+        resolve();
+      },
+    );
+    child.stdin?.end();
+    child.stdout?.on("data", (data: Buffer) => {
+      for (const line of data.toString().split("\n")) {
+        if (line.trim()) opts.onLine?.(line.trim());
+      }
+    });
+    child.stderr?.on("data", (data: Buffer) => {
+      for (const line of data.toString().split("\n")) {
+        if (line.trim()) opts.onLine?.(line.trim());
+      }
+    });
+    armed = armKillEscalation(child, SDKMANAGER_UNINSTALL_TIMEOUT_MS, () => {
+      if (settled) return;
+      settled = true;
+      reject(
+        new Error(
+          `sdkmanager --uninstall ${packagePath} timed out after ${SDKMANAGER_UNINSTALL_TIMEOUT_MS}ms`,
+        ),
+      );
+    });
+  });
+}
+
+// Accepts all pending SDK licenses by piping `yes` to `sdkmanager --licenses`.
+// Streams each stdout/stderr line to the caller via `onLine`.
+//
+// sdkmanager --licenses exits with code 1 on some SDK versions even when
+// licenses ARE accepted — the caller should check for the success line
+// in the output rather than trusting the exit code alone.
+const ACCEPT_LICENSES_TIMEOUT_MS = 30_000;
+export async function acceptLicenses(
+  sdkmanagerPath: string,
+  sdkRoot: string,
+  opts: { onLine?: (line: string) => void } = {},
+): Promise<void> {
+  const { spawn } = await import("node:child_process");
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    let armed: ReturnType<typeof armKillEscalation> | undefined;
+
+    const child = spawn(sdkmanagerPath, ["--licenses", "--sdk_root", sdkRoot], {
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    // Declared (as `let`) BEFORE spawn() is armed — same pattern as
+    // execFileWithEscalation; see that function's comment for why.
+    // eslint-disable-next-line prefer-const
+    armed = armKillEscalation(child, ACCEPT_LICENSES_TIMEOUT_MS, () => {
+      if (settled) return;
+      settled = true;
+      reject(new Error(`sdkmanager --licenses timed out after ${ACCEPT_LICENSES_TIMEOUT_MS}ms`));
+    });
+
+    // Pipe "yes" to stdin to auto-accept all licenses. Unlike a hardcoded
+    // count, this keeps stdin open so every prompt (typically ~7 on a fresh
+    // SDK) gets answered regardless of how many there are.
+    child.stdin.write("y\n");
+
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (data: Buffer) => {
+      const text = data.toString();
+      stdout += text;
+      // Answer each prompt line with "y\n" — detectable by the trailing
+      // ": " that sdkmanager prints before waiting for input.
+      for (const line of text.split("\n")) {
+        if (line.includes(": ")) {
+          child.stdin.write("y\n");
+        }
+        if (line.trim()) opts.onLine?.(line.trim());
+      }
+    });
+    child.stderr.on("data", (data: Buffer) => {
+      const text = data.toString();
+      stderr += text;
+      for (const line of text.split("\n")) {
+        if (line.trim()) opts.onLine?.(line.trim());
+      }
+    });
+    child.on("close", (code) => {
+      if (settled) return;
+      settled = true;
+      armed?.clearOnSettle();
+      child.stdin.end();
+      // Match the known success message rather than a loose substring
+      // check — includes("accepted") would also match "not accepted".
+      if (/^All SDK package licenses accepted\b/m.test(stdout)) {
+        resolve();
+        return;
+      }
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(
+        new Error(
+          stderr.trim() || stdout.trim() || `sdkmanager --licenses exited with code ${code}`,
+        ),
+      );
+    });
+    child.on("error", (err) => {
+      if (settled) return;
+      settled = true;
+      armed?.clearOnSettle();
+      reject(err);
+    });
+  });
+}
+
+// Checks whether SDK licenses might still need acceptance. We can't know
+// which specific license hashes a fresh SDK requires without actually running
+// `sdkmanager --licenses`, so we conservatively always return `true`. The
+// `acceptLicenses` call is idempotent — if licenses are already accepted it's
+// a fast no-op — so the only cost of a false positive is one extra dialog.
+export function licensesMayBePending(): boolean {
+  return true;
+}

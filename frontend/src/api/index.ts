@@ -177,6 +177,7 @@ export type {
   DeviceInfo,
   DeviceLiveStatus,
   SystemImage,
+  AvailableSystemImage,
 } from "./types.js";
 
 export { ApiError, AuthExpiredError, RateLimitedError } from "./client.js";
