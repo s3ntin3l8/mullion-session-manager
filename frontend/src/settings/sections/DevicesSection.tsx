@@ -2,9 +2,11 @@ import { Fragment, useEffect, useState } from "react";
 import { useDashboardStore } from "../../store/index.js";
 import { useShallow } from "zustand/react/shallow";
 import { api, ApiError } from "../../api/index.js";
-import type { Device, SystemImage } from "../../api/index.js";
+import type { Device, SystemImage, AvailableSystemImage } from "../../api/index.js";
 import { deviceDotClass } from "../../deviceStatus.js";
 import { usePolling } from "../../hooks/usePolling.js";
+import { useSystemImageInstall } from "../../hooks/useSystemImageInstall.js";
+import { useSdkLicenses } from "../../hooks/useSdkLicenses.js";
 import { DEVICES_POLL_MS } from "../../SidebarDevices.js";
 import {
   AddButton,
@@ -18,6 +20,8 @@ import {
 } from "../../ui/primitives.js";
 import { ConfirmButton } from "../../ui/ConfirmButton.js";
 import { ErrorText } from "../../ui/ErrorText.js";
+import { ProgressBar } from "../../ui/ProgressBar.js";
+import { Modal } from "../../ui/Modal.js";
 import { PlusIcon } from "../../ui/icons.js";
 
 // Same allowlist as src/routes/avds.ts's own AVD_NAME_PATTERN — checked
@@ -130,6 +134,20 @@ export function DevicesSection() {
   const [creatingAvd, setCreatingAvd] = useState(false);
   const [createAvdError, setCreateAvdError] = useState<string | null>(null);
 
+  // Available system images browser — fetched lazily, only once the section
+  // is actually visible. Filters out already-installed images and groups
+  // by API level for quick scanning.
+  const [availableImages, setAvailableImages] = useState<AvailableSystemImage[]>([]);
+  const [availableLoaded, setAvailableLoaded] = useState(false);
+  const [availableError, setAvailableError] = useState<string | null>(null);
+  const [availableFilter, setAvailableFilter] = useState<"all" | "installable" | "installed">(
+    "all",
+  );
+  const installOp = useSystemImageInstall();
+  const licenseOp = useSdkLicenses();
+  const [showLicenseModal, setShowLicenseModal] = useState(false);
+  const [pendingInstallPath, setPendingInstallPath] = useState<string | null>(null);
+
   useEffect(() => {
     if (!createOpen || createMode !== "emulator") return;
     let cancelled = false;
@@ -176,6 +194,77 @@ export function DevicesSection() {
       cancelled = true;
     };
   }, [newAvdOpen]);
+
+  // Available system images — fetched once when the component mounts (not
+  // lazily gated behind a toggle like provisioning data, since the browser
+  // is always visible in the SDK section).
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .listAvailableSystemImages()
+      .then(({ systemImages: images }) => {
+        if (cancelled) return;
+        setAvailableImages(images);
+        setAvailableLoaded(true);
+        setAvailableError(null);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setAvailableError(
+          err instanceof ApiError ? err.message : "Could not load available system images",
+        );
+        setAvailableLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const filteredAvailable = availableImages.filter((img) => {
+    if (availableFilter === "installable") return !img.installed;
+    if (availableFilter === "installed") return img.installed;
+    return true;
+  });
+
+  const handleInstall = (packagePath: string) => {
+    // Check for pending licenses first — if there are any, show the
+    // license modal before proceeding with the install.
+    api
+      .getLicenseStatus()
+      .then(({ pending }) => {
+        if (pending) {
+          setPendingInstallPath(packagePath);
+          setShowLicenseModal(true);
+        } else {
+          installOp.install(packagePath);
+        }
+      })
+      .catch(() => {
+        // If the status check fails, proceed anyway — the backend will
+        // reject if licenses are actually required.
+        installOp.install(packagePath);
+      });
+  };
+
+  const handleLicenseAccept = () => {
+    licenseOp.accept(() => {
+      setShowLicenseModal(false);
+      if (pendingInstallPath) {
+        installOp.install(pendingInstallPath);
+        setPendingInstallPath(null);
+      }
+    });
+  };
+
+  // Refresh available images after a successful install/uninstall.
+  useEffect(() => {
+    if (installOp.status === "done") {
+      api.listAvailableSystemImages().then(({ systemImages: images }) => {
+        setAvailableImages(images);
+        setAvailableLoaded(true);
+      });
+    }
+  }, [installOp.status]);
 
   // Issue #1347 — editing a physical device's stored adb address in place,
   // without delete-and-recreate. Keyed by device id (not a boolean) so only
@@ -698,6 +787,129 @@ export function DevicesSection() {
             </>
           )}
         </div>
+      )}
+
+      {/* SDK system images section */}
+      <div style={{ marginTop: 20 }}>
+        <GroupHeading
+          title="SDK system images"
+          desc="Install and manage Android system images from Google's repository. Required for creating AVDs."
+        />
+
+        {!availableLoaded && (
+          <div className="settings-readonly-value">Loading available images…</div>
+        )}
+        {availableError && <ErrorText style={{ marginTop: 8 }}>{availableError}</ErrorText>}
+
+        {availableLoaded && !availableError && (
+          <>
+            {/* Filter tabs */}
+            <div style={{ display: "flex", gap: 8, marginTop: 8, marginBottom: 10 }}>
+              <Segmented
+                options={[
+                  { value: "all", label: "All" },
+                  { value: "installable", label: "Not installed" },
+                  { value: "installed", label: "Installed" },
+                ]}
+                value={availableFilter}
+                onChange={setAvailableFilter}
+              />
+            </div>
+
+            {/* Images list */}
+            {filteredAvailable.length === 0 && (
+              <div style={{ fontSize: 11.5, color: "var(--dim)" }}>
+                {availableFilter === "all" && "No system images available."}
+                {availableFilter === "installable" && "All available images are already installed."}
+                {availableFilter === "installed" && "No system images installed yet."}
+              </div>
+            )}
+            {filteredAvailable.length > 0 && (
+              <StyledList>
+                {filteredAvailable.map((img) => (
+                  <ListRow
+                    key={img.packagePath}
+                    title={`API ${img.apiLevel} — ${img.tagDisplay} (${img.abi})`}
+                    subtitle={img.packagePath}
+                    trailing={
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        {img.installed ? (
+                          <ConfirmButton
+                            title={`Uninstall ${img.packagePath} — removes this system image from the host`}
+                            onConfirm={() => installOp.uninstall(img.packagePath)}
+                            disabled={installOp.status === "running"}
+                          >
+                            Uninstall
+                          </ConfirmButton>
+                        ) : (
+                          <SecondaryButton
+                            onClick={() => handleInstall(img.packagePath)}
+                            disabled={installOp.status === "running"}
+                          >
+                            Install
+                          </SecondaryButton>
+                        )}
+                      </div>
+                    }
+                  />
+                ))}
+              </StyledList>
+            )}
+
+            {/* Install/uninstall progress */}
+            {installOp.status === "running" && (
+              <div style={{ marginTop: 10 }}>
+                <ProgressBar />
+                {installOp.progress.length > 0 && (
+                  <div className="sdk-operation-log" style={{ marginTop: 8 }}>
+                    {installOp.progress.map((line, i) => (
+                      <div key={i}>{line}</div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+            {installOp.status === "done" && (
+              <div style={{ fontSize: 11, color: "var(--dim)", marginTop: 8 }}>
+                Operation complete.
+              </div>
+            )}
+            {installOp.status === "error" && (
+              <ErrorText style={{ marginTop: 8 }}>{installOp.error}</ErrorText>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* License acceptance modal */}
+      {showLicenseModal && (
+        <Modal onClose={() => setShowLicenseModal(false)} title="Accept SDK licenses">
+          <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 12 }}>
+            Some SDK packages require accepting Google's license agreements before installation.
+            This runs <code style={{ fontSize: 11 }}>yes | sdkmanager --licenses</code> on the host.
+          </div>
+          {licenseOp.status === "running" && (
+            <div style={{ marginTop: 10 }}>
+              <ProgressBar />
+              {licenseOp.progress.length > 0 && (
+                <div className="sdk-operation-log" style={{ marginTop: 8 }}>
+                  {licenseOp.progress.map((line, i) => (
+                    <div key={i}>{line}</div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          {licenseOp.status === "error" && (
+            <ErrorText style={{ marginTop: 8 }}>{licenseOp.error}</ErrorText>
+          )}
+          <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
+            {licenseOp.status !== "running" && (
+              <SecondaryButton onClick={handleLicenseAccept}>Accept licenses</SecondaryButton>
+            )}
+            <SecondaryButton onClick={() => setShowLicenseModal(false)}>Cancel</SecondaryButton>
+          </div>
+        </Modal>
       )}
     </>
   );

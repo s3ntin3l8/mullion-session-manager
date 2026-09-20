@@ -27,6 +27,11 @@ vi.mock("../../src/services/avd-manager.js", () => ({
   listDeviceProfiles: vi.fn(),
   listInstalledSystemImages: vi.fn(),
   createAvd: vi.fn(),
+  listAvailableSystemImages: vi.fn(),
+  installSystemImage: vi.fn(),
+  uninstallSystemImage: vi.fn(),
+  acceptLicenses: vi.fn(),
+  hasPendingLicenses: vi.fn(),
 }));
 
 // buildTestApp (not a static `import { buildApp } from "../../src/app.js"`)
@@ -43,6 +48,11 @@ import {
   listAvds,
   listDeviceProfiles,
   listInstalledSystemImages,
+  listAvailableSystemImages,
+  installSystemImage,
+  uninstallSystemImage,
+  acceptLicenses,
+  hasPendingLicenses,
 } from "../../src/services/avd-manager.js";
 
 describe("avds routes", () => {
@@ -60,12 +70,29 @@ describe("avds routes", () => {
         },
       ]);
     vi.mocked(createAvd).mockReset().mockResolvedValue(undefined);
+    vi.mocked(listAvailableSystemImages)
+      .mockReset()
+      .mockResolvedValue([
+        {
+          packagePath: "system-images;android-35;google_apis;x86_64",
+          apiLevel: "35",
+          tag: "google_apis",
+          tagDisplay: "Google APIs",
+          abi: "x86_64",
+          installed: true,
+        },
+      ]);
+    vi.mocked(installSystemImage).mockReset().mockResolvedValue(undefined);
+    vi.mocked(uninstallSystemImage).mockReset().mockResolvedValue(undefined);
+    vi.mocked(acceptLicenses).mockReset().mockResolvedValue(undefined);
+    vi.mocked(hasPendingLicenses).mockReset().mockReturnValue(false);
   });
 
   afterEach(() => {
     delete process.env.DEVICE_ENABLED;
     delete process.env.DEVICE_AVDMANAGER_PATH;
     delete process.env.DEVICE_ANDROID_SDK_ROOT;
+    delete process.env.DEVICE_SDKMANAGER_PATH;
   });
 
   describe("with DEVICE_ENABLED unset (default off)", () => {
@@ -328,6 +355,83 @@ describe("avds routes", () => {
         expect(res.statusCode).toBe(400);
         expect(res.json().message).toContain("already exists");
       });
+    });
+  });
+
+  describe("GET /api/system-images/available", () => {
+    it("rejects with 400 when DEVICE_ENABLED is unset", async () => {
+      const app = await buildTestApp();
+      const res = await app.inject({ method: "GET", url: "/api/system-images/available" });
+      expect(res.statusCode).toBe(400);
+    });
+
+    it("rejects with 400 when DEVICE_SDKMANAGER_PATH is unset", async () => {
+      process.env.DEVICE_ENABLED = "true";
+      process.env.DEVICE_ANDROID_SDK_ROOT = "/opt/sdk";
+      const app = await buildTestApp();
+      const res = await app.inject({ method: "GET", url: "/api/system-images/available" });
+      expect(res.statusCode).toBe(400);
+    });
+
+    it("rejects with 400 when DEVICE_ANDROID_SDK_ROOT is unset", async () => {
+      process.env.DEVICE_ENABLED = "true";
+      process.env.DEVICE_SDKMANAGER_PATH = "/opt/sdk/sdkmanager";
+      const app = await buildTestApp();
+      const res = await app.inject({ method: "GET", url: "/api/system-images/available" });
+      expect(res.statusCode).toBe(400);
+    });
+
+    it("returns available system images when all config is set", async () => {
+      process.env.DEVICE_ENABLED = "true";
+      process.env.DEVICE_SDKMANAGER_PATH = "/opt/sdk/sdkmanager";
+      process.env.DEVICE_ANDROID_SDK_ROOT = "/opt/sdk";
+      const app = await buildTestApp();
+      const res = await app.inject({ method: "GET", url: "/api/system-images/available" });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().systemImages).toHaveLength(1);
+      expect(vi.mocked(listAvailableSystemImages)).toHaveBeenCalledWith(
+        "/opt/sdk/sdkmanager",
+        "/opt/sdk",
+      );
+    });
+
+    it("surfaces a listAvailableSystemImages failure as 400", async () => {
+      process.env.DEVICE_ENABLED = "true";
+      process.env.DEVICE_SDKMANAGER_PATH = "/opt/sdk/sdkmanager";
+      process.env.DEVICE_ANDROID_SDK_ROOT = "/opt/sdk";
+      vi.mocked(listAvailableSystemImages).mockRejectedValueOnce(
+        new Error("spawn sdkmanager ENOENT"),
+      );
+      const app = await buildTestApp();
+      const res = await app.inject({ method: "GET", url: "/api/system-images/available" });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().message).toContain("ENOENT");
+    });
+  });
+
+  describe("GET /api/sdk-licenses/status", () => {
+    it("rejects with 400 when DEVICE_ENABLED is unset", async () => {
+      const app = await buildTestApp();
+      const res = await app.inject({ method: "GET", url: "/api/sdk-licenses/status" });
+      expect(res.statusCode).toBe(400);
+    });
+
+    it("rejects with 400 when DEVICE_ANDROID_SDK_ROOT is unset", async () => {
+      process.env.DEVICE_ENABLED = "true";
+      const app = await buildTestApp();
+      const res = await app.inject({ method: "GET", url: "/api/sdk-licenses/status" });
+      expect(res.statusCode).toBe(400);
+    });
+
+    it("returns pending status when config is set", async () => {
+      process.env.DEVICE_ENABLED = "true";
+      process.env.DEVICE_ANDROID_SDK_ROOT = "/opt/sdk";
+      vi.mocked(hasPendingLicenses).mockReturnValue(true);
+      const app = await buildTestApp();
+      const res = await app.inject({ method: "GET", url: "/api/sdk-licenses/status" });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ pending: true });
+      expect(vi.mocked(hasPendingLicenses)).toHaveBeenCalledWith("/opt/sdk");
     });
   });
 });

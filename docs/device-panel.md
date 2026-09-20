@@ -310,10 +310,32 @@ afterward via `POST /api/devices {avdName}` (§3 above), the same way
   route's own timeout. A name collision therefore surfaces as a clear
   "already exists" error rather than silently overwriting an existing AVD.
 
-**Not yet possible from the UI or this API:** installing a system image
-that isn't already on the host. Today that still requires running
-`sdkmanager` by hand on the host — see issue #1348 for the planned
-follow-up (list installable packages from Google's repository, drive an
-install with progress, and surface SDK license acceptance), which is the
-reason the two GET routes above return only what's on disk already rather
-than the full installable set.
+### System image management (issue #1348)
+
+Gated by `DEVICE_SDKMANAGER_PATH` (the `sdkmanager` binary from the SDK's
+cmdline-tools), which follows the same "empty means not configured" posture
+as the other `DEVICE_*_PATH` vars.
+
+- **`GET /api/system-images/available`** — runs `sdkmanager --list` against
+  Google's repository, parses the tabular output into structured objects
+  (`{packagePath, apiLevel, tag, tagDisplay, abi, installed}`), auto-filters
+  by host ABI (`process.arch` → Android ABI mapping), deduplicates by
+  `{apiLevel, tag}` (picks newest API if duplicates exist), and marks
+  which are already installed locally. Results are cached in-memory for 5
+  minutes to avoid repeated network fetches. Falls back to empty list if
+  `sdkmanager --list` times out (60s) or fails.
+- **`/ws/system-image-install`** — WebSocket endpoint for install/uninstall
+  operations. Accepts `{type: "install"|"uninstall", packagePath}` messages.
+  Validates `packagePath` against the allowlist from `GET /api/system-images/available`
+  before spawning the subprocess. Streams `{type: "progress", message}` lines
+  from `sdkmanager --install`/`--uninstall` stdout, and `{type: "done"}` or
+  `{type: "error", message}` on completion. Only one SDK operation at a time
+  is allowed (concurrent requests get rejected with `{type: "error"}`).
+- **`/ws/sdk-licenses`** — WebSocket endpoint for license acceptance.
+  Accepts `{type: "accept-licenses"}` messages. Runs `yes | sdkmanager --licenses`
+  on the host, streams progress lines, and reports done/error. Handles the
+  quirk where `sdkmanager --licenses` exits 1 on some SDK versions even on
+  success by checking stderr for the "accepted" string instead.
+- **`GET /api/sdk-licenses/status`** — returns `{pending: boolean}`. Runs
+  `sdkmanager --licenses --simulate` to check whether any licenses are
+  still pending without actually accepting them.

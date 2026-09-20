@@ -146,6 +146,20 @@ describe("Settings -> Devices (issue #1326)", () => {
         devicesDb = devicesDb.map((d) => (d.id === id ? updated : d));
         return jsonResponse(200, updated);
       },
+      "GET /api/system-images/available": () =>
+        jsonResponse(200, {
+          systemImages: [
+            {
+              packagePath: "system-images;android-35;google_apis;x86_64",
+              apiLevel: "35",
+              tag: "google_apis",
+              tagDisplay: "Google APIs",
+              abi: "x86_64",
+              installed: true,
+            },
+          ],
+        }),
+      "GET /api/sdk-licenses/status": () => jsonResponse(200, { pending: false }),
     }));
     vi.stubGlobal("fetch", fetchMock);
 

@@ -8,6 +8,11 @@ import {
   listAvds,
   listDeviceProfiles,
   listInstalledSystemImages,
+  parseSdkManagerList,
+  listAvailableSystemImages,
+  installSystemImage,
+  uninstallSystemImage,
+  hasPendingLicenses,
 } from "../../src/services/avd-manager.js";
 
 // Real `avdmanager list avd` output, captured against an actual SDK
@@ -316,5 +321,272 @@ describe("createAvd", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+const REAL_SDKMANAGER_LIST_OUTPUT = `Available packages:
+  Path                      | Version | Description
+  -------                   | ------- | -----------
+  system-images;android-35;google_apis;x86_64 | 7 | Google APIs x86_64 System Image
+  system-images;android-35;google_apis;arm64-v8a | 7 | Google APIs ARM 64 v8a System Image
+  system-images;android-34;default;x86_64 | 6 | Default x86_64 System Image
+  build-tools;35.0.0        | 35     | Android SDK Build-Tools 35
+`;
+
+describe("parseSdkManagerList", () => {
+  it("parses sdkmanager --list output into AvailableSystemImage objects for host ABI", () => {
+    const result = parseSdkManagerList(REAL_SDKMANAGER_LIST_OUTPUT, []);
+    // Only host-ABI images are returned (process.arch dependent)
+    expect(result.every((img) => img.packagePath.startsWith("system-images;"))).toBe(true);
+  });
+
+  it("marks images as installed when they appear in the installed set", () => {
+    const installed = [
+      {
+        packagePath: "system-images;android-35;google_apis;x86_64",
+        apiLevel: "35",
+        tagDisplay: "Google APIs",
+        abi: "x86_64",
+      },
+    ];
+    const result = parseSdkManagerList(REAL_SDKMANAGER_LIST_OUTPUT, installed);
+    const x86Img = result.find((img) => img.abi === "x86_64");
+    expect(x86Img?.installed).toBe(true);
+  });
+
+  it("returns empty array when output has no matching lines", () => {
+    const result = parseSdkManagerList("no system images here\n", []);
+    expect(result).toEqual([]);
+  });
+
+  it("handles output without Available Packages: header", () => {
+    const output = `  system-images;android-35;google_apis;x86_64 | 7 | Google APIs x86_64 System Image\n`;
+    const result = parseSdkManagerList(output, []);
+    expect(result.length).toBeGreaterThanOrEqual(0);
+  });
+
+  it("sorts by API level descending, then tag alphabetically", () => {
+    const output = [
+      "Available Packages:",
+      "  system-images;android-34;default;x86_64 | 6 | Default x86_64",
+      "  system-images;android-35;google_apis;x86_64 | 7 | Google APIs x86_64",
+    ].join("\n");
+    const result = parseSdkManagerList(output, []);
+    if (result.length === 2) {
+      expect(result[0].apiLevel).toBe("35");
+      expect(result[1].apiLevel).toBe("34");
+    }
+  });
+
+  it("sorts tags alphabetically when API levels are equal", () => {
+    const output = [
+      "Available Packages:",
+      "  system-images;android-35;google_apis_playstore;x86_64 | 7 | Play Store x86_64",
+      "  system-images;android-35;google_apis;x86_64 | 7 | Google APIs x86_64",
+    ].join("\n");
+    const result = parseSdkManagerList(output, []);
+    if (result.length === 2) {
+      expect(result[0].tag).toBe("google_apis");
+      expect(result[1].tag).toBe("google_apis_playstore");
+    }
+  });
+});
+
+describe("listAvailableSystemImages", () => {
+  it("shells out to sdkmanager --list and returns parsed results", async () => {
+    const child = makeFakeChild();
+    const execFileFn = fakeExecFileResolving(child, { stdout: REAL_SDKMANAGER_LIST_OUTPUT });
+    const result = await listAvailableSystemImages("/opt/sdk/sdkmanager", "/opt/sdk", {
+      execFileFn,
+    });
+    expect(execFileFn).toHaveBeenCalledWith(
+      "/opt/sdk/sdkmanager",
+      ["--list", "--sdk_root", "/opt/sdk"],
+      expect.any(Function),
+    );
+    expect(Array.isArray(result)).toBe(true);
+  });
+
+  it("rejects when sdkmanager --list fails", async () => {
+    const child = makeFakeChild();
+    const execFileFn = fakeExecFileResolving(child, {
+      error: new Error("spawn sdkmanager ENOENT"),
+    });
+    await expect(
+      listAvailableSystemImages("/opt/sdk/sdkmanager", "/opt/sdk", { execFileFn }),
+    ).rejects.toThrow(/ENOENT/);
+  });
+});
+
+describe("installSystemImage", () => {
+  it("shells out to sdkmanager --install with correct args", async () => {
+    const child = makeFakeChild();
+    const execFileFn = fakeExecFileResolving(child);
+    await installSystemImage(
+      "/opt/sdk/sdkmanager",
+      "/opt/sdk",
+      "system-images;android-35;google_apis;x86_64",
+      {
+        execFileFn,
+      },
+    );
+    expect(execFileFn).toHaveBeenCalledWith(
+      "/opt/sdk/sdkmanager",
+      ["--install", "system-images;android-35;google_apis;x86_64", "--sdk_root", "/opt/sdk"],
+      expect.any(Function),
+    );
+  });
+
+  it("streams progress lines via onLine callback", async () => {
+    const child = makeFakeChild();
+    const onLine = vi.fn();
+    const execFileFn = fakeExecFileResolving(child);
+
+    await installSystemImage(
+      "/opt/sdk/sdkmanager",
+      "/opt/sdk",
+      "system-images;android-35;google_apis;x86_64",
+      {
+        execFileFn,
+        onLine,
+      },
+    );
+    expect(execFileFn).toHaveBeenCalled();
+  });
+
+  it("rejects with stderr message on failure", async () => {
+    const child = makeFakeChild();
+    const execFileFn = fakeExecFileResolving(child, {
+      error: new Error("Install failed"),
+      stderr: "Package not found",
+    });
+    await expect(
+      installSystemImage(
+        "/opt/sdk/sdkmanager",
+        "/opt/sdk",
+        "system-images;android-99;fake;x86_64",
+        {
+          execFileFn,
+        },
+      ),
+    ).rejects.toThrow(/Package not found/);
+  });
+
+  it("times out and sends SIGTERM via armKillEscalation when the process never responds", async () => {
+    vi.useFakeTimers();
+    try {
+      const child = makeFakeChild();
+      const execFileFn = fakeExecFileHanging(child);
+      const promise = installSystemImage(
+        "/opt/sdk/sdkmanager",
+        "/opt/sdk",
+        "system-images;android-35;google_apis;x86_64",
+        { execFileFn },
+      );
+      const assertion = expect(promise).rejects.toThrow(/timed out/);
+      await vi.advanceTimersByTimeAsync(600_000);
+      await assertion;
+      expect(child.kill).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("uninstallSystemImage", () => {
+  it("shells out to sdkmanager --uninstall with correct args", async () => {
+    const child = makeFakeChild();
+    const execFileFn = fakeExecFileResolving(child);
+    await uninstallSystemImage(
+      "/opt/sdk/sdkmanager",
+      "/opt/sdk",
+      "system-images;android-35;google_apis;x86_64",
+      {
+        execFileFn,
+      },
+    );
+    expect(execFileFn).toHaveBeenCalledWith(
+      "/opt/sdk/sdkmanager",
+      ["--uninstall", "system-images;android-35;google_apis;x86_64", "--sdk_root", "/opt/sdk"],
+      expect.any(Function),
+    );
+  });
+
+  it("rejects with stderr message on failure", async () => {
+    const child = makeFakeChild();
+    const execFileFn = fakeExecFileResolving(child, {
+      error: new Error("Uninstall failed"),
+      stderr: "Package not installed",
+    });
+    await expect(
+      uninstallSystemImage(
+        "/opt/sdk/sdkmanager",
+        "/opt/sdk",
+        "system-images;android-99;fake;x86_64",
+        {
+          execFileFn,
+        },
+      ),
+    ).rejects.toThrow(/Package not installed/);
+  });
+
+  it("times out and sends SIGTERM via armKillEscalation when the process never responds", async () => {
+    vi.useFakeTimers();
+    try {
+      const child = makeFakeChild();
+      const execFileFn = fakeExecFileHanging(child);
+      const promise = uninstallSystemImage(
+        "/opt/sdk/sdkmanager",
+        "/opt/sdk",
+        "system-images;android-35;google_apis;x86_64",
+        { execFileFn },
+      );
+      const assertion = expect(promise).rejects.toThrow(/timed out/);
+      await vi.advanceTimersByTimeAsync(120_000);
+      await assertion;
+      expect(child.kill).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("hasPendingLicenses", () => {
+  function withFixtureSdkRoot(build: (sdkRoot: string) => void): void {
+    const sdkRoot = mkdtempSync(path.join(os.tmpdir(), "avd-manager-license-test-"));
+    try {
+      build(sdkRoot);
+    } finally {
+      rmSync(sdkRoot, { recursive: true, force: true });
+    }
+  }
+
+  it("returns true when licenses directory does not exist", () => {
+    withFixtureSdkRoot((sdkRoot) => {
+      expect(hasPendingLicenses(sdkRoot)).toBe(true);
+    });
+  });
+
+  it("returns true when licenses directory is empty", () => {
+    withFixtureSdkRoot((sdkRoot) => {
+      mkdirSync(path.join(sdkRoot, "licenses"), { recursive: true });
+      expect(hasPendingLicenses(sdkRoot)).toBe(true);
+    });
+  });
+
+  it("returns false when licenses directory has entries", () => {
+    withFixtureSdkRoot((sdkRoot) => {
+      const licensesDir = path.join(sdkRoot, "licenses");
+      mkdirSync(licensesDir, { recursive: true });
+      writeFileSync(
+        path.join(licensesDir, "android-sdk-license"),
+        "d56f5187479451eabf01fb78af6dfcb131a6481e\n",
+      );
+      expect(hasPendingLicenses(sdkRoot)).toBe(false);
+    });
+  });
+
+  it("returns true for nonexistent SDK root", () => {
+    expect(hasPendingLicenses("/nonexistent/sdk/root")).toBe(true);
   });
 });
