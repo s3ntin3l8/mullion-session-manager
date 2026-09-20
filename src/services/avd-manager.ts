@@ -321,8 +321,17 @@ export function parseSdkManagerList(
   }
 
   // Sort by API level descending (newest first), then tag alphabetically.
+  // Codename levels (e.g. "VanillaIceCream") sort to the top since they
+  // represent unreleased previews and are numerically NaN.
   return images.sort((a, b) => {
-    const apiNum = parseInt(b.apiLevel, 10) - parseInt(a.apiLevel, 10);
+    const aNum = parseInt(a.apiLevel, 10);
+    const bNum = parseInt(b.apiLevel, 10);
+    const aIsNaN = Number.isNaN(aNum);
+    const bIsNaN = Number.isNaN(bNum);
+    if (aIsNaN && !bIsNaN) return -1;
+    if (!aIsNaN && bIsNaN) return 1;
+    if (aIsNaN && bIsNaN) return a.apiLevel.localeCompare(b.apiLevel);
+    const apiNum = bNum - aNum;
     if (apiNum !== 0) return apiNum;
     return a.tag.localeCompare(b.tag);
   });
@@ -459,16 +468,30 @@ export async function uninstallSystemImage(
 // sdkmanager --licenses exits with code 1 on some SDK versions even when
 // licenses ARE accepted — the caller should check for the "accepted" string
 // in the output rather than trusting the exit code alone.
+const ACCEPT_LICENSES_TIMEOUT_MS = 30_000;
 export async function acceptLicenses(
   sdkmanagerPath: string,
   sdkRoot: string,
-  opts: { onLine?: (line: string) => void; execFileFn?: ExecFileFn } = {},
+  opts: { onLine?: (line: string) => void } = {},
 ): Promise<void> {
   const { spawn } = await import("node:child_process");
   await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    let armed: ReturnType<typeof armKillEscalation> | undefined;
+
     const child = spawn(sdkmanagerPath, ["--licenses", "--sdk_root", sdkRoot], {
       stdio: ["pipe", "pipe", "pipe"],
     });
+
+    // Declared (as `let`) BEFORE spawn() is armed — same pattern as
+    // execFileWithEscalation; see that function's comment for why.
+    // eslint-disable-next-line prefer-const
+    armed = armKillEscalation(child, ACCEPT_LICENSES_TIMEOUT_MS, () => {
+      if (settled) return;
+      settled = true;
+      reject(new Error(`sdkmanager --licenses timed out after ${ACCEPT_LICENSES_TIMEOUT_MS}ms`));
+    });
+
     // Pipe "yes" to stdin to auto-accept all licenses.
     child.stdin.write("y\n");
     child.stdin.write("y\n");
@@ -494,6 +517,9 @@ export async function acceptLicenses(
       }
     });
     child.on("close", (code) => {
+      if (settled) return;
+      settled = true;
+      armed?.clearOnSettle();
       // Treat as success if "accepted" appears in output, regardless of exit code.
       if (stdout.includes("accepted") || stderr.includes("accepted")) {
         resolve();
@@ -510,6 +536,9 @@ export async function acceptLicenses(
       );
     });
     child.on("error", (err) => {
+      if (settled) return;
+      settled = true;
+      armed?.clearOnSettle();
       reject(err);
     });
   });

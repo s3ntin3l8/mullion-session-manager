@@ -9,6 +9,11 @@ vi.mock("node:child_process", async (importOriginal) => {
   return { ...actual, spawn: spawnMock };
 });
 
+// Mock armKillEscalation so the 30s timeout doesn't fire in tests.
+vi.mock("../../src/services/session-process.js", () => ({
+  armKillEscalation: vi.fn(() => ({ clearOnSettle: vi.fn() })),
+}));
+
 import { spawn } from "node:child_process";
 import { acceptLicenses } from "../../src/services/avd-manager.js";
 
