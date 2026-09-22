@@ -119,11 +119,24 @@
 }
 
 /* Resize handle on the sidebar's right edge — hover-revealed, same pattern
-   as .dock-resize-handle. Hidden when sidebar is collapsed. */
+   as .dock-resize-handle. Hidden when sidebar is collapsed.
+
+   Must lie fully INSIDE the wrapper's padding box (no negative `right`):
+   .sidebar-wrapper sets `overflow-y: auto` with no overflow-x, so per the
+   CSS Overflow spec a `visible` axis paired with a non-`visible` one
+   computes to `auto` and the wrapper silently becomes horizontally
+   scrollable. An abspos child whose containing block is that scroll
+   container then contributes to its scrollable overflow — a 3px overhang
+   (the old `right: -3px`) adds a permanent 3px to scrollWidth regardless
+   of sidebar width, and .cmux-scroll styles that as a visible 9px
+   scrollbar. .dock gets away with the same straddle because .dock's
+   `overflow: hidden` clips the overhang instead of scrolling it. Same
+   trap called out next to `.dock-split` in dock.css and next to
+   `.github-panel-repo-name` in empty-states.css. */
 .sidebar-resize-handle {
   position: absolute;
   top: 0;
-  right: -3px;
+  right: 0;
   bottom: 0;
   width: 6px;
   cursor: col-resize;
@@ -134,7 +147,8 @@
   position: absolute;
   top: 0;
   bottom: 0;
-  left: 2px;
+  left: auto;
+  right: 0;
   width: 2px;
   background: transparent;
 }

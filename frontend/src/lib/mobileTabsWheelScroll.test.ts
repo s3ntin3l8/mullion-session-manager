@@ -335,4 +335,23 @@ describe("sidebar.css contract with attachMobileTabsEdgeState's classes", () => 
     expect(rule, "no .mobile-tabs.at-end::after rule in sidebar.css").not.toBeNull();
     expect(rule![1]).toMatch(/opacity:\s*0\s*;/);
   });
+
+  // .sidebar-resize-handle is an absolutely-positioned descendant of the
+  // scroll container .sidebar-wrapper (overflow-y: auto). Per CSS Overflow,
+  // a `visible` axis paired with a non-`visible` one computes to `auto`,
+  // so the wrapper is also horizontally scrollable — and any abspos child
+  // whose containing block IS that scroll container contributes to its
+  // scrollable overflow. A negative `right` overhangs the padding box and
+  // produces a permanent horizontal scrollbar regardless of sidebar width.
+  // The contract: the handle must lie fully INSIDE the padding box.
+  it("keeps .sidebar-resize-handle inside the wrapper's padding box (no negative `right`)", () => {
+    const block = sidebarCss.match(/\.sidebar-resize-handle\s*\{([^}]*)\}/);
+    expect(block, "no .sidebar-resize-handle rule in sidebar.css").not.toBeNull();
+    // Unit-less `0` is valid CSS and is what this rule uses; tolerate both
+    // `right: 0` and `right: Npx` so the assertion tracks the contract (>= 0)
+    // rather than a particular unit choice.
+    const right = block![1].match(/right:\s*(-?[\d.]+)/);
+    expect(right, "no `right:` declaration on .sidebar-resize-handle").not.toBeNull();
+    expect(Number(right![1])).toBeGreaterThanOrEqual(0);
+  });
 });
