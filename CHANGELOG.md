@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.27](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.26...v0.3.27) (2026-09-22)
+
+
+### Bug Fixes
+
+* remove phantom horizontal scrollbar in sidebar ([#1371](https://github.com/s3ntin3l8/mullion-session-manager/issues/1371)) ([08e2f5c](https://github.com/s3ntin3l8/mullion-session-manager/commit/08e2f5cb6f163f10bd0428495407cde7709b34c9))
+
 ## [0.3.26](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.25...v0.3.26) (2026-09-20)
 
 
