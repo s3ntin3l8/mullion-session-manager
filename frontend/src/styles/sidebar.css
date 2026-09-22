@@ -131,7 +131,8 @@
    of sidebar width, and .cmux-scroll styles that as a visible 9px
    scrollbar. .dock gets away with the same straddle because .dock's
    `overflow: hidden` clips the overhang instead of scrolling it. Same
-   trap called out at dock.css:378 and empty-states.css:1776. */
+   trap called out next to `.dock-split` in dock.css and next to
+   `.github-panel-repo-name` in empty-states.css. */
 .sidebar-resize-handle {
   position: absolute;
   top: 0;
