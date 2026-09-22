@@ -252,14 +252,14 @@ export function DevicesSection() {
     });
   };
 
-  // Refresh available images after a successful install/uninstall, and the
-  // installed-image list the New-AVD dropdown reads so a freshly installed
-  // image (e.g. a Play Store image) shows up without reopening the form.
+  // Refresh available images after a successful install/uninstall.
   useEffect(() => {
     if (installOp.status !== "done") return;
+    let cancelled = false;
     api
       .listAvailableSystemImages()
       .then(({ systemImages: images }) => {
+        if (cancelled) return;
         setAvailableImages(images);
         setAvailableLoaded(true);
       })
@@ -267,9 +267,22 @@ export function DevicesSection() {
         // Non-critical — the stale list will still render; the user can
         // re-open the section to retry.
       });
+    return () => {
+      cancelled = true;
+    };
+  }, [installOp.status]);
+
+  // Refresh the installed-image list the New-AVD dropdown reads so a freshly
+  // installed image (e.g. a Play Store image) shows up without reopening the
+  // form. Only while the form is open — reopening refetches anyway via the
+  // newAvdOpen effect above — and guarded like every other fetch here.
+  useEffect(() => {
+    if (installOp.status !== "done" || !newAvdOpen) return;
+    let cancelled = false;
     api
       .listSystemImages()
       .then(({ systemImages: images }) => {
+        if (cancelled) return;
         setSystemImages(images);
         setSelectedSystemImage((prev) =>
           prev && images.some((img) => img.packagePath === prev)
@@ -281,7 +294,10 @@ export function DevicesSection() {
         // Non-critical — same posture as above: the dropdown keeps its
         // current list and refetches the next time the form is opened.
       });
-  }, [installOp.status]);
+    return () => {
+      cancelled = true;
+    };
+  }, [installOp.status, newAvdOpen]);
 
   // Issue #1347 — editing a physical device's stored adb address in place,
   // without delete-and-recreate. Keyed by device id (not a boolean) so only
