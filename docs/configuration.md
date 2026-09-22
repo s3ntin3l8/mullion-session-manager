@@ -157,7 +157,7 @@ See [`device-panel.md`](device-panel.md) for the full design.
 
 > **cmdline-tools version matters.** The AVD device-profile list
 > (`avdmanager list device`) is whatever the installed cmdline-tools
-> package bundles — Modern Pixel profiles (Pixel 8/9/10) need
+> package bundles — modern Pixel profiles (Pixel 8/9/10) need
 > **cmdline-tools ≥ 22**. (The available-system-images list
 > (`sdkmanager --list`) resolves from Google's remote repository, not
 > the bundle.) Upgrade in place with
