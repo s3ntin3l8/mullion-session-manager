@@ -282,7 +282,16 @@ afterward via `POST /api/devices {avdName}` (§3 above), the same way
 - **`GET /api/device-profiles`** — `avdmanager list device`, parsed from its
   `id: N or "..."` lines (the token `-d` actually accepts, not the
   human-readable `Name:` line below it, which can contain spaces/parens
-  `-d` doesn't take verbatim).
+  `-d` doesn't take verbatim). The profile list comes from the
+  `nexus.xml` bundled inside the installed cmdline-tools' own sdklib jar,
+  so its freshness is bounded by **that** package's version — cmdline-tools
+  12.0 tops out at Pixel 7, while cmdline-tools 22.0 and newer add the
+  Pixel 8/9/10 family (`pixel_10a` arrives in 23.0). A host missing those
+  profiles should upgrade in place: `sdkmanager "cmdline-tools;latest"`
+  (with `--sdk_root=<root>` if your sdkmanager needs it), re-point
+  `DEVICE_AVDMANAGER_PATH` / `DEVICE_SDKMANAGER_PATH` at
+  `<root>/cmdline-tools/latest/bin/…` if they name a versioned bin dir,
+  then restart Mullion.
 - **`GET /api/system-images`** — lists system images **already installed**
   on this host, by scanning `<sdkRoot>/system-images/<api>/<tag>/<abi>/`
   directly on disk rather than shelling out to `avdmanager`/`sdkmanager` —

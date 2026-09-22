@@ -54,7 +54,7 @@ describe("acceptLicenses", () => {
 
     expect(spawn).toHaveBeenCalledWith(
       "/opt/sdk/sdkmanager",
-      ["--licenses", "--sdk_root", "/opt/sdk"],
+      ["--licenses", "--sdk_root=/opt/sdk"],
       { stdio: ["pipe", "pipe", "pipe"] },
     );
   });

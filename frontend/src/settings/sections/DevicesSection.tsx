@@ -254,18 +254,54 @@ export function DevicesSection() {
 
   // Refresh available images after a successful install/uninstall.
   useEffect(() => {
-    if (installOp.status === "done") {
-      api
-        .listAvailableSystemImages()
-        .then(({ systemImages: images }) => {
-          setAvailableImages(images);
-          setAvailableLoaded(true);
-        })
-        .catch(() => {
-          // Non-critical — the stale list will still render; the user can
-          // re-open the section to retry.
-        });
-    }
+    if (installOp.status !== "done") return;
+    let cancelled = false;
+    api
+      .listAvailableSystemImages()
+      .then(({ systemImages: images }) => {
+        if (cancelled) return;
+        setAvailableImages(images);
+        setAvailableLoaded(true);
+      })
+      .catch(() => {
+        // Non-critical — the stale list will still render; the user can
+        // re-open the section to retry.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [installOp.status]);
+
+  // Refresh the installed-image list the New-AVD dropdown reads so a freshly
+  // installed image (e.g. a Play Store image) shows up without reopening the
+  // form. Only while the form is already open — reopening after the fact is
+  // covered by the newAvdOpen effect above — so opening the form later never
+  // fires this effect a second time for the same install.
+  const newAvdOpenRef = useRef(newAvdOpen);
+  useEffect(() => {
+    newAvdOpenRef.current = newAvdOpen;
+  }, [newAvdOpen]);
+  useEffect(() => {
+    if (installOp.status !== "done" || !newAvdOpenRef.current) return;
+    let cancelled = false;
+    api
+      .listSystemImages()
+      .then(({ systemImages: images }) => {
+        if (cancelled) return;
+        setSystemImages(images);
+        setSelectedSystemImage((prev) =>
+          prev && images.some((img) => img.packagePath === prev)
+            ? prev
+            : (images[0]?.packagePath ?? ""),
+        );
+      })
+      .catch(() => {
+        // Non-critical — same posture as above: the dropdown keeps its
+        // current list and refetches the next time the form is opened.
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [installOp.status]);
 
   // Issue #1347 — editing a physical device's stored adb address in place,
@@ -641,8 +677,8 @@ export function DevicesSection() {
                   )}
                   {provisioningLoaded && !createAvdError && systemImages.length === 0 && (
                     <div style={{ fontSize: 11.5, color: "var(--dim)", marginTop: 4 }}>
-                      No system images installed on this host — install one via the SDK's sdkmanager
-                      first.
+                      No system images installed on this host — open “SDK system images” below and
+                      use Install to fetch one first.
                     </div>
                   )}
                   {provisioningLoaded && deviceProfiles.length > 0 && (

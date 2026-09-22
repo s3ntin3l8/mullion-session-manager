@@ -350,7 +350,7 @@ export async function listAvailableSystemImages(
   const { stdout } = await execFileWithEscalation(
     opts.execFileFn ?? execFileCb,
     sdkmanagerPath,
-    ["--list", "--sdk_root", sdkRoot],
+    ["--list", `--sdk_root=${sdkRoot}`],
     SDKMANAGER_LIST_TIMEOUT_MS,
   );
   const installed = listInstalledSystemImages(sdkRoot);
@@ -372,7 +372,7 @@ export async function installSystemImage(
     let armed: ReturnType<typeof armKillEscalation> | undefined;
     const child = execFileFn(
       sdkmanagerPath,
-      ["--install", packagePath, "--sdk_root", sdkRoot],
+      ["--install", packagePath, `--sdk_root=${sdkRoot}`],
       (error, stdout, stderr) => {
         if (settled) return;
         settled = true;
@@ -438,7 +438,7 @@ export async function uninstallSystemImage(
     let armed: ReturnType<typeof armKillEscalation> | undefined;
     const child = execFileFn(
       sdkmanagerPath,
-      ["--uninstall", packagePath, "--sdk_root", sdkRoot],
+      ["--uninstall", packagePath, `--sdk_root=${sdkRoot}`],
       (error, stdout, stderr) => {
         if (settled) return;
         settled = true;
@@ -495,7 +495,7 @@ export async function acceptLicenses(
     let settled = false;
     let armed: ReturnType<typeof armKillEscalation> | undefined;
 
-    const child = spawn(sdkmanagerPath, ["--licenses", "--sdk_root", sdkRoot], {
+    const child = spawn(sdkmanagerPath, ["--licenses", `--sdk_root=${sdkRoot}`], {
       stdio: ["pipe", "pipe", "pipe"],
     });
 

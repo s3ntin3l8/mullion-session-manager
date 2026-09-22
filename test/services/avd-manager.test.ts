@@ -400,7 +400,7 @@ describe("listAvailableSystemImages", () => {
     });
     expect(execFileFn).toHaveBeenCalledWith(
       "/opt/sdk/sdkmanager",
-      ["--list", "--sdk_root", "/opt/sdk"],
+      ["--list", "--sdk_root=/opt/sdk"],
       expect.any(Function),
     );
     expect(Array.isArray(result)).toBe(true);
@@ -431,7 +431,7 @@ describe("installSystemImage", () => {
     );
     expect(execFileFn).toHaveBeenCalledWith(
       "/opt/sdk/sdkmanager",
-      ["--install", "system-images;android-35;google_apis;x86_64", "--sdk_root", "/opt/sdk"],
+      ["--install", "system-images;android-35;google_apis;x86_64", "--sdk_root=/opt/sdk"],
       expect.any(Function),
     );
   });
@@ -506,7 +506,7 @@ describe("uninstallSystemImage", () => {
     );
     expect(execFileFn).toHaveBeenCalledWith(
       "/opt/sdk/sdkmanager",
-      ["--uninstall", "system-images;android-35;google_apis;x86_64", "--sdk_root", "/opt/sdk"],
+      ["--uninstall", "system-images;android-35;google_apis;x86_64", "--sdk_root=/opt/sdk"],
       expect.any(Function),
     );
   });
