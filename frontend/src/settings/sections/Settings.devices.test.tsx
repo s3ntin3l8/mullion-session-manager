@@ -736,6 +736,114 @@ describe("Settings -> Devices (issue #1326)", () => {
     expect(await screen.findByText("Operation complete.")).toBeInTheDocument();
   });
 
+  // Issue #1373 — a successful install must refresh the installed-image list
+  // the New-AVD dropdown reads, so a freshly installed image appears without
+  // reopening the form. Keep the previously selected image when it's still
+  // present; fall back to the first entry when it isn't.
+  it("install done refreshes the New-AVD system image dropdown without dropping the selection", async () => {
+    availableImagesDb = [
+      {
+        packagePath: "system-images;android-36;google_apis_playstore;x86_64",
+        apiLevel: "36",
+        tag: "google_apis_playstore",
+        tagDisplay: "Google Play Store",
+        abi: "x86_64",
+        installed: false,
+      },
+    ];
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(await screen.findByText("New device"));
+    await user.click(screen.getByRole("button", { name: "+ New AVD" }));
+    await screen.findByDisplayValue("API 35 — Google APIs (x86_64)"); // form loaded, selection = android-35
+
+    await user.click(screen.getByRole("button", { name: "Load available images" }));
+    await user.click(await screen.findByRole("button", { name: "Install" }));
+    const installWs = MockWebSocket.instances.find((ws) =>
+      ws.url.includes("/ws/system-image-install"),
+    )!;
+    act(() => installWs.triggerOpen());
+
+    // Backend now has the new image on disk; done triggers the refetch.
+    systemImagesDb = [
+      ...systemImagesDb,
+      {
+        packagePath: "system-images;android-36;google_apis_playstore;x86_64",
+        apiLevel: "36",
+        tagDisplay: "Google Play Store",
+        abi: "x86_64",
+      },
+    ];
+    act(() => installWs.triggerMessage(JSON.stringify({ type: "done" })));
+
+    expect(await screen.findByText("Operation complete.")).toBeInTheDocument();
+    // Selection kept (still present), new image now offered in the dropdown.
+    await waitFor(() => {
+      const select = screen.getByDisplayValue("API 35 — Google APIs (x86_64)");
+      expect(
+        within(select).getByRole("option", {
+          name: /API 36 — Google Play Store \(x86_64\)/,
+        }),
+      ).toBeInTheDocument();
+    });
+  });
+
+  it("install done falls back to the first image when the previous selection vanished", async () => {
+    availableImagesDb = [
+      {
+        packagePath: "system-images;android-36;google_apis;x86_64",
+        apiLevel: "36",
+        tag: "google_apis",
+        tagDisplay: "Google APIs",
+        abi: "x86_64",
+        installed: false,
+      },
+    ];
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(await screen.findByText("New device"));
+    await user.click(screen.getByRole("button", { name: "+ New AVD" }));
+    await screen.findByDisplayValue("API 35 — Google APIs (x86_64)");
+
+    await user.click(screen.getByRole("button", { name: "Load available images" }));
+    await user.click(await screen.findByRole("button", { name: "Install" }));
+    const installWs = MockWebSocket.instances.find((ws) =>
+      ws.url.includes("/ws/system-image-install"),
+    )!;
+    act(() => installWs.triggerOpen());
+
+    // Previous selection is no longer installed — only the new image remains.
+    systemImagesDb = [
+      {
+        packagePath: "system-images;android-36;google_apis;x86_64",
+        apiLevel: "36",
+        tagDisplay: "Google APIs",
+        abi: "x86_64",
+      },
+    ];
+    act(() => installWs.triggerMessage(JSON.stringify({ type: "done" })));
+
+    expect(await screen.findByText("Operation complete.")).toBeInTheDocument();
+    expect(await screen.findByDisplayValue("API 36 — Google APIs (x86_64)")).toBeInTheDocument();
+  });
+
+  it("empty-state copy points at the SDK system images section when none are installed", async () => {
+    systemImagesDb = [];
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(await screen.findByText("New device"));
+    await user.click(screen.getByRole("button", { name: "+ New AVD" }));
+
+    expect(
+      await screen.findByText(/open “SDK system images” below and use Install to fetch one first/),
+    ).toBeInTheDocument();
+    expect(screen.queryByDisplayValue("API 35 — Google APIs (x86_64)")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create AVD" })).toBeDisabled();
+  });
+
   it("install error shows the error message", async () => {
     availableImagesDb = [
       {

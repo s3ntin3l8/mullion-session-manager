@@ -155,6 +155,13 @@ See [`device-panel.md`](device-panel.md) for the full design.
 | `DEVICE_SDKMANAGER_PATH`    | (empty) | absolute path to the `sdkmanager` binary (Android SDK cmdline-tools), used for system image install/uninstall and license management — empty means "not configured"                |
 | `DEVICE_ANDROID_SDK_ROOT`   | (empty) | Android SDK root, for scanning installed system images (`<root>/system-images/...`) — empty means "not configured"                                                                 |
 
+> **cmdline-tools version matters.** The AVD device-profile list (`avdmanager
+list device`) and the available-system-images list (`sdkmanager --list`) are
+> both whatever the installed cmdline-tools package bundles. Modern Pixel
+> profiles (Pixel 8/9/10) need **cmdline-tools ≥ 23**; upgrade in place with
+> `sdkmanager "cmdline-tools;latest"` (pass `--sdk_root=<root>` if your
+> sdkmanager requires it) and restart Mullion.
+
 ## Deploy and update (versioned-release installs only)
 
 Only relevant to a `deploy/install.sh`-provisioned host — see

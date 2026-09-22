@@ -252,20 +252,35 @@ export function DevicesSection() {
     });
   };
 
-  // Refresh available images after a successful install/uninstall.
+  // Refresh available images after a successful install/uninstall, and the
+  // installed-image list the New-AVD dropdown reads so a freshly installed
+  // image (e.g. a Play Store image) shows up without reopening the form.
   useEffect(() => {
-    if (installOp.status === "done") {
-      api
-        .listAvailableSystemImages()
-        .then(({ systemImages: images }) => {
-          setAvailableImages(images);
-          setAvailableLoaded(true);
-        })
-        .catch(() => {
-          // Non-critical — the stale list will still render; the user can
-          // re-open the section to retry.
-        });
-    }
+    if (installOp.status !== "done") return;
+    api
+      .listAvailableSystemImages()
+      .then(({ systemImages: images }) => {
+        setAvailableImages(images);
+        setAvailableLoaded(true);
+      })
+      .catch(() => {
+        // Non-critical — the stale list will still render; the user can
+        // re-open the section to retry.
+      });
+    api
+      .listSystemImages()
+      .then(({ systemImages: images }) => {
+        setSystemImages(images);
+        setSelectedSystemImage((prev) =>
+          prev && images.some((img) => img.packagePath === prev)
+            ? prev
+            : (images[0]?.packagePath ?? ""),
+        );
+      })
+      .catch(() => {
+        // Non-critical — same posture as above: the dropdown keeps its
+        // current list and refetches the next time the form is opened.
+      });
   }, [installOp.status]);
 
   // Issue #1347 — editing a physical device's stored adb address in place,
@@ -641,8 +656,8 @@ export function DevicesSection() {
                   )}
                   {provisioningLoaded && !createAvdError && systemImages.length === 0 && (
                     <div style={{ fontSize: 11.5, color: "var(--dim)", marginTop: 4 }}>
-                      No system images installed on this host — install one via the SDK's sdkmanager
-                      first.
+                      No system images installed on this host — open “SDK system images” below and
+                      use Install to fetch one first.
                     </div>
                   )}
                   {provisioningLoaded && deviceProfiles.length > 0 && (
