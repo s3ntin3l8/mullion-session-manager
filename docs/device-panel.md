@@ -288,8 +288,10 @@ afterward via `POST /api/devices {avdName}` (§3 above), the same way
   12.0 tops out at Pixel 7, while cmdline-tools 22.0 and newer add the
   Pixel 8/9/10 family (`pixel_10a` arrives in 23.0). A host missing those
   profiles should upgrade in place: `sdkmanager "cmdline-tools;latest"`
-  (with `--sdk_root=<root>` if your sdkmanager needs it), then restart
-  Mullion.
+  (with `--sdk_root=<root>` if your sdkmanager needs it), re-point
+  `DEVICE_AVDMANAGER_PATH` / `DEVICE_SDKMANAGER_PATH` at
+  `<root>/cmdline-tools/latest/bin/…` if they name a versioned bin dir,
+  then restart Mullion.
 - **`GET /api/system-images`** — lists system images **already installed**
   on this host, by scanning `<sdkRoot>/system-images/<api>/<tag>/<abi>/`
   directly on disk rather than shelling out to `avdmanager`/`sdkmanager` —

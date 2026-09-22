@@ -274,10 +274,15 @@ export function DevicesSection() {
 
   // Refresh the installed-image list the New-AVD dropdown reads so a freshly
   // installed image (e.g. a Play Store image) shows up without reopening the
-  // form. Only while the form is open — reopening refetches anyway via the
-  // newAvdOpen effect above — and guarded like every other fetch here.
+  // form. Only while the form is already open — reopening after the fact is
+  // covered by the newAvdOpen effect above — so opening the form later never
+  // fires this effect a second time for the same install.
+  const newAvdOpenRef = useRef(newAvdOpen);
   useEffect(() => {
-    if (installOp.status !== "done" || !newAvdOpen) return;
+    newAvdOpenRef.current = newAvdOpen;
+  }, [newAvdOpen]);
+  useEffect(() => {
+    if (installOp.status !== "done" || !newAvdOpenRef.current) return;
     let cancelled = false;
     api
       .listSystemImages()
@@ -297,7 +302,7 @@ export function DevicesSection() {
     return () => {
       cancelled = true;
     };
-  }, [installOp.status, newAvdOpen]);
+  }, [installOp.status]);
 
   // Issue #1347 — editing a physical device's stored adb address in place,
   // without delete-and-recreate. Keyed by device id (not a boolean) so only
