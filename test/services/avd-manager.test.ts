@@ -334,6 +334,30 @@ const REAL_SDKMANAGER_LIST_OUTPUT = `Available Packages:
   build-tools;35.0.0        | 35     | Android SDK Build-Tools 35
 `;
 
+// Captured and adapted from a real `sdkmanager --list` on cmdline-tools 23.0
+// — the Android CLI under the sdkmanager deprecation shim prints a lowercase
+// section header and slash-delimited sdk-style paths in a space-aligned
+// table, not the classic pipe/semicolon package-path rows above. Issue:
+// "SDK system images" showed "No system images available." with no error
+// after #1374 made `--sdk_root=` succeed on this host. Two rows are adapted
+// from the capture rather than verbatim: the Installed-only android-33 row
+// (synthetic `(obsolete, installed-only)` suffix so the header-slice test
+// has something to pin) and android-35-ext14 (real `ext*` variants live
+// under `platforms/`, not `system-images/`) — so a later byte-diff against
+// a fresh capture is expected to differ on those lines, not a regex miss.
+const ANDROID_CLI_SDKMANAGER_LIST_OUTPUT = `Installed packages:
+  system-images/android-35/google_apis/x86_64                                             9.0.0                                  Google APIs Intel x86_64 Atom System Image
+  system-images/android-33/default/x86_64                                                 5.0.0                                  Default Intel x86_64 Atom System Image (obsolete, installed-only)
+
+Available packages:
+  build-tools/35.0.0                                                                      35.0.0                                 Android SDK Build-Tools 35
+  system-images/android-35/google_apis/x86_64                                             9.0.0                                  Google APIs Intel x86_64 Atom System Image
+  system-images/android-35/google_apis_playstore/x86_64                                   1.0.0                                  Google Play Intel x86_64 Atom System Image
+  system-images/android-35-ext14/google_apis_playstore/x86_64                             1.0.0                                  Google Play Intel x86_64 Atom System Image
+  system-images/android-35/google_apis/arm64-v8a                                          9.0.0                                  Google APIs ARM 64 v8a System Image
+  system-images/android-34/default/x86_64                                                 6.0.0                                  Default Intel x86_64 Atom System Image
+`;
+
 describe("parseSdkManagerList", () => {
   it("parses sdkmanager --list output into AvailableSystemImage objects for host ABI", () => {
     const result = parseSdkManagerList(REAL_SDKMANAGER_LIST_OUTPUT, [], "x86_64");
@@ -355,6 +379,50 @@ describe("parseSdkManagerList", () => {
     expect(x86Img?.installed).toBe(true);
   });
 
+  it("parses Android CLI (cmdline-tools 23) slash-path output and normalizes to semicolon packagePath", () => {
+    const result = parseSdkManagerList(ANDROID_CLI_SDKMANAGER_LIST_OUTPUT, [], "x86_64");
+    // arm64 image filtered out (host ABI x86_64); 4 x86_64 images remain.
+    // Sort: API 35 first (parseInt("35-ext14") === 35), then tag alpha —
+    // the two google_apis_playstore entries tie on tag, so stable sort
+    // keeps their source order (plain before -ext14).
+    expect(result.map((img) => img.packagePath)).toEqual([
+      "system-images;android-35;google_apis;x86_64",
+      "system-images;android-35;google_apis_playstore;x86_64",
+      "system-images;android-35-ext14;google_apis_playstore;x86_64",
+      "system-images;android-34;default;x86_64",
+    ]);
+    expect(result[0]).toMatchObject({
+      apiLevel: "35",
+      tag: "google_apis",
+      tagDisplay: "Google APIs Intel x86_64 Atom System Image",
+      abi: "x86_64",
+      installed: false,
+    });
+  });
+
+  it("does not scrape the Android CLI Installed packages section", () => {
+    const installed = [
+      {
+        packagePath: "system-images;android-35;google_apis;x86_64",
+        apiLevel: "35",
+        tagDisplay: "Google APIs",
+        abi: "x86_64",
+      },
+    ];
+    const result = parseSdkManagerList(ANDROID_CLI_SDKMANAGER_LIST_OUTPUT, installed, "x86_64");
+    const paths = result.map((img) => img.packagePath);
+    // android-33 lives only in the fixture's Installed block. The `seen`
+    // dedupe alone cannot hide it (it never appears under Available), so this
+    // assertion fails if the header-based section slice regresses to scanning
+    // the whole stdout.
+    expect(paths).not.toContain("system-images;android-33;default;x86_64");
+    expect(new Set(paths).size).toBe(paths.length);
+    expect(
+      result.find((img) => img.packagePath === "system-images;android-35;google_apis;x86_64")
+        ?.installed,
+    ).toBe(true);
+  });
+
   it("returns empty array when output has no matching lines", () => {
     const result = parseSdkManagerList("no system images here\n", [], "x86_64");
     expect(result).toEqual([]);
@@ -364,6 +432,31 @@ describe("parseSdkManagerList", () => {
     const output = `  system-images;android-35;google_apis;x86_64 | 7 | Google APIs x86_64 System Image\n`;
     const result = parseSdkManagerList(output, [], "x86_64");
     expect(result.length).toBe(1);
+  });
+
+  it("no-header fallback surfaces an installed-only image as installed", () => {
+    const output = `  system-images;android-33;default;x86_64 | 5 | Android TV x86_64\n`;
+    const installed = [
+      {
+        packagePath: "system-images;android-33;default;x86_64",
+        apiLevel: "33",
+        tag: "default",
+        abi: "x86_64",
+      },
+    ];
+    const result = parseSdkManagerList(output, installed, "x86_64");
+    expect(result).toHaveLength(1);
+    expect(result[0].packagePath).toBe("system-images;android-33;default;x86_64");
+    expect(result[0].installed).toBe(true);
+  });
+
+  it("skips a slash-dialect row whose version cell is blank instead of eating the description", () => {
+    const output = [
+      "Available packages:",
+      "  system-images/android-35/google_apis/x86_64   Google APIs Intel x86_64 System Image",
+    ].join("\n");
+    const result = parseSdkManagerList(output, [], "x86_64");
+    expect(result).toEqual([]);
   });
 
   it("sorts by API level descending, then tag alphabetically", () => {

@@ -33,6 +33,50 @@ import { PlusIcon } from "../../ui/icons.js";
 const AVD_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
 const AVD_NAME_HAS_ALPHANUMERIC = /[A-Za-z0-9]/;
 
+function isAvdNameValid(name: string): boolean {
+  return AVD_NAME_PATTERN.test(name) && AVD_NAME_HAS_ALPHANUMERIC.test(name);
+}
+
+// Names what's wrong with *this* value (the Row desc already states the
+// allowed set). Gating on the raw length (not trim) so a whitespace-only
+// name still gets an explanation instead of silently greying out Create AVD.
+function describeAvdNameError(raw: string): string | null {
+  if (raw.length === 0) return null; // empty field is the placeholder's job
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) {
+    // Fixed wording: interpolating raw here would render as “ ” once HTML
+    // collapses the whitespace, so the message would look like it lost its
+    // subject.
+    return "This name is only whitespace — use a name with letters or digits.";
+  }
+  if (AVD_NAME_PATTERN.test(trimmed)) {
+    if (AVD_NAME_HAS_ALPHANUMERIC.test(trimmed)) return null;
+    return `“${trimmed}” needs at least one letter or digit.`;
+  }
+  // Single-char membership via AVD_NAME_PATTERN itself — one source for the
+  // allowlist instead of re-spelling the char class here a third time.
+  // Invisible culprits get a visible label — interpolating the raw char
+  // would collapse to blank in HTML, the same failure the whitespace-only
+  // branch above was fixed for. `ch.trim() === ""` covers JS WhiteSpace
+  // (NBSP, thin space, …); `\p{Cf}` covers format chars (ZWSP, soft hyphen)
+  // that render blank but are not WhiteSpace, so trim alone misses them.
+  const badChars = [
+    ...new Set(
+      Array.from(trimmed)
+        .filter((ch) => !AVD_NAME_PATTERN.test(ch))
+        .map((ch) => {
+          if (ch.trim() === "" || /\p{Cf}/u.test(ch)) {
+            return ch === " "
+              ? "space"
+              : `U+${(ch.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, "0")}`;
+          }
+          return ch;
+        }),
+    ),
+  ];
+  return `“${trimmed}” contains ${badChars.join(", ")} — remove ${badChars.length === 1 ? "it" : "them"}.`;
+}
+
 function describeSystemImage(image: SystemImage): string {
   if (image.apiLevel && image.tagDisplay) {
     return `API ${image.apiLevel} — ${image.tagDisplay} (${image.abi ?? image.packagePath})`;
@@ -133,6 +177,11 @@ export function DevicesSection() {
   const [provisioningLoaded, setProvisioningLoaded] = useState(false);
   const [creatingAvd, setCreatingAvd] = useState(false);
   const [createAvdError, setCreateAvdError] = useState<string | null>(null);
+  // Single source for the New-AVD name's invalid *message* — the input's
+  // aria-invalid and the inline ErrorText both read this. Create AVD's
+  // disabled check calls isAvdNameValid directly (it must stay disabled for
+  // an empty field, which deliberately has no error message).
+  const avdNameError = describeAvdNameError(newAvdName);
 
   // Available system images browser — fetched lazily, only once the section
   // is actually visible. Filters out already-installed images and groups
@@ -352,12 +401,7 @@ export function DevicesSection() {
   const submitCreateAvd = () => {
     if (creatingAvd) return;
     const trimmedName = newAvdName.trim();
-    if (
-      !AVD_NAME_PATTERN.test(trimmedName) ||
-      !AVD_NAME_HAS_ALPHANUMERIC.test(trimmedName) ||
-      !selectedSystemImage ||
-      !selectedDeviceProfile
-    ) {
+    if (!isAvdNameValid(trimmedName) || !selectedSystemImage || !selectedDeviceProfile) {
       return;
     }
     setCreateAvdError(null);
@@ -652,9 +696,18 @@ export function DevicesSection() {
                         onKeyDown={(e) => {
                           if (e.key === "Enter") submitCreateAvd();
                         }}
+                        aria-invalid={avdNameError !== null}
                       />
                     </div>
                   </Row>
+                  {/* The Row desc above states the allowed set; this error
+                      names what's wrong with *this* value so Create AVD's
+                      disabled state (e.g. "Pixel 10 Pro XL" or "   ") isn't a
+                      silent mystery. role="alert" is the announce channel —
+                      no aria-describedby here, to avoid double-reading. */}
+                  {avdNameError !== null && (
+                    <ErrorText style={{ marginTop: 4 }}>{avdNameError}</ErrorText>
+                  )}
                   {!provisioningLoaded && (
                     <div className="settings-readonly-value" style={{ marginTop: 4 }}>
                       Loading system images and device profiles…
@@ -690,13 +743,18 @@ export function DevicesSection() {
                       />
                     </Row>
                   )}
+                  {provisioningLoaded && !createAvdError && deviceProfiles.length === 0 && (
+                    <div style={{ fontSize: 11.5, color: "var(--dim)", marginTop: 4 }}>
+                      No device profiles known to avdmanager on this host — check the SDK
+                      cmdline-tools install.
+                    </div>
+                  )}
                   <div style={{ marginTop: 8 }}>
                     <SecondaryButton
                       onClick={submitCreateAvd}
                       disabled={
                         creatingAvd ||
-                        !AVD_NAME_PATTERN.test(newAvdName.trim()) ||
-                        !AVD_NAME_HAS_ALPHANUMERIC.test(newAvdName.trim()) ||
+                        !isAvdNameValid(newAvdName.trim()) ||
                         !selectedSystemImage ||
                         !selectedDeviceProfile
                       }

@@ -844,6 +844,125 @@ describe("Settings -> Devices (issue #1326)", () => {
     expect(screen.getByRole("button", { name: "Create AVD" })).toBeDisabled();
   });
 
+  // A name with spaces (e.g. "Pixel 10 Pro XL") fails AVD_NAME_PATTERN and
+  // silently disables Create AVD — surface an inline error that names what's
+  // wrong with this value (the Row desc already states the allowed set).
+  it("shows an inline AVD-name validation error while the name has disallowed characters", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(await screen.findByText("New device"));
+    await user.click(screen.getByRole("button", { name: "+ New AVD" }));
+    await screen.findByDisplayValue("pixel_6");
+
+    const nameInput = screen.getByPlaceholderText("Pixel_8_API_35");
+    await user.type(nameInput, "Pixel 10 Pro XL");
+    expect(await screen.findByText(/contains space — remove it\./)).toBeInTheDocument();
+    expect(nameInput).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByRole("button", { name: "Create AVD" })).toBeDisabled();
+
+    // Clearing back to a valid name hides the error again.
+    await user.clear(nameInput);
+    await user.type(nameInput, "Pixel_10_Pro_XL");
+    await waitFor(() => {
+      expect(screen.queryByText(/contains/)).not.toBeInTheDocument();
+    });
+    expect(nameInput).toHaveAttribute("aria-invalid", "false");
+    expect(screen.getByRole("button", { name: "Create AVD" })).toBeEnabled();
+  });
+
+  it("names the value when it has no letter or digit", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(await screen.findByText("New device"));
+    await user.click(screen.getByRole("button", { name: "+ New AVD" }));
+    await screen.findByDisplayValue("pixel_6");
+
+    // "___" passes AVD_NAME_PATTERN but fails AVD_NAME_HAS_ALPHANUMERIC.
+    await user.type(screen.getByPlaceholderText("Pixel_8_API_35"), "___");
+    expect(
+      await screen.findByText(/“___” needs at least one letter or digit\./),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create AVD" })).toBeDisabled();
+  });
+
+  it("empty-state copy points at the cmdline-tools install when no device profiles are known", async () => {
+    const user = userEvent.setup();
+    deviceProfilesDb = [];
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(await screen.findByText("New device"));
+    await user.click(screen.getByRole("button", { name: "+ New AVD" }));
+
+    expect(
+      await screen.findByText(/No device profiles known to avdmanager on this host/),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create AVD" })).toBeDisabled();
+  });
+
+  it("explains a whitespace-only name instead of silently greying Create AVD", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(await screen.findByText("New device"));
+    await user.click(screen.getByRole("button", { name: "+ New AVD" }));
+    await screen.findByDisplayValue("pixel_6");
+
+    const nameInput = screen.getByPlaceholderText("Pixel_8_API_35");
+    // Spaces only: trim().length === 0, but the field is non-empty — the
+    // same silent grey-out this PR sets out to explain must not reappear.
+    await user.type(nameInput, "   ");
+    expect(await screen.findByText(/This name is only whitespace/)).toBeInTheDocument();
+    expect(nameInput).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByRole("button", { name: "Create AVD" })).toBeDisabled();
+  });
+
+  it("labels non-breaking-space culprits by code point so the message isn't blank", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(await screen.findByText("New device"));
+    await user.click(screen.getByRole("button", { name: "+ New AVD" }));
+    await screen.findByDisplayValue("pixel_6");
+
+    // U+00A0 fails AVD_NAME_PATTERN; `ch === " "` is false, and HTML would
+    // collapse the raw NBSP to a blank — must name it as U+00A0 instead.
+    // Escape form keeps an invisible char from being lost to tooling.
+    await user.type(screen.getByPlaceholderText("Pixel_8_API_35"), "Pixel\u00a010");
+    expect(await screen.findByText(/contains U\+00A0/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create AVD" })).toBeDisabled();
+  });
+
+  it("labels zero-width-space (Cf) culprits by code point so the message isn't blank", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(await screen.findByText("New device"));
+    await user.click(screen.getByRole("button", { name: "+ New AVD" }));
+    await screen.findByDisplayValue("pixel_6");
+
+    // U+200B is Cf, not WhiteSpace: `ch.trim() === ""` is false, so only
+    // the `\p{Cf}` arm labels it — without it the message loses its subject.
+    await user.type(screen.getByPlaceholderText("Pixel_8_API_35"), "Pixel\u200b10 Pro");
+    expect(await screen.findByText(/contains U\+200B/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create AVD" })).toBeDisabled();
+  });
+
+  it("does not show the name validation error while the field is still empty", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(await screen.findByText("New device"));
+    await user.click(screen.getByRole("button", { name: "+ New AVD" }));
+    await screen.findByDisplayValue("pixel_6");
+
+    expect(
+      screen.queryByText(/contains|needs at least one|is only whitespace/),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create AVD" })).toBeDisabled();
+  });
+
   it("install error shows the error message", async () => {
     availableImagesDb = [
       {
