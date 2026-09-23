@@ -918,6 +918,21 @@ describe("Settings -> Devices (issue #1326)", () => {
     expect(screen.getByRole("button", { name: "Create AVD" })).toBeDisabled();
   });
 
+  it("labels non-breaking-space culprits by code point so the message isn't blank", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(await screen.findByText("New device"));
+    await user.click(screen.getByRole("button", { name: "+ New AVD" }));
+    await screen.findByDisplayValue("pixel_6");
+
+    // U+00A0 fails AVD_NAME_PATTERN; `ch === " "` is false, and HTML would
+    // collapse the raw NBSP to a blank — must name it as U+00A0 instead.
+    await user.type(screen.getByPlaceholderText("Pixel_8_API_35"), "Pixel 10");
+    expect(await screen.findByText(/contains U\+00A0/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create AVD" })).toBeDisabled();
+  });
+
   it("does not show the name validation error while the field is still empty", async () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);

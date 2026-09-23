@@ -55,11 +55,21 @@ function describeAvdNameError(raw: string): string | null {
   }
   // Single-char membership via AVD_NAME_PATTERN itself — one source for the
   // allowlist instead of re-spelling the char class here a third time.
+  // Whitespace-only culprits (NBSP, thin space, …) get a visible label —
+  // interpolating the raw char would collapse to blank in HTML, the same
+  // failure the whitespace-only branch above was fixed for.
   const badChars = [
     ...new Set(
       Array.from(trimmed)
         .filter((ch) => !AVD_NAME_PATTERN.test(ch))
-        .map((ch) => (ch === " " ? "space" : ch)),
+        .map((ch) => {
+          if (ch.trim() === "") {
+            return ch === " "
+              ? "space"
+              : `U+${(ch.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, "0")}`;
+          }
+          return ch;
+        }),
     ),
   ];
   return `“${trimmed}” contains ${badChars.join(", ")} — remove ${badChars.length === 1 ? "it" : "them"}.`;
