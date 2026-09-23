@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.28](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.27...v0.3.28) (2026-09-22)
+
+
+### Bug Fixes
+
+* sdkmanager --sdk_root rejected, missing Pixel 8+ device profiles, and stale New-AVD image dropdown after install ([#1374](https://github.com/s3ntin3l8/mullion-session-manager/issues/1374)) ([3586ddf](https://github.com/s3ntin3l8/mullion-session-manager/commit/3586ddfbb99d6c569fdc04a0304696fb288c00b4))
+
 ## [0.3.27](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.26...v0.3.27) (2026-09-22)
 
 
