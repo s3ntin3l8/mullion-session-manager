@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.29](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.28...v0.3.29) (2026-09-23)
+
+
+### Bug Fixes
+
+* parse Android CLI sdkmanager output and explain why Create AVD stays disabled ([#1376](https://github.com/s3ntin3l8/mullion-session-manager/issues/1376)) ([e47bdaa](https://github.com/s3ntin3l8/mullion-session-manager/commit/e47bdaa3ef08f5969e6d539493a2bfc583827564))
+
 ## [0.3.28](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.27...v0.3.28) (2026-09-22)
 
 
