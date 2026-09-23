@@ -106,46 +106,48 @@ condensed for an in-session agent, alongside the scope caveats most likely
 to trip one up (the auth-disabled full-scope-for-everyone mode in
 particular).
 
-| Op                     | Scope           | REST equivalent                                          |
-| ---------------------- | --------------- | -------------------------------------------------------- |
-| `ping`                 | full, session   | — (answered in-process, no REST call)                    |
-| `sessions.list`        | full            | `GET /api/sessions`                                      |
-| `sessions.get`         | full, session   | `GET /api/sessions/:id`                                  |
-| `sessions.create`      | full            | `POST /api/sessions`                                     |
-| `sessions.spawn_child` | full, session   | `POST /api/sessions`                                     |
-| `sessions.kill`        | full            | `DELETE /api/sessions/:id`                               |
-| `sessions.rename`      | full, session   | `PATCH /api/sessions/:id`                                |
-| `sessions.scrollback`  | full, session   | `GET /api/sessions/:id/scrollback`                       |
-| `sessions.attach`      | full, session   | stream — see below                                       |
-| `sessions.input`       | full, session   | stream — see below                                       |
-| `sessions.resize`      | full, session   | stream — see below                                       |
-| `sessions.detach`      | full, session   | stream — see below                                       |
-| `events.subscribe`     | full, session   | stream — see below                                       |
-| `events.seen`          | full, session   | stream — see below                                       |
-| `events.unsubscribe`   | full, session   | stream — see below                                       |
-| `events.query`         | full, session   | `GET /api/events`                                        |
-| `browser.action`       | full, session   | `POST /api/sessions/:id/browser`                         |
-| `browser.find`         | full, session   | `POST /api/sessions/:id/browser/find`                    |
-| `browser.bindings`     | full, session   | `GET /api/sessions/:id/browser`                          |
-| `device.list`          | full, session   | `GET /api/devices`                                       |
-| `device.get`           | full, session   | `GET /api/devices/:id`                                   |
-| `device.create`        | full, session\* | `POST /api/devices`                                      |
-| `device.action`        | full, session   | `POST /api/devices/:id/action`                           |
-| `device.terminate`     | full, session   | `DELETE /api/devices/:id`                                |
-| `device.pair`          | full            | `POST /api/devices/pair`                                 |
-| `projects.list`        | full            | `GET /api/projects`                                      |
-| `projects.actions`     | full, session   | `GET /api/projects/:id/actions`                          |
-| `projects.dock`        | full            | `GET /api/projects/:id/dock`                             |
-| `projects.get_tooling` | full, session   | `GET /api/projects/:id/tooling`                          |
-| `projects.set_tooling` | full            | `PUT /api/projects/:id/tooling[/{skill,reviewer-agent}]` |
-| `previews.create`      | full            | `POST /api/previews`                                     |
-| `previews.get`         | full            | `GET /api/previews/:slug`                                |
-| `previews.delete`      | full            | `DELETE /api/previews/:slug`                             |
-| `previews.list`        | full            | `GET /api/previews`                                      |
-| `agents.list`          | full            | `GET /api/agents`                                        |
-| `bundle.status`        | full            | `GET /api/bundle-sync/status`                            |
-| `bundle.resync`        | full            | `POST /api/bundle-sync/resync`                           |
-| `bundle.remove`        | full            | `POST /api/bundle-sync/remove`                           |
+| Op                        | Scope           | REST equivalent                                          |
+| ------------------------- | --------------- | -------------------------------------------------------- |
+| `ping`                    | full, session   | — (answered in-process, no REST call)                    |
+| `sessions.list`           | full            | `GET /api/sessions`                                      |
+| `sessions.get`            | full, session   | `GET /api/sessions/:id`                                  |
+| `sessions.create`         | full            | `POST /api/sessions`                                     |
+| `sessions.spawn_child`    | full, session   | `POST /api/sessions`                                     |
+| `sessions.kill`           | full            | `DELETE /api/sessions/:id`                               |
+| `sessions.rename`         | full, session   | `PATCH /api/sessions/:id`                                |
+| `sessions.scrollback`     | full, session   | `GET /api/sessions/:id/scrollback`                       |
+| `sessions.attach`         | full, session   | stream — see below                                       |
+| `sessions.input`          | full, session   | stream — see below                                       |
+| `sessions.resize`         | full, session   | stream — see below                                       |
+| `sessions.detach`         | full, session   | stream — see below                                       |
+| `events.subscribe`        | full, session   | stream — see below                                       |
+| `events.seen`             | full, session   | stream — see below                                       |
+| `events.unsubscribe`      | full, session   | stream — see below                                       |
+| `events.query`            | full, session   | `GET /api/events`                                        |
+| `browser.action`          | full, session   | `POST /api/sessions/:id/browser`                         |
+| `browser.find`            | full, session   | `POST /api/sessions/:id/browser/find`                    |
+| `browser.bindings`        | full, session   | `GET /api/sessions/:id/browser`                          |
+| `device.list`             | full, session   | `GET /api/devices`                                       |
+| `device.get`              | full, session   | `GET /api/devices/:id`                                   |
+| `device.create`           | full, session\* | `POST /api/devices`                                      |
+| `device.action`           | full, session   | `POST /api/devices/:id/action`                           |
+| `device.terminate`        | full, session   | `DELETE /api/devices/:id`                                |
+| `device.pair`             | full            | `POST /api/devices/pair`                                 |
+| `device.pair-and-connect` | full            | `POST /api/devices/pair-and-connect`                     |
+| `device.discovered`       | full, session   | `GET /api/devices/discovered`                            |
+| `projects.list`           | full            | `GET /api/projects`                                      |
+| `projects.actions`        | full, session   | `GET /api/projects/:id/actions`                          |
+| `projects.dock`           | full            | `GET /api/projects/:id/dock`                             |
+| `projects.get_tooling`    | full, session   | `GET /api/projects/:id/tooling`                          |
+| `projects.set_tooling`    | full            | `PUT /api/projects/:id/tooling[/{skill,reviewer-agent}]` |
+| `previews.create`         | full            | `POST /api/previews`                                     |
+| `previews.get`            | full            | `GET /api/previews/:slug`                                |
+| `previews.delete`         | full            | `DELETE /api/previews/:slug`                             |
+| `previews.list`           | full            | `GET /api/previews`                                      |
+| `agents.list`             | full            | `GET /api/agents`                                        |
+| `bundle.status`           | full            | `GET /api/bundle-sync/status`                            |
+| `bundle.resync`           | full            | `POST /api/bundle-sync/resync`                           |
+| `bundle.remove`           | full            | `POST /api/bundle-sync/remove`                           |
 
 `events.query` (issue #213, roadmap 4.7) is a one-shot request/response query
 over the _persisted_ `session_events` table — distinct from `events.subscribe`
@@ -529,6 +531,15 @@ different from every other op above — its **three-tier scope story**.
   tears down the live process/scope.
 - **`device.pair`** — **full scope only**, no exceptions. `body` is
   `{pairingAddress, pairingCode}`, forwarded to `POST /api/devices/pair`.
+- **`device.pair-and-connect`** — **full scope only** for the same reason as
+  `device.pair` below. `body` is either `{discoveryId, pairingCode,
+connectAddress?, name?}` (use `device.discovered` first to look up an
+  `id`) or `{pairingAddress, connectAddress, pairingCode, name?}` (manual
+  fallback — both ports must be supplied). Atomic pair+connect+insert.
+- **`device.discovered`** — `body: {}`. Returns the current mDNS snapshot of
+  nearby phones in Wireless-debugging mode (`{id, name, host, pairingAddress?,
+connectAddress?, device?, model?, product?, discoveredAt}[]`). Empty array
+  when `DEVICE_DISCOVERY_ENABLED=false` or nothing is in range.
 
 **Why `device.*` is reachable at session scope at all**, unlike most
 control-socket ops: the device panel exists so an agent can screenshot, tap,
@@ -543,6 +554,8 @@ tap/screenshot, not a leaked credential.
 - **`device.pair`**, unconditionally — pairing authorizes the _host's_ adb
   server to trust a new piece of hardware, a materially bigger act than
   driving a device Mullion already manages.
+- **`device.pair-and-connect`** — same "dials an arbitrary address" reasoning
+  as the next bullet; the same full-scope gate applies, unconditionally.
 - **`device.create` when `body.kind === "physical"`** — `wireless.connect()`
   makes the host's adb server dial an arbitrary network address a caller
   supplies, an outbound-dial/internal-network-probe primitive the emulator

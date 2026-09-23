@@ -2,6 +2,7 @@ import fp from "fastify-plugin";
 import type { FastifyInstance } from "fastify";
 import { eq } from "drizzle-orm";
 import { DeviceManager } from "../services/device-manager.js";
+import { DeviceDiscoveryService } from "../services/device-discovery.js";
 import { devices } from "../db/schema.js";
 import { ensureSessionsDir } from "./pty.js";
 
@@ -61,13 +62,31 @@ export const devicePlugin = fp(async (app: FastifyInstance) => {
 
   app.decorate("device", manager);
 
+  // Companion to the manager: the mDNS scanner that surfaces nearby
+  // Android phones in wireless-debugging mode (issue #1378). Independent of
+  // DEVICE_ENABLED — discovery is a read-only LAN probe and stays useful
+  // even when the rest of the device panel is off (the user can still see
+  // what phones are out there before deciding to enable the feature).
+  // Always constructed; start()/stop() are gated by DEVICE_DISCOVERY_ENABLED
+  // inside the service itself so a disabled scanner never opens a UDP
+  // socket. Started eagerly (mDNS discovery is silent and adds no
+  // protocol surface); torn down in onClose alongside the manager.
+  const discovery = new DeviceDiscoveryService({
+    enabled: app.config.DEVICE_DISCOVERY_ENABLED,
+    intervalMs: app.config.DEVICE_DISCOVERY_INTERVAL_MS,
+  });
+  discovery.start();
+  app.decorate("deviceDiscovery", discovery);
+
   app.addHook("onClose", async () => {
     await manager.killAll();
+    discovery.stop();
   });
 });
 
 declare module "fastify" {
   interface FastifyInstance {
     device: DeviceManager;
+    deviceDiscovery: DeviceDiscoveryService;
   }
 }

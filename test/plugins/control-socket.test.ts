@@ -2541,6 +2541,82 @@ describe("controlSocketPlugin (issue #185)", () => {
         socket.destroy();
       });
 
+      it("device.pair-and-connect (full scope): dispatches to POST /api/devices/pair-and-connect", async () => {
+        app = await buildApp();
+        await app.ready();
+        const socket = await fullScopeSocket();
+        socket.write(
+          `${JSON.stringify({
+            id: 1,
+            op: "device.pair-and-connect",
+            body: {
+              pairingAddress: "192.168.1.23:41234",
+              connectAddress: "192.168.1.23:37251",
+              pairingCode: "123456",
+            },
+          })}\n`,
+        );
+        // No real adb server in this test env — the route's own validation,
+        // a stale row collision from a sibling test, or pair()'s own
+        // network failure can each surface as 400/409/500. The point is
+        // that the op DISPATCHES at full scope, not that the pairing
+        // succeeds (that's covered end-to-end by test/routes/
+        // devices-discovery.test.ts with mocked adb).
+        const reply = await waitForReply(socket);
+        expect([200, 201, 400, 409, 500]).toContain(reply.status);
+        socket.destroy();
+      });
+
+      it("device.pair-and-connect (session scope): rejected — same full-only gate as device.pair", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession();
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(
+          `${JSON.stringify({
+            id: 1,
+            op: "device.pair-and-connect",
+            body: {
+              pairingAddress: "192.168.1.23:41234",
+              connectAddress: "192.168.1.23:37251",
+              pairingCode: "123456",
+            },
+          })}\n`,
+        );
+        expect(await waitForReply(socket)).toEqual({
+          id: 1,
+          ok: false,
+          status: 403,
+          error: "not permitted for this connection's scope",
+        });
+        socket.destroy();
+      });
+
+      it("device.discovered (full scope): dispatches to GET /api/devices/discovered and returns an array", async () => {
+        app = await buildApp();
+        await app.ready();
+        const socket = await fullScopeSocket();
+        socket.write(`${JSON.stringify({ id: 1, op: "device.discovered" })}\n`);
+        const reply = await waitForReply(socket);
+        expect(reply.ok).toBe(true);
+        expect(reply.status).toBe(200);
+        expect(Array.isArray(reply.result)).toBe(true);
+        socket.destroy();
+      });
+
+      it("device.discovered (session scope): dispatches at session scope — read-only, no network side-effects", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession();
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(`${JSON.stringify({ id: 1, op: "device.discovered" })}\n`);
+        const reply = await waitForReply(socket);
+        expect(reply.ok).toBe(true);
+        expect(reply.status).toBe(200);
+        expect(Array.isArray(reply.result)).toBe(true);
+        socket.destroy();
+      });
+
       it("device.terminate 400s with 'deviceId is required' when omitted", async () => {
         app = await buildApp();
         await app.ready();

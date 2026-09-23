@@ -1471,6 +1471,105 @@ describe("runCommand", () => {
       expect(await runCommand(["device", "connect"], { client: fakeClient(), io })).toBe(2);
     });
 
+    it("device discovered forwards to device.discovered with no args", async () => {
+      const client = fakeClient();
+      const io = fakeIo();
+      await runCommand(["device", "discovered"], { client, io });
+      expect(client.request).toHaveBeenCalledWith("device.discovered", {});
+    });
+
+    it("device discovered rejects positional args (exit 2)", async () => {
+      const io = fakeIo();
+      expect(
+        await runCommand(["device", "discovered", "extra"], { client: fakeClient(), io }),
+      ).toBe(2);
+    });
+
+    it("device pair-and-connect with --discovery-id forwards to device.pair-and-connect", async () => {
+      const client = fakeClient();
+      const io = fakeIo();
+      await runCommand(
+        [
+          "device",
+          "pair-and-connect",
+          "--discovery-id",
+          "192.168.1.23",
+          "--pairing-code",
+          "123456",
+        ],
+        { client, io },
+      );
+      expect(client.request).toHaveBeenCalledWith("device.pair-and-connect", {
+        discoveryId: "192.168.1.23",
+        pairingCode: "123456",
+      });
+    });
+
+    it("device pair-and-connect with --pairing-address+--connect-address (manual fallback) forwards both", async () => {
+      const client = fakeClient();
+      const io = fakeIo();
+      await runCommand(
+        [
+          "device",
+          "pair-and-connect",
+          "--pairing-address",
+          "192.168.1.23:41234",
+          "--connect-address",
+          "192.168.1.23:37251",
+          "--pairing-code",
+          "123456",
+          "--name",
+          "My Pixel",
+        ],
+        { client, io },
+      );
+      expect(client.request).toHaveBeenCalledWith("device.pair-and-connect", {
+        pairingAddress: "192.168.1.23:41234",
+        connectAddress: "192.168.1.23:37251",
+        pairingCode: "123456",
+        name: "My Pixel",
+      });
+    });
+
+    it("device pair-and-connect without --pairing-code throws usage error (exit 2)", async () => {
+      const io = fakeIo();
+      expect(
+        await runCommand(["device", "pair-and-connect", "--discovery-id", "192.168.1.23"], {
+          client: fakeClient(),
+          io,
+        }),
+      ).toBe(2);
+    });
+
+    it("device pair-and-connect with both --discovery-id AND --pairing-address throws usage error (exit 2)", async () => {
+      const io = fakeIo();
+      expect(
+        await runCommand(
+          [
+            "device",
+            "pair-and-connect",
+            "--discovery-id",
+            "192.168.1.23",
+            "--pairing-address",
+            "192.168.1.23:41234",
+            "--pairing-code",
+            "123456",
+          ],
+          { client: fakeClient(), io },
+        ),
+      ).toBe(2);
+    });
+
+    it("device pair-and-connect with neither --discovery-id nor --pairing-address throws usage error (exit 2)", async () => {
+      const io = fakeIo();
+      expect(
+        await runCommand(["device", "pair-and-connect", "--pairing-code", "123456"], {
+          client: fakeClient(),
+          io,
+        }),
+      ).toBe(2);
+    });
+
     it("device stop passes deviceId", async () => {
       const client = fakeClient();
       const io = fakeIo();

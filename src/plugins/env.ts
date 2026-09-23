@@ -681,6 +681,30 @@ export const schema = {
       type: "string",
       default: "",
     },
+    // mDNS scanner for the physical-device pairing flow (src/services/
+    // device-discovery.ts). When enabled, the backend binds a Bonjour/
+    // multicast-DNS socket and listens for `_adb-tls-pairing._tcp` /
+    // `_adb-tls-connect._tcp` advertisements from nearby Android phones.
+    // Discovered phones surface in the new "Pair a phone" modal so the
+    // user no longer has to type the phone's IP+pairing-port by hand.
+    // Default on: discovery is purely additive — disabling just falls the
+    // UI back to the manual address+code entry form. mDNS doesn't always
+    // reach segmented networks (corporate VLANs, mDNS-reflector-less
+    // bridges, etc.) — set this to false there to avoid opening a UDP
+    // socket that has no useful traffic.
+    DEVICE_DISCOVERY_ENABLED: {
+      type: "boolean",
+      default: true,
+    },
+    // Snapshot interval for the discovery cache as seen by the REST layer
+    // (GET /api/devices/discovered). bonjour-service's own Browser is
+    // push-based, so this knob only affects how stale a consumer's view can
+    // be — the underlying up/down events still fire in real time. Default
+    // 2500ms matches the modal's polling cadence well.
+    DEVICE_DISCOVERY_INTERVAL_MS: {
+      type: "number",
+      default: 2500,
+    },
     // Absolute path to a unix socket implementing the SSH agent protocol,
     // injected as SSH_AUTH_SOCK into every spawned session (see
     // session-env.ts's "deliberately NOT stripped" comment and
@@ -912,6 +936,8 @@ declare module "fastify" {
       DEVICE_AVDMANAGER_PATH: string;
       DEVICE_SDKMANAGER_PATH: string;
       DEVICE_ANDROID_SDK_ROOT: string;
+      DEVICE_DISCOVERY_ENABLED: boolean;
+      DEVICE_DISCOVERY_INTERVAL_MS: number;
       MULLION_SOCKET_PATH: string;
       MULLION_SSH_AUTH_SOCK: string;
       MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED: boolean;

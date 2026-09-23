@@ -1110,6 +1110,36 @@ const OPS: Record<string, OpSpec> = {
       );
     },
   },
+  // Same "full-only because it dials an arbitrary address" reasoning as
+  // device.pair above. Accepts either a `discoveryId` (from
+  // device.discovered) or a manual `pairingAddress`+`connectAddress` pair.
+  "device.pair-and-connect": {
+    scopes: ["full"],
+    handler: async ({ app, body, reply }) => {
+      reply(
+        await injectAndShape(app, {
+          method: "POST",
+          url: "/api/devices/pair-and-connect",
+          headers: { ...buildAuthHeaders(app), "content-type": "application/json" },
+          payload: JSON.stringify(body ?? {}),
+        }),
+      );
+    },
+  },
+  // Read-only mDNS snapshot. Cheap (in-memory cache), no network side
+  // effects, no scope concerns beyond the rest of the device.list family.
+  "device.discovered": {
+    scopes: ["full", "session"],
+    handler: async ({ app, reply }) => {
+      reply(
+        await injectAndShape(app, {
+          method: "GET",
+          url: "/api/devices/discovered",
+          headers: buildAuthHeaders(app),
+        }),
+      );
+    },
+  },
   "device.terminate": {
     scopes: ["full", "session"],
     handler: async ({ app, body, reply }) => {

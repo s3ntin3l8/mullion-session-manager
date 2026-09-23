@@ -300,9 +300,194 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
     },
   );
 
+  // Atomic pair-then-connect-and-insert for the new "Pair a phone" modal
+  // (issue #1378). The phone-discovery UX shows the user one button; behind
+  // it, two adb wire-protocol calls plus a DB row insert. Exactly one of
+  // `discoveryId` or `pairingAddress` is required — the former looks the
+  // cached mDNS entry up for both pairing + connect addresses, the latter
+  // is the manual fallback for networks where mDNS doesn't reach.
+  //
+  // `connectAddress` is REQUIRED when going the manual route (the user has
+  // to type both ports, same as the legacy two-form flow, but in a single
+  // POST). With a `discoveryId` it's optional — the cache normally has it,
+  // and we only ask for it as a manual override if it doesn't.
+  //
+  // Same full-scope-only blast-radius reasoning as the existing
+  // `device.pair` op (control-socket.ts:1100) — this dials an arbitrary
+  // network address a caller supplies. The route itself does NOT gate on
+  // scope; the control-socket handler does, when called via CLI/MCP.
+  app.post<{
+    Body: {
+      discoveryId?: string;
+      pairingAddress?: string;
+      connectAddress?: string;
+      pairingCode?: string;
+      name?: string;
+    };
+  }>("/api/devices/pair-and-connect", async (request, reply) => {
+    if (!app.config.DEVICE_ENABLED) {
+      return reply.badRequest("Device panel is disabled — set DEVICE_ENABLED=true.");
+    }
+    const { discoveryId, pairingAddress, connectAddress, pairingCode, name } = request.body ?? {};
+
+    if (!isValidPairingCode(pairingCode)) {
+      return reply.badRequest("pairingCode must be the 6-digit code shown on the device");
+    }
+
+    // Resolve the two adb addresses. `discoveryId` wins if both are set —
+    // the cache is always fresher than what the user typed, and silently
+    // mixing the two (e.g. typed pairing address + discovered connect
+    // address for a DIFFERENT phone) would be a confusing failure mode.
+    let resolvedPairing: string | undefined;
+    let resolvedConnect: string | undefined;
+
+    if (typeof discoveryId === "string" && discoveryId.length > 0) {
+      const cached = app.deviceDiscovery.getById(discoveryId);
+      if (!cached) {
+        return reply.badRequest(
+          `discoveryId ${JSON.stringify(discoveryId)} is no longer in the discovery cache — re-open the picker`,
+        );
+      }
+      resolvedPairing = cached.pairingAddress;
+      resolvedConnect = cached.connectAddress;
+      // User-supplied `connectAddress` overrides the cached one — useful
+      // when discovery sees the wrong port (e.g. mDNS reached a different
+      // transport than the one Mullion's adb server can actually use).
+      if (typeof connectAddress === "string" && connectAddress.length > 0) {
+        if (!isValidDeviceAddress(connectAddress)) {
+          return reply.badRequest("connectAddress must be host:port");
+        }
+        resolvedConnect = connectAddress;
+      }
+    } else if (typeof pairingAddress === "string" && pairingAddress.length > 0) {
+      if (!isValidDeviceAddress(pairingAddress)) {
+        return reply.badRequest("pairingAddress must be host:port (e.g. 192.168.1.23:41234)");
+      }
+      resolvedPairing = pairingAddress;
+      if (!isValidDeviceAddress(connectAddress)) {
+        return reply.badRequest(
+          "connectAddress is required in manual mode — both Android's pairing port and connect port must be supplied",
+        );
+      }
+      resolvedConnect = connectAddress;
+    } else {
+      return reply.badRequest("either discoveryId or pairingAddress is required");
+    }
+
+    if (!resolvedConnect) {
+      return reply.badRequest(
+        "this device's connect service was not advertised — supply connectAddress manually",
+      );
+    }
+
+    // Address-collision guard — copied verbatim from POST /api/devices's
+    // own kind:"physical" branch above. Two rows racing for the same
+    // serial would otherwise each spin up their own scrcpy against the
+    // same live device, since connectPhysical()'s AlreadyConnectedError
+    // handling is correct-but-permissive for the restart-reattach case.
+    const [existingActive] = app.db
+      .select({ id: devices.id })
+      .from(devices)
+      .where(
+        and(
+          eq(devices.status, "active"),
+          eq(devices.kind, "physical"),
+          eq(devices.serial, resolvedConnect),
+        ),
+      )
+      .all();
+    if (existingActive) {
+      return reply.conflict(
+        `device ${existingActive.id} is already active for address ${resolvedConnect}`,
+      );
+    }
+
+    // Pairing is attempted UNLESS we have evidence the phone is NOT in
+    // pairing mode: the discovery cache saw the connect service for this
+    // host but never the pairing one. Android stops advertising the
+    // pairing port the moment the user navigates off the "Pair device with
+    // pairing code" screen, and again after a successful pair (the
+    // keystore now has a key for this host, so re-pairing would fail
+    // anyway). In both those cases skipping pair() and going straight to
+    // connect is correct.
+    //
+    // In manual mode (`discoveryId` absent) we have no idea whether the
+    // phone is in pairing mode — the modal's user just typed both ports —
+    // so we always try pair() there. If it fails (wrong code, host
+    // unreachable, port-closed-because-already-paired, etc.) we surface
+    // the error directly; the modal renders it and the user can re-open
+    // the phone's pairing screen and retry. We deliberately don't fall
+    // through to a "blind connect" attempt on pair-failure: that hides the
+    // most common user error (typo'd code) behind a different confusing
+    // downstream error, and a fresh pair attempt is cheap.
+    //
+    // `resolvedPairing` is `string | undefined` because it can be unset in
+    // the cached connect-only case, but we only reach the pair() call when
+    // it's been validated upstream — the narrowing is per-branch:
+    const discoveryEntry =
+      typeof discoveryId === "string" && discoveryId.length > 0
+        ? app.deviceDiscovery.getById(discoveryId)
+        : undefined;
+    const skipPairBecauseCachedConnectOnly =
+      discoveryEntry !== undefined && discoveryEntry.pairingAddress === undefined;
+    if (!skipPairBecauseCachedConnectOnly) {
+      // Both branches leading here guarantee a pairing address:
+      //   - manual mode → resolvedPairing came from the user's
+      //     `pairingAddress` (validated at the top of this handler)
+      //   - discovery mode with a pairing service → resolvedPairing came
+      //     from the cache's `pairingAddress` (which is what triggered
+      //     `!skipPairBecauseCachedConnectOnly`).
+      try {
+        await app.device.pair(resolvedPairing as string, pairingCode);
+      } catch (err) {
+        return reply.badRequest(err instanceof Error ? err.message : String(err));
+      }
+    }
+
+    const [row] = app.db
+      .insert(devices)
+      .values({
+        kind: "physical",
+        serial: resolvedConnect,
+        avdName: null,
+        projectId: null,
+        name: name ?? null,
+      })
+      .returning()
+      .all();
+
+    try {
+      await app.device.getOrCreate({
+        id: String(row.id),
+        kind: "physical",
+        avdName: null,
+        serial: resolvedConnect,
+        label: row.name,
+        port: null,
+      });
+    } catch (err) {
+      return reply.badRequest(err instanceof Error ? err.message : String(err));
+    }
+
+    reply.code(201);
+    return toListItem(row, app.device.get(String(row.id))?.toInfo());
+  });
+
   app.get("/api/devices", async () => {
     const rows = app.db.select().from(devices).all();
     return rows.map((row) => toListItem(row, app.device.get(String(row.id))?.toInfo()));
+  });
+
+  // Issue #1378 — read-only mDNS snapshot of nearby Android phones that
+  // are currently advertising `_adb-tls-pairing._tcp` and/or
+  // `_adb-tls-connect._tcp`. Empty array when discovery is disabled or
+  // nothing is in range — never an error, so a disabled-discovery deploy
+  // can still render the empty-list UI cleanly. Returned alongside the
+  // matching connect address when both are known, so the modal can offer
+  // a single-click "Pair & Connect" without re-fetching.
+  app.get("/api/devices/discovered", async () => {
+    if (!app.config.DEVICE_DISCOVERY_ENABLED) return [];
+    return app.deviceDiscovery.getDiscovered();
   });
 
   app.get<{ Params: { id: string } }>("/api/devices/:id", async (request, reply) => {
