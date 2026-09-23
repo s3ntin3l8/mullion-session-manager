@@ -859,7 +859,6 @@ describe("Settings -> Devices (issue #1326)", () => {
     await user.type(nameInput, "Pixel 10 Pro XL");
     expect(await screen.findByText(/contains space — remove it\./)).toBeInTheDocument();
     expect(nameInput).toHaveAttribute("aria-invalid", "true");
-    expect(nameInput).toHaveAttribute("aria-describedby", "new-avd-name-error");
     expect(screen.getByRole("button", { name: "Create AVD" })).toBeDisabled();
 
     // Clearing back to a valid name hides the error again.
@@ -869,7 +868,6 @@ describe("Settings -> Devices (issue #1326)", () => {
       expect(screen.queryByText(/contains/)).not.toBeInTheDocument();
     });
     expect(nameInput).toHaveAttribute("aria-invalid", "false");
-    expect(nameInput).not.toHaveAttribute("aria-describedby");
     expect(screen.getByRole("button", { name: "Create AVD" })).toBeEnabled();
   });
 
@@ -889,6 +887,23 @@ describe("Settings -> Devices (issue #1326)", () => {
     expect(screen.getByRole("button", { name: "Create AVD" })).toBeDisabled();
   });
 
+  it("explains a whitespace-only name instead of silently greying Create AVD", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(await screen.findByText("New device"));
+    await user.click(screen.getByRole("button", { name: "+ New AVD" }));
+    await screen.findByDisplayValue("pixel_6");
+
+    const nameInput = screen.getByPlaceholderText("Pixel_8_API_35");
+    // Spaces only: trim().length === 0, but the field is non-empty — the
+    // same silent grey-out this PR sets out to explain must not reappear.
+    await user.type(nameInput, "   ");
+    expect(await screen.findByText(/is only whitespace/)).toBeInTheDocument();
+    expect(nameInput).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByRole("button", { name: "Create AVD" })).toBeDisabled();
+  });
+
   it("does not show the name validation error while the field is still empty", async () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
@@ -897,7 +912,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
     await screen.findByDisplayValue("pixel_6");
 
-    expect(screen.queryByText(/contains|needs at least one/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/contains|needs at least one|whitespace/)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Create AVD" })).toBeDisabled();
   });
 
