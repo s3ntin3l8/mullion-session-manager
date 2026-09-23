@@ -887,6 +887,20 @@ describe("Settings -> Devices (issue #1326)", () => {
     expect(screen.getByRole("button", { name: "Create AVD" })).toBeDisabled();
   });
 
+  it("empty-state copy points at the cmdline-tools install when no device profiles are known", async () => {
+    const user = userEvent.setup();
+    deviceProfilesDb = [];
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(await screen.findByText("New device"));
+    await user.click(screen.getByRole("button", { name: "+ New AVD" }));
+
+    expect(
+      await screen.findByText(/No device profiles known to avdmanager on this host/),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create AVD" })).toBeDisabled();
+  });
+
   it("explains a whitespace-only name instead of silently greying Create AVD", async () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
@@ -899,7 +913,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     // Spaces only: trim().length === 0, but the field is non-empty — the
     // same silent grey-out this PR sets out to explain must not reappear.
     await user.type(nameInput, "   ");
-    expect(await screen.findByText(/is only whitespace/)).toBeInTheDocument();
+    expect(await screen.findByText(/This name is only whitespace/)).toBeInTheDocument();
     expect(nameInput).toHaveAttribute("aria-invalid", "true");
     expect(screen.getByRole("button", { name: "Create AVD" })).toBeDisabled();
   });
@@ -912,7 +926,9 @@ describe("Settings -> Devices (issue #1326)", () => {
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
     await screen.findByDisplayValue("pixel_6");
 
-    expect(screen.queryByText(/contains|needs at least one|whitespace/)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/contains|needs at least one|is only whitespace/),
+    ).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Create AVD" })).toBeDisabled();
   });
 

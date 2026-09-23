@@ -44,7 +44,10 @@ function describeAvdNameError(raw: string): string | null {
   if (raw.length === 0) return null; // empty field is the placeholder's job
   const trimmed = raw.trim();
   if (trimmed.length === 0) {
-    return `“${raw}” is only whitespace — use a name with letters or digits.`;
+    // Fixed wording: interpolating raw here would render as “ ” once HTML
+    // collapses the whitespace, so the message would look like it lost its
+    // subject.
+    return "This name is only whitespace — use a name with letters or digits.";
   }
   if (AVD_NAME_PATTERN.test(trimmed)) {
     if (AVD_NAME_HAS_ALPHANUMERIC.test(trimmed)) return null;
@@ -162,9 +165,10 @@ export function DevicesSection() {
   const [provisioningLoaded, setProvisioningLoaded] = useState(false);
   const [creatingAvd, setCreatingAvd] = useState(false);
   const [createAvdError, setCreateAvdError] = useState<string | null>(null);
-  // Single source for the New-AVD name's invalid state — the input's
-  // aria-invalid, the inline ErrorText, and Create AVD's disabled check all
-  // read this rather than re-spelling the predicate.
+  // Single source for the New-AVD name's invalid *message* — the input's
+  // aria-invalid and the inline ErrorText both read this. Create AVD's
+  // disabled check calls isAvdNameValid directly (it must stay disabled for
+  // an empty field, which deliberately has no error message).
   const avdNameError = describeAvdNameError(newAvdName);
 
   // Available system images browser — fetched lazily, only once the section
@@ -690,9 +694,7 @@ export function DevicesSection() {
                       silent mystery. role="alert" is the announce channel —
                       no aria-describedby here, to avoid double-reading. */}
                   {avdNameError !== null && (
-                    <ErrorText id="new-avd-name-error" style={{ marginTop: 4 }}>
-                      {avdNameError}
-                    </ErrorText>
+                    <ErrorText style={{ marginTop: 4 }}>{avdNameError}</ErrorText>
                   )}
                   {!provisioningLoaded && (
                     <div className="settings-readonly-value" style={{ marginTop: 4 }}>
