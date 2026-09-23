@@ -334,12 +334,17 @@ const REAL_SDKMANAGER_LIST_OUTPUT = `Available Packages:
   build-tools;35.0.0        | 35     | Android SDK Build-Tools 35
 `;
 
-// Captured from a real `sdkmanager --list` on cmdline-tools 23.0 — the
-// Android CLI under the sdkmanager deprecation shim prints a lowercase
+// Captured and adapted from a real `sdkmanager --list` on cmdline-tools 23.0
+// — the Android CLI under the sdkmanager deprecation shim prints a lowercase
 // section header and slash-delimited sdk-style paths in a space-aligned
 // table, not the classic pipe/semicolon package-path rows above. Issue:
 // "SDK system images" showed "No system images available." with no error
-// after #1374 made `--sdk_root=` succeed on this host.
+// after #1374 made `--sdk_root=` succeed on this host. Two rows are adapted
+// from the capture rather than verbatim: the Installed-only android-33 row
+// (synthetic `(obsolete, installed-only)` suffix so the header-slice test
+// has something to pin) and android-35-ext14 (real `ext*` variants live
+// under `platforms/`, not `system-images/`) — so a later byte-diff against
+// a fresh capture is expected to differ on those lines, not a regex miss.
 const ANDROID_CLI_SDKMANAGER_LIST_OUTPUT = `Installed packages:
   system-images/android-35/google_apis/x86_64                                             9.0.0                                  Google APIs Intel x86_64 Atom System Image
   system-images/android-33/default/x86_64                                                 5.0.0                                  Default Intel x86_64 Atom System Image (obsolete, installed-only)
