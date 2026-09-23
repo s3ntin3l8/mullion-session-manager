@@ -845,8 +845,8 @@ describe("Settings -> Devices (issue #1326)", () => {
   });
 
   // A name with spaces (e.g. "Pixel 10 Pro XL") fails AVD_NAME_PATTERN and
-  // silently disables Create AVD — surface an inline error so the dead
-  // button is explicable instead of mysterious.
+  // silently disables Create AVD — surface an inline error that names what's
+  // wrong with this value (the Row desc already states the allowed set).
   it("shows an inline AVD-name validation error while the name has disallowed characters", async () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
@@ -855,19 +855,38 @@ describe("Settings -> Devices (issue #1326)", () => {
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
     await screen.findByDisplayValue("pixel_6");
 
-    await user.type(screen.getByPlaceholderText("Pixel_8_API_35"), "Pixel 10 Pro XL");
-    expect(
-      await screen.findByText(/Use only letters, digits, '\.', '_', and '-'/),
-    ).toBeInTheDocument();
+    const nameInput = screen.getByPlaceholderText("Pixel_8_API_35");
+    await user.type(nameInput, "Pixel 10 Pro XL");
+    expect(await screen.findByText(/contains space — remove it\./)).toBeInTheDocument();
+    expect(nameInput).toHaveAttribute("aria-invalid", "true");
+    expect(nameInput).toHaveAttribute("aria-describedby", "new-avd-name-error");
     expect(screen.getByRole("button", { name: "Create AVD" })).toBeDisabled();
 
     // Clearing back to a valid name hides the error again.
-    await user.clear(screen.getByPlaceholderText("Pixel_8_API_35"));
-    await user.type(screen.getByPlaceholderText("Pixel_8_API_35"), "Pixel_10_Pro_XL");
+    await user.clear(nameInput);
+    await user.type(nameInput, "Pixel_10_Pro_XL");
     await waitFor(() => {
-      expect(screen.queryByText(/Use only letters, digits/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/contains/)).not.toBeInTheDocument();
     });
+    expect(nameInput).toHaveAttribute("aria-invalid", "false");
+    expect(nameInput).not.toHaveAttribute("aria-describedby");
     expect(screen.getByRole("button", { name: "Create AVD" })).toBeEnabled();
+  });
+
+  it("names the value when it has no letter or digit", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(await screen.findByText("New device"));
+    await user.click(screen.getByRole("button", { name: "+ New AVD" }));
+    await screen.findByDisplayValue("pixel_6");
+
+    // "___" passes AVD_NAME_PATTERN but fails AVD_NAME_HAS_ALPHANUMERIC.
+    await user.type(screen.getByPlaceholderText("Pixel_8_API_35"), "___");
+    expect(
+      await screen.findByText(/“___” needs at least one letter or digit\./),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create AVD" })).toBeDisabled();
   });
 
   it("does not show the name validation error while the field is still empty", async () => {
@@ -878,7 +897,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
     await screen.findByDisplayValue("pixel_6");
 
-    expect(screen.queryByText(/Use only letters, digits/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/contains|needs at least one/)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Create AVD" })).toBeDisabled();
   });
 

@@ -329,9 +329,14 @@ as the other `DEVICE_*_PATH` vars.
   Google's repository, parses the tabular output into structured objects
   (`{packagePath, apiLevel, tag, tagDisplay, abi, installed}`), auto-filters
   by host ABI (`process.arch` → Android ABI mapping), and marks
-  which are already installed locally. Results are cached in-memory for 5
-  minutes to avoid repeated network fetches. Returns 400 if
-  `sdkmanager --list` times out (60s) or fails.
+  which are already installed locally. The parser accepts both stdout
+  dialects: the classic Java sdkmanager (`Available Packages:` header,
+  pipe-delimited columns, `system-images;…` semicolon paths) and the newer
+  Android CLI under the sdkmanager deprecation shim (cmdline-tools ≥ ~23,
+  lowercase `Available packages:`, space-aligned columns,
+  `system-images/…` slash paths — normalized to semicolons at parse time).
+  Results are cached in-memory for 5 minutes to avoid repeated network
+  fetches. Returns 400 if `sdkmanager --list` times out (60s) or fails.
 - **`/ws/system-image-install`** — WebSocket endpoint for install/uninstall
   operations. Accepts `{type: "install"|"uninstall", packagePath}` messages.
   Validates `packagePath` against the allowlist from `GET /api/system-images/available`

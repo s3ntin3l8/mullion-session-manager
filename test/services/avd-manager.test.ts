@@ -342,6 +342,7 @@ const REAL_SDKMANAGER_LIST_OUTPUT = `Available Packages:
 // after #1374 made `--sdk_root=` succeed on this host.
 const ANDROID_CLI_SDKMANAGER_LIST_OUTPUT = `Installed packages:
   system-images/android-35/google_apis/x86_64                                             9.0.0                                  Google APIs Intel x86_64 Atom System Image
+  system-images/android-33/default/x86_64                                                 5.0.0                                  Default Intel x86_64 Atom System Image (obsolete, installed-only)
 
 Available packages:
   build-tools/35.0.0                                                                      35.0.0                                 Android SDK Build-Tools 35
@@ -394,7 +395,7 @@ describe("parseSdkManagerList", () => {
     });
   });
 
-  it("does not scrape the Android CLI Installed packages section (no duplicates)", () => {
+  it("does not scrape the Android CLI Installed packages section", () => {
     const installed = [
       {
         packagePath: "system-images;android-35;google_apis;x86_64",
@@ -405,6 +406,11 @@ describe("parseSdkManagerList", () => {
     ];
     const result = parseSdkManagerList(ANDROID_CLI_SDKMANAGER_LIST_OUTPUT, installed, "x86_64");
     const paths = result.map((img) => img.packagePath);
+    // android-33 lives only in the fixture's Installed block. The `seen`
+    // dedupe alone cannot hide it (it never appears under Available), so this
+    // assertion fails if the header-based section slice regresses to scanning
+    // the whole stdout.
+    expect(paths).not.toContain("system-images;android-33;default;x86_64");
     expect(new Set(paths).size).toBe(paths.length);
     expect(
       result.find((img) => img.packagePath === "system-images;android-35;google_apis;x86_64")

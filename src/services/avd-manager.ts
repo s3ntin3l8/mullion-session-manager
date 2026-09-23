@@ -319,6 +319,10 @@ export function parseSdkManagerList(
   // Find the available-packages section — everything before it is installed
   // packages or header text we don't need (and must not be scraped: the
   // Installed section would otherwise duplicate every still-available image).
+  // Intentional fallback: if no header is found we scan the whole stdout, so
+  // an installed-only image (obsolete, still on disk) surfaces as an available
+  // entry with installed: true; the `seen` set only collapses rows that also
+  // appear under Available. Same shape as the pre-existing no-header fallback.
   const headerMatch = AVAILABLE_HEADER_RE.exec(output);
   const section = headerMatch ? output.slice(headerMatch.index + headerMatch[0].length) : output;
 

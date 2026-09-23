@@ -13,13 +13,20 @@ export function ErrorText({
   children,
   style,
   className,
+  id,
 }: {
   children: ReactNode;
   style?: CSSProperties;
   className?: string;
+  id?: string;
 }) {
   return (
-    <div className={className} style={{ fontSize: 12, color: "var(--r)", ...style }} role="alert">
+    <div
+      id={id}
+      className={className}
+      style={{ fontSize: 12, color: "var(--r)", ...style }}
+      role="alert"
+    >
       {children}
     </div>
   );

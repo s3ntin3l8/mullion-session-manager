@@ -652,19 +652,44 @@ export function DevicesSection() {
                         onKeyDown={(e) => {
                           if (e.key === "Enter") submitCreateAvd();
                         }}
+                        aria-invalid={
+                          newAvdName.trim().length > 0 &&
+                          (!AVD_NAME_PATTERN.test(newAvdName.trim()) ||
+                            !AVD_NAME_HAS_ALPHANUMERIC.test(newAvdName.trim()))
+                        }
+                        aria-describedby={
+                          newAvdName.trim().length > 0 &&
+                          (!AVD_NAME_PATTERN.test(newAvdName.trim()) ||
+                            !AVD_NAME_HAS_ALPHANUMERIC.test(newAvdName.trim()))
+                            ? "new-avd-name-error"
+                            : undefined
+                        }
                       />
                     </div>
                   </Row>
                   {/* Only once the user has typed something — an empty field
-                      is the placeholder's job, not an error's. Surfaces why
-                      Create AVD stays disabled for e.g. "Pixel 10 Pro XL"
-                      (spaces fail AVD_NAME_PATTERN) instead of leaving a
-                      silently dead button. */}
+                      is the placeholder's job, not an error's. The Row desc
+                      above already states the allowed set; this error names
+                      what's wrong with *this* value so Create AVD's disabled
+                      state (e.g. "Pixel 10 Pro XL") isn't a silent mystery. */}
                   {newAvdName.trim().length > 0 &&
                     (!AVD_NAME_PATTERN.test(newAvdName.trim()) ||
                       !AVD_NAME_HAS_ALPHANUMERIC.test(newAvdName.trim())) && (
-                      <ErrorText style={{ marginTop: 4 }}>
-                        Use only letters, digits, '.', '_', and '-' — at least one letter or digit.
+                      <ErrorText id="new-avd-name-error" style={{ marginTop: 4 }}>
+                        {(() => {
+                          const trimmed = newAvdName.trim();
+                          const badChars = [
+                            ...new Set(
+                              Array.from(trimmed)
+                                .filter((ch) => !/[A-Za-z0-9._-]/.test(ch))
+                                .map((ch) => (ch === " " ? "space" : ch)),
+                            ),
+                          ];
+                          if (badChars.length > 0) {
+                            return `“${trimmed}” contains ${badChars.join(", ")} — remove ${badChars.length === 1 ? "it" : "them"}.`;
+                          }
+                          return `“${trimmed}” needs at least one letter or digit.`;
+                        })()}
                       </ErrorText>
                     )}
                   {!provisioningLoaded && (
