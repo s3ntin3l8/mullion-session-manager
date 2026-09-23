@@ -18,11 +18,22 @@ import type { DeviceDiscoveryService } from "../../src/services/device-discovery
 // real socket never binds during tests; the discovery service itself is
 // exercised through `__debugHandleServiceForTest` (see
 // test/services/device-discovery.test.ts for the pattern).
+//
+// The mock captures every `find()` call so route tests can assert on the
+// (non-)existence of mDNS traffic — specifically that `DEVICE_ENABLED=false`
+// never causes a Bonjour instance to be constructed.
+type FindCall = { type?: string };
+const routeFindCalls: FindCall[] = [];
+const routeBonjourCtorCalls = vi.fn();
 vi.mock("bonjour-service", () => {
   return {
     default: function BonjourStub() {
+      routeBonjourCtorCalls();
       return {
-        find: () => ({ on: () => undefined, stop: () => undefined }),
+        find: (opts: FindCall) => {
+          routeFindCalls.push(opts);
+          return { on: () => undefined, stop: () => undefined };
+        },
         destroy: () => undefined,
       };
     },
@@ -89,6 +100,26 @@ describe("devices discovery + pair-and-connect routes", () => {
       const res = await app.inject({ method: "GET", url: "/api/devices/discovered" });
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual([]);
+    });
+
+    it("does NOT construct a Bonjour instance or call find() when DEVICE_ENABLED=false (Hermes suggestion on #1381)", async () => {
+      delete process.env.DEVICE_ENABLED;
+      const findCallsBefore = routeFindCalls.length;
+      const ctorCallsBefore = routeBonjourCtorCalls.mock.calls.length;
+      const app = await buildTestApp();
+      const res = await app.inject({ method: "GET", url: "/api/devices/discovered" });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual([]);
+      // Combined gate in src/plugins/device.ts: a default install with
+      // DEVICE_ENABLED=false must never open a UDP socket or emit 5353
+      // queries. Both metrics here are cumulative across the whole
+      // process — the test asserts nothing was added during this
+      // particular buildApp() invocation.
+      expect(routeBonjourCtorCalls.mock.calls.length).toBe(ctorCallsBefore);
+      expect(routeFindCalls.length).toBe(findCallsBefore);
+      // Restore for sibling tests that DO want DEVICE_ENABLED.
+      process.env.DEVICE_ENABLED = "true";
+      await app.close();
     });
 
     it("returns the cached discovery snapshot grouped by host", async () => {

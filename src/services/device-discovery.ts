@@ -65,37 +65,44 @@ export type DiscoveryChange =
   | { kind: "update"; device: DiscoveredDevice };
 
 /** Configuration knobs. `enabled: false` short-circuits everything — no
- * Bonjour instance is ever constructed, no mDNS socket bound. The
- * `intervalMs` knob is honored only as a poll-tick rate for the
- * `getDiscovered()` snapshot freshness; bonjour-service itself is push-based
- * (Browser emits `up`/`down` events), so a long interval just means stale
- * snapshots, not missed events. */
+ * Bonjour instance is ever constructed, no mDNS socket bound. */
 export interface DeviceDiscoveryOptions {
   enabled: boolean;
-  /** Periodic tick at which `getDiscovered()` returns a fresh snapshot.
-   * Defaults to 2500ms (matches the env default). bonjour-service's own
-   * Browser is push-based, so this only affects staleness on the consumer
-   * side. */
-  intervalMs: number;
   /** Called for every up/down/update transition. Mostly here for tests —
    * production consumers poll `getDiscovered()` rather than subscribe. */
   onChange?: (change: DiscoveryChange) => void;
 }
 
-const PAIRING_TYPE = "_adb-tls-pairing._tcp";
-const CONNECT_TYPE = "_adb-tls-connect._tcp";
+// Canonical short form — what bonjour-service expects on `find({type})`,
+// and what the `up`-event `type` field then surfaces back. See the load-
+// bearing comment on `BROWSER_TYPES` below for why the short form (and
+// not the full `_adb-tls-pairing._tcp`) is correct.
+const PAIRING_TYPE = "adb-tls-pairing";
+const CONNECT_TYPE = "adb-tls-connect";
 
-// Service types bonjour-service expects: `_adb-tls-pairing._tcp` minus the
-// leading `_` and the trailing `.tcp`. The library handles the protocol/
-// subtype split itself when constructing the query.
+// Service types bonjour-service expects — and this is the load-bearing
+// detail that determines whether the scanner matches a real advertisement:
+// bonjour-service's `find({type})` constructs its PTR browse name as
+// `'_'+type+'._tcp.local'` (see `dist/lib/browser.js`). Passing the full
+// `_adb-tls-pairing._tcp` would produce the browse name
+// `__adb-tls-pairing._tcp._tcp.local`, which no real Android advertisement
+// matches (Android advertises the canonical `_adb-tls-pairing._tcp.local`).
+// The short form `adb-tls-pairing` is what bonjour-service expects; the
+// library re-adds the surrounding `_` and `._tcp` itself. We still accept
+// the long form in `normalizeBonjourType` for callers that surface an
+// `up`-event type in the longer shape (a future mDNS responder could in
+// principle format it differently), so both shapes remain interchangeable
+// at the handler boundary.
 const BROWSER_TYPES = [PAIRING_TYPE, CONNECT_TYPE] as const;
 
 function normalizeBonjourType(serviceType: string): (typeof BROWSER_TYPES)[number] | null {
-  // bonjour-service surfaces `type` as `_adb-tls-pairing._tcp` verbatim
-  // (leading underscore, trailing `._tcp`), but be defensive about both
-  // shapes in case a future mDNS responder formats it differently.
-  if (serviceType === PAIRING_TYPE || serviceType === "_adb-tls-pairing") return PAIRING_TYPE;
-  if (serviceType === CONNECT_TYPE || serviceType === "_adb-tls-connect") return CONNECT_TYPE;
+  // bonjour-service's Browser surfaces the `up`-event `type` field in
+  // whichever form was passed to `find()` — today that's the short form
+  // (see BROWSER_TYPES), but accept the long form too in case a future
+  // mDNS responder formats it that way. Always return the short form so
+  // downstream comparisons against PAIRING_TYPE/CONNECT_TYPE stay simple.
+  if (serviceType === PAIRING_TYPE || serviceType === "_adb-tls-pairing._tcp") return PAIRING_TYPE;
+  if (serviceType === CONNECT_TYPE || serviceType === "_adb-tls-connect._tcp") return CONNECT_TYPE;
   return null;
 }
 
@@ -133,6 +140,24 @@ interface HostEntry {
   deviceSerial?: string;
   model?: string;
   product?: string;
+}
+
+// Practical IPv4-literal check — `:`-free dotted-quad shape. We don't need
+// full RFC validation here; the goal is just to pick v4 out of a mixed v4/v6
+// `addresses[]` array. The common `192.168.x.x` / `10.x.x.x` shapes phones
+// advertise all match; loopback/link-local IPv4 likewise.
+function isIPv4Literal(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  if (value.includes(":")) return false;
+  const parts = value.split(".");
+  if (parts.length !== 4) return false;
+  for (const part of parts) {
+    if (part.length === 0 || part.length > 3) return false;
+    if (!/^\d+$/.test(part)) return false;
+    const n = Number(part);
+    if (n < 0 || n > 255) return false;
+  }
+  return true;
 }
 
 export class DeviceDiscoveryService {
@@ -203,9 +228,13 @@ export class DeviceDiscoveryService {
 
   /** Returns a defensive snapshot of every device the scanner has seen
    * advertising. Each entry's `id` is its host IP — same value the REST
-   * `pair-and-connect` endpoint accepts as `discoveryId`. */
+   * `pair-and-connect` endpoint accepts as `discoveryId`. Spreads each
+   * `device` object so a caller mutating the returned array cannot reach
+   * the live cache entry (which `handleServiceUp`/`Down` mutate in place
+   * — and the REST layer JSON-serializes whatever we hand back). Matches
+   * the `onChange` callback's spread convention. */
   getDiscovered(): DiscoveredDevice[] {
-    return [...this.cache.values()].map((entry) => entry.device);
+    return [...this.cache.values()].map((entry) => ({ ...entry.device }));
   }
 
   getById(id: string): DiscoveredDevice | undefined {
@@ -230,13 +259,21 @@ export class DeviceDiscoveryService {
   }
 
   private resolveHost(service: RawService): string | undefined {
+    // bonjour-service populates `service.host` from the SRV-record target,
+    // which is the mDNS *hostname* (e.g. `Android.local`) — not an IP.
+    // `service.addresses[]` is built from the A/AAAA records and is the
+    // only field that's an actual IP. Android's adb-over-TCP only listens
+    // on IPv4, so prefer the first IPv4 entry and only fall back to
+    // `service.host` if no A-records came back at all (rare — happens on
+    // the very first `up` event before the A-record query has resolved).
+    if (Array.isArray(service.addresses) && service.addresses.length > 0) {
+      const ipv4 = service.addresses.find(isIPv4Literal);
+      if (ipv4) return ipv4;
+      const anyAddress = service.addresses[0];
+      if (typeof anyAddress === "string" && anyAddress.length > 0) return anyAddress;
+    }
     if (typeof service.host === "string" && service.host.length > 0) {
       return service.host;
-    }
-    // bonjour-service sometimes leaves `host` unset on the first `up` event
-    // before the A-record resolves; fall back to the first address.
-    if (Array.isArray(service.addresses) && service.addresses.length > 0) {
-      return service.addresses[0];
     }
     return undefined;
   }
@@ -247,6 +284,7 @@ export class DeviceDiscoveryService {
     const port = typeof service.port === "number" ? service.port : undefined;
     if (port === undefined) return;
 
+    const isFresh = !this.cache.has(host);
     let entry = this.cache.get(host);
     if (!entry) {
       entry = {
@@ -297,7 +335,18 @@ export class DeviceDiscoveryService {
 
     entry.device.discoveredAt = this.now();
 
-    this.opts.onChange?.({ kind: "up", device: { ...entry.device } });
+    // `up` means the host was not in the cache before this event — the
+    // first service (either pairing or connect) to arrive from a phone
+    // introduces it. Subsequent `up` events for an already-known host —
+    // the second service arriving, or a service re-advertising — are
+    // `update`. Consumers that want "something new showed up" should
+    // listen for `up`; consumers that want "the picture changed" should
+    // listen for `update`. This keeps the two semantics distinct, which
+    // the previous always-`up`-on-every-event shape didn't.
+    this.opts.onChange?.({
+      kind: isFresh ? "up" : "update",
+      device: { ...entry.device },
+    });
   }
 
   private handleServiceDown(type: (typeof BROWSER_TYPES)[number], service: RawService): void {

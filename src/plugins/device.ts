@@ -63,17 +63,16 @@ export const devicePlugin = fp(async (app: FastifyInstance) => {
   app.decorate("device", manager);
 
   // Companion to the manager: the mDNS scanner that surfaces nearby
-  // Android phones in wireless-debugging mode (issue #1378). Independent of
-  // DEVICE_ENABLED — discovery is a read-only LAN probe and stays useful
-  // even when the rest of the device panel is off (the user can still see
-  // what phones are out there before deciding to enable the feature).
-  // Always constructed; start()/stop() are gated by DEVICE_DISCOVERY_ENABLED
-  // inside the service itself so a disabled scanner never opens a UDP
-  // socket. Started eagerly (mDNS discovery is silent and adds no
-  // protocol surface); torn down in onClose alongside the manager.
+  // Android phones in wireless-debugging mode (issue #1378). Gated on
+  // DEVICE_ENABLED AND DEVICE_DISCOVERY_ENABLED — a deployment that never
+  // enabled the device panel (the default) gets neither the manager nor
+  // the scanner, so no multicast socket binds and no 5353 queries are
+  // emitted on a Mullion install that has no business listening for them.
+  // The env-driven `DEVICE_DISCOVERY_ENABLED` knob still works as the
+  // boot-time default; a Settings-UI override will follow in a separate
+  // issue once lazy-bind runtime reconfigure lands.
   const discovery = new DeviceDiscoveryService({
-    enabled: app.config.DEVICE_DISCOVERY_ENABLED,
-    intervalMs: app.config.DEVICE_DISCOVERY_INTERVAL_MS,
+    enabled: app.config.DEVICE_ENABLED && app.config.DEVICE_DISCOVERY_ENABLED,
   });
   discovery.start();
   app.decorate("deviceDiscovery", discovery);

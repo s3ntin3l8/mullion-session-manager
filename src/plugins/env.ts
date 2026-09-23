@@ -691,19 +691,12 @@ export const schema = {
     // UI back to the manual address+code entry form. mDNS doesn't always
     // reach segmented networks (corporate VLANs, mDNS-reflector-less
     // bridges, etc.) — set this to false there to avoid opening a UDP
-    // socket that has no useful traffic.
+    // socket that has no useful traffic. Also requires DEVICE_ENABLED
+    // (the manager-level switch) — see src/plugins/device.ts's combined
+    // gate, which keeps the default-deploy posture unchanged.
     DEVICE_DISCOVERY_ENABLED: {
       type: "boolean",
       default: true,
-    },
-    // Snapshot interval for the discovery cache as seen by the REST layer
-    // (GET /api/devices/discovered). bonjour-service's own Browser is
-    // push-based, so this knob only affects how stale a consumer's view can
-    // be — the underlying up/down events still fire in real time. Default
-    // 2500ms matches the modal's polling cadence well.
-    DEVICE_DISCOVERY_INTERVAL_MS: {
-      type: "number",
-      default: 2500,
     },
     // Absolute path to a unix socket implementing the SSH agent protocol,
     // injected as SSH_AUTH_SOCK into every spawned session (see
@@ -937,7 +930,6 @@ declare module "fastify" {
       DEVICE_SDKMANAGER_PATH: string;
       DEVICE_ANDROID_SDK_ROOT: string;
       DEVICE_DISCOVERY_ENABLED: boolean;
-      DEVICE_DISCOVERY_INTERVAL_MS: number;
       MULLION_SOCKET_PATH: string;
       MULLION_SSH_AUTH_SOCK: string;
       MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED: boolean;
