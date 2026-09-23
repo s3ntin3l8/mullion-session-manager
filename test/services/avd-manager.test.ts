@@ -434,6 +434,31 @@ describe("parseSdkManagerList", () => {
     expect(result.length).toBe(1);
   });
 
+  it("no-header fallback surfaces an installed-only image as installed", () => {
+    const output = `  system-images;android-33;default;x86_64 | 5 | Android TV x86_64\n`;
+    const installed = [
+      {
+        packagePath: "system-images;android-33;default;x86_64",
+        apiLevel: "33",
+        tag: "default",
+        abi: "x86_64",
+      },
+    ];
+    const result = parseSdkManagerList(output, installed, "x86_64");
+    expect(result).toHaveLength(1);
+    expect(result[0].packagePath).toBe("system-images;android-33;default;x86_64");
+    expect(result[0].installed).toBe(true);
+  });
+
+  it("skips a slash-dialect row whose version cell is blank instead of eating the description", () => {
+    const output = [
+      "Available packages:",
+      "  system-images/android-35/google_apis/x86_64   Google APIs Intel x86_64 System Image",
+    ].join("\n");
+    const result = parseSdkManagerList(output, [], "x86_64");
+    expect(result).toEqual([]);
+  });
+
   it("sorts by API level descending, then tag alphabetically", () => {
     const output = [
       "Available Packages:",

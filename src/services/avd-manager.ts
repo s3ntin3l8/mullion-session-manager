@@ -287,7 +287,9 @@ const SDKMANAGER_LINE_RE = /^\s+(system-images;\S+)\s+\|\s+(\S+)\s+\|\s+(.+)$/;
 // sdk-style paths instead of the classic pipe/semicolon package paths —
 // captured from a real `sdkmanager --list` on cmdline-tools 23.0:
 //   system-images/android-35/google_apis/x86_64   9.0.0   Google APIs ...
-const SDKMANAGER_SLASH_LINE_RE = /^\s+(system-images\/\S+)\s+(\S+)\s+(\S.*)$/;
+// The version cell must start with a digit (`7`, `9.0.0`): a blank cell
+// would otherwise let `(\S+)` swallow the first description word.
+const SDKMANAGER_SLASH_LINE_RE = /^\s+(system-images\/\S+)\s+(\d\S*)\s+(\S.*)$/;
 // Header casing differs too: classic prints "Available Packages:", the
 // Android CLI prints "Available packages:". Match either (and tolerate a
 // missing header by falling back to the full output below).
