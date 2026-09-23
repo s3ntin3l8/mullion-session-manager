@@ -844,6 +844,44 @@ describe("Settings -> Devices (issue #1326)", () => {
     expect(screen.getByRole("button", { name: "Create AVD" })).toBeDisabled();
   });
 
+  // A name with spaces (e.g. "Pixel 10 Pro XL") fails AVD_NAME_PATTERN and
+  // silently disables Create AVD — surface an inline error so the dead
+  // button is explicable instead of mysterious.
+  it("shows an inline AVD-name validation error while the name has disallowed characters", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(await screen.findByText("New device"));
+    await user.click(screen.getByRole("button", { name: "+ New AVD" }));
+    await screen.findByDisplayValue("pixel_6");
+
+    await user.type(screen.getByPlaceholderText("Pixel_8_API_35"), "Pixel 10 Pro XL");
+    expect(
+      await screen.findByText(/Use only letters, digits, '\.', '_', and '-'/),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create AVD" })).toBeDisabled();
+
+    // Clearing back to a valid name hides the error again.
+    await user.clear(screen.getByPlaceholderText("Pixel_8_API_35"));
+    await user.type(screen.getByPlaceholderText("Pixel_8_API_35"), "Pixel_10_Pro_XL");
+    await waitFor(() => {
+      expect(screen.queryByText(/Use only letters, digits/)).not.toBeInTheDocument();
+    });
+    expect(screen.getByRole("button", { name: "Create AVD" })).toBeEnabled();
+  });
+
+  it("does not show the name validation error while the field is still empty", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(await screen.findByText("New device"));
+    await user.click(screen.getByRole("button", { name: "+ New AVD" }));
+    await screen.findByDisplayValue("pixel_6");
+
+    expect(screen.queryByText(/Use only letters, digits/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create AVD" })).toBeDisabled();
+  });
+
   it("install error shows the error message", async () => {
     availableImagesDb = [
       {

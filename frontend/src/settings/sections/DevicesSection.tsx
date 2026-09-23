@@ -655,6 +655,18 @@ export function DevicesSection() {
                       />
                     </div>
                   </Row>
+                  {/* Only once the user has typed something — an empty field
+                      is the placeholder's job, not an error's. Surfaces why
+                      Create AVD stays disabled for e.g. "Pixel 10 Pro XL"
+                      (spaces fail AVD_NAME_PATTERN) instead of leaving a
+                      silently dead button. */}
+                  {newAvdName.trim().length > 0 &&
+                    (!AVD_NAME_PATTERN.test(newAvdName.trim()) ||
+                      !AVD_NAME_HAS_ALPHANUMERIC.test(newAvdName.trim())) && (
+                      <ErrorText style={{ marginTop: 4 }}>
+                        Use only letters, digits, '.', '_', and '-' — at least one letter or digit.
+                      </ErrorText>
+                    )}
                   {!provisioningLoaded && (
                     <div className="settings-readonly-value" style={{ marginTop: 4 }}>
                       Loading system images and device profiles…

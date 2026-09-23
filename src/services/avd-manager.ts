@@ -277,11 +277,30 @@ export interface AvailableSystemImage {
   installed: boolean;
 }
 
-// Parses a single line from `sdkmanager --list`'s pipe-delimited table.
-// Returns [path, version, description] or null if the line doesn't match.
+// Parses a single line from `sdkmanager --list`'s pipe-delimited table
+// (classic Java sdkmanager). Returns [path, version, description] or null
+// if the line doesn't match.
 //   | system-images;android-35;google_apis;x86_64  | 7 | Google APIs ... |
 const SDKMANAGER_LINE_RE = /^\s+(system-images;\S+)\s+\|\s+(\S+)\s+\|\s+(.+)$/;
-const AVAILABLE_HEADER = "Available Packages:";
+// Android CLI (cmdline-tools ≥ ~23, the `sdkmanager` deprecation shim's
+// underlying binary) prints a space-aligned table with slash-delimited
+// sdk-style paths instead of the classic pipe/semicolon package paths —
+// captured from a real `sdkmanager --list` on cmdline-tools 23.0:
+//   system-images/android-35/google_apis/x86_64   9.0.0   Google APIs ...
+const SDKMANAGER_SLASH_LINE_RE = /^\s+(system-images\/\S+)\s+(\S+)\s+(\S.*)$/;
+// Header casing differs too: classic prints "Available Packages:", the
+// Android CLI prints "Available packages:". Match either (and tolerate a
+// missing header by falling back to the full output below).
+const AVAILABLE_HEADER_RE = /Available packages?:/i;
+
+// Normalizes either package-path spelling to the semicolon form the rest of
+// this file (and `avdmanager create avd -k`, the installed-image fs scan's
+// packagePath, and the route allowlist) already uses. The new Android CLI's
+// own `sdkmanager` shim accepts both — it `tr ';' '/'`s its package args —
+// so semicolon is the safe interchange format on either generation.
+function toSemicolonPackagePath(path: string): string {
+  return path.replace(/\//g, ";");
+}
 
 // Parses `sdkmanager --list` output and returns system image entries filtered
 // to the host's architecture. Cross-references with the installed images set
@@ -295,21 +314,29 @@ export function parseSdkManagerList(
   const installedPaths = new Set(installedImages.map((img) => img.packagePath));
   const resolvedAbi = hostAbi ?? ARCH_TO_ABI[process.arch] ?? process.arch;
   const images: AvailableSystemImage[] = [];
+  const seen = new Set<string>();
 
-  // Find the "Available Packages:" section — everything before it is
-  // installed packages or header text we don't need.
-  const availableIdx = output.indexOf(AVAILABLE_HEADER);
-  const section = availableIdx >= 0 ? output.slice(availableIdx + AVAILABLE_HEADER.length) : output;
+  // Find the available-packages section — everything before it is installed
+  // packages or header text we don't need (and must not be scraped: the
+  // Installed section would otherwise duplicate every still-available image).
+  const headerMatch = AVAILABLE_HEADER_RE.exec(output);
+  const section = headerMatch ? output.slice(headerMatch.index + headerMatch[0].length) : output;
 
   for (const line of section.split("\n")) {
-    const match = SDKMANAGER_LINE_RE.exec(line);
+    const match = SDKMANAGER_LINE_RE.exec(line) ?? SDKMANAGER_SLASH_LINE_RE.exec(line);
     if (!match) continue;
-    const [, packagePath, _version, tagDisplay] = match;
+    const [, rawPackagePath, _version, tagDisplay] = match;
+    const packagePath = toSemicolonPackagePath(rawPackagePath);
     const parts = packagePath.split(";");
     if (parts.length !== 4) continue;
     const [, apiRaw, tag, abi] = parts;
     // Filter: only host-ABI images.
     if (abi !== resolvedAbi) continue;
+    // Defensive dedupe — a hand-edited/odd stdout could list the same image
+    // twice across a re-sliced section; React keys and the installed-set
+    // lookup both assume packagePath is unique.
+    if (seen.has(packagePath)) continue;
+    seen.add(packagePath);
     // Extract numeric API level from "android-35" or "android-VanillaIceCream".
     const apiLevel = apiRaw.replace(/^android-/, "");
     images.push({
