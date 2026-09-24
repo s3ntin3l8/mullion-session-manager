@@ -215,6 +215,61 @@ describe("PairDeviceDialog (issue #1379)", () => {
     expect(pixel).toBeChecked();
   });
 
+  it("drops a typed device address when the selection migrates to another phone", async () => {
+    vi.useFakeTimers();
+    vi.mocked(api.listDiscoveredDevices)
+      .mockResolvedValueOnce([discovered({ connectAddress: undefined })])
+      .mockResolvedValue([
+        discovered({ pairingAddress: undefined }),
+        discovered({ id: "192.168.1.50", name: "Pixel 9", host: "192.168.1.50" }),
+      ]);
+    render(<PairDeviceDialog onClose={vi.fn()} onPaired={vi.fn()} />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    typeInto("192.168.1.23:37251", "192.168.1.23:40000");
+    typeInto("123456", "123456");
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(DISCOVERY_POLL_MS);
+    });
+    expect(screen.getByRole("radio", { name: /Pixel 9/ })).toBeChecked();
+    // Pixel 9 advertised its connect port, so no override field is shown.
+    expect(screen.queryByPlaceholderText("192.168.1.23:37251")).not.toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(submitButton());
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(api.pairAndConnectDevice).toHaveBeenCalledWith({
+      discoveryId: "192.168.1.50",
+      pairingCode: "123456",
+      name: undefined,
+    });
+  });
+
+  it("keeps an auto-opened manual form open when a phone shows up later", async () => {
+    vi.useFakeTimers();
+    vi.mocked(api.listDiscoveredDevices).mockResolvedValue([]);
+    render(<PairDeviceDialog onClose={vi.fn()} onPaired={vi.fn()} />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(DISCOVERY_TIMEOUT_MS);
+    });
+    typeInto("192.168.1.23:41234", "10.0.0.5:41234");
+
+    vi.mocked(api.listDiscoveredDevices).mockResolvedValue([discovered()]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(DISCOVERY_POLL_MS);
+    });
+    const pixel = screen.getByRole("radio", { name: /Pixel 7/ });
+    expect(pixel).not.toBeChecked();
+    expect(screen.getByPlaceholderText("192.168.1.23:41234")).toHaveValue("10.0.0.5:41234");
+
+    // Picking the phone is still one click away.
+    fireEvent.click(pixel);
+    expect(pixel).toBeChecked();
+    expect(screen.queryByPlaceholderText("192.168.1.23:41234")).not.toBeInTheDocument();
+  });
+
   it("strips non-digits from the pairing code", async () => {
     vi.mocked(api.listDiscoveredDevices).mockResolvedValue([discovered()]);
     render(<PairDeviceDialog onClose={vi.fn()} onPaired={vi.fn()} />);

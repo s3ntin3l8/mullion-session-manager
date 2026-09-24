@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 import { useDashboardStore } from "../../store/index.js";
 import { ApiError } from "../../api/index.js";
@@ -63,10 +63,14 @@ export function PairDeviceDialog({
   const [discovered, setDiscovered] = useState<DiscoveredDevice[]>([]);
   const [scanTimedOut, setScanTimedOut] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  // `null` = not chosen by the user yet, so the manual form follows the
-  // scan (opens once it times out empty-handed); a boolean = the user's own
-  // explicit toggle, which always wins from then on.
+  // `null` = nothing decided yet (manual form closed, lone-phone auto-pick
+  // active); a boolean = the form's latched state, set either by the user's
+  // own toggle or by the scan timing out empty-handed. Latched so a phone
+  // that shows up later lands in the list without yanking an auto-opened
+  // form shut mid-typing — the user picks it (or hides the form) themselves.
   const [manualChoice, setManualChoice] = useState<boolean | null>(null);
+  // Read by the timeout below, which fires once from a mount-time closure.
+  const pairableCountRef = useRef(0);
 
   const [pairingCode, setPairingCode] = useState("");
   const [name, setName] = useState("");
@@ -76,7 +80,10 @@ export function PairDeviceDialog({
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const id = setTimeout(() => setScanTimedOut(true), DISCOVERY_TIMEOUT_MS);
+    const id = setTimeout(() => {
+      setScanTimedOut(true);
+      if (pairableCountRef.current === 0) setManualChoice((prev) => prev ?? true);
+    }, DISCOVERY_TIMEOUT_MS);
     return () => clearTimeout(id);
   }, []);
 
@@ -86,19 +93,25 @@ export function PairDeviceDialog({
         .then((list) => {
           if (isCancelled()) return;
           setDiscovered(list);
+          const pairableIds = list
+            .filter((entry) => entry.pairingAddress !== undefined)
+            .map((entry) => entry.id);
+          pairableCountRef.current = pairableIds.length;
           if (manualChoice === true) return;
           // The auto-pick for a lone pairable phone is stored as a real
           // selection (not derived per render), so a second phone showing up
           // on a later tick doesn't yank the code/name fields away mid-typing.
           // A selection whose phone dropped off the scan (screen closed, out
-          // of range) is cleared rather than submitted with a stale id.
-          const pairableIds = list
-            .filter((entry) => entry.pairingAddress !== undefined)
-            .map((entry) => entry.id);
-          setSelectedId((prev) => {
-            if (prev !== null && pairableIds.includes(prev)) return prev;
-            return pairableIds.length === 1 ? pairableIds[0] : null;
-          });
+          // of range) is replaced by the lone remaining pairable phone if
+          // there is exactly one, else cleared — never submitted stale.
+          const kept = selectedId !== null && pairableIds.includes(selectedId);
+          const next = kept ? selectedId : pairableIds.length === 1 ? pairableIds[0] : null;
+          if (next !== selectedId) {
+            setSelectedId(next);
+            // A device address typed for the previous phone must not ride
+            // along as an override for a different one (Hermes review).
+            setConnectAddress("");
+          }
         })
         // The endpoint itself never errors (disabled discovery is `[]`); a
         // network blip just keeps the previous snapshot until the next tick.
@@ -113,7 +126,7 @@ export function PairDeviceDialog({
   // it — a connect-only entry is an already-paired phone (reconnecting
   // those is issue #1380's job), so it's listed but not selectable.
   const pairable = discovered.filter((entry) => entry.pairingAddress !== undefined);
-  const manualOpen = manualChoice ?? (scanTimedOut && pairable.length === 0);
+  const manualOpen = manualChoice ?? false;
   const selected = pairable.find((entry) => entry.id === selectedId);
   const mode: "discovery" | "manual" | null = manualOpen ? "manual" : selected ? "discovery" : null;
 
@@ -152,7 +165,11 @@ export function PairDeviceDialog({
             discoveryId: selected.id,
             pairingCode,
             name: trimmedName,
-            ...(trimmedConnect ? { connectAddress: trimmedConnect } : {}),
+            // Only an entry that never advertised its connect port shows the
+            // override field, so only it may send one.
+            ...(selected.connectAddress === undefined && trimmedConnect
+              ? { connectAddress: trimmedConnect }
+              : {}),
           }
         : {
             pairingAddress: pairingAddress.trim(),
