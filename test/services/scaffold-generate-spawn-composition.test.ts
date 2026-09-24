@@ -1,5 +1,4 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import type * as ChildProcessModule from "node:child_process";
@@ -57,7 +56,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 // Imported AFTER the mock is declared (vi.mock is hoisted by vitest to the
 // top of the file regardless of declaration order, so this is safe, but
 // kept below for readability).
-const { defaultSpawnGenerationTurn, resetSandboxCapabilityCache } =
+const { defaultSpawnGenerationTurn, resetSandboxCapabilityCache, scaffoldGenerateBaseDir } =
   await import("../../src/services/scaffold-generate.js");
 
 describe("defaultSpawnGenerationTurn — sandbox composition (issue #1081 coverage gap)", () => {
@@ -67,7 +66,10 @@ describe("defaultSpawnGenerationTurn — sandbox composition (issue #1081 covera
     resetSandboxCapabilityCache();
     execFileMock.mockClear();
     smokeProbeSucceeds = true;
-    scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-spawn-composition-test-"));
+    // Under scaffoldGenerateBaseDir(): defaultSpawnGenerationTurn refuses
+    // any cwd outside it (CodeQL #303 containment).
+    fs.mkdirSync(scaffoldGenerateBaseDir(), { recursive: true });
+    scratchDir = fs.mkdtempSync(path.join(scaffoldGenerateBaseDir(), "spawn-composition-test-"));
   });
 
   afterEach(() => {

@@ -491,13 +491,17 @@ describe("agent-bridge routes (POST/GET/DELETE /api/bridges, GET /ws/agent-bridg
     });
 
     it("rejects renewal of a session that's since been revoked", async () => {
-      const { port } = await buildAndListen();
+      const { app, port } = await buildAndListen();
       const { bridge_id, session_id } = await pairFreshBridge(port);
 
-      const deleteRes = await fetch(`http://127.0.0.1:${port}/api/bridges/${bridge_id}`, {
+      // app.inject(), not a real fetch: bridge_id comes off the WebSocket
+      // reply, and a fetch() URL built from it trips CodeQL's
+      // js/request-forgery (alert #252) even in a test.
+      const deleteRes = await app.inject({
         method: "DELETE",
+        url: `/api/bridges/${encodeURIComponent(bridge_id)}`,
       });
-      expect(deleteRes.status).toBe(204);
+      expect(deleteRes.statusCode).toBe(204);
 
       const res = await fetch(`http://127.0.0.1:${port}/api/bridges/renew`, {
         method: "POST",

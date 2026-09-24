@@ -12,6 +12,7 @@ import {
   parseGeneratedOutput,
   generateScaffoldContent,
   defaultSpawnGenerationTurn,
+  scaffoldGenerateBaseDir,
   buildInvocation,
   wrapWithSandbox,
   agentSandboxWritablePaths,
@@ -921,7 +922,7 @@ describe("ensureSandboxWritablePathsExist", () => {
     const target = path.join(parentDir, "does", "not", "exist", "yet");
     expect(fs.existsSync(target)).toBe(false);
 
-    ensureSandboxWritablePathsExist({ dirs: [target], files: [] });
+    ensureSandboxWritablePathsExist({ dirs: [target], files: [] }, parentDir);
 
     expect(fs.existsSync(target)).toBe(true);
     expect(fs.statSync(target).isDirectory()).toBe(true);
@@ -931,7 +932,9 @@ describe("ensureSandboxWritablePathsExist", () => {
     const target = path.join(parentDir, "already-here");
     fs.mkdirSync(target);
 
-    expect(() => ensureSandboxWritablePathsExist({ dirs: [target], files: [] })).not.toThrow();
+    expect(() =>
+      ensureSandboxWritablePathsExist({ dirs: [target], files: [] }, parentDir),
+    ).not.toThrow();
     expect(fs.existsSync(target)).toBe(true);
   });
 
@@ -939,7 +942,7 @@ describe("ensureSandboxWritablePathsExist", () => {
     const target = path.join(parentDir, "deep", "nested", "opencode.db");
     expect(fs.existsSync(target)).toBe(false);
 
-    ensureSandboxWritablePathsExist({ dirs: [], files: [target] });
+    ensureSandboxWritablePathsExist({ dirs: [], files: [target] }, parentDir);
 
     expect(fs.existsSync(target)).toBe(true);
     expect(fs.statSync(target).isFile()).toBe(true);
@@ -950,7 +953,9 @@ describe("ensureSandboxWritablePathsExist", () => {
     const target = path.join(parentDir, "existing-file.db");
     fs.writeFileSync(target, "existing content");
 
-    expect(() => ensureSandboxWritablePathsExist({ dirs: [], files: [target] })).not.toThrow();
+    expect(() =>
+      ensureSandboxWritablePathsExist({ dirs: [], files: [target] }, parentDir),
+    ).not.toThrow();
     expect(fs.readFileSync(target, "utf8")).toBe("existing content");
   });
 
@@ -963,10 +968,13 @@ describe("ensureSandboxWritablePathsExist", () => {
     const impossibleFileTarget = path.join(blockingFile, "child.db");
 
     expect(() =>
-      ensureSandboxWritablePathsExist({
-        dirs: [impossibleDirTarget],
-        files: [impossibleFileTarget],
-      }),
+      ensureSandboxWritablePathsExist(
+        {
+          dirs: [impossibleDirTarget],
+          files: [impossibleFileTarget],
+        },
+        parentDir,
+      ),
     ).not.toThrow();
   });
 
@@ -976,12 +984,29 @@ describe("ensureSandboxWritablePathsExist", () => {
     expect(fs.existsSync(dir)).toBe(false);
     expect(fs.existsSync(file)).toBe(false);
 
-    ensureSandboxWritablePathsExist({ dirs: [dir], files: [file] });
+    ensureSandboxWritablePathsExist({ dirs: [dir], files: [file] }, parentDir);
 
     expect(fs.existsSync(dir)).toBe(true);
     expect(fs.statSync(dir).isDirectory()).toBe(true);
     expect(fs.existsSync(file)).toBe(true);
     expect(fs.statSync(file).isFile()).toBe(true);
+  });
+
+  it("skips any dir or file that resolves outside root (CodeQL #302 containment)", () => {
+    const root = path.join(parentDir, "fake-home");
+    fs.mkdirSync(root);
+    const escapingDir = path.join(root, "..", "escaped-dir");
+    const escapingFile = path.join(parentDir, "escaped.json");
+    const inside = path.join(root, "log");
+
+    ensureSandboxWritablePathsExist(
+      { dirs: [escapingDir, root, inside], files: [escapingFile] },
+      root,
+    );
+
+    expect(fs.existsSync(path.join(parentDir, "escaped-dir"))).toBe(false);
+    expect(fs.existsSync(escapingFile)).toBe(false);
+    expect(fs.existsSync(inside)).toBe(true);
   });
 });
 
@@ -1026,6 +1051,23 @@ describe("createAgentSandboxHome", () => {
 
   afterEach(() => {
     fs.rmSync(scratchDir, { recursive: true, force: true });
+  });
+
+  it("never materializes a missing worktree, even for an agent with writable paths", () => {
+    const missingWorktree = path.join(scratchDir, "missing-worktree");
+
+    const { writablePaths } = createAgentSandboxHome(missingWorktree, "codex");
+
+    expect(writablePaths.dirs.length).toBeGreaterThan(0);
+    expect(fs.existsSync(missingWorktree)).toBe(false);
+  });
+
+  it("still creates writable paths when .agent-home already exists", () => {
+    fs.mkdirSync(path.join(scratchDir, ".agent-home"));
+
+    const { writablePaths } = createAgentSandboxHome(scratchDir, "codex");
+
+    for (const d of writablePaths.dirs) expect(fs.existsSync(d)).toBe(true);
   });
 
   it("creates a fake HOME under the worktree and returns it", () => {
@@ -1408,7 +1450,10 @@ describeIfBwrap(
     });
 
     it("with ensureSandboxWritablePathsExist called first, the same write succeeds — proves the fix", async () => {
-      ensureSandboxWritablePathsExist({ dirs: [freshStateDir], files: [] });
+      ensureSandboxWritablePathsExist(
+        { dirs: [freshStateDir], files: [] },
+        path.dirname(freshStateDir),
+      );
       expect(fs.existsSync(freshStateDir)).toBe(true);
 
       const target = path.join(freshStateDir, "written-by-agent.txt");
@@ -1493,6 +1538,11 @@ describe("isSandboxCapable caching", () => {
 // back on (unlike claude's --allowedTools or codex's --sandbox read-only).
 // defaultSpawnGenerationTurn fails closed for agy specifically in that case
 // rather than silently degrading like the other three agents.
+// Under scaffoldGenerateBaseDir() — defaultSpawnGenerationTurn refuses any
+// cwd outside it (CodeQL #303) — but never created, so a spawn that gets
+// past every guard still fails with a real ENOENT.
+const NONEXISTENT_SCRATCH_WORKTREE = path.join(scaffoldGenerateBaseDir(), "nonexistent-worktree");
+
 describe("defaultSpawnGenerationTurn — agy fails closed without a usable sandbox (issue #1130/#1152)", () => {
   beforeEach(() => {
     resetSandboxCapabilityCache();
@@ -1502,13 +1552,32 @@ describe("defaultSpawnGenerationTurn — agy fails closed without a usable sandb
     resetSandboxCapabilityCache();
   });
 
+  it("refuses a cwd outside scaffoldGenerateBaseDir() before any spawn (CodeQL #303)", async () => {
+    await isSandboxCapable(async () => true);
+
+    for (const cwd of [
+      "/some/real/project",
+      scaffoldGenerateBaseDir(),
+      path.join(scaffoldGenerateBaseDir(), "..", "escaped-worktree"),
+    ]) {
+      const err: unknown = await defaultSpawnGenerationTurn({
+        agentCommand: "claude",
+        cwd,
+        prompt: "x",
+        timeoutMs: 1000,
+      }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(GenerationSpawnError);
+      expect((err as Error).message).toMatch(/refusing to run outside the scratch generation/);
+    }
+  });
+
   it("throws GenerationSpawnError for agy when no usable bwrap is available, without ever spawning", async () => {
     await isSandboxCapable(async () => false);
 
     await expect(
       defaultSpawnGenerationTurn({
         agentCommand: "agy",
-        cwd: "/nonexistent/scratch-worktree",
+        cwd: NONEXISTENT_SCRATCH_WORKTREE,
         prompt: "irrelevant — this must fail before any spawn is attempted",
         timeoutMs: 5000,
       }),
@@ -1527,7 +1596,7 @@ describe("defaultSpawnGenerationTurn — agy fails closed without a usable sandb
     for (const agentCommand of ["claude", "codex"]) {
       const err: unknown = await defaultSpawnGenerationTurn({
         agentCommand,
-        cwd: "/nonexistent/scratch-worktree",
+        cwd: NONEXISTENT_SCRATCH_WORKTREE,
         prompt: "x",
         timeoutMs: 1000,
       }).catch((e: unknown) => e);
@@ -1544,7 +1613,7 @@ describe("defaultSpawnGenerationTurn — agy fails closed without a usable sandb
     await expect(
       defaultSpawnGenerationTurn({
         agentCommand: "opencode",
-        cwd: "/nonexistent/scratch-worktree",
+        cwd: NONEXISTENT_SCRATCH_WORKTREE,
         prompt: "irrelevant — this must fail before any spawn is attempted",
         timeoutMs: 5000,
       }),
@@ -1561,7 +1630,7 @@ describe("defaultSpawnGenerationTurn — agy fails closed without a usable sandb
 
     const err: unknown = await defaultSpawnGenerationTurn({
       agentCommand: "opencode",
-      cwd: "/nonexistent/scratch-worktree",
+      cwd: NONEXISTENT_SCRATCH_WORKTREE,
       prompt: "irrelevant — this must fail before any spawn is attempted",
       timeoutMs: 5000,
       sandbox: false,
@@ -1583,7 +1652,7 @@ describe("defaultSpawnGenerationTurn — agy fails closed without a usable sandb
 
     const err: unknown = await defaultSpawnGenerationTurn({
       agentCommand: "agy",
-      cwd: "/nonexistent/scratch-worktree",
+      cwd: NONEXISTENT_SCRATCH_WORKTREE,
       prompt: "irrelevant — this must fail before any spawn is attempted",
       timeoutMs: 5000,
       sandbox: false,
@@ -1604,7 +1673,7 @@ describe("defaultSpawnGenerationTurn — agy fails closed without a usable sandb
 
     const err: unknown = await defaultSpawnGenerationTurn({
       agentCommand: "agy",
-      cwd: "/nonexistent/scratch-worktree",
+      cwd: NONEXISTENT_SCRATCH_WORKTREE,
       prompt: "x",
       timeoutMs: 1000,
     }).catch((e: unknown) => e);
@@ -1639,7 +1708,7 @@ describe("defaultSpawnGenerationTurn — sandbox opt-out actually skips wrapWith
 
     const err: unknown = await defaultSpawnGenerationTurn({
       agentCommand: "claude",
-      cwd: "/nonexistent/scratch-worktree",
+      cwd: NONEXISTENT_SCRATCH_WORKTREE,
       prompt: "x",
       timeoutMs: 1000,
       sandbox: false,
@@ -1655,7 +1724,7 @@ describe("defaultSpawnGenerationTurn — sandbox opt-out actually skips wrapWith
 
     const err: unknown = await defaultSpawnGenerationTurn({
       agentCommand: "claude",
-      cwd: "/nonexistent/scratch-worktree",
+      cwd: NONEXISTENT_SCRATCH_WORKTREE,
       prompt: "x",
       timeoutMs: 1000,
     }).catch((e: unknown) => e);
