@@ -272,11 +272,44 @@ export class Device {
 
       await new Promise<void>((resolve, reject) => {
         const child = spawnChild("systemd-run", plan.argv, { stdio: "ignore" });
-        child.on("error", reject);
+        let settled = false;
+
+        child.on("error", (err) => {
+          if (!settled) {
+            settled = true;
+            reject(err);
+          } else {
+            this.handleExit();
+          }
+        });
+
         child.on("exit", (code) => {
-          if (code === 0) resolve();
-          else
-            reject(new Error(`device bootstrap exited with code ${code} (unit ${plan.unitName})`));
+          if (!settled) {
+            if (code !== 0) {
+              settled = true;
+              reject(
+                new Error(`device bootstrap exited with code ${code} (unit ${plan.unitName})`),
+              );
+              return;
+            }
+            // An exit code 0 during the bootstrap window (e.g. from test mocks)
+            // indicates successful scope launch.
+            settled = true;
+            resolve();
+          } else {
+            this.handleExit();
+          }
+        });
+
+        // In production, `systemd-run --scope` runs the emulator in the foreground
+        // and stays alive for the emulator's full lifespan. Once spawned without an
+        // immediate error or non-zero exit, proceed to boot monitoring while the
+        // exit listener remains attached for process lifecycle tracking.
+        setImmediate(() => {
+          if (!settled) {
+            settled = true;
+            resolve();
+          }
         });
       });
 

@@ -672,6 +672,53 @@ describe("DeviceManager", () => {
     expect(manager.get("1")?.toInfo().status).toBe("exited");
   });
 
+  it("handles child process exit after streaming by transitioning status to exited", async () => {
+    mockDeviceList = [{ serial: "emulator-5554" }];
+    let spawnedChild: ReturnType<typeof createMockChild> | undefined;
+
+    // Override the default mockImplementation so that for `systemd-run` we
+    // capture the child but NEVER emit exit — simulating a long-running scope.
+    // Other commands (adb start-server, systemctl) fall through to the base.
+    const baseImpl = vi.mocked(spawnChildProcess).getMockImplementation()!;
+    vi.mocked(spawnChildProcess).mockImplementation(((
+      file: string,
+      args: readonly string[],
+      ...rest: unknown[]
+    ) => {
+      if (file === "systemd-run" && spawnedChild === undefined) {
+        const ee = createMockChild();
+        spawnedChild = ee;
+        listUnitsReply.push(`${args[4]}.scope loaded active running ${args[6]}`);
+        // Do NOT emit exit — simulates systemd-run staying alive for the full
+        // emulator lifespan. The setImmediate in Device.spawn() settles the
+        // bootstrap promise; only AFTER that should the emulator "die".
+        return ee as unknown as ChildProcess.ChildProcess;
+      }
+      return baseImpl(file, args, ...(rest as []));
+    }) as typeof spawnChildProcess);
+
+    const manager = new DeviceManager(baseOpts());
+    await manager.getOrCreate({
+      id: "1",
+      kind: "emulator" as const,
+      avdName: "dev35",
+      serial: null,
+      label: null,
+      port: null,
+    });
+    await waitForStatus(manager, "1", "streaming");
+    expect(spawnedChild).toBeDefined();
+
+    // Let any remaining macrotasks flush so Device.spawn()'s setImmediate has
+    // already fired and `settled = true` — only then does a late exit take the
+    // `else { this.handleExit() }` branch.
+    await new Promise<void>((r) => setTimeout(r, 10));
+
+    // Simulate the emulator process dying while already streaming.
+    spawnedChild!.emit("exit", 0);
+    expect(manager.get("1")?.toInfo().status).toBe("exited");
+  });
+
   it("kill() on an id with NO in-memory Device still stops the scope by derived unit name — the orphan-scope fix (Hermes review)", async () => {
     // Simulates the post-restart case: nothing in the in-memory map, but a
     // scope for id "9" is still alive. Before this fix, kill()/terminate()
