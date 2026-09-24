@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useDashboardStore } from "../store/index.js";
 import { OverflowIcon } from "./icons.js";
+import { useVisualViewportChange } from "../hooks/useVisualViewportChange.js";
 
 // Generic ⋯ trigger + portaled dropdown, extracted from PaneTab.tsx's own
 // overflow menu (Phase 4b/4c) so group/workspace/project rows get the same
@@ -108,6 +109,14 @@ export function KebabMenu({
     document.addEventListener("mousedown", onOutsideClick);
     return () => document.removeEventListener("mousedown", onOutsideClick);
   }, [open]);
+
+  // Issue #1399 — re-read the trigger's rect when the iOS visual viewport
+  // pans/resizes while open: `.app` (and this trigger with it) moves with the
+  // visual viewport since #1398, and getMenuStyle below derives everything
+  // from `triggerRect`, so refreshing it is enough to keep the menu attached.
+  useVisualViewportChange(open, () => {
+    if (btnRef.current) setTriggerRect(btnRef.current.getBoundingClientRect());
+  });
 
   const handleItemClick = (item: KebabMenuItem) => {
     if (item.disabled) return;

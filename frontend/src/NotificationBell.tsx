@@ -16,6 +16,7 @@ import type { NotificationEvent, Project, Session } from "./api/index.js";
 import { BellIcon, BlockedIcon, CheckIcon, CloseIcon, WarningTriangleIcon } from "./ui/icons.js";
 import { formatRelativeAge } from "./relativeTime.js";
 import { useFocusTrap } from "./hooks/useFocusTrap.js";
+import { useVisualViewportChange } from "./hooks/useVisualViewportChange.js";
 import { truncateHead } from "./lib/truncatePath.js";
 import { formatStatusLabel, STATUS_PRESENTATION } from "./sessionStatus.js";
 import { panelPosition } from "./lib/notifPanelPosition.js";
@@ -464,17 +465,20 @@ export function NotificationBell({
   // The toolbar's mobile breakpoint (styles.css's max-width:699px block)
   // changes .toolbar-lead's width, so the bell can move under the panel on a
   // resize/orientation-change while it's open — recompute rather than leave
-  // it anchored to a stale rect.
+  // it anchored to a stale rect. Issue #1399 — same for an iOS visual-viewport
+  // pan/resize: since #1398 `.app` (toolbar and bell included) tracks the
+  // visual viewport's offsetTop, which moves without a window `resize`.
+  const reposition = useCallback(() => {
+    if (!btnRef.current) return;
+    const rect = btnRef.current.getBoundingClientRect();
+    setPos(panelPosition(rect, window.innerWidth));
+  }, []);
   useEffect(() => {
     if (!open) return;
-    const reposition = () => {
-      if (!btnRef.current) return;
-      const rect = btnRef.current.getBoundingClientRect();
-      setPos(panelPosition(rect, window.innerWidth));
-    };
     window.addEventListener("resize", reposition);
     return () => window.removeEventListener("resize", reposition);
-  }, [open]);
+  }, [open, reposition]);
+  useVisualViewportChange(open, reposition);
 
   // Issue #170: a desktop notification's onclick handler bumps
   // `notificationsPanelOpenRequest` via the store (this component can't be

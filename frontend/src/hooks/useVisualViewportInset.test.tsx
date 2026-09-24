@@ -6,6 +6,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { act, render, cleanup } from "@testing-library/react";
 import { useVisualViewportInset } from "./useVisualViewportInset.js";
+import { FakeVisualViewport } from "../test/fakeVisualViewport.js";
 
 /** Awaits the next animation frame — the hook's own update() is
  * rAF-coalesced, so every test needs to yield to it before asserting. */
@@ -26,27 +27,6 @@ function kbInset(): string {
 /** Same as kbInset(), for the visual viewport's own offsetTop (issue #1387). */
 function kbOffsetTop(): string {
   return document.documentElement.style.getPropertyValue("--kb-offset-top");
-}
-
-// A minimal fake visualViewport — real EventTarget so addEventListener/
-// removeEventListener/dispatchEvent all behave like the browser API this
-// stands in for, rather than hand-rolling a listener registry.
-class FakeVisualViewport extends EventTarget {
-  height: number;
-  offsetTop: number;
-  scale: number;
-  constructor(height: number, offsetTop = 0, scale = 1) {
-    super();
-    this.height = height;
-    this.offsetTop = offsetTop;
-    this.scale = scale;
-  }
-  resizeTo(height: number, offsetTop = 0, scale = 1) {
-    this.height = height;
-    this.offsetTop = offsetTop;
-    this.scale = scale;
-    this.dispatchEvent(new Event("resize"));
-  }
 }
 
 function Harness() {
