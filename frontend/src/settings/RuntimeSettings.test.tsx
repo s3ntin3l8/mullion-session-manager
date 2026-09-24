@@ -80,6 +80,17 @@ describe("runtime settings controls", () => {
     expect(useDashboardStore.getState().settings.github.pollQuietSeconds).toBe(-1);
   });
 
+  it("reverts instead of saving 0 when the field is cleared and left", async () => {
+    const user = userEvent.setup();
+    setSettings({ hosts: { heartbeatSeconds: 90 } });
+    render(<HostHeartbeatSetting />);
+    const input = within(rowFor("Health check interval")).getByRole("spinbutton");
+    await user.clear(input);
+    await user.tab();
+    expect(useDashboardStore.getState().settings.hosts.heartbeatSeconds).toBe(90);
+    expect(input).toHaveValue(90);
+  });
+
   it("returns an overridden value to the server default", async () => {
     const user = userEvent.setup();
     setSettings({ hosts: { heartbeatSeconds: 90 } });

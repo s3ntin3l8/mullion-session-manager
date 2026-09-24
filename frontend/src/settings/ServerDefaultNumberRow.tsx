@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { NumberField, Row } from "../ui/primitives.js";
 import { clampNumberFieldOnCommit } from "./clamp.js";
 
@@ -28,6 +28,10 @@ export function ServerDefaultNumberRow({
   onChange: (value: number) => void;
 }) {
   const [draft, setDraft] = useState<number | null>(null);
+  // NumberField reports an empty input as 0. Track emptiness separately so
+  // clearing the field and leaving it reverts instead of saving `min` —
+  // which for the heartbeat (min 0) would silently turn checks off.
+  const emptyRef = useRef(false);
   const overridden = value !== -1;
   return (
     <Row
@@ -53,21 +57,31 @@ export function ServerDefaultNumberRow({
         </>
       }
     >
-      <NumberField
-        value={draft ?? (overridden ? value : serverDefault)}
-        min={min}
-        max={max}
-        width={width}
-        suffix={suffix}
-        onChange={setDraft}
-        onCommit={(v) => {
-          // Blur without typing must not turn the displayed server default
-          // into a saved override.
-          if (draft === null) return;
-          setDraft(null);
-          onChange(clampNumberFieldOnCommit(v, min, max));
+      <div
+        onInputCapture={(e) => {
+          emptyRef.current = (e.target as HTMLInputElement).value.trim() === "";
         }}
-      />
+      >
+        <NumberField
+          value={draft ?? (overridden ? value : serverDefault)}
+          min={min}
+          max={max}
+          width={width}
+          suffix={suffix}
+          onChange={setDraft}
+          onCommit={(v) => {
+            // Blur without typing must not turn the displayed server default
+            // into a saved override.
+            if (draft === null) return;
+            setDraft(null);
+            if (emptyRef.current) {
+              emptyRef.current = false;
+              return;
+            }
+            onChange(clampNumberFieldOnCommit(v, min, max));
+          }}
+        />
+      </div>
     </Row>
   );
 }

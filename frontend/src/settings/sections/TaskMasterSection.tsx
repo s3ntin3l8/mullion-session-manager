@@ -138,7 +138,7 @@ export function TaskMasterSection() {
       </Row>
       <Row
         label="Rate-limit grace period"
-        desc={`When an agent stops because it hit its provider's rate limit, wait this long for it to resume before marking the task failed. 0 fails it immediately. Server default: ${env.rateLimitGraceMinutes} min.`}
+        desc={`When an agent stops because it hit its provider's rate limit, wait this long for it to resume before marking the task failed. 0 fails it immediately. Review agents are also limited by Sessions → Stale error timeout. Server default: ${env.rateLimitGraceMinutes} min.`}
       >
         <NumberField
           value={graceDraft ?? resolved.rateLimitGraceMinutes}
