@@ -824,14 +824,14 @@ export function agentSandboxWritablePaths(
  * exactly the pre-existing `--bind-try`-skips-a-missing-path case, not a
  * new failure mode.
  *
- * `mkdirSync` and `writeFileSync` here are filesystem-write sinks in a
- * module that already carries a documented CodeQL js/path-injection
- * dismissal (see `defaultSpawnGenerationTurn`'s own comment on `cwd`) —
- * worth a quick mental check if GHAS flags it fresh, though it should
- * not: every path this is ever called with comes from
- * `agentSandboxWritablePaths`, which only ever returns `os.homedir()`
- * joined with a hardcoded literal subpath, never anything request- or
- * agent-output-derived.
+ * `mkdirSync` and `writeFileSync` here are filesystem-write sinks, and
+ * every path reaching them comes from `agentSandboxWritablePaths(fakeHome)`
+ * — a hardcoded literal subpath under the disposable HOME, whose own root
+ * derives from the scratch worktree path (CodeQL js/path-injection, alert
+ * #302). `root` enforces that containment at the sink itself: each entry
+ * is `path.resolve`d and skipped unless it sits strictly inside `root`, so
+ * a future entry that escaped the disposable HOME (an absolute literal, a
+ * `..` segment) is dropped rather than created on the real filesystem.
  *
  * Issue #1131 narrowed `agentSandboxWritablePaths` from whole-directory
  * binds to specific files (e.g. `opencode.db`, `auth.json`) and
@@ -843,15 +843,23 @@ export function agentSandboxWritablePaths(
  * source file doesn't exist, the bind is skipped entirely, and the
  * destination stays read-only under `--ro-bind / /`. Creating an empty
  * file is safe: the agent CLI will overwrite it on first write. */
-export function ensureSandboxWritablePathsExist(paths: { dirs: string[]; files: string[] }): void {
-  for (const p of paths.dirs) {
+export function ensureSandboxWritablePathsExist(
+  paths: { dirs: string[]; files: string[] },
+  root: string,
+): void {
+  const rootPrefix = path.resolve(root) + path.sep;
+  for (const entry of paths.dirs) {
+    const p = path.resolve(entry);
+    if (!p.startsWith(rootPrefix)) continue;
     try {
       fs.mkdirSync(p, { recursive: true });
     } catch {
       // Best-effort — see this function's own comment.
     }
   }
-  for (const p of paths.files) {
+  for (const entry of paths.files) {
+    const p = path.resolve(entry);
+    if (!p.startsWith(rootPrefix)) continue;
     try {
       fs.mkdirSync(path.dirname(p), { recursive: true });
       // createFile if missing — not writeFileSync (which would clobber
@@ -905,14 +913,15 @@ export function createAgentSandboxHome(
   // Best-effort: if the parent worktree doesn't exist or isn't writable
   // (e.g. in tests that pass a nonexistent cwd to exercise error paths),
   // bwrap's own spawn will surface the real failure — we don't mask it
-  // here.
+  // here. Non-recursive for exactly that reason: `recursive: true` would
+  // silently materialize a missing worktree itself and mask that failure.
   try {
-    fs.mkdirSync(fakeHome, { recursive: true });
+    fs.mkdirSync(fakeHome);
   } catch {
     // Fall through — bwrap's --bind will produce the real error.
   }
   const writablePaths = agentSandboxWritablePaths(agentCommand, fakeHome);
-  ensureSandboxWritablePathsExist(writablePaths);
+  ensureSandboxWritablePathsExist(writablePaths, fakeHome);
   // Seed auth.json from the operator's real HOME if it exists — the CLI
   // needs valid credentials to reach its model API. If the real auth
   // doesn't exist (fresh host), the CLI will re-prompt or fail at auth,
@@ -922,9 +931,11 @@ export function createAgentSandboxHome(
     if (f.endsWith("auth.json")) {
       const realAuth = f.replace(fakeHome, realHome);
       try {
-        if (fs.existsSync(realAuth) && !fs.existsSync(f)) {
-          fs.copyFileSync(realAuth, f);
-        }
+        // COPYFILE_EXCL instead of an existsSync pre-check (CodeQL
+        // js/file-system-race, alert #301): a missing real auth throws
+        // ENOENT and an already-seeded sandbox copy throws EEXIST, both
+        // swallowed below — no check-then-use window.
+        fs.copyFileSync(realAuth, f, fs.constants.COPYFILE_EXCL);
       } catch {
         // Best-effort — auth seeding failure degrades to auth error at
         // CLI level, not a sandbox error.
@@ -1165,6 +1176,15 @@ export function isSandboxCapable(
   return cachedCapability;
 }
 
+/** The server-controlled parent directory every scratch generation
+ * worktree is created under — see `runGenerationTurnInScratchWorktree`'s
+ * `baseDir` comment for why it's `os.tmpdir()`-rooted and wholly unrelated
+ * to the project checkout. Also the containment root
+ * `defaultSpawnGenerationTurn` holds its `cwd` to. */
+export function scaffoldGenerateBaseDir(): string {
+  return path.join(os.tmpdir(), "mullion-scaffold-generate");
+}
+
 /** The real, production spawn — a bare, argv-array `execFile` (never a
  * shell string: the prompt embeds arbitrary repo-derived and DB-seed text,
  * so this avoids shell-injection risk entirely rather than relying on
@@ -1173,20 +1193,16 @@ export function isSandboxCapable(
  * same "inject the one seam that does real I/O" shape as this codebase's
  * other externally-mockable service boundaries.
  *
- * CodeQL's js/path-injection flags `cwd` here, the same "real mitigation,
- * not a CodeQL-recognized sanitizer shape" pattern this repo already
- * documents at opencode-session-transfer.ts:240-252 / git-worktree.ts /
- * git-branch-delete.ts. `cwd` is `worktreeResult.path` from
- * `createWorktree` (which itself runs `isSafeAbsolutePath` on the project
- * cwd and gates the seed through `sanitizeRefComponent`, which collapses
- * anything outside `[A-Za-z0-9_.-]` to `-` and rejects empty-after-sanitize);
- * `baseDir` is hardcoded server-side to `path.join(os.tmpdir(),
- * "mullion-scaffold-generate")` — never user-controlled; the only
- * request-derived input is `slug`, gated by `isValidScaffoldSlug` at the
- * route boundary. Dismissed in GHAS as a false positive via the Security
- * API rather than reshaping already-verified-safe code to chase a query
- * that doesn't model manual containment checks as sanitizers (see
- * opencode-session-transfer.ts:240-252 for the longer rationale). */
+ * `cwd` is `worktreeResult.path` from `createWorktree` (which itself runs
+ * `isSafeAbsolutePath` on the project cwd and gates the seed through
+ * `sanitizeRefComponent`, which collapses anything outside
+ * `[A-Za-z0-9_.-]` to `-` and rejects empty-after-sanitize), always placed
+ * under the server-controlled `scaffoldGenerateBaseDir()`. That placement
+ * is enforced again here, at the spawn itself (CodeQL js/path-injection,
+ * alert #303): `cwd` is `path.resolve`d and refused unless it sits
+ * strictly inside `scaffoldGenerateBaseDir()`, so an agent turn — which
+ * writes into its cwd — can never be pointed at the real project checkout
+ * or anywhere else on disk. */
 export const defaultSpawnGenerationTurn: SpawnGenerationTurn = async ({
   agentCommand,
   cwd,
@@ -1194,6 +1210,13 @@ export const defaultSpawnGenerationTurn: SpawnGenerationTurn = async ({
   timeoutMs,
   sandbox,
 }) => {
+  const spawnCwd = path.resolve(cwd);
+  if (!spawnCwd.startsWith(scaffoldGenerateBaseDir() + path.sep)) {
+    throw new GenerationSpawnError(
+      agentCommand,
+      `refusing to run outside the scratch generation worktree root (cwd "${cwd}")`,
+    );
+  }
   const { bin, args } = buildInvocation(agentCommand, prompt);
   // `cwd` here is always the scratch generation worktree (see
   // `generateScaffoldContent` below) — never the real project checkout —
@@ -1324,39 +1347,43 @@ export const defaultSpawnGenerationTurn: SpawnGenerationTurn = async ({
     // writes (state dirs, sqlite, tmp files) land here instead of the
     // operator's real HOME. The fake HOME is seeded with auth.json from
     // the real HOME (if it exists) so the CLI can reach its model API.
-    const { fakeHome, writablePaths } = createAgentSandboxHome(cwd, agentCommand);
+    const { fakeHome, writablePaths } = createAgentSandboxHome(spawnCwd, agentCommand);
     sandboxHome = { fakeHome, writablePaths };
     // Spread dirs + files into a flat string[] — wrapWithSandbox and
     // bwrap's --bind-try don't distinguish between them.
     invocation = wrapWithSandbox(
       bin,
       args,
-      cwd,
+      spawnCwd,
       [...writablePaths.dirs, ...writablePaths.files],
       fakeHome,
     );
   }
+  // Built out here, not inline in the Promise executor below: CodeQL's
+  // containment barrier (the `spawnCwd.startsWith` guard above) only
+  // applies within the function it dominates, not inside a nested closure.
+  const execOptions = {
+    cwd: spawnCwd,
+    env: gitEnv(),
+    timeout: timeoutMs,
+    maxBuffer: 16 * 1024 * 1024,
+  };
   return new Promise<string>((resolve, reject) => {
-    execFile(
-      invocation.bin,
-      invocation.args,
-      { cwd, env: gitEnv(), timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 },
-      (err, stdout, stderr) => {
-        // Copy back any rotated auth.json from the disposable HOME to the
-        // real HOME — see persistAgentSandboxAuth's own comment for why
-        // this matters for single-use refresh tokens. Done on both success
-        // and failure paths: a turn that crashed after rotating auth still
-        // has fresh credentials worth propagating.
-        if (sandboxHome) {
-          persistAgentSandboxAuth(sandboxHome.fakeHome, sandboxHome.writablePaths);
-        }
-        if (err) {
-          reject(new GenerationSpawnError(agentCommand, stderr?.trim() || err.message));
-          return;
-        }
-        resolve(stdout);
-      },
-    );
+    execFile(invocation.bin, invocation.args, execOptions, (err, stdout, stderr) => {
+      // Copy back any rotated auth.json from the disposable HOME to the
+      // real HOME — see persistAgentSandboxAuth's own comment for why
+      // this matters for single-use refresh tokens. Done on both success
+      // and failure paths: a turn that crashed after rotating auth still
+      // has fresh credentials worth propagating.
+      if (sandboxHome) {
+        persistAgentSandboxAuth(sandboxHome.fakeHome, sandboxHome.writablePaths);
+      }
+      if (err) {
+        reject(new GenerationSpawnError(agentCommand, stderr?.trim() || err.message));
+        return;
+      }
+      resolve(stdout);
+    });
   });
 };
 
@@ -1455,7 +1482,7 @@ export async function runGenerationTurnInScratchWorktree(
   // caller-supplied `baseDir` across the wire (which would also have
   // reopened the exact PROJECTS_ROOTS-containment question every other
   // `/internal/*` path argument in this codebase is deliberately held to).
-  const baseDir = path.join(os.tmpdir(), "mullion-scaffold-generate");
+  const baseDir = scaffoldGenerateBaseDir();
   const worktreeResult = await createWorktree({
     cwd: opts.cwd,
     baseRef: opts.baseRef,
