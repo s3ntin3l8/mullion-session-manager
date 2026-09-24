@@ -122,7 +122,7 @@ describe("MobileSessionSwitcher", () => {
     expect(input).toHaveValue("new name");
     // Escape cancels the rename, not the whole sheet.
     fireEvent.keyDown(input, { key: "Escape" });
-    expect(props.onRenameCancel).toHaveBeenCalled();
+    expect(props.onRenameCancel).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     fireEvent.keyDown(input, { key: "Enter" });
     expect(props.onRenameCommit).toHaveBeenCalled();

@@ -222,7 +222,12 @@ export function MobileSessionSwitcher({
                           onChange={(e) => onRenameDraftChange(e.target.value)}
                           onKeyDown={(e) => {
                             if (e.key === "Enter") onRenameCommit();
-                            else if (e.key === "Escape") onRenameCancel();
+                            else if (e.key === "Escape") {
+                              // Handled here; don't also reach the sheet's
+                              // Escape handler (a second cancel).
+                              e.stopPropagation();
+                              onRenameCancel();
+                            }
                           }}
                           onBlur={onRenameCommit}
                         />
