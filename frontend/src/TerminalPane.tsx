@@ -30,7 +30,7 @@ import { attachTerminalTouchScroll } from "./lib/terminalTouchScroll.js";
 import { parseChord, type KeyChord } from "./lib/keyChord.js";
 import { computeFitFontSize } from "./lib/terminalFontFit.js";
 import { clampTerminalGridSize } from "./lib/terminalGridSize.js";
-import { COARSE_POINTER_QUERY, useCoarsePointer } from "./lib/layoutTier.js";
+import { useCoarsePointer } from "./lib/layoutTier.js";
 import { computeLinksForRow, isSafeLinkUrl, type LinkBufferSource } from "./lib/terminalLinks.js";
 import { useTerminalSearch } from "./hooks/useTerminalSearch.js";
 import { TerminalFindBar } from "./terminal-pane/TerminalFindBar.js";
@@ -182,6 +182,13 @@ export function TerminalPane(props: {
   // (same call already made for `theme`, excluded from this effect's own
   // deps below) — the mount effect only reruns on `props.params.sessionId`.
   const isCoarsePointer = useCoarsePointer();
+  // Live copy for listeners attached once by the mount effect below (a
+  // pointer-type change, e.g. a tablet's keyboard/trackpad attaching,
+  // shouldn't need a terminal remount to be seen).
+  const isCoarsePointerRef = useRef(isCoarsePointer);
+  useEffect(() => {
+    isCoarsePointerRef.current = isCoarsePointer;
+  }, [isCoarsePointer]);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const [reconnectAttempt, setReconnectAttempt] = useState(0);
   const [copied, setCopied] = useState(false);
@@ -1350,7 +1357,7 @@ export function TerminalPane(props: {
       if (!prefsRef.current.pasteOnRightClick) return;
       // On touch, `contextmenu` is a long-press, not a right-click — pasting
       // the clipboard into the session on every long-press is never intended.
-      if (window.matchMedia?.(COARSE_POINTER_QUERY).matches) return;
+      if (isCoarsePointerRef.current) return;
       event.preventDefault();
       tryImagePaste()
         .then((handled) => {
