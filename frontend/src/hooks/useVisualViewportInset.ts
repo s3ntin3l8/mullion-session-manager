@@ -45,6 +45,23 @@ import { useEffect } from "react";
 // own inset erased mid-gesture — the CSS variable just holds its last
 // known-good value until the zoom ends and a real update lands again.
 //
+// Issue #1387 — also writes `--kb-offset-top` (the visual viewport's own
+// `offsetTop`). When iOS pans the visual viewport to keep a focused input
+// above the keyboard, `offsetTop` goes positive: the visible region, in the
+// layout-viewport coordinates `.app`'s `position: fixed` box is placed in,
+// is `[offsetTop, offsetTop + height]`. `--kb-inset` alone already puts
+// `.app`'s bottom edge at that region's bottom edge, but with `top` left at
+// 0 the top `offsetTop` pixels of the shell (the toolbar) sat above the
+// visible region, panned out of view with no scroll container to bring them
+// back. tablet.css pins `top` to this second value (via its own
+// pointer-coarse-gated `--shell-top`) so the shell tracks the whole visible
+// region — top AND bottom — rather than just its bottom edge. 0 wherever
+// the visual viewport isn't panned (keyboard closed, Android honoring
+// `interactive-widget=resizes-content`, desktop). Clamped at 0 on its own,
+// without feeding the clamp back into `--kb-inset`: a negative offsetTop
+// (overscroll bounce) can't move `.app`'s top above the layout viewport,
+// but the bottom edge should still land on the visible region's bottom.
+//
 // rAF-coalesced for the same reason terminalRepaintRegistry.ts's own
 // repaint dispatch is: `resize`/`scroll` on visualViewport can fire in a
 // tight burst while the keyboard animates open/closed.
@@ -60,7 +77,9 @@ export function useVisualViewportInset(): void {
         if (vv.scale !== 1) return;
         const layoutHeight = document.documentElement.clientHeight;
         const inset = Math.max(0, layoutHeight - (vv.height + vv.offsetTop));
-        document.documentElement.style.setProperty("--kb-inset", `${inset}px`);
+        const style = document.documentElement.style;
+        style.setProperty("--kb-inset", `${inset}px`);
+        style.setProperty("--kb-offset-top", `${Math.max(0, vv.offsetTop)}px`);
       });
     };
 
