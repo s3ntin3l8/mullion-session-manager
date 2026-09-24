@@ -222,6 +222,7 @@ export function ListRow({
   subtitle,
   trailing,
   unavailable = false,
+  stacked = false,
   testId,
 }: {
   icon?: ReactNode;
@@ -232,6 +233,11 @@ export function ListRow({
   subtitle?: ReactNode;
   trailing?: ReactNode;
   unavailable?: boolean;
+  // Puts the subtitle on its own full-width line under the title (long
+  // values like a system-image package path wrap instead of ellipsizing).
+  // Additive — every existing caller leaves it off and keeps the one-line
+  // side-by-side layout.
+  stacked?: boolean;
   // Optional, stable query hook for tests — a row's DOM shape (which wraps
   // its title in an extra <span>, etc.) is an implementation detail
   // component tests shouldn't couple to via `.closest(".settings-list-row")`
@@ -239,7 +245,10 @@ export function ListRow({
   testId?: string;
 }) {
   return (
-    <div className={`settings-list-row${unavailable ? " unavailable" : ""}`} data-testid={testId}>
+    <div
+      className={`settings-list-row${unavailable ? " unavailable" : ""}${stacked ? " stacked" : ""}`}
+      data-testid={testId}
+    >
       {icon && <span className="settings-list-row-icon">{icon}</span>}
       {dot && <span className={`settings-status-dot ${dot}`} />}
       <span className="settings-list-row-title">{title}</span>

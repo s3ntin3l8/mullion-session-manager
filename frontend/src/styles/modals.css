@@ -722,6 +722,82 @@
   align-items: center;
   gap: 10px;
 }
+/* Stacked variant (SDK system-image rows): title + trailing stay on line 1;
+   the subtitle wraps to its own full-width line so long values (a full
+   `system-images;…` package path) stay readable instead of ellipsizing.
+   Without this, the title's flex-shrink:0 squeezes the subtitle to nothing
+   on a narrow row. */
+.settings-list-row.stacked {
+  flex-wrap: wrap;
+}
+.settings-list-row.stacked .settings-list-row-title {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.settings-list-row.stacked .settings-list-row-trailing {
+  margin-left: auto;
+}
+.settings-list-row.stacked .settings-list-row-subtitle {
+  order: 3;
+  flex-basis: 100%;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+}
+/* Filter bar for the SDK system-images list — segmented status filter +
+   variant/API dropdowns + free-text search, all on one wrapping row. */
+.settings-image-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 10px;
+}
+.settings-image-filters-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 1;
+  min-width: 140px;
+  padding: 6px 9px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--field);
+  color: var(--dim);
+}
+.settings-image-filters-search input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 12.5px;
+  outline: none;
+}
+.settings-image-filters-search input::placeholder {
+  color: var(--muted);
+}
+.settings-image-filters-clear {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.settings-image-filters-clear:hover {
+  color: var(--fg);
+  background: color-mix(in srgb, var(--fg) 10%, transparent);
+}
 .settings-status-dot {
   width: 9px;
   height: 9px;
