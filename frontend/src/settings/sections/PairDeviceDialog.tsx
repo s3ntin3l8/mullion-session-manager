@@ -8,9 +8,9 @@ import { CloseIcon, DeviceIcon } from "../../ui/icons.js";
 import { SecondaryButton } from "../../ui/primitives.js";
 import { ErrorText } from "../../ui/ErrorText.js";
 
-// Same cadence as the backend's own DEVICE_DISCOVERY_INTERVAL_MS default —
-// polling faster than the scanner refreshes its cache would only re-read the
-// same snapshot.
+// A UI-side cadence only: the backend's discovery cache is updated by mDNS
+// events as they arrive (src/services/device-discovery.ts), so this just
+// bounds how long a newly advertised phone takes to show up in the list.
 export const DISCOVERY_POLL_MS = 2500;
 // How long the "Looking for nearby devices…" state lasts before the manual
 // form opens on its own (issue #1379). Scanning keeps going after this, so a
