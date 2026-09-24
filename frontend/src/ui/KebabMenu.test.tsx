@@ -1,8 +1,13 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { KebabMenu } from "./KebabMenu.js";
+import {
+  flushRaf,
+  installFakeVisualViewport,
+  uninstallFakeVisualViewport,
+} from "../test/fakeVisualViewport.js";
 
 // menuPlacement="top" (added for the Dock, whose kebabs sit near the bottom
 // of the viewport and would otherwise drop a downward menu off-screen).
@@ -168,5 +173,45 @@ describe("ui/KebabMenu disabled item — title and aria-disabled", () => {
 
     const item = screen.getByText("Restart service").closest("button");
     expect(item).not.toHaveAttribute("aria-disabled");
+  });
+});
+
+// Issue #1399 — since #1398 the toolbar moves with the iOS visual viewport
+// when it pans with the keyboard open; an open menu must follow its trigger
+// instead of staying where it was first drawn.
+describe("ui/KebabMenu visual-viewport pan", () => {
+  it("re-anchors the open menu to the trigger's moved rect", async () => {
+    const user = userEvent.setup();
+    const vv = installFakeVisualViewport();
+    let triggerTop = 10;
+    const rectSpy = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(() => ({
+        top: triggerTop,
+        bottom: triggerTop + 20,
+        left: 0,
+        right: 100,
+        width: 100,
+        height: 20,
+        x: 0,
+        y: triggerTop,
+        toJSON: () => ({}),
+      }));
+    try {
+      render(<KebabMenu items={[{ key: "only", label: "Only item", onClick: vi.fn() }]} />);
+      await user.click(screen.getByRole("button"));
+      const menu = document.querySelector(".pane-tab-overflow-menu") as HTMLElement;
+      expect(menu.style.top).toBe("34px");
+
+      triggerTop = 150;
+      await act(async () => {
+        vv.panTo(140);
+        await flushRaf();
+      });
+      expect(menu.style.top).toBe("174px");
+    } finally {
+      rectSpy.mockRestore();
+      uninstallFakeVisualViewport();
+    }
   });
 });

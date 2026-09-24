@@ -1,9 +1,14 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { NotificationBell } from "./NotificationBell.js";
 import type { NotificationEvent, Project, Session } from "./api/index.js";
+import {
+  flushRaf,
+  installFakeVisualViewport,
+  uninstallFakeVisualViewport,
+} from "./test/fakeVisualViewport.js";
 
 // Mirrors PaneTab.test.tsx's minimal selector-based store mock (only the
 // fields NotificationBell.tsx actually reads), plus store.ts's real
@@ -1072,5 +1077,34 @@ describe("NotificationBell popover — focus management (P11)", () => {
 
     expect(onOpenSession).toHaveBeenCalled();
     expect(bell).not.toHaveFocus();
+  });
+});
+
+// Issue #1399 — since #1398 the toolbar (and the bell in it) moves with the
+// iOS visual viewport when it pans with the keyboard open, with no window
+// `resize` to trigger the existing reposition.
+describe("NotificationBell visual-viewport pan (issue #1399)", () => {
+  afterEach(() => {
+    uninstallFakeVisualViewport();
+  });
+
+  it("re-anchors the open panel under the bell's moved rect", async () => {
+    const vv = installFakeVisualViewport();
+    render(<NotificationBell onOpenSession={vi.fn()} onOpenBrowser={vi.fn()} />);
+    const bell = screen.getByRole("button", { name: /notifications/i });
+    let bellBottom = 40;
+    vi.spyOn(bell, "getBoundingClientRect").mockImplementation(
+      () => ({ bottom: bellBottom, left: 20 }) as DOMRect,
+    );
+    await userEvent.click(bell);
+    const panel = screen.getByRole("dialog", { name: "Notifications" });
+    expect(panel.style.top).toBe("46px");
+
+    bellBottom = 180;
+    await act(async () => {
+      vv.panTo(140);
+      await flushRaf();
+    });
+    expect(panel.style.top).toBe("186px");
   });
 });

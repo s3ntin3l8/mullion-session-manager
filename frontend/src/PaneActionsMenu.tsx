@@ -28,6 +28,7 @@ import {
 import { liveChildCount } from "./sidebarHierarchy.js";
 import { PromoteDialog } from "./PromoteDialog.js";
 import { useFocusTrap } from "./hooks/useFocusTrap.js";
+import { useVisualViewportChange } from "./hooks/useVisualViewportChange.js";
 import { useLayoutContext } from "./lib/layoutTier.js";
 
 // Mobile UI/UX overhaul, item A.4 (see .claude/plans/we-need-to-work-
@@ -114,6 +115,9 @@ export function PaneActionsMenu({
 
   const [overflowOpen, setOverflowOpen] = useState(false);
   const [overflowPos, setOverflowPos] = useState<{ top: number; right: number } | null>(null);
+  // Bumped by positionMenu() so the clamp/flip layout effect below re-runs
+  // after a reposition (issue #1399), not only when the menu first opens.
+  const [repositionTick, setRepositionTick] = useState(0);
   const [promoteOpen, setPromoteOpen] = useState(false);
   const [killArmed, setKillArmed] = useState(false);
   // Ticks 3 -> 2 -> 1 in the "3s"-style hint below rather than sitting
@@ -258,9 +262,9 @@ export function PaneActionsMenu({
     }
   };
 
-  const openMenu = useCallback(() => {
+  const positionMenu = useCallback(() => {
     const btn = overflowBtnRef.current;
-    if (!btn) return;
+    if (!btn) return false;
     const rect = btn.getBoundingClientRect();
     // Anchored to the trigger button's own right edge — correct whenever the
     // menu fits; the layout effect below nudges this inward on the rare
@@ -269,8 +273,18 @@ export function PaneActionsMenu({
       top: rect.bottom + 4,
       right: Math.max(window.innerWidth - rect.right, VIEWPORT_MARGIN_PX),
     });
-    setOverflowOpen(true);
+    setRepositionTick((t) => t + 1);
+    return true;
   }, []);
+
+  const openMenu = useCallback(() => {
+    if (positionMenu()) setOverflowOpen(true);
+  }, [positionMenu]);
+
+  // Issue #1399 — since #1398 `.app` (and this trigger with it) moves with the
+  // iOS visual viewport when it pans with the keyboard open; re-anchor the
+  // portaled menu to the trigger's new rect rather than leaving it behind.
+  useVisualViewportChange(overflowOpen, positionMenu);
 
   // Hermes review, PR #613 — re-clamps against the menu's real rendered
   // width instead of a hardcoded constant. useLayoutEffect (not useEffect)
@@ -297,7 +311,7 @@ export function PaneActionsMenu({
     setOverflowPos((pos) =>
       pos ? { top: flippedTop ?? pos.top, right: pos.right + overflowBy } : pos,
     );
-  }, [overflowOpen]);
+  }, [overflowOpen, repositionTick]);
 
   // Read fresh on every open, not memoized — dockview's own group layout is
   // live state this component doesn't own, so a value computed once and

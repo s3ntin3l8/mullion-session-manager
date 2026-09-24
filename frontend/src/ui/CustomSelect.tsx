@@ -65,16 +65,27 @@ export function CustomSelect({
   useEffect(() => {
     if (!open) return;
     function handleExternalEvent(e: Event) {
-      if (menuRef.current?.contains(e.target as Node)) return;
+      // `instanceof Node` first: a `resize` targets `window` (and a
+      // visual-viewport event the VisualViewport), and Node.contains() throws
+      // a TypeError on a non-Node, which used to swallow every resize-close.
+      if (e.target instanceof Node && menuRef.current?.contains(e.target)) return;
       setOpen(false);
       setFocusedIndex(-1);
       setTriggerRect(null);
     }
+    // Issue #1399 — an iOS visual-viewport pan (keyboard open) moves `.app`,
+    // and this trigger with it, without reliably firing a window
+    // `scroll`/`resize`, so close on the visual viewport's own events too.
+    const vv = window.visualViewport;
     window.addEventListener("scroll", handleExternalEvent, true);
     window.addEventListener("resize", handleExternalEvent);
+    vv?.addEventListener("scroll", handleExternalEvent);
+    vv?.addEventListener("resize", handleExternalEvent);
     return () => {
       window.removeEventListener("scroll", handleExternalEvent, true);
       window.removeEventListener("resize", handleExternalEvent);
+      vv?.removeEventListener("scroll", handleExternalEvent);
+      vv?.removeEventListener("resize", handleExternalEvent);
     };
   }, [open]);
 

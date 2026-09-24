@@ -1,12 +1,17 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { PaneActionsMenu } from "./PaneActionsMenu.js";
 import { api } from "./api/index.js";
 import type { DockviewApi, DockviewPanelApi } from "dockview";
 import type { Session, Project } from "./api/index.js";
 import type { TerminalPaneParams } from "./TerminalPane.js";
+import {
+  flushRaf,
+  installFakeVisualViewport,
+  uninstallFakeVisualViewport,
+} from "./test/fakeVisualViewport.js";
 
 // Code review finding on PR #613 — PaneActionsMenu is now a standalone
 // component (api/params/containerApi/onRename/triggerClassName, not
@@ -609,6 +614,96 @@ describe("PaneActionsMenu — viewport-bottom flip", () => {
       expect(menu.style.overflowY).toBe("auto");
     } finally {
       HTMLElement.prototype.getBoundingClientRect = original;
+    }
+  });
+});
+
+// Issue #1399 — since #1398 the trigger moves with the iOS visual viewport
+// when it pans with the keyboard open; the portaled menu must follow it, and
+// the clamp/flip layout effect must re-run against the new position.
+describe("PaneActionsMenu — visual-viewport pan (issue #1399)", () => {
+  function renderMenu() {
+    render(
+      <PaneActionsMenu
+        api={makeApi()}
+        params={{ sessionId: session.id }}
+        containerApi={CONTAINER_API}
+        onRename={vi.fn()}
+        triggerClassName="pane-tab-btn"
+      />,
+    );
+    return screen.getByTitle("More…");
+  }
+
+  // A 300px-tall menu measured wherever its inline `top` currently puts it.
+  function stubMenuRect() {
+    const original = HTMLElement.prototype.getBoundingClientRect;
+    HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+      if (this.getAttribute("role") === "menu") {
+        const top = parseFloat(this.style.top) || 0;
+        return {
+          top,
+          bottom: top + 300,
+          left: 130,
+          right: 344,
+          width: 214,
+          height: 300,
+        } as DOMRect;
+      }
+      return original.call(this);
+    };
+    return () => {
+      HTMLElement.prototype.getBoundingClientRect = original;
+    };
+  }
+
+  it("re-anchors the open menu under the trigger's moved rect", async () => {
+    const vv = installFakeVisualViewport();
+    const restore = stubMenuRect();
+    try {
+      const trigger = renderMenu();
+      let triggerTop = 10;
+      trigger.getBoundingClientRect = () =>
+        ({ top: triggerTop, bottom: triggerTop + 20, left: 300, right: 344 }) as DOMRect;
+      await userEvent.setup().click(trigger);
+      const menu = screen.getByRole("menu");
+      expect(menu.style.top).toBe("34px");
+
+      triggerTop = 150;
+      await act(async () => {
+        vv.panTo(140);
+        await flushRaf();
+      });
+      expect(menu.style.top).toBe("174px");
+    } finally {
+      restore();
+      uninstallFakeVisualViewport();
+    }
+  });
+
+  it("re-applies the viewport-bottom flip after a reposition", async () => {
+    const vv = installFakeVisualViewport();
+    const restore = stubMenuRect();
+    try {
+      const trigger = renderMenu();
+      let triggerTop = 10;
+      trigger.getBoundingClientRect = () =>
+        ({ top: triggerTop, bottom: triggerTop + 44, left: 300, right: 344 }) as DOMRect;
+      await userEvent.setup().click(trigger);
+      const menu = screen.getByRole("menu");
+      expect(menu.style.top).toBe("58px");
+
+      // jsdom's innerHeight is 768: a menu dropped below y=744 would end at
+      // 1048, so it has to flip above the trigger instead.
+      triggerTop = 700;
+      await act(async () => {
+        vv.resizeTo(500);
+        await flushRaf();
+      });
+      expect(menu.style.top).toBe(`${700 - 4 - 300}px`);
+    } finally {
+      restore();
+      uninstallFakeVisualViewport();
     }
   });
 });
