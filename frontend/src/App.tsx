@@ -1390,7 +1390,7 @@ export function App() {
               <RefreshIcon size={16} style={{ color: "var(--o)", flexShrink: 0 }} />
               <span className="update-banner-title">Codex hooks not yet trusted</span>
               <span className="update-banner-subtext">
-                Run /hooks in a Codex session to enable structured events · Click for details
+                Run /hooks in a Codex session to enable status updates · Click for details
               </span>
               <span
                 className="update-banner-dismiss"
