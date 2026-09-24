@@ -130,8 +130,9 @@ export function App() {
   const isCoarsePointer = useCoarsePointer();
   // Mobile UI/UX overhaul, item B.2 — writes the keyboard's on-screen height
   // (0 when closed) directly onto `document.documentElement`'s own
-  // `--kb-inset` custom property (no React state — see the hook's own
-  // comment on why), which the `.app { bottom: var(--kb-inset) }` rule
+  // `--kb-inset` custom property, plus the visual viewport's pan as
+  // `--kb-offset-top` (issue #1387; no React state — see the hook's own
+  // comment on why), which the `.app { top/bottom }` rule
   // (tablet.css, gated on `(pointer: coarse)` — any touch device, not just
   // the phone breakpoint) inherits to shrink the fixed-position shell above
   // the keyboard instead of letting it overlay the terminal's active line.

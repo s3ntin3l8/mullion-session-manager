@@ -36,9 +36,9 @@
      `--kb-inset` (App.tsx's own useVisualViewportInset hook, 0px when the
      keyboard is closed or the browser reports no visualViewport shrink at
      all) shrinks it from the bottom instead, so whatever's focused stays
-     above the keyboard rather than hidden behind it. `bottom` alone, not
-     the other three `inset` edges — this only ever needs to reclaim height
-     from the bottom of the shell. TerminalPane's existing ResizeObserver →
+     above the keyboard rather than hidden behind it (and `top` tracks the
+     visual viewport's pan — issue #1387, below; `left`/`right` never
+     move). TerminalPane's existing ResizeObserver →
      refit picks up the resulting size change and re-fits the active
      terminal automatically; no separate wiring needed here.
 
@@ -51,18 +51,27 @@
      index.html), `--kb-inset` computes to ~0 and this rule is a no-op;
      where it doesn't, this rule is the fix.
 
-     Known limitation, unchanged from the mobile-only version of this rule
-     (independent code review, PR #615): only `bottom` moves, `top` stays
-     pinned to 0. When iOS's native scroll-into-view pans the visual
-     viewport to keep a focused input visible above the keyboard,
-     `visualViewport.offsetTop` goes positive — folded into --kb-inset's own
-     gap calculation (useVisualViewportInset.ts), so `bottom` shrinks by
-     more than the keyboard alone accounts for, while the toolbar at the top
-     of the now-panned viewport can end up scrolled out of view with no
-     scroll container to bring it back. Not chased further here (same as
-     before this rule moved) — a real fix would need `.app` to track `top`
-     too, which conflicts with the toolbar's own fixed-at-top design. */
+     Issue #1387 — `top` tracks `--kb-offset-top` (the visual viewport's
+     own `offsetTop`, same hook) alongside `bottom`. When iOS's native
+     scroll-into-view pans the visual viewport to keep a focused input
+     visible above the keyboard, `offsetTop` goes positive; with `top`
+     pinned to 0 (as it was before this issue) the toolbar at the top of the
+     shell ended up panned out of view above the visible region, with no
+     scroll container to bring it back. Pinning both edges keeps the whole
+     shell inside the visible region instead. 0px wherever the visual
+     viewport isn't panned, so this is a no-op there, same as `bottom`.
+
+     Routed through `--shell-top`, defined only inside this pointer-coarse
+     block, so the other fixed-position surfaces that line up with the
+     toolbar's bottom edge (.sidebar-wrapper/.cmux-scrim, sidebar.css;
+     .kanban-detail-drawer, mobile.css) and the bottom-sheet backdrops can
+     follow the same pan with a plain `var(--shell-top, 0px)` that resolves
+     to 0 on a fine pointer, where `.app` itself doesn't move either. */
+  :root {
+    --shell-top: var(--kb-offset-top, 0px);
+  }
   .app {
+    top: var(--shell-top, 0px);
     bottom: var(--kb-inset, 0px);
   }
 
