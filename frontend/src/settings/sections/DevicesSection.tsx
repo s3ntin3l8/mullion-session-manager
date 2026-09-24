@@ -1,9 +1,10 @@
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useDashboardStore } from "../../store/index.js";
 import { useShallow } from "zustand/react/shallow";
 import { api, ApiError } from "../../api/index.js";
 import type { Device, SystemImage, AvailableSystemImage } from "../../api/index.js";
 import { deviceDotClass } from "../../deviceStatus.js";
+import { matchesQuery } from "../../matchQuery.js";
 import { usePolling } from "../../hooks/usePolling.js";
 import { useSystemImageInstall } from "../../hooks/useSystemImageInstall.js";
 import { useSdkLicenses } from "../../hooks/useSdkLicenses.js";
@@ -22,7 +23,7 @@ import { ConfirmButton } from "../../ui/ConfirmButton.js";
 import { ErrorText } from "../../ui/ErrorText.js";
 import { ProgressBar } from "../../ui/ProgressBar.js";
 import { Modal } from "../../ui/Modal.js";
-import { PlusIcon } from "../../ui/icons.js";
+import { CloseIcon, PlusIcon, SearchIcon } from "../../ui/icons.js";
 import { PairDeviceDialog } from "./PairDeviceDialog.js";
 
 // Same allowlist as src/routes/avds.ts's own AVD_NAME_PATTERN — checked
@@ -175,6 +176,13 @@ export function DevicesSection() {
   const [availableFilter, setAvailableFilter] = useState<"all" | "installable" | "installed">(
     "all",
   );
+  // Narrowing filters for the available-images list — client-side only (the
+  // full sdkmanager listing is already in memory). "" means "all". Options
+  // are derived from whatever the host's sdkmanager actually returned, so
+  // they can't offer a variant/API that doesn't exist here.
+  const [availableVariant, setAvailableVariant] = useState("");
+  const [availableApi, setAvailableApi] = useState("");
+  const [availableQuery, setAvailableQuery] = useState("");
   const installOp = useSystemImageInstall();
   const licenseOp = useSdkLicenses();
   const [showLicenseModal, setShowLicenseModal] = useState(false);
@@ -254,9 +262,50 @@ export function DevicesSection() {
     };
   }, [sdkImagesOpen]);
 
+  // Distinct variant tags present, in first-seen order (the list is already
+  // sorted newest-API-first by the backend, so the option order follows that).
+  const variantOptions = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const img of availableImages) {
+      if (!seen.has(img.tag)) seen.set(img.tag, img.tagDisplay);
+    }
+    return [...seen.entries()].map(([tag, label]) => ({ value: tag, label }));
+  }, [availableImages]);
+
+  // Distinct API levels, newest first; codename levels (canary previews)
+  // sort above numeric ones — same rule as the backend's own list sort.
+  const apiOptions = useMemo(() => {
+    const levels = [...new Set(availableImages.map((img) => img.apiLevel))];
+    levels.sort((a, b) => {
+      const aNum = parseInt(a, 10);
+      const bNum = parseInt(b, 10);
+      const aIsNaN = Number.isNaN(aNum);
+      const bIsNaN = Number.isNaN(bNum);
+      if (aIsNaN && !bIsNaN) return -1;
+      if (!aIsNaN && bIsNaN) return 1;
+      if (aIsNaN && bIsNaN) return a.localeCompare(b);
+      return bNum - aNum;
+    });
+    return levels.map((level) => ({ value: level, label: `API ${level}` }));
+  }, [availableImages]);
+
+  // Trim once — both anyNarrowFilter and the filter predicate below read
+  // the same value (Hermes review, PR #1386).
+  const availableQueryTrimmed = availableQuery.trim();
+  const anyNarrowFilter =
+    availableVariant !== "" || availableApi !== "" || availableQueryTrimmed !== "";
+
   const filteredAvailable = availableImages.filter((img) => {
-    if (availableFilter === "installable") return !img.installed;
-    if (availableFilter === "installed") return img.installed;
+    if (availableFilter === "installable" && img.installed) return false;
+    if (availableFilter === "installed" && !img.installed) return false;
+    if (availableVariant !== "" && img.tag !== availableVariant) return false;
+    if (availableApi !== "" && img.apiLevel !== availableApi) return false;
+    if (
+      availableQueryTrimmed !== "" &&
+      !matchesQuery([img.packagePath, img.tagDisplay, img.apiLevel, img.abi], availableQueryTrimmed)
+    ) {
+      return false;
+    }
     return true;
   });
 
@@ -746,8 +795,9 @@ export function DevicesSection() {
 
         {availableLoaded && !availableError && (
           <>
-            {/* Filter tabs */}
-            <div style={{ display: "flex", gap: 8, marginTop: 8, marginBottom: 10 }}>
+            {/* Filter bar — installed-status segmented + variant/API dropdowns
+                + free-text search. All four AND together. */}
+            <div className="settings-image-filters">
               <Segmented
                 options={[
                   { value: "all", label: "All" },
@@ -757,14 +807,54 @@ export function DevicesSection() {
                 value={availableFilter}
                 onChange={setAvailableFilter}
               />
+              <Dropdown
+                options={[{ value: "", label: "All variants" }, ...variantOptions]}
+                value={availableVariant}
+                onChange={setAvailableVariant}
+                small
+              />
+              <Dropdown
+                options={[{ value: "", label: "All APIs" }, ...apiOptions]}
+                value={availableApi}
+                onChange={setAvailableApi}
+                small
+              />
+              <div className="settings-image-filters-search">
+                <SearchIcon size={13} strokeWidth={1.9} />
+                <input
+                  type="text"
+                  placeholder="Filter images…"
+                  value={availableQuery}
+                  onChange={(e) => setAvailableQuery(e.target.value)}
+                  aria-label="Filter system images"
+                />
+                {availableQuery !== "" && (
+                  <button
+                    type="button"
+                    className="settings-image-filters-clear"
+                    // title alone has inconsistent screen-reader exposure —
+                    // icon-only button needs its own accessible name (Hermes
+                    // review, PR #1386), same posture as ConfirmButton.
+                    aria-label="Clear filter"
+                    title="Clear filter"
+                    onClick={() => setAvailableQuery("")}
+                  >
+                    <CloseIcon size={10} />
+                  </button>
+                )}
+              </div>
             </div>
 
             {/* Images list */}
             {filteredAvailable.length === 0 && (
               <div style={{ fontSize: 11.5, color: "var(--dim)" }}>
-                {availableFilter === "all" && "No system images available."}
-                {availableFilter === "installable" && "All available images are already installed."}
-                {availableFilter === "installed" && "No system images installed yet."}
+                {anyNarrowFilter
+                  ? "No images match the current filters."
+                  : availableFilter === "installable"
+                    ? "All available images are already installed."
+                    : availableFilter === "installed"
+                      ? "No system images installed yet."
+                      : "No system images available."}
               </div>
             )}
             {filteredAvailable.length > 0 && (
@@ -772,6 +862,7 @@ export function DevicesSection() {
                 {filteredAvailable.map((img) => (
                   <ListRow
                     key={img.packagePath}
+                    stacked
                     title={`API ${img.apiLevel} — ${img.tagDisplay} (${img.abi})`}
                     subtitle={img.packagePath}
                     trailing={
