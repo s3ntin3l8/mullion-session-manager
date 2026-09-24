@@ -1541,14 +1541,19 @@ describe("defaultSpawnGenerationTurn — agy fails closed without a usable sandb
   it("fails closed for opencode when bwrap is not usable", async () => {
     await isSandboxCapable(async () => false);
 
-    await expect(
-      defaultSpawnGenerationTurn({
-        agentCommand: "opencode",
-        cwd: "/nonexistent/scratch-worktree",
-        prompt: "irrelevant — this must fail before any spawn is attempted",
-        timeoutMs: 5000,
-      }),
-    ).rejects.toThrow(/requires a usable bwrap sandbox/);
+    const err: unknown = await defaultSpawnGenerationTurn({
+      agentCommand: "opencode",
+      cwd: "/nonexistent/scratch-worktree",
+      prompt: "irrelevant — this must fail before any spawn is attempted",
+      timeoutMs: 5000,
+    }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(GenerationSpawnError);
+    expect((err as Error).message).toMatch(/requires a usable bwrap sandbox/);
+    // opencode's own remedy, not the generic "to use this agent here".
+    expect((err as Error).message).toMatch(
+      /Install\/enable bwrap on this host, or switch to claude\/codex for scaffold generation\./,
+    );
   });
 
   // Issue #1153/1164 — opt-out parity: sandbox: false must ALSO fail
@@ -1570,6 +1575,9 @@ describe("defaultSpawnGenerationTurn — agy fails closed without a usable sandb
     expect(err).toBeInstanceOf(GenerationSpawnError);
     expect((err as Error).message).toMatch(/requires a usable bwrap sandbox/);
     expect((err as Error).message).toMatch(/explicitly disabled/);
+    expect((err as Error).message).toMatch(
+      /Re-enable sandboxing on this host, or switch to claude\/codex for scaffold generation\./,
+    );
   });
 
   // Issue #1133 — MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED=false is NOT an
@@ -1592,6 +1600,9 @@ describe("defaultSpawnGenerationTurn — agy fails closed without a usable sandb
     expect(err).toBeInstanceOf(GenerationSpawnError);
     expect((err as Error).message).toMatch(/requires a usable bwrap sandbox/);
     expect((err as Error).message).toMatch(/explicitly disabled/);
+    // agy has no per-agent remedy, so it keeps the generic advice.
+    expect((err as Error).message).toMatch(/to use this agent here\./);
+    expect((err as Error).message).not.toMatch(/switch to claude\/codex/);
   });
 
   // The inverse: when sandbox is left at its default (true) and bwrap IS

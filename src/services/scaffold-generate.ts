@@ -1241,9 +1241,13 @@ export const defaultSpawnGenerationTurn: SpawnGenerationTurn = async ({
   // flag gap (this module's header). Both must fail closed when bwrap is
   // unavailable or sandboxing was explicitly opted out, rather than silently
   // degrading the way claude/codex do. The map keeps the two blocks'
-  // wording in one place so they can't drift apart — the only per-agent
-  // param is the agent name and the reason-specific explanation.
-  const SANDBOX_REQUIRED_AGENTS: Record<string, { prefix: string; fallback: string }> = {
+  // wording in one place so they can't drift apart — the per-agent params
+  // are the agent name, the reason-specific explanation, and an optional
+  // remedy that overrides the generic "to use this agent here" advice.
+  const SANDBOX_REQUIRED_AGENTS: Record<
+    string,
+    { prefix: string; fallback: string; remedy?: { unusable: string; disabled: string } }
+  > = {
     agy: {
       prefix: "agy requires a usable bwrap sandbox for scaffold generation",
       fallback:
@@ -1256,6 +1260,12 @@ export const defaultSpawnGenerationTurn: SpawnGenerationTurn = async ({
       fallback:
         "opencode run has no CLI-level write-restriction flag to fall back on, " +
         "leaving it with full write/exec access as the server user. ",
+      remedy: {
+        unusable:
+          "Install/enable bwrap on this host, or switch to claude/codex for scaffold generation.",
+        disabled:
+          "Re-enable sandboxing on this host, or switch to claude/codex for scaffold generation.",
+      },
     },
   };
   const agentSandboxGuard = SANDBOX_REQUIRED_AGENTS[agentCommand];
@@ -1271,31 +1281,15 @@ export const defaultSpawnGenerationTurn: SpawnGenerationTurn = async ({
     const reason = sandboxRequested
       ? "bwrap is not usable on this host"
       : "sandboxing was explicitly disabled (MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED=false)";
+    const remedy = sandboxRequested
+      ? (agentSandboxGuard.remedy?.unusable ??
+        "Install/enable bwrap on this host to use this agent here.")
+      : (agentSandboxGuard.remedy?.disabled ??
+        "Re-enable sandboxing on this host (or use a different agent) to use this agent here.");
     throw new GenerationSpawnError(
       agentCommand,
       `${agentSandboxGuard.prefix} — ${reason}, and without it, ${agentSandboxGuard.fallback}` +
-        (sandboxRequested
-          ? "Install/enable bwrap on this host to use this agent here."
-          : "Re-enable sandboxing on this host (or use a different agent) to use this agent here."),
-    );
-  }
-  // Issue #1153 — opencode has no CLI-level write-restriction flag at all
-  // (confirmed against its own --help; see this module's header). Running
-  // unsandboxed would provide full write/exec access as the server user,
-  // prompted on repo/seed content — the same prompt-injection surface as
-  // agy above. Fail closed identically.
-  if (!sandboxUsable && agentCommand === "opencode") {
-    const reason = sandboxRequested
-      ? "bwrap is not usable on this host"
-      : "sandboxing was explicitly disabled (MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED=false)";
-    throw new GenerationSpawnError(
-      agentCommand,
-      `opencode requires a usable bwrap sandbox for scaffold generation — ${reason}, and ` +
-        "without it, opencode run has no CLI-level write-restriction flag to fall back on, " +
-        "leaving it with full write/exec access as the server user. " +
-        (sandboxRequested
-          ? "Install/enable bwrap on this host, or switch to claude/codex for scaffold generation."
-          : "Re-enable sandboxing on this host, or switch to claude/codex for scaffold generation."),
+        remedy,
     );
   }
   let invocation = { bin, args };
