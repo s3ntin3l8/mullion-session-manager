@@ -4,6 +4,7 @@ import type {
   CreateProjectDirOptions,
   CreateProjectResult,
   Device,
+  DiscoveredDevice,
   GitBranchesResult,
   GitDiffStats,
   GitHubPRsStatus,
@@ -12,6 +13,7 @@ import type {
   Group,
   Host,
   NotificationEvent,
+  PairAndConnectBody,
   Project,
   ProjectUrl,
   PromoteSessionResponse,
@@ -456,10 +458,12 @@ export interface DevicesSlice {
   devices: Device[];
   refreshDevices: () => Promise<void>;
   createDevice: (avdName: string, name?: string) => Promise<Device>;
-  // One-time `adb pair` — creates no row, see api/device.ts's own comment.
-  pairDevice: (pairingAddress: string, pairingCode: string) => Promise<void>;
-  // The `kind: "physical"` counterpart to createDevice.
-  connectPhysicalDevice: (address: string, name?: string) => Promise<Device>;
+  // GET /api/devices/discovered (issue #1378) — not stored in the slice,
+  // PairDeviceDialog keeps the scan results in its own local state.
+  listDiscovered: () => Promise<DiscoveredDevice[]>;
+  // Atomic pair + connect + insert (issue #1378), the physical-device
+  // counterpart to createDevice.
+  pairAndConnect: (body: PairAndConnectBody) => Promise<Device>;
   terminateDevice: (id: number) => Promise<void>;
   // Edits a physical device's stored adb address in place (issue #1347) —
   // reconnects against the new address without losing the row's id/name/

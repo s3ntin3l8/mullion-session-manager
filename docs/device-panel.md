@@ -153,9 +153,9 @@ its poll runs unconditionally regardless, so a device created purely
 through the CLI/MCP surface below (no panel ever opened) still makes the
 section appear without a reload. Settings → Devices is the lifecycle
 surface — create, stop, delete, and (for an active physical row) edit a
-device's adb address there. It's also where a phone gets paired
-(`adb pair`) and connected by address (the `kind: "physical"` counterpart
-to an emulator `create`, see §1 below), and where a new AVD can be
+device's adb address there. It's also where a phone gets paired and
+connected (the `kind: "physical"` counterpart to an emulator `create`, see
+§1 below, and the pairing dialog described next), and where a new AVD can be
 provisioned from an installed system image (see "AVD provisioning" below)
 before a device is ever created from it, including devices whose row has
 since flipped to `killed`, which the sidebar list omits but Settings
@@ -164,6 +164,21 @@ streaming from the existing emulator (see the reattach behavior above)
 rather than requiring a manual `systemctl --user stop` first — no UI
 change needed for that; it's the same `openDevicePanel`/WS-connect path
 either way.
+
+Pairing a phone from Settings (issue #1379) uses **Pair a phone or tablet**,
+which opens `PairDeviceDialog.tsx` (the emulator flow sits behind its own
+**Create an emulator** button). The dialog polls `GET /api/devices/discovered`
+(issue #1378's mDNS snapshot) and lists phones that are advertising Wireless
+debugging. A phone that is only advertising its connect port (the phone is
+already paired, or its "Pair device with pairing code" screen is closed) is
+shown but can't be picked. The user picks a phone, enters the 6-digit code, and
+one **Pair & Connect** click calls `POST /api/devices/pair-and-connect`, which
+pairs, connects and creates the device row in a single request. If nothing is
+found within ~3 s, a **Pair manually** form opens (scanning continues above
+it). This form is the fallback for networks mDNS can't reach, and it takes the
+pairing address, the device (connect) address and the code, since the endpoint
+needs both ports in manual mode. The per-row **Edit address** button stays as
+the post-hoc override when Android rotates the connect port.
 
 ---
 

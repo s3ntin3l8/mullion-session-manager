@@ -47,20 +47,23 @@ export const createDevicesSlice: StateCreator<DashboardState, [], [], DevicesSli
       return device;
     },
 
-    pairDevice: async (pairingAddress, pairingCode) => {
-      await api.pairDevice({ pairingAddress, pairingCode });
-      // No row is created by pairing itself, so no refreshDevices() here —
-      // unlike createDevice/connectPhysicalDevice/terminateDevice, there is
-      // nothing in `devices` for this call to have changed.
-    },
+    // Passthrough, deliberately NOT stored — the scan results are only ever
+    // read by PairDeviceDialog while it's open, never by the sidebar.
+    listDiscovered: () => api.listDiscoveredDevices(),
 
-    connectPhysicalDevice: async (address, name) => {
-      const device = await api.connectPhysicalDevice({ address, name });
-      // Same reasoning as createDevice above.
-      void get()
-        .refreshDevices()
-        .catch(() => {});
-      return device;
+    pairAndConnect: async (body) => {
+      try {
+        return await api.pairAndConnectDevice(body);
+      } finally {
+        // Refreshes on failure too, unlike createDevice above: the backend
+        // rolls its inserted row back when `adb pair` fails, but leaves it in
+        // place when the follow-up `adb connect` fails — that row must show
+        // up in the list rather than wait for the next poll tick. Same
+        // best-effort, never-rejects shape as createDevice otherwise.
+        void get()
+          .refreshDevices()
+          .catch(() => {});
+      }
     },
 
     terminateDevice: async (id) => {
