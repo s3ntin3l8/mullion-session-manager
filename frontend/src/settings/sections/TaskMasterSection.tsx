@@ -63,7 +63,7 @@ export function TaskMasterSection() {
       </Row>
       <Row
         label="Max concurrent claims"
-        desc={`The most tasks that can be claimed or running at the same time. Server default: ${env.maxConcurrent}.`}
+        desc={`The most tasks that can run at the same time. Claimed tasks wait until a slot frees up. Server default: ${env.maxConcurrent}.`}
       >
         <NumberField
           value={maxConcurrentDraft ?? resolved.maxConcurrent}
