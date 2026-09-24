@@ -43,9 +43,19 @@ const mockWirelessConnect = vi.fn(async (address: string) => {
 });
 const mockWirelessDisconnect = vi.fn(async () => {});
 
+// Test-only injection points for the "scope dies while spawn() is between
+// the adb race and `status = 'streaming'`" window (PR #1404 nit): a hook
+// fires *inside* the mock, i.e. while spawn() is awaiting that very call, so
+// the exit lands mid-await instead of at a point a test can reach directly.
+// Reset in beforeEach so a test that bails before its hook ever fires can't
+// leak it into the next one.
+let mockCreateAdbHook: (() => void) | null = null;
+let mockPushServerHook: (() => void) | null = null;
+
 const mockServerClient = {
   getDevices: vi.fn(async () => mockDeviceList),
   createAdb: vi.fn(async () => {
+    mockCreateAdbHook?.();
     if (mockCreateAdbShouldFail) throw new Error("createAdb failed");
     return { close: mockAdbClose };
   }),
@@ -128,6 +138,7 @@ const mockScrcpyClient = {
 vi.mock("@yume-chan/adb-scrcpy", () => ({
   AdbScrcpyClient: {
     pushServer: vi.fn(async () => {
+      mockPushServerHook?.();
       if (mockPushServerShouldFail) throw new Error("pushServer failed");
     }),
     start: vi.fn(async () => {
@@ -282,7 +293,9 @@ function baseOpts(overrides: Partial<ConstructorParameters<typeof DeviceManager>
 beforeEach(() => {
   mockDeviceList = [];
   mockCreateAdbShouldFail = false;
+  mockCreateAdbHook = null;
   mockPushServerShouldFail = false;
+  mockPushServerHook = null;
   mockStartShouldFail = false;
   mockExited = new Promise(() => {});
   mockVideoPackets = [{ type: "configuration", data: new Uint8Array([1, 2, 3]) }];
@@ -598,6 +611,112 @@ describe("DeviceManager", () => {
     // Must surface as "error" with the specific message — NOT hang for 120s.
     await waitForStatus(manager, "1", "error");
     expect(manager.get("1")?.toInfo().error).toMatch(/scope exited during boot with code 1/);
+
+    // PR #1404 nit: bootstrapFailed won the race above, which leaves the
+    // losing waitForAdbSerial loop alive — without the shared scopeExit flag
+    // it keeps calling getDevices() once per BOOT_POLL_INTERVAL_MS (1000ms)
+    // until BOOT_TIMEOUT_MS (120s) expires. Wait past two poll intervals and
+    // assert the count is untouched: with the flag the loop checks it before
+    // every getDevices() and stops dead, so no call can be registered after
+    // capture (the flag was set synchronously, before status flipped to
+    // "error", and the loop only ever resumes from a sleep() macrotask).
+    const pollsAfterError = mockServerClient.getDevices.mock.calls.length;
+    await new Promise<void>((r) => setTimeout(r, 1500));
+    expect(mockServerClient.getDevices.mock.calls.length).toBe(pollsAfterError);
+  });
+
+  it.each(["createAdb", "pushServer"] as const)(
+    "scope exit while spawn() is between the adb race and status=streaming (during %s) aborts with the specific error instead of reporting streaming",
+    async (phase) => {
+      // PR #1404 nit: Promise.race can settle via adb while the scope dies
+      // during the awaits that follow — bootstrapFailed's rejection is then
+      // unobservable (the race is already decided), so spawn() must re-check
+      // the recorded scopeExit error itself. Without that re-check this test
+      // ends at status "streaming" on an emulator that has already gone
+      // through handleExit(), which is exactly the status clobber the review
+      // flagged.
+      mockDeviceList = [{ serial: "emulator-5554" }];
+      let spawnedChild: ReturnType<typeof createMockChild> | undefined;
+      const baseImpl = vi.mocked(spawnChildProcess).getMockImplementation()!;
+      vi.mocked(spawnChildProcess).mockImplementation(((
+        file: string,
+        args: readonly string[],
+        ...rest: unknown[]
+      ) => {
+        if (file === "systemd-run" && spawnedChild === undefined) {
+          const ee = createMockChild();
+          spawnedChild = ee;
+          listUnitsReply.push(`${args[4]}.scope loaded active running ${args[6]}`);
+          // Never emits exit on its own — the scope "dies" only when the
+          // hook below fires, i.e. while spawn() is awaiting createAdb or
+          // pushServer. The setImmediate in Device.spawn() settles the
+          // bootstrap promise first, so the exit is post-settle by definition.
+          return ee as unknown as ChildProcess.ChildProcess;
+        }
+        return baseImpl(file, args, ...(rest as []));
+      }) as typeof spawnChildProcess);
+
+      const emitScopeExit = () => spawnedChild?.emit("exit", 1);
+      if (phase === "createAdb") mockCreateAdbHook = emitScopeExit;
+      else mockPushServerHook = emitScopeExit;
+
+      const manager = new DeviceManager(baseOpts());
+      await manager.getOrCreate({
+        id: "1",
+        kind: "emulator" as const,
+        avdName: "dev35",
+        serial: null,
+        label: null,
+        port: null,
+      });
+
+      // adb saw the serial, so the race resolved via waitForAdbSerial and the
+      // hook fires while spawn() is inside the named call — the post-race gap.
+      await waitForStatus(manager, "1", "error");
+      expect(manager.get("1")?.toInfo().error).toMatch(/scope exited during boot with code 1/);
+      expect(manager.get("1")?.toInfo().status).not.toBe("streaming");
+    },
+  );
+
+  it("a post-settle systemd-run 'error' event during boot aborts immediately instead of falling through to the 120s adb timeout", async () => {
+    // Same defect class as the exit path above: a real child 'error' after
+    // setImmediate has settled the bootstrap promise used to call handleExit()
+    // without recording anything, so spawn() stayed in waitForAdbSerial for
+    // the full BOOT_TIMEOUT_MS and reported only the generic adb timeout.
+    mockDeviceList = [];
+    let spawnedChild: ReturnType<typeof createMockChild> | undefined;
+    const baseImpl = vi.mocked(spawnChildProcess).getMockImplementation()!;
+    vi.mocked(spawnChildProcess).mockImplementation(((
+      file: string,
+      args: readonly string[],
+      ...rest: unknown[]
+    ) => {
+      if (file === "systemd-run" && spawnedChild === undefined) {
+        const ee = createMockChild();
+        spawnedChild = ee;
+        listUnitsReply.push(`${args[4]}.scope loaded active running ${args[6]}`);
+        return ee as unknown as ChildProcess.ChildProcess;
+      }
+      return baseImpl(file, args, ...(rest as []));
+    }) as typeof spawnChildProcess);
+
+    const manager = new DeviceManager(baseOpts());
+    await manager.getOrCreate({
+      id: "1",
+      kind: "emulator" as const,
+      avdName: "dev35",
+      serial: null,
+      label: null,
+      port: null,
+    });
+    // Flush macrotasks so the bootstrap promise has settled (settled=true)
+    // before the error arrives — post-settle, i.e. the branch under test.
+    await new Promise<void>((r) => setTimeout(r, 10));
+    expect(spawnedChild).toBeDefined();
+    spawnedChild!.emit("error", new Error("dbus connection refused"));
+
+    await waitForStatus(manager, "1", "error");
+    expect(manager.get("1")?.toInfo().error).toMatch(/dbus connection refused/);
   });
 
   it("spawn() failure when pushing the scrcpy server rejects tears down cleanly (CodeQL: exercises mockPushServerShouldFail)", async () => {
