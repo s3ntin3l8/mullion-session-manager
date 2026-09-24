@@ -117,7 +117,7 @@ way as a namespaced one.
   [`tasks.md`](tasks.md)), `skills` (per-agent Skill enable/disable),
   `agent-rules` (per-agent rule-file read/write), `settings` (the runtime
   Settings-override store backing Task Master's safety envelope and other
-  deploy-time-default overrides), `updates` (Settings → Server info's
+  deploy-time-default overrides), `updates` (Settings → Server's
   "Update now" flow), `push` (`GET /api/push/vapid-public-key`, `POST
 /api/push/subscribe`/`unsubscribe` — the web-push subscription surface
   backing mobile/background attention alerts), `browser`/
@@ -145,7 +145,7 @@ way as a namespaced one.
   [`agent-context.md`](agent-context.md#scaffolding-it-into-the-repo-instead)),
   `workflow-conventions` (`GET /api/workflow-conventions/questions`, `POST
 /api/workflow-conventions/preview` — the two read-only endpoints backing
-  the Settings → Sessions wizard; neither reads nor writes the actual
+  the Settings → Agent context & skills wizard; neither reads nor writes the actual
   `settings.sessions.workflowConventionsText` value, which rides the
   ordinary `PATCH /api/settings` path — see
   [`agent-context.md`](agent-context.md#workflow-conventions-issue-937)).
@@ -235,7 +235,7 @@ way as a namespaced one.
   the provisioning counterpart to `device-manager`'s running half; see
   [`device-panel.md`](device-panel.md)), `systemd-unit`
   (cgroup-based autodetection of the running unit for self-update),
-  `update-checker` (Settings → Server info's update surface).
+  `update-checker` (Settings → Server's update surface).
 - `src/mcp/` — the MCP server Mullion exposes over the same control socket
   the `mullion` CLI uses: `server.mjs` (the MCP protocol handler),
   `client.mjs` (control-socket client), `tools.mjs` (session/project/

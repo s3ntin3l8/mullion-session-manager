@@ -375,7 +375,7 @@ text field would only duplicate what the file already does well. The only
 per-project knob is a boolean: inject the global text, or don't.
 
 - **The global text** lives at `settings.sessions.workflowConventionsText`
-  (`src/services/settings.ts`), authored in **Settings → Sessions**. Empty
+  (`src/services/settings.ts`), authored in **Settings → Agent context & skills**. Empty
   by default — a fresh install has no opinion yet — and an empty value is
   its own independent "nothing to inject" gate, not just an uninteresting
   default.
@@ -476,7 +476,7 @@ pinned note]` `additionalContext` ordering `hooks.ts` composes for
 
 ## Settings
 
-Three independent toggles under **Settings → Sessions** (default **on** for
+Three independent toggles under **Settings → Agent context & skills** (default **on** for
 all three, except workflow conventions' own text default of ""):
 
 - **Inject project briefing** — gates the pointer/injection only; the

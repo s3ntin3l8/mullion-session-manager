@@ -36,9 +36,10 @@ export type SettingsSection =
   | "integrations"
   | "server";
 
-// Section ids that were folded into another section. Still accepted as a
-// deep link so an old `openSettings("models")` call lands on the section
-// that now hosts that content instead of crashing on a missing entry.
+// Section ids that were folded into another section. `openSettings` only
+// accepts current ids, so these only matter for a stale `initialSection`
+// value (a saved link, a test) — it resolves to the section that now hosts
+// that content instead of crashing on a missing entry.
 const LEGACY_SECTION_ALIASES = {
   models: "launchers",
   skills: "agent-context",
