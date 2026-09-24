@@ -39,13 +39,13 @@ export function ModelsSection() {
 
   return (
     <>
-      <Row label="Implementer model" desc="Default model for task worker sessions.">
+      <Row label="Implementer model" desc="Model for sessions that work on tasks.">
         <select
           className="settings-select"
           value={implementerValue}
           onChange={(e) => handleChange("implementerModel", e.target.value)}
         >
-          <option value="">— None (CLI default) —</option>
+          <option value="">opencode default</option>
           {models.map((model) => (
             <option key={model} value={model}>
               {model}
@@ -53,13 +53,13 @@ export function ModelsSection() {
           ))}
         </select>
       </Row>
-      <Row label="Reviewer model" desc="Default model for task review-agent sessions.">
+      <Row label="Reviewer model" desc="Model for sessions that review tasks.">
         <select
           className="settings-select"
           value={reviewerValue}
           onChange={(e) => handleChange("reviewerModel", e.target.value)}
         >
-          <option value="">— None (CLI default) —</option>
+          <option value="">opencode default</option>
           {models.map((model) => (
             <option key={model} value={model}>
               {model}
@@ -67,13 +67,13 @@ export function ModelsSection() {
           ))}
         </select>
       </Row>
-      <Row label="Small model" desc="Used for lightweight tasks like title generation.">
+      <Row label="Small model" desc="Model for lightweight jobs such as generating titles.">
         <select
           className="settings-select"
           value={smallModelValue}
           onChange={(e) => handleChange("defaultSmallModel", e.target.value)}
         >
-          <option value="">— None (CLI default) —</option>
+          <option value="">opencode default</option>
           {models.map((model) => (
             <option key={model} value={model}>
               {model}
@@ -99,18 +99,18 @@ export function ModelsSection() {
             // landing in the "ready && empty" branch below, not here.
             // (Code review caught the two messages swapped relative to
             // this.)
-            "Couldn't load the model catalog — try reopening Settings."
+            "Couldn't load the model list. Try reopening Settings."
           : status === "ready" && models.length === 0
             ? // Covers BOTH real causes that land here: opencode isn't
               // installed (the common case — see the note above) and
               // opencode is installed but has no configured provider.
-              "opencode returned no models — check that it's installed and has a configured provider."
+              "No models found. Check that opencode is installed and has a provider configured."
             : // These apply to opencode sessions only; other agents (claude,
               // codex, agy) ignore them entirely — no need to gate the
               // selects on the install's default agent (issue #957's
               // backend resolution already keys off the session's actual
               // command, via commandIsOpencode(), not this setting).
-              "Applies to opencode sessions only. Each can be overridden per task via Model: / Reviewer-Model: / SmallModel: lines in the task issue body."}
+              "Applies to opencode sessions only. A task can override these with Model:, Reviewer-Model:, or SmallModel: lines."}
       </p>
     </>
   );

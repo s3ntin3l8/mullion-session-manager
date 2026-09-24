@@ -68,7 +68,7 @@ export function LaunchersSection() {
 
   return (
     <>
-      <Row label="Detected CLIs" desc="Shells & agents found on PATH.">
+      <Row label="Detected CLIs" desc="Shells and coding agents installed on this host.">
         <SecondaryButton onClick={refresh} disabled={loading} icon={<RefreshIcon size={12} />}>
           Refresh
         </SecondaryButton>
@@ -79,7 +79,9 @@ export function LaunchersSection() {
           <span />
           <span>Launcher</span>
           <span>Config</span>
-          <span className="settings-launcher-col-center">Skip perms</span>
+          <span className="settings-launcher-col-center" title="Skip permissions">
+            Skip perms
+          </span>
           <span className="settings-launcher-col-center">Status</span>
           <span className="settings-launcher-col-center">Show</span>
         </div>
@@ -97,7 +99,7 @@ export function LaunchersSection() {
                 const skipFlag = skipPermissionFlags[agentId];
                 const configText =
                   (hookTrustPending
-                    ? "Hook trust pending — run /hooks in a Codex session to enable structured events"
+                    ? "Hooks not trusted yet. Run /hooks in a Codex session to enable status updates."
                     : a.available
                       ? (a.path ?? "")
                       : "not found on PATH") + (skipFlag ? `  •  ${skipFlag}` : "");
@@ -167,23 +169,26 @@ export function LaunchersSection() {
         })}
       </div>
 
-      <Row label="Default shell" desc={'Used by a plain "new session".'}>
+      <Row label="Default shell" desc="Shell for new terminal sessions.">
         <Dropdown
           value={settings.launchers.defaultShell}
           onChange={(v) => updateSettings({ launchers: { defaultShell: v } })}
           options={SHELL_OPTIONS}
         />
       </Row>
-      <Row label="Default agent" desc="Pre-selected in the launcher.">
+      <Row label="Default agent" desc="Agent selected by default when you start a session.">
         <Dropdown
           value={settings.launchers.defaultAgent}
           onChange={(v) => updateSettings({ launchers: { defaultAgent: v } })}
           options={AGENT_OPTIONS}
         />
       </Row>
-      <Row label="Global launchers" desc=".crs/actions.json">
+      <Row
+        label="Global launchers"
+        desc="Custom commands available in every project. Copy the file path to edit it."
+      >
         <SecondaryButton onClick={manageGlobalLaunchers}>
-          {copied ? "Copied path" : "Manage"}
+          {copied ? "Copied" : "Copy path"}
         </SecondaryButton>
       </Row>
 

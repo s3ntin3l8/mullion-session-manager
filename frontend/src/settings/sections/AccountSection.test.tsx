@@ -42,7 +42,7 @@ describe("Settings -> Account", () => {
       authSource: "gateway",
       logout: { kind: "unavailable" },
     });
-    expect(screen.getByText("Gateway identity details unavailable.")).toBeInTheDocument();
+    expect(screen.getByText("Identity details are not available.")).toBeInTheDocument();
     expect(screen.queryByText(/single-user/i)).not.toBeInTheDocument();
   });
 
@@ -54,7 +54,7 @@ describe("Settings -> Account", () => {
       user: {},
       logout: { kind: "unavailable" },
     });
-    expect(screen.getByText("Gateway identity details unavailable.")).toBeInTheDocument();
+    expect(screen.getByText("Identity details are not available.")).toBeInTheDocument();
   });
 
   it("explains Mullion-local logout and clears it through the API", async () => {

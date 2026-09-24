@@ -191,7 +191,7 @@ export function BridgesSection() {
     <>
       <GroupHeading
         title="SSH agent bridges"
-        desc="Laptops/PCs whose SSH agent (e.g. 1Password) is forwarded to every enrolled host."
+        desc="Computers whose SSH agent (for example, 1Password) is shared with every host."
       />
       {bridges === null && <div className="settings-readonly-value">Loading…</div>}
       {bridges !== null && bridges.length > 0 && (
@@ -280,7 +280,7 @@ export function BridgesSection() {
                           {describeBridge(bridge)}
                         </span>
                         <ConfirmButton
-                          title={`Revoke ${bridge.name ?? "this bridge"} — every session on every enrolled host loses its SSH agent forwarding immediately`}
+                          title={`Revoke ${bridge.name ?? "this bridge"}. Sessions on every host lose access to its SSH keys immediately.`}
                           onConfirm={() => revoke(bridge)}
                           disabled={revoking[bridge.id] ?? false}
                         >
@@ -310,8 +310,8 @@ export function BridgesSection() {
       )}
       {bridges !== null && bridges.length === 0 && !loadError && (
         <div style={{ fontSize: 11.5, color: "var(--dim)", marginTop: 10 }}>
-          No SSH agent bridges paired — a session's SSH_AUTH_SOCK falls back to whatever's
-          configured or ambient on the host it runs on until you pair one.
+          No SSH agent bridges yet. Until you pair one, sessions use the SSH agent of the host they
+          run on.
         </div>
       )}
 

@@ -141,7 +141,7 @@ describe("Settings -> Launchers", () => {
       expect(within(codexRow).getByText("trust pending")).toBeInTheDocument();
       expect(
         within(codexRow).getByTitle(
-          "Hook trust pending — run /hooks in a Codex session to enable structured events",
+          "Hooks not trusted yet. Run /hooks in a Codex session to enable status updates.",
         ),
       ).toBeInTheDocument();
       // The badge REPLACES "available", it doesn't sit alongside it.

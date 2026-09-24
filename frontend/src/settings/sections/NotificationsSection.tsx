@@ -66,7 +66,10 @@ export function NotificationsSection() {
 
   return (
     <>
-      <Row label="Browser permission" desc="Grant this in your browser's site settings if denied.">
+      <Row
+        label="Browser permission"
+        desc="If denied, allow notifications in your browser's site settings."
+      >
         <span className="settings-readonly-value">{permission}</span>
       </Row>
 
@@ -119,7 +122,7 @@ export function NotificationsSection() {
             unavailable={!pushSupported}
             subtitle={
               !pushSupported
-                ? "Not supported in this browser — requires HTTPS and Push API support."
+                ? "Not supported in this browser. Requires HTTPS and push support."
                 : (pushError ?? undefined)
             }
             trailing={
@@ -154,7 +157,7 @@ export function NotificationsSection() {
       <div style={{ paddingTop: 12 }}>
         <GroupHeading
           title="Status notifications"
-          desc="Toggle which session statuses fire a browser/sound notification or auto-focus the pane. Only statuses reachable by at least one detected agent are shown."
+          desc="Choose which session states notify you, play a sound, or focus the session. Only states your installed agents report are shown."
         />
         <div
           style={{
@@ -255,7 +258,7 @@ export function NotificationsSection() {
         </div>
       </div>
 
-      <Row label="Idle threshold" desc="Silence before a session reads as idle.">
+      <Row label="Idle threshold" desc="How long a session must be quiet before it counts as idle.">
         <Slider
           min={5}
           max={120}
@@ -267,7 +270,7 @@ export function NotificationsSection() {
       </Row>
       <Row
         label="Auto-focus on attention"
-        desc="Jump to a session's pane the moment it needs your input (also gated per-status by the matrix above)."
+        desc="Focus a session as soon as it needs your input. The Focus column above sets which states do this."
       >
         <Toggle
           on={n.autoFocusOnAttention}

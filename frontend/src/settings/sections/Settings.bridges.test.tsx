@@ -111,7 +111,7 @@ describe("Settings -> Hosts -> SSH agent bridges (issue #820 PR7c)", () => {
   it("shows the empty state when no bridge is paired", async () => {
     render(<Settings onClose={vi.fn()} initialSection="hosts" />);
 
-    expect(await screen.findByText(/No SSH agent bridges paired/)).toBeInTheDocument();
+    expect(await screen.findByText(/No SSH agent bridges yet/)).toBeInTheDocument();
   });
 
   // Hermes review, PR #869 — a failed fetch used to fall through to the
@@ -122,7 +122,7 @@ describe("Settings -> Hosts -> SSH agent bridges (issue #820 PR7c)", () => {
     render(<Settings onClose={vi.fn()} initialSection="hosts" />);
 
     expect(await screen.findByText("Couldn't load SSH agent bridges.")).toBeInTheDocument();
-    expect(screen.queryByText(/No SSH agent bridges paired/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/No SSH agent bridges yet/)).not.toBeInTheDocument();
   });
 
   it("lists a paired, connected bridge with its name/platform and status", async () => {

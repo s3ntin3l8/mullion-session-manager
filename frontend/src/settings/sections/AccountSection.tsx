@@ -8,7 +8,7 @@ const METHOD_LABELS = {
   gateway: "Trusted gateway",
   oidc: "Mullion OIDC",
   token: "Shared access token",
-  none: "No in-process authentication",
+  none: "None (handled outside Mullion)",
 } as const;
 
 export function AccountSection() {
@@ -33,9 +33,9 @@ export function AccountSection() {
 
   return (
     <>
-      <Eyebrow title="Account" desc="Identity supplied by your configured authentication layer." />
+      <Eyebrow title="Account" desc="Your identity, as reported by the sign-in provider." />
       {gatewayIdentityUnavailable && (
-        <div className="settings-footer-note">Gateway identity details unavailable.</div>
+        <div className="settings-footer-note">Identity details are not available.</div>
       )}
       <div className="settings-info-table">
         {status.user?.name && (

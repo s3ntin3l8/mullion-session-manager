@@ -11,7 +11,7 @@ export function AppearanceSection() {
   const layoutTier = useLayoutTier(settings.layoutMode);
   return (
     <>
-      <Row label="Theme" desc="Mullion is dark-first. System follows your OS." align="start">
+      <Row label="Theme" desc="System follows your operating system's setting." align="start">
         <Segmented
           value={settings.theme}
           onChange={(v) => updateSettings({ theme: v })}
@@ -22,7 +22,7 @@ export function AppearanceSection() {
           ]}
         />
       </Row>
-      <Row label="Sidebar density" desc="Row height for the workspace & project tree.">
+      <Row label="Sidebar density" desc="Row height in the workspace and project sidebar.">
         <Segmented
           value={settings.sidebarDensity}
           onChange={(v) => updateSettings({ sidebarDensity: v })}
@@ -37,8 +37,8 @@ export function AppearanceSection() {
         <GroupHeading title="Layout" />
       </div>
       <Row
-        label="Layout"
-        desc="Auto picks phone/tablet/desktop from window width. Override it if a foldable device reports ambiguous metrics, or to test a tier from a desktop browser."
+        label="Layout mode"
+        desc="Auto chooses a phone, tablet, or desktop layout from the window width. Pick one to override it, for example on a foldable device."
         align="start"
       >
         <Segmented
@@ -61,7 +61,7 @@ export function AppearanceSection() {
       {(layoutTier === "tablet" || settings.layoutMode === "auto") && (
         <Row
           label="Tablet columns"
-          desc="How many sessions tile side by side before a new one docks as a tab instead. 3 gives each column less width, which trips the narrow-pane font shrink sooner — 2 is the safer default unless your unfolded/tablet width is comfortably wide."
+          desc="How many sessions sit side by side before new ones open as tabs. Use 3 only on wide screens; narrow columns shrink the terminal font."
         >
           <Segmented
             value={String(settings.tabletPaneCap) as "2" | "3"}

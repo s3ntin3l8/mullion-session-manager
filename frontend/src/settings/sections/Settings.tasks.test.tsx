@@ -97,7 +97,7 @@ describe("Settings -> Task Master", () => {
     const row = await screen.findByText("Pause auto-claim");
     const toggle = row.closest(".settings-row")?.querySelector("button");
     expect(toggle).toBeDisabled();
-    expect(screen.getByText(/has no effect right now/i)).toBeInTheDocument();
+    expect(screen.getByText(/no effect while Task Master is off/i)).toBeInTheDocument();
   });
 
   it("enables Pause auto-claim once Task Master is resolved on, and PATCHes it", async () => {
@@ -290,7 +290,7 @@ describe("Settings -> Task Master", () => {
     });
     render(<Settings onClose={vi.fn()} initialSection="tasks" />);
 
-    const resetRow = await screen.findByText("Reset to environment defaults");
+    const resetRow = await screen.findByText("Reset to server defaults");
     const resetButton = resetRow.closest(".settings-row")?.querySelector("button") as HTMLElement;
     await user.click(resetButton);
 
@@ -327,7 +327,7 @@ describe("Settings -> Task Master", () => {
 
   it("surfaces Task Master's own install-wide agent defaults as the lowest resolution tier", async () => {
     render(<Settings onClose={vi.fn()} initialSection="tasks" />);
-    expect(await screen.findByText(/Task Master's own install-wide defaults/i)).toBeInTheDocument();
+    expect(await screen.findByText(/then the defaults above/i)).toBeInTheDocument();
   });
 
   it("lets the Default agent / Default review agent dropdowns override the install-wide defaults", async () => {

@@ -76,7 +76,7 @@ export function SessionsSection() {
         </div>
       </div>
 
-      <Row label="Confirm before kill" desc="Arm-then-confirm on the kill button.">
+      <Row label="Confirm before kill" desc="Require a second click to kill a session.">
         <Toggle
           on={s.confirmBeforeKill}
           onChange={(v) => updateSettings({ sessions: { confirmBeforeKill: v } })}
@@ -84,13 +84,13 @@ export function SessionsSection() {
       </Row>
       <Row
         label="Show exited & killed sessions"
-        desc="Keep dead sessions visible in the inventory."
+        desc="Keep sessions that have ended visible in the sidebar."
       >
         <Toggle on={!hideEndedSessions} onChange={(v) => setHideEndedSessions(!v)} />
       </Row>
       <Row
         label="Show task sessions"
-        desc="Keep Task Master's worker/review sessions visible in the sidebar, alongside your own. A killed one is hidden either way."
+        desc="Show Task Master's worker and review sessions in the sidebar alongside your own."
       >
         <Toggle on={showTaskSessions} onChange={setShowTaskSessions} />
       </Row>
@@ -100,10 +100,8 @@ export function SessionsSection() {
       <Row
         label="Auto-open child session panels"
         desc={
-          "When an agent spawns a child session (Phase 5, issue #193), open" +
-          " its panel next to its parent's automatically. A spawned child" +
-          " always shows in the sidebar regardless of this setting — it only" +
-          " governs whether the panel itself opens with no user gesture."
+          "When an agent starts a child session, open its panel next to the" +
+          " parent automatically. Child sessions always appear in the sidebar."
         }
       >
         <Toggle
@@ -113,7 +111,7 @@ export function SessionsSection() {
       </Row>
       <Row
         label="Max child sessions per parent"
-        desc="How many live child sessions an agent may have spawned at once before sessions.spawn_child starts rejecting new ones."
+        desc="The most child sessions one agent can have running at the same time."
       >
         <NumberField
           value={s.maxChildSessionsPerParent}
@@ -128,7 +126,10 @@ export function SessionsSection() {
       <div style={{ paddingTop: 6 }}>
         <GroupHeading title="Cleanup & history" />
       </div>
-      <Row label="Auto-reconcile interval" desc="How often exited sessions are swept.">
+      <Row
+        label="Auto-reconcile interval"
+        desc="How often Mullion checks for sessions that have exited."
+      >
         <NumberField
           value={s.reconcileIntervalSeconds}
           min={5}
@@ -140,7 +141,7 @@ export function SessionsSection() {
       </Row>
       <Row
         label="Stale error timeout"
-        desc="How long an unresolved API/tool error stays flagged before it's swept."
+        desc="How long an unresolved error stays on a session before it's cleared."
       >
         <NumberField
           value={s.staleErrorSeconds}
@@ -153,7 +154,7 @@ export function SessionsSection() {
       </Row>
       <Row
         label="Stale busy timeout"
-        desc="How long compacting/subagent activity stays flagged with no PTY output before it's swept — longer than the error timeout since these can legitimately run for a while."
+        desc="How long a busy state (compacting, running subagents) stays on a silent session before it's cleared. Keep this longer than the error timeout — this work can legitimately run for a while."
       >
         <NumberField
           value={s.staleBusySeconds}
@@ -167,11 +168,8 @@ export function SessionsSection() {
       <Row
         label="Persist session event history"
         desc={
-          "Record session notification events to disk so they survive a" +
-          " restart (mullion history, GET /api/events). Off by default." +
-          " Turning it on does not backfill — only events emitted from that" +
-          " moment are captured, and only for sessions this server itself" +
-          " spawned."
+          "Save session events so the timeline survives a restart. Only events" +
+          " from now on are recorded."
         }
       >
         <Toggle
@@ -181,7 +179,7 @@ export function SessionsSection() {
       </Row>
       <Row
         label="Event history retention"
-        desc="Persisted events older than this are swept hourly — and once immediately when you change this value. 0 keeps them forever. Only meaningful while persistence is on — with it off, no new events accumulate to sweep."
+        desc="Delete saved events older than this. 0 keeps them forever."
       >
         <NumberField
           value={eventRetentionDaysDraft ?? s.eventRetentionDays}
@@ -200,7 +198,7 @@ export function SessionsSection() {
       </Row>
       <Row
         label="Event history cap per session"
-        desc="Keeps only the newest N persisted events per session, swept hourly — and once immediately when you change this value — alongside the age-based retention above; the two limits apply independently. 0 keeps them all, regardless of count."
+        desc="Keep only this many of the newest saved events per session. 0 means no limit."
       >
         <NumberField
           value={eventRetentionPerSessionDraft ?? s.eventRetentionPerSession}

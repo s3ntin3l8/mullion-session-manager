@@ -38,7 +38,7 @@ export function InputSection() {
       </Row>
       <Row
         label="Allow programs to set the clipboard"
-        desc="Lets the running CLI copy to your clipboard directly (OSC 52) — this is how Claude Code and opencode's own copy commands work."
+        desc="Let terminal programs copy to your clipboard, for example Claude Code's copy command."
       >
         <Toggle
           on={t.clipboardWrite}
@@ -48,7 +48,7 @@ export function InputSection() {
 
       <Eyebrow
         title="Key-conflict handling"
-        desc="When on, the terminal captures the shortcut instead of the browser."
+        desc="When on, the terminal receives the shortcut instead of the browser."
       />
       <StyledList>
         <ListRow
@@ -88,12 +88,12 @@ export function InputSection() {
 
       <Eyebrow
         title="Clipboard shortcuts"
-        desc="Opt-in chords Mullion handles instead of the terminal. Ctrl+Insert / Shift+Insert (and Cmd+C / Cmd+V on macOS) always work regardless."
+        desc="Optional shortcuts for copy and paste. Ctrl+Insert and Shift+Insert (Cmd+C and Cmd+V on macOS) always work."
       />
       <StyledList>
         <ListRow
           title={<span className="settings-kbd-chip">Ctrl + V</span>}
-          subtitle="Paste clipboard — overrides vim Visual Block and readline quoted-insert"
+          subtitle="Paste. Replaces the terminal's own use of Ctrl+V (for example, Visual Block in Vim)."
           trailing={
             <Toggle
               size="small"
@@ -104,7 +104,7 @@ export function InputSection() {
         />
         <ListRow
           title={<span className="settings-kbd-chip">Ctrl + C</span>}
-          subtitle="Copy the selection; still sends SIGINT when nothing is selected"
+          subtitle="Copy the selection. Still interrupts the running program when nothing is selected."
           trailing={
             <Toggle
               size="small"
@@ -117,9 +117,9 @@ export function InputSection() {
 
       <Eyebrow
         title="Voice dictation"
-        desc="Push-to-talk into the prompt via the browser's speech engine — transcribed text is inserted, never sent automatically. Needs an https:// origin; hidden automatically in browsers without speech recognition support (Firefox today)."
+        desc="Talk instead of typing. Your words are inserted into the prompt, never sent automatically. Requires HTTPS and a browser with speech recognition (not available in Firefox)."
       />
-      <Row label="Enable dictation" desc="Shows the mic button in the terminal pane.">
+      <Row label="Enable dictation" desc="Show a microphone button in terminal panes.">
         <Toggle
           on={t.voice.enabled}
           onChange={(v) => updateSettings({ terminal: { voice: { enabled: v } } })}
@@ -128,7 +128,7 @@ export function InputSection() {
       </Row>
       <Row
         label="Dictation hotkey"
-        desc="Hold the combo below to talk, as an alternative to the mic button."
+        desc="Hold a key combination to talk, instead of using the microphone button."
       >
         <Toggle
           on={t.voice.hotkeyEnabled}
@@ -136,10 +136,7 @@ export function InputSection() {
           ariaLabel="Dictation hotkey"
         />
       </Row>
-      <Row
-        label="Hotkey combo"
-        desc="Click, then press the combo you want. Rebind if it's already claimed by another app — see #1119."
-      >
+      <Row label="Hotkey" desc="Click, then press the key combination you want to use.">
         <KeyChordField
           value={t.voice.hotkey}
           defaultValue={DEFAULT_VOICE_CHORD}
@@ -147,7 +144,7 @@ export function InputSection() {
           disabled={!t.voice.hotkeyEnabled}
         />
       </Row>
-      <Row label="Dictation language" desc="What language you're speaking.">
+      <Row label="Dictation language" desc="The language you speak.">
         <Dropdown
           options={DICTATION_LANGUAGES}
           value={t.voice.lang}
