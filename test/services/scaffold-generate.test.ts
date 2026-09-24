@@ -1053,6 +1053,23 @@ describe("createAgentSandboxHome", () => {
     fs.rmSync(scratchDir, { recursive: true, force: true });
   });
 
+  it("never materializes a missing worktree, even for an agent with writable paths", () => {
+    const missingWorktree = path.join(scratchDir, "missing-worktree");
+
+    const { writablePaths } = createAgentSandboxHome(missingWorktree, "codex");
+
+    expect(writablePaths.dirs.length).toBeGreaterThan(0);
+    expect(fs.existsSync(missingWorktree)).toBe(false);
+  });
+
+  it("still creates writable paths when .agent-home already exists", () => {
+    fs.mkdirSync(path.join(scratchDir, ".agent-home"));
+
+    const { writablePaths } = createAgentSandboxHome(scratchDir, "codex");
+
+    for (const d of writablePaths.dirs) expect(fs.existsSync(d)).toBe(true);
+  });
+
   it("creates a fake HOME under the worktree and returns it", () => {
     const { fakeHome, writablePaths } = createAgentSandboxHome(scratchDir, "codex");
     expect(fakeHome).toBe(path.join(scratchDir, ".agent-home"));

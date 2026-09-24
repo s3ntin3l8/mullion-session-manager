@@ -913,15 +913,19 @@ export function createAgentSandboxHome(
   // Best-effort: if the parent worktree doesn't exist or isn't writable
   // (e.g. in tests that pass a nonexistent cwd to exercise error paths),
   // bwrap's own spawn will surface the real failure — we don't mask it
-  // here. Non-recursive for exactly that reason: `recursive: true` would
-  // silently materialize a missing worktree itself and mask that failure.
+  // here. Non-recursive for exactly that reason, and the writable-path
+  // creation below is skipped unless .agent-home now exists: its own
+  // `recursive: true` mkdirs would otherwise materialize a missing
+  // worktree themselves and mask that failure all the same.
+  let homeReady = true;
   try {
     fs.mkdirSync(fakeHome);
-  } catch {
+  } catch (err) {
     // Fall through — bwrap's --bind will produce the real error.
+    homeReady = (err as NodeJS.ErrnoException).code === "EEXIST";
   }
   const writablePaths = agentSandboxWritablePaths(agentCommand, fakeHome);
-  ensureSandboxWritablePathsExist(writablePaths, fakeHome);
+  if (homeReady) ensureSandboxWritablePathsExist(writablePaths, fakeHome);
   // Seed auth.json from the operator's real HOME if it exists — the CLI
   // needs valid credentials to reach its model API. If the real auth
   // doesn't exist (fresh host), the CLI will re-prompt or fail at auth,
