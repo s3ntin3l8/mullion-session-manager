@@ -872,6 +872,10 @@ export function TerminalPane(props: {
     // Set around programmatic input (paste, dictation, key-bar keys — all of
     // which xterm reports through onData synchronously) so the key bar's
     // sticky Ctrl only ever modifies what's typed on the soft keyboard.
+    // Load-bearing assumption: term.input()/term.paste() fire onData
+    // synchronously, before returning (true of the installed @xterm/xterm).
+    // If a future xterm made that async, the flag would already be reset by
+    // the time onData ran and programmatic input would get Ctrl-translated.
     let suppressCtrl = false;
     const withoutCtrl = (send: () => void) => {
       suppressCtrl = true;
