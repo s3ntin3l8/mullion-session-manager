@@ -550,6 +550,56 @@ describe("DeviceManager", () => {
     await waitForStatus(manager, "1", "streaming");
   });
 
+  it("spawn() failure when the scope exits during boot (post-settle, pre-streaming) surfaces the specific error immediately rather than falling through to the 2-minute adb timeout", async () => {
+    // Simulates a real production failure mode: systemd-run starts and
+    // returns control (setImmediate resolves the bootstrap promise), but the
+    // scope exits non-zero a few macrotasks later — D-Bus errors, a unit
+    // name that became occupied between the TOCTOU check and the actual run,
+    // or an immediate emulator crash before it even writes to adb.
+    // Without the bootstrapFailed race, spawn() would stay in
+    // waitForAdbSerial for the full BOOT_TIMEOUT_MS (120 s) and then report
+    // only the generic "did not appear on adb within 120000ms" — losing the
+    // exit code and unit name that would have identified the real cause.
+    let spawnedChild: ReturnType<typeof createMockChild> | undefined;
+    const baseImpl = vi.mocked(spawnChildProcess).getMockImplementation()!;
+    vi.mocked(spawnChildProcess).mockImplementation(((
+      file: string,
+      args: readonly string[],
+      ...rest: unknown[]
+    ) => {
+      if (file === "systemd-run" && spawnedChild === undefined) {
+        const ee = createMockChild();
+        spawnedChild = ee;
+        listUnitsReply.push(`${args[4]}.scope loaded active running ${args[6]}`);
+        // Do NOT emit exit in this tick — the setImmediate below fires first,
+        // settling the bootstrap promise. The exit (simulating a D-Bus error)
+        // arrives afterwards, in the boot window.
+        return ee as unknown as ChildProcess.ChildProcess;
+      }
+      return baseImpl(file, args, ...(rest as []));
+    }) as typeof spawnChildProcess);
+
+    const manager = new DeviceManager(baseOpts());
+    await manager.getOrCreate({
+      id: "1",
+      kind: "emulator" as const,
+      avdName: "dev35",
+      serial: null,
+      label: null,
+      port: null,
+    });
+
+    // Device is now in "booting" (setImmediate settled, waitForAdbSerial
+    // running). Flush macrotasks so settled=true, then emit the crash exit.
+    await new Promise<void>((r) => setTimeout(r, 10));
+    expect(spawnedChild).toBeDefined();
+    spawnedChild!.emit("exit", 1);
+
+    // Must surface as "error" with the specific message — NOT hang for 120s.
+    await waitForStatus(manager, "1", "error");
+    expect(manager.get("1")?.toInfo().error).toMatch(/scope exited during boot with code 1/);
+  });
+
   it("spawn() failure when pushing the scrcpy server rejects tears down cleanly (CodeQL: exercises mockPushServerShouldFail)", async () => {
     mockDeviceList = [{ serial: "emulator-5554" }];
     mockPushServerShouldFail = true;

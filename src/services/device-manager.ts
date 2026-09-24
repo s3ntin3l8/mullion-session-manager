@@ -270,6 +270,19 @@ export class Device {
         ],
       });
 
+      // Populated by the post-settle exit handler if the scope exits non-zero
+      // *after* setImmediate has already resolved the bootstrap promise (the
+      // production failure window: D-Bus error, unit collision, immediate
+      // emulator crash). Raced against the adb poll below so the specific error
+      // surfaces at once instead of waiting for the 120s adb timeout.
+      let bootstrapFailReject: ((err: Error) => void) | null = null;
+      const bootstrapFailed = new Promise<never>((_resolve, reject) => {
+        bootstrapFailReject = reject;
+      });
+      // Prevent Node from treating the above as an unhandled rejection during
+      // the window between creation and the Promise.race() that consumes it.
+      bootstrapFailed.catch(() => {});
+
       await new Promise<void>((resolve, reject) => {
         const child = spawnChild("systemd-run", plan.argv, { stdio: "ignore" });
         let settled = false;
@@ -297,6 +310,18 @@ export class Device {
             settled = true;
             resolve();
           } else {
+            // Already past the bootstrap promise. If the scope exits non-zero
+            // during the boot window (before streaming), surface it immediately
+            // via bootstrapFailed rather than waiting for the full adb timeout.
+            // Exit code 0 (graceful emulator shutdown mid-boot) also counts as
+            // a scope failure; once streaming it becomes a normal handleExit().
+            if (this.status !== "streaming") {
+              bootstrapFailReject?.(
+                new Error(
+                  `device scope exited during boot with code ${code ?? "null"} (unit ${plan.unitName})`,
+                ),
+              );
+            }
             this.handleExit();
           }
         });
@@ -315,7 +340,11 @@ export class Device {
 
       this.status = "booting";
       this.serial = `emulator-${port}`;
-      await this.waitForAdbSerial(this.serial, BOOT_TIMEOUT_MS);
+      // Race the adb poll against the scope's own exit signal: if systemd-run
+      // exits during boot (D-Bus error, unit collision, immediate emulator
+      // crash), the specific "scope exited during boot" error surfaces at once
+      // rather than waiting for the full BOOT_TIMEOUT_MS generic timeout.
+      await Promise.race([this.waitForAdbSerial(this.serial, BOOT_TIMEOUT_MS), bootstrapFailed]);
 
       this.adb = await this.serverClient.createAdb({ serial: this.serial });
       await this.startScrcpySession(this.adb);
