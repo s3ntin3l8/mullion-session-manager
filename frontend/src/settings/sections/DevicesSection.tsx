@@ -289,8 +289,11 @@ export function DevicesSection() {
     return levels.map((level) => ({ value: level, label: `API ${level}` }));
   }, [availableImages]);
 
+  // Trim once — both anyNarrowFilter and the filter predicate below read
+  // the same value (Hermes review, PR #1386).
+  const availableQueryTrimmed = availableQuery.trim();
   const anyNarrowFilter =
-    availableVariant !== "" || availableApi !== "" || availableQuery.trim() !== "";
+    availableVariant !== "" || availableApi !== "" || availableQueryTrimmed !== "";
 
   const filteredAvailable = availableImages.filter((img) => {
     if (availableFilter === "installable" && img.installed) return false;
@@ -298,8 +301,8 @@ export function DevicesSection() {
     if (availableVariant !== "" && img.tag !== availableVariant) return false;
     if (availableApi !== "" && img.apiLevel !== availableApi) return false;
     if (
-      availableQuery.trim() !== "" &&
-      !matchesQuery([img.packagePath, img.tagDisplay, img.apiLevel, img.abi], availableQuery.trim())
+      availableQueryTrimmed !== "" &&
+      !matchesQuery([img.packagePath, img.tagDisplay, img.apiLevel, img.abi], availableQueryTrimmed)
     ) {
       return false;
     }
@@ -829,6 +832,10 @@ export function DevicesSection() {
                   <button
                     type="button"
                     className="settings-image-filters-clear"
+                    // title alone has inconsistent screen-reader exposure —
+                    // icon-only button needs its own accessible name (Hermes
+                    // review, PR #1386), same posture as ConfirmButton.
+                    aria-label="Clear filter"
                     title="Clear filter"
                     onClick={() => setAvailableQuery("")}
                   >

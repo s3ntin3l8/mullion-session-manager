@@ -811,8 +811,9 @@ describe("Settings -> Devices (issue #1326)", () => {
       ).not.toBeInTheDocument();
     });
 
-    // Clear button restores both rows.
-    await user.click(screen.getByTitle("Clear filter"));
+    // Clear button restores both rows. Accessible name comes from the
+    // aria-label (title alone is inconsistently exposed — Hermes, PR #1386).
+    await user.click(screen.getByRole("button", { name: "Clear filter" }));
     await waitFor(() => {
       expect(screen.getByText("system-images;android-35;google_apis;x86_64")).toBeInTheDocument();
     });
