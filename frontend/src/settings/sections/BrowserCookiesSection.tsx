@@ -132,8 +132,8 @@ export function BrowserCookiesSection() {
   return (
     <>
       <GroupHeading
-        title="Import Browser Cookies"
-        desc="Import cookies from a host Chrome or Firefox profile so a project's browser pane launches already signed in."
+        title="Import browser cookies"
+        desc="Import cookies from a Chrome or Firefox profile on this host so a project's browser opens already signed in."
       />
 
       <Row label="Project">
@@ -190,7 +190,7 @@ export function BrowserCookiesSection() {
             {importMethod === "path" ? (
               <Row
                 label="Cookies file path"
-                desc="Path on this host to the browser profile's Cookies (Chrome) or cookies.sqlite (Firefox) file."
+                desc="Path to the profile's Cookies file (Chrome) or cookies.sqlite (Firefox)."
                 align="start"
               >
                 <div className="settings-numberfield" style={{ width: 260 }}>
@@ -205,7 +205,7 @@ export function BrowserCookiesSection() {
             ) : (
               <Row
                 label="Upload cookies file"
-                desc="Select the Cookies (Chrome) or cookies.sqlite (Firefox) file to upload."
+                desc="Choose the profile's Cookies file (Chrome) or cookies.sqlite (Firefox)."
                 align="start"
               >
                 <div style={{ display: "flex", gap: 10, alignItems: "center" }}>

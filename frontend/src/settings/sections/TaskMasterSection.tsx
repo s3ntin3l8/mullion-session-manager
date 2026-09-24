@@ -40,7 +40,7 @@ export function TaskMasterSection() {
     <>
       <Row
         label="Enable Task Master"
-        desc={`Turns on the background watcher's GitHub ingest and auto-claim, the claim/approve endpoints, and a claimed task's transition into "reviewing" (including spawning its review-agent session). Reject stays available even while off, so a task already in reviewing can still be sent back rather than getting stranded. A claimed/in_progress task still keeps its own budget enforced and its status synced to GitHub either way — a safety net, not new work. The local task board (create/edit/drag/delete) works either way too. Environment default: ${env.enabled ? "on" : "off"}.`}
+        desc={`Picks up labeled GitHub issues, claims ready tasks automatically, and hands finished work to review. When off, the task board still works and tasks already running keep their budget and GitHub status. Server default: ${env.enabled ? "on" : "off"}.`}
       >
         <Toggle
           on={resolved.enabled}
@@ -50,10 +50,9 @@ export function TaskMasterSection() {
       <Row
         label="Pause auto-claim"
         desc={
-          "Stops the watcher from claiming new ready tasks. Takes effect on the next sweep —" +
-          " tasks already claimed or in progress are unaffected. A manual claim from the Tasks" +
-          " panel still works while paused." +
-          (resolved.enabled ? "" : " (Task Master is off — this has no effect right now.)")
+          "Stop claiming new ready tasks. Tasks already running are unaffected, and you can" +
+          " still claim a task manually from the Tasks panel." +
+          (resolved.enabled ? "" : " Has no effect while Task Master is off.")
         }
       >
         <Toggle
@@ -64,7 +63,7 @@ export function TaskMasterSection() {
       </Row>
       <Row
         label="Max concurrent claims"
-        desc={`Tasks in "claimed"/"in_progress" count against this cap — a hard ceiling, not a soft throttle. Environment default: ${env.maxConcurrent}.`}
+        desc={`The most tasks that can be claimed or running at the same time. Server default: ${env.maxConcurrent}.`}
       >
         <NumberField
           value={maxConcurrentDraft ?? resolved.maxConcurrent}
@@ -100,7 +99,7 @@ export function TaskMasterSection() {
       */}
       <Row
         label="Per-task budget"
-        desc={`How long a claimed task may run before it's force-failed and its session terminated. 0 = unlimited. Environment default: ${env.budgetMinutes} min.`}
+        desc={`How long a task may run before it's stopped and marked failed. 0 means no limit. Server default: ${env.budgetMinutes} min.`}
       >
         <NumberField
           value={budgetDraft ?? resolved.budgetMinutes}
@@ -119,7 +118,7 @@ export function TaskMasterSection() {
       </Row>
       <Row
         label="Progress-comment throttle"
-        desc={`Minimum minutes between two "in progress" comments posted to the same linked GitHub issue. 0 = no throttle. Environment default: ${env.progressCommentMinutes} min.`}
+        desc={`Minimum time between progress comments on the same GitHub issue. 0 posts every update. Server default: ${env.progressCommentMinutes} min.`}
       >
         <NumberField
           value={throttleDraft ?? resolved.progressCommentMinutes}
@@ -138,7 +137,7 @@ export function TaskMasterSection() {
       </Row>
       <Row
         label="Review-agent CI wait"
-        desc="How long the review agent's spawn holds after a task enters review, waiting for CI to report on the PR's head commit (including the moments right after the push, before checks have registered), so the review sees real pass/fail results instead of running before CI even starts. 0 = spawn immediately, never wait. No environment default — this is the one moment a stranded task (CI that will never report, e.g. Actions disabled) needs a live knob rather than an env-var edit."
+        desc="How long the review agent waits for CI results on the pull request before it starts, so the review sees real pass/fail results. 0 starts the review immediately."
       >
         <NumberField
           value={ciWaitDraft ?? resolved.reviewCiWaitMinutes}
@@ -157,7 +156,7 @@ export function TaskMasterSection() {
       </Row>
       <Row
         label="Skip permissions on unattended spawns"
-        desc={`Passes the resolved agent's own skip-permissions flag (e.g. --dangerously-skip-permissions) to a claim/auto-claim/retry/review-agent spawn, so an unattended agent doesn't stall at a permission prompt with no one to answer it. Off by default: an autonomous agent bypassing every tool-permission check is an explicit opt-in, not a safe default. Environment default: ${env.skipPermissions ? "on" : "off"}.`}
+        desc={`Start unattended task and review sessions with the agent's skip-permissions mode, so they don't stall at a permission prompt. This lets agents run any tool without asking — enable it only if you trust the tasks. Server default: ${env.skipPermissions ? "on" : "off"}.`}
       >
         <Toggle
           on={resolved.skipPermissions}
@@ -166,7 +165,7 @@ export function TaskMasterSection() {
       </Row>
       <Row
         label="Default agent"
-        desc="The install-wide fallback agent a claim spawns with when neither the task's Agent: line nor the project's Default agent (project kebab menu → Edit) picks one. Independent of Agents → Default agent, which only drives the terminal launcher."
+        desc="Agent used for a task when neither the task nor its project names one."
       >
         <Dropdown
           value={tm.defaultAgent}
@@ -176,7 +175,7 @@ export function TaskMasterSection() {
       </Row>
       <Row
         label="Default review agent"
-        desc="The install-wide fallback review agent when neither the task's ReviewAgent: line nor the project's Default review agent picks one. None = a human reviews directly, today's behavior."
+        desc="Agent that reviews a finished task when neither the task nor its project names one. None leaves the review to a person."
       >
         <Dropdown
           value={tm.defaultReviewAgent}
@@ -185,8 +184,8 @@ export function TaskMasterSection() {
         />
       </Row>
       <Row
-        label="Reset to environment defaults"
-        desc="Clears every env override above (Enable, Max concurrent, Budget, Throttle, Skip permissions) so this install falls back to its deploy-time MULLION_TASK_* configuration. Pause auto-claim and Review-agent CI wait have no env equivalent and are left as-is."
+        label="Reset to server defaults"
+        desc="Return Enable, Max concurrent claims, Per-task budget, Progress-comment throttle, and Skip permissions to the server's defaults. Pause auto-claim and Review-agent CI wait are left as they are."
       >
         <SecondaryButton
           onClick={() => {
@@ -209,8 +208,8 @@ export function TaskMasterSection() {
       </Row>
 
       <Eyebrow
-        title="Deploy-time settings"
-        desc="Set via MULLION_TASK_LABEL / MULLION_TASK_POLL_INTERVAL — changing either requires editing the environment and restarting, since a live label change would orphan already-labeled GitHub issues and the poll interval is a fixed rate-limit tradeoff."
+        title="Server settings"
+        desc="Set by the server administrator. Changing them requires a restart."
       />
       <div className="settings-info-table">
         <div className="settings-info-row zebra">
@@ -225,11 +224,11 @@ export function TaskMasterSection() {
 
       <Eyebrow
         title="Agent selection"
-        desc="The Default agent / Default review agent dropdowns above are Task Master's own install-wide defaults — the lowest tier of resolution, independent of Agents → Default agent (which only drives the terminal launcher). A per-project setting (project kebab menu → Edit) or a task's own Agent: / ReviewAgent: line overrides them."
+        desc="A task's own Agent: or ReviewAgent: line wins, then the project's setting (project menu → Edit), then the defaults above. Agents → Default agent only affects new terminal sessions."
       />
       <Eyebrow
         title="Auto-tag release"
-        desc="Whether a task's merged PR automatically triggers release-please to create or update a release PR is configured per project (project kebab menu → Edit → Auto-tag release), not here. Off by default — an explicit per-project opt-in."
+        desc="Whether a merged task opens or updates a release pull request is set per project (project menu → Edit → Auto-tag release). Off by default."
       />
     </>
   );

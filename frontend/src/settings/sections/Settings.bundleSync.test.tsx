@@ -111,7 +111,7 @@ describe("Settings -> Sessions -> Bundle sync panel", () => {
 
     render(<Settings onClose={vi.fn()} initialSection="agent-context" />);
 
-    expect(await screen.findByText(/Bundle delivery is off/)).toBeInTheDocument();
+    expect(await screen.findByText(/The tooling bundle is off/)).toBeInTheDocument();
     expect(screen.queryByTestId("bundle-sync-row-claude-code")).not.toBeInTheDocument();
     expect(screen.queryByText("Re-sync now")).not.toBeInTheDocument();
   });
@@ -130,7 +130,7 @@ describe("Settings -> Sessions -> Bundle sync panel", () => {
     render(<Settings onClose={vi.fn()} initialSection="agent-context" />);
 
     expect(await screen.findByTestId("bundle-sync-row-claude-code")).toBeInTheDocument();
-    expect(screen.queryByText(/Bundle delivery is off/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/The tooling bundle is off/)).not.toBeInTheDocument();
   });
 
   it("shows a stale row with a 're-sync to fix' note", async () => {
@@ -144,7 +144,7 @@ describe("Settings -> Sessions -> Bundle sync panel", () => {
 
     const agyRow = await screen.findByTestId("bundle-sync-row-agy");
     expect(agyRow.textContent).toContain("Stale");
-    expect(agyRow.textContent).toMatch(/Re-sync now to fix/);
+    expect(agyRow.textContent).toMatch(/Changed since the last sync/);
   });
 
   it("distinguishes not-synced-with-fallback (claude-code/opencode) from not-synced-with-nothing-delivered (codex/agy)", async () => {
@@ -160,12 +160,12 @@ describe("Settings -> Sessions -> Bundle sync panel", () => {
     render(<Settings onClose={vi.fn()} initialSection="agent-context" />);
 
     const claudeRow = await screen.findByTestId("bundle-sync-row-claude-code");
-    expect(claudeRow.textContent).toMatch(/per-session fallback/);
-    expect(claudeRow.textContent).not.toMatch(/nothing is currently delivered/i);
+    expect(claudeRow.textContent).toMatch(/sessions still receive it/);
+    expect(claudeRow.textContent).not.toMatch(/delivered yet/i);
 
     const codexRow = screen.getByTestId("bundle-sync-row-codex");
-    expect(codexRow.textContent).toMatch(/nothing is currently delivered/i);
-    expect(codexRow.textContent).not.toMatch(/per-session fallback/);
+    expect(codexRow.textContent).toMatch(/delivered yet/i);
+    expect(codexRow.textContent).not.toMatch(/sessions still receive it/);
   });
 
   it("Re-sync now shows a loading state, then refetches status on success", async () => {
@@ -220,7 +220,7 @@ describe("Settings -> Sessions -> Bundle sync panel", () => {
 
     await user.click(screen.getByText("Re-sync now"));
 
-    expect(await screen.findByText(/turn the toggle above back on/)).toBeInTheDocument();
+    expect(await screen.findByText(/Turn it on above before re-syncing/)).toBeInTheDocument();
   });
 
   it("Remove Mullion content arms, then fires on a second click, disabling the toggle above afterward", async () => {

@@ -464,7 +464,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
     await user.click(await screen.findByText("Create an emulator"));
-    expect(await screen.findByText(/No AVDs on this host yet/)).toBeInTheDocument();
+    expect(await screen.findByText(/No virtual devices on this host yet/)).toBeInTheDocument();
     expect(screen.queryByDisplayValue("pixel_7")).not.toBeInTheDocument();
   });
 
@@ -482,7 +482,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     expect(
       await screen.findByText("DEVICE_AVDMANAGER_PATH is not configured."),
     ).toBeInTheDocument();
-    expect(screen.queryByText(/No AVDs on this host yet/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/No virtual devices on this host yet/)).not.toBeInTheDocument();
   });
 
   it("+ New AVD reveals the system image and device profile pickers", async () => {
@@ -1024,7 +1024,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
 
     expect(
-      await screen.findByText(/open “SDK system images” below and use Install to fetch one first/),
+      await screen.findByText(/Install one under "SDK system images" below/),
     ).toBeInTheDocument();
     expect(screen.queryByDisplayValue("API 35 — Google APIs (x86_64)")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Create AVD" })).toBeDisabled();
@@ -1081,9 +1081,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     await user.click(await screen.findByText("Create an emulator"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
 
-    expect(
-      await screen.findByText(/No device profiles known to avdmanager on this host/),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/No device profiles found/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Create AVD" })).toBeDisabled();
   });
 
@@ -1211,7 +1209,7 @@ describe("Settings -> Devices (issue #1326)", () => {
 
     // License modal should appear after the license-related error
     expect(await screen.findByText("Accept SDK licenses")).toBeInTheDocument();
-    expect(screen.getByText(/Some SDK packages require accepting/)).toBeInTheDocument();
+    expect(screen.getByText(/Some Android SDK packages require accepting/)).toBeInTheDocument();
   });
 
   it("clicking 'Accept licenses' in modal opens the license WS", async () => {

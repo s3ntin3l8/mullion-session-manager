@@ -53,7 +53,7 @@ export function ProjectsSection() {
 
   return (
     <>
-      <GroupHeading title="Project roots" desc="Directories scanned for auto-discovery." />
+      <GroupHeading title="Project roots" desc="Folders Mullion scans for git repositories." />
       <StyledList>
         {roots.map((root) => (
           <ListRow
@@ -75,8 +75,7 @@ export function ProjectsSection() {
         ))}
         {roots.length === 0 && (
           <div style={{ fontSize: 12, color: "var(--dim)", padding: "4px 2px" }}>
-            No roots configured — falling back to the server's PROJECTS_ROOTS env default (
-            {info?.projectsRoots || "empty"}).
+            No roots configured. Using the server's default roots ({info?.projectsRoots || "none"}).
           </div>
         )}
       </StyledList>
@@ -107,7 +106,7 @@ export function ProjectsSection() {
         )}
       </div>
 
-      <Row label="Discover now" desc="Re-scan roots for new git repositories.">
+      <Row label="Discover now" desc="Scan the roots for new repositories.">
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           {rescanStatus && (
             <span style={{ fontSize: 11.5, color: "var(--dim)" }}>{rescanStatus}</span>
@@ -120,7 +119,7 @@ export function ProjectsSection() {
 
       <Row
         label="Git auto-fetch interval"
-        desc="How often to fetch origin for auto-fetch projects. 0 to disable."
+        desc="How often to fetch from the remote for projects with auto-fetch on. 0 turns it off."
       >
         <NumberField
           value={settings.sessions.gitAutoFetchIntervalSeconds}
@@ -131,7 +130,10 @@ export function ProjectsSection() {
           onChange={(v) => updateSettings({ sessions: { gitAutoFetchIntervalSeconds: v } })}
         />
       </Row>
-      <Row label="Global config directory" desc="Where global launchers & dock defaults live.">
+      <Row
+        label="Global config directory"
+        desc="Where global launchers and dock defaults are stored."
+      >
         <span className="settings-readonly-value">{info?.crsConfigDir ?? "…"}</span>
       </Row>
 

@@ -221,7 +221,7 @@ export function HostsSection() {
     <>
       <GroupHeading
         title="Registered hosts"
-        desc="Remote Mullion agents this dashboard can proxy sessions to."
+        desc="Other machines running Mullion that this dashboard can run sessions on."
       />
       <StyledList>
         <ListRow
@@ -363,7 +363,7 @@ export function HostsSection() {
 
       {hosts.filter((h) => h.id !== LOCAL_HOST_ID).length === 0 && (
         <div style={{ fontSize: 11.5, color: "var(--dim)", marginTop: 10 }}>
-          No remote hosts registered — every project runs on this machine until you add one.
+          No remote hosts yet. Every project runs on this machine until you add one.
         </div>
       )}
 

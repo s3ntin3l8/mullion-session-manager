@@ -68,7 +68,7 @@ export function IntegrationsSection() {
     <>
       <GroupHeading
         title="GitHub"
-        desc="Connect a GitHub account to see a project's issues, pull requests, and CI status."
+        desc="Connect a GitHub account to see each project's issues, pull requests, and CI status."
       />
       <StyledList>
         <ListRow
@@ -103,7 +103,7 @@ export function IntegrationsSection() {
         <div style={{ marginTop: 10 }}>
           <Row
             label="Personal access token"
-            desc="A fine-grained PAT with read access to Contents, Issues, and Pull requests."
+            desc="A fine-grained token with read access to Contents, Issues, and Pull requests."
             align="start"
           >
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -132,8 +132,8 @@ export function IntegrationsSection() {
 
       {integration && !integration.deviceFlowAvailable && (
         <div style={{ fontSize: 11.5, color: "var(--dim)", marginTop: 12 }}>
-          "Connect with GitHub" (device flow, no PAT needed) becomes available once this server is
-          configured with a GitHub OAuth App client id.
+          "Connect with GitHub" becomes available once the server administrator configures a GitHub
+          OAuth App.
         </div>
       )}
 
@@ -156,8 +156,8 @@ export function IntegrationsSection() {
         testId="github-app-section"
         rowTestId="github-app-row"
         title="GitHub App"
-        desc="Optional. Scopes both Task Master's own writes (sync, promote, push, issue ingest) and the repo-status widget/PR & CI poller's reads to a short-lived, repo-scoped installation token instead of the shared PAT/OAuth token above. Repos not covered by an installed App fall back to it automatically."
-        notConfiguredSubtitle="Task Master writes use the shared PAT/OAuth token"
+        desc="Optional. Use a GitHub App's short-lived, repository-scoped tokens instead of the account above for Task Master and status checks. Repositories without the App installed keep using the account."
+        notConfiguredSubtitle="Using the connected account"
         githubApp={integration?.githubApp ?? null}
         setApp={api.setGitHubApp}
         clearApp={api.clearGitHubApp}
@@ -180,8 +180,8 @@ export function IntegrationsSection() {
         testId="github-reviewer-app-section"
         rowTestId="github-reviewer-app-row"
         title="Reviewer App"
-        desc="Optional. A separate GitHub App used only to submit Task Master's review-agent findings as an actual PR review (Approve/Request changes), so it can satisfy a required-review branch protection rule. Must be a different App from the one above — GitHub rejects a review from a PR's own author."
-        notConfiguredSubtitle="Review-agent findings post as a plain comment, with no merge-gating state"
+        desc="Optional. A second GitHub App that posts review-agent results as real pull request reviews, so they can satisfy required-review rules. Must differ from the GitHub App above."
+        notConfiguredSubtitle="Review results are posted as comments"
         githubApp={integration?.reviewerApp ?? null}
         setApp={api.setReviewerApp}
         clearApp={api.clearReviewerApp}
@@ -351,7 +351,7 @@ function GitHubAppSection({
 
       {formOpen && (
         <div style={{ marginTop: 10 }}>
-          <Row label="App id" desc="The numeric id from the App's settings page." align="start">
+          <Row label="App ID" desc="The number shown on the App's settings page." align="start">
             <div className="settings-numberfield" style={{ width: 260 }}>
               <input
                 type="text"
@@ -368,8 +368,8 @@ function GitHubAppSection({
             label="Private key"
             desc={
               rotating
-                ? "The PEM contents of the NEW key. Generate it on GitHub before deleting the old one — GitHub allows several active keys at once, so there's no need to go without a working key in between."
-                : "The PEM contents downloaded when the App's key was generated."
+                ? "Paste the new private key (.pem). Generate it on GitHub before deleting the old one."
+                : "Paste the private key (.pem) you downloaded from GitHub."
             }
             align="start"
           >
@@ -466,7 +466,7 @@ function WebhooksSection({ integration }: { integration: GitHubIntegration | nul
       <div style={{ marginTop: 24 }}>
         <GroupHeading
           title="Webhooks"
-          desc="Receive real-time PR/CI updates from GitHub when events occur."
+          desc="Get pull request and CI updates from GitHub as they happen."
         />
         <StyledList>
           <ListRow
@@ -484,7 +484,7 @@ function WebhooksSection({ integration }: { integration: GitHubIntegration | nul
                 ? `${webhookStatus.reposSucceeded} repo${webhookStatus.reposSucceeded === 1 ? "" : "s"} registered, ${webhookStatus.reposFailed ?? 0} failed`
                 : webhookStatus?.enabled
                   ? "Receiving real-time updates"
-                  : "Poll for updates manually"
+                  : "Checking for updates periodically"
             }
             trailing={<Toggle on={webhookStatus?.enabled ?? false} onChange={toggle} />}
           />

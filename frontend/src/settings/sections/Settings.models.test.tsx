@@ -44,7 +44,7 @@ describe("Settings -> Models", () => {
     expect(selects).toHaveLength(3);
     for (const select of selects) {
       const options = Array.from(select.querySelectorAll("option")).map((o) => o.textContent);
-      expect(options).toEqual(["— None (CLI default) —", ...MODELS]);
+      expect(options).toEqual(["opencode default", ...MODELS]);
     }
   });
 
@@ -112,7 +112,7 @@ describe("Settings -> Models", () => {
     });
     render(<ModelsSection />);
 
-    expect(await screen.findByText(/couldn't load the model catalog/i)).toBeInTheDocument();
+    expect(await screen.findByText(/couldn't load the model list/i)).toBeInTheDocument();
   });
 
   // Code review caught this branch and the one above swapped relative to
@@ -132,7 +132,7 @@ describe("Settings -> Models", () => {
     render(<ModelsSection />);
 
     expect(
-      await screen.findByText(/opencode returned no models.*installed.*configured provider/i),
+      await screen.findByText(/No models found.*opencode is installed.*provider configured/i),
     ).toBeInTheDocument();
   });
 });

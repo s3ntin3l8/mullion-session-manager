@@ -54,7 +54,7 @@ export function ServerInfoSection() {
       <div className="settings-health-banner">
         <span className="settings-health-dot" />
         <span className="settings-health-label">Healthy</span>
-        <span className="settings-health-status">/health · /ready → 200</span>
+        <span className="settings-health-status">Server is responding</span>
         <span className="settings-health-uptime">uptime {formatUptime(info.uptimeSeconds)}</span>
       </div>
 
@@ -101,7 +101,7 @@ export function ServerInfoSection() {
         </div>
       </div>
 
-      <Eyebrow title="Storage" desc="Relevant local filesystems, deduplicated by volume." />
+      <Eyebrow title="Storage" desc="Disks used by Mullion's data, sessions, and projects." />
       {resourceError && <ErrorText>{resourceError}</ErrorText>}
       {stats?.filesystems.map((filesystem) => (
         <div className="settings-info-table" key={`${filesystem.paths[0]}:${filesystem.labels[0]}`}>
@@ -135,7 +135,7 @@ export function ServerInfoSection() {
         </SecondaryButton>
       </div>
 
-      <Eyebrow title="Docker storage" desc="Analyzed only when this section opens or refreshes." />
+      <Eyebrow title="Docker storage" desc="Measured when this page opens or refreshes." />
       {!docker && <div className="settings-readonly-value">Analyzing Docker…</div>}
       {docker && !docker.available && (
         <div className="settings-footer-note">
@@ -311,7 +311,7 @@ function UpdatesSubsection() {
 
   return (
     <>
-      <Eyebrow title="Updates" desc="Checks this project's GitHub releases for a newer version." />
+      <Eyebrow title="Updates" desc="Checks GitHub releases for a newer version of Mullion." />
 
       {checkError && <ErrorText>{checkError}</ErrorText>}
 
@@ -351,8 +351,7 @@ function UpdatesSubsection() {
 
       {check && !check.applyAvailable && (
         <div className="settings-footer-note">
-          Auto-update requires a versioned-release install (<code>MULLION_HOME</code>) — see{" "}
-          <code>deploy/README.md</code>.
+          Automatic updates need a versioned install. See the deployment guide.
           {check.updateAvailable && " A newer version is available; update this host manually."}
         </div>
       )}

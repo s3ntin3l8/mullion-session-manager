@@ -93,7 +93,7 @@ describe("Settings -> Terminal -> Voice dictation", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="input" />);
 
-    await screen.findByText("Hotkey combo");
+    await screen.findByText("Hotkey");
     expect(screen.getByText("Ctrl + Shift + Space")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Record dictation hotkey" }));
@@ -117,7 +117,7 @@ describe("Settings -> Terminal -> Voice dictation", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="input" />);
 
-    await screen.findByText("Hotkey combo");
+    await screen.findByText("Hotkey");
     await user.click(screen.getByRole("button", { name: "Record dictation hotkey" }));
     expect(screen.getByText("Press a combo…")).toBeInTheDocument();
 
@@ -153,7 +153,7 @@ describe("Settings -> Terminal -> Voice dictation", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="input" />);
 
-    await screen.findByText("Hotkey combo");
+    await screen.findByText("Hotkey");
     await user.click(screen.getByRole("button", { name: "Record dictation hotkey" }));
 
     fireEvent.keyDown(window, { code: "KeyF", ctrlKey: true, shiftKey: true, key: "f" });
@@ -170,7 +170,7 @@ describe("Settings -> Terminal -> Voice dictation", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="input" />);
 
-    await screen.findByText("Hotkey combo");
+    await screen.findByText("Hotkey");
     await user.click(screen.getByRole("button", { name: "Record dictation hotkey" }));
     fireEvent.keyDown(window, { code: "KeyF", ctrlKey: true, shiftKey: true, key: "f" });
     expect(await screen.findByRole("alert")).toHaveTextContent("scrollback find bar");
@@ -186,7 +186,7 @@ describe("Settings -> Terminal -> Voice dictation", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="input" />);
 
-    await screen.findByText("Hotkey combo");
+    await screen.findByText("Hotkey");
     await user.click(screen.getByRole("button", { name: "Record dictation hotkey" }));
     fireEvent.keyDown(window, { code: "KeyF", ctrlKey: true, shiftKey: true, key: "f" });
     expect(await screen.findByRole("alert")).toHaveTextContent("scrollback find bar");

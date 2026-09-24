@@ -9,9 +9,8 @@ export function DockSection() {
       <Row
         label="Refresh worktree on agent commits"
         desc={
-          "When a dock monitor runs in an auto-created preview worktree," +
-          " periodically sync it to the branch's latest commit so the dev" +
-          " server picks up changes live. Disable for non-HMR servers."
+          "Keep preview worktrees on the branch's latest commit so the dev" +
+          " server shows new changes. Turn off for dev servers without hot reload."
         }
       >
         <Toggle
@@ -23,10 +22,9 @@ export function DockSection() {
       <Row
         label="Detect dev servers in plain sessions"
         desc={
-          "When a dev server (Vite/Next/CRA/Astro) starts in an ordinary" +
-          " terminal — not a dock control — offer to wire its port into" +
-          ' the project\'s preview. "Off" disables the background scan' +
-          " entirely; it never rewrites devServerUrl without asking."
+          "When a dev server (Vite, Next.js, Astro, …) starts in a regular" +
+          " terminal, offer to use it as the project's preview. Mullion" +
+          " always asks before changing the preview address."
         }
       >
         <Segmented
@@ -41,10 +39,9 @@ export function DockSection() {
       <Row
         label="Docker Compose services"
         desc={
-          "Show a project's running Compose services (log streams, image" +
-          " tag, update check) alongside its dock.json monitors. A" +
-          " discovered service still never starts on its own — this only" +
-          " controls whether it appears at all."
+          "Show a project's running Docker Compose services in the dock, with" +
+          " logs, image tag, and update check. Services are never started" +
+          " automatically."
         }
       >
         <Toggle
@@ -56,10 +53,8 @@ export function DockSection() {
       <Row
         label="Auto-attach Docker logs"
         desc={
-          "Start a running Docker service's log stream automatically instead" +
-          " of waiting for a click on its header. Costs one terminal" +
-          " session per running container per visible column, so it's off" +
-          " by default."
+          "Open each running Docker service's logs automatically. Each open" +
+          " log uses a terminal session."
         }
       >
         <Toggle

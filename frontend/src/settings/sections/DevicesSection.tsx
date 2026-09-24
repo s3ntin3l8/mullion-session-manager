@@ -521,7 +521,7 @@ export function DevicesSection() {
     <>
       <GroupHeading
         title="Android devices"
-        desc="Emulators and physical phones streamed into a dockview panel over Mullion's own WebSocket."
+        desc="Emulators and phones whose screens you can open in a panel."
       />
       {!loaded && <div className="settings-readonly-value">Loading…</div>}
       {loaded && devices.length > 0 && (
@@ -555,7 +555,7 @@ export function DevicesSection() {
                         // own "Settings owns no DockviewApi" reasoning above);
                         // DevicePane just goes on to show a disconnected/stopped
                         // state once its emulator/scrcpy session is torn down.
-                        title={`Stop ${device.name || device.avdName || device.serial} — its emulator/scrcpy session is torn down; any open panel for it shows disconnected instead of closing`}
+                        title={`Delete ${device.name || device.avdName || device.serial}. Its stream stops and any open panel shows it as disconnected.`}
                         onConfirm={() => remove(device)}
                         disabled={deleting[device.id] ?? false}
                       >
@@ -569,7 +569,7 @@ export function DevicesSection() {
                 <div style={{ padding: "8px 12px" }}>
                   <Row
                     label="New address"
-                    desc="From the phone's Developer options -> Wireless debugging screen — host:port, e.g. 192.168.1.23:37251. If the phone was un-paired and needs a fresh pairing code, delete this row and use Pair a phone or tablet below instead."
+                    desc="The IP address and port shown under Developer options → Wireless debugging on the phone. If the phone needs a new pairing code, delete it and pair it again."
                   >
                     <div className="settings-numberfield" style={{ width: 220 }}>
                       <input
@@ -631,7 +631,7 @@ export function DevicesSection() {
       )}
       {loaded && devices.length === 0 && !loadError && !createOpen && (
         <div style={{ fontSize: 11.5, color: "var(--dim)", marginTop: 10 }}>
-          No Android devices yet — pair a phone or create an emulator to open its screen from the
+          No Android devices yet. Pair a phone or create an emulator to open its screen from the
           sidebar.
         </div>
       )}
@@ -644,7 +644,7 @@ export function DevicesSection() {
             </div>
           )}
           {avdsLoaded && avds.length > 0 && (
-            <Row label="AVD name" desc="An AVD already provisioned on the host.">
+            <Row label="Virtual device" desc="An Android virtual device (AVD) on this host.">
               <Dropdown
                 options={avds.map((n) => ({ value: n, label: n }))}
                 value={avdName}
@@ -654,7 +654,7 @@ export function DevicesSection() {
           )}
           {avdsLoaded && !avdsError && avds.length === 0 && !newAvdOpen && (
             <div style={{ fontSize: 11.5, color: "var(--dim)", marginTop: 4 }}>
-              No AVDs on this host yet — create one below.
+              No virtual devices on this host yet. Create one below.
             </div>
           )}
           {avdsError && <ErrorText style={{ marginTop: 8 }}>{avdsError}</ErrorText>}
@@ -667,7 +667,10 @@ export function DevicesSection() {
 
           {newAvdOpen && (
             <div style={{ marginTop: 10 }}>
-              <Row label="New AVD name" desc="Letters, digits, '.', '_', and '-' only.">
+              <Row
+                label="New virtual device name"
+                desc="Letters, digits, periods, underscores, and hyphens only."
+              >
                 <div className="settings-numberfield" style={{ width: 220 }}>
                   <input
                     style={{ flex: 1, textAlign: "left", width: "auto" }}
@@ -695,10 +698,7 @@ export function DevicesSection() {
                 </div>
               )}
               {provisioningLoaded && systemImages.length > 0 && (
-                <Row
-                  label="System image"
-                  desc="An Android system image already installed on the host."
-                >
+                <Row label="System image" desc="An Android system image installed on this host.">
                   <Dropdown
                     options={systemImages.map((img) => ({
                       value: img.packagePath,
@@ -711,12 +711,11 @@ export function DevicesSection() {
               )}
               {provisioningLoaded && !createAvdError && systemImages.length === 0 && (
                 <div style={{ fontSize: 11.5, color: "var(--dim)", marginTop: 4 }}>
-                  No system images installed on this host — open “SDK system images” below and use
-                  Install to fetch one first.
+                  No system images installed. Install one under "SDK system images" below.
                 </div>
               )}
               {provisioningLoaded && deviceProfiles.length > 0 && (
-                <Row label="Device profile" desc="A hardware profile avdmanager knows about.">
+                <Row label="Device profile" desc="The hardware to emulate.">
                   <Dropdown
                     options={deviceProfiles.map((p) => ({ value: p, label: p }))}
                     value={selectedDeviceProfile}
@@ -726,8 +725,7 @@ export function DevicesSection() {
               )}
               {provisioningLoaded && !createAvdError && deviceProfiles.length === 0 && (
                 <div style={{ fontSize: 11.5, color: "var(--dim)", marginTop: 4 }}>
-                  No device profiles known to avdmanager on this host — check the SDK cmdline-tools
-                  install.
+                  No device profiles found. Check the Android SDK command-line tools installation.
                 </div>
               )}
               <div style={{ marginTop: 8 }}>
@@ -748,7 +746,7 @@ export function DevicesSection() {
           )}
 
           <div style={{ marginTop: 14 }}>
-            <Row label="Name" desc="Optional — falls back to the AVD name.">
+            <Row label="Name" desc="Optional. Defaults to the virtual device name.">
               <div className="settings-numberfield" style={{ width: 220 }}>
                 <input
                   style={{ flex: 1, textAlign: "left", width: "auto" }}
@@ -775,7 +773,7 @@ export function DevicesSection() {
       <div style={{ marginTop: 20 }}>
         <GroupHeading
           title="SDK system images"
-          desc="Install and manage Android system images from Google's repository. Required for creating AVDs."
+          desc="Install Android system images from Google. You need one to create a virtual device."
         />
 
         {!sdkImagesOpen && (
@@ -919,8 +917,8 @@ export function DevicesSection() {
       {showLicenseModal && (
         <Modal onClose={() => setShowLicenseModal(false)} title="Accept SDK licenses">
           <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 12 }}>
-            Some SDK packages require accepting Google's license agreements before installation.
-            This runs <code style={{ fontSize: 11 }}>yes | sdkmanager --licenses</code> on the host.
+            Some Android SDK packages require accepting Google's license agreements before they can
+            be installed. This accepts all pending SDK licenses on the host.
           </div>
           {licenseOp.status === "running" && (
             <div style={{ marginTop: 10 }}>

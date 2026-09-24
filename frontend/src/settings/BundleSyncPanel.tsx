@@ -41,9 +41,9 @@ const HAS_SESSION_FALLBACK: Record<AgentRuleAgent, boolean> = {
 
 const CLI_META: Record<AgentRuleAgent, { label: string; logoBinary: string }> = {
   "claude-code": { label: "Claude Code", logoBinary: "claude" },
-  codex: { label: "codex", logoBinary: "codex" },
+  codex: { label: "Codex", logoBinary: "codex" },
   opencode: { label: "opencode", logoBinary: "opencode" },
-  agy: { label: "agy", logoBinary: "agy" },
+  agy: { label: "Antigravity", logoBinary: "agy" },
 };
 
 function fieldDotClass(status: SyncStatus): "on" | "off" | "warn" | null {
@@ -83,12 +83,12 @@ function fieldNote(
   status: SyncStatus,
 ): string | null {
   if (status === "stale") {
-    return "Drifted since the last sync — a file was edited or deleted by hand. Re-sync now to fix.";
+    return "Changed since the last sync. Click Re-sync now to restore it.";
   }
   if (status === "not-synced") {
     return HAS_SESSION_FALLBACK[cli]
-      ? "Not synced to the global directory yet — this CLI still receives this content via a per-session fallback, so nothing is actually missing."
-      : `Nothing is currently delivered to this CLI's ${kind === "skills" ? "skills" : "agents"} — click Re-sync now.`;
+      ? "Not installed globally yet, but sessions still receive it. Nothing is missing."
+      : `No ${kind === "skills" ? "skills" : "agents"} delivered yet. Click Re-sync now.`;
   }
   return null;
 }
@@ -213,7 +213,7 @@ export function BundleSyncPanel() {
       .catch((err: unknown) => {
         setResyncError(
           err instanceof ApiError && err.statusCode === 409
-            ? "Bundle delivery is currently off — turn the toggle above back on before re-syncing."
+            ? "The tooling bundle is off. Turn it on above before re-syncing."
             : err instanceof Error
               ? err.message
               : String(err),
@@ -264,12 +264,8 @@ export function BundleSyncPanel() {
       <Row
         label="Bundle sync status"
         desc={
-          "What's actually installed on this host right now — this panel is" +
-          " never a precondition for the integration working; skills and" +
-          " agents sync automatically at boot regardless of whether this is" +
-          " ever opened. Use Re-sync now for troubleshooting (e.g. you" +
-          " deleted a synced file by hand) or impatience right after an" +
-          " upgrade."
+          "What's installed on this host. Syncing happens automatically at" +
+          " startup; use Re-sync now if a file was changed or removed."
         }
       >
         <div style={{ display: "flex", gap: 8 }}>
@@ -299,9 +295,8 @@ export function BundleSyncPanel() {
 
       {status && isOff && (
         <div className="bundle-sync-off-note">
-          Bundle delivery is off — turn "Inject Mullion tooling bundle" above back on to resume
-          syncing skills and agents into Claude Code, Codex, opencode, and agy's own global
-          directories.
+          The tooling bundle is off. Turn on "Inject Mullion tooling bundle" above to install skills
+          and agents again.
         </div>
       )}
 
@@ -336,12 +331,9 @@ export function BundleSyncPanel() {
       <div className="bundle-sync-remove-row">
         <div className="bundle-sync-remove-desc">
           {s.injectMullionBundle
-            ? "Removes every skill/agent file Mullion has synced to this host" +
-              " (plus known leftovers from older install shapes), and turns" +
-              " bundle delivery off until you re-enable the toggle above."
-            : "Bundle delivery is already off — this sweeps any skills," +
-              " agents, or older-shape leftovers Mullion may have left" +
-              " behind on this host."}
+            ? "Remove every skill and agent Mullion installed on this host, and" +
+              " turn the tooling bundle off."
+            : "Remove any skills and agents Mullion left on this host."}
         </div>
         <ConfirmButton
           title="Remove all Mullion-synced content from this host"

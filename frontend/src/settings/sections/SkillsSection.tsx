@@ -40,10 +40,8 @@ export function SkillsSection() {
   if (skills.length === 0) {
     return (
       <div className="settings-footer-note">
-        No skills, subagents, or slash commands found under any known Claude Code, Codex, opencode,
-        or agy directory on this host. Per-project ones (repo-local `.claude/skills`,
-        `.agents/skills`, `.claude/agents`, `.claude/commands`, etc.) show up in each project's own
-        Skills panel instead.
+        No global skills, subagents, or slash commands found for Claude Code, Codex, opencode, or
+        Antigravity on this host. Project-specific ones appear in each project's Skills panel.
       </div>
     );
   }
@@ -61,8 +59,8 @@ export function SkillsSection() {
         ))}
       </div>
       <div className="settings-footer-note">
-        Global and builtin skills, subagents, and slash commands only, resolved on this host.
-        Per-project ones show up in each project's own Skills panel.
+        Global and built-in skills, subagents, and slash commands on this host. Project-specific
+        ones appear in each project's Skills panel.
       </div>
     </>
   );

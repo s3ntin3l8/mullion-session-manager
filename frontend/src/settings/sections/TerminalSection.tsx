@@ -23,14 +23,14 @@ export function TerminalSection() {
   const t = settings.terminal;
   return (
     <>
-      <Row label="Terminal font" desc="Applies to xterm rendering." align="start">
+      <Row label="Font" desc="Typeface used in terminal panes." align="start">
         <Dropdown
           value={t.fontFamily}
           onChange={(v) => updateSettings({ terminal: { fontFamily: v } })}
           options={FONT_FAMILY_OPTIONS}
         />
       </Row>
-      <Row label="Font size" desc="Terminal glyph size in pixels.">
+      <Row label="Font size" desc="Text size in terminal panes.">
         <Slider
           min={10}
           max={20}
@@ -39,7 +39,7 @@ export function TerminalSection() {
           onChange={(v) => updateSettings({ terminal: { fontSize: v } })}
         />
       </Row>
-      <Row label="Pane padding" desc="Inset between the panel edge and terminal content.">
+      <Row label="Pane padding" desc="Space between the pane edge and the terminal text.">
         <Slider
           min={0}
           max={16}
@@ -65,7 +65,7 @@ export function TerminalSection() {
         />
       </div>
 
-      <Row label="Cursor style" desc="Shape of the terminal caret.">
+      <Row label="Cursor style" desc="Shape of the terminal cursor.">
         <Segmented
           value={t.cursorStyle}
           onChange={(v) => updateSettings({ terminal: { cursorStyle: v } })}
@@ -76,7 +76,7 @@ export function TerminalSection() {
           ]}
         />
       </Row>
-      <Row label="Cursor blink" desc="Blink the caret when a pane is focused.">
+      <Row label="Cursor blink" desc="Blink the cursor in the focused pane.">
         <Toggle
           on={t.cursorBlink}
           onChange={(v) => updateSettings({ terminal: { cursorBlink: v } })}
@@ -86,7 +86,7 @@ export function TerminalSection() {
       <div style={{ paddingTop: 6 }}>
         <GroupHeading title="Behavior" />
       </div>
-      <Row label="Scrollback" desc="Lines of history kept per pane in the browser.">
+      <Row label="Scrollback" desc="Lines of history kept per pane.">
         <NumberField
           value={t.scrollback}
           min={100}
@@ -95,7 +95,7 @@ export function TerminalSection() {
           onChange={(v) => updateSettings({ terminal: { scrollback: v } })}
         />
       </Row>
-      <Row label="Auto-reconnect on drop" desc="Re-attach the socket with exponential backoff.">
+      <Row label="Auto-reconnect" desc="Reconnect automatically when the connection drops.">
         <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
           <NumberField
             value={t.reconnect.maxAttempts}

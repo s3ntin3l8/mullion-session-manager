@@ -37,7 +37,7 @@ describe("Settings -> Skills", () => {
     );
     render(<Settings onClose={vi.fn()} initialSection="skills" />);
     expect(
-      await screen.findByText(/No skills, subagents, or slash commands found/),
+      await screen.findByText(/No global skills, subagents, or slash commands found/),
     ).toBeInTheDocument();
   });
 
