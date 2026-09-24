@@ -89,8 +89,8 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
       ? formatBranchLabel(displayBranch, gitStatus ? !gitStatus.isClean : false)
       : null;
 
-  // Unread notification-worthy events (issue #168) — shared with App.tsx's
-  // mobile pane bar via eventDescriptions.ts's unreadEventSummary (Hermes
+  // Unread notification-worthy events (issue #168) — shared with the phone
+  // session switcher (MobileSessionBar.tsx) via eventDescriptions.ts's unreadEventSummary (Hermes
   // review, PR #613), which is where the "bell wins over check when both are
   // present" note now lives.
   // #719 — when muted, suppress the tab's unread badge entirely (mirrors the

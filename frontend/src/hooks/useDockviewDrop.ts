@@ -59,8 +59,7 @@ export interface UseDockviewDropResult {
 // is already the mounted container by the time this effect's body executes,
 // no matter where in App.tsx's render body this hook was called from. App.tsx
 // still calls it at the exact position these three effects previously
-// occupied (right after the mobile pane bar's rename-cancel effect, right
-// before the global keyboard shortcuts effect) purely to keep the diff
+// occupied (right before the global keyboard shortcuts effect) purely to keep the diff
 // minimal and the file's effect ordering easy to audit — not because it's
 // required.
 export function useDockviewDrop({

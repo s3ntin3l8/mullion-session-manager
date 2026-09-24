@@ -324,8 +324,8 @@ function positioningForTier(
 // `terminal` component panel's params are actually `{ sessionId: number }`;
 // a sibling panel could in principle be a GitHubPanel/GitPanel/BrowserPanel
 // with no sessionId at all, so every caller must guard rather than assume.
-// Shared by PaneTab.tsx (the tab-group attention accent) and App.tsx's
-// mobile pane bar (item A.5 of the mobile UI/UX overhaul) so the two don't
+// Shared by PaneTab.tsx (the tab-group attention accent) and
+// MobileSessionBar.tsx (the phone session switcher) so the two don't
 // carry two copies of the same narrowing.
 export function panelSessionId(panel: IDockviewPanel): number | undefined {
   const id = panel.params?.sessionId;
@@ -430,7 +430,7 @@ export function openSessionPanel(
   const projectName = projects.find((p) => p.id === session.projectId)?.name ?? undefined;
   // See positioningForTier's own comment for the tier switch. Phone keeps
   // its existing bare add + maximizeGroup — it never has floating groups
-  // and relies on the single-group + mobile-tabs model, which an explicit
+  // and relies on the single-group + session-switcher model, which an explicit
   // position would break.
   const panel = api.addPanel({
     id: panelId,
@@ -770,7 +770,7 @@ export function stripMaximizedNode(serialized: SerializedDockview): SerializedDo
 // item A.2/A.3) — mirrors stripMaximizedNode's own reasoning one field over.
 // applyMobilePresentation below sets `group.header.hidden` so dockview's own
 // tab strip doesn't render a second, duplicate pane switcher underneath
-// App.tsx's `.mobile-tabs` bar. dockview-core serializes that as `hideHeader`
+// the phone session switcher (MobileSessionBar.tsx). dockview-core serializes that as `hideHeader`
 // on each leaf group node inside `grid.root` (DockviewGroupPanelModel.toJSON,
 // confirmed in the installed package) — left unstripped, mobile's hide would
 // poison a desktop restore exactly the way unstripped maximization did before
@@ -894,13 +894,13 @@ export function serializeForPersist(api: DockviewApi): SerializedDockview {
 // exit branches no-ops when already in the target state. `activePanel` (not
 // "the first panel" or "the last panel") is used as the maximize target
 // because after fromJSON() it's the panel the restored layout itself
-// designates as focused — the same one the mobile tab bar renders as active
+// designates as focused — the same one the phone session switcher shows as active
 // (see App.tsx's panel.id === activePanelId check) — so picking a different
 // panel would show one pane while highlighting a different tab.
 //
 // Mobile UI/UX overhaul, item A.2 — also syncs every group's `header.hidden`
 // to the current breakpoint, so dockview's own tab strip doesn't render
-// underneath App.tsx's `.mobile-tabs` bar (the reported "doubled" pane
+// alongside the phone session switcher (the reported "doubled" pane
 // switcher). Every group, not just the one about to be (de)maximized: a
 // workspace restored from a desktop-authored layout can have several groups,
 // and only one of them becomes the maximized/visible one here — the rest

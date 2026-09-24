@@ -32,7 +32,8 @@ import { useLayoutContext } from "./lib/layoutTier.js";
 
 // Mobile UI/UX overhaul, item A.4 (see .claude/plans/we-need-to-work-
 // iterative-planet.md) — the kill/rename/timeline/browser/promote overflow
-// menu, extracted out of PaneTab.tsx so App.tsx's mobile pane bar can reach
+// menu, extracted out of PaneTab.tsx so the phone session switcher
+// (MobileSessionBar.tsx) can reach
 // the same actions dockview's own tab strip offers, instead of stranding
 // them behind a header that's now hidden on phone (applyLayoutPresentation,
 // panelUtils.ts). PaneTab.tsx keeps its own inline double-click-to-rename
@@ -43,7 +44,7 @@ import { useLayoutContext } from "./lib/layoutTier.js";
 // hands PaneTab) rather than a resolved IDockviewPanel: DockviewPanelApi
 // already exposes everything armOrKill/rename need (`close()`, `setTitle()`,
 // `id`/`title`), so there's no reason to round-trip through
-// `containerApi.getPanel()` to get a fuller handle. App.tsx's mobile bar
+// `containerApi.getPanel()` to get a fuller handle. MobileSessionBar.tsx
 // passes `panel.api`/`panel.params` directly off its own `dockviewApi.panels`
 // list — the same shape, no adapter needed.
 const KILL_ARM_MS = 3000;
@@ -52,8 +53,7 @@ const KILL_ARM_SECONDS = KILL_ARM_MS / 1000;
 // A right-anchored fixed menu positioned from the trigger button's own
 // getBoundingClientRect() can run off the left edge on a narrow phone —
 // PaneTab's desktop tab strip never got close enough to the viewport edge
-// for this to matter, but the mobile bar's kebab, anchored near the bar's
-// own left edge, can. The re-clamp effect below measures the menu's actual
+// for this to matter, but a kebab on a phone can. The re-clamp effect below measures the menu's actual
 // rendered width after mount rather than hardcoding it here (Hermes review,
 // PR #613) — a hardcoded constant would silently drift out of sync with
 // `.pane-tab-overflow-menu`'s CSS width the next time that changes.
@@ -69,7 +69,7 @@ export interface PaneActionsMenuProps {
   // actual rename affordance and this component just invoke it, rather than
   // duplicating a second rename UI here.
   onRename: () => void;
-  // "pane-tab-btn" (desktop tab strip) vs the mobile bar's own trigger class
+  // "pane-tab-btn" (desktop tab strip) vs the phone session sheet's class
   // — both use the same OverflowIcon glyph, only the surrounding button
   // chrome differs by breakpoint.
   triggerClassName: string;
@@ -283,9 +283,20 @@ export function PaneActionsMenu({
     const menu = overflowMenuRef.current;
     if (!menu) return;
     const rect = menu.getBoundingClientRect();
-    if (rect.left >= VIEWPORT_MARGIN_PX) return;
-    const overflowBy = VIEWPORT_MARGIN_PX - rect.left;
-    setOverflowPos((pos) => (pos ? { ...pos, right: pos.right + overflowBy } : pos));
+    const overflowBy = rect.left < VIEWPORT_MARGIN_PX ? VIEWPORT_MARGIN_PX - rect.left : 0;
+    // A trigger near the bottom of the viewport (the phone session sheet's
+    // active row, MobileSessionSwitcher.tsx) would drop the menu off-screen —
+    // flip it above the trigger instead, clamped to the top margin (the
+    // menu's own max-height below keeps it scrollable if even that can't fit).
+    let flippedTop: number | null = null;
+    if (rect.bottom > window.innerHeight - VIEWPORT_MARGIN_PX) {
+      const trigger = overflowBtnRef.current?.getBoundingClientRect();
+      if (trigger) flippedTop = Math.max(VIEWPORT_MARGIN_PX, trigger.top - 4 - rect.height);
+    }
+    if (overflowBy === 0 && flippedTop === null) return;
+    setOverflowPos((pos) =>
+      pos ? { top: flippedTop ?? pos.top, right: pos.right + overflowBy } : pos,
+    );
   }, [overflowOpen]);
 
   // Read fresh on every open, not memoized — dockview's own group layout is
@@ -326,7 +337,13 @@ export function PaneActionsMenu({
             // menu renders with a transparent background instead of falling
             // back to the theme.
             className={`cmux-root${theme === "light" ? " light" : ""} pane-tab-overflow-menu`}
-            style={{ position: "fixed", top: overflowPos.top, right: overflowPos.right }}
+            style={{
+              position: "fixed",
+              top: overflowPos.top,
+              right: overflowPos.right,
+              maxHeight: `calc(100dvh - ${2 * VIEWPORT_MARGIN_PX}px)`,
+              overflowY: "auto",
+            }}
             role="menu"
             aria-label={`${api.title ?? "Pane"} actions`}
             onKeyDown={onMenuKeyDown}
@@ -335,7 +352,7 @@ export function PaneActionsMenu({
                 unconditionally like "Move" below. On desktop this component
                 only ever mounted for terminal panels (PaneTab.tsx's
                 tabComponents mapping), so `session` was always present and
-                this never mattered; App.tsx's mobile bar now renders this
+                this never mattered; the phone session switcher now renders this
                 menu for every panel type, including timeline/Agent-Browser/
                 task-detail panels whose params carry no plain `sessionId`
                 (timeline's is `sessionIds`, plural). Ungated, Rename opened

@@ -262,8 +262,8 @@ export function useWorkspacePersistence({
 
   // Any real layout change (add/remove/move panel, or a splitter-drag
   // resize) schedules a debounced autosave, unless it's the restore
-  // effect's own echo. Also bumps panelsVersion so the toolbar/mobile-tabs
-  // pane count/list re-render (dockview's own panel list isn't otherwise
+  // effect's own echo. Also bumps panelsVersion so the toolbar pane count and
+  // phone session list re-render (dockview's own panel list isn't otherwise
   // reactive from React's perspective).
   useEffect(() => {
     if (!dockviewApi || activeWorkspaceId === null) return;

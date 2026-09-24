@@ -1624,7 +1624,7 @@ describe("applyLayoutPresentation (issue #85; tri-state as of tablet tier plan, 
 
   // Mobile UI/UX overhaul, item A.2 — the fix for the reported "doubled pane
   // switcher": dockview's own tab strip must not render alongside App.tsx's
-  // .mobile-tabs bar. Every group, not just the one being (de)maximized — a
+  // phone session switcher. Every group, not just the one being (de)maximized — a
   // desktop-authored layout can have several groups, and only one becomes
   // the maximized/visible one here (see applyLayoutPresentation's own
   // comment on why).

@@ -222,3 +222,21 @@
   color: var(--muted);
   background: color-mix(in srgb, var(--fg) 8%, transparent);
 }
+
+/* Phone-only (mobile.css shows them): the session switcher slot between the
+   lead icons and the actions, and the ⋯ app menu that holds the actions the
+   phone toolbar has no room for. */
+.toolbar-mobile-session {
+  display: none;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+}
+.toolbar-app-menu {
+  display: none;
+}
+.toolbar-app-menu .kebab-trigger-btn {
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+}

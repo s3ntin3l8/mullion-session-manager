@@ -129,3 +129,41 @@ describe("Toolbar — Tasks view (viewMode === kanban)", () => {
     expect(NOOP_PROPS.onOpenLauncher).not.toHaveBeenCalled();
   });
 });
+
+describe("Toolbar — phone session switcher slot and app menu", () => {
+  it("renders the mobile session slot outside Task view", () => {
+    render(<Toolbar {...NOOP_PROPS} mobileSessionSlot={<span>switcher</span>} />);
+    expect(screen.getByText("switcher")).toBeInTheDocument();
+  });
+
+  it("hides the mobile session slot in Task view", () => {
+    viewMode = "kanban";
+    render(<Toolbar {...NOOP_PROPS} mobileSessionSlot={<span>switcher</span>} />);
+    expect(screen.queryByText("switcher")).toBeNull();
+  });
+
+  it("offers new session, theme and settings from the ⋯ app menu", async () => {
+    const onOpenLauncher = vi.fn();
+    const onOpenSettings = vi.fn();
+    render(
+      <Toolbar
+        {...NOOP_PROPS}
+        currentVersion="0.3.29"
+        onOpenLauncher={onOpenLauncher}
+        onOpenSettings={onOpenSettings}
+      />,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByTitle("Menu"));
+    await user.click(screen.getByText("New session"));
+    expect(onOpenLauncher).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByTitle("Menu"));
+    await user.click(screen.getByText("Light theme"));
+    expect(toggleTheme).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByTitle("Menu"));
+    await user.click(screen.getByText("Settings · v0.3.29"));
+    expect(onOpenSettings).toHaveBeenCalledTimes(1);
+  });
+});
