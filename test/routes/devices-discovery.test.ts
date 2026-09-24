@@ -71,22 +71,25 @@ describe("devices discovery + pair-and-connect routes", () => {
   ): void {
     const discovery = app.deviceDiscovery as DeviceDiscoveryService;
     const host = payload.host ?? "192.168.1.23";
+    const name = payload.name ?? "Pixel 7";
     if (payload.pairingPort !== undefined) {
       discovery.__debugHandleServiceForTest("_adb-tls-pairing._tcp", {
-        name: payload.name ?? "Pixel 7",
+        name,
         type: "_adb-tls-pairing._tcp",
+        fqdn: `${name}._adb-tls-pairing._tcp.local`,
         host,
         port: payload.pairingPort,
-        txt: { name: payload.name ?? "Pixel 7" },
+        txt: { name },
       });
     }
     if (payload.connectPort !== undefined) {
       discovery.__debugHandleServiceForTest("_adb-tls-connect._tcp", {
-        name: payload.name ?? "Pixel 7",
+        name,
         type: "_adb-tls-connect._tcp",
+        fqdn: `${name}._adb-tls-connect._tcp.local`,
         host,
         port: payload.connectPort,
-        txt: { name: payload.name ?? "Pixel 7" },
+        txt: { name },
       });
     }
     // Touch `id` so unused-arg lints don't complain when the test
@@ -277,7 +280,7 @@ describe("devices discovery + pair-and-connect routes", () => {
       expect(getOrCreate).toHaveBeenCalledTimes(1);
     });
 
-    it("surfaces a pair() failure as 400 without inserting a row", async () => {
+    it("surfaces a pair() failure as 400 and rolls back the row so a retry can succeed", async () => {
       const app = await buildTestApp();
       seedDiscovery(app, { name: "Pixel 7", pairingPort: 41234, connectPort: 37251 });
       vi.spyOn(app.device, "pair").mockRejectedValueOnce(new Error("wrong code"));
@@ -289,6 +292,13 @@ describe("devices discovery + pair-and-connect routes", () => {
       expect(res.statusCode).toBe(400);
       expect(res.json().message).toContain("wrong code");
 
+      // Row is rolled back: a wrong code is the common typo case and the
+      // user will immediately retry — leaving the row would make that
+      // retry hit the collision guard with a confusing 409. The insert
+      // still happened BEFORE the await pair() (closing the double-click
+      // race), and the rollback is synchronous after the guard has either
+      // let a concurrent request through (it inserted its own row) or
+      // 409'd it.
       const list = await app.inject({ method: "GET", url: "/api/devices" });
       expect(list.json()).toEqual([]);
     });
@@ -336,6 +346,94 @@ describe("devices discovery + pair-and-connect routes", () => {
       expect(getOrCreate).toHaveBeenCalledWith(
         expect.objectContaining({ serial: "192.168.1.23:55555" }),
       );
+    });
+
+    it("rejects a cached pairingAddress that fails isValidDeviceAddress, evicts the entry, and 400s (W1 on #1381)", async () => {
+      const app = await buildTestApp();
+      // Seed with a literal IPv6 host: resolveHost falls back to
+      // service.host when addresses[] is empty, so the grouped
+      // pairingAddress becomes "fe80::1:41234" — which
+      // DEVICE_ADDRESS_PATTERN rejects (the host part contains `:`).
+      // DeviceManager.pair()'s doc says the route validates before pair()
+      // is reached — that must hold on the cached branch too, or the `:`
+      // in `host:pair:<code>:<address>` framing gets corrupted.
+      seedDiscovery(app, {
+        name: "Pixel 7",
+        host: "fe80::1",
+        pairingPort: 41234,
+        connectPort: 37251,
+      });
+      const discovery = app.deviceDiscovery as DeviceDiscoveryService;
+      expect(discovery.getById("fe80::1")?.pairingAddress).toBe("fe80::1:41234");
+
+      const pair = vi.spyOn(app.device, "pair");
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/devices/pair-and-connect",
+        payload: { discoveryId: "fe80::1", pairingCode: "123456" },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().message).toContain("invalid address");
+      expect(pair).not.toHaveBeenCalled();
+      // The poisoned entry was evicted so the next picker open gets a
+      // fresh scan rather than the same bad data.
+      expect(discovery.getById("fe80::1")).toBeUndefined();
+      expect(discovery.getDiscovered()).toEqual([]);
+    });
+
+    it("rejects a cached connectAddress that fails isValidDeviceAddress (W1 on #1381)", async () => {
+      const app = await buildTestApp();
+      // Connect-only entry (no pairing service) with an IPv6 host — the
+      // connectAddress fails validation even though pairingAddress is
+      // undefined (nothing to validate there).
+      seedDiscovery(app, {
+        name: "Pixel 7",
+        host: "fe80::1",
+        connectPort: 37251,
+      });
+      const discovery = app.deviceDiscovery as DeviceDiscoveryService;
+      expect(discovery.getById("fe80::1")?.connectAddress).toBe("fe80::1:37251");
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/devices/pair-and-connect",
+        payload: { discoveryId: "fe80::1", pairingCode: "123456" },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().message).toContain("invalid address");
+      expect(discovery.getById("fe80::1")).toBeUndefined();
+    });
+
+    it("concurrent double-click yields exactly one 201 and one 409, never two rows (W3 on #1381)", async () => {
+      const app = await buildTestApp();
+      seedDiscovery(app, { name: "Pixel 7", pairingPort: 41234, connectPort: 37251 });
+
+      // Block pair() on a deferred promise so both requests are in flight
+      // simultaneously — request A inserts its row (sync, before await
+      // pair), then B's synchronous collision guard finds it and 409s.
+      let releasePair!: () => void;
+      const pairGate = new Promise<void>((resolve) => {
+        releasePair = resolve;
+      });
+      vi.spyOn(app.device, "pair").mockImplementation(async () => {
+        await pairGate;
+        return undefined;
+      });
+      vi.spyOn(app.device, "getOrCreate").mockResolvedValue({} as never);
+
+      const payload = { discoveryId: "192.168.1.23", pairingCode: "123456" };
+      const reqA = app.inject({ method: "POST", url: "/api/devices/pair-and-connect", payload });
+      // Give A a tick to pass the guard + insert + reach the blocked pair().
+      await new Promise((r) => setTimeout(r, 10));
+      const reqB = app.inject({ method: "POST", url: "/api/devices/pair-and-connect", payload });
+      const [resB] = await Promise.all([reqB]);
+      expect(resB.statusCode).toBe(409);
+      releasePair();
+      const [resA] = await Promise.all([reqA]);
+      expect(resA.statusCode).toBe(201);
+
+      const list = await app.inject({ method: "GET", url: "/api/devices" });
+      expect(list.json()).toHaveLength(1);
     });
   });
 

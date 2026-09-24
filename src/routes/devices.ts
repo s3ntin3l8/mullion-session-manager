@@ -348,6 +348,34 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
           `discoveryId ${JSON.stringify(discoveryId)} is no longer in the discovery cache — re-open the picker`,
         );
       }
+      // DeviceManager.pair()'s own doc states "address/password are
+      // validated by the route before this is reached" — that invariant
+      // must hold on the cached branch too, not just the manual one below.
+      // A poisoned cache entry (e.g. an IPv6 literal that slipped past
+      // resolveHost, or a stale hostname:port that no longer parses) would
+      // otherwise reach wireless.pair()'s `host:pair:<code>:<address>`
+      // framing and corrupt it on the `:` separators. Evict so the next
+      // picker open gets a fresh scan rather than the same bad data.
+      if (cached.pairingAddress !== undefined && !isValidDeviceAddress(cached.pairingAddress)) {
+        app.deviceDiscovery.evict(discoveryId);
+        app.log.warn(
+          { discoveryId, pairingAddress: cached.pairingAddress },
+          "discovery cache contained an invalid pairingAddress — evicted",
+        );
+        return reply.badRequest(
+          "discovery cache contains an invalid address — re-open the picker to refresh",
+        );
+      }
+      if (cached.connectAddress !== undefined && !isValidDeviceAddress(cached.connectAddress)) {
+        app.deviceDiscovery.evict(discoveryId);
+        app.log.warn(
+          { discoveryId, connectAddress: cached.connectAddress },
+          "discovery cache contained an invalid connectAddress — evicted",
+        );
+        return reply.badRequest(
+          "discovery cache contains an invalid address — re-open the picker to refresh",
+        );
+      }
       resolvedPairing = cached.pairingAddress;
       resolvedConnect = cached.connectAddress;
       // User-supplied `connectAddress` overrides the cached one — useful
@@ -380,11 +408,18 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
       );
     }
 
-    // Address-collision guard — copied verbatim from POST /api/devices's
-    // own kind:"physical" branch above. Two rows racing for the same
-    // serial would otherwise each spin up their own scrcpy against the
-    // same live device, since connectPhysical()'s AlreadyConnectedError
-    // handling is correct-but-permissive for the restart-reattach case.
+    // Address-collision guard — same reasoning as POST /api/devices's own
+    // kind:"physical" branch above: two rows racing for the same serial
+    // would each spin up their own scrcpy against the same live device,
+    // since connectPhysical()'s AlreadyConnectedError handling is
+    // correct-but-permissive for the restart-reattach case. The INSERT
+    // below is synchronous (better-sqlite3) with no `await` between this
+    // check and it, so a concurrent double-click can't interleave — the
+    // second request finds the row and gets 409. Insert the row FIRST
+    // (intent), then attempt pair(): if pair() fails the row stays (same
+    // no-rollback posture as POST /api/devices), and the collision guard
+    // remains airtight because there's still no `await` between check and
+    // insert.
     const [existingActive] = app.db
       .select({ id: devices.id })
       .from(devices)
@@ -401,6 +436,18 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
         `device ${existingActive.id} is already active for address ${resolvedConnect}`,
       );
     }
+
+    const [row] = app.db
+      .insert(devices)
+      .values({
+        kind: "physical",
+        serial: resolvedConnect,
+        avdName: null,
+        projectId: null,
+        name: name ?? null,
+      })
+      .returning()
+      .all();
 
     // Pairing is attempted UNLESS we have evidence the phone is NOT in
     // pairing mode: the discovery cache saw the connect service for this
@@ -424,37 +471,32 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
     // `resolvedPairing` is `string | undefined` because it can be unset in
     // the cached connect-only case, but we only reach the pair() call when
     // it's been validated upstream — the narrowing is per-branch:
-    const discoveryEntry =
-      typeof discoveryId === "string" && discoveryId.length > 0
-        ? app.deviceDiscovery.getById(discoveryId)
-        : undefined;
     const skipPairBecauseCachedConnectOnly =
-      discoveryEntry !== undefined && discoveryEntry.pairingAddress === undefined;
+      resolvedPairing === undefined && typeof discoveryId === "string" && discoveryId.length > 0;
     if (!skipPairBecauseCachedConnectOnly) {
       // Both branches leading here guarantee a pairing address:
       //   - manual mode → resolvedPairing came from the user's
       //     `pairingAddress` (validated at the top of this handler)
       //   - discovery mode with a pairing service → resolvedPairing came
-      //     from the cache's `pairingAddress` (which is what triggered
-      //     `!skipPairBecauseCachedConnectOnly`).
+      //     from the cache's `pairingAddress`, which was validated by
+      //     isValidDeviceAddress above before being assigned.
       try {
         await app.device.pair(resolvedPairing as string, pairingCode);
       } catch (err) {
+        // Roll back the row we just inserted: a wrong code is the most
+        // common failure (typo) and the user will immediately retry —
+        // leaving the row would make that retry hit the collision guard
+        // with a confusing 409 instead of re-attempting pair(). The
+        // delete is synchronous; by the time pair() has rejected, any
+        // concurrent request has already either received 409 (the row
+        // existed when its synchronous guard ran) or inserted its own row
+        // before ours landed — either way this delete only removes OUR
+        // row and doesn't reopen the race the insert-before-pair ordering
+        // closed.
+        app.db.delete(devices).where(eq(devices.id, row.id)).run();
         return reply.badRequest(err instanceof Error ? err.message : String(err));
       }
     }
-
-    const [row] = app.db
-      .insert(devices)
-      .values({
-        kind: "physical",
-        serial: resolvedConnect,
-        avdName: null,
-        projectId: null,
-        name: name ?? null,
-      })
-      .returning()
-      .all();
 
     try {
       await app.device.getOrCreate({

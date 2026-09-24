@@ -62,13 +62,19 @@ function emitUp(
     host: string;
     port: number;
     txt?: Record<string, string>;
+    addresses?: string[];
+    /** Stable fqdn — derived from name+type when omitted, matching what
+     * bonjour-service surfaces from the SRV record. */
+    fqdn?: string;
   },
 ): void {
   service.__debugHandleServiceForTest(type, {
     name: payload.name,
     type,
+    fqdn: payload.fqdn ?? `${payload.name}.${type}.local`,
     host: payload.host,
     port: payload.port,
+    addresses: payload.addresses,
     txt: payload.txt,
   });
 }
@@ -76,9 +82,15 @@ function emitUp(
 function emitDown(
   service: DeviceDiscoveryService,
   type: string,
-  payload: { name: string; host: string; port: number },
+  payload: { name: string; host: string; port: number; fqdn?: string },
 ): void {
-  service.__debugHandleDownForTest(type, payload);
+  service.__debugHandleDownForTest(type, {
+    name: payload.name,
+    type,
+    fqdn: payload.fqdn ?? `${payload.name}.${type}.local`,
+    host: payload.host,
+    port: payload.port,
+  });
 }
 
 describe("DeviceDiscoveryService", () => {
@@ -127,6 +139,7 @@ describe("DeviceDiscoveryService", () => {
       svc.__debugHandleServiceForTest("_adb-tls-pairing._tcp", {
         name: "Pixel",
         type: "_adb-tls-pairing._tcp",
+        fqdn: "Pixel._adb-tls-pairing._tcp.local",
         host: "Android.local",
         port: 41234,
         addresses: ["192.168.1.42", "fe80::1ff:fe23:4567:890a"],
@@ -145,6 +158,7 @@ describe("DeviceDiscoveryService", () => {
       svc.__debugHandleServiceForTest("_adb-tls-pairing._tcp", {
         name: "Pixel",
         type: "_adb-tls-pairing._tcp",
+        fqdn: "Pixel._adb-tls-pairing._tcp.local",
         host: "Android.local",
         port: 41234,
         addresses: ["fe80::1ff:fe23:4567:890a", "192.168.1.42"],
@@ -154,21 +168,23 @@ describe("DeviceDiscoveryService", () => {
       svc.stop();
     });
 
-    it("falls back to the first addresses[] entry when no IPv4 is present", () => {
-      // IPv6-only deployment — uncommon for Android adb-over-TCP today,
-      // but the fallback shouldn't crash and shouldn't reach for the
-      // `.local` hostname either.
+    it("skips the entry when addresses[] has entries but NONE is IPv4 (W2 on #1381 — an IPv6 literal is not dialable by Android's IPv4-only adb listener and would be rejected by DEVICE_ADDRESS_PATTERN)", () => {
       const svc = new DeviceDiscoveryService({ enabled: true });
       svc.start();
       svc.__debugHandleServiceForTest("_adb-tls-pairing._tcp", {
         name: "Pixel",
         type: "_adb-tls-pairing._tcp",
+        fqdn: "Pixel._adb-tls-pairing._tcp.local",
         host: "Android.local",
         port: 41234,
         addresses: ["fe80::1ff:fe23:4567:890a"],
         txt: {},
       });
-      expect(svc.getDiscovered()[0].host).toBe("fe80::1ff:fe23:4567:890a");
+      // No IPv4 in addresses → resolveHost returns undefined → the entry
+      // is never cached (getDiscovered stays empty). This contradicts the
+      // old addresses[0] fallback, which produced
+      // "fe80::…:41234" — a value DEVICE_ADDRESS_PATTERN rejects.
+      expect(svc.getDiscovered()).toEqual([]);
       svc.stop();
     });
 
@@ -178,6 +194,7 @@ describe("DeviceDiscoveryService", () => {
       svc.__debugHandleServiceForTest("_adb-tls-pairing._tcp", {
         name: "Pixel",
         type: "_adb-tls-pairing._tcp",
+        fqdn: "Pixel._adb-tls-pairing._tcp.local",
         host: "192.168.1.55",
         port: 41234,
         // No addresses — only the hostname resolved so far.
@@ -187,12 +204,54 @@ describe("DeviceDiscoveryService", () => {
       svc.stop();
     });
 
+    it("re-keys from hostname to IPv4 when the A-record lands (srv-update), emitting down for the old host and up for the new (W4 on #1381)", () => {
+      const changes: Array<{ kind: string; id?: string; host?: string }> = [];
+      const svc = new DeviceDiscoveryService({
+        enabled: true,
+        onChange: (change) => {
+          if (change.kind === "down") changes.push({ kind: change.kind, id: change.id });
+          else changes.push({ kind: change.kind, host: change.device.host });
+        },
+      });
+      svc.start();
+      // First event: no A-record yet → hostname fallback.
+      emitUp(svc, "_adb-tls-pairing._tcp", {
+        name: "Pixel",
+        host: "Android.local",
+        port: 41234,
+        addresses: [],
+      });
+      expect(svc.getDiscovered()[0].host).toBe("Android.local");
+      // srv-update: A-record arrives → resolveHost now returns the IPv4.
+      // The cache is keyed by fqdn, so this updates the SAME record; the
+      // grouped view re-keys from hostname to IP. Consumers see down for
+      // the phantom hostname entry and up for the dialable IP.
+      emitUp(svc, "_adb-tls-pairing._tcp", {
+        name: "Pixel",
+        host: "Android.local",
+        port: 41234,
+        addresses: ["192.168.1.42"],
+      });
+      expect(svc.getDiscovered()[0]).toMatchObject({
+        id: "192.168.1.42",
+        host: "192.168.1.42",
+        pairingAddress: "192.168.1.42:41234",
+      });
+      expect(changes).toEqual([
+        { kind: "up", host: "Android.local" },
+        { kind: "down", id: "Android.local" },
+        { kind: "up", host: "192.168.1.42" },
+      ]);
+      svc.stop();
+    });
+
     it("ignores invalid IPv4-shaped entries (out-of-range octets)", () => {
       const svc = new DeviceDiscoveryService({ enabled: true });
       svc.start();
       svc.__debugHandleServiceForTest("_adb-tls-pairing._tcp", {
         name: "Pixel",
         type: "_adb-tls-pairing._tcp",
+        fqdn: "Pixel._adb-tls-pairing._tcp.local",
         host: "Android.local",
         port: 41234,
         addresses: ["999.1.1.1", "not-an-ip", "192.168.1.42"],
@@ -449,6 +508,28 @@ describe("DeviceDiscoveryService", () => {
       expect(svc.getById("nope")).toBeUndefined();
       svc.stop();
     });
+
+    it("evict(id) drops every service record whose resolved host is id (W1's cache-poisoning escape hatch)", () => {
+      const svc = new DeviceDiscoveryService({ enabled: true });
+      svc.start();
+      emitUp(svc, "_adb-tls-pairing._tcp", {
+        name: "Pixel",
+        host: "192.168.1.23",
+        port: 41234,
+      });
+      emitUp(svc, "_adb-tls-connect._tcp", {
+        name: "Pixel",
+        host: "192.168.1.23",
+        port: 37251,
+      });
+      expect(svc.getDiscovered()).toHaveLength(1);
+      svc.evict("192.168.1.23");
+      expect(svc.getDiscovered()).toEqual([]);
+      // Evicting an unknown id is a no-op.
+      svc.evict("10.0.0.99");
+      expect(svc.getDiscovered()).toEqual([]);
+      svc.stop();
+    });
   });
 
   describe("lifecycle (pre-existing coverage)", () => {
@@ -472,6 +553,23 @@ describe("DeviceDiscoveryService", () => {
       svc.stop();
       expect(destroyCalls).toHaveBeenCalledTimes(1);
       expect(stopCalls).toHaveBeenCalled();
+    });
+
+    it("start() after stop() constructs a FRESH Bonjour instance (stop() nulls this.bonjour — S5 on #1381)", () => {
+      // On bonjour-service@1.4.4, find() after destroy() returns a Browser
+      // on an already-closed socket without throwing — discovery would go
+      // silently dead. Nulling this.bonjour in stop() forces a new
+      // construction on the next start().
+      const svc = new DeviceDiscoveryService({ enabled: true });
+      svc.start();
+      expect(findCalls).toHaveLength(2);
+      svc.stop();
+      expect(destroyCalls).toHaveBeenCalledTimes(1);
+      svc.start();
+      // Two more find() calls — one per type — against a NEW instance.
+      expect(findCalls).toHaveLength(4);
+      svc.stop();
+      expect(destroyCalls).toHaveBeenCalledTimes(2);
     });
   });
 });
