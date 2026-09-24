@@ -18,6 +18,12 @@ import type {
   TabletPaneCap,
 } from "../shared/types.js";
 import { WORKFLOW_CONVENTION_QUESTIONS } from "./workflow-conventions.js";
+import {
+  resolveGitHubPoll,
+  resolveHeartbeatSeconds,
+  resolveLogLevel,
+  toActivityIntervals,
+} from "./runtime-config.js";
 
 export type { Theme, CursorStyle, SidebarDensity, SoundName, LayoutMode, TabletPaneCap };
 
@@ -36,6 +42,9 @@ export type { Theme, CursorStyle, SidebarDensity, SoundName, LayoutMode, TabletP
 // migration, and `mergeSettings` deep-merges a stored (possibly older,
 // missing-keys) blob over these defaults so a fresh key introduced by a
 // later release always resolves instead of coming back `undefined`.
+
+export const LOG_LEVELS = ["fatal", "error", "warn", "info", "debug", "trace"] as const;
+export type LogLevel = (typeof LOG_LEVELS)[number];
 
 export interface AppSettings {
   theme: Theme;
@@ -417,6 +426,27 @@ export interface AppSettings {
   // (src/services/task-model-resolve.ts). `null` means "no override; let
   // opencode pick via its own priority chain (last-used / first model)" —
   // today's behavior, unchanged.
+  // Runtime overrides for env-configured behaviour knobs. Same sentinel
+  // shape as taskMaster below: -1 / "inherit" means "use the env default"
+  // (resolved in services/runtime-config.ts), anything else wins over it.
+  github: {
+    // GITHUB_POLL_INTERVAL_ACTIVE / _QUIET / GITHUB_POLL_STALE_THRESHOLD.
+    pollActiveSeconds: number;
+    pollQuietSeconds: number;
+    pollStaleThresholdSeconds: number;
+  };
+  hosts: {
+    // HOST_HEARTBEAT_INTERVAL_SECONDS. 0 disables the heartbeat.
+    heartbeatSeconds: number;
+  };
+  browser: {
+    // BROWSER_FRAMERATE. Applied to the next browser stream that opens.
+    framerate: number;
+  };
+  server: {
+    // LOG_LEVEL. Applied live to the root logger.
+    logLevel: "inherit" | LogLevel;
+  };
   opencode: {
     implementerModel: string | null;
     reviewerModel: string | null;
@@ -521,6 +551,20 @@ export const DEFAULT_SETTINGS: AppSettings = {
     defaultAgent: "claude",
     hiddenAgents: [],
     skipPermissionsAgents: [],
+  },
+  github: {
+    pollActiveSeconds: -1,
+    pollQuietSeconds: -1,
+    pollStaleThresholdSeconds: -1,
+  },
+  hosts: {
+    heartbeatSeconds: -1,
+  },
+  browser: {
+    framerate: -1,
+  },
+  server: {
+    logLevel: "inherit",
   },
   opencode: {
     implementerModel: null,
@@ -895,6 +939,47 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
         fallback: DEFAULT_SETTINGS.sessions.maxChildSessionsPerParent,
       }),
     },
+    // -1 = inherit from the env var. The floors keep a stray small value
+    // from hammering the GitHub API; a value below the floor clamps up.
+    github: {
+      pollActiveSeconds: safeSentinelNumber(settings.github.pollActiveSeconds, {
+        sentinel: -1,
+        min: 5,
+        max: 3600,
+      }),
+      pollQuietSeconds: safeSentinelNumber(settings.github.pollQuietSeconds, {
+        sentinel: -1,
+        min: 5,
+        max: 3600,
+      }),
+      pollStaleThresholdSeconds: safeSentinelNumber(settings.github.pollStaleThresholdSeconds, {
+        sentinel: -1,
+        min: 30,
+        max: 86400,
+      }),
+    },
+    // -1 = inherit; 0 is a real "heartbeat off" value, matching the env var.
+    hosts: {
+      heartbeatSeconds: safeSentinelNumber(settings.hosts.heartbeatSeconds, {
+        sentinel: -1,
+        min: 0,
+        max: 3600,
+      }),
+    },
+    browser: {
+      framerate: safeSentinelNumber(settings.browser.framerate, {
+        sentinel: -1,
+        min: 1,
+        max: 30,
+      }),
+    },
+    server: {
+      logLevel:
+        settings.server.logLevel === "inherit" ||
+        (LOG_LEVELS as readonly string[]).includes(settings.server.logLevel)
+          ? settings.server.logLevel
+          : DEFAULT_SETTINGS.server.logLevel,
+    },
     taskMaster: {
       ...settings.taskMaster,
       enabled:
@@ -1036,6 +1121,19 @@ export function applySettingsPatch(
     next.sessions.eventPersistence !== previous.sessions.eventPersistence
   ) {
     app.reconfigureEventRetention();
+  }
+  if (
+    next.github.pollActiveSeconds !== previous.github.pollActiveSeconds ||
+    next.github.pollQuietSeconds !== previous.github.pollQuietSeconds ||
+    next.github.pollStaleThresholdSeconds !== previous.github.pollStaleThresholdSeconds
+  ) {
+    app.githubActivityTracker?.setIntervals(toActivityIntervals(resolveGitHubPoll(next, app)));
+  }
+  if (next.hosts.heartbeatSeconds !== previous.hosts.heartbeatSeconds) {
+    app.reconfigureHostHeartbeat?.(resolveHeartbeatSeconds(next, app));
+  }
+  if (next.server.logLevel !== previous.server.logLevel) {
+    app.log.level = resolveLogLevel(next, app);
   }
   // Issue #1128 — fans out a re-enable to every registered agent host on
   // the injectMullionBundle false->true edge — see plugins/bundle-sync.ts's

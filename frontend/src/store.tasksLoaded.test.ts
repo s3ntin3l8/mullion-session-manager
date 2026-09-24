@@ -1,6 +1,10 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { useDashboardStore, clearTaskMasterEnvCacheForTests } from "./store/index.js";
+import {
+  useDashboardStore,
+  clearTaskMasterEnvCacheForTests,
+  FALLBACK_RUNTIME_ENV,
+} from "./store/index.js";
 import { api } from "./api/index.js";
 import type { ServerInfo } from "./api/index.js";
 
@@ -25,10 +29,13 @@ const SERVER_INFO: ServerInfo = {
     maxConcurrent: 2,
     budgetMinutes: 120,
     progressCommentMinutes: 15,
+    rateLimitGraceMinutes: 5,
     skipPermissions: false,
     issueLabel: "mullion-task",
     pollIntervalSeconds: 60,
   },
+  runtimeEnv: FALLBACK_RUNTIME_ENV,
+  features: { browser: false, devices: false, deviceDiscovery: true },
 };
 
 // UnifiedBoard.tsx's "No tasks yet." empty state (tasks.length === 0) needs

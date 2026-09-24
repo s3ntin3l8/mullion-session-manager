@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { FastifyInstance } from "fastify";
+import type * as SettingsModule from "../../src/services/settings.js";
 
 const mockGetRepoPRsStatus = vi.hoisted(() => vi.fn());
 const mockResolveGitHubToken = vi.hoisted(() => vi.fn());
@@ -45,6 +46,13 @@ vi.mock("../../src/services/remote-host-client.js", () => ({
     }
   },
 }));
+
+// The poller reads its intervals through the settings row (env defaults,
+// overridable from Settings → Integrations); this mock app has no real DB.
+vi.mock("../../src/services/settings.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof SettingsModule>();
+  return { ...actual, getStoredSettings: () => actual.DEFAULT_SETTINGS };
+});
 
 import { startGitHubPRPoller } from "../../src/services/github-pr-poller.js";
 

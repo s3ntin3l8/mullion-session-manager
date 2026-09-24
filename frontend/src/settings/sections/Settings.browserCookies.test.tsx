@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { SERVER_INFO_FIXTURE } from "../../test/serverInfoFixture.js";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Settings } from "../../Settings.js";
@@ -159,6 +160,9 @@ describe("Settings -> Integrations -> Import Browser Cookies", () => {
         return Promise.resolve(new Response(null, { status: 204 }));
       }
 
+      if (url === "/api/server-info" && method === "GET") {
+        return Promise.resolve(jsonResponse(200, SERVER_INFO_FIXTURE));
+      }
       unexpectedCalls.push(`${method} ${url}`);
       return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
     });

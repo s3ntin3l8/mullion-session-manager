@@ -12,10 +12,10 @@ interface RepoActivity {
 // re-sync trigger).
 export class ActivityTracker {
   private repos = new Map<string, RepoActivity>();
-  private readonly activeIntervalMs: number;
-  private readonly quietIntervalMs: number;
+  private activeIntervalMs: number;
+  private quietIntervalMs: number;
   private readonly activeTimeoutMs: number;
-  private readonly staleThresholdMs: number;
+  private staleThresholdMs: number;
 
   constructor(
     opts: {
@@ -29,6 +29,22 @@ export class ActivityTracker {
     this.quietIntervalMs = opts.quietIntervalMs ?? 60_000;
     this.activeTimeoutMs = opts.activeTimeoutMs ?? 120_000;
     this.staleThresholdMs = opts.staleThresholdMs ?? 300_000;
+  }
+
+  // Live retune from Settings → Integrations. Takes effect from the next
+  // poll the poller schedules; the one already scheduled keeps its delay.
+  setIntervals(opts: {
+    activeIntervalMs: number;
+    quietIntervalMs: number;
+    staleThresholdMs: number;
+  }): void {
+    this.activeIntervalMs = opts.activeIntervalMs;
+    this.quietIntervalMs = opts.quietIntervalMs;
+    this.staleThresholdMs = opts.staleThresholdMs;
+  }
+
+  get quietInterval(): number {
+    return this.quietIntervalMs;
   }
 
   getIntervalFor(repoKey: string): number {

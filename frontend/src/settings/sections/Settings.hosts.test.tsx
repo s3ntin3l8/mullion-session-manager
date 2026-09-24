@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { SERVER_INFO_FIXTURE } from "../../test/serverInfoFixture.js";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Settings } from "../../Settings.js";
@@ -59,6 +60,7 @@ describe("Settings -> Hosts", () => {
     };
 
     ({ fetchMock, unexpectedCalls } = mockFetch({
+      "GET /api/server-info": () => jsonResponse(200, SERVER_INFO_FIXTURE),
       "GET /api/hosts": () => jsonResponse(200, hostsDb),
       "GET /api/projects": () => jsonResponse(200, []),
       "GET /api/sessions": () => jsonResponse(200, []),

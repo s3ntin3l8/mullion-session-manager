@@ -19,6 +19,7 @@ const TEST_ENV = {
   maxConcurrent: 2,
   budgetMinutes: 120,
   progressCommentMinutes: 15,
+  rateLimitGraceMinutes: 5,
   skipPermissions: false,
   issueLabel: "mullion-task",
   pollIntervalSeconds: 60,
@@ -147,6 +148,32 @@ describe("Settings -> Task Master", () => {
         expect.objectContaining({
           method: "PATCH",
           body: JSON.stringify({ taskMaster: { maxConcurrent: 5 } }),
+        }),
+      ),
+    );
+  });
+
+  it("edits the rate-limit grace period and shows its server default", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="tasks" />);
+
+    const label = await screen.findByText("Rate-limit grace period");
+    const row = label.closest(".settings-row") as HTMLElement;
+    expect(row).toHaveTextContent("Server default: 5 min.");
+    const input = row.querySelector("input[type=number]") as HTMLInputElement;
+    expect(input).toHaveValue(5);
+
+    await user.clear(input);
+    await user.type(input, "0");
+    await user.tab();
+
+    expect(useDashboardStore.getState().settings.taskMaster.rateLimitGraceMinutes).toBe(0);
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/settings",
+        expect.objectContaining({
+          method: "PATCH",
+          body: JSON.stringify({ taskMaster: { rateLimitGraceMinutes: 0 } }),
         }),
       ),
     );
@@ -281,6 +308,7 @@ describe("Settings -> Task Master", () => {
           maxConcurrent: 5,
           budgetMinutes: 30,
           progressCommentMinutes: 5,
+          rateLimitGraceMinutes: 5,
           skipPermissions: "on",
           reviewCiWaitMinutes: 30,
           defaultAgent: "codex",
@@ -299,6 +327,7 @@ describe("Settings -> Task Master", () => {
     expect(tm.maxConcurrent).toBe(-1);
     expect(tm.budgetMinutes).toBe(-1);
     expect(tm.progressCommentMinutes).toBe(-1);
+    expect(tm.rateLimitGraceMinutes).toBe(-1);
     expect(tm.skipPermissions).toBe("inherit");
     // autoClaimPaused and reviewCiWaitMinutes have no sentinel/inherit
     // concept (settings.ts's own doc comment) — Reset must not silently
@@ -317,6 +346,7 @@ describe("Settings -> Task Master", () => {
               maxConcurrent: -1,
               budgetMinutes: -1,
               progressCommentMinutes: -1,
+              rateLimitGraceMinutes: -1,
               skipPermissions: "inherit",
             },
           }),

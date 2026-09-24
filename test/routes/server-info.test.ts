@@ -47,9 +47,19 @@ describe("server-info route", () => {
         maxConcurrent: expect.any(Number),
         budgetMinutes: expect.any(Number),
         progressCommentMinutes: expect.any(Number),
+        rateLimitGraceMinutes: expect.any(Number),
         issueLabel: expect.any(String),
         pollIntervalSeconds: expect.any(Number),
       },
+      runtimeEnv: {
+        githubPollActiveSeconds: expect.any(Number),
+        githubPollQuietSeconds: expect.any(Number),
+        githubPollStaleThresholdSeconds: expect.any(Number),
+        hostHeartbeatSeconds: expect.any(Number),
+        browserFramerate: expect.any(Number),
+        logLevel: expect.any(String),
+      },
+      features: { browser: false, devices: false, deviceDiscovery: expect.any(Boolean) },
     });
     expect(body.uptimeSeconds).toBeGreaterThanOrEqual(0);
     expect(typeof body.version).toBe("string");

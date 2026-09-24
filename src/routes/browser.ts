@@ -7,6 +7,8 @@ import { sessions, projects } from "../db/schema.js";
 import { recordSessionBrowserBinding } from "../services/session-browsers.js";
 import { getRemoteHostClient } from "../services/remote-host-client.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
+import { resolveBrowserFramerate } from "../services/runtime-config.js";
+import { getStoredSettings } from "../services/settings.js";
 
 // Phase 3, issue #180 — streams a project's Playwright-controlled Chromium
 // page to the frontend BrowserPane (#181) as binary JPEG frames over
@@ -266,7 +268,11 @@ export async function attachSocketToBrowser(
     if (socket.readyState === socket.OPEN) socket.send(frame);
   }
 
-  const framerate = Math.max(1, app.config.BROWSER_FRAMERATE);
+  // Agent hosts have no settings DB (see app.ts's agent branch) and stream
+  // at their own env default.
+  const framerate = app.hasDecorator("db")
+    ? resolveBrowserFramerate(getStoredSettings(app.db), app)
+    : Math.max(1, app.config.BROWSER_FRAMERATE);
   const frameTimer = setInterval(
     () => {
       captureAndSend().catch((err) => {

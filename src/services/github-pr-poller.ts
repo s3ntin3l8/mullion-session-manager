@@ -4,6 +4,8 @@ import { parseGitRemote, type GitHubRepoRef } from "./git-remote.js";
 import { resolveGitHubToken } from "./github-integration.js";
 import { GitHubApiError, getRepoPRsStatus, setRepoPRsStatus } from "./github.js";
 import { ActivityTracker } from "./github-activity-tracker.js";
+import { resolveGitHubPoll, toActivityIntervals } from "./runtime-config.js";
+import { getStoredSettings } from "./settings.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { getRemoteHostClient, HostRequestError } from "./remote-host-client.js";
 
@@ -42,17 +44,13 @@ function computeNextInterval(
 }
 
 export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTracker): () => void {
-  const activeIntervalMs = app.config.GITHUB_POLL_INTERVAL_ACTIVE * 1000;
-  const quietIntervalMs = app.config.GITHUB_POLL_INTERVAL_QUIET * 1000;
-  const staleThresholdMs = app.config.GITHUB_POLL_STALE_THRESHOLD * 1000;
+  // Env defaults, overridable from Settings → Integrations (see
+  // runtime-config.ts). A later settings change retunes the tracker in place
+  // via ActivityTracker.setIntervals (settings.ts's applySettingsPatch).
+  const intervals = toActivityIntervals(resolveGitHubPoll(getStoredSettings(app.db), app));
+  const quietIntervalMs = intervals.quietIntervalMs;
 
-  const activityTracker =
-    tracker ??
-    new ActivityTracker({
-      activeIntervalMs,
-      quietIntervalMs,
-      staleThresholdMs,
-    });
+  const activityTracker = tracker ?? new ActivityTracker(intervals);
   app.githubActivityTracker = activityTracker;
 
   let pollTimer: ReturnType<typeof setTimeout> | null = null;
@@ -125,7 +123,11 @@ export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTrac
     await pollOnce(repoRows);
     if (cleanupCalled) return;
 
-    const nextInterval = computeNextInterval(activityTracker, repoRows, quietIntervalMs);
+    const nextInterval = computeNextInterval(
+      activityTracker,
+      repoRows,
+      activityTracker.quietInterval,
+    );
     pollTimer = setTimeout(tick, nextInterval);
     pollTimer.unref();
   }

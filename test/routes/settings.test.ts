@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
@@ -401,6 +401,72 @@ describe("settings route", () => {
     const fetched = await app.inject({ method: "GET", url: "/api/settings" });
     expect(fetched.json().terminal.voice.hotkey).toBe("Ctrl+Shift+Comma");
 
+    await app.close();
+  });
+});
+
+describe("settings route: live runtime overrides", () => {
+  const liveDb = path.join(os.tmpdir(), `settings-live-test-${process.pid}.db`);
+
+  beforeAll(() => {
+    fs.rmSync(liveDb, { force: true });
+    process.env.DATABASE_URL = `file:${liveDb}`;
+  });
+
+  afterAll(() => {
+    closeDb();
+    fs.rmSync(liveDb, { force: true });
+    delete process.env.DATABASE_URL;
+  });
+
+  it("retunes the GitHub poller, re-arms the heartbeat, and sets the log level without a restart", async () => {
+    const app = await buildApp();
+    await app.ready();
+    const reconfigureHeartbeat = vi.fn();
+    app.reconfigureHostHeartbeat = reconfigureHeartbeat;
+
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/api/settings",
+      payload: {
+        github: { pollQuietSeconds: 90 },
+        hosts: { heartbeatSeconds: 0 },
+        server: { logLevel: "debug" },
+      },
+    });
+    expect(res.statusCode).toBe(200);
+
+    // An unknown repo reports the quiet interval.
+    expect(app.githubActivityTracker?.getIntervalFor("nobody/nothing")).toBe(90_000);
+    expect(reconfigureHeartbeat).toHaveBeenCalledWith(0);
+    expect(app.log.level).toBe("debug");
+
+    // Back to inherit restores the env defaults.
+    await app.inject({
+      method: "PATCH",
+      url: "/api/settings",
+      payload: { github: { pollQuietSeconds: -1 }, server: { logLevel: "inherit" } },
+    });
+    expect(app.githubActivityTracker?.getIntervalFor("nobody/nothing")).toBe(
+      app.config.GITHUB_POLL_INTERVAL_QUIET * 1000,
+    );
+    expect(app.log.level).toBe(app.config.LOG_LEVEL);
+
+    await app.close();
+  });
+
+  it("applies a saved log level at boot", async () => {
+    const first = await buildApp();
+    await first.inject({
+      method: "PATCH",
+      url: "/api/settings",
+      payload: { server: { logLevel: "warn" } },
+    });
+    await first.close();
+
+    const app = await buildApp();
+    await app.ready();
+    expect(app.log.level).toBe("warn");
     await app.close();
   });
 });

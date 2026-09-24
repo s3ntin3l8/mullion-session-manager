@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { SERVER_INFO_FIXTURE } from "../../test/serverInfoFixture.js";
 import { render, screen, waitFor, within, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Settings } from "../../Settings.js";
 import { useDashboardStore } from "../../store/index.js";
+import { api } from "../../api/index.js";
 import type { Device, SystemImage } from "../../api/index.js";
 import { jsonResponse } from "../../test/jsonResponse.js";
 import { mockFetch } from "../../test/mockFetch.js";
@@ -111,6 +113,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     availableImagesShouldFail = false;
 
     ({ fetchMock, unexpectedCalls } = mockFetch({
+      "GET /api/server-info": () => jsonResponse(200, SERVER_INFO_FIXTURE),
       "GET /api/hosts": () => jsonResponse(200, []),
       "GET /api/projects": () => jsonResponse(200, []),
       "GET /api/sessions": () => jsonResponse(200, []),
@@ -245,6 +248,18 @@ describe("Settings -> Devices (issue #1326)", () => {
   afterEach(() => {
     expect(unexpectedCalls).toEqual([]);
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("says so when Android devices are turned off on this server", async () => {
+    vi.spyOn(api, "getServerInfo").mockResolvedValue({
+      ...SERVER_INFO_FIXTURE,
+      features: { ...SERVER_INFO_FIXTURE.features, devices: false },
+    });
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+    expect(
+      await screen.findByText(/Android devices are turned off on this server/),
+    ).toBeInTheDocument();
   });
 
   it("shows the empty state when no device exists", async () => {

@@ -127,3 +127,19 @@ describe("ActivityTracker", () => {
     });
   });
 });
+
+describe("ActivityTracker.setIntervals", () => {
+  it("retunes the intervals it reports without losing per-repo state", () => {
+    const tracker = new ActivityTracker({ activeIntervalMs: 15_000, quietIntervalMs: 60_000 });
+    expect(tracker.getIntervalFor("a/b")).toBe(60_000);
+    expect(tracker.quietInterval).toBe(60_000);
+
+    tracker.setIntervals({
+      activeIntervalMs: 10_000,
+      quietIntervalMs: 120_000,
+      staleThresholdMs: 600_000,
+    });
+    expect(tracker.getIntervalFor("a/b")).toBe(120_000);
+    expect(tracker.quietInterval).toBe(120_000);
+  });
+});

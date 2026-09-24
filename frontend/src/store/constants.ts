@@ -48,7 +48,7 @@ export const SIDEBAR_MAX_WIDTH = 500;
 // section can fall back to the same values before its own env fetch
 // resolves, rather than duplicating this table.
 //
-// These six values MUST match src/plugins/env.ts's own MULLION_TASK_*
+// These values MUST match src/plugins/env.ts's own MULLION_TASK_*
 // defaults (Hermes review, PR #480) — this is a real, if narrow, drift
 // risk: a future change to one side isn't caught by anything except a
 // human noticing during review. Only matters for the brief pre-load
@@ -60,9 +60,21 @@ export const FALLBACK_TASK_MASTER_ENV: ServerInfo["taskMasterEnv"] = {
   maxConcurrent: 2,
   budgetMinutes: 120,
   progressCommentMinutes: 15,
+  rateLimitGraceMinutes: 5,
   skipPermissions: false,
   issueLabel: "mullion-task",
   pollIntervalSeconds: 60,
+};
+
+// Same pre-load fallback for the runtime-overridable env knobs; must match
+// src/plugins/env.ts's defaults for the same reason as above.
+export const FALLBACK_RUNTIME_ENV: ServerInfo["runtimeEnv"] = {
+  githubPollActiveSeconds: 15,
+  githubPollQuietSeconds: 60,
+  githubPollStaleThresholdSeconds: 300,
+  hostHeartbeatSeconds: 30,
+  browserFramerate: 10,
+  logLevel: "info",
 };
 
 // How long to wait after the last updateSettings() call before firing the

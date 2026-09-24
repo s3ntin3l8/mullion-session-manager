@@ -7,6 +7,7 @@ import { securityPlugin } from "./plugins/security.js";
 import { dbPlugin } from "./plugins/db.js";
 import { ptyPlugin } from "./plugins/pty.js";
 import { browserPlugin } from "./plugins/browser.js";
+import { runtimeSettingsPlugin } from "./plugins/runtime-settings.js";
 import { devicePlugin } from "./plugins/device.js";
 import { hooksPlugin } from "./plugins/hooks.js";
 import { bundleSyncPlugin } from "./plugins/bundle-sync.js";
@@ -419,6 +420,7 @@ export async function buildApp() {
   // dbPlugin must register before ptyPlugin: ptyPlugin's reconciler reads
   // app.db (via getStoredSettings) as soon as it's registered.
   await app.register(dbPlugin);
+  await app.register(runtimeSettingsPlugin);
   await app.register(ptyPlugin);
   // Must register after BOTH dbPlugin (needs app.db) and ptyPlugin (needs
   // app.pty.onEvent() to subscribe to) — same ordering logic as the

@@ -11,6 +11,7 @@ export interface ResolvedTaskMasterConfig {
   maxConcurrent: number;
   budgetMinutes: number;
   progressCommentMinutes: number;
+  rateLimitGraceMinutes: number;
   skipPermissions: boolean;
   reviewCiWaitMinutes: number;
 }
@@ -30,6 +31,10 @@ export function resolveTaskMaster(
       taskMaster.progressCommentMinutes === -1
         ? envDefaults.progressCommentMinutes
         : taskMaster.progressCommentMinutes,
+    rateLimitGraceMinutes:
+      taskMaster.rateLimitGraceMinutes === -1
+        ? envDefaults.rateLimitGraceMinutes
+        : taskMaster.rateLimitGraceMinutes,
     skipPermissions:
       taskMaster.skipPermissions === "inherit"
         ? envDefaults.skipPermissions

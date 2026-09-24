@@ -1,6 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import { LOCAL_HOST_ID, listHosts } from "./host-registry.js";
 import { getRemoteHostClient } from "./remote-host-client.js";
+import { resolveHeartbeatSeconds } from "./runtime-config.js";
+import { getStoredSettings } from "./settings.js";
 
 export type HostHealthStatus = "pending" | "online" | "degraded" | "offline";
 
@@ -152,7 +154,6 @@ export function startHostHeartbeat(
   const hostHeartbeatTracker = tracker ?? new HostHeartbeatTracker();
   app.hostHeartbeatTracker = hostHeartbeatTracker;
 
-  const intervalSeconds = app.config.HOST_HEARTBEAT_INTERVAL_SECONDS;
   let timer: ReturnType<typeof setInterval> | null = null;
   // Reentrancy guard (Hermes review, PR #524): each ping already has its
   // own REQUEST_TIMEOUT_MS bound, but nothing stopped a slow/hung host from
@@ -185,7 +186,20 @@ export function startHostHeartbeat(
       });
   }
 
-  if (intervalSeconds > 0) {
+  // (Re)arms the sweep timer. Called once at start with the resolved
+  // interval (env default, overridable from Settings → Hosts) and again by
+  // applySettingsPatch whenever that setting changes. 0 disables the
+  // heartbeat.
+  function arm(intervalSeconds: number) {
+    if (timer) clearInterval(timer);
+    timer = null;
+    if (intervalSeconds <= 0) {
+      // Forget every verdict so no host keeps showing a stale "online"
+      // while nothing is checking it — the same "pending" state a server
+      // started with the heartbeat off reports.
+      hostHeartbeatTracker.pruneMissing(new Set());
+      return;
+    }
     // Immediate first sweep (Hermes review, PR #524) — without this every
     // host reports "pending" for a full interval (30s default) after every
     // primary restart, even though every host was already fully populated
@@ -198,14 +212,19 @@ export function startHostHeartbeat(
     timer.unref();
   }
 
+  arm(resolveHeartbeatSeconds(getStoredSettings(app.db), app));
+  app.reconfigureHostHeartbeat = arm;
+
   return () => {
     if (timer) clearInterval(timer);
     app.hostHeartbeatTracker = undefined;
+    app.reconfigureHostHeartbeat = undefined;
   };
 }
 
 declare module "fastify" {
   interface FastifyInstance {
     hostHeartbeatTracker?: HostHeartbeatTracker;
+    reconfigureHostHeartbeat?: (intervalSeconds: number) => void;
   }
 }

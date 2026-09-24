@@ -5,6 +5,7 @@ import type { DockerStorageStatus, SystemStats } from "../../api/index.js";
 import { usePolling } from "../../hooks/usePolling.js";
 import { formatRelativeAge } from "../../relativeTime.js";
 import { Eyebrow, SecondaryButton } from "../../ui/primitives.js";
+import { LogLevelSetting } from "../RuntimeSettings.js";
 import { ErrorText } from "../../ui/ErrorText.js";
 import { claimPostUpdateReload } from "../../postUpdateReload.js";
 import { formatBytes } from "../../formatBytes.js";
@@ -204,12 +205,26 @@ export function ServerInfoSection() {
             {info.rateLimit.max} req / {info.rateLimit.window}
           </span>
         </div>
+        <div className="settings-info-row">
+          <span className="settings-info-key">Browser pane</span>
+          <span className="settings-info-value">{info.features.browser ? "On" : "Off"}</span>
+        </div>
+        <div className="settings-info-row zebra">
+          <span className="settings-info-key">Android devices</span>
+          <span className="settings-info-value">
+            {info.features.devices
+              ? `On${info.features.deviceDiscovery ? ", with network discovery" : ""}`
+              : "Off"}
+          </span>
+        </div>
       </div>
 
       <div className="settings-footer-note">
-        Read-only diagnostics from deploy-time configuration. Values reflect the running process and
-        cannot be edited here.
+        Set by the server administrator. These values can't be changed here.
       </div>
+
+      <Eyebrow title="Logging" />
+      <LogLevelSetting />
 
       <UpdatesSubsection />
     </>

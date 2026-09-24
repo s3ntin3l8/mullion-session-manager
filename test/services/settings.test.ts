@@ -600,3 +600,42 @@ describe("DEFAULT_SETTINGS.layoutMode / tabletPaneCap (tablet tier)", () => {
     expect(sanitizeSettings(negative).tabletPaneCap).toBe(2);
   });
 });
+
+describe("sanitizeSettings: runtime env overrides", () => {
+  it("defaults every runtime override to its inherit sentinel", () => {
+    const s = mergeSettings({});
+    expect(s.github).toEqual({
+      pollActiveSeconds: -1,
+      pollQuietSeconds: -1,
+      pollStaleThresholdSeconds: -1,
+    });
+    expect(s.hosts.heartbeatSeconds).toBe(-1);
+    expect(s.browser.framerate).toBe(-1);
+    expect(s.server.logLevel).toBe("inherit");
+  });
+
+  it("clamps poll intervals into range and keeps the sentinel", () => {
+    const s = mergeSettings({
+      github: { pollActiveSeconds: 1, pollQuietSeconds: 99999, pollStaleThresholdSeconds: -1 },
+    });
+    expect(s.github.pollActiveSeconds).toBe(5);
+    expect(s.github.pollQuietSeconds).toBe(3600);
+    expect(s.github.pollStaleThresholdSeconds).toBe(-1);
+  });
+
+  it("keeps 0 as a real 'heartbeat off' value and clamps the frame rate", () => {
+    const s = mergeSettings({ hosts: { heartbeatSeconds: 0 }, browser: { framerate: 120 } });
+    expect(s.hosts.heartbeatSeconds).toBe(0);
+    expect(s.browser.framerate).toBe(30);
+  });
+
+  it("repairs a non-finite value to the sentinel", () => {
+    const s = mergeSettings({ browser: { framerate: Number.NaN } });
+    expect(s.browser.framerate).toBe(-1);
+  });
+
+  it("accepts a known log level and rejects anything else", () => {
+    expect(mergeSettings({ server: { logLevel: "debug" } }).server.logLevel).toBe("debug");
+    expect(mergeSettings({ server: { logLevel: "verbose" } }).server.logLevel).toBe("inherit");
+  });
+});

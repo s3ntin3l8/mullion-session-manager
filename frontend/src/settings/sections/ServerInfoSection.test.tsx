@@ -28,6 +28,7 @@ const info = {
   previewAuthRequired: false,
   taskMasterEnabled: false,
   taskMasterEnv: {},
+  features: { browser: true, devices: false, deviceDiscovery: false },
 } as ServerInfo;
 
 const stats: SystemStats = {
@@ -73,6 +74,16 @@ describe("Settings -> Server info resources", () => {
     expect(screen.getByText("12 GiB free / 100 GiB (12.0%)")).toBeInTheDocument();
     expect(screen.getByText("10 GiB")).toBeInTheDocument();
     expect(screen.getByText("4.0 GiB")).toBeInTheDocument();
+  });
+
+  it("shows which host features are on and offers the log level setting", async () => {
+    setup();
+    render(<ServerInfoSection />);
+    const browserKey = await screen.findByText("Browser pane");
+    expect(browserKey.nextElementSibling).toHaveTextContent("On");
+    expect(screen.getByText("Android devices").nextElementSibling).toHaveTextContent("Off");
+    expect(screen.getByText("Log level")).toBeInTheDocument();
+    expect(screen.queryByText(/\/health/)).toBeNull();
   });
 
   it("requires two clicks, prunes once, and refreshes figures after success", async () => {

@@ -1155,9 +1155,26 @@ export interface ServerInfo {
     maxConcurrent: number;
     budgetMinutes: number;
     progressCommentMinutes: number;
+    rateLimitGraceMinutes: number;
     skipPermissions: boolean;
     issueLabel: string;
     pollIntervalSeconds: number;
+  };
+  // Env defaults for the settings below that override them at runtime
+  // (src/services/runtime-config.ts), shown as "Server default: N".
+  runtimeEnv: {
+    githubPollActiveSeconds: number;
+    githubPollQuietSeconds: number;
+    githubPollStaleThresholdSeconds: number;
+    hostHeartbeatSeconds: number;
+    browserFramerate: number;
+    logLevel: LogLevel;
+  };
+  // Host-level feature gates, set by the server administrator.
+  features: {
+    browser: boolean;
+    devices: boolean;
+    deviceDiscovery: boolean;
   };
 }
 
@@ -1421,6 +1438,9 @@ export interface UpdateStatus {
 // doc comment on Theme/CursorStyle/SidebarDensity/SoundName, which DO move,
 // for the full rationale). AppSettings is otherwise still a duplicate of
 // the backend's row shape, same pattern as Project/Session/etc. above.
+export const LOG_LEVELS = ["fatal", "error", "warn", "info", "debug", "trace"] as const;
+export type LogLevel = (typeof LOG_LEVELS)[number];
+
 export interface AppSettings {
   theme: Theme;
   terminal: {
@@ -1622,6 +1642,21 @@ export interface AppSettings {
   // `provider/model` string (e.g. "openrouter/minimax-m3",
   // "anthropic/claude-sonnet-4-5"). `null` means "no override; let opencode
   // pick via its own priority chain".
+  // -1 / "inherit" = use the server's env default (see ServerInfo.runtimeEnv).
+  github: {
+    pollActiveSeconds: number;
+    pollQuietSeconds: number;
+    pollStaleThresholdSeconds: number;
+  };
+  hosts: {
+    heartbeatSeconds: number;
+  };
+  browser: {
+    framerate: number;
+  };
+  server: {
+    logLevel: "inherit" | LogLevel;
+  };
   opencode: {
     implementerModel: string | null;
     reviewerModel: string | null;
@@ -1635,6 +1670,7 @@ export interface AppSettings {
     maxConcurrent: number;
     budgetMinutes: number;
     progressCommentMinutes: number;
+    rateLimitGraceMinutes: number;
     skipPermissions: "inherit" | "on" | "off";
     // #741 — Task Master's install-wide worker/review agent defaults,
     // mirroring settings.ts's AppSettings.taskMaster 1:1. Independent of
