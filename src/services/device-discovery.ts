@@ -14,30 +14,38 @@ import Bonjour from "bonjour-service";
 //   _adb-tls-connect._tcp  — the longer-lived adb-over-TCP listener;
 //                            `wireless.connect()` dials it after pairing.
 //
-// Both services are advertised from the same device IP and share most of
-// their TXT record (name / model / device-serial / product) — the matching
-// key is the host IP, with the device-serial from TXT as a tiebreaker when
-// two devices NAT to the same external address (rare, but seen on some
-// home-routed setups). We group by host so a phone shows up as ONE entry in
-// the UI with both pairingAddress + connectAddress, not two duplicate rows.
+// Both services are advertised from the same phone and share most of
+// their TXT record (name / model / device-serial / product). Pairing and
+// connect records for one phone share the same SRV target hostname
+// (`service.host`, e.g. `Android.local`) — that hostname is the stable
+// group key (with the device-serial from TXT as a display/fingerprint
+// tiebreaker when two devices share a name). We group by SRV hostname, NOT
+// by resolved IP: the A record can land late or change mid-advertisement,
+// and IP-keyed grouping would split one phone into two rows (or re-key it
+// down/up) depending on which records have resolved so far. The dialable
+// IPv4 (when known) rides along as `host` / the `*Address` fields.
 //
 // Discovery is best-effort and read-only — if mDNS doesn't reach the phone
 // (segmented LAN, mDNS-reflector not configured, etc.) the existing manual
 // address+code entry path stays fully functional; nothing here is in the
 // critical path of actually pairing a device.
 
-/** A device the scanner has seen advertising mDNS. Stable `id` is the host
- * IP, since both pairing and connect services come from the same phone. */
+/** A device the scanner has seen advertising mDNS. Stable `id` is the SRV
+ * target hostname (e.g. `Android.local`) — shared by the phone's pairing
+ * and connect records, and stable across A-record resolution. */
 export interface DiscoveredDevice {
-  /** Stable per-device id (`host`) — used by the REST layer to round-trip a
-   * selection from the modal back to `pair-and-connect` without re-scanning. */
+  /** Stable per-device id (the SRV hostname, falling back to the dial host
+   * only when the SRV target is empty) — used by the REST layer to
+   * round-trip a selection from the modal back to `pair-and-connect`
+   * without re-scanning. Not necessarily an IP. */
   id: string;
   /** Display name from the pairing TXT record (e.g. "Pixel 7"). Falls back
    * to the connect TXT name if the pairing record hasn't been seen yet. */
   name: string;
-  /** The IP the phone advertised itself at — what `adb pair`/`adb connect`
-   * dial. IPv4 only for now; bonjour-service will surface AAAA records too
-   * but Android's adb-over-TCP only listens on IPv4. */
+  /** The address `adb pair`/`adb connect` should dial — IPv4 when the A
+   * record has resolved, else the hostname (adb resolves it via nss-mdns
+   * if available). IPv4 preferred for now; bonjour-service will surface
+   * AAAA records too but Android's adb-over-TCP only listens on IPv4. */
   host: string;
   /** `host:port` for the pairing listener, if seen. Until it's seen the UI
    * can't offer "Pair" against this entry yet — manual fallback remains. */
@@ -136,8 +144,8 @@ interface RawService {
 /** One bonjour-service advertisement, stored keyed by its `fqdn` (stable —
  * survives A-record resolution and IP changes, unlike `host`/`addresses`).
  * Pairing and connect services of the same phone have *different* fqdns;
- * they're grouped into one `DiscoveredDevice` at read time by their resolved
- * IP (see `getDiscovered`). */
+ * they're grouped into one `DiscoveredDevice` at read time by their shared
+ * SRV target hostname (see `groupKey` / `groupDevices`). */
 interface ServiceRecord {
   type: (typeof BROWSER_TYPES)[number];
   fqdn: string;
@@ -178,10 +186,11 @@ export class DeviceDiscoveryService {
   // boundary.
   private readonly browsers: Array<{ stop(): void }> = [];
   // Keyed by the service's `fqdn` (stable across A-record resolution and IP
-  // changes) — NOT by the resolved host, which can flip mid-advertisement
-  // and would make a `down` event miss the entry it's supposed to evict.
-  // Pairing + connect services of the same phone are grouped into one
-  // `DiscoveredDevice` at read time by their resolved IP.
+  // changes) — NOT by the resolved host or SRV hostname, either of which can
+  // flip mid-advertisement and would make a `down` event miss the entry it's
+  // supposed to evict. Pairing + connect services of the same phone are
+  // grouped into one `DiscoveredDevice` at read time by their shared SRV
+  // target hostname (see `groupKey`).
   private readonly cache = new Map<string, ServiceRecord>();
   // Captured `Date` at the moment a service transitioned up. Used both as
   // the displayed `discoveredAt` and (loosely) as a freshness hint — true
@@ -261,27 +270,26 @@ export class DeviceDiscoveryService {
   }
 
   /** Returns a defensive snapshot of every device the scanner has seen
-   * advertising. Each entry's `id` is its host IP — same value the REST
-   * `pair-and-connect` endpoint accepts as `discoveryId`. Groups the
-   * per-fqdn `ServiceRecord`s by their resolved IP and spreads each
-   * `device` object so a caller mutating the returned array cannot reach
-   * the live cache. Matches the `onChange` callback's spread convention. */
+   * advertising. Each entry's `id` is its SRV hostname — same value the
+   * REST `pair-and-connect` endpoint accepts as `discoveryId`. Groups the
+   * per-fqdn `ServiceRecord`s by that hostname and spreads each `device`
+   * object so a caller mutating the returned array cannot reach the live
+   * cache. Matches the `onChange` callback's spread convention. */
   getDiscovered(): DiscoveredDevice[] {
-    return [...this.groupByHost().values()];
+    return [...this.groupDevices().values()];
   }
 
   getById(id: string): DiscoveredDevice | undefined {
-    return this.groupByHost().get(id);
+    return this.groupDevices().get(id);
   }
 
-  /** Drop every service record whose resolved host is `id` — used by the
+  /** Drop every service record whose group key is `id` — used by the
    * pair-and-connect route when it finds a cached address that fails
    * `isValidDeviceAddress` (poisoned cache entry), so the next picker
    * open gets a fresh scan rather than the same bad data. */
   evict(id: string): void {
     for (const [fqdn, record] of this.cache) {
-      const host = this.resolveHost(record);
-      if (host === id) this.cache.delete(fqdn);
+      if (this.groupKey(record) === id) this.cache.delete(fqdn);
     }
   }
 
@@ -302,20 +310,23 @@ export class DeviceDiscoveryService {
     this.handleServiceDown(normalized, service);
   }
 
-  private resolveHost(service: RawService | ServiceRecord): string | undefined {
-    // bonjour-service populates `service.host` from the SRV-record target,
-    // which is the mDNS *hostname* (e.g. `Android.local`) — not an IP.
-    // `service.addresses[]` is built from the A/AAAA records and is the
-    // only field that's an actual IP. Android's adb-over-TCP only listens
-    // on IPv4, so:
-    //   - addresses has at least one IPv4 → return it.
-    //   - addresses has entries but NONE is IPv4 → return undefined
-    //     (skip the entry — an IPv6 literal is not dialable by Android's
-    //     IPv4-only adb listener and would be rejected by
-    //     DEVICE_ADDRESS_PATTERN anyway; see the interface doc on `host`).
-    //   - addresses is empty → fall back to `service.host` (rare — the
-    //     very first `up` before the A-record query has resolved; may be a
-    //     hostname, which adb resolves itself via nss-mdns if available).
+  /** Address `adb pair`/`adb connect` should dial for this record — what
+   * rides along as `DiscoveredDevice.host` and the `*Address` fields.
+   * bonjour-service populates `service.host` from the SRV-record target,
+   * which is the mDNS *hostname* (e.g. `Android.local`) — not an IP.
+   * `service.addresses[]` is built from the A/AAAA records and is the
+   * only field that's an actual IP. Android's adb-over-TCP only listens
+   * on IPv4, so:
+   *   - addresses has at least one IPv4 → return it.
+   *   - addresses has entries but NONE is IPv4 → return undefined
+   *     (skip the entry — an IPv6 literal is not dialable by Android's
+   *     IPv4-only adb listener and would be rejected by
+   *     DEVICE_ADDRESS_PATTERN anyway; see the interface doc on `host`).
+   *   - addresses is empty → fall back to `service.host` (rare — the
+   *     very first `up` before the A-record query has resolved; may be a
+   *     hostname, which adb resolves itself via nss-mdns if available).
+   */
+  private resolveDialHost(service: RawService | ServiceRecord): string | undefined {
     if (Array.isArray(service.addresses) && service.addresses.length > 0) {
       return service.addresses.find(isIPv4Literal);
     }
@@ -325,33 +336,54 @@ export class DeviceDiscoveryService {
     return undefined;
   }
 
-  /** Collect the per-fqdn `ServiceRecord`s into host-grouped
+  /** Stable group key for a record: the SRV target hostname (`host`), which
+   * is the phone's mDNS hostname (e.g. `Android.local`) and does NOT change
+   * when the A record lands or the IP rotates. Pairing and connect records
+   * for one phone share this hostname, so they always land in the same group
+   * even when only one of them has a resolved A record yet (the bug that
+   * IP-keyed grouping hit — Hermes suggestion 3 on #1381). Falls back to the
+   * dial host only when the SRV target itself is empty (rare). */
+  private groupKey(record: RawService | ServiceRecord): string | undefined {
+    if (typeof record.host === "string" && record.host.length > 0) {
+      return record.host;
+    }
+    return this.resolveDialHost(record);
+  }
+
+  /** Collect the per-fqdn `ServiceRecord`s into SRV-hostname-grouped
    * `DiscoveredDevice`s — the read model used by `getDiscovered`,
    * `getById`, and the upsert/down handlers' freshness check. Pairing and
-   * connect records for the same resolved IP merge into one entry; the
+   * connect records for the same hostname merge into one entry; the
    * pairing record's TXT name wins for display (the screen the user is
    * looking at while typing the code), falling back to connect's TXT name
-   * then either record's instance name. */
-  private groupByHost(): Map<string, DiscoveredDevice> {
-    // First pass: bucket records by resolved host, keeping pairing and
+   * then either record's instance name. `device.host` / the `*Address`
+   * fields use the best dial address across the group (IPv4 preferred over
+   * a hostname fallback). */
+  private groupDevices(): Map<string, DiscoveredDevice> {
+    // First pass: bucket records by group key, keeping pairing and
     // connect separate so the name-preference logic below can see both
-    // regardless of insertion order.
+    // regardless of insertion order. Skip records with no dialable address
+    // (W2 — v6-only with A/AAAA present is not dialable by adb).
     const groups = new Map<string, { pairing?: ServiceRecord; connect?: ServiceRecord }>();
     for (const record of this.cache.values()) {
-      const host = this.resolveHost(record);
-      if (!host || record.port === undefined) continue;
-      let group = groups.get(host);
+      if (record.port === undefined) continue;
+      if (this.resolveDialHost(record) === undefined) continue;
+      const key = this.groupKey(record);
+      if (!key) continue;
+      let group = groups.get(key);
       if (!group) {
         group = {};
-        groups.set(host, group);
+        groups.set(key, group);
       }
       if (record.type === PAIRING_TYPE) group.pairing = record;
       else group.connect = record;
     }
 
-    // Second pass: build the merged DiscoveredDevice for each host.
-    const byHost = new Map<string, DiscoveredDevice>();
-    for (const [host, group] of groups) {
+    // Second pass: build the merged DiscoveredDevice for each group. Prefer
+    // a concrete IPv4 dial across both records when either has one; otherwise
+    // fall back to the first non-empty dial (hostname before A-resolution).
+    const byKey = new Map<string, DiscoveredDevice>();
+    for (const [id, group] of groups) {
       const pairing = group.pairing;
       const connect = group.connect;
       // Prefer the pairing record (the one the user is staring at on the
@@ -359,8 +391,17 @@ export class DeviceDiscoveryService {
       const primary = pairing ?? connect;
       if (!primary) continue;
 
+      const dials: string[] = [];
+      for (const record of [pairing, connect]) {
+        if (!record) continue;
+        const dial = this.resolveDialHost(record);
+        if (dial) dials.push(dial);
+      }
+      const host = dials.find(isIPv4Literal) ?? dials[0];
+      if (!host) continue;
+
       const device: DiscoveredDevice = {
-        id: host,
+        id,
         name: primary.instanceName,
         host,
         discoveredAt: primary.lastSeen,
@@ -395,9 +436,9 @@ export class DeviceDiscoveryService {
       );
       if (latest) device.discoveredAt = latest;
 
-      byHost.set(host, device);
+      byKey.set(id, device);
     }
-    return byHost;
+    return byKey;
   }
 
   private handleServiceUpsert(type: (typeof BROWSER_TYPES)[number], service: RawService): void {
@@ -405,16 +446,16 @@ export class DeviceDiscoveryService {
     if (!fqdn) return;
     const port = typeof service.port === "number" ? service.port : undefined;
     if (port === undefined) return;
-    const host = this.resolveHost(service);
+    const key = this.groupKey(service);
 
     const existing = this.cache.get(fqdn);
-    const oldHost = existing ? this.resolveHost(existing) : undefined;
+    const oldKey = existing ? this.groupKey(existing) : undefined;
 
-    // Was this host already visible (via THIS or another record) before
+    // Was this group key already visible (via THIS or another record) before
     // this upsert? Snapshot the group map BEFORE mutating the cache so
     // `up` vs `update` distinguishes "first time we've seen this phone"
     // from "second service of a pair / re-advertise / A-record landed".
-    const wasVisible = host !== undefined && this.groupByHost().has(host);
+    const wasVisible = key !== undefined && this.groupDevices().has(key);
 
     this.cache.set(fqdn, {
       type,
@@ -427,20 +468,21 @@ export class DeviceDiscoveryService {
       lastSeen: this.now(),
     });
 
-    // Re-key: this record's resolved host changed (typically the first
-    // A-record landing after an `up` that fell back to the hostname).
-    // If the OLD host no longer has any records grouping under it, emit
-    // `down` for it so consumers drop the phantom hostname entry rather
-    // than seeing it linger in their snapshot forever.
-    if (oldHost !== undefined && host !== undefined && oldHost !== host) {
-      const oldStillVisible = this.groupByHost().has(oldHost);
+    // Re-key: this record's group key changed (only when the SRV target
+    // hostname itself changed — A-record landing no longer re-keys, since
+    // the key is the hostname). If the OLD key no longer has any records
+    // grouping under it, emit `down` for it so consumers drop the phantom
+    // entry rather than seeing it linger in their snapshot forever.
+    const newKey = this.groupKey(this.cache.get(fqdn)!);
+    if (oldKey !== undefined && newKey !== undefined && oldKey !== newKey) {
+      const oldStillVisible = this.groupDevices().has(oldKey);
       if (!oldStillVisible) {
-        this.opts.onChange?.({ kind: "down", id: oldHost });
+        this.opts.onChange?.({ kind: "down", id: oldKey });
       }
     }
 
-    if (!host) return;
-    const device = this.groupByHost().get(host);
+    if (newKey === undefined) return;
+    const device = this.groupDevices().get(newKey);
     if (!device) return;
     this.opts.onChange?.({
       kind: wasVisible ? "update" : "up",
@@ -454,18 +496,18 @@ export class DeviceDiscoveryService {
     const record = this.cache.get(fqdn);
     if (!record || record.type !== type) return;
 
-    const host = this.resolveHost(record);
+    const key = this.groupKey(record);
     this.cache.delete(fqdn);
-    if (!host) return;
+    if (!key) return;
 
     // Is the phone still visible via its OTHER service (pairing or
     // connect)? If yes → `update` (one address dropped); if no → `down`
     // (phone gone).
-    const remaining = this.groupByHost().get(host);
+    const remaining = this.groupDevices().get(key);
     if (remaining) {
       this.opts.onChange?.({ kind: "update", device: { ...remaining } });
       return;
     }
-    this.opts.onChange?.({ kind: "down", id: host });
+    this.opts.onChange?.({ kind: "down", id: key });
   }
 }

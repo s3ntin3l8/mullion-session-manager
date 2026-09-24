@@ -535,7 +535,9 @@ different from every other op above — its **three-tier scope story**.
   `device.pair` below. `body` is either `{discoveryId, pairingCode,
 connectAddress?, name?}` (use `device.discovered` first to look up an
   `id`) or `{pairingAddress, connectAddress, pairingCode, name?}` (manual
-  fallback — both ports must be supplied). Atomic pair+connect+insert.
+  fallback — both ports must be supplied). Insert → pair → fire-and-forget
+  connect: 201 + row on success, 409 on active-row collision, 400 + row
+  rollback on pair failure; connect errors surface later via device status.
 - **`device.discovered`** — `body: {}`. Returns the current mDNS snapshot of
   nearby phones in Wireless-debugging mode (`{id, name, host, pairingAddress?,
 connectAddress?, device?, model?, product?, discoveredAt}[]`). Empty array

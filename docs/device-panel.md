@@ -253,9 +253,12 @@ projectId?, name?}` (physical); `POST /api/devices/pair` takes
 from the cached mDNS snapshot returned by `GET /api/devices/discovered`)
 or `{pairingAddress, connectAddress, pairingCode, name?}` (manual fallback
 for networks where mDNS doesn't reach — both ports must be supplied). It
-is atomic: pair → insert → connect, returning 201 with the new row on
-success and 409 if an active physical row already owns the same connect
-address. `GET /api/devices/discovered` returns the current mDNS snapshot
+inserts the row first (sync collision guard → 409 if an active physical
+row already owns the same connect address), then awaits pair() — a wrong
+code rolls the insert back and returns 400 so an immediate retry re-pairs
+instead of hitting 409 — then kicks off connect fire-and-forget and
+returns 201. Connect failures after that surface asynchronously via the
+device's own `status`/`error`, not as a 400 from this endpoint. `GET /api/devices/discovered` returns the current mDNS snapshot
 (an empty array when `DEVICE_DISCOVERY_ENABLED=false` or nothing has been
 advertised). `PATCH /api/devices/:id`
 (issue #1347) takes `{address}` and is **physical-only** (an emulator's

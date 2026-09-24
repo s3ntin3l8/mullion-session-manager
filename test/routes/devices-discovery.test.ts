@@ -125,7 +125,7 @@ describe("devices discovery + pair-and-connect routes", () => {
       await app.close();
     });
 
-    it("returns the cached discovery snapshot grouped by host", async () => {
+    it("returns the cached discovery snapshot grouped by SRV hostname", async () => {
       const app = await buildTestApp();
       seedDiscovery(app, { name: "Pixel 7", pairingPort: 41234, connectPort: 37251 });
       const res = await app.inject({ method: "GET", url: "/api/devices/discovered" });

@@ -498,18 +498,20 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
       }
     }
 
-    try {
-      await app.device.getOrCreate({
-        id: String(row.id),
-        kind: "physical",
-        avdName: null,
-        serial: resolvedConnect,
-        label: row.name,
-        port: null,
-      });
-    } catch (err) {
-      return reply.badRequest(err instanceof Error ? err.message : String(err));
-    }
+    // Fire-and-forget past getOrCreate's synchronous guards (assertEnabled /
+    // serial===null — both already ruled out by this handler): the physical
+    // branch returns as soon as the Device is constructed, before
+    // connectPhysical() settles, so a connect failure never rejects here
+    // and must not be reported as 400. Callers get 201 + the row and learn
+    // about a failed connect from the device's own `status`/`error`.
+    await app.device.getOrCreate({
+      id: String(row.id),
+      kind: "physical",
+      avdName: null,
+      serial: resolvedConnect,
+      label: row.name,
+      port: null,
+    });
 
     reply.code(201);
     return toListItem(row, app.device.get(String(row.id))?.toInfo());

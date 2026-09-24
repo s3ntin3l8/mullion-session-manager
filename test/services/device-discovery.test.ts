@@ -7,8 +7,8 @@ import { DeviceDiscoveryService } from "../../src/services/device-discovery.js";
 // unverifiable in this suite (and would be flaky if it were). Most tests
 // here drive the service through its `__debugHandleServiceForTest` seam,
 // which feeds the same up/down handlers the real Browser would invoke, so
-// the cache-matching / group-by-host / TXT-merge / resolveHost logic gets
-// exercised without a live responder.
+// the cache-matching / group-by-SRV-hostname / TXT-merge / resolveDialHost
+// logic gets exercised without a live responder.
 //
 // A handful of tests verify the bonjour-service contract itself —
 // specifically, that `find()` is called with the short type form
@@ -128,7 +128,7 @@ describe("DeviceDiscoveryService", () => {
     });
   });
 
-  describe("resolveHost (Hermes warning on #1381)", () => {
+  describe("resolveDialHost (Hermes warning on #1381)", () => {
     it("prefers the first IPv4 entry of addresses[] over service.host (the SRV-target .local hostname)", () => {
       // Mirror what bonjour-service actually surfaces: host is the mDNS
       // hostname, addresses[] is the A/AAAA-record list. Without the fix
@@ -146,6 +146,7 @@ describe("DeviceDiscoveryService", () => {
         txt: {},
       });
       expect(svc.getDiscovered()[0]).toMatchObject({
+        id: "Android.local",
         host: "192.168.1.42",
         pairingAddress: "192.168.1.42:41234",
       });
@@ -204,28 +205,34 @@ describe("DeviceDiscoveryService", () => {
       svc.stop();
     });
 
-    it("re-keys from hostname to IPv4 when the A-record lands (srv-update), emitting down for the old host and up for the new (W4 on #1381)", () => {
+    it("keeps the same id when the A-record lands (srv-update), emitting update not down/up (W4 / Hermes suggestion 3 on #1381)", () => {
+      // Group key is the SRV hostname, which does not change when the A
+      // record resolves — so consumers see one stable entry whose `host`
+      // transitions hostname → IPv4 as an `update`, not a down/up re-key
+      // that would drop a mid-flight selection.
       const changes: Array<{ kind: string; id?: string; host?: string }> = [];
       const svc = new DeviceDiscoveryService({
         enabled: true,
         onChange: (change) => {
           if (change.kind === "down") changes.push({ kind: change.kind, id: change.id });
-          else changes.push({ kind: change.kind, host: change.device.host });
+          else changes.push({ kind: change.kind, id: change.device.id, host: change.device.host });
         },
       });
       svc.start();
-      // First event: no A-record yet → hostname fallback.
+      // First event: no A-record yet → hostname fallback for dial.
       emitUp(svc, "_adb-tls-pairing._tcp", {
         name: "Pixel",
         host: "Android.local",
         port: 41234,
         addresses: [],
       });
-      expect(svc.getDiscovered()[0].host).toBe("Android.local");
-      // srv-update: A-record arrives → resolveHost now returns the IPv4.
-      // The cache is keyed by fqdn, so this updates the SAME record; the
-      // grouped view re-keys from hostname to IP. Consumers see down for
-      // the phantom hostname entry and up for the dialable IP.
+      expect(svc.getDiscovered()[0]).toMatchObject({
+        id: "Android.local",
+        host: "Android.local",
+      });
+      // srv-update: A-record arrives → dial host becomes the IPv4. The
+      // group key (SRV hostname) is unchanged, so this is an `update`
+      // on the same id — not down(hostname) + up(ip).
       emitUp(svc, "_adb-tls-pairing._tcp", {
         name: "Pixel",
         host: "Android.local",
@@ -233,15 +240,45 @@ describe("DeviceDiscoveryService", () => {
         addresses: ["192.168.1.42"],
       });
       expect(svc.getDiscovered()[0]).toMatchObject({
-        id: "192.168.1.42",
+        id: "Android.local",
         host: "192.168.1.42",
         pairingAddress: "192.168.1.42:41234",
       });
       expect(changes).toEqual([
-        { kind: "up", host: "Android.local" },
-        { kind: "down", id: "Android.local" },
-        { kind: "up", host: "192.168.1.42" },
+        { kind: "up", id: "Android.local", host: "Android.local" },
+        { kind: "update", id: "Android.local", host: "192.168.1.42" },
       ]);
+      svc.stop();
+    });
+
+    it("groups pairing (A resolved) + connect (A not yet resolved) under ONE entry keyed by SRV hostname (Hermes suggestion 3 on #1381)", () => {
+      // The IP-keyed grouping bug: pairing has landed its A record but
+      // connect has not yet — old code put them under different keys
+      // (192.168.1.42 vs Android.local) and the phone showed as two rows.
+      // SRV hostname is shared by both records, so they always merge.
+      const svc = new DeviceDiscoveryService({ enabled: true });
+      svc.start();
+      emitUp(svc, "_adb-tls-pairing._tcp", {
+        name: "Pixel",
+        host: "Android.local",
+        port: 41234,
+        addresses: ["192.168.1.42"],
+      });
+      emitUp(svc, "_adb-tls-connect._tcp", {
+        name: "Pixel",
+        host: "Android.local",
+        port: 37251,
+        addresses: [],
+      });
+      const discovered = svc.getDiscovered();
+      expect(discovered).toHaveLength(1);
+      // Dial prefers the concrete IPv4 from whichever record has it.
+      expect(discovered[0]).toMatchObject({
+        id: "Android.local",
+        host: "192.168.1.42",
+        pairingAddress: "192.168.1.42:41234",
+        connectAddress: "192.168.1.42:37251",
+      });
       svc.stop();
     });
 
@@ -260,6 +297,7 @@ describe("DeviceDiscoveryService", () => {
       // "999.1.1.1" and "not-an-ip" are not valid IPv4 — the function
       // should skip them and land on the one valid v4 entry.
       expect(svc.getDiscovered()[0].host).toBe("192.168.1.42");
+      expect(svc.getDiscovered()[0].id).toBe("Android.local");
       svc.stop();
     });
   });
@@ -352,6 +390,9 @@ describe("DeviceDiscoveryService", () => {
       const discovered = svc.getDiscovered();
       expect(discovered).toHaveLength(1);
       expect(discovered[0]).toMatchObject({
+        // Group key is SRV `host`; when the phone advertises an IP as the
+        // SRV target (common in seeded tests / some responders) that IP is
+        // both the id and the dial address.
         id: "192.168.1.23",
         name: "Pixel 7",
         host: "192.168.1.23",
@@ -496,7 +537,7 @@ describe("DeviceDiscoveryService", () => {
       svc.stop();
     });
 
-    it("getById round-trips the entry by host", () => {
+    it("getById round-trips the entry by group key", () => {
       const svc = new DeviceDiscoveryService({ enabled: true });
       svc.start();
       emitUp(svc, "_adb-tls-pairing._tcp", {
@@ -509,7 +550,7 @@ describe("DeviceDiscoveryService", () => {
       svc.stop();
     });
 
-    it("evict(id) drops every service record whose resolved host is id (W1's cache-poisoning escape hatch)", () => {
+    it("evict(id) drops every service record whose group key is id (W1's cache-poisoning escape hatch)", () => {
       const svc = new DeviceDiscoveryService({ enabled: true });
       svc.start();
       emitUp(svc, "_adb-tls-pairing._tcp", {
