@@ -220,7 +220,7 @@ keep terminal sessions alive across redeploys, which a container lifecycle
 can't guarantee. There is no Docker image; `deploy/install.sh` bootstraps a
 fresh host into a versioned-release layout (fed by a CI-built release
 tarball) with a `systemd --user` unit, and updates after that go through the
-in-app Settings → Server info "Update now" button. This is fully supported,
+in-app Settings → Server "Update now" button. This is fully supported,
 not a stopgap: `deploy/` also has a Traefik dynamic-config router and an
 Authentik forwardAuth reference — see
 [`deploy/README.md`](deploy/README.md) for the full layout and install

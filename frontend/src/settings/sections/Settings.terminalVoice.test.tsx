@@ -10,7 +10,7 @@ import { jsonResponse } from "../../test/jsonResponse.js";
 // Model: Settings.notifications.test.tsx's fake-in-memory-backend pattern —
 // renders the real Settings modal (TerminalSection reads settings/
 // updateSettings straight off the store, same as every other section) with
-// initialSection="terminal", and asserts both the immediate optimistic
+// initialSection="input", and asserts both the immediate optimistic
 // store write and the debounced PATCH body.
 describe("Settings -> Terminal -> Voice dictation", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
@@ -33,7 +33,7 @@ describe("Settings -> Terminal -> Voice dictation", () => {
   });
 
   it("renders the voice dictation toggles and language dropdown with their current values", async () => {
-    render(<Settings onClose={vi.fn()} initialSection="terminal" />);
+    render(<Settings onClose={vi.fn()} initialSection="input" />);
 
     await screen.findByText("Voice dictation");
     expect(screen.getByText("Enable dictation")).toBeInTheDocument();
@@ -43,7 +43,7 @@ describe("Settings -> Terminal -> Voice dictation", () => {
 
   it("toggling 'Enable dictation' off patches terminal.voice.enabled and PATCHes it, debounced", async () => {
     const user = userEvent.setup();
-    render(<Settings onClose={vi.fn()} initialSection="terminal" />);
+    render(<Settings onClose={vi.fn()} initialSection="input" />);
 
     const toggle = await screen.findByRole("button", { name: "Enable dictation" });
     await user.click(toggle);
@@ -63,7 +63,7 @@ describe("Settings -> Terminal -> Voice dictation", () => {
 
   it("toggling the hotkey off leaves 'Enable dictation' untouched", async () => {
     const user = userEvent.setup();
-    render(<Settings onClose={vi.fn()} initialSection="terminal" />);
+    render(<Settings onClose={vi.fn()} initialSection="input" />);
 
     const toggle = await screen.findByRole("button", { name: "Dictation hotkey" });
     await user.click(toggle);
@@ -91,7 +91,7 @@ describe("Settings -> Terminal -> Voice dictation", () => {
 
   it("renders the current hotkey chord and captures a new one into a PATCH (#1119)", async () => {
     const user = userEvent.setup();
-    render(<Settings onClose={vi.fn()} initialSection="terminal" />);
+    render(<Settings onClose={vi.fn()} initialSection="input" />);
 
     await screen.findByText("Hotkey combo");
     expect(screen.getByText("Ctrl + Shift + Space")).toBeInTheDocument();
@@ -115,7 +115,7 @@ describe("Settings -> Terminal -> Voice dictation", () => {
 
   it("clicking away while armed cancels capture instead of leaving it swallowing keys modal-wide", async () => {
     const user = userEvent.setup();
-    render(<Settings onClose={vi.fn()} initialSection="terminal" />);
+    render(<Settings onClose={vi.fn()} initialSection="input" />);
 
     await screen.findByText("Hotkey combo");
     await user.click(screen.getByRole("button", { name: "Record dictation hotkey" }));
@@ -151,7 +151,7 @@ describe("Settings -> Terminal -> Voice dictation", () => {
 
   it("rejects a chord already claimed by the find bar and shows why, without patching", async () => {
     const user = userEvent.setup();
-    render(<Settings onClose={vi.fn()} initialSection="terminal" />);
+    render(<Settings onClose={vi.fn()} initialSection="input" />);
 
     await screen.findByText("Hotkey combo");
     await user.click(screen.getByRole("button", { name: "Record dictation hotkey" }));
@@ -168,7 +168,7 @@ describe("Settings -> Terminal -> Voice dictation", () => {
 
   it("Escape after a rejected combo clears the stale error, not just the capture state", async () => {
     const user = userEvent.setup();
-    render(<Settings onClose={vi.fn()} initialSection="terminal" />);
+    render(<Settings onClose={vi.fn()} initialSection="input" />);
 
     await screen.findByText("Hotkey combo");
     await user.click(screen.getByRole("button", { name: "Record dictation hotkey" }));
@@ -184,7 +184,7 @@ describe("Settings -> Terminal -> Voice dictation", () => {
 
   it("turning off the hotkey toggle mid-error clears the stale error under the now-disabled field", async () => {
     const user = userEvent.setup();
-    render(<Settings onClose={vi.fn()} initialSection="terminal" />);
+    render(<Settings onClose={vi.fn()} initialSection="input" />);
 
     await screen.findByText("Hotkey combo");
     await user.click(screen.getByRole("button", { name: "Record dictation hotkey" }));
@@ -212,7 +212,7 @@ describe("Settings -> Terminal -> Voice dictation", () => {
 
   it("changing the dictation language patches terminal.voice.lang", async () => {
     const user = userEvent.setup();
-    render(<Settings onClose={vi.fn()} initialSection="terminal" />);
+    render(<Settings onClose={vi.fn()} initialSection="input" />);
 
     await screen.findByText("Dictation language");
     await user.selectOptions(screen.getByRole("combobox"), "de-DE");

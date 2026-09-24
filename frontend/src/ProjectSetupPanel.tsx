@@ -353,18 +353,18 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
                 This project has opted out of workflow-conventions injection (Session injection for
                 this project → Workflow conventions, in the Mullion Briefing panel), so this will
                 commit Mullion's own built-in defaults{scaffoldDefaultsDisclosure} regardless of
-                anything configured in Settings → Sessions.
+                anything configured in Settings → Agent context & skills.
               </>
             ) : workflowConventionsText.length > 0 ? (
               <>
-                This install's own conventions, from Settings → Sessions — the same text already
-                injected into every session on this project.
+                This install's own conventions, from Settings → Agent context & skills — the same
+                text already injected into every session on this project.
               </>
             ) : (
               <>
-                No conventions configured yet in Settings → Sessions, so this will commit Mullion's
-                own built-in defaults{scaffoldDefaultsDisclosure} — configure your own there first
-                if these aren't right for this project.
+                No conventions configured yet in Settings → Agent context & skills, so this will
+                commit Mullion's own built-in defaults{scaffoldDefaultsDisclosure} — configure your
+                own there first if these aren't right for this project.
               </>
             )}
           </div>

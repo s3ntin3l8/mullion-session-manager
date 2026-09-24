@@ -4,8 +4,16 @@ import { api, normalizeAgentId } from "../../api/index.js";
 import type { Agent } from "../../api/index.js";
 import { resolveAgentLogo } from "../../cliLogos.js";
 import { RefreshIcon } from "../../ui/icons.js";
-import { Dropdown, Eyebrow, Row, SecondaryButton, Toggle } from "../../ui/primitives.js";
+import {
+  Dropdown,
+  Eyebrow,
+  GroupHeading,
+  Row,
+  SecondaryButton,
+  Toggle,
+} from "../../ui/primitives.js";
 import { AGENT_OPTIONS } from "../agentOptions.js";
+import { ModelsSection } from "./ModelsSection.js";
 
 const SHELL_OPTIONS = [
   { value: "zsh", label: "zsh" },
@@ -178,6 +186,11 @@ export function LaunchersSection() {
           {copied ? "Copied path" : "Manage"}
         </SecondaryButton>
       </Row>
+
+      <div style={{ paddingTop: 12 }}>
+        <GroupHeading title="opencode models" desc="Default model for opencode sessions." />
+      </div>
+      <ModelsSection />
     </>
   );
 }

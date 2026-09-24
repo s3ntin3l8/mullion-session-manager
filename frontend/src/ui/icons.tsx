@@ -528,6 +528,15 @@ export function MicIcon(props: IconProps) {
   );
 }
 
+export function KeyboardIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <rect x="2" y="5" width="20" height="14" rx="2" />
+      <path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M18 13h.01M10 13h4M7 16h10" />
+    </Svg>
+  );
+}
+
 export function StarIcon(props: IconProps) {
   return (
     <Svg {...props}>

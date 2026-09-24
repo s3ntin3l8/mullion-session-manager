@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { Settings } from "../../Settings.js";
+import { ModelsSection } from "./ModelsSection.js";
 import { useDashboardStore } from "../../store/index.js";
 import { DEFAULT_SETTINGS } from "../../api/index.js";
 import { jsonResponse } from "../../test/jsonResponse.js";
@@ -38,7 +38,7 @@ describe("Settings -> Models", () => {
   });
 
   it("populates all three selects from the model catalog", async () => {
-    render(<Settings onClose={vi.fn()} initialSection="models" />);
+    render(<ModelsSection />);
 
     const selects = await screen.findAllByRole("combobox");
     expect(selects).toHaveLength(3);
@@ -56,7 +56,7 @@ describe("Settings -> Models", () => {
       },
       settingsLoaded: true,
     });
-    render(<Settings onClose={vi.fn()} initialSection="models" />);
+    render(<ModelsSection />);
 
     const selects = await screen.findAllByRole("combobox");
     expect(selects).toHaveLength(3);
@@ -67,7 +67,7 @@ describe("Settings -> Models", () => {
 
   it("selecting a model PATCHes settings.opencode with the chosen key only", async () => {
     const user = userEvent.setup();
-    render(<Settings onClose={vi.fn()} initialSection="models" />);
+    render(<ModelsSection />);
 
     const [implementerSelect] = await screen.findAllByRole("combobox");
     // Wait for the catalog fetch to resolve and populate the <option>s
@@ -110,7 +110,7 @@ describe("Settings -> Models", () => {
       }
       return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
     });
-    render(<Settings onClose={vi.fn()} initialSection="models" />);
+    render(<ModelsSection />);
 
     expect(await screen.findByText(/couldn't load the model catalog/i)).toBeInTheDocument();
   });
@@ -129,7 +129,7 @@ describe("Settings -> Models", () => {
       }
       return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
     });
-    render(<Settings onClose={vi.fn()} initialSection="models" />);
+    render(<ModelsSection />);
 
     expect(
       await screen.findByText(/opencode returned no models.*installed.*configured provider/i),

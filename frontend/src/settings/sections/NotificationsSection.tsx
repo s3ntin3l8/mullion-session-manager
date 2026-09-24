@@ -6,7 +6,15 @@ import { requestNotificationPermission } from "../../desktopNotify.js";
 import { disablePush, enablePush, isPushSupported } from "../../pushClient.js";
 import { STATUS_PRESENTATION, isStatusReachable } from "../../sessionStatus.js";
 import { BellIcon } from "../../ui/icons.js";
-import { Dropdown, ListRow, Row, Slider, StyledList, Toggle } from "../../ui/primitives.js";
+import {
+  Dropdown,
+  GroupHeading,
+  ListRow,
+  Row,
+  Slider,
+  StyledList,
+  Toggle,
+} from "../../ui/primitives.js";
 
 const SOUND_OPTIONS: Array<{ value: SoundName; label: string }> = [
   { value: "ping", label: "Ping" },
@@ -63,9 +71,7 @@ export function NotificationsSection() {
       </Row>
 
       <div style={{ paddingTop: 6 }}>
-        <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 10 }}>
-          Delivery channels
-        </div>
+        <GroupHeading title="Delivery channels" />
         <StyledList>
           <ListRow
             icon={<BellIcon size={16} />}
@@ -146,13 +152,10 @@ export function NotificationsSection() {
       </div>
 
       <div style={{ paddingTop: 12 }}>
-        <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 10 }}>
-          Status notifications
-        </div>
-        <div style={{ fontSize: 10, color: "var(--dim)", marginBottom: 10, lineHeight: 1.4 }}>
-          Toggle which session statuses fire a browser/sound notification or auto-focus the pane.
-          Only statuses reachable by at least one detected agent are shown.
-        </div>
+        <GroupHeading
+          title="Status notifications"
+          desc="Toggle which session statuses fire a browser/sound notification or auto-focus the pane. Only statuses reachable by at least one detected agent are shown."
+        />
         <div
           style={{
             display: "grid",

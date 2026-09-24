@@ -78,7 +78,7 @@ describe("Settings -> Sessions -> Bundle sync panel", () => {
   });
 
   it("fetches status on mount and renders a synced row per detected CLI", async () => {
-    render(<Settings onClose={vi.fn()} initialSection="sessions" />);
+    render(<Settings onClose={vi.fn()} initialSection="agent-context" />);
 
     await waitFor(() => expect(statusCalls).toBeGreaterThan(0));
     expect(await screen.findByTestId("bundle-sync-row-claude-code")).toBeInTheDocument();
@@ -109,7 +109,7 @@ describe("Settings -> Sessions -> Bundle sync panel", () => {
       })),
     });
 
-    render(<Settings onClose={vi.fn()} initialSection="sessions" />);
+    render(<Settings onClose={vi.fn()} initialSection="agent-context" />);
 
     expect(await screen.findByText(/Bundle delivery is off/)).toBeInTheDocument();
     expect(screen.queryByTestId("bundle-sync-row-claude-code")).not.toBeInTheDocument();
@@ -127,7 +127,7 @@ describe("Settings -> Sessions -> Bundle sync panel", () => {
   it("keeps showing per-CLI rows when the toggle is locally on even if a stale status response still says disabled", async () => {
     statusResponse = makeStatus({ enabled: false });
 
-    render(<Settings onClose={vi.fn()} initialSection="sessions" />);
+    render(<Settings onClose={vi.fn()} initialSection="agent-context" />);
 
     expect(await screen.findByTestId("bundle-sync-row-claude-code")).toBeInTheDocument();
     expect(screen.queryByText(/Bundle delivery is off/)).not.toBeInTheDocument();
@@ -140,7 +140,7 @@ describe("Settings -> Sessions -> Bundle sync panel", () => {
       ),
     });
 
-    render(<Settings onClose={vi.fn()} initialSection="sessions" />);
+    render(<Settings onClose={vi.fn()} initialSection="agent-context" />);
 
     const agyRow = await screen.findByTestId("bundle-sync-row-agy");
     expect(agyRow.textContent).toContain("Stale");
@@ -157,7 +157,7 @@ describe("Settings -> Sessions -> Bundle sync panel", () => {
       }),
     });
 
-    render(<Settings onClose={vi.fn()} initialSection="sessions" />);
+    render(<Settings onClose={vi.fn()} initialSection="agent-context" />);
 
     const claudeRow = await screen.findByTestId("bundle-sync-row-claude-code");
     expect(claudeRow.textContent).toMatch(/per-session fallback/);
@@ -188,7 +188,7 @@ describe("Settings -> Sessions -> Bundle sync panel", () => {
       return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
     });
 
-    render(<Settings onClose={vi.fn()} initialSection="sessions" />);
+    render(<Settings onClose={vi.fn()} initialSection="agent-context" />);
     await screen.findByTestId("bundle-sync-row-claude-code");
     const callsBeforeResync = statusCalls;
 
@@ -215,7 +215,7 @@ describe("Settings -> Sessions -> Bundle sync panel", () => {
       return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
     });
 
-    render(<Settings onClose={vi.fn()} initialSection="sessions" />);
+    render(<Settings onClose={vi.fn()} initialSection="agent-context" />);
     await screen.findByTestId("bundle-sync-row-claude-code");
 
     await user.click(screen.getByText("Re-sync now"));
@@ -245,7 +245,7 @@ describe("Settings -> Sessions -> Bundle sync panel", () => {
       return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
     });
 
-    render(<Settings onClose={vi.fn()} initialSection="sessions" />);
+    render(<Settings onClose={vi.fn()} initialSection="agent-context" />);
     await screen.findByTestId("bundle-sync-row-claude-code");
 
     const removeButton = screen

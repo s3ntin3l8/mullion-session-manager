@@ -45,7 +45,7 @@ describe("Settings -> Sessions -> Workflow conventions textarea", () => {
 
   it("renders the current value and updates the store immediately on change", async () => {
     const user = userEvent.setup();
-    render(<Settings onClose={vi.fn()} initialSection="sessions" />);
+    render(<Settings onClose={vi.fn()} initialSection="agent-context" />);
 
     const textarea = await screen.findByPlaceholderText(/No workflow conventions configured yet/);
     expect(textarea).toHaveValue("");
@@ -59,7 +59,7 @@ describe("Settings -> Sessions -> Workflow conventions textarea", () => {
 
   it("PATCHes /api/settings with the changed field, debounced", async () => {
     const user = userEvent.setup();
-    render(<Settings onClose={vi.fn()} initialSection="sessions" />);
+    render(<Settings onClose={vi.fn()} initialSection="agent-context" />);
 
     const textarea = await screen.findByPlaceholderText(/No workflow conventions configured yet/);
     await user.type(textarea, "x");
@@ -130,7 +130,7 @@ describe("Settings -> Sessions -> workflow-conventions wizard", () => {
 
   it("opens the wizard, walks through a question, previews, and applies the result to the textarea", async () => {
     const user = userEvent.setup();
-    render(<Settings onClose={vi.fn()} initialSection="sessions" />);
+    render(<Settings onClose={vi.fn()} initialSection="agent-context" />);
 
     await user.click(await screen.findByText("Generate with wizard"));
 
@@ -157,7 +157,7 @@ describe("Settings -> Sessions -> workflow-conventions wizard", () => {
 
   it("cancelling the wizard (Escape) leaves the textarea untouched", async () => {
     const user = userEvent.setup();
-    render(<Settings onClose={vi.fn()} initialSection="sessions" />);
+    render(<Settings onClose={vi.fn()} initialSection="agent-context" />);
 
     await user.click(await screen.findByText("Generate with wizard"));
     await screen.findByText("Direct commits, or always branch + PR?");
@@ -206,7 +206,7 @@ describe("Settings -> Sessions -> workflow-conventions wizard", () => {
     });
 
     const user = userEvent.setup();
-    render(<Settings onClose={vi.fn()} initialSection="sessions" />);
+    render(<Settings onClose={vi.fn()} initialSection="agent-context" />);
 
     await user.click(await screen.findByText("Generate with wizard"));
     await screen.findByText("Direct commits, or always branch + PR?");
@@ -307,7 +307,7 @@ describe("Settings -> Sessions -> workflow-conventions wizard (pre-fill and revi
     useDashboardStore.setState({ settings: DEFAULT_SETTINGS, settingsLoaded: true });
 
     const user = userEvent.setup();
-    render(<Settings onClose={vi.fn()} initialSection="sessions" />);
+    render(<Settings onClose={vi.fn()} initialSection="agent-context" />);
 
     await user.click(await screen.findByText("Generate with wizard"));
 
@@ -327,7 +327,7 @@ describe("Settings -> Sessions -> workflow-conventions wizard (pre-fill and revi
     useDashboardStore.setState({ settings: DEFAULT_SETTINGS, settingsLoaded: true });
 
     const user = userEvent.setup();
-    render(<Settings onClose={vi.fn()} initialSection="sessions" />);
+    render(<Settings onClose={vi.fn()} initialSection="agent-context" />);
 
     await user.click(await screen.findByText("Generate with wizard"));
     await screen.findByText("Direct commits, or always branch + PR?");
@@ -349,7 +349,7 @@ describe("Settings -> Sessions -> workflow-conventions wizard (pre-fill and revi
     useDashboardStore.setState({ settings: settingsWithAnswers, settingsLoaded: true });
 
     const user = userEvent.setup();
-    render(<Settings onClose={vi.fn()} initialSection="sessions" />);
+    render(<Settings onClose={vi.fn()} initialSection="agent-context" />);
 
     await user.click(await screen.findByText("Generate with wizard"));
 
@@ -378,7 +378,7 @@ describe("Settings -> Sessions -> workflow-conventions wizard (pre-fill and revi
     useDashboardStore.setState({ settings: settingsWithAnswers, settingsLoaded: true });
 
     const user = userEvent.setup();
-    render(<Settings onClose={vi.fn()} initialSection="sessions" />);
+    render(<Settings onClose={vi.fn()} initialSection="agent-context" />);
 
     await user.click(await screen.findByText("Generate with wizard"));
     await screen.findByText("Your last answers. Click one to change it, or regenerate as-is.");
@@ -407,7 +407,7 @@ describe("Settings -> Sessions -> workflow-conventions wizard (pre-fill and revi
     useDashboardStore.setState({ settings: settingsWithAnswers, settingsLoaded: true });
 
     const user = userEvent.setup();
-    render(<Settings onClose={vi.fn()} initialSection="sessions" />);
+    render(<Settings onClose={vi.fn()} initialSection="agent-context" />);
 
     await user.click(await screen.findByText("Generate with wizard"));
     await screen.findByText("Your last answers. Click one to change it, or regenerate as-is.");
@@ -447,7 +447,7 @@ describe("Settings -> Sessions -> workflow-conventions wizard (pre-fill and revi
     useDashboardStore.setState({ settings: settingsWithHandEdit, settingsLoaded: true });
 
     const user = userEvent.setup();
-    render(<Settings onClose={vi.fn()} initialSection="sessions" />);
+    render(<Settings onClose={vi.fn()} initialSection="agent-context" />);
 
     await user.click(await screen.findByText("Generate with wizard"));
 
@@ -459,7 +459,7 @@ describe("Settings -> Sessions -> workflow-conventions wizard (pre-fill and revi
     useDashboardStore.setState({ settings: DEFAULT_SETTINGS, settingsLoaded: true });
 
     const user = userEvent.setup();
-    render(<Settings onClose={vi.fn()} initialSection="sessions" />);
+    render(<Settings onClose={vi.fn()} initialSection="agent-context" />);
 
     await user.click(await screen.findByText("Generate with wizard"));
     await screen.findByText("Direct commits, or always branch + PR?");

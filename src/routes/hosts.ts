@@ -231,7 +231,7 @@ export async function hostsRoute(app: FastifyInstance) {
   app.get<{ Params: { id: string } }>("/api/hosts/:id/update", async (request, reply) => {
     const { id } = request.params;
     if (id === LOCAL_HOST_ID) {
-      return reply.badRequest("the local host updates from Settings -> Server info, not here");
+      return reply.badRequest("the local host updates from Settings → Server, not here");
     }
     if (!getHostRow(app, id)) return reply.notFound();
     const client = getRemoteHostClient(app, id);
@@ -325,7 +325,7 @@ export async function hostsRoute(app: FastifyInstance) {
   app.post<{ Params: { id: string } }>("/api/hosts/:id/update/apply", async (request, reply) => {
     const { id } = request.params;
     if (id === LOCAL_HOST_ID) {
-      return reply.badRequest("the local host updates from Settings -> Server info, not here");
+      return reply.badRequest("the local host updates from Settings → Server, not here");
     }
     if (!getHostRow(app, id)) return reply.notFound();
     const client = getRemoteHostClient(app, id);

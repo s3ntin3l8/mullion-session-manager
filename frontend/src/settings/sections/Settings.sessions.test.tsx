@@ -436,7 +436,7 @@ describe("Settings -> Sessions -> Inject agent guide", () => {
   });
 
   it("renders the current (default-on) toggle state", async () => {
-    render(<Settings onClose={vi.fn()} initialSection="sessions" />);
+    render(<Settings onClose={vi.fn()} initialSection="agent-context" />);
     const row = await screen.findByText("Inject agent guide");
     const toggle = row.closest(".settings-row")?.querySelector("button");
     expect(toggle).toHaveAttribute("aria-pressed", "true");
@@ -444,7 +444,7 @@ describe("Settings -> Sessions -> Inject agent guide", () => {
 
   it("toggles the setting and PATCHes /api/settings", async () => {
     const user = userEvent.setup();
-    render(<Settings onClose={vi.fn()} initialSection="sessions" />);
+    render(<Settings onClose={vi.fn()} initialSection="agent-context" />);
     const row = await screen.findByText("Inject agent guide");
     const toggle = row.closest(".settings-row")?.querySelector("button") as HTMLElement;
 
@@ -497,7 +497,7 @@ describe("Settings -> Sessions -> Inject Mullion tooling bundle", () => {
   });
 
   it("renders the current (default-on) toggle state", async () => {
-    render(<Settings onClose={vi.fn()} initialSection="sessions" />);
+    render(<Settings onClose={vi.fn()} initialSection="agent-context" />);
     const row = await screen.findByText("Inject Mullion tooling bundle");
     const toggle = row.closest(".settings-row")?.querySelector("button");
     expect(toggle).toHaveAttribute("aria-pressed", "true");
@@ -505,7 +505,7 @@ describe("Settings -> Sessions -> Inject Mullion tooling bundle", () => {
 
   it("toggles the setting and PATCHes /api/settings", async () => {
     const user = userEvent.setup();
-    render(<Settings onClose={vi.fn()} initialSection="sessions" />);
+    render(<Settings onClose={vi.fn()} initialSection="agent-context" />);
     const row = await screen.findByText("Inject Mullion tooling bundle");
     const toggle = row.closest(".settings-row")?.querySelector("button") as HTMLElement;
 
@@ -562,7 +562,7 @@ describe("Settings -> Sessions -> Inject project briefing", () => {
   });
 
   it("renders the current (default-on) toggle state", async () => {
-    render(<Settings onClose={vi.fn()} initialSection="sessions" />);
+    render(<Settings onClose={vi.fn()} initialSection="agent-context" />);
     const row = await screen.findByText("Inject project briefing");
     const toggle = row.closest(".settings-row")?.querySelector("button");
     expect(toggle).toHaveAttribute("aria-pressed", "true");
@@ -570,7 +570,7 @@ describe("Settings -> Sessions -> Inject project briefing", () => {
 
   it("toggles the setting and PATCHes /api/settings", async () => {
     const user = userEvent.setup();
-    render(<Settings onClose={vi.fn()} initialSection="sessions" />);
+    render(<Settings onClose={vi.fn()} initialSection="agent-context" />);
     const row = await screen.findByText("Inject project briefing");
     const toggle = row.closest(".settings-row")?.querySelector("button") as HTMLElement;
 

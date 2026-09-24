@@ -3,7 +3,14 @@ import { useDashboardStore } from "../../store/index.js";
 import { api } from "../../api/index.js";
 import type { ServerInfo } from "../../api/index.js";
 import { CloseIcon, FolderIcon, PlusIcon, RefreshIcon } from "../../ui/icons.js";
-import { GroupHeading, ListRow, Row, SecondaryButton, StyledList } from "../../ui/primitives.js";
+import {
+  GroupHeading,
+  ListRow,
+  NumberField,
+  Row,
+  SecondaryButton,
+  StyledList,
+} from "../../ui/primitives.js";
 
 export function ProjectsSection() {
   const { settings, updateSettings, projects } = useDashboardStore();
@@ -111,6 +118,19 @@ export function ProjectsSection() {
         </div>
       </Row>
 
+      <Row
+        label="Git auto-fetch interval"
+        desc="How often to fetch origin for auto-fetch projects. 0 to disable."
+      >
+        <NumberField
+          value={settings.sessions.gitAutoFetchIntervalSeconds}
+          min={0}
+          max={3600}
+          width={46}
+          suffix="seconds"
+          onChange={(v) => updateSettings({ sessions: { gitAutoFetchIntervalSeconds: v } })}
+        />
+      </Row>
       <Row label="Global config directory" desc="Where global launchers & dock defaults live.">
         <span className="settings-readonly-value">{info?.crsConfigDir ?? "…"}</span>
       </Row>
