@@ -1,3 +1,5 @@
+import { useSyncExternalStore } from "react";
+
 // Split out of TerminalPane.tsx for the same reason terminalRepaintRegistry.ts
 // is (see that file's own header comment) — a plain module-level registry
 // keyed by sessionId, so react-refresh/only-export-components doesn't apply
@@ -36,9 +38,21 @@
 // attachCustomKeyEventHandler intercepts at all.
 export interface TerminalInputHandle {
   sendInput: (data: string) => void;
-  sendArrow: (direction: "up" | "down") => void;
+  sendArrow: (direction: "up" | "down" | "left" | "right") => void;
   sendCtrlC: () => void;
+  // Same clipboard path as Cmd+V (image-first, bracketed paste, trailing
+  // newline stripped) — see TerminalPane.tsx's pasteHandlerRef.
+  paste: () => void;
+  // Opens the copy view: the buffer as plain, natively selectable text
+  // (xterm has no touch selection of its own).
+  openCopyMode: () => void;
+  // The key bar's sticky Ctrl: while armed, the next single character typed
+  // on the soft keyboard is sent as its control code. `onConsumed` fires
+  // when a one-shot ("once") modifier has been used up.
+  setCtrlModifier: (mode: CtrlModifierMode, onConsumed: () => void) => void;
 }
+
+export type CtrlModifierMode = "off" | "once" | "locked";
 
 // Hermes review, PR #616 round 3 — a stack per sessionId, not a single
 // value: Dock.tsx mounts its own `<TerminalPane params={{ sessionId:
@@ -73,6 +87,7 @@ export function registerTerminalInput(sessionId: number, handle: TerminalInputHa
   const stack = terminalInputRegistry.get(sessionId);
   if (stack) stack.push(handle);
   else terminalInputRegistry.set(sessionId, [handle]);
+  notify();
 }
 
 // Takes the same handle reference passed to registerTerminalInput — not
@@ -84,9 +99,27 @@ export function unregisterTerminalInput(sessionId: number, handle: TerminalInput
   const index = stack.indexOf(handle);
   if (index !== -1) stack.splice(index, 1);
   if (stack.length === 0) terminalInputRegistry.delete(sessionId);
+  notify();
 }
 
 export function getTerminalInputHandle(sessionId: number): TerminalInputHandle | undefined {
   const stack = terminalInputRegistry.get(sessionId);
   return stack?.[stack.length - 1];
+}
+
+const listeners = new Set<() => void>();
+function notify(): void {
+  listeners.forEach((listener) => listener());
+}
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
+/** Live `getTerminalInputHandle(sessionId)`: re-renders when the session's
+ * current handle changes (its TerminalPane remounting), so state pushed into
+ * the terminal — the key bar's sticky Ctrl — can be re-applied to the new
+ * instance instead of silently desyncing. */
+export function useTerminalInputHandle(sessionId: number): TerminalInputHandle | undefined {
+  return useSyncExternalStore(subscribe, () => getTerminalInputHandle(sessionId));
 }

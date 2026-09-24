@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, renderHook, screen, waitFor, fireEvent } from "@testing-library/react";
 import { act } from "react";
+import userEvent from "@testing-library/user-event";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
@@ -9,6 +10,7 @@ import { SearchAddon } from "@xterm/addon-search";
 import type { Theme } from "./store/index.js";
 import { useDashboardStore } from "./store/index.js";
 import { TerminalPane } from "./TerminalPane.js";
+import { useVoiceControls } from "./lib/terminalVoiceRegistry.js";
 import { MAX_TERMINAL_COLS, MAX_TERMINAL_ROWS } from "./lib/terminalGridSize.js";
 import { api } from "./api/index.js";
 import type * as ApiModule from "./api/index.js";
@@ -4014,7 +4016,9 @@ describe("TerminalPane paste-on-right-click vs touch long-press", () => {
     });
     const containerDiv = container.querySelector("div[style*='inset']") as HTMLDivElement;
     const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
-    containerDiv.dispatchEvent(event);
+    act(() => {
+      containerDiv.dispatchEvent(event);
+    });
     return event;
   }
 
@@ -4025,10 +4029,214 @@ describe("TerminalPane paste-on-right-click vs touch long-press", () => {
     expect(fireContextMenu(container).defaultPrevented).toBe(true);
   });
 
-  it("ignores a coarse-pointer long-press instead of pasting", () => {
+  it("a mouse right-click on a coarse-primary device still pastes, not the copy view", () => {
     stubPointer(true);
     stubFakeWebSocket(true);
     const { container } = renderPane();
-    expect(fireContextMenu(container).defaultPrevented).toBe(false);
+    act(() => {
+      useDashboardStore.setState((st) => ({
+        settings: {
+          ...st.settings,
+          terminal: { ...st.settings.terminal, pasteOnRightClick: true },
+        },
+      }));
+    });
+    const containerDiv = container.querySelector("div[style*='inset']") as HTMLDivElement;
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "pointerType", { value: "mouse" });
+    act(() => {
+      containerDiv.dispatchEvent(event);
+    });
+    expect(event.defaultPrevented).toBe(true);
+    expect(screen.queryByRole("dialog", { name: "Copy terminal text" })).toBeNull();
+  });
+
+  it("opens the copy view on a coarse-pointer long-press instead of pasting", () => {
+    stubPointer(true);
+    stubFakeWebSocket(true);
+    const { container } = renderPane();
+    expect(fireContextMenu(container).defaultPrevented).toBe(true);
+    expect(screen.getByRole("dialog", { name: "Copy terminal text" })).toBeInTheDocument();
+    expect(getLatestTermInstance().paste).not.toHaveBeenCalled();
+  });
+});
+
+describe("TerminalPane key-bar handle: arrows, sticky Ctrl, paste, copy view", () => {
+  function handleAndTerm() {
+    const [, handle] = vi.mocked(registerTerminalInput).mock.calls.at(-1)!;
+    const term = getLatestTermInstance() as ReturnType<typeof getLatestTermInstance> & {
+      onData: ReturnType<typeof vi.fn>;
+    };
+    const onData = term.onData.mock.calls[0]![0] as (data: string) => void;
+    return { handle, term, onData };
+  }
+
+  function sentText(): string[] {
+    return vi
+      .mocked(fakeWsSend)
+      .mock.calls.map((call) => call[0] as unknown)
+      .filter((arg): arg is ArrayBufferView => ArrayBuffer.isView(arg))
+      .map((bytes) => new TextDecoder().decode(bytes));
+  }
+
+  it("sendArrow emits left/right as CSI D/C", () => {
+    stubFakeWebSocket(true);
+    renderPane();
+    const { handle, term } = handleAndTerm();
+    term.modes.applicationCursorKeysMode = false;
+    handle.sendArrow("left");
+    handle.sendArrow("right");
+    expect(term.input).toHaveBeenNthCalledWith(1, "\x1b[D");
+    expect(term.input).toHaveBeenNthCalledWith(2, "\x1b[C");
+  });
+
+  it("a one-shot Ctrl turns the next typed character into its control code, then releases", async () => {
+    stubFakeWebSocket(true);
+    renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    const { handle, term, onData } = handleAndTerm();
+    const onConsumed = vi.fn();
+    handle.setCtrlModifier("once", onConsumed);
+    expect(term.focus).toHaveBeenCalled();
+
+    onData("c");
+    onData("c");
+    expect(sentText().slice(-2)).toEqual(["\x03", "c"]);
+    expect(onConsumed).toHaveBeenCalledTimes(1);
+  });
+
+  it("a locked Ctrl stays armed, and leaves keys without a control code alone", async () => {
+    stubFakeWebSocket(true);
+    renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    const { handle, onData } = handleAndTerm();
+    const onConsumed = vi.fn();
+    handle.setCtrlModifier("locked", onConsumed);
+
+    onData("a");
+    onData("1");
+    onData("d");
+    handle.setCtrlModifier("off", () => {});
+    onData("d");
+    expect(sentText().slice(-4)).toEqual(["\x01", "1", "\x04", "d"]);
+    expect(onConsumed).not.toHaveBeenCalled();
+  });
+
+  it("paste focuses the terminal and pastes the clipboard text", async () => {
+    Object.defineProperty(navigator, "clipboard", {
+      value: { readText: vi.fn(async () => "echo hi\n") },
+      configurable: true,
+    });
+    stubFakeWebSocket(true);
+    renderPane();
+    const { handle, term } = handleAndTerm();
+    handle.paste();
+    expect(term.focus).toHaveBeenCalled();
+    await waitFor(() => expect(term.paste).toHaveBeenCalledWith("echo hi"));
+  });
+
+  it("openCopyMode shows the copy view; closing it doesn't refocus (no keyboard pop-up)", async () => {
+    stubFakeWebSocket(true);
+    renderPane();
+    const { handle, term } = handleAndTerm();
+    act(() => handle.openCopyMode());
+    expect(screen.getByRole("dialog", { name: "Copy terminal text" })).toBeInTheDocument();
+    term.focus.mockClear();
+    await userEvent.setup().click(screen.getByRole("button", { name: "Done" }));
+    expect(screen.queryByRole("dialog", { name: "Copy terminal text" })).toBeNull();
+    expect(term.focus).not.toHaveBeenCalled();
+  });
+
+  it("the copy view closes when the pane is unmounted/switched away", () => {
+    stubFakeWebSocket(true);
+    const { unmount } = renderPane();
+    const { handle } = handleAndTerm();
+    act(() => handle.openCopyMode());
+    unmount();
+    expect(screen.queryByRole("dialog", { name: "Copy terminal text" })).toBeNull();
+  });
+
+  it("an IME word-commit chunk gets Ctrl on its first letter and loses the committing space", async () => {
+    stubFakeWebSocket(true);
+    renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    const { handle, onData } = handleAndTerm();
+    const onConsumed = vi.fn();
+    handle.setCtrlModifier("once", onConsumed);
+    onData("c ");
+    expect(sentText().at(-1)).toBe("\x03");
+    expect(onConsumed).toHaveBeenCalledTimes(1);
+  });
+
+  it("key-bar keys, Ctrl+C and pastes are never modified by an armed Ctrl", async () => {
+    stubFakeWebSocket(true);
+    renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    const { handle, term, onData } = handleAndTerm();
+    // Real xterm reports input()/paste() through onData synchronously.
+    term.input.mockImplementation((d: string) => onData(d));
+    term.paste.mockImplementation((d: string) => onData(d));
+    const onConsumed = vi.fn();
+    handle.setCtrlModifier("once", onConsumed);
+
+    handle.sendInput("a");
+    Object.defineProperty(navigator, "clipboard", {
+      value: { readText: vi.fn(async () => "b") },
+      configurable: true,
+    });
+    handle.paste();
+    await waitFor(() => expect(term.paste).toHaveBeenCalledWith("b"));
+    expect(sentText().slice(-2)).toEqual(["a", "b"]);
+    expect(onConsumed).not.toHaveBeenCalled();
+
+    onData("c");
+    expect(sentText().at(-1)).toBe("\x03");
+  });
+});
+
+describe("TerminalPane voice mic on a coarse pointer (moves into the key bar)", () => {
+  class FakeSpeechRecognition {
+    continuous = false;
+    interimResults = false;
+    lang = "";
+    onresult: ((event: unknown) => void) | null = null;
+    onerror: ((event: unknown) => void) | null = null;
+    onend: (() => void) | null = null;
+    start = vi.fn();
+    stop = vi.fn();
+    abort = vi.fn();
+  }
+
+  beforeEach(() => {
+    (window as unknown as { SpeechRecognition: unknown }).SpeechRecognition = FakeSpeechRecognition;
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({
+        matches: query === "(pointer: coarse)",
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+  });
+
+  afterEach(() => {
+    delete (window as { SpeechRecognition?: unknown }).SpeechRecognition;
+  });
+
+  it("publishes its controls for the key bar instead of rendering the floating mic", () => {
+    stubFakeWebSocket(true);
+    const { unmount } = renderPane();
+    expect(document.querySelector(".terminal-voice-btn")).toBeNull();
+
+    const { result } = renderHook(() => useVoiceControls(1));
+    expect(result.current).toBeDefined();
+    expect(result.current!.phase).toBe("idle");
+    act(() => result.current!.press());
+    expect(result.current!.phase).toBe("listening");
+    act(() => result.current!.cancel());
+
+    unmount();
+    expect(result.current).toBeUndefined();
   });
 });

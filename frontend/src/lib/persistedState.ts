@@ -111,6 +111,8 @@ export const STORAGE_KEYS = {
   // above. Survives reload/reconnect like the rest; not shared across
   // devices (web-push to other subscribers is untouched — see the issue).
   mutedSessions: "crs.mutedSessions",
+  // MobileKeyBar.tsx — whether the second key row (⋯) is expanded.
+  mobileKeyBarMore: "crs.mobileKeyBarMore",
 } as const;
 
 export type StorageKey = (typeof STORAGE_KEYS)[keyof typeof STORAGE_KEYS];

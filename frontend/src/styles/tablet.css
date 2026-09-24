@@ -121,46 +121,38 @@
     padding-bottom: 0;
   }
 
-  /* Reported bug — under Android Chrome text scaling (or any fallback font
-     wider than the default), the seven buttons' combined intrinsic width
-     can exceed a narrow viewport. `flex: 1`'s implied `min-width: auto`
-     stops them shrinking below that intrinsic size, and the row had no
-     `overflow` of its own to absorb the rest — the tail ran off the right
-     edge, clipped by nothing and unreachable. `overflow-x: auto` plus
-     `touch-action: pan-x` makes the row itself swipeable, the same
-     scrollbar-hiding idiom already used for the dockview tab strip under
-     coarse pointers (xterm.css's own `(pointer: coarse)` block). `pan-x`
-     specifically (not a bare touch-action removal) reserves only the
-     horizontal axis, so the bar stays immune to its ancestors' vertical
-     `touch-action: none` — a horizontal swipe here was never competing with
-     `terminalTouchScroll.ts`'s vertical scrollback drag to begin with. */
+  /* Mobile UI overhaul, phase 3 — rows of equal-width keys (MobileKeyBar.tsx)
+     that always fit the screen. The earlier single row overflowed and
+     became a sideways-scrolling strip whose tail keys sat off-screen; now
+     each row is a grid of `minmax(0, 1fr)` columns (8 keys ≈ 40px each even
+     at 320px) and less-used keys live in the second row behind ⋯. */
   .mobile-key-bar {
+    position: relative;
     display: flex;
+    flex-direction: column;
     flex-shrink: 0;
     border-top: 1px solid var(--border);
     background: var(--chrome);
     padding-bottom: env(safe-area-inset-bottom);
-    overflow-x: auto;
-    touch-action: pan-x;
-    overscroll-behavior-x: contain;
-    scrollbar-width: none;
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
   }
-  .mobile-key-bar::-webkit-scrollbar {
-    display: none;
+  .mobile-key-bar-row {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
   }
-  /* `flex: 1 0 auto` (not the previous bare `flex: 1`, i.e. `1 1 0`) is the
-     other half of the fix — deliberate trade-off: on a screen too narrow to
-     show all seven keys at their `min-width: 44px` touch-target floor, they
-     now overflow (swipeable via the container above) rather than squashing
-     to fit. Guaranteed 44px targets and no silently-clipped keys, at the
-     cost of not all seven being visible at once on the narrowest covers. */
+  .mobile-key-bar-row + .mobile-key-bar-row {
+    border-top: 1px solid var(--border-soft);
+  }
   .mobile-key-bar-btn {
-    flex: 1 0 auto;
-    min-width: 44px;
+    min-width: 0;
     height: 44px;
+    padding: 0;
     display: flex;
     align-items: center;
     justify-content: center;
+    overflow: hidden;
     border: none;
     border-right: 1px solid var(--border-soft);
     background: transparent;
@@ -176,8 +168,30 @@
   .mobile-key-bar-btn:last-child {
     border-right: none;
   }
-  .mobile-key-bar-btn:active {
+  .mobile-key-bar-btn:active,
+  .mobile-key-bar-btn.active {
     background: color-mix(in srgb, var(--fg) 12%, transparent);
+  }
+  /* Sticky Ctrl: tinted while armed for the next key, solid while locked. */
+  .mobile-key-bar-ctrl.once {
+    color: var(--accent-solid);
+    background: color-mix(in srgb, var(--accent-solid) 14%, transparent);
+  }
+  .mobile-key-bar-ctrl.locked {
+    color: #fff;
+    background: var(--accent-solid);
+  }
+  .mobile-key-bar-mic.listening {
+    color: var(--r);
+    animation: cmuxAttn 1.4s ease-out infinite;
+  }
+  .mobile-key-bar-mic:disabled {
+    opacity: 0.4;
+  }
+  /* The live transcript chip floats just above the bar instead of over the
+     terminal's bottom rows. */
+  .mobile-key-bar .terminal-voice-interim {
+    bottom: calc(100% + 8px);
   }
 
   /* Item E — touch targets. .mobile-tab-btn is already sized

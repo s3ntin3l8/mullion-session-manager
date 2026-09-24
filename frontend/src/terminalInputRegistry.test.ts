@@ -11,6 +11,9 @@ function makeHandle(overrides: Partial<TerminalInputHandle> = {}): TerminalInput
     sendInput: vi.fn(),
     sendArrow: vi.fn(),
     sendCtrlC: vi.fn(),
+    paste: vi.fn(),
+    openCopyMode: vi.fn(),
+    setCtrlModifier: vi.fn(),
     ...overrides,
   };
 }
