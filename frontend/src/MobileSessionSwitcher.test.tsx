@@ -176,6 +176,37 @@ describe("MobileSessionSwitcher", () => {
     expect(document.activeElement).toHaveAttribute("aria-current", "true");
   });
 
+  it("cancels an in-flight rename when the sheet is closed from the backdrop", async () => {
+    const props = renderSwitcher({ renamingId: "p2", renameDraft: "half-typed" });
+    const user = userEvent.setup();
+    await user.click(trigger());
+    await user.click(document.querySelector(".mobile-session-backdrop") as HTMLElement);
+    expect(props.onRenameCancel).toHaveBeenCalled();
+    expect(props.onRenameCommit).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("Escape with focus outside the rename input cancels the rename, then closes the sheet", async () => {
+    const props = renderSwitcher({ renamingId: "p2", renameDraft: "x" });
+    const user = userEvent.setup();
+    await user.click(trigger());
+    const sheet = screen.getByRole("dialog");
+    fireEvent.keyDown(screen.getByText("Sessions (3)"), { key: "Escape" });
+    expect(props.onRenameCancel).toHaveBeenCalledTimes(1);
+    expect(sheet).toBeInTheDocument();
+  });
+
+  it("swiping with no active item enters the list at the first or last item", () => {
+    const props = renderSwitcher({ activeId: "floating" });
+    const el = screen.getByRole("button", { name: /Sessions/ });
+    fireEvent.touchStart(el, { touches: [{ clientX: 200, clientY: 20 }] });
+    fireEvent.touchEnd(el, { changedTouches: [{ clientX: 100, clientY: 20 }] });
+    expect(props.onSelect).toHaveBeenLastCalledWith("p1");
+    fireEvent.touchStart(el, { touches: [{ clientX: 100, clientY: 20 }] });
+    fireEvent.touchEnd(el, { changedTouches: [{ clientX: 200, clientY: 20 }] });
+    expect(props.onSelect).toHaveBeenLastCalledWith("p3");
+  });
+
   it("shows a New session button when there are no sessions", async () => {
     const props = renderSwitcher({ items: [], activeId: null });
     const user = userEvent.setup();

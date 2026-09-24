@@ -60,11 +60,23 @@ export function MobileSessionSwitcher({
   // a later keyboard/mouse activation is never eaten.
   const swipedAtRef = useRef(0);
 
+  // Every way of closing the sheet goes through here: an in-flight rename is
+  // cancelled rather than left pending (React fires no onBlur when the
+  // input unmounts), so reopening never shows a stale, unfocused draft.
+  const closeSheet = () => {
+    if (renamingId !== null) onRenameCancel();
+    setOpen(false);
+  };
+
   const { onKeyDown: onTrapKeyDown } = useFocusTrap({ active: open, containerRef: sheetRef });
   const onSheetKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
-    if (e.key === "Escape" && renamingId === null) {
+    if (e.key === "Escape") {
       e.stopPropagation();
-      setOpen(false);
+      // Escape first backs out of a rename (the input's own Escape handler
+      // does the same, and this catches it when focus is elsewhere); a
+      // second Escape closes the sheet.
+      if (renamingId !== null) onRenameCancel();
+      else setOpen(false);
       return;
     }
     onTrapKeyDown(e);
@@ -105,7 +117,7 @@ export function MobileSessionSwitcher({
 
   const select = (id: string) => {
     onSelect(id);
-    setOpen(false);
+    closeSheet();
   };
 
   return (
@@ -127,7 +139,11 @@ export function MobileSessionSwitcher({
           const dx = t.clientX - start.x;
           const dy = t.clientY - start.y;
           if (Math.abs(dx) < SWIPE_COMMIT_PX || Math.abs(dx) < Math.abs(dy) * 1.5) return;
-          const target = active ? swipeTargetId(items, active.id, dx) : items[0].id;
+          // No active item (a floating panel is active): swiping forward
+          // enters the list at its first item, backward at its last.
+          const target = active
+            ? swipeTargetId(items, active.id, dx)
+            : items[dx < 0 ? 0 : items.length - 1].id;
           if (target) {
             swipedAtRef.current = Date.now();
             onSelect(target);
@@ -171,7 +187,7 @@ export function MobileSessionSwitcher({
         createPortal(
           <div
             className={`cmux-root${theme === "light" ? " light" : ""} mobile-session-backdrop`}
-            onClick={() => setOpen(false)}
+            onClick={closeSheet}
           >
             <div
               ref={sheetRef}
@@ -187,7 +203,7 @@ export function MobileSessionSwitcher({
                 <button
                   className="mobile-tab-btn"
                   aria-label="Close session list"
-                  onClick={() => setOpen(false)}
+                  onClick={closeSheet}
                 >
                   <CloseIcon size={14} />
                 </button>
@@ -251,7 +267,7 @@ export function MobileSessionSwitcher({
               <button
                 className="mobile-session-new"
                 onClick={() => {
-                  setOpen(false);
+                  closeSheet();
                   onNewSession();
                 }}
               >
