@@ -1484,11 +1484,9 @@
 
 .mobile-tabs {
   display: none;
-  /* Issue #960 — defensive only: `.mobile-tabs` sits in `.grid-area-body`,
-     a COLUMN flex container, where the flex auto-minimum-size quirk this
-     would guard against applies to height, not width (verified — removing
-     this line doesn't change measured overflow here). Kept in case a
-     future layout change nests this in a row flex parent instead. */
+  /* Issue #960 — `.mobile-tabs` sits in a column flex container, so this
+     alone can't stop it widening; the fix that actually bounds its width is
+     `min-width: 0` on `.grid-area` (a row flex item), see there. */
   min-width: 0;
   flex-shrink: 0;
   align-items: center;
@@ -1695,6 +1693,15 @@
 .grid-area {
   flex: 1;
   min-height: 0;
+  /* Load-bearing on phone: .grid-area is an item in .app-body's ROW flex
+     container, so without this its min-width defaults to its content's
+     min-content width — which includes the full row of non-shrinking
+     .mobile-tab-wrap chips. With enough tabs open that inflated .grid-area
+     past the viewport, left .mobile-tabs nothing to scroll internally (it
+     was as wide as its content), fitted the terminal to the inflated width
+     (right columns clipped), and let the active-tab scroll-into-view scroll
+     the whole .app shell sideways. */
+  min-width: 0;
   display: flex;
   flex-direction: column;
 }

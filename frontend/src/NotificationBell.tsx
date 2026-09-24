@@ -18,6 +18,7 @@ import { formatRelativeAge } from "./relativeTime.js";
 import { useFocusTrap } from "./hooks/useFocusTrap.js";
 import { truncateHead } from "./lib/truncatePath.js";
 import { formatStatusLabel, STATUS_PRESENTATION } from "./sessionStatus.js";
+import { panelPosition } from "./lib/notifPanelPosition.js";
 
 // The toolbar bell, upgraded for issue #169 from a per-session "who's
 // currently ringing" list into an actual event feed: one row per buffered
@@ -469,7 +470,7 @@ export function NotificationBell({
     const reposition = () => {
       if (!btnRef.current) return;
       const rect = btnRef.current.getBoundingClientRect();
-      setPos({ top: rect.bottom + 6, left: rect.left });
+      setPos(panelPosition(rect, window.innerWidth));
     };
     window.addEventListener("resize", reposition);
     return () => window.removeEventListener("resize", reposition);
@@ -488,7 +489,7 @@ export function NotificationBell({
     openRequestRef.current = openRequest;
     if (!btnRef.current) return;
     const rect = btnRef.current.getBoundingClientRect();
-    setPos({ top: rect.bottom + 6, left: rect.left });
+    setPos(panelPosition(rect, window.innerWidth));
     setOpen(true);
   }, [openRequest]);
 
@@ -526,7 +527,7 @@ export function NotificationBell({
           e.stopPropagation();
           if (!open && btnRef.current) {
             const rect = btnRef.current.getBoundingClientRect();
-            setPos({ top: rect.bottom + 6, left: rect.left });
+            setPos(panelPosition(rect, window.innerWidth));
           }
           setOpen((v) => !v);
         }}

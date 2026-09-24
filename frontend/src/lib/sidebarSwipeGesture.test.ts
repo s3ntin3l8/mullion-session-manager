@@ -43,6 +43,28 @@ describe("attachSidebarSwipeGesture", () => {
     detach();
   });
 
+  it("ignores a touch starting inside an ignoreSelector match, even in the edge zone", () => {
+    const onCommit = vi.fn();
+    const strip = document.createElement("div");
+    strip.className = "mobile-tabs";
+    container.appendChild(strip);
+    const detach = attachSidebarSwipeGesture({
+      element: container,
+      commitDirection: 1,
+      edgeZonePx: 24,
+      ignoreSelector: ".mobile-tabs",
+      onCommit,
+    });
+
+    strip.dispatchEvent(touchEvent("touchstart", [{ clientX: 10, clientY: 0 }]));
+    const move = touchEvent("touchmove", [{ clientX: 80, clientY: 0 }]);
+    strip.dispatchEvent(move);
+
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(move.defaultPrevented).toBe(false);
+    detach();
+  });
+
   it("ignores a touch starting outside the edge zone", () => {
     const onCommit = vi.fn();
     const detach = attachSidebarSwipeGesture({

@@ -113,3 +113,28 @@ export function attachMobileTabsEdgeState(element: HTMLElement): () => void {
     mutationObserver.disconnect();
   };
 }
+
+/** Scrolls `strip` horizontally just enough to bring `tab` fully into view
+ * (the `inline: "nearest"` behavior), touching ONLY `strip.scrollLeft`.
+ * `Element.scrollIntoView` walks every scrollable ancestor — including the
+ * `overflow: hidden` `.app` shell, which is still programmatically
+ * scrollable — so any overflow anywhere above the strip made it slide the
+ * whole UI sideways on phone. */
+export function scrollTabIntoStrip(strip: HTMLElement, tab: HTMLElement): void {
+  const stripRect = strip.getBoundingClientRect();
+  const tabRect = tab.getBoundingClientRect();
+  let delta = 0;
+  if (tabRect.left < stripRect.left) {
+    delta = tabRect.left - stripRect.left;
+  } else if (tabRect.right > stripRect.right) {
+    // Never scroll so far right that the tab's left edge leaves the strip
+    // (a tab wider than the strip aligns to its start instead).
+    delta = Math.min(tabRect.right - stripRect.right, tabRect.left - stripRect.left);
+  }
+  if (delta === 0) return;
+  if (typeof strip.scrollBy === "function") {
+    strip.scrollBy({ left: delta, behavior: "smooth" });
+  } else {
+    strip.scrollLeft += delta;
+  }
+}

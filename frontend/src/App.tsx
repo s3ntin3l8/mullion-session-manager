@@ -54,6 +54,7 @@ import { useCoarsePointer } from "./lib/layoutTier.js";
 import type { LayoutTier, LayoutContext } from "./lib/layoutTier.js";
 import {
   attachMobileTabsWheelScroll,
+  scrollTabIntoStrip,
   attachMobileTabsEdgeState,
 } from "./lib/mobileTabsWheelScroll.js";
 import { attachSidebarSwipeGesture } from "./lib/sidebarSwipeGesture.js";
@@ -467,14 +468,13 @@ export function App() {
   }, [activePanelId]);
 
   // Keep the active tab scrolled into view inside .mobile-tabs as tabs are
-  // activated or opened.
+  // activated or opened. scrollTabIntoStrip, not scrollIntoView — the latter
+  // also scrolls ancestors, and used to slide the whole .app shell sideways.
   useEffect(() => {
     if (isMobile && activePanelId) {
-      activeMobileTabRef.current?.scrollIntoView({
-        behavior: "smooth",
-        block: "nearest",
-        inline: "nearest",
-      });
+      const tab = activeMobileTabRef.current;
+      const strip = tab?.closest<HTMLElement>(".mobile-tabs");
+      if (tab && strip) scrollTabIntoStrip(strip, tab);
     }
   }, [isMobile, activePanelId]);
 
@@ -1206,6 +1206,8 @@ export function App() {
       element: el,
       commitDirection: 1,
       edgeZonePx: 24,
+      // Horizontal scrollers flush with the left edge keep their own pans.
+      ignoreSelector: ".mobile-tabs, .mobile-key-bar",
       onCommit: () => setSidebarOpen(true),
     });
   }, [layoutTier, sidebarOpen]);

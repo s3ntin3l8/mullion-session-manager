@@ -93,6 +93,17 @@ body,
   overscroll-behavior-y: none;
 }
 
+/* While the dashboard is mounted its shell is a `position: fixed` .app, so
+   the document itself never needs to scroll. Without this, anything that
+   overflows the viewport (a fixed-position popover, a too-wide row) lets
+   mobile browsers pan or zoom-out the whole page sideways. Scoped via :has()
+   — the login page (.login-root, AuthGate.tsx) relies on normal document
+   scrolling when its card is taller than a landscape/keyboard-up viewport. */
+html:has(.app),
+html:has(.app) body {
+  overflow: hidden;
+}
+
 body {
   font-family:
     "Geist",

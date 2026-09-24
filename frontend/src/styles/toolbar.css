@@ -20,6 +20,10 @@
   background: var(--chrome);
   border-bottom: 1px solid var(--border);
   user-select: none;
+  /* Never wider than the viewport — on phone the 44px touch targets plus the
+     actions group can exceed a 360px screen; .toolbar-actions shrinks and
+     clips (mobile.css) instead of pushing the shell sideways. */
+  min-width: 0;
 }
 
 .toolbar-lead {
@@ -165,6 +169,12 @@
   padding-right: max(12px, env(safe-area-inset-right));
   height: 100%;
   margin-left: auto;
+  min-width: 0;
+}
+/* Buttons keep their full touch-target size; on phone the group clips
+   instead (mobile.css), rather than squeezing every button below 44px. */
+.toolbar-actions > * {
+  flex-shrink: 0;
 }
 
 .run-cmd-btn {

@@ -56,8 +56,13 @@ export function attachSidebarSwipeGesture(params: {
   // `element` (the open sidebar's own dismiss gesture — draggable from
   // anywhere on the panel, not just one edge of it).
   edgeZonePx?: number;
+  // Touches starting inside an element matching this selector never begin
+  // tracking — for horizontal scrollers (the phone tab strip, the key bar)
+  // whose own leftward/rightward pans would otherwise be preventDefault'ed
+  // and turned into a sidebar open when they happen to start in the edge zone.
+  ignoreSelector?: string;
 }): () => void {
-  const { element, commitDirection, onCommit, edgeZonePx } = params;
+  const { element, commitDirection, onCommit, edgeZonePx, ignoreSelector } = params;
 
   let tracking = false;
   let committed = false;
@@ -77,6 +82,10 @@ export function attachSidebarSwipeGesture(params: {
       return;
     }
     const touch = event.touches[0];
+    if (ignoreSelector && event.target instanceof Element && event.target.closest(ignoreSelector)) {
+      reset();
+      return;
+    }
     if (edgeZonePx !== undefined) {
       const rect = element.getBoundingClientRect();
       if (touch.clientX - rect.left > edgeZonePx) {

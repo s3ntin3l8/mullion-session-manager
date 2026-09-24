@@ -3,7 +3,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { attachMobileTabsWheelScroll, attachMobileTabsEdgeState } from "./mobileTabsWheelScroll.js";
+import {
+  attachMobileTabsWheelScroll,
+  attachMobileTabsEdgeState,
+  scrollTabIntoStrip,
+} from "./mobileTabsWheelScroll.js";
 
 // node:fs, not import.meta.glob(?raw) (pwaSplashScreens.test.ts's pattern
 // for reading a real file, preferred to stay in tsconfig.app.json's
@@ -353,5 +357,79 @@ describe("sidebar.css contract with attachMobileTabsEdgeState's classes", () => 
     const right = block![1].match(/right:\s*(-?[\d.]+)/);
     expect(right, "no `right:` declaration on .sidebar-resize-handle").not.toBeNull();
     expect(Number(right![1])).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe("scrollTabIntoStrip", () => {
+  function rect(left: number, right: number): DOMRect {
+    return {
+      left,
+      right,
+      top: 0,
+      bottom: 44,
+      width: right - left,
+      height: 44,
+      x: left,
+      y: 0,
+    } as DOMRect;
+  }
+
+  function setup(tabLeft: number, tabRight: number) {
+    const strip = document.createElement("div");
+    const tab = document.createElement("div");
+    strip.appendChild(tab);
+    strip.getBoundingClientRect = () => rect(0, 300);
+    tab.getBoundingClientRect = () => rect(tabLeft, tabRight);
+    const scrollBy = vi.fn();
+    strip.scrollBy = scrollBy as unknown as HTMLElement["scrollBy"];
+    return { strip, tab, scrollBy };
+  }
+
+  it("does nothing when the tab is already fully visible", () => {
+    const { strip, tab, scrollBy } = setup(50, 150);
+    scrollTabIntoStrip(strip, tab);
+    expect(scrollBy).not.toHaveBeenCalled();
+  });
+
+  it("scrolls right just enough to reveal a tab clipped at the right edge", () => {
+    const { strip, tab, scrollBy } = setup(250, 390);
+    scrollTabIntoStrip(strip, tab);
+    expect(scrollBy).toHaveBeenCalledWith({ left: 90, behavior: "smooth" });
+  });
+
+  it("scrolls left to reveal a tab clipped at the left edge", () => {
+    const { strip, tab, scrollBy } = setup(-60, 80);
+    scrollTabIntoStrip(strip, tab);
+    expect(scrollBy).toHaveBeenCalledWith({ left: -60, behavior: "smooth" });
+  });
+
+  it("aligns a tab wider than the strip to the strip's start", () => {
+    const { strip, tab, scrollBy } = setup(100, 500);
+    scrollTabIntoStrip(strip, tab);
+    expect(scrollBy).toHaveBeenCalledWith({ left: 100, behavior: "smooth" });
+  });
+
+  it("only ever scrolls the strip itself, never an ancestor", () => {
+    const shell = document.createElement("div");
+    const { strip, tab } = setup(250, 390);
+    shell.appendChild(strip);
+    const shellScrollBy = vi.fn();
+    shell.scrollBy = shellScrollBy as unknown as HTMLElement["scrollBy"];
+    scrollTabIntoStrip(strip, tab);
+    expect(shellScrollBy).not.toHaveBeenCalled();
+    expect(shell.scrollLeft).toBe(0);
+  });
+
+  it("falls back to scrollLeft when scrollBy is unavailable", () => {
+    const { strip, tab } = setup(250, 390);
+    Object.defineProperty(strip, "scrollBy", { value: undefined, configurable: true });
+    let left = 0;
+    Object.defineProperty(strip, "scrollLeft", {
+      get: () => left,
+      set: (v: number) => (left = v),
+      configurable: true,
+    });
+    scrollTabIntoStrip(strip, tab);
+    expect(left).toBe(90);
   });
 });
