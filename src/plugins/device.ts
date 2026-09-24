@@ -2,6 +2,7 @@ import fp from "fastify-plugin";
 import type { FastifyInstance } from "fastify";
 import { eq } from "drizzle-orm";
 import { DeviceManager } from "../services/device-manager.js";
+import { DeviceDiscoveryService } from "../services/device-discovery.js";
 import { devices } from "../db/schema.js";
 import { ensureSessionsDir } from "./pty.js";
 
@@ -61,13 +62,30 @@ export const devicePlugin = fp(async (app: FastifyInstance) => {
 
   app.decorate("device", manager);
 
+  // Companion to the manager: the mDNS scanner that surfaces nearby
+  // Android phones in wireless-debugging mode (issue #1378). Gated on
+  // DEVICE_ENABLED AND DEVICE_DISCOVERY_ENABLED — a deployment that never
+  // enabled the device panel (the default) gets neither the manager nor
+  // the scanner, so no multicast socket binds and no 5353 queries are
+  // emitted on a Mullion install that has no business listening for them.
+  // The env-driven `DEVICE_DISCOVERY_ENABLED` knob still works as the
+  // boot-time default; a Settings-UI override will follow in a separate
+  // issue once lazy-bind runtime reconfigure lands.
+  const discovery = new DeviceDiscoveryService({
+    enabled: app.config.DEVICE_ENABLED && app.config.DEVICE_DISCOVERY_ENABLED,
+  });
+  discovery.start();
+  app.decorate("deviceDiscovery", discovery);
+
   app.addHook("onClose", async () => {
     await manager.killAll();
+    discovery.stop();
   });
 });
 
 declare module "fastify" {
   interface FastifyInstance {
     device: DeviceManager;
+    deviceDiscovery: DeviceDiscoveryService;
   }
 }

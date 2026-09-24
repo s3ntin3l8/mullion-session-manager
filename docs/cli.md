@@ -214,6 +214,17 @@ sessionId), not scoped to any project or session.
 - `device pair <pairingAddress> <code>` — one-time `adb pair` against a phone's
   Wireless debugging pairing address/code (Android 11+). Doesn't create a
   device row; the adb server remembers the pairing across Mullion restarts.
+- `device discovered` — list nearby phones in Wireless-debugging mode
+  (mDNS snapshot from `GET /api/devices/discovered`). Empty when
+  `DEVICE_DISCOVERY_ENABLED=false` or nothing is in range.
+- `device pair-and-connect --discovery-id <id> --pairing-code <code> [--connect-address <addr>] [--name <label>]` — atomic pair+connect+insert in
+  one call (issue #1378). Drives the new "Pair a phone" modal's flow from the
+  CLI: list with `device discovered`, pick an `id`, supply the 6-digit code
+  Android shows on the Wireless-debugging screen. `--connect-address` is
+  optional and overrides the cached connect port. Manual fallback:
+  `--pairing-address <addr> --connect-address <addr> --pairing-code <code>`
+  — both ports must be supplied when mDNS doesn't reach the phone. Returns
+  the inserted device row.
 - `device connect <address> [--project <id>] [--name <label>]` — registers and
   connects a physical device already paired, at its (separate) connect
   address. `address` and `pairingAddress` are typically different ports on the

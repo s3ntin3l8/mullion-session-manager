@@ -681,6 +681,23 @@ export const schema = {
       type: "string",
       default: "",
     },
+    // mDNS scanner for the physical-device pairing flow (src/services/
+    // device-discovery.ts). When enabled, the backend binds a Bonjour/
+    // multicast-DNS socket and listens for `_adb-tls-pairing._tcp` /
+    // `_adb-tls-connect._tcp` advertisements from nearby Android phones.
+    // Discovered phones surface in the new "Pair a phone" modal so the
+    // user no longer has to type the phone's IP+pairing-port by hand.
+    // Default on: discovery is purely additive — disabling just falls the
+    // UI back to the manual address+code entry form. mDNS doesn't always
+    // reach segmented networks (corporate VLANs, mDNS-reflector-less
+    // bridges, etc.) — set this to false there to avoid opening a UDP
+    // socket that has no useful traffic. Also requires DEVICE_ENABLED
+    // (the manager-level switch) — see src/plugins/device.ts's combined
+    // gate, which keeps the default-deploy posture unchanged.
+    DEVICE_DISCOVERY_ENABLED: {
+      type: "boolean",
+      default: true,
+    },
     // Absolute path to a unix socket implementing the SSH agent protocol,
     // injected as SSH_AUTH_SOCK into every spawned session (see
     // session-env.ts's "deliberately NOT stripped" comment and
@@ -912,6 +929,7 @@ declare module "fastify" {
       DEVICE_AVDMANAGER_PATH: string;
       DEVICE_SDKMANAGER_PATH: string;
       DEVICE_ANDROID_SDK_ROOT: string;
+      DEVICE_DISCOVERY_ENABLED: boolean;
       MULLION_SOCKET_PATH: string;
       MULLION_SSH_AUTH_SOCK: string;
       MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED: boolean;

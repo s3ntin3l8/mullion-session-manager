@@ -179,7 +179,9 @@ CLI's own explicit-id convention avoids elsewhere).
 mullion device list
 mullion device create <avdName> [--project <id>] [--name <label>]
 mullion device pair <pairingAddress> <code>
+mullion device pair-and-connect [--discovery-id <id> | --pairing-address <addr>] --connect-address <addr> --pairing-code <code> [--name <label>]
 mullion device connect <address> [--project <id>] [--name <label>]
+mullion device discovered
 mullion device stop <id>
 mullion device screenshot <id> [--out <path>]
 mullion device tap <id> <x> <y>
@@ -193,7 +195,11 @@ mullion device logcat <id> [--lines <n>] [--filter <expr>]
 screen shows two separate addresses — a one-time pairing address/code, and a
 longer-lived connect address — and they're not the same port. `pair` doesn't
 create a device row (see the `devices` table bullet above); `connect` does,
-and is the `kind: "physical"` counterpart to `create`.
+and is the `kind: "physical"` counterpart to `create`. `pair-and-connect`
+(added in issue #1378) collapses both steps into one CLI call and is the
+text-equivalent of the new "Pair a phone" modal — supply `--discovery-id`
+(use `mullion device discovered` to find one) to drive pair+connect from a
+cached mDNS entry, or `--pairing-address` to type both ports by hand.
 
 `x`/`y` (and `x1 y1 x2 y2`) are in the device's **video-pixel space**, not
 CSS pixels — the same coordinate space `DevicePane.tsx` rescales mouse events
@@ -235,12 +241,26 @@ and REST do.
 ## 3. REST API
 
 `src/routes/devices.ts` — `GET/POST /api/devices`, `POST /api/devices/pair`,
+`POST /api/devices/pair-and-connect`, `GET /api/devices/discovered`,
 `GET/PATCH/DELETE /api/devices/:id`, `POST /api/devices/:id/action` (body:
 `{action: "screenshot"|"tap"|"swipe"|"text"|"key"|"logcat", ...}`, same shape
 the CLI/MCP surface forwards). `POST /api/devices` takes either
 `{avdName, projectId?, name?}` (emulator) or `{kind: "physical", address,
 projectId?, name?}` (physical); `POST /api/devices/pair` takes
-`{pairingAddress, pairingCode}` and creates no row. `PATCH /api/devices/:id`
+`{pairingAddress, pairingCode}` and creates no row.
+`POST /api/devices/pair-and-connect` (issue #1378) takes either
+`{discoveryId, pairingCode, connectAddress?, name?}` (drives pair+connect
+from the cached mDNS snapshot returned by `GET /api/devices/discovered`)
+or `{pairingAddress, connectAddress, pairingCode, name?}` (manual fallback
+for networks where mDNS doesn't reach — both ports must be supplied). It
+inserts the row first (sync collision guard → 409 if an active physical
+row already owns the same connect address), then awaits pair() — a wrong
+code rolls the insert back and returns 400 so an immediate retry re-pairs
+instead of hitting 409 — then kicks off connect fire-and-forget and
+returns 201. Connect failures after that surface asynchronously via the
+device's own `status`/`error`, not as a 400 from this endpoint. `GET /api/devices/discovered` returns the current mDNS snapshot
+(an empty array when `DEVICE_DISCOVERY_ENABLED=false` or nothing has been
+advertised). `PATCH /api/devices/:id`
 (issue #1347) takes `{address}` and is **physical-only** (an emulator's
 `serial` is synthesized from its own `port` column, not user-supplied) — it
 rewrites the row's `serial` in place (keeping `id`/`name`/`projectId`/
