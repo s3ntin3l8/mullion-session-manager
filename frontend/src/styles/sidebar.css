@@ -7,8 +7,11 @@
   /* Issue #87 — matches .toolbar's own inset-aware height (base rule
      above): a bare 44px here would paint the scrim over the toolbar's
      lower safe-area-inset-top region on a notched device, and its top edge
-     would no longer align with .sidebar-wrapper's own matching top offset. */
-  top: calc(44px + env(safe-area-inset-top));
+     would no longer align with .sidebar-wrapper's own matching top offset.
+     `--shell-top` (issue #1387, tablet.css) follows .app's own top down
+     when iOS pans the visual viewport with the keyboard open; 0px
+     otherwise. */
+  top: calc(44px + env(safe-area-inset-top) + var(--shell-top, 0px));
   left: 0;
   right: 0;
   bottom: 0;
@@ -63,7 +66,7 @@
     /* Matches .toolbar's own inset-aware height (its base rule, near the
        top of toolbar.css) — a bare 44px here would let the drawer start
        under the (now taller, on a notched device) toolbar. */
-    top: calc(44px + env(safe-area-inset-top));
+    top: calc(44px + env(safe-area-inset-top) + var(--shell-top, 0px));
     left: 0;
     bottom: 0;
     width: min(310px, 84vw) !important;
@@ -1565,7 +1568,11 @@
   flex-direction: column;
   justify-content: flex-end;
   /* Keeps the sheet (and its rename input) above the on-screen keyboard —
-     portaled to <body>, it doesn't get .app's own --kb-inset shrink. */
+     portaled to <body>, it doesn't get .app's own --kb-inset shrink.
+     `padding-top` likewise tracks .app's own panned top (issue #1387,
+     tablet.css's --shell-top) so a tall sheet's header can't end up above
+     the visible region while iOS has the visual viewport panned. */
+  padding-top: var(--shell-top, 0px);
   padding-bottom: var(--kb-inset, 0px);
   background: color-mix(in srgb, #000 40%, transparent);
 }
@@ -1675,6 +1682,7 @@
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
+  padding-top: var(--shell-top, 0px);
   padding-bottom: var(--kb-inset, 0px);
   background: color-mix(in srgb, #000 40%, transparent);
 }

@@ -23,6 +23,11 @@ function kbInset(): string {
   return document.documentElement.style.getPropertyValue("--kb-inset");
 }
 
+/** Same as kbInset(), for the visual viewport's own offsetTop (issue #1387). */
+function kbOffsetTop(): string {
+  return document.documentElement.style.getPropertyValue("--kb-offset-top");
+}
+
 // A minimal fake visualViewport — real EventTarget so addEventListener/
 // removeEventListener/dispatchEvent all behave like the browser API this
 // stands in for, rather than hand-rolling a listener registry.
@@ -71,6 +76,7 @@ afterEach(() => {
   // @ts-expect-error — same pattern as the visualViewport delete above.
   delete document.documentElement.clientHeight;
   document.documentElement.style.removeProperty("--kb-inset");
+  document.documentElement.style.removeProperty("--kb-offset-top");
 });
 
 describe("useVisualViewportInset", () => {
@@ -79,6 +85,7 @@ describe("useVisualViewportInset", () => {
     delete window.visualViewport;
     render(<Harness />);
     expect(kbInset()).toBe("");
+    expect(kbOffsetTop()).toBe("");
   });
 
   it("is 0px when the visual viewport matches the layout viewport (keyboard closed)", async () => {
@@ -158,22 +165,78 @@ describe("useVisualViewportInset", () => {
   // inset rather than being erased mid-gesture.
   it("ignores visualViewport changes while pinch-zoomed (scale !== 1)", async () => {
     stubClientHeight(800);
-    const vv = new FakeVisualViewport(500, 0);
+    const vv = new FakeVisualViewport(500, 50);
     Object.defineProperty(window, "visualViewport", { value: vv, configurable: true });
     render(<Harness />);
     await act(flushRaf);
-    expect(kbInset()).toBe("300px");
+    expect(kbInset()).toBe("250px");
+    expect(kbOffsetTop()).toBe("50px");
 
     // Pinch-zoom shrinks the visual viewport further with scale !== 1 — the
-    // real keyboard inset (300px) must be left untouched, not overwritten
+    // real keyboard inset (250px) and pan (50px) must be left untouched, not overwritten
     // with whatever this zoomed height would otherwise compute to.
-    act(() => vv.resizeTo(300, 0, 1.5));
+    act(() => vv.resizeTo(300, 120, 1.5));
     await act(flushRaf);
-    expect(kbInset()).toBe("300px");
+    expect(kbInset()).toBe("250px");
+    expect(kbOffsetTop()).toBe("50px");
 
     // Zooming back out (scale returns to 1) resumes real updates.
     act(() => vv.resizeTo(800, 0, 1));
     await act(flushRaf);
     expect(kbInset()).toBe("0px");
+    expect(kbOffsetTop()).toBe("0px");
+  });
+
+  // Issue #1387 — iOS pans the visual viewport (offsetTop > 0) to keep a
+  // focused input above the keyboard. The visible region in layout-viewport
+  // coordinates is then [offsetTop, offsetTop + height]; .app (tablet.css)
+  // pins `top` to --kb-offset-top and `bottom` to --kb-inset so the shell
+  // covers exactly that region, keeping the toolbar in view instead of
+  // panned out above it.
+  it("reports offsetTop separately so the shell can pin both edges to the panned visual viewport", async () => {
+    stubClientHeight(800);
+    const vv = new FakeVisualViewport(500, 0);
+    Object.defineProperty(window, "visualViewport", { value: vv, configurable: true });
+    render(<Harness />);
+    await act(flushRaf);
+    expect(kbInset()).toBe("300px");
+    expect(kbOffsetTop()).toBe("0px");
+
+    // Pan 120px down: visible region is [120, 620], so the shell's top
+    // moves to 120px and its bottom sits 800 - 620 = 180px above the layout
+    // viewport's bottom — together exactly vv.height (500px) tall.
+    act(() => vv.resizeTo(500, 120));
+    await act(flushRaf);
+    expect(kbOffsetTop()).toBe("120px");
+    expect(kbInset()).toBe("180px");
+    expect(800 - parseFloat(kbOffsetTop()) - parseFloat(kbInset())).toBe(vv.height);
+
+    // A visualViewport `scroll` event (panning with no resize) updates too.
+    vv.offsetTop = 40;
+    act(() => {
+      vv.dispatchEvent(new Event("scroll"));
+    });
+    await act(flushRaf);
+    expect(kbOffsetTop()).toBe("40px");
+    expect(kbInset()).toBe("260px");
+
+    // Keyboard closes and the pan resets — both edges back to 0.
+    act(() => vv.resizeTo(800, 0));
+    await act(flushRaf);
+    expect(kbOffsetTop()).toBe("0px");
+    expect(kbInset()).toBe("0px");
+  });
+
+  // The clamp applies to --kb-offset-top only: .app's top can't sit above
+  // the layout viewport, but its bottom edge should still land on the
+  // visible region's bottom (-30 + 500 = 470, i.e. 330px above 800).
+  it("clamps a negative offsetTop (overscroll bounce) to 0 without changing the inset", async () => {
+    stubClientHeight(800);
+    const vv = new FakeVisualViewport(500, -30);
+    Object.defineProperty(window, "visualViewport", { value: vv, configurable: true });
+    render(<Harness />);
+    await act(flushRaf);
+    expect(kbOffsetTop()).toBe("0px");
+    expect(kbInset()).toBe("330px");
   });
 });
