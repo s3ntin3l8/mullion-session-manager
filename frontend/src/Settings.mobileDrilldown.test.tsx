@@ -52,15 +52,13 @@ describe("Settings mobile drill-down", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} />);
 
-    await user.click(screen.getByRole("button", { name: /terminal behavior/i }));
+    await user.click(screen.getByRole("button", { name: /^terminal$/i }));
 
     expect(document.querySelector(".settings-modal-body")).toHaveClass(
       "settings-modal-body-showing-content",
     );
     expect(screen.getByLabelText(/^Back to settings list/)).toBeInTheDocument();
-    expect(document.querySelector(".settings-content-title")).toHaveTextContent(
-      "Terminal behavior",
-    );
+    expect(document.querySelector(".settings-content-title")).toHaveTextContent("Terminal");
   });
 
   // Hermes review, PR #621 round 2 (non-blocking suggestion) — focus lands
@@ -71,16 +69,16 @@ describe("Settings mobile drill-down", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} />);
 
-    await user.click(screen.getByRole("button", { name: /terminal behavior/i }));
+    await user.click(screen.getByRole("button", { name: /^terminal$/i }));
 
-    expect(screen.getByLabelText(/Terminal behavior/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/currently viewing Terminal$/)).toBeInTheDocument();
   });
 
   it("the back chevron returns to the nav list", async () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} />);
 
-    await user.click(screen.getByRole("button", { name: /terminal behavior/i }));
+    await user.click(screen.getByRole("button", { name: /^terminal$/i }));
     await user.click(screen.getByLabelText(/^Back to settings list/));
 
     expect(document.querySelector(".settings-modal-body")).not.toHaveClass(
@@ -97,7 +95,7 @@ describe("Settings mobile drill-down", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} />);
 
-    await user.click(screen.getByRole("button", { name: /terminal behavior/i }));
+    await user.click(screen.getByRole("button", { name: /^terminal$/i }));
 
     expect(screen.getByLabelText(/^Back to settings list/)).toHaveFocus();
   });
@@ -106,10 +104,10 @@ describe("Settings mobile drill-down", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} />);
 
-    await user.click(screen.getByRole("button", { name: /terminal behavior/i }));
+    await user.click(screen.getByRole("button", { name: /^terminal$/i }));
     await user.click(screen.getByLabelText(/^Back to settings list/));
 
-    expect(screen.getByRole("button", { name: /terminal behavior/i })).toHaveFocus();
+    expect(screen.getByRole("button", { name: /^terminal$/i })).toHaveFocus();
   });
 
   it("does not steal focus on initial mount — the focus trap owns that", () => {

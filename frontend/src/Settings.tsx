@@ -1,24 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useFocusTrap } from "./hooks/useFocusTrap.js";
+import { ChevronLeftIcon, CloseIcon, SearchIcon } from "./ui/icons.js";
 import {
-  AccountIcon,
-  AppearanceIcon,
-  BellIcon,
-  BoltIcon,
-  BotIcon,
-  ChevronLeftIcon,
-  CloseIcon,
-  DeviceIcon,
-  DockIcon,
-  FolderIcon,
-  GitHubIcon,
-  HostsIcon,
-  LayersIcon,
-  SearchIcon,
-  ServerRackIcon,
-  SkillIcon,
-  TerminalPromptIcon,
-} from "./ui/icons.js";
+  SEARCH_INDEX,
+  SECTIONS,
+  resolveSettingsSection,
+  type SettingsSection,
+  type SettingsSectionLink,
+} from "./settings/settingsSections.js";
 import { AppearanceSection } from "./settings/sections/AppearanceSection.js";
 import { TerminalSection } from "./settings/sections/TerminalSection.js";
 import { ProjectsSection } from "./settings/sections/ProjectsSection.js";
@@ -29,201 +18,14 @@ import { DockSection } from "./settings/sections/DockSection.js";
 import { SessionsSection } from "./settings/sections/SessionsSection.js";
 import { TaskMasterSection } from "./settings/sections/TaskMasterSection.js";
 import { IntegrationsSection } from "./settings/sections/IntegrationsSection.js";
-import { SkillsSection } from "./settings/sections/SkillsSection.js";
 import { ServerInfoSection } from "./settings/sections/ServerInfoSection.js";
-import { ModelsSection } from "./settings/sections/ModelsSection.js";
 import { AccountSection } from "./settings/sections/AccountSection.js";
 import { DevicesSection } from "./settings/sections/DevicesSection.js";
+import { InputSection } from "./settings/sections/InputSection.js";
+import { AgentContextSection } from "./settings/sections/AgentContextSection.js";
+import { BrowserSection } from "./settings/sections/BrowserSection.js";
 
-export type SettingsSection =
-  | "account"
-  | "appearance"
-  | "terminal"
-  | "projects"
-  | "hosts"
-  | "launchers"
-  | "notifications"
-  | "dock"
-  | "sessions"
-  | "tasks"
-  | "integrations"
-  | "skills"
-  | "server"
-  | "models"
-  | "devices";
-
-const SECTIONS: Array<{
-  id: SettingsSection;
-  title: string;
-  desc: string;
-  icon: (size: number) => React.ReactNode;
-}> = [
-  {
-    id: "account",
-    title: "Account",
-    desc: "Your authenticated identity and sign-out options.",
-    icon: (size) => <AccountIcon size={size} />,
-  },
-  {
-    id: "appearance",
-    title: "Appearance",
-    desc: "Theme, terminal fonts, colors, and cursor.",
-    icon: (size) => <AppearanceIcon size={size} />,
-  },
-  {
-    id: "terminal",
-    title: "Terminal behavior",
-    desc: "Scrollback, clipboard, reconnect, and key capture.",
-    icon: (size) => <TerminalPromptIcon size={size} />,
-  },
-  {
-    id: "projects",
-    title: "Projects & discovery",
-    desc: "Where Mullion scans for repositories.",
-    icon: (size) => <FolderIcon size={size} />,
-  },
-  {
-    id: "hosts",
-    title: "Hosts",
-    desc: "Remote machines Mullion can run sessions on.",
-    icon: (size) => <HostsIcon size={size} />,
-  },
-  {
-    id: "launchers",
-    title: "Launchers & agents",
-    desc: "Detected CLIs and session defaults.",
-    icon: (size) => <BoltIcon size={size} />,
-  },
-  {
-    id: "models",
-    title: "Models",
-    desc: "Default model for opencode sessions.",
-    icon: (size) => <BotIcon size={size} />,
-  },
-  {
-    id: "notifications",
-    title: "Notifications & status",
-    desc: "Attention alerts and how they reach you.",
-    icon: (size) => <BellIcon size={size} />,
-  },
-  {
-    id: "dock",
-    title: "Dock",
-    desc: "Monitor worktree refresh behavior.",
-    icon: (size) => <DockIcon size={size} />,
-  },
-  {
-    id: "sessions",
-    title: "Session management",
-    desc: "Naming, confirmations, and cleanup.",
-    icon: (size) => <LayersIcon size={size} />,
-  },
-  {
-    id: "tasks",
-    title: "Task Master",
-    desc: "Autonomous task claiming and its safety envelope.",
-    icon: (size) => <BotIcon size={size} />,
-  },
-  {
-    id: "integrations",
-    title: "Integrations",
-    desc: "Connect external services like GitHub.",
-    icon: (size) => <GitHubIcon size={size} />,
-  },
-  {
-    id: "skills",
-    title: "Skills",
-    desc: "Discovered skills across every agent CLI.",
-    icon: (size) => <SkillIcon size={size} />,
-  },
-  {
-    id: "server",
-    title: "Server info",
-    desc: "Read-only deployment diagnostics.",
-    icon: (size) => <ServerRackIcon size={size} />,
-  },
-  {
-    id: "devices",
-    title: "Devices",
-    desc: "Android emulators and physical phones streamed into the dashboard.",
-    icon: (size) => <DeviceIcon size={size} />,
-  },
-];
-
-// A real (not cosmetic) filter over control labels — the nav rail's search
-// box (ported from the reference's 1a nav) narrows to sections that
-// actually contain a matching control, not just a section whose title
-// matches. Kept as a flat static index rather than scraping the rendered
-// DOM: simpler, and stays correct even for a section that isn't currently
-// mounted.
-const SEARCH_INDEX: Array<{ section: SettingsSection; text: string }> = [
-  { section: "account", text: "account identity username email authentication sign out logout" },
-  { section: "appearance", text: "theme dark light system" },
-  { section: "appearance", text: "terminal font family geist jetbrains ibm plex sf mono menlo" },
-  { section: "appearance", text: "font size" },
-  { section: "appearance", text: "pane padding margin inset panel edge" },
-  { section: "appearance", text: "color scheme tokyo night dracula solarized gruvbox one dark" },
-  { section: "appearance", text: "cursor style block bar underline blink" },
-  { section: "appearance", text: "sidebar density comfortable compact" },
-  { section: "terminal", text: "scrollback lines" },
-  { section: "terminal", text: "copy on select clipboard" },
-  { section: "terminal", text: "allow programs set clipboard write osc 52" },
-  { section: "terminal", text: "paste on right click" },
-  { section: "terminal", text: "auto reconnect drop" },
-  { section: "terminal", text: "key conflict handling ctrl r l k reverse search clear kill line" },
-  {
-    section: "terminal",
-    text: "clipboard shortcuts ctrl v paste ctrl c copy selection sigint insert",
-  },
-  {
-    section: "terminal",
-    text: "voice dictation microphone push to talk speech hotkey language",
-  },
-  { section: "projects", text: "project roots add root directory" },
-  { section: "projects", text: "discover now rescan" },
-  { section: "projects", text: "global config directory" },
-  { section: "hosts", text: "remote host agent register base url token" },
-  { section: "hosts", text: "test connection ping online offline" },
-  { section: "hosts", text: "cascade delete host projects" },
-  { section: "hosts", text: "agent update version skew self-update" },
-  { section: "hosts", text: "ssh agent bridge pair laptop 1password forward helper revoke" },
-  { section: "launchers", text: "detected clis shells agents refresh" },
-  { section: "launchers", text: "ai agents skip perms status show" },
-  { section: "launchers", text: "default shell" },
-  { section: "launchers", text: "default agent" },
-  { section: "launchers", text: "global launchers manage actions.json" },
-  { section: "notifications", text: "browser permission bell osc" },
-  { section: "notifications", text: "delivery channels browser sound ping chime blip" },
-  { section: "notifications", text: "idle threshold" },
-  { section: "notifications", text: "status notification matrix notify sound focus" },
-  { section: "notifications", text: "auto focus on attention" },
-  { section: "dock", text: "worktree refresh branch sync monitor hmr preview" },
-  { section: "sessions", text: "new session name pattern agent project" },
-  { section: "sessions", text: "confirm before kill" },
-  { section: "sessions", text: "show exited killed sessions" },
-  { section: "sessions", text: "auto reconcile interval" },
-  { section: "sessions", text: "stale error timeout" },
-  { section: "sessions", text: "event history persistence retention days" },
-  { section: "sessions", text: "auto open child panels spawned subagent" },
-  { section: "sessions", text: "max child sessions per parent spawn cap" },
-  { section: "tasks", text: "task master enable autonomous claim board" },
-  { section: "tasks", text: "pause auto-claim kill switch" },
-  { section: "tasks", text: "max concurrent claims cap in flight" },
-  { section: "tasks", text: "per-task budget minutes timeout" },
-  { section: "tasks", text: "progress comment throttle github issue" },
-  { section: "tasks", text: "reset to environment defaults" },
-  { section: "tasks", text: "issue label poll interval deploy-time" },
-  { section: "tasks", text: "default agent default review agent per-project" },
-  { section: "integrations", text: "github personal access token pat connect disconnect" },
-  { section: "integrations", text: "issues pull requests actions device flow oauth" },
-  { section: "skills", text: "skill directories claude codex opencode agy plugins marketplace" },
-  { section: "skills", text: "skill.md name description builtin global project" },
-  { section: "server", text: "version environment port encryption uptime role primary agent" },
-  { section: "server", text: "sessions directory database rate limit" },
-  { section: "server", text: "updates update now release latest apply auto-update" },
-  { section: "devices", text: "android emulator avd adb scrcpy device panel phone" },
-  { section: "devices", text: "new device create stop delete" },
-];
+export type { SettingsSection, SettingsSectionLink } from "./settings/settingsSections.js";
 
 // Ported 1:1 from the design's settings modal: an accented nav rail (1a's
 // visuals) inside a centered modal (1b's shell already in use here) — see
@@ -232,11 +34,12 @@ const SEARCH_INDEX: Array<{ section: SettingsSection; text: string }> = [
 // `initialSection` is read once via a lazy useState initializer.
 export function Settings({
   onClose,
-  initialSection = "appearance",
+  initialSection: initialSectionLink = "appearance",
 }: {
   onClose: () => void;
-  initialSection?: SettingsSection;
+  initialSection?: SettingsSectionLink;
 }) {
+  const initialSection = resolveSettingsSection(initialSectionLink);
   const [section, setSection] = useState<SettingsSection>(initialSection);
   const [query, setQuery] = useState("");
   const meta = SECTIONS.find((s) => s.id === section)!;
@@ -383,6 +186,7 @@ export function Settings({
             className="settings-modal-close"
             style={{ marginLeft: "auto" }}
             onClick={onClose}
+            aria-label="Close settings"
           >
             <CloseIcon size={15} />
           </button>
@@ -400,15 +204,19 @@ export function Settings({
               />
             </div>
             <div className="settings-nav-items">
-              {visibleSections.map((s) => (
-                <button
-                  key={s.id}
-                  className={`settings-nav-item${s.id === section ? " active" : ""}`}
-                  onClick={() => selectSection(s.id)}
-                >
-                  {s.icon(16)}
-                  <span style={{ flex: 1 }}>{s.title}</span>
-                </button>
+              {visibleSections.map((s, i) => (
+                <Fragment key={s.id}>
+                  {visibleSections[i - 1]?.group !== s.group && (
+                    <div className="settings-nav-group">{s.group}</div>
+                  )}
+                  <button
+                    className={`settings-nav-item${s.id === section ? " active" : ""}`}
+                    onClick={() => selectSection(s.id)}
+                  >
+                    {s.icon(16)}
+                    <span style={{ flex: 1 }}>{s.title}</span>
+                  </button>
+                </Fragment>
               ))}
               {visibleSections.length === 0 && (
                 <div className="settings-nav-empty">No matching settings.</div>
@@ -431,18 +239,19 @@ export function Settings({
               {section === "account" && <AccountSection />}
               {section === "appearance" && <AppearanceSection />}
               {section === "terminal" && <TerminalSection />}
-              {section === "projects" && <ProjectsSection />}
-              {section === "hosts" && <HostsSection />}
-              {section === "launchers" && <LaunchersSection />}
-              {section === "models" && <ModelsSection />}
+              {section === "input" && <InputSection />}
               {section === "notifications" && <NotificationsSection />}
-              {section === "dock" && <DockSection />}
               {section === "sessions" && <SessionsSection />}
+              {section === "launchers" && <LaunchersSection />}
+              {section === "agent-context" && <AgentContextSection />}
               {section === "tasks" && <TaskMasterSection />}
-              {section === "integrations" && <IntegrationsSection />}
-              {section === "skills" && <SkillsSection />}
-              {section === "server" && <ServerInfoSection />}
+              {section === "projects" && <ProjectsSection />}
+              {section === "dock" && <DockSection />}
+              {section === "browser" && <BrowserSection />}
               {section === "devices" && <DevicesSection />}
+              {section === "hosts" && <HostsSection />}
+              {section === "integrations" && <IntegrationsSection />}
+              {section === "server" && <ServerInfoSection />}
             </div>
           </div>
         </div>

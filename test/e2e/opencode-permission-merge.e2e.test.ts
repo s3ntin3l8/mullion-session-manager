@@ -224,7 +224,7 @@ describeIfOpencode("opencode instructions config entry (issue #937)", () => {
       const conventionsPath = path.join(outsideDir, "1.workflow-conventions.md");
       writeFileSync(
         conventionsPath,
-        "> This Mullion install's own workflow conventions, set in Settings -> Sessions.\n\nNever commit directly to the default branch.",
+        "> This Mullion install's own workflow conventions, set in Settings → Agent context & skills.\n\nNever commit directly to the default branch.",
       );
 
       const result = execFileSync("opencode", ["debug", "config"], {

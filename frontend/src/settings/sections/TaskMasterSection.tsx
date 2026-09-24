@@ -166,7 +166,7 @@ export function TaskMasterSection() {
       </Row>
       <Row
         label="Default agent"
-        desc="The install-wide fallback agent a claim spawns with when neither the task's Agent: line nor the project's Default agent (project kebab menu → Edit) picks one. Independent of Launchers & agents → Default agent, which only drives the terminal launcher."
+        desc="The install-wide fallback agent a claim spawns with when neither the task's Agent: line nor the project's Default agent (project kebab menu → Edit) picks one. Independent of Agents → Default agent, which only drives the terminal launcher."
       >
         <Dropdown
           value={tm.defaultAgent}
@@ -225,7 +225,7 @@ export function TaskMasterSection() {
 
       <Eyebrow
         title="Agent selection"
-        desc="The Default agent / Default review agent dropdowns above are Task Master's own install-wide defaults — the lowest tier of resolution, independent of Launchers & agents → Default agent (which only drives the terminal launcher). A per-project setting (project kebab menu → Edit) or a task's own Agent: / ReviewAgent: line overrides them."
+        desc="The Default agent / Default review agent dropdowns above are Task Master's own install-wide defaults — the lowest tier of resolution, independent of Agents → Default agent (which only drives the terminal launcher). A per-project setting (project kebab menu → Edit) or a task's own Agent: / ReviewAgent: line overrides them."
       />
       <Eyebrow
         title="Auto-tag release"

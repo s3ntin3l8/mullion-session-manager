@@ -65,7 +65,7 @@ export function ResourceAlertBanner({ onOpenServer }: { onOpenServer: () => void
       <span className="update-banner-title">
         {severity === "critical" ? "Critical disk space" : "Low disk space"}: {affected}
       </span>
-      <span className="update-banner-subtext">Open Server info</span>
+      <span className="update-banner-subtext">Open server settings</span>
       {severity === "warning" && (
         <span
           className="update-banner-dismiss"

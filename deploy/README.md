@@ -75,7 +75,7 @@ absolute paths under `$MULLION_HOME/data/` for exactly this reason — if you
 ever hand-edit `.env`, keep them absolute.
 
 **Applying an update:** once installed, updates go through Settings ->
-Server info's "Update now" button (`POST /api/updates/apply`,
+Settings → Server's "Update now" button (`POST /api/updates/apply`,
 `src/routes/updates.ts`), not by re-running `install.sh`. That launches
 `scripts/self-update.sh` detached (the same `systemd-run --user --scope`
 isolation `src/services/pty-manager.ts` uses for terminal sessions, so it

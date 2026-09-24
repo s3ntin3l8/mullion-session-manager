@@ -13,7 +13,6 @@ import {
   Toggle,
 } from "../../ui/primitives.js";
 import { ErrorText } from "../../ui/ErrorText.js";
-import { BrowserCookiesSection } from "./BrowserCookiesSection.js";
 
 // One credential for the whole install (issue #27), not per-project — see
 // src/services/github-integration.ts. Manages its own fetch rather than
@@ -193,10 +192,6 @@ export function IntegrationsSection() {
             .catch(() => {})
         }
       />
-
-      <div style={{ marginTop: 24 }}>
-        <BrowserCookiesSection />
-      </div>
     </>
   );
 }

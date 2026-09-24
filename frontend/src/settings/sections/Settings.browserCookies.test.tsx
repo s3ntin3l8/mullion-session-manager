@@ -175,13 +175,13 @@ describe("Settings -> Integrations -> Import Browser Cookies", () => {
   });
 
   it("shows an empty state when nothing has been imported for the selected project", async () => {
-    render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+    render(<Settings onClose={vi.fn()} initialSection="browser" />);
     expect(await screen.findByText("No cookie profiles imported yet")).toBeInTheDocument();
   });
 
   it("imports a profile and lists it", async () => {
     const user = userEvent.setup();
-    render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+    render(<Settings onClose={vi.fn()} initialSection="browser" />);
     await screen.findByText("No cookie profiles imported yet");
 
     await user.type(
@@ -201,7 +201,7 @@ describe("Settings -> Integrations -> Import Browser Cookies", () => {
 
   it("shows an inline error when the import fails, without adding a row", async () => {
     const user = userEvent.setup();
-    render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+    render(<Settings onClose={vi.fn()} initialSection="browser" />);
     await screen.findByText("No cookie profiles imported yet");
 
     await user.type(
@@ -227,7 +227,7 @@ describe("Settings -> Integrations -> Import Browser Cookies", () => {
       },
     ]);
     const user = userEvent.setup();
-    render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+    render(<Settings onClose={vi.fn()} initialSection="browser" />);
 
     expect(await screen.findByText("personal")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Delete" }));
@@ -253,7 +253,7 @@ describe("Settings -> Integrations -> Import Browser Cookies", () => {
       },
     ]);
     const user = userEvent.setup();
-    render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+    render(<Settings onClose={vi.fn()} initialSection="browser" />);
 
     expect(await screen.findByText("personal")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Delete" }));
@@ -274,7 +274,7 @@ describe("Settings -> Integrations -> Import Browser Cookies", () => {
       },
     ]);
     const user = userEvent.setup();
-    render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+    render(<Settings onClose={vi.fn()} initialSection="browser" />);
     await screen.findByText("No cookie profiles imported yet");
 
     await user.selectOptions(screen.getByDisplayValue("project-a"), "project-b");

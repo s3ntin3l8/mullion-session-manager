@@ -329,7 +329,7 @@ export function sessionWorkflowConventionsPath(sessionsDir: string, sessionId: s
  * project's conventions, and always wins on anything it says explicitly).
  * Exported for tests. */
 export function buildSessionWorkflowConventionsContent(body: string): string {
-  return `> This Mullion install's own workflow conventions, set in Settings -> Sessions. Applies across every project unless this one opted out. If this project's own AGENTS.md says something different, AGENTS.md wins — this is a default, not an override.\n\n${body}`;
+  return `> This Mullion install's own workflow conventions, set in Settings → Agent context & skills. Applies across every project unless this one opted out. If this project's own AGENTS.md says something different, AGENTS.md wins — this is a default, not an override.\n\n${body}`;
 }
 
 /**
@@ -382,7 +382,11 @@ export function writeSessionWorkflowConventions(
     }
     return;
   }
-  const clamped = clampToBytes(text, MAX_WORKFLOW_CONVENTIONS_BYTES, "Settings -> Sessions");
+  const clamped = clampToBytes(
+    text,
+    MAX_WORKFLOW_CONVENTIONS_BYTES,
+    "Settings → Agent context & skills",
+  );
   const content = buildSessionWorkflowConventionsContent(clamped);
   try {
     mkdirSync(sessionsDir, { recursive: true });

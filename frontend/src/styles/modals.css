@@ -387,6 +387,17 @@
   color: var(--fg);
   font-weight: 600;
 }
+.settings-nav-group {
+  padding: 12px 10px 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.settings-nav-group:first-child {
+  padding-top: 4px;
+}
 .settings-nav-empty {
   padding: 12px 14px;
   font-size: 12px;
