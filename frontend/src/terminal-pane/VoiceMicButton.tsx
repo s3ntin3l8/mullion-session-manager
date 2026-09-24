@@ -20,11 +20,10 @@ export interface VoiceMicButtonProps {
    * disables it) when isSpeechDictationSupported() is false — see that
    * file's render. */
   disabled: boolean;
-  /** Positions the button as a 44px bottom-right FAB instead of the
-   * fine-pointer top-right overlay slot — matching the touch-target-size
-   * convention `isCoarsePointer` already drives elsewhere in this file
-   * (e.g. skipping WebGL). */
-  coarsePointer: boolean;
+  /** "overlay": the fine-pointer top-right slot over the terminal.
+   * "keyBar": a key in MobileKeyBar (coarse pointers) — the floating
+   * bottom-right FAB it replaced covered the terminal's prompt. */
+  variant: "overlay" | "keyBar";
   onPress: () => void;
   onRelease: () => void;
   onCancel: () => void;
@@ -34,7 +33,7 @@ export function VoiceMicButton({
   phase,
   interimText,
   disabled,
-  coarsePointer,
+  variant,
   onPress,
   onRelease,
   onCancel,
@@ -81,9 +80,9 @@ export function VoiceMicButton({
       <button
         type="button"
         className={[
-          "pane-tab-btn",
-          "terminal-voice-btn",
-          coarsePointer ? "coarse" : "",
+          ...(variant === "keyBar"
+            ? ["mobile-key-bar-btn", "mobile-key-bar-mic"]
+            : ["pane-tab-btn", "terminal-voice-btn"]),
           listening ? "listening" : "",
         ]
           .filter(Boolean)
@@ -103,7 +102,7 @@ export function VoiceMicButton({
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerCancel}
       >
-        <MicIcon size={14} />
+        <MicIcon size={variant === "keyBar" ? 16 : 14} />
       </button>
       {listening && interimText && (
         <div className="terminal-voice-interim" aria-live="polite">

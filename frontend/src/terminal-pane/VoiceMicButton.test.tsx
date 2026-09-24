@@ -20,7 +20,7 @@ function renderButton(overrides: Partial<VoiceMicButtonProps> = {}) {
     phase: "idle",
     interimText: "",
     disabled: false,
-    coarsePointer: false,
+    variant: "overlay",
     onPress: vi.fn(),
     onRelease: vi.fn(),
     onCancel: vi.fn(),
@@ -101,8 +101,10 @@ describe("VoiceMicButton", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("applies the coarse-pointer class for touch targets", () => {
-    renderButton({ coarsePointer: true });
-    expect(screen.getByRole("button", { name: "Start dictation" })).toHaveClass("coarse");
+  it("renders as a key-bar key in the keyBar variant", () => {
+    renderButton({ variant: "keyBar" });
+    const btn = screen.getByRole("button", { name: "Start dictation" });
+    expect(btn).toHaveClass("mobile-key-bar-btn");
+    expect(btn).not.toHaveClass("terminal-voice-btn");
   });
 });

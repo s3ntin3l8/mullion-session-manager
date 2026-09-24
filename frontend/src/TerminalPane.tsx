@@ -18,7 +18,11 @@ import {
   unregisterTerminalRepaint,
 } from "./terminalRepaintRegistry.js";
 import { registerTerminalInput, unregisterTerminalInput } from "./terminalInputRegistry.js";
-import type { TerminalInputHandle } from "./terminalInputRegistry.js";
+import type { CtrlModifierMode, TerminalInputHandle } from "./terminalInputRegistry.js";
+import { applyCtrlToChunk } from "./lib/ctrlModifier.js";
+import { bufferToText } from "./lib/terminalBufferText.js";
+import { publishVoiceControls, unpublishVoiceControls } from "./lib/terminalVoiceRegistry.js";
+import { CopyModeSheet } from "./terminal-pane/CopyModeSheet.js";
 import {
   attachKeyConflictHandler,
   hasClipboardApi,
@@ -189,6 +193,14 @@ export function TerminalPane(props: {
   useEffect(() => {
     isCoarsePointerRef.current = isCoarsePointer;
   }, [isCoarsePointer]);
+  // The key bar's sticky Ctrl (MobileKeyBar.tsx via terminalInputRegistry's
+  // setCtrlModifier) — read by the onData handler in the mount effect.
+  const ctrlModifierRef = useRef<{ mode: CtrlModifierMode; onConsumed: () => void }>({
+    mode: "off",
+    onConsumed: () => {},
+  });
+  // Touch copy view (CopyModeSheet): the buffer text while open, else null.
+  const [copyModeText, setCopyModeText] = useState<string | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const [reconnectAttempt, setReconnectAttempt] = useState(0);
   const [copied, setCopied] = useState(false);
@@ -458,6 +470,35 @@ export function TerminalPane(props: {
   useEffect(() => {
     voiceControllerRef.current = voiceController;
   });
+  // On a coarse pointer the mic moves out of the terminal (where the
+  // floating button covered the prompt) into the key bar, which reaches
+  // these controls through terminalVoiceRegistry.ts.
+  const showVoiceMic =
+    (props.inputAffordances ?? true) &&
+    terminalSettings.voice.enabled &&
+    voiceController.isSupported;
+  const { phase: voicePhase, interimText: voiceInterimText, isSecureContext } = voiceController;
+  useEffect(() => {
+    if (!showVoiceMic || !isCoarsePointer) return;
+    const sessionId = props.params.sessionId;
+    const controls = {
+      phase: voicePhase,
+      interimText: voiceInterimText,
+      disabled: !isSecureContext,
+      press: () => voiceControllerRef.current.press(),
+      release: () => voiceControllerRef.current.release(),
+      cancel: () => voiceControllerRef.current.cancel(),
+    };
+    publishVoiceControls(sessionId, controls);
+    return () => unpublishVoiceControls(sessionId, controls);
+  }, [
+    showVoiceMic,
+    isCoarsePointer,
+    props.params.sessionId,
+    voicePhase,
+    voiceInterimText,
+    isSecureContext,
+  ]);
   // Force-stops (never discards — see forceStop's own doc comment on
   // useVoiceDictation) an active dictation if the tab loses focus or is
   // backgrounded, regardless of how it was started. Deliberately keyed on
@@ -828,9 +869,38 @@ export function TerminalPane(props: {
     let connectionGeneration = 0;
     let replayCompleteGeneration = 0;
 
+    // Set around programmatic input (paste, dictation, key-bar keys — all of
+    // which xterm reports through onData synchronously) so the key bar's
+    // sticky Ctrl only ever modifies what's typed on the soft keyboard.
+    // Load-bearing assumption: term.input()/term.paste() fire onData
+    // synchronously, before returning (true of the installed @xterm/xterm).
+    // If a future xterm made that async, the flag would already be reset by
+    // the time onData ran and programmatic input would get Ctrl-translated.
+    let suppressCtrl = false;
+    const withoutCtrl = (send: () => void) => {
+      suppressCtrl = true;
+      try {
+        send();
+      } finally {
+        suppressCtrl = false;
+      }
+    };
+
     const dataSub = term.onData((data) => {
+      let out = data;
+      const ctrl = ctrlModifierRef.current;
+      if (ctrl.mode !== "off" && !suppressCtrl) {
+        const translated = applyCtrlToChunk(data);
+        if (translated !== null) {
+          out = translated;
+          if (ctrl.mode === "once") {
+            ctrlModifierRef.current = { mode: "off", onConsumed: () => {} };
+            ctrl.onConsumed();
+          }
+        }
+      }
       if (ws?.readyState === WebSocket.OPEN) {
-        ws.send(new TextEncoder().encode(data));
+        ws.send(new TextEncoder().encode(out));
       }
     });
 
@@ -1002,7 +1072,7 @@ export function TerminalPane(props: {
     // that effect's own comment).
     const focusThenInput = (data: string) => {
       term.focus();
-      term.input(data);
+      withoutCtrl(() => term.input(data));
     };
     // Named (not passed as an inline object literal) so the cleanup below
     // can pass this exact same reference to unregisterTerminalInput —
@@ -1015,7 +1085,17 @@ export function TerminalPane(props: {
       sendInput: focusThenInput,
       sendArrow: (direction) => {
         const csi = term.modes.applicationCursorKeysMode ? "\x1bO" : "\x1b[";
-        focusThenInput(csi + (direction === "up" ? "A" : "B"));
+        const final = { up: "A", down: "B", right: "C", left: "D" }[direction];
+        focusThenInput(csi + final);
+      },
+      paste: () => {
+        term.focus();
+        pasteHandlerRef.current();
+      },
+      openCopyMode: () => setCopyModeText(bufferToText(term.buffer.active)),
+      setCtrlModifier: (mode, onConsumed) => {
+        ctrlModifierRef.current = { mode, onConsumed };
+        if (mode !== "off") term.focus();
       },
       // Independent code review, PR #616 — a raw `term.input("\x03")` here
       // would bypass attachCustomKeyEventHandler's own Ctrl+C branch above
@@ -1042,7 +1122,7 @@ export function TerminalPane(props: {
           });
           return;
         }
-        term.input("\x03");
+        withoutCtrl(() => term.input("\x03"));
       },
     };
     registerTerminalInput(props.params.sessionId, inputHandle);
@@ -1215,7 +1295,7 @@ export function TerminalPane(props: {
     // side.
     function pasteToTerminal(text: string): void {
       const trimmed = text.replace(/[\r\n]+$/, "");
-      if (trimmed) term.paste(trimmed);
+      if (trimmed) withoutCtrl(() => term.paste(trimmed));
     }
 
     // Voice dictation (push-to-talk) — useVoiceDictation.ts's onInsert
@@ -1354,10 +1434,19 @@ export function TerminalPane(props: {
     // common terminal-emulator convention. Same image-first behavior as the
     // keyboard paste handler above.
     const onContextMenu = (event: MouseEvent) => {
+      // On touch, `contextmenu` is a long-press, not a right-click: open the
+      // copy view (the only way to select terminal text on touch) instead of
+      // the browser's menu — and never paste-on-right-click.
+      // pointerType tells a touch long-press from a mouse right-click on a
+      // hybrid device; without it (older engines) fall back to the primary
+      // pointer's coarseness.
+      const pointerType = (event as PointerEvent).pointerType;
+      if (pointerType ? pointerType === "touch" : isCoarsePointerRef.current) {
+        event.preventDefault();
+        setCopyModeText(bufferToText(term.buffer.active));
+        return;
+      }
       if (!prefsRef.current.pasteOnRightClick) return;
-      // On touch, `contextmenu` is a long-press, not a right-click — pasting
-      // the clipboard into the session on every long-press is never intended.
-      if (isCoarsePointerRef.current) return;
       event.preventDefault();
       tryImagePaste()
         .then((handled) => {
@@ -1715,6 +1804,9 @@ export function TerminalPane(props: {
       refitRef.current = () => {};
       unregisterTerminalRepaint(props.params.sessionId);
       unregisterTerminalInput(props.params.sessionId, inputHandle);
+      // The copy view shows this session's buffer — never carry it over to
+      // the next session this pane is switched to.
+      setCopyModeText(null);
       uploadImageRef.current = () => {};
       voiceInsertRef.current = () => {};
       // Drops any window/document listeners left by an in-progress hold —
@@ -2116,19 +2208,17 @@ export function TerminalPane(props: {
         // voice/support.ts's isSpeechDictationSupported/
         // isSecureContextForDictation for why these are two separate checks.
       }
-      {(props.inputAffordances ?? true) &&
-        terminalSettings.voice.enabled &&
-        voiceController.isSupported && (
-          <VoiceMicButton
-            phase={voiceController.phase}
-            interimText={voiceController.interimText}
-            disabled={!voiceController.isSecureContext}
-            coarsePointer={isCoarsePointer}
-            onPress={voiceController.press}
-            onRelease={voiceController.release}
-            onCancel={voiceController.cancel}
-          />
-        )}
+      {showVoiceMic && !isCoarsePointer && (
+        <VoiceMicButton
+          phase={voiceController.phase}
+          interimText={voiceController.interimText}
+          disabled={!voiceController.isSecureContext}
+          variant="overlay"
+          onPress={voiceController.press}
+          onRelease={voiceController.release}
+          onCancel={voiceController.cancel}
+        />
+      )}
       {
         // Scrollback find bar (U1) — opened via Ctrl+Shift+F, see
         // attachKeyConflictHandler (lib/terminalKeys.ts) for why that chord.
@@ -2136,6 +2226,14 @@ export function TerminalPane(props: {
         // top-right corner (`.terminal-attach-image-btn`, always visible) so
         // the two never collide.
       }
+      {copyModeText !== null && (
+        <CopyModeSheet
+          text={copyModeText}
+          // No terminal refocus on close: on touch that would pop the soft
+          // keyboard back up over the output the user was just reading.
+          onClose={() => setCopyModeText(null)}
+        />
+      )}
       {findOpen && (
         <TerminalFindBar
           findQuery={findQuery}
