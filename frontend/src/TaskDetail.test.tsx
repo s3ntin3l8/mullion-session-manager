@@ -1641,6 +1641,7 @@ describe("TaskDetail delete action", () => {
       maxConcurrent: 1,
       budgetMinutes: 30,
       progressCommentMinutes: 10,
+      rateLimitGraceMinutes: 5,
       skipPermissions: false,
       issueLabel: "custom-work-label",
       pollIntervalSeconds: 60,

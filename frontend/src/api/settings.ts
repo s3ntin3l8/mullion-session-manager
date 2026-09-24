@@ -218,6 +218,20 @@ export const DEFAULT_SETTINGS: AppSettings = {
     maxChildSessionsPerParent: 5,
     autoOpenChildPanels: false,
   },
+  github: {
+    pollActiveSeconds: -1,
+    pollQuietSeconds: -1,
+    pollStaleThresholdSeconds: -1,
+  },
+  hosts: {
+    heartbeatSeconds: -1,
+  },
+  browser: {
+    framerate: -1,
+  },
+  server: {
+    logLevel: "inherit",
+  },
   opencode: {
     implementerModel: null,
     reviewerModel: null,
@@ -229,6 +243,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     maxConcurrent: -1,
     budgetMinutes: -1,
     progressCommentMinutes: -1,
+    rateLimitGraceMinutes: -1,
     skipPermissions: "inherit",
     reviewCiWaitMinutes: 15,
     defaultAgent: "claude",

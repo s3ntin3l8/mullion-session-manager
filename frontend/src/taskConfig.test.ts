@@ -11,6 +11,7 @@ const ENV_DEFAULTS = {
   maxConcurrent: 2,
   budgetMinutes: 120,
   progressCommentMinutes: 15,
+  rateLimitGraceMinutes: 5,
   skipPermissions: false,
   issueLabel: "mullion-task",
   pollIntervalSeconds: 60,
@@ -25,6 +26,7 @@ describe("resolveTaskMaster", () => {
       maxConcurrent: 2,
       budgetMinutes: 120,
       progressCommentMinutes: 15,
+      rateLimitGraceMinutes: 5,
       skipPermissions: false,
       reviewCiWaitMinutes: 15,
     });

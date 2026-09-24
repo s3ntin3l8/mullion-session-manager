@@ -52,6 +52,7 @@ export {
   SIDEBAR_MIN_WIDTH,
   SIDEBAR_MAX_WIDTH,
   FALLBACK_TASK_MASTER_ENV,
+  FALLBACK_RUNTIME_ENV,
 } from "./constants.js";
 export { eventKey } from "./helpers.js";
 export type { Theme, ViewMode, TerminalPrefs, SplitRequest } from "./types.js";

@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { SERVER_INFO_FIXTURE } from "../../test/serverInfoFixture.js";
 import { act } from "react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -32,6 +33,7 @@ describe("Settings -> Hosts -> SSH agent bridges (issue #820 PR7c)", () => {
     pairCounter = 0;
 
     ({ fetchMock, unexpectedCalls } = mockFetch({
+      "GET /api/server-info": () => jsonResponse(200, SERVER_INFO_FIXTURE),
       "GET /api/hosts": () => jsonResponse(200, []),
       "GET /api/projects": () => jsonResponse(200, []),
       "GET /api/sessions": () => jsonResponse(200, []),
@@ -401,6 +403,7 @@ describe("Settings -> Hosts -> SSH agent bridges (issue #820 PR7c)", () => {
     });
 
     ({ fetchMock, unexpectedCalls } = mockFetch({
+      "GET /api/server-info": () => jsonResponse(200, SERVER_INFO_FIXTURE),
       "GET /api/hosts": () => jsonResponse(200, []),
       "GET /api/projects": () => jsonResponse(200, []),
       "GET /api/sessions": () => jsonResponse(200, []),
@@ -514,6 +517,7 @@ describe("Settings -> Hosts -> SSH agent bridges (issue #820 PR7c)", () => {
     ];
 
     ({ fetchMock, unexpectedCalls } = mockFetch({
+      "GET /api/server-info": () => jsonResponse(200, SERVER_INFO_FIXTURE),
       "GET /api/hosts": () => jsonResponse(200, []),
       "GET /api/projects": () => jsonResponse(200, []),
       "GET /api/sessions": () => jsonResponse(200, []),
