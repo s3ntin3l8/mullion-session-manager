@@ -1253,17 +1253,19 @@ describe("TerminalPane WebGL skipped on coarse pointer (PR 6)", () => {
 });
 
 describe("TerminalPane pane padding (issue #91)", () => {
-  it("applies the configured padding and border-box sizing to the terminal container", () => {
+  it("insets the terminal container by the configured padding instead of CSS padding", () => {
     stubFakeWebSocket(true);
     const { container } = renderPane();
 
     // The containerRef div is the one xterm opens into — distinguish it
-    // from the outer position:relative wrapper by its inline padding, which
-    // only this div ever sets.
-    const containerDiv = container.querySelector("div[style*='padding']") as HTMLDivElement;
+    // from the outer position:relative wrapper by its inline inset, which
+    // only this div ever sets. No CSS padding: FitAddon measures this
+    // element's own box, so padding here would overflow the last row.
+    const containerDiv = container.querySelector("div[style*='inset']") as HTMLDivElement;
     expect(containerDiv).toBeTruthy();
-    expect(containerDiv.style.padding).toBe("4px");
-    expect(containerDiv.style.boxSizing).toBe("border-box");
+    expect(containerDiv.style.inset).toBe("4px");
+    expect(containerDiv.style.position).toBe("absolute");
+    expect(containerDiv.style.padding).toBe("");
   });
 
   it("re-fits the terminal when the padding setting changes", async () => {
@@ -1293,8 +1295,8 @@ describe("TerminalPane pane padding (issue #91)", () => {
       }));
     });
 
-    const containerDiv = container.querySelector("div[style*='box-sizing']") as HTMLDivElement;
-    expect(containerDiv.style.padding).toBe("0px");
+    const containerDiv = container.querySelector("div[style*='inset']") as HTMLDivElement;
+    expect(containerDiv.style.inset).toBe("0px");
   });
 });
 
@@ -3988,5 +3990,45 @@ describe("TerminalPane inputAffordances (PR3 — dock monitor terminal chrome)",
     );
 
     expect(fakeAffordanceRecognitionInstances).toHaveLength(0);
+  });
+});
+
+describe("TerminalPane paste-on-right-click vs touch long-press", () => {
+  function stubPointer(coarse: boolean) {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({
+        matches: coarse && query === "(pointer: coarse)",
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+  }
+
+  function fireContextMenu(container: HTMLElement): MouseEvent {
+    act(() => {
+      useDashboardStore.setState((s) => ({
+        settings: { ...s.settings, terminal: { ...s.settings.terminal, pasteOnRightClick: true } },
+      }));
+    });
+    const containerDiv = container.querySelector("div[style*='inset']") as HTMLDivElement;
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    containerDiv.dispatchEvent(event);
+    return event;
+  }
+
+  it("pastes (suppressing the native menu) on a fine pointer", () => {
+    stubPointer(false);
+    stubFakeWebSocket(true);
+    const { container } = renderPane();
+    expect(fireContextMenu(container).defaultPrevented).toBe(true);
+  });
+
+  it("ignores a coarse-pointer long-press instead of pasting", () => {
+    stubPointer(true);
+    stubFakeWebSocket(true);
+    const { container } = renderPane();
+    expect(fireContextMenu(container).defaultPrevented).toBe(false);
   });
 });

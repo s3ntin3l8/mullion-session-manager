@@ -434,7 +434,10 @@
    feed body scrolls/virtualizes) rather than the whole panel scrolling. */
 .notif-panel {
   width: 380px;
-  max-height: 380px;
+  /* Phone: NotificationBell.tsx's panelPosition() clamps `left` to the same
+     8px margins, so this is the whole available width. */
+  max-width: calc(100vw - 16px);
+  max-height: min(380px, 70dvh);
   display: flex;
   flex-direction: column;
 }

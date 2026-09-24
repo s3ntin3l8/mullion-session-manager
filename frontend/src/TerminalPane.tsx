@@ -182,6 +182,13 @@ export function TerminalPane(props: {
   // (same call already made for `theme`, excluded from this effect's own
   // deps below) — the mount effect only reruns on `props.params.sessionId`.
   const isCoarsePointer = useCoarsePointer();
+  // Live copy for listeners attached once by the mount effect below (a
+  // pointer-type change, e.g. a tablet's keyboard/trackpad attaching,
+  // shouldn't need a terminal remount to be seen).
+  const isCoarsePointerRef = useRef(isCoarsePointer);
+  useEffect(() => {
+    isCoarsePointerRef.current = isCoarsePointer;
+  }, [isCoarsePointer]);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const [reconnectAttempt, setReconnectAttempt] = useState(0);
   const [copied, setCopied] = useState(false);
@@ -563,7 +570,9 @@ export function TerminalPane(props: {
       // No hover on touch — nothing to preview against, and the tooltip
       // would just get stuck showing after a tap. Clicking still opens.
       if (isCoarsePointer) return;
-      const rect = container.getBoundingClientRect();
+      // Relative to the outer `position: relative` wrapper the tooltip is
+      // positioned in — not `container`, which is inset by the padding.
+      const rect = (container.parentElement ?? container).getBoundingClientRect();
       setLinkTooltip({
         text,
         rowCount,
@@ -1346,6 +1355,9 @@ export function TerminalPane(props: {
     // keyboard paste handler above.
     const onContextMenu = (event: MouseEvent) => {
       if (!prefsRef.current.pasteOnRightClick) return;
+      // On touch, `contextmenu` is a long-press, not a right-click — pasting
+      // the clipboard into the session on every long-press is never intended.
+      if (isCoarsePointerRef.current) return;
       event.preventDefault();
       tryImagePaste()
         .then((handled) => {
@@ -2022,35 +2034,40 @@ export function TerminalPane(props: {
   }, [uploadState]);
 
   return (
-    <div style={{ position: "relative", width: "100%", height: "100%" }}>
+    <div
+      style={{
+        position: "relative",
+        width: "100%",
+        height: "100%",
+        // xterm's own canvas covers the terminal area itself, but not the
+        // padding ring around it — without an explicit background here,
+        // that ring (and the dockview chrome peeking through it) shows
+        // through as an unrelated color when it doesn't match the active
+        // scheme (issue #132). getSchemeBackground (not buildXtermTheme)
+        // since only the background is needed here, not a full 16-color
+        // xterm theme object.
+        background: getSchemeBackground(terminalSettings.colorScheme, theme),
+        // Same as the inner container's: the padding ring is part of the
+        // terminal to a finger, so no native panning/pull-to-refresh there.
+        touchAction: "pinch-zoom",
+      }}
+    >
       {
-        // Padding + border-box (not the outer wrapper) is deliberate — see
-        // issue #91: `.xterm` is a normal-flow child of whatever element
-        // `term.open()` is called on, so padding here visually insets the
-        // rendered terminal on all sides, and FitAddon.fit() reads this same
-        // element's content-box width/height, so the computed cols/rows
-        // already account for it (no clipping/overflow). border-box keeps
-        // this div's own occupied size at exactly 100% of its parent —
-        // without it, width:100% + padding would add the padding on top and
-        // overflow the pane. The four absolutely-positioned overlay siblings
-        // below resolve their offsets against the *outer* `position:
-        // relative` wrapper, not this div, so they're unaffected either way.
+        // Issue #91's padding is an absolute inset, NOT CSS padding on this
+        // div: FitAddon.proposeDimensions() measures the computed
+        // width/height of the element `term.open()` was called on and only
+        // subtracts `.xterm`'s own padding — with border-box padding here it
+        // measured the padded box, so the last row (and, above the 14px
+        // scrollbar reserve, the last column) overflowed and was clipped.
+        // Insetting the whole element makes its own box exactly the content
+        // area. The overlay siblings below resolve their offsets against the
+        // outer `position: relative` wrapper, so they're unaffected.
       }
       <div
         ref={containerRef}
         style={{
-          width: "100%",
-          height: "100%",
-          // xterm's own canvas covers the terminal area itself, but not the
-          // padding ring around it — without an explicit background here,
-          // that ring (and the dockview chrome peeking through it) shows
-          // through as an unrelated color when it doesn't match the active
-          // scheme (issue #132). getSchemeBackground (not buildXtermTheme)
-          // since only the background is needed here, not a full 16-color
-          // xterm theme object.
-          background: getSchemeBackground(terminalSettings.colorScheme, theme),
-          padding: `${terminalSettings.padding}px`,
-          boxSizing: "border-box",
+          position: "absolute",
+          inset: `${terminalSettings.padding}px`,
           // A pane below pty-manager.ts's MIN_TERMINAL_COLS/ROWS floor now
           // gets resized up to the floor by the geometry-sync handler above
           // (issue: small panes ignoring input) — xterm's canvas then renders

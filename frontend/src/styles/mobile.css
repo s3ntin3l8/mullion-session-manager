@@ -33,6 +33,18 @@
   .run-cmd-btn {
     display: none !important;
   }
+  /* The version string is desktop chrome; on phone it costs ~50px of a
+     toolbar that already barely fits (it's still shown in Settings). */
+  .toolbar-version-label {
+    display: none !important;
+  }
+  /* Clip rather than overflow the viewport if the actions still don't fit
+     (e.g. Tasks view's extra Back button on a 360px screen). Phone-only: on
+     a coarse-pointer tablet the 44px buttons fill this 44px-tall group and a
+     clip would cut their focus rings. */
+  .toolbar-actions {
+    overflow: hidden;
+  }
 
   .mobile-tabs {
     display: flex !important;

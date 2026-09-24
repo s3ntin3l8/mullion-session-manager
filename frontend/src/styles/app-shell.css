@@ -16,4 +16,8 @@
   flex: 1;
   display: flex;
   min-height: 0;
+  /* .app is a column flex container, so this is the cross axis — but an
+     explicit floor keeps any wide descendant from ever stretching the body
+     past the viewport (see .grid-area's min-width comment in sidebar.css). */
+  min-width: 0;
 }
