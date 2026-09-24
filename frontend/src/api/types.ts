@@ -309,6 +309,35 @@ export interface Device {
   live: DeviceInfo | null;
 }
 
+// A phone advertising Wireless debugging over mDNS (issue #1378,
+// src/services/device-discovery.ts's own DiscoveredDevice) — returned by
+// GET /api/devices/discovered. `id` round-trips back to
+// POST /api/devices/pair-and-connect as `discoveryId`. Either address may be
+// missing: Android only advertises the pairing service while its "Pair device
+// with pairing code" screen is open.
+export interface DiscoveredDevice {
+  id: string;
+  name: string;
+  host: string;
+  pairingAddress?: string;
+  connectAddress?: string;
+  device?: string;
+  model?: string;
+  product?: string;
+  discoveredAt: string;
+}
+
+// POST /api/devices/pair-and-connect's body — either `discoveryId` (a cached
+// mDNS entry, `connectAddress` then an optional override) or the manual
+// `pairingAddress` + `connectAddress` pair. `pairingCode` is always required.
+export interface PairAndConnectBody {
+  discoveryId?: string;
+  pairingAddress?: string;
+  connectAddress?: string;
+  pairingCode: string;
+  name?: string;
+}
+
 // An installed Android system image (src/services/avd-manager.ts's own
 // SystemImage) — `packagePath` is both the stable identifier and the exact
 // `-k`/`--package` value `avdmanager create avd` accepts; the rest is

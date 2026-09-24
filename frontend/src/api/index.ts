@@ -176,6 +176,8 @@ export type {
   Device,
   DeviceInfo,
   DeviceLiveStatus,
+  DiscoveredDevice,
+  PairAndConnectBody,
   SystemImage,
   AvailableSystemImage,
 } from "./types.js";

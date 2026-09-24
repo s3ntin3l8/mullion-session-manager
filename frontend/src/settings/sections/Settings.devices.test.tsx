@@ -56,7 +56,8 @@ describe("Settings -> Devices (issue #1326)", () => {
   let devicesShouldFail: boolean;
   let deviceEnabled: boolean;
   let createCounter: number;
-  let pairCalls: unknown[];
+  let discoveredDb: Array<Record<string, unknown>>;
+  let pairAndConnectCalls: unknown[];
   let avdsDb: string[];
   let avdsShouldFail: boolean;
   let avdsRefreshShouldFailAfterCreate: boolean;
@@ -80,7 +81,8 @@ describe("Settings -> Devices (issue #1326)", () => {
     devicesShouldFail = false;
     deviceEnabled = true;
     createCounter = 0;
-    pairCalls = [];
+    discoveredDb = [];
+    pairAndConnectCalls = [];
     // Seeded with one AVD by default so the picker isn't empty in tests
     // that don't specifically exercise the empty-AVDs state.
     avdsDb = ["pixel_7"];
@@ -174,14 +176,37 @@ describe("Settings -> Devices (issue #1326)", () => {
         devicesDb = [...devicesDb, device];
         return jsonResponse(201, device);
       },
-      "POST /api/devices/pair": ({ init }) => {
+      "GET /api/devices/discovered": () => jsonResponse(200, discoveredDb),
+      // Mirrors routes/devices.ts's own pair-and-connect handler (issue
+      // #1378): inserts a physical row at the resolved connect address.
+      "POST /api/devices/pair-and-connect": ({ init }) => {
         if (!deviceEnabled) {
           return jsonResponse(400, {
             message: "Device panel is disabled — set DEVICE_ENABLED=true.",
           });
         }
-        pairCalls.push(JSON.parse(init?.body as string));
-        return jsonResponse(200, { ok: true });
+        const body = JSON.parse(init?.body as string) as {
+          discoveryId?: string;
+          connectAddress?: string;
+          name?: string;
+        };
+        pairAndConnectCalls.push(body);
+        const cached = discoveredDb.find((d) => d.id === body.discoveryId);
+        createCounter += 1;
+        const device: Device = {
+          id: createCounter,
+          hostId: "local",
+          projectId: null,
+          name: body.name ?? null,
+          kind: "physical",
+          avdName: null,
+          serial: body.connectAddress ?? (cached?.connectAddress as string | undefined) ?? null,
+          status: "active",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          live: null,
+        };
+        devicesDb = [...devicesDb, device];
+        return jsonResponse(201, device);
       },
       "DELETE /api/devices/:id": ({ params }) => {
         const id = Number(params.id);
@@ -272,7 +297,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    await user.click(await screen.findByText("New device"));
+    await user.click(await screen.findByText("Create an emulator"));
     await screen.findByDisplayValue("pixel_7"); // wait for the AVD picker to load
     await user.click(screen.getByRole("button", { name: "Create" }));
 
@@ -294,7 +319,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    await user.click(await screen.findByText("New device"));
+    await user.click(await screen.findByText("Create an emulator"));
     await screen.findByDisplayValue("pixel_7"); // wait for the AVD picker to load
     await user.click(screen.getByRole("button", { name: "Create" }));
 
@@ -349,48 +374,46 @@ describe("Settings -> Devices (issue #1326)", () => {
     ]);
   });
 
-  it("switching to Physical mode shows the pairing/connect fields instead of the AVD name field", async () => {
+  // Issue #1379 — physical phones are paired from PairDeviceDialog, not an
+  // inline Physical mode of the emulator form.
+  it("the emulator form no longer offers a Physical mode", async () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    await user.click(await screen.findByText("New device"));
-    await screen.findByDisplayValue("pixel_7"); // emulator mode's AVD picker, before switching away
-    await user.click(screen.getByRole("button", { name: "Physical" }));
-
-    expect(screen.queryByText("+ New AVD")).not.toBeInTheDocument();
-    expect(screen.queryByDisplayValue("pixel_7")).not.toBeInTheDocument();
-    expect(screen.getByPlaceholderText("192.168.1.23:41234")).toBeInTheDocument();
-    expect(screen.getByPlaceholderText("123456")).toBeInTheDocument();
-    expect(screen.getByPlaceholderText("192.168.1.23:37251")).toBeInTheDocument();
+    await user.click(await screen.findByText("Create an emulator"));
+    await screen.findByDisplayValue("pixel_7");
+    expect(screen.queryByRole("button", { name: "Physical" })).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("192.168.1.23:41234")).not.toBeInTheDocument();
   });
 
-  it("pairing posts to /api/devices/pair with the entered address and code, without creating a device row", async () => {
+  it("pairing a discovered phone adds its row to the shared store and closes the dialog", async () => {
+    discoveredDb = [
+      {
+        id: "192.168.1.23",
+        name: "Pixel 7",
+        host: "192.168.1.23",
+        pairingAddress: "192.168.1.23:41234",
+        connectAddress: "192.168.1.23:37251",
+        discoveredAt: "2026-01-01T00:00:00.000Z",
+      },
+    ];
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    await user.click(await screen.findByText("New device"));
-    await user.click(screen.getByRole("button", { name: "Physical" }));
-    await user.type(screen.getByPlaceholderText("192.168.1.23:41234"), "192.168.1.23:41234");
-    await user.type(screen.getByPlaceholderText("123456"), "123456");
-    await user.click(screen.getByRole("button", { name: "Pair" }));
-
-    await screen.findByText("Paired — connect below.");
-    expect(pairCalls).toEqual([{ pairingAddress: "192.168.1.23:41234", pairingCode: "123456" }]);
-    // Pairing alone creates no device row — see api/device.ts's own comment.
-    expect(useDashboardStore.getState().devices).toEqual([]);
-  });
-
-  it("connecting a physical device updates the shared store with kind: physical and its address", async () => {
-    const user = userEvent.setup();
-    render(<Settings onClose={vi.fn()} initialSection="devices" />);
-
-    await user.click(await screen.findByText("New device"));
-    await user.click(screen.getByRole("button", { name: "Physical" }));
-    await user.type(screen.getByPlaceholderText("192.168.1.23:37251"), "192.168.1.23:37251");
-    await user.type(screen.getByPlaceholderText("My Pixel"), "My Pixel");
-    await user.click(screen.getByRole("button", { name: "Connect" }));
+    await user.click(await screen.findByText("Pair a phone or tablet"));
+    const dialog = await screen.findByRole("dialog", { name: "Pair a phone or tablet" });
+    await within(dialog).findByRole("radio", { name: /Pixel 7 · 192\.168\.1\.23/ });
+    await user.type(within(dialog).getByPlaceholderText("123456"), "123456");
+    await user.type(within(dialog).getByPlaceholderText("My Pixel"), "My Pixel");
+    await user.click(within(dialog).getByRole("button", { name: "Pair & Connect" }));
 
     await screen.findByTestId("device-row-1");
+    expect(
+      screen.queryByRole("dialog", { name: "Pair a phone or tablet" }),
+    ).not.toBeInTheDocument();
+    expect(pairAndConnectCalls).toEqual([
+      { discoveryId: "192.168.1.23", pairingCode: "123456", name: "My Pixel" },
+    ]);
     expect(useDashboardStore.getState().devices).toEqual([
       expect.objectContaining({
         id: 1,
@@ -403,12 +426,34 @@ describe("Settings -> Devices (issue #1326)", () => {
     ]);
   });
 
+  it("the pair dialog surfaces the server's DEVICE_ENABLED=false message verbatim", async () => {
+    deviceEnabled = false;
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(await screen.findByText("Pair a phone or tablet"));
+    const dialog = await screen.findByRole("dialog", { name: "Pair a phone or tablet" });
+    await user.click(within(dialog).getByRole("button", { name: "Pair manually" }));
+    await user.type(within(dialog).getByPlaceholderText("192.168.1.23:41234"), "10.0.0.5:41234");
+    await user.type(within(dialog).getByPlaceholderText("192.168.1.23:37251"), "10.0.0.5:37251");
+    await user.type(within(dialog).getByPlaceholderText("123456"), "123456");
+    await user.click(within(dialog).getByRole("button", { name: "Pair & Connect" }));
+
+    expect(
+      await within(dialog).findByText("Device panel is disabled — set DEVICE_ENABLED=true."),
+    ).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(
+      screen.queryByRole("dialog", { name: "Pair a phone or tablet" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("AVD picker lists the host's installed AVDs", async () => {
     avdsDb = ["pixel_7", "pixel_6_tablet"];
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    await user.click(await screen.findByText("New device"));
+    await user.click(await screen.findByText("Create an emulator"));
     const picker = await screen.findByDisplayValue("pixel_7");
     expect(within(picker).getByText("pixel_6_tablet")).toBeInTheDocument();
   });
@@ -418,7 +463,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    await user.click(await screen.findByText("New device"));
+    await user.click(await screen.findByText("Create an emulator"));
     expect(await screen.findByText(/No AVDs on this host yet/)).toBeInTheDocument();
     expect(screen.queryByDisplayValue("pixel_7")).not.toBeInTheDocument();
   });
@@ -433,7 +478,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    await user.click(await screen.findByText("New device"));
+    await user.click(await screen.findByText("Create an emulator"));
     expect(
       await screen.findByText("DEVICE_AVDMANAGER_PATH is not configured."),
     ).toBeInTheDocument();
@@ -444,7 +489,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    await user.click(await screen.findByText("New device"));
+    await user.click(await screen.findByText("Create an emulator"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
 
     expect(await screen.findByDisplayValue("API 35 — Google APIs (x86_64)")).toBeInTheDocument();
@@ -456,7 +501,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    await user.click(await screen.findByText("New device"));
+    await user.click(await screen.findByText("Create an emulator"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
     await screen.findByDisplayValue("pixel_6"); // wait for device profiles to load
     await user.type(screen.getByPlaceholderText("Pixel_8_API_35"), "pixel_9_new");
@@ -489,7 +534,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    await user.click(await screen.findByText("New device"));
+    await user.click(await screen.findByText("Create an emulator"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
     await screen.findByDisplayValue("pixel_6");
     await user.type(screen.getByPlaceholderText("Pixel_8_API_35"), "pixel_9_new");
@@ -754,7 +799,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    await user.click(await screen.findByText("New device"));
+    await user.click(await screen.findByText("Create an emulator"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
     await screen.findByDisplayValue("API 35 — Google APIs (x86_64)"); // form loaded, selection = android-35
 
@@ -803,7 +848,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    await user.click(await screen.findByText("New device"));
+    await user.click(await screen.findByText("Create an emulator"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
     await screen.findByDisplayValue("API 35 — Google APIs (x86_64)");
 
@@ -834,7 +879,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    await user.click(await screen.findByText("New device"));
+    await user.click(await screen.findByText("Create an emulator"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
 
     expect(
@@ -851,7 +896,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    await user.click(await screen.findByText("New device"));
+    await user.click(await screen.findByText("Create an emulator"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
     await screen.findByDisplayValue("pixel_6");
 
@@ -875,7 +920,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    await user.click(await screen.findByText("New device"));
+    await user.click(await screen.findByText("Create an emulator"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
     await screen.findByDisplayValue("pixel_6");
 
@@ -892,7 +937,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     deviceProfilesDb = [];
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    await user.click(await screen.findByText("New device"));
+    await user.click(await screen.findByText("Create an emulator"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
 
     expect(
@@ -905,7 +950,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    await user.click(await screen.findByText("New device"));
+    await user.click(await screen.findByText("Create an emulator"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
     await screen.findByDisplayValue("pixel_6");
 
@@ -922,7 +967,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    await user.click(await screen.findByText("New device"));
+    await user.click(await screen.findByText("Create an emulator"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
     await screen.findByDisplayValue("pixel_6");
 
@@ -938,7 +983,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    await user.click(await screen.findByText("New device"));
+    await user.click(await screen.findByText("Create an emulator"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
     await screen.findByDisplayValue("pixel_6");
 
@@ -953,7 +998,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    await user.click(await screen.findByText("New device"));
+    await user.click(await screen.findByText("Create an emulator"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
     await screen.findByDisplayValue("pixel_6");
 

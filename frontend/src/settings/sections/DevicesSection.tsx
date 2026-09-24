@@ -23,6 +23,7 @@ import { ErrorText } from "../../ui/ErrorText.js";
 import { ProgressBar } from "../../ui/ProgressBar.js";
 import { Modal } from "../../ui/Modal.js";
 import { PlusIcon } from "../../ui/icons.js";
+import { PairDeviceDialog } from "./PairDeviceDialog.js";
 
 // Same allowlist as src/routes/avds.ts's own AVD_NAME_PATTERN — checked
 // client-side too so a bad name fails fast instead of round-tripping to the
@@ -118,8 +119,6 @@ export function DevicesSection() {
   const devices = useDashboardStore(useShallow((s) => s.devices));
   const refreshDevices = useDashboardStore((s) => s.refreshDevices);
   const createDevice = useDashboardStore((s) => s.createDevice);
-  const pairDevice = useDashboardStore((s) => s.pairDevice);
-  const connectPhysicalDevice = useDashboardStore((s) => s.connectPhysicalDevice);
   const terminateDevice = useDashboardStore((s) => s.terminateDevice);
   const updateDeviceAddress = useDashboardStore((s) => s.updateDeviceAddress);
 
@@ -133,29 +132,13 @@ export function DevicesSection() {
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const [createOpen, setCreateOpen] = useState(false);
-  const [createMode, setCreateMode] = useState<"emulator" | "physical">("emulator");
+  // Physical phones are paired from their own dialog (issue #1379) — see
+  // PairDeviceDialog.tsx. This section only owns whether it's open.
+  const [pairOpen, setPairOpen] = useState(false);
   const [avdName, setAvdName] = useState("");
   const [name, setName] = useState("");
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
-
-  // Physical mode is two independent actions, not a strict wizard: pairing
-  // is one-time (the adb server remembers it across Mullion restarts — see
-  // device-panel.md's own note), so a phone paired earlier via `mullion
-  // device pair`/another session can skip straight to Connect. Kept as
-  // separate state/handlers from the emulator fields above rather than
-  // reusing them, since the two forms share no fields (an AVD name vs. an
-  // adb address) beyond the optional label.
-  const [pairingAddress, setPairingAddress] = useState("");
-  const [pairingCode, setPairingCode] = useState("");
-  const [pairing, setPairing] = useState(false);
-  const [pairError, setPairError] = useState<string | null>(null);
-  const [paired, setPaired] = useState(false);
-
-  const [connectAddress, setConnectAddress] = useState("");
-  const [physicalName, setPhysicalName] = useState("");
-  const [connecting, setConnecting] = useState(false);
-  const [connectError, setConnectError] = useState<string | null>(null);
 
   // The AVD picker (GET /api/avds) — fetched lazily, only once the create
   // form is actually open in emulator mode, not eagerly at mount (these
@@ -199,7 +182,7 @@ export function DevicesSection() {
   const pendingInstallRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!createOpen || createMode !== "emulator") return;
+    if (!createOpen) return;
     let cancelled = false;
     api
       .listAvds()
@@ -218,7 +201,7 @@ export function DevicesSection() {
     return () => {
       cancelled = true;
     };
-  }, [createOpen, createMode]);
+  }, [createOpen]);
 
   useEffect(() => {
     if (!newAvdOpen) return;
@@ -440,45 +423,6 @@ export function DevicesSection() {
       .finally(() => setCreatingAvd(false));
   };
 
-  const submitPair = () => {
-    if (pairing) return;
-    const address = pairingAddress.trim();
-    const code = pairingCode.trim();
-    if (!address || !code) return;
-    setPairError(null);
-    setPaired(false);
-    setPairing(true);
-    pairDevice(address, code)
-      .then(() => {
-        setPaired(true);
-        setPairingAddress("");
-        setPairingCode("");
-      })
-      .catch((err: unknown) => {
-        setPairError(err instanceof ApiError ? err.message : "Could not pair this device");
-      })
-      .finally(() => setPairing(false));
-  };
-
-  const submitConnect = () => {
-    if (connecting) return;
-    const address = connectAddress.trim();
-    if (!address) return;
-    setConnectError(null);
-    setConnecting(true);
-    connectPhysicalDevice(address, physicalName.trim() || undefined)
-      .then(() => {
-        setCreateOpen(false);
-        setConnectAddress("");
-        setPhysicalName("");
-        setPaired(false);
-      })
-      .catch((err: unknown) => {
-        setConnectError(err instanceof ApiError ? err.message : "Could not connect this device");
-      })
-      .finally(() => setConnecting(false));
-  };
-
   const remove = (device: Device) => {
     setDeleteError(null);
     setDeleting((prev) => ({ ...prev, [device.id]: true }));
@@ -576,7 +520,7 @@ export function DevicesSection() {
                 <div style={{ padding: "8px 12px" }}>
                   <Row
                     label="New address"
-                    desc="From the phone's Developer options -> Wireless debugging screen — host:port, e.g. 192.168.1.23:37251. Re-pair above first if the phone requires a fresh pairing code."
+                    desc="From the phone's Developer options -> Wireless debugging screen — host:port, e.g. 192.168.1.23:37251. If the phone was un-paired and needs a fresh pairing code, delete this row and use Pair a phone or tablet below instead."
                   >
                     <div className="settings-numberfield" style={{ width: 220 }}>
                       <input
@@ -608,280 +552,173 @@ export function DevicesSection() {
       )}
       {deleteError && <ErrorText style={{ marginTop: 8 }}>{deleteError}</ErrorText>}
 
-      <div style={{ marginTop: 10 }}>
+      <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <AddButton onClick={() => setPairOpen(true)}>
+          <PlusIcon size={13} />
+          Pair a phone or tablet
+        </AddButton>
         <AddButton
           onClick={() => {
             // Self-review (code-review high) — without this, closing the
             // form after a failed create (e.g. DEVICE_ENABLED=false) and
             // reopening it shows that same stale error before the user has
-            // typed or submitted anything. Covers all three modes' errors,
-            // not just the emulator one, for the same reason.
+            // typed or submitted anything.
             setCreateError(null);
-            setPairError(null);
-            setConnectError(null);
-            setPaired(false);
             setCreateAvdError(null);
             setNewAvdOpen(false);
             setCreateOpen((open) => !open);
           }}
         >
           <PlusIcon size={13} />
-          New device
+          Create an emulator
         </AddButton>
       </div>
+      {pairOpen && (
+        <PairDeviceDialog onClose={() => setPairOpen(false)} onPaired={() => setPairOpen(false)} />
+      )}
 
       {loaded && devices.length === 0 && loadError && (
         <ErrorText style={{ marginTop: 10 }}>Couldn't load devices.</ErrorText>
       )}
       {loaded && devices.length === 0 && !loadError && !createOpen && (
         <div style={{ fontSize: 11.5, color: "var(--dim)", marginTop: 10 }}>
-          No Android devices yet — create one to open its screen from the sidebar.
+          No Android devices yet — pair a phone or create an emulator to open its screen from the
+          sidebar.
         </div>
       )}
 
       {createOpen && (
         <div style={{ marginTop: 10 }}>
-          <Row
-            label="Kind"
-            desc="An emulator Mullion spawns itself, or a physical phone already reachable over wireless debugging."
-          >
-            <Segmented
-              options={[
-                { value: "emulator", label: "Emulator" },
-                { value: "physical", label: "Physical" },
-              ]}
-              value={createMode}
-              onChange={setCreateMode}
-            />
-          </Row>
+          {!avdsLoaded && (
+            <div className="settings-readonly-value" style={{ marginTop: 4 }}>
+              Loading AVDs…
+            </div>
+          )}
+          {avdsLoaded && avds.length > 0 && (
+            <Row label="AVD name" desc="An AVD already provisioned on the host.">
+              <Dropdown
+                options={avds.map((n) => ({ value: n, label: n }))}
+                value={avdName}
+                onChange={setAvdName}
+              />
+            </Row>
+          )}
+          {avdsLoaded && !avdsError && avds.length === 0 && !newAvdOpen && (
+            <div style={{ fontSize: 11.5, color: "var(--dim)", marginTop: 4 }}>
+              No AVDs on this host yet — create one below.
+            </div>
+          )}
+          {avdsError && <ErrorText style={{ marginTop: 8 }}>{avdsError}</ErrorText>}
 
-          {createMode === "emulator" && (
-            <>
-              {!avdsLoaded && (
-                <div className="settings-readonly-value" style={{ marginTop: 4 }}>
-                  Loading AVDs…
-                </div>
-              )}
-              {avdsLoaded && avds.length > 0 && (
-                <Row label="AVD name" desc="An AVD already provisioned on the host.">
-                  <Dropdown
-                    options={avds.map((n) => ({ value: n, label: n }))}
-                    value={avdName}
-                    onChange={setAvdName}
+          <div style={{ marginTop: 8 }}>
+            <SecondaryButton onClick={() => setNewAvdOpen((open) => !open)}>
+              {newAvdOpen ? "Cancel new AVD" : "+ New AVD"}
+            </SecondaryButton>
+          </div>
+
+          {newAvdOpen && (
+            <div style={{ marginTop: 10 }}>
+              <Row label="New AVD name" desc="Letters, digits, '.', '_', and '-' only.">
+                <div className="settings-numberfield" style={{ width: 220 }}>
+                  <input
+                    style={{ flex: 1, textAlign: "left", width: "auto" }}
+                    placeholder="Pixel_8_API_35"
+                    value={newAvdName}
+                    onChange={(e) => setNewAvdName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") submitCreateAvd();
+                    }}
+                    aria-invalid={avdNameError !== null}
                   />
-                </Row>
-              )}
-              {avdsLoaded && !avdsError && avds.length === 0 && !newAvdOpen && (
-                <div style={{ fontSize: 11.5, color: "var(--dim)", marginTop: 4 }}>
-                  No AVDs on this host yet — create one below.
                 </div>
-              )}
-              {avdsError && <ErrorText style={{ marginTop: 8 }}>{avdsError}</ErrorText>}
-
-              <div style={{ marginTop: 8 }}>
-                <SecondaryButton onClick={() => setNewAvdOpen((open) => !open)}>
-                  {newAvdOpen ? "Cancel new AVD" : "+ New AVD"}
-                </SecondaryButton>
-              </div>
-
-              {newAvdOpen && (
-                <div style={{ marginTop: 10 }}>
-                  <Row label="New AVD name" desc="Letters, digits, '.', '_', and '-' only.">
-                    <div className="settings-numberfield" style={{ width: 220 }}>
-                      <input
-                        style={{ flex: 1, textAlign: "left", width: "auto" }}
-                        placeholder="Pixel_8_API_35"
-                        value={newAvdName}
-                        onChange={(e) => setNewAvdName(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") submitCreateAvd();
-                        }}
-                        aria-invalid={avdNameError !== null}
-                      />
-                    </div>
-                  </Row>
-                  {/* The Row desc above states the allowed set; this error
+              </Row>
+              {/* The Row desc above states the allowed set; this error
                       names what's wrong with *this* value so Create AVD's
                       disabled state (e.g. "Pixel 10 Pro XL" or "   ") isn't a
                       silent mystery. role="alert" is the announce channel —
                       no aria-describedby here, to avoid double-reading. */}
-                  {avdNameError !== null && (
-                    <ErrorText style={{ marginTop: 4 }}>{avdNameError}</ErrorText>
-                  )}
-                  {!provisioningLoaded && (
-                    <div className="settings-readonly-value" style={{ marginTop: 4 }}>
-                      Loading system images and device profiles…
-                    </div>
-                  )}
-                  {provisioningLoaded && systemImages.length > 0 && (
-                    <Row
-                      label="System image"
-                      desc="An Android system image already installed on the host."
-                    >
-                      <Dropdown
-                        options={systemImages.map((img) => ({
-                          value: img.packagePath,
-                          label: describeSystemImage(img),
-                        }))}
-                        value={selectedSystemImage}
-                        onChange={setSelectedSystemImage}
-                      />
-                    </Row>
-                  )}
-                  {provisioningLoaded && !createAvdError && systemImages.length === 0 && (
-                    <div style={{ fontSize: 11.5, color: "var(--dim)", marginTop: 4 }}>
-                      No system images installed on this host — open “SDK system images” below and
-                      use Install to fetch one first.
-                    </div>
-                  )}
-                  {provisioningLoaded && deviceProfiles.length > 0 && (
-                    <Row label="Device profile" desc="A hardware profile avdmanager knows about.">
-                      <Dropdown
-                        options={deviceProfiles.map((p) => ({ value: p, label: p }))}
-                        value={selectedDeviceProfile}
-                        onChange={setSelectedDeviceProfile}
-                      />
-                    </Row>
-                  )}
-                  {provisioningLoaded && !createAvdError && deviceProfiles.length === 0 && (
-                    <div style={{ fontSize: 11.5, color: "var(--dim)", marginTop: 4 }}>
-                      No device profiles known to avdmanager on this host — check the SDK
-                      cmdline-tools install.
-                    </div>
-                  )}
-                  <div style={{ marginTop: 8 }}>
-                    <SecondaryButton
-                      onClick={submitCreateAvd}
-                      disabled={
-                        creatingAvd ||
-                        !isAvdNameValid(newAvdName.trim()) ||
-                        !selectedSystemImage ||
-                        !selectedDeviceProfile
-                      }
-                    >
-                      {creatingAvd ? "Creating AVD…" : "Create AVD"}
-                    </SecondaryButton>
-                  </div>
-                  {createAvdError && (
-                    <ErrorText style={{ marginTop: 8 }}>{createAvdError}</ErrorText>
-                  )}
+              {avdNameError !== null && (
+                <ErrorText style={{ marginTop: 4 }}>{avdNameError}</ErrorText>
+              )}
+              {!provisioningLoaded && (
+                <div className="settings-readonly-value" style={{ marginTop: 4 }}>
+                  Loading system images and device profiles…
                 </div>
               )}
-
-              <div style={{ marginTop: 14 }}>
-                <Row label="Name" desc="Optional — falls back to the AVD name.">
-                  <div className="settings-numberfield" style={{ width: 220 }}>
-                    <input
-                      style={{ flex: 1, textAlign: "left", width: "auto" }}
-                      placeholder="Pixel 8"
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") submitCreate();
-                      }}
-                    />
-                  </div>
-                </Row>
-              </div>
-              <div style={{ marginTop: 8 }}>
-                <SecondaryButton onClick={submitCreate} disabled={creating || !avdName.trim()}>
-                  {creating ? "Creating…" : "Create"}
-                </SecondaryButton>
-              </div>
-              {createError && <ErrorText style={{ marginTop: 8 }}>{createError}</ErrorText>}
-            </>
-          )}
-
-          {createMode === "physical" && (
-            <>
-              {/* Two independent actions, not a strict wizard — see
-                  submitPair's own comment on why. */}
-              <Row
-                label="Pairing address"
-                desc="From the phone's Developer options -> Wireless debugging -> Pair device with pairing code — host:port, e.g. 192.168.1.23:41234. One-time; skip this and Pair below if already paired."
-              >
-                <div className="settings-numberfield" style={{ width: 220 }}>
-                  <input
-                    style={{ flex: 1, textAlign: "left", width: "auto" }}
-                    placeholder="192.168.1.23:41234"
-                    value={pairingAddress}
-                    onChange={(e) => setPairingAddress(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") submitPair();
-                    }}
-                  />
-                </div>
-              </Row>
-              <Row label="Pairing code" desc="The 6-digit code shown on the same screen.">
-                <div className="settings-numberfield" style={{ width: 220 }}>
-                  <input
-                    style={{ flex: 1, textAlign: "left", width: "auto" }}
-                    placeholder="123456"
-                    value={pairingCode}
-                    onChange={(e) => setPairingCode(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") submitPair();
-                    }}
-                  />
-                </div>
-              </Row>
-              <div style={{ marginTop: 8 }}>
-                <SecondaryButton
-                  onClick={submitPair}
-                  disabled={pairing || !pairingAddress.trim() || !pairingCode.trim()}
-                >
-                  {pairing ? "Pairing…" : "Pair"}
-                </SecondaryButton>
-              </div>
-              {paired && (
-                <div style={{ fontSize: 11, color: "var(--dim)", marginTop: 6 }}>
-                  Paired — connect below.
-                </div>
-              )}
-              {pairError && <ErrorText style={{ marginTop: 8 }}>{pairError}</ErrorText>}
-
-              <div style={{ marginTop: 14 }}>
+              {provisioningLoaded && systemImages.length > 0 && (
                 <Row
-                  label="Device address"
-                  desc="A DIFFERENT port than pairing — shown at the top of the same Wireless debugging screen once paired, e.g. 192.168.1.23:37251."
+                  label="System image"
+                  desc="An Android system image already installed on the host."
                 >
-                  <div className="settings-numberfield" style={{ width: 220 }}>
-                    <input
-                      style={{ flex: 1, textAlign: "left", width: "auto" }}
-                      placeholder="192.168.1.23:37251"
-                      value={connectAddress}
-                      onChange={(e) => setConnectAddress(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") submitConnect();
-                      }}
-                    />
-                  </div>
-                </Row>
-              </div>
-              <Row label="Name" desc="Optional — falls back to the address.">
-                <div className="settings-numberfield" style={{ width: 220 }}>
-                  <input
-                    style={{ flex: 1, textAlign: "left", width: "auto" }}
-                    placeholder="My Pixel"
-                    value={physicalName}
-                    onChange={(e) => setPhysicalName(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") submitConnect();
-                    }}
+                  <Dropdown
+                    options={systemImages.map((img) => ({
+                      value: img.packagePath,
+                      label: describeSystemImage(img),
+                    }))}
+                    value={selectedSystemImage}
+                    onChange={setSelectedSystemImage}
                   />
+                </Row>
+              )}
+              {provisioningLoaded && !createAvdError && systemImages.length === 0 && (
+                <div style={{ fontSize: 11.5, color: "var(--dim)", marginTop: 4 }}>
+                  No system images installed on this host — open “SDK system images” below and use
+                  Install to fetch one first.
                 </div>
-              </Row>
+              )}
+              {provisioningLoaded && deviceProfiles.length > 0 && (
+                <Row label="Device profile" desc="A hardware profile avdmanager knows about.">
+                  <Dropdown
+                    options={deviceProfiles.map((p) => ({ value: p, label: p }))}
+                    value={selectedDeviceProfile}
+                    onChange={setSelectedDeviceProfile}
+                  />
+                </Row>
+              )}
+              {provisioningLoaded && !createAvdError && deviceProfiles.length === 0 && (
+                <div style={{ fontSize: 11.5, color: "var(--dim)", marginTop: 4 }}>
+                  No device profiles known to avdmanager on this host — check the SDK cmdline-tools
+                  install.
+                </div>
+              )}
               <div style={{ marginTop: 8 }}>
                 <SecondaryButton
-                  onClick={submitConnect}
-                  disabled={connecting || !connectAddress.trim()}
+                  onClick={submitCreateAvd}
+                  disabled={
+                    creatingAvd ||
+                    !isAvdNameValid(newAvdName.trim()) ||
+                    !selectedSystemImage ||
+                    !selectedDeviceProfile
+                  }
                 >
-                  {connecting ? "Connecting…" : "Connect"}
+                  {creatingAvd ? "Creating AVD…" : "Create AVD"}
                 </SecondaryButton>
               </div>
-              {connectError && <ErrorText style={{ marginTop: 8 }}>{connectError}</ErrorText>}
-            </>
+              {createAvdError && <ErrorText style={{ marginTop: 8 }}>{createAvdError}</ErrorText>}
+            </div>
           )}
+
+          <div style={{ marginTop: 14 }}>
+            <Row label="Name" desc="Optional — falls back to the AVD name.">
+              <div className="settings-numberfield" style={{ width: 220 }}>
+                <input
+                  style={{ flex: 1, textAlign: "left", width: "auto" }}
+                  placeholder="Pixel 8"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") submitCreate();
+                  }}
+                />
+              </div>
+            </Row>
+          </div>
+          <div style={{ marginTop: 8 }}>
+            <SecondaryButton onClick={submitCreate} disabled={creating || !avdName.trim()}>
+              {creating ? "Creating…" : "Create"}
+            </SecondaryButton>
+          </div>
+          {createError && <ErrorText style={{ marginTop: 8 }}>{createError}</ErrorText>}
         </div>
       )}
 

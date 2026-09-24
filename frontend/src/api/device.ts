@@ -2,7 +2,7 @@
 // execution. Split out the same way bridges.ts is: one file per backend
 // route module (routes/devices.ts).
 import { request } from "./client.js";
-import type { Device } from "./types.js";
+import type { Device, DiscoveredDevice, PairAndConnectBody } from "./types.js";
 
 export const devicesApi = {
   listDevices: () => request<Device[]>("/api/devices"),
@@ -12,20 +12,20 @@ export const devicesApi = {
   createDevice: (body: { avdName: string; projectId?: number; name?: string }) =>
     request<Device>("/api/devices", { method: "POST", body: JSON.stringify(body) }),
 
-  // The `kind: "physical"` counterpart to createDevice — requires `address`
-  // to already be paired (see pairDevice below); this is what actually
-  // calls `adb connect`.
-  connectPhysicalDevice: (body: { address: string; projectId?: number; name?: string }) =>
-    request<Device>("/api/devices", {
-      method: "POST",
-      body: JSON.stringify({ kind: "physical", ...body }),
-    }),
+  // Issue #1378's mDNS snapshot of nearby phones in Wireless debugging mode.
+  // Always a list — empty (never an error) when DEVICE_DISCOVERY_ENABLED is
+  // off or nothing is in range.
+  listDiscoveredDevices: () => request<DiscoveredDevice[]>("/api/devices/discovered"),
 
-  // One-time `adb pair` against a phone's Wireless debugging pairing
-  // address/code. Creates no device row — see routes/devices.ts's own
-  // comment on why this is a separate, stateless endpoint.
-  pairDevice: (body: { pairingAddress: string; pairingCode: string }) =>
-    request<{ ok: true }>("/api/devices/pair", { method: "POST", body: JSON.stringify(body) }),
+  // Atomic `adb pair` + `adb connect` + device-row insert (issue #1378) —
+  // the single call behind PairDeviceDialog's "Pair & Connect" button. The
+  // legacy two-step POST /api/devices/pair + POST /api/devices {kind:
+  // "physical"} endpoints stay on the backend for the CLI only.
+  pairAndConnectDevice: (body: PairAndConnectBody) =>
+    request<Device>("/api/devices/pair-and-connect", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 
   terminateDevice: (id: number) => request<void>(`/api/devices/${id}`, { method: "DELETE" }),
 
