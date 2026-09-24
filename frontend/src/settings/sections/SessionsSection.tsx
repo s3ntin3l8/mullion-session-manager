@@ -154,7 +154,7 @@ export function SessionsSection() {
       </Row>
       <Row
         label="Stale busy timeout"
-        desc="How long a busy state (compacting, running subagents) stays on a silent session before it's cleared."
+        desc="How long a busy state (compacting, running subagents) stays on a silent session before it's cleared. Keep this longer than the error timeout — this work can legitimately run for a while."
       >
         <NumberField
           value={s.staleBusySeconds}

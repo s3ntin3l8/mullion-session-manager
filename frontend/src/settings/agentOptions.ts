@@ -6,13 +6,13 @@
 // projects.defaultAgent store.
 export const AGENT_OPTIONS = [
   { value: "claude", label: "Claude Code" },
-  { value: "codex", label: "codex" },
+  { value: "codex", label: "Codex" },
   { value: "opencode", label: "opencode" },
   // Rich statuses (issue: extend surfaced session statuses) — was missing
   // entirely, so agy could never be picked as the launcher's default agent
   // even though agent-detect.ts's KNOWN_AGENTS and its own hook adapter have
   // supported it since PR #301.
-  { value: "agy", label: "agy" },
+  { value: "agy", label: "Antigravity" },
 ];
 
 // Review-agent pickers additionally offer "none" — the explicit "no review
