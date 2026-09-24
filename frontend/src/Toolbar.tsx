@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { useDashboardStore } from "./store/index.js";
 import {
   ChevronLeftIcon,
@@ -11,6 +12,7 @@ import {
   GearIcon,
 } from "./ui/icons.js";
 import { NotificationBell } from "./NotificationBell.js";
+import { KebabMenu } from "./ui/KebabMenu.js";
 import type { Session } from "./api/index.js";
 import type { SettingsSection } from "./Settings.js";
 
@@ -29,6 +31,9 @@ interface ToolbarProps {
   activeWorkspaceName: string | null;
   paneCount: number;
   currentVersion: string | null;
+  // Phone only (mobile.css shows `.toolbar-mobile-session`): App's
+  // MobileSessionSwitcher, in place of the hidden `.toolbar-center`.
+  mobileSessionSlot?: ReactNode;
 }
 
 // Ported 1:1 from the design's toolbar: sidebar toggle, attention bell with
@@ -46,6 +51,7 @@ export function Toolbar({
   activeWorkspaceName,
   paneCount,
   currentVersion,
+  mobileSessionSlot,
 }: ToolbarProps) {
   // P1 perf fix — the plan's own audit didn't cite this file by line, but
   // it's the identical whole-store-subscription defect (`useDashboardStore()`
@@ -81,7 +87,7 @@ export function Toolbar({
           onOpenBrowser={onOpenBrowser}
         />
         <button
-          className="toolbar-icon-btn"
+          className="toolbar-icon-btn toolbar-new-session-btn"
           onClick={onOpenLauncher}
           title={
             viewMode === "kanban" ? "New session (unavailable in Task view)" : "New session (⌘K)"
@@ -124,6 +130,9 @@ export function Toolbar({
           )
         )}
       </div>
+      {viewMode !== "kanban" && mobileSessionSlot && (
+        <div className="toolbar-mobile-session">{mobileSessionSlot}</div>
+      )}
       <div className="toolbar-actions">
         {/* Mobile-only Back button — the phone's escape hatch from Tasks
            view. mobile.css hides `.toolbar-center` entirely below 700px,
@@ -157,7 +166,7 @@ export function Toolbar({
           <span className="kbd">⌘K</span>
         </button>
         <button
-          className="toolbar-icon-btn"
+          className="toolbar-icon-btn toolbar-theme-btn"
           onClick={() => useDashboardStore.getState().toggleTheme()}
           title="Toggle theme"
         >
@@ -172,9 +181,41 @@ export function Toolbar({
             v{currentVersion}
           </button>
         )}
-        <button className="toolbar-icon-btn" onClick={() => onOpenSettings()} title="Settings (⌘,)">
+        <button
+          className="toolbar-icon-btn toolbar-settings-btn"
+          onClick={() => onOpenSettings()}
+          title="Settings (⌘,)"
+        >
           <GearIcon size={18} />
         </button>
+        {/* Phone only (mobile.css): the actions the phone toolbar has no
+            room for. */}
+        <span className="toolbar-app-menu">
+          <KebabMenu
+            title="Menu"
+            items={[
+              {
+                key: "new",
+                label: "New session",
+                icon: <PlusIcon size={14} />,
+                onClick: onOpenLauncher,
+                disabled: viewMode === "kanban",
+              },
+              {
+                key: "theme",
+                label: theme === "light" ? "Dark theme" : "Light theme",
+                icon: theme === "light" ? <MoonIcon size={14} /> : <SunIcon size={14} />,
+                onClick: () => useDashboardStore.getState().toggleTheme(),
+              },
+              {
+                key: "settings",
+                label: currentVersion !== null ? `Settings · v${currentVersion}` : "Settings",
+                icon: <GearIcon size={14} />,
+                onClick: () => onOpenSettings(),
+              },
+            ]}
+          />
+        </span>
       </div>
     </div>
   );

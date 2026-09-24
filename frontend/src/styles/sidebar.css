@@ -1482,168 +1482,193 @@
   opacity: 0.5;
 }
 
-.mobile-tabs {
-  display: none;
-  /* Issue #960 — `.mobile-tabs` sits in a column flex container, so this
-     alone can't stop it widening; the fix that actually bounds its width is
-     `min-width: 0` on `.grid-area` (a row flex item), see there. */
-  min-width: 0;
-  flex-shrink: 0;
-  align-items: center;
-  /* Read back by the fade pseudo-elements' geometry below (Hermes review —
-     the -8px/-5px there used to hardcode these two values a second time,
-     so a future edit here could silently desync them from the fade). */
-  --mobile-tabs-padding-x: 8px;
-  --mobile-tabs-gap: 5px;
-  gap: var(--mobile-tabs-gap);
-  padding: 7px var(--mobile-tabs-padding-x);
-  overflow-x: auto;
-  touch-action: pan-x;
-  overscroll-behavior-x: contain;
-  /* Scrollbar hidden on both engines deliberately (touch/trackpad affordance
-     is the wheel listener + the sticky fade below, not a visible track) —
-     keep this even though the fade exists for the SAME reason a hidden
-     scrollbar was chosen in the first place: a native scrollbar here is a
-     mouse-facing artifact this bar was never designed to show (see the
-     scrollbars={isCoarsePointer ? "native" : "custom"} comment on
-     DockviewReact in App.tsx for the same reasoning applied elsewhere). */
-  scrollbar-width: none;
-  background: var(--chrome);
-  border-bottom: 1px solid var(--border);
-  -webkit-overflow-scrolling: touch;
-}
-.mobile-tabs::-webkit-scrollbar {
-  display: none;
-}
-/* Issue #960 — the bar has no visible signal that more tabs exist off
-   -screen once the (deliberately hidden, see above) scrollbar is gone.
-   Sticky pseudo-elements rather than a `mask-image` on the bar itself: a
-   mask fades the bar's own `background`/`border-bottom` too, notching the
-   header's separator line at the edge. Sticky pseudo-elements are flex
-   items of `.mobile-tabs`, so they paint OVER the tabs (unlike a
-   `background-attachment: local` scroll-shadow layer, which paints behind
-   them and would show through `.mobile-tab.active`'s own translucent
-   highlight) while staying pinned to each edge of the scroll viewport.
-   Each fades to `var(--chrome)` — the bar's own background.
-   `.at-start`/`.at-end` (toggled by lib/mobileTabsWheelScroll.ts's
-   attachMobileTabsEdgeState, App.tsx) hide the fade on whichever side has
-   nothing left to scroll to — needed for the LEFT fade specifically: as
-   the first flex item, it always overlaps tab 1's leading edge regardless
-   of scroll position, including at rest with nothing to scroll to on that
-   side at all (Hermes review, PR #1224 — verified in real Chromium). The
-   right fade doesn't strictly need this (it naturally sits past the last
-   tab in the untouched trailing track once there's no overflow, so it's
-   already invisible there), but gets the same treatment for symmetry and
-   to hide once genuinely scrolled to the end. `z-index: 1` guards against
-   a future positioned tab (e.g. `position: relative` for a badge) painting
-   over these — verified without it, DOM order alone lets an earlier
-   positioned sibling win paint order over `::before`. */
-.mobile-tabs::before,
-.mobile-tabs::after {
-  content: "";
-  position: sticky;
-  flex: 0 0 24px;
-  align-self: stretch;
-  pointer-events: none;
-  z-index: 1;
-  transition: opacity 0.15s ease;
-}
-.mobile-tabs::before {
-  /* Negative padding-x (not 0) reaches the bar's true visual edge —
-     `left`/`right` on a sticky element inside `.mobile-tabs` are relative
-     to ITS OWN padding edge (verified: ramp otherwise starts
-     `--mobile-tabs-padding-x` in from the edge, leaving a strip of unfaded
-     content even at full scroll). */
-  left: calc(-1 * var(--mobile-tabs-padding-x));
-  /* -24px cancels the pseudo-element's own flex-basis so it overlays
-     rather than reserving track width; the negative gap cancels the
-     container's own `gap`, which flexbox still inserts between this
-     pseudo-element and the next tab regardless of the margin (verified —
-     without it, an exactly-fitting bar measures 10px of bogus extra
-     scrollWidth: 5px on each edge, wrongly registering as overflowing). */
-  margin-right: calc(-24px - var(--mobile-tabs-gap));
-  background: linear-gradient(to left, transparent, var(--chrome));
-}
-.mobile-tabs.at-start::before {
-  opacity: 0;
-}
-.mobile-tabs::after {
-  right: calc(-1 * var(--mobile-tabs-padding-x));
-  margin-left: calc(-24px - var(--mobile-tabs-gap));
-  background: linear-gradient(to right, transparent, var(--chrome));
-}
-.mobile-tabs.at-end::after {
-  opacity: 0;
-}
-/* Mobile UI/UX overhaul, item A.5 — one wrap per panel so the active pane's
-   trailing close/kebab buttons (added conditionally in App.tsx) sit next to
-   its own tab without being swept into that tab's own flex sizing. */
-.mobile-tab-wrap {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  flex-shrink: 0;
-}
-.mobile-tab {
-  display: inline-flex;
+/* MobileSessionSwitcher.tsx — the phone's session switcher. The trigger
+   lives in the toolbar (`.toolbar-mobile-session`, shown only by
+   mobile.css); the sheet is portaled to <body>. Replaces the old horizontal
+   `.mobile-tabs` strip, which only fit ~2.5 truncated tabs and cost a whole
+   row of vertical space. */
+.mobile-session-trigger {
+  display: flex;
   align-items: center;
   gap: 7px;
-  flex-shrink: 0;
-  /* Item E's touch-target floor (44px), applied here directly rather than
-     shipped at the old 30px and raised again in a later pass — this bar's
-     markup is new in this same change. */
-  height: 44px;
-  padding: 0 12px;
-  border: none;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
+  min-width: 0;
+  width: 100%;
+  height: 40px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--fg) 4%, transparent);
+  color: var(--fg);
   font-family: inherit;
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 500;
+  cursor: pointer;
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
 }
-.mobile-tab.active {
-  background: color-mix(in srgb, var(--fg) 12%, transparent);
-  color: var(--fg);
+.mobile-session-trigger:active {
+  background: color-mix(in srgb, var(--fg) 10%, transparent);
 }
-.mobile-tab-dot {
+.mobile-session-trigger > svg {
+  flex-shrink: 0;
+  color: var(--dim);
+}
+.mobile-session-trigger--empty {
+  color: var(--muted);
+}
+.mobile-session-dot {
   width: 7px;
   height: 7px;
   border-radius: 50%;
   flex-shrink: 0;
 }
-.mobile-tab-agent-logo {
+.mobile-session-logo {
   flex-shrink: 0;
-  width: 14px;
-  height: 14px;
 }
-.mobile-tab-title {
-  max-width: 140px;
+.mobile-session-title {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  text-align: left;
 }
-.mobile-tab-unread-badge {
+.mobile-session-count {
+  flex-shrink: 0;
+  font-family: "Geist Mono", monospace;
+  font-size: 11px;
+  color: var(--dim);
+}
+.mobile-session-unread {
+  flex-shrink: 0;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
-  height: 15px;
-  min-width: 15px;
-  padding: 0 4px;
-  border-radius: 999px;
-  font-size: 9.5px;
-  font-weight: 700;
+  font-size: 10.5px;
+  font-weight: 600;
   line-height: 1;
   color: #fff;
   background: var(--ring);
 }
-/* The active pane's close (×) + kebab (PaneActionsMenu) — same glyph sizes
-   as .pane-tab-btn's desktop equivalent, just a larger hit area to clear the
-   44px touch floor. */
+
+.mobile-session-backdrop {
+  position: fixed;
+  inset: 0;
+  /* Above the drawer (45) and overlay backdrop (50); below Settings (60) and
+     modals (70). */
+  z-index: 55;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  /* Keeps the sheet (and its rename input) above the on-screen keyboard —
+     portaled to <body>, it doesn't get .app's own --kb-inset shrink. */
+  padding-bottom: var(--kb-inset, 0px);
+  background: color-mix(in srgb, #000 40%, transparent);
+}
+/* The active row's PaneActionsMenu portals its dropdown to <body> after this
+   sheet — lift it above the sheet (its own z-index is 20). */
+.mobile-session-backdrop ~ .pane-tab-overflow-menu {
+  z-index: 56;
+}
+.mobile-session-sheet {
+  display: flex;
+  flex-direction: column;
+  max-height: min(75dvh, 640px);
+  background: var(--chrome);
+  color: var(--fg);
+  border-top: 1px solid var(--border);
+  border-radius: 14px 14px 0 0;
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+  box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.25);
+}
+.mobile-session-sheet-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 4px 4px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+.mobile-session-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.mobile-session-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 4px 0 8px;
+}
+.mobile-session-row.active {
+  background: color-mix(in srgb, var(--fg) 7%, transparent);
+}
+.mobile-session-row-main {
+  flex: 1;
+  min-width: 0;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 8px;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+.mobile-session-row.active .mobile-session-row-main {
+  font-weight: 600;
+}
+.mobile-session-rename-input {
+  flex: 1;
+  min-width: 0;
+  height: 44px;
+  margin: 4px 0;
+  font-family: inherit;
+  /* 16px, not smaller: iOS zooms the page on focusing a smaller input. */
+  font-size: 16px;
+  color: var(--fg);
+  background: var(--term);
+  border: 1px solid var(--accent-solid);
+  border-radius: 8px;
+  padding: 0 10px;
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-solid) 22%, transparent);
+}
+.mobile-session-new {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 48px;
+  margin: 6px 12px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+/* Close (×) + kebab (PaneActionsMenu) buttons in MobileSessionSwitcher's
+   sheet — same glyph sizes as .pane-tab-btn's desktop equivalent, just a
+   larger hit area to clear the 44px touch floor. */
 .mobile-tab-btn {
   width: 44px;
   height: 44px;
@@ -1665,24 +1690,9 @@
   background: color-mix(in srgb, var(--fg) 12%, transparent);
   color: var(--fg);
 }
-.mobile-tab-rename-input {
-  height: 44px;
-  min-width: 140px;
-  font-family: inherit;
-  font-size: 12.5px;
-  font-weight: 500;
-  color: var(--fg);
-  background: var(--term);
-  border: 1px solid var(--accent-solid);
-  border-radius: 8px;
-  padding: 0 10px;
-  outline: none;
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-solid) 22%, transparent);
-}
-
 /* Mobile UI/UX overhaul, item C.2 — the terminal key bar (MobileKeyBar.tsx).
-   Hidden by default/on desktop; shown only via the mobile breakpoint block
-   further down, same pattern as .mobile-tabs above. Claims the bottom
+   Hidden by default/on desktop; shown only via the coarse-pointer block in
+   tablet.css. Claims the bottom
    safe-area inset itself when present — see .grid-area-body's own comment
    and the `.app.key-bar` override below for why that ownership moves here
    rather than staying on .grid-area-body. */
@@ -1695,12 +1705,10 @@
   min-height: 0;
   /* Load-bearing on phone: .grid-area is an item in .app-body's ROW flex
      container, so without this its min-width defaults to its content's
-     min-content width — which includes the full row of non-shrinking
-     .mobile-tab-wrap chips. With enough tabs open that inflated .grid-area
-     past the viewport, left .mobile-tabs nothing to scroll internally (it
-     was as wide as its content), fitted the terminal to the inflated width
-     (right columns clipped), and let the active-tab scroll-into-view scroll
-     the whole .app shell sideways. */
+     min-content width. The former phone tab strip's row of non-shrinking
+     chips inflated .grid-area past the viewport this way, which fitted the
+     terminal to the inflated width (right columns clipped) and let the
+     active-tab scroll-into-view slide the whole .app shell sideways. */
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -1720,8 +1728,7 @@
   flex-direction: column;
   /* Issue #87 — unconditional; env() is 0px without a home-indicator gesture
      area to account for. This is the bottom-most visible content region on
-     mobile EXCEPT when the key bar is showing (.dock is hidden there,
-     .mobile-tabs is a top-of-screen pane switcher, not a bottom bar) — see
+     mobile EXCEPT when the key bar is showing (.dock is hidden there) — see
      the `.app.key-bar` override below, where MobileKeyBar.tsx becomes the
      bottom-most element instead and claims this inset itself. A landscape
      phone can have this inset outside the <700px breakpoint too — see

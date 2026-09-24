@@ -849,7 +849,7 @@ export interface UnreadEventSummary {
   kind: "attention" | "exited" | null;
 }
 
-// Shared by PaneTab.tsx's own tab badge and App.tsx's mobile pane bar (issue
+// Shared by PaneTab.tsx's own tab badge and MobileSessionBar.tsx (issue
 // #168 / mobile UI overhaul, PR #613 Hermes review) — the identical "events
 // newer than the read cursor, minus anything already dismissed from the
 // notification panel, that classify as notify-worthy" derivation, previously

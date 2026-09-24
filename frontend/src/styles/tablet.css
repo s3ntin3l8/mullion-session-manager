@@ -180,7 +180,7 @@
     background: color-mix(in srgb, var(--fg) 12%, transparent);
   }
 
-  /* Item E — touch targets. .mobile-tab/.mobile-tab-btn are already sized
+  /* Item E — touch targets. .mobile-tab-btn is already sized
      for this at phone width (mobile.css); these are the remaining sub-44px
      interactive rows/buttons that are reachable at ANY width on a
      coarse-pointer device (dockview's own tab strip, i.e.

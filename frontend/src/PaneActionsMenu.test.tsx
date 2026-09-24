@@ -11,13 +11,13 @@ import type { TerminalPaneParams } from "./TerminalPane.js";
 // Code review finding on PR #613 — PaneActionsMenu is now a standalone
 // component (api/params/containerApi/onRename/triggerClassName, not
 // IDockviewPanelHeaderProps) reused by both PaneTab.tsx's desktop tab strip
-// and App.tsx's mobile pane bar. PaneTab.test.tsx already exercises its
+// and the phone session switcher (MobileSessionBar.tsx). PaneTab.test.tsx already exercises its
 // full behavior (kill-arm, focus management, promote, timeline) through
 // PaneTab — this file covers it as the standalone contract both callers
 // actually depend on: the trigger's own accessibility attributes, the
-// `onRename` callback wiring (PaneTab and the mobile bar each own a
+// `onRename` callback wiring (PaneTab and the phone switcher each own a
 // different rename UI — see PaneActionsMenu.tsx's own comment on why), and
-// the non-terminal-panel (`params: undefined`) case the mobile bar hits for
+// the non-terminal-panel (`params: undefined`) case the phone switcher hits for
 // every non-session panel in `dockviewApi.panels`.
 const resetTiledGroupWidths = vi.fn();
 // Untyped (no inline implementation, unlike a `vi.fn(() => true)` initial
@@ -353,7 +353,7 @@ describe("PaneActionsMenu", () => {
     });
   });
 
-  // The mobile bar renders this for every panel in dockviewApi.panels, not
+  // The phone switcher renders this for any tiled panel, not
   // just terminal ones — a github/git/timeline/browser panel has no plain
   // `sessionId` at all (timeline's params carry `sessionIds`, plural).
   // Hermes review, PR #613 — Rename and Kill must be GATED on session, not
@@ -569,5 +569,46 @@ describe("PaneActionsMenu — mute notifications (#719)", () => {
     await user.click(unmuteItem);
 
     expect(toggleSessionMute).toHaveBeenCalledWith(session.id);
+  });
+});
+
+describe("PaneActionsMenu — viewport-bottom flip", () => {
+  it("flips the menu above a trigger near the bottom of the viewport", async () => {
+    render(
+      <PaneActionsMenu
+        api={makeApi()}
+        params={{ sessionId: session.id }}
+        containerApi={CONTAINER_API}
+        onRename={vi.fn()}
+        triggerClassName="mobile-tab-btn"
+      />,
+    );
+    const trigger = screen.getByTitle("More…");
+    // jsdom's innerHeight is 768: a trigger at y=700..744 with a 300px menu
+    // below it would end at 1048.
+    trigger.getBoundingClientRect = () =>
+      ({ top: 700, bottom: 744, left: 300, right: 344, width: 44, height: 44 }) as DOMRect;
+    const original = HTMLElement.prototype.getBoundingClientRect;
+    HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+      if (this.getAttribute("role") === "menu") {
+        return {
+          top: 748,
+          bottom: 1048,
+          left: 130,
+          right: 344,
+          width: 214,
+          height: 300,
+        } as DOMRect;
+      }
+      return original.call(this);
+    };
+    try {
+      await userEvent.setup().click(trigger);
+      const menu = screen.getByRole("menu");
+      expect(menu.style.top).toBe(`${700 - 4 - 300}px`);
+      expect(menu.style.overflowY).toBe("auto");
+    } finally {
+      HTMLElement.prototype.getBoundingClientRect = original;
+    }
   });
 });

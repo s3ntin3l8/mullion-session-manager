@@ -46,13 +46,13 @@ describe("attachSidebarSwipeGesture", () => {
   it("ignores a touch starting inside an ignoreSelector match, even in the edge zone", () => {
     const onCommit = vi.fn();
     const strip = document.createElement("div");
-    strip.className = "mobile-tabs";
+    strip.className = "mobile-key-bar";
     container.appendChild(strip);
     const detach = attachSidebarSwipeGesture({
       element: container,
       commitDirection: 1,
       edgeZonePx: 24,
-      ignoreSelector: ".mobile-tabs",
+      ignoreSelector: ".mobile-key-bar",
       onCommit,
     });
 
