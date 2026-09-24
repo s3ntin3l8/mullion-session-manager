@@ -25,6 +25,7 @@ import { ProgressBar } from "../../ui/ProgressBar.js";
 import { Modal } from "../../ui/Modal.js";
 import { CloseIcon, PlusIcon, SearchIcon } from "../../ui/icons.js";
 import { PairDeviceDialog } from "./PairDeviceDialog.js";
+import { useServerInfo } from "../useServerInfo.js";
 
 // Same allowlist as src/routes/avds.ts's own AVD_NAME_PATTERN — checked
 // client-side too so a bad name fails fast instead of round-tripping to the
@@ -117,6 +118,7 @@ function describeDevice(device: Device): string {
 }
 
 export function DevicesSection() {
+  const serverInfo = useServerInfo();
   const devices = useDashboardStore(useShallow((s) => s.devices));
   const refreshDevices = useDashboardStore((s) => s.refreshDevices);
   const createDevice = useDashboardStore((s) => s.createDevice);
@@ -519,6 +521,11 @@ export function DevicesSection() {
 
   return (
     <>
+      {serverInfo && !serverInfo.features.devices && (
+        <div className="settings-footer-note" style={{ marginTop: 0, marginBottom: 12 }}>
+          Android devices are turned off on this server. The server administrator can enable them.
+        </div>
+      )}
       <GroupHeading
         title="Android devices"
         desc="Emulators and phones whose screens you can open in a panel."

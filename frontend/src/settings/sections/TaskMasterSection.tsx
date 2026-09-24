@@ -34,6 +34,7 @@ export function TaskMasterSection() {
   const [maxConcurrentDraft, setMaxConcurrentDraft] = useState<number | null>(null);
   const [budgetDraft, setBudgetDraft] = useState<number | null>(null);
   const [throttleDraft, setThrottleDraft] = useState<number | null>(null);
+  const [graceDraft, setGraceDraft] = useState<number | null>(null);
   const [ciWaitDraft, setCiWaitDraft] = useState<number | null>(null);
 
   return (
@@ -136,6 +137,25 @@ export function TaskMasterSection() {
         />
       </Row>
       <Row
+        label="Rate-limit grace period"
+        desc={`When an agent stops because it hit its provider's rate limit, wait this long for it to resume before marking the task failed. 0 fails it immediately. Server default: ${env.rateLimitGraceMinutes} min.`}
+      >
+        <NumberField
+          value={graceDraft ?? resolved.rateLimitGraceMinutes}
+          min={0}
+          max={1440}
+          width={46}
+          suffix="minutes"
+          onChange={setGraceDraft}
+          onCommit={(v) => {
+            setGraceDraft(null);
+            updateSettings({
+              taskMaster: { rateLimitGraceMinutes: clampNumberFieldOnCommit(v, 0, 1440) },
+            });
+          }}
+        />
+      </Row>
+      <Row
         label="Review-agent CI wait"
         desc="How long the review agent waits for CI results on the pull request before it starts, so the review sees real pass/fail results. 0 starts the review immediately."
       >
@@ -185,19 +205,21 @@ export function TaskMasterSection() {
       </Row>
       <Row
         label="Reset to server defaults"
-        desc="Return Enable, Max concurrent claims, Per-task budget, Progress-comment throttle, and Skip permissions to the server's defaults. Pause auto-claim and Review-agent CI wait are left as they are."
+        desc="Return Enable, Max concurrent claims, Per-task budget, Progress-comment throttle, Rate-limit grace period, and Skip permissions to the server's defaults. Pause auto-claim and Review-agent CI wait are left as they are."
       >
         <SecondaryButton
           onClick={() => {
             setMaxConcurrentDraft(null);
             setBudgetDraft(null);
             setThrottleDraft(null);
+            setGraceDraft(null);
             updateSettings({
               taskMaster: {
                 enabled: "inherit",
                 maxConcurrent: -1,
                 budgetMinutes: -1,
                 progressCommentMinutes: -1,
+                rateLimitGraceMinutes: -1,
                 skipPermissions: "inherit",
               },
             });

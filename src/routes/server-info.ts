@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { runtimeEnvDefaults } from "../services/runtime-config.js";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
@@ -89,9 +90,19 @@ export async function serverInfoRoute(app: FastifyInstance) {
         maxConcurrent: app.config.MULLION_TASK_MAX_CONCURRENT,
         budgetMinutes: app.config.MULLION_TASK_BUDGET_MINUTES,
         progressCommentMinutes: app.config.MULLION_TASK_PROGRESS_COMMENT_MINUTES,
+        rateLimitGraceMinutes: app.config.MULLION_TASK_RATE_LIMIT_GRACE_MINUTES,
         skipPermissions: app.config.MULLION_TASK_SKIP_PERMISSIONS,
         issueLabel: app.config.MULLION_TASK_LABEL,
         pollIntervalSeconds: app.config.MULLION_TASK_POLL_INTERVAL,
+      },
+      // Env defaults for the settings the UI can override at runtime (see
+      // services/runtime-config.ts), shown as "Server default: N".
+      runtimeEnv: runtimeEnvDefaults(app),
+      // Host-level feature gates. Read-only: they wire plugins at boot.
+      features: {
+        browser: app.config.BROWSER_ENABLED,
+        devices: app.config.DEVICE_ENABLED,
+        deviceDiscovery: app.config.DEVICE_DISCOVERY_ENABLED,
       },
     };
   });

@@ -5,7 +5,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { DockviewPanelApi } from "dockview-react";
 import { BrowserPanel } from "./BrowserPanel.js";
-import { useDashboardStore } from "./store/index.js";
+import { useDashboardStore, FALLBACK_RUNTIME_ENV } from "./store/index.js";
 import { api } from "./api/index.js";
 import type { Project, ServerInfo } from "./api/index.js";
 import { jsonResponse } from "./test/jsonResponse.js";
@@ -54,10 +54,13 @@ const SERVER_INFO_BASE = {
     maxConcurrent: 2,
     budgetMinutes: 120,
     progressCommentMinutes: 15,
+    rateLimitGraceMinutes: 5,
     skipPermissions: false,
     issueLabel: "mullion-task",
     pollIntervalSeconds: 60,
   },
+  runtimeEnv: FALLBACK_RUNTIME_ENV,
+  features: { browser: true, devices: false, deviceDiscovery: true },
   previewAuthRequired: false,
 };
 
