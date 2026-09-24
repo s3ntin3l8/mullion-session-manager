@@ -646,8 +646,10 @@ describe("Settings -> Devices (issue #1326)", () => {
     await user.click(await screen.findByRole("button", { name: "Load available images" }));
 
     // The installed image shows an Uninstall button; filter tabs appear.
+    // Match on the row's package path, not "Google APIs" alone — that
+    // string is also an <option> in the new variant filter dropdown.
     await waitFor(() => {
-      expect(screen.getByText(/Google APIs/)).toBeInTheDocument();
+      expect(screen.getByText("system-images;android-35;google_apis;x86_64")).toBeInTheDocument();
     });
     expect(screen.getByText("Not installed")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Uninstall/ })).toBeInTheDocument();
@@ -687,24 +689,163 @@ describe("Settings -> Devices (issue #1326)", () => {
 
     await user.click(await screen.findByRole("button", { name: "Load available images" }));
 
-    // "All" is default — both images visible (wait for the list to load)
+    // "All" is default — both images visible (wait for the list to load).
+    // Assertions key on package paths (unique to the list rows) rather than
+    // "Google APIs", which the variant dropdown also renders as an option.
     await waitFor(() => {
-      expect(screen.getAllByText(/Google APIs/).length).toBeGreaterThanOrEqual(2);
+      expect(screen.getByText("system-images;android-35;google_apis;x86_64")).toBeInTheDocument();
     });
+    expect(screen.getByText("system-images;android-35;google_apis;arm64-v8a")).toBeInTheDocument();
 
     // "Not installed" filter — only arm64-v8a image remains
     await user.click(screen.getByRole("button", { name: "Not installed" }));
     await waitFor(() => {
-      expect(screen.getAllByText(/arm64-v8a/).length).toBeGreaterThanOrEqual(1);
-      expect(screen.queryByText(/x86_64.*Uninstall/)).not.toBeInTheDocument();
+      expect(
+        screen.getByText("system-images;android-35;google_apis;arm64-v8a"),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByText("system-images;android-35;google_apis;x86_64"),
+      ).not.toBeInTheDocument();
     });
 
     // "Installed" filter — only x86_64 image remains
     await user.click(screen.getByRole("button", { name: "Installed" }));
     await waitFor(() => {
-      expect(screen.getAllByText(/x86_64/).length).toBeGreaterThanOrEqual(1);
-      expect(screen.queryByText(/arm64-v8a.*Install/)).not.toBeInTheDocument();
+      expect(screen.getByText("system-images;android-35;google_apis;x86_64")).toBeInTheDocument();
+      expect(
+        screen.queryByText("system-images;android-35;google_apis;arm64-v8a"),
+      ).not.toBeInTheDocument();
     });
+  });
+
+  // Shared fixture for the variant/API/search filter tests: one Play image,
+  // one Google APIs image (different API level), both not installed.
+  const twoVariantImages = () => {
+    availableImagesDb = [
+      {
+        packagePath: "system-images;android-36;google_apis_playstore;x86_64",
+        apiLevel: "36",
+        tag: "google_apis_playstore",
+        tagDisplay: "Google Play",
+        abi: "x86_64",
+        installed: false,
+      },
+      {
+        packagePath: "system-images;android-35;google_apis;x86_64",
+        apiLevel: "35",
+        tag: "google_apis",
+        tagDisplay: "Google APIs",
+        abi: "x86_64",
+        installed: false,
+      },
+    ];
+  };
+
+  const loadAvailableImages = async (user: ReturnType<typeof userEvent.setup>) => {
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+    await user.click(await screen.findByRole("button", { name: "Load available images" }));
+    // Wait on the list row's package path — tagDisplay text also appears in
+    // the variant dropdown options, so it can't uniquely identify a row.
+    await waitFor(() => {
+      expect(
+        document.querySelector(".settings-list-row.stacked .settings-list-row-subtitle"),
+      ).not.toBeNull();
+    });
+  };
+
+  it("variant dropdown narrows the list to one image tag", async () => {
+    twoVariantImages();
+    const user = userEvent.setup();
+    await loadAvailableImages(user);
+
+    expect(
+      screen.getByText("system-images;android-36;google_apis_playstore;x86_64"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("system-images;android-35;google_apis;x86_64")).toBeInTheDocument();
+
+    await user.selectOptions(screen.getByDisplayValue("All variants"), "google_apis_playstore");
+    await waitFor(() => {
+      expect(
+        screen.getByText("system-images;android-36;google_apis_playstore;x86_64"),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByText("system-images;android-35;google_apis;x86_64"),
+      ).not.toBeInTheDocument();
+    });
+
+    // Back to all — both rows return.
+    await user.selectOptions(screen.getByDisplayValue("Google Play"), "");
+    await waitFor(() => {
+      expect(screen.getByText("system-images;android-35;google_apis;x86_64")).toBeInTheDocument();
+    });
+  });
+
+  it("API dropdown narrows the list to one API level", async () => {
+    twoVariantImages();
+    const user = userEvent.setup();
+    await loadAvailableImages(user);
+
+    // Options are sorted newest-first, so API 36 precedes API 35.
+    await user.selectOptions(screen.getByDisplayValue("All APIs"), "35");
+    await waitFor(() => {
+      expect(screen.getByText("system-images;android-35;google_apis;x86_64")).toBeInTheDocument();
+      expect(
+        screen.queryByText("system-images;android-36;google_apis_playstore;x86_64"),
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  it("search input filters over package path and description", async () => {
+    twoVariantImages();
+    const user = userEvent.setup();
+    await loadAvailableImages(user);
+
+    const search = screen.getByLabelText("Filter system images");
+    await user.type(search, "playstore");
+    await waitFor(() => {
+      expect(
+        screen.getByText("system-images;android-36;google_apis_playstore;x86_64"),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByText("system-images;android-35;google_apis;x86_64"),
+      ).not.toBeInTheDocument();
+    });
+
+    // Clear button restores both rows. Accessible name comes from the
+    // aria-label (title alone is inconsistently exposed — Hermes, PR #1386).
+    await user.click(screen.getByRole("button", { name: "Clear filter" }));
+    await waitFor(() => {
+      expect(screen.getByText("system-images;android-35;google_apis;x86_64")).toBeInTheDocument();
+    });
+  });
+
+  it("empty narrowed-filter state says filters, not 'no images'", async () => {
+    twoVariantImages();
+    const user = userEvent.setup();
+    await loadAvailableImages(user);
+
+    await user.type(screen.getByLabelText("Filter system images"), "does-not-exist");
+    expect(await screen.findByText("No images match the current filters.")).toBeInTheDocument();
+    expect(screen.queryByText("No system images available.")).not.toBeInTheDocument();
+  });
+
+  it("system-image rows stack the package path on its own line", async () => {
+    const user = userEvent.setup();
+    // Default fixture (single installed google_apis image) is enough —
+    // this only asserts the row's stacked DOM shape, not filter content.
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+    await user.click(await screen.findByRole("button", { name: "Load available images" }));
+
+    await waitFor(() => {
+      expect(document.querySelectorAll(".settings-list-row.stacked").length).toBeGreaterThanOrEqual(
+        1,
+      );
+    });
+    // The full package path is the stacked subtitle — present in the DOM
+    // (CSS wraps it to its own line; no JS truncation).
+    expect(
+      document.querySelector(".settings-list-row.stacked .settings-list-row-subtitle"),
+    ).toHaveTextContent("system-images;");
   });
 
   it("empty filter state shows correct message when no images match", async () => {
