@@ -276,10 +276,10 @@ describe("PairDeviceDialog (issue #1379)", () => {
     expect(pixel).toBeChecked();
   });
 
-  it("shows the server's error and refreshes the device list anyway", async () => {
+  it("shows the server's error and keeps the dialog open for a retry", async () => {
     vi.mocked(api.listDiscoveredDevices).mockResolvedValue([discovered()]);
     vi.mocked(api.pairAndConnectDevice).mockRejectedValue(
-      new ApiError("adb connect failed: connection refused", 400),
+      new ApiError("adb pair failed: wrong pairing code", 400),
     );
     const onPaired = vi.fn();
     render(<PairDeviceDialog onClose={vi.fn()} onPaired={onPaired} />);
@@ -288,10 +288,10 @@ describe("PairDeviceDialog (issue #1379)", () => {
     typeInto("123456", "123456");
     fireEvent.click(submitButton());
 
-    expect(await screen.findByText("adb connect failed: connection refused")).toBeInTheDocument();
+    expect(await screen.findByText("adb pair failed: wrong pairing code")).toBeInTheDocument();
     expect(onPaired).not.toHaveBeenCalled();
-    // A failed connect leaves the backend's row in place — it must surface.
-    await waitFor(() => expect(api.listDevices).toHaveBeenCalled());
+    // Every error response rolled its row back server-side — nothing to refresh.
+    expect(api.listDevices).not.toHaveBeenCalled();
     expect(submitButton()).toBeEnabled();
   });
 

@@ -52,18 +52,16 @@ export const createDevicesSlice: StateCreator<DashboardState, [], [], DevicesSli
     listDiscovered: () => api.listDiscoveredDevices(),
 
     pairAndConnect: async (body) => {
-      try {
-        return await api.pairAndConnectDevice(body);
-      } finally {
-        // Refreshes on failure too, unlike createDevice above: the backend
-        // rolls its inserted row back when `adb pair` fails, but leaves it in
-        // place when the follow-up `adb connect` fails — that row must show
-        // up in the list rather than wait for the next poll tick. Same
-        // best-effort, never-rejects shape as createDevice otherwise.
-        void get()
-          .refreshDevices()
-          .catch(() => {});
-      }
+      // A failed `adb connect` still comes back 201 (the row's own
+      // `live.status`/`error` reports it), and every error response has
+      // already rolled its row back server-side — so, same as createDevice,
+      // only a success has anything new for this refresh to pick up.
+      const device = await api.pairAndConnectDevice(body);
+      // Same reasoning as createDevice above.
+      void get()
+        .refreshDevices()
+        .catch(() => {});
+      return device;
     },
 
     terminateDevice: async (id) => {
