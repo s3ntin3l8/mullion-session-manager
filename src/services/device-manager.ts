@@ -515,6 +515,12 @@ export class Device {
    * connection path (spawn(), attach(), connectPhysical()) needs
    * identically once it reaches this point. */
   private async startScrcpySession(adb: Adb): Promise<void> {
+    // An unset DEVICE_SCRCPY_SERVER_PATH ("" = not configured) must fail as
+    // an ordinary rejected spawn — `createReadStream("")` instead surfaces
+    // its ENOENT as an uncaught exception outside this promise chain.
+    if (!this.manager.scrcpyServerPath) {
+      throw new Error("DEVICE_SCRCPY_SERVER_PATH is not configured");
+    }
     // Node's own web-streams ReadableStream and @yume-chan/stream-extra's
     // (a structurally-identical, DOM-independent redeclaration — see that
     // package's own types.d.ts) are not nominally the same type, hence
