@@ -26,8 +26,19 @@ import type { Device, DeviceKind } from "../services/device-manager.js";
 // start), and once the backlog clears, asks the device for a fresh keyframe
 // via `resetVideo()` rather than leaving the decoder to free-run corrupted
 // until whatever the stream's own next natural keyframe interval is.
+//
+// The same reasoning applies to a NEW socket (a late joiner): it is sent the
+// replayed config, then no delta frame until a keyframe has gone out on that
+// socket, and a keyframe is requested on attach.
 
 const BACKPRESSURE_MAX_BUFFERED_BYTES = 4 * 1024 * 1024;
+
+// How long a socket may sit gated on a keyframe before we log it and ask the
+// device for another one. The gate silently drops every delta, and the pane
+// can't tell "no keyframe yet" from "stream idle" — so a permanently-gated
+// socket (the attach-time resetVideo() rejected, no controller, or the device
+// ignored the request) would otherwise be invisible.
+const KEYFRAME_STALL_MS = 5000;
 
 // Wire framing for a video packet: [1 byte type][1 byte flags][payload].
 // type: 0 = configuration (SPS/PPS), 1 = data. flags bit0 = keyframe.
@@ -322,13 +333,24 @@ export async function attachSocketToDevice(
   // getOrCreate() above resolves.
   if (socket.readyState !== socket.OPEN) return;
 
+  // `device` is a `let` (assigned in the try above), so closures below would
+  // otherwise see it as implicitly `any`.
+  const liveDevice: Device = device;
   let closed = false;
   let droppedSincePacket = false;
+  // A brand-new socket is a late joiner: Device.onVideoPacket replays only
+  // the SPS/PPS config, so the next packet is normally a delta frame — and
+  // the frontend's WebCodecs decoder throws on a delta before its first
+  // keyframe, which permanently errors its stream (a blank panel). Hold
+  // every delta back until a keyframe has actually gone out on this socket;
+  // a backpressure drop re-arms it.
+  let awaitingKeyframe = true;
 
   const unsubscribeVideo = device.onVideoPacket((packet) => {
     if (closed || socket.readyState !== socket.OPEN) return;
     if (packet.type === "data" && socket.bufferedAmount > BACKPRESSURE_MAX_BUFFERED_BYTES) {
       droppedSincePacket = true;
+      awaitingKeyframe = true;
       return;
     }
     if (droppedSincePacket && packet.type === "data") {
@@ -336,12 +358,32 @@ export async function attachSocketToDevice(
       // frontend decoder free-run against a stream with a hole in it. Fire
       // once per drop-then-recover episode, not on every packet.
       droppedSincePacket = false;
-      device.controller?.resetVideo().catch((err) => {
-        app.log.warn({ err, deviceId }, "device resetVideo after backpressure drop failed");
-      });
+      requestKeyframe("after backpressure drop");
+    }
+    if (packet.type === "data") {
+      if (awaitingKeyframe && !packet.keyframe) return;
+      awaitingKeyframe = false;
     }
     socket.send(encodeVideoFrame(packet), { binary: true });
   });
+
+  function requestKeyframe(reason: string): void {
+    liveDevice.controller?.resetVideo().catch((err) => {
+      app.log.warn({ err, deviceId }, `device resetVideo ${reason} failed`);
+    });
+  }
+  // Get the late joiner an IDR now rather than after the encoder's own
+  // (possibly many-second) keyframe interval.
+  requestKeyframe("on attach");
+  const stallTimer = setTimeout(() => {
+    if (closed || !awaitingKeyframe) return;
+    app.log.warn(
+      { deviceId, hasController: Boolean(liveDevice.controller) },
+      "device socket still waiting for a keyframe; requesting another",
+    );
+    requestKeyframe("after keyframe stall");
+  }, KEYFRAME_STALL_MS);
+  stallTimer.unref();
 
   const unsubscribeExit = device.onExit(() => {
     if (socket.readyState === socket.OPEN) {
@@ -374,6 +416,7 @@ export async function attachSocketToDevice(
 
   socket.on("close", () => {
     closed = true;
+    clearTimeout(stallTimer);
     unsubscribeVideo();
     unsubscribeExit();
   });

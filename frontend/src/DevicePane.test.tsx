@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { DevicePane } from "./DevicePane.js";
 import type { Device } from "./api/index.js";
@@ -25,9 +25,14 @@ const decoderWriter = {
   close: vi.fn(() => Promise.resolve()),
 };
 
+const decoderCtor = vi.hoisted(() => vi.fn());
+
 vi.mock("@yume-chan/scrcpy-decoder-webcodecs", () => {
   class WebCodecsVideoDecoder {
     static isSupported = true;
+    constructor() {
+      decoderCtor();
+    }
     writable = { getWriter: () => decoderWriter };
     sizeChanged() {}
     dispose() {}
@@ -105,7 +110,9 @@ describe("DevicePane (issue #1326)", () => {
   beforeEach(() => {
     FakeWebSocket.instances = [];
     vi.stubGlobal("WebSocket", FakeWebSocket);
-    decoderWriter.write.mockClear();
+    decoderWriter.write.mockReset();
+    decoderWriter.write.mockImplementation(() => Promise.resolve());
+    decoderCtor.mockClear();
     decoderWriter.close.mockClear();
     resetStore({ devices: [], devicesLoaded: true });
     ({ fetchMock, unexpectedCalls } = mockFetch({
@@ -203,4 +210,76 @@ describe("DevicePane (issue #1326)", () => {
     expect(screen.queryByText("Device stopped")).not.toBeInTheDocument();
     expect(screen.queryByText(/This device was deleted/)).not.toBeInTheDocument();
   });
+
+  // Wire frames (see decodeVideoFrame): [type][flags][payload].
+  const keyframe = () => new Uint8Array([1, 1, 9]).buffer;
+  const delta = () => new Uint8Array([1, 0, 9]).buffer;
+
+  it("shows 'Waiting for video…' once open, until a keyframe has been decoded", async () => {
+    resetStore({ devices: [makeDevice()], devicesLoaded: true });
+    render(<DevicePane params={{ deviceId: 7 }} />);
+    const socket = FakeWebSocket.instances[0];
+    act(() => socket.open());
+    expect(screen.getByText("Waiting for video…")).toBeTruthy();
+
+    act(() => socket.emit("message", { data: keyframe() }));
+    await waitFor(() => expect(screen.queryByText("Waiting for video…")).toBeNull());
+  });
+
+  it("rebuilds the decoder and reconnects when a write rejects, ignoring the stale socket", async () => {
+    resetStore({ devices: [makeDevice()], devicesLoaded: true });
+    render(<DevicePane params={{ deviceId: 7 }} />);
+    const first = FakeWebSocket.instances[0];
+    act(() => first.open());
+    expect(decoderCtor).toHaveBeenCalledTimes(1);
+
+    decoderWriter.write.mockImplementationOnce(() => Promise.reject(new Error("bad delta")));
+    act(() => first.emit("message", { data: delta() }));
+    await waitFor(() => expect(first.readyState).toBe(FakeWebSocket.CLOSED));
+    act(() => first.emit("close"));
+
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2), { timeout: 2000 });
+    expect(decoderCtor).toHaveBeenCalledTimes(2);
+
+    // The replaced socket can no longer reach the new decoder.
+    decoderWriter.write.mockClear();
+    act(() => first.emit("message", { data: delta() }));
+    expect(decoderWriter.write).not.toHaveBeenCalled();
+    act(() => first.emit("close"));
+    expect(FakeWebSocket.instances).toHaveLength(2);
+  });
+
+  it("gives up with a visible error after repeated decoder failures with no frame", async () => {
+    // Fake (but real-time-advancing) timers so we can jump past the longest
+    // backoff and prove no fourth connect is queued, rather than sleeping.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      await runGiveUpScenario();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  async function runGiveUpScenario() {
+    resetStore({ devices: [makeDevice()], devicesLoaded: true });
+    render(<DevicePane params={{ deviceId: 7 }} />);
+    decoderWriter.write.mockImplementation(() => Promise.reject(new Error("bad delta")));
+
+    for (let i = 0; i < 3; i++) {
+      await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(i + 1), { timeout: 2000 });
+      const socket = FakeWebSocket.instances[i];
+      act(() => socket.open());
+      act(() => socket.emit("message", { data: delta() }));
+      await waitFor(() => expect(socket.readyState).toBe(FakeWebSocket.CLOSED));
+      act(() => socket.emit("close"));
+    }
+
+    expect(await screen.findByText(/Video decoder failed: bad delta/)).toBeTruthy();
+    expect(screen.getByText("Disconnected")).toBeTruthy();
+    // No fourth connection was scheduled, even past the max backoff (8s).
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(3);
+  }
 });

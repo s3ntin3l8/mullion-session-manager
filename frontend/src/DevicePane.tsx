@@ -85,6 +85,10 @@ export function DevicePane(props: {
   );
   const [reconnectAttempt, setReconnectAttempt] = useState(0);
   const [lastError, setLastError] = useState<string | null>(null);
+  // True once a keyframe has been decoded on the current connection. Until
+  // then the canvas has nothing on it (and sits on --term, plain white in the
+  // light theme), so an "open" socket alone must not read as "streaming".
+  const [hasFrame, setHasFrame] = useState(false);
   // This panel's own row, by status only. Primitive on purpose: the devices
   // poll replaces the whole array with fresh objects every tick, so
   // selecting the row itself would re-render (and re-measure nothing but
@@ -129,13 +133,37 @@ export function DevicePane(props: {
     let videoWidth = 0;
     let videoHeight = 0;
 
-    const renderer = new BitmapVideoFrameRenderer(canvas);
-    const decoder = new WebCodecsVideoDecoder({ codec: ScrcpyVideoCodecId.H264, renderer });
-    decoder.sizeChanged(({ width, height }) => {
-      videoWidth = width;
-      videoHeight = height;
-    });
-    const writer = decoder.writable.getWriter();
+    // A WebCodecsVideoDecoder whose writable has errored (e.g. it was handed
+    // a delta frame before its first keyframe) stays errored for good —
+    // every later write rejects, keyframes included — so recovery means a
+    // brand-new decoder, not waiting for the next keyframe. `decoderDead`
+    // marks that state; connect() swaps in a fresh decoder before the next
+    // socket opens. `decoderFailures` counts failures that never produced a
+    // frame (reconnectAttempt can't: it resets on every "open").
+    const MAX_DECODER_FAILURES = 3;
+    let decoder: WebCodecsVideoDecoder;
+    let writer: WritableStreamDefaultWriter<ScrcpyMediaStreamPacket>;
+    let decoderDead = false;
+    let decoderFailures = 0;
+    // Failures only forgive after this many packets decode cleanly — a
+    // decoder that eats one keyframe and then errors must still hit the cap.
+    const HEALTHY_PACKETS_TO_FORGIVE = 120;
+    let healthyPackets = 0;
+
+    function createDecoder(): void {
+      const renderer = new BitmapVideoFrameRenderer(canvas!);
+      decoder = new WebCodecsVideoDecoder({ codec: ScrcpyVideoCodecId.H264, renderer });
+      decoder.sizeChanged(({ width, height }) => {
+        videoWidth = width;
+        videoHeight = height;
+      });
+      writer = decoder.writable.getWriter();
+    }
+    function disposeDecoder(): void {
+      writer.close().catch(() => {});
+      decoder.dispose();
+    }
+    createDecoder();
 
     function sendControl(message: Record<string, unknown>) {
       if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
@@ -153,6 +181,12 @@ export function DevicePane(props: {
       // own comment on why this matters (a stray socket stays registered
       // server-side as a live viewer until the OS times it out).
       if (ws && ws.readyState !== WebSocket.CLOSED) ws.close();
+      if (decoderDead) {
+        disposeDecoder();
+        createDecoder();
+        decoderDead = false;
+      }
+      setHasFrame(false);
       setStatus(reconnectAttempt === 0 ? "connecting" : "reconnecting");
       setReconnectAttempt(reconnectAttempt);
 
@@ -170,6 +204,8 @@ export function DevicePane(props: {
       });
 
       socket.addEventListener("message", (event) => {
+        // A replaced socket must not feed the (possibly fresh) decoder.
+        if (socket !== ws) return;
         if (typeof event.data === "string") {
           const message = parseControlMessage(event.data);
           if (message?.type === "exited") {
@@ -196,16 +232,46 @@ export function DevicePane(props: {
           return;
         }
         const packet = decodeVideoFrame(event.data as ArrayBuffer);
-        if (!packet) return;
-        writer.write(packet).catch(() => {
-          // A decode error on a single packet — the next keyframe (the
-          // backend requests one via resetVideo() after any backpressure
-          // drop, see routes/device.ts) recovers the stream; nothing to
-          // surface to the user for one bad packet.
-        });
+        if (!packet || decoderDead) return;
+        const activeWriter = writer;
+        activeWriter.write(packet).then(
+          () => {
+            if (destroyed || socket !== ws || activeWriter !== writer || decoderDead) return;
+            if (++healthyPackets >= HEALTHY_PACKETS_TO_FORGIVE) {
+              decoderFailures = 0;
+              healthyPackets = 0;
+            }
+            if (packet.type === "data" && packet.keyframe) setHasFrame(true);
+          },
+          (err: unknown) => {
+            if (destroyed || activeWriter !== writer || decoderDead) return;
+            // The stream is permanently errored (see decoderDead above).
+            decoderDead = true;
+            healthyPackets = 0;
+            decoderFailures += 1;
+            setHasFrame(false);
+            if (decoderFailures >= MAX_DECODER_FAILURES) {
+              // Reconnecting hasn't helped — surface it rather than loop.
+              // Detaching `ws` first makes this socket's own "close" a
+              // no-op, so no reconnect is scheduled; Retry starts over.
+              ws = null;
+              socket.close();
+              setLastError(
+                `Video decoder failed: ${err instanceof Error ? err.message : String(err)}`,
+              );
+              setStatus("failed");
+              return;
+            }
+            // Let the close handler's existing backoff do the reconnect;
+            // connect() rebuilds the decoder. The server replays config and
+            // sends a keyframe first (routes/device.ts).
+            socket.close();
+          },
+        );
       });
 
       socket.addEventListener("close", () => {
+        if (socket !== ws) return;
         if (destroyed) return;
         if (reconnectAttempt >= MAX_RECONNECT_ATTEMPTS) {
           setStatus("failed");
@@ -223,6 +289,7 @@ export function DevicePane(props: {
     retryRef.current = () => {
       if (reconnectTimer) clearTimeout(reconnectTimer);
       reconnectAttempt = 0;
+      decoderFailures = 0;
       connect();
     };
 
@@ -342,8 +409,7 @@ export function DevicePane(props: {
       canvas.removeEventListener("touchcancel", onTouchEnd);
       canvas.removeEventListener("keydown", onKeyDown);
       ws?.close();
-      writer.close().catch(() => {});
-      decoder.dispose();
+      disposeDecoder();
       sendControlRef.current = () => {};
       retryRef.current = () => {};
     };
@@ -356,8 +422,17 @@ export function DevicePane(props: {
       <div className="browser-pane-canvas-wrap">
         <canvas ref={canvasRef} className="browser-pane-canvas" tabIndex={0} />
         {lastError && <div className="browser-pane-error-toast">{lastError}</div>}
-        {status !== "unsupported" && (status !== "open" || stopped || removed) && (
-          <div className={`terminal-status-overlay ${stopped || removed ? "failed" : status}`}>
+        {status !== "unsupported" && (status !== "open" || stopped || removed || !hasFrame) && (
+          <div
+            // While merely waiting for the first frame, let taps/keys through
+            // to the canvas — poking the screen is how you wake an idle one.
+            style={
+              status === "open" && !stopped && !removed ? { pointerEvents: "none" } : undefined
+            }
+            className={`terminal-status-overlay ${
+              stopped || removed ? "failed" : status === "open" ? "connecting" : status
+            }`}
+          >
             {removed ? (
               <>
                 <WifiOffIcon size={22} style={{ color: "var(--dim)" }} />
@@ -375,10 +450,12 @@ export function DevicePane(props: {
                 </button>
               </>
             ) : (
-              status === "connecting" && (
+              (status === "connecting" || status === "open") && (
                 <>
                   <Spinner variant="connecting" />
-                  <span className="terminal-status-text">Connecting…</span>
+                  <span className="terminal-status-text">
+                    {status === "open" ? "Waiting for video…" : "Connecting…"}
+                  </span>
                 </>
               )
             )}
