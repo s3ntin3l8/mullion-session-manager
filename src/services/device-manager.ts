@@ -270,23 +270,131 @@ export class Device {
         ],
       });
 
+      // Populated by the post-settle exit handler if the scope exits non-zero
+      // *after* setImmediate has already resolved the bootstrap promise (the
+      // production failure window: D-Bus error, unit collision, immediate
+      // emulator crash). Raced against the adb poll below so the specific error
+      // surfaces at once instead of waiting for the 120s adb timeout.
+      let bootstrapFailReject: ((err: Error) => void) | null = null;
+      const bootstrapFailed = new Promise<never>((_resolve, reject) => {
+        bootstrapFailReject = reject;
+      });
+      // Prevent Node from treating the above as an unhandled rejection during
+      // the window between creation and the Promise.race() that consumes it.
+      bootstrapFailed.catch(() => {});
+
+      // Durable copy of the same failure, shared by THREE readers that the
+      // one-shot rejection above can't serve on its own:
+      //   1. the exit/error handlers below — once spawn() has reached
+      //      streaming (`spawnFinished`), a later exit is a normal lifetime
+      //      event and must not be recorded as a boot failure;
+      //   2. waitForAdbSerial's poll loop — the loser of the race above keeps
+      //      running, so once bootstrapFailed has won the loop must stop
+      //      burning a getDevices() call every BOOT_POLL_INTERVAL_MS for the
+      //      rest of BOOT_TIMEOUT_MS;
+      //   3. spawn() itself after the race — if the scope dies while createAdb
+      //      / startScrcpySession is still awaited, bootstrapFailed's
+      //      rejection is too late to observe, so spawn() re-checks this and
+      //      aborts with the specific error rather than reaching
+      //      `status = "streaming"` on an emulator that is already gone.
+      const scopeExit: { error: Error | null } = { error: null };
+      /** Set true only on spawn()'s own success path, synchronously with
+       * `status = "streaming"`. Once streaming, a later scope exit is a
+       * normal lifetime event (handleExit only) — recording it would reject
+       * a bootstrap promise spawn() has already consumed. */
+      let spawnFinished = false;
+      const recordScopeExit = (error: Error): void => {
+        if (spawnFinished) return;
+        scopeExit.error = error;
+        bootstrapFailReject?.(error);
+      };
+
       await new Promise<void>((resolve, reject) => {
         const child = spawnChild("systemd-run", plan.argv, { stdio: "ignore" });
-        child.on("error", reject);
+        let settled = false;
+
+        child.on("error", (err) => {
+          if (!settled) {
+            settled = true;
+            reject(err);
+          } else {
+            // Same defect class as the exit branch below: a post-settle error
+            // means the scope is gone while spawn() may still be waiting on
+            // adb — record it so the boot path aborts instead of timing out.
+            recordScopeExit(err instanceof Error ? err : new Error(String(err)));
+            this.handleExit();
+          }
+        });
+
         child.on("exit", (code) => {
-          if (code === 0) resolve();
-          else
-            reject(new Error(`device bootstrap exited with code ${code} (unit ${plan.unitName})`));
+          if (!settled) {
+            if (code !== 0) {
+              settled = true;
+              reject(
+                new Error(`device bootstrap exited with code ${code} (unit ${plan.unitName})`),
+              );
+              return;
+            }
+            // An exit code 0 during the bootstrap window (e.g. from test mocks)
+            // indicates successful scope launch.
+            settled = true;
+            resolve();
+          } else {
+            // Already past the bootstrap promise. If the scope dies during the
+            // boot window (before streaming), surface it immediately via
+            // bootstrapFailed rather than waiting for the full adb timeout —
+            // and, once the race below has already settled, via scopeExit so
+            // spawn()'s own post-race checks catch it (see scopeExit's comment).
+            // Exit code 0 (graceful emulator shutdown mid-boot) also counts as
+            // a scope failure; once streaming it becomes a normal handleExit().
+            recordScopeExit(
+              new Error(
+                `device scope exited during boot with code ${code ?? "null"} (unit ${plan.unitName})`,
+              ),
+            );
+            this.handleExit();
+          }
+        });
+
+        // In production, `systemd-run --scope` runs the emulator in the foreground
+        // and stays alive for the emulator's full lifespan. Once spawned without an
+        // immediate error or non-zero exit, proceed to boot monitoring while the
+        // exit listener remains attached for process lifecycle tracking.
+        setImmediate(() => {
+          if (!settled) {
+            settled = true;
+            resolve();
+          }
         });
       });
 
       this.status = "booting";
       this.serial = `emulator-${port}`;
-      await this.waitForAdbSerial(this.serial, BOOT_TIMEOUT_MS);
+      // Race the adb poll against the scope's own exit signal: if systemd-run
+      // exits during boot (D-Bus error, unit collision, immediate emulator
+      // crash), the specific "scope exited during boot" error surfaces at once
+      // rather than waiting for the full BOOT_TIMEOUT_MS generic timeout. The
+      // poll loop is passed scopeExit so that when THIS side of the race wins,
+      // the adb poll stops too instead of running out its 120s deadline in the
+      // background.
+      await Promise.race([
+        this.waitForAdbSerial(this.serial, BOOT_TIMEOUT_MS, scopeExit),
+        bootstrapFailed,
+      ]);
 
+      // The race can settle via adb while the scope dies during either await
+      // below — bootstrapFailed's rejection is then unobservable (the race is
+      // already decided). Re-check the recorded failure so the specific scope
+      // message wins over whatever createAdb/scrcpy would report, and so
+      // `status = "streaming"` at the end of this method can never be reached
+      // on a scope that has already gone through handleExit() (whose
+      // "exited" + teardown this would otherwise silently overwrite).
       this.adb = await this.serverClient.createAdb({ serial: this.serial });
+      if (scopeExit.error) throw scopeExit.error;
       await this.startScrcpySession(this.adb);
+      if (scopeExit.error) throw scopeExit.error;
 
+      spawnFinished = true;
       this.status = "streaming";
     } catch (err) {
       this.status = "error";
@@ -469,9 +577,26 @@ export class Device {
     }
   }
 
-  private async waitForAdbSerial(serial: string, timeoutMs: number): Promise<void> {
+  /** Polls adb for `serial` until it appears or `timeoutMs` elapses.
+   *
+   * `scopeExit` is spawn()'s shared failure record: Promise.race does not
+   * cancel its loser, so when the sibling `bootstrapFailed` wins the race the
+   * loop here would otherwise keep calling getDevices() once per
+   * BOOT_POLL_INTERVAL_MS until BOOT_TIMEOUT_MS (120s) expires — bounded and
+   * harmless, but pure waste. Checked at the TOP of each iteration, before
+   * getDevices(), so an aborted wait issues no further polls at all. Throwing
+   * the recorded error (rather than a generic "aborted" one) keeps this loop's
+   * own failure message as the specific scope failure should it ever be the
+   * side that settles the race. Optional: connectPhysical() has no scope to
+   * die, so it passes nothing. */
+  private async waitForAdbSerial(
+    serial: string,
+    timeoutMs: number,
+    scopeExit?: { error: Error | null },
+  ): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     for (;;) {
+      if (scopeExit?.error) throw scopeExit.error;
       const devices = await this.serverClient.getDevices();
       if (devices.some((d) => d.serial === serial)) return;
       if (Date.now() > deadline) {
