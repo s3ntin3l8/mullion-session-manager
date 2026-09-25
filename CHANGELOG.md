@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.31](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.30...v0.3.31) (2026-09-25)
+
+
+### Bug Fixes
+
+* **devices:** show video when a panel attaches to an already-streaming device ([#1414](https://github.com/s3ntin3l8/mullion-session-manager/issues/1414)) ([90637d0](https://github.com/s3ntin3l8/mullion-session-manager/commit/90637d06a8cb73ff25e2529b080c6e566d9a786c))
+
 ## [0.3.30](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.29...v0.3.30) (2026-09-25)
 
 
