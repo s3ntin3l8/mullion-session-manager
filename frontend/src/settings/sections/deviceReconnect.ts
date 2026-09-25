@@ -1,0 +1,66 @@
+import type { Device, DiscoveredDevice } from "../../api/index.js";
+
+// Issue #1380 — pairs a stored physical device row with the mDNS entry that
+// says the same phone has come back on a different connect port (Android
+// re-rolls that port every time Wireless debugging is toggled; issue #1347's
+// manual Edit-address button was the only remedy until now).
+
+export interface ReconnectSuggestion {
+  // Discovered entries that plausibly are this row's phone, best match first.
+  // One entry → a plain "Reconnect to <name>?" prompt; several → the row
+  // renders a disambiguation prompt with one button per candidate.
+  candidates: DiscoveredDevice[];
+  // True when the pick isn't unambiguous: several candidates, or another
+  // physical row claims the same phone.
+  ambiguous: boolean;
+}
+
+// `host:port` → host. IPv6 literals are bracketed (`[fe80::1]:5555`); the
+// port is always the part after the last colon.
+export function hostOf(address: string | null | undefined): string | null {
+  if (!address) return null;
+  const i = address.lastIndexOf(":");
+  if (i <= 0) return null;
+  return address.slice(0, i).replace(/^\[|\]$/g, "");
+}
+
+const norm = (s: string | null | undefined) => (s ?? "").trim().toLowerCase();
+
+function nameMatches(device: Device, d: DiscoveredDevice): boolean {
+  const own = norm(device.name);
+  if (!own) return false;
+  return own === norm(d.name) || own === norm(d.model);
+}
+
+// Returns row id → suggestion for every active physical row whose stored
+// address is stale. Matching order (the mDNS record carries no stable
+// hardware fingerprint the rows also store, so the closest stable signals
+// are used): (1) same host, (2) if the phone also changed IP, same
+// user-given name as the advertised name/model. A row already pointing at a
+// currently-advertised connect address is up to date and never prompts.
+export function findReconnectSuggestions(
+  devices: Device[],
+  discovered: DiscoveredDevice[],
+): Map<number, ReconnectSuggestion> {
+  const out = new Map<number, ReconnectSuggestion>();
+  const rows = devices.filter((d) => d.kind === "physical" && d.status === "active" && d.serial);
+  const connectable = discovered.filter((d) => d.connectAddress);
+  const advertised = new Set(connectable.map((d) => d.connectAddress));
+  const stale = rows.filter((r) => !advertised.has(r.serial as string));
+
+  for (const row of stale) {
+    const host = hostOf(row.serial);
+    if (!host) continue;
+    let candidates = connectable.filter((d) => d.host === host);
+    if (candidates.length === 0) candidates = connectable.filter((d) => nameMatches(row, d));
+    if (candidates.length === 0) continue;
+    // Prefer an advertised name/model match when a host serves several.
+    candidates = [...candidates].sort(
+      (a, b) => Number(nameMatches(row, b)) - Number(nameMatches(row, a)),
+    );
+    // Another stale row on the same host competes for the same candidates.
+    const sharing = stale.filter((o) => o.id !== row.id && hostOf(o.serial) === host).length > 0;
+    out.set(row.id, { candidates, ambiguous: candidates.length > 1 || sharing });
+  }
+  return out;
+}

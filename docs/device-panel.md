@@ -187,6 +187,21 @@ pairing address, the device (connect) address and the code, since the endpoint
 needs both ports in manual mode. The per-row **Edit address** button stays as
 the post-hoc override when Android rotates the connect port.
 
+**Reconnect prompt (issue #1380).** Android picks a new connect port every time
+Wireless debugging is toggled, which used to strand a paired phone until the
+user clicked **Edit address** (issue #1347). When `DEVICE_DISCOVERY_ENABLED` is
+on, Settings → Devices polls `GET /api/devices/discovered` every ~5 s (only
+while an active physical row exists and the tab is visible) and compares it
+with the stored rows. A row whose stored address is no longer advertised, but
+whose host is (or, if the phone also changed IP, whose name matches the
+advertised name/model), gets an inline **Reconnect to <name>?** note. Clicking it
+sends the same `PATCH /api/devices/:id` as Edit address — no new row, no new
+protocol, and never without a click. When several phones or rows match (for
+example two Pixels behind one host), the note lists one button per candidate
+instead. If the phone needs a fresh pairing code, delete and re-pair as before.
+The prompt only appears when mDNS can reach the device; otherwise **Edit
+address** remains the manual path.
+
 ---
 
 ## 1. `mullion device` CLI

@@ -2,7 +2,12 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useDashboardStore } from "../../store/index.js";
 import { useShallow } from "zustand/react/shallow";
 import { api, ApiError } from "../../api/index.js";
-import type { Device, SystemImage, AvailableSystemImage } from "../../api/index.js";
+import type {
+  Device,
+  DiscoveredDevice,
+  SystemImage,
+  AvailableSystemImage,
+} from "../../api/index.js";
 import { deviceDotClass } from "../../deviceStatus.js";
 import { matchesQuery } from "../../matchQuery.js";
 import { usePolling } from "../../hooks/usePolling.js";
@@ -25,6 +30,7 @@ import { ProgressBar } from "../../ui/ProgressBar.js";
 import { Modal } from "../../ui/Modal.js";
 import { CloseIcon, PlusIcon, SearchIcon, TrashIcon } from "../../ui/icons.js";
 import { PairDeviceDialog } from "./PairDeviceDialog.js";
+import { findReconnectSuggestions } from "./deviceReconnect.js";
 import { useServerInfo } from "../useServerInfo.js";
 import { DeviceDiscoverySetting } from "../RuntimeSettings.js";
 
@@ -122,6 +128,46 @@ function describeDevice(device: Device): string {
     default:
       return "not running";
   }
+}
+
+// Reconnect-prompt scan cadence (issue #1380).
+export const DISCOVERY_RECONNECT_POLL_MS = 5000;
+
+function ReconnectPrompt({
+  device,
+  candidates,
+  ambiguous,
+  busy,
+  error,
+  onReconnect,
+}: {
+  device: Device;
+  candidates: DiscoveredDevice[];
+  ambiguous: boolean;
+  busy: boolean;
+  error: string | undefined;
+  onReconnect: (target: DiscoveredDevice) => void;
+}) {
+  const label = device.name || device.serial || "this device";
+  return (
+    <div
+      data-testid={`reconnect-prompt-${device.id}`}
+      className="settings-footer-note"
+      style={{ margin: "0 12px 8px" }}
+    >
+      {ambiguous
+        ? `${label} may have moved — pick the phone to reconnect to:`
+        : `${label} is advertising a new address.`}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
+        {candidates.map((c) => (
+          <SecondaryButton key={c.id} onClick={() => onReconnect(c)} disabled={busy}>
+            {ambiguous ? `Reconnect to ${c.name} (${c.connectAddress})` : `Reconnect to ${label}?`}
+          </SecondaryButton>
+        ))}
+      </div>
+      {error && <ErrorText style={{ marginTop: 6 }}>{error}</ErrorText>}
+    </div>
+  );
 }
 
 export function DevicesSection() {
@@ -423,6 +469,60 @@ export function DevicesSection() {
 
   usePolling(refresh, DEVICES_POLL_MS, { pauseWhenHidden: true, deps: [refreshDevices] });
 
+  // Issue #1380 — when mDNS rediscovers a paired phone on a new connect port,
+  // offer the same in-place address update as "Edit address" as a one-click
+  // inline prompt. Only polls while discovery is on AND at least one active
+  // physical row exists to match against.
+  const [discovered, setDiscovered] = useState<DiscoveredDevice[]>([]);
+  const [reconnecting, setReconnecting] = useState<Record<number, boolean>>({});
+  const [reconnectError, setReconnectError] = useState<Record<number, string>>({});
+  const discoveryOn = Boolean(serverInfo?.features.devices && serverInfo.features.deviceDiscovery);
+  const hasPhysical = devices.some((d) => d.kind === "physical" && d.status === "active");
+  usePolling(
+    (isCancelled) => {
+      api
+        .listDiscoveredDevices()
+        .then((list) => {
+          if (!isCancelled()) setDiscovered(list);
+        })
+        .catch(() => {
+          // Best-effort hint only — a failed scan just means no prompt.
+          if (!isCancelled()) setDiscovered([]);
+        });
+    },
+    DISCOVERY_RECONNECT_POLL_MS,
+    { enabled: discoveryOn && hasPhysical, pauseWhenHidden: true },
+  );
+  const reconnectSuggestions = useMemo(
+    () => (discoveryOn ? findReconnectSuggestions(devices, discovered) : new Map()),
+    [discoveryOn, devices, discovered],
+  );
+
+  const reconnect = (device: Device, target: DiscoveredDevice) => {
+    const address = target.connectAddress;
+    if (!address || reconnecting[device.id]) return;
+    setReconnectError((prev) => {
+      const next = { ...prev };
+      delete next[device.id];
+      return next;
+    });
+    setReconnecting((prev) => ({ ...prev, [device.id]: true }));
+    updateDeviceAddress(device.id, address)
+      .catch((err: unknown) => {
+        setReconnectError((prev) => ({
+          ...prev,
+          [device.id]: err instanceof ApiError ? err.message : "Could not reconnect this device",
+        }));
+      })
+      .finally(() =>
+        setReconnecting((prev) => {
+          const next = { ...prev };
+          delete next[device.id];
+          return next;
+        }),
+      );
+  };
+
   const submitCreate = () => {
     if (creating) return;
     const trimmedAvdName = avdName.trim();
@@ -630,6 +730,16 @@ export function DevicesSection() {
                   </div>
                 }
               />
+              {editingId !== device.id && reconnectSuggestions.has(device.id) && (
+                <ReconnectPrompt
+                  device={device}
+                  candidates={reconnectSuggestions.get(device.id)?.candidates ?? []}
+                  ambiguous={reconnectSuggestions.get(device.id)?.ambiguous ?? false}
+                  busy={reconnecting[device.id] ?? false}
+                  error={reconnectError[device.id]}
+                  onReconnect={(target) => reconnect(device, target)}
+                />
+              )}
               {editingId === device.id && (
                 <div style={{ padding: "8px 12px" }}>
                   <Row
