@@ -185,7 +185,9 @@ export class Device {
    * already went out (a second panel, or a reconnect after a network blip)
    * would otherwise never get it and its WebCodecs decoder would never
    * configure. Replayed synchronously to a new subscriber in
-   * onVideoPacket() below. */
+   * onVideoPacket() below. Config alone isn't enough to start decoding —
+   * routes/device.ts additionally gates each socket on a keyframe and
+   * requests one on attach. */
   private lastConfigPacket: ScrcpyMediaStreamPacket | null = null;
 
   constructor(
