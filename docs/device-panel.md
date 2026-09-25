@@ -141,29 +141,36 @@ deliberately a **separate** implementation from `PtyManager`/
   current Chromium-based browser; shows an explicit "unsupported" state
   otherwise.
 
-**Wired into the dashboard UI (issue #1326).** The sidebar shows a "Devices"
-section, above Projects, listing every device whose DB row is still
-`active` — there's no manual expand/collapse for it; the section simply
-doesn't render at all while there are zero active devices (see below). A
-row's status dot reflects its live state, and
-clicking it opens (or focuses) that device's panel via `openDevicePanel`
-(`panelUtils.ts`). The section renders nothing while there are zero active
-devices, so it stays out of the way on a host that never touches Android;
-its poll runs unconditionally regardless, so a device created purely
-through the CLI/MCP surface below (no panel ever opened) still makes the
-section appear without a reload. Settings → Devices is the lifecycle
-surface — create, stop, delete, and (for an active physical row) edit a
-device's adb address there. It's also where a phone gets paired and
-connected (the `kind: "physical"` counterpart to an emulator `create`, see
-§1 below, and the pairing dialog described next), and where a new AVD can be
-provisioned from an installed system image (see "AVD provisioning" below)
-before a device is ever created from it, including devices whose row has
-since flipped to `killed`, which the sidebar list omits but Settings
-still shows. Reopening a device panel after a Mullion restart resumes
-streaming from the existing emulator (see the reattach behavior above)
-rather than requiring a manual `systemctl --user stop` first — no UI
-change needed for that; it's the same `openDevicePanel`/WS-connect path
-either way.
+**Wired into the dashboard UI (issue #1326, lifecycle rework).** The sidebar
+shows a "Devices" section, above Projects, listing every device row that still
+exists — active _and_ stopped. There's no manual expand/collapse for it; the
+section simply doesn't render at all while there are zero devices (see below).
+A row's status dot reflects its live state, a stopped row renders dimmed with
+a **Start** control (an active row gets **Stop** instead), and clicking the row
+itself opens (or focuses) that device's panel via `openDevicePanel`
+(`panelUtils.ts`) — deliberately starting it first when it was stopped, since a
+panel pointed at a stopped device is just a 404ing websocket. The section
+renders nothing while there are zero devices, so it stays out of the way on a
+host that never touches Android; its poll runs unconditionally regardless, so a
+device created purely through the CLI/MCP surface below (no panel ever opened)
+still makes the section appear without a reload.
+
+Settings → Devices is the lifecycle surface — create, pair, and, on _every_
+row regardless of status: start, stop, edit a physical device's adb address,
+and delete. Delete is the irreversible half (it removes the row, which is what
+clears a pre-existing row stuck in the list); stop keeps the row and lists it
+as `stopped`. It's also where a phone gets paired and connected (the
+`kind: "physical"` counterpart to an emulator `create`, see §1 below, and the
+pairing dialog described next), and where a new AVD can be provisioned from an
+installed system image (see "AVD provisioning" below) before a device is ever
+created from it.
+
+Reopening a device panel after a Mullion restart resumes streaming from the
+existing emulator (see the reattach behavior above) rather than requiring a
+manual `systemctl --user stop` first. A restored layout that points at a
+device which has since been stopped or deleted closes that panel instead of
+restarting the device as a side effect of a page load — reopening it from the
+sidebar (which now lists stopped rows) starts it deliberately.
 
 Pairing a phone from Settings (issue #1379) uses **Pair a phone or tablet**,
 which opens `PairDeviceDialog.tsx` (the emulator flow sits behind its own
@@ -197,7 +204,9 @@ mullion device pair <pairingAddress> <code>
 mullion device pair-and-connect [--discovery-id <id> | --pairing-address <addr>] --connect-address <addr> --pairing-code <code> [--name <label>]
 mullion device connect <address> [--project <id>] [--name <label>]
 mullion device discovered
+mullion device start <id>
 mullion device stop <id>
+mullion device delete <id>
 mullion device screenshot <id> [--out <path>]
 mullion device tap <id> <x> <y>
 mullion device swipe <id> <x1> <y1> <x2> <y2> [<durationMs>]
@@ -234,32 +243,57 @@ before scrcpy does) rather than falling back to the shell.
 
 ## 2. `mullion mcp` tools
 
-`list_devices` and `use_device`/`device_action` mirror the CLI 1:1 — see
-`src/mcp/tools.mjs`. Unlike most control-socket-backed tools (`list_sessions`,
-`list_projects`, ...), these are reachable at **session scope**, not just
-full scope: a device has no "belongs to this session" relationship to pin a
-session-scoped connection to the way a browser pane's project does, so
-`deviceId` is always explicit, at either scope, and a session-scoped caller
-is not restricted to any particular device (see `control-socket.ts`'s own
-comment on `device.action` for the full reasoning). This is what actually
-closes the "verify your own UI change" loop the feature exists for — an
-agent inside a normal session can call these with no elevated credential.
-Two exceptions are **full scope only**, both gated on the same "bigger blast
+`list_devices`, `start_device`, `stop_device` and `use_device`/`device_action`
+mirror the CLI 1:1 — see `src/mcp/tools.mjs`. Unlike most control-socket-backed
+tools (`list_sessions`, `list_projects`, ...), these are reachable at **session
+scope**, not just full scope: a device has no "belongs to this session"
+relationship to pin a session-scoped connection to the way a browser pane's
+project does, so `deviceId` is always explicit, at either scope, and a
+session-scoped caller is not restricted to any particular device (see
+`control-socket.ts`'s own comment on `device.action` for the full reasoning).
+This is what actually closes the "verify your own UI change" loop the feature
+exists for — an agent inside a normal session can call these with no elevated
+credential. Stop is reachable there too: it's reversible, and an agent that can
+stop a device can start it again.
+
+Three things are **full scope only**, all gated on the same "bigger blast
 radius than driving a device Mullion already manages" reasoning: `device.pair`
-always, and `device.create` when its body sets `kind: "physical"` (session
+always, `device.create` when its body sets `kind: "physical"` (session
 scope still works for an ordinary emulator `device.create`) — `wireless.connect()`
 lets the caller dial an arbitrary address, an outbound-dial/internal-network-
 probe primitive the emulator path never had (see `control-socket.ts`'s own
-comments on both). MCP does not expose `device pair`/`connect` — only the CLI
-and REST do.
+comments on both) — and `delete_device`/`device delete`, which drops the row
+and the id that identifies its systemd scope with no undo. MCP does not expose
+`device pair`/`connect` — only the CLI and REST do.
 
 ## 3. REST API
 
 `src/routes/devices.ts` — `GET/POST /api/devices`, `POST /api/devices/pair`,
 `POST /api/devices/pair-and-connect`, `GET /api/devices/discovered`,
-`GET/PATCH/DELETE /api/devices/:id`, `POST /api/devices/:id/action` (body:
+`GET/PATCH/DELETE /api/devices/:id`, `POST /api/devices/:id/start`,
+`POST /api/devices/:id/stop`, `POST /api/devices/:id/action` (body:
 `{action: "screenshot"|"tap"|"swipe"|"text"|"key"|"logcat", ...}`, same shape
-the CLI/MCP surface forwards). `POST /api/devices` takes either
+the CLI/MCP surface forwards). Lifecycle: `POST /:id/start` flips a stopped row
+back to `active` and runs `getOrCreate()` so something is actually running
+behind it. Errors: 400 when `getOrCreate()` throws — synchronously, so a
+stopped row is reverted to `killed` and never left "active" with nothing
+behind it; a physical row's adb connect failure is fire-and-forget inside
+`getOrCreate()`, so like a physical `POST /api/devices` it surfaces on the
+device's own live error instead of as a 400 here — 409 when
+another **active** physical row already owns this row's address — the same
+one-active-row-per-adb-address guard create, pair-and-connect and PATCH apply
+(issue #1350) — and 404 for a row that no longer exists. Start also re-reads
+the row after `getOrCreate()` resolves, because that call awaits and a whole
+`DELETE` or `/stop` can land while it is in flight: the later write wins, and
+the scope that was just made is torn back down with it (404 for the deleted
+row, 409 "device was stopped while starting" for the stopped one), so neither
+race can leave a scope running where no control can reach it. `POST /:id/stop`
+flips the row to `killed` and tears the live process/scope down, **keeping
+the row** — the reversible half; `DELETE /:id`
+is the irreversible one, tearing the live thing down first and then **removing
+the row** (two-phase: if teardown throws it returns 500 and keeps the row,
+marked `killed`, so the deletion never reports success for something still
+half-alive). `POST /api/devices` takes either
 `{avdName, projectId?, name?}` (emulator) or `{kind: "physical", address,
 projectId?, name?}` (physical); `POST /api/devices/pair` takes
 `{pairingAddress, pairingCode}` and creates no row.
@@ -280,9 +314,11 @@ advertised). `PATCH /api/devices/:id`
 `serial` is synthesized from its own `port` column, not user-supplied) — it
 rewrites the row's `serial` in place (keeping `id`/`name`/`projectId`/
 history) and reconnects at the new address, tearing down any existing live
-`Device` first so a stale connection at the old address can't linger. Only
-valid against a `status: "active"` row — there is no un-kill path anywhere
-in this API, so a killed row's address can't usefully be edited. No CLI/MCP
+`Device` first so a stale connection at the old address can't linger. It is
+**physical-only, any status** — a stopped phone is exactly when Android has
+rotated its connect port, so the address stays editable there, and editing a
+stopped row persists the new `serial` without implicitly starting the device.
+An active row whose new address is already owned by another active row is a 409. No CLI/MCP
 counterpart: `wireless.connect()` on an arbitrary caller-supplied address is
 the same "bigger blast radius" outbound-dial primitive `device.create`
 (`kind: "physical"`) and `device.pair` are already gated `["full"]`-scope

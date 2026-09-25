@@ -131,7 +131,9 @@ particular).
 | `device.get`              | full, session   | `GET /api/devices/:id`                                   |
 | `device.create`           | full, session\* | `POST /api/devices`                                      |
 | `device.action`           | full, session   | `POST /api/devices/:id/action`                           |
-| `device.terminate`        | full, session   | `DELETE /api/devices/:id`                                |
+| `device.start`            | full, session   | `POST /api/devices/:id/start`                            |
+| `device.terminate`        | full, session   | `POST /api/devices/:id/stop`                             |
+| `device.delete`           | full            | `DELETE /api/devices/:id`                                |
 | `device.pair`             | full            | `POST /api/devices/pair`                                 |
 | `device.pair-and-connect` | full            | `POST /api/devices/pair-and-connect`                     |
 | `device.discovered`       | full, session   | `GET /api/devices/discovered`                            |
@@ -511,6 +513,15 @@ different from every other op above — its **three-tier scope story**.
 
 { "id": 33, "op": "device.pair", "body": { "pairingAddress": "192.168.1.5:41235", "pairingCode": "123456" } }
 { "id": 33, "ok": true, "status": 200, "result": { "ok": true } }
+
+{ "id": 34, "op": "device.terminate", "body": { "deviceId": 3 } }
+{ "id": 34, "ok": true, "status": 204, "result": "" }
+
+{ "id": 35, "op": "device.start", "body": { "deviceId": 3 } }
+{ "id": 35, "ok": true, "status": 200, "result": { "id": 3, "status": "active", /* ... */ } }
+
+{ "id": 36, "op": "device.delete", "body": { "deviceId": 3 } }
+{ "id": 36, "ok": true, "status": 204, "result": "" }
 ```
 
 - **`device.list`** / **`device.get`** — `body.deviceId` required for `get`
@@ -527,8 +538,26 @@ different from every other op above — its **three-tier scope story**.
   Reachable at **session scope for an emulator**, but a `kind: "physical"`
   body is rejected with a 403 at **session** scope — see the scope table
   below.
-- **`device.terminate`** — `body.deviceId`; flips the row to `killed` and
-  tears down the live process/scope.
+- **`device.start`** — `body.deviceId`; flips a stopped row back to `active`
+  and makes sure something is actually running behind it (spawn/reconnect/
+  reattach, all inside `getOrCreate`). Returns the refreshed row. A 404 for a
+  deleted row, a 400 when devices are disabled, a 409 when another **active**
+  physical row already owns this device's adb address (the same
+  one-active-row-per-address guard REST applies, issue #1350). Start re-reads
+  the row after `getOrCreate()` resolves, so a `DELETE` or `device.terminate`
+  landing during that await wins and the scope it just made is torn back down
+  with it: 404 for the deleted row, 409 ("device was stopped while starting")
+  for the stopped one.
+- **`device.terminate`** — `body.deviceId`; stops the device but **keeps its
+  row**, which flips to `killed` (rendered as `stopped` everywhere). The
+  reversible half of the lifecycle — the row stays listed so it can be
+  started again. Forwarded to `POST /api/devices/:id/stop`.
+- **`device.delete`** — **full scope only**. `body.deviceId`; the irreversible
+  half: tears the live process/scope down, then **removes the row** from the
+  list (`DELETE /api/devices/:id`). If teardown fails the row is kept (marked
+  `killed`) and the op returns 500 rather than reporting a deletion that
+  didn't happen — so a `killed` row surviving a failed delete is recoverable
+  by retrying.
 - **`device.pair`** — **full scope only**, no exceptions. `body` is
   `{pairingAddress, pairingCode}`, forwarded to `POST /api/devices/pair`.
 - **`device.pair-and-connect`** — **full scope only** for the same reason as
@@ -551,13 +580,18 @@ than the session/SSH-agent traffic the rest of this file's scope pinning
 exists to protect — worst case for `device.action` is an unrelated
 tap/screenshot, not a leaked credential.
 
-**Two exceptions carve out a bigger blast radius, both full-scope only:**
+**Four exceptions carve out a bigger blast radius, all full-scope only:**
 
 - **`device.pair`**, unconditionally — pairing authorizes the _host's_ adb
   server to trust a new piece of hardware, a materially bigger act than
   driving a device Mullion already manages.
 - **`device.pair-and-connect`** — same "dials an arbitrary address" reasoning
   as the next bullet; the same full-scope gate applies, unconditionally.
+- **`device.delete`** — same destroy-something-permanently shape as
+  `sessions.kill`/`previews.delete`: it drops the row and the id that
+  identifies its systemd scope, with no undo. Start/stop stay reachable at
+  session scope, so a session-scoped caller can still bring a stopped device
+  back up.
 - **`device.create` when `body.kind === "physical"`** — `wireless.connect()`
   makes the host's adb server dial an arbitrary network address a caller
   supplies, an outbound-dial/internal-network-probe primitive the emulator

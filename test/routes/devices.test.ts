@@ -87,6 +87,13 @@ describe("devices routes", () => {
       expect(res.statusCode).toBe(400);
     });
 
+    it("POST /api/devices/:id/start rejects with 400 (guard runs before the row lookup)", async () => {
+      const app = await buildTestApp();
+      const res = await app.inject({ method: "POST", url: "/api/devices/999/start" });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().message).toMatch(/Device panel is disabled/);
+    });
+
     it("PATCH /api/devices/:id rejects with 400", async () => {
       const app = await buildTestApp();
       const res = await app.inject({
@@ -95,6 +102,42 @@ describe("devices routes", () => {
         payload: { address: "192.168.1.23:37251" },
       });
       expect(res.statusCode).toBe(400);
+    });
+
+    // /stop and DELETE are deliberately UNGUARDED — tearing a device down
+    // must keep working while the feature is off (routes/devices.ts's own
+    // comment on the /start guard claims exactly that, so these two pin the
+    // claim). Creation is gated, so the row has to be inserted directly.
+    it("POST /api/devices/:id/stop still works with the feature off (teardown is never gated)", async () => {
+      const app = await buildTestApp();
+      const [row] = app.db
+        .insert(devices)
+        .values({ kind: "emulator", avdName: "dev35", status: "active" })
+        .returning()
+        .all();
+      vi.spyOn(app.device, "terminate").mockResolvedValueOnce(undefined);
+
+      const stop = await app.inject({ method: "POST", url: `/api/devices/${row.id}/stop` });
+      expect(stop.statusCode).toBe(204);
+
+      const got = await app.inject({ method: "GET", url: `/api/devices/${row.id}` });
+      expect(got.json().status).toBe("killed");
+    });
+
+    it("DELETE /api/devices/:id still works with the feature off (teardown is never gated)", async () => {
+      const app = await buildTestApp();
+      const [row] = app.db
+        .insert(devices)
+        .values({ kind: "emulator", avdName: "dev35", status: "active" })
+        .returning()
+        .all();
+      vi.spyOn(app.device, "terminate").mockResolvedValueOnce(undefined);
+
+      const del = await app.inject({ method: "DELETE", url: `/api/devices/${row.id}` });
+      expect(del.statusCode).toBe(204);
+
+      const got = await app.inject({ method: "GET", url: `/api/devices/${row.id}` });
+      expect(got.statusCode).toBe(404);
     });
   });
 
@@ -196,7 +239,7 @@ describe("devices routes", () => {
       expect(rows[0].avdName).toBe("dev35");
     });
 
-    it("DELETE /api/devices/:id flips status to killed and returns 204", async () => {
+    it("DELETE /api/devices/:id tears the device down and REMOVES the row, returning 204", async () => {
       const app = await buildTestApp();
       const created = await app.inject({
         method: "POST",
@@ -207,6 +250,179 @@ describe("devices routes", () => {
 
       const del = await app.inject({ method: "DELETE", url: `/api/devices/${id}` });
       expect(del.statusCode).toBe(204);
+
+      // The whole point of the hard-delete rework: a killed row used to be
+      // indistinguishable from a stopped one in GET /api/devices, which is
+      // how a deleted device could sit in the list forever with no control
+      // left to clear it. The row must be GONE, not flipped.
+      const got = await app.inject({ method: "GET", url: `/api/devices/${id}` });
+      expect(got.statusCode).toBe(404);
+      const list = await app.inject({ method: "GET", url: "/api/devices" });
+      expect(list.json()).toHaveLength(0);
+    });
+
+    it("DELETE /api/devices/:id keeps the row as killed and returns 500 when teardown throws", async () => {
+      const app = await buildTestApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/devices",
+        payload: { avdName: "dev35" },
+      });
+      const id = created.json().id;
+      // Two-phase delete: the row is the only handle on a possibly-surviving
+      // systemd scope, so a failed teardown must never discard it.
+      vi.spyOn(app.device, "terminate").mockRejectedValueOnce(new Error("scope is busy"));
+
+      const del = await app.inject({ method: "DELETE", url: `/api/devices/${id}` });
+      expect(del.statusCode).toBe(500);
+
+      const got = await app.inject({ method: "GET", url: `/api/devices/${id}` });
+      expect(got.statusCode).toBe(200);
+      expect(got.json().status).toBe("killed");
+    });
+
+    it("POST /api/devices/:id/stop flips status to killed and keeps the row", async () => {
+      const app = await buildTestApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/devices",
+        payload: { avdName: "dev35" },
+      });
+      const id = created.json().id;
+
+      const stop = await app.inject({ method: "POST", url: `/api/devices/${id}/stop` });
+      expect(stop.statusCode).toBe(204);
+
+      const got = await app.inject({ method: "GET", url: `/api/devices/${id}` });
+      expect(got.statusCode).toBe(200);
+      expect(got.json().status).toBe("killed");
+    });
+
+    it("POST /api/devices/:id/stop keeps the row killed and returns 500 when teardown throws", async () => {
+      const app = await buildTestApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/devices",
+        payload: { avdName: "dev35" },
+      });
+      const id = created.json().id;
+      vi.spyOn(app.device, "terminate").mockRejectedValueOnce(new Error("scope is busy"));
+
+      const stop = await app.inject({ method: "POST", url: `/api/devices/${id}/stop` });
+      expect(stop.statusCode).toBe(500);
+
+      const got = await app.inject({ method: "GET", url: `/api/devices/${id}` });
+      expect(got.json().status).toBe("killed");
+    });
+
+    it("POST /api/devices/:id/stop 404s for a nonexistent row", async () => {
+      const app = await buildTestApp();
+      const res = await app.inject({ method: "POST", url: "/api/devices/999/stop" });
+      expect(res.statusCode).toBe(404);
+    });
+
+    it("POST /api/devices/:id/start flips a stopped row back to active and returns the row", async () => {
+      const app = await buildTestApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/devices",
+        payload: { avdName: "dev35" },
+      });
+      const id = created.json().id;
+      await app.inject({ method: "POST", url: `/api/devices/${id}/stop` });
+
+      const start = await app.inject({ method: "POST", url: `/api/devices/${id}/start` });
+      expect(start.statusCode).toBe(200);
+      expect(start.json()).toMatchObject({ id, status: "active" });
+
+      const got = await app.inject({ method: "GET", url: `/api/devices/${id}` });
+      expect(got.json().status).toBe("active");
+    });
+
+    it("POST /api/devices/:id/start reverts a stopped row to killed and 400s when getOrCreate throws", async () => {
+      const app = await buildTestApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/devices",
+        payload: { avdName: "dev35" },
+      });
+      const id = created.json().id;
+      await app.inject({ method: "POST", url: `/api/devices/${id}/stop` });
+      vi.spyOn(app.device, "getOrCreate").mockRejectedValueOnce(
+        new Error("no emulator named dev35"),
+      );
+
+      const start = await app.inject({ method: "POST", url: `/api/devices/${id}/start` });
+      expect(start.statusCode).toBe(400);
+      expect(start.json().message).toMatch(/no emulator named dev35/);
+
+      // Not left stranded as "active" with nothing behind it — that would
+      // hide the Stop button the user needs to recover.
+      const got = await app.inject({ method: "GET", url: `/api/devices/${id}` });
+      expect(got.json().status).toBe("killed");
+    });
+
+    it("POST /api/devices/:id/start 404s for a nonexistent row", async () => {
+      const app = await buildTestApp();
+      const res = await app.inject({ method: "POST", url: "/api/devices/999/start" });
+      expect(res.statusCode).toBe(404);
+    });
+
+    it("POST /api/devices/:id/start tears the scope it just made down and 404s when the row is deleted mid-start", async () => {
+      const app = await buildTestApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/devices",
+        payload: { avdName: "dev35" },
+      });
+      const id = created.json().id;
+      await app.inject({ method: "POST", url: `/api/devices/${id}/stop` });
+
+      // DELETE landing while getOrCreate() is in flight — getOrCreate
+      // awaits (isScopeAlive/allocatePort), so the whole DELETE can run in
+      // that window. Simulated by removing the row from inside the mocked
+      // call and then resolving it as if the spawn had succeeded.
+      vi.spyOn(app.device, "getOrCreate").mockImplementationOnce(async () => {
+        app.db.delete(devices).where(eq(devices.id, id)).run();
+        return {} as never;
+      });
+      const terminate = vi.spyOn(app.device, "terminate").mockResolvedValueOnce(undefined);
+
+      const start = await app.inject({ method: "POST", url: `/api/devices/${id}/start` });
+      expect(start.statusCode).toBe(404);
+
+      // The scope we just made is torn down instead of orphaned: its
+      // identifying row is gone, so nothing else could ever stop it again.
+      expect(terminate).toHaveBeenCalledWith(String(id), "emulator");
+      const got = await app.inject({ method: "GET", url: `/api/devices/${id}` });
+      expect(got.statusCode).toBe(404);
+    });
+
+    it("POST /api/devices/:id/start rolls the device back down and 409s when it is stopped mid-start", async () => {
+      const app = await buildTestApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/devices",
+        payload: { avdName: "dev35" },
+      });
+      const id = created.json().id;
+      await app.inject({ method: "POST", url: `/api/devices/${id}/stop` });
+
+      // A Stop click landing while Start is inside getOrCreate()'s await —
+      // the sidebar's two buttons make this a normal double-click sequence.
+      // Last write wins: the stop stays stopped, and the scope this start
+      // brought up is rolled back rather than left running behind a
+      // "killed" row where no control can reach it.
+      vi.spyOn(app.device, "getOrCreate").mockImplementationOnce(async () => {
+        app.db.update(devices).set({ status: "killed" }).where(eq(devices.id, id)).run();
+        return {} as never;
+      });
+      const terminate = vi.spyOn(app.device, "terminate").mockResolvedValueOnce(undefined);
+
+      const start = await app.inject({ method: "POST", url: `/api/devices/${id}/start` });
+      expect(start.statusCode).toBe(409);
+      expect(start.json().message).toMatch(/stopped while starting/);
+      expect(terminate).toHaveBeenCalledWith(String(id), "emulator");
 
       const got = await app.inject({ method: "GET", url: `/api/devices/${id}` });
       expect(got.json().status).toBe("killed");
@@ -583,6 +799,37 @@ describe("devices routes", () => {
         expect(second.json().id).not.toBe(firstId);
       });
 
+      it("POST /api/devices/:id/start rejects a stop→re-add→start cycle that would put two active rows on one address (issue #1350)", async () => {
+        const app = await buildTestApp();
+        const first = await app.inject({
+          method: "POST",
+          url: "/api/devices",
+          payload: { kind: "physical", address: "192.168.1.23:37251" },
+        });
+        const firstId = first.json().id;
+        await app.inject({ method: "POST", url: `/api/devices/${firstId}/stop` });
+
+        // Only ACTIVE rows are checked, so re-adding the address of a
+        // stopped row is legal (that is what makes stop/start on two rows
+        // for one phone work) — and it is exactly the window /start has to
+        // close, since start is the only remaining write path that flips a
+        // row back to active.
+        const second = await app.inject({
+          method: "POST",
+          url: "/api/devices",
+          payload: { kind: "physical", address: "192.168.1.23:37251" },
+        });
+        expect(second.statusCode).toBe(201);
+
+        const start = await app.inject({ method: "POST", url: `/api/devices/${firstId}/start` });
+        expect(start.statusCode).toBe(409);
+        expect(start.json().message).toMatch(/already active/);
+
+        // Still stopped: the guard runs before any row/status mutation.
+        const got = await app.inject({ method: "GET", url: `/api/devices/${firstId}` });
+        expect(got.json().status).toBe("killed");
+      });
+
       it("POST /api/devices with kind: physical rejects a malformed address", async () => {
         const app = await buildTestApp();
         const res = await app.inject({
@@ -755,7 +1002,7 @@ describe("devices routes", () => {
           expect(res.statusCode).toBe(400);
         });
 
-        it("rejects editing a killed (stopped) row with 400 — no un-kill path exists", async () => {
+        it("persists an edit on a stopped row WITHOUT starting it — no implicit start, no 400", async () => {
           const app = await buildTestApp();
           const created = await app.inject({
             method: "POST",
@@ -763,14 +1010,51 @@ describe("devices routes", () => {
             payload: { kind: "physical", address: "192.168.1.23:37251" },
           });
           const id = created.json().id;
-          await app.inject({ method: "DELETE", url: `/api/devices/${id}` });
+          // Stopped, NOT deleted (DELETE now removes the row outright) —
+          // a phone whose address rotated is edited exactly while it's down.
+          const stop = await app.inject({ method: "POST", url: `/api/devices/${id}/stop` });
+          expect(stop.statusCode).toBe(204);
+
+          const terminate = vi.spyOn(app.device, "terminate");
+          const getOrCreate = vi.spyOn(app.device, "getOrCreate");
 
           const res = await app.inject({
             method: "PATCH",
             url: `/api/devices/${id}`,
             payload: { address: "192.168.1.23:41999" },
           });
-          expect(res.statusCode).toBe(400);
+          expect(res.statusCode).toBe(200);
+          expect(res.json()).toMatchObject({
+            id,
+            status: "killed",
+            serial: "192.168.1.23:41999",
+          });
+          expect(terminate).not.toHaveBeenCalled();
+          expect(getOrCreate).not.toHaveBeenCalled();
+        });
+
+        it("rejects an address another ACTIVE row already owns with 409", async () => {
+          const app = await buildTestApp();
+          const owner = await app.inject({
+            method: "POST",
+            url: "/api/devices",
+            payload: { kind: "physical", address: "192.168.1.23:37251" },
+          });
+          const other = await app.inject({
+            method: "POST",
+            url: "/api/devices",
+            payload: { kind: "physical", address: "192.168.1.99:37251" },
+          });
+          expect(owner.statusCode).toBe(201);
+          expect(other.statusCode).toBe(201);
+
+          const res = await app.inject({
+            method: "PATCH",
+            url: `/api/devices/${other.json().id}`,
+            payload: { address: "192.168.1.23:37251" },
+          });
+          expect(res.statusCode).toBe(409);
+          expect(res.json().message).toMatch(/already active for address/);
         });
 
         it("404s for a nonexistent row", async () => {

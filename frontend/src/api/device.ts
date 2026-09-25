@@ -27,7 +27,25 @@ export const devicesApi = {
       body: JSON.stringify(body),
     }),
 
-  terminateDevice: (id: number) => request<void>(`/api/devices/${id}`, { method: "DELETE" }),
+  // Stops the device but keeps its row (`status: "killed"`) so it can be
+  // started again — the reversible half of the lifecycle. `deleteDevice`
+  // below is the one that drops the row.
+  stopDevice: (id: number) => request<void>(`/api/devices/${id}/stop`, { method: "POST" }),
+
+  // Flips a stopped row back to `active` and makes sure something is
+  // actually running behind it (spawn/reconnect/reattach — all inside
+  // getOrCreate). Returns the refreshed row so a caller can read the new
+  // `status`/`live` without a second GET.
+  startDevice: (id: number) => request<Device>(`/api/devices/${id}/start`, { method: "POST" }),
+
+  // Irreversible: tears the device down and removes its row. Distinct from
+  // stopDevice by intent, not by effect — a stopped device is still listed,
+  // a deleted one is gone from every surface. Named for DELETE on purpose:
+  // the MCP client's own `terminateDevice` (src/mcp/client.mjs) maps to the
+  // published `device.terminate` op, which is a STOP and keeps the row —
+  // two same-named methods with opposite meanings in one product was the
+  // trap this name avoids.
+  deleteDevice: (id: number) => request<void>(`/api/devices/${id}`, { method: "DELETE" }),
 
   // Physical-only — edits a device's stored adb address in place and
   // reconnects against it, without losing the row's id/name/history. See

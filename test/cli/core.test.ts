@@ -1582,6 +1582,31 @@ describe("runCommand", () => {
       expect(await runCommand(["device", "stop"], { client: fakeClient(), io })).toBe(2);
     });
 
+    it("device start passes deviceId", async () => {
+      const client = fakeClient();
+      const io = fakeIo();
+      await runCommand(["device", "start", "5"], { client, io });
+      expect(client.request).toHaveBeenCalledWith("device.start", { deviceId: "5" });
+    });
+
+    it("device start without deviceId throws usage error (exit 2)", async () => {
+      const io = fakeIo();
+      expect(await runCommand(["device", "start"], { client: fakeClient(), io })).toBe(2);
+    });
+
+    it("device delete passes deviceId to the irreversible op (not device.terminate)", async () => {
+      const client = fakeClient();
+      const io = fakeIo();
+      await runCommand(["device", "delete", "5"], { client, io });
+      expect(client.request).toHaveBeenCalledWith("device.delete", { deviceId: "5" });
+      expect(client.request).not.toHaveBeenCalledWith("device.terminate", expect.anything());
+    });
+
+    it("device delete without deviceId throws usage error (exit 2)", async () => {
+      const io = fakeIo();
+      expect(await runCommand(["device", "delete"], { client: fakeClient(), io })).toBe(2);
+    });
+
     it("device screenshot passes deviceId and action", async () => {
       const client = fakeClient({
         request: vi.fn(async () => ({ screenshot: "aGVsbG8=" })),

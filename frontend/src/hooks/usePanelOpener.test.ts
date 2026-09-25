@@ -15,9 +15,10 @@ import { makeProject, makeSession, makeWorkspace } from "../test/fixtures.js";
 const triggerPanelHighlight = vi.fn();
 const setActiveWorkspaceId = vi.fn();
 const setViewMode = vi.fn();
+const startDevice = vi.fn();
 
 function storeState() {
-  return { triggerPanelHighlight, setActiveWorkspaceId, setViewMode };
+  return { triggerPanelHighlight, setActiveWorkspaceId, setViewMode, startDevice };
 }
 
 vi.mock("../store/index.js", () => {
@@ -84,6 +85,8 @@ beforeEach(() => {
   triggerPanelHighlight.mockClear();
   setActiveWorkspaceId.mockClear();
   setViewMode.mockClear();
+  startDevice.mockReset();
+  startDevice.mockResolvedValue(undefined);
 });
 
 interface SetupProps {
@@ -590,5 +593,42 @@ describe("usePanelOpener — onOpenDevice", () => {
     const { result } = setup({ dockviewApi: null });
     expect(() => result.current.onOpenDevice(DEVICE)).not.toThrow();
     expect(setSidebarOpen).not.toHaveBeenCalled();
+  });
+
+  // Deliberate open of a STOPPED device must bring it up (otherwise the
+  // panel lands on a 404ing WS and is useless), but start-then-open only —
+  // an ACTIVE device is never started again.
+  it("starts a stopped device on the way in, and still opens its panel", () => {
+    const api = mockDockviewApi();
+    const { result } = setup({ dockviewApi: api });
+
+    result.current.onOpenDevice({ ...DEVICE, status: "killed" });
+
+    expect(startDevice).toHaveBeenCalledWith(1);
+    expect(api.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "device-1", params: { deviceId: 1 } }),
+    );
+  });
+
+  it("does not start an already-active device", () => {
+    const api = mockDockviewApi();
+    const { result } = setup({ dockviewApi: api });
+
+    result.current.onOpenDevice(DEVICE);
+
+    expect(startDevice).not.toHaveBeenCalled();
+    expect(api.addPanel).toHaveBeenCalledTimes(1);
+  });
+
+  // Fire-and-forget: the start round trip can take seconds (an emulator
+  // spawn is awaited server-side), so a failure must not eat the click —
+  // the pane's own "Start device" affordance is the recovery path.
+  it("opens the panel even when the start rejects", () => {
+    startDevice.mockRejectedValueOnce(new Error("no emulator"));
+    const api = mockDockviewApi();
+    const { result } = setup({ dockviewApi: api });
+
+    expect(() => result.current.onOpenDevice({ ...DEVICE, status: "killed" })).not.toThrow();
+    expect(api.addPanel).toHaveBeenCalledWith(expect.objectContaining({ id: "device-1" }));
   });
 });

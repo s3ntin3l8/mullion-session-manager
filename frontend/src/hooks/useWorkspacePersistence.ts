@@ -85,6 +85,17 @@ export function useWorkspacePersistence({
   const restoringRef = useRef(false);
   const pendingSaveRef = useRef<PendingSave | null>(null);
   const restoredWorkspaceIdRef = useRef<number | null>(null);
+  // The deferred half of the restore effect's device-panel prune: when
+  // restore ran before GET /api/devices resolved (`devicesLoaded` false),
+  // the device panels it couldn't classify are parked here instead of being
+  // dropped, because the restore itself won't run again for this workspace
+  // (restoredWorkspaceIdRef) and App.tsx's own sweep only closes MISSING
+  // rows — a STOPPED device's panel would otherwise survive the reload,
+  // which is the one thing the restore prune exists to prevent. One-shot:
+  // a later restore for any workspace clears it first (those panel ids
+  // belong to a layout that is being replaced), so by the time the effect
+  // below reads it, it always describes the layout currently on screen.
+  const pendingDevicePruneRef = useRef<Array<{ panelId: string; deviceId: number }> | null>(null);
   // Belt-and-braces guard for the workspace-autosave rate-limit-storm fix —
   // panelUtils.ts's stripSessionPanelTitles is the actual fix (it's what
   // stops the blob from genuinely DIFFERING on every OSC title tick in the
@@ -167,6 +178,11 @@ export function useWorkspacePersistence({
     flushPendingSave(dockviewApi);
 
     restoringRef.current = true;
+    // A newer restore supersedes whatever the previous one parked: those
+    // panel ids belong to a layout that is about to be replaced.
+    pendingDevicePruneRef.current = null;
+    // "killed" covers sessions AND the pruned device panels above — one
+    // flag for "the restored blob pointed at something dead" either way.
     let closedKilledPanels = false;
     let closedLegacyPanels = false;
     try {
@@ -179,9 +195,44 @@ export function useWorkspacePersistence({
       // catches stale layouts; the reactive `useEffect` below (commented
       // "Close any dockview panel whose session has been killed") catches
       // the case where sessions haven't loaded yet at this point.
-      const currentSessions = useDashboardStore.getState().sessions;
+      //
+      // Device panels get the same treatment here (and this is the ONLY
+      // place a STOPPED device's panel is ever auto-closed): a device row
+      // is stopped or gone, restoring its panel would either show a dead
+      // overlay or point at nothing, and the alternative — auto-starting it
+      // to make the restore come up happy — would reboot an emulator as a
+      // side effect of a page load. Reopening from the sidebar (which lists
+      // stopped rows) starts it deliberately instead. Gated on
+      // devicesLoaded because `devices` starts [] and an unloaded list
+      // would otherwise prune every device panel on a layout that's fine.
+      // When the list hasn't arrived yet the ids are NOT dropped: they go
+      // into pendingDevicePruneRef and the effect below finishes the sweep
+      // the first time devicesLoaded flips true — this restore effect has
+      // deliberately run only once per workspace (restoredWorkspaceIdRef),
+      // so without that second pass a restore that won the race against
+      // GET /api/devices would leave a stopped device's panel alive
+      // forever, contradicting the rule this comment exists for.
+      const {
+        sessions: currentSessions,
+        devices: currentDevices,
+        devicesLoaded: devicesReady,
+      } = useDashboardStore.getState();
       const stalePanelIds: string[] = [];
+      const deferredDevicePanels: Array<{ panelId: string; deviceId: number }> = [];
       for (const panel of dockviewApi.panels) {
+        let deviceId = (panel.params as { deviceId?: number } | undefined)?.deviceId;
+        if (deviceId == null && panel.id.startsWith("device-")) {
+          const match = panel.id.match(/^device-(\d+)$/);
+          if (match) deviceId = parseInt(match[1], 10);
+        }
+        if (deviceId != null) {
+          if (!devicesReady) deferredDevicePanels.push({ panelId: panel.id, deviceId });
+          else {
+            const device = currentDevices.find((d) => d.id === deviceId);
+            if (!device || device.status === "killed") stalePanelIds.push(panel.id);
+          }
+          continue;
+        }
         let sessionId = (panel.params as { sessionId?: number } | undefined)?.sessionId;
         if (sessionId == null) {
           const match = panel.id.match(/^(?:timeline|browserPane)-(\d+)$/);
@@ -199,6 +250,11 @@ export function useWorkspacePersistence({
             }
           }
         }
+      }
+      // Park whatever the devicesLoaded gate skipped — picked up by the
+      // effect directly below the restore effect.
+      if (deferredDevicePanels.length > 0) {
+        pendingDevicePruneRef.current = deferredDevicePanels;
       }
       if (stalePanelIds.length > 0) {
         closedKilledPanels = true;
@@ -259,6 +315,29 @@ export function useWorkspacePersistence({
     // workspaceProjectIds memo comment for the full mechanism.
     setPanelsVersion((v) => v + 1);
   }, [dockviewApi, activeWorkspaceId, workspaces, flushPendingSave, layoutTier, setPanelsVersion]);
+
+  // Second half of the device prune the restore effect above couldn't finish
+  // (see pendingDevicePruneRef): it parked its device panels because
+  // GET /api/devices hadn't resolved yet, and this effect closes them the
+  // first time devicesLoaded flips true — re-classifying against the list as
+  // it actually is by then, so an active device's panel is left alone. Runs
+  // long after restoringRef cleared, so the closes are picked up by the
+  // onDidLayoutChange autosave below exactly like any other real edit; no
+  // explicit save needed here.
+  const devicesLoaded = useDashboardStore((s) => s.devicesLoaded);
+  useEffect(() => {
+    if (!dockviewApi || !devicesLoaded) return;
+    const pending = pendingDevicePruneRef.current;
+    if (!pending) return;
+    pendingDevicePruneRef.current = null;
+    const currentDevices = useDashboardStore.getState().devices;
+    for (const { panelId, deviceId } of pending) {
+      const device = currentDevices.find((d) => d.id === deviceId);
+      if (!device || device.status === "killed") {
+        dockviewApi.getPanel(panelId)?.api.close();
+      }
+    }
+  }, [devicesLoaded, dockviewApi]);
 
   // Any real layout change (add/remove/move panel, or a splitter-drag
   // resize) schedules a debounced autosave, unless it's the restore

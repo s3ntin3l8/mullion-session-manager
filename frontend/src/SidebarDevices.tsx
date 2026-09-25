@@ -1,9 +1,10 @@
+import { useState } from "react";
 import { useDashboardStore } from "./store/index.js";
 import { useShallow } from "zustand/react/shallow";
 import type { Device } from "./api/index.js";
 import { deviceDotClass } from "./deviceStatus.js";
 import { usePolling } from "./hooks/usePolling.js";
-import { DeviceIcon } from "./ui/icons.js";
+import { DeviceIcon, PlayIcon, StopIcon } from "./ui/icons.js";
 
 // Sidebar entry point for the Android device panel (issue #1326) — mirrors
 // the standalone Tasks button's "host-global thing above the Projects
@@ -17,23 +18,35 @@ import { DeviceIcon } from "./ui/icons.js";
 // already-1981-line Sidebar.tsx.
 export const DEVICES_POLL_MS = 4000;
 
-// GET /api/devices (routes/devices.ts) never drops a killed row — DELETE
-// only flips `status` to "killed", the row stays forever (same "DB row is
-// intent" shape sessions.status has). Filtering to "active" here is what
-// keeps a deleted device from both re-appearing after the optimistic
-// removal's next poll AND keeping this whole section pinned open once any
-// device has ever been deleted. DevicesSection.tsx (Settings) intentionally
-// does NOT apply this filter — it's the management surface and shows a
-// killed device's final state.
-function activeDevices(devices: Device[]): Device[] {
-  return devices.filter((d) => d.status === "active");
-}
-
 export function SidebarDevices({ onOpenDevice }: { onOpenDevice: (device: Device) => void }) {
-  const devices = useDashboardStore(useShallow((s) => activeDevices(s.devices)));
+  // Unfiltered, deliberately: a `status: "killed"` row is a STOPPED device,
+  // which is exactly what Start exists for. This used to filter to
+  // active-only, but that filter only existed to hide rows DELETE left
+  // behind — DELETE now removes the row outright (routes/devices.ts), so
+  // there is nothing left to hide and a stopped device that no longer shows
+  // up would be un-startable from here. Settings -> Devices remains the
+  // management surface (create/pair/edit-address/delete); this section is
+  // start/stop + open.
+  const devices = useDashboardStore(useShallow((s) => s.devices));
   const refreshDevices = useDashboardStore((s) => s.refreshDevices);
+  const startDevice = useDashboardStore((s) => s.startDevice);
+  const stopDevice = useDashboardStore((s) => s.stopDevice);
+  // One lifecycle call at a time, keyed by row id: both control buttons on
+  // the in-flight row (and every other row's, so a slow `start` can't be
+  // raced by a second click) disable until it resolves. Local, not store —
+  // only this surface ever needs the notion.
+  const [pendingId, setPendingId] = useState<number | null>(null);
+  // No inline error slot in this section (DevicesSection has one under its
+  // table; a sidebar row has nowhere to put a second line without shifting
+  // the whole column) — so the failure rides on the row's `title` instead,
+  // next to the device's own live error. Keyed BY ROW: this is read inside
+  // the per-row title below, so a plain string would put whichever row
+  // failed LAST into every other row's tooltip until the next click.
+  const [lifecycleError, setLifecycleError] = useState<{ id: number; message: string } | null>(
+    null,
+  );
 
-  // Poll unconditionally, even with zero active devices — there is no
+  // Poll unconditionally, even with zero devices — there is no
   // device event in the event stream (store/slices/events.ts carries none),
   // and PR #1324 explicitly built the CLI/MCP surface so an agent can
   // create/drive a device with no panel open at all. Gating this poll on
@@ -55,26 +68,93 @@ export function SidebarDevices({ onOpenDevice }: { onOpenDevice: (device: Device
 
   if (devices.length === 0) return null;
 
+  const runLifecycle = async (device: Device, kind: "start" | "stop") => {
+    if (pendingId !== null) return;
+    setPendingId(device.id);
+    setLifecycleError(null);
+    try {
+      if (kind === "start") await startDevice(device.id);
+      else await stopDevice(device.id);
+    } catch (err) {
+      setLifecycleError({
+        id: device.id,
+        message: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setPendingId(null);
+    }
+  };
+
   return (
     <div className="sidebar-devices">
       <div className="sidebar-section-header">
         <span className="sidebar-section-title">Devices</span>
       </div>
-      {devices.map((device) => (
-        <button
-          key={device.id}
-          className="sidebar-tasks-entry"
-          data-testid={`device-row-${device.id}`}
-          title={device.live?.error ?? undefined}
-          onClick={() => onOpenDevice(device)}
-        >
-          <DeviceIcon size={14} />
-          <span className="sidebar-tasks-entry-label">
-            {device.name || device.avdName || device.serial}
-          </span>
-          <span className={`settings-status-dot ${deviceDotClass(device)}`} />
-        </button>
-      ))}
+      {devices.map((device) => {
+        const stopped = device.status === "killed";
+        const label = device.name || device.avdName || device.serial;
+        const title =
+          (lifecycleError?.id === device.id ? lifecycleError.message : undefined) ??
+          (stopped ? "Stopped — click to start" : (device.live?.error ?? undefined));
+        return (
+          // role/tabIndex/Enter-Space + `e.target !== e.currentTarget`, same
+          // P10 pattern as Sidebar.tsx's SessionRow/project-row-header (see
+          // that row's comment for the full rationale): this row nests a
+          // real <button> below, whose keydown would otherwise bubble here
+          // and open the panel when the user meant to start/stop it.
+          <div
+            key={device.id}
+            className={`sidebar-tasks-entry${stopped ? " stopped" : ""}`}
+            data-testid={`device-row-${device.id}`}
+            role="button"
+            tabIndex={0}
+            title={title}
+            onClick={() => onOpenDevice(device)}
+            onKeyDown={(e) => {
+              if (e.target !== e.currentTarget) return;
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onOpenDevice(device);
+              }
+            }}
+          >
+            <DeviceIcon size={14} />
+            <span className="sidebar-tasks-entry-label">{label}</span>
+            <span className={`settings-status-dot ${deviceDotClass(device)}`} />
+            <span className="device-row-actions">
+              {stopped ? (
+                <button
+                  type="button"
+                  data-testid={`device-start-${device.id}`}
+                  aria-label={`Start ${label}`}
+                  title="Start"
+                  disabled={pendingId !== null}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void runLifecycle(device, "start");
+                  }}
+                >
+                  <PlayIcon size={13} />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  data-testid={`device-stop-${device.id}`}
+                  aria-label={`Stop ${label}`}
+                  title="Stop"
+                  disabled={pendingId !== null}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void runLifecycle(device, "stop");
+                  }}
+                >
+                  <StopIcon size={13} />
+                </button>
+              )}
+            </span>
+          </div>
+        );
+      })}
     </div>
   );
 }
