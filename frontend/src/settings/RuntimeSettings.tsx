@@ -70,6 +70,72 @@ export function HostHeartbeatSetting() {
   );
 }
 
+function RestartRequiredHint() {
+  return (
+    <div className="settings-footer-note" style={{ marginTop: 0, marginBottom: 12 }}>
+      Restart required: this change takes effect the next time the Mullion server restarts.
+    </div>
+  );
+}
+
+// Boot-time settings (read once while the server starts). A saved value that
+// resolves differently from what the server booted with needs a restart.
+export function BrowserPoolSizeSetting() {
+  const { settings, updateSettings } = useDashboardStore();
+  const info = useServerInfo();
+  const env = info?.runtimeEnv ?? FALLBACK_RUNTIME_ENV;
+  const saved = settings.browser.maxInstances;
+  const effective = Math.max(1, saved === -1 ? env.browserMaxInstances : saved);
+  const pending = info !== null && effective !== info.running.browserMaxInstances;
+  return (
+    <>
+      <ServerDefaultNumberRow
+        label="Browser pool size"
+        desc="Most browsers running at once, one per project. Each one uses memory even when idle. Takes effect after a server restart."
+        value={saved}
+        serverDefault={env.browserMaxInstances}
+        min={1}
+        max={32}
+        suffix="browsers"
+        width={62}
+        onChange={(v) => updateSettings({ browser: { maxInstances: v } })}
+      />
+      {pending && <RestartRequiredHint />}
+    </>
+  );
+}
+
+export function DeviceDiscoverySetting() {
+  const { settings, updateSettings } = useDashboardStore();
+  const info = useServerInfo();
+  const env = info?.runtimeEnv ?? FALLBACK_RUNTIME_ENV;
+  const saved = settings.devices.discoveryEnabled;
+  const effective = saved === "inherit" ? env.deviceDiscoveryEnabled : saved === "on";
+  const pending = info !== null && effective !== info.running.deviceDiscoveryEnabled;
+  return (
+    <>
+      <Row
+        label="Find phones on the network"
+        desc="Lists phones that have wireless debugging on, so you can pair without typing an address. Takes effect after a server restart."
+      >
+        <Dropdown<"inherit" | "on" | "off">
+          value={saved}
+          onChange={(v) => updateSettings({ devices: { discoveryEnabled: v } })}
+          options={[
+            {
+              value: "inherit",
+              label: `Server default (${env.deviceDiscoveryEnabled ? "On" : "Off"})`,
+            },
+            { value: "on", label: "On" },
+            { value: "off", label: "Off" },
+          ]}
+        />
+      </Row>
+      {pending && <RestartRequiredHint />}
+    </>
+  );
+}
+
 export function BrowserFramerateSetting() {
   const { settings, updateSettings } = useDashboardStore();
   const info = useServerInfo();

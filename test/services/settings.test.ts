@@ -634,6 +634,25 @@ describe("sanitizeSettings: runtime env overrides", () => {
     expect(s.browser.framerate).toBe(-1);
   });
 
+  it("clamps the browser pool size and repairs bad values to the sentinel", () => {
+    expect(mergeSettings({ browser: { maxInstances: 500 } }).browser.maxInstances).toBe(32);
+    expect(mergeSettings({ browser: { maxInstances: 0 } }).browser.maxInstances).toBe(1);
+    expect(mergeSettings({ browser: { maxInstances: Number.NaN } }).browser.maxInstances).toBe(-1);
+    expect(mergeSettings({}).browser.maxInstances).toBe(-1);
+  });
+
+  it("accepts on/off/inherit for device discovery and rejects anything else", () => {
+    expect(mergeSettings({ devices: { discoveryEnabled: "off" } }).devices.discoveryEnabled).toBe(
+      "off",
+    );
+    expect(mergeSettings({ devices: { discoveryEnabled: "on" } }).devices.discoveryEnabled).toBe(
+      "on",
+    );
+    expect(
+      mergeSettings({ devices: { discoveryEnabled: "maybe" as never } }).devices.discoveryEnabled,
+    ).toBe("inherit");
+  });
+
   it("accepts a known log level and rejects anything else", () => {
     expect(mergeSettings({ server: { logLevel: "debug" } }).server.logLevel).toBe("debug");
     expect(mergeSettings({ server: { logLevel: "verbose" } }).server.logLevel).toBe("inherit");

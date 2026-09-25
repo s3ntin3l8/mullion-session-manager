@@ -3,6 +3,8 @@ import type { FastifyInstance } from "fastify";
 import { DEFAULT_SETTINGS, type AppSettings } from "../../src/services/settings.js";
 import {
   resolveBrowserFramerate,
+  resolveBrowserMaxInstances,
+  resolveDeviceDiscoveryEnabled,
   resolveGitHubPoll,
   resolveHeartbeatSeconds,
   resolveLogLevel,
@@ -17,6 +19,8 @@ const app = {
     GITHUB_POLL_STALE_THRESHOLD: 300,
     HOST_HEARTBEAT_INTERVAL_SECONDS: 30,
     BROWSER_FRAMERATE: 10,
+    BROWSER_MAX_INSTANCES: 4,
+    DEVICE_DISCOVERY_ENABLED: true,
     LOG_LEVEL: "info",
   },
 } as unknown as FastifyInstance;
@@ -33,6 +37,8 @@ describe("runtime-config", () => {
       githubPollStaleThresholdSeconds: 300,
       hostHeartbeatSeconds: 30,
       browserFramerate: 10,
+      browserMaxInstances: 4,
+      deviceDiscoveryEnabled: true,
       logLevel: "info",
     });
   });
@@ -52,7 +58,8 @@ describe("runtime-config", () => {
     const s = withOverrides({
       github: { pollActiveSeconds: 20, pollQuietSeconds: 120, pollStaleThresholdSeconds: 600 },
       hosts: { heartbeatSeconds: 0 },
-      browser: { framerate: 24 },
+      browser: { framerate: 24, maxInstances: 8 },
+      devices: { discoveryEnabled: "off" },
       server: { logLevel: "debug" },
     });
     expect(resolveGitHubPoll(s, app)).toEqual({
@@ -76,5 +83,22 @@ describe("runtime-config", () => {
     expect(
       toActivityIntervals({ activeSeconds: 15, quietSeconds: 60, staleThresholdSeconds: 300 }),
     ).toEqual({ activeIntervalMs: 15_000, quietIntervalMs: 60_000, staleThresholdMs: 300_000 });
+  });
+
+  it("resolves the boot-time knobs against env", () => {
+    expect(resolveBrowserMaxInstances(DEFAULT_SETTINGS, app)).toBe(4);
+    expect(resolveDeviceDiscoveryEnabled(DEFAULT_SETTINGS, app)).toBe(true);
+    const s = withOverrides({
+      browser: { framerate: -1, maxInstances: 8 },
+      devices: { discoveryEnabled: "off" },
+    });
+    expect(resolveBrowserMaxInstances(s, app)).toBe(8);
+    expect(resolveDeviceDiscoveryEnabled(s, app)).toBe(false);
+    const on = withOverrides({ devices: { discoveryEnabled: "on" } });
+    expect(
+      resolveDeviceDiscoveryEnabled(on, {
+        config: { ...app.config, DEVICE_DISCOVERY_ENABLED: false },
+      } as unknown as FastifyInstance),
+    ).toBe(true);
   });
 });

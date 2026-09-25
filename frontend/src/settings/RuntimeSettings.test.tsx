@@ -4,6 +4,8 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
   BrowserFramerateSetting,
+  BrowserPoolSizeSetting,
+  DeviceDiscoverySetting,
   GitHubPollingSettings,
   HostHeartbeatSetting,
   LogLevelSetting,
@@ -128,5 +130,29 @@ describe("runtime settings controls", () => {
     render(<BrowserFramerateSetting />);
     await waitFor(() => expect(fetch).toHaveBeenCalled());
     expect(screen.queryByText(/turned off on this server/)).toBeNull();
+  });
+
+  it("hints that a restart is needed only when the saved pool size differs from the running one", async () => {
+    setSettings({ browser: { ...DEFAULT_SETTINGS.browser, maxInstances: 8 } });
+    const { unmount } = render(<BrowserPoolSizeSetting />);
+    expect(await screen.findByText(/Restart required/)).toBeInTheDocument();
+    unmount();
+
+    setSettings({ browser: { ...DEFAULT_SETTINGS.browser, maxInstances: 4 } });
+    render(<BrowserPoolSizeSetting />);
+    await waitFor(() => expect(screen.getByText(/Server default: 4 browsers/)).toBeInTheDocument());
+    expect(screen.queryByText(/Restart required/)).toBeNull();
+  });
+
+  it("hints for device discovery when the saved choice differs from what booted", async () => {
+    setSettings({ devices: { discoveryEnabled: "off" } });
+    render(<DeviceDiscoverySetting />);
+    expect(await screen.findByText(/Restart required/)).toBeInTheDocument();
+  });
+
+  it("shows no restart hint while device discovery inherits the running value", async () => {
+    render(<DeviceDiscoverySetting />);
+    await waitFor(() => expect(screen.getByText("Find phones on the network")).toBeInTheDocument());
+    expect(screen.queryByText(/Restart required/)).toBeNull();
   });
 });

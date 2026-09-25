@@ -3,6 +3,8 @@ import type { FastifyInstance } from "fastify";
 import path from "node:path";
 import { BrowserManager } from "../services/browser-manager.js";
 import { loadStoredCookiesForProject } from "../services/browser-cookies.js";
+import { resolveBrowserMaxInstances } from "../services/runtime-config.js";
+import { DEFAULT_SETTINGS, getStoredSettings } from "../services/settings.js";
 
 // Cheap, idempotent housekeeping — see BrowserManager.healthCheck's own
 // comment on why this evicts rather than proactively relaunches.
@@ -18,9 +20,17 @@ const HEALTH_CHECK_INTERVAL_MS = 30_000;
 // than a missing decorator.
 export const browserPlugin = fp(async (app: FastifyInstance) => {
   const dataDir = app.config.BROWSER_DATA_DIR;
+  // Pool size is fixed at boot: a Settings override (read here, after
+  // dbPlugin) only applies after a restart. Agent hosts have no settings DB
+  // and use the env value.
+  const maxInstances = resolveBrowserMaxInstances(
+    app.db ? getStoredSettings(app.db) : DEFAULT_SETTINGS,
+    app,
+  );
+  app.decorate("bootBrowserMaxInstances", maxInstances);
   const manager = new BrowserManager({
     enabled: app.config.BROWSER_ENABLED,
-    maxInstances: app.config.BROWSER_MAX_INSTANCES,
+    maxInstances,
     dataDir: path.isAbsolute(dataDir) ? dataDir : path.resolve(dataDir),
     loadCookies: app.db ? (projectId) => loadStoredCookiesForProject(app, projectId) : undefined,
     onCookieLoadError: (projectId, err) => {
@@ -62,5 +72,12 @@ export const browserPlugin = fp(async (app: FastifyInstance) => {
 declare module "fastify" {
   interface FastifyInstance {
     browser: BrowserManager;
+  }
+}
+
+declare module "fastify" {
+  interface FastifyInstance {
+    /** Pool size this process booted with (env default or Settings override). */
+    bootBrowserMaxInstances: number;
   }
 }

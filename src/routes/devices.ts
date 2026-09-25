@@ -530,7 +530,7 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
   // matching connect address when both are known, so the modal can offer
   // a single-click "Pair & Connect" without re-fetching.
   app.get("/api/devices/discovered", async () => {
-    if (!app.config.DEVICE_DISCOVERY_ENABLED) return [];
+    if (!app.bootDeviceDiscoveryEnabled) return [];
     return app.deviceDiscovery.getDiscovered();
   });
 

@@ -549,7 +549,8 @@ function renderPane(extra: { active?: boolean; inputAffordances?: boolean } = {}
       },
       github: { pollActiveSeconds: -1, pollQuietSeconds: -1, pollStaleThresholdSeconds: -1 },
       hosts: { heartbeatSeconds: -1 },
-      browser: { framerate: -1 },
+      browser: { framerate: -1, maxInstances: -1 },
+      devices: { discoveryEnabled: "inherit" },
       server: { logLevel: "inherit" },
       opencode: {
         implementerModel: null,

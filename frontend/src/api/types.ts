@@ -1168,7 +1168,15 @@ export interface ServerInfo {
     githubPollStaleThresholdSeconds: number;
     hostHeartbeatSeconds: number;
     browserFramerate: number;
+    browserMaxInstances: number;
+    deviceDiscoveryEnabled: boolean;
     logLevel: LogLevel;
+  };
+  // What this process booted with for the restart-required settings; a saved
+  // value that differs takes effect after a restart.
+  running: {
+    browserMaxInstances: number;
+    deviceDiscoveryEnabled: boolean;
   };
   // Host-level feature gates, set by the server administrator.
   features: {
@@ -1653,6 +1661,12 @@ export interface AppSettings {
   };
   browser: {
     framerate: number;
+    // Read once at boot: a change needs a restart.
+    maxInstances: number;
+  };
+  devices: {
+    // Read once at boot: a change needs a restart.
+    discoveryEnabled: "inherit" | "on" | "off";
   };
   server: {
     logLevel: "inherit" | LogLevel;

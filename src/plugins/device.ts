@@ -5,6 +5,8 @@ import { DeviceManager } from "../services/device-manager.js";
 import { DeviceDiscoveryService } from "../services/device-discovery.js";
 import { devices } from "../db/schema.js";
 import { ensureSessionsDir } from "./pty.js";
+import { resolveDeviceDiscoveryEnabled } from "../services/runtime-config.js";
+import { DEFAULT_SETTINGS, getStoredSettings } from "../services/settings.js";
 
 // Decorates app.device with the emulator/adb-scrcpy manager (see
 // src/services/device-manager.ts). Modeled on src/plugins/browser.ts:
@@ -68,11 +70,15 @@ export const devicePlugin = fp(async (app: FastifyInstance) => {
   // enabled the device panel (the default) gets neither the manager nor
   // the scanner, so no multicast socket binds and no 5353 queries are
   // emitted on a Mullion install that has no business listening for them.
-  // The env-driven `DEVICE_DISCOVERY_ENABLED` knob still works as the
-  // boot-time default; a Settings-UI override will follow in a separate
-  // issue once lazy-bind runtime reconfigure lands.
+  // `DEVICE_DISCOVERY_ENABLED` is the boot-time default; a Settings override
+  // is read here (after dbPlugin) and applies after a restart.
+  const discoveryEnabled = resolveDeviceDiscoveryEnabled(
+    app.db ? getStoredSettings(app.db) : DEFAULT_SETTINGS,
+    app,
+  );
+  app.decorate("bootDeviceDiscoveryEnabled", discoveryEnabled);
   const discovery = new DeviceDiscoveryService({
-    enabled: app.config.DEVICE_ENABLED && app.config.DEVICE_DISCOVERY_ENABLED,
+    enabled: app.config.DEVICE_ENABLED && discoveryEnabled,
   });
   discovery.start();
   app.decorate("deviceDiscovery", discovery);
@@ -87,5 +93,7 @@ declare module "fastify" {
   interface FastifyInstance {
     device: DeviceManager;
     deviceDiscovery: DeviceDiscoveryService;
+    /** Discovery flag this process booted with (env default or Settings override). */
+    bootDeviceDiscoveryEnabled: boolean;
   }
 }

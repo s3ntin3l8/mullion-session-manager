@@ -228,6 +228,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   },
   browser: {
     framerate: -1,
+    maxInstances: -1,
+  },
+  devices: {
+    discoveryEnabled: "inherit",
   },
   server: {
     logLevel: "inherit",
