@@ -15,13 +15,13 @@ export interface ReconnectSuggestion {
   ambiguous: boolean;
 }
 
-// `host:port` → host. IPv6 literals are bracketed (`[fe80::1]:5555`); the
-// port is always the part after the last colon.
+// `host:port` → host. IPv6 literals must be bracketed (`[fe80::1]:5555`); a
+// bare, unbracketed IPv6 address (`fe80::1`) has no port to split off and is
+// rejected rather than mis-split at one of its own colons.
 export function hostOf(address: string | null | undefined): string | null {
   if (!address) return null;
-  const i = address.lastIndexOf(":");
-  if (i <= 0) return null;
-  return address.slice(0, i).replace(/^\[|\]$/g, "");
+  const m = /^\[([^\]]+)\]:\d+$/.exec(address) ?? /^([^:[\]]+):\d+$/.exec(address);
+  return m ? m[1] : null;
 }
 
 const norm = (s: string | null | undefined) => (s ?? "").trim().toLowerCase();

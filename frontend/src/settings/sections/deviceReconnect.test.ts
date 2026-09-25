@@ -34,6 +34,10 @@ describe("hostOf", () => {
     expect(hostOf("192.168.1.23:37251")).toBe("192.168.1.23");
     expect(hostOf("[fe80::1]:5555")).toBe("fe80::1");
     expect(hostOf("nocolon")).toBeNull();
+    // Bare IPv6 (no brackets, no port) and a missing/non-numeric port are junk.
+    expect(hostOf("fe80::1")).toBeNull();
+    expect(hostOf("192.168.1.23:")).toBeNull();
+    expect(hostOf("192.168.1.23:abc")).toBeNull();
     expect(hostOf(null)).toBeNull();
   });
 });

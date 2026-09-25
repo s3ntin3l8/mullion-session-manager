@@ -198,7 +198,9 @@ advertised name/model), gets an inline **Reconnect to _name_?** note. Clicking i
 sends the same `PATCH /api/devices/:id` as Edit address — no new row, no new
 protocol, and never without a click. When several phones or rows match (for
 example two Pixels behind one host), the note lists one button per candidate
-instead. If the phone needs a fresh pairing code, delete and re-pair as before.
+instead. The name-only fallback can also match a _different_ phone that shares
+the advertised name/model while the real one is offline, so that case is always
+shown as a confirm-style prompt. If the phone needs a fresh pairing code, delete and re-pair as before.
 The prompt only appears when mDNS can reach the device; otherwise **Edit
 address** remains the manual path.
 
