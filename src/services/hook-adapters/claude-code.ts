@@ -1,7 +1,12 @@
 import os from "node:os";
 import path from "node:path";
 import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./types.js";
-import { resolveMcpServerPath, shellQuote, SHELL_METACHARACTERS_RE } from "./shared.js";
+import {
+  resolveMcpServerPath,
+  shellQuote,
+  buildModelFlag,
+  SHELL_METACHARACTERS_RE,
+} from "./shared.js";
 import { resolveMullionBundleDir, composeClaudeSessionBundle } from "./mullion-bundle.js";
 import { isBundleSyncedFor, removeBundleContentForCli } from "../bundle-sync.js";
 
@@ -455,7 +460,7 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
       ...bundleSettingsFiles,
     ],
     commandTransform: (command) =>
-      `${command} --settings ${JSON.stringify(settingsPath)} --mcp-config ${JSON.stringify(mcpConfigPath)}${bundleFlag}`,
+      `${command} --settings ${JSON.stringify(settingsPath)} --mcp-config ${JSON.stringify(mcpConfigPath)}${bundleFlag}${buildModelFlag(command, ctx.model)}`,
     // Issue #1079 — the setting-off counterpart to the `--plugin-dir`
     // branches above, which only ever SKIP adding a pointer. Codex's and
     // agy's own managedInstall steps already actively uninstall their

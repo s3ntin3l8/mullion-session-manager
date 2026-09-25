@@ -180,14 +180,13 @@ export interface HookAdapterContext {
    * re-run, same "seed, not a live channel" caveat `docs/agent-context.md`
    * already documents for `projectSkill`. */
   projectReviewerAgent?: string;
-  /** Issue #957 — the resolved opencode model the session is configured
-   * to use, threaded from createSessionRecord (where resolveOpenCodeModel
-   * has already run) all the way to the opencode adapter's prepareLaunch,
-   * which lands it in OPENCODE_CONFIG_CONTENT.model. `undefined` for
-   * any non-opencode adapter and for an opencode session with no model
-   * resolution anywhere (opencode's own fallback then runs). The opencode
-   * adapter is the only consumer; every other adapter ignores this
-   * field, same posture as `seedPrompt`/`projectSkill`/etc. */
+  /** The resolved model the session is configured to use, threaded from
+   * createSessionRecord (where the model resolution has already run) to the
+   * adapter's prepareLaunch. opencode lands it in
+   * OPENCODE_CONFIG_CONTENT.model (issue #957); Claude Code, Codex, and agy
+   * append `--model <value>` to argv. `undefined` when nothing resolved
+   * (the CLI's own default then applies) or the command has its own
+   * `--model`/`-m` flag. */
   model?: string;
   /** Issue #958 — same threading posture as `model` above, but for
    * opencode's `small_model` config key (used for lightweight tasks).

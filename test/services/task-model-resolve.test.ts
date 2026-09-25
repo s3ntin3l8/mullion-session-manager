@@ -8,6 +8,8 @@ vi.mock("../../src/services/settings.js", () => ({
 }));
 
 import {
+  resolveCliModel,
+  validateCliModel,
   resolveOpenCodeModel,
   resolveOpenCodeSmallModel,
 } from "../../src/services/task-model-resolve.js";
@@ -238,5 +240,52 @@ describe("resolveOpenCodeSmallModel", () => {
     });
     expect(result).toBe(OPENCODE_SETTINGS.opencode.defaultSmallModel);
     expect(app.log.warn).toHaveBeenCalledOnce();
+  });
+});
+
+describe("resolveCliModel", () => {
+  const settings = {
+    claudeCode: { defaultModel: "sonnet" },
+    codex: { defaultModel: null },
+    agy: { defaultModel: "gemini-3" },
+  };
+  beforeEach(() => {
+    mockGetStoredSettings.mockReset();
+    mockGetStoredSettings.mockReturnValue(settings);
+  });
+
+  it("prefers the task model, then the issue directive, then the install default", () => {
+    const app = mockApp();
+    expect(
+      resolveCliModel(app, "claude-code", { taskModel: "opus", issueBody: "Model: haiku" }),
+    ).toBe("opus");
+    expect(resolveCliModel(app, "claude-code", { issueBody: "Model: haiku" })).toBe("haiku");
+    expect(resolveCliModel(app, "claude-code", { issueBody: null })).toBe("sonnet");
+    expect(resolveCliModel(app, "agy", { issueBody: null })).toBe("gemini-3");
+  });
+
+  it("returns null when nothing is configured", () => {
+    expect(resolveCliModel(mockApp(), "codex", { issueBody: null })).toBeNull();
+  });
+
+  it("falls through an invalid value and logs it", () => {
+    const app = mockApp();
+    const result = resolveCliModel(app, "claude-code", {
+      taskModel: "bad model; rm -rf /",
+      issueBody: null,
+    });
+    expect(result).toBe("sonnet");
+    expect(app.log.warn).toHaveBeenCalled();
+  });
+});
+
+describe("validateCliModel", () => {
+  it("accepts bare names and rejects shell-hostile or flag-like values", () => {
+    expect(validateCliModel("claude-opus-4-5[1m]")).toBe(true);
+    expect(validateCliModel("gpt-5")).toBe(true);
+    expect(validateCliModel("--foo")).toBe(false);
+    expect(validateCliModel("a b")).toBe(false);
+    expect(validateCliModel("$(x)")).toBe(false);
+    expect(validateCliModel("a'b")).toBe(false);
   });
 });

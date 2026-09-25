@@ -29,8 +29,16 @@ import {
   type CreateSessionBody,
 } from "../services/session-lifecycle.js";
 import { commandSupportsSeed, resolveSeedDelivered } from "../services/task-agent-resolve.js";
-import { resolveOpenCodeModel, resolveOpenCodeSmallModel } from "../services/task-model-resolve.js";
-import { adapterHasResumeSessionArgs, commandIsOpencode } from "../services/hook-adapters/index.js";
+import {
+  resolveCliModel,
+  resolveOpenCodeModel,
+  resolveOpenCodeSmallModel,
+} from "../services/task-model-resolve.js";
+import {
+  adapterHasResumeSessionArgs,
+  commandIsOpencode,
+  commandModelCli,
+} from "../services/hook-adapters/index.js";
 import { transferOpencodeSession } from "../services/opencode-session-transfer.js";
 import {
   withLiveInfo,
@@ -443,25 +451,35 @@ export async function sessionsRoute(app: FastifyInstance) {
           parentSmallModel = parentRow.smallModel ?? undefined;
         }
       }
+      // Claude Code / Codex / agy: same default resolution (no parent
+      // inheritance — see the issue's out-of-scope note), landing as
+      // `--model` via the adapter's commandTransform.
+      const modelCli = commandModelCli(request.body.command);
       const body =
-        isOpencode && (request.body.model === undefined || request.body.smallModel === undefined)
+        modelCli !== null && request.body.model === undefined
           ? {
               ...request.body,
-              model:
-                request.body.model ??
-                parentModel ??
-                resolveOpenCodeModel(app, {
-                  issueBody: null,
-                  role: "implementer",
-                }) ??
-                undefined,
-              smallModel:
-                request.body.smallModel ??
-                parentSmallModel ??
-                resolveOpenCodeSmallModel(app, { issueBody: null }) ??
-                undefined,
+              model: resolveCliModel(app, modelCli, { issueBody: null }) ?? undefined,
             }
-          : request.body;
+          : isOpencode &&
+              (request.body.model === undefined || request.body.smallModel === undefined)
+            ? {
+                ...request.body,
+                model:
+                  request.body.model ??
+                  parentModel ??
+                  resolveOpenCodeModel(app, {
+                    issueBody: null,
+                    role: "implementer",
+                  }) ??
+                  undefined,
+                smallModel:
+                  request.body.smallModel ??
+                  parentSmallModel ??
+                  resolveOpenCodeSmallModel(app, { issueBody: null }) ??
+                  undefined,
+              }
+            : request.body;
 
       // Issue: spawn_child_session (the one session-scoped spawn path an
       // agent can reach) had no way to submit a first turn to its child at

@@ -153,3 +153,21 @@ export function escapeTomlBasicString(value: string): string {
 export function tomlString(value: string): string {
   return `"${escapeTomlBasicString(value)}"`;
 }
+
+/** ` --model '<value>'` to append to a launch command, or "" when there is no
+ * model or the command already carries its own model flag (a hand-typed
+ * `--model` always wins over a Mullion default). `shortFlag` covers CLIs
+ * (codex) whose `-m` is an alias. The value is single-quoted via shellQuote
+ * on top of resolveCliModel's own character allowlist. */
+export function buildModelFlag(
+  command: string,
+  model: string | undefined,
+  shortFlag?: string,
+): string {
+  if (!model) return "";
+  const existing = shortFlag
+    ? new RegExp(`(?:^|\\s)(?:--model|${shortFlag})(?:[\\s=]|$)`)
+    : /(?:^|\s)--model(?:[\s=]|$)/;
+  if (existing.test(command)) return "";
+  return ` --model ${shellQuote(model)}`;
+}

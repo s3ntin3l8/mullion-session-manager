@@ -44,7 +44,7 @@ describe("agyAdapter.prepareLaunch (issue #253)", () => {
     injectAgentGuide: false,
   };
 
-  it("returns only a managedInstall — no argv edit, no ephemeral files/env", () => {
+  it("returns only a managedInstall — no argv edit (absent a model), no ephemeral files/env", () => {
     const plan = agyAdapter.prepareLaunch(ctx);
     expect(typeof plan.managedInstall).toBe("function");
     expect(plan.commandTransform).toBeUndefined();

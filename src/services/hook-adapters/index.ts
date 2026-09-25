@@ -127,6 +127,21 @@ export function commandIsOpencode(command: string): boolean {
   return adapter === openCodeAdapter;
 }
 
+export type ModelInjectingCli = "claude-code" | "codex" | "agy";
+
+/**
+ * Which non-opencode CLI (if any) `command` resolves to, for the CLIs whose
+ * adapters inject `--model`. `null` for opencode (see commandIsOpencode),
+ * shells, and unmatched commands. Pure lookup, no I/O.
+ */
+export function commandModelCli(command: string): ModelInjectingCli | null {
+  const adapter = ADAPTERS.find((candidate) => candidate.matches(command));
+  if (adapter === claudeCodeAdapter) return "claude-code";
+  if (adapter === codexAdapter) return "codex";
+  if (adapter === agyAdapter) return "agy";
+  return null;
+}
+
 /**
  * Finds the first adapter matching `command`, runs its launch plan's I/O
  * side effects (settings-file writes, managed installs), and returns the

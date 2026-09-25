@@ -463,6 +463,13 @@ export interface AppSettings {
     // property of the model itself, not the task.
     defaultSmallModel: string | null;
   };
+  // Install-wide default `--model` per non-opencode CLI (the lowest tier of
+  // resolveCliModel's precedence chain). Free-form because each CLI names
+  // models differently (`sonnet`, `gpt-5`, ...); `null` means "no flag, let
+  // the CLI pick".
+  claudeCode: { defaultModel: string | null };
+  codex: { defaultModel: string | null };
+  agy: { defaultModel: string | null };
   taskMaster: {
     autoClaimPaused: boolean;
     enabled: "inherit" | "on" | "off";
@@ -582,6 +589,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
     reviewerModel: null,
     defaultSmallModel: null,
   },
+  claudeCode: { defaultModel: null },
+  codex: { defaultModel: null },
+  agy: { defaultModel: null },
   notifications: {
     channels: {
       browser: true,
