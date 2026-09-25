@@ -1099,9 +1099,19 @@ const deviceCommands = {
     if (flags.name !== undefined) body.name = flags.name;
     return { json: await client.request("device.create", body) };
   },
+  async start(client, args) {
+    const deviceId = requireOne(args, "device id");
+    return { json: await client.request("device.start", { deviceId }) };
+  },
   async stop(client, args) {
     const deviceId = requireOne(args, "device id");
     return { json: await client.request("device.terminate", { deviceId }) };
+  },
+  // Irreversible — drops the row itself (stop only flips it to "killed").
+  // Full scope only, like the sessions.kill verb's underlying op.
+  async delete(client, args) {
+    const deviceId = requireOne(args, "device id");
+    return { json: await client.request("device.delete", { deviceId }) };
   },
   async screenshot(client, args) {
     const deviceId = requireOne(args, "device id");
@@ -1282,7 +1292,7 @@ Commands:
   project list|actions|dock
   preview create|get|delete|list
   dock start|stop|list
-  device list|create|pair|pair-and-connect|discovered|connect|stop|screenshot|tap|swipe|text|key|logcat
+  device list|create|pair|pair-and-connect|discovered|connect|start|stop|delete|screenshot|tap|swipe|text|key|logcat
   bundle status|resync|remove
   events tail
   history [--session <id>] [--kind <k>] [--since <ms>] [--until <ms>]

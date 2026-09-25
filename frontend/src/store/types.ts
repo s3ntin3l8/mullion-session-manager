@@ -451,11 +451,17 @@ export interface HostsSlice {
 
 export interface DevicesSlice {
   // Android device panel rows (issue #1326) — host-global like Host above,
-  // fetched independently of projects/sessions. Unfiltered: includes killed
-  // rows (GET /api/devices never drops them, see routes/devices.ts's own
-  // comment on the DELETE endpoint only flipping `status`, never removing
-  // the row) — consumers filter as their own surface requires.
+  // fetched independently of projects/sessions. Unfiltered: a stopped row
+  // (`status: "killed"`) is still a real device you can start again, so it
+  // stays listed — only deleteDevice removes a row, and then it's gone
+  // from every surface. Consumers filter as their own surface requires.
   devices: Device[];
+  // True once the first refreshDevices() has resolved. `devices` starting
+  // as `[]` is ambiguous ("nothing loaded yet" vs "genuinely empty"), and
+  // useWorkspacePersistence's stale-panel sweep needs the distinction to
+  // prune a restored device panel whose row was DELETED without
+  // mass-closing every device panel while the list is still loading.
+  devicesLoaded: boolean;
   refreshDevices: () => Promise<void>;
   createDevice: (avdName: string, name?: string) => Promise<Device>;
   // GET /api/devices/discovered (issue #1378) — not stored in the slice,
@@ -464,10 +470,19 @@ export interface DevicesSlice {
   // Atomic pair + connect + insert (issue #1378), the physical-device
   // counterpart to createDevice.
   pairAndConnect: (body: PairAndConnectBody) => Promise<Device>;
-  terminateDevice: (id: number) => Promise<void>;
+  // Makes sure a device is running: flips a stopped row back to "active"
+  // and spawns/reconnects/reattaches behind it (POST /api/devices/:id/start).
+  startDevice: (id: number) => Promise<Device>;
+  // Stops a device WITHOUT dropping its row (POST /api/devices/:id/stop) —
+  // the reversible half of the lifecycle.
+  stopDevice: (id: number) => Promise<void>;
+  // Tears the device down AND removes its row (DELETE /api/devices/:id) —
+  // irreversible, hence its own verb rather than an option on stopDevice.
+  deleteDevice: (id: number) => Promise<void>;
   // Edits a physical device's stored adb address in place (issue #1347) —
   // reconnects against the new address without losing the row's id/name/
-  // history, unlike terminateDevice+createDevice.
+  // history, unlike deleteDevice+createDevice. A stopped row's edit is
+  // persisted only (no implicit start).
   updateDeviceAddress: (id: number, address: string) => Promise<Device>;
 }
 

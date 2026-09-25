@@ -606,3 +606,37 @@ export function DeviceIcon(props: IconProps) {
     </Svg>
   );
 }
+
+// Device lifecycle controls (Settings -> Devices rows + the sidebar's
+// Devices section). Deliberately stroke-based to sit next to KillIcon/
+// RefreshIcon in a 22x22 action box, and deliberately NOT reusing
+// PlayTriangleIcon above (fill-based, hardcodes fill="#fff" for the empty
+// state's accent badge — wrong color model for a button glyph) nor
+// KillIcon for stop (a circle-slash reads as "prohibited", not "stop", and
+// it's already load-bearing as the terminal/session kill affordance).
+export function PlayIcon(props: IconProps) {
+  return (
+    <Svg strokeWidth={1.8} {...props}>
+      <path d="M8 5.5v13l10.5-6.5z" strokeLinejoin="round" strokeLinecap="round" />
+    </Svg>
+  );
+}
+
+export function StopIcon(props: IconProps) {
+  return (
+    <Svg strokeWidth={1.8} {...props}>
+      <rect x="6.5" y="6.5" width="11" height="11" rx="1.8" />
+    </Svg>
+  );
+}
+
+export function TrashIcon(props: IconProps) {
+  return (
+    <Svg strokeWidth={1.8} {...props}>
+      <path d="M4 7h16" strokeLinecap="round" />
+      <path d="M9.5 7V5.6A1.6 1.6 0 0 1 11.1 4h1.8a1.6 1.6 0 0 1 1.6 1.6V7" />
+      <path d="M6.2 7l.9 12.5A1.6 1.6 0 0 0 8.7 21h6.6a1.6 1.6 0 0 0 1.6-1.5L17.8 7" />
+      <path d="M10.2 11v6M13.8 11v6" strokeLinecap="round" />
+    </Svg>
+  );
+}

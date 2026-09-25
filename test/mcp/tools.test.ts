@@ -19,6 +19,9 @@ describe("TOOLS registry (issue #271, #134 part 2)", () => {
       "list_devices",
       "use_device",
       "device_action",
+      "start_device",
+      "stop_device",
+      "delete_device",
       "list_sessions",
       "start_dock_session",
       "spawn_child_session",
@@ -398,5 +401,56 @@ describe("use_device and device_action handlers (PR #1324)", () => {
     );
     expect(deviceAction).toHaveBeenCalledWith("2", { action: "screenshot" });
     expect(JSON.parse(result)).toEqual({ screenshot: "base64" });
+  });
+});
+
+describe("start_device / stop_device / delete_device handlers (device lifecycle)", () => {
+  const startTool = TOOLS.find((t) => t.name === "start_device")!;
+  const stopTool = TOOLS.find((t) => t.name === "stop_device")!;
+  const deleteTool = TOOLS.find((t) => t.name === "delete_device")!;
+
+  it("start_device calls client.startDevice with deviceId and returns JSON", async () => {
+    const startDevice = vi.fn().mockResolvedValue({ id: 1, status: "active" });
+    const result = await startTool.handler({ deviceId: "1" }, { startDevice });
+    expect(startDevice).toHaveBeenCalledWith("1");
+    expect(JSON.parse(result)).toEqual({ id: 1, status: "active" });
+  });
+
+  // Documents the deliberate asymmetry: there is no client.stopDevice.
+  // terminateDevice IS the stop call (it points at POST /:id/stop now, not
+  // DELETE) and stop_device is the tool name — no duplicate public method
+  // for the same wire operation.
+  it("stop_device calls client.terminateDevice (the stop path, not a separate stopDevice)", async () => {
+    const terminateDevice = vi.fn().mockResolvedValue(undefined);
+    const result = await stopTool.handler({ deviceId: "1" }, { terminateDevice });
+    expect(terminateDevice).toHaveBeenCalledWith("1");
+    expect(result).toBe(JSON.stringify(undefined));
+  });
+
+  it("delete_device calls client.deleteDevice with deviceId", async () => {
+    const deleteDevice = vi.fn().mockResolvedValue(undefined);
+    const result = await deleteTool.handler({ deviceId: "1" }, { deleteDevice });
+    expect(deleteDevice).toHaveBeenCalledWith("1");
+    expect(result).toBe(JSON.stringify(undefined));
+  });
+
+  it.each([
+    ["start_device", startTool, "startDevice"],
+    ["stop_device", stopTool, "terminateDevice"],
+    ["delete_device", deleteTool, "deleteDevice"],
+  ])(
+    "%s throws when deviceId is missing, without touching the client",
+    async (_n, tool, method) => {
+      const client = { [method]: vi.fn() };
+      await expect(tool.handler({}, client)).rejects.toThrow("deviceId is required");
+      expect(client[method as keyof typeof client]).not.toHaveBeenCalled();
+    },
+  );
+
+  it("delete_device's description warns it is irreversible, and start/stop's do not", () => {
+    expect(deleteTool.description).toMatch(/IRREVERSIBLY/i);
+    expect(deleteTool.description).toMatch(/stop_device/);
+    expect(startTool.description).not.toMatch(/IRREVERSIBLY/i);
+    expect(stopTool.description).toMatch(/reversible/i);
   });
 });

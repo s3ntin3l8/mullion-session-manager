@@ -15,7 +15,9 @@ import { resetStore } from "../../test/resetStore.js";
 // exercises Settings -> Devices against a fake GET/POST/DELETE /api/devices
 // backend (through the real `devices` store slice, not a mocked one), so the
 // component/store/api wiring the plan's own risk list calls out is what's
-// under test here, not a hand-picked mock.
+// under test here, not a hand-picked mock. The fake backend mirrors the
+// hard-delete rework: DELETE removes the row, POST /:id/stop keeps it
+// killed, POST /:id/start brings it back.
 // Mock WebSocket for the install/license WS hooks.
 class MockWebSocket {
   static instances: MockWebSocket[] = [];
@@ -214,11 +216,33 @@ describe("Settings -> Devices (issue #1326)", () => {
       "DELETE /api/devices/:id": ({ params }) => {
         const id = Number(params.id);
         if (!devicesDb.some((d) => d.id === id)) return jsonResponse(404, { message: "not found" });
-        // Mirrors routes/devices.ts's own DELETE handler: it flips `status`
-        // to "killed" in place, it never removes the row — the killed-row
-        // regression test below depends on this exact shape.
-        devicesDb = devicesDb.map((d) => (d.id === id ? { ...d, status: "killed" } : d));
+        // Mirrors routes/devices.ts's own DELETE handler: two-phase (teardown,
+        // then REMOVE the row). The row is GONE from the list afterwards —
+        // the hard-delete rework is exactly what makes the delete test below
+        // possible.
+        devicesDb = devicesDb.filter((d) => d.id !== id);
         return jsonResponse(204);
+      },
+      "POST /api/devices/:id/stop": ({ params }) => {
+        const id = Number(params.id);
+        if (!devicesDb.some((d) => d.id === id)) return jsonResponse(404, { message: "not found" });
+        // Mirrors routes/devices.ts's /stop: flips `status` to "killed",
+        // keeps the row (that's the reversible half of the lifecycle).
+        devicesDb = devicesDb.map((d) =>
+          d.id === id ? { ...d, status: "killed", live: null } : d,
+        );
+        return jsonResponse(204);
+      },
+      "POST /api/devices/:id/start": ({ params }) => {
+        const id = Number(params.id);
+        const existing = devicesDb.find((d) => d.id === id);
+        if (!existing) return jsonResponse(404, { message: "not found" });
+        // Mirrors routes/devices.ts's /start: flips back to active (the real
+        // server also (re)spawns behind it, which this fake doesn't model —
+        // `live` stays null either way for a row that never connected).
+        const updated: Device = { ...existing, status: "active" };
+        devicesDb = devicesDb.map((d) => (d.id === id ? updated : d));
+        return jsonResponse(200, updated);
       },
       "PATCH /api/devices/:id": ({ params, init }) => {
         const id = Number(params.id);
@@ -344,7 +368,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     ]);
   });
 
-  it("deleting the last active device renders it dimmed instead of removing it", async () => {
+  it("deleting a device removes its row from the list AND from the shared store", async () => {
     devicesDb = [
       {
         id: 1,
@@ -375,18 +399,148 @@ describe("Settings -> Devices (issue #1326)", () => {
     await user.click(deleteButton);
     await user.click(deleteButton);
 
+    // The bug this whole change exists for: a deleted device used to stay
+    // in the list as an unstoppable "stopped" row with no control left.
+    await waitFor(() => {
+      expect(screen.queryByTestId("device-row-1")).not.toBeInTheDocument();
+    });
+    expect(useDashboardStore.getState().devices).toEqual([]);
+  });
+
+  it("a stopped row is still listed, dimmed, with Start + Delete (no Stop)", async () => {
+    devicesDb = [
+      {
+        id: 1,
+        hostId: "local",
+        projectId: null,
+        name: "My Pixel",
+        kind: "emulator",
+        avdName: "pixel_7",
+        serial: null,
+        status: "killed",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        live: null,
+      },
+    ];
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    const row = await screen.findByTestId("device-row-1");
+    expect(within(row).getByText("stopped")).toBeInTheDocument();
+    expect(within(row).getByRole("button", { name: "Start" })).toBeInTheDocument();
+    expect(within(row).queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
+    // Delete is no longer gated on `status === "active"` — that gate is what
+    // stranded stopped rows with no way to clear them.
+    expect(within(row).getByRole("button", { name: "Delete" })).toBeInTheDocument();
+    expect(row.classList.contains("unavailable")).toBe(true);
+  });
+
+  it("Stop on an active row posts /stop and leaves it listed as stopped", async () => {
+    devicesDb = [
+      {
+        id: 1,
+        hostId: "local",
+        projectId: null,
+        name: "My Pixel",
+        kind: "emulator",
+        avdName: "pixel_7",
+        serial: null,
+        status: "active",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        live: null,
+      },
+    ];
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    const row = await screen.findByTestId("device-row-1");
+    await user.click(within(row).getByRole("button", { name: "Stop" }));
+
     await waitFor(() => {
       expect(within(screen.getByTestId("device-row-1")).getByText("stopped")).toBeInTheDocument();
     });
-    // Still the SAME row, not removed — Settings is the one surface that
-    // shows a killed device's final state (unlike SidebarDevices, which
-    // filters it out entirely). No "Delete" button on an already-killed row.
-    expect(
-      within(screen.getByTestId("device-row-1")).queryByRole("button", { name: "Delete" }),
-    ).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/devices/1/stop",
+      expect.objectContaining({ method: "POST" }),
+    );
     expect(useDashboardStore.getState().devices).toEqual([
       expect.objectContaining({ id: 1, status: "killed" }),
     ]);
+  });
+
+  it("Start on a stopped row posts /start and flips it back to active", async () => {
+    devicesDb = [
+      {
+        id: 1,
+        hostId: "local",
+        projectId: null,
+        name: "My Pixel",
+        kind: "emulator",
+        avdName: "pixel_7",
+        serial: null,
+        status: "killed",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        live: null,
+      },
+    ];
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    const row = await screen.findByTestId("device-row-1");
+    await user.click(within(row).getByRole("button", { name: "Start" }));
+
+    await waitFor(() => {
+      expect(useDashboardStore.getState().devices).toEqual([
+        expect.objectContaining({ id: 1, status: "active" }),
+      ]);
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/devices/1/start",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  // A phone's address rotates while it's DOWN — that's the normal time to
+  // edit it — so Edit address must not be gated on `status === "active"`,
+  // and the edit must persist without implicitly starting the device.
+  it("Edit address is offered on a stopped physical row and persists without starting it", async () => {
+    devicesDb = [
+      {
+        id: 1,
+        hostId: "local",
+        projectId: null,
+        name: "My Pixel",
+        kind: "physical",
+        avdName: null,
+        serial: "192.168.1.23:37251",
+        status: "killed",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        live: null,
+      },
+    ];
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    const row = await screen.findByTestId("device-row-1");
+    await user.click(within(row).getByRole("button", { name: "Edit address" }));
+    const input = screen.getByPlaceholderText("192.168.1.23:37251");
+    await user.clear(input);
+    await user.type(input, "192.168.1.23:41999");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(useDashboardStore.getState().devices).toEqual([
+        expect.objectContaining({
+          id: 1,
+          serial: "192.168.1.23:41999",
+          status: "killed",
+        }),
+      ]);
+    });
+    // Persist only — no /start fired as a side effect of the edit.
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      "/api/devices/1/start",
+      expect.objectContaining({ method: "POST" }),
+    );
   });
 
   // Issue #1379 — physical phones are paired from PairDeviceDialog, not an

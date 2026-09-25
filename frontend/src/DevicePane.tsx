@@ -5,7 +5,8 @@ import {
 } from "@yume-chan/scrcpy-decoder-webcodecs";
 import type { ScrcpyMediaStreamPacket } from "@yume-chan/scrcpy";
 import { ScrcpyVideoCodecId } from "@yume-chan/scrcpy";
-import { RefreshIcon, WifiOffIcon } from "./ui/icons.js";
+import { PlayIcon, RefreshIcon, StopIcon, WifiOffIcon } from "./ui/icons.js";
+import { useDashboardStore } from "./store/index.js";
 import { Spinner } from "./ui/Spinner.js";
 
 export interface DevicePaneParams {
@@ -84,6 +85,35 @@ export function DevicePane(props: {
   );
   const [reconnectAttempt, setReconnectAttempt] = useState(0);
   const [lastError, setLastError] = useState<string | null>(null);
+  // This panel's own row, by status only. Primitive on purpose: the devices
+  // poll replaces the whole array with fresh objects every tick, so
+  // selecting the row itself would re-render (and re-measure nothing but
+  // this overlay) every DEVICES_POLL_MS for as long as the pane is open.
+  const deviceStatus = useDashboardStore(
+    (s) => s.devices.find((d) => d.id === props.params.deviceId)?.status,
+  );
+  const devicesLoaded = useDashboardStore((s) => s.devicesLoaded);
+  const [starting, setStarting] = useState(false);
+  // Two states the socket can never recover from on its own: the row is
+  // STOPPED (status "killed" — routes/device.ts 404s every connect) or
+  // GONE (hard-deleted, same 404 with no row left to restart). Without
+  // these the pane would burn its six reconnect attempts and then sit on a
+  // generic "Disconnected / Retry now" that no amount of retrying fixes.
+  const stopped = deviceStatus === "killed";
+  const removed = devicesLoaded && deviceStatus === undefined;
+
+  const handleStart = () => {
+    if (starting) return;
+    setStarting(true);
+    useDashboardStore
+      .getState()
+      .startDevice(props.params.deviceId)
+      // Start already re-read the row; reconnect once the process is back
+      // rather than waiting out the failed state's backoff.
+      .then(() => retryRef.current())
+      .catch((err: unknown) => setLastError(err instanceof Error ? err.message : String(err)))
+      .finally(() => setStarting(false));
+  };
   const sendControlRef = useRef<(message: Record<string, unknown>) => void>(() => {});
   const retryRef = useRef<() => void>(() => {});
 
@@ -326,15 +356,33 @@ export function DevicePane(props: {
       <div className="browser-pane-canvas-wrap">
         <canvas ref={canvasRef} className="browser-pane-canvas" tabIndex={0} />
         {lastError && <div className="browser-pane-error-toast">{lastError}</div>}
-        {status !== "open" && status !== "unsupported" && (
-          <div className={`terminal-status-overlay ${status}`}>
-            {status === "connecting" && (
+        {status !== "unsupported" && (status !== "open" || stopped || removed) && (
+          <div className={`terminal-status-overlay ${stopped || removed ? "failed" : status}`}>
+            {removed ? (
               <>
-                <Spinner variant="connecting" />
-                <span className="terminal-status-text">Connecting…</span>
+                <WifiOffIcon size={22} style={{ color: "var(--dim)" }} />
+                <span className="terminal-status-text">
+                  This device was deleted — its row is gone, so there is nothing to reconnect to.
+                </span>
               </>
+            ) : stopped ? (
+              <>
+                <StopIcon size={22} style={{ color: "var(--dim)" }} />
+                <span className="terminal-status-text">Device stopped</span>
+                <button className="terminal-status-retry" onClick={handleStart} disabled={starting}>
+                  <PlayIcon size={13} />
+                  {starting ? "Starting…" : "Start device"}
+                </button>
+              </>
+            ) : (
+              status === "connecting" && (
+                <>
+                  <Spinner variant="connecting" />
+                  <span className="terminal-status-text">Connecting…</span>
+                </>
+              )
             )}
-            {status === "reconnecting" && (
+            {status === "reconnecting" && !stopped && !removed && (
               <>
                 <Spinner variant="reconnecting" />
                 <span className="terminal-status-text">
@@ -342,7 +390,7 @@ export function DevicePane(props: {
                 </span>
               </>
             )}
-            {status === "failed" && (
+            {status === "failed" && !stopped && !removed && (
               <>
                 <WifiOffIcon size={22} style={{ color: "var(--r)" }} />
                 <span className="terminal-status-text">Disconnected</span>

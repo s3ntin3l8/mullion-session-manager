@@ -1140,8 +1140,56 @@ const OPS: Record<string, OpSpec> = {
       );
     },
   },
+  // Keeps its historical name (and its documented meaning — "flips the row
+  // to `killed` and tears down the live process/scope") even though the
+  // `mullion device stop` verb now maps here rather than to DELETE: stop is
+  // reversible, the row survives, and `device.delete` below is the
+  // irreversible one. Renaming the op would break every raw-socket caller
+  // of a published API for no behavioural gain.
   "device.terminate": {
     scopes: ["full", "session"],
+    handler: async ({ app, body, reply }) => {
+      const deviceId = extractDeviceId(body);
+      if (deviceId === null) {
+        reply({ ok: false, status: 400, error: "'deviceId' is required" });
+        return;
+      }
+      reply(
+        await injectAndShape(app, {
+          method: "POST",
+          url: `/api/devices/${encodeURIComponent(String(deviceId))}/stop`,
+          headers: buildAuthHeaders(app),
+        }),
+      );
+    },
+  },
+  // Start is the mirror of terminate above and equally reversible, so it
+  // gets the same full+session reachability — an agent that can stop a
+  // device can start one again.
+  "device.start": {
+    scopes: ["full", "session"],
+    handler: async ({ app, body, reply }) => {
+      const deviceId = extractDeviceId(body);
+      if (deviceId === null) {
+        reply({ ok: false, status: 400, error: "'deviceId' is required" });
+        return;
+      }
+      reply(
+        await injectAndShape(app, {
+          method: "POST",
+          url: `/api/devices/${encodeURIComponent(String(deviceId))}/start`,
+          headers: buildAuthHeaders(app),
+        }),
+      );
+    },
+  },
+  // Full scope only, on the same "bigger blast radius than driving a device
+  // Mullion already manages" reasoning as device.pair and (for the same
+  // destroy-something-permanently shape) sessions.kill/previews.delete:
+  // this drops the row and the id that identifies its systemd scope, with
+  // no undo. A session-scoped caller can still start/stop the device.
+  "device.delete": {
+    scopes: ["full"],
     handler: async ({ app, body, reply }) => {
       const deviceId = extractDeviceId(body);
       if (deviceId === null) {

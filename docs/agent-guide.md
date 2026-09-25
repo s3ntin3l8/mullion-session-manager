@@ -158,8 +158,9 @@ you're working:
   spawn, structured input/output, and it's what's already registered for a
   Claude Code session (`mullion mcp`, auto-wired into `--mcp-config`). Prefer
   this for `get_scrollback`, `list_actions`, `browser_action`, `use_browser`,
-  `promote_to_worktree`, `spawn_child_session`, `list_devices`, and
-  `use_device`/`device_action` — the ops actually reachable at session scope.
+  `promote_to_worktree`, `spawn_child_session`, `list_devices`,
+  `start_device`/`stop_device`, and `use_device`/`device_action` — the ops
+  actually reachable at session scope.
 - **`mullion` CLI** — better when you need to reason about `--json` output
   directly in a shell pipeline, run something interactively (`mullion
 session exec`), or you're not running under an agent with MCP wired up at
@@ -168,11 +169,11 @@ session exec`), or you're not running under an agent with MCP wired up at
 
 **From inside a session, the full-scope-only MCP tools
 (`list_sessions`/`start_dock_session`/`stop_dock_session`/`list_projects`/
-`create_preview`/`delete_preview`) reply with a scope error, same as the
-CLI's own** — they're there for an operator running `mullion mcp` directly
-with `MULLION_AUTH_TOKEN` set, not for you. `get_scrollback` (defaults to
-your own session) and `list_actions` (defaults to your own project) work
-normally at session scope.
+`create_preview`/`delete_preview`/`delete_device`) reply with a scope error,
+same as the CLI's own** — they're there for an operator running `mullion mcp`
+directly with `MULLION_AUTH_TOKEN` set, not for you. `get_scrollback`
+(defaults to your own session) and `list_actions` (defaults to your own
+project) work normally at session scope.
 
 ## Browser automation
 
