@@ -21,5 +21,6 @@ export const SERVER_INFO_FIXTURE: ServerInfo = {
   taskMasterEnabled: false,
   taskMasterEnv: FALLBACK_TASK_MASTER_ENV,
   runtimeEnv: FALLBACK_RUNTIME_ENV,
+  running: { browserMaxInstances: 4, deviceDiscoveryEnabled: true },
   features: { browser: true, devices: true, deviceDiscovery: true },
 };

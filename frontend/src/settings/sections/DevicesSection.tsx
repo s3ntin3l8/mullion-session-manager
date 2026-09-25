@@ -26,6 +26,7 @@ import { Modal } from "../../ui/Modal.js";
 import { CloseIcon, PlusIcon, SearchIcon } from "../../ui/icons.js";
 import { PairDeviceDialog } from "./PairDeviceDialog.js";
 import { useServerInfo } from "../useServerInfo.js";
+import { DeviceDiscoverySetting } from "../RuntimeSettings.js";
 
 // Same allowlist as src/routes/avds.ts's own AVD_NAME_PATTERN — checked
 // client-side too so a bad name fails fast instead of round-tripping to the
@@ -526,6 +527,7 @@ export function DevicesSection() {
           Android devices are turned off on this server. The server administrator can enable them.
         </div>
       )}
+      <DeviceDiscoverySetting />
       <GroupHeading
         title="Android devices"
         desc="Emulators and phones whose screens you can open in a panel."

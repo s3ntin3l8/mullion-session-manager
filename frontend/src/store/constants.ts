@@ -74,6 +74,8 @@ export const FALLBACK_RUNTIME_ENV: ServerInfo["runtimeEnv"] = {
   githubPollStaleThresholdSeconds: 300,
   hostHeartbeatSeconds: 30,
   browserFramerate: 10,
+  browserMaxInstances: 4,
+  deviceDiscoveryEnabled: true,
   logLevel: "info",
 };
 
