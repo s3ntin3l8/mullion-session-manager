@@ -72,6 +72,22 @@ function parseControlMessage(raw: string): ControlMessage | null {
 // the PR description); the wire framing and coordinate math are believed
 // correct from the protocol docs and library types, not confirmed against a
 // running emulator.
+// isSupported probes a throwaway canvas, so it can disagree with the pane's
+// real one — the WebGL constructor still throws if that canvas yields no
+// context or a shader fails to compile. An error thrown from a useEffect
+// isn't caught by the root ErrorBoundary and would unmount the whole
+// dashboard, so fall back to the bitmap renderer (which can't throw here).
+function createRenderer(canvas: HTMLCanvasElement) {
+  if (WebGLVideoFrameRenderer.isSupported) {
+    try {
+      return new WebGLVideoFrameRenderer(canvas);
+    } catch {
+      // fall through to the bitmap renderer
+    }
+  }
+  return new BitmapVideoFrameRenderer(canvas);
+}
+
 export function DevicePane(props: {
   params: DevicePaneParams;
   onTitleChange?: (title: string) => void;
@@ -161,9 +177,7 @@ export function DevicePane(props: {
     // the decoded VideoFrame directly on the GPU; the bitmap renderer does a
     // createImageBitmap copy per frame, so it is only the fallback.
     // enableCapture stays off (faster) — nothing reads canvas pixels back.
-    rendererRef.current ??= WebGLVideoFrameRenderer.isSupported
-      ? new WebGLVideoFrameRenderer(canvas)
-      : new BitmapVideoFrameRenderer(canvas);
+    rendererRef.current ??= createRenderer(canvas);
     const renderer = rendererRef.current;
 
     function createDecoder(): void {

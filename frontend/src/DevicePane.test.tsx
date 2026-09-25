@@ -256,6 +256,16 @@ describe("DevicePane (issue #1326)", () => {
     expect(bitmapCtor).toHaveBeenCalledTimes(1);
   });
 
+  it("falls back to the bitmap renderer, instead of crashing, when the WebGL renderer throws on construction", () => {
+    resetStore({ devices: [makeDevice()], devicesLoaded: true });
+    webglCtor.mockImplementationOnce(() => {
+      throw new Error("WebGL not supported");
+    });
+    render(<DevicePane params={{ deviceId: 7 }} />);
+    expect(webglCtor).toHaveBeenCalledTimes(1);
+    expect(bitmapCtor).toHaveBeenCalledTimes(1);
+  });
+
   it("rebuilds the decoder and reconnects when a write rejects, ignoring the stale socket", async () => {
     resetStore({ devices: [makeDevice()], devicesLoaded: true });
     render(<DevicePane params={{ deviceId: 7 }} />);

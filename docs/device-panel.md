@@ -266,7 +266,7 @@ cached mDNS entry, or `--pairing-address` to type both ports by hand.
 `x`/`y` (and `x1 y1 x2 y2`) are in the device's native **screen pixels** —
 the same space a `screenshot` comes back in, since `tap`/`swipe` run as
 `adb shell input`. This is deliberately _not_ the live stream's video-pixel
-space: the panel's stream is downscaled (see "Stream tuning" below), and
+space: the panel's stream is downscaled (see "Stream tuning" above), and
 `DevicePane.tsx` rescales its own mouse events into that video space before
 sending them over the WebSocket.
 

@@ -19,6 +19,12 @@ import {
   stopDeviceScope,
   touchDeviceMarker,
 } from "./device-process.js";
+import {
+  DEFAULT_DEVICE_EMULATOR_GPU,
+  DEFAULT_DEVICE_VIDEO_BIT_RATE,
+  DEFAULT_DEVICE_VIDEO_MAX_FPS,
+  DEFAULT_DEVICE_VIDEO_MAX_SIZE,
+} from "./device-defaults.js";
 
 // The devices/AVD analogue of PtyManager (pty-manager.ts) — an in-memory
 // live-process map, mirroring that file's "DB row is intent, this map is
@@ -276,7 +282,7 @@ export class Device {
           "-no-window",
           "-no-audio",
           "-gpu",
-          this.manager.emulatorGpu ?? "swiftshader_indirect",
+          this.manager.emulatorGpu ?? DEFAULT_DEVICE_EMULATOR_GPU,
         ],
       });
 
@@ -546,9 +552,9 @@ export class Device {
       video: true,
       audio: false,
       control: true,
-      maxSize: this.manager.videoMaxSize ?? 1280,
-      maxFps: this.manager.videoMaxFps ?? 60,
-      videoBitRate: this.manager.videoBitRate ?? 8_000_000,
+      maxSize: this.manager.videoMaxSize ?? DEFAULT_DEVICE_VIDEO_MAX_SIZE,
+      maxFps: this.manager.videoMaxFps ?? DEFAULT_DEVICE_VIDEO_MAX_FPS,
+      videoBitRate: this.manager.videoBitRate ?? DEFAULT_DEVICE_VIDEO_BIT_RATE,
     });
     this.scrcpyClient = await AdbScrcpyClient.start(
       adb,
