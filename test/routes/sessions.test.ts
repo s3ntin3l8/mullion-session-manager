@@ -1633,6 +1633,60 @@ describe("sessions route", () => {
       return res.json().id as number;
     }
 
+    describe("child spawn cwd containment (issue #1332)", () => {
+      async function spawnChild(
+        app: Awaited<ReturnType<typeof buildApp>>,
+        projectId: number,
+        cwd: string,
+      ) {
+        const parent = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: { projectId, command: "bash" },
+        });
+        return app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: { projectId, command: "bash", cwd, parentSessionId: parent.json().id },
+        });
+      }
+
+      it("allows a child cwd that is a registered sibling worktree of the project's repo", async () => {
+        const app = await buildApp();
+        const cwd = createGitRepo();
+        const projectId = await createProjectWithGitRepo(app, cwd);
+        const sibling = `${cwd}-sibling`;
+        git(cwd, ["worktree", "add", sibling, "-b", "sibling-branch"]);
+
+        const res = await spawnChild(app, projectId, sibling);
+        expect(res.statusCode).toBe(201);
+        expect(res.json().cwd).toBe(sibling);
+
+        fs.rmSync(sibling, { recursive: true, force: true });
+        fs.rmSync(cwd, { recursive: true, force: true });
+        await app.close();
+      });
+
+      it("still rejects an arbitrary outside path, even another git repo or an unregistered sibling", async () => {
+        const app = await buildApp();
+        const cwd = createGitRepo();
+        const projectId = await createProjectWithGitRepo(app, cwd);
+        const foreign = createGitRepo();
+        const unregistered = `${cwd}-unregistered`;
+        fs.mkdirSync(unregistered);
+
+        for (const outside of [foreign, unregistered, os.tmpdir()]) {
+          const res = await spawnChild(app, projectId, outside);
+          expect(res.statusCode).toBe(400);
+        }
+
+        fs.rmSync(foreign, { recursive: true, force: true });
+        fs.rmSync(unregistered, { recursive: true, force: true });
+        fs.rmSync(cwd, { recursive: true, force: true });
+        await app.close();
+      });
+    });
+
     describe("option 1 — launcher worktree toggle", () => {
       it("spawns the session inside a fresh worktree when a worktree intent is given", async () => {
         const app = await buildApp();

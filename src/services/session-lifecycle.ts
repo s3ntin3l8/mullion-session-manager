@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import path from "node:path";
-import { readdirSync, openSync, readSync, closeSync, statSync } from "node:fs";
+import { readdirSync, openSync, readSync, closeSync, statSync, realpathSync } from "node:fs";
 import { and, eq } from "drizzle-orm";
 // Issue #1223 — only used for the `instanceof BetterSqlite3.SqliteError`
 // check below, to detect `sessions_stack_identity_unique`'s violation.
@@ -27,6 +27,7 @@ import {
 } from "./git-worktree.js";
 import { getStoredSettings } from "./settings.js";
 import { resolveBackend } from "./session-backend.js";
+import { listWorktrees } from "./git-refs.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { HostRequestError } from "./remote-host-client.js";
 import { viaRemote } from "./host-git.js";
@@ -696,6 +697,39 @@ export async function discoverCommittedScaffoldOnHost(
   return { skillCommitted: true, reviewerCommitted: true, warnings: [] };
 }
 
+/**
+ * Issue #1332 — the one exception to a child spawn's cwd containment: a
+ * directory that is itself a registered git worktree of the project's own
+ * repository (`git worktree list` run from `project.cwd`, so membership is
+ * decided by git's own registry, never a caller-supplied path). Anything
+ * else — an arbitrary path, an unregistered checkout of the same repo, a
+ * subdirectory *of* a sibling worktree — stays rejected. Symlinks are
+ * resolved on both sides so a link can't masquerade as a listed worktree.
+ * Local hosts only: `listWorktrees` shells out on this machine, so a remote
+ * host's project keeps the strict containment rule.
+ */
+async function isSiblingWorktreeCwd(
+  project: { cwd: string; hostId: string },
+  effectiveCwd: string,
+): Promise<boolean> {
+  if (project.hostId !== LOCAL_HOST_ID) return false;
+  const worktrees = await listWorktrees(project.cwd);
+  if (!worktrees) return false;
+  let target: string;
+  try {
+    target = realpathSync(effectiveCwd);
+  } catch {
+    return false;
+  }
+  return worktrees.some((wt) => {
+    try {
+      return realpathSync(wt.path) === target;
+    } catch {
+      return false;
+    }
+  });
+}
+
 // Shared by POST /api/sessions (the launcher's worktree toggle, option 1),
 // POST /api/sessions/:id/promote (option 2), and POST /api/tasks/:id/claim
 // (Phase 2.5's 2.5.2 — issue #216) — all three ultimately need "insert a
@@ -821,7 +855,9 @@ export async function createSessionRecord(
     const projectRoot = path.resolve(project.cwd);
     const withinProject =
       effectiveCwd === projectRoot || effectiveCwd.startsWith(projectRoot + path.sep);
-    if (!withinProject) return { ok: false, reason: "cwd-outside-project" };
+    if (!withinProject && !(await isSiblingWorktreeCwd(project, effectiveCwd))) {
+      return { ok: false, reason: "cwd-outside-project" };
+    }
   }
 
   // Phase 5 (Track B) — the live-child cap is checked and the row inserted

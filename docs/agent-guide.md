@@ -253,7 +253,9 @@ name a project or your own session id; both are derived automatically. A
 hard cap on how many live children you can have open at once applies
 (ask a human to raise `settings.sessions.maxChildSessionsPerParent` in
 Settings → Sessions if you hit it); `cwd`, if you override it, must stay
-inside the project directory. A spawned child's panel does not open on its
+inside the project directory — or be another registered git worktree of the
+project's own repo (`git worktree list`), e.g. a sibling `repo-pr408` checkout.
+Any other outside path is rejected (400 `cwd-outside-project`). A spawned child's panel does not open on its
 own unless a human has separately turned on "Auto-open child session panels"
 (`settings.sessions.autoOpenChildPanels`, Settings → Sessions, default off) —
 either way, the child always shows in the sidebar.
