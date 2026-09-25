@@ -2,6 +2,7 @@ import { and, eq, inArray, isNotNull, isNull, lt, lte, or } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { projects, sessions, tasks } from "../db/schema.js";
 import type { SessionInfo } from "./pty-manager.js";
+import type { SessionStatus } from "../shared/types.js";
 // createSessionRecord is pure business logic filed under services/
 // (session-lifecycle.ts) precisely so a service can reuse it directly.
 import { createSessionRecord, killSession } from "./session-lifecycle.js";
@@ -663,6 +664,48 @@ function turnFinishedSinceClaim(
 ): boolean {
   if (info === null || info.lastTurnEndedAt === null || task.claimedAt === null) return false;
   return info.lastTurnEndedAt >= task.claimedAt.getTime() - CLOCK_SKEW_TOLERANCE_MS;
+}
+
+// How long a worker's finished turn may sit behind a still-"running"
+// background SHELL job before the reconciler stops waiting on it. Such a job
+// (a `until ...; do sleep 5; done` wait loop the worker started for its own
+// gate run and never stopped — task 441117, issue #1380) holds the session
+// at `derived.status === "background"` forever: nothing re-stamps
+// `backgroundTasksAt` after the final turn, and the stale-latch sweep (busy
+// TTL, default 2h, PLUS a PTY-silence requirement any later redraw breaks)
+// can't beat the claim-anchored budget. Only shell tasks are excused —
+// outstanding agent/MCP work still blocks the handoff (issue #428).
+const SHELL_TAIL_GRACE_MS = 5 * 60_000;
+const SHELL_TAIL_STATUSES: ReadonlySet<SessionStatus> = new Set([
+  "background",
+  "tool_failure",
+  "needs_input",
+]);
+
+/**
+ * True when the worker's turn ended since this claim and the ONLY thing
+ * keeping the session from deriving `finished` is background `shell` tasks
+ * that have outlived `SHELL_TAIL_GRACE_MS` past that turn end. The derived
+ * status must be one a stuck shell tail can present as: `background` itself,
+ * or a higher-precedence status that merely masks it (`tool_failure` after a
+ * failed last gate run, byte-heuristic `needs_input` once the PTY goes
+ * quiet). Every other status (awaiting_*, api_error, compacting, subagent,
+ * exited, ...) is a real, separate reason not to hand off. The
+ * commits-past-base check stays with the existing `checkReviewingGate`.
+ */
+function isShellTailHandoff(
+  derivedStatus: SessionStatus,
+  info: SessionInfo | null,
+  task: { claimedAt: Date | null },
+  now: number,
+): boolean {
+  if (!SHELL_TAIL_STATUSES.has(derivedStatus)) return false;
+  if (info === null || !turnFinishedSinceClaim(info, task)) return false;
+  if (info.lastTurnEndedAt === null || now - info.lastTurnEndedAt < SHELL_TAIL_GRACE_MS) {
+    return false;
+  }
+  const outstanding = info.outstandingBackgroundTasks;
+  return outstanding.length > 0 && outstanding.every((t) => t.type === "shell");
 }
 
 /**
@@ -4347,7 +4390,31 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
           // what its session is currently doing. 0 = unlimited (opt out).
           if (budgetMinutes > 0) {
             const deadline = new Date(task.claimedAt!.getTime() + budgetMinutes * 60_000);
-            if (now > deadline) {
+            // Salvage a worker that already finished: its turn ended since
+            // the claim (cleanly, or behind a stuck background shell job —
+            // see SHELL_TAIL_GRACE_MS) and the branch has commits. Failing
+            // it now would throw away completed work; skip the budget
+            // failure so the normal handoff below moves it to reviewing
+            // (checkReviewingGate re-verifies the commits there).
+            let salvage = false;
+            if (now > deadline && task.status === "in_progress") {
+              const liveInfo = liveMap[String(session.id)];
+              if (liveInfo) {
+                const liveDerived = deriveSessionStatus({
+                  dbStatus: session.status,
+                  info: defaultDeriveStatusInfo(liveInfo),
+                });
+                // The handoff below only fires with Task Master enabled —
+                // salvaging without it would skip the budget failure and
+                // then never hand off, looping the task past its budget.
+                salvage =
+                  resolvedTaskMaster.enabled &&
+                  ((liveDerived.status === "finished" && turnFinishedSinceClaim(liveInfo, task)) ||
+                    isShellTailHandoff(liveDerived.status, liveInfo, task, now.getTime())) &&
+                  (await hasCommitsPastBase(app, project, task));
+              }
+            }
+            if (now > deadline && !salvage) {
               const updated = app.db
                 .update(tasks)
                 .set({
@@ -4442,9 +4509,11 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
           // could ever observe it — the "claimed -> reviewing" direct edge
           // (task-state.ts's transition table) stays legal for the type
           // system but is unreachable via this path now.
+          const shellTail = isShellTailHandoff(derived.status, info, task, now.getTime());
           if (
             task.status === "in_progress" &&
             (derived.status === "finished" ||
+              shellTail ||
               derived.status === "api_error" ||
               // Hermes review (PR #1027, round 2) — the durable
               // lastRateLimitAt column is the only signal that
@@ -4517,7 +4586,7 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
             // "happy" finished task per reconcile tick. The other two
             // branches are the only ones that actually consult the
             // value.
-            if (derived.status !== "finished") {
+            if (derived.status !== "finished" && !shellTail) {
               // In-grace (round 2): the durable lastRateLimitAt is
               // recent. Two sub-cases — the session's `errorState` may
               // still be `api_error` (live) or have been TTL-cleared

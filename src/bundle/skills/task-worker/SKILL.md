@@ -76,3 +76,25 @@ round's self-review pass is scoped to what changed since the last round —
 the fix itself — not a re-audit of the entire diff from the beginning.
 Earlier rounds already got their own pass; re-running the full check every
 time you're re-seeded spends effort without finding anything new.
+
+## Background jobs and scratch files
+
+Your prompt tells you to finish or cancel background jobs before ending your
+turn. The reason is concrete: while any background job is still reported as
+running, this session never counts as finished, so the hand-off to review
+waits on it — and a job that can never exit (a wait loop whose condition
+matches its own command line, or one polling for a marker a failed step never
+wrote) holds the task until its time budget runs out. A task once ran out its
+budget this way with the work fully committed.
+
+- Before your final turn ends, stop every background job you started and
+  confirm none is left running. Don't leave a "wait until the gate finishes"
+  loop behind as a background job.
+- Prefer running the verification gate in the foreground, or capture its exit
+  status in the same command, instead of polling for it from a second job.
+- If you must poll for a process, never match it with a broad command-line
+  pattern (`pgrep -f "make test"`) from a shell whose own command line
+  contains that pattern — it matches itself and never reports "gone".
+- Write logs and other scratch output inside your own worktree (and leave it
+  clean at the end), not to a fixed shared path like `/tmp/gate.log`:
+  concurrent workers on the same host would overwrite each other's files.

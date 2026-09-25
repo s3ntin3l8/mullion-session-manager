@@ -5235,6 +5235,303 @@ describe("reconcileTasks", () => {
       await app.close();
     });
 
+    // Task 441117 / issue #1380 — a worker's final turn ended, but a
+    // background shell job it started (a wait loop that can never exit) was
+    // still reported "running", pinning the session at `background` so the
+    // handoff never fired and the claim-anchored budget failed finished work.
+    describe("background shell tail after a finished turn", () => {
+      const MIN = 60_000;
+      const shellTask = { id: "b1", type: "shell", status: "running", description: "wait loop" };
+
+      function tailInfo(turnEndedAgoMs: number, tasksOutstanding: unknown[]) {
+        return fakeInfo({
+          lastTurnEndedAt: Date.now() - turnEndedAgoMs,
+          outstandingBackgroundTasks: tasksOutstanding,
+        });
+      }
+
+      it("hands off to reviewing once only shell tasks remain past the grace window", async () => {
+        const app = await buildApp();
+        const { taskId } = await createSessionAndTaskWithBase(
+          app,
+          "in_progress",
+          new Date(Date.now() - 30 * MIN),
+        );
+        vi.spyOn(app.pty, "get").mockReturnValue({
+          toInfo: () => tailInfo(10 * MIN, [shellTask]),
+        } as never);
+        mockResolveHostGitStatus.mockResolvedValue(gitStatus("abcdef1", true));
+
+        await reconcileTasks(app);
+
+        expect((await getTask(app, taskId)).status).toBe("reviewing");
+        await app.close();
+      });
+
+      it("keeps waiting while the shell tail is still inside the grace window", async () => {
+        const app = await buildApp();
+        const { taskId } = await createSessionAndTaskWithBase(
+          app,
+          "in_progress",
+          new Date(Date.now() - 30 * MIN),
+        );
+        vi.spyOn(app.pty, "get").mockReturnValue({
+          toInfo: () => tailInfo(1 * MIN, [shellTask]),
+        } as never);
+        mockResolveHostGitStatus.mockResolvedValue(gitStatus("abcdef1", true));
+
+        await reconcileTasks(app);
+
+        expect((await getTask(app, taskId)).status).toBe("in_progress");
+        await app.close();
+      });
+
+      it("still blocks on outstanding non-shell background work (issue #428)", async () => {
+        const app = await buildApp();
+        const { taskId } = await createSessionAndTaskWithBase(
+          app,
+          "in_progress",
+          new Date(Date.now() - 30 * MIN),
+        );
+        const agentTask = { id: "a1", type: "agent", status: "running", description: "sub" };
+        vi.spyOn(app.pty, "get").mockReturnValue({
+          toInfo: () => tailInfo(10 * MIN, [shellTask, agentTask]),
+        } as never);
+        mockResolveHostGitStatus.mockResolvedValue(gitStatus("abcdef1", true));
+
+        await reconcileTasks(app);
+
+        expect((await getTask(app, taskId)).status).toBe("in_progress");
+        await app.close();
+      });
+
+      it("still hands off when a failed last gate run masks the shell tail as tool_failure", async () => {
+        const app = await buildApp();
+        const { taskId } = await createSessionAndTaskWithBase(
+          app,
+          "in_progress",
+          new Date(Date.now() - 30 * MIN),
+        );
+        vi.spyOn(app.pty, "get").mockReturnValue({
+          toInfo: () => ({
+            ...tailInfo(10 * MIN, [shellTask]),
+            errorState: "tool_failure",
+            errorDetail: "make format-check failed",
+          }),
+        } as never);
+        mockResolveHostGitStatus.mockResolvedValue(gitStatus("abcdef1", true));
+
+        await reconcileTasks(app);
+
+        expect((await getTask(app, taskId)).status).toBe("reviewing");
+        await app.close();
+      });
+
+      it("does not hand off while the session is blocked on a human decision", async () => {
+        const app = await buildApp();
+        const { taskId } = await createSessionAndTaskWithBase(
+          app,
+          "in_progress",
+          new Date(Date.now() - 30 * MIN),
+        );
+        vi.spyOn(app.pty, "get").mockReturnValue({
+          toInfo: () => ({ ...tailInfo(10 * MIN, [shellTask]), permissionState: "pending" }),
+        } as never);
+        mockResolveHostGitStatus.mockResolvedValue(gitStatus("abcdef1", true));
+
+        await reconcileTasks(app);
+
+        expect((await getTask(app, taskId)).status).toBe("in_progress");
+        await app.close();
+      });
+
+      it("ignores a shell tail whose turn ended BEFORE this claim (stale latch)", async () => {
+        const app = await buildApp();
+        const { taskId } = await createSessionAndTaskWithBase(
+          app,
+          "in_progress",
+          new Date(Date.now() - 5 * MIN),
+        );
+        vi.spyOn(app.pty, "get").mockReturnValue({
+          toInfo: () => tailInfo(20 * MIN, [shellTask]),
+        } as never);
+        mockResolveHostGitStatus.mockResolvedValue(gitStatus("abcdef1", true));
+
+        await reconcileTasks(app);
+
+        expect((await getTask(app, taskId)).status).toBe("in_progress");
+        await app.close();
+      });
+    });
+
+    describe("budget salvage for a worker that already finished", () => {
+      const TWO_HOURS_AGO = () => new Date(Date.now() - 2 * 60 * 60_000);
+      const shellTask = { id: "b1", type: "shell", status: "running", description: "wait loop" };
+
+      async function withBudget(run: () => Promise<void>) {
+        process.env.MULLION_TASK_BUDGET_MINUTES = "1";
+        try {
+          await run();
+        } finally {
+          process.env.MULLION_TASK_BUDGET_MINUTES = "120";
+        }
+      }
+
+      it("hands a finished worker with commits to reviewing instead of failing it on budget", async () => {
+        await withBudget(async () => {
+          const app = await buildApp();
+          const { taskId } = await createSessionAndTaskWithBase(
+            app,
+            "in_progress",
+            TWO_HOURS_AGO(),
+          );
+          vi.spyOn(app.pty, "get").mockReturnValue({
+            toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
+          } as never);
+          mockResolveHostGitStatus.mockResolvedValue(gitStatus("abcdef1", true));
+
+          await reconcileTasks(app);
+
+          const row = await getTask(app, taskId);
+          expect(row.status).toBe("reviewing");
+          expect(row.failureReason).toBeNull();
+          await app.close();
+        });
+      });
+
+      it("salvages a finished worker stuck behind a background shell job", async () => {
+        await withBudget(async () => {
+          const app = await buildApp();
+          const { taskId } = await createSessionAndTaskWithBase(
+            app,
+            "in_progress",
+            TWO_HOURS_AGO(),
+          );
+          vi.spyOn(app.pty, "get").mockReturnValue({
+            toInfo: () =>
+              fakeInfo({
+                lastTurnEndedAt: Date.now() - 90 * 60_000,
+                outstandingBackgroundTasks: [shellTask],
+              }),
+          } as never);
+          mockResolveHostGitStatus.mockResolvedValue(gitStatus("abcdef1", true));
+
+          await reconcileTasks(app);
+
+          expect((await getTask(app, taskId)).status).toBe("reviewing");
+          await app.close();
+        });
+      });
+
+      it("still fails on budget when Task Master is disabled (no handoff would follow a salvage)", async () => {
+        await withBudget(async () => {
+          const app = await buildApp();
+          try {
+            vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined);
+            await app.inject({
+              method: "PATCH",
+              url: "/api/settings",
+              payload: { taskMaster: { enabled: "off" } },
+            });
+            const { taskId } = await createSessionAndTaskWithBase(
+              app,
+              "in_progress",
+              TWO_HOURS_AGO(),
+            );
+            vi.spyOn(app.pty, "get").mockReturnValue({
+              toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
+            } as never);
+            mockResolveHostGitStatus.mockResolvedValue(gitStatus("abcdef1", true));
+
+            await reconcileTasks(app);
+
+            const row = await getTask(app, taskId);
+            expect(row.status).toBe("failed");
+            expect(row.failureReason).toContain("budget exceeded");
+          } finally {
+            // Settings persist across tests in this file — restore the default.
+            await app.inject({
+              method: "PATCH",
+              url: "/api/settings",
+              payload: { taskMaster: { enabled: "inherit" } },
+            });
+            await app.close();
+          }
+        });
+      });
+
+      it("still fails on budget when the finished worker made no commits", async () => {
+        await withBudget(async () => {
+          const app = await buildApp();
+          vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined);
+          const { taskId } = await createSessionAndTaskWithBase(
+            app,
+            "in_progress",
+            TWO_HOURS_AGO(),
+          );
+          vi.spyOn(app.pty, "get").mockReturnValue({
+            toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
+          } as never);
+          // "0000000" is a prefix of BASE_SHA — HEAD never moved.
+          mockResolveHostGitStatus.mockResolvedValue(gitStatus("0000000", true));
+
+          await reconcileTasks(app);
+
+          const row = await getTask(app, taskId);
+          expect(row.status).toBe("failed");
+          expect(row.failureReason).toContain("budget exceeded");
+          await app.close();
+        });
+      });
+
+      it("still fails on budget when non-shell background work is outstanding", async () => {
+        await withBudget(async () => {
+          const app = await buildApp();
+          vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined);
+          const { taskId } = await createSessionAndTaskWithBase(
+            app,
+            "in_progress",
+            TWO_HOURS_AGO(),
+          );
+          const agentTask = { id: "a1", type: "agent", status: "running", description: "sub" };
+          vi.spyOn(app.pty, "get").mockReturnValue({
+            toInfo: () =>
+              fakeInfo({
+                lastTurnEndedAt: Date.now() - 90 * 60_000,
+                outstandingBackgroundTasks: [shellTask, agentTask],
+              }),
+          } as never);
+          mockResolveHostGitStatus.mockResolvedValue(gitStatus("abcdef1", true));
+
+          await reconcileTasks(app);
+
+          expect((await getTask(app, taskId)).status).toBe("failed");
+          await app.close();
+        });
+      });
+
+      it("still fails on budget when the turn hasn't ended since this claim", async () => {
+        await withBudget(async () => {
+          const app = await buildApp();
+          vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined);
+          const { taskId } = await createSessionAndTaskWithBase(
+            app,
+            "in_progress",
+            TWO_HOURS_AGO(),
+          );
+          vi.spyOn(app.pty, "get").mockReturnValue({
+            toInfo: () => fakeInfo({ activity: "working" }),
+          } as never);
+          mockResolveHostGitStatus.mockResolvedValue(gitStatus("abcdef1", true));
+
+          await reconcileTasks(app);
+
+          expect((await getTask(app, taskId)).status).toBe("failed");
+          await app.close();
+        });
+      });
+    });
+
     it("fails open (advances to reviewing) when the git-status check itself is unresolvable", async () => {
       const app = await buildApp();
       const { taskId } = await createSessionAndTaskWithBase(app, "in_progress");

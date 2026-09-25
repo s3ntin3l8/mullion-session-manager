@@ -1035,8 +1035,16 @@ reviewing`. There is no marker to write, tool to call, or endpoint to hit.
   "Stop talking" and "quit" are indistinguishable from inside the agent and
   as different as possible from outside it.
 - **Drain background jobs before ending the turn.** An outstanding one
-  suppresses the completion signal entirely, so the task rides out its
-  budget instead of reaching review.
+  suppresses the completion signal, so the hand-off to review waits on it.
+  Two backstops keep a stuck job from costing finished work (task 441117,
+  issue #1380): once the worker's turn has ended since the claim and only
+  background **shell** jobs remain, the reconciler stops waiting after
+  `SHELL_TAIL_GRACE_MS` (5 minutes) and runs the normal commits-past-base
+  gate; and a task that hits its time budget while its worker has finished
+  (clean, or behind such a shell tail) with commits on the branch is handed to
+  review instead of failed. Outstanding agent/subagent/MCP background work
+  still blocks the hand-off, and a budget-expired task with no commits, or a
+  worker still mid-turn, still fails.
 - **Review your own diff before committing.** The worker cannot see from
   inside the worktree that its diff goes to a separately spawned reviewer
   (below) that cannot edit files there and draws on a small, never-reset
