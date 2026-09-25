@@ -442,6 +442,13 @@ export interface AppSettings {
   browser: {
     // BROWSER_FRAMERATE. Applied to the next browser stream that opens.
     framerate: number;
+    // BROWSER_MAX_INSTANCES. Read once at boot: a change needs a restart.
+    maxInstances: number;
+  };
+  devices: {
+    // DEVICE_DISCOVERY_ENABLED (mDNS phone discovery). Read once at boot: a
+    // change needs a restart.
+    discoveryEnabled: "inherit" | "on" | "off";
   };
   server: {
     // LOG_LEVEL. Applied live to the root logger.
@@ -569,6 +576,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   },
   browser: {
     framerate: -1,
+    maxInstances: -1,
+  },
+  devices: {
+    discoveryEnabled: "inherit",
   },
   server: {
     logLevel: "inherit",
@@ -982,6 +993,17 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
         min: 1,
         max: 30,
       }),
+      maxInstances: safeSentinelNumber(settings.browser.maxInstances, {
+        sentinel: -1,
+        min: 1,
+        max: 32,
+      }),
+    },
+    devices: {
+      discoveryEnabled:
+        settings.devices.discoveryEnabled === "on" || settings.devices.discoveryEnabled === "off"
+          ? settings.devices.discoveryEnabled
+          : DEFAULT_SETTINGS.devices.discoveryEnabled,
     },
     server: {
       logLevel:

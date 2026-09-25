@@ -99,10 +99,16 @@ export async function serverInfoRoute(app: FastifyInstance) {
       // services/runtime-config.ts), shown as "Server default: N".
       runtimeEnv: runtimeEnvDefaults(app),
       // Host-level feature gates. Read-only: they wire plugins at boot.
+      // What this process booted with for the restart-required settings, so
+      // the UI can flag a saved value that differs.
+      running: {
+        browserMaxInstances: app.bootBrowserMaxInstances,
+        deviceDiscoveryEnabled: app.bootDeviceDiscoveryEnabled,
+      },
       features: {
         browser: app.config.BROWSER_ENABLED,
         devices: app.config.DEVICE_ENABLED,
-        deviceDiscovery: app.config.DEVICE_DISCOVERY_ENABLED,
+        deviceDiscovery: app.bootDeviceDiscoveryEnabled,
       },
     };
   });

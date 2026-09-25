@@ -57,7 +57,13 @@ describe("server-info route", () => {
         githubPollStaleThresholdSeconds: expect.any(Number),
         hostHeartbeatSeconds: expect.any(Number),
         browserFramerate: expect.any(Number),
+        browserMaxInstances: expect.any(Number),
+        deviceDiscoveryEnabled: expect.any(Boolean),
         logLevel: expect.any(String),
+      },
+      running: {
+        browserMaxInstances: expect.any(Number),
+        deviceDiscoveryEnabled: expect.any(Boolean),
       },
       features: { browser: false, devices: false, deviceDiscovery: expect.any(Boolean) },
     });
