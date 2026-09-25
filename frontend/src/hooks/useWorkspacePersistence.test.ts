@@ -500,6 +500,61 @@ describe("useWorkspacePersistence", () => {
     expect(panel.api.close).not.toHaveBeenCalled();
   });
 
+  // The deferred half of that gate: restore may WIN the race against
+  // GET /api/devices (the restore effect runs once per workspace, guarded by
+  // restoredWorkspaceIdRef), so the panels it couldn't classify are parked
+  // and swept by the hook's own devicesLoaded effect — otherwise a restored
+  // panel for a stopped device would outlive the reload, which is the one
+  // thing the restore prune exists to prevent.
+  it("sweeps a parked device panel for a stopped device once the list arrives after restore", () => {
+    devices = [{ id: 7, status: "killed", name: "My Pixel", avdName: "pixel_7" }];
+    devicesLoaded = false;
+    const { api, addPanel } = makeMockApi();
+    const panel = addPanel("device-7", { deviceId: 7 });
+    const workspace = makeWorkspace();
+
+    const { rerender } = renderHook(() =>
+      useWorkspacePersistence({
+        dockviewApi: api,
+        activeWorkspaceId: 1,
+        workspaces: [workspace],
+        layoutTier: "desktop",
+        setPanelsVersion: makeSetPanelsVersion(),
+      }),
+    );
+
+    // Not classified yet — closing here would prune a layout that might be
+    // perfectly fine.
+    expect(panel.api.close).not.toHaveBeenCalled();
+
+    devicesLoaded = true;
+    rerender();
+
+    expect(panel.api.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a parked device panel whose device turns out to still be active", () => {
+    devices = [{ id: 7, status: "active", name: "My Pixel", avdName: "pixel_7" }];
+    devicesLoaded = false;
+    const { api, addPanel } = makeMockApi();
+    const panel = addPanel("device-7", { deviceId: 7 });
+    const workspace = makeWorkspace();
+
+    const { rerender } = renderHook(() =>
+      useWorkspacePersistence({
+        dockviewApi: api,
+        activeWorkspaceId: 1,
+        workspaces: [workspace],
+        layoutTier: "desktop",
+        setPanelsVersion: makeSetPanelsVersion(),
+      }),
+    );
+    devicesLoaded = true;
+    rerender();
+
+    expect(panel.api.close).not.toHaveBeenCalled();
+  });
+
   it("falls back to clearing the grid and logging when fromJSON throws on a corrupt/incompatible layout blob", () => {
     vi.useFakeTimers();
     const { api } = makeMockApi();

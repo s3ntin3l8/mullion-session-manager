@@ -63,11 +63,11 @@ describe("devicesApi", () => {
     );
   });
 
-  it("terminateDevice calls DELETE /api/devices/:id — the irreversible remove", async () => {
+  it("  deleteDevice calls DELETE /api/devices/:id — the irreversible remove", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(204, null));
     vi.stubGlobal("fetch", fetchMock);
 
-    await devicesApi.terminateDevice(1);
+    await devicesApi.deleteDevice(1);
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/devices/1",
       expect.objectContaining({ method: "DELETE" }),

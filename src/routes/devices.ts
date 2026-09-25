@@ -669,16 +669,38 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
     const [row] = app.db.select().from(devices).where(eq(devices.id, id)).all();
     if (!row) return reply.notFound(`No device ${id}`);
 
+    // The "at most one ACTIVE physical row per adb address" guard (#1350)
+    // that POST create, pair-and-connect, and PATCH below all apply — start
+    // is the one write path left that flips a row back to active, so without
+    // this the exact sequence Hermes flagged was possible: stop row A, add
+    // row B at A's address (allowed — only ACTIVE rows are checked), then
+    // Start A. Both rows end up active at one serial, and connectPhysical()
+    // treats AlreadyConnectedError as success, so the loser quietly runs a
+    // competing scrcpy session. Same synchronous check-then-write shape as
+    // PATCH's own copy — no `await` between the select and the update below,
+    // so it can't interleave with another request's.
+    if (row.kind === "physical" && row.serial !== null) {
+      const [owner] = app.db
+        .select({ id: devices.id })
+        .from(devices)
+        .where(
+          and(
+            eq(devices.status, "active"),
+            eq(devices.kind, "physical"),
+            eq(devices.serial, row.serial),
+          ),
+        )
+        .all();
+      if (owner && owner.id !== id) {
+        return reply.conflict(`device ${owner.id} is already active for address ${row.serial}`);
+      }
+    }
+
     // Record intent BEFORE awaiting getOrCreate, same TOCTOU-avoidance
     // ordering DELETE/stop use: a WS connect landing while we're still
     // starting must see an "active" row and attach, not reject on "killed".
     const wasKilled = row.status !== "active";
-    const [updated] = app.db
-      .update(devices)
-      .set({ status: "active" })
-      .where(eq(devices.id, id))
-      .returning()
-      .all();
+    app.db.update(devices).set({ status: "active" }).where(eq(devices.id, id)).run();
 
     try {
       await app.device.getOrCreate({
@@ -703,7 +725,34 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
       return reply.badRequest(err instanceof Error ? err.message : String(err));
     }
 
-    return toListItem(updated, app.device.get(String(id))?.toInfo());
+    // Re-read AFTER the await: getOrCreate() awaits isScopeAlive()/
+    // allocatePort()/connectPhysical(), so a whole DELETE or /stop can land
+    // while this start is in flight — the two endpoints that used to leave a
+    // ghost scope behind a row this handler has just flipped. Both lose
+    // here, deliberately (the later write wins): a scope spawned against a
+    // row that no longer exists has no handle left to ever stop it, and a
+    // scope spawned behind a "killed" row would be invisible state.
+    const [fresh] = app.db.select().from(devices).where(eq(devices.id, id)).all();
+    if (!fresh) {
+      // DELETE won: the row identifying the scope we just made is gone, so
+      // tear the scope down rather than orphan it, then report what the API
+      // now says about this id.
+      await app.device.terminate(String(id), row.kind).catch((err) => {
+        app.log.warn({ err, deviceId: id }, "start: row deleted mid-start; teardown failed");
+      });
+      return reply.notFound(`No device ${id}`);
+    }
+    if (fresh.status !== "active") {
+      // /stop won: roll back what we just brought up so the stopped row the
+      // caller asked for stays stopped (a Stop click racing a Start click is
+      // a normal thing for the sidebar's two buttons to do).
+      await app.device.terminate(String(id), row.kind).catch((err) => {
+        app.log.warn({ err, deviceId: id }, "start: row stopped mid-start; rollback failed");
+      });
+      return reply.conflict("device was stopped while starting");
+    }
+
+    return toListItem(fresh, app.device.get(String(id))?.toInfo());
   });
 
   // Stops a device WITHOUT discarding its row — what `mullion device stop`,

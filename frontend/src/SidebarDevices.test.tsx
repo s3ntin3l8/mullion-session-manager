@@ -21,15 +21,22 @@ describe("SidebarDevices (issue #1326)", () => {
   let devicesDb: Device[];
   let fetchMock: ReturnType<typeof vi.fn>;
   let unexpectedCalls: string[];
+  // Per-row outage switch: a key here makes that row's next start/stop fail
+  // with the mapped message, which is how the per-row error-title test below
+  // gets one row to fail while its neighbour stays healthy.
+  let lifecycleFailures: Map<number, string>;
 
   beforeEach(() => {
     devicesDb = [];
+    lifecycleFailures = new Map();
 
     ({ fetchMock, unexpectedCalls } = mockFetch({
       "GET /api/devices": () => jsonResponse(200, devicesDb),
       "POST /api/devices/:id/stop": ({ params }) => {
         const id = Number(params.id);
         if (!devicesDb.some((d) => d.id === id)) return jsonResponse(404, { message: "not found" });
+        const failure = lifecycleFailures.get(id);
+        if (failure) return jsonResponse(500, { message: failure });
         devicesDb = devicesDb.map((d) =>
           d.id === id ? { ...d, status: "killed", live: null } : d,
         );
@@ -39,6 +46,8 @@ describe("SidebarDevices (issue #1326)", () => {
         const id = Number(params.id);
         const existing = devicesDb.find((d) => d.id === id);
         if (!existing) return jsonResponse(404, { message: "not found" });
+        const failure = lifecycleFailures.get(id);
+        if (failure) return jsonResponse(500, { message: failure });
         devicesDb = devicesDb.map((d) => (d.id === id ? { ...d, status: "active" } : d));
         return jsonResponse(200, { ...existing, status: "active" });
       },
@@ -54,20 +63,19 @@ describe("SidebarDevices (issue #1326)", () => {
     vi.useRealTimers();
   });
 
-  it("renders nothing when there are no active devices", async () => {
+  it("renders nothing when there are no devices", async () => {
     const { container } = render(<SidebarDevices onOpenDevice={vi.fn()} />);
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
     expect(container).toBeEmptyDOMElement();
   });
 
-  // The killed-row regression: GET /api/devices never drops a killed row
-  // (routes/devices.ts's DELETE only flips `status`), so an implementation
-  // that renders `devices` unfiltered would show this device forever.
-  // The stopped-row half of the fix: a killed row is a STOPPED device, and
-  // the sidebar's old active-only filter (whose whole reason to exist was
-  // hiding rows DELETE used to leave behind) made it un-startable from here.
-  // DELETE now removes the row outright, so there is nothing left to hide.
+  // The stopped-row invariant this section is built on: a `status: "killed"`
+  // row IS a stopped device, so it must render — that is exactly what Start
+  // exists for. The section used to filter to active-only, but that filter
+  // only existed to hide rows DELETE left behind; DELETE now removes the row
+  // outright (routes/devices.ts), so there is nothing left to hide — and a
+  // stopped device that didn't show up would be un-startable from here.
   it("renders a stopped (killed) device dimmed, with a Start control and no Stop", async () => {
     devicesDb = [
       {
@@ -301,6 +309,41 @@ describe("SidebarDevices (issue #1326)", () => {
       expect.objectContaining({ method: "POST" }),
     );
     expect(onOpenDevice).not.toHaveBeenCalled();
+  });
+
+  // A sidebar row has no room for an inline error line, so a failed
+  // start/stop rides on the row's `title` instead — which makes the error
+  // per-row data: one shared string would put whichever row failed LAST
+  // into every other row's tooltip until the next lifecycle click.
+  it("shows a failed stop message only on the row it happened to", async () => {
+    const shared = {
+      hostId: "local",
+      projectId: null,
+      kind: "emulator" as const,
+      avdName: "pixel_7",
+      serial: null,
+      status: "active" as const,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      live: null,
+    };
+    devicesDb = [
+      { ...shared, id: 1, name: "Broken Pixel" },
+      { ...shared, id: 2, name: "Healthy Pixel" },
+    ];
+    lifecycleFailures.set(1, "adb refused the connection");
+    const user = userEvent.setup();
+    render(<SidebarDevices onOpenDevice={vi.fn()} />);
+
+    await screen.findByTestId("device-row-1");
+    await user.click(screen.getByTestId("device-stop-1"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("device-row-1").getAttribute("title")).toContain(
+        "adb refused the connection",
+      );
+    });
+    const neighbourTitle = screen.getByTestId("device-row-2").getAttribute("title") ?? "";
+    expect(neighbourTitle).not.toContain("adb refused the connection");
   });
 
   // Keyboard parity for the div-row conversion (role="button" + tabIndex +

@@ -275,9 +275,18 @@ and the id that identifies its systemd scope with no undo. MCP does not expose
 `{action: "screenshot"|"tap"|"swipe"|"text"|"key"|"logcat", ...}`, same shape
 the CLI/MCP surface forwards). Lifecycle: `POST /:id/start` flips a stopped row
 back to `active` and runs `getOrCreate()` so something is actually running
-behind it (404 for a deleted row; the row is reverted if `getOrCreate()`
-throws); `POST /:id/stop` flips the row to `killed` and tears the live
-process/scope down, **keeping the row** — the reversible half; `DELETE /:id`
+behind it. Errors: 400 when `getOrCreate()` throws (a stopped row is reverted
+to `killed` so it is never left "active" with nothing behind it), 409 when
+another **active** physical row already owns this row's address — the same
+one-active-row-per-adb-address guard create, pair-and-connect and PATCH apply
+(issue #1350) — and 404 for a row that no longer exists. Start also re-reads
+the row after `getOrCreate()` resolves, because that call awaits and a whole
+`DELETE` or `/stop` can land while it is in flight: the later write wins, and
+the scope that was just made is torn back down with it (404 for the deleted
+row, 409 "device was stopped while starting" for the stopped one), so neither
+race can leave a scope running where no control can reach it. `POST /:id/stop`
+flips the row to `killed` and tears the live process/scope down, **keeping
+the row** — the reversible half; `DELETE /:id`
 is the irreversible one, tearing the live thing down first and then **removing
 the row** (two-phase: if teardown throws it returns 500 and keeps the row,
 marked `killed`, so the deletion never reports success for something still

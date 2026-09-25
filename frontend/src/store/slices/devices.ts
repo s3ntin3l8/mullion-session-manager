@@ -74,8 +74,8 @@ export const createDevicesSlice: StateCreator<DashboardState, [], [], DevicesSli
       refreshAfterMutation();
     },
 
-    terminateDevice: async (id) => {
-      await api.terminateDevice(id);
+    deleteDevice: async (id) => {
+      await api.deleteDevice(id);
       refreshAfterMutation();
     },
 

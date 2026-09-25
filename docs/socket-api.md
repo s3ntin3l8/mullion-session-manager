@@ -541,7 +541,13 @@ different from every other op above — its **three-tier scope story**.
 - **`device.start`** — `body.deviceId`; flips a stopped row back to `active`
   and makes sure something is actually running behind it (spawn/reconnect/
   reattach, all inside `getOrCreate`). Returns the refreshed row. A 404 for a
-  deleted row, a 400 when devices are disabled.
+  deleted row, a 400 when devices are disabled, a 409 when another **active**
+  physical row already owns this device's adb address (the same
+  one-active-row-per-address guard REST applies, issue #1350). Start re-reads
+  the row after `getOrCreate()` resolves, so a `DELETE` or `device.terminate`
+  landing during that await wins and the scope it just made is torn back down
+  with it: 404 for the deleted row, 409 ("device was stopped while starting")
+  for the stopped one.
 - **`device.terminate`** — `body.deviceId`; stops the device but **keeps its
   row**, which flips to `killed` (rendered as `stopped` everywhere). The
   reversible half of the lifecycle — the row stays listed so it can be

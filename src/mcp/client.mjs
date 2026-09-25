@@ -268,7 +268,10 @@ export class MullionClient {
   // historical — see control-socket.ts's own device.terminate comment for
   // why it wasn't renamed when `mullion device stop` stopped being a delete.
   // This is the client method the `stop_device` MCP tool calls; `start`/
-  // `delete` below are named for their op.
+  // `delete` below are named for their op. NB the frontend's own
+  // `devicesApi.deleteDevice` is the irreversible DELETE — this method is
+  // NOT that, despite the shared verb, which is why that one was renamed
+  // rather than this (the published wire op can't move).
   terminateDevice(deviceId) {
     return this.controlRequest("device.terminate", { deviceId });
   }

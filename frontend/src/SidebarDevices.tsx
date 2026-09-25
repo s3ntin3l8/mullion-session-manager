@@ -39,8 +39,12 @@ export function SidebarDevices({ onOpenDevice }: { onOpenDevice: (device: Device
   // No inline error slot in this section (DevicesSection has one under its
   // table; a sidebar row has nowhere to put a second line without shifting
   // the whole column) — so the failure rides on the row's `title` instead,
-  // next to the device's own live error.
-  const [lifecycleError, setLifecycleError] = useState<string | null>(null);
+  // next to the device's own live error. Keyed BY ROW: this is read inside
+  // the per-row title below, so a plain string would put whichever row
+  // failed LAST into every other row's tooltip until the next click.
+  const [lifecycleError, setLifecycleError] = useState<{ id: number; message: string } | null>(
+    null,
+  );
 
   // Poll unconditionally, even with zero devices — there is no
   // device event in the event stream (store/slices/events.ts carries none),
@@ -72,7 +76,10 @@ export function SidebarDevices({ onOpenDevice }: { onOpenDevice: (device: Device
       if (kind === "start") await startDevice(device.id);
       else await stopDevice(device.id);
     } catch (err) {
-      setLifecycleError(err instanceof Error ? err.message : String(err));
+      setLifecycleError({
+        id: device.id,
+        message: err instanceof Error ? err.message : String(err),
+      });
     } finally {
       setPendingId(null);
     }
@@ -87,7 +94,7 @@ export function SidebarDevices({ onOpenDevice }: { onOpenDevice: (device: Device
         const stopped = device.status === "killed";
         const label = device.name || device.avdName || device.serial;
         const title =
-          lifecycleError ??
+          (lifecycleError?.id === device.id ? lifecycleError.message : undefined) ??
           (stopped ? "Stopped — click to start" : (device.live?.error ?? undefined));
         return (
           // role/tabIndex/Enter-Space + `e.target !== e.currentTarget`, same

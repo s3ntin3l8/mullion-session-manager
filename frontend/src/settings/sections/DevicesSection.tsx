@@ -131,7 +131,7 @@ export function DevicesSection() {
   const createDevice = useDashboardStore((s) => s.createDevice);
   const startDevice = useDashboardStore((s) => s.startDevice);
   const stopDevice = useDashboardStore((s) => s.stopDevice);
-  const terminateDevice = useDashboardStore((s) => s.terminateDevice);
+  const deleteDevice = useDashboardStore((s) => s.deleteDevice);
   const updateDeviceAddress = useDashboardStore((s) => s.updateDeviceAddress);
 
   // Distinguishes "not loaded yet" from "loaded and genuinely empty" — the
@@ -507,7 +507,7 @@ export function DevicesSection() {
   const remove = (device: Device) => {
     setDeleteError(null);
     setDeleting((prev) => ({ ...prev, [device.id]: true }));
-    terminateDevice(device.id)
+    deleteDevice(device.id)
       .catch((err: unknown) => {
         setDeleteError(err instanceof ApiError ? err.message : "Could not delete this device");
       })

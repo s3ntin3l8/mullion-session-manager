@@ -453,7 +453,7 @@ export interface DevicesSlice {
   // Android device panel rows (issue #1326) — host-global like Host above,
   // fetched independently of projects/sessions. Unfiltered: a stopped row
   // (`status: "killed"`) is still a real device you can start again, so it
-  // stays listed — only terminateDevice removes a row, and then it's gone
+  // stays listed — only deleteDevice removes a row, and then it's gone
   // from every surface. Consumers filter as their own surface requires.
   devices: Device[];
   // True once the first refreshDevices() has resolved. `devices` starting
@@ -478,10 +478,10 @@ export interface DevicesSlice {
   stopDevice: (id: number) => Promise<void>;
   // Tears the device down AND removes its row (DELETE /api/devices/:id) —
   // irreversible, hence its own verb rather than an option on stopDevice.
-  terminateDevice: (id: number) => Promise<void>;
+  deleteDevice: (id: number) => Promise<void>;
   // Edits a physical device's stored adb address in place (issue #1347) —
   // reconnects against the new address without losing the row's id/name/
-  // history, unlike terminateDevice+createDevice. A stopped row's edit is
+  // history, unlike deleteDevice+createDevice. A stopped row's edit is
   // persisted only (no implicit start).
   updateDeviceAddress: (id: number, address: string) => Promise<Device>;
 }
