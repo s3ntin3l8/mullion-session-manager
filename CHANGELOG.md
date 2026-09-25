@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.3.30](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.29...v0.3.30) (2026-09-25)
+
+
+### Features
+
+* allow spawn_child_session to target a sibling git worktree ([019d1af](https://github.com/s3ntin3l8/mullion-session-manager/commit/019d1af02efd72a0c49400471e5517c2475abfa6))
+* auto-reconnect prompt when mDNS rediscovers a known device ([#1411](https://github.com/s3ntin3l8/mullion-session-manager/issues/1411)) ([2ab1155](https://github.com/s3ntin3l8/mullion-session-manager/commit/2ab1155d9f80c6b7698e073a3a5de631e476c5da))
+* backend mDNS device discovery + atomic pair-and-connect ([#1378](https://github.com/s3ntin3l8/mullion-session-manager/issues/1378)) ([#1381](https://github.com/s3ntin3l8/mullion-session-manager/issues/1381)) ([5afbfe0](https://github.com/s3ntin3l8/mullion-session-manager/commit/5afbfe05a1729b06bf49ecc0d2c4aab454149cdc))
+* **devices:** hard-delete rows on DELETE and add start/stop lifecycle controls ([da53683](https://github.com/s3ntin3l8/mullion-session-manager/commit/da53683252bdcb5597eb1db1452742e4dd877c33))
+* extend model selection to Claude Code, Codex, and agy adapters ([ac14985](https://github.com/s3ntin3l8/mullion-session-manager/commit/ac149858dede1ac5ecf77297012e301dfde4289b))
+* filter available system images by variant/API/search and stack package path on its own row ([#1386](https://github.com/s3ntin3l8/mullion-session-manager/issues/1386)) ([42db97d](https://github.com/s3ntin3l8/mullion-session-manager/commit/42db97d6884a8b641399872d2575fc0468f076ca))
+* frontend PairDeviceDialog + auto-discovery UI ([#1379](https://github.com/s3ntin3l8/mullion-session-manager/issues/1379)) ([#1383](https://github.com/s3ntin3l8/mullion-session-manager/issues/1383)) ([29045c2](https://github.com/s3ntin3l8/mullion-session-manager/commit/29045c2a7767ac0e05226746a7d49174fbb6cf1f))
+* mobile key bar with sticky Ctrl, paste, copy view and in-bar mic ([#1396](https://github.com/s3ntin3l8/mullion-session-manager/issues/1396)) ([491a4bf](https://github.com/s3ntin3l8/mullion-session-manager/commit/491a4bfc1a3a63fb7bd5ebf6127b15733251a45f))
+* phone session switcher replaces the mobile tab strip ([#1394](https://github.com/s3ntin3l8/mullion-session-manager/issues/1394)) ([ad48594](https://github.com/s3ntin3l8/mullion-session-manager/commit/ad48594e9737a8ec92dbc08b1df60b6096a0c0ba))
+* restart-required settings for boot-time env knobs (browser pool size, device discovery) ([53b336d](https://github.com/s3ntin3l8/mullion-session-manager/commit/53b336de3660b58ebe96fe986a23b0ca5308c3c9))
+* **settings:** make polling, frame rate and log level configurable in the UI ([#1393](https://github.com/s3ntin3l8/mullion-session-manager/issues/1393)) ([e242f0b](https://github.com/s3ntin3l8/mullion-session-manager/commit/e242f0bcb6ae7d141cf991840070fe4be4a33509))
+* **settings:** regroup settings into categorized sections ([#1390](https://github.com/s3ntin3l8/mullion-session-manager/issues/1390)) ([577108a](https://github.com/s3ntin3l8/mullion-session-manager/commit/577108a2f2d218f74b5f7db19c1e91bb3a0a3a17))
+
+
+### Bug Fixes
+
+* add containment barriers for CodeQL path-injection alerts ([#1397](https://github.com/s3ntin3l8/mullion-session-manager/issues/1397)) ([d279be9](https://github.com/s3ntin3l8/mullion-session-manager/commit/d279be9f3724b720b84a5c1a47942e6f45909461))
+* **devices:** do not block AVD startup on systemd-run foreground exit ([#1404](https://github.com/s3ntin3l8/mullion-session-manager/issues/1404)) ([f365612](https://github.com/s3ntin3l8/mullion-session-manager/commit/f3656125f6f4f4cf86145cc9dbe245061583551c))
+* **devices:** fail cleanly when DEVICE_SCRCPY_SERVER_PATH is unset ([#1410](https://github.com/s3ntin3l8/mullion-session-manager/issues/1410)) ([21c84f3](https://github.com/s3ntin3l8/mullion-session-manager/commit/21c84f3f64620347529f5544341ce766fbd9ef32))
+* KebabMenu and PaneActionsMenu stay at a stale position on a window resize ([129fbc3](https://github.com/s3ntin3l8/mullion-session-manager/commit/129fbc3b7e27500df4e957beb869a27fd2976d05))
+* keep toolbar dropdowns anchored when the iOS visual viewport pans ([#1401](https://github.com/s3ntin3l8/mullion-session-manager/issues/1401)) ([ad6717d](https://github.com/s3ntin3l8/mullion-session-manager/commit/ad6717d2b5f74fc91615efb3f0a596f15cfe68b3)), closes [#1399](https://github.com/s3ntin3l8/mullion-session-manager/issues/1399)
+* mobile layout overflow pushing the UI sideways and breaking tab scroll ([#1389](https://github.com/s3ntin3l8/mullion-session-manager/issues/1389)) ([189015f](https://github.com/s3ntin3l8/mullion-session-manager/commit/189015f8da8410dfa67cbfd1d24e31547381f3a7))
+* **mobile:** pin app shell top to the panned iOS visual viewport ([#1387](https://github.com/s3ntin3l8/mullion-session-manager/issues/1387)) ([#1398](https://github.com/s3ntin3l8/mullion-session-manager/issues/1398)) ([7dd5e92](https://github.com/s3ntin3l8/mullion-session-manager/commit/7dd5e925dc37f4753402cea3bedc2c87795d0baa))
+* **tasks:** hand off finished workers stuck behind a background shell job ([#1413](https://github.com/s3ntin3l8/mullion-session-manager/issues/1413)) ([6877e86](https://github.com/s3ntin3l8/mullion-session-manager/commit/6877e86c2583a927548a9f06611ae69f39545ed9))
+
 ## [0.3.29](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.28...v0.3.29) (2026-09-23)
 
 
