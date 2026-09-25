@@ -275,8 +275,11 @@ and the id that identifies its systemd scope with no undo. MCP does not expose
 `{action: "screenshot"|"tap"|"swipe"|"text"|"key"|"logcat", ...}`, same shape
 the CLI/MCP surface forwards). Lifecycle: `POST /:id/start` flips a stopped row
 back to `active` and runs `getOrCreate()` so something is actually running
-behind it. Errors: 400 when `getOrCreate()` throws (a stopped row is reverted
-to `killed` so it is never left "active" with nothing behind it), 409 when
+behind it. Errors: 400 when `getOrCreate()` throws — synchronously, so a
+stopped row is reverted to `killed` and never left "active" with nothing
+behind it; a physical row's adb connect failure is fire-and-forget inside
+`getOrCreate()`, so like a physical `POST /api/devices` it surfaces on the
+device's own live error instead of as a 400 here — 409 when
 another **active** physical row already owns this row's address — the same
 one-active-row-per-adb-address guard create, pair-and-connect and PATCH apply
 (issue #1350) — and 404 for a row that no longer exists. Start also re-reads

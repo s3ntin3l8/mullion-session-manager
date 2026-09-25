@@ -719,6 +719,15 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
       // that were stopped get their status reverted: a row that was already
       // active keeps POST's own create-path posture (its live status/error
       // reports the failure from here on).
+      //
+      // Deliberately covers only the SYNCHRONOUS half. A physical row's
+      // connect failure never lands here: getOrCreate() resolves as soon as
+      // it has kicked connectPhysical() off (fire-and-forget, see
+      // device-manager.ts), so a wasKilled physical row ends up "active"
+      // with the error on its live state instead of reverting — exactly the
+      // posture POST /api/devices already has for a physical create (see its
+      // own comment), so the two agree rather than start/stop behaving
+      // differently from create for the same phone.
       if (wasKilled) {
         app.db.update(devices).set({ status: "killed" }).where(eq(devices.id, id)).run();
       }
@@ -726,12 +735,13 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
     }
 
     // Re-read AFTER the await: getOrCreate() awaits isScopeAlive()/
-    // allocatePort()/connectPhysical(), so a whole DELETE or /stop can land
-    // while this start is in flight — the two endpoints that used to leave a
-    // ghost scope behind a row this handler has just flipped. Both lose
-    // here, deliberately (the later write wins): a scope spawned against a
-    // row that no longer exists has no handle left to ever stop it, and a
-    // scope spawned behind a "killed" row would be invisible state.
+    // allocatePort() before it resolves (an emulator row additionally kicks
+    // spawn() off), and that window is enough for a whole DELETE or /stop to
+    // land — the two endpoints that used to leave a ghost scope behind a row
+    // this handler has just flipped. Both lose here, deliberately (the later
+    // write wins): a scope spawned against a row that no longer exists has
+    // no handle left to ever stop it, and a scope spawned behind a "killed"
+    // row would be invisible state.
     const [fresh] = app.db.select().from(devices).where(eq(devices.id, id)).all();
     if (!fresh) {
       // DELETE won: the row identifying the scope we just made is gone, so
