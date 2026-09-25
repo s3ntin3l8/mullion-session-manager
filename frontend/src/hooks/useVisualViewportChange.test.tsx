@@ -42,6 +42,18 @@ describe("useVisualViewportChange", () => {
     expect(onChange).toHaveBeenCalledTimes(2);
   });
 
+  it("fires on a window resize, even without a visualViewport", async () => {
+    const onChange = vi.fn();
+    render(<Harness active onChange={onChange} />);
+
+    await act(async () => {
+      window.dispatchEvent(new Event("resize"));
+      window.dispatchEvent(new Event("resize"));
+      await flushRaf();
+    });
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
   it("does not subscribe while inactive", async () => {
     const vv = installFakeVisualViewport();
     const onChange = vi.fn();

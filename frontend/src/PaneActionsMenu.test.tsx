@@ -681,6 +681,28 @@ describe("PaneActionsMenu — visual-viewport pan (issue #1399)", () => {
     }
   });
 
+  it("re-anchors the open menu on a window resize", async () => {
+    const restore = stubMenuRect();
+    try {
+      const trigger = renderMenu();
+      let triggerTop = 10;
+      trigger.getBoundingClientRect = () =>
+        ({ top: triggerTop, bottom: triggerTop + 20, left: 300, right: 344 }) as DOMRect;
+      await userEvent.setup().click(trigger);
+      const menu = screen.getByRole("menu");
+      expect(menu.style.top).toBe("34px");
+
+      triggerTop = 150;
+      await act(async () => {
+        window.dispatchEvent(new Event("resize"));
+        await flushRaf();
+      });
+      expect(menu.style.top).toBe("174px");
+    } finally {
+      restore();
+    }
+  });
+
   it("re-applies the viewport-bottom flip after a reposition", async () => {
     const vv = installFakeVisualViewport();
     const restore = stubMenuRect();

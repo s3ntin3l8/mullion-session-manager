@@ -9,7 +9,7 @@ import { useEffect, useRef } from "react";
 // away. Calls `onChange` (rAF-coalesced, same as useVisualViewportInset's own
 // update — `resize`/`scroll` fire in a tight burst while the keyboard
 // animates) on every visual-viewport `resize`/`scroll` while `active`, so a
-// menu can re-read its trigger's rect.
+// menu can re-read its trigger's rect. Also fires on a window `resize`.
 //
 // Ordering: useVisualViewportInset is mounted once at App level, so its
 // listeners are registered before any menu's — its rAF is queued first in
@@ -28,7 +28,6 @@ export function useVisualViewportChange(active: boolean, onChange: () => void): 
   useEffect(() => {
     if (!active) return;
     const vv = window.visualViewport;
-    if (!vv) return;
 
     let raf = 0;
     const update = () => {
@@ -36,12 +35,18 @@ export function useVisualViewportChange(active: boolean, onChange: () => void): 
       raf = requestAnimationFrame(() => onChangeRef.current());
     };
 
-    vv.addEventListener("resize", update);
-    vv.addEventListener("scroll", update);
+    // A window `resize` (desktop window/devtools resize, orientation change,
+    // crossing the toolbar's max-width:699px breakpoint) moves the trigger
+    // without any visual-viewport event on browsers lacking one, and the
+    // visual viewport doesn't always fire alongside it.
+    window.addEventListener("resize", update);
+    vv?.addEventListener("resize", update);
+    vv?.addEventListener("scroll", update);
     return () => {
       cancelAnimationFrame(raf);
-      vv.removeEventListener("resize", update);
-      vv.removeEventListener("scroll", update);
+      window.removeEventListener("resize", update);
+      vv?.removeEventListener("resize", update);
+      vv?.removeEventListener("scroll", update);
     };
   }, [active]);
 }
