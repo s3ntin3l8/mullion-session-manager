@@ -776,6 +776,132 @@ describe("Settings -> Devices (issue #1326)", () => {
     );
   });
 
+  // Issue #1380 — mDNS rediscovery of a known phone on a rotated port.
+  const physicalRow = (over: Partial<Device> = {}): Device => ({
+    id: 1,
+    hostId: "local",
+    projectId: null,
+    name: "My Pixel",
+    kind: "physical",
+    avdName: null,
+    serial: "192.168.1.23:37251",
+    status: "active",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    live: null,
+    ...over,
+  });
+
+  it("offers an inline reconnect when a known phone is rediscovered on a new port, and PATCHes the row", async () => {
+    devicesDb = [physicalRow()];
+    discoveredDb = [
+      {
+        id: "192.168.1.23",
+        name: "Pixel 7",
+        host: "192.168.1.23",
+        connectAddress: "192.168.1.23:40111",
+        discoveredAt: "2026-01-01T00:00:00.000Z",
+      },
+    ];
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    const prompt = await screen.findByTestId("reconnect-prompt-1");
+    await user.click(within(prompt).getByRole("button", { name: "Reconnect to My Pixel?" }));
+
+    await waitFor(() => {
+      expect(useDashboardStore.getState().devices[0]?.serial).toBe("192.168.1.23:40111");
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/devices/1",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ address: "192.168.1.23:40111" }),
+      }),
+    );
+    // Row now matches the advertised address → prompt goes away.
+    await waitFor(() => expect(screen.queryByTestId("reconnect-prompt-1")).not.toBeInTheDocument());
+  });
+
+  it("shows no reconnect prompt when the stored address is still advertised", async () => {
+    devicesDb = [physicalRow()];
+    discoveredDb = [
+      {
+        id: "192.168.1.23",
+        name: "Pixel 7",
+        host: "192.168.1.23",
+        connectAddress: "192.168.1.23:37251",
+        discoveredAt: "2026-01-01T00:00:00.000Z",
+      },
+    ];
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+    await screen.findByTestId("device-row-1");
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith("/api/devices/discovered", expect.anything()),
+    );
+    expect(screen.queryByTestId("reconnect-prompt-1")).not.toBeInTheDocument();
+  });
+
+  it("asks which phone to reconnect to when several candidates match", async () => {
+    devicesDb = [physicalRow()];
+    discoveredDb = [
+      {
+        id: "a",
+        name: "Pixel 7",
+        host: "192.168.1.23",
+        connectAddress: "192.168.1.23:40111",
+        discoveredAt: "2026-01-01T00:00:00.000Z",
+      },
+      {
+        id: "b",
+        name: "Pixel 8",
+        host: "192.168.1.23",
+        connectAddress: "192.168.1.23:40222",
+        discoveredAt: "2026-01-01T00:00:00.000Z",
+      },
+    ];
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    const prompt = await screen.findByTestId("reconnect-prompt-1");
+    expect(within(prompt).getByText(/pick the phone to reconnect to/)).toBeInTheDocument();
+    expect(
+      within(prompt).getByRole("button", { name: "Reconnect to Pixel 7 (192.168.1.23:40111)" }),
+    ).toBeInTheDocument();
+    expect(
+      within(prompt).getByRole("button", { name: "Reconnect to Pixel 8 (192.168.1.23:40222)" }),
+    ).toBeInTheDocument();
+  });
+
+  it("surfaces a failed reconnect inline", async () => {
+    devicesDb = [physicalRow()];
+    discoveredDb = [
+      {
+        id: "a",
+        name: "Pixel 7",
+        host: "192.168.1.23",
+        connectAddress: "192.168.1.23:40111",
+        discoveredAt: "2026-01-01T00:00:00.000Z",
+      },
+    ];
+    vi.spyOn(api, "updateDeviceAddress").mockRejectedValue(new Error("boom"));
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    const prompt = await screen.findByTestId("reconnect-prompt-1");
+    await user.click(within(prompt).getByRole("button", { name: /Reconnect to/ }));
+    expect(await screen.findByText("Could not reconnect this device")).toBeInTheDocument();
+  });
+
+  it("does not scan for reconnects when discovery is disabled", async () => {
+    vi.spyOn(api, "getServerInfo").mockResolvedValue({
+      ...SERVER_INFO_FIXTURE,
+      features: { ...SERVER_INFO_FIXTURE.features, deviceDiscovery: false },
+    });
+    devicesDb = [physicalRow()];
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+    await screen.findByTestId("device-row-1");
+    expect(fetchMock).not.toHaveBeenCalledWith("/api/devices/discovered", expect.anything());
+  });
+
   it("an emulator device row shows no 'Edit address' button", async () => {
     devicesDb = [
       {

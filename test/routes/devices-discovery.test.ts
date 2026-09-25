@@ -151,6 +151,42 @@ describe("devices discovery + pair-and-connect routes", () => {
     });
   });
 
+  // Issue #1380 — the reconnect prompt is frontend-only; its data path is
+  // "discovery snapshot host matches a stored physical row" + the existing
+  // PATCH /api/devices/:id. This pins that the two backend halves line up.
+  describe("rediscovered known device (issue #1380)", () => {
+    it("a discovered host matching a physical row's host is reconnectable via PATCH with the rediscovered address", async () => {
+      const app = await buildTestApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/devices",
+        payload: { kind: "physical", address: "192.168.1.23:37251", name: "My Pixel" },
+      });
+      const row = created.json();
+      vi.spyOn(app.device, "terminate").mockResolvedValue(undefined);
+
+      seedDiscovery(app, { name: "Pixel 7", host: "192.168.1.23", connectPort: 40111 });
+      const discovered = (
+        await app.inject({ method: "GET", url: "/api/devices/discovered" })
+      ).json() as Array<{ host: string; connectAddress?: string }>;
+      const match = discovered.find((d) => row.serial.startsWith(`${d.host}:`));
+      expect(match?.connectAddress).toBe("192.168.1.23:40111");
+      expect(match?.connectAddress).not.toBe(row.serial);
+
+      const res = await app.inject({
+        method: "PATCH",
+        url: `/api/devices/${row.id}`,
+        payload: { address: match?.connectAddress },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({
+        id: row.id,
+        name: "My Pixel",
+        serial: "192.168.1.23:40111",
+      });
+    });
+  });
+
   describe("POST /api/devices/pair-and-connect", () => {
     it("rejects when DEVICE_ENABLED is off", async () => {
       delete process.env.DEVICE_ENABLED;
