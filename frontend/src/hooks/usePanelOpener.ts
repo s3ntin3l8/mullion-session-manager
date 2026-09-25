@@ -156,7 +156,8 @@ export interface UsePanelOpenerResult {
   // (SidebarDevices.tsx). Host-global like onOpenBlankBrowser above (no
   // projectId), but open-or-focus-by-id like onOpenSession/onOpenGitHub/etc
   // rather than always-fresh — see openDevicePanel's own comment in
-  // panelUtils.ts.
+  // panelUtils.ts. Also starts a stopped device on the way in; see the
+  // implementation below.
   onOpenDevice: (device: Device) => void;
 }
 
@@ -384,6 +385,24 @@ export function usePanelOpener({
     (device: Device) => {
       if (!dockviewApi) return;
       leaveTaskView();
+      // Opening a STOPPED device (status "killed") is deliberate — the row
+      // is visibly dimmed wherever it's listed — and a panel with no
+      // process behind it is a dead end (the WS route 404s, DevicePane
+      // lands on its disconnected overlay). So start it FIRST, but
+      // fire-and-forget: the start can take seconds (an emulator spawn is
+      // awaited server-side), and blocking the panel open on that round
+      // trip would read as a hung click. The pane shows its own
+      // Connecting… meanwhile, and on failure falls through to its
+      // "Start device" affordance — no surprise start on layout restore,
+      // which useWorkspacePersistence's prune handles separately (a
+      // persisted panel for a stopped device is closed, not silently
+      // booted).
+      if (device.status === "killed") {
+        void useDashboardStore
+          .getState()
+          .startDevice(device.id)
+          .catch(() => {});
+      }
       openDevicePanel(dockviewApi, device, layout);
       setSidebarOpen(false);
     },

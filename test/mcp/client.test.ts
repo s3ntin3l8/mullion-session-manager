@@ -863,7 +863,34 @@ describe("MullionClient (issue #271)", () => {
         expect(result).toEqual({ id: 1 });
       });
 
-      it("terminateDevice calls device.terminate with deviceId", async () => {
+      it("startDevice calls device.start with deviceId", async () => {
+        const socketPath = await startControlServer((msg, socket) => {
+          expect(msg.op).toBe("device.start");
+          expect(msg.body).toEqual({ deviceId: "1" });
+          socket.write(
+            `${JSON.stringify({ id: msg.id, ok: true, status: 200, result: { id: 1, status: "active" } })}\n`,
+          );
+        });
+        const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+        const result = await client.startDevice("1");
+        expect(result).toEqual({ id: 1, status: "active" });
+      });
+
+      it("deleteDevice calls device.delete with deviceId", async () => {
+        const socketPath = await startControlServer((msg, socket) => {
+          expect(msg.op).toBe("device.delete");
+          expect(msg.body).toEqual({ deviceId: "1" });
+          socket.write(`${JSON.stringify({ id: msg.id, ok: true, status: 204 })}\n`);
+        });
+        const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+        await client.deleteDevice("1");
+      });
+
+      // `device.terminate` still names the op, but control-socket.ts now
+      // dispatches it to POST /:id/stop (reversible, row kept) — see the
+      // method's own doc comment in src/mcp/client.mjs. `stop_device` is
+      // the MCP tool name; this stays the only client method for it.
+      it("terminateDevice calls device.terminate with deviceId (the stop path)", async () => {
         const socketPath = await startControlServer((msg, socket) => {
           expect(msg.op).toBe("device.terminate");
           expect(msg.body).toEqual({ deviceId: "1" });

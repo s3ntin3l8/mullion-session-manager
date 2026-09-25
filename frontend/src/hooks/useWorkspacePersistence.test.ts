@@ -23,9 +23,19 @@ let sessions: Array<{
 // which reads `projects` off the store the same way TerminalPanelWrapper's
 // own onTitleChange already did. Real usage.
 let projects: Array<{ id: number; name: string | null }> = [];
+// Device panels are pruned against this list after a restore (see the
+// `devicesLoaded` gate in useWorkspacePersistence.ts) — an EMPTY list with
+// `devicesLoaded: true` means "the server says this device is gone".
+let devices: Array<{
+  id: number;
+  status: string;
+  name?: string | null;
+  avdName?: string | null;
+}> = [];
+let devicesLoaded = false;
 
 function storeState() {
-  return { sessions, projects, saveWorkspaceLayout };
+  return { sessions, projects, devices, devicesLoaded, saveWorkspaceLayout };
 }
 
 vi.mock("../store/index.js", () => {
@@ -116,6 +126,8 @@ function makeSetPanelsVersion() {
 beforeEach(() => {
   sessions = [];
   projects = [];
+  devices = [];
+  devicesLoaded = false;
   saveWorkspaceLayout.mockClear();
 });
 
@@ -398,6 +410,94 @@ describe("useWorkspacePersistence", () => {
     vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS);
     expect(saveWorkspaceLayout).toHaveBeenCalledTimes(1);
     expect(saveWorkspaceLayout).toHaveBeenCalledWith(1, { panels: {} });
+  });
+
+  // Device-panel half of the "deleted device stays in the list" rework: a
+  // restored blob can point at a device that has since been hard-deleted
+  // (row gone) or stopped (row killed). Restoring either would land on a
+  // dead overlay — close the panel instead. Deliberately the ONLY place a
+  // STOPPED device's panel is auto-closed: auto-starting it on page load
+  // would reboot an emulator as a side effect of a reload.
+  it("closes a restored device panel whose row was deleted outright", () => {
+    devices = [];
+    devicesLoaded = true;
+    const { api, addPanel } = makeMockApi();
+    const staleDevicePanel = addPanel("device-7", { deviceId: 7 });
+    const liveSessionPanel = addPanel("session-9", { sessionId: 9 });
+    sessions = [{ id: 9, status: "active" }];
+
+    renderHook(() =>
+      useWorkspacePersistence({
+        dockviewApi: api,
+        activeWorkspaceId: 1,
+        workspaces: [makeWorkspace()],
+        layoutTier: "desktop",
+        setPanelsVersion: makeSetPanelsVersion(),
+      }),
+    );
+
+    expect(staleDevicePanel.api.close).toHaveBeenCalledTimes(1);
+    expect(liveSessionPanel.api.close).not.toHaveBeenCalled();
+  });
+
+  it("closes a restored device panel for a stopped (killed) device", () => {
+    devices = [{ id: 7, status: "killed", name: "My Pixel", avdName: "pixel_7" }];
+    devicesLoaded = true;
+    const { api, addPanel } = makeMockApi();
+    const staleDevicePanel = addPanel("device-7", { deviceId: 7 });
+
+    renderHook(() =>
+      useWorkspacePersistence({
+        dockviewApi: api,
+        activeWorkspaceId: 1,
+        workspaces: [makeWorkspace()],
+        layoutTier: "desktop",
+        setPanelsVersion: makeSetPanelsVersion(),
+      }),
+    );
+
+    expect(staleDevicePanel.api.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a restored device panel for an active device", () => {
+    devices = [{ id: 7, status: "active", name: "My Pixel", avdName: "pixel_7" }];
+    devicesLoaded = true;
+    const { api, addPanel } = makeMockApi();
+    const panel = addPanel("device-7", { deviceId: 7 });
+
+    renderHook(() =>
+      useWorkspacePersistence({
+        dockviewApi: api,
+        activeWorkspaceId: 1,
+        workspaces: [makeWorkspace()],
+        layoutTier: "desktop",
+        setPanelsVersion: makeSetPanelsVersion(),
+      }),
+    );
+
+    expect(panel.api.close).not.toHaveBeenCalled();
+  });
+
+  // The `devicesLoaded` gate is load-bearing: `devices` starts [] before the
+  // first refreshDevices() resolves, and treating that as "gone" would prune
+  // every device panel on a layout that's perfectly fine.
+  it("does not prune device panels before the device list has loaded", () => {
+    devices = [];
+    devicesLoaded = false;
+    const { api, addPanel } = makeMockApi();
+    const panel = addPanel("device-7", { deviceId: 7 });
+
+    renderHook(() =>
+      useWorkspacePersistence({
+        dockviewApi: api,
+        activeWorkspaceId: 1,
+        workspaces: [makeWorkspace()],
+        layoutTier: "desktop",
+        setPanelsVersion: makeSetPanelsVersion(),
+      }),
+    );
+
+    expect(panel.api.close).not.toHaveBeenCalled();
   });
 
   it("falls back to clearing the grid and logging when fromJSON throws on a corrupt/incompatible layout blob", () => {

@@ -2631,7 +2631,13 @@ describe("controlSocketPlugin (issue #185)", () => {
         socket.destroy();
       });
 
-      it("device.terminate (session scope): dispatches to DELETE /api/devices/:id with an explicit deviceId", async () => {
+      // The op keeps its historical name but was repointed at the new
+      // POST /:id/stop (the reversible teardown) rather than DELETE — see
+      // control-socket.ts's own comment on why: its documented meaning
+      // ("flips the row to killed and tears the device down") stays exactly
+      // true, so the wire API doesn't break, while DELETE becomes the
+      // irreversible, full-scope-only remove further down.
+      it("device.terminate (session scope): dispatches to POST /api/devices/:id/stop and KEEPS the row", async () => {
         app = await buildApp();
         await app.ready();
         const deviceId = await createRealDevice();
@@ -2642,6 +2648,106 @@ describe("controlSocketPlugin (issue #185)", () => {
         expect(reply.ok).toBe(true);
         expect(reply.status).toBe(204);
         socket.destroy();
+
+        const authHeaders = { authorization: `Bearer ${TEST_TOKEN}` };
+        const after = await app.inject({
+          method: "GET",
+          url: `/api/devices/${deviceId}`,
+          headers: authHeaders,
+        });
+        expect(after.statusCode).toBe(200);
+        expect(after.json().status).toBe("killed");
+      });
+
+      it("device.start 400s with 'deviceId is required' when omitted", async () => {
+        app = await buildApp();
+        await app.ready();
+        const socket = await fullScopeSocket();
+        socket.write(`${JSON.stringify({ id: 1, op: "device.start" })}\n`);
+        expect(await waitForReply(socket)).toEqual({
+          id: 1,
+          ok: false,
+          status: 400,
+          error: "'deviceId' is required",
+        });
+        socket.destroy();
+      });
+
+      it("device.start (session scope): dispatches to POST /api/devices/:id/start with an explicit deviceId", async () => {
+        app = await buildApp();
+        await app.ready();
+        const deviceId = await createRealDevice();
+        // Park it in the stopped state so start has something to reverse.
+        const authHeaders = { authorization: `Bearer ${TEST_TOKEN}` };
+        await app.inject({
+          method: "POST",
+          url: `/api/devices/${deviceId}/stop`,
+          headers: authHeaders,
+        });
+        const { hookToken } = await createRealSession();
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(`${JSON.stringify({ id: 1, op: "device.start", body: { deviceId } })}\n`);
+        const reply = await waitForReply(socket);
+        expect(reply.ok).toBe(true);
+        expect(reply.status).toBe(200);
+        expect((reply.result as { status: string }).status).toBe("active");
+        socket.destroy();
+      });
+
+      it("device.delete 400s with 'deviceId is required' when omitted", async () => {
+        app = await buildApp();
+        await app.ready();
+        const socket = await fullScopeSocket();
+        socket.write(`${JSON.stringify({ id: 1, op: "device.delete" })}\n`);
+        expect(await waitForReply(socket)).toEqual({
+          id: 1,
+          ok: false,
+          status: 400,
+          error: "'deviceId' is required",
+        });
+        socket.destroy();
+      });
+
+      // Full-scope only — same blast-radius reasoning as device.pair: this
+      // one is irreversible (the row is gone) rather than stop's reversible
+      // flip, so a session-scoped agent gets the same 403.
+      it("device.delete (session scope): rejected — full scope only", async () => {
+        app = await buildApp();
+        await app.ready();
+        const deviceId = await createRealDevice();
+        const { hookToken } = await createRealSession();
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(`${JSON.stringify({ id: 1, op: "device.delete", body: { deviceId } })}\n`);
+        expect(await waitForReply(socket)).toMatchObject({ ok: false, status: 403 });
+        socket.destroy();
+
+        const authHeaders = { authorization: `Bearer ${TEST_TOKEN}` };
+        const after = await app.inject({
+          method: "GET",
+          url: `/api/devices/${deviceId}`,
+          headers: authHeaders,
+        });
+        expect(after.statusCode).toBe(200);
+      });
+
+      it("device.delete (full scope): dispatches to DELETE /api/devices/:id and the row is gone", async () => {
+        app = await buildApp();
+        await app.ready();
+        const deviceId = await createRealDevice();
+        const socket = await fullScopeSocket();
+        socket.write(`${JSON.stringify({ id: 1, op: "device.delete", body: { deviceId } })}\n`);
+        const reply = await waitForReply(socket);
+        expect(reply.ok).toBe(true);
+        expect(reply.status).toBe(204);
+        socket.destroy();
+
+        const authHeaders = { authorization: `Bearer ${TEST_TOKEN}` };
+        const after = await app.inject({
+          method: "GET",
+          url: `/api/devices/${deviceId}`,
+          headers: authHeaders,
+        });
+        expect(after.statusCode).toBe(404);
       });
 
       it("device.get 400s with 'deviceId is required' when omitted", async () => {

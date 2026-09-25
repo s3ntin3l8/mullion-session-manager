@@ -204,6 +204,8 @@ export function App() {
     dismissedCodexHookTrustVersion,
     viewMode,
     activePanelId,
+    devices,
+    devicesLoaded,
   } = useDashboardStore(
     useShallow((s) => ({
       workspaces: s.workspaces,
@@ -226,6 +228,13 @@ export function App() {
       dismissedCodexHookTrustVersion: s.dismissedCodexHookTrustVersion,
       viewMode: s.viewMode,
       activePanelId: s.activePanelId,
+      // devices/devicesLoaded — the device-panel prune sweep below. `devices`
+      // gets a fresh array identity every DEVICES_POLL_MS just like sessions
+      // does, so this costs the same already-acknowledged periodic
+      // re-render sessions costs (the two polls start together, so in
+      // practice they land on the same tick rather than doubling up).
+      devices: s.devices,
+      devicesLoaded: s.devicesLoaded,
     })),
   );
 
@@ -701,6 +710,28 @@ export function App() {
       dockviewApi.getPanel(id)?.api.close();
     }
   }, [sessions, dockviewApi]);
+
+  // Device-panel counterpart of the session sweep above, for the other half
+  // of the "deleted device stays in the list" fix: DELETE now removes the
+  // row outright (routes/devices.ts), so a `device-<id>` panel outliving
+  // its row would render DevicePane's "this device was deleted" dead end
+  // forever. Note this only closes panels for MISSING rows — a STOPPED row
+  // is a real, startable device and its panel stays put showing the stopped
+  // overlay (DevicePane), the same way stopping never closed the panel
+  // before. Gated on devicesLoaded: `devices` starts [] and every device
+  // panel would otherwise be closed during the first moments after a
+  // reload, before GET /api/devices resolves.
+  useEffect(() => {
+    if (!dockviewApi || !devicesLoaded) return;
+    for (const panel of dockviewApi.panels) {
+      const match = panel.id.match(/^device-(\d+)$/);
+      if (!match) continue;
+      const deviceId = parseInt(match[1], 10);
+      if (!devices.some((d) => d.id === deviceId)) {
+        dockviewApi.getPanel(panel.id)?.api.close();
+      }
+    }
+  }, [devices, devicesLoaded, dockviewApi]);
 
   // The 12 `onOpen*` panel-opening callbacks (session/session-as-float/
   // timeline/GitHub/Git/Agent Rules/Dock Config/Skills/Browser/Tasks/

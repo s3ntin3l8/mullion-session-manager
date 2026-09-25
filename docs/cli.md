@@ -230,7 +230,12 @@ sessionId), not scoped to any project or session.
   address. `address` and `pairingAddress` are typically different ports on the
   same phone — Android shows both under Developer options → Wireless
   debugging.
-- `device stop <id>`
+- `device start <id>` — start/reconnect a stopped device (`POST
+/api/devices/:id/start`); returns the refreshed row.
+- `device stop <id>` — stop the device but keep its row, listed as `stopped`
+  (`POST /api/devices/:id/stop`).
+- `device delete <id>` — **irreversible**: tears the device down and removes
+  its row from the list (`DELETE /api/devices/:id`).
 - `device screenshot <id> [--out <path>]`
 - `device tap <id> <x> <y>`
 - `device swipe <id> <x1> <y1> <x2> <y2> [<durationMs>]`

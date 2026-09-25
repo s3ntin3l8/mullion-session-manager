@@ -143,6 +143,51 @@
   flex: 1;
 }
 
+/* Device lifecycle controls (Start/Stop on the sidebar's own device rows).
+   `.device-row-actions` is `.workspace-item-actions` (styles/sidebar.css)
+   transplanted next to the row class it actually decorates: same 22x22
+   centered box rationale (without an explicit box the button only sizes to
+   its icon and aligns to its taller siblings' top edge), same `border:
+   none` reset, same `--dim` resting color lifted by `:hover`. No
+   `.danger.armed` companion here — the sidebar's only device control is
+   Start/Stop, both reversible, so nothing arms (Settings -> Devices is
+   where the trash confirm lives, and it carries that rule itself). */
+.device-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--dim);
+  flex-shrink: 0;
+}
+.device-row-actions button {
+  box-sizing: border-box;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.device-row-actions button:hover:not(:disabled) {
+  color: var(--fg);
+}
+.device-row-actions button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+/* A stopped row is a first-class row now (only DELETE drops one), just not
+   a running one — dim it so "running" still reads as the at-a-glance
+   default without hiding the row, which would make it un-startable. The
+   status dot already goes "off" through deviceDotClass. */
+.sidebar-tasks-entry.stopped {
+  color: var(--dim);
+}
+
 /* UnifiedBoard.tsx's task-columns section (formerly TasksPanel.tsx, a
    standalone dockview panel). The column/card grid itself reuses
    .kanban-board/.kanban-column* wholesale (issue #211's session board) —

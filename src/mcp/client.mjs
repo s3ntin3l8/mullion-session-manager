@@ -264,8 +264,22 @@ export class MullionClient {
     return this.controlRequest("device.create", body);
   }
 
+  // Stops the device but keeps its row (status "killed"). The op's name is
+  // historical — see control-socket.ts's own device.terminate comment for
+  // why it wasn't renamed when `mullion device stop` stopped being a delete.
+  // This is the client method the `stop_device` MCP tool calls; `start`/
+  // `delete` below are named for their op.
   terminateDevice(deviceId) {
     return this.controlRequest("device.terminate", { deviceId });
+  }
+
+  startDevice(deviceId) {
+    return this.controlRequest("device.start", { deviceId });
+  }
+
+  // Irreversible — drops the row. Full-scope only on the server side.
+  deleteDevice(deviceId) {
+    return this.controlRequest("device.delete", { deviceId });
   }
 
   deviceAction(deviceId, actionPayload) {

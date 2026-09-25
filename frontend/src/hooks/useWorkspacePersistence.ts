@@ -167,6 +167,8 @@ export function useWorkspacePersistence({
     flushPendingSave(dockviewApi);
 
     restoringRef.current = true;
+    // "killed" covers sessions AND the pruned device panels above — one
+    // flag for "the restored blob pointed at something dead" either way.
     let closedKilledPanels = false;
     let closedLegacyPanels = false;
     try {
@@ -179,9 +181,36 @@ export function useWorkspacePersistence({
       // catches stale layouts; the reactive `useEffect` below (commented
       // "Close any dockview panel whose session has been killed") catches
       // the case where sessions haven't loaded yet at this point.
-      const currentSessions = useDashboardStore.getState().sessions;
+      //
+      // Device panels get the same treatment here (and this is the ONLY
+      // place a STOPPED device's panel is ever auto-closed): a device row
+      // is stopped or gone, restoring its panel would either show a dead
+      // overlay or point at nothing, and the alternative — auto-starting it
+      // to make the restore come up happy — would reboot an emulator as a
+      // side effect of a page load. Reopening from the sidebar (which lists
+      // stopped rows) starts it deliberately instead. Gated on
+      // devicesLoaded because `devices` starts [] and an unloaded list
+      // would otherwise prune every device panel on a layout that's fine;
+      // when the list hasn't arrived yet, the reactive sweep in App.tsx
+      // picks the missing-row case up afterwards.
+      const {
+        sessions: currentSessions,
+        devices: currentDevices,
+        devicesLoaded: devicesReady,
+      } = useDashboardStore.getState();
       const stalePanelIds: string[] = [];
       for (const panel of dockviewApi.panels) {
+        let deviceId = (panel.params as { deviceId?: number } | undefined)?.deviceId;
+        if (deviceId == null && panel.id.startsWith("device-")) {
+          const match = panel.id.match(/^device-(\d+)$/);
+          if (match) deviceId = parseInt(match[1], 10);
+        }
+        if (deviceId != null) {
+          if (!devicesReady) continue;
+          const device = currentDevices.find((d) => d.id === deviceId);
+          if (!device || device.status === "killed") stalePanelIds.push(panel.id);
+          continue;
+        }
         let sessionId = (panel.params as { sessionId?: number } | undefined)?.sessionId;
         if (sessionId == null) {
           const match = panel.id.match(/^(?:timeline|browserPane)-(\d+)$/);

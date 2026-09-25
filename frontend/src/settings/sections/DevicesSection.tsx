@@ -23,7 +23,7 @@ import { ConfirmButton } from "../../ui/ConfirmButton.js";
 import { ErrorText } from "../../ui/ErrorText.js";
 import { ProgressBar } from "../../ui/ProgressBar.js";
 import { Modal } from "../../ui/Modal.js";
-import { CloseIcon, PlusIcon, SearchIcon } from "../../ui/icons.js";
+import { CloseIcon, PlusIcon, SearchIcon, TrashIcon } from "../../ui/icons.js";
 import { PairDeviceDialog } from "./PairDeviceDialog.js";
 import { useServerInfo } from "../useServerInfo.js";
 import { DeviceDiscoverySetting } from "../RuntimeSettings.js";
@@ -88,16 +88,22 @@ function describeSystemImage(image: SystemImage): string {
   return image.packagePath;
 }
 
-// Settings -> Devices (issue #1326) — the management surface (create/stop/
-// delete) for the Android device panel. Deliberately NOT where a device is
-// opened from day to day — that's SidebarDevices.tsx, which explains why in
-// its own header comment. This section shows a device's FULL lifecycle,
-// including killed rows (unlike the sidebar, which filters them out): a
-// killed device is where you'd see its final `live.error`.
+// Settings -> Devices (issue #1326) — the full-lifecycle management surface
+// (create / pair / edit address / start / stop / delete) for the Android
+// device panel. Deliberately NOT where a device is opened from day to day —
+// that's SidebarDevices.tsx, which explains why in its own header comment
+// (the sidebar does Start/Stop and open; everything irreversible or
+// form-shaped lives here).
+//
+// A `status: "killed"` row is a STOPPED device, not a dead one: dimmed via
+// `unavailable`, but still Start/Edit/Delete-able. It used to be shown
+// read-only with no Delete, which is exactly how a device could get stuck
+// here forever — DELETE now removes the row outright (routes/devices.ts),
+// so this section never accumulates unreachable ghosts.
 //
 // Reads/writes through the `devices` store slice, not local `api.*` calls
 // the way BridgesSection.tsx does — devices are also read by
-// SidebarDevices.tsx, so a create/delete here has to update the SAME data
+// SidebarDevices.tsx, so any mutation here has to update the SAME data
 // the sidebar renders, not a copy of it (a local-state version would leave
 // the sidebar showing a stale list until its own next poll tick).
 function describeDevice(device: Device): string {
@@ -123,6 +129,8 @@ export function DevicesSection() {
   const devices = useDashboardStore(useShallow((s) => s.devices));
   const refreshDevices = useDashboardStore((s) => s.refreshDevices);
   const createDevice = useDashboardStore((s) => s.createDevice);
+  const startDevice = useDashboardStore((s) => s.startDevice);
+  const stopDevice = useDashboardStore((s) => s.stopDevice);
   const terminateDevice = useDashboardStore((s) => s.terminateDevice);
   const updateDeviceAddress = useDashboardStore((s) => s.updateDeviceAddress);
 
@@ -134,6 +142,10 @@ export function DevicesSection() {
   const [loadError, setLoadError] = useState(false);
   const [deleting, setDeleting] = useState<Record<number, boolean>>({});
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  // Start/Stop in-flight, keyed by row id + which of the two (a row can
+  // only ever have one) so the right button can label its own busy state.
+  const [toggling, setToggling] = useState<Record<number, "start" | "stop">>({});
+  const [toggleError, setToggleError] = useState<string | null>(null);
 
   const [createOpen, setCreateOpen] = useState(false);
   // Physical phones are paired from their own dialog (issue #1379) — see
@@ -475,6 +487,23 @@ export function DevicesSection() {
       .finally(() => setCreatingAvd(false));
   };
 
+  const toggleRunning = (device: Device, kind: "start" | "stop") => {
+    setToggleError(null);
+    setToggling((prev) => ({ ...prev, [device.id]: kind }));
+    // `Promise<unknown>` rather than the `Promise<Device> | Promise<void>`
+    // union — a union of two .catch signatures isn't callable directly.
+    const op: Promise<unknown> = kind === "start" ? startDevice(device.id) : stopDevice(device.id);
+    op.catch((err: unknown) => {
+      setToggleError(err instanceof ApiError ? err.message : `Could not ${kind} this device`);
+    }).finally(() => {
+      setToggling((prev) => {
+        const next = { ...prev };
+        delete next[device.id];
+        return next;
+      });
+    });
+  };
+
   const remove = (device: Device) => {
     setDeleteError(null);
     setDeleting((prev) => ({ ...prev, [device.id]: true }));
@@ -548,29 +577,56 @@ export function DevicesSection() {
                     <span style={{ fontSize: 10.5, color: "var(--dim)" }}>
                       {describeDevice(device)}
                     </span>
-                    {device.kind === "physical" && device.status === "active" && (
+                    {/* Physical-only, but NO longer active-only: a stopped
+                        phone's address is exactly the thing you may need to
+                        fix (DHCP lease moved) before starting it, and PATCH
+                        persists it without touching the process (routes/
+                        devices.ts) — so gating this on `status === "active"`
+                        would have made the fix require a running device. */}
+                    {device.kind === "physical" && (
                       <SecondaryButton
                         onClick={() => (editingId === device.id ? cancelEdit() : startEdit(device))}
                       >
                         {editingId === device.id ? "Cancel" : "Edit address"}
                       </SecondaryButton>
                     )}
-                    {device.status === "active" && (
-                      <ConfirmButton
-                        // Hermes review (PR #1341) — softened from "its panel
-                        // closes": nothing in this action closes an already-open
-                        // device-<id> panel (that would need a DockviewApi this
-                        // Settings-owned slice doesn't have, per the design's
-                        // own "Settings owns no DockviewApi" reasoning above);
-                        // DevicePane just goes on to show a disconnected/stopped
-                        // state once its emulator/scrcpy session is torn down.
-                        title={`Delete ${device.name || device.avdName || device.serial}. Its stream stops and any open panel shows it as disconnected.`}
-                        onConfirm={() => remove(device)}
-                        disabled={deleting[device.id] ?? false}
+                    {device.status === "active" ? (
+                      <SecondaryButton
+                        onClick={() => toggleRunning(device, "stop")}
+                        disabled={toggling[device.id] != null}
                       >
-                        Delete
-                      </ConfirmButton>
+                        {toggling[device.id] === "stop" ? "Stopping…" : "Stop"}
+                      </SecondaryButton>
+                    ) : (
+                      <SecondaryButton
+                        onClick={() => toggleRunning(device, "start")}
+                        disabled={toggling[device.id] != null}
+                      >
+                        {toggling[device.id] === "start" ? "Starting…" : "Start"}
+                      </SecondaryButton>
                     )}
+                    {/* Available on EVERY row — the old active-only gate is
+                        what stranded stopped devices with no way to clear
+                        them (the bug this control set exists for). Delete
+                        now removes the row (see routes/devices.ts), so the
+                        copy says "removed" rather than the old soft-delete's
+                        "stream stops and any open panel shows it as
+                        disconnected". Hermes' earlier softening still holds
+                        for the open-panel half: nothing here closes a
+                        device-<id> panel (no DockviewApi in a Settings-owned
+                        slice), DevicePane just reports it. */}
+                    <ConfirmButton
+                      title={`Delete ${device.name || device.avdName || device.serial}. The device is torn down and removed from this list permanently.`}
+                      onConfirm={() => remove(device)}
+                      disabled={deleting[device.id] ?? false}
+                    >
+                      {/* aria-hidden so the trashcan never joins the
+                          button's accessible name — "Delete" stays the
+                          exact role name the tests (and a screen reader's
+                          quick scan) match on. */}
+                      <TrashIcon size={13} aria-hidden="true" />
+                      Delete
+                    </ConfirmButton>
                   </div>
                 }
               />
@@ -609,6 +665,7 @@ export function DevicesSection() {
         </StyledList>
       )}
       {deleteError && <ErrorText style={{ marginTop: 8 }}>{deleteError}</ErrorText>}
+      {toggleError && <ErrorText style={{ marginTop: 8 }}>{toggleError}</ErrorText>}
 
       <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
         <AddButton onClick={() => setPairOpen(true)}>

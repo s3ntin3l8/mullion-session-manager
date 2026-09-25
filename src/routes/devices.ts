@@ -564,16 +564,35 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
       if (row.kind !== "physical") {
         return reply.badRequest("only a physical device's address can be edited");
       }
-      // No un-kill path exists anywhere in this API (DELETE only ever flips
-      // status forward, never back) — an address edit on a killed row would
-      // have nothing reachable to reconnect, so this rejects rather than
-      // silently rewriting a dead row's address.
-      if (row.status !== "active") {
-        return reply.badRequest("cannot edit the address of a stopped device");
-      }
       const { address } = request.body ?? {};
       if (!isValidDeviceAddress(address)) {
         return reply.badRequest("address must be host:port (e.g. 192.168.1.23:37251)");
+      }
+
+      // Same guard POST's create path applies (issue #1350), on the same
+      // "an adb address is a single live connection, not a label" reasoning:
+      // without it this PATCH can repoint a row at an address some OTHER
+      // active row already owns, leaving two rows claiming one phone — the
+      // second one to connect would push a competing scrcpy session against
+      // the same serial. Only ACTIVE rows are checked, so re-using the
+      // address of a stopped row stays allowed (POST's own rule — one at a
+      // time can hold it, which is what makes stop/start on two rows for
+      // one phone work at all). Synchronous, no `await` in between, and
+      // better-sqlite3 is synchronous too — this check-then-write can't
+      // interleave with another request's.
+      const [owner] = app.db
+        .select({ id: devices.id })
+        .from(devices)
+        .where(
+          and(
+            eq(devices.status, "active"),
+            eq(devices.kind, "physical"),
+            eq(devices.serial, address),
+          ),
+        )
+        .all();
+      if (owner && owner.id !== id) {
+        return reply.conflict(`device ${owner.id} is already active for address ${address}`);
       }
 
       // Row records intent BEFORE the reconnect below — same ordering
@@ -587,6 +606,17 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
         .where(eq(devices.id, id))
         .returning()
         .all();
+
+      // A STOPPED row's edit persists only — no terminate(), no
+      // getOrCreate(). Editing a phone's stale address is exactly what you
+      // do while it's down (the port rotated, the reboot dropped it), and
+      // silently booting/reconnecting it here would start a device the user
+      // deliberately stopped. `POST /api/devices/:id/start` is the explicit
+      // next step; the sidebar/Settings Start button and the device panel's
+      // own Start affordance both route through it.
+      if (updated.status !== "active") {
+        return toListItem(updated, undefined);
+      }
 
       // The existing live Device (if any) is still connected at the OLD,
       // now-stale address — getOrCreate() below is a no-op against it
@@ -615,7 +645,72 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
     },
   );
 
-  app.delete<{ Params: { id: string } }>("/api/devices/:id", async (request, reply) => {
+  // Explicit "make sure this device is running" — the reverse of stop, and
+  // the one path that flips a row's status BACK from "killed" to "active"
+  // (an emulator's spawn, a physical row's adb reconnect, or a reattach to
+  // a restart-surviving scope all live inside getOrCreate()). Deliberately
+  // its own endpoint rather than folded into the WS panel's connect path:
+  // the panel opening on a stopped device (usePanelOpener's start-then-open),
+  // a Start click in the sidebar/Settings, and an agent running `mullion
+  // device start` all funnel through here, but only the last two ever want
+  // to start a device with no viewer attached.
+  // Unlike /stop and DELETE below (both deliberately unguarded, same as
+  // DELETE always was), this one IS gated on DEVICE_ENABLED: starting is
+  // the only lifecycle verb that brings a device UP, so it's the same
+  // operation — and the same "the server's own 400 message is the disabled-
+  // state UI" posture — as POST /api/devices creating one. Tearing a device
+  // down must keep working while the feature is off.
+  app.post<{ Params: { id: string } }>("/api/devices/:id/start", async (request, reply) => {
+    if (!app.config.DEVICE_ENABLED) {
+      return reply.badRequest("Device panel is disabled — set DEVICE_ENABLED=true.");
+    }
+    const id = Number(request.params.id);
+    if (!Number.isInteger(id)) return reply.badRequest("id path param is required");
+    const [row] = app.db.select().from(devices).where(eq(devices.id, id)).all();
+    if (!row) return reply.notFound(`No device ${id}`);
+
+    // Record intent BEFORE awaiting getOrCreate, same TOCTOU-avoidance
+    // ordering DELETE/stop use: a WS connect landing while we're still
+    // starting must see an "active" row and attach, not reject on "killed".
+    const wasKilled = row.status !== "active";
+    const [updated] = app.db
+      .update(devices)
+      .set({ status: "active" })
+      .where(eq(devices.id, id))
+      .returning()
+      .all();
+
+    try {
+      await app.device.getOrCreate({
+        id: String(id),
+        kind: row.kind,
+        avdName: row.avdName,
+        serial: row.serial,
+        label: row.name,
+        port: row.port,
+      });
+    } catch (err) {
+      // A synchronously-rejected start (a scope left over from before a
+      // restart with no persisted port, a confirmed-gone emulator) must not
+      // strand the row as "active" with nothing running behind it — that
+      // would hide the Stop button the user needs to recover. Only rows
+      // that were stopped get their status reverted: a row that was already
+      // active keeps POST's own create-path posture (its live status/error
+      // reports the failure from here on).
+      if (wasKilled) {
+        app.db.update(devices).set({ status: "killed" }).where(eq(devices.id, id)).run();
+      }
+      return reply.badRequest(err instanceof Error ? err.message : String(err));
+    }
+
+    return toListItem(updated, app.device.get(String(id))?.toInfo());
+  });
+
+  // Stops a device WITHOUT discarding its row — what `mullion device stop`,
+  // `device.terminate`, and the sidebar/Settings Stop button all do. The row
+  // stays (status "killed") so it can be started again, its address edited,
+  // and its final state read; `DELETE` below is the irreversible remove.
+  app.post<{ Params: { id: string } }>("/api/devices/:id/stop", async (request, reply) => {
     const id = Number(request.params.id);
     if (!Number.isInteger(id)) return reply.badRequest("id path param is required");
     const [row] = app.db.select().from(devices).where(eq(devices.id, id)).all();
@@ -626,7 +721,41 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
     // a concurrent WS connect that lands mid-terminate must see "killed",
     // not a stale "active" row.
     app.db.update(devices).set({ status: "killed" }).where(eq(devices.id, id)).run();
+
+    // Deliberately NOT caught: a failed teardown leaves the row "killed"
+    // (retryable — it's still the only handle to a possibly-surviving
+    // scope), and the caller gets the failure instead of a silent success.
     await app.device.terminate(String(id), row.kind);
+
+    reply.code(204);
+  });
+
+  // Removes the row outright. Two phases, deliberately: stop first (same
+  // ordering + TOCTOU reasoning as /stop above), THEN delete. A teardown
+  // that throws must not discard the row — the `devices` row is what
+  // identifies the systemd scope (`crs-device-<instanceId>-<id>.scope`) if
+  // it's still running, so deleting it first would strand a live emulator
+  // with no API path left to ever stop it (device-manager.ts's terminate()
+  // doc comment describes exactly that failure). Hence 500 + row kept on
+  // failure, 204 + row gone on success.
+  app.delete<{ Params: { id: string } }>("/api/devices/:id", async (request, reply) => {
+    const id = Number(request.params.id);
+    if (!Number.isInteger(id)) return reply.badRequest("id path param is required");
+    const [row] = app.db.select().from(devices).where(eq(devices.id, id)).all();
+    if (!row) return reply.notFound(`No device ${id}`);
+
+    app.db.update(devices).set({ status: "killed" }).where(eq(devices.id, id)).run();
+
+    try {
+      await app.device.terminate(String(id), row.kind);
+    } catch (err) {
+      app.log.warn({ err, deviceId: id }, "device delete: teardown failed, keeping the row");
+      return reply.internalServerError(
+        err instanceof Error ? err.message : "could not tear down this device",
+      );
+    }
+
+    app.db.delete(devices).where(eq(devices.id, id)).run();
 
     reply.code(204);
   });
