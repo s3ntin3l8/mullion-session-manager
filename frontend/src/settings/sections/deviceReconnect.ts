@@ -44,15 +44,22 @@ export function findReconnectSuggestions(
 ): Map<number, ReconnectSuggestion> {
   const out = new Map<number, ReconnectSuggestion>();
   const rows = devices.filter((d) => d.kind === "physical" && d.status === "active" && d.serial);
-  const connectable = discovered.filter((d) => d.connectAddress);
-  const advertised = new Set(connectable.map((d) => d.connectAddress));
+  // An advertised address another stored row already points at belongs to
+  // that row's phone — never offer it to a different row.
+  const claimed = new Set(devices.filter((d) => d.serial).map((d) => d.serial as string));
+  const connectable = discovered.filter((d) => d.connectAddress && !claimed.has(d.connectAddress));
+  const advertised = new Set(discovered.map((d) => d.connectAddress));
   const stale = rows.filter((r) => !advertised.has(r.serial as string));
 
   for (const row of stale) {
     const host = hostOf(row.serial);
     if (!host) continue;
     let candidates = connectable.filter((d) => d.host === host);
-    if (candidates.length === 0) candidates = connectable.filter((d) => nameMatches(row, d));
+    // A name-only match (the phone changed IP) is a weaker signal than a
+    // host match — names like "Pixel" collide — so it's always confirmed
+    // via the ambiguity-style prompt rather than a plain one.
+    const nameOnly = candidates.length === 0;
+    if (nameOnly) candidates = connectable.filter((d) => nameMatches(row, d));
     if (candidates.length === 0) continue;
     // Prefer an advertised name/model match when a host serves several.
     candidates = [...candidates].sort(
@@ -60,7 +67,7 @@ export function findReconnectSuggestions(
     );
     // Another stale row on the same host competes for the same candidates.
     const sharing = stale.filter((o) => o.id !== row.id && hostOf(o.serial) === host).length > 0;
-    out.set(row.id, { candidates, ambiguous: candidates.length > 1 || sharing });
+    out.set(row.id, { candidates, ambiguous: candidates.length > 1 || sharing || nameOnly });
   }
   return out;
 }

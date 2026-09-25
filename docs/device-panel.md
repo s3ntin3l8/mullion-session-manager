@@ -194,7 +194,7 @@ on, Settings → Devices polls `GET /api/devices/discovered` every ~5 s (only
 while an active physical row exists and the tab is visible) and compares it
 with the stored rows. A row whose stored address is no longer advertised, but
 whose host is (or, if the phone also changed IP, whose name matches the
-advertised name/model), gets an inline **Reconnect to <name>?** note. Clicking it
+advertised name/model), gets an inline **Reconnect to _name_?** note. Clicking it
 sends the same `PATCH /api/devices/:id` as Edit address — no new row, no new
 protocol, and never without a click. When several phones or rows match (for
 example two Pixels behind one host), the note lists one button per candidate

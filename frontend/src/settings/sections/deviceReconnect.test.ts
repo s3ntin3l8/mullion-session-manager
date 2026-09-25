@@ -74,6 +74,22 @@ describe("findReconnectSuggestions (issue #1380)", () => {
       [disc("192.168.1.99", 40111)],
     );
     expect(res.get(1)?.candidates[0]?.host).toBe("192.168.1.99");
+    // A name-only match is weaker than a host match — confirmed, not plain.
+    expect(res.get(1)?.ambiguous).toBe(true);
+  });
+
+  it("never offers an address another row already points at", () => {
+    // Row B's phone changed IP; A's live Pixel 7 is also advertised under
+    // the same name and must not be offered to B.
+    const res = findReconnectSuggestions(
+      [
+        row(1, "192.168.1.10:5555", { name: "Pixel 7" }),
+        row(2, "192.168.1.23:37251", { name: "Pixel 7" }),
+      ],
+      [disc("192.168.1.10", 5555, { id: "a" }), disc("192.168.1.99", 40111, { id: "b" })],
+    );
+    expect(res.has(1)).toBe(false);
+    expect(res.get(2)?.candidates.map((c) => c.id)).toEqual(["b"]);
   });
 
   it("flags several candidates as ambiguous, name match first", () => {
