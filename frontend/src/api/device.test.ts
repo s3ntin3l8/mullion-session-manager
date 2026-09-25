@@ -40,11 +40,34 @@ describe("devicesApi", () => {
     );
   });
 
-  it("terminateDevice calls DELETE /api/devices/:id", async () => {
+  it("stopDevice calls POST /api/devices/:id/stop and keeps the row", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(204, null));
     vi.stubGlobal("fetch", fetchMock);
 
-    await devicesApi.terminateDevice(1);
+    await devicesApi.stopDevice(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/devices/1/stop",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("startDevice calls POST /api/devices/:id/start and returns the refreshed row", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { id: 1, status: "active" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await devicesApi.startDevice(1);
+    expect(result).toEqual({ id: 1, status: "active" });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/devices/1/start",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("  deleteDevice calls DELETE /api/devices/:id — the irreversible remove", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(204, null));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await devicesApi.deleteDevice(1);
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/devices/1",
       expect.objectContaining({ method: "DELETE" }),

@@ -5,11 +5,11 @@ import type { DashboardState, DevicesSlice } from "../types.js";
 // Android device panel dashboard entry point (issue #1326) — mirrors
 // hosts.ts's shape: a flat list refreshed wholesale after every mutation,
 // since devices are host-global the same way hosts/bridges are. `devices`
-// starts `[]` and is NOT filtered here — both a `status: "active"` row and
-// a `status: "killed"` one (GET /api/devices never drops killed rows, see
-// routes/devices.ts) land in this array unfiltered. SidebarDevices.tsx
-// filters to active-only for its render/poll gate; DevicesSection.tsx (the
-// Settings management surface) intentionally shows killed rows too.
+// starts `[]` and is NOT filtered here — a `status: "killed"` row is a
+// STOPPED device (still startable), and only a DELETE removes a row
+// entirely; both land in this array unfiltered, and each surface picks
+// what it shows: SidebarDevices lists everything (with Start/Stop controls),
+// DevicesSection (the Settings management surface) is the full lifecycle.
 export const createDevicesSlice: StateCreator<DashboardState, [], [], DevicesSlice> = (
   set,
   get,
@@ -23,27 +23,29 @@ export const createDevicesSlice: StateCreator<DashboardState, [], [], DevicesSli
   // recently ISSUED call's response is ever applied.
   let latestRefreshId = 0;
 
+  // Shared tail for every mutation below: re-fetch, best-effort, so a
+  // transient GET failure never masquerades as a mutation failure (the
+  // mutation already succeeded server-side by this point) — either poller's
+  // next tick heals the store within DEVICES_POLL_MS regardless.
+  const refreshAfterMutation = () => {
+    void get()
+      .refreshDevices()
+      .catch(() => {});
+  };
+
   return {
     devices: [],
+    devicesLoaded: false,
 
     refreshDevices: async () => {
       const requestId = ++latestRefreshId;
       const devices = await api.listDevices();
-      if (requestId === latestRefreshId) set({ devices });
+      if (requestId === latestRefreshId) set({ devices, devicesLoaded: true });
     },
 
     createDevice: async (avdName, name) => {
       const device = await api.createDevice({ avdName, name });
-      // Same "best-effort, don't let a refresh failure masquerade as a
-      // mutation failure" shape as projects.ts's own createProject — the
-      // create itself already succeeded server-side by this point, and
-      // awaiting would fail createDevice's own promise (surfacing a
-      // misleading "could not create this device" to DevicesSection) on a
-      // transient failure of this GET alone. Either poller's next tick
-      // heals the store within DEVICES_POLL_MS regardless.
-      void get()
-        .refreshDevices()
-        .catch(() => {});
+      refreshAfterMutation();
       return device;
     },
 
@@ -57,27 +59,29 @@ export const createDevicesSlice: StateCreator<DashboardState, [], [], DevicesSli
       // already rolled its row back server-side — so, same as createDevice,
       // only a success has anything new for this refresh to pick up.
       const device = await api.pairAndConnectDevice(body);
-      // Same reasoning as createDevice above.
-      void get()
-        .refreshDevices()
-        .catch(() => {});
+      refreshAfterMutation();
       return device;
     },
 
-    terminateDevice: async (id) => {
-      await api.terminateDevice(id);
-      // Same reasoning as createDevice above.
-      void get()
-        .refreshDevices()
-        .catch(() => {});
+    startDevice: async (id) => {
+      const device = await api.startDevice(id);
+      refreshAfterMutation();
+      return device;
+    },
+
+    stopDevice: async (id) => {
+      await api.stopDevice(id);
+      refreshAfterMutation();
+    },
+
+    deleteDevice: async (id) => {
+      await api.deleteDevice(id);
+      refreshAfterMutation();
     },
 
     updateDeviceAddress: async (id, address) => {
       const device = await api.updateDeviceAddress(id, address);
-      // Same reasoning as createDevice above.
-      void get()
-        .refreshDevices()
-        .catch(() => {});
+      refreshAfterMutation();
       return device;
     },
   };

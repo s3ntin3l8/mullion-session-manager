@@ -517,6 +517,8 @@ const setProjectTooling = {
 // change" loop the whole device panel feature exists for. `deviceId` is
 // always required (see control-socket.ts's own comment on why there's no
 // "omit it, target your own" default the way get_scrollback has).
+// `delete_device` is the one exception (full scope only, irreversibly drops
+// the row) — see its own definition below.
 const listDevices = {
   name: "list_devices",
   description:
@@ -573,6 +575,67 @@ const useDevice = {
 
 const deviceAction = { ...useDevice, name: "device_action" };
 
+// Lifecycle trio, one shared `deviceId` schema for the lot. `start`/`stop`
+// inherit the session-scope reachability the block above argues for (both
+// reversible — a stop leaves the row, a start is its own inverse);
+// `delete_device` is the exception that keeps proving the rule, its op is
+// full-scope only, same blast-radius reasoning as device.pair.
+const deviceIdProperty = { type: "string", description: "The device's row id, from list_devices." };
+
+const startDevice = {
+  name: "start_device",
+  description:
+    "Start a Mullion-managed Android device (spawn the emulator, reconnect the phone, or " +
+    "resume a scope that survived a restart) and flip its row back to active. No-op-ish when " +
+    "it is already running. Use list_devices to find a deviceId first.",
+  inputSchema: {
+    type: "object",
+    required: ["deviceId"],
+    properties: { deviceId: deviceIdProperty },
+  },
+  async handler(args, client) {
+    const { deviceId } = args ?? {};
+    if (!deviceId) throw new Error("deviceId is required");
+    return JSON.stringify(await client.startDevice(deviceId));
+  },
+};
+
+const stopDevice = {
+  name: "stop_device",
+  description:
+    "Stop a Mullion-managed Android device's stream/process, leaving its row in place so it " +
+    "can be started again. Unlike delete_device this is reversible. Use list_devices to find " +
+    "a deviceId first.",
+  inputSchema: {
+    type: "object",
+    required: ["deviceId"],
+    properties: { deviceId: deviceIdProperty },
+  },
+  async handler(args, client) {
+    const { deviceId } = args ?? {};
+    if (!deviceId) throw new Error("deviceId is required");
+    return JSON.stringify(await client.terminateDevice(deviceId));
+  },
+};
+
+const deleteDevice = {
+  name: "delete_device",
+  description:
+    "IRREVERSIBLY remove a Mullion-managed Android device's row after tearing it down — the " +
+    "device disappears from every list. Prefer stop_device when the device may come back. " +
+    "Full-scope only; use list_devices to find a deviceId first.",
+  inputSchema: {
+    type: "object",
+    required: ["deviceId"],
+    properties: { deviceId: deviceIdProperty },
+  },
+  async handler(args, client) {
+    const { deviceId } = args ?? {};
+    if (!deviceId) throw new Error("deviceId is required");
+    return JSON.stringify(await client.deleteDevice(deviceId));
+  },
+};
+
 export const TOOLS = [
   promoteToWorktree,
   useBrowser,
@@ -580,6 +643,9 @@ export const TOOLS = [
   listDevices,
   useDevice,
   deviceAction,
+  startDevice,
+  stopDevice,
+  deleteDevice,
   listSessions,
   startDockSession,
   spawnChildSession,
