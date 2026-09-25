@@ -509,7 +509,9 @@ export async function sessionsRoute(app: FastifyInstance) {
           );
         }
         if (result.reason === "cwd-outside-project") {
-          return reply.badRequest("cwd must resolve inside the project directory");
+          return reply.badRequest(
+            "cwd must resolve inside the project directory or be a registered git worktree of its repo",
+          );
         }
         if (result.reason === "child-cap-exceeded") {
           return reply.tooManyRequests("this session has reached its live child-session cap");

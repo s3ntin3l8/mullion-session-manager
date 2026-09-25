@@ -16,7 +16,9 @@ own PTY, own terminal) of the session you're running inside, in the same
 project. You never need to name a project or your own session id; both are
 derived automatically. A hard cap on live children applies (ask a human to
 raise `settings.sessions.maxChildSessionsPerParent` if you hit it); `cwd`,
-if overridden, must stay inside the project directory.
+if overridden, must stay inside the project directory or be another registered
+git worktree of the project's repo (`git worktree list`, e.g. a sibling
+`repo-pr408` checkout); any other outside path is rejected.
 
 This is a genuine child session — it survives if you're later killed, not a
 `Task`-tool subagent (no session, no PTY). A spawned child always starts as
