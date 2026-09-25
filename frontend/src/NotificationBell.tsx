@@ -473,11 +473,6 @@ export function NotificationBell({
     const rect = btnRef.current.getBoundingClientRect();
     setPos(panelPosition(rect, window.innerWidth));
   }, []);
-  useEffect(() => {
-    if (!open) return;
-    window.addEventListener("resize", reposition);
-    return () => window.removeEventListener("resize", reposition);
-  }, [open, reposition]);
   useVisualViewportChange(open, reposition);
 
   // Issue #170: a desktop notification's onclick handler bumps

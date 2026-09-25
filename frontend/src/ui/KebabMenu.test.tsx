@@ -215,3 +215,38 @@ describe("ui/KebabMenu visual-viewport pan", () => {
     }
   });
 });
+
+describe("ui/KebabMenu window resize", () => {
+  it("re-anchors the open menu to the trigger's moved rect", async () => {
+    const user = userEvent.setup();
+    let triggerTop = 10;
+    const rectSpy = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(() => ({
+        top: triggerTop,
+        bottom: triggerTop + 20,
+        left: 0,
+        right: 100,
+        width: 100,
+        height: 20,
+        x: 0,
+        y: triggerTop,
+        toJSON: () => ({}),
+      }));
+    try {
+      render(<KebabMenu items={[{ key: "only", label: "Only item", onClick: vi.fn() }]} />);
+      await user.click(screen.getByRole("button"));
+      const menu = document.querySelector(".pane-tab-overflow-menu") as HTMLElement;
+      expect(menu.style.top).toBe("34px");
+
+      triggerTop = 150;
+      await act(async () => {
+        window.dispatchEvent(new Event("resize"));
+        await flushRaf();
+      });
+      expect(menu.style.top).toBe("174px");
+    } finally {
+      rectSpy.mockRestore();
+    }
+  });
+});
