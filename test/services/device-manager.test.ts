@@ -757,6 +757,25 @@ describe("DeviceManager", () => {
     await waitForStatus(manager, "1", "streaming");
   });
 
+  it("spawn() with DEVICE_SCRCPY_SERVER_PATH unset fails as a normal spawn error, not an uncaught createReadStream ENOENT", async () => {
+    mockDeviceList = [{ serial: "emulator-5554" }];
+    const manager = new DeviceManager(baseOpts({ scrcpyServerPath: "" }));
+    await manager.getOrCreate({
+      id: "1",
+      kind: "emulator" as const,
+      avdName: "dev35",
+      serial: null,
+      label: null,
+      port: null,
+    });
+    await waitForStatus(manager, "1", "error");
+    expect(manager.get("1")?.toInfo().error).toBe("DEVICE_SCRCPY_SERVER_PATH is not configured");
+    await waitForCondition(
+      () => !fs.existsSync(deviceMarkerPath(SESSIONS_DIR, "1")),
+      "device 1's marker file to be removed",
+    );
+  });
+
   it("spawn() failure when starting the scrcpy server rejects tears down cleanly (CodeQL: exercises mockStartShouldFail)", async () => {
     mockDeviceList = [{ serial: "emulator-5554" }];
     mockStartShouldFail = true;
