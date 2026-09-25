@@ -2,7 +2,12 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./types.js";
-import { resolveMcpServerPath, shellQuote } from "./shared.js";
+import {
+  resolveMcpServerPath,
+  shellQuote,
+  buildModelFlag,
+  SHELL_METACHARACTERS_RE,
+} from "./shared.js";
 import { ensureForwarderShim, forwarderHookCommand } from "./forwarder-shim.js";
 import { installBundleSkills, uninstallBundleSkills } from "./mullion-bundle.js";
 
@@ -402,6 +407,15 @@ export function removeAgyMcpMullionEntry(mcpConfigPath = resolveAgyMcpConfigPath
 
 function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
   return {
+    // Only edits argv when a model resolved; skipped for a chained/piped
+    // command, where the flag could attach to the wrong part of the chain
+    // (this adapter's matches() has no metacharacter guard).
+    commandTransform: ctx.model
+      ? (command) =>
+          SHELL_METACHARACTERS_RE.test(command.trim())
+            ? command
+            : `${command}${buildModelFlag(command, ctx.model)}`
+      : undefined,
     // async, not a plain wrapper — see codex.ts's identical note: a
     // synchronous throw from mergeAgyHooks must become a rejected promise
     // here, not an exception out of this call itself.

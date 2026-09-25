@@ -2,7 +2,13 @@ import { readFileSync, writeFileSync, mkdirSync, realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./types.js";
-import { shellQuote, tomlString, resolveMcpServerPath, SHELL_METACHARACTERS_RE } from "./shared.js";
+import {
+  shellQuote,
+  tomlString,
+  resolveMcpServerPath,
+  buildModelFlag,
+  SHELL_METACHARACTERS_RE,
+} from "./shared.js";
 import { ensureForwarderShim, forwarderHookCommand } from "./forwarder-shim.js";
 import { installBundleSkills, uninstallBundleSkills } from "./mullion-bundle.js";
 
@@ -648,7 +654,7 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
       // Issue #965/#1282 — same taskId gate as opencode.ts's own deny
       // list, see buildCodexSkillDenyFlag's own comment.
       if (ctx.taskId !== undefined) parts.push(buildCodexSkillDenyFlag());
-      return parts.join(" ");
+      return `${parts.join(" ")}${buildModelFlag(command, ctx.model, "-m")}`;
     },
     // async, not a plain arrow wrapping a sync call: a synchronous throw
     // from any step below must become a REJECTED PROMISE here, not an

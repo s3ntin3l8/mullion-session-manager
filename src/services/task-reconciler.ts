@@ -23,8 +23,12 @@ import {
   commandSupportsSeed,
   resolveSeedDelivered,
 } from "./task-agent-resolve.js";
-import { resolveOpenCodeModel, resolveOpenCodeSmallModel } from "./task-model-resolve.js";
-import { commandIsOpencode } from "./hook-adapters/index.js";
+import {
+  resolveCliModel,
+  resolveOpenCodeModel,
+  resolveOpenCodeSmallModel,
+} from "./task-model-resolve.js";
+import { commandIsOpencode, commandModelCli } from "./hook-adapters/index.js";
 import {
   syncTaskTransition,
   computeTaskDiffStat,
@@ -556,13 +560,19 @@ async function processPendingReviewSpawns(app: FastifyInstance): Promise<void> {
         // network call.
         if (reviewCommand === null) continue;
 
+        const reviewCliModelAgent = commandModelCli(reviewCommand);
         const reviewModel = commandIsOpencode(reviewCommand)
           ? (resolveOpenCodeModel(app, {
               taskModel: task.model ?? null,
               issueBody: task.body,
               role: "reviewer",
             }) ?? undefined)
-          : undefined;
+          : reviewCliModelAgent !== null
+            ? (resolveCliModel(app, reviewCliModelAgent, {
+                taskModel: task.model ?? null,
+                issueBody: task.body,
+              }) ?? undefined)
+            : undefined;
         const reviewSmallModel = commandIsOpencode(reviewCommand)
           ? (resolveOpenCodeSmallModel(app, {
               taskSmallModel: task.smallModel ?? null,
