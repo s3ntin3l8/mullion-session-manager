@@ -12,6 +12,8 @@ export interface RuntimeEnvDefaults {
   githubPollStaleThresholdSeconds: number;
   hostHeartbeatSeconds: number;
   browserFramerate: number;
+  browserMaxInstances: number;
+  deviceDiscoveryEnabled: boolean;
   logLevel: LogLevel;
 }
 
@@ -24,6 +26,8 @@ export function runtimeEnvDefaults(app: ConfigSource): RuntimeEnvDefaults {
     githubPollStaleThresholdSeconds: app.config.GITHUB_POLL_STALE_THRESHOLD,
     hostHeartbeatSeconds: app.config.HOST_HEARTBEAT_INTERVAL_SECONDS,
     browserFramerate: app.config.BROWSER_FRAMERATE,
+    browserMaxInstances: app.config.BROWSER_MAX_INSTANCES,
+    deviceDiscoveryEnabled: app.config.DEVICE_DISCOVERY_ENABLED,
     logLevel: app.config.LOG_LEVEL as LogLevel,
   };
 }
@@ -74,4 +78,25 @@ export function resolveLogLevel(settings: AppSettings, app: ConfigSource): LogLe
   return settings.server.logLevel === "inherit"
     ? runtimeEnvDefaults(app).logLevel
     : settings.server.logLevel;
+}
+
+// Boot-time knobs: read once during plugin registration, so a saved value only
+// takes effect after a restart. The plugins record what they resolved on the
+// app; the Settings UI compares that with the saved value to show a
+// "Restart required" hint.
+export interface BootRuntime {
+  browserMaxInstances: number;
+  deviceDiscoveryEnabled: boolean;
+}
+
+export function resolveBrowserMaxInstances(settings: AppSettings, app: ConfigSource): number {
+  return Math.max(
+    1,
+    inherit(settings.browser.maxInstances, runtimeEnvDefaults(app).browserMaxInstances),
+  );
+}
+
+export function resolveDeviceDiscoveryEnabled(settings: AppSettings, app: ConfigSource): boolean {
+  const saved = settings.devices.discoveryEnabled;
+  return saved === "inherit" ? runtimeEnvDefaults(app).deviceDiscoveryEnabled : saved === "on";
 }
