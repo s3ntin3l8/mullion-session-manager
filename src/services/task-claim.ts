@@ -24,8 +24,12 @@ import {
   commandSupportsSeed,
   resolveSeedDelivered,
 } from "./task-agent-resolve.js";
-import { resolveOpenCodeModel, resolveOpenCodeSmallModel } from "./task-model-resolve.js";
-import { commandIsOpencode } from "./hook-adapters/index.js";
+import {
+  resolveCliModel,
+  resolveOpenCodeModel,
+  resolveOpenCodeSmallModel,
+} from "./task-model-resolve.js";
+import { commandIsOpencode, commandModelCli } from "./hook-adapters/index.js";
 import { syncTaskTransition } from "./task-github-sync.js";
 import { buildWorkerPrompt, taskCommitTitlePath } from "./task-prompt.js";
 import { resolveTaskIssueContextSafe } from "./task-issue-context.js";
@@ -368,13 +372,19 @@ export async function dispatchClaimedTask(
           )
         : undefined,
     });
+    const cliModelAgent = commandModelCli(command);
     const model = commandIsOpencode(command)
       ? (resolveOpenCodeModel(app, {
           taskModel: task.model ?? null,
           issueBody: task.body,
           role: "implementer",
         }) ?? undefined)
-      : undefined;
+      : cliModelAgent !== null
+        ? (resolveCliModel(app, cliModelAgent, {
+            taskModel: task.model ?? null,
+            issueBody: task.body,
+          }) ?? undefined)
+        : undefined;
     const smallModel = commandIsOpencode(command)
       ? (resolveOpenCodeSmallModel(app, {
           taskSmallModel: task.smallModel ?? null,

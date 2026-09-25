@@ -131,3 +131,45 @@ export function resolveOpenCodeSmallModel(
   }
   return null;
 }
+
+export type CliModelAgent = "claude-code" | "codex" | "agy";
+
+// Unlike opencode's `provider/model`, these CLIs take bare names (`sonnet`,
+// `gpt-5`, `claude-opus-4-5[1m]`). The value ends up in a shell command
+// line, so this is a strict allowlist with no whitespace, quotes, `$`,
+// backticks, or leading `-` (which would read as another flag).
+const CLI_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@[\]-]{0,127}$/;
+
+export function validateCliModel(value: string): boolean {
+  return CLI_MODEL_RE.test(value);
+}
+
+const SETTINGS_KEY = { "claude-code": "claudeCode", codex: "codex", agy: "agy" } as const;
+
+/**
+ * Resolve the `--model` value for a Claude Code, Codex, or agy session. Same
+ * precedence chain as resolveOpenCodeModel: task DB row > issue-body `Model:`
+ * directive > install-wide default (`settings.<cli>.defaultModel`) > `null`
+ * (no flag; the CLI picks). An invalid value at any tier is logged and falls
+ * through rather than reaching the command line.
+ */
+export function resolveCliModel(
+  app: FastifyInstance,
+  agent: CliModelAgent,
+  opts: { taskModel?: string | null; issueBody: string | null },
+): string | null {
+  const candidates: Array<[string, string | null | undefined]> = [
+    ["task's model", opts.taskModel],
+    ["issue body's Model: line", parseModelDirective(opts.issueBody)],
+    ["install-wide default model", getStoredSettings(app.db)[SETTINGS_KEY[agent]].defaultModel],
+  ];
+  for (const [source, value] of candidates) {
+    if (!value) continue;
+    if (validateCliModel(value)) return value;
+    app.log.warn(
+      { model: value, agent },
+      `[task-model-resolve] ${source} is not a valid ${agent} model name, falling through`,
+    );
+  }
+  return null;
+}
