@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   WebCodecsVideoDecoder,
   BitmapVideoFrameRenderer,
+  WebGLVideoFrameRenderer,
 } from "@yume-chan/scrcpy-decoder-webcodecs";
 import type { ScrcpyMediaStreamPacket } from "@yume-chan/scrcpy";
 import { ScrcpyVideoCodecId } from "@yume-chan/scrcpy";
@@ -76,6 +77,8 @@ export function DevicePane(props: {
   onTitleChange?: (title: string) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  // One renderer per <canvas> for the pane's whole life (see the effect below).
+  const rendererRef = useRef<WebGLVideoFrameRenderer | BitmapVideoFrameRenderer | null>(null);
   // Lazy initializer, not a synchronous setState() inside the effect below
   // (which the react-hooks lint rule flags) — isSupported is a pure,
   // environment-only check with no dependency on props, so there's nothing
@@ -150,8 +153,20 @@ export function DevicePane(props: {
     const HEALTHY_PACKETS_TO_FORGIVE = 120;
     let healthyPackets = 0;
 
+    // Created ONCE per canvas (rendererRef survives effect re-runs, e.g. a
+    // deviceId change) and shared by every rebuilt decoder: a canvas is
+    // bound to one context type for life, decoder.dispose() doesn't dispose
+    // its renderer, and a second WebGL renderer would recompile its
+    // program/texture on the same context and leak the first. WebGL draws
+    // the decoded VideoFrame directly on the GPU; the bitmap renderer does a
+    // createImageBitmap copy per frame, so it is only the fallback.
+    // enableCapture stays off (faster) — nothing reads canvas pixels back.
+    rendererRef.current ??= WebGLVideoFrameRenderer.isSupported
+      ? new WebGLVideoFrameRenderer(canvas)
+      : new BitmapVideoFrameRenderer(canvas);
+    const renderer = rendererRef.current;
+
     function createDecoder(): void {
-      const renderer = new BitmapVideoFrameRenderer(canvas!);
       decoder = new WebCodecsVideoDecoder({ codec: ScrcpyVideoCodecId.H264, renderer });
       decoder.sizeChanged(({ width, height }) => {
         videoWidth = width;

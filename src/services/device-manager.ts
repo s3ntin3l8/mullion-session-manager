@@ -44,6 +44,14 @@ export interface DeviceManagerOptions {
   adbServerPort: number;
   emulatorPath: string;
   scrcpyServerPath: string;
+  /** scrcpy stream tuning — see env.ts's DEVICE_VIDEO_* comments. Optional
+   * so a caller that doesn't care (tests) gets the same defaults as the env
+   * schema. `0` means native size / uncapped fps. */
+  videoMaxSize?: number;
+  videoMaxFps?: number;
+  videoBitRate?: number;
+  /** Emulator `-gpu` mode — see env.ts's DEVICE_EMULATOR_GPU comment. */
+  emulatorGpu?: string;
   /** Same directory PtyManager's own scopes are namespaced against
    * (src/plugins/pty.ts's `ensureSessionsDir` output) — passed in rather
    * than read from app.config directly so this manager always agrees with
@@ -268,7 +276,7 @@ export class Device {
           "-no-window",
           "-no-audio",
           "-gpu",
-          "swiftshader_indirect",
+          this.manager.emulatorGpu ?? "swiftshader_indirect",
         ],
       });
 
@@ -534,7 +542,14 @@ export class Device {
     ) as unknown as YumeReadableStream<MaybeConsumable<Uint8Array>>;
     await AdbScrcpyClient.pushServer(adb, scrcpyServerStream);
 
-    const options = new AdbScrcpyOptionsLatest({ video: true, audio: false, control: true });
+    const options = new AdbScrcpyOptionsLatest({
+      video: true,
+      audio: false,
+      control: true,
+      maxSize: this.manager.videoMaxSize ?? 1280,
+      maxFps: this.manager.videoMaxFps ?? 60,
+      videoBitRate: this.manager.videoBitRate ?? 8_000_000,
+    });
     this.scrcpyClient = await AdbScrcpyClient.start(
       adb,
       "/data/local/tmp/scrcpy-server.jar",

@@ -243,7 +243,8 @@ sessionId), not scoped to any project or session.
 - `device key <id> <androidKeyCode>`
 - `device logcat <id> [--lines <n>] [--filter <expr>]`
 
-`x`/`y` are in the device's video-pixel space, not CSS pixels. Every verb
+`x`/`y` are in the device's native **screen pixels** — the same space as a
+`screenshot`, and independent of the (downscaled) live-panel stream. Every verb
 takes an explicit device id — there's no implicit default device.
 
 ### bundle
