@@ -237,7 +237,10 @@ export function DevicePane(props: {
         activeWriter.write(packet).then(
           () => {
             if (destroyed || socket !== ws || activeWriter !== writer || decoderDead) return;
-            if (++healthyPackets >= HEALTHY_PACKETS_TO_FORGIVE) decoderFailures = 0;
+            if (++healthyPackets >= HEALTHY_PACKETS_TO_FORGIVE) {
+              decoderFailures = 0;
+              healthyPackets = 0;
+            }
             if (packet.type === "data" && packet.keyframe) setHasFrame(true);
           },
           (err: unknown) => {

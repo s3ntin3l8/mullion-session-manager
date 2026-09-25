@@ -250,6 +250,17 @@ describe("DevicePane (issue #1326)", () => {
   });
 
   it("gives up with a visible error after repeated decoder failures with no frame", async () => {
+    // Fake (but real-time-advancing) timers so we can jump past the longest
+    // backoff and prove no fourth connect is queued, rather than sleeping.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      await runGiveUpScenario();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  async function runGiveUpScenario() {
     resetStore({ devices: [makeDevice()], devicesLoaded: true });
     render(<DevicePane params={{ deviceId: 7 }} />);
     decoderWriter.write.mockImplementation(() => Promise.reject(new Error("bad delta")));
@@ -265,8 +276,10 @@ describe("DevicePane (issue #1326)", () => {
 
     expect(await screen.findByText(/Video decoder failed: bad delta/)).toBeTruthy();
     expect(screen.getByText("Disconnected")).toBeTruthy();
-    // No fourth connection was scheduled.
-    await new Promise((r) => setTimeout(r, 700));
+    // No fourth connection was scheduled, even past the max backoff (8s).
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+    });
     expect(FakeWebSocket.instances).toHaveLength(3);
-  });
+  }
 });

@@ -33,6 +33,13 @@ import type { Device, DeviceKind } from "../services/device-manager.js";
 
 const BACKPRESSURE_MAX_BUFFERED_BYTES = 4 * 1024 * 1024;
 
+// How long a socket may sit gated on a keyframe before we log it and ask the
+// device for another one. The gate silently drops every delta, and the pane
+// can't tell "no keyframe yet" from "stream idle" — so a permanently-gated
+// socket (the attach-time resetVideo() rejected, no controller, or the device
+// ignored the request) would otherwise be invisible.
+const KEYFRAME_STALL_MS = 5000;
+
 // Wire framing for a video packet: [1 byte type][1 byte flags][payload].
 // type: 0 = configuration (SPS/PPS), 1 = data. flags bit0 = keyframe.
 // Deliberately doesn't carry `pts` — see the route's own header on why
@@ -368,6 +375,15 @@ export async function attachSocketToDevice(
   // Get the late joiner an IDR now rather than after the encoder's own
   // (possibly many-second) keyframe interval.
   requestKeyframe("on attach");
+  const stallTimer = setTimeout(() => {
+    if (closed || !awaitingKeyframe) return;
+    app.log.warn(
+      { deviceId, hasController: Boolean(liveDevice.controller) },
+      "device socket still waiting for a keyframe; requesting another",
+    );
+    requestKeyframe("after keyframe stall");
+  }, KEYFRAME_STALL_MS);
+  stallTimer.unref();
 
   const unsubscribeExit = device.onExit(() => {
     if (socket.readyState === socket.OPEN) {
@@ -400,6 +416,7 @@ export async function attachSocketToDevice(
 
   socket.on("close", () => {
     closed = true;
+    clearTimeout(stallTimer);
     unsubscribeVideo();
     unsubscribeExit();
   });

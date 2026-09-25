@@ -279,6 +279,70 @@ describe("device route (/ws/device/:deviceId)", () => {
       expect(socket.sentMessages).toHaveLength(3);
     });
 
+    it("warns and re-requests a keyframe when a socket stays gated past the stall timeout", async () => {
+      vi.useFakeTimers();
+      try {
+        const app = await buildTestApp();
+        const warn = vi.spyOn(app.log, "warn");
+        const mockResetVideo = vi.fn().mockResolvedValue(undefined);
+        vi.spyOn(app.device, "getOrCreate").mockResolvedValueOnce({
+          controller: { resetVideo: mockResetVideo },
+          onVideoPacket: vi.fn(() => vi.fn()),
+          onExit: vi.fn(() => vi.fn()),
+        } as any);
+        await attachSocketToDevice(app, new MockWebSocket() as any, {
+          deviceId: 1,
+          avdName: "dev35",
+          label: null,
+          port: null,
+        });
+        expect(mockResetVideo).toHaveBeenCalledTimes(1);
+
+        await vi.advanceTimersByTimeAsync(5000);
+        expect(warn).toHaveBeenCalledWith(
+          expect.objectContaining({ deviceId: 1, hasController: true }),
+          expect.stringContaining("still waiting for a keyframe"),
+        );
+        expect(mockResetVideo).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not warn about a stall once a keyframe has gone out, or after close", async () => {
+      vi.useFakeTimers();
+      try {
+        const app = await buildTestApp();
+        const warn = vi.spyOn(app.log, "warn");
+        let videoListener: ((pkt: ScrcpyMediaStreamPacket) => void) | undefined;
+        const mockResetVideo = vi.fn().mockResolvedValue(undefined);
+        vi.spyOn(app.device, "getOrCreate").mockResolvedValue({
+          controller: { resetVideo: mockResetVideo },
+          onVideoPacket: vi.fn((fn) => {
+            videoListener = fn;
+            return vi.fn();
+          }),
+          onExit: vi.fn(() => vi.fn()),
+        } as any);
+        const params = { deviceId: 1, avdName: "dev35", label: null, port: null };
+
+        const live = new MockWebSocket();
+        await attachSocketToDevice(app, live as any, params);
+        videoListener!({ type: "data", keyframe: true, data: new Uint8Array([1]) });
+
+        const closing = new MockWebSocket();
+        await attachSocketToDevice(app, closing as any, params);
+        closing.close();
+
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(warn).not.toHaveBeenCalled();
+        // one on-attach request per socket, no stall retries
+        expect(mockResetVideo).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("logs, rather than throws, when the on-attach resetVideo rejects", async () => {
       const app = await buildTestApp();
       const warn = vi.spyOn(app.log, "warn");
