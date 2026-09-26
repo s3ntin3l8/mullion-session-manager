@@ -1605,6 +1605,11 @@
   border-bottom: 1px solid var(--border);
 }
 .mobile-session-list {
+  /* A flex child of the max-height sheet: without min-height: 0 it grows to
+     its content and never scrolls, pushing later projects and "New session"
+     out of reach. */
+  flex: 1 1 auto;
+  min-height: 0;
   margin: 0;
   padding: 0 0 4px;
   overflow-y: auto;

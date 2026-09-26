@@ -337,4 +337,34 @@ describe("MobileSessionSwitcher", () => {
     fireEvent.touchEnd(el, { changedTouches: [{ clientX: 100, clientY: 20 }] });
     expect(props.onSelect).not.toHaveBeenCalled();
   });
+
+  it("hides the Needs you pin while a search is active", async () => {
+    const many: MobileSessionItem[] = Array.from({ length: 10 }, (_, i) => ({
+      id: `m${i}`,
+      title: `task-${i}`,
+      dotColor: "gray",
+      agentLogo: null,
+      unreadCount: 0,
+    }));
+    renderSwitcher({
+      items: many,
+      activeId: "m0",
+      unreadElsewhere: 0,
+      sections: [
+        {
+          key: "needs-you",
+          label: "Needs you",
+          kind: "needs-you",
+          rows: [rowFor(many[7], { key: "pin-7", needsYou: true })],
+        },
+        { key: "project-1", label: "runway", kind: "project", rows: many.map((i) => rowFor(i)) },
+      ],
+    });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /task-0/ }));
+    expect(screen.getByRole("heading", { name: /Needs you/ })).toBeInTheDocument();
+    await user.type(screen.getByLabelText("Search sessions"), "task-7");
+    expect(screen.queryByRole("heading", { name: /Needs you/ })).toBeNull();
+    expect(screen.getAllByText("task-7")).toHaveLength(1);
+  });
 });
