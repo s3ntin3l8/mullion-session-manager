@@ -674,7 +674,16 @@ export class Device {
       for (;;) {
         const { value, done } = await reader.read();
         if (done) break;
-        for (const listener of this.clipboardListeners) listener(value);
+        for (const listener of this.clipboardListeners) {
+          // One throwing listener (e.g. socket.send on a closing socket) must
+          // not end the drain — an undrained stream is the stall this pump
+          // exists to prevent.
+          try {
+            listener(value);
+          } catch {
+            // ignore
+          }
+        }
       }
     } catch {
       // Stream errors surface via `exited` — same as pumpVideo().

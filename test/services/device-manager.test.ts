@@ -1101,6 +1101,26 @@ describe("DeviceManager", () => {
       expect(late).not.toHaveBeenCalled();
     });
 
+    it("keeps draining when a listener throws", async () => {
+      let push!: (text: string) => void;
+      mockClipboardStream = new ReadableStream<string>({
+        start(controller) {
+          push = (text) => controller.enqueue(text);
+        },
+      });
+      const device = await spawnDevice();
+      const good = vi.fn();
+      device.onClipboard(() => {
+        throw new Error("socket closing");
+      });
+      device.onClipboard(good);
+
+      push("one");
+      push("two");
+      await vi.waitFor(() => expect(good).toHaveBeenCalledWith("two"));
+      expect(good).toHaveBeenCalledWith("one");
+    });
+
     it("keeps draining with no subscriber attached (so the device-message loop never stalls)", async () => {
       let pulled = 0;
       mockClipboardStream = new ReadableStream<string>(
