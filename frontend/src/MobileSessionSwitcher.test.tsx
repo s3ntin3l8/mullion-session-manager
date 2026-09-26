@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi } from "vitest";
 import { createRef } from "react";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MobileSessionSwitcher } from "./MobileSessionSwitcher.js";
+import { resetPhoneBackStackForTests } from "./hooks/usePhoneBackStack.js";
 import type {
   MobileSessionItem,
   MobileSessionRow,
@@ -366,5 +367,21 @@ describe("MobileSessionSwitcher", () => {
     await user.type(screen.getByLabelText("Search sessions"), "task-7");
     expect(screen.queryByRole("heading", { name: /Needs you/ })).toBeNull();
     expect(screen.getAllByText("task-7")).toHaveLength(1);
+  });
+
+  it("Android back closes the sheet", async () => {
+    resetPhoneBackStackForTests();
+    const pushState = vi.spyOn(window.history, "pushState").mockImplementation(() => {});
+    vi.spyOn(window.history, "back").mockImplementation(() => {});
+    try {
+      renderSwitcher();
+      await userEvent.setup().click(trigger());
+      expect(pushState).toHaveBeenCalledTimes(1);
+      act(() => void window.dispatchEvent(new PopStateEvent("popstate")));
+      expect(screen.queryByRole("dialog")).toBeNull();
+    } finally {
+      resetPhoneBackStackForTests();
+      vi.restoreAllMocks();
+    }
   });
 });

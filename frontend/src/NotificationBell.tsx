@@ -17,6 +17,7 @@ import type { NotificationEvent, Project, Session } from "./api/index.js";
 import { BellIcon, BlockedIcon, CheckIcon, CloseIcon, WarningTriangleIcon } from "./ui/icons.js";
 import { formatRelativeAge } from "./relativeTime.js";
 import { useFocusTrap } from "./hooks/useFocusTrap.js";
+import { usePhoneBackStack } from "./hooks/usePhoneBackStack.js";
 import { useVisualViewportChange } from "./hooks/useVisualViewportChange.js";
 import { truncateHead } from "./lib/truncatePath.js";
 import { formatStatusLabel, STATUS_PRESENTATION } from "./sessionStatus.js";
@@ -517,6 +518,8 @@ export function NotificationBell({
   // hook as Settings/CommandPalette/PaneTab's menu. No `aria-modal` — same
   // "no backdrop, background stays interactive" rule as PaneTab's menu and
   // UnifiedBoard.tsx's drawer.
+  // Phone sheet only (`phone` gates it): Android back closes it.
+  usePhoneBackStack(phone && open, () => setOpen(false));
   const { onKeyDown: onTrapKeyDown, suppressRestore } = useFocusTrap({
     active: open,
     containerRef: panelRef,

@@ -30,7 +30,9 @@ vi.mock("./store/index.js", () => {
 });
 
 vi.mock("./NotificationBell.js", () => ({
-  NotificationBell: () => null,
+  NotificationBell: ({ phone }: { phone?: boolean }) => (
+    <span data-testid="bell" data-phone={String(!!phone)} />
+  ),
 }));
 
 const NOOP_PROPS = {
@@ -165,5 +167,33 @@ describe("Toolbar — phone session switcher slot and app menu", () => {
     await user.click(screen.getByTitle("Menu"));
     await user.click(screen.getByText("Settings · v0.3.29"));
     expect(onOpenSettings).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Toolbar — phone tier", () => {
+  it("puts the bell at the right edge and drops the ⋯ menu", () => {
+    const { container } = render(<Toolbar {...NOOP_PROPS} phone />);
+    const bell = screen.getByTestId("bell");
+    expect(bell.closest(".toolbar-actions")).not.toBeNull();
+    expect(container.querySelector(".toolbar-lead")?.contains(bell)).toBe(false);
+    expect(bell).toHaveAttribute("data-phone", "true");
+    expect(container.querySelector(".toolbar-app-menu")).toBeNull();
+  });
+
+  it("keeps the bell in the lead and the ⋯ menu when not phone", () => {
+    const { container } = render(<Toolbar {...NOOP_PROPS} />);
+    const bell = screen.getByTestId("bell");
+    expect(container.querySelector(".toolbar-lead")?.contains(bell)).toBe(true);
+    expect(bell).toHaveAttribute("data-phone", "false");
+    expect(container.querySelector(".toolbar-app-menu")).not.toBeNull();
+  });
+
+  it("names the Tasks view in the switcher's slot on phone only", () => {
+    viewMode = "kanban";
+    const phone = render(<Toolbar {...NOOP_PROPS} phone />);
+    expect(phone.container.querySelector(".toolbar-mobile-title")).toHaveTextContent("Tasks");
+    phone.unmount();
+    const other = render(<Toolbar {...NOOP_PROPS} />);
+    expect(other.container.querySelector(".toolbar-mobile-title")).toBeNull();
   });
 });

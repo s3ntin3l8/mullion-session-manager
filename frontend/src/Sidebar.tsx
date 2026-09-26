@@ -88,6 +88,10 @@ const SIDEBAR_FILTER_CHIPS: { id: KanbanColumnId; label: string }[] = [
 const VIRTUALIZE_SESSION_THRESHOLD = 20;
 
 interface SidebarProps {
+  // Phone navigator only: render just one of the sidebar's two areas (the
+  // full-screen navigator shows Projects and Devices as separate tabs).
+  // Unset — desktop and tablet — renders the whole sidebar exactly as before.
+  phoneSection?: "projects" | "devices";
   onOpenSession: (session: Session) => void;
   onOpenSessionAsFloat: (session: Session) => void;
   onSessionEnded: (session: Session) => void;
@@ -115,6 +119,7 @@ interface SidebarProps {
 }
 
 export function Sidebar({
+  phoneSection,
   onOpenSession,
   onOpenSessionAsFloat,
   onSessionEnded,
@@ -406,106 +411,113 @@ export function Sidebar({
 
   return (
     <div className="sidebar">
-      <button
-        className={`sidebar-tasks-entry${viewMode === "kanban" ? " active" : ""}`}
-        aria-pressed={viewMode === "kanban"}
-        // Issue: this already claimed to be a toggle via aria-pressed, but
-        // onOpenTasks only ever set viewMode to "kanban" — clicking it a
-        // second time while already in Tasks did nothing, leaving the
-        // Toolbar's "Back" chevron as the only way out. Honoring what the
-        // a11y attribute already advertised.
-        onClick={() =>
-          viewMode === "kanban" ? useDashboardStore.getState().setViewMode("list") : onOpenTasks()
-        }
-      >
-        <LayersIcon size={14} />
-        <span className="sidebar-tasks-entry-label">Tasks</span>
-        {actionableTaskCount > 0 && (
-          <span className="project-attn-pill">{actionableTaskCount}</span>
-        )}
-      </button>
-      <SidebarDevices onOpenDevice={onOpenDevice} />
-      <div className="sidebar-section-header">
-        <span className="sidebar-section-title">Projects</span>
-        <span className="project-session-count">sessions</span>
-        <HierarchyToggle />
+      {phoneSection === undefined && (
         <button
-          className="toolbar-icon-btn"
-          style={{ width: 22, height: 22 }}
-          title="Add project"
-          onClick={openAddProject}
+          className={`sidebar-tasks-entry${viewMode === "kanban" ? " active" : ""}`}
+          aria-pressed={viewMode === "kanban"}
+          // Issue: this already claimed to be a toggle via aria-pressed, but
+          // onOpenTasks only ever set viewMode to "kanban" — clicking it a
+          // second time while already in Tasks did nothing, leaving the
+          // Toolbar's "Back" chevron as the only way out. Honoring what the
+          // a11y attribute already advertised.
+          onClick={() =>
+            viewMode === "kanban" ? useDashboardStore.getState().setViewMode("list") : onOpenTasks()
+          }
         >
-          <PlusIcon size={15} strokeLinecap="round" strokeWidth={1.9} />
+          <LayersIcon size={14} />
+          <span className="sidebar-tasks-entry-label">Tasks</span>
+          {actionableTaskCount > 0 && (
+            <span className="project-attn-pill">{actionableTaskCount}</span>
+          )}
         </button>
-      </div>
-      {/* U3 — sticky at the top of the scrollable sidebar (see
+      )}
+      {phoneSection !== "projects" && <SidebarDevices onOpenDevice={onOpenDevice} />}
+      {phoneSection !== "devices" && (
+        <>
+          <div className="sidebar-section-header">
+            <span className="sidebar-section-title">Projects</span>
+            <span className="project-session-count">sessions</span>
+            <HierarchyToggle />
+            <button
+              className="toolbar-icon-btn"
+              style={{ width: 22, height: 22 }}
+              title="Add project"
+              onClick={openAddProject}
+            >
+              <PlusIcon size={15} strokeLinecap="round" strokeWidth={1.9} />
+            </button>
+          </div>
+          {/* U3 — sticky at the top of the scrollable sidebar (see
         .sidebar-filter-bar's own `position: sticky` rule in styles.css) so
         it stays reachable while scrolled deep into a long session list —
         exactly the scenario ("past ~20 sessions") this filter exists for.
         Only shown once there's at least one project — an empty dashboard
         has nothing to filter, and the box would just add clutter to the
         "Welcome to Mullion" empty state below. */}
-      {projects.length > 0 && (
-        <div className="sidebar-filter-bar">
-          <div className="sidebar-filter-search">
-            <SearchIcon size={13} strokeWidth={1.9} />
-            <input
-              type="text"
-              placeholder="Filter sessions…"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              aria-label="Filter sessions"
-            />
-            {searchQuery !== "" && (
-              <button
-                type="button"
-                className="sidebar-filter-clear"
-                title="Clear filter"
-                onClick={() => setSearchQuery("")}
-              >
-                <CloseIcon size={10} />
-              </button>
-            )}
-          </div>
-          <div className="sidebar-filter-chips" role="group" aria-label="Filter by status">
-            {SIDEBAR_FILTER_CHIPS.map((chip) => (
-              <button
-                key={chip.id}
-                type="button"
-                className={`sidebar-filter-chip${selectedChips.has(chip.id) ? " active" : ""}`}
-                aria-pressed={selectedChips.has(chip.id)}
-                onClick={() => toggleChip(chip.id)}
-              >
-                {chip.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-      {projects.length === 0 ? (
-        <EmptyState>
-          <MullionMark size={32} className="ui-empty-state-mark" />
-          <EmptyStateTitle>Welcome to Mullion</EmptyStateTitle>
-          <EmptyStateBody>
-            Add a project folder to start — sessions run there and survive across restarts.
-          </EmptyStateBody>
-          <EmptyStateActions>
-            <button className="ui-empty-state-btn-primary" onClick={() => setAddProjectOpen(true)}>
-              <PlusIcon size={12} strokeLinecap="round" strokeWidth={2.2} />
-              Add a project
-            </button>
-            <button
-              className="ui-empty-state-btn-secondary"
-              onClick={() => setDiscoverCollapsed(false)}
-            >
-              <SearchIcon size={12} strokeWidth={2} />
-              Scan for repos
-            </button>
-          </EmptyStateActions>
-        </EmptyState>
-      ) : (
-        <>
-          {/* U3 — the live GitHub CI subscription used to live inside
+          {projects.length > 0 && (
+            <div className="sidebar-filter-bar">
+              <div className="sidebar-filter-search">
+                <SearchIcon size={13} strokeWidth={1.9} />
+                <input
+                  type="text"
+                  placeholder="Filter sessions…"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  aria-label="Filter sessions"
+                />
+                {searchQuery !== "" && (
+                  <button
+                    type="button"
+                    className="sidebar-filter-clear"
+                    title="Clear filter"
+                    onClick={() => setSearchQuery("")}
+                  >
+                    <CloseIcon size={10} />
+                  </button>
+                )}
+              </div>
+              <div className="sidebar-filter-chips" role="group" aria-label="Filter by status">
+                {SIDEBAR_FILTER_CHIPS.map((chip) => (
+                  <button
+                    key={chip.id}
+                    type="button"
+                    className={`sidebar-filter-chip${selectedChips.has(chip.id) ? " active" : ""}`}
+                    aria-pressed={selectedChips.has(chip.id)}
+                    onClick={() => toggleChip(chip.id)}
+                  >
+                    {chip.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {projects.length === 0 ? (
+            <EmptyState>
+              <MullionMark size={32} className="ui-empty-state-mark" />
+              <EmptyStateTitle>Welcome to Mullion</EmptyStateTitle>
+              <EmptyStateBody>
+                Add a project folder to start — sessions run there and survive across restarts.
+              </EmptyStateBody>
+              <EmptyStateActions>
+                <button
+                  className="ui-empty-state-btn-primary"
+                  onClick={() => setAddProjectOpen(true)}
+                >
+                  <PlusIcon size={12} strokeLinecap="round" strokeWidth={2.2} />
+                  Add a project
+                </button>
+                <button
+                  className="ui-empty-state-btn-secondary"
+                  onClick={() => setDiscoverCollapsed(false)}
+                >
+                  <SearchIcon size={12} strokeWidth={2} />
+                  Scan for repos
+                </button>
+              </EmptyStateActions>
+            </EmptyState>
+          ) : (
+            <>
+              {/* U3 — the live GitHub CI subscription used to live inside
             ProjectSection's own effect, one per mounted instance. Split out
             so it has exactly one owner regardless of which rendering path
             below is active (ProjectSection isn't mounted at all once
@@ -513,54 +525,56 @@ export function Sidebar({
             unconditionally (not just `visibleProjects`) since a filtered-out
             project's CI status should keep updating in the background, the
             same as it always has. */}
-          {projects.map((project) => (
-            <ProjectGitHubSubscription key={project.id} projectId={project.id} />
-          ))}
-          {filterActive && visibleProjects.length === 0 ? (
-            <EmptyState>
-              <EmptyStateTitle>No sessions match</EmptyStateTitle>
-              <EmptyStateBody>
-                Try a different search, or clear the status filters above.
-              </EmptyStateBody>
-            </EmptyState>
-          ) : shouldVirtualize ? (
-            <VirtualizedProjectTree
-              rows={flatRows}
-              hosts={hosts}
-              onOpenSession={onOpenSession}
-              onOpenSessionAsFloat={onOpenSessionAsFloat}
-              onSessionEnded={onSessionEnded}
-              onOpenProjectLauncher={onOpenProjectLauncher}
-              onToggleCollapsed={toggleProjectCollapsedVirtualized}
-              onOpenProjectSetup={onOpenProjectSetup}
-            />
-          ) : (
-            visibleProjects.map((project) => (
-              <ProjectSection
-                key={project.id}
-                project={project}
-                hosts={hosts}
-                onOpenSessionAsFloat={onOpenSessionAsFloat}
-                sessions={filteredSessionsByProject.get(project.id) ?? []}
-                allSessions={baseSessionsByProject.get(project.id) ?? []}
-                onOpenSession={onOpenSession}
-                onSessionEnded={onSessionEnded}
-                onOpenLauncher={() => onOpenProjectLauncher(project.id)}
-                onOpenProjectSetup={() => onOpenProjectSetup(project.id)}
-                hierarchicalView={hierarchicalView}
-                forceExpanded={filterActive}
-              />
-            ))
+              {projects.map((project) => (
+                <ProjectGitHubSubscription key={project.id} projectId={project.id} />
+              ))}
+              {filterActive && visibleProjects.length === 0 ? (
+                <EmptyState>
+                  <EmptyStateTitle>No sessions match</EmptyStateTitle>
+                  <EmptyStateBody>
+                    Try a different search, or clear the status filters above.
+                  </EmptyStateBody>
+                </EmptyState>
+              ) : shouldVirtualize ? (
+                <VirtualizedProjectTree
+                  rows={flatRows}
+                  hosts={hosts}
+                  onOpenSession={onOpenSession}
+                  onOpenSessionAsFloat={onOpenSessionAsFloat}
+                  onSessionEnded={onSessionEnded}
+                  onOpenProjectLauncher={onOpenProjectLauncher}
+                  onToggleCollapsed={toggleProjectCollapsedVirtualized}
+                  onOpenProjectSetup={onOpenProjectSetup}
+                />
+              ) : (
+                visibleProjects.map((project) => (
+                  <ProjectSection
+                    key={project.id}
+                    project={project}
+                    hosts={hosts}
+                    onOpenSessionAsFloat={onOpenSessionAsFloat}
+                    sessions={filteredSessionsByProject.get(project.id) ?? []}
+                    allSessions={baseSessionsByProject.get(project.id) ?? []}
+                    onOpenSession={onOpenSession}
+                    onSessionEnded={onSessionEnded}
+                    onOpenLauncher={() => onOpenProjectLauncher(project.id)}
+                    onOpenProjectSetup={() => onOpenProjectSetup(project.id)}
+                    hierarchicalView={hierarchicalView}
+                    forceExpanded={filterActive}
+                  />
+                ))
+              )}
+            </>
           )}
+          <SourceControlSection onOpenGit={onOpenGit} />
+          <DiscoverProjects
+            collapsed={discoverCollapsed}
+            onToggleCollapsed={() => setDiscoverCollapsed((v) => !v)}
+            onOpenSettingsProjects={onOpenSettingsProjects}
+            hosts={hosts}
+          />
         </>
       )}
-      <SourceControlSection onOpenGit={onOpenGit} />
-      <DiscoverProjects
-        collapsed={discoverCollapsed}
-        onToggleCollapsed={() => setDiscoverCollapsed((v) => !v)}
-        onOpenSettingsProjects={onOpenSettingsProjects}
-        hosts={hosts}
-      />
       {addProjectOpen && (
         <CreateProjectModal
           hosts={hosts}

@@ -3,6 +3,7 @@ import type { KeyboardEvent as ReactKeyboardEvent, ReactNode, RefObject } from "
 import { createPortal } from "react-dom";
 import { useDashboardStore } from "./store/index.js";
 import { useFocusTrap } from "./hooks/useFocusTrap.js";
+import { usePhoneBackStack } from "./hooks/usePhoneBackStack.js";
 import { ChevronDownIcon, CloseIcon, PlusIcon } from "./ui/icons.js";
 import { matchesQuery } from "./matchQuery.js";
 import {
@@ -106,6 +107,9 @@ export function MobileSessionSwitcher({
     setOpen(false);
     setQuery("");
   };
+
+  // Phone-only component: Android back closes the sheet (cancelling a rename).
+  usePhoneBackStack(open, closeSheet);
 
   const { onKeyDown: onTrapKeyDown } = useFocusTrap({ active: open, containerRef: sheetRef });
   const onSheetKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {

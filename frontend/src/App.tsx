@@ -5,6 +5,9 @@ import type { DockviewApi, DockviewReadyEvent } from "dockview-react";
 import "dockview-react/dist/styles/dockview.css";
 import { Sidebar } from "./Sidebar.js";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher.js";
+import { PhoneNavigatorHeader, PhoneSettingsList } from "./PhoneNavigator.js";
+import type { PhoneNavTab } from "./PhoneNavigator.js";
+import { usePhoneBackStack } from "./hooks/usePhoneBackStack.js";
 import type { TerminalPaneParams } from "./TerminalPane.js";
 import { repaintAllTerminals } from "./terminalRepaintRegistry.js";
 import { ErrorBoundary } from "./ErrorBoundary.js";
@@ -147,6 +150,11 @@ export function App() {
   });
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("appearance");
+  // Set when a section was picked from the phone navigator's own Settings
+  // list, so Settings opens straight into it (see Settings.tsx).
+  const [settingsStartInContent, setSettingsStartInContent] = useState(false);
+  // Which tab of the phone navigator is showing; remembered across closes.
+  const [navTab, setNavTab] = useState<PhoneNavTab>("projects");
   // Bumped on the Settings ErrorBoundary's own reset — see loadSettings'
   // header comment for why a fresh lazy() payload (not just remounting)
   // is what actually lets a later reopen retry a chunk-load failure.
@@ -429,7 +437,16 @@ export function App() {
 
   const openSettings = useCallback((section: SettingsSection = "appearance") => {
     setSettingsSection(section);
+    setSettingsStartInContent(false);
     setSettingsOpen(true);
+  }, []);
+  // Phone navigator's Settings tab: open the picked section directly and
+  // close the navigator behind it.
+  const openSettingsFromNavigator = useCallback((section: SettingsSection) => {
+    setSettingsSection(section);
+    setSettingsStartInContent(true);
+    setSettingsOpen(true);
+    setSidebarOpen(false);
   }, []);
 
   // Opens the global command palette. The single enforcement point for
@@ -1113,6 +1130,13 @@ export function App() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (layoutTier === "desktop") setSidebarOpen(false);
   }, [layoutTier]);
+  // Phone: Android back / the back gesture closes the topmost overlay (see
+  // hooks/usePhoneBackStack.ts). Settings and the session/notification
+  // sheets register themselves; the navigator and the Tasks board live here.
+  usePhoneBackStack(isMobile && sidebarOpen, () => setSidebarOpen(false));
+  usePhoneBackStack(isMobile && viewMode === "kanban", () =>
+    useDashboardStore.getState().setViewMode("list"),
+  );
   useEffect(() => {
     if (layoutTier === "desktop") return;
     if (sidebarOpen) {
@@ -1257,6 +1281,21 @@ export function App() {
   // dockview's tab text colors.
   const dockviewChromeBg = getSchemeBackground(settings.terminal.colorScheme, theme);
 
+  const sidebar = (
+    <Sidebar
+      phoneSection={isMobile && navTab !== "settings" ? navTab : undefined}
+      onOpenSession={onOpenSession}
+      onOpenSessionAsFloat={onOpenSessionAsFloat}
+      onSessionEnded={onSessionEnded}
+      onOpenProjectLauncher={openProjectLauncher}
+      onOpenSettingsProjects={() => openSettings("projects")}
+      onOpenTasks={onOpenTasks}
+      onOpenGit={onOpenGit}
+      onOpenProjectSetup={onOpenProjectSetup}
+      onOpenDevice={onOpenDevice}
+    />
+  );
+
   // Phone session switcher — rendered into the toolbar in place of the old
   // `.mobile-tabs` strip. `mobilePanels` is tiled-only (see its comment).
   const mobileSessionSwitcher = isMobile ? (
@@ -1301,18 +1340,30 @@ export function App() {
           {layoutTier === "desktop" && !sidebarCollapsed && (
             <div className="sidebar-resize-handle" onMouseDown={onSidebarResizeMouseDown} />
           )}
-          <WorkspaceSwitcher onSelectWorkspace={handleSelectWorkspace} />
-          <Sidebar
-            onOpenSession={onOpenSession}
-            onOpenSessionAsFloat={onOpenSessionAsFloat}
-            onSessionEnded={onSessionEnded}
-            onOpenProjectLauncher={openProjectLauncher}
-            onOpenSettingsProjects={() => openSettings("projects")}
-            onOpenTasks={onOpenTasks}
-            onOpenGit={onOpenGit}
-            onOpenProjectSetup={onOpenProjectSetup}
-            onOpenDevice={onOpenDevice}
-          />
+          {/* Phone: workspaces don't exist as a concept — the session picker
+              lists every session — and the drawer is a full-screen navigator
+              with tabs instead of one long scroll. */}
+          {isMobile ? (
+            <>
+              <PhoneNavigatorHeader
+                tab={navTab}
+                onTab={setNavTab}
+                onOpenTasks={onOpenTasks}
+                tasksActive={viewMode === "kanban"}
+                onClose={() => setSidebarOpen(false)}
+              />
+              {navTab === "settings" ? (
+                <PhoneSettingsList onSelect={openSettingsFromNavigator} />
+              ) : (
+                sidebar
+              )}
+            </>
+          ) : (
+            <>
+              <WorkspaceSwitcher onSelectWorkspace={handleSelectWorkspace} />
+              {sidebar}
+            </>
+          )}
         </div>
         <div className="grid-area">
           {/* Whole-backend-down — design States doc section 04. Docked at
@@ -1617,6 +1668,8 @@ export function App() {
               <LazySettings
                 onClose={() => setSettingsOpen(false)}
                 initialSection={settingsSection}
+                startInContent={settingsStartInContent}
+                phone={isMobile}
               />
             </Suspense>
           </ErrorBoundary>
