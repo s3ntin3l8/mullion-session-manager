@@ -1576,7 +1576,11 @@ export function App() {
                   button renders on mobile too — see mobile.css's
                   .toolbar-back-to-workspace override). */}
               {viewMode === "kanban" && (
-                <KanbanBoardOverlay onOpenSession={onOpenSession} onSessionEnded={onSessionEnded} />
+                <KanbanBoardOverlay
+                  onOpenSession={onOpenSession}
+                  onSessionEnded={onSessionEnded}
+                  phone={isMobile}
+                />
               )}
             </div>
             <Dock

@@ -398,6 +398,8 @@ function DevicePaneWrapper(props: IDockviewPanelProps<DevicePaneParams>) {
 export function KanbanBoardOverlay(props: {
   onOpenSession: (session: Session) => void;
   onSessionEnded: (session: Session) => void;
+  // Phone tier: the board's one-column-at-a-time layout (see UnifiedBoard).
+  phone?: boolean;
 }) {
   const [resetKey, resetPanel] = useResetKey();
   const LazyUnifiedBoard = useRetriableLazy(loadUnifiedBoard, resetKey);
@@ -412,6 +414,7 @@ export function KanbanBoardOverlay(props: {
             key={resetKey}
             onOpenSession={props.onOpenSession}
             onSessionEnded={props.onSessionEnded}
+            phone={props.phone}
           />
         </Suspense>
       </ErrorBoundary>

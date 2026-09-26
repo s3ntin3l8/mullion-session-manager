@@ -498,6 +498,14 @@ describe("UnifiedBoard task columns", () => {
     vi.useRealTimers();
   });
 
+  it("also renders the sync error as (aria-hidden) text so phone CSS can show it without a hover tooltip", () => {
+    tasks = [makeTask({ id: 1, githubSyncError: "401 Unauthorized" })];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    const text = document.querySelector(".task-card-sync-error-text");
+    expect(text).toHaveTextContent("401 Unauthorized");
+    expect(text).toHaveAttribute("aria-hidden", "true");
+  });
+
   it("shows a warning glyph with an accessible name for a task with a GitHub sync error", () => {
     tasks = [makeTask({ id: 1, githubSyncError: "401 Unauthorized" })];
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);

@@ -6,6 +6,7 @@ import {
   orderTasksForColumn,
   computeTaskReorder,
   absoluteDropIndex,
+  defaultPhoneColumn,
 } from "./tasksBoard.js";
 import type { Task, TaskStatus } from "./api/index.js";
 
@@ -245,5 +246,47 @@ describe("absoluteDropIndex", () => {
     // Task 6 doesn't move — no update emitted for it.
     expect(byId[6]).toBeUndefined();
     expect(updates).toHaveLength(5);
+  });
+});
+
+describe("defaultPhoneColumn", () => {
+  const ALL = TASK_COLUMNS.map((c) => c.id);
+  const counts = (over: Partial<Record<TaskStatus, number>> = {}) =>
+    ({
+      backlog: 0,
+      ready: 0,
+      claimed: 0,
+      in_progress: 0,
+      reviewing: 0,
+      done: 0,
+      failed: 0,
+      ...over,
+    }) as Record<TaskStatus, number>;
+
+  it("prefers In Progress, then Reviewing, then Ready", () => {
+    expect(defaultPhoneColumn(counts({ in_progress: 1, reviewing: 3, ready: 2 }), ALL)).toBe(
+      "in_progress",
+    );
+    expect(defaultPhoneColumn(counts({ reviewing: 1, ready: 2 }), ALL)).toBe("reviewing");
+    expect(defaultPhoneColumn(counts({ ready: 2, backlog: 5 }), ALL)).toBe("ready");
+  });
+
+  it("falls back to the first non-empty column in board order", () => {
+    expect(defaultPhoneColumn(counts({ done: 2, failed: 1 }), ALL)).toBe("done");
+    expect(defaultPhoneColumn(counts({ backlog: 1, claimed: 1 }), ALL)).toBe("backlog");
+  });
+
+  it("opens on Ready when the board is empty", () => {
+    expect(defaultPhoneColumn(counts(), ALL)).toBe("ready");
+  });
+
+  it("only considers the columns the strip offers", () => {
+    const noDone = ALL.filter((id) => id !== "done" && id !== "failed");
+    expect(defaultPhoneColumn(counts({ done: 4 }), noDone)).toBe("ready");
+    expect(defaultPhoneColumn(counts({ done: 4, backlog: 1 }), noDone)).toBe("backlog");
+  });
+
+  it("degrades to the first available column when Ready isn't offered", () => {
+    expect(defaultPhoneColumn(counts(), ["done", "failed"])).toBe("done");
   });
 });

@@ -10,7 +10,7 @@
 // unified-board/TaskColumn.test.tsx, unified-board/TaskCard.test.tsx,
 // unified-board/TaskSessionSlot.test.tsx, and unified-board/LaneCard.test.tsx
 // — see each file's own header comment.
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, act, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { UnifiedBoard } from "./UnifiedBoard.js";
@@ -25,6 +25,7 @@ import type {
   Task,
 } from "./api/index.js";
 import { makeProject, makeTask } from "./test/fixtures.js";
+import { resetPhoneBackStackForTests } from "./hooks/usePhoneBackStack.js";
 
 // Merges KanbanBoard.test.tsx's and TasksPanel.test.tsx's own store mocks —
 // UnifiedBoard reads value fields via a useShallow-grouped selector (the P1
@@ -1224,5 +1225,166 @@ describe("UnifiedBoard detail drawer resize", () => {
     await user.click(screen.getByText("Open me"));
     const main = document.querySelector(".kanban-unified-main") as HTMLElement;
     expect(main.style.getPropertyValue("--task-drawer-width")).toBe("500px");
+  });
+});
+
+describe("UnifiedBoard phone layout", () => {
+  const renderPhone = () =>
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} phone />);
+  const shownTitles = () =>
+    Array.from(document.querySelectorAll(".kanban-column-title")).map((el) => el.textContent);
+
+  beforeEach(() => {
+    tasks = [
+      makeTask({ id: 1, status: "ready", title: "r1" }),
+      makeTask({ id: 2, status: "ready", title: "r2" }),
+      makeTask({ id: 3, status: "in_progress", title: "ip1" }),
+      makeTask({ id: 4, status: "done", title: "d1" }),
+    ];
+  });
+
+  it("shows a status strip with per-status counts and only the default column", () => {
+    renderPhone();
+    const strip = screen.getByRole("group", { name: "Task status" });
+    expect(strip).toHaveTextContent("Ready2");
+    expect(strip).toHaveTextContent("In Progress1");
+    expect(strip).toHaveTextContent("Done1");
+    // Default: In Progress is the first actionable non-empty column.
+    expect(shownTitles()).toEqual(["In Progress"]);
+    expect(screen.getByRole("button", { name: /^In Progress/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByText("ip1")).toBeInTheDocument();
+    expect(screen.queryByText("r1")).toBeNull();
+  });
+
+  it("scrolls the selected chip into view, on mount and when the column changes", async () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    });
+    try {
+      renderPhone();
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      expect(scrollIntoView.mock.contexts[0]).toHaveTextContent("In Progress");
+      await userEvent.click(screen.getByRole("button", { name: /^Ready/ }));
+      expect(scrollIntoView).toHaveBeenCalledTimes(2);
+      expect(scrollIntoView.mock.contexts[1]).toHaveTextContent("Ready");
+    } finally {
+      Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
+    }
+  });
+
+  it("switches column from the strip", async () => {
+    renderPhone();
+    await userEvent.click(screen.getByRole("button", { name: /^Ready/ }));
+    expect(shownTitles()).toEqual(["Ready"]);
+    expect(screen.getByText("r1")).toBeInTheDocument();
+    expect(screen.queryByText("ip1")).toBeNull();
+  });
+
+  it("drops Done/Failed from the strip under Hide done and falls back from a hidden pick", async () => {
+    renderPhone();
+    await userEvent.click(screen.getByRole("button", { name: /^Done/ }));
+    expect(shownTitles()).toEqual(["Done"]);
+    await userEvent.click(screen.getByRole("button", { name: /Filter/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Hide done" }));
+    await userEvent.click(screen.getByRole("button", { name: "Close filters" }));
+    expect(screen.queryByRole("button", { name: /^Done/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Failed/ })).toBeNull();
+    expect(shownTitles()).toEqual(["In Progress"]);
+  });
+
+  it("has no ad-hoc sessions lane, and keeps its filters out of the page (they live in the sheet)", async () => {
+    tasks = [
+      makeTask({ id: 1, status: "ready", title: "r1", projectId: 1 }),
+      makeTask({ id: 2, status: "ready", title: "r2", projectId: 2 }),
+    ];
+    renderPhone();
+    expect(screen.queryByText(/Ad-hoc sessions/)).toBeNull();
+    expect(document.querySelector(".tasks-panel-filter-bar")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: /Filter/ }));
+    const sheet = screen.getByRole("dialog", { name: "Task filters" });
+    expect(sheet.querySelector(".tasks-panel-filter-bar")).not.toBeNull();
+    expect(sheet).toHaveTextContent("Clear done");
+  });
+
+  it("counts active filters on the Filter button", async () => {
+    renderPhone();
+    expect(screen.getByRole("button", { name: /^Filter$/ })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /^Filter$/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Hide done" }));
+    await userEvent.click(screen.getByRole("button", { name: "Show archived" }));
+    await userEvent.click(screen.getByRole("button", { name: "Close filters" }));
+    expect(screen.getByRole("button", { name: "Filter (2)" })).toBeInTheDocument();
+  });
+
+  it("creates a task from the phone toolbar's New task form", async () => {
+    renderPhone();
+    await userEvent.click(screen.getByRole("button", { name: "New task" }));
+    await userEvent.type(screen.getByPlaceholderText("Task title"), "from phone{Enter}");
+    expect(createTask).toHaveBeenCalledWith(1, "from phone");
+  });
+
+  it("the Filter sheet closes on Escape and hosts the two-step Clear done", async () => {
+    renderPhone();
+    await userEvent.click(screen.getByRole("button", { name: /^Filter/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Clear done" }));
+    expect(screen.getByRole("button", { name: "Confirm clear" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.keyDown(screen.getByRole("dialog", { name: "Task filters" }), { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Task filters" })).toBeNull();
+  });
+
+  it("Android back closes the Filter sheet", async () => {
+    resetPhoneBackStackForTests();
+    const pushState = vi.spyOn(window.history, "pushState").mockImplementation(() => {});
+    vi.spyOn(window.history, "back").mockImplementation(() => {});
+    try {
+      renderPhone();
+      await userEvent.click(screen.getByRole("button", { name: /^Filter/ }));
+      expect(pushState).toHaveBeenCalledTimes(1);
+      act(() => void window.dispatchEvent(new PopStateEvent("popstate")));
+      expect(screen.queryByRole("dialog", { name: "Task filters" })).toBeNull();
+    } finally {
+      resetPhoneBackStackForTests();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("is unchanged when not phone: every column, the lane, no strip or filter sheet", () => {
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(shownTitles()).toHaveLength(7);
+    expect(screen.getByText(/Ad-hoc sessions/)).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Task status" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Filter/ })).toBeNull();
+  });
+
+  describe("Android back closes the task detail", () => {
+    beforeEach(() => {
+      resetPhoneBackStackForTests();
+      vi.spyOn(window.history, "pushState").mockImplementation(() => {});
+      vi.spyOn(window.history, "back").mockImplementation(() => {});
+    });
+    afterEach(() => {
+      resetPhoneBackStackForTests();
+      vi.restoreAllMocks();
+    });
+
+    it("on phone, but never off phone", async () => {
+      renderPhone();
+      await userEvent.click(screen.getByText("ip1"));
+      expect(screen.getByRole("dialog", { name: "Task detail" })).toBeInTheDocument();
+      act(() => void window.dispatchEvent(new PopStateEvent("popstate")));
+      expect(screen.queryByRole("dialog", { name: "Task detail" })).toBeNull();
+    });
+
+    it("does not register a history entry off phone", async () => {
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+      await userEvent.click(screen.getByText("ip1"));
+      expect(window.history.pushState).not.toHaveBeenCalled();
+    });
   });
 });
