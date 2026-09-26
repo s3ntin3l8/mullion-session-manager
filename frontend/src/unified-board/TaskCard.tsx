@@ -366,6 +366,15 @@ export function TaskCard({
             <WarningTriangleIcon size={11} aria-hidden="true" />
           </span>
         )}
+        {/* Hover tooltips don't exist on touch, so the sync error above is
+            otherwise unreadable there. Hidden everywhere except phone
+            (mobile.css); aria-hidden because the icon's aria-label already
+            carries this text. */}
+        {task.githubSyncError && (
+          <span className="task-card-sync-error-text" aria-hidden="true">
+            {task.githubSyncError}
+          </span>
+        )}
       </div>
       {/* Promoted `blocked` strip — see the meta row's own comment above for
           why `unresolved` stays an inline chip and `blocked` gets this

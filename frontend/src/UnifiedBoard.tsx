@@ -8,6 +8,7 @@ import {
   orderTasksForColumn,
   computeTaskReorder,
   absoluteDropIndex,
+  defaultPhoneColumn,
 } from "./tasksBoard.js";
 import {
   taskLinkedSessionIds,
@@ -27,6 +28,7 @@ import {
   LayersIcon,
 } from "./ui/icons.js";
 import { useDragResize } from "./hooks/useDragResize.js";
+import { usePhoneBackStack } from "./hooks/usePhoneBackStack.js";
 import {
   STORAGE_KEYS,
   readNumber,
@@ -80,9 +82,14 @@ function clampDrawerWidth(n: number, maxW: number): number {
 export function UnifiedBoard({
   onOpenSession,
   onSessionEnded,
+  phone = false,
 }: {
   onOpenSession: (session: Session) => void;
   onSessionEnded: (session: Session) => void;
+  // Phone tier: one column at a time behind a status strip, filters in a
+  // sheet, no ad-hoc lane (the session picker covers those sessions), and
+  // Android back closes the task detail. Unset elsewhere = the full board.
+  phone?: boolean;
 }) {
   // P1 perf fix — was a single bare `useDashboardStore()` (whole-store
   // subscription). `refreshTasks`/`updateTask`/`createTask`/`deleteSession`/
@@ -415,6 +422,8 @@ export function UnifiedBoard({
     [setDetailTaskId],
   );
 
+  usePhoneBackStack(phone && detailTaskId !== null, () => setDetailTaskId(null));
+
   useEffect(() => {
     if (detailTaskId === null) return;
     drawerCloseButtonRef.current?.focus();
@@ -528,6 +537,119 @@ export function UnifiedBoard({
     return () => window.removeEventListener("resize", clampToContainer);
   }, []);
 
+  // Per-status counts (after the board's filters) for the phone strip, and
+  // which column the phone shows: the user's pick if it's still offered,
+  // else the first actionable one (tasksBoard.ts's defaultPhoneColumn).
+  const [phoneColumnChoice, setPhoneColumnChoice] = useState<TaskStatus | null>(null);
+  const statusCounts = useMemo(() => {
+    const counts = Object.fromEntries(TASK_COLUMNS.map((c) => [c.id, 0])) as Record<
+      TaskStatus,
+      number
+    >;
+    for (const task of visibleTasks) counts[task.status] += 1;
+    return counts;
+  }, [visibleTasks]);
+  const phoneColumns = TASK_COLUMNS.filter(
+    (c) => !(hideDone && (c.id === "done" || c.id === "failed")),
+  );
+  const phoneColumn =
+    phoneColumnChoice !== null && phoneColumns.some((c) => c.id === phoneColumnChoice)
+      ? phoneColumnChoice
+      : defaultPhoneColumn(
+          statusCounts,
+          phoneColumns.map((c) => c.id),
+        );
+
+  // The board's three filter bars. Inline above the columns on desktop/
+  // tablet; inside the toolbar's filter sheet on phone.
+  const filterBars = (
+    <>
+      {/* Issue: a blocked task's card badge is easy to scroll past on a
+              large board. Only worth showing once something is actually
+              blocked — an always-visible toggle that's always a no-op would
+              just be noise. */}
+      {hasBlockedTask && (
+        <div className="tasks-panel-filter-bar">
+          <button
+            type="button"
+            className={`sidebar-filter-chip tasks-panel-blocked-toggle${blockedOnly ? " active" : ""}`}
+            aria-pressed={blockedOnly}
+            onClick={toggleBlockedOnly}
+          >
+            <BlockedIcon size={11} aria-hidden="true" />
+            Blocked only
+          </button>
+        </div>
+      )}
+      {/* Client-only render filter (see selectedProjectIds's own
+              comment above) — only worth showing once there's more than
+              one project to narrow down. */}
+      {projects.length > 1 && (
+        <div className="tasks-panel-filter-bar">
+          <div className="sidebar-filter-chips" role="group" aria-label="Filter by project">
+            {projects.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                className={`sidebar-filter-chip${activeProjectIds.includes(p.id) ? " active" : ""}`}
+                aria-pressed={activeProjectIds.includes(p.id)}
+                onClick={() => toggleProjectFilter(p.id)}
+              >
+                {p.name}
+              </button>
+            ))}
+          </div>
+          {activeProjectIds.length > 0 && (
+            <button
+              type="button"
+              className="tasks-panel-filter-clear"
+              title="Show every project"
+              aria-label="Show every project"
+              onClick={clearProjectFilter}
+            >
+              Clear
+            </button>
+          )}
+        </div>
+      )}
+      {/* #701 — only worth showing once at least one task actually has
+              a parent, same "only worth showing once it'd narrow anything"
+              posture as the project filter above. */}
+      {parentOptions.length > 0 && (
+        <div className="tasks-panel-filter-bar">
+          <label className="tasks-panel-parent-filter-label" htmlFor="tasks-panel-parent-filter">
+            Phase
+          </label>
+          <select
+            id="tasks-panel-parent-filter"
+            className="tasks-panel-parent-filter"
+            value={selectedParentKey}
+            onChange={(e) => setSelectedParentKey(e.target.value)}
+          >
+            <option value="">All</option>
+            {parentOptions.map((o) => (
+              <option key={o.key} value={o.key}>
+                {o.label} ({o.count})
+              </option>
+            ))}
+            <option value={PARENT_FILTER_NONE}>(no parent) ({noParentCount})</option>
+          </select>
+          {selectedParentKey !== "" && (
+            <button
+              type="button"
+              className="tasks-panel-filter-clear"
+              title="Show every phase"
+              aria-label="Show every phase"
+              onClick={() => setSelectedParentKey("")}
+            >
+              Clear
+            </button>
+          )}
+        </div>
+      )}
+    </>
+  );
+
   return (
     <div className="kanban-unified">
       <div
@@ -550,93 +672,33 @@ export function UnifiedBoard({
             onToggleShowArchived={toggleShowArchived}
             activeProjectIds={activeProjectIds}
             clearDoneTasks={(opts) => useDashboardStore.getState().clearDoneTasks(opts)}
+            phone={phone}
+            filterSheetContent={filterBars}
+            activeFilterCount={
+              (hideDone ? 1 : 0) +
+              (showArchived ? 1 : 0) +
+              (blockedOnly ? 1 : 0) +
+              (activeProjectIds.length > 0 ? 1 : 0) +
+              (selectedParentKey !== "" ? 1 : 0)
+            }
           />
-          {/* Issue: a blocked task's card badge is easy to scroll past on a
-              large board. Only worth showing once something is actually
-              blocked — an always-visible toggle that's always a no-op would
-              just be noise. */}
-          {hasBlockedTask && (
-            <div className="tasks-panel-filter-bar">
-              <button
-                type="button"
-                className={`sidebar-filter-chip tasks-panel-blocked-toggle${blockedOnly ? " active" : ""}`}
-                aria-pressed={blockedOnly}
-                onClick={toggleBlockedOnly}
-              >
-                <BlockedIcon size={11} aria-hidden="true" />
-                Blocked only
-              </button>
-            </div>
-          )}
-          {/* Client-only render filter (see selectedProjectIds's own
-              comment above) — only worth showing once there's more than
-              one project to narrow down. */}
-          {projects.length > 1 && (
-            <div className="tasks-panel-filter-bar">
-              <div className="sidebar-filter-chips" role="group" aria-label="Filter by project">
-                {projects.map((p) => (
-                  <button
-                    key={p.id}
-                    type="button"
-                    className={`sidebar-filter-chip${activeProjectIds.includes(p.id) ? " active" : ""}`}
-                    aria-pressed={activeProjectIds.includes(p.id)}
-                    onClick={() => toggleProjectFilter(p.id)}
-                  >
-                    {p.name}
-                  </button>
-                ))}
-              </div>
-              {activeProjectIds.length > 0 && (
+          {phone && (
+            <div className="tasks-phone-strip" role="group" aria-label="Task status">
+              {phoneColumns.map((column) => (
                 <button
+                  key={column.id}
                   type="button"
-                  className="tasks-panel-filter-clear"
-                  title="Show every project"
-                  aria-label="Show every project"
-                  onClick={clearProjectFilter}
+                  className="tasks-phone-strip-chip"
+                  aria-pressed={column.id === phoneColumn}
+                  onClick={() => setPhoneColumnChoice(column.id)}
                 >
-                  Clear
+                  {column.title}
+                  <span className="tasks-phone-strip-count">{statusCounts[column.id]}</span>
                 </button>
-              )}
+              ))}
             </div>
           )}
-          {/* #701 — only worth showing once at least one task actually has
-              a parent, same "only worth showing once it'd narrow anything"
-              posture as the project filter above. */}
-          {parentOptions.length > 0 && (
-            <div className="tasks-panel-filter-bar">
-              <label
-                className="tasks-panel-parent-filter-label"
-                htmlFor="tasks-panel-parent-filter"
-              >
-                Phase
-              </label>
-              <select
-                id="tasks-panel-parent-filter"
-                className="tasks-panel-parent-filter"
-                value={selectedParentKey}
-                onChange={(e) => setSelectedParentKey(e.target.value)}
-              >
-                <option value="">All</option>
-                {parentOptions.map((o) => (
-                  <option key={o.key} value={o.key}>
-                    {o.label} ({o.count})
-                  </option>
-                ))}
-                <option value={PARENT_FILTER_NONE}>(no parent) ({noParentCount})</option>
-              </select>
-              {selectedParentKey !== "" && (
-                <button
-                  type="button"
-                  className="tasks-panel-filter-clear"
-                  title="Show every phase"
-                  aria-label="Show every phase"
-                  onClick={() => setSelectedParentKey("")}
-                >
-                  Clear
-                </button>
-              )}
-            </div>
-          )}
+          {!phone && filterBars}
           {dragError && (
             <div className="task-detail-error tasks-panel-drag-error" role="status">
               {dragError}
@@ -712,31 +774,33 @@ export function UnifiedBoard({
             </EmptyStateNote>
           )}
           <div className="kanban-board tasks-board kanban-unified-columns">
-            {TASK_COLUMNS.map((column) => {
-              const columnTasks = orderTasksForColumn(visibleTasks, column.id);
-              const acceptsDrop =
-                draggingTask !== null &&
-                (draggingTask.status === column.id ||
-                  (canDragToColumn(draggingTask.status) && canDragToColumn(column.id)));
-              return (
-                <TaskColumn
-                  key={column.id}
-                  title={column.title}
-                  projectsById={projectsById}
-                  sessionsById={sessionsById}
-                  theme={theme}
-                  tasks={columnTasks}
-                  taskMasterEnabled={taskMasterEnabled}
-                  acceptsDrop={acceptsDrop}
-                  onOpen={(task) => openDetail(task.id)}
-                  onOpenSession={onOpenSession}
-                  onDrop={(draggedId, index) => applyDrop(draggedId, column.id, index)}
-                  onDragBegin={setDraggingId}
-                  onDragFinish={() => setDraggingId(null)}
-                  collapsed={hideDone && (column.id === "done" || column.id === "failed")}
-                />
-              );
-            })}
+            {(phone ? TASK_COLUMNS.filter((c) => c.id === phoneColumn) : TASK_COLUMNS).map(
+              (column) => {
+                const columnTasks = orderTasksForColumn(visibleTasks, column.id);
+                const acceptsDrop =
+                  draggingTask !== null &&
+                  (draggingTask.status === column.id ||
+                    (canDragToColumn(draggingTask.status) && canDragToColumn(column.id)));
+                return (
+                  <TaskColumn
+                    key={column.id}
+                    title={column.title}
+                    projectsById={projectsById}
+                    sessionsById={sessionsById}
+                    theme={theme}
+                    tasks={columnTasks}
+                    taskMasterEnabled={taskMasterEnabled}
+                    acceptsDrop={acceptsDrop}
+                    onOpen={(task) => openDetail(task.id)}
+                    onOpenSession={onOpenSession}
+                    onDrop={(draggedId, index) => applyDrop(draggedId, column.id, index)}
+                    onDragBegin={setDraggingId}
+                    onDragFinish={() => setDraggingId(null)}
+                    collapsed={hideDone && (column.id === "done" || column.id === "failed")}
+                  />
+                );
+              },
+            )}
           </div>
         </div>
         {detailTaskId !== null && (
@@ -785,95 +849,97 @@ export function UnifiedBoard({
           </>
         )}
       </div>
-      <div className="kanban-unified-lane">
-        <div className="kanban-lane-header">
-          <button
-            type="button"
-            className="kanban-lane-collapse"
-            onClick={() => setLaneCollapsed((v) => !v)}
-            aria-expanded={!laneCollapsed}
-            aria-controls="kanban-lane-body"
-          >
-            {laneCollapsed ? <ChevronRightIcon size={12} /> : <ChevronDownIcon size={12} />}
-            Ad-hoc sessions (no task)
-          </button>
-          <span className="kanban-lane-count">{laneTotal}</span>
-        </div>
-        {!laneCollapsed && (
-          <div className="kanban-lane-body" id="kanban-lane-body">
-            {laneTotal === 0 ? (
-              <div className="kanban-lane-empty">No sessions without a task.</div>
-            ) : (
-              // Filters by the same visible-card count the group's own
-              // title uses below (Hermes review) — using the raw,
-              // unfiltered laneColumns[id].length here rendered an empty
-              // group header (title + a "0" count, no cards) whenever
-              // every session in a group had a since-deleted project.
-              LANE_COLUMN_ORDER.filter(
-                (id) => laneColumns[id].filter((s) => projectsById.has(s.projectId)).length > 0,
-              ).map((id) => {
-                const columnSessions = laneColumns[id];
-                const order = kanbanOrder[id] ?? [];
-                const orderedSessions = orderSessionsForColumn(columnSessions, order);
-                const visibleSessionCount = orderedSessions.filter((s) =>
-                  projectsById.has(s.projectId),
-                ).length;
-                const acceptsDrop =
-                  draggingSessionId !== null &&
-                  columnSessions.some((s) => s.id === draggingSessionId);
-                return (
-                  <div className="kanban-lane-group" key={id}>
-                    <div className="kanban-lane-group-title">
-                      {laneColumnTitle(id)} <span>{visibleSessionCount}</span>
-                    </div>
-                    {orderedSessions.map((session, index) => {
-                      const project = projectsById.get(session.projectId);
-                      if (!project) return null;
-                      return (
-                        <LaneCard
-                          key={session.id}
-                          session={session}
-                          project={project}
-                          acceptsDrop={acceptsDrop}
-                          onOpen={() => onOpenSession(session)}
-                          // P9 — not `void`-discarded: SessionRow (nested
-                          // inside LaneCard) now catches a rejection here
-                          // and surfaces it inline, same fix as Sidebar.tsx's
-                          // two identical onEnd call sites. LaneCard's own
-                          // `onEnd: () => void` prop type doesn't need
-                          // widening — TS's void-return bivariance already
-                          // accepts this function's real Promise return
-                          // value, and SessionRow's `Promise.resolve(onEnd())`
-                          // sees the actual returned promise at runtime
-                          // regardless of the narrower static type in
-                          // between.
-                          onEnd={() =>
-                            useDashboardStore
-                              .getState()
-                              .deleteSession(session.id)
-                              .then(() => onSessionEnded(session))
-                          }
-                          onDragBegin={() => setDraggingSessionId(session.id)}
-                          onDragFinish={() => setDraggingSessionId(null)}
-                          onReorder={(draggedId) => {
-                            const next = computeKanbanReorder(
-                              columnSessions,
-                              order,
-                              draggedId,
-                              index,
-                            );
-                            useDashboardStore.getState().setKanbanColumnOrder(id, next);
-                          }}
-                        />
-                      );
-                    })}
-                  </div>
-                );
-              })
-            )}
+      {!phone && (
+        <div className="kanban-unified-lane">
+          <div className="kanban-lane-header">
+            <button
+              type="button"
+              className="kanban-lane-collapse"
+              onClick={() => setLaneCollapsed((v) => !v)}
+              aria-expanded={!laneCollapsed}
+              aria-controls="kanban-lane-body"
+            >
+              {laneCollapsed ? <ChevronRightIcon size={12} /> : <ChevronDownIcon size={12} />}
+              Ad-hoc sessions (no task)
+            </button>
+            <span className="kanban-lane-count">{laneTotal}</span>
           </div>
-        )}
-      </div>
+          {!laneCollapsed && (
+            <div className="kanban-lane-body" id="kanban-lane-body">
+              {laneTotal === 0 ? (
+                <div className="kanban-lane-empty">No sessions without a task.</div>
+              ) : (
+                // Filters by the same visible-card count the group's own
+                // title uses below (Hermes review) — using the raw,
+                // unfiltered laneColumns[id].length here rendered an empty
+                // group header (title + a "0" count, no cards) whenever
+                // every session in a group had a since-deleted project.
+                LANE_COLUMN_ORDER.filter(
+                  (id) => laneColumns[id].filter((s) => projectsById.has(s.projectId)).length > 0,
+                ).map((id) => {
+                  const columnSessions = laneColumns[id];
+                  const order = kanbanOrder[id] ?? [];
+                  const orderedSessions = orderSessionsForColumn(columnSessions, order);
+                  const visibleSessionCount = orderedSessions.filter((s) =>
+                    projectsById.has(s.projectId),
+                  ).length;
+                  const acceptsDrop =
+                    draggingSessionId !== null &&
+                    columnSessions.some((s) => s.id === draggingSessionId);
+                  return (
+                    <div className="kanban-lane-group" key={id}>
+                      <div className="kanban-lane-group-title">
+                        {laneColumnTitle(id)} <span>{visibleSessionCount}</span>
+                      </div>
+                      {orderedSessions.map((session, index) => {
+                        const project = projectsById.get(session.projectId);
+                        if (!project) return null;
+                        return (
+                          <LaneCard
+                            key={session.id}
+                            session={session}
+                            project={project}
+                            acceptsDrop={acceptsDrop}
+                            onOpen={() => onOpenSession(session)}
+                            // P9 — not `void`-discarded: SessionRow (nested
+                            // inside LaneCard) now catches a rejection here
+                            // and surfaces it inline, same fix as Sidebar.tsx's
+                            // two identical onEnd call sites. LaneCard's own
+                            // `onEnd: () => void` prop type doesn't need
+                            // widening — TS's void-return bivariance already
+                            // accepts this function's real Promise return
+                            // value, and SessionRow's `Promise.resolve(onEnd())`
+                            // sees the actual returned promise at runtime
+                            // regardless of the narrower static type in
+                            // between.
+                            onEnd={() =>
+                              useDashboardStore
+                                .getState()
+                                .deleteSession(session.id)
+                                .then(() => onSessionEnded(session))
+                            }
+                            onDragBegin={() => setDraggingSessionId(session.id)}
+                            onDragFinish={() => setDraggingSessionId(null)}
+                            onReorder={(draggedId) => {
+                              const next = computeKanbanReorder(
+                                columnSessions,
+                                order,
+                                draggedId,
+                                index,
+                              );
+                              useDashboardStore.getState().setKanbanColumnOrder(id, next);
+                            }}
+                          />
+                        );
+                      })}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

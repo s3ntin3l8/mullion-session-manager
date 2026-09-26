@@ -153,3 +153,22 @@ export function absoluteDropIndex(
   const found = full.findIndex((t) => t.id === anchor.id);
   return found === -1 ? full.length : found;
 }
+
+// Phone board: one column at a time. Opens on the first column that has
+// something to act on — In Progress, then Reviewing, then Ready — else the
+// first non-empty column in board order, else Ready (the natural place a new
+// task lands). `available` is the columns the phone strip offers (hide-done
+// removes Done/Failed from it).
+const PHONE_ACTIONABLE_ORDER: readonly TaskStatus[] = ["in_progress", "reviewing", "ready"];
+
+export function defaultPhoneColumn(
+  counts: Record<TaskStatus, number>,
+  available: readonly TaskStatus[],
+): TaskStatus {
+  const usable = (id: TaskStatus) => available.includes(id) && counts[id] > 0;
+  return (
+    PHONE_ACTIONABLE_ORDER.find(usable) ??
+    available.find((id) => counts[id] > 0) ??
+    (available.includes("ready") ? "ready" : (available[0] ?? "ready"))
+  );
+}

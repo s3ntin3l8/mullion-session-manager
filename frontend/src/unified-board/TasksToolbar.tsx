@@ -1,7 +1,10 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { ApiError } from "../api/index.js";
 import type { ClearDoneResult } from "../api/index.js";
-import { PlusIcon } from "../ui/icons.js";
+import { CloseIcon, PlusIcon } from "../ui/icons.js";
+import { useFocusTrap } from "../hooks/useFocusTrap.js";
+import { usePhoneBackStack } from "../hooks/usePhoneBackStack.js";
 
 // Split out of UnifiedBoard.tsx (Wave 5 / PR 28 of
 // .claude/plans/can-we-do-a-warm-cocke.md) — the board's own "New task"
@@ -20,7 +23,15 @@ export function TasksToolbar({
   onToggleShowArchived,
   activeProjectIds,
   clearDoneTasks,
+  phone = false,
+  filterSheetContent,
+  activeFilterCount = 0,
 }: {
+  // Phone: the toolbar is just [New task] [Filter], and every filter (these
+  // chips, `filterSheetContent`, Clear done) moves into a filter sheet.
+  phone?: boolean;
+  filterSheetContent?: ReactNode;
+  activeFilterCount?: number;
   creating: boolean;
   onToggleCreate: () => void;
   projects: { id: number; name: string }[];
@@ -121,28 +132,52 @@ export function TasksToolbar({
     }
   };
 
-  return (
-    <div className="tasks-panel-toolbar">
-      <button className="tasks-panel-new-btn" onClick={onToggleCreate}>
-        <PlusIcon size={12} strokeLinecap="round" strokeWidth={2.2} />
-        New task
-      </button>
-      <button
-        type="button"
-        className={`sidebar-filter-chip tasks-panel-hide-done-toggle${hideDone ? " active" : ""}`}
-        aria-pressed={hideDone}
-        onClick={onToggleHideDone}
-      >
-        Hide done
-      </button>
-      <button
-        type="button"
-        className={`sidebar-filter-chip tasks-panel-show-archived-toggle${showArchived ? " active" : ""}`}
-        aria-pressed={showArchived}
-        onClick={onToggleShowArchived}
-      >
-        Show archived
-      </button>
+  // Phone filter sheet (see `phone` above).
+  const [filterSheetOpen, setFilterSheetOpen] = useState(false);
+  const sheetRef = useRef<HTMLDivElement>(null);
+  const closeFilterSheet = () => setFilterSheetOpen(false);
+  usePhoneBackStack(phone && filterSheetOpen, closeFilterSheet);
+  const { onKeyDown: onTrapKeyDown } = useFocusTrap({
+    active: phone && filterSheetOpen,
+    containerRef: sheetRef,
+  });
+  const onSheetKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      closeFilterSheet();
+      return;
+    }
+    onTrapKeyDown(e);
+  };
+
+  const newBtn = (
+    <button className="tasks-panel-new-btn" onClick={onToggleCreate}>
+      <PlusIcon size={12} strokeLinecap="round" strokeWidth={2.2} />
+      New task
+    </button>
+  );
+  const hideDoneBtn = (
+    <button
+      type="button"
+      className={`sidebar-filter-chip tasks-panel-hide-done-toggle${hideDone ? " active" : ""}`}
+      aria-pressed={hideDone}
+      onClick={onToggleHideDone}
+    >
+      Hide done
+    </button>
+  );
+  const showArchivedBtn = (
+    <button
+      type="button"
+      className={`sidebar-filter-chip tasks-panel-show-archived-toggle${showArchived ? " active" : ""}`}
+      aria-pressed={showArchived}
+      onClick={onToggleShowArchived}
+    >
+      Show archived
+    </button>
+  );
+  const clearDoneUi = (
+    <>
       {!clearConfirming ? (
         <button
           type="button"
@@ -212,40 +247,99 @@ export function TasksToolbar({
           )}
         </div>
       )}
-      {creating && (
-        <div className="tasks-panel-new-form">
-          <select
-            className="tasks-panel-new-project"
-            value={projectId ?? ""}
-            onChange={(e) => setManualProjectId(Number(e.target.value))}
-          >
-            {projects.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-          <input
-            className="tasks-panel-new-title"
-            placeholder="Task title"
-            value={title}
-            autoFocus
-            disabled={submitting}
-            onChange={(e) => setTitle(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") submit();
-            }}
-          />
-          <button
-            className="tasks-panel-new-submit"
-            disabled={!title.trim() || projectId === null || submitting}
-            onClick={submit}
-          >
-            {submitting ? "Creating…" : "Create"}
-          </button>
-          {error && <span className="task-detail-error">{error}</span>}
-        </div>
-      )}
+    </>
+  );
+  const newForm = creating && (
+    <div className="tasks-panel-new-form">
+      <select
+        className="tasks-panel-new-project"
+        value={projectId ?? ""}
+        onChange={(e) => setManualProjectId(Number(e.target.value))}
+      >
+        {projects.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.name}
+          </option>
+        ))}
+      </select>
+      <input
+        className="tasks-panel-new-title"
+        placeholder="Task title"
+        value={title}
+        autoFocus
+        disabled={submitting}
+        onChange={(e) => setTitle(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") submit();
+        }}
+      />
+      <button
+        className="tasks-panel-new-submit"
+        disabled={!title.trim() || projectId === null || submitting}
+        onClick={submit}
+      >
+        {submitting ? "Creating…" : "Create"}
+      </button>
+      {error && <span className="task-detail-error">{error}</span>}
+    </div>
+  );
+
+  if (phone) {
+    return (
+      <div className="tasks-panel-toolbar tasks-panel-toolbar--phone">
+        {newBtn}
+        <button
+          type="button"
+          className="tasks-phone-filter-btn"
+          aria-haspopup="dialog"
+          onClick={() => setFilterSheetOpen(true)}
+        >
+          Filter{activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}
+        </button>
+        {newForm}
+        {filterSheetOpen && (
+          <div className="mobile-session-backdrop" onClick={closeFilterSheet}>
+            <div
+              ref={sheetRef}
+              className="mobile-session-sheet tasks-phone-filter-sheet"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Task filters"
+              onClick={(e) => e.stopPropagation()}
+              onKeyDown={onSheetKeyDown}
+            >
+              <div className="mobile-session-sheet-header">
+                <span>Filters</span>
+                <button
+                  className="mobile-tab-btn"
+                  aria-label="Close filters"
+                  onClick={closeFilterSheet}
+                >
+                  <CloseIcon size={14} />
+                </button>
+              </div>
+              <div className="tasks-phone-filter-body">
+                <div className="tasks-phone-filter-chips">
+                  {hideDoneBtn}
+                  {showArchivedBtn}
+                </div>
+                {filterSheetContent}
+                <div className="tasks-phone-filter-danger">{clearDoneUi}</div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="tasks-panel-toolbar">
+      {newBtn}
+      {hideDoneBtn}
+      {showArchivedBtn}
+      {clearDoneUi}
+      {newForm}
     </div>
   );
 }
