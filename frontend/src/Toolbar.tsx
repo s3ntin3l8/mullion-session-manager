@@ -34,6 +34,8 @@ interface ToolbarProps {
   // Phone only (mobile.css shows `.toolbar-mobile-session`): App's
   // MobileSessionSwitcher, in place of the hidden `.toolbar-center`.
   mobileSessionSlot?: ReactNode;
+  // Phone tier: the bell renders its feed as a bottom sheet.
+  phone?: boolean;
 }
 
 // Ported 1:1 from the design's toolbar: sidebar toggle, attention bell with
@@ -52,6 +54,7 @@ export function Toolbar({
   paneCount,
   currentVersion,
   mobileSessionSlot,
+  phone,
 }: ToolbarProps) {
   // P1 perf fix — the plan's own audit didn't cite this file by line, but
   // it's the identical whole-store-subscription defect (`useDashboardStore()`
@@ -85,6 +88,7 @@ export function Toolbar({
           onOpenSession={onOpenSession}
           onOpenTimeline={onOpenTimeline}
           onOpenBrowser={onOpenBrowser}
+          phone={phone}
         />
         <button
           className="toolbar-icon-btn toolbar-new-session-btn"

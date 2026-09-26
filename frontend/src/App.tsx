@@ -1285,6 +1285,7 @@ export function App() {
         paneCount={paneCount}
         currentVersion={currentVersion}
         mobileSessionSlot={mobileSessionSwitcher}
+        phone={isMobile}
       />
       <div className="app-body" ref={appBodyRef}>
         <div className="cmux-scrim" onClick={() => setSidebarOpen(false)} />

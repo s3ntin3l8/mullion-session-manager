@@ -2041,3 +2041,103 @@
 .scaffold-offer-banner-accept:hover {
   background: color-mix(in srgb, var(--b) 14%, transparent);
 }
+
+/* Phone notifications sheet (NotificationBell.tsx's `phone` branch) — reuses
+   the session sheet's backdrop/sheet shell; everything below is scoped to
+   `.mobile-notif-sheet` so the desktop popover's rows are untouched. */
+.mobile-notif-sheet {
+  height: min(88dvh, 760px);
+  max-height: none;
+}
+.mobile-notif-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.mobile-notif-readall {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 44px;
+  padding: 0 10px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.mobile-notif-filters {
+  flex: none;
+  display: flex;
+  gap: 6px;
+  padding: 8px 12px;
+}
+.mobile-notif-filter {
+  flex: 1;
+  min-height: 44px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+.mobile-notif-filter.active {
+  color: var(--fg);
+  border-color: var(--accent-solid);
+  background: color-mix(in srgb, var(--accent-solid) 12%, transparent);
+}
+.mobile-notif-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 8px 8px;
+}
+.mobile-notif-sheet .notif-group-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 8px 6px 4px;
+  background: var(--chrome);
+}
+/* The sheet renders the whole feed (no virtualizer); let the browser skip
+   layout/paint for rows that are scrolled far off-screen. */
+.mobile-notif-sheet .notif-event-row {
+  align-items: flex-start;
+  padding: 10px 6px;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 72px;
+}
+.mobile-notif-sheet .notif-event-action-btn {
+  width: 44px;
+  height: 44px;
+}
+.mobile-notif-sheet .notif-gate-actions,
+.mobile-notif-sheet .notif-gate-deny-form {
+  gap: 8px;
+  margin-top: 8px;
+}
+.mobile-notif-sheet .notif-gate-btn {
+  flex: 1;
+  min-height: 44px;
+  font-size: 14px;
+}
+.mobile-notif-sheet .notif-gate-deny-reason {
+  min-height: 44px;
+  /* 16px, not smaller: iOS zooms the page on focusing a smaller input. */
+  font-size: 16px;
+}
+.mobile-notif-timeline {
+  align-self: flex-start;
+  min-height: 44px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--accent-solid);
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
