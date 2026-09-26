@@ -49,7 +49,9 @@ export function diffEdit(before: string, after: string): { removed: number; inse
   };
 }
 
-export function attachImeInput(term: Pick<Terminal, "input" | "textarea" | "element">): () => void {
+export function attachImeInput(
+  term: Pick<Terminal, "input" | "paste" | "textarea" | "element">,
+): () => void {
   const { textarea, element: root } = term;
   if (!textarea || !root) return () => {};
 
@@ -63,12 +65,18 @@ export function attachImeInput(term: Pick<Terminal, "input" | "textarea" | "elem
   const onCompositionEnd = (): void => {
     composing = false;
   };
+  // A composition cut off by blur/teardown never fires compositionend; without
+  // this every later edit would fall through to xterm's buggy path.
+  const onBlur = (): void => {
+    composing = false;
+    before = null;
+  };
   const fromTextarea = (ev: Event): boolean => ev.target === textarea;
   const onKeyDown = (ev: KeyboardEvent): void => {
     if (fromTextarea(ev) && ev.keyCode === 229 && !composing) ev.stopPropagation();
   };
   const onBeforeInput = (ev: InputEvent): void => {
-    if (!fromTextarea(ev)) return;
+    if (!fromTextarea(ev) || ev.defaultPrevented) return;
     before =
       !composing && !ev.isComposing && !COMPOSITION_INPUT_TYPES.has(ev.inputType)
         ? { value: textarea.value, inputType: ev.inputType }
@@ -85,13 +93,20 @@ export function attachImeInput(term: Pick<Terminal, "input" | "textarea" | "elem
       return;
     }
     const { removed, inserted } = diffEdit(prev, textarea.value);
-    const out = DEL.repeat(removed) + inserted;
+    // Pasted text goes through xterm's own paste() so it gets CR normalization
+    // and bracketed-paste, like a real paste event would.
+    if (inputType === "insertFromPaste" && inserted && !removed) {
+      term.paste(inserted);
+      return;
+    }
+    const out = DEL.repeat(removed) + inserted.replace(/\r?\n/g, CR);
     if (out) term.input(out, true);
   };
 
   const opts = { capture: true } as const;
   root.addEventListener("compositionstart", onCompositionStart, opts);
   root.addEventListener("compositionend", onCompositionEnd, opts);
+  root.addEventListener("blur", onBlur, opts);
   root.addEventListener("keydown", onKeyDown, opts);
   root.addEventListener("beforeinput", onBeforeInput as EventListener, opts);
   root.addEventListener("input", onInput, opts);
@@ -99,6 +114,7 @@ export function attachImeInput(term: Pick<Terminal, "input" | "textarea" | "elem
   return () => {
     root.removeEventListener("compositionstart", onCompositionStart, opts);
     root.removeEventListener("compositionend", onCompositionEnd, opts);
+    root.removeEventListener("blur", onBlur, opts);
     root.removeEventListener("keydown", onKeyDown, opts);
     root.removeEventListener("beforeinput", onBeforeInput as EventListener, opts);
     root.removeEventListener("input", onInput, opts);
