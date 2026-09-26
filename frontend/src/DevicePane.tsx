@@ -77,6 +77,12 @@ function parseControlMessage(raw: string): ControlMessage | null {
 // context or a shader fails to compile. An error thrown from a useEffect
 // isn't caught by the root ErrorBoundary and would unmount the whole
 // dashboard, so fall back to the bitmap renderer (which can't throw here).
+// Ordering assumption: the fallback is only sound if the throw happens BEFORE
+// the canvas has acquired a WebGL context (the "no context" case). A later
+// failure (shader compile/link) would leave the canvas bound to `webgl`, and
+// getContext("bitmaprenderer") would return null — failing per frame instead.
+// Near-unreachable: isSupported probes with the same context attributes and
+// the shaders are trivial.
 function createRenderer(canvas: HTMLCanvasElement) {
   if (WebGLVideoFrameRenderer.isSupported) {
     try {
