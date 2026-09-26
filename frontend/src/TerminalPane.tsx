@@ -31,6 +31,7 @@ import {
   SEARCH_HIGHLIGHT_LIMIT,
 } from "./lib/terminalKeys.js";
 import { attachTerminalTouchScroll } from "./lib/terminalTouchScroll.js";
+import { attachImeInput } from "./lib/imeInput.js";
 import { parseChord, type KeyChord } from "./lib/keyChord.js";
 import { computeFitFontSize } from "./lib/terminalFontFit.js";
 import { clampTerminalGridSize } from "./lib/terminalGridSize.js";
@@ -824,6 +825,10 @@ export function TerminalPane(props: {
     }
 
     term.open(container);
+    // Android soft-keyboard autocomplete otherwise makes xterm re-send the whole
+    // typed line (xtermjs/xterm.js#3600) — see imeInput.ts. Needs term.element,
+    // so it must attach after open().
+    const detachImeInput = attachImeInput(term);
     applyClampedFit();
     // Mobile UI/UX overhaul follow-up — see terminalTouchScroll.ts's own
     // header comment for why xterm needs this at all (touch scrolling is a
@@ -1771,6 +1776,7 @@ export function TerminalPane(props: {
       resizeObserver.disconnect();
       window.removeEventListener("resize", refit);
       detachTouchScroll();
+      detachImeInput();
       container.removeEventListener("contextmenu", onContextMenu);
       selectionSub.dispose();
       osc52Sub.dispose();
