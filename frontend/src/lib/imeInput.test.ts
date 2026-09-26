@@ -1,0 +1,204 @@
+// @vitest-environment jsdom
+//
+// The `attachImeInput` cases below drive a REAL `@xterm/xterm` Terminal (not the
+// module-level mock TerminalPane.test.tsx uses) with the event shapes captured
+// from Gboard on an Android 16 emulator: every key is a keyCode-229 keydown, a
+// `beforeinput` and an `input` (insertText) on the helper textarea, and a
+// suggestion tap fires TWO 229 keydowns before its single insert.
+import { Terminal } from "@xterm/xterm";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { attachImeInput, diffEdit } from "./imeInput.js";
+
+describe("diffEdit", () => {
+  it("reports a pure append", () => {
+    expect(diffEdit("git hel", "git help")).toEqual({ removed: 0, inserted: "p" });
+  });
+  it("reports a tail replacement as removed + inserted", () => {
+    expect(diffEdit("git helo", "git hello ")).toEqual({ removed: 1, inserted: "lo " });
+  });
+  it("reports a deletion", () => {
+    expect(diffEdit("git hel", "git he")).toEqual({ removed: 1, inserted: "" });
+  });
+  it("reports a prepend (Gboard inserts at caret 0 in a bare textarea)", () => {
+    expect(diffEdit("leh", "lleh")).toEqual({ removed: 0, inserted: "l" });
+  });
+  it("reports nothing for an unchanged value", () => {
+    expect(diffEdit("abc", "abc")).toEqual({ removed: 0, inserted: "" });
+  });
+});
+
+function keydown229(ta: HTMLTextAreaElement): void {
+  const ev = new KeyboardEvent("keydown", { key: "Unidentified", bubbles: true, cancelable: true });
+  // jsdom ignores keyCode in KeyboardEventInit; xterm checks it.
+  Object.defineProperty(ev, "keyCode", { value: 229 });
+  ta.dispatchEvent(ev);
+}
+
+// One Gboard edit: `keydowns` 229 keydowns, then beforeinput -> mutate -> input.
+function edit(
+  ta: HTMLTextAreaElement,
+  change: (current: string) => string,
+  inputType = "insertText",
+  keydowns = 1,
+): void {
+  for (let i = 0; i < keydowns; i++) keydown229(ta);
+  ta.dispatchEvent(new InputEvent("beforeinput", { inputType, bubbles: true, cancelable: true }));
+  ta.value = change(ta.value);
+  ta.dispatchEvent(new InputEvent("input", { inputType, bubbles: true }));
+  vi.runAllTimers();
+}
+const append = (chunk: string) => (current: string) => current + chunk;
+
+describe("attachImeInput against a real xterm Terminal", () => {
+  let term: Terminal;
+  let ta: HTMLTextAreaElement;
+  let sent: string[];
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    term = new Terminal({ cols: 80, rows: 24 });
+    term.open(document.body.appendChild(document.createElement("div")));
+    ta = term.textarea as HTMLTextAreaElement;
+    sent = [];
+    term.onData((d) => sent.push(d));
+  });
+  afterEach(() => {
+    term.dispose();
+    vi.useRealTimers();
+  });
+
+  function typeLine(text: string): void {
+    for (const ch of text) edit(ta, append(ch));
+  }
+
+  it("without it, a suggestion tap double-sends its text (the bug)", () => {
+    typeLine("git helo");
+    sent.length = 0;
+    edit(ta, (v) => `${v}lo `, "insertText", 2);
+    expect(sent).toEqual(["lo ", "lo "]);
+  });
+
+  it("sends each typed character exactly once", () => {
+    attachImeInput(term);
+    typeLine("git status");
+    expect(sent.join("")).toBe("git status");
+  });
+
+  it("sends a suggestion commit once despite its two keydowns", () => {
+    attachImeInput(term);
+    typeLine("git hel");
+    sent.length = 0;
+    edit(ta, append("lo "), "insertText", 2);
+    expect(sent.join("")).toBe("lo ");
+  });
+
+  it("turns a typo correction into DEL + replacement, never re-sending the line", () => {
+    attachImeInput(term);
+    typeLine("git helo");
+    sent.length = 0;
+    edit(ta, (v) => v.replace(/helo$/, "hello "), "insertReplacementText");
+    expect(sent.join("")).toBe("\x7f" + "lo ");
+    // Later keys stay incremental.
+    sent.length = 0;
+    typeLine("wo");
+    expect(sent).toEqual(["w", "o"]);
+  });
+
+  it("maps deleteContentBackward to DEL, once per press", () => {
+    attachImeInput(term);
+    typeLine("git hel");
+    sent.length = 0;
+    edit(ta, (v) => v.slice(0, -1), "deleteContentBackward");
+    edit(ta, (v) => v.slice(0, -1), "deleteContentBackward");
+    expect(sent).toEqual(["\x7f", "\x7f"]);
+  });
+
+  it("sends Gboard's 229 Enter (insertLineBreak) as CR", () => {
+    attachImeInput(term);
+    typeLine("ls");
+    sent.length = 0;
+    edit(ta, append("\n"), "insertLineBreak");
+    expect(sent).toEqual(["\r"]);
+  });
+
+  it("does not drop other 229-driven edits: word delete", () => {
+    attachImeInput(term);
+    typeLine("git status");
+    sent.length = 0;
+    edit(ta, (v) => v.slice(0, -"status".length), "deleteWordBackward");
+    expect(sent.join("")).toBe("\x7f".repeat(6));
+  });
+
+  it("routes paste-as-input through xterm's paste() and maps other newlines to CR", () => {
+    attachImeInput(term);
+    const paste = vi.spyOn(term, "paste");
+    edit(ta, append("a\nb"), "insertFromPaste");
+    expect(paste).toHaveBeenCalledWith("a\nb");
+    sent.length = 0;
+    edit(ta, append("x\ny")); // e.g. dictation/insertText carrying a newline
+    expect(sent.join("")).toBe("x\ry");
+  });
+
+  it("ignores a cancelled beforeinput, so no stale snapshot skews the next edit", () => {
+    attachImeInput(term);
+    typeLine("ab");
+    const spy = vi.spyOn(term, "input");
+    keydown229(ta);
+    // Cancelled by something above xterm's root, before our capture listener.
+    document.addEventListener("beforeinput", (e) => e.preventDefault(), {
+      capture: true,
+      once: true,
+    });
+    ta.dispatchEvent(
+      new InputEvent("beforeinput", { inputType: "insertText", bubbles: true, cancelable: true }),
+    );
+    ta.value = "abZZZ"; // a later input arriving with no beforeinput of its own
+    ta.dispatchEvent(new InputEvent("input", { inputType: "insertText", bubbles: true }));
+    vi.runAllTimers();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("recovers from a composition cut off by blur", () => {
+    attachImeInput(term);
+    ta.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    ta.dispatchEvent(new FocusEvent("blur"));
+    sent.length = 0;
+    typeLine("ok");
+    expect(sent.join("")).toBe("ok");
+  });
+
+  it("sends a prepend once (Gboard puts the caret at 0 in a bare textarea)", () => {
+    attachImeInput(term);
+    edit(ta, append("h"));
+    edit(ta, (v) => `e${v}`);
+    edit(ta, (v) => `l${v}`);
+    expect(sent).toEqual(["h", "e", "l"]);
+  });
+
+  it("leaves composing input to xterm, which commits it once via onData", () => {
+    attachImeInput(term);
+    const spy = vi.spyOn(term, "input");
+    ta.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    keydown229(ta);
+    ta.dispatchEvent(
+      new InputEvent("beforeinput", { inputType: "insertCompositionText", bubbles: true }),
+    );
+    ta.value = "n";
+    ta.dispatchEvent(
+      new InputEvent("input", { inputType: "insertCompositionText", bubbles: true }),
+    );
+    ta.dispatchEvent(new CompositionEvent("compositionend", { data: "n", bubbles: true }));
+    vi.runAllTimers();
+    expect(spy).not.toHaveBeenCalled();
+    expect(sent).toEqual(["n"]);
+  });
+
+  it("stops intercepting after detach", () => {
+    const off = attachImeInput(term);
+    off();
+    const spy = vi.spyOn(term, "input");
+    typeLine("a");
+    expect(spy).not.toHaveBeenCalled();
+  });
+});
