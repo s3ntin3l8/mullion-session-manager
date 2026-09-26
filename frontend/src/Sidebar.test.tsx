@@ -1049,3 +1049,49 @@ describe("project-row New-session button (issue #730 — no launch from Task vie
     expect(onOpenProjectLauncher).not.toHaveBeenCalled();
   });
 });
+
+describe("Sidebar phoneSection (phone navigator tabs)", () => {
+  const renderSection = (phoneSection?: "projects" | "devices") => {
+    // SidebarDevices renders nothing without at least one device.
+    devices = [
+      {
+        id: 1,
+        hostId: "local",
+        projectId: null,
+        name: "My Pixel",
+        kind: "emulator",
+        avdName: "pixel_7",
+        serial: null,
+        status: "active",
+        createdAt: "2026-01-01T00:00:00Z",
+        live: null,
+      },
+    ] as unknown as typeof devices;
+    return render(
+      <div className="sidebar-wrapper">
+        <Sidebar {...NOOP_PROPS} phoneSection={phoneSection} />
+      </div>,
+    );
+  };
+
+  it("renders everything when unset (desktop/tablet)", () => {
+    renderSection();
+    expect(screen.getByRole("button", { name: /Tasks/ })).toBeInTheDocument();
+    expect(screen.getByText("Projects")).toBeInTheDocument();
+    expect(document.querySelector(".sidebar-devices")).not.toBeNull();
+  });
+
+  it("'projects' hides the Tasks entry and Devices, keeping the project tree", () => {
+    renderSection("projects");
+    expect(screen.queryByRole("button", { name: /^Tasks/ })).toBeNull();
+    expect(screen.getByText("Projects")).toBeInTheDocument();
+    expect(document.querySelector(".sidebar-devices")).toBeNull();
+  });
+
+  it("'devices' shows only Devices — no Tasks entry, no project header or tree", () => {
+    renderSection("devices");
+    expect(screen.queryByRole("button", { name: /^Tasks/ })).toBeNull();
+    expect(screen.queryByText("Projects")).toBeNull();
+    expect(screen.queryByLabelText("Filter sessions")).toBeNull();
+  });
+});

@@ -5,6 +5,8 @@ import userEvent from "@testing-library/user-event";
 import { Settings } from "./Settings.js";
 import { useDashboardStore } from "./store/index.js";
 import { DEFAULT_SETTINGS } from "./api/index.js";
+import { act } from "@testing-library/react";
+import { resetPhoneBackStackForTests } from "./hooks/usePhoneBackStack.js";
 
 // Mobile UI/UX overhaul, item D — Settings.tsx's drill-down is pure JS state
 // (`mobileNavOpen`) gated entirely by CSS at the <700px breakpoint (see
@@ -146,5 +148,47 @@ describe("Settings mobile drill-down", () => {
       "settings-modal-body-showing-content",
     );
     expect(screen.queryByLabelText(/^Back to settings list/)).not.toBeInTheDocument();
+  });
+});
+
+describe("Settings phone navigator integration", () => {
+  it("startInContent opens straight into Appearance instead of the list", () => {
+    const { container } = render(<Settings onClose={vi.fn()} startInContent />);
+    expect(container.querySelector(".settings-modal-body")).toHaveClass(
+      "settings-modal-body-showing-content",
+    );
+  });
+
+  describe("back stack (phone)", () => {
+    const pop = () => act(() => void window.dispatchEvent(new PopStateEvent("popstate")));
+    beforeEach(() => {
+      resetPhoneBackStackForTests();
+      vi.spyOn(window.history, "pushState").mockImplementation(() => {});
+      vi.spyOn(window.history, "back").mockImplementation(() => {});
+    });
+    afterEach(() => {
+      resetPhoneBackStackForTests();
+      vi.restoreAllMocks();
+    });
+
+    it("back from a section's content returns to the list, then closes Settings", () => {
+      const onClose = vi.fn();
+      const { container } = render(<Settings onClose={onClose} initialSection="terminal" phone />);
+      expect(container.querySelector(".settings-modal-body")).toHaveClass(
+        "settings-modal-body-showing-content",
+      );
+      pop();
+      expect(container.querySelector(".settings-modal-body")).not.toHaveClass(
+        "settings-modal-body-showing-content",
+      );
+      expect(onClose).not.toHaveBeenCalled();
+      pop();
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not touch history when not phone", () => {
+      render(<Settings onClose={vi.fn()} initialSection="terminal" />);
+      expect(window.history.pushState).not.toHaveBeenCalled();
+    });
   });
 });

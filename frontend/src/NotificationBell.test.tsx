@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { resetPhoneBackStackForTests } from "./hooks/usePhoneBackStack.js";
 import { NotificationBell } from "./NotificationBell.js";
 import type { NotificationEvent, Project, Session } from "./api/index.js";
 import {
@@ -1307,5 +1308,31 @@ describe("NotificationBell phone sheet", () => {
     await userEvent.keyboard("{Enter}");
     expect(onOpenTimeline).toHaveBeenCalledTimes(1);
     expect(onOpenSession).not.toHaveBeenCalled();
+  });
+
+  describe("history (Android back)", () => {
+    let pushState: ReturnType<typeof vi.spyOn>;
+    beforeEach(() => {
+      resetPhoneBackStackForTests();
+      pushState = vi.spyOn(window.history, "pushState").mockImplementation(() => {});
+      vi.spyOn(window.history, "back").mockImplementation(() => {});
+      events = { 1: [makeEvent({ seq: 1 })] };
+    });
+    afterEach(() => {
+      resetPhoneBackStackForTests();
+      vi.restoreAllMocks();
+    });
+
+    it("closes the phone sheet", async () => {
+      await openPhoneSheet();
+      expect(pushState).toHaveBeenCalledTimes(1);
+      act(() => void window.dispatchEvent(new PopStateEvent("popstate")));
+      expect(screen.queryByRole("dialog", { name: "Notifications" })).toBeNull();
+    });
+
+    it("is never touched by the desktop popover", async () => {
+      await openPanel();
+      expect(pushState).not.toHaveBeenCalled();
+    });
   });
 });

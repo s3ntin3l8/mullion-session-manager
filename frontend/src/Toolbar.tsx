@@ -73,6 +73,15 @@ export function Toolbar({
   // the way back out, mirroring Dock.tsx's own contextual-chrome posture.
   const viewMode = useDashboardStore((s) => s.viewMode);
 
+  const bell = (
+    <NotificationBell
+      onOpenSession={onOpenSession}
+      onOpenTimeline={onOpenTimeline}
+      onOpenBrowser={onOpenBrowser}
+      phone={phone}
+    />
+  );
+
   return (
     <div className="toolbar">
       <div className="toolbar-lead">
@@ -84,12 +93,9 @@ export function Toolbar({
         >
           <SidebarToggleIcon size={17} />
         </button>
-        <NotificationBell
-          onOpenSession={onOpenSession}
-          onOpenTimeline={onOpenTimeline}
-          onOpenBrowser={onOpenBrowser}
-          phone={phone}
-        />
+        {/* Phone: the bell sits at the right edge (below), so the lead is
+            just the navigator toggle. */}
+        {!phone && bell}
         <button
           className="toolbar-icon-btn toolbar-new-session-btn"
           onClick={onOpenLauncher}
@@ -136,6 +142,14 @@ export function Toolbar({
       </div>
       {viewMode !== "kanban" && mobileSessionSlot && (
         <div className="toolbar-mobile-session">{mobileSessionSlot}</div>
+      )}
+      {/* Phone in Tasks view: the switcher is hidden and `.toolbar-center` is
+          display:none below 700px, so name where you are. */}
+      {phone && viewMode === "kanban" && (
+        <div className="toolbar-mobile-session toolbar-mobile-title">
+          <LayersIcon size={14} />
+          <span>Tasks</span>
+        </div>
       )}
       <div className="toolbar-actions">
         {/* Mobile-only Back button — the phone's escape hatch from Tasks
@@ -192,34 +206,39 @@ export function Toolbar({
         >
           <GearIcon size={18} />
         </button>
+        {phone && bell}
         {/* Phone only (mobile.css): the actions the phone toolbar has no
-            room for. */}
-        <span className="toolbar-app-menu">
-          <KebabMenu
-            title="Menu"
-            items={[
-              {
-                key: "new",
-                label: "New session",
-                icon: <PlusIcon size={14} />,
-                onClick: onOpenLauncher,
-                disabled: viewMode === "kanban",
-              },
-              {
-                key: "theme",
-                label: theme === "light" ? "Dark theme" : "Light theme",
-                icon: theme === "light" ? <MoonIcon size={14} /> : <SunIcon size={14} />,
-                onClick: () => useDashboardStore.getState().toggleTheme(),
-              },
-              {
-                key: "settings",
-                label: currentVersion !== null ? `Settings · v${currentVersion}` : "Settings",
-                icon: <GearIcon size={14} />,
-                onClick: () => onOpenSettings(),
-              },
-            ]}
-          />
-        </span>
+            room for. Not rendered on the phone tier: New session lives in
+            the session picker, and Settings (with the theme control) in the
+            navigator's Settings tab. */}
+        {!phone && (
+          <span className="toolbar-app-menu">
+            <KebabMenu
+              title="Menu"
+              items={[
+                {
+                  key: "new",
+                  label: "New session",
+                  icon: <PlusIcon size={14} />,
+                  onClick: onOpenLauncher,
+                  disabled: viewMode === "kanban",
+                },
+                {
+                  key: "theme",
+                  label: theme === "light" ? "Dark theme" : "Light theme",
+                  icon: theme === "light" ? <MoonIcon size={14} /> : <SunIcon size={14} />,
+                  onClick: () => useDashboardStore.getState().toggleTheme(),
+                },
+                {
+                  key: "settings",
+                  label: currentVersion !== null ? `Settings · v${currentVersion}` : "Settings",
+                  icon: <GearIcon size={14} />,
+                  onClick: () => onOpenSettings(),
+                },
+              ]}
+            />
+          </span>
+        )}
       </div>
     </div>
   );
