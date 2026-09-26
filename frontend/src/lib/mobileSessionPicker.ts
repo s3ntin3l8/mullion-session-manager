@@ -61,7 +61,14 @@ export function buildPickerSections(input: PickerInput): PickerSection[] {
   const panelBySession = new Map<number, PickerPanel>();
   const paneRows: PickerRow[] = [];
   for (const panel of input.panels) {
-    const session = panel.sessionId !== undefined ? sessionById.get(panel.sessionId) : undefined;
+    // Only the session's own terminal panel (`session-<id>`) is its row.
+    // Other panels can carry the same `sessionId` (an Agent Browser pane, a
+    // restored pre-#477 timeline) and coexist with it — those stay switchable
+    // under Open panes instead of overwriting the session's own panel.
+    const session =
+      panel.sessionId !== undefined && panel.id === `session-${panel.sessionId}`
+        ? sessionById.get(panel.sessionId)
+        : undefined;
     if (session) {
       panelBySession.set(session.id, panel);
     } else {

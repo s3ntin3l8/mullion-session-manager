@@ -133,4 +133,20 @@ describe("buildPickerSections", () => {
     );
     expect(section.rows[0].searchFields).toEqual(["t", "codex", "runway"]);
   });
+
+  it("keeps a browser/timeline panel that shares a sessionId separate from the session's own row", () => {
+    const sections = buildPickerSections(
+      input({
+        sessions: [makeSession({ id: 1, projectId: 1 })],
+        panels: [
+          { id: "browserPane-1", title: "Browser", sessionId: 1 },
+          { id: "session-1", title: "shell", sessionId: 1 },
+        ],
+      }),
+    );
+    const panes = sections.find((s) => s.kind === "panes");
+    expect(panes?.rows.map((r) => r.panelId)).toEqual(["browserPane-1"]);
+    const project = sections.find((s) => s.kind === "project");
+    expect(project?.rows[0]).toMatchObject({ panelId: "session-1", title: "shell" });
+  });
 });

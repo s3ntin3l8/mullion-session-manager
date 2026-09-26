@@ -179,7 +179,12 @@ export function MobileSessionSwitcher({
           rows: section.rows.filter((row) => matchesQuery(row.searchFields, trimmedQuery)),
         }))
       : sections
-  ).filter((section) => section.rows.length > 0);
+  )
+    // While searching, the "Needs you" pin would only repeat matching
+    // project rows.
+    .filter(
+      (section) => section.rows.length > 0 && !(trimmedQuery && section.kind === "needs-you"),
+    );
 
   return (
     <>
