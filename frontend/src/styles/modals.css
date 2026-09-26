@@ -1327,3 +1327,9 @@
   font-family: "Geist Mono", monospace;
   color: var(--muted);
 }
+
+/* Status-notification matrix (Settings -> Notifications): label + Notify /
+   Sound / Focus columns. Phone override lives in mobile.css. */
+.settings-status-matrix {
+  grid-template-columns: minmax(140px, 1fr) 60px 60px 60px;
+}

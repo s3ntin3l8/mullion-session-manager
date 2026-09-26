@@ -160,9 +160,11 @@ export function NotificationsSection() {
           desc="Choose which session states notify you, play a sound, or focus the session. Only states your installed agents report are shown."
         />
         <div
+          // Columns live in CSS (.settings-status-matrix) so phone can narrow
+          // them; an inline template would outrank any media query.
+          className="settings-status-matrix"
           style={{
             display: "grid",
-            gridTemplateColumns: "minmax(140px, 1fr) 60px 60px 60px",
             gap: "6px 8px",
             alignItems: "center",
             fontSize: 11,

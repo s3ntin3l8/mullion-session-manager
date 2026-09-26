@@ -588,3 +588,37 @@
     border-top: 1px solid var(--border);
   }
 }
+
+/* Settings on phone: fix the fields that overflow a 390px screen. Inline
+   widths need !important to lose to. */
+@media (max-width: 699.98px) {
+  .settings-launcher-table {
+    --lch-cols: 16px 9px minmax(0, 96px) minmax(0, 1fr) 36px 56px 36px;
+  }
+  .settings-launcher-head,
+  .settings-launcher-row {
+    gap: 6px;
+  }
+  .settings-launcher-head {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+  .settings-launcher-row {
+    padding: 10px 8px;
+  }
+  .settings-status-matrix {
+    grid-template-columns: minmax(0, 1fr) 48px 48px 48px;
+  }
+  .settings-modal .settings-numberfield {
+    width: 100% !important;
+    min-width: 0;
+  }
+  .settings-modal textarea {
+    width: 100% !important;
+    box-sizing: border-box;
+  }
+  /* 16px, not smaller: iOS zooms the page on focusing a smaller input. */
+  .settings-nav-search input {
+    font-size: 16px;
+  }
+}

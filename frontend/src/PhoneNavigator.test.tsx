@@ -53,9 +53,12 @@ describe("PhoneSettingsList", () => {
   it("lists every settings section under its group and opens the chosen one", async () => {
     const onSelect = vi.fn();
     render(<PhoneSettingsList onSelect={onSelect} />);
-    for (const s of SECTIONS) {
+    // Every section except "Dock & previews", which configures the desktop
+    // Dock that phone hides.
+    for (const s of SECTIONS.filter((x) => x.id !== "dock")) {
       expect(screen.getByRole("button", { name: new RegExp(s.title) })).toBeInTheDocument();
     }
+    expect(screen.queryByRole("button", { name: /Dock & previews/ })).toBeNull();
     const groups = new Set(SECTIONS.map((s) => s.group));
     for (const g of groups) expect(screen.getByText(g)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: /Terminal/ }));

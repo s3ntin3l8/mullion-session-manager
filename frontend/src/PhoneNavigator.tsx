@@ -1,6 +1,6 @@
 import { Fragment } from "react";
 import { CloseIcon, ChevronRightIcon } from "./ui/icons.js";
-import { SECTIONS } from "./settings/settingsSections.js";
+import { phoneSections } from "./settings/settingsSections.js";
 import type { SettingsSection } from "./settings/settingsSections.js";
 
 // Phone-only chrome for the full-screen navigator (App.tsx renders it inside
@@ -73,11 +73,12 @@ export function PhoneNavigatorHeader({
 // rail is built from (SECTIONS), as full-width 44px rows. Picking one opens
 // Settings straight into that section.
 export function PhoneSettingsList({ onSelect }: { onSelect: (section: SettingsSection) => void }) {
+  const sections = phoneSections();
   return (
     <div className="phone-nav-settings">
-      {SECTIONS.map((s, i) => (
+      {sections.map((s, i) => (
         <Fragment key={s.id}>
-          {SECTIONS[i - 1]?.group !== s.group && (
+          {sections[i - 1]?.group !== s.group && (
             <div className="phone-nav-settings-group">{s.group}</div>
           )}
           <button className="phone-nav-settings-row" onClick={() => onSelect(s.id)}>
