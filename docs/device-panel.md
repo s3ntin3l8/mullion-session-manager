@@ -13,6 +13,27 @@ provisioning most deployments won't have: `/dev/kvm` passthrough, an
 installed Android SDK emulator + system image, and the `scrcpy-server`
 binary. See the `ansible-playbooks` repo's `lxc-kvm`/`android-sdk` roles.
 
+### Stream tuning
+
+The emulator has no hardware H.264 encoder, so every streamed frame is
+encoded in software on the same guest vCPUs that render it. A phone-native
+screen (e.g. 1344×2992) is far more pixels than a panel of a few hundred CSS
+pixels can show, so the stream is bounded by default:
+
+| Variable                | Default                | Meaning                                                                                                                                                                                                                                                                                                                                                                             |
+| ----------------------- | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DEVICE_VIDEO_MAX_SIZE` | `1280`                 | Longest side of the streamed video, px (scrcpy `--max-size`). `0` = native.                                                                                                                                                                                                                                                                                                         |
+| `DEVICE_VIDEO_MAX_FPS`  | `60`                   | Frame-rate cap (scrcpy `--max-fps`). `0` = uncapped.                                                                                                                                                                                                                                                                                                                                |
+| `DEVICE_VIDEO_BIT_RATE` | `8000000`              | H.264 bit rate, bits/s. Lower it for a remote viewer.                                                                                                                                                                                                                                                                                                                               |
+| `DEVICE_EMULATOR_GPU`   | `swiftshader_indirect` | Emulator `-gpu` mode. The default is software rendering (works headless anywhere). `host` uses the host GPU but needs a GL/EGL display — a headless container typically has none and the emulator exits with `Failed to get EGL display` (the Vulkan device itself is visible) — so it is opt-in and unverified headless. Other common values: `auto`, `swangle_indirect`, `guest`. |
+
+These bound the **stream** only — `tap`/`swipe`/`screenshot` still operate at
+native screen resolution. If the guest itself renders slowly (software
+SwiftShader drawing a 4-megapixel screen), lowering the AVD's own `hw.lcd`
+resolution helps more than any stream setting — the encoder and the software
+renderer compete for the same guest CPUs. In the browser, the pane draws frames with WebGL when available and
+falls back to a slower bitmap renderer otherwise.
+
 ---
 
 ## Architecture & Lifecycle
@@ -242,9 +263,12 @@ text-equivalent of the new "Pair a phone" modal — supply `--discovery-id`
 (use `mullion device discovered` to find one) to drive pair+connect from a
 cached mDNS entry, or `--pairing-address` to type both ports by hand.
 
-`x`/`y` (and `x1 y1 x2 y2`) are in the device's **video-pixel space**, not
-CSS pixels — the same coordinate space `DevicePane.tsx` rescales mouse events
-into before sending them.
+`x`/`y` (and `x1 y1 x2 y2`) are in the device's native **screen pixels** —
+the same space a `screenshot` comes back in, since `tap`/`swipe` run as
+`adb shell input`. This is deliberately _not_ the live stream's video-pixel
+space: the panel's stream is downscaled (see "Stream tuning" above), and
+`DevicePane.tsx` rescales its own mouse events into that video space before
+sending them over the WebSocket.
 
 `tap`/`swipe`/`key`/`screenshot`/`logcat` all run as plain `adb shell`
 commands against the device's live adb connection

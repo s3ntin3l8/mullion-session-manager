@@ -19,6 +19,12 @@ import {
   stopDeviceScope,
   touchDeviceMarker,
 } from "./device-process.js";
+import {
+  DEFAULT_DEVICE_EMULATOR_GPU,
+  DEFAULT_DEVICE_VIDEO_BIT_RATE,
+  DEFAULT_DEVICE_VIDEO_MAX_FPS,
+  DEFAULT_DEVICE_VIDEO_MAX_SIZE,
+} from "./device-defaults.js";
 
 // The devices/AVD analogue of PtyManager (pty-manager.ts) — an in-memory
 // live-process map, mirroring that file's "DB row is intent, this map is
@@ -44,6 +50,14 @@ export interface DeviceManagerOptions {
   adbServerPort: number;
   emulatorPath: string;
   scrcpyServerPath: string;
+  /** scrcpy stream tuning — see env.ts's DEVICE_VIDEO_* comments. Optional
+   * so a caller that doesn't care (tests) gets the same defaults as the env
+   * schema. `0` means native size / uncapped fps. */
+  videoMaxSize?: number;
+  videoMaxFps?: number;
+  videoBitRate?: number;
+  /** Emulator `-gpu` mode — see env.ts's DEVICE_EMULATOR_GPU comment. */
+  emulatorGpu?: string;
   /** Same directory PtyManager's own scopes are namespaced against
    * (src/plugins/pty.ts's `ensureSessionsDir` output) — passed in rather
    * than read from app.config directly so this manager always agrees with
@@ -268,7 +282,7 @@ export class Device {
           "-no-window",
           "-no-audio",
           "-gpu",
-          "swiftshader_indirect",
+          this.manager.emulatorGpu ?? DEFAULT_DEVICE_EMULATOR_GPU,
         ],
       });
 
@@ -534,7 +548,14 @@ export class Device {
     ) as unknown as YumeReadableStream<MaybeConsumable<Uint8Array>>;
     await AdbScrcpyClient.pushServer(adb, scrcpyServerStream);
 
-    const options = new AdbScrcpyOptionsLatest({ video: true, audio: false, control: true });
+    const options = new AdbScrcpyOptionsLatest({
+      video: true,
+      audio: false,
+      control: true,
+      maxSize: this.manager.videoMaxSize ?? DEFAULT_DEVICE_VIDEO_MAX_SIZE,
+      maxFps: this.manager.videoMaxFps ?? DEFAULT_DEVICE_VIDEO_MAX_FPS,
+      videoBitRate: this.manager.videoBitRate ?? DEFAULT_DEVICE_VIDEO_BIT_RATE,
+    });
     this.scrcpyClient = await AdbScrcpyClient.start(
       adb,
       "/data/local/tmp/scrcpy-server.jar",

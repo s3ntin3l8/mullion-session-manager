@@ -2,6 +2,12 @@ import fp from "fastify-plugin";
 import env from "@fastify/env";
 import { existsSync, readFileSync } from "node:fs";
 import { parseEnv } from "node:util";
+import {
+  DEFAULT_DEVICE_EMULATOR_GPU,
+  DEFAULT_DEVICE_VIDEO_BIT_RATE,
+  DEFAULT_DEVICE_VIDEO_MAX_FPS,
+  DEFAULT_DEVICE_VIDEO_MAX_SIZE,
+} from "../services/device-defaults.js";
 
 // Exported so RATE_LIMIT_MAX's schema default and
 // test/plugins/security.test.ts's "no per-route limiter matches the global
@@ -681,6 +687,47 @@ export const schema = {
       type: "string",
       default: "",
     },
+    // scrcpy stream tuning (src/services/device-manager.ts's
+    // startScrcpySession). The emulator has no hardware H.264 encoder, so
+    // every frame is encoded in software on the same guest vCPUs that render
+    // it — streaming a phone-native 1344x2992 screen is the dominant cost,
+    // and the panel only ever shows a few hundred CSS pixels of it. These
+    // bound the STREAM only: MCP/CLI tap/swipe/screenshot run `adb shell
+    // input`/`screencap` at native screen resolution regardless.
+    //
+    // Longest side of the streamed video, in pixels (scrcpy's --max-size).
+    // 0 = native resolution.
+    DEVICE_VIDEO_MAX_SIZE: {
+      type: "number",
+      default: DEFAULT_DEVICE_VIDEO_MAX_SIZE,
+      minimum: 0,
+    },
+    // Frame-rate cap (scrcpy's --max-fps). 60 matches the AVD's own
+    // hw.lcd.vsync. 0 = uncapped.
+    DEVICE_VIDEO_MAX_FPS: {
+      type: "number",
+      default: DEFAULT_DEVICE_VIDEO_MAX_FPS,
+      minimum: 0,
+    },
+    // H.264 bit rate in bits/second — scrcpy's own default (8 Mbps). Lower
+    // it for a remote/WAN viewer.
+    DEVICE_VIDEO_BIT_RATE: {
+      type: "number",
+      default: DEFAULT_DEVICE_VIDEO_BIT_RATE,
+      minimum: 100000,
+    },
+    // Emulator `-gpu` mode. The default keeps guest rendering in software
+    // (SwiftShader), which works headless anywhere. `host` renders on the
+    // host GPU but is environment-specific: it needs a GL/EGL display (a
+    // headless container usually has none — the emulator fails with "Failed
+    // to get EGL display"), so it is opt-in and unverified headless. Common
+    // values: auto, host, swiftshader_indirect, swangle_indirect, guest.
+    // Deliberately not an enum: newer emulators add modes.
+    DEVICE_EMULATOR_GPU: {
+      type: "string",
+      default: DEFAULT_DEVICE_EMULATOR_GPU,
+      pattern: "^\\S+$",
+    },
     // mDNS scanner for the physical-device pairing flow (src/services/
     // device-discovery.ts). When enabled, the backend binds a Bonjour/
     // multicast-DNS socket and listens for `_adb-tls-pairing._tcp` /
@@ -926,6 +973,10 @@ declare module "fastify" {
       DEVICE_ADB_SERVER_PORT: number;
       DEVICE_EMULATOR_PATH: string;
       DEVICE_SCRCPY_SERVER_PATH: string;
+      DEVICE_VIDEO_MAX_SIZE: number;
+      DEVICE_VIDEO_MAX_FPS: number;
+      DEVICE_VIDEO_BIT_RATE: number;
+      DEVICE_EMULATOR_GPU: string;
       DEVICE_AVDMANAGER_PATH: string;
       DEVICE_SDKMANAGER_PATH: string;
       DEVICE_ANDROID_SDK_ROOT: string;

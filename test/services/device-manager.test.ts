@@ -8,6 +8,7 @@ import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
 import { mockChildProcessSpawn } from "../helpers/mock-spawn.js";
 import { EventEmitter } from "node:events";
 import { spawn as spawnChildProcess } from "node:child_process";
+import { AdbScrcpyOptionsLatest } from "@yume-chan/adb-scrcpy";
 import type * as ChildProcess from "node:child_process";
 
 // Hermes review on PR #1324 — device-manager.ts (the feature's other
@@ -311,6 +312,7 @@ beforeEach(() => {
   mockWirelessConnect.mockClear();
   mockWirelessDisconnect.mockClear();
   vi.mocked(spawnChildProcess).mockClear();
+  vi.mocked(AdbScrcpyOptionsLatest).mockClear();
   fs.mkdirSync(SESSIONS_DIR, { recursive: true });
   fs.writeFileSync(SCRCPY_SERVER_FIXTURE, "");
 });
@@ -386,6 +388,55 @@ describe("DeviceManager", () => {
     await waitForStatus(manager, "1", "streaming");
     expect(manager.get("1")).toBe(device);
     expect(manager.list().map((d) => d.id)).toEqual(["1"]);
+  });
+
+  it("passes the stream-tuning options to scrcpy and the -gpu mode to the emulator", async () => {
+    mockDeviceList = [{ serial: "emulator-5554" }];
+    const manager = new DeviceManager(
+      baseOpts({
+        videoMaxSize: 720,
+        videoMaxFps: 30,
+        videoBitRate: 2_000_000,
+        emulatorGpu: "host",
+      }),
+    );
+    await manager.getOrCreate({
+      id: "1",
+      kind: "emulator" as const,
+      avdName: "dev35",
+      serial: null,
+      label: null,
+      port: null,
+    });
+    await waitForStatus(manager, "1", "streaming");
+
+    expect(vi.mocked(AdbScrcpyOptionsLatest)).toHaveBeenCalledWith(
+      expect.objectContaining({ maxSize: 720, maxFps: 30, videoBitRate: 2_000_000 }),
+    );
+    const systemdRun = vi.mocked(spawnChildProcess).mock.calls.find((c) => c[0] === "systemd-run");
+    const argv = systemdRun?.[1] as string[];
+    expect(argv[argv.indexOf("-gpu") + 1]).toBe("host");
+  });
+
+  it("falls back to a 1280px / 60fps / 8Mbps stream and swiftshader_indirect when unconfigured", async () => {
+    mockDeviceList = [{ serial: "emulator-5554" }];
+    const manager = new DeviceManager(baseOpts());
+    await manager.getOrCreate({
+      id: "1",
+      kind: "emulator" as const,
+      avdName: "dev35",
+      serial: null,
+      label: null,
+      port: null,
+    });
+    await waitForStatus(manager, "1", "streaming");
+
+    expect(vi.mocked(AdbScrcpyOptionsLatest)).toHaveBeenCalledWith(
+      expect.objectContaining({ maxSize: 1280, maxFps: 60, videoBitRate: 8_000_000 }),
+    );
+    const systemdRun = vi.mocked(spawnChildProcess).mock.calls.find((c) => c[0] === "systemd-run");
+    const argv = systemdRun?.[1] as string[];
+    expect(argv[argv.indexOf("-gpu") + 1]).toBe("swiftshader_indirect");
   });
 
   it("getOrCreate is idempotent — a second call for the same alive id returns the SAME Device, no second spawn", async () => {

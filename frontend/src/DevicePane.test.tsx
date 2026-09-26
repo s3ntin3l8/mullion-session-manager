@@ -26,6 +26,9 @@ const decoderWriter = {
 };
 
 const decoderCtor = vi.hoisted(() => vi.fn());
+const webglCtor = vi.hoisted(() => vi.fn());
+const bitmapCtor = vi.hoisted(() => vi.fn());
+const webglSupport = vi.hoisted(() => ({ value: true }));
 
 vi.mock("@yume-chan/scrcpy-decoder-webcodecs", () => {
   class WebCodecsVideoDecoder {
@@ -38,9 +41,19 @@ vi.mock("@yume-chan/scrcpy-decoder-webcodecs", () => {
     dispose() {}
   }
   class BitmapVideoFrameRenderer {
-    constructor(_canvas: unknown) {}
+    constructor(_canvas: unknown) {
+      bitmapCtor();
+    }
   }
-  return { WebCodecsVideoDecoder, BitmapVideoFrameRenderer };
+  class WebGLVideoFrameRenderer {
+    static get isSupported() {
+      return webglSupport.value;
+    }
+    constructor(_canvas: unknown) {
+      webglCtor();
+    }
+  }
+  return { WebCodecsVideoDecoder, BitmapVideoFrameRenderer, WebGLVideoFrameRenderer };
 });
 
 // jsdom ships a WebSocket, but it would try to dial a real server. A bare
@@ -113,6 +126,9 @@ describe("DevicePane (issue #1326)", () => {
     decoderWriter.write.mockReset();
     decoderWriter.write.mockImplementation(() => Promise.resolve());
     decoderCtor.mockClear();
+    webglCtor.mockClear();
+    bitmapCtor.mockClear();
+    webglSupport.value = true;
     decoderWriter.close.mockClear();
     resetStore({ devices: [], devicesLoaded: true });
     ({ fetchMock, unexpectedCalls } = mockFetch({
@@ -226,6 +242,30 @@ describe("DevicePane (issue #1326)", () => {
     await waitFor(() => expect(screen.queryByText("Waiting for video…")).toBeNull());
   });
 
+  it("renders with WebGL when supported, and falls back to the bitmap renderer when not", () => {
+    resetStore({ devices: [makeDevice()], devicesLoaded: true });
+    const first = render(<DevicePane params={{ deviceId: 7 }} />);
+    expect(webglCtor).toHaveBeenCalledTimes(1);
+    expect(bitmapCtor).not.toHaveBeenCalled();
+    first.unmount();
+
+    webglCtor.mockClear();
+    webglSupport.value = false;
+    render(<DevicePane params={{ deviceId: 7 }} />);
+    expect(webglCtor).not.toHaveBeenCalled();
+    expect(bitmapCtor).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to the bitmap renderer, instead of crashing, when the WebGL renderer throws on construction", () => {
+    resetStore({ devices: [makeDevice()], devicesLoaded: true });
+    webglCtor.mockImplementationOnce(() => {
+      throw new Error("WebGL not supported");
+    });
+    render(<DevicePane params={{ deviceId: 7 }} />);
+    expect(webglCtor).toHaveBeenCalledTimes(1);
+    expect(bitmapCtor).toHaveBeenCalledTimes(1);
+  });
+
   it("rebuilds the decoder and reconnects when a write rejects, ignoring the stale socket", async () => {
     resetStore({ devices: [makeDevice()], devicesLoaded: true });
     render(<DevicePane params={{ deviceId: 7 }} />);
@@ -240,6 +280,8 @@ describe("DevicePane (issue #1326)", () => {
 
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2), { timeout: 2000 });
     expect(decoderCtor).toHaveBeenCalledTimes(2);
+    // ...but the renderer (a GL context/program on the canvas) is reused.
+    expect(webglCtor).toHaveBeenCalledTimes(1);
 
     // The replaced socket can no longer reach the new decoder.
     decoderWriter.write.mockClear();

@@ -110,6 +110,51 @@ describe("env plugin", () => {
     await app.close();
   });
 
+  describe("device stream tuning", () => {
+    const VARS = [
+      "DEVICE_VIDEO_MAX_SIZE",
+      "DEVICE_VIDEO_MAX_FPS",
+      "DEVICE_VIDEO_BIT_RATE",
+      "DEVICE_EMULATOR_GPU",
+    ];
+    afterEach(() => {
+      for (const v of VARS) delete process.env[v];
+    });
+
+    it("defaults to a 1280px / 60fps / 8Mbps stream and software GPU", async () => {
+      const app = await buildApp();
+      expect(app.config.DEVICE_VIDEO_MAX_SIZE).toBe(1280);
+      expect(app.config.DEVICE_VIDEO_MAX_FPS).toBe(60);
+      expect(app.config.DEVICE_VIDEO_BIT_RATE).toBe(8_000_000);
+      expect(app.config.DEVICE_EMULATOR_GPU).toBe("swiftshader_indirect");
+      await app.close();
+    });
+
+    it("coerces string overrides (0 = native size / uncapped fps)", async () => {
+      process.env.DEVICE_VIDEO_MAX_SIZE = "0";
+      process.env.DEVICE_VIDEO_MAX_FPS = "30";
+      process.env.DEVICE_VIDEO_BIT_RATE = "2000000";
+      process.env.DEVICE_EMULATOR_GPU = "host";
+      const app = await buildApp();
+      expect(app.config.DEVICE_VIDEO_MAX_SIZE).toBe(0);
+      expect(app.config.DEVICE_VIDEO_MAX_FPS).toBe(30);
+      expect(app.config.DEVICE_VIDEO_BIT_RATE).toBe(2_000_000);
+      expect(app.config.DEVICE_EMULATOR_GPU).toBe("host");
+      await app.close();
+    });
+
+    it.each([
+      ["DEVICE_VIDEO_MAX_SIZE", "-1"],
+      ["DEVICE_VIDEO_MAX_FPS", "-5"],
+      ["DEVICE_VIDEO_BIT_RATE", "10"],
+      ["DEVICE_EMULATOR_GPU", "host swiftshader"],
+      ["DEVICE_EMULATOR_GPU", ""],
+    ])("rejects an invalid %s=%j at startup", async (name, value) => {
+      process.env[name] = value;
+      await expect(buildApp()).rejects.toThrow();
+    });
+  });
+
   // Env vars are always strings on the wire (process.env, a real .env file,
   // systemd EnvironmentFile, ...) — this is the load-bearing check that
   // @fastify/env's ajv-backed coercion actually turns the STRING "true"/

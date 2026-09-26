@@ -547,12 +547,30 @@ const useDevice = {
         enum: ["screenshot", "tap", "swipe", "text", "key", "logcat"],
         description: "The device action to execute.",
       },
-      x: { type: "number", description: "X coordinate, video-pixel space (tap)." },
-      y: { type: "number", description: "Y coordinate, video-pixel space (tap)." },
-      x1: { type: "number", description: "Start X, video-pixel space (swipe)." },
-      y1: { type: "number", description: "Start Y, video-pixel space (swipe)." },
-      x2: { type: "number", description: "End X, video-pixel space (swipe)." },
-      y2: { type: "number", description: "End Y, video-pixel space (swipe)." },
+      x: {
+        type: "number",
+        description: "X coordinate, screen pixels — same space as screenshot (tap).",
+      },
+      y: {
+        type: "number",
+        description: "Y coordinate, screen pixels — same space as screenshot (tap).",
+      },
+      x1: {
+        type: "number",
+        description: "Start X, screen pixels — same space as screenshot (swipe).",
+      },
+      y1: {
+        type: "number",
+        description: "Start Y, screen pixels — same space as screenshot (swipe).",
+      },
+      x2: {
+        type: "number",
+        description: "End X, screen pixels — same space as screenshot (swipe).",
+      },
+      y2: {
+        type: "number",
+        description: "End Y, screen pixels — same space as screenshot (swipe).",
+      },
       durationMs: { type: "number", description: "Swipe duration in milliseconds (swipe)." },
       text: { type: "string", description: "Text to type (text)." },
       androidKeyCode: {
