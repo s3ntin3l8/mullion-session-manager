@@ -42,7 +42,7 @@ describe("Settings structure", () => {
   });
 
   it("maps folded-in section ids to their new home", () => {
-    expect(resolveSettingsSection("models")).toBe("launchers");
+    expect(resolveSettingsSection("models")).toBe("models");
     expect(resolveSettingsSection("skills")).toBe("agent-context");
     expect(resolveSettingsSection("server")).toBe("server");
   });
