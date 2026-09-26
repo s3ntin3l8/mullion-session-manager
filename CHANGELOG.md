@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.32](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.31...v0.3.32) (2026-09-26)
+
+
+### Performance Improvements
+
+* **devices:** downscale scrcpy stream, WebGL render, configurable emulator GPU ([#1417](https://github.com/s3ntin3l8/mullion-session-manager/issues/1417)) ([0816f4b](https://github.com/s3ntin3l8/mullion-session-manager/commit/0816f4bcd6a08ef5e18815db77ef4769b4ce93aa))
+
 ## [0.3.31](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.30...v0.3.31) (2026-09-25)
 
 
