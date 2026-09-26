@@ -10,6 +10,7 @@ import { PlayIcon, RefreshIcon, StopIcon, WifiOffIcon } from "./ui/icons.js";
 import { useDashboardStore } from "./store/index.js";
 import { Spinner } from "./ui/Spinner.js";
 import { devicesApi } from "./api/device.js";
+import { STORAGE_KEYS, readString, writeString } from "./lib/persistedState.js";
 
 export interface DevicePaneParams {
   deviceId: number;
@@ -125,7 +126,7 @@ export function DevicePane(props: {
   const devicesLoaded = useDashboardStore((s) => s.devicesLoaded);
   const [starting, setStarting] = useState(false);
   const [showFrame, setShowFrame] = useState(
-    () => localStorage.getItem("crs.deviceFrame") !== "off",
+    () => readString(STORAGE_KEYS.deviceFrame, "on") !== "off",
   );
   const [takingScreenshot, setTakingScreenshot] = useState(false);
   // Two states the socket can never recover from on its own: the row is
@@ -176,7 +177,7 @@ export function DevicePane(props: {
   const toggleFrame = () =>
     setShowFrame((current) => {
       const next = !current;
-      localStorage.setItem("crs.deviceFrame", next ? "on" : "off");
+      writeString(STORAGE_KEYS.deviceFrame, next ? "on" : "off");
       return next;
     });
 
@@ -193,6 +194,7 @@ export function DevicePane(props: {
     let videoHeight = 0;
     let activePointer: number | null = null;
     let lastTouchPoint = { x: 0, y: 0 };
+    let pendingTouchUp: Record<string, unknown> | null = null;
 
     // A WebCodecsVideoDecoder whose writable has errored (e.g. it was handed
     // a delta frame before its first keyframe) stays errored for good —
@@ -238,17 +240,25 @@ export function DevicePane(props: {
     createDecoder();
 
     function sendControl(message: Record<string, unknown>) {
-      if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
+      if (ws?.readyState !== WebSocket.OPEN) return false;
+      ws.send(JSON.stringify(message));
+      return true;
     }
     function sendTouch(type: "touchDown" | "touchMove" | "touchUp", point = lastTouchPoint) {
-      sendControl({
+      const message = {
         type,
         x: point.x,
         y: point.y,
         videoWidth: videoWidth || canvas!.width,
         videoHeight: videoHeight || canvas!.height,
         pointerId: 0,
-      });
+      };
+      if (type === "touchUp") {
+        if (sendControl(message)) pendingTouchUp = null;
+        else pendingTouchUp = message;
+      } else {
+        sendControl(message);
+      }
     }
     function releaseActivePointer(point = lastTouchPoint) {
       if (activePointer === null) return;
@@ -270,7 +280,10 @@ export function DevicePane(props: {
       // once a new one is about to be created — see the "exited" handler's
       // own comment on why this matters (a stray socket stays registered
       // server-side as a live viewer until the OS times it out).
-      if (ws && ws.readyState !== WebSocket.CLOSED) ws.close();
+      if (ws && ws.readyState !== WebSocket.CLOSED) {
+        releaseActivePointer();
+        ws.close();
+      }
       if (decoderDead) {
         disposeDecoder();
         createDecoder();
@@ -289,6 +302,11 @@ export function DevicePane(props: {
 
       socket.addEventListener("open", () => {
         reconnectAttempt = 0;
+        if (socket !== ws) return;
+        if (pendingTouchUp) {
+          socket.send(JSON.stringify(pendingTouchUp));
+          pendingTouchUp = null;
+        }
         setStatus("open");
         setLastError(null);
       });
@@ -362,7 +380,7 @@ export function DevicePane(props: {
 
       socket.addEventListener("close", () => {
         if (socket !== ws) return;
-        activePointer = null;
+        releaseActivePointer();
         if (destroyed) return;
         if (reconnectAttempt >= MAX_RECONNECT_ATTEMPTS) {
           setStatus("failed");
@@ -510,6 +528,7 @@ export function DevicePane(props: {
       <div className="device-toolbar" role="toolbar" aria-label="Android device controls">
         <div className="device-toolbar-group" aria-label="Navigation">
           <button
+            onPointerDown={(event) => event.preventDefault()}
             title="Back"
             aria-label="Back"
             disabled={controlsDisabled}
@@ -518,6 +537,7 @@ export function DevicePane(props: {
             ‹
           </button>
           <button
+            onPointerDown={(event) => event.preventDefault()}
             title="Home"
             aria-label="Home"
             disabled={controlsDisabled}
@@ -526,6 +546,7 @@ export function DevicePane(props: {
             ⌂
           </button>
           <button
+            onPointerDown={(event) => event.preventDefault()}
             title="Recent apps"
             aria-label="Recent apps"
             disabled={controlsDisabled}
@@ -536,6 +557,7 @@ export function DevicePane(props: {
         </div>
         <div className="device-toolbar-group" aria-label="Device buttons">
           <button
+            onPointerDown={(event) => event.preventDefault()}
             title="Power"
             aria-label="Power"
             disabled={controlsDisabled}
@@ -544,6 +566,7 @@ export function DevicePane(props: {
             ⏻
           </button>
           <button
+            onPointerDown={(event) => event.preventDefault()}
             title="Volume down"
             aria-label="Volume down"
             disabled={controlsDisabled}
@@ -552,6 +575,7 @@ export function DevicePane(props: {
             −
           </button>
           <button
+            onPointerDown={(event) => event.preventDefault()}
             title="Volume up"
             aria-label="Volume up"
             disabled={controlsDisabled}
@@ -562,6 +586,7 @@ export function DevicePane(props: {
         </div>
         <div className="device-toolbar-group" aria-label="Display">
           <button
+            onPointerDown={(event) => event.preventDefault()}
             title="Rotate device"
             aria-label="Rotate device"
             disabled={controlsDisabled}
@@ -570,6 +595,7 @@ export function DevicePane(props: {
             ↻
           </button>
           <button
+            onPointerDown={(event) => event.preventDefault()}
             title="Take screenshot"
             aria-label="Take screenshot"
             disabled={controlsDisabled || takingScreenshot}
@@ -578,6 +604,7 @@ export function DevicePane(props: {
             {takingScreenshot ? "…" : "⇩"}
           </button>
           <button
+            onPointerDown={(event) => event.preventDefault()}
             title={showFrame ? "Hide device frame" : "Show device frame"}
             aria-label={showFrame ? "Hide device frame" : "Show device frame"}
             aria-pressed={showFrame}
