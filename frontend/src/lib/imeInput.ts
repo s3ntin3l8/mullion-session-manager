@@ -49,18 +49,23 @@ export function diffEdit(before: string, after: string): { removed: number; inse
   };
 }
 
-export function attachImeInput(
-  term: Pick<Terminal, "input" | "paste" | "textarea" | "element">,
-): () => void {
+export function attachImeInput(term: Pick<Terminal, "input" | "textarea" | "element">): () => void {
   const { textarea, element: root } = term;
   if (!textarea || !root) return () => {};
 
   let composing = false;
+  // True once we've swallowed a 229 keydown, until the edit it announces is
+  // consumed. We only own edits that follow one: swallowing that keydown is what
+  // removes xterm's own textarea-diff for them. Anything else (a real clipboard
+  // paste, which xterm's paste listener already sent; dictation with no keydown)
+  // is left entirely to xterm, or it would go out twice.
+  let armed = false;
   // Non-null between an owned `beforeinput` and its `input`.
   let before: { value: string; inputType: string } | null = null;
 
   const onCompositionStart = (): void => {
     composing = true;
+    armed = false;
   };
   const onCompositionEnd = (): void => {
     composing = false;
@@ -69,18 +74,25 @@ export function attachImeInput(
   // this every later edit would fall through to xterm's buggy path.
   const onBlur = (): void => {
     composing = false;
+    armed = false;
     before = null;
   };
   const fromTextarea = (ev: Event): boolean => ev.target === textarea;
   const onKeyDown = (ev: KeyboardEvent): void => {
-    if (fromTextarea(ev) && ev.keyCode === 229 && !composing) ev.stopPropagation();
+    if (!fromTextarea(ev) || ev.keyCode !== 229 || composing) return;
+    armed = true;
+    ev.stopPropagation();
   };
   const onBeforeInput = (ev: InputEvent): void => {
-    if (!fromTextarea(ev) || ev.defaultPrevented) return;
-    before =
-      !composing && !ev.isComposing && !COMPOSITION_INPUT_TYPES.has(ev.inputType)
-        ? { value: textarea.value, inputType: ev.inputType }
-        : null;
+    if (!fromTextarea(ev)) return;
+    const own =
+      armed &&
+      !ev.defaultPrevented &&
+      !composing &&
+      !ev.isComposing &&
+      !COMPOSITION_INPUT_TYPES.has(ev.inputType);
+    armed = false; // consumed (or cancelled) either way — never carry it forward
+    before = own ? { value: textarea.value, inputType: ev.inputType } : null;
   };
   const onInput = (ev: Event): void => {
     if (!fromTextarea(ev) || before === null) return;
@@ -93,12 +105,6 @@ export function attachImeInput(
       return;
     }
     const { removed, inserted } = diffEdit(prev, textarea.value);
-    // Pasted text goes through xterm's own paste() so it gets CR normalization
-    // and bracketed-paste, like a real paste event would.
-    if (inputType === "insertFromPaste" && inserted && !removed) {
-      term.paste(inserted);
-      return;
-    }
     const out = DEL.repeat(removed) + inserted.replace(/\r?\n/g, CR);
     if (out) term.input(out, true);
   };

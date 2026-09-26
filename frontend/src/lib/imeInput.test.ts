@@ -130,14 +130,27 @@ describe("attachImeInput against a real xterm Terminal", () => {
     expect(sent.join("")).toBe("\x7f".repeat(6));
   });
 
-  it("routes paste-as-input through xterm's paste() and maps other newlines to CR", () => {
+  it("maps newlines in a 229-driven insertion (e.g. a Gboard clipboard chip) to CR", () => {
     attachImeInput(term);
-    const paste = vi.spyOn(term, "paste");
     edit(ta, append("a\nb"), "insertFromPaste");
-    expect(paste).toHaveBeenCalledWith("a\nb");
-    sent.length = 0;
-    edit(ta, append("x\ny")); // e.g. dictation/insertText carrying a newline
-    expect(sent.join("")).toBe("x\ry");
+    expect(sent.join("")).toBe("a\rb");
+  });
+
+  it("leaves a real clipboard paste to xterm (no 229 keydown), so it is sent once", () => {
+    attachImeInput(term);
+    const spy = vi.spyOn(term, "input");
+    // Chrome fires beforeinput/input after xterm's own paste listener already ran.
+    ta.dispatchEvent(
+      new InputEvent("beforeinput", {
+        inputType: "insertFromPaste",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    ta.value = "echo hi\n";
+    ta.dispatchEvent(new InputEvent("input", { inputType: "insertFromPaste", bubbles: true }));
+    vi.runAllTimers();
+    expect(spy).not.toHaveBeenCalled();
   });
 
   it("ignores a cancelled beforeinput, so no stale snapshot skews the next edit", () => {
