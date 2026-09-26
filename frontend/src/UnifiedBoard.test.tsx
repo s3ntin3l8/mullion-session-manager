@@ -1259,6 +1259,24 @@ describe("UnifiedBoard phone layout", () => {
     expect(screen.queryByText("r1")).toBeNull();
   });
 
+  it("scrolls the selected chip into view, on mount and when the column changes", async () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    });
+    try {
+      renderPhone();
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      expect(scrollIntoView.mock.contexts[0]).toHaveTextContent("In Progress");
+      await userEvent.click(screen.getByRole("button", { name: /^Ready/ }));
+      expect(scrollIntoView).toHaveBeenCalledTimes(2);
+      expect(scrollIntoView.mock.contexts[1]).toHaveTextContent("Ready");
+    } finally {
+      Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
+    }
+  });
+
   it("switches column from the strip", async () => {
     renderPhone();
     await userEvent.click(screen.getByRole("button", { name: /^Ready/ }));

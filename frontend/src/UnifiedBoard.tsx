@@ -560,6 +560,17 @@ export function UnifiedBoard({
           phoneColumns.map((c) => c.id),
         );
 
+  // Keep the selected chip visible: with all seven columns the strip
+  // overflows a phone, and the default pick (In Progress) is 4th. Optional
+  // call: jsdom has no scrollIntoView.
+  const stripRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!phone) return;
+    stripRef.current
+      ?.querySelector<HTMLElement>('[aria-pressed="true"]')
+      ?.scrollIntoView?.({ inline: "nearest", block: "nearest" });
+  }, [phone, phoneColumn]);
+
   // The board's three filter bars. Inline above the columns on desktop/
   // tablet; inside the toolbar's filter sheet on phone.
   const filterBars = (
@@ -683,7 +694,7 @@ export function UnifiedBoard({
             }
           />
           {phone && (
-            <div className="tasks-phone-strip" role="group" aria-label="Task status">
+            <div ref={stripRef} className="tasks-phone-strip" role="group" aria-label="Task status">
               {phoneColumns.map((column) => (
                 <button
                   key={column.id}
