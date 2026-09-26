@@ -73,9 +73,6 @@ describe("Settings -> Launchers", () => {
       if (url.startsWith("/api/agents")) {
         return Promise.resolve(jsonResponse(200, agentsDb));
       }
-      if (url === "/api/opencode/models") {
-        return Promise.resolve(jsonResponse(200, []));
-      }
       if (url === "/api/server-info") {
         return Promise.resolve(jsonResponse(200, { crsConfigDir: "/home/bjoern/.config/crs" }));
       }

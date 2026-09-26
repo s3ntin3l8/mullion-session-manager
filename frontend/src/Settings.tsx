@@ -13,6 +13,7 @@ import { TerminalSection } from "./settings/sections/TerminalSection.js";
 import { ProjectsSection } from "./settings/sections/ProjectsSection.js";
 import { HostsSection } from "./settings/sections/HostsSection.js";
 import { LaunchersSection } from "./settings/sections/LaunchersSection.js";
+import { ModelsSection } from "./settings/sections/ModelsSection.js";
 import { NotificationsSection } from "./settings/sections/NotificationsSection.js";
 import { DockSection } from "./settings/sections/DockSection.js";
 import { SessionsSection } from "./settings/sections/SessionsSection.js";
@@ -243,6 +244,7 @@ export function Settings({
               {section === "notifications" && <NotificationsSection />}
               {section === "sessions" && <SessionsSection />}
               {section === "launchers" && <LaunchersSection />}
+              {section === "models" && <ModelsSection />}
               {section === "agent-context" && <AgentContextSection />}
               {section === "tasks" && <TaskMasterSection />}
               {section === "projects" && <ProjectsSection />}
