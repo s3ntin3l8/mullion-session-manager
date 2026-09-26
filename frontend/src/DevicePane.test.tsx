@@ -97,6 +97,11 @@ class FakeWebSocket {
     this.readyState = FakeWebSocket.CLOSED;
   }
 
+  disconnect() {
+    this.readyState = FakeWebSocket.CLOSED;
+    this.emit("close", {});
+  }
+
   open() {
     this.readyState = FakeWebSocket.OPEN;
     this.emit("open", {});
@@ -227,6 +232,61 @@ describe("DevicePane (issue #1326)", () => {
       { type: "keyEvent", androidKeyCode: 3, action: "up" },
     ]);
     expect(screen.getByRole("button", { name: "Recent apps" })).toBeEnabled();
+  });
+
+  it("flushes a touch release after the socket reconnects mid-gesture", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      resetStore({ devices: [makeDevice()], devicesLoaded: true });
+      render(<DevicePane params={{ deviceId: 7 }} />);
+      const socket = FakeWebSocket.instances[0];
+      act(() => socket.open());
+      const canvas = document.querySelector("canvas")!;
+      Object.defineProperty(canvas, "setPointerCapture", { value: vi.fn() });
+      Object.defineProperty(canvas, "hasPointerCapture", { value: () => false });
+      vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue({
+        x: 0,
+        y: 0,
+        left: 0,
+        top: 0,
+        right: 300,
+        bottom: 600,
+        width: 300,
+        height: 600,
+        toJSON: () => ({}),
+      });
+      const down = new Event("pointerdown", { bubbles: true, cancelable: true });
+      Object.assign(down, {
+        pointerId: 1,
+        pointerType: "touch",
+        button: 0,
+        clientX: 120,
+        clientY: 580,
+      });
+      act(() => canvas.dispatchEvent(down));
+      expect(socket.sent.map((entry) => JSON.parse(entry))).toEqual([
+        expect.objectContaining({ type: "touchDown", x: 120, y: 145 }),
+      ]);
+
+      act(() => socket.disconnect());
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+      const reconnected = FakeWebSocket.instances[1];
+      act(() => reconnected.open());
+
+      expect(reconnected.sent.map((entry) => JSON.parse(entry))).toEqual([
+        expect.objectContaining({
+          type: "touchUp",
+          x: 120,
+          y: 145,
+          videoWidth: 300,
+          videoHeight: 150,
+        }),
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("sends device toolbar actions, remembers the frame preference, and downloads screenshots", async () => {

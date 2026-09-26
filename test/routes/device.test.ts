@@ -12,6 +12,7 @@ import { closeDb } from "../../src/db/client.js";
 import { devices } from "../../src/db/schema.js";
 import { eq } from "drizzle-orm";
 import { attachSocketToDevice } from "../../src/routes/device.js";
+import { AndroidMotionEventAction } from "@yume-chan/scrcpy";
 import type { ScrcpyMediaStreamPacket } from "@yume-chan/scrcpy";
 
 const ptyMock = createNodePtyMock();
@@ -608,6 +609,58 @@ describe("device route (/ws/device/:deviceId)", () => {
 
       expect(unsubscribeVideo).toHaveBeenCalledTimes(1);
       expect(unsubscribeExit).toHaveBeenCalledTimes(1);
+    });
+
+    it("releases touches still held when a viewer socket disconnects", async () => {
+      const app = await buildTestApp();
+      const injectTouch = vi.fn().mockResolvedValue(undefined);
+      const fakeDevice = {
+        controller: {
+          resetVideo: vi.fn().mockResolvedValue(undefined),
+          injectTouch,
+        },
+        onVideoPacket: vi.fn(() => vi.fn()),
+        onExit: vi.fn(() => vi.fn()),
+      };
+      vi.spyOn(app.device, "getOrCreate").mockResolvedValueOnce(fakeDevice as any);
+
+      const socket = new MockWebSocket();
+      await attachSocketToDevice(app, socket as any, {
+        deviceId: 1,
+        avdName: "dev35",
+        label: null,
+        port: null,
+      });
+
+      const touchMessage = (type: "touchDown" | "touchMove") =>
+        socket.emit(
+          "message",
+          Buffer.from(
+            JSON.stringify({
+              type,
+              x: type === "touchDown" ? 20 : 42,
+              y: type === "touchDown" ? 30 : 84,
+              videoWidth: 1080,
+              videoHeight: 1920,
+              pointerId: 0,
+            }),
+          ),
+          false,
+        );
+      touchMessage("touchDown");
+      touchMessage("touchMove");
+      await vi.waitFor(() => expect(injectTouch).toHaveBeenCalledTimes(2));
+
+      socket.emit("close");
+
+      await vi.waitFor(() => expect(injectTouch).toHaveBeenCalledTimes(3));
+      expect(injectTouch.mock.calls[2][0]).toMatchObject({
+        action: AndroidMotionEventAction.Up,
+        pointerId: 0n,
+        pointerX: 42,
+        pointerY: 84,
+        pressure: 0,
+      });
     });
 
     it("stops forwarding video packets once the socket has already closed", async () => {
