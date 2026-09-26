@@ -122,15 +122,50 @@ describe("attachImeInput against a real xterm Terminal", () => {
     expect(sent).toEqual(["\r"]);
   });
 
-  it("does not drop other 229-driven edits: word delete and paste-as-input", () => {
+  it("does not drop other 229-driven edits: word delete", () => {
     attachImeInput(term);
     typeLine("git status");
     sent.length = 0;
     edit(ta, (v) => v.slice(0, -"status".length), "deleteWordBackward");
     expect(sent.join("")).toBe("\x7f".repeat(6));
+  });
+
+  it("routes paste-as-input through xterm's paste() and maps other newlines to CR", () => {
+    attachImeInput(term);
+    const paste = vi.spyOn(term, "paste");
+    edit(ta, append("a\nb"), "insertFromPaste");
+    expect(paste).toHaveBeenCalledWith("a\nb");
     sent.length = 0;
-    edit(ta, append("main"), "insertFromPaste");
-    expect(sent.join("")).toBe("main");
+    edit(ta, append("x\ny")); // e.g. dictation/insertText carrying a newline
+    expect(sent.join("")).toBe("x\ry");
+  });
+
+  it("ignores a cancelled beforeinput, so no stale snapshot skews the next edit", () => {
+    attachImeInput(term);
+    typeLine("ab");
+    const spy = vi.spyOn(term, "input");
+    keydown229(ta);
+    // Cancelled by something above xterm's root, before our capture listener.
+    document.addEventListener("beforeinput", (e) => e.preventDefault(), {
+      capture: true,
+      once: true,
+    });
+    ta.dispatchEvent(
+      new InputEvent("beforeinput", { inputType: "insertText", bubbles: true, cancelable: true }),
+    );
+    ta.value = "abZZZ"; // a later input arriving with no beforeinput of its own
+    ta.dispatchEvent(new InputEvent("input", { inputType: "insertText", bubbles: true }));
+    vi.runAllTimers();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("recovers from a composition cut off by blur", () => {
+    attachImeInput(term);
+    ta.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    ta.dispatchEvent(new FocusEvent("blur"));
+    sent.length = 0;
+    typeLine("ok");
+    expect(sent.join("")).toBe("ok");
   });
 
   it("sends a prepend once (Gboard puts the caret at 0 in a bare textarea)", () => {
