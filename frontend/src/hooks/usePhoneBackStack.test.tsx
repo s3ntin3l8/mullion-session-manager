@@ -103,4 +103,26 @@ describe("usePhoneBackStack", () => {
     expect(first).not.toHaveBeenCalled();
     expect(second).toHaveBeenCalledTimes(1);
   });
+
+  it("orders by when each overlay opened, not by hook call order", () => {
+    // App declares the navigator's hook BEFORE the Tasks board's. Open Tasks
+    // first, then the navigator on top of it: back must close the navigator.
+    const closeNav = vi.fn();
+    const closeTasks = vi.fn();
+    const { rerender } = renderHook(
+      ({ nav, tasks }) => {
+        usePhoneBackStack(nav, closeNav);
+        usePhoneBackStack(tasks, closeTasks);
+      },
+      { initialProps: { nav: false, tasks: false } },
+    );
+    rerender({ nav: false, tasks: true });
+    rerender({ nav: true, tasks: true });
+
+    pop();
+    expect(closeNav).toHaveBeenCalledTimes(1);
+    expect(closeTasks).not.toHaveBeenCalled();
+    pop();
+    expect(closeTasks).toHaveBeenCalledTimes(1);
+  });
 });

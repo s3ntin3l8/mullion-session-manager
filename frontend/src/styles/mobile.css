@@ -429,7 +429,8 @@
     cursor: pointer;
     touch-action: manipulation;
   }
-  .phone-nav-tab[aria-pressed="true"] {
+  .phone-nav-tab[aria-pressed="true"],
+  .phone-nav-tab.current {
     color: var(--fg);
     border-color: var(--accent-solid);
     background: color-mix(in srgb, var(--accent-solid) 12%, transparent);

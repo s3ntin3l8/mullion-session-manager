@@ -41,7 +41,9 @@ describe("PhoneNavigatorHeader", () => {
 
   it("shows Tasks as pressed while the board is open, and closes", async () => {
     const props = header({ tasksActive: true });
-    expect(screen.getByRole("button", { name: "Tasks" })).toHaveAttribute("aria-pressed", "true");
+    const tasks = screen.getByRole("button", { name: "Tasks" });
+    expect(tasks).toHaveAttribute("aria-current", "page");
+    expect(tasks).not.toHaveAttribute("aria-pressed");
     await userEvent.click(screen.getByRole("button", { name: "Close navigator" }));
     expect(props.onClose).toHaveBeenCalledTimes(1);
   });

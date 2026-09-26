@@ -41,7 +41,13 @@ export function PhoneNavigatorHeader({
         >
           Projects
         </button>
-        <button className="phone-nav-tab" aria-pressed={tasksActive} onClick={onOpenTasks}>
+        <button
+          className={`phone-nav-tab${tasksActive ? " current" : ""}`}
+          // A destination, not a toggle: aria-current, unlike the three
+          // real tabs' aria-pressed.
+          aria-current={tasksActive ? "page" : undefined}
+          onClick={onOpenTasks}
+        >
           Tasks
         </button>
         <button
