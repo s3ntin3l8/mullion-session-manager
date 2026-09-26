@@ -1287,4 +1287,25 @@ describe("NotificationBell phone sheet", () => {
       "mobile-notif-sheet",
     );
   });
+
+  it("does not offer a Needs you count/filter for a session the feed has nothing to list for", async () => {
+    // attention persists, but every notify-worthy event was dismissed.
+    sessions = [makeSession({ attention: true })];
+    events = { 1: [makeEvent({ seq: 1 })] };
+    dismissedEventKeys = { "1:1": true };
+    await openPhoneSheet();
+    expect(screen.getByRole("button", { name: "All" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Needs you" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Needs you \d/ })).toBeNull();
+  });
+
+  it("Enter on the Timeline button opens the timeline, not the terminal", async () => {
+    events = { 1: [makeEvent({ seq: 1 })] };
+    const onOpenTimeline = vi.fn();
+    const onOpenSession = await openPhoneSheet({ onOpenTimeline });
+    screen.getByRole("button", { name: "Timeline" }).focus();
+    await userEvent.keyboard("{Enter}");
+    expect(onOpenTimeline).toHaveBeenCalledTimes(1);
+    expect(onOpenSession).not.toHaveBeenCalled();
+  });
 });

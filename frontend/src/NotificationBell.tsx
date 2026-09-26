@@ -378,16 +378,25 @@ export function NotificationBell({
         : EMPTY_FEED_ITEMS,
     [open, sessions, projects, events, lastSeenSeq, dismissedEventKeys],
   );
-  // Sessions that need the user — the SAME predicate the phone session
-  // picker's pinned section uses (eventDescriptions.ts's sessionNeedsYou), so
-  // "Needs you" can't mean two things on phone.
+  // Sessions that need the user — eventDescriptions.ts's sessionNeedsYou (the
+  // predicate the phone session picker pins on), narrowed to sessions this
+  // feed can actually LIST: `attention` can outlive every notify-worthy
+  // event (all dismissed, or evicted past the buffer cap), and a "Needs you 1"
+  // chip over an empty body with no way to reach the session is worse than
+  // no chip. The picker still lists such a session — it can navigate to it,
+  // this feed can't.
   const needsYouIds = useMemo(() => {
     const ids = new Set<number>();
     for (const session of sessions) {
+      const sessionEvents = events[session.id];
+      const listable = sessionEvents?.some(
+        (e) => notifyKind(e) !== null && !dismissedEventKeys[eventKey(session.id, e.seq)],
+      );
       if (
+        listable &&
         sessionNeedsYou(
           session,
-          events[session.id],
+          sessionEvents,
           lastSeenSeq[session.id] ?? 0,
           dismissedEventKeys,
           mutedSessionIds.includes(session.id),
@@ -962,6 +971,10 @@ function EventRow({
               e.stopPropagation();
               onTimeline(session);
             }}
+            // The row's own onKeyDown treats Enter/Space anywhere inside it
+            // as "open this session" (the terminal) — same guard GateActions
+            // uses, or keyboard-activating this would open the wrong view.
+            onKeyDown={(e) => e.stopPropagation()}
           >
             Timeline
           </button>
