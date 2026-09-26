@@ -45,6 +45,17 @@ export function ModelPicker({
   const [draft, setDraft] = useState(inList ? "" : (value ?? ""));
   const [error, setError] = useState<string | null>(null);
 
+  // Keep the field in step with the stored value when it changes underneath
+  // us (settings finishing their load, another tab). Typing doesn't touch
+  // `value` until a commit, so this never fights the user's edit. Done during
+  // render (React's "adjust state on prop change" pattern), not in an effect.
+  const [syncedValue, setSyncedValue] = useState(value);
+  if (syncedValue !== value) {
+    setSyncedValue(value);
+    setDraft(value ?? "");
+    setError(null);
+  }
+
   const customMode = allowCustom && (customOpen || !inList);
   const selectValue = customMode ? CUSTOM : (value ?? "");
 
@@ -53,6 +64,9 @@ export function ModelPicker({
   const handleSelect = (v: string) => {
     setError(null);
     if (v === CUSTOM) {
+      // Seed from the stored value so opening Custom… and leaving the field
+      // again is a no-op rather than a silent reset to the CLI default.
+      setDraft(value ?? "");
       setCustomOpen(true);
       return;
     }
@@ -64,6 +78,11 @@ export function ModelPicker({
   // its PATCH, but a half-typed ID would still be saved once the debounce fires.
   const commit = () => {
     const next = draft.trim();
+    // Blur fires whenever focus leaves the field, edited or not.
+    if (next === (value ?? "")) {
+      setError(null);
+      return;
+    }
     if (next === "") {
       setError(null);
       onChange(null);
