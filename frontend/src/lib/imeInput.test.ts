@@ -114,8 +114,35 @@ describe("attachImeInput against a real xterm Terminal", () => {
     expect(sent).toEqual(["\x7f", "\x7f"]);
   });
 
-  it("leaves composing input to xterm", () => {
-    const off = attachImeInput(term);
+  it("sends Gboard's 229 Enter (insertLineBreak) as CR", () => {
+    attachImeInput(term);
+    typeLine("ls");
+    sent.length = 0;
+    edit(ta, append("\n"), "insertLineBreak");
+    expect(sent).toEqual(["\r"]);
+  });
+
+  it("does not drop other 229-driven edits: word delete and paste-as-input", () => {
+    attachImeInput(term);
+    typeLine("git status");
+    sent.length = 0;
+    edit(ta, (v) => v.slice(0, -"status".length), "deleteWordBackward");
+    expect(sent.join("")).toBe("\x7f".repeat(6));
+    sent.length = 0;
+    edit(ta, append("main"), "insertFromPaste");
+    expect(sent.join("")).toBe("main");
+  });
+
+  it("sends a prepend once (Gboard puts the caret at 0 in a bare textarea)", () => {
+    attachImeInput(term);
+    edit(ta, append("h"));
+    edit(ta, (v) => `e${v}`);
+    edit(ta, (v) => `l${v}`);
+    expect(sent).toEqual(["h", "e", "l"]);
+  });
+
+  it("leaves composing input to xterm, which commits it once via onData", () => {
+    attachImeInput(term);
     const spy = vi.spyOn(term, "input");
     ta.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
     keydown229(ta);
@@ -126,8 +153,10 @@ describe("attachImeInput against a real xterm Terminal", () => {
     ta.dispatchEvent(
       new InputEvent("input", { inputType: "insertCompositionText", bubbles: true }),
     );
+    ta.dispatchEvent(new CompositionEvent("compositionend", { data: "n", bubbles: true }));
+    vi.runAllTimers();
     expect(spy).not.toHaveBeenCalled();
-    off();
+    expect(sent).toEqual(["n"]);
   });
 
   it("stops intercepting after detach", () => {
