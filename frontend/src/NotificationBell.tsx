@@ -291,6 +291,44 @@ function countUnread(
   return count;
 }
 
+// Sessions that need the user — eventDescriptions.ts's sessionNeedsYou (the
+// predicate the phone session picker pins on), narrowed to sessions this
+// feed can actually LIST: `attention` can outlive every notify-worthy event
+// (all dismissed, or evicted past the buffer cap), and a "Needs you 1" chip
+// over an empty body with no way to reach the session is worse than no chip.
+// The picker still lists such a session — it can navigate to it, this feed
+// can't.
+function collectNeedsYouIds(
+  sessions: Session[],
+  events: Record<number, NotificationEvent[]>,
+  lastSeenSeq: Record<number, number>,
+  dismissedEventKeys: Record<string, true>,
+  mutedSessionIds: ReadonlyArray<number>,
+): Set<number> {
+  const ids = new Set<number>();
+  for (const session of sessions) {
+    const sessionEvents = events[session.id];
+    const listable = sessionEvents?.some(
+      (e) => notifyKind(e) !== null && !dismissedEventKeys[eventKey(session.id, e.seq)],
+    );
+    if (
+      listable &&
+      sessionNeedsYou(
+        session,
+        sessionEvents,
+        lastSeenSeq[session.id] ?? 0,
+        dismissedEventKeys,
+        mutedSessionIds.includes(session.id),
+      )
+    ) {
+      ids.add(session.id);
+    }
+  }
+  return ids;
+}
+
+const EMPTY_ID_SET: ReadonlySet<number> = new Set();
+
 // Stable reference for the closed-panel case — a fresh `[]` literal every
 // render would give useVirtualizer/the length check a new identity for no
 // reason, same anti-pattern P1 elsewhere in this PR removes for store
@@ -378,35 +416,17 @@ export function NotificationBell({
         : EMPTY_FEED_ITEMS,
     [open, sessions, projects, events, lastSeenSeq, dismissedEventKeys],
   );
-  // Sessions that need the user — eventDescriptions.ts's sessionNeedsYou (the
-  // predicate the phone session picker pins on), narrowed to sessions this
-  // feed can actually LIST: `attention` can outlive every notify-worthy
-  // event (all dismissed, or evicted past the buffer cap), and a "Needs you 1"
-  // chip over an empty body with no way to reach the session is worse than
-  // no chip. The picker still lists such a session — it can navigate to it,
-  // this feed can't.
-  const needsYouIds = useMemo(() => {
-    const ids = new Set<number>();
-    for (const session of sessions) {
-      const sessionEvents = events[session.id];
-      const listable = sessionEvents?.some(
-        (e) => notifyKind(e) !== null && !dismissedEventKeys[eventKey(session.id, e.seq)],
-      );
-      if (
-        listable &&
-        sessionNeedsYou(
-          session,
-          sessionEvents,
-          lastSeenSeq[session.id] ?? 0,
-          dismissedEventKeys,
-          mutedSessionIds.includes(session.id),
-        )
-      ) {
-        ids.add(session.id);
-      }
-    }
-    return ids;
-  }, [sessions, events, lastSeenSeq, dismissedEventKeys, mutedSessionIds]);
+  // Only computed while the phone sheet is open (the scan looks at every
+  // event, unlike countUnread's unread-only one — see the P3 perf comment on
+  // countUnread); openFilter below calls the same collector once at open time
+  // to pick the default filter.
+  const needsYouIds = useMemo(
+    () =>
+      phone && open
+        ? collectNeedsYouIds(sessions, events, lastSeenSeq, dismissedEventKeys, mutedSessionIds)
+        : EMPTY_ID_SET,
+    [phone, open, sessions, events, lastSeenSeq, dismissedEventKeys, mutedSessionIds],
+  );
   // What the phone sheet actually lists; the desktop popover always shows
   // every group, so `items` itself is never filtered.
   const shownItems = useMemo(
@@ -414,7 +434,13 @@ export function NotificationBell({
     [phone, filter, items, needsYouIds],
   );
   // Opening defaults to "Needs you" when something does, else the full feed.
-  const openFilter = () => setFilter(needsYouIds.size > 0 ? "needs" : "all");
+  const openFilter = () =>
+    setFilter(
+      collectNeedsYouIds(sessions, events, lastSeenSeq, dismissedEventKeys, mutedSessionIds).size >
+        0
+        ? "needs"
+        : "all",
+    );
 
   // Deliberately NOT derived from `items` (unlike before this fix) — the
   // toolbar badge must stay accurate every tick regardless of whether the
