@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { DevicePane } from "./DevicePane.js";
 import type { Device } from "./api/index.js";
@@ -28,6 +28,7 @@ const decoderWriter = {
 const decoderCtor = vi.hoisted(() => vi.fn());
 const webglCtor = vi.hoisted(() => vi.fn());
 const bitmapCtor = vi.hoisted(() => vi.fn());
+const decoderSizeChanged = vi.hoisted(() => vi.fn());
 const webglSupport = vi.hoisted(() => ({ value: true }));
 
 vi.mock("@yume-chan/scrcpy-decoder-webcodecs", () => {
@@ -37,7 +38,9 @@ vi.mock("@yume-chan/scrcpy-decoder-webcodecs", () => {
       decoderCtor();
     }
     writable = { getWriter: () => decoderWriter };
-    sizeChanged() {}
+    sizeChanged(callback: (size: { width: number; height: number }) => void) {
+      decoderSizeChanged(callback);
+    }
     dispose() {}
   }
   class BitmapVideoFrameRenderer {
@@ -94,6 +97,11 @@ class FakeWebSocket {
     this.readyState = FakeWebSocket.CLOSED;
   }
 
+  disconnect() {
+    this.readyState = FakeWebSocket.CLOSED;
+    this.emit("close", {});
+  }
+
   open() {
     this.readyState = FakeWebSocket.OPEN;
     this.emit("open", {});
@@ -128,12 +136,14 @@ describe("DevicePane (issue #1326)", () => {
     decoderCtor.mockClear();
     webglCtor.mockClear();
     bitmapCtor.mockClear();
+    decoderSizeChanged.mockClear();
     webglSupport.value = true;
     decoderWriter.close.mockClear();
     resetStore({ devices: [], devicesLoaded: true });
     ({ fetchMock, unexpectedCalls } = mockFetch({
       "GET /api/devices": () => jsonResponse(200, []),
       "POST /api/devices/:id/start": () => jsonResponse(200, makeDevice({ status: "active" })),
+      "POST /api/devices/:id/action": () => jsonResponse(200, { screenshot: "iVBORw0KGgo=" }),
     }));
     vi.stubGlobal("fetch", fetchMock);
   });
@@ -152,6 +162,233 @@ describe("DevicePane (issue #1326)", () => {
     // Not the generic dead-end: no "Disconnected"/"Retry now" for a state
     // retrying can never fix.
     expect(screen.queryByText("Disconnected")).not.toBeInTheDocument();
+  });
+
+  it("forwards a complete bottom-edge swipe and exposes Android navigation controls", async () => {
+    resetStore({ devices: [makeDevice()], devicesLoaded: true });
+    render(<DevicePane params={{ deviceId: 7 }} />);
+    const socket = FakeWebSocket.instances[0];
+    act(() => socket.open());
+    const canvas = document.querySelector("canvas")!;
+    Object.defineProperty(canvas, "setPointerCapture", { value: vi.fn() });
+    Object.defineProperty(canvas, "hasPointerCapture", { value: () => false });
+    vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 300,
+      bottom: 600,
+      width: 300,
+      height: 600,
+      toJSON: () => ({}),
+    });
+    const pointer = (type: string, y: number) => {
+      const event = new Event(type, { bubbles: true, cancelable: true });
+      Object.assign(event, {
+        pointerId: 1,
+        pointerType: "touch",
+        button: 0,
+        clientX: 150,
+        clientY: y,
+      });
+      act(() => canvas.dispatchEvent(event));
+    };
+    pointer("pointerdown", 590);
+    pointer("pointermove", 300);
+    pointer("pointerup", 20);
+    expect(socket.sent.map((entry) => JSON.parse(entry))).toEqual([
+      expect.objectContaining({ type: "touchDown", y: 147.5, videoWidth: 300, videoHeight: 150 }),
+      expect.objectContaining({ type: "touchMove", y: 75, videoWidth: 300, videoHeight: 150 }),
+      expect.objectContaining({ type: "touchUp", y: 5, videoWidth: 300, videoHeight: 150 }),
+    ]);
+
+    pointer("pointerdown", 400);
+    pointer("pointermove", 320);
+    pointer("pointercancel", 320);
+    expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({ type: "touchUp", x: 150, y: 80 });
+
+    pointer("pointerdown", 300);
+    pointer("pointermove", 200);
+    act(() => window.dispatchEvent(new Event("blur")));
+    expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({ type: "touchUp", x: 150, y: 50 });
+
+    pointer("pointerdown", 300);
+    pointer("pointermove", 200);
+    act(() => decoderSizeChanged.mock.calls.at(-1)?.[0]({ width: 600, height: 1200 }));
+    expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
+      type: "touchUp",
+      x: 150,
+      y: 50,
+      videoWidth: 300,
+      videoHeight: 150,
+    });
+
+    const homeButton = screen.getByRole("button", { name: "Home" });
+    expect(homeButton).toBeEnabled();
+    fireEvent.click(homeButton);
+    expect(socket.sent.slice(-2).map((entry) => JSON.parse(entry))).toEqual([
+      { type: "keyEvent", androidKeyCode: 3, action: "down" },
+      { type: "keyEvent", androidKeyCode: 3, action: "up" },
+    ]);
+    expect(screen.getByRole("button", { name: "Recent apps" })).toBeEnabled();
+  });
+
+  it("flushes a touch release after the socket reconnects mid-gesture", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      resetStore({ devices: [makeDevice()], devicesLoaded: true });
+      render(<DevicePane params={{ deviceId: 7 }} />);
+      const socket = FakeWebSocket.instances[0];
+      act(() => socket.open());
+      const canvas = document.querySelector("canvas")!;
+      Object.defineProperty(canvas, "setPointerCapture", { value: vi.fn() });
+      Object.defineProperty(canvas, "hasPointerCapture", { value: () => false });
+      vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue({
+        x: 0,
+        y: 0,
+        left: 0,
+        top: 0,
+        right: 300,
+        bottom: 600,
+        width: 300,
+        height: 600,
+        toJSON: () => ({}),
+      });
+      const down = new Event("pointerdown", { bubbles: true, cancelable: true });
+      Object.assign(down, {
+        pointerId: 1,
+        pointerType: "touch",
+        button: 0,
+        clientX: 120,
+        clientY: 580,
+      });
+      act(() => canvas.dispatchEvent(down));
+      expect(socket.sent.map((entry) => JSON.parse(entry))).toEqual([
+        expect.objectContaining({ type: "touchDown", x: 120, y: 145 }),
+      ]);
+
+      act(() => socket.disconnect());
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+      const reconnected = FakeWebSocket.instances[1];
+      act(() => reconnected.open());
+
+      expect(reconnected.sent.map((entry) => JSON.parse(entry))).toEqual([
+        expect.objectContaining({
+          type: "touchUp",
+          x: 120,
+          y: 145,
+          videoWidth: 300,
+          videoHeight: 150,
+        }),
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("sends device toolbar actions, remembers the frame preference, and downloads screenshots", async () => {
+    resetStore({ devices: [makeDevice()], devicesLoaded: true });
+    localStorage.removeItem("crs.deviceFrame");
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    const createObjectURL = vi.fn(() => "blob:device-shot");
+    const revokeObjectURL = vi.fn();
+    URL.createObjectURL = createObjectURL;
+    URL.revokeObjectURL = revokeObjectURL;
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    render(<DevicePane params={{ deviceId: 7 }} />);
+    const socket = FakeWebSocket.instances[0];
+    act(() => socket.open());
+
+    for (const name of ["Back", "Home", "Recent apps", "Power", "Volume down", "Volume up"]) {
+      fireEvent.click(screen.getByRole("button", { name }));
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Rotate device" }));
+    const controls = socket.sent.map((entry) => JSON.parse(entry));
+    expect(controls).toEqual([
+      { type: "back" },
+      ...[3, 187, 26, 25, 24].flatMap((androidKeyCode) => [
+        { type: "keyEvent", androidKeyCode, action: "down" },
+        { type: "keyEvent", androidKeyCode, action: "up" },
+      ]),
+      { type: "rotate" },
+    ]);
+
+    expect(screen.getByRole("button", { name: "Hide device frame" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Hide device frame" }));
+    expect(localStorage.getItem("crs.deviceFrame")).toBe("off");
+    expect(screen.getByRole("button", { name: "Show device frame" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Take screenshot" }));
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/devices/7/action",
+        expect.objectContaining({ method: "POST", body: JSON.stringify({ action: "screenshot" }) }),
+      ),
+    );
+    await waitFor(() => expect(click).toHaveBeenCalled());
+    expect(createObjectURL).toHaveBeenCalledWith(expect.any(Blob));
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:device-shot");
+
+    fetchMock.mockRejectedValueOnce(new Error("screenshot failed"));
+    fireEvent.click(screen.getByRole("button", { name: "Take screenshot" }));
+    await waitFor(() => expect(screen.getByText("screenshot failed")).toBeInTheDocument());
+
+    URL.createObjectURL = originalCreateObjectURL;
+    URL.revokeObjectURL = originalRevokeObjectURL;
+    click.mockRestore();
+  });
+
+  it("releases a held touch at its last point when the pane unmounts", () => {
+    resetStore({ devices: [makeDevice()], devicesLoaded: true });
+    const { unmount } = render(<DevicePane params={{ deviceId: 7 }} />);
+    const socket = FakeWebSocket.instances[0];
+    act(() => socket.open());
+    const canvas = document.querySelector("canvas")!;
+    Object.defineProperty(canvas, "setPointerCapture", { value: vi.fn() });
+    Object.defineProperty(canvas, "hasPointerCapture", { value: () => false });
+    vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 300,
+      bottom: 600,
+      width: 300,
+      height: 600,
+      toJSON: () => ({}),
+    });
+    const event = new Event("pointerdown", { bubbles: true, cancelable: true });
+    Object.assign(event, {
+      pointerId: 5,
+      pointerType: "touch",
+      button: 0,
+      clientX: 90,
+      clientY: 480,
+    });
+    act(() => canvas.dispatchEvent(event));
+    const move = new Event("pointermove", { bubbles: true, cancelable: true });
+    Object.assign(move, {
+      pointerId: 5,
+      pointerType: "touch",
+      button: 0,
+      clientX: 90,
+      clientY: 360,
+    });
+    act(() => canvas.dispatchEvent(move));
+
+    unmount();
+    expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({ type: "touchUp", x: 90, y: 90 });
   });
 
   it("Start posts to /start and reconnects once the row is back", async () => {

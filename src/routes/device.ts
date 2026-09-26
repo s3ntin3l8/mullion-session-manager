@@ -115,8 +115,18 @@ interface BackMessage {
   type: "back";
 }
 
+interface RotateMessage {
+  type: "rotate";
+}
+
 type DeviceInputMessage =
-  TapMessage | TouchMessage | ScrollMessage | TextMessage | KeyEventMessage | BackMessage;
+  | TapMessage
+  | TouchMessage
+  | ScrollMessage
+  | TextMessage
+  | KeyEventMessage
+  | BackMessage
+  | RotateMessage;
 
 function isFiniteNumber(v: unknown): v is number {
   return typeof v === "number" && Number.isFinite(v);
@@ -201,6 +211,8 @@ function parseInputMessage(value: unknown): DeviceInputMessage | null {
     }
     case "back":
       return { type: "back" };
+    case "rotate":
+      return { type: "rotate" };
     default:
       return null;
   }
@@ -286,6 +298,9 @@ async function dispatchInput(device: Device, message: DeviceInputMessage): Promi
       await controller.backOrScreenOn(AndroidKeyEventAction.Down);
       await controller.backOrScreenOn(AndroidKeyEventAction.Up);
       break;
+    case "rotate":
+      await controller.rotateDevice();
+      break;
   }
 }
 
@@ -338,6 +353,10 @@ export async function attachSocketToDevice(
   const liveDevice: Device = device;
   let closed = false;
   let droppedSincePacket = false;
+  // A socket can disappear while the frontend is holding a touch. Keep the
+  // most recent point for each pointer so its close handler can release the
+  // controller state even when the client cannot send touchUp itself.
+  const activeTouches = new Map<number, TouchMessage>();
   // A brand-new socket is a late joiner: Device.onVideoPacket replays only
   // the SPS/PPS config, so the next packet is normally a delta frame — and
   // the frontend's WebCodecs decoder throws on a delta before its first
@@ -399,6 +418,7 @@ export async function attachSocketToDevice(
   });
 
   socket.on("message", (data, isBinary) => {
+    if (closed) return;
     if (isBinary) return;
     let parsed: unknown;
     try {
@@ -409,6 +429,10 @@ export async function attachSocketToDevice(
     }
     const message = parseInputMessage(parsed);
     if (!message) return;
+    if (message.type === "touchDown") activeTouches.set(message.pointerId, message);
+    else if (message.type === "touchMove" && activeTouches.has(message.pointerId)) {
+      activeTouches.set(message.pointerId, message);
+    } else if (message.type === "touchUp") activeTouches.delete(message.pointerId);
     dispatchInput(device, message).catch((err) => {
       app.log.warn({ err, deviceId }, "device input dispatch failed");
     });
@@ -419,6 +443,12 @@ export async function attachSocketToDevice(
     clearTimeout(stallTimer);
     unsubscribeVideo();
     unsubscribeExit();
+    for (const touch of activeTouches.values()) {
+      dispatchInput(liveDevice, { ...touch, type: "touchUp" }).catch((err) => {
+        app.log.warn({ err, deviceId }, "device touch release on socket close failed");
+      });
+    }
+    activeTouches.clear();
   });
 }
 

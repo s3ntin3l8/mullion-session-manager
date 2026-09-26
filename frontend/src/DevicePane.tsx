@@ -9,6 +9,8 @@ import { ScrcpyVideoCodecId } from "@yume-chan/scrcpy";
 import { PlayIcon, RefreshIcon, StopIcon, WifiOffIcon } from "./ui/icons.js";
 import { useDashboardStore } from "./store/index.js";
 import { Spinner } from "./ui/Spinner.js";
+import { devicesApi } from "./api/device.js";
+import { STORAGE_KEYS, readString, writeString } from "./lib/persistedState.js";
 
 export interface DevicePaneParams {
   deviceId: number;
@@ -123,6 +125,10 @@ export function DevicePane(props: {
   );
   const devicesLoaded = useDashboardStore((s) => s.devicesLoaded);
   const [starting, setStarting] = useState(false);
+  const [showFrame, setShowFrame] = useState(
+    () => readString(STORAGE_KEYS.deviceFrame, "on") !== "off",
+  );
+  const [takingScreenshot, setTakingScreenshot] = useState(false);
   // Two states the socket can never recover from on its own: the row is
   // STOPPED (status "killed" — routes/device.ts 404s every connect) or
   // GONE (hard-deleted, same 404 with no row left to restart). Without
@@ -145,6 +151,35 @@ export function DevicePane(props: {
   };
   const sendControlRef = useRef<(message: Record<string, unknown>) => void>(() => {});
   const retryRef = useRef<() => void>(() => {});
+  const pressKey = (androidKeyCode: number) => {
+    sendControlRef.current({ type: "keyEvent", androidKeyCode, action: "down" });
+    sendControlRef.current({ type: "keyEvent", androidKeyCode, action: "up" });
+  };
+  const takeScreenshot = async () => {
+    if (takingScreenshot) return;
+    setTakingScreenshot(true);
+    setLastError(null);
+    try {
+      const result = await devicesApi.takeScreenshot(props.params.deviceId);
+      const bytes = Uint8Array.from(atob(result.screenshot), (char) => char.charCodeAt(0));
+      const url = URL.createObjectURL(new Blob([bytes], { type: "image/png" }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `device-${props.params.deviceId}-${new Date().toISOString().replace(/[:.]/g, "-")}.png`;
+      link.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (err) {
+      setLastError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setTakingScreenshot(false);
+    }
+  };
+  const toggleFrame = () =>
+    setShowFrame((current) => {
+      const next = !current;
+      writeString(STORAGE_KEYS.deviceFrame, next ? "on" : "off");
+      return next;
+    });
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -157,6 +192,9 @@ export function DevicePane(props: {
     let reconnectAttempt = 0;
     let videoWidth = 0;
     let videoHeight = 0;
+    let activePointer: number | null = null;
+    let lastTouchPoint = { x: 0, y: 0 };
+    let pendingTouchUp: Record<string, unknown> | null = null;
 
     // A WebCodecsVideoDecoder whose writable has errored (e.g. it was handed
     // a delta frame before its first keyframe) stays errored for good —
@@ -189,6 +227,7 @@ export function DevicePane(props: {
     function createDecoder(): void {
       decoder = new WebCodecsVideoDecoder({ codec: ScrcpyVideoCodecId.H264, renderer });
       decoder.sizeChanged(({ width, height }) => {
+        if (videoWidth !== width || videoHeight !== height) releaseActivePointer();
         videoWidth = width;
         videoHeight = height;
       });
@@ -201,7 +240,33 @@ export function DevicePane(props: {
     createDecoder();
 
     function sendControl(message: Record<string, unknown>) {
-      if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
+      if (ws?.readyState !== WebSocket.OPEN) return false;
+      ws.send(JSON.stringify(message));
+      return true;
+    }
+    function sendTouch(type: "touchDown" | "touchMove" | "touchUp", point = lastTouchPoint) {
+      const message = {
+        type,
+        x: point.x,
+        y: point.y,
+        videoWidth: videoWidth || canvas!.width,
+        videoHeight: videoHeight || canvas!.height,
+        pointerId: 0,
+      };
+      if (type === "touchUp") {
+        if (sendControl(message)) pendingTouchUp = null;
+        else pendingTouchUp = message;
+      } else {
+        sendControl(message);
+      }
+    }
+    function releaseActivePointer(point = lastTouchPoint) {
+      if (activePointer === null) return;
+      const pointerId = activePointer;
+      activePointer = null;
+      lastTouchPoint = point;
+      sendTouch("touchUp", point);
+      if (canvas!.hasPointerCapture(pointerId)) canvas!.releasePointerCapture(pointerId);
     }
     sendControlRef.current = sendControl;
 
@@ -215,7 +280,10 @@ export function DevicePane(props: {
       // once a new one is about to be created — see the "exited" handler's
       // own comment on why this matters (a stray socket stays registered
       // server-side as a live viewer until the OS times it out).
-      if (ws && ws.readyState !== WebSocket.CLOSED) ws.close();
+      if (ws && ws.readyState !== WebSocket.CLOSED) {
+        releaseActivePointer();
+        ws.close();
+      }
       if (decoderDead) {
         disposeDecoder();
         createDecoder();
@@ -234,6 +302,11 @@ export function DevicePane(props: {
 
       socket.addEventListener("open", () => {
         reconnectAttempt = 0;
+        if (socket !== ws) return;
+        if (pendingTouchUp) {
+          socket.send(JSON.stringify(pendingTouchUp));
+          pendingTouchUp = null;
+        }
         setStatus("open");
         setLastError(null);
       });
@@ -307,6 +380,7 @@ export function DevicePane(props: {
 
       socket.addEventListener("close", () => {
         if (socket !== ws) return;
+        releaseActivePointer();
         if (destroyed) return;
         if (reconnectAttempt >= MAX_RECONNECT_ATTEMPTS) {
           setStatus("failed");
@@ -341,13 +415,36 @@ export function DevicePane(props: {
       const height = videoHeight || canvas!.height;
       const scaleX = rect.width > 0 ? width / rect.width : 1;
       const scaleY = rect.height > 0 ? height / rect.height : 1;
-      return { x: (event.clientX - rect.left) * scaleX, y: (event.clientY - rect.top) * scaleY };
+      return {
+        x: Math.max(0, Math.min(width - 1, (event.clientX - rect.left) * scaleX)),
+        y: Math.max(0, Math.min(height - 1, (event.clientY - rect.top) * scaleY)),
+      };
     }
 
-    const onMouseDown = (event: MouseEvent) => {
+    const onPointerDown = (event: PointerEvent) => {
+      if (activePointer !== null || (event.pointerType === "mouse" && event.button !== 0)) return;
+      event.preventDefault();
+      activePointer = event.pointerId;
+      canvas!.setPointerCapture(event.pointerId);
       canvas!.focus();
-      const { x, y } = canvasPoint(event);
-      sendControl({ type: "tap", x, y, videoWidth, videoHeight });
+      lastTouchPoint = canvasPoint(event);
+      sendTouch("touchDown");
+    };
+    const onPointerMove = (event: PointerEvent) => {
+      if (activePointer !== event.pointerId) return;
+      lastTouchPoint = canvasPoint(event);
+      sendTouch("touchMove");
+    };
+    const onPointerUp = (event: PointerEvent) => {
+      if (activePointer !== event.pointerId) return;
+      releaseActivePointer(canvasPoint(event));
+    };
+    const onPointerCancel = (event: PointerEvent) => {
+      if (activePointer !== event.pointerId) return;
+      releaseActivePointer(canvasPoint(event));
+    };
+    const onWindowBlur = () => {
+      releaseActivePointer();
     };
     const onWheel = (event: WheelEvent) => {
       event.preventDefault();
@@ -366,45 +463,14 @@ export function DevicePane(props: {
       });
     };
     const onContextMenu = (event: MouseEvent) => event.preventDefault();
-    canvas.addEventListener("mousedown", onMouseDown);
+    canvas.addEventListener("pointerdown", onPointerDown);
+    canvas.addEventListener("pointermove", onPointerMove);
+    canvas.addEventListener("pointerup", onPointerUp);
+    canvas.addEventListener("pointercancel", onPointerCancel);
+    canvas.addEventListener("lostpointercapture", onPointerCancel);
+    window.addEventListener("blur", onWindowBlur);
     canvas.addEventListener("wheel", onWheel, { passive: false });
     canvas.addEventListener("contextmenu", onContextMenu);
-
-    // Touch support (Hermes review — canvasPoint already accepted a Touch,
-    // but nothing sent one). Single-touch only: `pointerId: 0` throughout,
-    // matching the tap gesture's own single-pointer convention above — a
-    // second simultaneous touch is silently ignored (`event.touches[0]`),
-    // not tracked as a distinct pointer. `{ passive: false }` +
-    // preventDefault on all three so a drag on the canvas doesn't also
-    // scroll the page.
-    const onTouchStart = (event: TouchEvent) => {
-      event.preventDefault();
-      canvas!.focus();
-      const touch = event.touches[0];
-      if (!touch) return;
-      const { x, y } = canvasPoint(touch);
-      sendControl({ type: "touchDown", x, y, videoWidth, videoHeight, pointerId: 0 });
-    };
-    const onTouchMove = (event: TouchEvent) => {
-      event.preventDefault();
-      const touch = event.touches[0];
-      if (!touch) return;
-      const { x, y } = canvasPoint(touch);
-      sendControl({ type: "touchMove", x, y, videoWidth, videoHeight, pointerId: 0 });
-    };
-    const onTouchEnd = (event: TouchEvent) => {
-      event.preventDefault();
-      // `changedTouches`, not `touches` — by "touchend" the lifted touch
-      // has already been removed from `touches`.
-      const touch = event.changedTouches[0];
-      if (!touch) return;
-      const { x, y } = canvasPoint(touch);
-      sendControl({ type: "touchUp", x, y, videoWidth, videoHeight, pointerId: 0 });
-    };
-    canvas.addEventListener("touchstart", onTouchStart, { passive: false });
-    canvas.addEventListener("touchmove", onTouchMove, { passive: false });
-    canvas.addEventListener("touchend", onTouchEnd, { passive: false });
-    canvas.addEventListener("touchcancel", onTouchEnd, { passive: false });
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Backspace") {
@@ -435,14 +501,18 @@ export function DevicePane(props: {
     return () => {
       destroyed = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
-      canvas.removeEventListener("mousedown", onMouseDown);
+      canvas.removeEventListener("pointerdown", onPointerDown);
+      canvas.removeEventListener("pointermove", onPointerMove);
+      canvas.removeEventListener("pointerup", onPointerUp);
+      canvas.removeEventListener("pointercancel", onPointerCancel);
+      canvas.removeEventListener("lostpointercapture", onPointerCancel);
+      window.removeEventListener("blur", onWindowBlur);
       canvas.removeEventListener("wheel", onWheel);
       canvas.removeEventListener("contextmenu", onContextMenu);
-      canvas.removeEventListener("touchstart", onTouchStart);
-      canvas.removeEventListener("touchmove", onTouchMove);
-      canvas.removeEventListener("touchend", onTouchEnd);
-      canvas.removeEventListener("touchcancel", onTouchEnd);
       canvas.removeEventListener("keydown", onKeyDown);
+      if (activePointer !== null) {
+        releaseActivePointer();
+      }
       ws?.close();
       disposeDecoder();
       sendControlRef.current = () => {};
@@ -452,10 +522,102 @@ export function DevicePane(props: {
     // as BrowserPane.tsx/TerminalPane.tsx.
   }, [props.params.deviceId]);
 
+  const controlsDisabled = status !== "open" || stopped || removed;
   return (
     <div className="browser-pane">
+      <div className="device-toolbar" role="toolbar" aria-label="Android device controls">
+        <div className="device-toolbar-group" aria-label="Navigation">
+          <button
+            onPointerDown={(event) => event.preventDefault()}
+            title="Back"
+            aria-label="Back"
+            disabled={controlsDisabled}
+            onClick={() => sendControlRef.current({ type: "back" })}
+          >
+            ‹
+          </button>
+          <button
+            onPointerDown={(event) => event.preventDefault()}
+            title="Home"
+            aria-label="Home"
+            disabled={controlsDisabled}
+            onClick={() => pressKey(3)}
+          >
+            ⌂
+          </button>
+          <button
+            onPointerDown={(event) => event.preventDefault()}
+            title="Recent apps"
+            aria-label="Recent apps"
+            disabled={controlsDisabled}
+            onClick={() => pressKey(187)}
+          >
+            ▢
+          </button>
+        </div>
+        <div className="device-toolbar-group" aria-label="Device buttons">
+          <button
+            onPointerDown={(event) => event.preventDefault()}
+            title="Power"
+            aria-label="Power"
+            disabled={controlsDisabled}
+            onClick={() => pressKey(26)}
+          >
+            ⏻
+          </button>
+          <button
+            onPointerDown={(event) => event.preventDefault()}
+            title="Volume down"
+            aria-label="Volume down"
+            disabled={controlsDisabled}
+            onClick={() => pressKey(25)}
+          >
+            −
+          </button>
+          <button
+            onPointerDown={(event) => event.preventDefault()}
+            title="Volume up"
+            aria-label="Volume up"
+            disabled={controlsDisabled}
+            onClick={() => pressKey(24)}
+          >
+            +
+          </button>
+        </div>
+        <div className="device-toolbar-group" aria-label="Display">
+          <button
+            onPointerDown={(event) => event.preventDefault()}
+            title="Rotate device"
+            aria-label="Rotate device"
+            disabled={controlsDisabled}
+            onClick={() => sendControlRef.current({ type: "rotate" })}
+          >
+            ↻
+          </button>
+          <button
+            onPointerDown={(event) => event.preventDefault()}
+            title="Take screenshot"
+            aria-label="Take screenshot"
+            disabled={controlsDisabled || takingScreenshot}
+            onClick={() => void takeScreenshot()}
+          >
+            {takingScreenshot ? "…" : "⇩"}
+          </button>
+          <button
+            onPointerDown={(event) => event.preventDefault()}
+            title={showFrame ? "Hide device frame" : "Show device frame"}
+            aria-label={showFrame ? "Hide device frame" : "Show device frame"}
+            aria-pressed={showFrame}
+            onClick={toggleFrame}
+          >
+            ▯
+          </button>
+        </div>
+      </div>
       <div className="browser-pane-canvas-wrap">
-        <canvas ref={canvasRef} className="browser-pane-canvas" tabIndex={0} />
+        <div className={`device-frame${showFrame ? " visible" : ""}`}>
+          <canvas ref={canvasRef} className="browser-pane-canvas device-pane-canvas" tabIndex={0} />
+        </div>
         {lastError && <div className="browser-pane-error-toast">{lastError}</div>}
         {status !== "unsupported" && (status !== "open" || stopped || removed || !hasFrame) && (
           <div

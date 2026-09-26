@@ -2590,8 +2590,51 @@
    both panel types look consistent. */
 .browser-pane {
   height: 100%;
+  min-height: 0;
   display: flex;
   flex-direction: column;
+}
+.device-toolbar {
+  flex: 0 0 auto;
+  min-height: 42px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 8px;
+  background: var(--sidebar);
+  border-bottom: 1px solid var(--border-soft);
+}
+.device-toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.device-toolbar-group + .device-toolbar-group {
+  border-left: 1px solid var(--border-soft);
+  padding-left: 8px;
+}
+.device-toolbar button {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fg);
+  font-size: 19px;
+  line-height: 1;
+  cursor: pointer;
+}
+.device-toolbar button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--fg) 9%, transparent);
+}
+.device-toolbar button:focus-visible {
+  outline: 2px solid var(--accent-solid);
+  outline-offset: 1px;
+}
+.device-toolbar button:disabled {
+  opacity: 0.38;
+  cursor: default;
 }
 .browser-pane-canvas-wrap {
   position: relative;
@@ -2612,6 +2655,31 @@
   max-height: 100%;
   outline: none;
   cursor: default;
+}
+.device-pane-canvas {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.device-frame {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.device-frame.visible {
+  width: calc(100% - 28px);
+  height: calc(100% - 28px);
+  padding: 10px;
+  border: 2px solid color-mix(in srgb, var(--fg) 28%, transparent);
+  border-radius: 24px;
+  background: color-mix(in srgb, var(--fg) 5%, var(--term));
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.22);
 }
 .browser-pane-error-toast {
   position: absolute;

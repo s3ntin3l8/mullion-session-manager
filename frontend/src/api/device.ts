@@ -38,6 +38,12 @@ export const devicesApi = {
   // `status`/`live` without a second GET.
   startDevice: (id: number) => request<Device>(`/api/devices/${id}/start`, { method: "POST" }),
 
+  takeScreenshot: (id: number) =>
+    request<{ screenshot: string }>(`/api/devices/${id}/action`, {
+      method: "POST",
+      body: JSON.stringify({ action: "screenshot" }),
+    }),
+
   // Irreversible: tears the device down and removes its row. Distinct from
   // stopDevice by intent, not by effect — a stopped device is still listed,
   // a deleted one is gone from every surface. Named for DELETE on purpose:

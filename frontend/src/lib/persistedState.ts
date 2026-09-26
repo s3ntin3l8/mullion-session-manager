@@ -113,6 +113,7 @@ export const STORAGE_KEYS = {
   mutedSessions: "crs.mutedSessions",
   // MobileKeyBar.tsx — whether the second key row (⋯) is expanded.
   mobileKeyBarMore: "crs.mobileKeyBarMore",
+  deviceFrame: "crs.deviceFrame",
 } as const;
 
 export type StorageKey = (typeof STORAGE_KEYS)[keyof typeof STORAGE_KEYS];
