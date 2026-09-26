@@ -6,6 +6,8 @@ import {
   notifyLabel,
   notifySeverity,
   sessionContextMap,
+  sessionNeedsYou,
+  sessionUnreadCount,
 } from "./eventDescriptions.js";
 import type { NotificationEvent } from "./api/index.js";
 
@@ -1092,5 +1094,44 @@ describe("eventDescriptions (Phase 2, issue #176)", () => {
       });
       expect(notifyLabel(event)).toBe("Notification");
     });
+  });
+});
+
+describe("sessionUnreadCount / sessionNeedsYou", () => {
+  const attention = makeEvent({ seq: 5, kind: "attention", payload: { attention: true } });
+  const exited = makeEvent({ seq: 6, kind: "status_change", payload: { reason: "exited" } });
+
+  it("counts unread notify-worthy events past the read cursor", () => {
+    expect(sessionUnreadCount(1, [attention, exited], 0, {}, false)).toBe(2);
+    expect(sessionUnreadCount(1, [attention, exited], 5, {}, false)).toBe(1);
+    expect(sessionUnreadCount(1, undefined, 0, {}, false)).toBe(0);
+  });
+
+  it("skips dismissed events", () => {
+    expect(sessionUnreadCount(1, [attention], 0, { "1:5": true }, false)).toBe(0);
+  });
+
+  it("counts nothing for a muted session", () => {
+    expect(sessionUnreadCount(1, [attention], 0, {}, true)).toBe(0);
+  });
+
+  it("needs you when the session is flagged attention, with no events at all", () => {
+    expect(sessionNeedsYou({ id: 1, attention: true }, undefined, 0, {}, false)).toBe(true);
+  });
+
+  it("needs you on an unread attention event even if the polled flag is false", () => {
+    expect(sessionNeedsYou({ id: 1, attention: false }, [attention], 0, {}, false)).toBe(true);
+  });
+
+  it("does not need you for a plain exit, a read event, or a dismissed event", () => {
+    expect(sessionNeedsYou({ id: 1, attention: false }, [exited], 0, {}, false)).toBe(false);
+    expect(sessionNeedsYou({ id: 1, attention: false }, [attention], 5, {}, false)).toBe(false);
+    expect(
+      sessionNeedsYou({ id: 1, attention: false }, [attention], 0, { "1:5": true }, false),
+    ).toBe(false);
+  });
+
+  it("never needs you when muted, even when flagged attention", () => {
+    expect(sessionNeedsYou({ id: 1, attention: true }, [attention], 0, {}, true)).toBe(false);
   });
 });

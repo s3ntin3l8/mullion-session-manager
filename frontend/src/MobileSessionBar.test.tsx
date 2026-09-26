@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { DockviewApi, IDockviewPanel } from "dockview";
 import { MobileSessionBar } from "./MobileSessionBar.js";
@@ -31,16 +31,52 @@ function fakePanel(id: string, title: string, sessionId?: number) {
   } as unknown as IDockviewPanel;
 }
 
+const onOpenSession = vi.fn();
 let panels: IDockviewPanel[];
 let dockviewApi: DockviewApi;
 
 beforeEach(() => {
   renameSession.mockClear();
+  onOpenSession.mockClear();
   storeState = {
     sessions: [
-      { id: 1, command: "bash", attention: true, activity: "idle" },
-      { id: 2, command: "claude", attention: false, activity: "working" },
+      {
+        id: 1,
+        projectId: 10,
+        kind: "terminal",
+        status: "active",
+        command: "bash",
+        attention: true,
+        activity: "idle",
+      },
+      {
+        id: 2,
+        projectId: 10,
+        kind: "terminal",
+        status: "active",
+        command: "claude",
+        attention: false,
+        activity: "working",
+      },
+      // Not open in the current layout: listed in the picker, opened on tap.
+      {
+        id: 3,
+        projectId: 11,
+        kind: "terminal",
+        status: "active",
+        command: "codex",
+        attention: false,
+        activity: "idle",
+      },
     ],
+    projects: [
+      { id: 10, name: "runway" },
+      { id: 11, name: "hermes" },
+    ],
+    tasks: [],
+    hideEndedSessions: false,
+    showTaskSessions: true,
+    mutedSessionIds: [],
     events: {
       2: [{ seq: 5, kind: "gate_opened", sessionId: 2, key: "k" }],
     },
@@ -64,6 +100,7 @@ function renderBar(activePanelId: string | null = "session-1") {
       activePanelId={activePanelId}
       dockviewApi={dockviewApi}
       onNewSession={vi.fn()}
+      onOpenSession={onOpenSession}
     />,
   );
 }
@@ -131,10 +168,47 @@ describe("MobileSessionBar", () => {
           activePanelId="session-2"
           dockviewApi={dockviewApi}
           onNewSession={vi.fn()}
+          onOpenSession={onOpenSession}
         />,
       );
     });
     expect(screen.queryByLabelText("Session name")).toBeNull();
     expect(renameSession).not.toHaveBeenCalled();
+  });
+  it("lists every session grouped by project plus non-session panes", async () => {
+    renderBar();
+    const user = userEvent.setup();
+    const trigger = screen.getByRole("button", { name: /shell/ });
+    await user.click(trigger);
+    const sheet = screen.getByRole("dialog");
+    // Trigger `n/N` still counts open panes only (3), the sheet lists all.
+    expect(trigger).toHaveTextContent("1/3");
+    expect(within(sheet).getByRole("heading", { name: /runway/ })).toBeInTheDocument();
+    expect(within(sheet).getByRole("heading", { name: /hermes/ })).toBeInTheDocument();
+    expect(within(sheet).getByRole("heading", { name: /Open panes/ })).toBeInTheDocument();
+    expect(within(sheet).getByText("codex")).toBeInTheDocument();
+    expect(within(sheet).getByText("Git")).toBeInTheDocument();
+    // Session 1 has `attention`, so it is also pinned under "Needs you".
+    expect(within(sheet).getByRole("heading", { name: /Needs you/ })).toBeInTheDocument();
+  });
+
+  it("opens a session that isn't open through onOpenSession, not the dockview panel path", async () => {
+    renderBar();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /shell/ }));
+    await user.click(screen.getByText("codex"));
+    expect(onOpenSession).toHaveBeenCalledWith(expect.objectContaining({ id: 3 }));
+    expect(dockviewApi.maximizeGroup).not.toHaveBeenCalled();
+  });
+
+  it("counts unread on sessions that aren't open, but not on a muted one", async () => {
+    storeState.events = {
+      3: [{ seq: 1, kind: "attention", sessionId: 3, payload: { attention: true } }],
+      2: [{ seq: 1, kind: "attention", sessionId: 2, payload: { attention: true } }],
+    };
+    storeState.mutedSessionIds = [2];
+    renderBar();
+    // Only session 3 counts: session 2 is muted, session 1 (active) has none.
+    expect(screen.getByLabelText("1 unread elsewhere")).toBeInTheDocument();
   });
 });

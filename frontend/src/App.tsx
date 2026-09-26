@@ -30,6 +30,7 @@ import { components, tabComponents, KanbanBoardOverlay } from "./panels/registry
 import {
   openSessionPanel,
   attentionTransitionPanelIds,
+  focusPanelForTier,
   newChildSessionIds,
   childPanelPosition,
   shouldAutoOpenChildPanels,
@@ -529,11 +530,17 @@ export function App() {
         ) {
           continue;
         }
-        dockviewApi.getPanel(panelId)?.api.setActive();
+        const target = dockviewApi.getPanel(panelId);
+        if (!target) continue;
+        // Phone only: leave the Tasks board first (its overlay hides the
+        // panes) and maximize, so the pane that needs you is the one on
+        // screen. Desktop keeps the plain setActive() it always had.
+        if (layoutTier === "phone") useDashboardStore.getState().setViewMode("list");
+        focusPanelForTier(dockviewApi, target, layoutTier);
       }
     }
     seenAttentionForFocusRef.current = attentionNow;
-  }, [sessions, settings.notifications, dockviewApi]);
+  }, [sessions, settings.notifications, dockviewApi, layoutTier]);
 
   // Phase 5 (Track B, issue #194 5.4) — this codebase's first
   // backend-state-driven panel ADD (every other effect here only
@@ -952,7 +959,7 @@ export function App() {
     if (lastHandledHighlightRef.current === id) return;
     const panel = dockviewApi.getPanel(id);
     if (panel) {
-      panel.api.setActive();
+      focusPanelForTier(dockviewApi, panel, layout.tier);
       lastHandledHighlightRef.current = id;
       return;
     }
@@ -1258,6 +1265,7 @@ export function App() {
       activePanelId={activePanelId}
       dockviewApi={dockviewApi}
       onNewSession={openGlobalLauncher}
+      onOpenSession={onOpenSession}
     />
   ) : null;
 
