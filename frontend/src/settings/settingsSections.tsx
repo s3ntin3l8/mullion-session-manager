@@ -186,6 +186,15 @@ export const SECTIONS: Array<{
   },
 ];
 
+// Sections not offered on phone: "Dock & previews" configures the desktop
+// Dock, which phone hides (mobile.css). A deep link to one still opens it —
+// this only trims the lists. Add the next hidden-on-phone section id here.
+const HIDDEN_ON_PHONE: ReadonlySet<SettingsSection> = new Set<SettingsSection>(["dock"]);
+
+export function phoneSections(): typeof SECTIONS {
+  return SECTIONS.filter((s) => !HIDDEN_ON_PHONE.has(s.id));
+}
+
 // A real (not cosmetic) filter over control labels — the nav rail's search
 // box (ported from the reference's 1a nav) narrows to sections that
 // actually contain a matching control, not just a section whose title

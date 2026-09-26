@@ -5,6 +5,7 @@ import { ChevronLeftIcon, CloseIcon, SearchIcon } from "./ui/icons.js";
 import {
   SEARCH_INDEX,
   SECTIONS,
+  phoneSections,
   resolveSettingsSection,
   type SettingsSection,
   type SettingsSectionLink,
@@ -85,9 +86,7 @@ export function Settings({
   usePhoneBackStack(phone && !mobileNavOpen, () => setMobileNavOpen(true));
 
   const visibleSections = useMemo(() => {
-    // "Dock & previews" configures the desktop Dock, which is hidden on phone
-    // (mobile.css), so it's not offered there. A deep link to it still opens.
-    const base = phone ? SECTIONS.filter((s) => s.id !== "dock") : SECTIONS;
+    const base = phone ? phoneSections() : SECTIONS;
     const q = query.trim().toLowerCase();
     if (!q) return base;
     return base.filter(

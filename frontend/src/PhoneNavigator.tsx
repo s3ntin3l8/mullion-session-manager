@@ -1,6 +1,6 @@
 import { Fragment } from "react";
 import { CloseIcon, ChevronRightIcon } from "./ui/icons.js";
-import { SECTIONS } from "./settings/settingsSections.js";
+import { phoneSections } from "./settings/settingsSections.js";
 import type { SettingsSection } from "./settings/settingsSections.js";
 
 // Phone-only chrome for the full-screen navigator (App.tsx renders it inside
@@ -73,8 +73,7 @@ export function PhoneNavigatorHeader({
 // rail is built from (SECTIONS), as full-width 44px rows. Picking one opens
 // Settings straight into that section.
 export function PhoneSettingsList({ onSelect }: { onSelect: (section: SettingsSection) => void }) {
-  // "Dock & previews" configures the desktop Dock, which phone hides.
-  const sections = SECTIONS.filter((s) => s.id !== "dock");
+  const sections = phoneSections();
   return (
     <div className="phone-nav-settings">
       {sections.map((s, i) => (
