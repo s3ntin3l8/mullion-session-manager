@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ModelsSection } from "./ModelsSection.js";
 import { useDashboardStore } from "../../store/index.js";
@@ -255,5 +255,45 @@ describe("Settings -> Models", () => {
     render(<ModelsSection />);
 
     expect(await screen.findByText(/agy is installed and signed in/i)).toBeInTheDocument();
+  });
+
+  it("opening Custom… and leaving the field doesn't reset a stored default", async () => {
+    const user = userEvent.setup();
+    useDashboardStore.setState({
+      settings: { ...DEFAULT_SETTINGS, claudeCode: { defaultModel: "opus" } },
+      settingsLoaded: true,
+    });
+    render(<ModelsSection />);
+
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Claude Code default model" }),
+      "__custom__",
+    );
+    const input = screen.getByRole("textbox", { name: /Claude Code default model \(custom/ });
+    expect(input).toHaveValue("opus");
+    await user.click(input);
+    await user.tab();
+
+    await settle();
+    expect(patchBodies()).toEqual([]);
+    expect(useDashboardStore.getState().settings.claudeCode.defaultModel).toBe("opus");
+  });
+
+  it("re-syncs the custom field when the stored value changes underneath it", async () => {
+    useDashboardStore.setState({
+      settings: { ...DEFAULT_SETTINGS, claudeCode: { defaultModel: "claude-opus-4-5" } },
+      settingsLoaded: true,
+    });
+    render(<ModelsSection />);
+    const input = screen.getByRole("textbox", { name: /Claude Code default model \(custom/ });
+    expect(input).toHaveValue("claude-opus-4-5");
+
+    act(() => {
+      useDashboardStore.setState({
+        settings: { ...DEFAULT_SETTINGS, claudeCode: { defaultModel: "claude-sonnet-4-6" } },
+      });
+    });
+
+    await waitFor(() => expect(input).toHaveValue("claude-sonnet-4-6"));
   });
 });
