@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { listOpenCodeModels } from "../services/opencode-models.js";
+import { listAgyModels, listOpenCodeModels } from "../services/opencode-models.js";
 
 export async function opencodeModelsRoute(app: FastifyInstance) {
   app.get("/api/opencode/models", async (_request, reply) => {
@@ -11,5 +11,11 @@ export async function opencodeModelsRoute(app: FastifyInstance) {
     // `request<string[]>`, and the mismatch crashed ModelsSection's `.map()`
     // silently past `tsc` (the response body is asserted `as Promise<T>`).
     return await listOpenCodeModels();
+  });
+
+  // Same bare-array contract as the opencode route above.
+  app.get("/api/agy/models", async (_request, reply) => {
+    reply.type("application/json");
+    return await listAgyModels();
   });
 }

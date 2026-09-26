@@ -1671,6 +1671,11 @@ export interface AppSettings {
   server: {
     logLevel: "inherit" | LogLevel;
   };
+  // Install-wide default `--model` per non-opencode CLI; `null` means no
+  // flag (the CLI picks). Mirrors src/services/settings.ts.
+  claudeCode: { defaultModel: string | null };
+  codex: { defaultModel: string | null };
+  agy: { defaultModel: string | null };
   opencode: {
     implementerModel: string | null;
     reviewerModel: string | null;

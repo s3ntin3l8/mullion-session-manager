@@ -236,6 +236,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   server: {
     logLevel: "inherit",
   },
+  claudeCode: { defaultModel: null },
+  codex: { defaultModel: null },
+  agy: { defaultModel: null },
   opencode: {
     implementerModel: null,
     reviewerModel: null,
