@@ -6,7 +6,24 @@ import {
 } from "@yume-chan/scrcpy-decoder-webcodecs";
 import type { ScrcpyMediaStreamPacket } from "@yume-chan/scrcpy";
 import { ScrcpyVideoCodecId } from "@yume-chan/scrcpy";
-import { PlayIcon, RefreshIcon, StopIcon, WifiOffIcon } from "./ui/icons.js";
+import {
+  CheckIcon,
+  ChevronLeftIcon,
+  CopyIcon,
+  DeviceIcon,
+  DownloadIcon,
+  HomeIcon,
+  PlayIcon,
+  PowerIcon,
+  RecentsIcon,
+  RefreshIcon,
+  RotateIcon,
+  SpinnerIcon,
+  StopIcon,
+  VolumeDownIcon,
+  VolumeUpIcon,
+  WifiOffIcon,
+} from "./ui/icons.js";
 import { useDashboardStore } from "./store/index.js";
 import { Spinner } from "./ui/Spinner.js";
 import { devicesApi } from "./api/device.js";
@@ -42,7 +59,36 @@ interface ErrorMessage {
   type: "error";
   message: string;
 }
-type ControlMessage = ExitedMessage | ErrorMessage;
+// Text the device copied to its own clipboard (routes/device.ts forwards
+// scrcpy's device->host clipboard stream, live only — never replayed).
+interface ClipboardMessage {
+  type: "clipboard";
+  text: string;
+}
+type ControlMessage = ExitedMessage | ErrorMessage | ClipboardMessage;
+
+// One size/weight for every toolbar glyph — see ui/icons.tsx's note on why
+// the old Unicode glyphs never lined up.
+const TOOLBAR_ICON = { size: 18, strokeWidth: 1.8 } as const;
+
+// AOSP KEYCODE_COPY / KEYCODE_CUT — what Ctrl/Cmd+C / +X map to on the device
+// (the device's own selection owns the text; the host never sees it until
+// the device's clipboard stream reports it back).
+const KEYCODE_COPY = 278;
+const KEYCODE_CUT = 277;
+
+// Async Clipboard API image write needs a secure context (HTTPS/localhost),
+// ClipboardItem and clipboard.write — hide the copy button rather than show
+// one that can only fail.
+function canCopyImage(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    window.isSecureContext &&
+    typeof ClipboardItem !== "undefined" &&
+    typeof navigator !== "undefined" &&
+    typeof navigator.clipboard?.write === "function"
+  );
+}
 
 function parseControlMessage(raw: string): ControlMessage | null {
   let parsed: unknown;
@@ -56,6 +102,9 @@ function parseControlMessage(raw: string): ControlMessage | null {
   if (v.type === "exited") return { type: "exited" };
   if (v.type === "error" && typeof v.message === "string") {
     return { type: "error", message: v.message };
+  }
+  if (v.type === "clipboard" && typeof v.text === "string") {
+    return { type: "clipboard", text: v.text };
   }
   return null;
 }
@@ -129,6 +178,15 @@ export function DevicePane(props: {
     () => readString(STORAGE_KEYS.deviceFrame, "on") !== "off",
   );
   const [takingScreenshot, setTakingScreenshot] = useState(false);
+  const [copyingScreenshot, setCopyingScreenshot] = useState(false);
+  const [screenshotCopied, setScreenshotCopied] = useState(false);
+  const copiedTimer = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
+    },
+    [],
+  );
   // Two states the socket can never recover from on its own: the row is
   // STOPPED (status "killed" — routes/device.ts 404s every connect) or
   // GONE (hard-deleted, same 404 with no row left to restart). Without
@@ -155,14 +213,35 @@ export function DevicePane(props: {
     sendControlRef.current({ type: "keyEvent", androidKeyCode, action: "down" });
     sendControlRef.current({ type: "keyEvent", androidKeyCode, action: "up" });
   };
+  const fetchScreenshotBlob = async (): Promise<Blob> => {
+    const result = await devicesApi.takeScreenshot(props.params.deviceId);
+    const bytes = Uint8Array.from(atob(result.screenshot), (char) => char.charCodeAt(0));
+    return new Blob([bytes], { type: "image/png" });
+  };
+  const copyScreenshot = () => {
+    if (copyingScreenshot) return;
+    setCopyingScreenshot(true);
+    setLastError(null);
+    // The ClipboardItem is built SYNCHRONOUSLY from a promise, not from an
+    // already-fetched blob: Safari only honors clipboard.write() inside the
+    // click's user activation, and the screenshot round trip would outlive it.
+    // The blob type must be exactly "image/png" — that is all browsers accept.
+    navigator.clipboard
+      .write([new ClipboardItem({ "image/png": fetchScreenshotBlob() })])
+      .then(() => {
+        setScreenshotCopied(true);
+        if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
+        copiedTimer.current = window.setTimeout(() => setScreenshotCopied(false), 1500);
+      })
+      .catch((err: unknown) => setLastError(err instanceof Error ? err.message : String(err)))
+      .finally(() => setCopyingScreenshot(false));
+  };
   const takeScreenshot = async () => {
     if (takingScreenshot) return;
     setTakingScreenshot(true);
     setLastError(null);
     try {
-      const result = await devicesApi.takeScreenshot(props.params.deviceId);
-      const bytes = Uint8Array.from(atob(result.screenshot), (char) => char.charCodeAt(0));
-      const url = URL.createObjectURL(new Blob([bytes], { type: "image/png" }));
+      const url = URL.createObjectURL(await fetchScreenshotBlob());
       const link = document.createElement("a");
       link.href = url;
       link.download = `device-${props.params.deviceId}-${new Date().toISOString().replace(/[:.]/g, "-")}.png`;
@@ -326,6 +405,14 @@ export function DevicePane(props: {
             // leave this one to linger as a phantom, still-subscribed
             // viewer until the OS eventually times it out).
             socket.close();
+          } else if (message?.type === "clipboard") {
+            // Device -> host clipboard. Every open panel for this device
+            // gets the frame, so only the focused one writes; failures
+            // (permission, insecure context) stay silent like the
+            // terminal's copy-on-select — a background tab must not toast.
+            if (document.hasFocus()) {
+              void navigator.clipboard?.writeText(message.text).catch(() => {});
+            }
           } else if (message?.type === "error") {
             // getOrCreate() failed right after the upgrade (routes/
             // device.ts) — most likely a scope left running from before a
@@ -473,6 +560,25 @@ export function DevicePane(props: {
     canvas.addEventListener("contextmenu", onContextMenu);
 
     const onKeyDown = (event: KeyboardEvent) => {
+      // Ctrl/Cmd chords must never fall through to the printable-key branch
+      // below (Ctrl+V used to type a literal "v"). AltGr reports as
+      // ctrl+alt on Windows, so a chord excludes Alt/AltGraph — otherwise
+      // "@ { [ \ €" on European layouts could not be typed.
+      const chord =
+        (event.ctrlKey || event.metaKey) && !event.altKey && !event.getModifierState("AltGraph");
+      if (chord) {
+        const key = event.key.toLowerCase();
+        // Do NOT preventDefault on paste: cancelling the keydown would
+        // cancel the browser's native `paste` event that onPaste reads.
+        if (key === "v") return;
+        event.preventDefault();
+        if (key === "c" || key === "x") {
+          const androidKeyCode = key === "c" ? KEYCODE_COPY : KEYCODE_CUT;
+          sendControl({ type: "keyEvent", androidKeyCode, action: "down" });
+          sendControl({ type: "keyEvent", androidKeyCode, action: "up" });
+        }
+        return;
+      }
       if (event.key === "Backspace") {
         event.preventDefault();
         // AOSP KEYCODE_DEL — the one key worth a dedicated, ergonomic
@@ -498,6 +604,17 @@ export function DevicePane(props: {
     };
     canvas.addEventListener("keydown", onKeyDown);
 
+    // Host -> device clipboard. The native paste event is the single read
+    // path (no readText: no permission prompt, works over plain HTTP, and
+    // no double paste). scrcpy SET_CLIPBOARD+paste handles Unicode, unlike
+    // the `text` inject path.
+    const onPaste = (event: ClipboardEvent) => {
+      event.preventDefault();
+      const text = event.clipboardData?.getData("text/plain") ?? "";
+      if (text) sendControl({ type: "clipboard", text });
+    };
+    canvas.addEventListener("paste", onPaste);
+
     return () => {
       destroyed = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
@@ -510,6 +627,7 @@ export function DevicePane(props: {
       canvas.removeEventListener("wheel", onWheel);
       canvas.removeEventListener("contextmenu", onContextMenu);
       canvas.removeEventListener("keydown", onKeyDown);
+      canvas.removeEventListener("paste", onPaste);
       if (activePointer !== null) {
         releaseActivePointer();
       }
@@ -534,7 +652,7 @@ export function DevicePane(props: {
             disabled={controlsDisabled}
             onClick={() => sendControlRef.current({ type: "back" })}
           >
-            ‹
+            <ChevronLeftIcon {...TOOLBAR_ICON} />
           </button>
           <button
             onPointerDown={(event) => event.preventDefault()}
@@ -543,7 +661,7 @@ export function DevicePane(props: {
             disabled={controlsDisabled}
             onClick={() => pressKey(3)}
           >
-            ⌂
+            <HomeIcon {...TOOLBAR_ICON} />
           </button>
           <button
             onPointerDown={(event) => event.preventDefault()}
@@ -552,7 +670,7 @@ export function DevicePane(props: {
             disabled={controlsDisabled}
             onClick={() => pressKey(187)}
           >
-            ▢
+            <RecentsIcon {...TOOLBAR_ICON} />
           </button>
         </div>
         <div className="device-toolbar-group" aria-label="Device buttons">
@@ -563,7 +681,7 @@ export function DevicePane(props: {
             disabled={controlsDisabled}
             onClick={() => pressKey(26)}
           >
-            ⏻
+            <PowerIcon {...TOOLBAR_ICON} />
           </button>
           <button
             onPointerDown={(event) => event.preventDefault()}
@@ -572,7 +690,7 @@ export function DevicePane(props: {
             disabled={controlsDisabled}
             onClick={() => pressKey(25)}
           >
-            −
+            <VolumeDownIcon {...TOOLBAR_ICON} />
           </button>
           <button
             onPointerDown={(event) => event.preventDefault()}
@@ -581,7 +699,7 @@ export function DevicePane(props: {
             disabled={controlsDisabled}
             onClick={() => pressKey(24)}
           >
-            +
+            <VolumeUpIcon {...TOOLBAR_ICON} />
           </button>
         </div>
         <div className="device-toolbar-group" aria-label="Display">
@@ -592,17 +710,38 @@ export function DevicePane(props: {
             disabled={controlsDisabled}
             onClick={() => sendControlRef.current({ type: "rotate" })}
           >
-            ↻
+            <RotateIcon {...TOOLBAR_ICON} />
           </button>
           <button
             onPointerDown={(event) => event.preventDefault()}
-            title="Take screenshot"
-            aria-label="Take screenshot"
+            title="Download screenshot"
+            aria-label="Download screenshot"
             disabled={controlsDisabled || takingScreenshot}
             onClick={() => void takeScreenshot()}
           >
-            {takingScreenshot ? "…" : "⇩"}
+            {takingScreenshot ? (
+              <SpinnerIcon {...TOOLBAR_ICON} className="device-toolbar-spin" />
+            ) : (
+              <DownloadIcon {...TOOLBAR_ICON} />
+            )}
           </button>
+          {canCopyImage() && (
+            <button
+              onPointerDown={(event) => event.preventDefault()}
+              title="Copy screenshot to clipboard"
+              aria-label="Copy screenshot to clipboard"
+              disabled={controlsDisabled || copyingScreenshot}
+              onClick={copyScreenshot}
+            >
+              {copyingScreenshot ? (
+                <SpinnerIcon {...TOOLBAR_ICON} className="device-toolbar-spin" />
+              ) : screenshotCopied ? (
+                <CheckIcon {...TOOLBAR_ICON} />
+              ) : (
+                <CopyIcon {...TOOLBAR_ICON} />
+              )}
+            </button>
+          )}
           <button
             onPointerDown={(event) => event.preventDefault()}
             title={showFrame ? "Hide device frame" : "Show device frame"}
@@ -610,7 +749,7 @@ export function DevicePane(props: {
             aria-pressed={showFrame}
             onClick={toggleFrame}
           >
-            ▯
+            <DeviceIcon {...TOOLBAR_ICON} />
           </button>
         </div>
       </div>

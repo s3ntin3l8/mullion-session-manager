@@ -131,6 +131,7 @@ describe("device route (/ws/device/:deviceId)", () => {
         socket.readyState = socket.CLOSED;
         return {
           onVideoPacket: vi.fn(),
+          onClipboard: vi.fn(() => vi.fn()),
           onExit: vi.fn(),
         } as any;
       });
@@ -157,6 +158,7 @@ describe("device route (/ws/device/:deviceId)", () => {
           videoListener = fn;
           return unsubscribeVideo;
         }),
+        onClipboard: vi.fn(() => vi.fn()),
         onExit: vi.fn(() => vi.fn()),
       };
       vi.spyOn(app.device, "getOrCreate").mockResolvedValueOnce(fakeDevice as any);
@@ -252,6 +254,7 @@ describe("device route (/ws/device/:deviceId)", () => {
           videoListener = fn;
           return vi.fn();
         }),
+        onClipboard: vi.fn(() => vi.fn()),
         onExit: vi.fn(() => vi.fn()),
       } as any);
 
@@ -289,6 +292,7 @@ describe("device route (/ws/device/:deviceId)", () => {
         vi.spyOn(app.device, "getOrCreate").mockResolvedValueOnce({
           controller: { resetVideo: mockResetVideo },
           onVideoPacket: vi.fn(() => vi.fn()),
+          onClipboard: vi.fn(() => vi.fn()),
           onExit: vi.fn(() => vi.fn()),
         } as any);
         await attachSocketToDevice(app, new MockWebSocket() as any, {
@@ -323,6 +327,7 @@ describe("device route (/ws/device/:deviceId)", () => {
             videoListener = fn;
             return vi.fn();
           }),
+          onClipboard: vi.fn(() => vi.fn()),
           onExit: vi.fn(() => vi.fn()),
         } as any);
         const params = { deviceId: 1, avdName: "dev35", label: null, port: null };
@@ -350,6 +355,7 @@ describe("device route (/ws/device/:deviceId)", () => {
       vi.spyOn(app.device, "getOrCreate").mockResolvedValueOnce({
         controller: { resetVideo: vi.fn().mockRejectedValue(new Error("nope")) },
         onVideoPacket: vi.fn(() => vi.fn()),
+        onClipboard: vi.fn(() => vi.fn()),
         onExit: vi.fn(() => vi.fn()),
       } as any);
 
@@ -371,6 +377,7 @@ describe("device route (/ws/device/:deviceId)", () => {
       let exitListener: (() => void) | undefined;
       const fakeDevice = {
         onVideoPacket: vi.fn(() => vi.fn()),
+        onClipboard: vi.fn(() => vi.fn()),
         onExit: vi.fn((fn) => {
           exitListener = fn;
           return vi.fn();
@@ -408,6 +415,7 @@ describe("device route (/ws/device/:deviceId)", () => {
       const fakeDevice = {
         controller: mockController,
         onVideoPacket: vi.fn(() => vi.fn()),
+        onClipboard: vi.fn(() => vi.fn()),
         onExit: vi.fn(() => vi.fn()),
       };
       vi.spyOn(app.device, "getOrCreate").mockResolvedValueOnce(fakeDevice as any);
@@ -564,6 +572,7 @@ describe("device route (/ws/device/:deviceId)", () => {
           videoListener = fn;
           return vi.fn();
         }),
+        onClipboard: vi.fn(() => vi.fn()),
         onExit: vi.fn(() => vi.fn()),
       };
       vi.spyOn(app.device, "getOrCreate").mockResolvedValueOnce(fakeDevice as any);
@@ -587,12 +596,100 @@ describe("device route (/ws/device/:deviceId)", () => {
       // resetVideo rejected but caught without throwing
     });
 
+    describe("clipboard", () => {
+      const attach = async (fakeDevice: Record<string, unknown>) => {
+        const app = await buildTestApp();
+        vi.spyOn(app.device, "getOrCreate").mockResolvedValueOnce(fakeDevice as any);
+        const socket = new MockWebSocket();
+        await attachSocketToDevice(app, socket as any, {
+          deviceId: 1,
+          avdName: "dev35",
+          label: null,
+          port: null,
+        });
+        return socket;
+      };
+      const send = (socket: MockWebSocket, msg: unknown) =>
+        socket.emit("message", Buffer.from(JSON.stringify(msg)), false);
+
+      it("pastes host clipboard text via setClipboard (no ACK sequence)", async () => {
+        const setClipboard = vi.fn().mockResolvedValue(undefined);
+        const socket = await attach({
+          controller: { resetVideo: vi.fn().mockResolvedValue(undefined), setClipboard },
+          onVideoPacket: vi.fn(() => vi.fn()),
+          onClipboard: vi.fn(() => vi.fn()),
+          onExit: vi.fn(() => vi.fn()),
+        });
+
+        send(socket, { type: "clipboard", text: "häll\u00f6 \u{1F600}" });
+
+        await vi.waitFor(() =>
+          expect(setClipboard).toHaveBeenCalledWith({
+            sequence: 0n,
+            paste: true,
+            content: "häll\u00f6 \u{1F600}",
+          }),
+        );
+      });
+
+      it("drops empty, non-string and oversized clipboard messages", async () => {
+        const setClipboard = vi.fn().mockResolvedValue(undefined);
+        const socket = await attach({
+          controller: { resetVideo: vi.fn().mockResolvedValue(undefined), setClipboard },
+          onVideoPacket: vi.fn(() => vi.fn()),
+          onClipboard: vi.fn(() => vi.fn()),
+          onExit: vi.fn(() => vi.fn()),
+        });
+
+        send(socket, { type: "clipboard", text: "" });
+        send(socket, { type: "clipboard", text: 42 });
+        send(socket, { type: "clipboard" });
+        // 3-byte chars: char count is under the cap but the UTF-8 byte
+        // length is over it.
+        send(socket, { type: "clipboard", text: "\u20ac".repeat(100_000) });
+        // A sentinel message that IS valid proves the queue drained.
+        send(socket, { type: "clipboard", text: "ok" });
+
+        await vi.waitFor(() => expect(setClipboard).toHaveBeenCalledTimes(1));
+        expect(setClipboard).toHaveBeenCalledWith(expect.objectContaining({ content: "ok" }));
+      });
+
+      it("forwards device clipboard text as a JSON frame and unsubscribes on close", async () => {
+        let clipboardListener: ((text: string) => void) | undefined;
+        const unsubscribeClipboard = vi.fn();
+        const socket = await attach({
+          controller: { resetVideo: vi.fn().mockResolvedValue(undefined) },
+          onVideoPacket: vi.fn(() => vi.fn()),
+          onClipboard: vi.fn((fn) => {
+            clipboardListener = fn;
+            return unsubscribeClipboard;
+          }),
+          onExit: vi.fn(() => vi.fn()),
+        });
+
+        clipboardListener!("copied on device");
+
+        expect(socket.sentMessages.map((m) => m.data)).toContain(
+          JSON.stringify({ type: "clipboard", text: "copied on device" }),
+        );
+
+        socket.emit("close");
+        expect(unsubscribeClipboard).toHaveBeenCalledTimes(1);
+
+        // A late device-copy after close is not sent.
+        const before = socket.sentMessages.length;
+        clipboardListener!("late");
+        expect(socket.sentMessages).toHaveLength(before);
+      });
+    });
+
     it("unsubscribes listeners on socket close", async () => {
       const app = await buildTestApp();
       const unsubscribeVideo = vi.fn();
       const unsubscribeExit = vi.fn();
       const fakeDevice = {
         onVideoPacket: vi.fn(() => unsubscribeVideo),
+        onClipboard: vi.fn(() => vi.fn()),
         onExit: vi.fn(() => unsubscribeExit),
       };
       vi.spyOn(app.device, "getOrCreate").mockResolvedValueOnce(fakeDevice as any);
@@ -620,6 +717,7 @@ describe("device route (/ws/device/:deviceId)", () => {
           injectTouch,
         },
         onVideoPacket: vi.fn(() => vi.fn()),
+        onClipboard: vi.fn(() => vi.fn()),
         onExit: vi.fn(() => vi.fn()),
       };
       vi.spyOn(app.device, "getOrCreate").mockResolvedValueOnce(fakeDevice as any);
@@ -671,6 +769,7 @@ describe("device route (/ws/device/:deviceId)", () => {
           videoListener = fn;
           return vi.fn();
         }),
+        onClipboard: vi.fn(() => vi.fn()),
         onExit: vi.fn(() => vi.fn()),
       };
       vi.spyOn(app.device, "getOrCreate").mockResolvedValueOnce(fakeDevice as any);
@@ -698,6 +797,7 @@ describe("device route (/ws/device/:deviceId)", () => {
       const fakeDevice = {
         controller: mockController,
         onVideoPacket: vi.fn(() => vi.fn()),
+        onClipboard: vi.fn(() => vi.fn()),
         onExit: vi.fn(() => vi.fn()),
       };
       vi.spyOn(app.device, "getOrCreate").mockResolvedValueOnce(fakeDevice as any);

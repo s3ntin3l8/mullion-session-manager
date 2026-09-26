@@ -225,6 +225,38 @@ shown as a confirm-style prompt. If the phone needs a fresh pairing code, delete
 The prompt only appears when mDNS can reach the device; otherwise **Edit
 address** remains the manual path.
 
+### Clipboard and screenshots in the panel
+
+The panel syncs the clipboard with your browser in both directions, so text
+copied in a Mullion terminal (or anywhere on your machine) pastes into the
+device and vice versa.
+
+- **Host → device.** Ctrl/Cmd+V in the focused panel reads the browser's
+  `paste` event and sends a `{type:"clipboard", text}` WS message. The route
+  calls scrcpy `SET_CLIPBOARD` with `paste: true` (sequence `0`, so it never
+  waits for an ACK), which handles Unicode — unlike the `text` inject path.
+  Empty text and anything over scrcpy's ~256 KiB limit is dropped. Because it
+  uses the `paste` event, it needs no clipboard permission and works over
+  plain HTTP.
+- **Device → host.** Text the device copies arrives on scrcpy's clipboard
+  stream, which `Device` drains for the life of the session (an undrained
+  stream stalls scrcpy's device-message loop) and forwards to each attached
+  panel as `{type:"clipboard", text}`. The focused panel writes it with
+  `navigator.clipboard.writeText`; unfocused tabs ignore it, and failures are
+  silent. It is live-only: a reconnecting or second panel is **never** sent
+  the last value, since that would overwrite whatever you copied since.
+- **Chords.** Ctrl/Cmd+C and +X send the device's `KEYCODE_COPY` / `KEYCODE_CUT`;
+  other Ctrl/Cmd chords are swallowed rather than typed as letters. AltGr
+  characters (`@`, `{`, `€`, ...) still type normally.
+- **Toolbar.** The screenshot button downloads a PNG. The adjacent **Copy
+  screenshot to clipboard** button puts the same PNG on the clipboard
+  instead; it only appears in a secure context (HTTPS or localhost) with
+  `ClipboardItem` support.
+
+Not covered (tracked in #1422): a clipboard verb for the CLI/MCP
+`device_action`, Ctrl+A and other modifier chords, and clipboard sync for the
+streamed browser pane.
+
 ---
 
 ## 1. `mullion device` CLI

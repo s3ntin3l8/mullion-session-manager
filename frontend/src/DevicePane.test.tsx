@@ -328,7 +328,7 @@ describe("DevicePane (issue #1326)", () => {
       "false",
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Take screenshot" }));
+    fireEvent.click(screen.getByRole("button", { name: "Download screenshot" }));
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
         "/api/devices/7/action",
@@ -341,12 +341,154 @@ describe("DevicePane (issue #1326)", () => {
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:device-shot");
 
     fetchMock.mockRejectedValueOnce(new Error("screenshot failed"));
-    fireEvent.click(screen.getByRole("button", { name: "Take screenshot" }));
+    fireEvent.click(screen.getByRole("button", { name: "Download screenshot" }));
     await waitFor(() => expect(screen.getByText("screenshot failed")).toBeInTheDocument());
 
     URL.createObjectURL = originalCreateObjectURL;
     URL.revokeObjectURL = originalRevokeObjectURL;
     click.mockRestore();
+  });
+
+  describe("clipboard", () => {
+    const setup = () => {
+      resetStore({ devices: [makeDevice()], devicesLoaded: true });
+      render(<DevicePane params={{ deviceId: 7 }} />);
+      const socket = FakeWebSocket.instances[0];
+      act(() => socket.open());
+      const canvas = document.querySelector("canvas")!;
+      const sent = () => socket.sent.map((entry) => JSON.parse(entry));
+      const key = (init: KeyboardEventInit) => {
+        const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
+        act(() => {
+          canvas.dispatchEvent(event);
+        });
+        return event;
+      };
+      return { socket, canvas, sent, key };
+    };
+
+    it("Ctrl+V is not typed as 'v' and is left to the native paste event", () => {
+      const { sent, key } = setup();
+      const event = key({ key: "v", ctrlKey: true });
+      expect(event.defaultPrevented).toBe(false);
+      expect(sent()).toEqual([]);
+      // Cmd+V (macOS) behaves the same.
+      expect(key({ key: "v", metaKey: true }).defaultPrevented).toBe(false);
+      expect(sent()).toEqual([]);
+    });
+
+    it("sends the pasted host text as a clipboard message (single read path)", () => {
+      const { canvas, sent } = setup();
+      const paste = new Event("paste", { bubbles: true, cancelable: true });
+      Object.assign(paste, { clipboardData: { getData: () => "häll\u00f6 \u{1F600}" } });
+      act(() => {
+        canvas.dispatchEvent(paste);
+      });
+      expect(paste.defaultPrevented).toBe(true);
+      expect(sent()).toEqual([{ type: "clipboard", text: "häll\u00f6 \u{1F600}" }]);
+
+      // Empty clipboard text sends nothing.
+      const empty = new Event("paste", { bubbles: true, cancelable: true });
+      Object.assign(empty, { clipboardData: { getData: () => "" } });
+      act(() => {
+        canvas.dispatchEvent(empty);
+      });
+      expect(sent()).toHaveLength(1);
+    });
+
+    it("maps Ctrl/Cmd+C and +X to the device's COPY/CUT keycodes; other chords type nothing", () => {
+      const { sent, key } = setup();
+      expect(key({ key: "c", ctrlKey: true }).defaultPrevented).toBe(true);
+      key({ key: "X", metaKey: true });
+      key({ key: "a", ctrlKey: true });
+      expect(sent()).toEqual([
+        { type: "keyEvent", androidKeyCode: 278, action: "down" },
+        { type: "keyEvent", androidKeyCode: 278, action: "up" },
+        { type: "keyEvent", androidKeyCode: 277, action: "down" },
+        { type: "keyEvent", androidKeyCode: 277, action: "up" },
+      ]);
+    });
+
+    it("still types AltGr characters (reported as ctrl+alt on Windows)", () => {
+      const { sent, key } = setup();
+      const event = key({ key: "@", ctrlKey: true, altKey: true });
+      expect(event.defaultPrevented).toBe(true);
+      expect(sent()).toEqual([{ type: "text", text: "@" }]);
+    });
+
+    it("writes device clipboard text to the host clipboard only while the tab is focused", () => {
+      const writeText = vi.fn(() => Promise.resolve());
+      vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+      const { socket } = setup();
+      const frame = { data: JSON.stringify({ type: "clipboard", text: "from device" }) };
+
+      const hasFocus = vi.spyOn(document, "hasFocus");
+      hasFocus.mockReturnValue(false);
+      act(() => socket.emit("message", frame));
+      expect(writeText).not.toHaveBeenCalled();
+
+      hasFocus.mockReturnValue(true);
+      act(() => socket.emit("message", frame));
+      expect(writeText).toHaveBeenCalledWith("from device");
+      hasFocus.mockRestore();
+    });
+
+    it("swallows a rejected host clipboard write silently", async () => {
+      const writeText = vi.fn(() => Promise.reject(new Error("denied")));
+      vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+      const { socket } = setup();
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      act(() => socket.emit("message", { data: JSON.stringify({ type: "clipboard", text: "x" }) }));
+      await waitFor(() => expect(writeText).toHaveBeenCalled());
+      expect(screen.queryByText("denied")).not.toBeInTheDocument();
+    });
+
+    describe("copy screenshot button", () => {
+      class FakeClipboardItem {
+        constructor(public readonly items: Record<string, Promise<Blob>>) {}
+      }
+
+      it("is hidden when the clipboard image API is unavailable", () => {
+        // jsdom has no ClipboardItem — the default environment.
+        setup();
+        expect(
+          screen.queryByRole("button", { name: "Copy screenshot to clipboard" }),
+        ).not.toBeInTheDocument();
+      });
+
+      it("hands clipboard.write an image/png ClipboardItem built from the screenshot promise", async () => {
+        const write = vi.fn((_items: unknown[]) => Promise.resolve());
+        vi.stubGlobal("ClipboardItem", FakeClipboardItem);
+        vi.stubGlobal("isSecureContext", true);
+        vi.stubGlobal("navigator", { ...navigator, clipboard: { write } });
+        setup();
+
+        fireEvent.click(screen.getByRole("button", { name: "Copy screenshot to clipboard" }));
+
+        // write() is called synchronously inside the click (Safari's user-
+        // activation rule) — before the screenshot request has resolved.
+        expect(write).toHaveBeenCalledTimes(1);
+        const item = write.mock.calls[0][0][0] as FakeClipboardItem;
+        expect(Object.keys(item.items)).toEqual(["image/png"]);
+        const blob = await item.items["image/png"];
+        expect(blob.type).toBe("image/png");
+        expect(fetchMock).toHaveBeenCalledWith(
+          "/api/devices/7/action",
+          expect.objectContaining({ body: JSON.stringify({ action: "screenshot" }) }),
+        );
+      });
+
+      it("shows the error when the copy fails", async () => {
+        const write = vi.fn(() => Promise.reject(new Error("copy denied")));
+        vi.stubGlobal("ClipboardItem", FakeClipboardItem);
+        vi.stubGlobal("isSecureContext", true);
+        vi.stubGlobal("navigator", { ...navigator, clipboard: { write } });
+        setup();
+
+        fireEvent.click(screen.getByRole("button", { name: "Copy screenshot to clipboard" }));
+        await waitFor(() => expect(screen.getByText("copy denied")).toBeInTheDocument());
+      });
+    });
   });
 
   it("releases a held touch at its last point when the pane unmounts", () => {

@@ -640,3 +640,83 @@ export function TrashIcon(props: IconProps) {
     </Svg>
   );
 }
+
+// Android device toolbar (DevicePane.tsx). The toolbar used to use Unicode
+// glyphs (‹ ⌂ ▢ ⏻ − + ↻ ⇩ ▯) whose size and baseline each depend on whichever
+// fallback font supplies them, so the row never lined up. Same 24-unit
+// stroke vocabulary as the icons above; DevicePane renders them all at one
+// size and stroke width.
+export function HomeIcon(props: IconProps) {
+  return (
+    <Svg strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M3.5 11.2L12 4l8.5 7.2" />
+      <path d="M5.8 9.7V20h12.4V9.7" />
+    </Svg>
+  );
+}
+
+export function RecentsIcon(props: IconProps) {
+  return (
+    <Svg strokeWidth={1.8} {...props}>
+      <rect x="5.5" y="5.5" width="13" height="13" rx="2.5" />
+    </Svg>
+  );
+}
+
+export function PowerIcon(props: IconProps) {
+  return (
+    <Svg strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M12 3.5v8" />
+      <path d="M7 6.6a7.5 7.5 0 1 0 10 0" />
+    </Svg>
+  );
+}
+
+const SPEAKER = "M4 9.5v5h3.5l4.5 4v-13l-4.5 4z";
+
+export function VolumeDownIcon(props: IconProps) {
+  return (
+    <Svg strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d={SPEAKER} />
+      <path d="M15.5 12h5" />
+    </Svg>
+  );
+}
+
+export function VolumeUpIcon(props: IconProps) {
+  return (
+    <Svg strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d={SPEAKER} />
+      <path d="M15.5 12h5M18 9.5v5" />
+    </Svg>
+  );
+}
+
+export function RotateIcon(props: IconProps) {
+  return (
+    <Svg strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <rect x="9.5" y="8.5" width="5" height="8" rx="1" />
+      <path d="M20 12a8 8 0 0 0-14-5.3L4 9" />
+      <path d="M4 4v5h5" />
+    </Svg>
+  );
+}
+
+export function DownloadIcon(props: IconProps) {
+  return (
+    <Svg strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M12 4v11" />
+      <path d="M7.5 11l4.5 4.5 4.5-4.5" />
+      <path d="M5 19.5h14" />
+    </Svg>
+  );
+}
+
+export function CopyIcon(props: IconProps) {
+  return (
+    <Svg strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <rect x="8.5" y="8.5" width="11" height="11" rx="2" />
+      <path d="M15.5 8.5v-2a2 2 0 0 0-2-2h-7a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h2" />
+    </Svg>
+  );
+}

@@ -91,6 +91,9 @@ vi.mock("@yume-chan/adb-server-node-tcp", () => ({
 let mockPushServerShouldFail = false;
 let mockStartShouldFail = false;
 const mockScrcpyClose = vi.fn(async () => {});
+// Assigned per-test like mockVideoPackets; undefined = the pre-clipboard
+// scrcpy client shape (no `clipboard` getter at all).
+let mockClipboardStream: ReadableStream<string> | undefined;
 const mockController = {
   injectText: vi.fn(async () => {}),
   resetVideo: vi.fn(async () => {}),
@@ -132,6 +135,9 @@ const mockScrcpyClient = {
   },
   get exited() {
     return mockExited;
+  },
+  get clipboard() {
+    return mockClipboardStream;
   },
   close: mockScrcpyClose,
 };
@@ -300,6 +306,7 @@ beforeEach(() => {
   mockStartShouldFail = false;
   mockExited = new Promise(() => {});
   mockVideoPackets = [{ type: "configuration", data: new Uint8Array([1, 2, 3]) }];
+  mockClipboardStream = undefined;
   systemdRunShouldFail = false;
   listUnitsReply = [];
   mockAdbClose.mockClear();
@@ -1034,6 +1041,90 @@ describe("DeviceManager", () => {
     expect(lateListener).toHaveBeenCalledWith(
       expect.objectContaining({ type: "configuration", data: new Uint8Array([9, 9, 9]) }),
     );
+  });
+
+  describe("device clipboard stream", () => {
+    const spawnDevice = async () => {
+      mockDeviceList = [{ serial: "emulator-5554" }];
+      const manager = new DeviceManager(baseOpts());
+      const device = await manager.getOrCreate({
+        id: "1",
+        kind: "emulator",
+        avdName: "dev35",
+        serial: null,
+        label: null,
+        port: null,
+      });
+      await waitForStatus(manager, "1", "streaming");
+      return device;
+    };
+
+    it("drains the stream and fans text out to live subscribers", async () => {
+      let push!: (text: string) => void;
+      mockClipboardStream = new ReadableStream<string>({
+        start(controller) {
+          push = (text) => controller.enqueue(text);
+        },
+      });
+      const device = await spawnDevice();
+      const seen: string[] = [];
+      const unsubscribe = device.onClipboard((text) => seen.push(text));
+
+      push("first");
+      push("second");
+      await vi.waitFor(() => expect(seen).toEqual(["first", "second"]));
+
+      unsubscribe();
+      push("third");
+      await new Promise((r) => setTimeout(r, 20));
+      expect(seen).toEqual(["first", "second"]);
+    });
+
+    it("does NOT replay the last device clipboard to a late subscriber", async () => {
+      let push!: (text: string) => void;
+      mockClipboardStream = new ReadableStream<string>({
+        start(controller) {
+          push = (text) => controller.enqueue(text);
+        },
+      });
+      const device = await spawnDevice();
+      const early = vi.fn();
+      device.onClipboard(early);
+      push("stale");
+      await vi.waitFor(() => expect(early).toHaveBeenCalledWith("stale"));
+
+      // A reconnecting / second panel must not get "stale" pushed at it —
+      // that would overwrite the user's host clipboard (#1251's bug class).
+      const late = vi.fn();
+      device.onClipboard(late);
+      await new Promise((r) => setTimeout(r, 20));
+      expect(late).not.toHaveBeenCalled();
+    });
+
+    it("keeps draining with no subscriber attached (so the device-message loop never stalls)", async () => {
+      let pulled = 0;
+      mockClipboardStream = new ReadableStream<string>(
+        {
+          pull(controller) {
+            // Bounded: an endless synchronous producer would starve the
+            // event loop (microtasks only) and hang the test's own timers.
+            if (pulled >= 5) return new Promise<void>(() => {});
+            pulled++;
+            controller.enqueue(`t${pulled}`);
+          },
+        },
+        { highWaterMark: 0 },
+      );
+      await spawnDevice();
+      // With nobody listening, the pump must still be reading.
+      await vi.waitFor(() => expect(pulled).toBe(5));
+    });
+
+    it("tolerates a scrcpy client with no clipboard stream", async () => {
+      mockClipboardStream = undefined;
+      const device = await spawnDevice();
+      expect(device.isAlive).toBe(true);
+    });
   });
 
   // A physical device is never spawned (no systemd-run, no marker, no port
