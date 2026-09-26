@@ -10,6 +10,7 @@ import {
   notifyLabel,
   notifySeverity,
   sessionContextMap,
+  sessionNeedsYou,
 } from "./eventDescriptions.js";
 import { api } from "./api/index.js";
 import type { NotificationEvent, Project, Session } from "./api/index.js";
@@ -321,6 +322,7 @@ export function NotificationBell({
   onOpenSession,
   onOpenTimeline,
   onOpenBrowser,
+  phone = false,
 }: {
   onOpenSession: (session: Session) => void;
   // Issue #270 — the roadmap's own framing is that the timeline (2.8) is
@@ -335,6 +337,11 @@ export function NotificationBell({
   // dev_server_detected offer is accepted, so the user lands straight on
   // the now-wired-up preview rather than having to find it themselves.
   onOpenBrowser: (projectId: number) => void;
+  // Phone tier: render the feed as a full-height bottom sheet (tap a row =
+  // open the session's terminal, "Needs you | All" filter, 44px targets)
+  // instead of the desktop dropdown popover. Desktop/tablet leave it unset
+  // and get the popover exactly as before.
+  phone?: boolean;
 }) {
   const theme = useDashboardStore((s) => s.theme);
   const sessions = useDashboardStore((s) => s.sessions);
@@ -348,6 +355,8 @@ export function NotificationBell({
   const openRequest = useDashboardStore((s) => s.notificationsPanelOpenRequest);
 
   const [open, setOpen] = useState(false);
+  // Phone sheet only: which sessions' groups the feed shows.
+  const [filter, setFilter] = useState<"needs" | "all">("all");
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -369,6 +378,35 @@ export function NotificationBell({
         : EMPTY_FEED_ITEMS,
     [open, sessions, projects, events, lastSeenSeq, dismissedEventKeys],
   );
+  // Sessions that need the user — the SAME predicate the phone session
+  // picker's pinned section uses (eventDescriptions.ts's sessionNeedsYou), so
+  // "Needs you" can't mean two things on phone.
+  const needsYouIds = useMemo(() => {
+    const ids = new Set<number>();
+    for (const session of sessions) {
+      if (
+        sessionNeedsYou(
+          session,
+          events[session.id],
+          lastSeenSeq[session.id] ?? 0,
+          dismissedEventKeys,
+          mutedSessionIds.includes(session.id),
+        )
+      ) {
+        ids.add(session.id);
+      }
+    }
+    return ids;
+  }, [sessions, events, lastSeenSeq, dismissedEventKeys, mutedSessionIds]);
+  // What the phone sheet actually lists; the desktop popover always shows
+  // every group, so `items` itself is never filtered.
+  const shownItems = useMemo(
+    () => (phone && filter === "needs" ? items.filter((i) => needsYouIds.has(i.sessionId)) : items),
+    [phone, filter, items, needsYouIds],
+  );
+  // Opening defaults to "Needs you" when something does, else the full feed.
+  const openFilter = () => setFilter(needsYouIds.size > 0 ? "needs" : "all");
+
   // Deliberately NOT derived from `items` (unlike before this fix) — the
   // toolbar badge must stay accurate every tick regardless of whether the
   // panel is open, and countUnread (above) gets there without paying for
@@ -489,7 +527,9 @@ export function NotificationBell({
     if (!btnRef.current) return;
     const rect = btnRef.current.getBoundingClientRect();
     setPos(panelPosition(rect, window.innerWidth));
+    openFilter();
     setOpen(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fires on a fresh request only; openFilter reads the latest needsYouIds on that render
   }, [openRequest]);
 
   // Advances every session with at least one unread feed item to that
@@ -499,7 +539,7 @@ export function NotificationBell({
   // fully clears those sessions' tab badges, not just this panel's view.
   const markAllRead = () => {
     const unreadSessionIds = new Set(
-      items
+      shownItems
         .filter((i): i is FeedEventItem => i.type === "event" && !i.read)
         .map((i) => i.sessionId),
     );
@@ -527,6 +567,7 @@ export function NotificationBell({
           if (!open && btnRef.current) {
             const rect = btnRef.current.getBoundingClientRect();
             setPos(panelPosition(rect, window.innerWidth));
+            openFilter();
           }
           setOpen((v) => !v);
         }}
@@ -535,6 +576,109 @@ export function NotificationBell({
         {unreadCount > 0 && <span className="attention-badge">{unreadCount}</span>}
       </button>
       {open &&
+        phone &&
+        createPortal(
+          <div
+            className={`cmux-root${theme === "light" ? " light" : ""} mobile-session-backdrop`}
+            onClick={() => setOpen(false)}
+          >
+            <div
+              ref={panelRef}
+              className="mobile-session-sheet mobile-notif-sheet"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Notifications"
+              onClick={(e) => e.stopPropagation()}
+              onKeyDown={onPanelKeyDown}
+            >
+              <div className="mobile-session-sheet-header">
+                <span>Notifications</span>
+                <span className="mobile-notif-header-actions">
+                  {shownItems.some((i) => i.type === "event" && !i.read) && (
+                    <button className="mobile-notif-readall" onClick={markAllRead}>
+                      <CheckIcon size={13} />
+                      Read all
+                    </button>
+                  )}
+                  <button
+                    className="mobile-tab-btn"
+                    aria-label="Close notifications"
+                    onClick={() => setOpen(false)}
+                  >
+                    <CloseIcon size={14} />
+                  </button>
+                </span>
+              </div>
+              <div className="mobile-notif-filters" role="group" aria-label="Filter notifications">
+                <button
+                  className={`mobile-notif-filter${filter === "needs" ? " active" : ""}`}
+                  aria-pressed={filter === "needs"}
+                  onClick={() => setFilter("needs")}
+                >
+                  Needs you{needsYouIds.size > 0 ? ` ${needsYouIds.size}` : ""}
+                </button>
+                <button
+                  className={`mobile-notif-filter${filter === "all" ? " active" : ""}`}
+                  aria-pressed={filter === "all"}
+                  onClick={() => setFilter("all")}
+                >
+                  All
+                </button>
+              </div>
+              <div className="mobile-notif-scroll">
+                {shownItems.length === 0 ? (
+                  <div className="notif-empty">
+                    {filter === "needs" ? "Nothing needs you right now" : "No notifications yet"}
+                  </div>
+                ) : (
+                  shownItems.map((item) => {
+                    const session = sessions.find((s) => s.id === item.sessionId);
+                    if (item.type === "header") {
+                      return (
+                        <FeedHeader key={`h-${item.sessionId}`} item={item} session={session} />
+                      );
+                    }
+                    return (
+                      <EventRow
+                        key={`e-${item.sessionId}-${item.event.seq}`}
+                        item={item}
+                        session={session}
+                        // Tap = the session's terminal (maximized by the
+                        // opener), and reading it marks that session seen —
+                        // the timeline view never advances the read cursor.
+                        onOpen={(target) => {
+                          suppressRestore();
+                          setOpen(false);
+                          const maxSeq = (events[target.id] ?? []).reduce(
+                            (max, e) => Math.max(max, e.seq),
+                            0,
+                          );
+                          if (maxSeq > 0) markEventSeen(target.id, maxSeq);
+                          onOpenSession(target);
+                        }}
+                        onTimeline={
+                          onOpenTimeline
+                            ? (target) => {
+                                suppressRestore();
+                                setOpen(false);
+                                onOpenTimeline(target);
+                              }
+                            : undefined
+                        }
+                        onOpenBrowser={onOpenBrowser}
+                        onMarkRead={() => markEventSeen(item.sessionId, item.event.seq)}
+                        onDismiss={() => dismissEvents(item.sessionId, item.foldedSeqs)}
+                      />
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
+      {open &&
+        !phone &&
         pos &&
         createPortal(
           <div
@@ -691,6 +835,7 @@ function EventRow({
   item,
   session,
   onOpen,
+  onTimeline,
   onOpenBrowser,
   onMarkRead,
   onDismiss,
@@ -698,6 +843,9 @@ function EventRow({
   item: FeedEventItem;
   session: Session | undefined;
   onOpen: (session: Session) => void;
+  // Phone sheet only: the row's tap opens the terminal there, so the
+  // timeline (this panel's per-session complement) is its own action.
+  onTimeline?: (session: Session) => void;
   onOpenBrowser: (projectId: number) => void;
   onMarkRead: () => void;
   onDismiss: () => void;
@@ -806,6 +954,17 @@ function EventRow({
         <span className="notif-event-time">{age}</span>
         {isPendingGate && matchingGate && (
           <GateActions sessionId={item.sessionId} gateId={matchingGate.gateId} />
+        )}
+        {onTimeline && session && (
+          <button
+            className="mobile-notif-timeline"
+            onClick={(e) => {
+              e.stopPropagation();
+              onTimeline(session);
+            }}
+          >
+            Timeline
+          </button>
         )}
         {isPendingDevServer && eventPort && (
           <DevServerActions

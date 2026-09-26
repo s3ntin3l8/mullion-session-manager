@@ -1108,3 +1108,183 @@ describe("NotificationBell visual-viewport pan (issue #1399)", () => {
     expect(panel.style.top).toBe("186px");
   });
 });
+
+describe("NotificationBell phone sheet", () => {
+  async function openPhoneSheet(
+    props: Partial<Parameters<typeof NotificationBell>[0]> = {},
+  ): Promise<ReturnType<typeof vi.fn>> {
+    const onOpenSession = vi.fn();
+    render(
+      <NotificationBell onOpenSession={onOpenSession} onOpenBrowser={vi.fn()} phone {...props} />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: /notifications/i }));
+    return onOpenSession;
+  }
+
+  const gateEvent = (seq: number): NotificationEvent => ({
+    seq,
+    sessionId: 1,
+    kind: "review_gate",
+    ts: Date.now(),
+    payload: { state: "waiting", prompt: "Run rm -rf /tmp/build?" },
+  });
+
+  it("renders a modal bottom sheet, not the desktop popover", async () => {
+    events = { 1: [makeEvent({ seq: 1 })] };
+    await openPhoneSheet();
+    const dialog = screen.getByRole("dialog", { name: "Notifications" });
+    expect(dialog).toHaveClass("mobile-notif-sheet");
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    expect(document.querySelector(".notif-panel")).toBeNull();
+  });
+
+  it("keeps the desktop popover when `phone` is not set", async () => {
+    events = { 1: [makeEvent({ seq: 1 })] };
+    await openPanel();
+    expect(document.querySelector(".notif-panel")).not.toBeNull();
+    expect(document.querySelector(".mobile-notif-sheet")).toBeNull();
+  });
+
+  it("opens on 'Needs you' when a session needs you, and 'All' shows the rest", async () => {
+    sessions = [
+      makeSession({ id: 1, name: "needy", attention: true }),
+      makeSession({ id: 2, name: "calm" }),
+    ];
+    events = {
+      1: [makeEvent({ seq: 1, sessionId: 1 })],
+      2: [
+        makeEvent({ seq: 1, sessionId: 2, kind: "status_change", payload: { reason: "exited" } }),
+      ],
+    };
+    await openPhoneSheet();
+    expect(screen.getByRole("button", { name: /Needs you/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByText("needy")).toBeInTheDocument();
+    expect(screen.queryByText("calm")).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: "All" }));
+    expect(screen.getByText("calm")).toBeInTheDocument();
+  });
+
+  it("opens on 'All' when nothing needs you", async () => {
+    events = { 1: [makeEvent({ seq: 1, kind: "status_change", payload: { reason: "exited" } })] };
+    await openPhoneSheet();
+    expect(screen.getByRole("button", { name: "All" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("Exited")).toBeInTheDocument();
+  });
+
+  it("says nothing needs you (not 'no notifications') on an empty Needs you filter", async () => {
+    events = { 1: [makeEvent({ seq: 1 })] };
+    sessions = [makeSession({ attention: true })];
+    await openPhoneSheet();
+    sessions = [makeSession({ attention: false })];
+    await userEvent.click(screen.getByRole("button", { name: /Needs you/ }));
+    // Once attention clears and the event is read, the filter is empty.
+    lastSeenSeq = { 1: 1 };
+    await userEvent.click(screen.getByRole("button", { name: "All" }));
+    await userEvent.click(screen.getByRole("button", { name: /Needs you/ }));
+    expect(screen.getByText("Nothing needs you right now")).toBeInTheDocument();
+  });
+
+  it("tap opens the session's TERMINAL, marks it read, and closes the sheet", async () => {
+    events = {
+      1: [makeEvent({ seq: 3 }), makeEvent({ seq: 7, kind: "title_change", payload: {} })],
+    };
+    const onOpenTimeline = vi.fn();
+    const onOpenSession = await openPhoneSheet({ onOpenTimeline });
+    await userEvent.click(screen.getByRole("button", { name: /Bell/ }));
+    expect(onOpenSession).toHaveBeenCalledWith(expect.objectContaining({ id: 1 }));
+    expect(onOpenTimeline).not.toHaveBeenCalled();
+    // Cursor advances to the session's true latest seq (not just this row's).
+    expect(markEventSeen).toHaveBeenCalledWith(1, 7);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("offers the timeline as its own action", async () => {
+    events = { 1: [makeEvent({ seq: 1 })] };
+    const onOpenTimeline = vi.fn();
+    const onOpenSession = await openPhoneSheet({ onOpenTimeline });
+    await userEvent.click(screen.getByRole("button", { name: "Timeline" }));
+    expect(onOpenTimeline).toHaveBeenCalledWith(expect.objectContaining({ id: 1 }));
+    expect(onOpenSession).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("shows no Timeline action when the caller has no timeline", async () => {
+    events = { 1: [makeEvent({ seq: 1 })] };
+    await openPhoneSheet();
+    expect(screen.queryByRole("button", { name: "Timeline" })).toBeNull();
+  });
+
+  it("marks read / dismisses a row without opening it", async () => {
+    events = { 1: [makeEvent({ seq: 4 })] };
+    const onOpenSession = await openPhoneSheet();
+    await userEvent.click(screen.getByRole("button", { name: "Mark read" }));
+    expect(markEventSeen).toHaveBeenCalledWith(1, 4);
+    await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(dismissEvents).toHaveBeenCalledWith(1, [4]);
+    expect(onOpenSession).not.toHaveBeenCalled();
+  });
+
+  it("Read all only marks the sessions currently shown", async () => {
+    sessions = [
+      makeSession({ id: 1, name: "needy", attention: true }),
+      makeSession({ id: 2, name: "calm" }),
+    ];
+    events = {
+      1: [makeEvent({ seq: 5, sessionId: 1 })],
+      2: [
+        makeEvent({ seq: 9, sessionId: 2, kind: "status_change", payload: { reason: "exited" } }),
+      ],
+    };
+    await openPhoneSheet();
+    await userEvent.click(screen.getByRole("button", { name: "Read all" }));
+    expect(markEventSeen).toHaveBeenCalledWith(1, 5);
+    expect(markEventSeen).not.toHaveBeenCalledWith(2, expect.anything());
+  });
+
+  it("approves a pending gate inline from the sheet", async () => {
+    sessions = [
+      makeSession({
+        gateState: "waiting",
+        gates: [{ gateId: "g-1", prompt: "Run rm -rf /tmp/build?", at: Date.now() }],
+        attention: true,
+      }),
+    ];
+    events = {
+      1: [{ ...gateEvent(1), payload: { state: "waiting", gateId: "g-1", prompt: "x" } }],
+    };
+    await openPhoneSheet();
+    await userEvent.click(screen.getByRole("button", { name: "Approve" }));
+    expect(resolveReviewGate).toHaveBeenCalledWith(1, "g-1", "approved");
+  });
+
+  it("closes from the backdrop, the close button and Escape", async () => {
+    events = { 1: [makeEvent({ seq: 1 })] };
+    await openPhoneSheet();
+    await userEvent.click(document.querySelector(".mobile-session-backdrop") as HTMLElement);
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: /notifications/i }));
+    await userEvent.click(screen.getByRole("button", { name: "Close notifications" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: /notifications/i }));
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("a desktop-notification open request opens the phone sheet too", async () => {
+    events = { 1: [makeEvent({ seq: 1 })] };
+    const { rerender } = render(
+      <NotificationBell onOpenSession={vi.fn()} onOpenBrowser={vi.fn()} phone />,
+    );
+    notificationsPanelOpenRequest = 1;
+    rerender(<NotificationBell onOpenSession={vi.fn()} onOpenBrowser={vi.fn()} phone />);
+    expect(await screen.findByRole("dialog", { name: "Notifications" })).toHaveClass(
+      "mobile-notif-sheet",
+    );
+  });
+});
