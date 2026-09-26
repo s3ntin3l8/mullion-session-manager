@@ -85,14 +85,17 @@ export function Settings({
   usePhoneBackStack(phone && !mobileNavOpen, () => setMobileNavOpen(true));
 
   const visibleSections = useMemo(() => {
+    // "Dock & previews" configures the desktop Dock, which is hidden on phone
+    // (mobile.css), so it's not offered there. A deep link to it still opens.
+    const base = phone ? SECTIONS.filter((s) => s.id !== "dock") : SECTIONS;
     const q = query.trim().toLowerCase();
-    if (!q) return SECTIONS;
-    return SECTIONS.filter(
+    if (!q) return base;
+    return base.filter(
       (s) =>
         s.title.toLowerCase().includes(q) ||
         SEARCH_INDEX.some((entry) => entry.section === s.id && entry.text.includes(q)),
     );
-  }, [query]);
+  }, [query, phone]);
 
   const selectSection = (id: SettingsSection) => {
     setSection(id);
@@ -199,7 +202,10 @@ export function Settings({
               <ChevronLeftIcon size={16} />
             </button>
           )}
-          <span className="settings-modal-title">Settings</span>
+          <span className="settings-modal-title">
+            {/* Phone drill-down: name the section you're in, not just the app. */}
+            {phone && !mobileNavOpen ? meta.title : "Settings"}
+          </span>
           <button
             ref={closeBtnRef}
             className="settings-modal-close"

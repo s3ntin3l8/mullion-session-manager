@@ -73,11 +73,13 @@ export function PhoneNavigatorHeader({
 // rail is built from (SECTIONS), as full-width 44px rows. Picking one opens
 // Settings straight into that section.
 export function PhoneSettingsList({ onSelect }: { onSelect: (section: SettingsSection) => void }) {
+  // "Dock & previews" configures the desktop Dock, which phone hides.
+  const sections = SECTIONS.filter((s) => s.id !== "dock");
   return (
     <div className="phone-nav-settings">
-      {SECTIONS.map((s, i) => (
+      {sections.map((s, i) => (
         <Fragment key={s.id}>
-          {SECTIONS[i - 1]?.group !== s.group && (
+          {sections[i - 1]?.group !== s.group && (
             <div className="phone-nav-settings-group">{s.group}</div>
           )}
           <button className="phone-nav-settings-row" onClick={() => onSelect(s.id)}>

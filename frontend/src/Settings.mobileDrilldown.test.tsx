@@ -151,6 +151,33 @@ describe("Settings mobile drill-down", () => {
   });
 });
 
+describe("Settings phone polish", () => {
+  it("offers 'Dock & previews' on desktop but not on phone (the Dock is hidden there)", () => {
+    const desktop = render(<Settings onClose={vi.fn()} />);
+    expect(screen.getByRole("button", { name: /Dock & previews/ })).toBeInTheDocument();
+    desktop.unmount();
+    render(<Settings onClose={vi.fn()} phone />);
+    expect(screen.queryByRole("button", { name: /Dock & previews/ })).toBeNull();
+    expect(screen.getByRole("button", { name: /^terminal$/i })).toBeInTheDocument();
+  });
+
+  it("phone search doesn't resurface the hidden Dock section", async () => {
+    render(<Settings onClose={vi.fn()} phone />);
+    await userEvent.type(screen.getByPlaceholderText("Search settings…"), "dock");
+    expect(screen.queryByRole("button", { name: /Dock & previews/ })).toBeNull();
+  });
+
+  it("phone header names the open section, and says Settings on the list", async () => {
+    const { rerender } = render(<Settings onClose={vi.fn()} phone />);
+    expect(document.querySelector(".settings-modal-title")).toHaveTextContent("Settings");
+    await userEvent.click(screen.getByRole("button", { name: /^terminal$/i }));
+    expect(document.querySelector(".settings-modal-title")).toHaveTextContent("Terminal");
+    // Not phone: always "Settings", even inside a section.
+    rerender(<Settings onClose={vi.fn()} />);
+    expect(document.querySelector(".settings-modal-title")).toHaveTextContent("Settings");
+  });
+});
+
 describe("Settings phone navigator integration", () => {
   it("startInContent opens straight into Appearance instead of the list", () => {
     const { container } = render(<Settings onClose={vi.fn()} startInContent />);
