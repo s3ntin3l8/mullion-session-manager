@@ -28,6 +28,7 @@ const decoderWriter = {
 const decoderCtor = vi.hoisted(() => vi.fn());
 const webglCtor = vi.hoisted(() => vi.fn());
 const bitmapCtor = vi.hoisted(() => vi.fn());
+const decoderSizeChanged = vi.hoisted(() => vi.fn());
 const webglSupport = vi.hoisted(() => ({ value: true }));
 
 vi.mock("@yume-chan/scrcpy-decoder-webcodecs", () => {
@@ -37,7 +38,9 @@ vi.mock("@yume-chan/scrcpy-decoder-webcodecs", () => {
       decoderCtor();
     }
     writable = { getWriter: () => decoderWriter };
-    sizeChanged() {}
+    sizeChanged(callback: (size: { width: number; height: number }) => void) {
+      decoderSizeChanged(callback);
+    }
     dispose() {}
   }
   class BitmapVideoFrameRenderer {
@@ -128,6 +131,7 @@ describe("DevicePane (issue #1326)", () => {
     decoderCtor.mockClear();
     webglCtor.mockClear();
     bitmapCtor.mockClear();
+    decoderSizeChanged.mockClear();
     webglSupport.value = true;
     decoderWriter.close.mockClear();
     resetStore({ devices: [], devicesLoaded: true });
@@ -189,10 +193,31 @@ describe("DevicePane (issue #1326)", () => {
     pointer("pointermove", 300);
     pointer("pointerup", 20);
     expect(socket.sent.map((entry) => JSON.parse(entry))).toEqual([
-      expect.objectContaining({ type: "touchDown", y: 147.5 }),
-      expect.objectContaining({ type: "touchMove", y: 75 }),
-      expect.objectContaining({ type: "touchUp", y: 5 }),
+      expect.objectContaining({ type: "touchDown", y: 147.5, videoWidth: 300, videoHeight: 150 }),
+      expect.objectContaining({ type: "touchMove", y: 75, videoWidth: 300, videoHeight: 150 }),
+      expect.objectContaining({ type: "touchUp", y: 5, videoWidth: 300, videoHeight: 150 }),
     ]);
+
+    pointer("pointerdown", 400);
+    pointer("pointermove", 320);
+    pointer("pointercancel", 320);
+    expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({ type: "touchUp", x: 150, y: 80 });
+
+    pointer("pointerdown", 300);
+    pointer("pointermove", 200);
+    act(() => window.dispatchEvent(new Event("blur")));
+    expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({ type: "touchUp", x: 150, y: 50 });
+
+    pointer("pointerdown", 300);
+    pointer("pointermove", 200);
+    act(() => decoderSizeChanged.mock.calls.at(-1)?.[0]({ width: 600, height: 1200 }));
+    expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
+      type: "touchUp",
+      x: 150,
+      y: 50,
+      videoWidth: 300,
+      videoHeight: 150,
+    });
 
     const homeButton = screen.getByRole("button", { name: "Home" });
     expect(homeButton).toBeEnabled();
@@ -206,7 +231,7 @@ describe("DevicePane (issue #1326)", () => {
 
   it("sends device toolbar actions, remembers the frame preference, and downloads screenshots", async () => {
     resetStore({ devices: [makeDevice()], devicesLoaded: true });
-    localStorage.removeItem("mullion-device-frame");
+    localStorage.removeItem("crs.deviceFrame");
     const originalCreateObjectURL = URL.createObjectURL;
     const originalRevokeObjectURL = URL.revokeObjectURL;
     const createObjectURL = vi.fn(() => "blob:device-shot");
@@ -237,7 +262,7 @@ describe("DevicePane (issue #1326)", () => {
       "true",
     );
     fireEvent.click(screen.getByRole("button", { name: "Hide device frame" }));
-    expect(localStorage.getItem("mullion-device-frame")).toBe("off");
+    expect(localStorage.getItem("crs.deviceFrame")).toBe("off");
     expect(screen.getByRole("button", { name: "Show device frame" })).toHaveAttribute(
       "aria-pressed",
       "false",
@@ -252,9 +277,58 @@ describe("DevicePane (issue #1326)", () => {
     );
     await waitFor(() => expect(click).toHaveBeenCalled());
     expect(createObjectURL).toHaveBeenCalledWith(expect.any(Blob));
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:device-shot");
+
+    fetchMock.mockRejectedValueOnce(new Error("screenshot failed"));
+    fireEvent.click(screen.getByRole("button", { name: "Take screenshot" }));
+    await waitFor(() => expect(screen.getByText("screenshot failed")).toBeInTheDocument());
+
     URL.createObjectURL = originalCreateObjectURL;
     URL.revokeObjectURL = originalRevokeObjectURL;
     click.mockRestore();
+  });
+
+  it("releases a held touch at its last point when the pane unmounts", () => {
+    resetStore({ devices: [makeDevice()], devicesLoaded: true });
+    const { unmount } = render(<DevicePane params={{ deviceId: 7 }} />);
+    const socket = FakeWebSocket.instances[0];
+    act(() => socket.open());
+    const canvas = document.querySelector("canvas")!;
+    Object.defineProperty(canvas, "setPointerCapture", { value: vi.fn() });
+    Object.defineProperty(canvas, "hasPointerCapture", { value: () => false });
+    vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 300,
+      bottom: 600,
+      width: 300,
+      height: 600,
+      toJSON: () => ({}),
+    });
+    const event = new Event("pointerdown", { bubbles: true, cancelable: true });
+    Object.assign(event, {
+      pointerId: 5,
+      pointerType: "touch",
+      button: 0,
+      clientX: 90,
+      clientY: 480,
+    });
+    act(() => canvas.dispatchEvent(event));
+    const move = new Event("pointermove", { bubbles: true, cancelable: true });
+    Object.assign(move, {
+      pointerId: 5,
+      pointerType: "touch",
+      button: 0,
+      clientX: 90,
+      clientY: 360,
+    });
+    act(() => canvas.dispatchEvent(move));
+
+    unmount();
+    expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({ type: "touchUp", x: 90, y: 90 });
   });
 
   it("Start posts to /start and reconnects once the row is back", async () => {

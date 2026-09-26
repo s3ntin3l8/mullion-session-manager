@@ -125,7 +125,7 @@ export function DevicePane(props: {
   const devicesLoaded = useDashboardStore((s) => s.devicesLoaded);
   const [starting, setStarting] = useState(false);
   const [showFrame, setShowFrame] = useState(
-    () => localStorage.getItem("mullion-device-frame") !== "off",
+    () => localStorage.getItem("crs.deviceFrame") !== "off",
   );
   const [takingScreenshot, setTakingScreenshot] = useState(false);
   // Two states the socket can never recover from on its own: the row is
@@ -176,7 +176,7 @@ export function DevicePane(props: {
   const toggleFrame = () =>
     setShowFrame((current) => {
       const next = !current;
-      localStorage.setItem("mullion-device-frame", next ? "on" : "off");
+      localStorage.setItem("crs.deviceFrame", next ? "on" : "off");
       return next;
     });
 
@@ -191,6 +191,8 @@ export function DevicePane(props: {
     let reconnectAttempt = 0;
     let videoWidth = 0;
     let videoHeight = 0;
+    let activePointer: number | null = null;
+    let lastTouchPoint = { x: 0, y: 0 };
 
     // A WebCodecsVideoDecoder whose writable has errored (e.g. it was handed
     // a delta frame before its first keyframe) stays errored for good —
@@ -223,10 +225,7 @@ export function DevicePane(props: {
     function createDecoder(): void {
       decoder = new WebCodecsVideoDecoder({ codec: ScrcpyVideoCodecId.H264, renderer });
       decoder.sizeChanged(({ width, height }) => {
-        if ((videoWidth !== width || videoHeight !== height) && activePointer !== null) {
-          activePointer = null;
-          sendControl({ type: "touchUp", x: 0, y: 0, videoWidth, videoHeight, pointerId: 0 });
-        }
+        if (videoWidth !== width || videoHeight !== height) releaseActivePointer();
         videoWidth = width;
         videoHeight = height;
       });
@@ -240,6 +239,24 @@ export function DevicePane(props: {
 
     function sendControl(message: Record<string, unknown>) {
       if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
+    }
+    function sendTouch(type: "touchDown" | "touchMove" | "touchUp", point = lastTouchPoint) {
+      sendControl({
+        type,
+        x: point.x,
+        y: point.y,
+        videoWidth: videoWidth || canvas!.width,
+        videoHeight: videoHeight || canvas!.height,
+        pointerId: 0,
+      });
+    }
+    function releaseActivePointer(point = lastTouchPoint) {
+      if (activePointer === null) return;
+      const pointerId = activePointer;
+      activePointer = null;
+      lastTouchPoint = point;
+      sendTouch("touchUp", point);
+      if (canvas!.hasPointerCapture(pointerId)) canvas!.releasePointerCapture(pointerId);
     }
     sendControlRef.current = sendControl;
 
@@ -386,38 +403,30 @@ export function DevicePane(props: {
       };
     }
 
-    let activePointer: number | null = null;
     const onPointerDown = (event: PointerEvent) => {
       if (activePointer !== null || (event.pointerType === "mouse" && event.button !== 0)) return;
       event.preventDefault();
       activePointer = event.pointerId;
       canvas!.setPointerCapture(event.pointerId);
       canvas!.focus();
-      const { x, y } = canvasPoint(event);
-      sendControl({ type: "touchDown", x, y, videoWidth, videoHeight, pointerId: 0 });
+      lastTouchPoint = canvasPoint(event);
+      sendTouch("touchDown");
     };
     const onPointerMove = (event: PointerEvent) => {
       if (activePointer !== event.pointerId) return;
-      const { x, y } = canvasPoint(event);
-      sendControl({ type: "touchMove", x, y, videoWidth, videoHeight, pointerId: 0 });
+      lastTouchPoint = canvasPoint(event);
+      sendTouch("touchMove");
     };
     const onPointerUp = (event: PointerEvent) => {
       if (activePointer !== event.pointerId) return;
-      activePointer = null;
-      const { x, y } = canvasPoint(event);
-      sendControl({ type: "touchUp", x, y, videoWidth, videoHeight, pointerId: 0 });
-      if (canvas!.hasPointerCapture(event.pointerId))
-        canvas!.releasePointerCapture(event.pointerId);
+      releaseActivePointer(canvasPoint(event));
     };
     const onPointerCancel = (event: PointerEvent) => {
       if (activePointer !== event.pointerId) return;
-      activePointer = null;
-      sendControl({ type: "touchUp", x: 0, y: 0, videoWidth, videoHeight, pointerId: 0 });
+      releaseActivePointer(canvasPoint(event));
     };
     const onWindowBlur = () => {
-      if (activePointer === null) return;
-      activePointer = null;
-      sendControl({ type: "touchUp", x: 0, y: 0, videoWidth, videoHeight, pointerId: 0 });
+      releaseActivePointer();
     };
     const onWheel = (event: WheelEvent) => {
       event.preventDefault();
@@ -484,7 +493,7 @@ export function DevicePane(props: {
       canvas.removeEventListener("contextmenu", onContextMenu);
       canvas.removeEventListener("keydown", onKeyDown);
       if (activePointer !== null) {
-        sendControl({ type: "touchUp", x: 0, y: 0, videoWidth, videoHeight, pointerId: 0 });
+        releaseActivePointer();
       }
       ws?.close();
       disposeDecoder();
@@ -580,7 +589,7 @@ export function DevicePane(props: {
       </div>
       <div className="browser-pane-canvas-wrap">
         <div className={`device-frame${showFrame ? " visible" : ""}`}>
-          <canvas ref={canvasRef} className="browser-pane-canvas" tabIndex={0} />
+          <canvas ref={canvasRef} className="browser-pane-canvas device-pane-canvas" tabIndex={0} />
         </div>
         {lastError && <div className="browser-pane-error-toast">{lastError}</div>}
         {status !== "unsupported" && (status !== "open" || stopped || removed || !hasFrame) && (
