@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.34](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.33...v0.3.34) (2026-09-26)
+
+
+### Features
+
+* **devices:** clipboard sync and copy-screenshot for the AVD panel ([#1436](https://github.com/s3ntin3l8/mullion-session-manager/issues/1436)) ([34a577c](https://github.com/s3ntin3l8/mullion-session-manager/commit/34a577cb103c4a1e0b885de90b477053ee64d398))
+
 ## [0.3.33](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.32...v0.3.33) (2026-09-26)
 
 
