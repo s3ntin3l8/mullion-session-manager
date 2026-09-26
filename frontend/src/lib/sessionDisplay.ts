@@ -30,3 +30,27 @@ export function sessionDisplayTitle(session: Session): string {
 export function sessionMatchesSearch(session: Session, project: Project, query: string): boolean {
   return matchesQuery([sessionDisplayTitle(session), session.command, project.name], query);
 }
+
+export interface ListedSessionOptions {
+  hideEndedSessions: boolean;
+  showTaskSessions: boolean;
+  taskSessionIds: ReadonlySet<number>;
+  // The sidebar's explicit "Exited" chip bypasses hideEndedSessions for its
+  // own selection (see Sidebar.tsx's baseSessionsByProject); the phone
+  // picker has no chips and leaves this unset.
+  includeExited?: boolean;
+}
+
+// The exact "is this session listed at all" predicate Sidebar.tsx has always
+// applied per project (kind === "terminal", not killed, hideEndedSessions,
+// showTaskSessions), extracted so the phone session picker lists precisely
+// the same sessions as the sidebar instead of growing a second copy that
+// could drift. Project membership stays with the caller.
+export function isListedSession(session: Session, opts: ListedSessionOptions): boolean {
+  return (
+    session.kind === "terminal" &&
+    session.status !== "killed" &&
+    (!opts.hideEndedSessions || session.status === "active" || opts.includeExited === true) &&
+    (opts.showTaskSessions || !opts.taskSessionIds.has(session.id))
+  );
+}

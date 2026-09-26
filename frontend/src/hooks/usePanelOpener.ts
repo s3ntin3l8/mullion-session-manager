@@ -6,6 +6,8 @@ import { useDashboardStore } from "../store/index.js";
 import { randomPanelId } from "../random-id.js";
 import {
   findSessionWorkspace,
+  focusPanelForTier,
+  isTiledPanel,
   maximizeIfTiled,
   openDevicePanel,
   openOrFocusProjectPanel,
@@ -223,8 +225,15 @@ export function usePanelOpener({
       leaveTaskView();
       const panelId = `session-${session.id}`;
       const existing = dockviewApi.getPanel(panelId);
-      if (existing) {
-        existing.api.setActive();
+      // Phone can only show a tiled group (maximizeIfTiled skips a float), so
+      // a leftover float from a desktop layout that shrank to phone would be
+      // setActive()d off-screen while the maximized view never changes. Drop
+      // it and fall through to opening a fresh tiled panel; closing only
+      // detaches the view, the session keeps running.
+      const strandedFloat = existing && layout.tier === "phone" && !isTiledPanel(existing);
+      if (existing && strandedFloat) existing.api.close();
+      if (existing && !strandedFloat) {
+        focusPanelForTier(dockviewApi, existing, layout.tier);
         useDashboardStore.getState().triggerPanelHighlight(panelId);
       } else {
         const wsId = findSessionWorkspace(session.id, workspaces);

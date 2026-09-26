@@ -218,6 +218,18 @@ export function maximizeIfTiled(
   if (panel && isTiledPanel(panel)) api.maximizeGroup(panel);
 }
 
+// Activate a panel and, on phone, also bring its group to the front. Phone
+// shows one maximized group at a time, so a bare `setActive()` on a panel in
+// a non-maximized group leaves the user looking at a different pane than the
+// one they asked for; the phone paths that used to do exactly that
+// (auto-focus on attention, re-opening an already-open session, the
+// post-workspace-switch highlight) go through here. Desktop/tablet behave
+// exactly as a bare `setActive()` always did.
+export function focusPanelForTier(api: DockviewApi, panel: IDockviewPanel, tier: LayoutTier): void {
+  panel.api.setActive();
+  if (tier === "phone") maximizeIfTiled(api, panel);
+}
+
 // dockview's own DEFAULT_FLOATING_GROUP_POSITION is a bare 300x300
 // (constants.js) — comfortably enough for chrome-only panels, but a
 // terminal panel's xterm instance fits inside that at well under

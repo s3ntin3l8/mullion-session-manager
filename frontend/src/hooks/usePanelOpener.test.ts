@@ -127,6 +127,48 @@ describe("usePanelOpener — onOpenSession", () => {
     expect(setSidebarOpen).toHaveBeenCalledWith(false);
   });
 
+  it("maximizes an already-open panel on phone, but only activates it elsewhere", () => {
+    const phoneApi = mockDockviewApi();
+    phoneApi.addPanel({ id: "session-1", component: "terminal", params: {} });
+    setup({ dockviewApi: phoneApi, layout: PHONE_LAYOUT }).result.current.onOpenSession(SESSION);
+    expect(phoneApi.maximizeGroup).toHaveBeenCalledWith(phoneApi.getPanel("session-1"));
+
+    const desktopApi = mockDockviewApi();
+    desktopApi.addPanel({ id: "session-1", component: "terminal", params: {} });
+    setup({ dockviewApi: desktopApi }).result.current.onOpenSession(SESSION);
+    expect(desktopApi.getPanel("session-1")!.api.setActive).toHaveBeenCalled();
+    expect(desktopApi.maximizeGroup).not.toHaveBeenCalled();
+  });
+
+  it("on phone, replaces a stranded floating panel with a fresh tiled one; elsewhere keeps the float", () => {
+    const phoneApi = mockDockviewApi();
+    const float = phoneApi.addPanel({
+      id: "session-1",
+      component: "terminal",
+      params: {},
+      floating: true,
+    });
+    // Real dockview drops a closed panel from getPanel; the shared mock doesn't.
+    float.api.close = vi.fn(() => {
+      vi.mocked(phoneApi.getPanel).mockReturnValue(undefined);
+    });
+    const phone = setup({ dockviewApi: phoneApi, layout: PHONE_LAYOUT });
+    phone.result.current.onOpenSession(SESSION);
+    expect(float.api.close).toHaveBeenCalled();
+    expect(phoneApi.addPanel).toHaveBeenCalledTimes(2);
+
+    const desktopApi = mockDockviewApi();
+    const deskFloat = desktopApi.addPanel({
+      id: "session-1",
+      component: "terminal",
+      params: {},
+      floating: true,
+    });
+    setup({ dockviewApi: desktopApi }).result.current.onOpenSession(SESSION);
+    expect(deskFloat.api.close).not.toHaveBeenCalled();
+    expect(deskFloat.api.setActive).toHaveBeenCalled();
+  });
+
   it("switches workspace and highlights (not opens locally) when the session's panel lives elsewhere", () => {
     const api = mockDockviewApi();
     const otherWorkspace = makeWorkspace({

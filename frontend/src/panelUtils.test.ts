@@ -13,6 +13,7 @@ import {
   isTiledGroup,
   isTiledPanel,
   maximizeIfTiled,
+  focusPanelForTier,
   stripFloatingPanels,
   stripMaximizedNode,
   stripHiddenHeaders,
@@ -1036,6 +1037,40 @@ describe("maximizeIfTiled", () => {
 
     expect(() => maximizeIfTiled(api, undefined)).not.toThrow();
 
+    expect(api.maximizeGroup).not.toHaveBeenCalled();
+  });
+});
+
+describe("focusPanelForTier", () => {
+  it("activates and maximizes a tiled panel on phone", () => {
+    const api = mockDockviewApi();
+    const panel = mockPanel("session-1", "grid")!;
+
+    focusPanelForTier(api, panel, "phone");
+
+    expect(panel.api.setActive).toHaveBeenCalled();
+    expect(api.maximizeGroup).toHaveBeenCalledWith(panel);
+  });
+
+  it("only activates on tablet and desktop — never maximizes", () => {
+    for (const tier of ["tablet", "desktop"] as const) {
+      const api = mockDockviewApi();
+      const panel = mockPanel("session-1", "grid")!;
+
+      focusPanelForTier(api, panel, tier);
+
+      expect(panel.api.setActive).toHaveBeenCalled();
+      expect(api.maximizeGroup).not.toHaveBeenCalled();
+    }
+  });
+
+  it("does not maximize (or throw for) a floating panel on phone", () => {
+    const api = mockDockviewApi();
+    const panel = mockPanel("session-1", "floating")!;
+
+    expect(() => focusPanelForTier(api, panel, "phone")).not.toThrow();
+
+    expect(panel.api.setActive).toHaveBeenCalled();
     expect(api.maximizeGroup).not.toHaveBeenCalled();
   });
 });
