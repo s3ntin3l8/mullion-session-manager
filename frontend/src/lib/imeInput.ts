@@ -20,7 +20,17 @@ import type { Terminal } from "@xterm/xterm";
 // itself would fire after them, in registration order). Anything composing is
 // left to xterm.
 const DEL = "\x7f";
-const OWNED_INPUT_TYPES = new Set(["insertText", "insertReplacementText", "deleteContentBackward"]);
+const CR = "\r";
+// Composition edits stay with xterm; everything else that reaches `input`
+// after a swallowed 229 keydown (text, replacements, deletes, line breaks,
+// paste) is reconciled here, since swallowing the keydown removes xterm's own
+// textarea-diff fallback for it.
+const COMPOSITION_INPUT_TYPES = new Set([
+  "insertCompositionText",
+  "insertFromComposition",
+  "deleteCompositionText",
+]);
+const LINE_BREAK_INPUT_TYPES = new Set(["insertLineBreak", "insertParagraph"]);
 
 export function diffEdit(before: string, after: string): { removed: number; inserted: string } {
   const max = Math.min(before.length, after.length);
@@ -45,7 +55,7 @@ export function attachImeInput(term: Pick<Terminal, "input" | "textarea" | "elem
 
   let composing = false;
   // Non-null between an owned `beforeinput` and its `input`.
-  let before: string | null = null;
+  let before: { value: string; inputType: string } | null = null;
 
   const onCompositionStart = (): void => {
     composing = true;
@@ -60,13 +70,20 @@ export function attachImeInput(term: Pick<Terminal, "input" | "textarea" | "elem
   const onBeforeInput = (ev: InputEvent): void => {
     if (!fromTextarea(ev)) return;
     before =
-      !composing && !ev.isComposing && OWNED_INPUT_TYPES.has(ev.inputType) ? textarea.value : null;
+      !composing && !ev.isComposing && !COMPOSITION_INPUT_TYPES.has(ev.inputType)
+        ? { value: textarea.value, inputType: ev.inputType }
+        : null;
   };
   const onInput = (ev: Event): void => {
     if (!fromTextarea(ev) || before === null) return;
-    const prev = before;
+    const { value: prev, inputType } = before;
     before = null;
     ev.stopPropagation();
+    if (LINE_BREAK_INPUT_TYPES.has(inputType)) {
+      // The terminal wants CR, not the textarea's "\n".
+      term.input(CR, true);
+      return;
+    }
     const { removed, inserted } = diffEdit(prev, textarea.value);
     const out = DEL.repeat(removed) + inserted;
     if (out) term.input(out, true);
