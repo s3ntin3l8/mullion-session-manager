@@ -402,6 +402,7 @@ describe("device route (/ws/device/:deviceId)", () => {
         injectText: vi.fn().mockResolvedValue(undefined),
         injectKeyCode: vi.fn().mockResolvedValue(undefined),
         backOrScreenOn: vi.fn().mockResolvedValue(undefined),
+        rotateDevice: vi.fn().mockResolvedValue(undefined),
       };
       const fakeDevice = {
         controller: mockController,
@@ -526,6 +527,9 @@ describe("device route (/ws/device/:deviceId)", () => {
       // 6. back
       socket.emit("message", Buffer.from(JSON.stringify({ type: "back" })), false);
       await vi.waitFor(() => expect(mockController.backOrScreenOn).toHaveBeenCalledTimes(2));
+
+      socket.emit("message", Buffer.from(JSON.stringify({ type: "rotate" })), false);
+      await vi.waitFor(() => expect(mockController.rotateDevice).toHaveBeenCalledTimes(1));
 
       // 7. error handling when controller rejects
       mockController.injectText.mockRejectedValueOnce(new Error("input failed"));

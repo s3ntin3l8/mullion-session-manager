@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { DevicePane } from "./DevicePane.js";
 import type { Device } from "./api/index.js";
@@ -134,6 +134,7 @@ describe("DevicePane (issue #1326)", () => {
     ({ fetchMock, unexpectedCalls } = mockFetch({
       "GET /api/devices": () => jsonResponse(200, []),
       "POST /api/devices/:id/start": () => jsonResponse(200, makeDevice({ status: "active" })),
+      "POST /api/devices/:id/action": () => jsonResponse(200, { screenshot: "iVBORw0KGgo=" }),
     }));
     vi.stubGlobal("fetch", fetchMock);
   });
@@ -152,6 +153,108 @@ describe("DevicePane (issue #1326)", () => {
     // Not the generic dead-end: no "Disconnected"/"Retry now" for a state
     // retrying can never fix.
     expect(screen.queryByText("Disconnected")).not.toBeInTheDocument();
+  });
+
+  it("forwards a complete bottom-edge swipe and exposes Android navigation controls", async () => {
+    resetStore({ devices: [makeDevice()], devicesLoaded: true });
+    render(<DevicePane params={{ deviceId: 7 }} />);
+    const socket = FakeWebSocket.instances[0];
+    act(() => socket.open());
+    const canvas = document.querySelector("canvas")!;
+    Object.defineProperty(canvas, "setPointerCapture", { value: vi.fn() });
+    Object.defineProperty(canvas, "hasPointerCapture", { value: () => false });
+    vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 300,
+      bottom: 600,
+      width: 300,
+      height: 600,
+      toJSON: () => ({}),
+    });
+    const pointer = (type: string, y: number) => {
+      const event = new Event(type, { bubbles: true, cancelable: true });
+      Object.assign(event, {
+        pointerId: 1,
+        pointerType: "touch",
+        button: 0,
+        clientX: 150,
+        clientY: y,
+      });
+      act(() => canvas.dispatchEvent(event));
+    };
+    pointer("pointerdown", 590);
+    pointer("pointermove", 300);
+    pointer("pointerup", 20);
+    expect(socket.sent.map((entry) => JSON.parse(entry))).toEqual([
+      expect.objectContaining({ type: "touchDown", y: 147.5 }),
+      expect.objectContaining({ type: "touchMove", y: 75 }),
+      expect.objectContaining({ type: "touchUp", y: 5 }),
+    ]);
+
+    const homeButton = screen.getByRole("button", { name: "Home" });
+    expect(homeButton).toBeEnabled();
+    fireEvent.click(homeButton);
+    expect(socket.sent.slice(-2).map((entry) => JSON.parse(entry))).toEqual([
+      { type: "keyEvent", androidKeyCode: 3, action: "down" },
+      { type: "keyEvent", androidKeyCode: 3, action: "up" },
+    ]);
+    expect(screen.getByRole("button", { name: "Recent apps" })).toBeEnabled();
+  });
+
+  it("sends device toolbar actions, remembers the frame preference, and downloads screenshots", async () => {
+    resetStore({ devices: [makeDevice()], devicesLoaded: true });
+    localStorage.removeItem("mullion-device-frame");
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    const createObjectURL = vi.fn(() => "blob:device-shot");
+    const revokeObjectURL = vi.fn();
+    URL.createObjectURL = createObjectURL;
+    URL.revokeObjectURL = revokeObjectURL;
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    render(<DevicePane params={{ deviceId: 7 }} />);
+    const socket = FakeWebSocket.instances[0];
+    act(() => socket.open());
+
+    for (const name of ["Back", "Home", "Recent apps", "Power", "Volume down", "Volume up"]) {
+      fireEvent.click(screen.getByRole("button", { name }));
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Rotate device" }));
+    const controls = socket.sent.map((entry) => JSON.parse(entry));
+    expect(controls).toEqual([
+      { type: "back" },
+      ...[3, 187, 26, 25, 24].flatMap((androidKeyCode) => [
+        { type: "keyEvent", androidKeyCode, action: "down" },
+        { type: "keyEvent", androidKeyCode, action: "up" },
+      ]),
+      { type: "rotate" },
+    ]);
+
+    expect(screen.getByRole("button", { name: "Hide device frame" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Hide device frame" }));
+    expect(localStorage.getItem("mullion-device-frame")).toBe("off");
+    expect(screen.getByRole("button", { name: "Show device frame" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Take screenshot" }));
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/devices/7/action",
+        expect.objectContaining({ method: "POST", body: JSON.stringify({ action: "screenshot" }) }),
+      ),
+    );
+    await waitFor(() => expect(click).toHaveBeenCalled());
+    expect(createObjectURL).toHaveBeenCalledWith(expect.any(Blob));
+    URL.createObjectURL = originalCreateObjectURL;
+    URL.revokeObjectURL = originalRevokeObjectURL;
+    click.mockRestore();
   });
 
   it("Start posts to /start and reconnects once the row is back", async () => {

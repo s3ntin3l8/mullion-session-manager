@@ -115,8 +115,18 @@ interface BackMessage {
   type: "back";
 }
 
+interface RotateMessage {
+  type: "rotate";
+}
+
 type DeviceInputMessage =
-  TapMessage | TouchMessage | ScrollMessage | TextMessage | KeyEventMessage | BackMessage;
+  | TapMessage
+  | TouchMessage
+  | ScrollMessage
+  | TextMessage
+  | KeyEventMessage
+  | BackMessage
+  | RotateMessage;
 
 function isFiniteNumber(v: unknown): v is number {
   return typeof v === "number" && Number.isFinite(v);
@@ -201,6 +211,8 @@ function parseInputMessage(value: unknown): DeviceInputMessage | null {
     }
     case "back":
       return { type: "back" };
+    case "rotate":
+      return { type: "rotate" };
     default:
       return null;
   }
@@ -285,6 +297,9 @@ async function dispatchInput(device: Device, message: DeviceInputMessage): Promi
     case "back":
       await controller.backOrScreenOn(AndroidKeyEventAction.Down);
       await controller.backOrScreenOn(AndroidKeyEventAction.Up);
+      break;
+    case "rotate":
+      await controller.rotateDevice();
       break;
   }
 }
