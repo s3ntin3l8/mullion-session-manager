@@ -38,6 +38,10 @@ function createModelCatalog(config: {
   file: string;
   args: string[];
   parse: (stdout: string) => string[];
+  // Cache a successful-but-empty parse. Off for CLIs whose output format we
+  // don't control: an unrecognised format would otherwise pin "no models" for
+  // an hour, where an empty result is cheap to retry.
+  cacheEmpty?: boolean;
 }): ModelCatalog {
   let cache: { fetchedAt: number; models: string[] } | null = null;
 
@@ -48,7 +52,11 @@ function createModelCatalog(config: {
 
   async function list(opts: { exec?: ExecFn; now?: () => number } = {}): Promise<string[]> {
     const exec =
-      opts.exec ?? ((file, args, options) => execFileP(file, args, { signal: options.signal }));
+      opts.exec ??
+      // `codex debug models` prints ~0.5 MB of JSON, past execFile's 1 MB
+      // default headroom for comfort; give every catalog room.
+      ((file, args, options) =>
+        execFileP(file, args, { signal: options.signal, maxBuffer: 8 * 1024 * 1024 }));
     const now = opts.now ?? Date.now;
 
     if (cache !== null && now() - cache.fetchedAt < CACHE_TTL_MS) {
@@ -89,7 +97,9 @@ function createModelCatalog(config: {
         }
 
         const models = config.parse(stdout);
-        cache = { fetchedAt: now(), models };
+        if (models.length > 0 || config.cacheEmpty !== false) {
+          cache = { fetchedAt: now(), models };
+        }
         return models;
       } finally {
         clearTimeout(timer);
@@ -124,27 +134,60 @@ const opencodeCatalog = createModelCatalog({
     ).sort(),
 });
 
-// `agy models` prints a "Fetching available models..." header followed by
-// `slug<TAB>Display Name` rows. Only tab-separated rows are models; the slug
-// must also pass the same allowlist the launch path applies, so a value the
-// picker offers is never one `resolveCliModel` would later drop. CLI order is
-// kept — it groups families and tiers, which a sort would scramble.
+// `agy models` prints `slug<whitespace>Display Name` rows on stdout (its
+// "Fetching available models..." header goes to stderr, which execFile keeps
+// separate). Take the first whitespace-delimited column so a change from tabs
+// to spaces doesn't silently empty the list. The slug must also pass the same
+// allowlist the launch path applies, so a value the picker offers is never one
+// `resolveCliModel` would later drop. CLI order is kept — it groups families
+// and tiers, which a sort would scramble.
 const agyCatalog = createModelCatalog({
   file: "agy",
   args: ["models"],
+  cacheEmpty: false,
   parse: (stdout) =>
     Array.from(
       new Set(
         stdout
           .split("\n")
-          .filter((line) => line.includes("\t"))
-          .map((line) => line.split("\t")[0]!.trim())
+          .map((line) => line.trim().split(/\s+/)[0] ?? "")
           .filter((slug) => validateCliModel(slug)),
       ),
     ),
+});
+
+// `codex debug models` prints JSON: { models: [{ slug, visibility, priority }] }.
+// Only `visibility: "list"` entries are user-selectable (the rest are internal,
+// e.g. codex-auto-review); `priority` is Codex's own ordering.
+const codexCatalog = createModelCatalog({
+  file: "codex",
+  args: ["debug", "models"],
+  cacheEmpty: false,
+  parse: (stdout) => {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(stdout);
+    } catch {
+      return [];
+    }
+    const models = (parsed as { models?: unknown } | null)?.models;
+    if (!Array.isArray(models)) return [];
+    const entries = models.filter(
+      (m): m is { slug: string; priority?: number } =>
+        typeof m === "object" &&
+        m !== null &&
+        (m as { visibility?: unknown }).visibility === "list" &&
+        typeof (m as { slug?: unknown }).slug === "string" &&
+        validateCliModel((m as { slug: string }).slug),
+    );
+    entries.sort((a, b) => (a.priority ?? Infinity) - (b.priority ?? Infinity));
+    return Array.from(new Set(entries.map((m) => m.slug)));
+  },
 });
 
 export const listOpenCodeModels = opencodeCatalog.list;
 export const resetOpenCodeModelsCache = opencodeCatalog.reset;
 export const listAgyModels = agyCatalog.list;
 export const resetAgyModelsCache = agyCatalog.reset;
+export const listCodexModels = codexCatalog.list;
+export const resetCodexModelsCache = codexCatalog.reset;

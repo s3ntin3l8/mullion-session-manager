@@ -14,6 +14,7 @@ import { jsonResponse } from "../../test/jsonResponse.js";
 // whether the real route wraps the array or not.
 const MODELS = ["anthropic/claude-sonnet-4-5", "openrouter/minimax-m3"];
 const AGY_MODELS = ["gemini-3.1-pro-high", "claude-sonnet-4-6"];
+const CODEX_MODELS = ["gpt-6-astra", "gpt-5.6-sol"];
 
 describe("Settings -> Models", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
@@ -28,6 +29,9 @@ describe("Settings -> Models", () => {
       }
       if (url === "/api/agy/models" && method === "GET") {
         return Promise.resolve(jsonResponse(200, AGY_MODELS));
+      }
+      if (url === "/api/codex/models" && method === "GET") {
+        return Promise.resolve(jsonResponse(200, CODEX_MODELS));
       }
       if (url === "/api/settings" && method === "PATCH") {
         return Promise.resolve(jsonResponse(200, DEFAULT_SETTINGS));
@@ -90,13 +94,13 @@ describe("Settings -> Models", () => {
   it("PATCHes null when a CLI is set back to its default", async () => {
     const user = userEvent.setup();
     useDashboardStore.setState({
-      settings: { ...DEFAULT_SETTINGS, codex: { defaultModel: "gpt-5.5" } },
+      settings: { ...DEFAULT_SETTINGS, codex: { defaultModel: "gpt-5.6-sol" } },
       settingsLoaded: true,
     });
     render(<ModelsSection />);
 
     const select = screen.getByRole("combobox", { name: "Codex default model" });
-    expect(select).toHaveValue("gpt-5.5");
+    expect(select).toHaveValue("gpt-5.6-sol");
     await user.selectOptions(select, "");
 
     await expectPatch({ codex: { defaultModel: null } });
@@ -295,5 +299,22 @@ describe("Settings -> Models", () => {
     });
 
     await waitFor(() => expect(input).toHaveValue("claude-sonnet-4-6"));
+  });
+
+  it("lists Codex models from the live catalog, falling back to a snapshot when it's empty", async () => {
+    const first = render(<ModelsSection />);
+    const select = screen.getByRole("combobox", { name: "Codex default model" });
+    await waitFor(() =>
+      expect(
+        Array.from(select.querySelectorAll("option")).map((o) => o.getAttribute("value")),
+      ).toEqual(["", ...CODEX_MODELS, "__custom__"]),
+    );
+    first.unmount();
+
+    routeFetch({ "/api/codex/models": () => jsonResponse(200, []) });
+    render(<ModelsSection />);
+    const fallback = screen.getByRole("combobox", { name: "Codex default model" });
+    await waitFor(() => expect(within(fallback).getByText("gpt-6-astra")).toBeInTheDocument());
+    expect(within(fallback).queryByText("gpt-5.5")).not.toBeInTheDocument();
   });
 });

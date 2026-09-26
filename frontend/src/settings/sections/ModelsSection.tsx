@@ -22,13 +22,14 @@ const CLAUDE_MODELS: ModelOption[] = [
   { value: "opusplan[1m]" },
 ];
 
-// Codex's only catalog is an undocumented internal cache file, so this is a
-// snapshot of its current models. Custom… covers anything newer.
-const CODEX_MODELS: ModelOption[] = [
+// Fallback for when `codex debug models` yields nothing (codex missing, or its
+// output format changed). It's a snapshot and will age; the live catalog wins
+// whenever it returns anything, and Custom… covers the rest.
+const CODEX_FALLBACK_MODELS: ModelOption[] = [
   { value: "gpt-6-astra" },
   { value: "gpt-6-sol" },
   { value: "gpt-6-luna" },
-  { value: "gpt-5.5" },
+  { value: "gpt-5.6-sol" },
 ];
 
 const hintStyle = { fontSize: 12, color: "var(--muted)", margin: "4px 0 0", paddingLeft: 6 };
@@ -36,7 +37,7 @@ const hintStyle = { fontSize: 12, color: "var(--muted)", margin: "4px 0 0", padd
 const FLAG_HINT =
   "Adds --model to new sessions and Task Master workers. A task's Model: line overrides it; a launcher command that already passes --model is left alone.";
 
-// Both catalogs are fetched from a CLI that may be missing or have no provider
+// Every catalog is fetched from a CLI that may be missing or have no provider
 // configured — the routes answer 200 [] for that, so only a genuine HTTP/network
 // failure lands in "error". Each catalog loads independently so one failing
 // doesn't blank the other, and the Array.isArray guard keeps a malformed
@@ -62,6 +63,7 @@ export function ModelsSection() {
   const { settings, updateSettings } = useDashboardStore();
   const opencode = useCatalog(api.listOpenCodeModels);
   const agy = useCatalog(api.listAgyModels);
+  const codex = useCatalog(api.listCodexModels);
 
   const setOpencode = (
     key: "implementerModel" | "reviewerModel" | "defaultSmallModel",
@@ -93,7 +95,9 @@ export function ModelsSection() {
         ariaLabel="Codex default model"
         desc="Model for new Codex sessions."
         value={settings.codex?.defaultModel ?? null}
-        options={CODEX_MODELS}
+        options={
+          codex.models.length > 0 ? codex.models.map((value) => ({ value })) : CODEX_FALLBACK_MODELS
+        }
         defaultLabel="Codex default"
         allowCustom
         onChange={(v) => updateSettings({ codex: { defaultModel: v } })}

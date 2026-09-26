@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { listAgyModels, listOpenCodeModels } from "../services/opencode-models.js";
+import { listAgyModels, listCodexModels, listOpenCodeModels } from "../services/opencode-models.js";
 
 export async function opencodeModelsRoute(app: FastifyInstance) {
   app.get("/api/opencode/models", async (_request, reply) => {
@@ -17,5 +17,10 @@ export async function opencodeModelsRoute(app: FastifyInstance) {
   app.get("/api/agy/models", async (_request, reply) => {
     reply.type("application/json");
     return await listAgyModels();
+  });
+
+  app.get("/api/codex/models", async (_request, reply) => {
+    reply.type("application/json");
+    return await listCodexModels();
   });
 }

@@ -11,6 +11,7 @@ vi.mock("../../src/services/opencode-models.js", () => ({
     .fn()
     .mockResolvedValue(["anthropic/claude-sonnet-4-5", "openrouter/minimax-m3"]),
   listAgyModels: vi.fn().mockResolvedValue(["gemini-3.1-pro-high", "claude-sonnet-4-6"]),
+  listCodexModels: vi.fn().mockResolvedValue(["gpt-6-astra", "gpt-5.6-sol"]),
 }));
 
 import { buildApp } from "../../src/app.js";
@@ -40,6 +41,16 @@ describe("GET /api/agy/models", () => {
     const response = await app.inject({ method: "GET", url: "/api/agy/models" });
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual(["gemini-3.1-pro-high", "claude-sonnet-4-6"]);
+    await app.close();
+  });
+});
+
+describe("GET /api/codex/models", () => {
+  it("returns a bare array of model slugs", async () => {
+    const app = await buildApp();
+    const response = await app.inject({ method: "GET", url: "/api/codex/models" });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual(["gpt-6-astra", "gpt-5.6-sol"]);
     await app.close();
   });
 });
