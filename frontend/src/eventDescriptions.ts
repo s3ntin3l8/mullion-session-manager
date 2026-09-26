@@ -871,3 +871,41 @@ export function unreadEventSummary(
     kind: kinds.includes("attention") ? "attention" : kinds.length > 0 ? "exited" : null,
   };
 }
+
+// Phone surfaces (session picker rows/badge, and the phone notifications
+// sheet to come) count unread through this, not unreadEventSummary directly:
+// a muted session contributes nothing, matching the desktop bell's own
+// countUnread — the old phone switcher badge ignored mute, so the two
+// disagreed. Explicit primitives, same shape as unreadEventSummary.
+export function sessionUnreadCount(
+  sessionId: number,
+  events: NotificationEvent[] | undefined,
+  lastSeenSeq: number,
+  dismissedEventKeys: Record<string, true>,
+  muted: boolean,
+): number {
+  if (muted) return 0;
+  return unreadEventSummary(sessionId, events, lastSeenSeq, dismissedEventKeys).count;
+}
+
+// The one definition of "this session needs you", shared by every phone
+// surface that groups or filters on it (the session picker's pinned section
+// and the notifications sheet's "Needs you" filter) so they can't drift into
+// the same disagreement the audit found between the polled `attention`
+// boolean and the event stream. True when the session is flagged `attention`
+// OR has an unread, undismissed attention-kind event (a pending gate,
+// attention, dev-server offer — NOT a plain exit). A muted session never
+// needs you: mute is the user saying "don't bother me about this one".
+export function sessionNeedsYou(
+  session: { id: number; attention: boolean },
+  events: NotificationEvent[] | undefined,
+  lastSeenSeq: number,
+  dismissedEventKeys: Record<string, true>,
+  muted: boolean,
+): boolean {
+  if (muted) return false;
+  if (session.attention) return true;
+  return (
+    unreadEventSummary(session.id, events, lastSeenSeq, dismissedEventKeys).kind === "attention"
+  );
+}
