@@ -186,6 +186,7 @@ export class Device {
   private scrcpyClient: AdbScrcpyClient<AdbScrcpyOptionsLatest<true>> | null = null;
   private videoListeners = new Set<(packet: ScrcpyMediaStreamPacket) => void>();
   private exitListeners = new Set<() => void>();
+  private clipboardListeners = new Set<(text: string) => void>();
   /** Set at the start of spawn(), read (and released) by teardownProcess() —
    * whichever teardown path fires (an in-flight spawn() failing partway
    * through, kill(), or handleExit() after an unexpected scrcpy exit) needs
@@ -564,6 +565,7 @@ export class Device {
 
     void this.scrcpyClient.exited.then(() => this.handleExit());
     void this.pumpVideo();
+    void this.pumpClipboard();
   }
 
   /** Stops the scope, removes the marker, closes the scrcpy/adb connections,
@@ -658,6 +660,38 @@ export class Device {
     }
   }
 
+  /** Drains the device's clipboard stream for the whole life of the scrcpy
+   * session, whether or not a panel is attached. With clipboardAutosync on
+   * (the library default) the device-message loop awaits a push into this
+   * stream; left unread it backs up after a copy or two and stalls every
+   * later device message. Text is fanned out live and deliberately NOT
+   * cached — see onClipboard(). */
+  private async pumpClipboard(): Promise<void> {
+    const stream = this.scrcpyClient?.clipboard;
+    if (!stream) return;
+    const reader = stream.getReader();
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        for (const listener of this.clipboardListeners) {
+          // One throwing listener (e.g. socket.send on a closing socket) must
+          // not end the drain — an undrained stream is the stall this pump
+          // exists to prevent.
+          try {
+            listener(value);
+          } catch {
+            // ignore
+          }
+        }
+      }
+    } catch {
+      // Stream errors surface via `exited` — same as pumpVideo().
+    } finally {
+      reader.releaseLock();
+    }
+  }
+
   private handleExit(): void {
     this.status = "exited";
     for (const listener of this.exitListeners) listener();
@@ -679,6 +713,15 @@ export class Device {
     this.videoListeners.add(listener);
     if (this.lastConfigPacket) listener(this.lastConfigPacket);
     return () => this.videoListeners.delete(listener);
+  }
+
+  /** Subscribes to text the device copies to its own clipboard. Live only —
+   * unlike onVideoPacket there is intentionally no replay to a new
+   * subscriber: replaying a stale value on every reconnect or second panel
+   * would overwrite the user's host clipboard (same bug class as #1251). */
+  onClipboard(listener: (text: string) => void): () => void {
+    this.clipboardListeners.add(listener);
+    return () => this.clipboardListeners.delete(listener);
   }
 
   onExit(listener: () => void): () => void {

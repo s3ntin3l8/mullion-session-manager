@@ -40,6 +40,12 @@ const BACKPRESSURE_MAX_BUFFERED_BYTES = 4 * 1024 * 1024;
 // ignored the request) would otherwise be invisible.
 const KEYFRAME_STALL_MS = 5000;
 
+// scrcpy server's CONTROL_MSG_CLIPBOARD_TEXT_MAX_LENGTH ((1 << 18) - 14):
+// a longer SET_CLIPBOARD payload makes the server drop the message, and an
+// oversized frame risks desyncing the whole control socket, which would kill
+// every later input. Measured in UTF-8 bytes — that's what goes on the wire.
+const CLIPBOARD_MAX_BYTES = (1 << 18) - 14;
+
 // Wire framing for a video packet: [1 byte type][1 byte flags][payload].
 // type: 0 = configuration (SPS/PPS), 1 = data. flags bit0 = keyframe.
 // Deliberately doesn't carry `pts` — see the route's own header on why
@@ -111,6 +117,13 @@ interface KeyEventMessage {
   action: "down" | "up";
 }
 
+/** Host clipboard text to place on the device and paste (scrcpy
+ * SET_CLIPBOARD with paste=true — handles Unicode, unlike `injectText`). */
+interface ClipboardMessage {
+  type: "clipboard";
+  text: string;
+}
+
 interface BackMessage {
   type: "back";
 }
@@ -125,6 +138,7 @@ type DeviceInputMessage =
   | ScrollMessage
   | TextMessage
   | KeyEventMessage
+  | ClipboardMessage
   | BackMessage
   | RotateMessage;
 
@@ -206,6 +220,17 @@ function parseInputMessage(value: unknown): DeviceInputMessage | null {
       const m = v as Partial<KeyEventMessage>;
       if (isFiniteNumber(m.androidKeyCode) && (m.action === "down" || m.action === "up")) {
         return { type: "keyEvent", androidKeyCode: m.androidKeyCode, action: m.action };
+      }
+      return null;
+    }
+    case "clipboard": {
+      const m = v as Partial<ClipboardMessage>;
+      if (
+        typeof m.text === "string" &&
+        m.text.length > 0 &&
+        Buffer.byteLength(m.text, "utf8") <= CLIPBOARD_MAX_BYTES
+      ) {
+        return { type: "clipboard", text: m.text };
       }
       return null;
     }
@@ -293,6 +318,12 @@ async function dispatchInput(device: Device, message: DeviceInputMessage): Promi
         repeat: 0,
         metaState: 0,
       });
+      break;
+    case "clipboard":
+      // sequence 0n = fire-and-forget: a non-zero sequence makes the library
+      // wait for an ACK_CLIPBOARD device message, which we'd rather not
+      // depend on (see Device.pumpClipboard).
+      await controller.setClipboard({ sequence: 0n, paste: true, content: message.text });
       break;
     case "back":
       await controller.backOrScreenOn(AndroidKeyEventAction.Down);
@@ -417,6 +448,14 @@ export async function attachSocketToDevice(
     }
   });
 
+  // Live-only by design (no replay on attach, unlike onVideoPacket's config
+  // packet): a reconnecting or second panel must never overwrite the user's
+  // clipboard with a stale device value — same bug class as #1251.
+  const unsubscribeClipboard = device.onClipboard((text) => {
+    if (closed || socket.readyState !== socket.OPEN) return;
+    socket.send(JSON.stringify({ type: "clipboard", text }));
+  });
+
   socket.on("message", (data, isBinary) => {
     if (closed) return;
     if (isBinary) return;
@@ -443,6 +482,7 @@ export async function attachSocketToDevice(
     clearTimeout(stallTimer);
     unsubscribeVideo();
     unsubscribeExit();
+    unsubscribeClipboard();
     for (const touch of activeTouches.values()) {
       dispatchInput(liveDevice, { ...touch, type: "touchUp" }).catch((err) => {
         app.log.warn({ err, deviceId }, "device touch release on socket close failed");
