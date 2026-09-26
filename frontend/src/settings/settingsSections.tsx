@@ -15,6 +15,7 @@ import {
   LayersIcon,
   ServerRackIcon,
   SkillIcon,
+  StarIcon,
   TerminalPromptIcon,
 } from "../ui/icons.js";
 
@@ -26,6 +27,7 @@ export type SettingsSection =
   | "notifications"
   | "sessions"
   | "launchers"
+  | "models"
   | "agent-context"
   | "tasks"
   | "projects"
@@ -41,7 +43,6 @@ export type SettingsSection =
 // value (a saved link, a test) — it resolves to the section that now hosts
 // that content instead of crashing on a missing entry.
 const LEGACY_SECTION_ALIASES = {
-  models: "launchers",
   skills: "agent-context",
 } as const satisfies Record<string, SettingsSection>;
 
@@ -110,8 +111,15 @@ export const SECTIONS: Array<{
     id: "launchers",
     group: "Sessions & agents",
     title: "Agents",
-    desc: "Detected CLIs, launcher defaults, and opencode models.",
+    desc: "Detected CLIs and launcher defaults.",
     icon: (size) => <BoltIcon size={size} />,
+  },
+  {
+    id: "models",
+    group: "Sessions & agents",
+    title: "Models",
+    desc: "Default model for each agent CLI.",
+    icon: (size) => <StarIcon size={size} />,
   },
   {
     id: "agent-context",
@@ -228,7 +236,10 @@ export const SEARCH_INDEX: Array<{ section: SettingsSection; text: string }> = [
   { section: "launchers", text: "default shell" },
   { section: "launchers", text: "default agent" },
   { section: "launchers", text: "global launchers manage actions" },
-  { section: "launchers", text: "opencode models implementer reviewer small model" },
+  { section: "models", text: "default model claude code opus sonnet haiku fable opusplan" },
+  { section: "models", text: "codex model gpt" },
+  { section: "models", text: "agy antigravity gemini model" },
+  { section: "models", text: "opencode models implementer reviewer small model" },
   { section: "agent-context", text: "inject agent guide session start context" },
   { section: "agent-context", text: "inject project briefing pinned note" },
   { section: "agent-context", text: "workflow conventions wizard branching merge review policy" },

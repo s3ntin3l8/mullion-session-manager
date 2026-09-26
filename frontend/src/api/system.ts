@@ -79,4 +79,5 @@ export const systemApi = {
     request<{ output: string }>("/api/storage/docker/prune", { method: "POST" }),
 
   listOpenCodeModels: () => request<string[]>("/api/opencode/models"),
+  listAgyModels: () => request<string[]>("/api/agy/models"),
 };

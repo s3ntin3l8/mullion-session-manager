@@ -196,15 +196,17 @@ export function Dropdown<T extends string>({
   value,
   onChange,
   small = false,
+  ariaLabel,
 }: {
   options: Array<{ value: T; label: string }>;
   value: T;
   onChange: (v: T) => void;
   small?: boolean;
+  ariaLabel?: string;
 }) {
   return (
     <div className={`settings-dropdown${small ? " small" : ""}`}>
-      <select value={value} onChange={(e) => onChange(e.target.value as T)}>
+      <select aria-label={ariaLabel} value={value} onChange={(e) => onChange(e.target.value as T)}>
         {options.map((opt) => (
           <option key={opt.value} value={opt.value}>
             {opt.label}

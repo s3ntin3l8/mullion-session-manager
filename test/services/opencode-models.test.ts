@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
+  listAgyModels,
   listOpenCodeModels,
+  resetAgyModelsCache,
   resetOpenCodeModelsCache,
 } from "../../src/services/opencode-models.js";
 
@@ -124,5 +126,52 @@ describe("listOpenCodeModels", () => {
       "opencode-go/minimax-m3",
     ]);
     expect(exec).toHaveBeenCalledTimes(2);
+  });
+});
+
+const AGY_OUTPUT = `Fetching available models...
+gemini-3.8-flash-high\tGemini 3.8 Flash (High)
+gemini-3.1-pro-low\tGemini 3.1 Pro (Low)
+claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)
+gemini-3.1-pro-low\tGemini 3.1 Pro (Low)
+-bad-flag\tLooks like an option
+has space\tNot a valid slug
+`;
+
+describe("listAgyModels", () => {
+  beforeEach(() => {
+    resetAgyModelsCache();
+    resetOpenCodeModelsCache();
+  });
+
+  it("parses `agy models` rows, skipping the header and invalid slugs, in CLI order", async () => {
+    const exec = vi.fn().mockResolvedValue({ stdout: AGY_OUTPUT, stderr: "" });
+    const result = await listAgyModels({ exec });
+    expect(exec).toHaveBeenCalledWith(
+      "agy",
+      ["models"],
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(result).toEqual(["gemini-3.8-flash-high", "gemini-3.1-pro-low", "claude-sonnet-4-6"]);
+  });
+
+  it("returns [] when agy is missing, and does not cache the failure", async () => {
+    const exec = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("ENOENT"))
+      .mockResolvedValueOnce({ stdout: AGY_OUTPUT, stderr: "" });
+    expect(await listAgyModels({ exec })).toEqual([]);
+    expect(await listAgyModels({ exec })).toHaveLength(3);
+    expect(exec).toHaveBeenCalledTimes(2);
+  });
+
+  it("caches independently of the opencode catalog", async () => {
+    const agyExec = vi.fn().mockResolvedValue({ stdout: AGY_OUTPUT, stderr: "" });
+    const ocExec = vi.fn().mockResolvedValue({ stdout: REAL_OUTPUT, stderr: "" });
+    await listAgyModels({ exec: agyExec });
+    await listOpenCodeModels({ exec: ocExec });
+    await listAgyModels({ exec: agyExec });
+    expect(agyExec).toHaveBeenCalledTimes(1);
+    expect(ocExec).toHaveBeenCalledTimes(1);
   });
 });
