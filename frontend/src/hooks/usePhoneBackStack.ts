@@ -36,9 +36,16 @@ function ensureGuard(): void {
   guardPushed = true;
 }
 
-function onPopState(): void {
+function onPopState(event: PopStateEvent): void {
   if (ignoredPops > 0) {
     ignoredPops -= 1;
+    return;
+  }
+  // Landing ON the guard entry (a forward navigation, or external history
+  // manipulation, onto one we'd already consumed) is not a back press: the
+  // guard is simply present again, so reconcile instead of popping an overlay.
+  if ((event.state as { mullionPhoneOverlay?: boolean } | null)?.mullionPhoneOverlay) {
+    guardPushed = true;
     return;
   }
   // The browser already consumed the guard entry.

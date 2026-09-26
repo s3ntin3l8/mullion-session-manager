@@ -7,6 +7,13 @@ let pushState: ReturnType<typeof vi.spyOn>;
 let back: ReturnType<typeof vi.spyOn>;
 
 const pop = () => act(() => void window.dispatchEvent(new PopStateEvent("popstate")));
+const landOnGuard = () =>
+  act(
+    () =>
+      void window.dispatchEvent(
+        new PopStateEvent("popstate", { state: { mullionPhoneOverlay: true } }),
+      ),
+  );
 const flushTimers = () => act(() => void vi.runAllTimers());
 
 beforeEach(() => {
@@ -124,5 +131,17 @@ describe("usePhoneBackStack", () => {
     expect(closeTasks).not.toHaveBeenCalled();
     pop();
     expect(closeTasks).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats landing on the guard entry (forward navigation) as reconciliation, not a back press", () => {
+    const close = vi.fn();
+    renderHook(() => usePhoneBackStack(true, close));
+    pop();
+    expect(close).toHaveBeenCalledTimes(1);
+    // The overlay reopens, then a forward nav lands on the old guard entry.
+    const again = vi.fn();
+    renderHook(() => usePhoneBackStack(true, again));
+    landOnGuard();
+    expect(again).not.toHaveBeenCalled();
   });
 });
