@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.33](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.32...v0.3.33) (2026-09-26)
+
+
+### Features
+
+* improve AVD panel controls and gestures ([#1419](https://github.com/s3ntin3l8/mullion-session-manager/issues/1419)) ([d83a28d](https://github.com/s3ntin3l8/mullion-session-manager/commit/d83a28d48b1d51a26326c710e912f1e90b5b0bd1))
+
 ## [0.3.32](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.31...v0.3.32) (2026-09-26)
 
 
