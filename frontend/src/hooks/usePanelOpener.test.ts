@@ -127,6 +127,19 @@ describe("usePanelOpener — onOpenSession", () => {
     expect(setSidebarOpen).toHaveBeenCalledWith(false);
   });
 
+  it("maximizes an already-open panel on phone, but only activates it elsewhere", () => {
+    const phoneApi = mockDockviewApi();
+    phoneApi.addPanel({ id: "session-1", component: "terminal", params: {} });
+    setup({ dockviewApi: phoneApi, layout: PHONE_LAYOUT }).result.current.onOpenSession(SESSION);
+    expect(phoneApi.maximizeGroup).toHaveBeenCalledWith(phoneApi.getPanel("session-1"));
+
+    const desktopApi = mockDockviewApi();
+    desktopApi.addPanel({ id: "session-1", component: "terminal", params: {} });
+    setup({ dockviewApi: desktopApi }).result.current.onOpenSession(SESSION);
+    expect(desktopApi.getPanel("session-1")!.api.setActive).toHaveBeenCalled();
+    expect(desktopApi.maximizeGroup).not.toHaveBeenCalled();
+  });
+
   it("switches workspace and highlights (not opens locally) when the session's panel lives elsewhere", () => {
     const api = mockDockviewApi();
     const otherWorkspace = makeWorkspace({

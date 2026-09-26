@@ -47,7 +47,11 @@ import { buildHierarchicalRows, liveChildCount } from "./sidebarHierarchy.js";
 import { SourceControlSection } from "./SourceControlSection.js";
 import { columnForSession } from "./kanban.js";
 import type { KanbanColumnId } from "./kanban.js";
-import { sessionDisplayTitle, sessionMatchesSearch } from "./lib/sessionDisplay.js";
+import {
+  isListedSession,
+  sessionDisplayTitle,
+  sessionMatchesSearch,
+} from "./lib/sessionDisplay.js";
 import { summarizeFileChanges } from "./lib/sidebarStatus.js";
 import { estimateSidebarRowHeight } from "./lib/sidebarRowSizing.js";
 import { Header } from "./session-row/Header.js";
@@ -253,10 +257,12 @@ export function Sidebar({
         sessions.filter(
           (s) =>
             s.projectId === project.id &&
-            s.kind === "terminal" &&
-            s.status !== "killed" &&
-            (!hideEndedSessions || s.status === "active" || selectedChips.has("exited")) &&
-            (showTaskSessions || !taskSessionIds.has(s.id)),
+            isListedSession(s, {
+              hideEndedSessions,
+              showTaskSessions,
+              taskSessionIds,
+              includeExited: selectedChips.has("exited"),
+            }),
         ),
       );
     }

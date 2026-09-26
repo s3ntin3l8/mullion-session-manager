@@ -6,6 +6,7 @@ import { useDashboardStore } from "../store/index.js";
 import { randomPanelId } from "../random-id.js";
 import {
   findSessionWorkspace,
+  focusPanelForTier,
   maximizeIfTiled,
   openDevicePanel,
   openOrFocusProjectPanel,
@@ -224,7 +225,7 @@ export function usePanelOpener({
       const panelId = `session-${session.id}`;
       const existing = dockviewApi.getPanel(panelId);
       if (existing) {
-        existing.api.setActive();
+        focusPanelForTier(dockviewApi, existing, layout.tier);
         useDashboardStore.getState().triggerPanelHighlight(panelId);
       } else {
         const wsId = findSessionWorkspace(session.id, workspaces);
