@@ -36,12 +36,17 @@ pixels can show, so the stream is bounded by default:
 
 Host GPU rendering can work without a physical display, but the emulator still
 needs a GL/EGL display. The usual headless setup runs a virtual Wayland
-compositor with GL rendering and Xwayland, then makes its display available to
-the Mullion service through `WAYLAND_DISPLAY` and `DISPLAY`. The emulator also
-needs access to the host GPU's render device (typically under `/dev/dri`) and
-the matching host graphics driver and GL/EGL libraries. Container and virtual
-machine deployments may need to pass through the render device and graphics
-libraries explicitly; the exact setup depends on the host and its GPU driver.
+compositor with GL rendering and Xwayland. `WAYLAND_DISPLAY` names the
+compositor's Wayland socket; the emulator's `-gpu host` GLX renderer connects
+to Xwayland through `DISPLAY`. Make Xwayland's `DISPLAY` available in the
+Mullion service environment. Mullion launches the emulator with
+`systemd-run --user --scope`, so a variable exported only in an interactive
+shell will not necessarily reach the running service. The emulator also needs
+access to the host GPU's render device (typically under `/dev/dri`) and the
+matching host graphics driver and GL/EGL libraries. Container and virtual
+machine deployments may need to pass through the render device and make the
+graphics libraries available explicitly; the exact setup depends on the host
+and its GPU driver.
 
 Once the host display and GPU are available to Mullion, set
 `DEVICE_EMULATOR_GPU=host` and restart the service. Confirm that the emulator
