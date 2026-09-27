@@ -172,6 +172,24 @@ describe("attachImeInput against a real xterm Terminal", () => {
     expect(spy).not.toHaveBeenCalled();
   });
 
+  it("disarms on a real paste event, so a stray 229 with no edit can't make it double-send", () => {
+    attachImeInput(term);
+    keydown229(ta); // e.g. Gboard's own arrow key: a 229 with no edit of its own
+    ta.dispatchEvent(new Event("paste", { bubbles: true })); // always precedes its beforeinput
+    const spy = vi.spyOn(term, "input");
+    ta.dispatchEvent(
+      new InputEvent("beforeinput", {
+        inputType: "insertFromPaste",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    ta.value = "XYZ";
+    ta.dispatchEvent(new InputEvent("input", { inputType: "insertFromPaste", bubbles: true }));
+    vi.runAllTimers();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
   it("recovers from a composition cut off by blur", () => {
     attachImeInput(term);
     ta.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));

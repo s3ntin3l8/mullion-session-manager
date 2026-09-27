@@ -77,6 +77,15 @@ export function attachImeInput(term: Pick<Terminal, "input" | "textarea" | "elem
     armed = false;
     before = null;
   };
+  // A stray 229 keydown announces no edit of its own (Gboard's arrow keys fire
+  // one with no beforeinput), which would leave `armed` set until whatever
+  // happens next. A real clipboard paste fires its own `paste` event — which
+  // always precedes its beforeinput — before xterm's paste listener sends the
+  // text; without this, this gate would then also own that paste's
+  // insertFromPaste and send the same text a second time.
+  const onPaste = (): void => {
+    armed = false;
+  };
   const fromTextarea = (ev: Event): boolean => ev.target === textarea;
   const onKeyDown = (ev: KeyboardEvent): void => {
     if (!fromTextarea(ev) || ev.keyCode !== 229 || composing) return;
@@ -113,6 +122,7 @@ export function attachImeInput(term: Pick<Terminal, "input" | "textarea" | "elem
   root.addEventListener("compositionstart", onCompositionStart, opts);
   root.addEventListener("compositionend", onCompositionEnd, opts);
   root.addEventListener("blur", onBlur, opts);
+  root.addEventListener("paste", onPaste, opts);
   root.addEventListener("keydown", onKeyDown, opts);
   root.addEventListener("beforeinput", onBeforeInput as EventListener, opts);
   root.addEventListener("input", onInput, opts);
