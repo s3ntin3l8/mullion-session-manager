@@ -234,22 +234,33 @@ describe("cursors/seen frames (issue #1427)", () => {
     instances[0].__open();
 
     instances[0].__message(
-      JSON.stringify({ type: "cursors", cursors: { "5": { seen: 7, head: 20 } } }),
+      JSON.stringify({
+        type: "cursors",
+        bootId: "boot-1",
+        cursors: { "5": { seen: 7, head: 20 } },
+      }),
     );
 
     expect(useDashboardStore.getState().lastSeenSeq[5]).toBe(7);
     stop();
   });
 
-  it("restart: local sitting above the server's head is not treated as ahead — adopts the server's cursor", () => {
+  it("first-ever cursors frame this page load: local above the server's head falls back to the numeric restart heuristic", () => {
     useDashboardStore.setState({ lastSeenSeq: { 5: 50 } });
     const stop = useDashboardStore.getState().startEventsStream();
     instances[0].__open();
 
     // The server has only ever emitted up to seq 10 in this process's
     // lifetime — a local cursor of 50 can only mean the server restarted.
+    // This is the very first cursors frame this store has ever seen, so
+    // there's no prior bootId to compare against — mergeServerCursor's own
+    // numeric heuristic is what catches this case.
     instances[0].__message(
-      JSON.stringify({ type: "cursors", cursors: { "5": { seen: 2, head: 10 } } }),
+      JSON.stringify({
+        type: "cursors",
+        bootId: "boot-1",
+        cursors: { "5": { seen: 2, head: 10 } },
+      }),
     );
 
     expect(useDashboardStore.getState().lastSeenSeq[5]).toBe(2);
@@ -262,10 +273,55 @@ describe("cursors/seen frames (issue #1427)", () => {
     instances[0].__open();
 
     instances[0].__message(
-      JSON.stringify({ type: "cursors", cursors: { "5": { seen: 1, head: 1 } } }),
+      JSON.stringify({ type: "cursors", bootId: "boot-1", cursors: { "5": { seen: 1, head: 1 } } }),
     );
 
     expect(useDashboardStore.getState().lastSeenSeq[9]).toBe(40);
+    stop();
+  });
+
+  it("confirmed restart (changed bootId): adopts the server's cursor even once its new head has caught up past the old local value", () => {
+    // The scenario the numeric-only heuristic alone can't catch: a fully-
+    // read local cursor of 5, then the backend restarts and re-emits 10
+    // brand-new events before this tab reconnects. local(5) is NOT above
+    // the new head(10), so mergeServerCursor's own check would wrongly
+    // take max(5, 0) = 5, treating those 10 new events as already read.
+    // The changed bootId removes the ambiguity outright.
+    const stop = useDashboardStore.getState().startEventsStream();
+    instances[0].__open();
+    instances[0].__message(
+      JSON.stringify({ type: "cursors", bootId: "boot-1", cursors: { "5": { seen: 5, head: 5 } } }),
+    );
+    expect(useDashboardStore.getState().lastSeenSeq[5]).toBe(5);
+
+    instances[0].__message(
+      JSON.stringify({
+        type: "cursors",
+        bootId: "boot-2",
+        cursors: { "5": { seen: 0, head: 10 } },
+      }),
+    );
+    expect(useDashboardStore.getState().lastSeenSeq[5]).toBe(0);
+
+    stop();
+  });
+
+  it("same bootId across two cursors frames uses the normal (non-adopting) merge", () => {
+    const stop = useDashboardStore.getState().startEventsStream();
+    instances[0].__open();
+    instances[0].__message(
+      JSON.stringify({ type: "cursors", bootId: "boot-1", cursors: { "5": { seen: 5, head: 5 } } }),
+    );
+    expect(useDashboardStore.getState().lastSeenSeq[5]).toBe(5);
+
+    // A second frame from the SAME process incarnation reporting a LOWER
+    // seen value must not regress the cursor — this is the ordinary merge
+    // path, not a forced adopt.
+    instances[0].__message(
+      JSON.stringify({ type: "cursors", bootId: "boot-1", cursors: { "5": { seen: 2, head: 8 } } }),
+    );
+    expect(useDashboardStore.getState().lastSeenSeq[5]).toBe(5);
+
     stop();
   });
 

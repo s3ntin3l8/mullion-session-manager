@@ -50,9 +50,16 @@ function isEventsWireMessage(value: unknown): value is NotificationEvent {
 // store/helpers.ts's mergeCursorsFrame for the merge rule this enables).
 // `cursors`' values arrive with string keys (a JSON object can't have
 // numeric keys on the wire) — deliberately left as-is here; the numeric
-// conversion happens once, in mergeCursorsFrame, rather than twice.
+// conversion happens once, in mergeCursorsFrame/adoptServerCursors, rather
+// than twice. `bootId` is a fresh random id generated once per backend
+// process incarnation (PtyManager's own doc comment) — store/slices/
+// events.ts compares it against the last one this connection saw to tell a
+// genuine restart apart from an ordinary reconnect, since raw seq/head
+// numbers alone can't always disambiguate the two (see
+// mergeServerCursor's doc comment).
 export interface CursorsWireMessage {
   type: "cursors";
+  bootId: string;
   cursors: Record<string, { seen: number; head: number }>;
 }
 
@@ -61,6 +68,7 @@ function isCursorsMessage(value: unknown): value is CursorsWireMessage {
     typeof value === "object" &&
     value !== null &&
     (value as { type?: unknown }).type === "cursors" &&
+    typeof (value as { bootId?: unknown }).bootId === "string" &&
     typeof (value as { cursors?: unknown }).cursors === "object" &&
     (value as { cursors?: unknown }).cursors !== null
   );
@@ -94,7 +102,7 @@ export interface ConnectEventsStreamHandlers {
   onEvent: (event: NotificationEvent) => void;
   /** Called once per connection, right after it opens, before any replayed
    * event — see CursorsWireMessage above. */
-  onCursors: (cursors: Record<string, { seen: number; head: number }>) => void;
+  onCursors: (bootId: string, cursors: Record<string, { seen: number; head: number }>) => void;
   /** Called for every live cross-client "seen" broadcast — see
    * SeenWireMessage above. Never called for this connection's own outgoing
    * sendSeen (the server excludes the sender). */
@@ -137,7 +145,7 @@ export function connectEventsStream(handlers: ConnectEventsStreamHandlers): Even
         return;
       }
       if (isCursorsMessage(parsed)) {
-        onCursors(parsed.cursors);
+        onCursors(parsed.bootId, parsed.cursors);
       } else if (isSeenMessage(parsed)) {
         onSeen(parsed.sessionId, parsed.seq);
       } else if (isEventsWireMessage(parsed)) {

@@ -471,4 +471,22 @@ describe("notification events (issue #166)", () => {
       vi.useRealTimers();
     }
   });
+
+  it("PtyManager.bootId is a fresh, non-empty id, distinct per process incarnation", () => {
+    // Issue #1427 — the restart-detection signal sent alongside listCursors
+    // in the `cursors` frame (routes/events.ts). Deterministic per THIS
+    // instance's own lifetime (unchanged across getOrCreate calls) but
+    // distinct from another instance entirely — unlike instanceId, which
+    // is derived from sessionsDir and would collide for the same dir.
+    expect(typeof manager.bootId).toBe("string");
+    expect(manager.bootId).not.toBe("");
+    expect(manager.bootId).toBe(manager.bootId);
+
+    const other = new PtyManager({ sessionsDir: `${sessionsDir}-other` });
+    try {
+      expect(other.bootId).not.toBe(manager.bootId);
+    } finally {
+      other.killAll();
+    }
+  });
 });

@@ -4124,6 +4124,20 @@ export class PtyManager {
   // instance's own `crs-session-*` scopes apart from another Mullion
   // instance's on the same host by dtach socket path, not by unit name.
   private readonly instanceId: string;
+  // Issue #1427 — a fresh, random id generated once per PROCESS INCARNATION
+  // (unlike instanceId above, which is deterministic and stays the same
+  // across restarts of this same sessionsDir). eventSeq/lastSeenSeq are
+  // both ephemeral, in-memory-only counters that silently reset to 0 on
+  // every restart (see Session.eventSeqHead/seenSeq's own doc comments) —
+  // a client comparing raw seq numbers alone can't always tell "the server
+  // restarted" apart from "ordinary continued growth" (a local cursor that
+  // was fully caught up before a restart, if enough new events land before
+  // the client reconnects, can end up numerically BELOW the new head even
+  // though every one of those new events is unread). Included in the
+  // `cursors` frame (routes/events.ts) precisely so the client has a
+  // deterministic, non-numeric signal for "this is a different process
+  // than last time I connected" instead of relying on that heuristic alone.
+  readonly bootId: string = crypto.randomUUID();
   // Issue #271 — see stashSeed()/consumeSeed() below.
   private pendingSeeds = new Map<string, string>();
   // Phase 2 (issue #172) — the ONE shared Unix socket every session in this

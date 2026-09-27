@@ -70,28 +70,32 @@ export function eventKey(sessionId: number, seq: number, ts: number): string {
 }
 
 // Issue #1427's read-cursor merge rule, applied per session id whenever a
-// `cursors` frame arrives (routes/events.ts's attachAggregatedEventsSocket,
-// sent right after connect, before replay) or synced against a *stored*
-// starting point. The server's own read cursor is itself ephemeral — not
+// `cursors` frame arrives from the SAME backend process incarnation as last
+// time (or the very first frame this page load has ever seen) — see
+// adoptServerCursors below for the confirmed-restart branch, and
+// store/slices/events.ts's onCursors handler for which one a given frame
+// actually takes. The server's own read cursor is itself ephemeral — not
 // persisted, see pty-manager.ts's Session.seenSeq doc comment — so this
 // can't simply always trust the server's value (that would regress a
 // cursor this same client advanced moments before a brief reconnect) or
 // always trust the local value (that would leave events the server has
 // forgotten about — because it restarted — looking unread forever).
 //
-// `local > server.head` is the restart signal: `head` (the server's own
-// eventSeq) is monotonic and never decreases within one backend process's
-// lifetime (Session.eventSeqHead's doc comment), so a local cursor sitting
-// ABOVE anything the server has ever emitted can only mean the server's
-// own counters reset out from under it — the local cursor's numbering no
-// longer corresponds to anything the server can replay, so the server's
-// value (even though it's numerically lower) is authoritative. Any other
-// case is an ordinary reconnect or a second device's cursor arriving, and
-// the higher of the two wins — this also fixes a pre-existing bug: without
-// this frame at all, a bare reconnect after a backend restart used to
-// leave every already-buffered event looking already-read, because the
-// local cursor (still holding its old, now out-of-range value) was never
-// reconciled against anything.
+// `local > server.head` is a NECESSARY-but-not-sufficient restart signal:
+// `head` (the server's own eventSeq) is monotonic and never decreases
+// within one backend process's lifetime (Session.eventSeqHead's doc
+// comment), so a local cursor sitting ABOVE anything the server has ever
+// emitted can only mean the server's own counters reset out from under it.
+// But the converse doesn't hold — if the server has re-emitted enough new
+// events by the time the client reconnects, the new head can catch up past
+// (or exceed) the old local cursor, and this heuristic alone would then
+// wrongly treat those brand-new events as already read. That's exactly why
+// the `cursors` frame also carries a `bootId`: onCursors uses THAT as the
+// definitive signal and only falls back to this numeric heuristic when
+// bootId confirms it's talking to the same process incarnation as before
+// (where the heuristic can only ever agree with "ordinary reconnect,"
+// never accidentally fire) — see adoptServerCursors for the confirmed-
+// restart path this function is deliberately not responsible for.
 export function mergeServerCursor(local: number, server: { seen: number; head: number }): number {
   if (local > server.head) return server.seen;
   return Math.max(local, server.seen);
@@ -112,6 +116,29 @@ export function mergeCursorsFrame(
     const sessionId = Number(key);
     if (!Number.isFinite(sessionId)) continue;
     next[sessionId] = mergeServerCursor(next[sessionId] ?? 0, server);
+  }
+  return next;
+}
+
+// Issue #1427 — the confirmed-restart branch: onCursors (store/slices/
+// events.ts) calls this instead of mergeCursorsFrame once a `cursors`
+// frame's `bootId` no longer matches the one this connection saw last,
+// proving the backend restarted between reconnects (mergeServerCursor's
+// own doc comment explains why the numeric heuristic alone can't always
+// catch this). Every session mentioned in the frame belongs to a fresh
+// process incarnation, so the server's own `seen` value is authoritative
+// regardless of the numbers involved — adopted directly, not merged via
+// Math.max. Same "absent session stays untouched" posture as
+// mergeCursorsFrame.
+export function adoptServerCursors(
+  lastSeenSeq: Record<number, number>,
+  cursors: Record<string, { seen: number; head: number }>,
+): Record<number, number> {
+  const next = { ...lastSeenSeq };
+  for (const [key, server] of Object.entries(cursors)) {
+    const sessionId = Number(key);
+    if (!Number.isFinite(sessionId)) continue;
+    next[sessionId] = server.seen;
   }
   return next;
 }
@@ -151,15 +178,27 @@ export function capDismissedEventKeys(record: Record<string, true>): Record<stri
 }
 
 // Merges one incoming NotificationEvent into the per-session accumulated
-// list, deduped by seq (a reconnect's replay batch can re-deliver an
+// list, deduped by (seq, ts) (a reconnect's replay batch can re-deliver an
 // event this store already holds — see startEventsStream) and capped at
 // EVENTS_PER_SESSION_CAP, oldest evicted first.
+//
+// Issue #1427: dedupe used to compare `seq` alone, which was correct right
+// up until this same issue made seq collide across a backend restart (see
+// eventKey's own doc comment) — a genuine, brand-new post-restart event can
+// now share a seq with an old, still-buffered pre-restart one. Comparing
+// `seq` alone would treat that as "the same event replayed" and silently
+// drop it — never reaching the notification feed, badge count, or
+// timeline. `ts` (each event's own wall-clock timestamp, immutable once
+// assigned) disambiguates the same way it does for eventKey: a genuine
+// replay of the SAME event carries the SAME ts, so this still dedupes the
+// case the original comment describes, while a same-seq-different-ts pair
+// is now correctly treated as two distinct events.
 export function addEvent(
   events: Record<number, NotificationEvent[]>,
   event: NotificationEvent,
 ): Record<number, NotificationEvent[]> {
   const existing = events[event.sessionId] ?? [];
-  if (existing.some((e) => e.seq === event.seq)) return events;
+  if (existing.some((e) => e.seq === event.seq && e.ts === event.ts)) return events;
   const next = [...existing, event].sort((a, b) => a.seq - b.seq).slice(-EVENTS_PER_SESSION_CAP);
   return { ...events, [event.sessionId]: next };
 }

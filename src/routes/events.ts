@@ -258,17 +258,26 @@ function getSeenSubscribers(app: FastifyInstance): Set<SocketLike> {
  * there is nothing for it to gain from opening upstream relays to every
  * other host just to filter back down to its own single, local session.
  *
- * Issue #1427: also sends a `cursors` frame — `{type:"cursors", cursors:
- * app.pty.listCursors()}` — before anything else (in particular, before
- * attachLocalEventsSocket's own replay below), and broadcasts every
- * genuine "seen" advance to every other currently-open connection of this
- * same kind on this process (see seenSubscribers above). Both are
- * local-only: a remote host's own sessions/cursors never appear here, same
- * scope as attachLocalEventsSocket's own replay.
+ * Issue #1427: also sends a `cursors` frame — `{type:"cursors", bootId:
+ * app.pty.bootId, cursors: app.pty.listCursors()}` — before anything else
+ * (in particular, before attachLocalEventsSocket's own replay below), and
+ * broadcasts every genuine "seen" advance to every other currently-open
+ * connection of this same kind on this process (see seenSubscribers
+ * above). Both are local-only: a remote host's own sessions/cursors never
+ * appear here, same scope as attachLocalEventsSocket's own replay.
+ * `bootId` (PtyManager's own doc comment) is what lets the client tell a
+ * genuine backend restart apart from ordinary continued growth, since raw
+ * seq/head numbers alone can't always disambiguate the two.
  */
 export function attachAggregatedEventsSocket(app: FastifyInstance, socket: SocketLike): void {
   if (socket.readyState === socket.OPEN) {
-    socket.send(JSON.stringify({ type: "cursors", cursors: app.pty.listCursors() }));
+    socket.send(
+      JSON.stringify({
+        type: "cursors",
+        bootId: app.pty.bootId,
+        cursors: app.pty.listCursors(),
+      }),
+    );
   }
 
   const subs = getSeenSubscribers(app);

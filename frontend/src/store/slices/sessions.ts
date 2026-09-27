@@ -2,6 +2,7 @@ import type { StateCreator } from "zustand";
 import { api, AuthExpiredError, RateLimitedError } from "../../api/index.js";
 import { BACKEND_UNREACHABLE_THRESHOLD, LIVE_REFRESH_INTERVAL_MS } from "../constants.js";
 import { pruneDismissedEventKeys, pruneSessionKeyedRecord } from "../helpers.js";
+import { writeDismissedEventKeys } from "../../lib/persistedState.js";
 import type { DashboardState, SessionsSlice } from "../types.js";
 
 // Consecutive failed session-fetches (from any caller — the live poll,
@@ -90,12 +91,25 @@ export const createSessionsSlice: StateCreator<DashboardState, [], [], SessionsS
         // "every session is gone" and wipe event history that's still
         // valid.
         const liveIds = new Set(sessions.map((s) => s.id));
+        // dismissedEventKeys is persisted to localStorage (issue #1427) —
+        // unlike events/lastSeenSeq (in-memory only), a prune here has to
+        // also write through, or a deleted session's dismissed keys just
+        // linger in storage until some unrelated future dismissEvent call
+        // happens to overwrite the whole map. Computed once, outside the
+        // updater, so the `!==` no-op check below (pruneDismissedEventKeys
+        // returns the SAME reference when nothing changed) can skip the
+        // write on the overwhelmingly common case: nothing to prune this
+        // tick.
+        const dismissedEventKeys = pruneDismissedEventKeys(get().dismissedEventKeys, liveIds);
+        if (dismissedEventKeys !== get().dismissedEventKeys) {
+          writeDismissedEventKeys(dismissedEventKeys);
+        }
         set((state) => ({
           sessions,
           sessionsLoaded: true,
           events: pruneSessionKeyedRecord(state.events, liveIds),
           lastSeenSeq: pruneSessionKeyedRecord(state.lastSeenSeq, liveIds),
-          dismissedEventKeys: pruneDismissedEventKeys(state.dismissedEventKeys, liveIds),
+          dismissedEventKeys,
         }));
         if (consecutiveSessionFetchFailures > 0 || !get().backendReachable) {
           consecutiveSessionFetchFailures = 0;

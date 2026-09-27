@@ -2,6 +2,7 @@ import type { StateCreator } from "zustand";
 import { connectEventsStream, type EventsClientHandle } from "../../eventsClient.js";
 import {
   addEvent,
+  adoptServerCursors,
   applyLiveSeen,
   capDismissedEventKeys,
   eventKey,
@@ -33,6 +34,19 @@ export const createEventsSlice: StateCreator<DashboardState, [], [], EventsSlice
   // until then (and after cleanup), matching eventsClient.ts's own
   // "no-op while disconnected" semantics rather than throwing.
   let eventsClientHandle: EventsClientHandle | null = null;
+
+  // Issue #1427 — the bootId this connection last saw in a `cursors` frame
+  // (PtyManager.bootId's own doc comment). Scoped alongside
+  // eventsClientHandle (survives a stop()/start() cycle within the same
+  // page load, resets only on an actual page reload — a fresh module
+  // init) so a reconnect can compare against what THIS tab has already
+  // observed, not just whatever a single connection's lifetime saw. `null`
+  // means "no cursors frame seen yet this page load" — the very first one
+  // is never treated as a restart (there's nothing to compare against, and
+  // a fresh page load's lastSeenSeq already starts empty, so
+  // mergeCursorsFrame's normal path already adopts the server's cursor
+  // wholesale for every session in that case).
+  let knownBootId: string | null = null;
 
   // Issue #673 — fixed-window throttle (not the tasks.ts/github.ts precedent's
   // pure trailing debounce): refreshSessions() is called immediately on the
@@ -116,12 +130,26 @@ export const createEventsSlice: StateCreator<DashboardState, [], [], EventsSlice
           if (!NON_STATUS_EVENT_KINDS.has(event.kind)) onStatusBearingEvent();
         },
         // Issue #1427 — reconcile the local read cursor against the
-        // server's own, per session, via mergeCursorsFrame's restart-aware
-        // merge rule. Arrives once per connection, before any replayed
-        // event, so this always runs before addEvent above has a chance to
-        // make lastSeenSeq's staleness visible as a wrong unread count.
-        onCursors: (cursors) => {
-          set((state) => ({ lastSeenSeq: mergeCursorsFrame(state.lastSeenSeq, cursors) }));
+        // server's own, per session. Arrives once per connection, before
+        // any replayed event, so this always runs before addEvent above
+        // has a chance to make lastSeenSeq's staleness visible as a wrong
+        // unread count.
+        //
+        // A changed bootId (vs. the last cursors frame THIS tab saw) is a
+        // confirmed backend restart — mergeServerCursor's numeric
+        // heuristic alone can't always catch this (see its own doc
+        // comment for the scenario it misses), so that case bypasses it
+        // entirely via adoptServerCursors. Same bootId (including "no
+        // prior bootId at all," the very first frame this page load has
+        // seen) uses the normal merge.
+        onCursors: (bootId, cursors) => {
+          const restarted = knownBootId !== null && knownBootId !== bootId;
+          knownBootId = bootId;
+          set((state) => ({
+            lastSeenSeq: restarted
+              ? adoptServerCursors(state.lastSeenSeq, cursors)
+              : mergeCursorsFrame(state.lastSeenSeq, cursors),
+          }));
         },
         // Issue #1427 — another connection (this tab, another tab, another
         // device) just advanced this session's cursor. Deliberately does
@@ -164,11 +192,17 @@ export const createEventsSlice: StateCreator<DashboardState, [], [], EventsSlice
     dismissEvent: (sessionId, seq) => {
       // ts comes from the buffered event itself (eventKey's own doc
       // comment — needed to disambiguate a (sessionId, seq) pair that
-      // repeats across a backend restart). Every caller dismisses an event
-      // it's currently rendering, i.e. one still present in `events`, so
-      // this should always find it; Date.now() is a harmless fallback for
-      // the theoretical case it doesn't (still dismisses, just without the
-      // restart-disambiguation benefit for that one key).
+      // repeats across a backend restart). Every real call site dismisses
+      // an event it's currently rendering, i.e. one still present in
+      // `events`, so this should always find it. The Date.now() fallback
+      // below is NOT a "still works, just less precisely" degrade — every
+      // real lookup of dismissedEventKeys (NotificationBell.tsx,
+      // SessionTimeline.tsx) keys off the actual event's own ts, which a
+      // synthesized Date.now() will essentially never match — so this path
+      // writes an inert, orphaned entry rather than actually dismissing
+      // anything. It exists purely so a seq this store doesn't (or no
+      // longer) recognizes can't throw or corrupt state; it is not
+      // expected to be exercised by any real caller.
       const ts = get().events[sessionId]?.find((e) => e.seq === seq)?.ts ?? Date.now();
       set((state) => {
         const dismissedEventKeys = capDismissedEventKeys({

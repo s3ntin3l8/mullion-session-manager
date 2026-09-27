@@ -115,6 +115,12 @@ describe("store per-session-id map pruning (P6)", () => {
     expect(state.events).toEqual({ 1: [makeEvent({ sessionId: 1 })] });
     expect(state.lastSeenSeq).toEqual({ 1: 1 });
     expect(state.dismissedEventKeys).toEqual({ [eventKey(1, 1, 1_700_000_000_000)]: true });
+    // Issue #1427 — dismissedEventKeys is persisted; a prune that drops a
+    // gone session's entry must write the pruned result through too, or
+    // the stale entry just lingers in localStorage.
+    expect(localStorage.getItem("crs.dismissedEventKeys")).toBe(
+      JSON.stringify({ [eventKey(1, 1, 1_700_000_000_000)]: true }),
+    );
   });
 
   it("does NOT prune a session that's merely killed — it still appears in the live list", async () => {
@@ -139,6 +145,7 @@ describe("store per-session-id map pruning (P6)", () => {
     const lastSeenSeq = { 1: 1 };
     const dismissedEventKeys = { [eventKey(1, 1, 1_700_000_000_000)]: true as const };
     useDashboardStore.setState({ events, lastSeenSeq, dismissedEventKeys });
+    localStorage.clear();
     vi.spyOn(api, "listSessions").mockResolvedValue([makeSession({ id: 1 })]);
 
     await useDashboardStore.getState().refreshSessions();
@@ -150,6 +157,10 @@ describe("store per-session-id map pruning (P6)", () => {
     expect(state.events).toBe(events);
     expect(state.lastSeenSeq).toBe(lastSeenSeq);
     expect(state.dismissedEventKeys).toBe(dismissedEventKeys);
+    // Issue #1427 — a no-op prune (the overwhelmingly common case, since
+    // this runs on every successful refreshSessions() poll tick) must not
+    // also perform a wasted localStorage write.
+    expect(localStorage.getItem("crs.dismissedEventKeys")).toBeNull();
   });
 
   it("does not prune anything when refreshSessions() fails — a transient outage must not read as every session being gone", async () => {

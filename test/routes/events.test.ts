@@ -265,13 +265,35 @@ describe("events route (/ws/events)", () => {
     await waitUntil(() => raw.length > 0);
     const first = raw[0] as {
       type?: string;
+      bootId?: string;
       cursors?: Record<string, { seen: number; head: number }>;
     };
     expect(first.type).toBe("cursors");
+    expect(typeof first.bootId).toBe("string");
+    expect(first.bootId).not.toBe("");
     expect(first.cursors?.[String(sessionId)]).toEqual({ seen: 0, head: 1 });
 
     ws.close();
   }, 10_000);
+
+  it("sends the same bootId to every connection on this process (issue #1427's restart-detection signal)", async () => {
+    const { app, port } = await buildAndListen();
+    await createProjectAndSession(app);
+
+    const ws1 = new WebSocket(`ws://127.0.0.1:${port}/ws/events`);
+    const ws2 = new WebSocket(`ws://127.0.0.1:${port}/ws/events`);
+    const raw1 = collectRawMessages(ws1);
+    const raw2 = collectRawMessages(ws2);
+    await Promise.all([waitForOpenOrClose(ws1), waitForOpenOrClose(ws2)]);
+    await waitUntil(() => raw1.length > 0 && raw2.length > 0);
+
+    const bootId1 = (raw1[0] as { bootId?: string }).bootId;
+    const bootId2 = (raw2[0] as { bootId?: string }).bootId;
+    expect(bootId1).toBe(bootId2);
+
+    ws1.close();
+    ws2.close();
+  });
 
   it("broadcasts a 'seen' advance to another open connection, but not back to the sender", async () => {
     const { app, port } = await buildAndListen();
@@ -313,10 +335,17 @@ describe("events route (/ws/events)", () => {
     raw2.length = 0;
 
     // A lower/equal seq is a no-op on Session.markEventsSeen (monotonic
-    // only) — must not re-broadcast either.
+    // only) — must not re-broadcast either. Waiting on a bare timer tick
+    // here can't distinguish "correctly didn't broadcast" from "broadcast
+    // still in flight over the real WS round trip" — instead, send a
+    // second, definitely-advancing seq right behind it and wait for THAT
+    // one to arrive, then assert it was the ONLY frame raw2 ever received
+    // (i.e. the no-op seq truly produced nothing, not just something
+    // slow).
     ws1.send(JSON.stringify({ type: "seen", sessionId, seq: 3 }));
-    await new Promise((resolve) => setImmediate(resolve));
-    expect(raw2).toEqual([]);
+    ws1.send(JSON.stringify({ type: "seen", sessionId, seq: 8 }));
+    await waitUntil(() => raw2.some((m) => (m as { type?: string; seq?: number }).seq === 8));
+    expect(raw2).toEqual([{ type: "seen", sessionId, seq: 8 }]);
 
     ws1.close();
     ws2.close();

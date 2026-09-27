@@ -5,6 +5,8 @@
 // the integration-level coverage in store.events.test.ts).
 import { describe, it, expect } from "vitest";
 import {
+  addEvent,
+  adoptServerCursors,
   applyLiveSeen,
   capDismissedEventKeys,
   DISMISSED_EVENT_KEYS_CAP,
@@ -12,6 +14,18 @@ import {
   mergeCursorsFrame,
   mergeServerCursor,
 } from "./helpers.js";
+import type { NotificationEvent } from "../api/index.js";
+
+function event(overrides: Partial<NotificationEvent> = {}): NotificationEvent {
+  return {
+    seq: 1,
+    sessionId: 5,
+    kind: "attention",
+    ts: 1000,
+    payload: {},
+    ...overrides,
+  };
+}
 
 describe("mergeServerCursor (issue #1427)", () => {
   it("takes the higher of local and server when local is within the server's head", () => {
@@ -54,6 +68,41 @@ describe("mergeCursorsFrame (issue #1427)", () => {
   it("parses string keys (the wire's JSON object keys) into numeric session ids", () => {
     const merged = mergeCursorsFrame({}, { "42": { seen: 1, head: 1 } });
     expect(merged).toEqual({ 42: 1 });
+  });
+});
+
+describe("adoptServerCursors (issue #1427)", () => {
+  it("adopts the server's value unconditionally, even when it's lower than local", () => {
+    // The whole point: mergeServerCursor's numeric heuristic can't always
+    // tell a restart apart from ordinary growth once the server's new head
+    // has caught up past the old local cursor — this is the branch that
+    // fires once the cursors frame's bootId itself proves a restart
+    // happened, bypassing that ambiguity entirely.
+    const adopted = adoptServerCursors({ 5: 5 }, { 5: { seen: 0, head: 10 } });
+    expect(adopted).toEqual({ 5: 0 });
+  });
+
+  it("leaves a session absent from the cursors frame untouched", () => {
+    const adopted = adoptServerCursors({ 9: 40 }, { 1: { seen: 5, head: 10 } });
+    expect(adopted).toEqual({ 9: 40, 1: 5 });
+  });
+});
+
+describe("addEvent dedupe across a backend restart (issue #1427)", () => {
+  it("keeps a brand-new post-restart event that happens to share a seq with an old one", () => {
+    // The scenario mergeServerCursor's own doc comment describes: the
+    // server's eventSeq resets to 0 on restart, so a genuinely new event
+    // can collide on seq with something already buffered locally. Deduping
+    // on seq alone (the pre-#1427 behavior) would silently drop this.
+    const before = { 5: [event({ seq: 1, ts: 1000 })] };
+    const after = addEvent(before, event({ seq: 1, ts: 5000 }));
+    expect(after[5]).toHaveLength(2);
+  });
+
+  it("still dedupes a genuine replay of the same event (same seq AND ts)", () => {
+    const before = { 5: [event({ seq: 1, ts: 1000 })] };
+    const after = addEvent(before, event({ seq: 1, ts: 1000 }));
+    expect(after[5]).toHaveLength(1);
   });
 });
 
