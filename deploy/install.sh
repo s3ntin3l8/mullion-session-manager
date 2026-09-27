@@ -326,15 +326,17 @@ EOF
   # first boot than half-wired through install-time flags.
   if [ "${MULLION_INSTALL_TRUST_GATEWAY:-}" = "true" ]; then
     printf 'MULLION_TRUST_GATEWAY=true\n' >>"$MULLION_HOME/.env"
-  elif ! is_blank "${MULLION_INSTALL_AUTH_TOKEN:-}"; then
-    # Hermes review — src/app.ts:130-138 refuses to boot with
+  elif ! is_blank "${MULLION_INSTALL_AUTH_TOKEN:-}" && ! is_blank "${MULLION_INSTALL_SESSION_SECRET:-}"; then
+    # Hermes review (two rounds) — src/app.ts:130-138 refuses to boot with
     # MULLION_AUTH_TOKEN set and MULLION_SESSION_SECRET blank (nothing to
-    # sign a session cookie with); MULLION_INSTALL_AUTH_TOKEN alone used to
-    # trade the no-auth-at-all crash-loop for this one instead. Both or
-    # neither.
+    # sign a session cookie with). Requiring BOTH here, not just writing
+    # AUTH_TOKEN and letting SESSION_SECRET default to blank, means the
+    # WARNING below is the only way this branch ever produces a half-
+    # configured .env — an Ansible role that ships AUTH_TOKEN without
+    # SESSION_SECRET gets neither line written (falls through to the
+    # WARNING) instead of a silently-still-crash-looping "partial success".
     printf 'MULLION_AUTH_TOKEN=%s\n' "$MULLION_INSTALL_AUTH_TOKEN" >>"$MULLION_HOME/.env"
-    printf 'MULLION_SESSION_SECRET=%s\n' "${MULLION_INSTALL_SESSION_SECRET:-}" \
-      >>"$MULLION_HOME/.env"
+    printf 'MULLION_SESSION_SECRET=%s\n' "$MULLION_INSTALL_SESSION_SECRET" >>"$MULLION_HOME/.env"
   fi
   chmod 600 "$MULLION_HOME/.env"
   # Issue #1458 — mirrors app.ts's ACTUAL boot condition (same "must mirror
