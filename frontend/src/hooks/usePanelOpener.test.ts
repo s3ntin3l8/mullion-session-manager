@@ -169,6 +169,42 @@ describe("usePanelOpener — onOpenSession", () => {
     expect(deskFloat.api.setActive).toHaveBeenCalled();
   });
 
+  // #1440 (e) — closing a stranded float used to fall through to the same
+  // findSessionWorkspace lookup the "no existing panel at all" branch uses,
+  // which could switch workspace instead of just re-tiling the panel that
+  // was already right there. `otherWorkspace`'s layout blob also claims
+  // session 1 here, on purpose — proving the fix reopens locally regardless
+  // of what a stale/duplicate blob elsewhere says.
+  it("on phone, reopens a stranded float in place without consulting findSessionWorkspace", () => {
+    const phoneApi = mockDockviewApi();
+    const float = phoneApi.addPanel({
+      id: "session-1",
+      component: "terminal",
+      params: {},
+      floating: true,
+    });
+    float.api.close = vi.fn(() => {
+      vi.mocked(phoneApi.getPanel).mockReturnValue(undefined);
+    });
+    const otherWorkspace = makeWorkspace({
+      id: 2,
+      layout: { sessionId: 1 } as Record<string, unknown>,
+    });
+    const { result } = setup({
+      dockviewApi: phoneApi,
+      layout: PHONE_LAYOUT,
+      workspaces: [makeWorkspace({ id: 1, layout: null }), otherWorkspace],
+      activeWorkspaceId: 1,
+    });
+
+    result.current.onOpenSession(SESSION);
+
+    expect(float.api.close).toHaveBeenCalled();
+    expect(phoneApi.addPanel).toHaveBeenCalledWith(expect.objectContaining({ id: "session-1" }));
+    expect(setActiveWorkspaceId).not.toHaveBeenCalled();
+    expect(triggerPanelHighlight).not.toHaveBeenCalled();
+  });
+
   it("switches workspace and highlights (not opens locally) when the session's panel lives elsewhere", () => {
     const api = mockDockviewApi();
     const otherWorkspace = makeWorkspace({

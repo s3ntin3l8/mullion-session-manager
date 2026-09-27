@@ -228,11 +228,21 @@ export function usePanelOpener({
       // Phone can only show a tiled group (maximizeIfTiled skips a float), so
       // a leftover float from a desktop layout that shrank to phone would be
       // setActive()d off-screen while the maximized view never changes. Drop
-      // it and fall through to opening a fresh tiled panel; closing only
-      // detaches the view, the session keeps running.
+      // it and reopen in place; closing only detaches the view, the session
+      // keeps running.
       const strandedFloat = existing && layout.tier === "phone" && !isTiledPanel(existing);
-      if (existing && strandedFloat) existing.api.close();
-      if (existing && !strandedFloat) {
+      if (strandedFloat) {
+        // #1440 (e) — this used to fall through to the `else` branch below,
+        // which re-derives the session's workspace from the *server*
+        // layout blobs (findSessionWorkspace). `existing` was only found by
+        // asking the live grid for `panelId` in the first place, so the
+        // session already has a panel in whichever workspace is currently
+        // active — there's nothing to look up, and doing so anyway could
+        // switch workspace instead of just re-tiling the float that was
+        // just closed.
+        existing.api.close();
+        openSessionPanel(dockviewApi, session, layout, projects);
+      } else if (existing) {
         focusPanelForTier(dockviewApi, existing, layout.tier);
         useDashboardStore.getState().triggerPanelHighlight(panelId);
       } else {
