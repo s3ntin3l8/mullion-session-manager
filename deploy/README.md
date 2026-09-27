@@ -74,7 +74,7 @@ re-pointed at the next update. `install.sh` writes `.env` with both set to
 absolute paths under `$MULLION_HOME/data/` for exactly this reason — if you
 ever hand-edit `.env`, keep them absolute.
 
-**Applying an update:** once installed, updates go through Settings ->
+**Applying an update:** once installed, updates go through
 Settings → Server's "Update now" button (`POST /api/updates/apply`,
 `src/routes/updates.ts`), not by re-running `install.sh`. That launches
 `scripts/self-update.sh` detached (the same `systemd-run --user --scope`
@@ -130,12 +130,26 @@ enough, since the real gate is the kernel's `unprivileged_userns_clone`
 sysctl or an equivalent policy restriction), `/setup/generate`'s agent
 turn runs inside a real process-level sandbox (`bwrap --ro-bind / /
 --dev /dev --proc /proc --bind <scratch worktree> <scratch worktree>
---die-with-parent`) in addition to the structural guarantee described in
-that file's own header comment. When `bwrap` is absent, or present but not
-usable, generation degrades gracefully to that structural-only guarantee
-(the scratch worktree never feeds the PR pipeline directly), logging a
-one-time warning naming the gap. `install.sh` prints a heads-up note (not
-a failure) when `bwrap` is missing.
+[--bind-try <extra> <extra> ...] --die-with-parent`) in addition to the
+structural guarantee described in that file's own header comment — there is
+no unsandboxed retry once bwrap is usable, only a hard failure for an agent
+whose writable-path needs aren't covered. The bracketed `--bind-try` flags
+are per-agent: `codex` and `opencode` both write to their own state/log
+directories under `$HOME` on every invocation and need an extra writable
+bind for each (`agentSandboxWritablePaths`), and a disposable, per-turn fake
+`$HOME` (bound writable, `HOME` re-pointed at it via `--setenv`) is what
+lets those narrower binds work at all instead of every `$HOME`-relative
+write falling through to the operator's own real `$HOME`. **`agy` fails
+closed rather than degrading**: it runs with `--dangerously-skip-permissions`
+(issue #1130), so bwrap is its _only_ containment, and
+`MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED=false` (`.env.example`) — the
+opt-out that lets the other three agents run unsandboxed when bwrap is
+merely unusable — does not create an escape hatch for agy specifically; it
+still refuses to run unsandboxed either way. When `bwrap` is absent, or
+present but not usable, generation degrades gracefully (for claude/codex/
+opencode) to that structural-only guarantee (the scratch worktree never
+feeds the PR pipeline directly), logging a one-time warning naming the gap.
+`install.sh` prints a heads-up note (not a failure) when `bwrap` is missing.
 
 **Playwright / Chromium (Phase 3, issue #179):** `install.sh` and
 `scripts/self-update.sh` both run `npx playwright install chromium` after
@@ -229,6 +243,41 @@ install's own Traefik container already satisfies that; a bare `make dev`
 checkout with no gateway at all needs either a real credential above or this
 flag.
 
+**The Authentik identity-header chain, once `MULLION_TRUST_GATEWAY=true`.**
+Trusting the gateway isn't just an acknowledgement — this app also reads a
+display-only identity off the request when the gateway forwards one, so
+`GET /api/auth/me` can report _who_ is signed in even with no in-process
+credential at all (see [`docs/auth.md`](../docs/auth.md)). The chain has two
+links, both already templated in `authentik-middleware-example.yml`:
+
+1. **Strip, then set.** The middleware chain there first clears any
+   client-supplied `X-authentik-*` headers (`CHANGEME_STRIP_AUTHENTIK_HEADERS`)
+   before the forwardAuth step runs — otherwise an attacker could just send
+   `X-authentik-uid: admin` directly and have this app trust it.
+2. **forwardAuth's `authResponseHeaders`** then copies Authentik's own
+   trusted `X-authentik-uid`/`-username`/`-name`/`-email` response headers
+   onto the forwarded request. `src/routes/auth.ts` reads these
+   case-insensitively (`x-authentik-uid` gates the other three; each is
+   trimmed and capped at 512 characters) and surfaces them as `/api/auth/me`'s
+   `user` object when `MULLION_TRUST_GATEWAY` is set — display-only, never
+   used for any authorization decision.
+
+If you already have a shared forwardAuth middleware (the common case — see
+"Before installing anything" above) and just reference it by name, confirm
+it also runs this strip-then-set chain; a middleware that skips the strip
+step lets a client spoof the identity headers, and one that skips
+`authResponseHeaders` just means `/api/auth/me`'s `user` stays absent (a
+functionality gap, not a security one).
+
+**`MULLION_GATEWAY_LOGOUT_URL`** (also gated on `MULLION_TRUST_GATEWAY=true`)
+adds a working "Sign out" from Settings → Account for this posture — without
+it, `/api/auth/logout` has nothing to clear (there's no local session under
+trust-the-gateway auth), so the button reports `{kind:"unavailable"}` and
+sign-out has to happen at the IdP directly. Set it to
+`/outpost.goauthentik.io/sign_out` for a single-app Authentik outpost, or an
+absolute URL on the authentication host for a domain-level outpost — see
+[`docs/auth.md`](../docs/auth.md)'s "Network exposure" section.
+
 Separately, `HOST` (`.env.example`) defaults to `127.0.0.1` — this process
 only listens on loopback out of the box, which is exactly what
 `traefik-dynamic.yml`'s own `loadBalancer.servers[].url` above targets
@@ -253,7 +302,9 @@ browser `<iframe>` can't attach a bearer token either, so gating that
 surface with this mechanism would just break every preview once auth is
 turned on. The preview router still needs its own forwardAuth middleware
 (point 4 in that section below) regardless of whether in-process auth is
-enabled for the main dashboard.
+enabled for the main dashboard — **unless** `PREVIEW_AUTH_REQUIRED=true`
+(issue #383) is also set, which closes this gap in-process instead of at
+the gateway (see point 4's own tradeoffs before relying on that instead).
 
 ## Optional: SSH-agent bridge behind a forwardAuth gateway (issues #820, #1072)
 
@@ -284,35 +335,37 @@ only these:
 - `/ws/agent-bridge`
 - `POST /api/bridges/renew`
 
-These match `isProtectedPath`'s own exemptions in `src/plugins/auth.ts`
-(around lines 108 and 116) exactly — both are exact-path matches there, not
-prefix matches — so a router-level exemption that drifts from that in-app
-list either reopens a path the app still expects to gate, or leaves the
-helper unable to reach a path the app already treats as self-authenticating.
-Keep the two lists in sync.
+These match `isProtectedPath`'s own `/ws/agent-bridge` and
+`/api/bridges/renew` exemptions in `src/plugins/auth.ts` exactly — both are
+exact-path matches there, not prefix matches — so a router-level exemption
+that drifts from that in-app list either reopens a path the app still
+expects to gate, or leaves the helper unable to reach a path the app
+already treats as self-authenticating. Keep the two lists in sync.
 
 **Explicitly NOT exempt, and why the shape matters.** `POST /api/bridges`
 (minting a _new_ pairing code) is a Settings-side admin action and stays
 behind the normal gate, same as `POST /api/hosts` — see the comment
 immediately above `isProtectedPath`'s `/ws/agent-bridge` case in
 `src/plugins/auth.ts`. And `/ws/terminal` — a live, interactive PTY — must
-never be reachable through this exemption. That's why the router below
-matches the two exact paths above, not a `PathPrefix('/ws/')` bypass: a
-prefix match on `/ws/` would be the wrong shape precisely because it would
-also expose `/ws/terminal` to the same forwardAuth bypass (see
-`src/plugins/auth.ts` around lines 117-118 for the same exact-match-vs-prefix
-contrast in the in-app gate).
+never be reachable through this exemption; in fact `isProtectedPath` gates
+every `/ws/*` path by prefix, not just `/ws/terminal` (see
+[`docs/auth.md`](../docs/auth.md)). That's why the router below matches the
+two exact paths above, not a `PathPrefix('/ws/')` bypass: a prefix match on
+`/ws/` would be the wrong shape precisely because it would also expose
+`/ws/terminal` to the same forwardAuth bypass — the same exact-match-vs-prefix
+contrast `isProtectedPath` itself draws in the in-app gate.
 
 **The security implication.** When `MULLION_TRUST_GATEWAY=true` and neither
 in-process auth mechanism is configured (`MULLION_AUTH_TOKEN`/OIDC — see
 "Optional: in-process auth" above), `isAuthEnabled` returns false and
-`authPlugin` never registers its `onRequest` hook at all (`src/plugins/auth.ts`
-around lines 220-227); `isProtectedPath` simply never runs. In that
-configuration — the one this whole section exists for — the router below
-**is** the entire security boundary for `/ws/agent-bridge` and
+`authPlugin`'s own `!isAuthEnabled(...)` early return means it never
+registers its `onRequest` hook at all; `isProtectedPath` simply never runs.
+In that configuration — the one this whole section exists for — the router
+below **is** the entire security boundary for `/ws/agent-bridge` and
 `POST /api/bridges/renew`, not defense-in-depth on top of an in-app check
-(contrast `src/app.ts` around lines 184-198, which is what forces the
-`MULLION_TRUST_GATEWAY` acknowledgment in the first place). Any
+(contrast `src/app.ts`'s `buildApp`, whose own boot-time `#603` guard is
+what forces the `MULLION_TRUST_GATEWAY` acknowledgment in the first place).
+Any
 IP-allowlisting or rate-limiting you want on these two paths belongs on this
 router — there is nothing else in front of them.
 
@@ -460,6 +513,18 @@ cd mullion-session-manager
 ./deploy/install.sh ~/opt/mullion
 systemctl --user status mullion.service
 
+# The unit above will crash-loop on first boot (issue #1458): install.sh's
+# generated primary .env sets MULLION_ROLE but neither an auth mechanism
+# nor MULLION_TRUST_GATEWAY, and src/app.ts's #603 boot guard refuses to
+# start with neither configured — see "Optional: in-process auth" above.
+# Append ONE of the following to the generated .env, then restart:
+echo 'MULLION_TRUST_GATEWAY=true' >> ~/opt/mullion/.env   # if the Traefik+Authentik config below is already in front
+# — or, for a bare deployment with no gateway, a real credential instead:
+#   echo 'MULLION_AUTH_TOKEN='"$(openssl rand -hex 32)" >> ~/opt/mullion/.env
+#   echo 'MULLION_SESSION_SECRET='"$(openssl rand -hex 32)" >> ~/opt/mullion/.env
+systemctl --user restart mullion.service
+systemctl --user status mullion.service
+
 # 2. Traefik dynamic config (still manual — see "Before installing anything")
 # edit the CHANGEME placeholders first
 cp deploy/traefik-dynamic.yml <your-traefik-dynamic-config-dir>/
@@ -545,9 +610,12 @@ whole feature exists for):
   # `systemctl --user enable --now` itself — no separate task needed for
   # that. There's deliberately no version pinning here either: install.sh
   # always installs whatever GitHub currently reports as "latest," so a
-  # periodic/reconverge run of this role DOES pick up new releases (this
-  # agent has no in-app "Update now" of its own — see the known limitation
-  # below). It is NOT a general config-drift fixer, though: install.sh
+  # periodic/reconverge run of this role DOES pick up new releases (an
+  # agent has no in-app "Update now" button of its own — it has no
+  # frontend to render one in — but as of issue #647/roadmap 7.8 it does
+  # have its own self-update surface, triggered from the primary's
+  # Settings → Hosts row; see "Updating an agent" below). It is NOT a
+  # general config-drift fixer, though: install.sh
   # leaves an existing .env completely untouched (see above), so changing
   # mullion_primary_url/mullion_enrollment_token/MULLION_AGENT_PROJECTS_ROOTS
   # in your role vars and re-running this play silently does nothing —

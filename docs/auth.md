@@ -18,8 +18,13 @@ on every interface with no credential at all.
 
 ## Shared token (issue #19)
 
-The simplest option: one shared secret gates every `/api/*` route and the
-`/ws/terminal` upgrade.
+The simplest option: one shared secret gates every `/api/*` route and every
+`/ws/*` upgrade (`isProtectedPath`'s prefix match, `src/plugins/auth.ts`, so
+any future `/ws/*` route inherits it too), not just `/ws/terminal` — the
+two narrow exceptions are `/ws/agent-bridge` and the SSH-agent bridge's own
+`POST /api/bridges/renew` (see `deploy/README.md`'s "Optional: SSH-agent
+bridge" section), which authenticate with the helper's own credential
+instead.
 
 ```bash
 MULLION_AUTH_TOKEN=$(openssl rand -hex 32)
@@ -92,23 +97,53 @@ configuration, not on anything this app can force.
 Both mechanisms above mint the same cookie (`mullion_session`, `httpOnly`,
 `SameSite=Lax`, 30-day max age), signed (HMAC via `MULLION_SESSION_SECRET`)
 but **not encrypted** — the payload is base64, not encrypted, so treat it as
-client-readable. A token-only login's payload is just
-`{ authenticated: true }`; an OIDC login's payload also carries the derived
-identity claims (`sub`/`email`/`name`/`groups`) — never the raw
-`id_token`/`access_token` from the provider, which are discarded the moment
-the identity claims are extracted from them.
+client-readable. A token-only login's payload is
+`{ authenticated: true, issuedAt: <ms epoch> }`; an OIDC login's payload adds
+the derived identity claims under `identity`
+(`sub`/`email`/`name`/`groups`) — never the raw `id_token`/`access_token`
+from the provider, which are discarded the moment the identity claims are
+extracted from them. `issuedAt` (not just a max-age check) is what lets
+`signed-payload.ts`'s `verifySignedPayload` also reject a payload whose
+timestamp is implausibly far in the future (clock-skew tolerance, finding
+AS11) — see that module's own comment.
 
-`GET /api/auth/me` is how the frontend decides what to render, reachable
-without a credential (a request can't authenticate itself against a gate
-that also blocks the one endpoint that authenticates it):
+`GET /api/auth/me` (`src/routes/auth.ts`) is how the frontend decides what
+to render, reachable without a credential (a request can't authenticate
+itself against a gate that also blocks the one endpoint that authenticates
+it). Its shape is richer than just `methods`/`authenticated`/`user` — it
+also reports where the identity came from and how to log out, since a
+trusted-gateway user (see "Network exposure" below) is neither a token nor
+an OIDC login:
+
+A trusted-gateway example, with no other in-process credential configured
+(the case the fields below exist to distinguish from plain OIDC/token):
 
 ```jsonc
 {
-  "methods": { "token": true, "oidc": true }, // which mechanisms are configured
-  "authenticated": false,
-  "user": { "sub": "...", "email": "...", "name": "...", "groups": ["..."] }, // only present once authenticated via OIDC
+  "methods": { "token": false, "oidc": false }, // neither in-process mechanism is configured
+  "authenticated": true, // true whenever in-process auth is off entirely, not just on a valid credential — true here regardless of the gateway header below
+  "authSource": "authentik", // "authentik" | "oidc" | "token" | "gateway" | "none" — see below
+  "logout": { "kind": "gateway", "url": "/outpost.goauthentik.io/sign_out" }, // or {"kind":"local"} or {"kind":"unavailable"}
+  "user": { "username": "...", "name": "...", "email": "..." }, // trusted-gateway identity; present only when MULLION_TRUST_GATEWAY is set and the provider sent `x-authentik-uid`
 }
 ```
+
+`authSource` picks the first of: a trusted-gateway `x-authentik-uid` header
+(`"authentik"`), a session cookie carrying OIDC identity claims
+(`"oidc"`), an otherwise-valid token/cookie session (`"token"`),
+`MULLION_TRUST_GATEWAY` alone with no per-request identity header
+(`"gateway"`), or `"none"`. `logout` is `{kind:"gateway",url}` when
+`MULLION_TRUST_GATEWAY` and `MULLION_GATEWAY_LOGOUT_URL` are both set,
+`{kind:"local"}` when in-process auth is enabled (clears the local session
+cookie via `POST /api/auth/logout`), or `{kind:"unavailable"}` otherwise. A
+gateway `user` (`username`/`name`/`email`, each optional) is read from the
+`x-authentik-username`/`x-authentik-name`/`x-authentik-email` request
+headers — trimmed and capped at 512 characters, display-only, never used
+for authorization — and is populated only when `MULLION_TRUST_GATEWAY` is
+`true` **and** the reverse proxy actually forwards a trusted `x-authentik-uid`
+(see the identity-header chain in `deploy/README.md`'s "Optional: in-process
+auth" section). An OIDC `user` (`sub`/`email`/`name`/`groups`) is reported
+instead when the session cookie itself carries OIDC identity claims.
 
 ## API surface
 
@@ -119,7 +154,7 @@ below):
 | ------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------- |
 | `/api/auth/login`         | POST   | Body `{ token }`; sets the session cookie on a valid token.                                                         |
 | `/api/auth/logout`        | POST   | Clears the session cookie.                                                                                          |
-| `/api/auth/me`            | GET    | Reports `methods`/`authenticated`/`user` (see above).                                                               |
+| `/api/auth/me`            | GET    | Reports `methods`/`authenticated`/`authSource`/`logout`/`user` (see above).                                         |
 | `/api/auth/oidc/login`    | GET    | Redirects to the provider; sets a short-lived PKCE/state/nonce transaction cookie. Browser navigation, not a fetch. |
 | `/api/auth/oidc/callback` | GET    | Exchanges the code, verifies the ID token, mints the session cookie, redirects to `/`.                              |
 
@@ -140,10 +175,11 @@ configured" and "reachable by anyone who can route to this host":
   acknowledgement that something else (normally a reverse-proxy forwardAuth)
   already authenticates every request before it reaches this process. Before
   this flag existed, that combination just logged a boot-time warning and
-  ran wide open — every `/api/*` route and the `/ws/terminal` upgrade
-  reachable with no credential at all, since `src/plugins/auth.ts`'s
-  `onRequest` gate installs no hook whatsoever in that case (see "Preview-host
-  auth token" below for the one other place this same early-return matters).
+  ran wide open — every `/api/*` route and every `/ws/*` upgrade reachable
+  with no credential at all, since `authPlugin`'s own `!isAuthEnabled(...)`
+  early return (`src/plugins/auth.ts`) installs no `onRequest` hook
+  whatsoever in that case (see "Preview-host auth token" below for the one
+  other place this same early-return matters).
 - **`MULLION_GATEWAY_LOGOUT_URL`** (default empty) — enables gateway logout
   from Settings → Account and requires `MULLION_TRUST_GATEWAY=true`. Use
   `/outpost.goauthentik.io/sign_out` for single-app Authentik forward auth,
@@ -433,6 +469,21 @@ throttles itself.
   comment for why this is an explicit allowlist rather than a negation of
   `/api` + `/ws`.
 
+- **A queued request racing a gateway session's own expiry can clobber the
+  gateway's state cookie mid-redirect** (issue #1273) — validated in
+  production behind Traefik + Authentik forwardAuth: the 4-second live
+  session-refresh timer's `window.location.reload()` and any already
+  in-flight `fetch()` calls could both still be unloading/firing when
+  Authentik's outpost minted a fresh proxy-session cookie for the reload's
+  own top-level navigation, so a trailing request's `Set-Cookie` sometimes
+  won the race and clobbered it, breaking the callback with `invalid state`.
+  `frontend/src/api/client.ts`'s `authExpiryInProgress` in-memory circuit
+  breaker now fast-fails every subsequent request the instant a forward-auth
+  redirect/expiry is detected, so nothing else can dispatch HTTP traffic
+  while the top-level reload is in flight — see `deploy/README.md`'s "What
+  still needs a real, live check" section for the fuller narrative on why a
+  WS upgrade can't itself recover from an expired gateway session the same
+  way.
 - **Plain-HTTP + cross-registrable-domain deployments aren't supported** by
   `PREVIEW_AUTH_REQUIRED`: the preview cookie is `Secure`/`SameSite=None`/
   `Partitioned` when the request arrived over https, but falls back to

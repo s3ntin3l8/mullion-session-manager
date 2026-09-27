@@ -127,19 +127,25 @@ the UI gives.
 CLI:
 
 ```sh
-# Read (all three fields + whether the row exists)
+# Read (all three fields; each is `null` if not authored yet — there is no
+# separate "row exists" flag). Session-reachable: omit <projectId> from
+# inside a session to default to that session's own project.
 mullion project tooling <projectId>
 
 # Write: any of --briefing / --skill / --reviewer, each takes a path
 # or "-" for stdin. Only one flag may read from stdin per invocation.
+# Full scope only (MULLION_AUTH_TOKEN) — unlike the read above.
 mullion project tooling <projectId> \
   --briefing ./briefing.md \
   --skill ./SKILL.md \
   --reviewer ./reviewer.md
 ```
 
-MCP tools (full scope only — these are operator-side, not available at
-session scope, same posture `list_projects` already takes):
+MCP tools — **`get_project_tooling` is reachable at session scope** (an
+agent inside a session can read its own project's tooling with `projectId`
+omitted, the same posture `list_actions` already takes); only
+**`set_project_tooling` is full scope only**, since it's the operator-side
+write path:
 
 - `get_project_tooling(projectId)` — returns
   `{briefing?, skill?, reviewerAgent?}`, each a string or `null` (the same
@@ -410,7 +416,14 @@ pinned note]` `additionalContext` ordering `hooks.ts` composes for
   Claude Code/Codex/agy (see `agent-hooks.md`), and opencode's own
   `instructions[]` channel for the fourth CLI — see that adapter's own
   comment for why file presence alone (no separate ctx boolean) already
-  encodes both the toggle and the "non-empty global text" gate.
+  encodes both the toggle and the "non-empty global text" gate. Like the
+  pinned note above, the resolved text is written to a per-session copy
+  (`<sessionsDir>/<id>.workflow-conventions.md`) at spawn time, which every
+  hook adapter's injection mechanism reads from. `PtyManager`'s terminate
+  path unlinks this file alongside the briefing/agent-guide per-session
+  copies (issue #1275) — before that fix it leaked, and stale
+  `*.workflow-conventions.md` files accumulated under `SESSIONS_DIR`
+  indefinitely.
 - **The scaffold reads the same text, not a separate copy.** "Scaffolding
   it into the repo instead" above commits a `## Workflow Conventions`
   section into the target `AGENTS.md`, resolved from this exact global text
@@ -476,9 +489,12 @@ pinned note]` `additionalContext` ordering `hooks.ts` composes for
 
 ## Settings
 
-Three independent toggles under **Settings → Agent context & skills** (default **on** for
-all three, except workflow conventions' own text default of ""):
+Four related controls, all under **Settings → Agent context & skills**
+(default **on** for the three boolean toggles, except workflow conventions'
+own text default of ""):
 
+- **Inject agent guide** — [`docs/agent-guide.md`](agent-guide.md)'s own
+  injection, independent of the other three below.
 - **Inject project briefing** — gates the pointer/injection only; the
   per-session file is always written regardless, so turning this off
   doesn't affect the file's own existence, just whether an agent's own
@@ -498,10 +514,9 @@ all three, except workflow conventions' own text default of ""):
   per-project toggle not being explicitly off), not on a separate on/off
   switch of its own.
 
-See also **Inject agent guide** (`docs/agent-guide.md`'s own injection,
-independent of every setting above) and `docs/configuration.md` for every
-`@fastify/env`-validated setting — these are DB-backed runtime Settings,
-not environment variables, so they don't appear in that table.
+See `docs/configuration.md` for every `@fastify/env`-validated setting —
+these four are DB-backed runtime Settings, not environment variables, so
+they don't appear in that table.
 
 **Per-project overrides (issue #884, extended by #937):** the agent-guide,
 project-briefing, and workflow-conventions toggles — but not the
