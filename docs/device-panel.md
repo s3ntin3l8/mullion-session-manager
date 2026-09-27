@@ -25,12 +25,29 @@ encoded in software on the same guest vCPUs that render it. A phone-native
 screen (e.g. 1344×2992) is far more pixels than a panel of a few hundred CSS
 pixels can show, so the stream is bounded by default:
 
-| Variable                | Default                | Meaning                                                                                                                                                                                                                                                                                                                                                                             |
-| ----------------------- | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DEVICE_VIDEO_MAX_SIZE` | `1280`                 | Longest side of the streamed video, px (scrcpy `--max-size`). `0` = native.                                                                                                                                                                                                                                                                                                         |
-| `DEVICE_VIDEO_MAX_FPS`  | `60`                   | Frame-rate cap (scrcpy `--max-fps`). `0` = uncapped.                                                                                                                                                                                                                                                                                                                                |
-| `DEVICE_VIDEO_BIT_RATE` | `8000000`              | H.264 bit rate, bits/s. Lower it for a remote viewer.                                                                                                                                                                                                                                                                                                                               |
-| `DEVICE_EMULATOR_GPU`   | `swiftshader_indirect` | Emulator `-gpu` mode. The default is software rendering (works headless anywhere). `host` uses the host GPU but needs a GL/EGL display — a headless container typically has none and the emulator exits with `Failed to get EGL display` (the Vulkan device itself is visible) — so it is opt-in and unverified headless. Other common values: `auto`, `swangle_indirect`, `guest`. |
+| Variable                | Default                | Meaning                                                                                                                                                                                                                                                  |
+| ----------------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DEVICE_VIDEO_MAX_SIZE` | `1280`                 | Longest side of the streamed video, px (scrcpy `--max-size`). `0` = native.                                                                                                                                                                              |
+| `DEVICE_VIDEO_MAX_FPS`  | `60`                   | Frame-rate cap (scrcpy `--max-fps`). `0` = uncapped.                                                                                                                                                                                                     |
+| `DEVICE_VIDEO_BIT_RATE` | `8000000`              | H.264 bit rate, bits/s. Lower it for a remote viewer.                                                                                                                                                                                                    |
+| `DEVICE_EMULATOR_GPU`   | `swiftshader_indirect` | Emulator `-gpu` mode. The default is software rendering (works headless anywhere). `host` uses the host GPU; it requires a usable GL/EGL display and access to the host graphics driver stack. Other common values: `auto`, `swangle_indirect`, `guest`. |
+
+### Host GPU rendering
+
+Host GPU rendering can work without a physical display, but the emulator still
+needs a GL/EGL display. The usual headless setup runs a virtual Wayland
+compositor with GL rendering and Xwayland, then makes its display available to
+the Mullion service through `WAYLAND_DISPLAY` and `DISPLAY`. The emulator also
+needs access to the host GPU's render device (typically under `/dev/dri`) and
+the matching host graphics driver and GL/EGL libraries. Container and virtual
+machine deployments may need to pass through the render device and graphics
+libraries explicitly; the exact setup depends on the host and its GPU driver.
+
+Once the host display and GPU are available to Mullion, set
+`DEVICE_EMULATOR_GPU=host` and restart the service. Confirm that the emulator
+uses the host GPU before comparing performance. This accelerates guest graphics
+rendering; scrcpy's H.264 encoding remains software-based, so host GPU rendering
+does not remove that cost or guarantee a faster stream on every workload.
 
 These bound the **stream** only — `tap`/`swipe`/`screenshot` still operate at
 native screen resolution. If the guest itself renders slowly (software
