@@ -5,17 +5,25 @@ API](socket-api.md) — a local-only CLI for listing/creating/attaching to
 sessions, driving a session's bound browser (see
 [browser-automation.md](browser-automation.md) for the underlying action
 set), and tailing notification events, with no HTTP base URL or bearer
-token required. Run from inside a Mullion session **when in-process auth is
-enabled**, it defaults to targeting that session with zero flags (via
-`MULLION_HOOK_TOKEN`'s session-scoped handshake); run from an operator's own
-shell, it needs `MULLION_AUTH_TOKEN` (see [Authentication and
-scope](#authentication-and-scope) below). **On an auth-disabled host, the
-zero-flags default currently does not work for the CLI** — every connection
-resolves to full scope with no session pin, and the CLI (unlike the MCP
-client) has no `MULLION_SESSION_ID` fallback for that case yet, so
-`session get`/`browser ...`/`session spawn-child` without an explicit
-`--session <id>` 400s (see [issue
-#1457](https://github.com/s3ntin3l8/mullion-session-manager/issues/1457)).
+token required. Run from inside a Mullion session, it defaults to targeting
+that session with zero flags (via `MULLION_HOOK_TOKEN`'s session-scoped
+handshake when in-process auth is enabled, or `MULLION_SESSION_ID` as a
+retry fallback on an auth-disabled host — see below); run from an
+operator's own shell, it needs `MULLION_AUTH_TOKEN` (see [Authentication
+and scope](#authentication-and-scope) below).
+
+**On an auth-disabled host**, every connection resolves to full scope with
+no session pin (`control-socket.ts`'s `resolveHandshake`), which breaks the
+"omit it, get your own" shape `session get`, every `browser` action, and
+`session spawn-child` support at session scope. The CLI retries once
+against `MULLION_SESSION_ID` on exactly that failure (issue #1457, mirrors
+the MCP client's own `ownSessionId` fallback, issue #1291/#1292) — never an
+eager substitution, so this never changes behavior on a normal,
+session-scoped connection. `MULLION_SESSION_ID` is set in every spawned
+session's own env (`launch-plan.ts`), so this is transparent from inside a
+session; it only matters if you're scripting the CLI from outside one on an
+auth-disabled host, where you'd need to export it yourself or pass
+`--session <id>` explicitly.
 
 A versioned install links it at `~/.local/bin/mullion` (see
 `deploy/install.sh` — it skips the link if that release predates the CLI, and

@@ -54,6 +54,31 @@ export class MullionSocketError extends Error {
   }
 }
 
+/** True only for the exact "no pin to resolve this id from" 400 a given
+ * op's resolve* helper (control-socket.ts's resolveTargetSessionId, or
+ * sessions.spawn_child's own inline check) produces when its id is omitted
+ * and the connection has no session-scoped pin (full scope — every
+ * connection on an auth-disabled host, control-socket.ts's
+ * resolveHandshake). Narrower than "any 400" so an unrelated failure (e.g.
+ * a genuinely bad explicit id) propagates as itself instead of triggering a
+ * same-shaped but unrelated retry. Shared by src/mcp/client.mjs and
+ * src/cli/core.mjs — both retry an omitted-id request against
+ * MULLION_SESSION_ID on exactly this error (issues #1291/#1457). */
+export function isMissingIdError(err, message) {
+  return err instanceof MullionSocketError && err.status === 400 && err.message === message;
+}
+
+/** The calling session's own id (`MULLION_SESSION_ID`, set in every spawned
+ * session's env by launch-plan.ts) — a client-side RETRY fallback for
+ * "target the calling session" on a connection with no pin to resolve that
+ * from itself (see isMissingIdError's doc comment). Never used for an eager
+ * substitution: every caller tries the direct, no-id request first, so a
+ * healthy session-scoped connection never substitutes this at all. */
+export function resolveOwnSessionId(env) {
+  const id = env?.MULLION_SESSION_ID;
+  return typeof id === "string" && id.length > 0 ? id : undefined;
+}
+
 /**
  * One connection, many in-flight requests/streams multiplexed by `id` — same
  * shape the wire protocol itself uses. Every request has a safety-net

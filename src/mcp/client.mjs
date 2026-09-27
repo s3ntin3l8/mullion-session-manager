@@ -1,5 +1,5 @@
 import net from "node:net";
-import { MullionSocketClient, MullionSocketError } from "../cli/client.mjs";
+import { MullionSocketClient, isMissingIdError, resolveOwnSessionId } from "../cli/client.mjs";
 
 // Issue #271 — the transport half of the `mullion mcp` server (issue #134's
 // eventual CLI/MCP surface starts here): a thin client wrapping however a
@@ -44,15 +44,10 @@ import { MullionSocketClient, MullionSocketError } from "../cli/client.mjs";
 const PROMOTE_TIMEOUT_MS = 295_000;
 const BROWSER_ACTION_TIMEOUT_MS = 30_000;
 
-/** Issue #1291 (Hermes review, PR #1292) — true only for the exact
- * "no pin to resolve this id from" 400 a given op's resolve* helper
- * (control-socket.ts) produces when its id is omitted and the connection
- * has no session-scoped pin (full scope). Narrower than "any 400", so an
- * unrelated failure (e.g. a genuinely bad explicit id) propagates as
- * itself instead of triggering a same-shaped but unrelated retry. */
-function isMissingIdError(err, message) {
-  return err instanceof MullionSocketError && err.status === 400 && err.message === message;
-}
+// isMissingIdError/resolveOwnSessionId used to be private to this file
+// (issue #1291, Hermes review PR #1292); moved to cli/client.mjs (issue
+// #1457) so core.mjs's own CLI-side retry can share the exact same
+// implementation instead of re-deriving it.
 
 export class MullionClient {
   constructor(env = process.env) {
@@ -80,8 +75,7 @@ export class MullionClient {
    * session's own subprocess (e.g. `mullion mcp` run directly by an
    * operator). */
   get ownSessionId() {
-    const id = this._env.MULLION_SESSION_ID;
-    return typeof id === "string" && id.length > 0 ? id : undefined;
+    return resolveOwnSessionId(this._env);
   }
 
   /** One-shot control-socket request: fresh MullionSocketClient, one

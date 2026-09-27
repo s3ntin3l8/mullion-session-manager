@@ -140,15 +140,16 @@ at all; the socket's `0600` file permission is the only gate left. Don't
 assume you're scope-limited just because you're "inside a session" — check
 with `mullion config` (below) if it matters to what you're about to do.
 
-**A CLI-specific gap in that same mode:** the MCP client already defaults a
-missing session/project id to yours on an auth-disabled host, but the
-`mullion` CLI doesn't yet ([issue #1457](https://github.com/s3ntin3l8/mullion-session-manager/issues/1457))
-— `src/cli/core.mjs` only reads `MULLION_SESSION_ID` for `mullion config`'s
-own display. On such a host, `mullion session get`/`mullion browser ...`/
-`mullion session spawn-child` fail with a "required" error unless you pass
-`--session <id>` explicitly, even though the MCP tools reachable from the
-same session already resolve it for you. Prefer MCP for these ops in that
-mode, or pass `--session $MULLION_SESSION_ID` on the CLI yourself.
+**In that same mode**, `mullion session get`/`mullion browser ...`/`mullion
+session spawn-child` retry against `MULLION_SESSION_ID` on the exact same
+"no pin" failure the MCP client's own `ownSessionId` fallback handles
+(issue #1457/#1291) — so the zero-flags default works from the CLI too,
+transparently, from inside a session. The one CLI gap that remains: `mullion
+project actions` with no positional project id has no analogous fallback
+(the MCP client's `list_actions` does — a two-hop `sessions.get` lookup to
+derive the project from `MULLION_SESSION_ID`), so on this one command in
+this mode you need either an explicit `mullion project actions <projectId>`
+or `list_actions` via MCP instead.
 
 ## Checking your own scope
 
@@ -171,17 +172,18 @@ have no MCP tool at all — CLI (or the dashboard's own device panel) only.
 Pick based on how you're working:
 
 - **MCP tool** — lower overhead for a tool-calling model: no subprocess
-  spawn, structured input/output, and it's what's already registered for a
-  Claude Code session (`mullion mcp`, auto-wired into `--mcp-config`). Prefer
+  spawn, structured input/output, and it's auto-wired for all four CLIs
+  Mullion hosts, not just Claude Code (`--mcp-config` for Claude Code, `-c
+mcp_servers.mullion.*` overrides for Codex, its own `mcp.<name>` config
+  keys for opencode, and `~/.gemini/config/mcp_config.json` for agy). Prefer
   this for `get_scrollback`, `list_actions`, `browser_action`, `use_browser`,
   `promote_to_worktree`, `spawn_child_session`, `list_devices`,
   `start_device`/`stop_device`, and `use_device`/`device_action` — the ops
   actually reachable at session scope.
 - **`mullion` CLI** — better when you need to reason about `--json` output
   directly in a shell pipeline, run something interactively (`mullion
-session exec`), or you're not running under an agent with MCP wired up at
-  all (Codex/OpenCode/agy today — MCP wiring is a separate concern from the
-  startup nudge, see [Auto-injection](#auto-injection)).
+session exec`), or for `device create`/`device pair`/`device
+pair-and-connect`, the three ops above with no MCP tool at all.
 
 **From inside a session, the full-scope-only MCP tools
 (`list_sessions`/`start_dock_session`/`stop_dock_session`/`list_projects`/
