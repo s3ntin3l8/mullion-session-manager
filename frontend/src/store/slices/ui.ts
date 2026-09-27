@@ -242,6 +242,12 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
       }));
     },
 
+    clearOpenSessionRequest: (nonce) => {
+      set((state) =>
+        state.openSessionRequest?.nonce === nonce ? { openSessionRequest: null } : state,
+      );
+    },
+
     startThemeWatch: () => {
       if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
         return () => {};

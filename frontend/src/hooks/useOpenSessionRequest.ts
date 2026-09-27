@@ -78,6 +78,13 @@ export function useOpenSessionRequest({
     const sessionId = openSessionRequest.sessionId;
     const timer = setTimeout(() => {
       resolvedNonceRef.current = nonce;
+      // Hermes review — cosmetic (resolvedNonceRef above already stops this
+      // exact request from re-firing), but otherwise leaves a resolved
+      // request sitting in the store forever. Nonce-guarded (not a bare
+      // clear) so this can't wipe out a brand new request that arrived in
+      // this same setTimeout(0) gap — see clearOpenSessionRequest's own
+      // doc comment.
+      useDashboardStore.getState().clearOpenSessionRequest(nonce);
       const session = sessions.find((s) => s.id === sessionId);
       // A session id that isn't found (killed/reaped between the click and
       // resolution, or a stale click on an id that never existed) is

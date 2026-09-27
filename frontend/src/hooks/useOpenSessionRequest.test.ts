@@ -11,9 +11,15 @@ import type { DockviewApi } from "dockview-react";
 // calls `markSessionRead` via `.getState()`.
 let openSessionRequest: { sessionId: number; nonce: number } | null = null;
 const markSessionRead = vi.fn();
+// Mirrors the real store's own nonce-guarded clear (store/slices/ui.ts) —
+// tests can assert this hook only ever clears the exact request it just
+// resolved, never a newer one.
+const clearOpenSessionRequest = vi.fn((nonce: number) => {
+  if (openSessionRequest?.nonce === nonce) openSessionRequest = null;
+});
 
 function storeState() {
-  return { openSessionRequest, markSessionRead };
+  return { openSessionRequest, markSessionRead, clearOpenSessionRequest };
 }
 
 vi.mock("../store/index.js", () => {
@@ -28,6 +34,7 @@ vi.mock("../store/index.js", () => {
 beforeEach(() => {
   openSessionRequest = null;
   markSessionRead.mockClear();
+  clearOpenSessionRequest.mockClear();
 });
 
 afterEach(() => {
@@ -171,6 +178,61 @@ describe("useOpenSessionRequest", () => {
     vi.advanceTimersByTime(0);
     expect(onOpenSession).toHaveBeenCalledTimes(1);
     expect(onOpenSession).toHaveBeenCalledWith(expect.objectContaining({ id: 7 }));
+  });
+
+  // Hermes review, PR #1456 — cosmetic cleanup of a resolved request; the
+  // nonce guard on the clear itself is the load-bearing part, tested next.
+  it("clears the resolved request from the store, tagged with the nonce it resolved", () => {
+    vi.useFakeTimers();
+    openSessionRequest = { sessionId: 7, nonce: 1 };
+    renderHook(() =>
+      useOpenSessionRequest({
+        dockviewApi: {} as DockviewApi,
+        activeWorkspaceId: 1,
+        sessionsLoaded: true,
+        sessions: [makeSession({ id: 7 })],
+        onOpenSession: vi.fn(),
+        restoringRef: { current: false },
+        restoredWorkspaceIdRef: { current: 1 },
+      }),
+    );
+    vi.advanceTimersByTime(0);
+
+    expect(clearOpenSessionRequest).toHaveBeenCalledWith(1);
+    expect(openSessionRequest).toBeNull();
+  });
+
+  it("does not clear a brand new request that arrives in the gap before the previous one's timer fires", () => {
+    vi.useFakeTimers();
+    openSessionRequest = { sessionId: 7, nonce: 1 };
+    const onOpenSession = vi.fn();
+    renderHook(() =>
+      useOpenSessionRequest({
+        dockviewApi: {} as DockviewApi,
+        activeWorkspaceId: 1,
+        sessionsLoaded: true,
+        sessions: [makeSession({ id: 7 }), makeSession({ id: 8 })],
+        onOpenSession,
+        restoringRef: { current: false },
+        restoredWorkspaceIdRef: { current: 1 },
+      }),
+    );
+    // Nonce 1's own setTimeout(0) is now pending. A second notification is
+    // clicked, landing directly in the store (clearOpenSessionRequest itself
+    // reads the CURRENT store value via .getState() when nonce 1's timer
+    // below fires, same as production — no rerender needed to construct
+    // this).
+    openSessionRequest = { sessionId: 8, nonce: 2 };
+
+    vi.advanceTimersByTime(0);
+
+    // Nonce 1 still resolves against session 7 (its own closure captured
+    // that at schedule time)...
+    expect(onOpenSession).toHaveBeenCalledWith(expect.objectContaining({ id: 7 }));
+    // ...but its own clear call — tagged with nonce 1 — must not have
+    // wiped out nonce 2's still-unresolved request.
+    expect(clearOpenSessionRequest).toHaveBeenCalledWith(1);
+    expect(openSessionRequest).toEqual({ sessionId: 8, nonce: 2 });
   });
 
   it("drops a request for a session that's since been killed, without opening or marking it read", () => {

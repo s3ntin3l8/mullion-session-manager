@@ -647,6 +647,17 @@ export interface UiSlice {
   // calls markSessionRead.
   openSessionRequest: { sessionId: number; nonce: number } | null;
   requestOpenSession: (sessionId: number) => void;
+  // Hermes review, PR #1456 — cosmetic (the nonce check already prevents a
+  // resolved request from re-firing on its own), but a resolved request
+  // otherwise sits in the store forever, one stale object per session ever
+  // opened via notification. Symmetric with clearSplitRequest above, EXCEPT
+  // it takes the nonce being cleared and only actually clears when the
+  // store's current request still has that exact nonce — a bare
+  // unconditional clear could otherwise wipe out a BRAND NEW request that
+  // arrived in the narrow gap between useOpenSessionRequest.ts's own
+  // setTimeout(0) being scheduled and it firing (two notifications clicked
+  // in quick succession).
+  clearOpenSessionRequest: (nonce: number) => void;
   // Re-resolves `theme` whenever the OS-level color-scheme preference
   // changes, but only while settings.theme === "system" — a no-op the rest
   // of the time. Returns a cleanup function; called once from App.tsx

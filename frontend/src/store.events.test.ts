@@ -271,6 +271,28 @@ describe("requestOpenSession (issue #1429)", () => {
   });
 });
 
+// Hermes review, PR #1456 — cosmetic cleanup once a request resolves
+// (hooks/useOpenSessionRequest.ts), nonce-guarded so it can't wipe out a
+// newer request that arrived after the one being cleared.
+describe("clearOpenSessionRequest (issue #1429)", () => {
+  beforeEach(() => {
+    useDashboardStore.setState({ openSessionRequest: null });
+  });
+
+  it("clears the request when the given nonce matches the current one", () => {
+    useDashboardStore.getState().requestOpenSession(7);
+    useDashboardStore.getState().clearOpenSessionRequest(1);
+    expect(useDashboardStore.getState().openSessionRequest).toBeNull();
+  });
+
+  it("does not clear a newer request tagged with a different nonce", () => {
+    useDashboardStore.getState().requestOpenSession(7); // nonce 1
+    useDashboardStore.getState().requestOpenSession(8); // nonce 2
+    useDashboardStore.getState().clearOpenSessionRequest(1);
+    expect(useDashboardStore.getState().openSessionRequest).toEqual({ sessionId: 8, nonce: 2 });
+  });
+});
+
 describe("dismissEvent / dismissedEventKeys (issue #169)", () => {
   beforeEach(() => {
     useDashboardStore.setState({ events: {}, lastSeenSeq: {}, dismissedEventKeys: {} });
