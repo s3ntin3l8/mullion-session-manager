@@ -402,8 +402,8 @@ export function describeEvent(
     // Rich statuses (issue: extend surfaced session statuses) — was missing
     // entirely: pty-manager.ts's Session.emitHookEvent has emitted a
     // dedicated "promote_request" NotificationEvent since issue #271, but
-    // this switch never grew a case for it, so it silently described as
-    // nothing (describeLatestEvent falls back to an earlier event, or null).
+    // this switch never grew a case for it, so this returned null for it,
+    // silently describing it as nothing.
     case "promote_request": {
       const summary = typeof event.payload.summary === "string" ? event.payload.summary : null;
       return {
@@ -630,27 +630,6 @@ export function sessionContextMap(
     }
   }
   return map;
-}
-
-// Issue #167's per-session status line — turns the most recent describable
-// NotificationEvent for a session into a short, human-readable string plus
-// whether it should get the "attention" color treatment. Walks backward
-// from the newest event rather than only looking at the very last one: a
-// top event whose kind/shape describeEvent doesn't recognize (a future
-// payload change, or a kind this hasn't been taught about) shouldn't blank
-// the line when an earlier, still-relevant event (e.g. the last title
-// change) can still describe it — last-known-good is more useful than
-// nothing. Returns null only when NO buffered event describes (including
-// the empty/undefined case), so SessionRow can render no line at all.
-export function describeLatestEvent(
-  events: NotificationEvent[] | undefined,
-): { text: string; attention: boolean } | null {
-  if (!events) return null;
-  for (let i = events.length - 1; i >= 0; i--) {
-    const described = describeEvent(events[i]);
-    if (described) return described;
-  }
-  return null;
 }
 
 // Which of a session's buffered NotificationEvents count as an actual

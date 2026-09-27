@@ -1461,10 +1461,10 @@ function VirtualizedProjectTree({
 // priority over working/idle since it's the highest-value signal for an
 // unwatched dashboard.
 
-// describeEvent/describeLatestEvent (the kind/payload interpretation this
-// row's status line uses) moved to eventDescriptions.ts for #169, which
-// needed the exact same rules for its event-feed panel — see that module's
-// own doc comment.
+// describeEvent (the kind/payload interpretation this row's now-line —
+// lib/sessionNowLine.ts's deriveNowLine — and the notification panel both
+// build on) moved to eventDescriptions.ts for #169, which needed the same
+// rules for its own event-feed panel — see that module's own doc comment.
 
 // Row 3's expand/collapse toggle (issue #202) persists per session, same
 // single-localStorage-key convention as the sidebar's own collapse/width

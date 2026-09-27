@@ -383,10 +383,8 @@ export function SessionTimeline({ params }: { params: SessionTimelineParams }) {
   // mergeTimelineEvents for why both sources matter: history persistence is
   // debounced up to 30s, so the newest activity is store-only for a while)
   // — dropping anything eventDescriptions.ts's describeEvent doesn't
-  // recognize (e.g. a bare title_change with no title). Same
-  // "last-known-good, not everything" filter describeLatestEvent applies
-  // for the sidebar's status line, just over the whole history instead of
-  // only the newest entry.
+  // recognize (e.g. a bare title_change with no title), over the whole
+  // history rather than just the newest entry.
   const described = useMemo<DescribedEvent[]>(() => {
     // Making notifications relevant/scannable — suppressPairedAttentionRows
     // runs BEFORE describeEvent, on the raw merged list: it needs the OTHER

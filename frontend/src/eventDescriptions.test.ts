@@ -1,7 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
   describeEvent,
-  describeLatestEvent,
   latestFileContext,
   latestTitleContext,
   notifyKind,
@@ -875,23 +874,6 @@ describe("eventDescriptions (Phase 2, issue #176)", () => {
       ];
       // seq 2 repeats the label, so it doesn't overwrite the earlier real title.
       expect(latestTitleContext(events, "my-session")).toBe("npm run dev");
-    });
-  });
-
-  describe("describeLatestEvent — walks back through Phase 2 kinds too", () => {
-    it("prefers the newest describable event across mixed kinds", () => {
-      const events: NotificationEvent[] = [
-        makeEvent({ seq: 1, kind: "file_change", payload: { path: "a.ts", action: "modify" } }),
-        makeEvent({
-          seq: 2,
-          kind: "review_gate",
-          payload: { state: "waiting", prompt: "Merge?" },
-        }),
-      ];
-      expect(describeLatestEvent(events)).toEqual({
-        text: "Waiting for review: Merge?",
-        attention: true,
-      });
     });
   });
 

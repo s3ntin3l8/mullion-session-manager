@@ -203,6 +203,49 @@ describe("SessionRow row 5 — subagents (Phase 5 Track A, #195/5.5a)", () => {
     expect(container.querySelector(".session-subagent-history-toggle")).toBeNull();
   });
 
+  it("does not leak an open history list into a showSubagents={false} view of the same session (code review)", () => {
+    // Regression test: `historyOpen` is seeded from a session-id-only
+    // localStorage set (crs.expandedSubagentHistory), not scoped per view —
+    // opening the history for a session in the sidebar (showSubagents=true)
+    // must not also reveal it on that same session's card in a context that
+    // explicitly opted out of subagents (LaneCard.tsx's showSubagents={false}
+    // kanban cards), which renders no toggle to close it. A background task
+    // is what actually mounts Chips.tsx in that kanban context at all — with
+    // no outstanding one, Details.tsx never renders the "agents" detail row
+    // in the first place (agentsVisible and bgVisible both false), which
+    // would mask this exact bug.
+    const session = makeRow5Session({
+      hookEmits: ["subagent", "progress"],
+      subagents: [FINISHED_SUBAGENT],
+      outstandingBackgroundTasks: [
+        { id: "task-1", type: "shell", status: "running", description: "tail logs" },
+      ],
+    });
+    const sidebarView = render(
+      <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+    );
+    openDetails(sidebarView.container);
+    openSubagentHistory(sidebarView.container);
+    expect(sidebarView.container.querySelector(".session-subagent-history")).toBeTruthy();
+    sidebarView.unmount();
+
+    const kanbanView = render(
+      <SessionRow
+        session={session}
+        project={PROJECT}
+        onOpen={vi.fn()}
+        onEnd={vi.fn()}
+        showSubagents={false}
+        foldDetails={false}
+      />,
+    );
+    // Confirm Chips.tsx actually mounted (via the background-tasks row) —
+    // otherwise this test would pass vacuously regardless of the bug.
+    expect(kanbanView.container.querySelector(".session-background-tasks-line")).toBeTruthy();
+    expect(kanbanView.container.querySelector(".session-subagent-history")).toBeNull();
+    expect(kanbanView.container.querySelector(".session-subagents-line")).toBeNull();
+  });
+
   it("persists the history toggle's open state across remounts via localStorage", () => {
     const session = makeRow5Session({
       hookEmits: ["subagent"],

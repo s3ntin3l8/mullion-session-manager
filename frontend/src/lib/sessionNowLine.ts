@@ -52,11 +52,10 @@ function stripLeadingGlyph(text: string): string {
   return text.replace(/^[^\p{L}\p{N}]+\s*/u, "");
 }
 
-// The newest event describeEvent reports as attention-worthy — same
-// backward-scan idiom as eventDescriptions.ts's own describeLatestEvent, but
-// filtered to attention:true only (describeLatestEvent's "last describable
-// event, of any kind" isn't right here — a routine file_change/tool_done
-// event newer than the actual attention signal would otherwise mask it).
+// The newest event describeEvent reports as attention-worthy — a backward
+// scan filtered to attention:true only, unlike a plain "last describable
+// event, of any kind" scan: a routine file_change/tool_done event newer
+// than the actual attention signal would otherwise mask it.
 function newestAttentionEvent(
   events: readonly NotificationEvent[],
 ): { text: string; generic?: boolean } | null {

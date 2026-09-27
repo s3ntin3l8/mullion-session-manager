@@ -463,16 +463,22 @@ export interface SessionInfo {
    * turns still has something to show. In-memory only. */
   lastAssistantMessage: string | null;
   /** Issue: sidebar now-line — the model's current in-progress (or, absent
-   * one, pending) todo item from its most recent TodoWrite call, kept across
-   * turns the same way lastAssistantMessage above is (not cleared until the
-   * next TodoWrite says otherwise) so a poll landing mid-task still has
-   * something to show. Cleared unconditionally once every remaining todo in
-   * a call is terminal (completed/cancelled) — content-agnostic, same
-   * "no todo beats stale todo" rule as eventDescriptions.ts's
-   * sessionContextMap, since todos have no stable per-item id to match
-   * against. Claude Code only, so far (the only TodoWrite-mapping adapter —
-   * see hooks/forwarder-core.mjs's mapClaudeCodePostToolUse). In-memory
-   * only. */
+   * one, pending) todo item, kept across turns the same way
+   * lastAssistantMessage above is (not cleared until the next `todo` message
+   * says otherwise) so a poll landing mid-task still has something to show.
+   * Cleared unconditionally once the latest `todo` message reports a
+   * terminal status (completed/cancelled) — content-agnostic, same "no todo
+   * beats stale todo" rule as eventDescriptions.ts's sessionContextMap,
+   * since todos have no stable per-item id to match against. Both Claude
+   * Code (hooks/forwarder-core.mjs's mapClaudeCodePostToolUse, which
+   * pre-resolves ONE "current" item per TodoWrite call: in_progress, else
+   * pending, else the call's last entry) and OpenCode (hooks/
+   * opencode-plugin.js's `todo.updated` handler, which instead fires once
+   * PER todo item as its own state changes) map into this same `todo` hook
+   * kind — so for OpenCode specifically, a burst of per-item updates ending
+   * on a different, now-terminal item can clear this even while another
+   * item is still genuinely in progress. Same tradeoff sessionContextMap's
+   * own doc comment already accepts for that adapter. In-memory only. */
   currentTodo: { content: string; status: string } | null;
   /** Rich statuses — "compacting" while a PreCompact/PostCompact hook pair
    * is in flight (Claude Code only, so far — see hook-adapters/claude-code.ts).

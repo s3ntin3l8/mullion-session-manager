@@ -190,7 +190,15 @@ export function Chips({
           )}
         </div>
       )}
-      {historyOpen && finished.length > 0 && (
+      {/* Gated on showSubagentsRow, same as the toggle button above whose
+        click sets `historyOpen` in the first place — that toggle lives
+        inside the showSubagentsRow block, but the persisted open/closed
+        state itself is keyed only by sessionId (crs.expandedSubagentHistory),
+        not per-view. Without this same gate here, a session viewed both in
+        the sidebar and as a showSubagents={false} kanban card
+        (LaneCard.tsx) would leak the history list onto the card with no
+        toggle rendered there to close it. */}
+      {showSubagentsRow && historyOpen && finished.length > 0 && (
         <div className="session-subagent-history" onClick={(e) => e.stopPropagation()}>
           {finished.map((subagent) => (
             <SubagentChip key={subagent.agentId} sessionId={sessionId} subagent={subagent} />
