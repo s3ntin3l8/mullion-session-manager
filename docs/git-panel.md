@@ -1,11 +1,14 @@
 # GitPanel — branch and worktree management (#442)
 
-The Dock's GitPanel gives a project's branches and worktrees a management
-UI, layered on top of the existing read-only branch/worktree listing and
-the sidebar's git-status polling. It works for local- and multi-host
-(remote-hosted) projects alike, proxying through the same
-`SessionBackend`/`/internal/*` pattern the rest of Mullion's remote-host
-support uses.
+GitPanel gives a project's branches and worktrees a management UI, layered
+on top of the existing read-only branch/worktree listing and the sidebar's
+git-status polling. Open it via the sidebar's Source Control section
+(`SourceControlSection.tsx`'s "Open Git Panel" action, issue #433) or the
+command palette ("Git: `<project>`") — not the Dock, which is a separate,
+shared rail of per-project monitors (see [`dock.md`](dock.md)). It works for
+local- and multi-host (remote-hosted) projects alike, proxying through the
+same `SessionBackend`/`/internal/*` pattern the rest of Mullion's
+remote-host support uses.
 
 ## What you get
 

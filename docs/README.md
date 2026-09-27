@@ -6,10 +6,12 @@ when you'd reach for it.
 
 ## Using Mullion
 
-- [`dock.md`](dock.md) — per-project dock: launchers, `dock.json`, Docker
-  Compose service discovery, dev-server port auto-detection.
-- [`git-panel.md`](git-panel.md) — branch and worktree management from the
-  Dock: delete a branch, remove a worktree, prune stale metadata.
+- [`dock.md`](dock.md) — the Dock: a shared rail of per-project monitors
+  (`dock.json`), Docker Compose service discovery, dev-server port
+  auto-detection.
+- [`git-panel.md`](git-panel.md) — branch and worktree management, opened
+  from the sidebar's Source Control section or the command palette: delete a
+  branch, remove a worktree, prune stale metadata.
 - [`browser-previews.md`](browser-previews.md) — embed a project's dev
   server or an external URL in-dashboard, with working HMR.
 - [`browser-automation.md`](browser-automation.md) — drive a project's

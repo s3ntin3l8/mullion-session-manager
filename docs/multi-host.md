@@ -40,9 +40,9 @@ manual step on the primary at all, the path a scripted/automated deploy
 section for the full deploy-tooling contract (`install.sh --role agent`,
 the systemd unit, an example Ansible role); the protocol itself is
 documented here. **Manual registration** (a pre-provisioned, per-agent
-static token, added by hand in Settings → Hosts) is also supported, for a
-one-off host or anyone who'd rather not hand a shared enrollment secret to
-automation — see below.
+static token, added by hand in Settings → Hosts & SSH bridges) is also
+supported, for a one-off host or anyone who'd rather not hand a shared
+enrollment secret to automation — see below.
 
 ### Self-registration (zero manual steps)
 
@@ -95,10 +95,10 @@ enrollment call (with retry/backoff, so a briefly-down primary never blocks
 the agent's own boot) if a renewal ever comes back `401`.
 
 Newly-enrolled hosts are distinguishable from manually-registered ones via
-the API's `origin: "enrolled" | "manual"` field on `GET /api/hosts` — a
-Settings → Hosts UI badge surfacing this (so an unexpected enrolled host is
-easy to spot at a glance, not just via the API) hasn't shipped yet; the data
-is there for a follow-up to render it.
+the API's `origin: "enrolled" | "manual"` field on `GET /api/hosts` —
+a Settings → Hosts & SSH bridges UI badge surfacing this (so an unexpected
+enrolled host is easy to spot at a glance, not just via the API) hasn't
+shipped yet; the data is there for a follow-up to render it.
 
 Advertised URLs must be unique per agent, the same requirement manual
 registration already has implicitly. `MULLION_AGENT_ADVERTISE_URL`'s
@@ -109,7 +109,8 @@ sharing a baseUrl will repeatedly "steal" the same host row from each other
 on their independent renewal cycles. Set `MULLION_AGENT_ADVERTISE_URL`
 explicitly if you can't guarantee that.
 
-Rotating a manually-registered host's token (Settings → Hosts → Edit, or
+Rotating a manually-registered host's token (Settings → Hosts & SSH
+bridges → Edit, or
 `PATCH /api/hosts/:id`) also revokes any session that host had established
 via self-registration, immediately — this is what makes token rotation a
 real response to a suspected leak rather than a no-op once a host has
@@ -140,13 +141,13 @@ hand a shared enrollment secret to automation:
 3. **Start it.** It boots to `/health`/`/ready` plus the internal API; there
    is no UI to open on the agent itself — you never point a browser at it.
 4. **Register it on the primary**: open the primary's dashboard →
-   **Settings → Hosts → Add host**, and fill in:
+   **Settings → Hosts & SSH bridges → Add a host**, and fill in:
    - **Name** — any label (e.g. `home-server`).
    - **Base URL** — where the agent is reachable, e.g.
      `http://192.168.1.20:4000`.
    - **Token** — must exactly match that agent's `MULLION_AGENT_TOKEN`.
 
-   Once saved, use **Ping** in the Hosts list to confirm connectivity.
+   Once saved, use **Test** in the Hosts list to confirm connectivity.
 
 5. **Create (or move) a project onto that host.** The project-creation modal
    gets a host picker once at least one remote host is registered; every
@@ -229,9 +230,10 @@ A self-registered agent traps `SIGTERM`/`SIGINT` (the same signals a
 `POST /api/internal/deregister` on the primary with its current session
 credential — a request bounded to ~2 seconds and entirely best-effort: an
 unreachable primary never blocks or delays the agent's own shutdown, and the
-heartbeat sweep above is still the fallback for an ungraceful exit (a crash,
-`kill -9`, or a network partition). The effect is purely a faster status
-update — a clean shutdown reflects as offline in Settings within the
+heartbeat sweep below ("Health monitoring") is still the fallback for an
+ungraceful exit (a crash, `kill -9`, or a network partition). The effect is
+purely a faster status update — a clean shutdown reflects as offline in
+Settings within the
 request's own round-trip, instead of waiting on the heartbeat's 3-missed-ping
 window.
 
@@ -297,10 +299,12 @@ anything that happened before it.
 ## Health monitoring
 
 The primary polls every registered remote host's `/health` route (the same
-unauthenticated liveness check `ping()`/**Ping** already used) on a
+unauthenticated liveness check `ping()`/**Test** already used) on a
 background timer — `HOST_HEARTBEAT_INTERVAL_SECONDS` (default `30`, `0`
-disables it). Settings → Hosts shows a continuously-updated status dot:
-green (online), amber (degraded — up to 2 consecutive missed pings), or a
+disables it; also UI-configurable at runtime as "Health check interval" in
+Settings → Hosts & SSH bridges, no restart needed). Settings → Hosts & SSH
+bridges shows a continuously-updated status dot: green (online), amber
+(degraded — up to 2 consecutive missed pings), or a
 hollow dim ring with a red text label (offline — 3 or more). This is live,
 in-memory state only, never written to the `hosts` table — an unreachable
 primary restart resets every host back to "pending" until the next sweep,
@@ -311,9 +315,10 @@ same as a fresh boot.
 Issue [#647](https://github.com/s3ntin3l8/mullion-session-manager/issues/647)
 / roadmap 7.8 — an agent updates the same way the primary does
 (`scripts/self-update.sh`, unchanged), just triggered remotely instead of
-from its own dashboard. Settings → Hosts shows each registered agent's
-running version next to the primary's own, and — when they differ — an
-"Update" button. There is deliberately no "update all hosts": applying is
+from its own dashboard. Settings → Hosts & SSH bridges shows each
+registered agent's running version next to the primary's own, and — when
+they differ — an "Update" button. There is deliberately no "update all
+hosts": applying is
 always a per-host, manually-triggered action, since a concurrent fleet-wide
 apply is how every host goes down at once.
 
@@ -358,8 +363,8 @@ can go through the button.
 
 If a session on an agent host needs to authenticate with a key that lives on
 your laptop (1Password, `ssh-agent`, ...), pair the SSH agent bridge once
-from the primary's Settings → Hosts → SSH agent bridges — that single
-pairing serves every enrolled agent host, with no per-host tunnel or
+from the primary's Settings → Hosts & SSH bridges → SSH agent bridges — that
+single pairing serves every enrolled agent host, with no per-host tunnel or
 laptop-side change needed when you enroll another one later. See
 [`ssh-agent.md`](ssh-agent.md) for setup, the manual per-host `ssh -R`
 alternative, and how the two compose.
@@ -372,9 +377,9 @@ alternative, and how the two compose.
   notes in `.claude/plans/`), not an oversight — it's what makes zero-touch
   deploys possible; treat the enrollment secret as fleet-wide-admin-grade.
 - No in-app auth on the agent's internal API beyond the bearer token/session
-  credential (plus, for a session credential, the signature described
-  below); put it behind the same network/VPN boundary you'd use for
-  anything else with shell access.
+  credential (plus, for a session credential, the signature described above
+  in "Request signing"); put it behind the same network/VPN boundary you'd
+  use for anything else with shell access.
 - Task Master now works end-to-end against a remote-hosted project (`#484`)
   — issue ingest, claim, work, review with a real diff-stat, promotion to a
   PR, and Retry — given an agent build new enough to serve the routes it

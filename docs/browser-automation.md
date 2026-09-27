@@ -68,6 +68,13 @@ The request must include an `action` property:
   browser download for. See [The `download` action](#the-download-action-issue-381)
   below.
 
+The full action set also includes `press`, `type`, `select`, `check`,
+`uncheck`, `wait`, `dialog`, `hover`, `scroll`, `get`, `console`, and
+`errors` (`src/routes/browser-automation.ts`) — keyboard/form input beyond
+`fill`, waiting for a selector/condition, handling a native `alert`/
+`confirm`/`prompt` dialog, and reading back the page's console/error buffers
+without a separate `eval` round trip.
+
 #### The `download` action (issue #381)
 
 A download event fires during the **preceding** action (e.g. a `click` on a
@@ -248,16 +255,24 @@ To bypass the need for agents to write fragile CSS/XPath selectors:
 
 ## 3. Cookie & Profile Import
 
-To facilitate logging into corporate or personal staging environments, users can import cookies from their real browser profile (Chrome or Firefox) on the host.
+To facilitate logging into corporate or personal staging environments, users can import cookies from their real browser profile (Chrome or Firefox) on the host, or upload a cookie export directly.
 
-- **Storage & Retrieval:** Profile paths and metadata are saved in the `browser_cookies` table. Actual cookies are loaded directly into the Playwright browser context at startup.
+- **Storage & Retrieval:** Profile paths and metadata are saved in the `browser_cookies` table; the cookie values themselves are encrypted at rest via `app.encryption` (AES-256-GCM, when `DB_ENCRYPTION_KEY` is set — same convention as other encrypted-at-rest tables). Actual cookies are decrypted and loaded directly into the Playwright browser context when the project's browser launches (`BrowserManager.getOrLaunch`).
 - **Endpoints:**
   - **`GET /api/projects/:projectId/browser-cookies`**: List imported cookie profiles for a project. Returns metadata summaries only; decrypted cookie values are **never** returned.
-  - **`POST /api/projects/:projectId/browser-cookies/import`**: Synchronously parse and import a browser profile's cookies.
+  - **`POST /api/projects/:projectId/browser-cookies/import`**: Synchronously parse and import cookies from a browser profile _path_ on the host's filesystem. Local-host projects only — a remote-hosted project's profile path lives on the agent's disk, not this process's; use Upload instead.
     ```json
     {
       "browser": "chrome",
       "profilePath": "/home/user/.config/google-chrome/Default",
+      "label": "My Dev Profile"
+    }
+    ```
+  - **`POST /api/projects/:projectId/browser-cookies/upload`**: Import cookies from an uploaded file's own bytes instead of a host path — works for any project regardless of which host it runs on.
+    ```json
+    {
+      "browser": "chrome",
+      "fileBase64": "<base64-encoded cookie export>",
       "label": "My Dev Profile"
     }
     ```
@@ -270,9 +285,37 @@ To facilitate logging into corporate or personal staging environments, users can
 The frontend `BrowserPane` attaches to the browser's live display via a dedicated WebSocket pipeline:
 
 ```
-GET /ws/sessions/:id/browser
+GET /ws/browser/:sessionId
 ```
 
 - **Binary Frame Streaming:** Playwright captures page screenshot frames (`page.screenshot()`) and streams them down to the client as raw JPEG binary blobs.
 - **Backpressure Handling:** To prevent network flooding and buffering lag, Mullion monitors socket queue size (`BACKPRESSURE_MAX_BUFFERED_BYTES = 4MB`). If client rendering falls behind, newer frames are dropped rather than queued.
 - **Event Proxying:** Mouse clicks, movements, scroll wheels, and key events are serialized in the frontend and sent up to the WebSocket server, which replays them using Playwright's `page.mouse` and `page.keyboard` input APIs.
+
+---
+
+## 5. Configuration and stream settings
+
+`BROWSER_ENABLED` (default off) gates the whole feature. Settings → Browser
+adds two UI-configurable runtime knobs, each falling back to a server-side
+env default:
+
+- **Browser pool size** (`BROWSER_MAX_INSTANCES`, clamped 1–32) — most
+  browsers running at once, one per project. Marked restart-required: takes
+  effect after the server next restarts.
+- **Stream frame rate** (`BROWSER_FRAMERATE`) — frames per second for the
+  live display above. No restart needed, but only applies to a newly opened
+  pane for a project on this (the primary's own) machine, not one already
+  streaming and not a remote-hosted project's pane.
+
+See [`configuration.md`](configuration.md) for the full env var reference.
+
+## 6. CLI and MCP
+
+The same actions are reachable outside the dashboard: `mullion browser
+<action>` (over the control socket, like the rest of the CLI) and the
+`use_browser`/`browser_action` MCP tools (over the per-session hook socket,
+`src/mcp/client.mjs` — the same channel the agent hooks in
+[`agent-hooks.md`](agent-hooks.md) speak, not the control socket) both mirror
+this action set. See [`cli.md`](cli.md)'s `browser` command section for the
+full action list.

@@ -21,6 +21,11 @@ One helper connection supplies `SSH_AUTH_SOCK` to sessions on the primary
 and every enrolled agent host. Adding another host does not require another
 laptop-side installation or tunnel.
 
+The tray app replaces the former `mullion helper` command-line installation
+(see "Existing helper migration" below) — running `mullion helper` today
+just errors with a pointer to install the tray app instead
+(`src/cli/core.mjs`).
+
 ### Install
 
 - **macOS 13.5 or newer on Apple silicon:** download the DMG from the
@@ -41,8 +46,8 @@ Use the [manual tunnel](#manual-tunnel-ssh--r) on those platforms for now.
 
 ### Pair
 
-1. In Mullion, open **Settings → Hosts → SSH agent bridges** and choose
-   **Pair a new bridge**.
+1. In Mullion, open **Settings → Hosts & SSH bridges → SSH agent bridges**
+   and choose **Pair a new bridge**.
 2. Copy the one-time payload. It expires after 10 minutes.
 3. Open Mullion Helper, paste the payload into its pairing screen, and pair.
 4. Confirm that the helper shows **Connected** and Mullion shows the bridge
@@ -80,8 +85,9 @@ credential and close its live connection immediately. Re-pairing afterward
 requires a new payload.
 
 When more than one laptop is paired, Mullion tries them in the order shown
-in Settings → Hosts → SSH agent bridges — drag a row to reorder the list and
-set which laptop should be preferred. Reordering takes effect immediately,
+in Settings → Hosts & SSH bridges → SSH agent bridges — drag a row to
+reorder the list and set which laptop should be preferred. Reordering takes
+effect immediately,
 including for a laptop that's already connected. A bridge that isn't
 currently reachable is skipped in favor of the next one, regardless of its
 position in the list, so a locked or sleeping top-priority laptop never
@@ -149,14 +155,32 @@ systemd user service if it should survive sleep, network changes, and login.
 
 ## Precedence
 
-For each host, Mullion resolves the session socket in this order:
+For each host, Mullion resolves the session socket in this order
+(`resolveSshAuthSock`, `ssh-agent-socket.ts`):
 
-1. `MULLION_SSH_AUTH_SOCK`, when explicitly configured.
-2. The local socket materialized by a connected Mullion Helper bridge.
-3. No `SSH_AUTH_SOCK`.
+1. `MULLION_SSH_AUTH_SOCK`, when explicitly configured — wins over both 2 and 3.
+2. Otherwise, an **ambient** `SSH_AUTH_SOCK` this host process already
+   inherited (`systemd --user` environment, PAM, a desktop keyring) — wins
+   over 3, the paired bridge. This is an upgrade-safety trade-off:
+   a host that already had a working agent before ever pairing a bridge
+   keeps using it unchanged, rather than a newly-paired bridge silently
+   taking over sessions that worked fine before. It applies on both the
+   primary and any agent host, whether or not a laptop has ever actually
+   paired — the bridge socket is materialized on every host regardless (see
+   [`multi-host.md`](multi-host.md#current-limitations)). The host logs a
+   shadow warning at boot when this shadowing happens, since Settings'
+   `connected` bridge status doesn't otherwise distinguish it from a session
+   actually using the bridge.
+3. Otherwise, the local socket the Mullion Helper bridge materializes on
+   this host — bound unconditionally at boot, whether or not a laptop has
+   ever paired, so a session spawned before any laptop pairs starts working
+   the moment one does, with no respawn needed. Resolution isn't gated on
+   whether a helper is actually connected at the moment; an unpaired or
+   disconnected bridge just means nothing answers on the other end yet.
+4. No `SSH_AUTH_SOCK`.
 
-This lets a host keep an intentional manual tunnel while other hosts use the
-same paired helper.
+This lets a host keep an intentional manual tunnel (or a pre-existing
+ambient agent) while other hosts use the same paired helper.
 
 ## Troubleshooting
 
