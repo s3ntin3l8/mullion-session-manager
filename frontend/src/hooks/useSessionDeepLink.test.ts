@@ -14,9 +14,13 @@ import { makeSession, makeWorkspace } from "../test/fixtures.js";
 // touch the store.
 const saveWorkspaceLayout = vi.fn().mockResolvedValue(undefined);
 let mockSessions: Array<{ id: number; status: string }> = [];
+// Issue #1426 — useWorkspacePersistence's isPhoneTierNow() reads this
+// straight off the store now; "desktop" keeps this composed test's own
+// saves un-suppressed, matching its layoutTier prop below.
+const layoutMode = "desktop";
 
 function storeState() {
-  return { sessions: mockSessions, saveWorkspaceLayout };
+  return { sessions: mockSessions, saveWorkspaceLayout, settings: { layoutMode } };
 }
 
 vi.mock("../store/index.js", () => {

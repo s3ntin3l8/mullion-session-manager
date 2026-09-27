@@ -33,9 +33,22 @@ let devices: Array<{
   avdName?: string | null;
 }> = [];
 let devicesLoaded = false;
+// Issue #1426 — isPhoneTierNow() reads this straight off the store, live, at
+// save/restore time, independent of the `layoutTier` prop every test below
+// already passes. Defaults to an explicit "desktop" override (not "auto")
+// so these tests don't also depend on jsdom's own window.matchMedia default
+// (testSetup.ts stubs `matches: false` for every query) staying that way.
+let layoutMode: "auto" | "phone" | "tablet" | "desktop" = "desktop";
 
 function storeState() {
-  return { sessions, projects, devices, devicesLoaded, saveWorkspaceLayout };
+  return {
+    sessions,
+    projects,
+    devices,
+    devicesLoaded,
+    saveWorkspaceLayout,
+    settings: { layoutMode },
+  };
 }
 
 vi.mock("../store/index.js", () => {
@@ -128,6 +141,7 @@ beforeEach(() => {
   projects = [];
   devices = [];
   devicesLoaded = false;
+  layoutMode = "desktop";
   saveWorkspaceLayout.mockClear();
 });
 
@@ -763,5 +777,201 @@ describe("useWorkspacePersistence", () => {
     );
 
     expect(orphanPanel.api.setTitle).not.toHaveBeenCalled();
+  });
+});
+
+// Issue #1426 — phone shouldn't mutate the workspace layouts desktop shares.
+// `layoutTier` (the hook's own prop) is left "desktop" in every test below
+// on purpose — the whole point of isPhoneTierNow() is that it does NOT
+// trust that prop (see its own comment for why), so these tests drive
+// suppression purely through the mocked store's `settings.layoutMode`.
+// `api.toJSON` (which serializeForPersist calls internally) is asserted
+// un-called wherever a save should be suppressed — proving the skip happens
+// before serialization, not just before the PATCH.
+describe("useWorkspacePersistence — issue #1426 (phone never saves)", () => {
+  it("suppresses the normal autosave path on phone", () => {
+    vi.useFakeTimers();
+    const { api, fireLayoutChange } = makeMockApi();
+    layoutMode = "phone";
+    const workspace = makeWorkspace();
+    const setPanelsVersion = makeSetPanelsVersion();
+
+    renderHook(() =>
+      useWorkspacePersistence({
+        dockviewApi: api,
+        activeWorkspaceId: 1,
+        workspaces: [workspace],
+        layoutTier: "desktop",
+        setPanelsVersion,
+      }),
+    );
+    vi.advanceTimersByTime(0); // let the restore settle
+
+    fireLayoutChange();
+    vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS);
+
+    expect(api.toJSON).not.toHaveBeenCalled();
+    expect(saveWorkspaceLayout).not.toHaveBeenCalled();
+  });
+
+  it("suppresses the outgoing-workspace flush on a phone workspace switch", () => {
+    vi.useFakeTimers();
+    const { api, fireLayoutChange } = makeMockApi();
+    layoutMode = "phone";
+    const ws1 = makeWorkspace({ id: 1, layout: { ws: 1 } });
+    const ws2 = makeWorkspace({ id: 2, layout: { ws: 2 } });
+    const setPanelsVersion = makeSetPanelsVersion();
+
+    const { rerender } = renderHook(
+      ({ activeWorkspaceId, workspaces }: { activeWorkspaceId: number; workspaces: Workspace[] }) =>
+        useWorkspacePersistence({
+          dockviewApi: api,
+          activeWorkspaceId,
+          workspaces,
+          layoutTier: "desktop",
+          setPanelsVersion,
+        }),
+      { initialProps: { activeWorkspaceId: 1, workspaces: [ws1] } },
+    );
+    vi.advanceTimersByTime(0);
+
+    fireLayoutChange();
+    vi.advanceTimersByTime(100); // still inside the debounce, unflushed
+
+    rerender({ activeWorkspaceId: 2, workspaces: [ws1, ws2] });
+
+    expect(api.toJSON).not.toHaveBeenCalled();
+    expect(saveWorkspaceLayout).not.toHaveBeenCalled();
+  });
+
+  it("suppresses the post-restore prune-save on phone", () => {
+    vi.useFakeTimers();
+    const { api, addPanel } = makeMockApi();
+    layoutMode = "phone";
+    sessions = [{ id: 1, status: "killed" }];
+    addPanel("session-1", { sessionId: 1 });
+    const workspace = makeWorkspace();
+    const setPanelsVersion = makeSetPanelsVersion();
+
+    renderHook(() =>
+      useWorkspacePersistence({
+        dockviewApi: api,
+        activeWorkspaceId: 1,
+        workspaces: [workspace],
+        layoutTier: "desktop",
+        setPanelsVersion,
+      }),
+    );
+    vi.advanceTimersByTime(0);
+    vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS);
+
+    expect(api.toJSON).not.toHaveBeenCalled();
+    expect(saveWorkspaceLayout).not.toHaveBeenCalled();
+  });
+
+  it("a workspace touched on phone stays save-suspended after a live tier flip to tablet, until its next restore", () => {
+    vi.useFakeTimers();
+    const { api, fireLayoutChange } = makeMockApi();
+    layoutMode = "phone";
+    const workspace = makeWorkspace();
+    const setPanelsVersion = makeSetPanelsVersion();
+
+    renderHook(() =>
+      useWorkspacePersistence({
+        dockviewApi: api,
+        activeWorkspaceId: 1,
+        workspaces: [workspace],
+        layoutTier: "desktop",
+        setPanelsVersion,
+      }),
+    );
+    vi.advanceTimersByTime(0);
+
+    // Taint the workspace with a phone-tier edit first.
+    fireLayoutChange();
+    vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS);
+    expect(saveWorkspaceLayout).not.toHaveBeenCalled();
+
+    // Rotate to tablet width WITHOUT switching workspace or reloading — no
+    // restore re-runs (restoredWorkspaceIdRef already matches), so nothing
+    // else could have lifted the taint.
+    layoutMode = "tablet";
+    fireLayoutChange();
+    vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS);
+
+    expect(api.toJSON).not.toHaveBeenCalled();
+    expect(saveWorkspaceLayout).not.toHaveBeenCalled();
+  });
+
+  it("resumes saving once the SAME workspace is restored again at a non-phone tier", () => {
+    vi.useFakeTimers();
+    const { api, fireLayoutChange } = makeMockApi();
+    layoutMode = "phone";
+    const ws1 = makeWorkspace({ id: 1 });
+    const ws2 = makeWorkspace({ id: 2 });
+    const setPanelsVersion = makeSetPanelsVersion();
+
+    const { rerender } = renderHook(
+      ({ activeWorkspaceId }: { activeWorkspaceId: number }) =>
+        useWorkspacePersistence({
+          dockviewApi: api,
+          activeWorkspaceId,
+          workspaces: [ws1, ws2],
+          layoutTier: "desktop",
+          setPanelsVersion,
+        }),
+      { initialProps: { activeWorkspaceId: 1 } },
+    );
+    vi.advanceTimersByTime(0);
+    fireLayoutChange();
+    vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS);
+    expect(saveWorkspaceLayout).not.toHaveBeenCalled();
+
+    // Switch away and back at desktop width — restoredWorkspaceIdRef only
+    // guards against re-restoring the SAME id twice in a row (ws2 must
+    // actually restore, not just bounce off a workspace list that doesn't
+    // carry it, or ws1's own guard never lifts either), so switching to
+    // workspace 2 and back to 1 forces a fresh restore of 1.
+    layoutMode = "desktop";
+    rerender({ activeWorkspaceId: 2 });
+    vi.advanceTimersByTime(0);
+    rerender({ activeWorkspaceId: 1 });
+    vi.advanceTimersByTime(0);
+
+    fireLayoutChange();
+    vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS);
+
+    expect(saveWorkspaceLayout).toHaveBeenCalledTimes(1);
+    expect(saveWorkspaceLayout).toHaveBeenCalledWith(1, { panels: {} });
+  });
+
+  it("never saves on a first render at phone width, even though the layoutTier PROP still reports desktop", () => {
+    // Mirrors App.tsx's own `layoutTier` state, which literally starts at
+    // the "desktop" default and is only corrected a render later — every
+    // renderHook call in this file already passes `layoutTier: "desktop"`
+    // regardless of `layoutMode`, which is the point: this test's mocked
+    // `layoutMode = "phone"` is the ONLY signal the hook can (and must)
+    // still see this as phone through.
+    vi.useFakeTimers();
+    const { api, fireLayoutChange } = makeMockApi();
+    layoutMode = "phone";
+    const workspace = makeWorkspace();
+    const setPanelsVersion = makeSetPanelsVersion();
+
+    renderHook(() =>
+      useWorkspacePersistence({
+        dockviewApi: api,
+        activeWorkspaceId: 1,
+        workspaces: [workspace],
+        layoutTier: "desktop",
+        setPanelsVersion,
+      }),
+    );
+    vi.advanceTimersByTime(0);
+    fireLayoutChange();
+    vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS);
+
+    expect(api.toJSON).not.toHaveBeenCalled();
+    expect(saveWorkspaceLayout).not.toHaveBeenCalled();
   });
 });

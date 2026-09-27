@@ -38,7 +38,7 @@ export function AppearanceSection() {
       </div>
       <Row
         label="Layout mode"
-        desc="Auto chooses a phone, tablet, or desktop layout from the window width. Pick one to override it, for example on a foldable device."
+        desc="Auto chooses a phone, tablet, or desktop layout from the window width. Pick one to override it, for example on a foldable device. This is a server-wide setting: forcing Phone here makes every device's workspace layout read-only (issue #1426), the same as viewing one at phone width normally."
         align="start"
       >
         <Segmented
