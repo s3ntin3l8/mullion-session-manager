@@ -102,20 +102,24 @@ enough for everything a session needs to do to itself — get/rename/logs,
 the full `browser` surface, `project actions`, `events tail`, and your own
 MCP tools. It is **never** enough for **full-scope** ops:
 
-| Op                                                 | Scope           |
-| -------------------------------------------------- | --------------- |
-| `session get/rename/logs/scrollback`, `attach`     | full or session |
-| `attach` stream frames — `input`/`resize`/`detach` | full or session |
-| `session list/create/kill`                         | **full only**   |
-| `session spawn-child` / `spawn_child_session`      | full or session |
-| `project actions`                                  | full or session |
-| `project list`, `project dock`                     | **full only**   |
-| `project get_tooling`                              | full or session |
-| `project set_tooling`                              | **full only**   |
-| `preview create/get/delete/list`                   | **full only**   |
-| `dock start/stop/list`                             | **full only**   |
-| `agents list`                                      | **full only**   |
-| `browser` (any action), `events tail`              | full or session |
+| Op                                                  | Scope           |
+| --------------------------------------------------- | --------------- |
+| `session get/rename/logs/scrollback`, `attach`      | full or session |
+| `attach` stream frames — `input`/`resize`/`detach`  | full or session |
+| `session list/create/kill`                          | **full only**   |
+| `session spawn-child` / `spawn_child_session`       | full or session |
+| `project actions`                                   | full or session |
+| `project list`, `project dock`                      | **full only**   |
+| `project get_tooling`                               | full or session |
+| `project set_tooling`                               | **full only**   |
+| `preview create/get/delete/list`                    | **full only**   |
+| `dock start/stop/list`                              | **full only**   |
+| `agents list`                                       | **full only**   |
+| `device list/get/action/start/terminate/discovered` | full or session |
+| `device create` (an emulator)                       | full or session |
+| `device delete/pair/pair-and-connect`               | **full only**   |
+| `bundle status/resync/remove`                       | **full only**   |
+| `browser` (any action), `events tail`               | full or session |
 
 (This mirrors `docs/socket-api.md`'s Ops table exactly — that's the
 authoritative source if it and this table ever drift; check there for
@@ -136,6 +140,16 @@ at all; the socket's `0600` file permission is the only gate left. Don't
 assume you're scope-limited just because you're "inside a session" — check
 with `mullion config` (below) if it matters to what you're about to do.
 
+**A CLI-specific gap in that same mode:** the MCP client already defaults a
+missing session/project id to yours on an auth-disabled host, but the
+`mullion` CLI doesn't yet ([issue #1457](https://github.com/s3ntin3l8/mullion-session-manager/issues/1457))
+— `src/cli/core.mjs` only reads `MULLION_SESSION_ID` for `mullion config`'s
+own display. On such a host, `mullion session get`/`mullion browser ...`/
+`mullion session spawn-child` fail with a "required" error unless you pass
+`--session <id>` explicitly, even though the MCP tools reachable from the
+same session already resolve it for you. Prefer MCP for these ops in that
+mode, or pass `--session $MULLION_SESSION_ID` on the CLI yourself.
+
 ## Checking your own scope
 
 ```bash
@@ -149,10 +163,12 @@ actually in before you build a multi-step script around an assumption.
 
 ## CLI vs. MCP — when to use which
 
-Every op below has both an MCP tool and a `mullion` CLI subcommand; they
-wrap the exact same control-socket operation (`docs/socket-api.md`), so
-there's no functional difference in what either can do. Pick based on how
-you're working:
+Nearly every op below has both an MCP tool and a `mullion` CLI subcommand;
+they wrap the exact same control-socket operation (`docs/socket-api.md`),
+so there's no functional difference in what either can do. The one
+exception: `device create`, `device pair`, and `device pair-and-connect`
+have no MCP tool at all — CLI (or the dashboard's own device panel) only.
+Pick based on how you're working:
 
 - **MCP tool** — lower overhead for a tool-calling model: no subprocess
   spawn, structured input/output, and it's what's already registered for a
@@ -169,11 +185,12 @@ session exec`), or you're not running under an agent with MCP wired up at
 
 **From inside a session, the full-scope-only MCP tools
 (`list_sessions`/`start_dock_session`/`stop_dock_session`/`list_projects`/
-`create_preview`/`delete_preview`/`delete_device`) reply with a scope error,
-same as the CLI's own** — they're there for an operator running `mullion mcp`
-directly with `MULLION_AUTH_TOKEN` set, not for you. `get_scrollback`
-(defaults to your own session) and `list_actions` (defaults to your own
-project) work normally at session scope.
+`create_preview`/`delete_preview`/`list_previews`/`set_project_tooling`/
+`delete_device`) reply with a scope error, same as the CLI's own** — they're
+there for an operator running `mullion mcp` directly with `MULLION_AUTH_TOKEN`
+set, not for you. `get_scrollback` (defaults to your own session),
+`list_actions` (defaults to your own project), and `get_project_tooling`
+(defaults to your own project) work normally at session scope.
 
 ## Browser automation
 
@@ -274,6 +291,15 @@ act unattended (edit files, run tests, commit) rather than just sit and wait
 for a human, pass `skipPermissions: true` (or check whether it actually took
 effect on this host before assuming it stalled on a permission prompt nobody
 is watching).
+
+**Model overrides.** `model` (MCP) / `--model` (CLI) sets the child's model:
+opencode's own `provider/model` string, or the bare `--model` value for a
+Claude Code, Codex, or agy command — an invalid value is rejected rather
+than silently ignored. Omit it and set `parentSessionId` to inherit the
+parent session's own model instead, but that inheritance is opencode-only;
+it's ignored for any other command. `smallModel` is the same idea for
+opencode's lightweight `small_model` config key specifically — meaningless,
+and ignored, for a non-opencode command either way.
 
 **Do not bake prompt text into `command`.** Use `initialPrompt` (MCP) /
 `--initial-prompt` (CLI) instead — it's delivered via the target CLI's own

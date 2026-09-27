@@ -27,11 +27,14 @@ defaults to you.
 
 `MULLION_HOOK_TOKEN` authenticates at **session scope**: pinned to this one
 session. Enough for get/rename/logs on yourself, the full `browser` surface,
-`project actions`, and your own MCP tools. **Never** enough for full-scope
-ops: `session list/create/kill`, `dock start/stop/list`, `preview *`,
-`project list/dock`, `agents list` — these 403, and that's expected, not a
-bug. `session spawn-child` IS session-reachable (it targets a child of
-yourself, not an arbitrary session).
+`project actions`, reading (not writing) `project tooling`, and most of the
+`device` surface. **Never** enough for full-scope ops: `session
+list/create/kill`, `dock start/stop/list`, `preview *`, `project list/dock`,
+writing `project tooling`, `agents list`, `device delete/pair/pair-and-connect`,
+`bundle status/resync/remove` — these 403, and that's expected, not a bug.
+`session spawn-child` IS session-reachable (it targets a child of yourself,
+not an arbitrary session), and so is the rest of `device`
+(`list/get/action/start/stop/discovered`, plus an emulator `device create`).
 
 **The one caveat that will confuse you if you skip it:** when Mullion's
 authentication is disabled entirely on this host, the socket accepts every
@@ -47,22 +50,28 @@ not sure why.
 
 ## CLI vs. MCP
 
-Every op has both an MCP tool and a `mullion` CLI subcommand, wrapping the
-identical control-socket operation — no functional difference, pick based
-on how you're working:
+Nearly every op has both an MCP tool and a `mullion` CLI subcommand,
+wrapping the identical control-socket operation — no functional difference
+between the two, pick based on how you're working. MCP is wired for all
+four CLIs Mullion hosts, not just Claude Code: Codex via `-c
+mcp_servers.mullion.*` overrides, opencode via its own `mcp.<name>` config
+keys, and agy via `~/.gemini/config/mcp_config.json` — each auto-registered
+the same way `--mcp-config` is for Claude Code.
 
 - **MCP tool** — lower overhead for a tool-calling model, no subprocess
   spawn. Prefer for `get_scrollback`, `list_actions`, `browser_action`,
-  `use_browser`, `promote_to_worktree`, `spawn_child_session` — already
-  registered for a Claude Code session (`mullion mcp`).
+  `use_browser`, `promote_to_worktree`, `spawn_child_session`,
+  `list_devices`, `use_device`/`device_action`, and `start_device`/
+  `stop_device` — the ops actually reachable at session scope.
 - **`mullion` CLI** — better for `--json` in a shell pipeline, an
-  interactive `mullion session exec`, or an agent without MCP wired up
-  (Codex/opencode/agy today).
+  interactive `mullion session exec`, or the couple of ops with no MCP tool
+  at all (`device create`/`device pair`/`device pair-and-connect`).
 
 Full-scope-only MCP tools (`list_sessions`, `start_dock_session`,
-`stop_dock_session`, `list_projects`, `create_preview`, `delete_preview`)
-reply with a scope error from inside a session, same as the CLI's own —
-they're for an operator running `mullion mcp` directly, not for you.
+`stop_dock_session`, `list_projects`, `create_preview`, `delete_preview`,
+`list_previews`, `set_project_tooling`, `delete_device`) reply with a scope
+error from inside a session, same as the CLI's own — they're for an
+operator running `mullion mcp` directly, not for you.
 
 ## If this project hasn't been scaffolded
 

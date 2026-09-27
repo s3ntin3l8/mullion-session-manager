@@ -51,9 +51,10 @@ ExecStart=/home/CHANGEME/.nvm/versions/node/vCHANGEME/bin/node dist/server.js
 # name — matters only for a host whose cgroup layout defeats
 # src/services/systemd-unit.ts's own autodetection. Placed before
 # EnvironmentFile below so an explicit MULLION_SERVICE_UNIT in .env (if you
-# ever need one) still wins. An agent has no self-update surface of its own
-# today (POST /api/updates/apply is a primary-only route), so this mostly
-# matters for future use, not anything this release exercises.
+# ever need one) still wins. This matters today, not just for future use: an
+# agent has its own self-update surface (POST /internal/updates/apply,
+# sharing services/update-apply.ts's spawn/status logic with the primary's
+# own /api/updates/apply), and that flow resolves this same unit to restart.
 Environment=MULLION_SERVICE_UNIT=%n
 
 # CHANGE ME: absolute path to this install's .env — OUTSIDE `current`/any

@@ -241,7 +241,9 @@ const spawnChildSession = {
         type: "string",
         description:
           "Optional working directory override. Must resolve inside the project's own " +
-          "directory — a path outside it is rejected.",
+          "directory, OR be another directory git already lists as a worktree of the " +
+          "project's own repo (e.g. a sibling '.mullion-worktrees/<name>' checkout) — " +
+          "local projects only. Anything else is rejected.",
       },
       initialPrompt: {
         type: "string",

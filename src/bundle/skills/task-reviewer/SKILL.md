@@ -25,10 +25,17 @@ cover — what actually belongs in that JSON, and how to arrive at it.
 
 ## What your verdict actually costs
 
-Your verdict isn't advisory prose — it's a gating decision. A `clean`
-verdict approves the diff; `changes-requested` blocks it. It also does one
-more thing your prompt doesn't tell you: `changes-requested` spends one of
-this task's small, non-renewing budget of automatic fix-up rounds, shared
+Your verdict isn't advisory prose — it's a gating decision. `changes-requested`
+blocks the diff outright. A `clean` verdict clears it for merge but doesn't
+by itself merge it: the PR still needs the project's own `autoApprove`
+setting on, or a reviewer GitHub App posting its own approving review, before
+it merges without a human clicking Approve. Write the verdict the diff
+earns either way — don't shade it toward `clean` because you're not sure a
+human is watching.
+
+`changes-requested` also does one more thing your prompt doesn't tell you:
+it spends one of this task's small, non-renewing budget of automatic fix-up
+rounds, shared
 with a failing CI check and an unresolved PR review comment, never reset
 for the life of the task. If your prompt states how many of these remain,
 that number is the honest stakes of the verdict you're about to write.

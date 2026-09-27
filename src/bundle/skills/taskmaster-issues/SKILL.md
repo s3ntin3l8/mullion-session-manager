@@ -7,8 +7,10 @@ description: "How to write a GitHub issue that Mullion's Task Master will autono
 
 Only relevant to a project where Mullion's Task Master is enabled — if this
 repo doesn't have a background task watcher polling its issues, this skill
-doesn't apply. See `docs/tasks.md` for the full system; this is just the
-"how do I write the issue" cheat sheet.
+doesn't apply. See
+[`docs/tasks.md`](https://github.com/s3ntin3l8/mullion-session-manager/blob/main/docs/tasks.md)
+for the full system; this is just the "how do I write the issue" cheat
+sheet.
 
 ## What the worker actually gets
 
@@ -18,12 +20,23 @@ not even the directive lines below. There is no parsing, no summarization,
 no expansion: whatever isn't in the text you write is invisible to the
 agent that implements it.
 
-- **No parent issue, epic, or linked issue is ever pulled into the
-  prompt.** A bare `#123` reference is just four characters to the worker
-  — it never resolves to that issue's content.
+- **The worker DOES get more than your raw title+body.** Comments already
+  posted on the issue are always appended to the prompt. If this issue is a
+  registered GitHub sub-issue, the parent tracking issue's own spec and
+  comments, plus a list of sibling sub-issues Mullion already knows about,
+  are appended too (`task-prompt.ts`'s `renderComments`/`renderParent`/
+  `renderSiblings`) — each framed explicitly as context, not the worker's
+  own task. What still doesn't resolve: a bare `#123` reference typed into
+  your own prose is just four characters to the worker — it never expands
+  to that issue's content, so paste the conclusion instead of pointing at
+  it.
+- **An issue that still has open sub-issues is treated as an epic and
+  parked in `backlog`, not `ready`** — it won't auto-claim until every
+  sub-issue closes (or you claim it by hand).
 - **The same title+body is what the reviewer judges the diff against**,
-  when a review agent is configured — your body is the acceptance spec,
-  not a hint.
+  when a review agent is configured — spawned once your task moves from
+  `in_progress` to `reviewing`, the same point its draft PR opens. Your
+  body is the acceptance spec, not a hint.
 - Mullion's own preamble already covers running the repo's verification
   gate, self-reviewing the diff before committing, and leaving the
   worktree clean. Don't repeat any of that in your Scope.
@@ -94,7 +107,7 @@ claude`") is deliberately not picked up, only a line matching exactly
 | `Manual: true`                     | Ingests to `backlog`, not `ready` — never auto-claimed. Still claimable by hand. |
 | `Agent: <name>`                    | Which worker agent claims this task.                                             |
 | `ReviewAgent: <name>`              | Which agent reviews the diff. `none`/`false` disables review.                    |
-| `Model: <provider/model>`          | opencode only — implementer model.                                               |
+| `Model: <model>`                   | Implementer model override — every claimable agent, not just opencode.           |
 | `Reviewer-Model: <provider/model>` | opencode only — reviewer model; falls back to `Model:` if unset.                 |
 | `SmallModel: <provider/model>`     | opencode only — opencode's lightweight `small_model`.                            |
 
@@ -116,10 +129,14 @@ Matching rules, all six:
 - First match wins if a directive line appears more than once.
 - `Manual: true`/`Manual: True`/`Manual: TRUE` all match — only the word
   `true` counts, in any casing; `Manual: yes` is inert.
-- The three `Model:`-family directives only affect opencode-claimed
-  tasks; on claude/codex/agy they're silently inert. Their value must
-  look like `provider/model` — more than one slash is fine, e.g.
-  `openrouter/anthropic/claude-sonnet-4-5`.
+- **`Reviewer-Model:`/`SmallModel:` only affect opencode-claimed tasks; on
+  claude/codex/agy they're silently inert.** `Model:` is different — it
+  works for every claimable agent, but the expected shape differs by agent:
+  opencode wants `provider/model` (more than one slash is fine, e.g.
+  `openrouter/anthropic/claude-sonnet-4-5`), while claude/codex/agy take a
+  bare `--model` value with no slash required (e.g. `sonnet`, `gpt-5`).
+  A value in the wrong shape for the claiming agent is logged and falls
+  through, same as any other malformed value.
 - An unrecognized or malformed value at any tier is logged and falls
   through — never blocks pickup. If a directive doesn't seem to be taking
   effect, check it's really alone on its own line first.
@@ -149,6 +166,7 @@ worker's Scope.
 - Sequencing a roadmap with parent/sub-issue nesting instead of
   `blocked_by` — nesting doesn't gate auto-claim, only dependencies do.
 
-See `docs/tasks.md` for everything beyond issue authoring — claim/review/
-promote flow, worktree layout, agent-selection precedence, and dependency
-gating.
+See
+[`docs/tasks.md`](https://github.com/s3ntin3l8/mullion-session-manager/blob/main/docs/tasks.md)
+for everything beyond issue authoring — claim/review/promote flow, worktree
+layout, agent-selection precedence, and dependency gating.
