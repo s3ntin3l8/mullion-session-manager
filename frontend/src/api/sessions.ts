@@ -71,6 +71,14 @@ export const sessionsApi = {
       skipPermissions?: boolean;
       // Issue #822 — a dock control's own env, forwarded verbatim.
       env?: Record<string, string>;
+      // Issue #1424 — the command palette's per-session model override.
+      // Omitted (not sent) when the picker is left on its default option, so
+      // the backend resolves the install-wide settings default the same way
+      // it would for any other caller that leaves this unset (POST
+      // /api/sessions's own resolveCliModel/resolveOpenCodeModel chain,
+      // issue #1408). Validated server-side (issue #1423) — an invalid
+      // hand-typed value surfaces through the existing launchError path.
+      model?: string;
     },
   ) =>
     request<Session>("/api/sessions", {

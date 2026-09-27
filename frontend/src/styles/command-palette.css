@@ -158,6 +158,13 @@
 .cmd-palette-worktree-toggle input {
   accent-color: var(--accent-solid);
 }
+/* Issue #1424 — per-session model picker, sits below the skip-permissions
+   row inside the same options strip. */
+.cmd-palette-model-picker {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-soft);
+}
 .cmd-palette-change-target {
   margin-left: auto;
   font-size: 11px;

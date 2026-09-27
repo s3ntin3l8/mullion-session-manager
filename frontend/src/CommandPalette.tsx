@@ -24,6 +24,13 @@ import { STORAGE_KEYS, readNumber, writeNumber } from "./lib/persistedState.js";
 import { WorktreeOptions } from "./command-palette/WorktreeOptions.js";
 import { useFocusTrap } from "./hooks/useFocusTrap.js";
 import { useCoarsePointer } from "./lib/layoutTier.js";
+import { ModelSelect } from "./settings/ModelPicker.js";
+import {
+  commandHasModelFlag,
+  commandModelCli,
+  useModelOptions,
+  type ModelCli,
+} from "./models/modelCatalogs.js";
 
 // The unified launcher menu — one component backs the toolbar's "New
 // session"/⌘K entry (scope: "global", needs a project-target picker to
@@ -425,6 +432,53 @@ export function CommandPalette({
 
   const skipPermissionsEnabled = skipPermissionsOverride ?? false;
 
+  // Issue #1424 — per-session model override, shown in the options strip
+  // below for whichever launcher is currently highlighted. Unlike
+  // `skipPermissionsOverride` above, this does NOT persist across a launcher
+  // switch: it's keyed to the CLI it was picked for (`modelOverride.cli`),
+  // and read back as "no override" (falls through to the settings default)
+  // the moment `activeCli` no longer matches — moving the highlight from
+  // Claude to Codex must never carry a Claude model over to a Codex launch.
+  // No reset-on-close effect needed: the palette unmounts on close (App.tsx
+  // renders it behind `paletteOpen &&`), so a fresh mount already means
+  // fresh state.
+  const [modelOverride, setModelOverride] = useState<{
+    cli: ModelCli;
+    value: string | null;
+  } | null>(null);
+
+  const activeLauncherCommand =
+    activeEntry?.type === "launcher" ? activeEntry.launcher.command : null;
+  const activeCli = activeLauncherCommand !== null ? commandModelCli(activeLauncherCommand) : null;
+  // A command that already has its own --model (or codex's -m) flag keeps it
+  // — offering a picker that the backend would then silently ignore
+  // (buildModelFlag's own skip-if-present rule, hook-adapters/shared.ts)
+  // would be actively misleading.
+  const showModelPicker =
+    activeCli !== null &&
+    activeLauncherCommand !== null &&
+    !commandHasModelFlag(activeLauncherCommand, activeCli);
+  // Called unconditionally (rules of hooks) even when nothing is a
+  // model-capable launcher — "claude-code" is a safe, no-fetch fallback
+  // (useModelOptions never hits the network for it), and the result is
+  // simply not rendered when `showModelPicker` is false.
+  const modelCatalog = useModelOptions(activeCli ?? "claude-code");
+  const modelValue =
+    activeCli !== null && modelOverride?.cli === activeCli ? modelOverride.value : null;
+  const activeCliSettingsDefault =
+    activeCli === "claude-code"
+      ? settings.claudeCode?.defaultModel
+      : activeCli === "codex"
+        ? settings.codex?.defaultModel
+        : activeCli === "agy"
+          ? settings.agy?.defaultModel
+          : activeCli === "opencode"
+            ? settings.opencode?.implementerModel
+            : null;
+  const modelDefaultLabel = activeCliSettingsDefault
+    ? `Default (${activeCliSettingsDefault})`
+    : "CLI default";
+
   const target = projects.find((p) => p.id === effectiveProjectId) ?? null;
 
   // P9 — this used to be `void createSession(...).then(...)` with no
@@ -451,6 +505,20 @@ export function CommandPalette({
       n: sessions.filter((s) => s.projectId === effectiveProjectId).length + 1,
     });
     const trimmedBaseRef = worktreeBaseRef.trim();
+    // Issue #1424 — re-derive the launched launcher's own CLI here rather
+    // than trusting `activeCli` (computed from the currently highlighted
+    // row): `launch()` is also reachable from a row's onClick with whatever
+    // launcher that row represents, which onMouseEnter's setSelectedIndex
+    // makes the same row in practice, but this keeps the guarantee exact
+    // regardless of hover-event timing. Omitted (not sent) unless the
+    // override was set for this exact CLI and isn't the default option, so
+    // the backend resolves the settings default the same way it would if
+    // the picker had never rendered at all.
+    const launcherCli = commandModelCli(launcher.command);
+    const model =
+      modelOverride && modelOverride.cli === launcherCli && modelOverride.value !== null
+        ? modelOverride.value
+        : undefined;
     setLaunching(true);
     setLaunchError(null);
     useDashboardStore
@@ -459,6 +527,7 @@ export function CommandPalette({
         cwd: launcher.cwd,
         name,
         worktree: worktreeEnabled && trimmedBaseRef ? { baseRef: trimmedBaseRef } : undefined,
+        model,
         skipPermissions:
           launcher.kind === "agent"
             ? skipPermissionsOverride !== null
@@ -666,6 +735,29 @@ export function CommandPalette({
               >
                 Overrides per-agent settings — suppresses approval prompts for all agents
               </div>
+            </div>
+            {/* Issue #1424 — per-session model override for the highlighted
+                launcher. `visibility`/`aria-hidden`, not a conditional
+                unmount, so the strip's height doesn't jump as the highlight
+                moves between an agent launcher and a plain shell command. */}
+            <div
+              className="cmd-palette-model-picker"
+              style={{ visibility: showModelPicker ? "visible" : "hidden" }}
+              aria-hidden={!showModelPicker}
+            >
+              <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 4 }}>Model</div>
+              <ModelSelect
+                small
+                ariaLabel="Model for this session"
+                value={modelValue}
+                options={modelCatalog.options}
+                defaultLabel={modelDefaultLabel}
+                allowCustom={modelCatalog.allowCustom}
+                onChange={(v) => {
+                  if (activeCli === null) return;
+                  setModelOverride({ cli: activeCli, value: v });
+                }}
+              />
             </div>
           </div>
         )}

@@ -15,26 +15,30 @@ const CUSTOM = "__custom__";
 // that silently never applies.
 const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@[\]-]{0,127}$/;
 
-export function ModelPicker({
-  label,
-  ariaLabel = label,
-  desc,
+// The select + Custom… escape hatch, with no label/description layout of its
+// own — issue #1424 pulled this out of ModelPicker (below) so the same
+// control fits both a Settings `Row` and the command palette's compact
+// options strip. All the behavior (custom-mode detection, draft resync,
+// client-side validation) lives here; ModelPicker is now just this wrapped
+// in a Row.
+export function ModelSelect({
+  ariaLabel,
   value,
   options,
   defaultLabel,
   allowCustom,
   onChange,
+  small = false,
 }: {
-  label: string;
-  // The visible label repeats across CLIs ("Default model"), so callers pass a
-  // distinct accessible name for the select.
-  ariaLabel?: string;
-  desc?: string;
+  ariaLabel: string;
   value: string | null;
   options: ModelOption[];
   defaultLabel: string;
   allowCustom: boolean;
   onChange: (value: string | null) => void;
+  // The command palette's options strip is far narrower than a Settings Row —
+  // maps to Dropdown's own `small` class.
+  small?: boolean;
 }) {
   const inList = value === null || options.some((o) => o.value === value);
   // `customOpen` is only the user's explicit choice of Custom…. A stored value
@@ -97,38 +101,80 @@ export function ModelPicker({
   };
 
   return (
-    <>
-      <Row label={label} desc={desc}>
-        <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
-          <Dropdown
-            ariaLabel={ariaLabel}
-            value={selectValue}
-            onChange={handleSelect}
-            options={[
-              { value: "", label: defaultLabel },
-              ...options.map((o) => ({ value: o.value, label: o.label ?? o.value })),
-              ...(allowCustom ? [{ value: CUSTOM, label: "Custom…" }] : []),
-            ]}
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 6,
+        // A Settings Row right-aligns its control column against the label;
+        // the palette's compact strip is left-aligned instead, with its own
+        // "Model" caption above (CommandPalette.tsx).
+        alignItems: small ? "flex-start" : "flex-end",
+      }}
+    >
+      <Dropdown
+        small={small}
+        ariaLabel={ariaLabel}
+        value={selectValue}
+        onChange={handleSelect}
+        options={[
+          { value: "", label: defaultLabel },
+          ...options.map((o) => ({ value: o.value, label: o.label ?? o.value })),
+          ...(allowCustom ? [{ value: CUSTOM, label: "Custom…" }] : []),
+        ]}
+      />
+      {customMode && (
+        <div className="settings-numberfield" style={{ width: "100%" }}>
+          <input
+            aria-label={`${ariaLabel} (custom model ID)`}
+            style={{ flex: 1, textAlign: "left", width: "auto" }}
+            value={draft}
+            placeholder="model ID"
+            spellCheck={false}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={commit}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commit();
+            }}
           />
-          {customMode && (
-            <div className="settings-numberfield" style={{ width: "100%" }}>
-              <input
-                aria-label={`${ariaLabel} (custom model ID)`}
-                style={{ flex: 1, textAlign: "left", width: "auto" }}
-                value={draft}
-                placeholder="model ID"
-                spellCheck={false}
-                onChange={(e) => setDraft(e.target.value)}
-                onBlur={commit}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") commit();
-                }}
-              />
-            </div>
-          )}
         </div>
-      </Row>
+      )}
       {error && <ErrorText style={{ paddingLeft: 6 }}>{error}</ErrorText>}
-    </>
+    </div>
+  );
+}
+
+export function ModelPicker({
+  label,
+  ariaLabel = label,
+  desc,
+  value,
+  options,
+  defaultLabel,
+  allowCustom,
+  onChange,
+}: {
+  label: string;
+  // The visible label repeats across CLIs ("Default model"), so callers pass a
+  // distinct accessible name for the select.
+  ariaLabel?: string;
+  desc?: string;
+  value: string | null;
+  options: ModelOption[];
+  defaultLabel: string;
+  allowCustom: boolean;
+  onChange: (value: string | null) => void;
+}) {
+  return (
+    <Row label={label} desc={desc}>
+      <ModelSelect
+        ariaLabel={ariaLabel}
+        value={value}
+        options={options}
+        defaultLabel={defaultLabel}
+        allowCustom={allowCustom}
+        onChange={onChange}
+      />
+    </Row>
   );
 }
