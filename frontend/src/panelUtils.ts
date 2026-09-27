@@ -318,9 +318,14 @@ function tabletPositioning(
 // panel right back into (or behind) that same floating group, invisible
 // under the "one maximized tiled group" phone model. Target the first
 // tiled group explicitly whenever `activeGroup` isn't one; every phone
-// open helper shares `positioningForTier`, so this fixes all of them
-// (session, timeline, browser, device, task detail), not just the
-// stranded-float path that surfaced it.
+// open helper that actually routes through `positioningForTier` shares
+// this fix, not just the stranded-float path that surfaced it — session,
+// timeline, task detail, device, and the project GitHub/Git/Agent Rules/
+// Dock Config/Skills panels. The project Browser pane is the one
+// exception: `openOrFocusProjectPanel`'s `applyDesktopPositioning` gate
+// (a pre-existing quirk, see that config's own doc comment) skips this
+// function entirely for it, on every tier — tracked separately (issue
+// #1452), not fixed here.
 function phonePositioning(
   api: DockviewApi,
 ): { position: { referencePanel: IDockviewPanel; direction: "within" } } | Record<string, never> {
