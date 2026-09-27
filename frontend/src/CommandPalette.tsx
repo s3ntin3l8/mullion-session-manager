@@ -5,6 +5,7 @@ import type { Launcher, Session } from "./api/index.js";
 import { useDashboardStore } from "./store/index.js";
 import { useShallow } from "zustand/react/shallow";
 import {
+  CheckIcon,
   ChevronDownIcon,
   DockIcon,
   FileTextIcon,
@@ -93,6 +94,11 @@ interface CommandPaletteProps {
   // project.
   onOpenSkills: (projectId: number) => void;
   onOpenIntegrationsSettings: () => void;
+  // Issue #1434: the palette used to claim (in its own and App.tsx's
+  // comments) that it could enter Tasks, but had no such entry — this is
+  // that entry. Project-independent (the task board is install-wide, not
+  // per-project), so it's always shown, same as onOpenBlankBrowser below.
+  onOpenTasks: () => void;
   // Issue #28: same section, opening a browser preview pane for this
   // project's dev server.
   onOpenBrowser: (projectId: number) => void;
@@ -135,6 +141,7 @@ export function CommandPalette({
   onOpenSkills,
   onOpenBrowser,
   onOpenIntegrationsSettings,
+  onOpenTasks,
   onOpenBlankBrowser,
   onOpenBrowserUrl,
   onShowWorkspace,
@@ -705,6 +712,25 @@ export function CommandPalette({
                 so they don't compete with actual command results. */}
             {query.trim() === "" && (
               <>
+                <div className="cmd-palette-group-label">Navigate</div>
+                <button
+                  className="cmd-row"
+                  onClick={() => {
+                    onOpenTasks();
+                    closeAfterAction();
+                  }}
+                >
+                  <span
+                    className="cmd-row-icon"
+                    style={{ background: "color-mix(in srgb, var(--fg) 8%, transparent)" }}
+                  >
+                    <CheckIcon size={13} style={{ color: "var(--muted)" }} />
+                  </span>
+                  <span className="cmd-row-body">
+                    <span className="cmd-row-title">Task board</span>
+                    <span className="cmd-row-subtitle">Every project's tasks, in one board</span>
+                  </span>
+                </button>
                 <div className="cmd-palette-group-label">Integrations</div>
                 {effectiveProjectId !== null && (
                   <button

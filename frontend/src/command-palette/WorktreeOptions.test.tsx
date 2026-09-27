@@ -107,6 +107,7 @@ describe("CommandPalette -> worktree isolation toggle", () => {
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
     );
@@ -155,6 +156,7 @@ describe("CommandPalette -> worktree isolation toggle", () => {
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
     );
@@ -207,6 +209,7 @@ describe("CommandPalette -> worktree isolation toggle", () => {
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
     );
@@ -255,6 +258,7 @@ describe("CommandPalette -> worktree isolation toggle", () => {
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
     );
@@ -299,6 +303,7 @@ describe("CommandPalette -> worktree isolation toggle", () => {
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
     );
@@ -333,6 +338,7 @@ describe("CommandPalette -> worktree isolation toggle", () => {
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
     );
@@ -373,6 +379,7 @@ describe("CommandPalette -> WorktreeOptions -> P9 silent failures", () => {
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
         {...overrides}
       />,
