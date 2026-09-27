@@ -15,7 +15,14 @@ side effects the HTTP route already has.
 This document covers the transport and handshake (Phase 4.1, #185), session
 lifecycle ops (Phase 4.3, #187), PTY I/O streaming (Phase 4.2, #186),
 notification events (Phase 4.4, #188), browser-action ops (Phase 4.5, #189),
-and the persisted-history query op (Phase 4.7, #213).
+the persisted-history query op (Phase 4.7, #213), and the device/projects/
+previews/bundle op families added since (see the canonical Ops table below).
+This is also the **canonical op ↔ scope ↔ REST ↔ CLI ↔ MCP mapping** for
+every control-socket op — [`docs/cli.md`](cli.md) and
+[`docs/agent-context.md`](agent-context.md) link here instead of maintaining
+their own partial copies of it (`docs/agent-guide.md` and the `host` skill
+keep their own condensed lists, since those ship to end users' agents
+without this repo alongside them).
 
 ## Locating the socket
 
@@ -106,50 +113,74 @@ condensed for an in-session agent, alongside the scope caveats most likely
 to trip one up (the auth-disabled full-scope-for-everyone mode in
 particular).
 
-| Op                        | Scope           | REST equivalent                                          |
-| ------------------------- | --------------- | -------------------------------------------------------- |
-| `ping`                    | full, session   | — (answered in-process, no REST call)                    |
-| `sessions.list`           | full            | `GET /api/sessions`                                      |
-| `sessions.get`            | full, session   | `GET /api/sessions/:id`                                  |
-| `sessions.create`         | full            | `POST /api/sessions`                                     |
-| `sessions.spawn_child`    | full, session   | `POST /api/sessions`                                     |
-| `sessions.kill`           | full            | `DELETE /api/sessions/:id`                               |
-| `sessions.rename`         | full, session   | `PATCH /api/sessions/:id`                                |
-| `sessions.scrollback`     | full, session   | `GET /api/sessions/:id/scrollback`                       |
-| `sessions.attach`         | full, session   | stream — see below                                       |
-| `sessions.input`          | full, session   | stream — see below                                       |
-| `sessions.resize`         | full, session   | stream — see below                                       |
-| `sessions.detach`         | full, session   | stream — see below                                       |
-| `events.subscribe`        | full, session   | stream — see below                                       |
-| `events.seen`             | full, session   | stream — see below                                       |
-| `events.unsubscribe`      | full, session   | stream — see below                                       |
-| `events.query`            | full, session   | `GET /api/events`                                        |
-| `browser.action`          | full, session   | `POST /api/sessions/:id/browser`                         |
-| `browser.find`            | full, session   | `POST /api/sessions/:id/browser/find`                    |
-| `browser.bindings`        | full, session   | `GET /api/sessions/:id/browser`                          |
-| `device.list`             | full, session   | `GET /api/devices`                                       |
-| `device.get`              | full, session   | `GET /api/devices/:id`                                   |
-| `device.create`           | full, session\* | `POST /api/devices`                                      |
-| `device.action`           | full, session   | `POST /api/devices/:id/action`                           |
-| `device.start`            | full, session   | `POST /api/devices/:id/start`                            |
-| `device.terminate`        | full, session   | `POST /api/devices/:id/stop`                             |
-| `device.delete`           | full            | `DELETE /api/devices/:id`                                |
-| `device.pair`             | full            | `POST /api/devices/pair`                                 |
-| `device.pair-and-connect` | full            | `POST /api/devices/pair-and-connect`                     |
-| `device.discovered`       | full, session   | `GET /api/devices/discovered`                            |
-| `projects.list`           | full            | `GET /api/projects`                                      |
-| `projects.actions`        | full, session   | `GET /api/projects/:id/actions`                          |
-| `projects.dock`           | full            | `GET /api/projects/:id/dock`                             |
-| `projects.get_tooling`    | full, session   | `GET /api/projects/:id/tooling`                          |
-| `projects.set_tooling`    | full            | `PUT /api/projects/:id/tooling[/{skill,reviewer-agent}]` |
-| `previews.create`         | full            | `POST /api/previews`                                     |
-| `previews.get`            | full            | `GET /api/previews/:slug`                                |
-| `previews.delete`         | full            | `DELETE /api/previews/:slug`                             |
-| `previews.list`           | full            | `GET /api/previews`                                      |
-| `agents.list`             | full            | `GET /api/agents`                                        |
-| `bundle.status`           | full            | `GET /api/bundle-sync/status`                            |
-| `bundle.resync`           | full            | `POST /api/bundle-sync/resync`                           |
-| `bundle.remove`           | full            | `POST /api/bundle-sync/remove`                           |
+**CLI** names the `mullion <command>` (see [`docs/cli.md`](cli.md)) that
+wraps this op, if any. **MCP** names the `mcp__mullion__<tool>` (see
+`src/mcp/tools.mjs`) that wraps it, if any — `promote_to_worktree`/
+`use_browser`/`browser_action` are NOT in this column even though they
+sound related: those three are hook-socket tools, a different transport
+entirely (see [`docs/agent-hooks.md`](agent-hooks.md)), not control-socket
+ops. A composite CLI/MCP surface that drives more than one op internally
+is marked with a dagger (†) and explained below the table, rather than
+split across two cells.
+
+| Op                        | Scope           | REST equivalent                                          | CLI                                                     | MCP                                   |
+| ------------------------- | --------------- | -------------------------------------------------------- | ------------------------------------------------------- | ------------------------------------- |
+| `ping`                    | full, session   | — (answered in-process, no REST call)                    | `config` (reachability probe)                           | —                                     |
+| `sessions.list`           | full            | `GET /api/sessions`                                      | `session list` (alias `ps`)                             | `list_sessions`                       |
+| `sessions.get`            | full, session   | `GET /api/sessions/:id`                                  | `session get`                                           | —                                     |
+| `sessions.create`         | full            | `POST /api/sessions`                                     | `session create`; `dock start`†                         | `start_dock_session`†                 |
+| `sessions.spawn_child`    | full, session   | `POST /api/sessions`                                     | `session spawn-child`                                   | `spawn_child_session`                 |
+| `sessions.kill`           | full            | `DELETE /api/sessions/:id`                               | `session kill` (alias `kill`); `dock stop`†             | `stop_dock_session`†                  |
+| `sessions.rename`         | full, session   | `PATCH /api/sessions/:id`                                | `session rename`                                        | —                                     |
+| `sessions.scrollback`     | full, session   | `GET /api/sessions/:id/scrollback`                       | `session logs` (alias `logs`)                           | `get_scrollback`                      |
+| `sessions.attach`         | full, session   | stream — see below                                       | `session exec` (alias `exec`)                           | —                                     |
+| `sessions.input`          | full, session   | stream — see below                                       | `session exec` (alias `exec`)                           | —                                     |
+| `sessions.resize`         | full, session   | stream — see below                                       | `session exec` (alias `exec`)                           | —                                     |
+| `sessions.detach`         | full, session   | stream — see below                                       | `session exec` (alias `exec`)                           | —                                     |
+| `events.subscribe`        | full, session   | stream — see below                                       | `events tail`                                           | —                                     |
+| `events.seen`             | full, session   | stream — see below                                       | `events tail`                                           | —                                     |
+| `events.unsubscribe`      | full, session   | stream — see below                                       | `events tail`                                           | —                                     |
+| `events.query`            | full, session   | `GET /api/events`                                        | `history`                                               | —                                     |
+| `browser.action`          | full, session   | `POST /api/sessions/:id/browser`                         | `browser <subcommand>`                                  | — (see `browser_action`, hook socket) |
+| `browser.find`            | full, session   | `POST /api/sessions/:id/browser/find`                    | `browser find`                                          | — (see `browser_action`, hook socket) |
+| `browser.bindings`        | full, session   | `GET /api/sessions/:id/browser`                          | —                                                       | —                                     |
+| `device.list`             | full, session   | `GET /api/devices`                                       | `device list`                                           | `list_devices`                        |
+| `device.get`              | full, session   | `GET /api/devices/:id`                                   | —                                                       | —                                     |
+| `device.create`           | full, session\* | `POST /api/devices`                                      | `device create`; `device connect` (see \* below)        | — (no MCP wrapper)                    |
+| `device.action`           | full, session   | `POST /api/devices/:id/action`                           | `device screenshot`/`tap`/`swipe`/`text`/`key`/`logcat` | `use_device` (alias `device_action`)  |
+| `device.start`            | full, session   | `POST /api/devices/:id/start`                            | `device start`                                          | `start_device`                        |
+| `device.terminate`        | full, session   | `POST /api/devices/:id/stop`                             | `device stop`                                           | `stop_device`                         |
+| `device.delete`           | full            | `DELETE /api/devices/:id`                                | `device delete`                                         | `delete_device`                       |
+| `device.pair`             | full            | `POST /api/devices/pair`                                 | `device pair`                                           | — (no MCP wrapper)                    |
+| `device.pair-and-connect` | full            | `POST /api/devices/pair-and-connect`                     | `device pair-and-connect`                               | — (no MCP wrapper)                    |
+| `device.discovered`       | full, session   | `GET /api/devices/discovered`                            | `device discovered`                                     | —                                     |
+| `projects.list`           | full            | `GET /api/projects`                                      | `project list`                                          | `list_projects`                       |
+| `projects.actions`        | full, session   | `GET /api/projects/:id/actions`                          | `project actions`                                       | `list_actions`                        |
+| `projects.dock`           | full            | `GET /api/projects/:id/dock`                             | `project dock`; `dock start`†                           | `start_dock_session`†                 |
+| `projects.get_tooling`    | full, session   | `GET /api/projects/:id/tooling`                          | `project tooling <id>` (read)                           | `get_project_tooling`                 |
+| `projects.set_tooling`    | full            | `PUT /api/projects/:id/tooling[/{skill,reviewer-agent}]` | `project tooling <id> --briefing/--skill/--reviewer`    | `set_project_tooling`                 |
+| `previews.create`         | full            | `POST /api/previews`                                     | `preview create`                                        | `create_preview`                      |
+| `previews.get`            | full            | `GET /api/previews/:slug`                                | `preview get`                                           | —                                     |
+| `previews.delete`         | full            | `DELETE /api/previews/:slug`                             | `preview delete`                                        | `delete_preview`                      |
+| `previews.list`           | full            | `GET /api/previews`                                      | `preview list`                                          | `list_previews`                       |
+| `agents.list`             | full            | `GET /api/agents`                                        | — (no CLI wrapper yet)                                  | — (no MCP wrapper yet)                |
+| `bundle.status`           | full            | `GET /api/bundle-sync/status`                            | `bundle status`                                         | — (no MCP wrapper)                    |
+| `bundle.resync`           | full            | `POST /api/bundle-sync/resync`                           | `bundle resync`                                         | — (no MCP wrapper)                    |
+| `bundle.remove`           | full            | `POST /api/bundle-sync/remove`                           | `bundle remove`                                         | — (no MCP wrapper)                    |
+
+† **`dock start`/`start_dock_session`** look up the requested control via
+`projects.dock`, then call `sessions.create` with that control's own
+command/cwd — two ops behind one CLI/MCP call, mirrored between
+`src/cli/core.mjs` and `MullionClient.startDockSession`. **`dock stop`/
+`stop_dock_session`** are a thin, single-op alias of `sessions.kill` —
+listed separately from plain `session kill` only because they're the
+dock-specific entry point, not a different underlying op.
+
+\* `device.create` is reachable at session scope only for an emulator body
+(`{avdName, ...}`); a `{kind: "physical", ...}` body 403s at session scope —
+see "Four exceptions" below. `device connect` (registering an already-paired
+physical device at its own connect address) is a separate CLI verb over the
+same underlying `device.create` op with `kind: "physical"`.
 
 `events.query` (issue #213, roadmap 4.7) is a one-shot request/response query
 over the _persisted_ `session_events` table — distinct from `events.subscribe`
@@ -194,12 +225,15 @@ inside a session can read its own project's tooling, just not edit it).
 
 `get_tooling` returns `{briefing, skill, reviewerAgent}`, each either a
 string or `null` — `null` is the ordinary "not authored yet" case per
-field, not a 404 (404 is reserved for an unknown project id). The op always
-requires `body.projectId`; at session scope, omitting it defaults to the
-connection's own pinned session's project, the same posture
-`projects.actions` already has.
+field, not a 404 (404 is reserved for an unknown project id). It always
+targets exactly one project, but `body.projectId` isn't always required to
+say which: full scope must pass it explicitly, while at session scope
+omitting it defaults to the connection's own pinned session's project, the
+same posture `projects.actions` already has (a session-scoped caller naming
+a _different_ project's id still gets a `403`).
 
-`set_tooling` is full-scope only and always requires `body.projectId`. It
+`set_tooling` is full-scope only, so `body.projectId` is always required —
+there's no pinned session to default to at that scope. It
 takes any subset of `{briefing, skill, reviewerAgent}` in the body and
 upserts each field independently against the matching `PUT
 /api/projects/:id/tooling[/skill|/reviewer-agent]` route. The response is
@@ -260,9 +294,17 @@ from, the connection's own pinned session. Full scope must instead pass
 derived server-side from the resolved parent session's own project, via a
 real `GET /api/sessions/:id`, never trusted from the request. The rest of
 `body` (`command` required; optional `name`/`cwd`/`kind`/`skipPermissions`/
-`env`) maps onto `POST /api/sessions`; `worktree`/`worktreeRefresh` are
-stripped even if present, since a child spawn's cwd-containment check assumes
-no worktree was requested. **`kind`, `skipPermissions`, and `env` are
+`env`/`seedPrompt`/`model`/`smallModel`) maps onto `POST /api/sessions`;
+`worktree`/`worktreeRefresh` are stripped even if present, since a child
+spawn's cwd-containment check (below) assumes no worktree was requested.
+`seedPrompt` is deliberately NOT in the session-scope strip list below — it
+grants no extra privilege, only text for the child's first turn, which a
+session-scoped caller already fully controls via `command` itself. `model`/
+`smallModel` are likewise forwarded unstripped at either scope — inheriting
+the parent's own model/smallModel when omitted is opencode-only (see
+[`docs/cli.md`](cli.md#session)'s own caveat that the CLI has no flag for
+either today; only the MCP `spawn_child_session` tool or a raw socket
+client can set them). **`kind`, `skipPermissions`, and `env` are
 additionally stripped for a SESSION-scoped caller** (`kind`/`skipPermissions`:
 independent review, PR #426; `env`: issue #822): all three are
 privilege-adjacent — `skipPermissions` disables permission prompts,
@@ -278,7 +320,14 @@ Server-side validation (not just this op's own scope check) additionally
 enforces: the parent must be in the target project (always true here,
 since the project IS derived from the parent), the parent must not itself
 be a child (one level of nesting only), `cwd` must resolve inside the
-project directory, and a hard cap on that parent's LIVE children
+project directory **or be a directory that's itself a registered git
+worktree of the project's own repository** (`isSiblingWorktreeCwd`, issue
+#1332 — membership is decided by `git worktree list` run against the
+project's own cwd, never a caller-supplied path; a subdirectory _of_ a
+sibling worktree still isn't allowed, and this exception only applies on a
+local host — a remote-hosted project's child spawn keeps the strict
+project-directory-only rule, since `isSiblingWorktreeCwd` shells out
+locally), and a hard cap on that parent's LIVE children
 (`settings.sessions.maxChildSessionsPerParent`, default 5, checked and the
 new row inserted inside one transaction so concurrent spawns can't both
 slip past the same check) — each violation is a clean 4xx (`400` for the
@@ -503,7 +552,7 @@ different from every other op above — its **three-tier scope story**.
 
 ```jsonc
 { "id": 30, "op": "device.list" }
-{ "id": 30, "ok": true, "status": 200, "result": { "devices": [ /* ... */ ] } }
+{ "id": 30, "ok": true, "status": 200, "result": [ /* ... */ ] }
 
 { "id": 31, "op": "device.create", "body": { "avdName": "pixel_7", "name": "Pixel 7" } }
 { "id": 31, "ok": true, "status": 201, "result": { "id": 3, "avdName": "pixel_7", /* ... */ } }

@@ -5,10 +5,17 @@ API](socket-api.md) — a local-only CLI for listing/creating/attaching to
 sessions, driving a session's bound browser (see
 [browser-automation.md](browser-automation.md) for the underlying action
 set), and tailing notification events, with no HTTP base URL or bearer
-token required. Run from inside a Mullion session, it defaults to targeting
-that session with zero flags; run from an operator's own shell, it needs
-`MULLION_AUTH_TOKEN` (see [Authentication and scope](#authentication-and-scope)
-below).
+token required. Run from inside a Mullion session **when in-process auth is
+enabled**, it defaults to targeting that session with zero flags (via
+`MULLION_HOOK_TOKEN`'s session-scoped handshake); run from an operator's own
+shell, it needs `MULLION_AUTH_TOKEN` (see [Authentication and
+scope](#authentication-and-scope) below). **On an auth-disabled host, the
+zero-flags default currently does not work for the CLI** — every connection
+resolves to full scope with no session pin, and the CLI (unlike the MCP
+client) has no `MULLION_SESSION_ID` fallback for that case yet, so
+`session get`/`browser ...`/`session spawn-child` without an explicit
+`--session <id>` 400s (see [issue
+#1457](https://github.com/s3ntin3l8/mullion-session-manager/issues/1457)).
 
 A versioned install links it at `~/.local/bin/mullion` (see
 `deploy/install.sh` — it skips the link if that release predates the CLI, and
@@ -43,9 +50,11 @@ mullion session list|get|create|spawn-child|kill|rename|logs|exec
 mullion browser navigate|click|fill|type|press|select|check|uncheck|hover|
                 scroll|wait|dialog|get|eval|snapshot|screenshot|find|console|errors|
                 download
-mullion project list|actions|dock
+mullion project list|actions|dock|tooling
 mullion preview create|get|delete|list
 mullion dock start|stop|list
+mullion device list|create|pair|discovered|pair-and-connect|connect|start|
+               stop|delete|screenshot|tap|swipe|text|key|logcat
 mullion bundle status|resync|remove
 mullion events tail
 mullion history [--session <id>] [--kind <k>] [--since <ms>] [--until <ms>]
@@ -64,7 +73,7 @@ Aliases: `ps` → `session list`, `kill` → `session kill`, `logs` → `session
 - `session get [<id>]` — omit `<id>` to inspect the session you're running
   inside (or pass `--session <id>`).
 - `session create --project <id> --command <cmd> [--name <n>] [--cwd <path>] [--kind terminal|dock] [--skip-permissions]`
-- `session spawn-child --command <cmd> [--parent <id>] [--name <n>] [--cwd <path>] [--kind terminal|dock] [--skip-permissions]` (Phase 5, issue #193 5.3b) — spawns a real child session (own PTY) of `--parent`, or of the session you're running inside when `--parent` is omitted (falls back to `--session`). No `--project` flag: the project is always derived from the parent. Reachable at session scope (`sessions.spawn_child`), unlike `session create` above — see [`socket-api.md`](socket-api.md) for the full validation rules (same project, one level of nesting, cwd containment, a per-parent live-child cap). `--kind`/`--skip-permissions` only take effect for a full-scope caller (`MULLION_AUTH_TOKEN` set); silently ignored at session scope.
+- `session spawn-child --command <cmd> [--parent <id>] [--name <n>] [--cwd <path>] [--kind terminal|dock] [--skip-permissions] [--initial-prompt <text>]` (Phase 5, issue #193 5.3b) — spawns a real child session (own PTY) of `--parent`, or of the session you're running inside when `--parent` is omitted (falls back to `--session`). No `--project` flag: the project is always derived from the parent. Reachable at session scope (`sessions.spawn_child`), unlike `session create` above — see [`socket-api.md`](socket-api.md) for the full validation rules (same project, one level of nesting, cwd containment — including the sibling-git-worktree exception on a local host — a per-parent live-child cap). `--kind`/`--skip-permissions` only take effect for a full-scope caller (`MULLION_AUTH_TOKEN` set); silently ignored at session scope. `--initial-prompt` is sent as the underlying `seedPrompt` field (matching the MCP `spawn_child_session` tool's `initialPrompt` param name, the clearer name from a caller's point of view) and is honored at both scopes. **No `--model`/`--small-model` flag exists on this command** — only the MCP `spawn_child_session` tool or a raw control-socket client can set the child's model/smallModel; when set there and `--parent`/`parentSessionId` is given, `model` inherits the parent session's own model **for opencode only** (ignored for any other command), and `smallModel` inherits the same way whenever the resolved command is an opencode adapter.
 - `session kill <id> [--cascade detach|kill]` — `detach` (default) leaves any live children of `<id>` running as independent top-level sessions; `kill` cascades to them too.
 - `session rename <id> <name>` — or `session rename <name>` with `--session <id>` supplying the target.
 - `session logs <id>` (alias: `logs <id>`) — dumps the session's scrollback buffer (raw bytes, including ANSI escapes) to stdout. One-shot, not a live tail.
@@ -169,9 +178,14 @@ $M browser screenshot $S --out /tmp/shot.png
 - `project dock <id>` — full scope only; lists this project's dock controls
   (see `mullion dock start` below).
 - `project tooling <id> [--briefing <path|->] [--skill <path|->] [--reviewer <path|->]`
-  — full scope only. Without any of the write flags, reads the project's
-  `project_tooling` row and prints `{briefing, skill, reviewerAgent}`
-  (each a string or `null`). Passing any of `--briefing`/`--skill`/`--reviewer`
+  — the read and write halves have different scope requirements. Without
+  any of the write flags, this **reads** the project's `project_tooling` row
+  and prints `{briefing, skill, reviewerAgent}` (each a string or `null` —
+  there is no separate "row exists" flag; `null` per field just means
+  "not authored yet"). The read is reachable at **session scope** too
+  (`<id>` may be omitted there, defaulting to the connection's own pinned
+  session's project, same as `project actions`); only **writing** (passing
+  any of `--briefing`/`--skill`/`--reviewer`) is full scope only. A write
   upserts that field; the file content is read from the given path, or
   from stdin if `-` is passed (only one flag may read from stdin per
   invocation). Each field is independent. On a partial-failure upsert
@@ -180,7 +194,9 @@ $M browser screenshot $S --out /tmp/shot.png
   exposes the per-field diagnostics (the MCP `set_project_tooling` tool
   collapses them to a generic error). See
   [`docs/agent-context.md`](agent-context.md) for what each field
-  does and how the resolved values reach spawned sessions.
+  does and how the resolved values reach spawned sessions, and
+  [`docs/socket-api.md`](socket-api.md#ops) for the underlying
+  `projects.get_tooling`/`projects.set_tooling` ops.
 
 ### preview
 
@@ -246,6 +262,19 @@ sessionId), not scoped to any project or session.
 `x`/`y` are in the device's native **screen pixels** — the same space as a
 `screenshot`, and independent of the (downscaled) live-panel stream. Every verb
 takes an explicit device id — there's no implicit default device.
+
+**Four scope-restricted operations, full scope only** (`MULLION_AUTH_TOKEN`
+required — every other verb above is reachable at session scope too, since
+a device is a much lower blast-radius resource than a session):
+`device pair`, `device pair-and-connect`, `device delete`, and a
+**physical** `device create`/`device connect` (an emulator `device create`
+stays session-reachable — the restriction is on the physical branch of the
+underlying `device.create` op, not the CLI verb). See
+[`docs/socket-api.md`](socket-api.md#device-automation-ops-device) for why.
+MCP has no wrapper at all for `device create`/`device pair`
+(`src/mcp/tools.mjs` has no `create_device`/`pair_device` tool, even though
+the CLI and REST both support them) — only the CLI and REST expose those
+two verbs.
 
 ### bundle
 
@@ -351,20 +380,27 @@ browser tab being open. See `src/plugins/event-store.ts`'s own doc comment.
 
 - `mullion mcp` — execs `dist/mcp/server.mjs` (`src/mcp/server.mjs` in dev),
   Mullion's stdio MCP server. Equivalent to invoking that file directly.
+  Registration into the launched agent's own MCP config happens
+  automatically for all four CLIs Mullion hosts (Claude Code, opencode,
+  Codex, agy) — see [`docs/agent-hooks.md`](agent-hooks.md)'s per-CLI
+  capability matrix; running `mullion mcp` by hand (as an operator, with
+  `MULLION_AUTH_TOKEN` set) is a separate, full-scope use of the same
+  binary.
 
-Tools exposed, beyond `promote_to_worktree`/`use_browser`/`browser_action`
-(both hook-socket, see [`docs/agent-hooks.md`](agent-hooks.md)):
-`list_sessions`, `start_dock_session`, `stop_dock_session`, `get_scrollback`,
-`list_projects`, `list_actions`, `get_project_tooling`, `set_project_tooling`,
-`create_preview`, `delete_preview`, `list_previews`, `list_devices`,
-`use_device` (alias `device_action`) — each a thin wrapper over the matching
-control-socket op (`src/mcp/tools.mjs`). The two `*_project_tooling` tools are full-scope only
-— they're operator-side, for automating the same per-project row the
-Mullion Briefing panel edits in the UI; see
-[`docs/agent-context.md`](agent-context.md). Note: the
-`set_project_tooling` MCP tool surfaces a partial-failure upsert as a
-generic tool error — the CLI is the right surface if a caller needs to
-see which field rejected (the per-field `ok`/`status`/`error`).
+21 tools total (`src/mcp/tools.mjs`'s `TOOLS` array). Three
+(`promote_to_worktree`, `use_browser`, `browser_action`) are **hook-socket**
+tools, a different transport — see [`docs/agent-hooks.md`](agent-hooks.md).
+The other 18 each thinly wrap a control-socket op —
+[`docs/socket-api.md`](socket-api.md#ops)'s canonical Ops table is the
+single list of which op each one wraps and at which scope, rather than
+duplicating that list here. Two of those 18
+(`get_project_tooling`/`set_project_tooling`) are operator-side tools for
+automating the same per-project row the Mullion Briefing panel edits in the
+UI — `get_project_tooling` is reachable at session scope, `set_project_tooling`
+is full scope only; see [`docs/agent-context.md`](agent-context.md). Note:
+the `set_project_tooling` MCP tool surfaces a partial-failure upsert as a
+generic tool error — the CLI is the right surface if a caller needs to see
+which field rejected (the per-field `ok`/`status`/`error`).
 
 **Scope applies here too.** Claude Code's auto-injected MCP config
 (`buildClaudeMcpConfig`) only ever carries the session-scoped
@@ -374,13 +410,15 @@ full-scope `MULLION_AUTH_TOKEN` into a per-session config file would let any
 agent read its own operator credential straight off disk. So from inside a
 normal agent session **when authentication is enabled**, `list_sessions`/
 `start_dock_session`/`stop_dock_session`/`list_projects`/`create_preview`/
-`delete_preview`/`list_previews`/`get_project_tooling`/`set_project_tooling`
-reply with a scope error (same message as the CLI's own,
-above) rather than succeeding — they're for a client that sets
-`MULLION_AUTH_TOKEN` itself (e.g. `mullion mcp` run directly by an operator).
-`get_scrollback` (defaults to the caller's own session) and `list_actions`
-(defaults to the caller's own project) are reachable at session scope and
-work normally from inside a session regardless. **When authentication is
+`delete_preview`/`list_previews`/`set_project_tooling` reply with a scope
+error (same message as the CLI's own, above) rather than succeeding —
+they're for a client that sets `MULLION_AUTH_TOKEN` itself (e.g.
+`mullion mcp` run directly by an operator). `get_scrollback` (defaults to
+the caller's own session), `list_actions` (defaults to the caller's own
+project), and `get_project_tooling` (same default, and full-scope-only only
+for its write counterpart `set_project_tooling`) are reachable at session
+scope and work normally from inside a session regardless. **When
+authentication is
 disabled** (`isAuthEnabled(app.config)` false — the `0600` socket mode is the
 only gate in that mode, same posture plain HTTP already takes), every
 handshake resolves to full scope, so all of the above are reachable from
