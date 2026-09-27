@@ -309,10 +309,38 @@ function tabletPositioning(
   return { position: { referencePanel: target, direction: "within" } };
 }
 
+// #1440 (b) — a bare add (phone's usual `{}`) lands in `api.activeGroup`
+// (verified in dockview-core's `_doAddPanel`), which is only ever the
+// group phone actually shows when it's tiled. `activeGroup` can still be a
+// floating one — e.g. a desktop/tablet layout that shrank into phone
+// without re-tiling its float, or the group `onOpenSession`'s
+// stranded-float branch just closed — and a bare add there reopens the
+// panel right back into (or behind) that same floating group, invisible
+// under the "one maximized tiled group" phone model. Target the first
+// tiled group explicitly whenever `activeGroup` isn't one; every phone
+// open helper that actually routes through `positioningForTier` shares
+// this fix, not just the stranded-float path that surfaced it — session,
+// timeline, task detail, device, and the project GitHub/Git/Agent Rules/
+// Dock Config/Skills panels. The project Browser pane is the one
+// exception: `openOrFocusProjectPanel`'s `applyDesktopPositioning` gate
+// (a pre-existing quirk, see that config's own doc comment) skips this
+// function entirely for it, on every tier — tracked separately (issue
+// #1452), not fixed here.
+function phonePositioning(
+  api: DockviewApi,
+): { position: { referencePanel: IDockviewPanel; direction: "within" } } | Record<string, never> {
+  const activeGroup = api.activeGroup;
+  if (!activeGroup || isTiledGroup(activeGroup)) return {};
+  const target = api.panels.find(isTiledPanel);
+  if (!target) return {};
+  return { position: { referencePanel: target, direction: "within" } };
+}
+
 // Single switch every open-or-focus-by-stable-id helper below routes
 // through: phone never positions explicitly (bare add, single-pane via
-// maximizeGroup — see each caller's own `layout.tier === "phone"` check);
-// tablet uses the capped grid above; desktop is unchanged.
+// maximizeGroup — see each caller's own `layout.tier === "phone"` check),
+// unless the active group isn't tiled (phonePositioning above); tablet uses
+// the capped grid above; desktop is unchanged.
 function positioningForTier(
   api: DockviewApi,
   layout: LayoutContext,
@@ -323,7 +351,7 @@ function positioningForTier(
   | Record<string, never> {
   switch (layout.tier) {
     case "phone":
-      return {};
+      return phonePositioning(api);
     case "tablet":
       return tabletPositioning(api, layout.tabletPaneCap);
     case "desktop":

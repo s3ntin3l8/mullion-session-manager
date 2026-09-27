@@ -299,6 +299,62 @@ describe("openSessionPanel", () => {
   });
 });
 
+// #1440 (b) — phonePositioning itself isn't exported (a private helper
+// alongside desktopPositioning/tabletPositioning), exercised the same
+// indirect way through openSessionPanel with a phone LayoutContext.
+describe("phonePositioning (via openSessionPanel)", () => {
+  it("bare-adds into activeGroup when it's tiled (the pre-#1440 default)", () => {
+    const api = mockDockviewApi();
+    api.addPanel({ id: "session-1", component: "terminal", params: {} });
+    (api as unknown as { activeGroup: DockviewGroupPanel }).activeGroup = mockGroup(
+      "group-1",
+      "grid",
+    );
+
+    openSessionPanel(api, NEW_SESSION, PHONE_LAYOUT, PROJECTS);
+
+    const addCall = (api.addPanel as ReturnType<typeof vi.fn>).mock.calls[1][0];
+    expect(addCall.id).toBe("session-2");
+    expect(addCall).not.toHaveProperty("position");
+    expect(addCall).not.toHaveProperty("floating");
+  });
+
+  it("targets the first tiled panel instead of a bare add when activeGroup is floating", () => {
+    const api = mockDockviewApi();
+    api.addPanel({ id: "session-1", component: "terminal", params: {} }); // tiled
+    (api as unknown as { activeGroup: DockviewGroupPanel }).activeGroup = mockGroup(
+      "float-group",
+      "floating",
+    );
+
+    openSessionPanel(api, NEW_SESSION, PHONE_LAYOUT, PROJECTS);
+
+    const addCall = (api.addPanel as ReturnType<typeof vi.fn>).mock.calls[1][0];
+    expect(addCall.id).toBe("session-2");
+    expect(addCall).toEqual(
+      expect.objectContaining({
+        position: {
+          referencePanel: expect.objectContaining({ id: "session-1" }),
+          direction: "within",
+        },
+      }),
+    );
+    expect(addCall).not.toHaveProperty("floating");
+    // Phone's own single-maximized-group model still applies on top.
+    expect(api.maximizeGroup).toHaveBeenCalledTimes(1);
+  });
+
+  it("still bare-adds (docks full-screen) when there's no activeGroup and nothing tiled", () => {
+    const api = mockDockviewApi();
+
+    openSessionPanel(api, NEW_SESSION, PHONE_LAYOUT, PROJECTS);
+
+    const addCall = (api.addPanel as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(addCall).not.toHaveProperty("position");
+    expect(addCall).not.toHaveProperty("floating");
+  });
+});
+
 // Tablet tier plan, PR 4 — tabletPositioning itself isn't exported (a
 // private helper alongside desktopPositioning), so this exercises it the
 // same indirect way desktopPositioning's own float-vs-dock behavior is

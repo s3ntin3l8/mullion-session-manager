@@ -149,4 +149,53 @@ describe("buildPickerSections", () => {
     const project = sections.find((s) => s.kind === "project");
     expect(project?.rows[0]).toMatchObject({ panelId: "session-1", title: "shell" });
   });
+
+  // #1440 (c) — an open session panel whose project isn't in `projects`
+  // (deleted/renamed project, or a stale reference) used to be consumed by
+  // `panelBySession` and then never emitted by the project loop, vanishing
+  // from every section — only swipe/n-of-N could still reach it.
+  it("surfaces an open session panel under Open panes when its project is missing", () => {
+    const sections = buildPickerSections(
+      input({
+        sessions: [makeSession({ id: 1, projectId: 999, command: "codex", lastTitle: "orphan" })],
+        panels: [{ id: "session-1", title: "orphan", sessionId: 1 }],
+      }),
+    );
+    expect(sections.map((s) => s.kind)).toEqual(["panes"]);
+    expect(sections[0].rows).toEqual([
+      expect.objectContaining({
+        panelId: "session-1",
+        session: expect.objectContaining({ id: 1 }),
+      }),
+    ]);
+  });
+
+  it("pins an orphaned-project session under Needs you too, not just Open panes", () => {
+    const sections = buildPickerSections(
+      input({
+        sessions: [makeSession({ id: 1, projectId: 999, attention: true })],
+        panels: [{ id: "session-1", title: "orphan", sessionId: 1 }],
+      }),
+    );
+    expect(sections.map((s) => s.kind)).toEqual(["needs-you", "panes"]);
+    expect(sections[0].rows[0]).toMatchObject({ panelId: "session-1", needsYou: true });
+    expect(sections[1].rows[0]).toMatchObject({ panelId: "session-1", needsYou: true });
+  });
+
+  // #1440 (d) — searchFields used to carry only whichever title was
+  // displayed (the panel's, once open) — a renamed tab's live panel title
+  // can drift from the locked/OSC name sessionDisplayTitle resolves (and
+  // the sidebar's own search matches), so both need to be searchable.
+  it("includes both the panel title and sessionDisplayTitle in searchFields when they differ", () => {
+    const [section] = buildPickerSections(
+      input({
+        sessions: [
+          makeSession({ id: 1, projectId: 1, command: "codex", lastTitle: "locked name" }),
+        ],
+        panels: [{ id: "session-1", title: "renamed tab", sessionId: 1 }],
+      }),
+    );
+    expect(section.rows[0]).toMatchObject({ title: "renamed tab" });
+    expect(section.rows[0].searchFields).toEqual(["locked name", "codex", "renamed tab", "runway"]);
+  });
 });

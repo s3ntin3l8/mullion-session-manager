@@ -84,18 +84,29 @@ export function buildPickerSections(input: PickerInput): PickerSection[] {
     }
   }
 
-  const sessionRow = (session: Session, project: Project): PickerRow => {
+  // `project: null` covers the #1440 edge case below: an open session panel
+  // whose project isn't in `projects` (a stale/deleted project reference)
+  // still needs a row, just without a project name to search or group by.
+  const sessionRow = (session: Session, project: Project | null): PickerRow => {
     const panel = panelBySession.get(session.id);
     const isMuted = muted.has(session.id);
     const events = input.events[session.id];
     const seen = input.lastSeenSeq[session.id] ?? 0;
-    const title = panel?.title || sessionDisplayTitle(session);
+    // Both names are searchable, not just whichever one is displayed — a
+    // renamed tab's live panel title and the locked/OSC name
+    // sessionDisplayTitle resolves (and the sidebar's own search matches)
+    // can disagree once the panel's title has drifted since the rename.
+    const displayTitle = sessionDisplayTitle(session);
+    const title = panel?.title || displayTitle;
+    const searchFields = [displayTitle, session.command];
+    if (panel && panel.title && panel.title !== displayTitle) searchFields.push(panel.title);
+    if (project) searchFields.push(project.name);
     return {
       key: panel?.id ?? `session-${session.id}`,
       panelId: panel?.id ?? null,
       session,
       title,
-      searchFields: [title, session.command, project.name],
+      searchFields,
       unreadCount: sessionUnreadCount(session.id, events, seen, input.dismissedEventKeys, isMuted),
       needsYou: sessionNeedsYou(session, events, seen, input.dismissedEventKeys, isMuted),
     };
@@ -104,6 +115,7 @@ export function buildPickerSections(input: PickerInput): PickerSection[] {
   const sections: PickerSection[] = [];
   const projectSections: PickerSection[] = [];
   const needsYouRows: PickerRow[] = [];
+  const consumedSessionIds = new Set<number>();
   for (const project of input.projects) {
     const rows: PickerRow[] = [];
     for (const session of input.sessions) {
@@ -119,6 +131,7 @@ export function buildPickerSections(input: PickerInput): PickerSection[] {
       const row = sessionRow(session, project);
       rows.push(row);
       if (row.needsYou) needsYouRows.push(row);
+      consumedSessionIds.add(session.id);
     }
     if (rows.length > 0) {
       projectSections.push({
@@ -128,6 +141,24 @@ export function buildPickerSections(input: PickerInput): PickerSection[] {
         rows,
       });
     }
+  }
+
+  // An open session panel is only reachable through the project loop above —
+  // if its project isn't (or is no longer) in `projects`, it was silently
+  // dropped from every section, leaving swipe/n-of-N as the only way back to
+  // it. Surface it under Open panes instead, same as any other open pane the
+  // picker doesn't otherwise know how to group.
+  for (const sessionId of panelBySession.keys()) {
+    if (consumedSessionIds.has(sessionId)) continue;
+    const session = sessionById.get(sessionId);
+    if (!session) continue;
+    const row = sessionRow(session, null);
+    paneRows.push(row);
+    // Same pin the project loop above gives every other needs-you row — an
+    // orphaned-project session shouldn't lose it just for being harder to
+    // place, or "Needs you" would under-count relative to what's actually
+    // open.
+    if (row.needsYou) needsYouRows.push(row);
   }
 
   if (needsYouRows.length > 0) {
