@@ -73,4 +73,42 @@ describe("dismissedEventKeys persistence (issue #1427)", () => {
     expect(stored[eventKey(1, 0, 0)]).toBeUndefined();
     expect(stored[eventKey(1, 509, 509)]).toBe(true);
   });
+
+  // Hermes review, PR #1460 — a re-dismiss of an already-dismissed key must
+  // not perform a redundant localStorage write.
+  it("dismissEvent skips the localStorage write on a re-dismiss of an already-dismissed event", () => {
+    useDashboardStore.setState({ events: { 1: [event({ seq: 5, ts: 2000 })] } });
+    useDashboardStore.getState().dismissEvent(1, 5);
+
+    localStorage.clear();
+    useDashboardStore.getState().dismissEvent(1, 5);
+
+    expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
+  });
+
+  it("dismissEvents skips the localStorage write when every seq is already dismissed", () => {
+    useDashboardStore.setState({
+      events: { 1: [event({ seq: 1, ts: 1000 }), event({ seq: 2, ts: 2000 })] },
+    });
+    useDashboardStore.getState().dismissEvents(1, [1, 2]);
+
+    localStorage.clear();
+    useDashboardStore.getState().dismissEvents(1, [1, 2]);
+
+    expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
+  });
+
+  it("dismissEvents still writes when only SOME of the seqs are already dismissed", () => {
+    useDashboardStore.setState({
+      events: { 1: [event({ seq: 1, ts: 1000 }), event({ seq: 2, ts: 2000 })] },
+    });
+    useDashboardStore.getState().dismissEvent(1, 1);
+
+    localStorage.clear();
+    useDashboardStore.getState().dismissEvents(1, [1, 2]);
+
+    const stored = readDismissedEventKeys();
+    expect(stored[eventKey(1, 1, 1000)]).toBe(true);
+    expect(stored[eventKey(1, 2, 2000)]).toBe(true);
+  });
 });

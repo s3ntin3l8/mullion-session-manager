@@ -96,6 +96,21 @@ export function eventKey(sessionId: number, seq: number, ts: number): string {
 // (where the heuristic can only ever agree with "ordinary reconnect,"
 // never accidentally fire) — see adoptServerCursors for the confirmed-
 // restart path this function is deliberately not responsible for.
+//
+// Hermes review, PR #1460 — the `local === server.head` boundary
+// deliberately falls through to `Math.max`, i.e. trusts `local`, the same
+// as `local < server.head`. That's intentional, not an oversight: within a
+// bootId-confirmed same-incarnation call (this function's only remaining
+// caller once a restart is confirmed elsewhere), `local` can only ever
+// have been set by markEventSeen against a REAL rendered event, a prior
+// mergeServerCursor result, or applyLiveSeen — every one of those is
+// itself bounded by `head` at the time it ran, and `head` only grows, so
+// `local === head` here means "caught up to the newest event that existed
+// the last time local was set," not "coincidentally matches a since-reset
+// counter." The one narrow way this could misfire — clicking dismiss/mark-
+// read on a STALE, pre-restart event still sitting in `events` after
+// addEvent's (seq, ts) dedupe fix kept it around — is an events-history
+// staleness question, not a cursor-merge one, and out of scope here.
 export function mergeServerCursor(local: number, server: { seen: number; head: number }): number {
   if (local > server.head) return server.seen;
   return Math.max(local, server.seen);

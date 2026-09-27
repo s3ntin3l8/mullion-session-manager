@@ -39,7 +39,16 @@ describe("mergeServerCursor (issue #1427)", () => {
     expect(mergeServerCursor(50, { seen: 2, head: 10 })).toBe(2);
   });
 
-  it("treats local === head as still legitimately local, not a restart", () => {
+  it("treats local === head as still legitimately local, not a restart — trusts local even over a lower server.seen", () => {
+    // Hermes review, PR #1460 — the exact boundary: local(10) === head(10),
+    // and the server itself hasn't been told anything was seen yet
+    // (server.seen is 0). Falls through to Math.max(local, server.seen),
+    // i.e. trusts local — see mergeServerCursor's own doc comment for why
+    // that's correct in a bootId-confirmed same-incarnation call: `local`
+    // being 10 here can only mean it was legitimately set against event
+    // seq 10 while it existed, not a coincidental match to a reset
+    // counter.
+    expect(mergeServerCursor(10, { seen: 0, head: 10 })).toBe(10);
     expect(mergeServerCursor(10, { seen: 3, head: 10 })).toBe(10);
   });
 });

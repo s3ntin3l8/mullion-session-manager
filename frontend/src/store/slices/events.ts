@@ -204,10 +204,19 @@ export const createEventsSlice: StateCreator<DashboardState, [], [], EventsSlice
       // longer) recognizes can't throw or corrupt state; it is not
       // expected to be exercised by any real caller.
       const ts = get().events[sessionId]?.find((e) => e.seq === seq)?.ts ?? Date.now();
+      const key = eventKey(sessionId, seq, ts);
+      // Hermes review, PR #1460 — an already-dismissed key is a no-op
+      // re-set (dismissEvent's own doc comment/contract), but without this
+      // check every re-click (e.g. a double Dismiss click, or a folded row
+      // whose action fires more than once) still spread a fresh
+      // dismissedEventKeys object, ran it through capDismissedEventKeys,
+      // and wrote the identical content to localStorage again — a wasted
+      // write, mirrored after refreshSessions' own no-op identity check.
+      if (get().dismissedEventKeys[key] === true) return;
       set((state) => {
         const dismissedEventKeys = capDismissedEventKeys({
           ...state.dismissedEventKeys,
-          [eventKey(sessionId, seq, ts)]: true,
+          [key]: true,
         });
         writeDismissedEventKeys(dismissedEventKeys);
         return { dismissedEventKeys };
@@ -217,12 +226,16 @@ export const createEventsSlice: StateCreator<DashboardState, [], [], EventsSlice
     dismissEvents: (sessionId, seqs) => {
       if (seqs.length === 0) return;
       const bySeq = new Map(get().events[sessionId]?.map((e) => [e.seq, e.ts]));
+      const current = get().dismissedEventKeys;
+      const keys = seqs.map((seq) => eventKey(sessionId, seq, bySeq.get(seq) ?? Date.now()));
+      // Same no-op short-circuit as dismissEvent above — every key already
+      // dismissed (e.g. re-clicking a folded row's Dismiss after it's
+      // already gone through, or an empty intersection after filtering
+      // elsewhere) skips the write entirely.
+      if (keys.every((key) => current[key] === true)) return;
       set((state) => {
         let dismissedEventKeys = { ...state.dismissedEventKeys };
-        for (const seq of seqs) {
-          const ts = bySeq.get(seq) ?? Date.now();
-          dismissedEventKeys[eventKey(sessionId, seq, ts)] = true;
-        }
+        for (const key of keys) dismissedEventKeys[key] = true;
         dismissedEventKeys = capDismissedEventKeys(dismissedEventKeys);
         writeDismissedEventKeys(dismissedEventKeys);
         return { dismissedEventKeys };
