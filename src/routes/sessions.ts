@@ -30,6 +30,7 @@ import {
 } from "../services/session-lifecycle.js";
 import { commandSupportsSeed, resolveSeedDelivered } from "../services/task-agent-resolve.js";
 import {
+  explicitModelError,
   resolveCliModel,
   resolveOpenCodeModel,
   resolveOpenCodeSmallModel,
@@ -98,8 +99,12 @@ const createSessionSchema = {
         maxProperties: MAX_SESSION_ENV_ENTRIES,
         additionalProperties: { type: "string", maxLength: MAX_SESSION_ENV_VALUE_LENGTH },
       },
-      model: { type: "string" },
-      smallModel: { type: "string" },
+      // Issue #1423 — the handler validates the value's shape against the
+      // resolved command (CLI_MODEL_RE for claude-code/codex/agy,
+      // provider/model for opencode); this maxLength is just a coarse
+      // upper bound, matching CLI_MODEL_RE's own 128-char cap.
+      model: { type: "string", maxLength: 128 },
+      smallModel: { type: "string", maxLength: 128 },
       // Issue: spawn_child_session had no prompt-delivery channel at all,
       // unlike the promote route's own `seedPrompt` (that route's separate
       // schema, not this one). Same public name and same "route handler
@@ -426,20 +431,47 @@ export async function sessionsRoute(app: FastifyInstance) {
       // is meaningless for a non-opencode command, and an unguarded stamp
       // renders a misleading model badge on a row whose agent will never
       // read it (Hermes review warning, PR #961 round 2).
-      //
+      const isOpencode = commandIsOpencode(request.body.command);
+      // Claude Code / Codex / agy: same default resolution (no parent
+      // inheritance — see the issue's out-of-scope note), landing as
+      // `--model` via the adapter's commandTransform.
+      const modelCli = commandModelCli(request.body.command);
+
+      // Issue #1423 — validate any explicit model/smallModel before it's
+      // stored or used to build argv; an invalid value would otherwise
+      // reach `buildModelFlag` protected only by shell-quoting, which stops
+      // shell injection but not a value like `--dangerously-skip-permissions`
+      // from being read as another flag by the CLI's own argument parser.
+      // A field that doesn't apply to this command (smallModel for a
+      // claude-code/codex/agy command, or either field for a bash/npm/other
+      // command) is silently dropped below rather than rejected here — it's
+      // inert on that command, not malicious, and rejecting it outright
+      // risks breaking an existing caller (e.g. spawn_child_session, which
+      // can send both fields on every call) that has been sending it
+      // harmlessly until now.
+      if (request.body.model !== undefined) {
+        const err = explicitModelError(request.body.command, "model", request.body.model);
+        if (err) return reply.badRequest(err);
+      }
+      if (request.body.smallModel !== undefined) {
+        const err = explicitModelError(request.body.command, "smallModel", request.body.smallModel);
+        if (err) return reply.badRequest(err);
+      }
+      const explicitModel = modelCli !== null || isOpencode ? request.body.model : undefined;
+      const explicitSmallModel = isOpencode ? request.body.smallModel : undefined;
+
       // Issue #1337 — when parentSessionId is set and model/smallModel are
       // still unresolved after explicit caller-supplied values, inherit from
       // the parent session's stored model/smallModel before falling through
       // to the install-wide defaults. This lets a spawn_child_session MCP
       // call propagate the parent's model choice to its children without
       // the agent needing to pass them explicitly.
-      const isOpencode = commandIsOpencode(request.body.command);
       let parentModel: string | undefined;
       let parentSmallModel: string | undefined;
       if (
         isOpencode &&
         request.body.parentSessionId !== undefined &&
-        (request.body.model === undefined || request.body.smallModel === undefined)
+        (explicitModel === undefined || explicitSmallModel === undefined)
       ) {
         const [parentRow] = app.db
           .select({ model: sessions.model, smallModel: sessions.smallModel })
@@ -447,39 +479,61 @@ export async function sessionsRoute(app: FastifyInstance) {
           .where(eq(sessions.id, request.body.parentSessionId))
           .all();
         if (parentRow) {
-          parentModel = parentRow.model ?? undefined;
-          parentSmallModel = parentRow.smallModel ?? undefined;
+          // Issue #1423 — the parent's stored model predates this
+          // validation, or could have been written by an older backend
+          // build, so re-validate defensively rather than trusting it. This
+          // isn't the current caller's fault, so an invalid value is
+          // logged and dropped (falls through to the settings default)
+          // rather than rejecting the child's creation outright.
+          const rawParentModel = parentRow.model ?? undefined;
+          if (
+            rawParentModel !== undefined &&
+            explicitModelError(request.body.command, "model", rawParentModel) === null
+          ) {
+            parentModel = rawParentModel;
+          } else if (rawParentModel !== undefined) {
+            app.log.warn(
+              { model: rawParentModel },
+              "[sessions] parent session's model failed validation, falling through to the settings default",
+            );
+          }
+          const rawParentSmallModel = parentRow.smallModel ?? undefined;
+          if (
+            rawParentSmallModel !== undefined &&
+            explicitModelError(request.body.command, "smallModel", rawParentSmallModel) === null
+          ) {
+            parentSmallModel = rawParentSmallModel;
+          } else if (rawParentSmallModel !== undefined) {
+            app.log.warn(
+              { smallModel: rawParentSmallModel },
+              "[sessions] parent session's smallModel failed validation, falling through to the settings default",
+            );
+          }
         }
       }
-      // Claude Code / Codex / agy: same default resolution (no parent
-      // inheritance — see the issue's out-of-scope note), landing as
-      // `--model` via the adapter's commandTransform.
-      const modelCli = commandModelCli(request.body.command);
-      const body =
-        modelCli !== null && request.body.model === undefined
-          ? {
-              ...request.body,
-              model: resolveCliModel(app, modelCli, { issueBody: null }) ?? undefined,
-            }
-          : isOpencode &&
-              (request.body.model === undefined || request.body.smallModel === undefined)
-            ? {
-                ...request.body,
-                model:
-                  request.body.model ??
-                  parentModel ??
-                  resolveOpenCodeModel(app, {
-                    issueBody: null,
-                    role: "implementer",
-                  }) ??
-                  undefined,
-                smallModel:
-                  request.body.smallModel ??
-                  parentSmallModel ??
-                  resolveOpenCodeSmallModel(app, { issueBody: null }) ??
-                  undefined,
-              }
-            : request.body;
+
+      let resolvedModel: string | undefined;
+      let resolvedSmallModel: string | undefined;
+      if (modelCli !== null) {
+        resolvedModel =
+          explicitModel ?? resolveCliModel(app, modelCli, { issueBody: null }) ?? undefined;
+        // smallModel has no meaning for these CLIs (see explicitSmallModel
+        // above) — resolvedSmallModel stays undefined so it's dropped.
+      } else if (isOpencode) {
+        resolvedModel =
+          explicitModel ??
+          parentModel ??
+          resolveOpenCodeModel(app, { issueBody: null, role: "implementer" }) ??
+          undefined;
+        resolvedSmallModel =
+          explicitSmallModel ??
+          parentSmallModel ??
+          resolveOpenCodeSmallModel(app, { issueBody: null }) ??
+          undefined;
+      }
+      // Else: no model concept for this command (bash, npm scripts, an
+      // unmatched custom launcher) — both stay undefined.
+      const body = { ...request.body, model: resolvedModel, smallModel: resolvedSmallModel };
 
       // Issue: spawn_child_session (the one session-scoped spawn path an
       // agent can reach) had no way to submit a first turn to its child at

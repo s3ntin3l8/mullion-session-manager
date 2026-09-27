@@ -8,6 +8,7 @@ vi.mock("../../src/services/settings.js", () => ({
 }));
 
 import {
+  explicitModelError,
   resolveCliModel,
   validateCliModel,
   resolveOpenCodeModel,
@@ -287,5 +288,49 @@ describe("validateCliModel", () => {
     expect(validateCliModel("a b")).toBe(false);
     expect(validateCliModel("$(x)")).toBe(false);
     expect(validateCliModel("a'b")).toBe(false);
+  });
+});
+
+// Issue #1423 — explicitModelError gates a caller-supplied model/smallModel
+// on POST /api/sessions and /internal/sessions, where an invalid value has
+// no "next precedence tier" to fall through to (unlike the resolvers above).
+describe("explicitModelError", () => {
+  it("validates a claude-code command's model against CLI_MODEL_RE", () => {
+    expect(explicitModelError("claude", "model", "opusplan")).toBeNull();
+    expect(explicitModelError("claude", "model", "claude-opus-4-5[1m]")).toBeNull();
+    expect(explicitModelError("claude", "model", "--dangerously-skip-permissions")).not.toBeNull();
+    expect(explicitModelError("claude", "model", "a b")).not.toBeNull();
+    expect(explicitModelError("claude", "model", "$(x)")).not.toBeNull();
+  });
+
+  it("validates codex and agy commands the same way", () => {
+    expect(explicitModelError("codex", "model", "gpt-6-sol")).toBeNull();
+    expect(explicitModelError("codex", "model", "-m")).not.toBeNull();
+    expect(explicitModelError("agy", "model", "gemini-3")).toBeNull();
+    expect(explicitModelError("agy", "model", "'; rm -rf /'")).not.toBeNull();
+  });
+
+  it("never errors on smallModel for a claude-code/codex/agy command — it's meaningless there", () => {
+    expect(explicitModelError("claude", "smallModel", "--anything at all")).toBeNull();
+    expect(explicitModelError("codex", "smallModel", "$(x)")).toBeNull();
+  });
+
+  it("requires an opencode model/smallModel to be both provider/model-shaped and charset-safe", () => {
+    expect(explicitModelError("opencode", "model", "anthropic/claude-sonnet-4-5")).toBeNull();
+    expect(
+      explicitModelError("opencode", "model", "openrouter/anthropic/claude-sonnet-4-5"),
+    ).toBeNull();
+    expect(explicitModelError("opencode", "smallModel", "opencode-go/cheap")).toBeNull();
+    // No "/" at all — fails validateModel.
+    expect(explicitModelError("opencode", "model", "sonnet")).not.toBeNull();
+    // Has a "/", but a leading "-" and a "$()" are still a shell/argv hazard
+    // once this lands in OPENCODE_CONFIG_CONTENT — validateModel alone
+    // wouldn't catch it, so validateCliModel must run too.
+    expect(explicitModelError("opencode", "model", "-x/$(y)")).not.toBeNull();
+  });
+
+  it("returns null for any value on a command with no model concept — the route drops it instead of erroring", () => {
+    expect(explicitModelError("bash", "model", "anything, even garbage")).toBeNull();
+    expect(explicitModelError("npm run build", "smallModel", "$(x)")).toBeNull();
   });
 });

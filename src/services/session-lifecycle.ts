@@ -142,12 +142,15 @@ export interface CreateSessionBody {
   // envAdditions), so none of those can be overridden by it — enforced by
   // reserved-key rejection at the dock-config write path, not here.
   env?: Record<string, string>;
-  // Issue #957 — the opencode model to set on the spawned session.
-  // Honored only when `command` resolves to an opencode adapter; ignored
-  // for every other command. For Task Master, set by task-claim.ts /
-  // task-reconciler.ts after running resolveOpenCodeModel; for the public
-  // UI, callers typically leave this unset so opencode's own fallback
-  // applies.
+  // Issue #957 — the model to set on the spawned session: opencode's
+  // `provider/model`, or the bare `--model` value for Claude Code, Codex or
+  // agy (issue #1408). Ignored for every other command. For Task Master,
+  // set by task-claim.ts / task-reconciler.ts after running
+  // resolveOpenCodeModel / resolveCliModel; for the public UI, callers
+  // typically leave this unset so the settings default (or the CLI's own
+  // fallback) applies. An explicit value is validated by the route (issue
+  // #1423) before it reaches here — see task-model-resolve.ts's
+  // explicitModelError.
   model?: string;
   // Issue #958 — opencode's `small_model` config key (lightweight tasks
   // like title generation). Same threading posture as `model` above.
