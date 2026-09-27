@@ -43,13 +43,81 @@ function isEventsWireMessage(value: unknown): value is NotificationEvent {
   );
 }
 
+// Issue #1427 — sent once, right after connect (before the replay batch),
+// by attachAggregatedEventsSocket (routes/events.ts): every locally-tracked
+// session's server-side read cursor, so this client can reconcile its own
+// possibly-stale local cursor against what the server currently knows (see
+// store/helpers.ts's mergeCursorsFrame for the merge rule this enables).
+// `cursors`' values arrive with string keys (a JSON object can't have
+// numeric keys on the wire) — deliberately left as-is here; the numeric
+// conversion happens once, in mergeCursorsFrame/adoptServerCursors, rather
+// than twice. `bootId` is a fresh random id generated once per backend
+// process incarnation (PtyManager's own doc comment) — store/slices/
+// events.ts compares it against the last one this connection saw to tell a
+// genuine restart apart from an ordinary reconnect, since raw seq/head
+// numbers alone can't always disambiguate the two (see
+// mergeServerCursor's doc comment).
+export interface CursorsWireMessage {
+  type: "cursors";
+  bootId: string;
+  cursors: Record<string, { seen: number; head: number }>;
+}
+
+function isCursorsMessage(value: unknown): value is CursorsWireMessage {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { type?: unknown }).type === "cursors" &&
+    typeof (value as { bootId?: unknown }).bootId === "string" &&
+    typeof (value as { cursors?: unknown }).cursors === "object" &&
+    (value as { cursors?: unknown }).cursors !== null
+  );
+}
+
+// Issue #1427 — broadcast by attachAggregatedEventsSocket to every OTHER
+// currently-open aggregate connection on this process whenever a "seen"
+// message (see sendSeen below) genuinely advances a session's cursor.
+// Shares its `{type, sessionId, seq}` shape with the outgoing "seen"
+// message this same client sends via sendSeen — same fields, opposite
+// direction — but this one only ever arrives, never gets echoed back to
+// its own sender (routes/events.ts excludes the originating socket).
+export interface SeenWireMessage {
+  type: "seen";
+  sessionId: number;
+  seq: number;
+}
+
+function isSeenMessage(value: unknown): value is SeenWireMessage {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { type?: unknown }).type === "seen" &&
+    typeof (value as { sessionId?: unknown }).sessionId === "number" &&
+    typeof (value as { seq?: unknown }).seq === "number"
+  );
+}
+
+export interface ConnectEventsStreamHandlers {
+  /** Called for every replayed-or-live NotificationEvent frame. */
+  onEvent: (event: NotificationEvent) => void;
+  /** Called once per connection, right after it opens, before any replayed
+   * event — see CursorsWireMessage above. */
+  onCursors: (bootId: string, cursors: Record<string, { seen: number; head: number }>) => void;
+  /** Called for every live cross-client "seen" broadcast — see
+   * SeenWireMessage above. Never called for this connection's own outgoing
+   * sendSeen (the server excludes the sender). */
+  onSeen: (sessionId: number, seq: number) => void;
+}
+
 /** Opens (and keeps reopening, on any drop) a connection to /ws/events,
- * calling `onEvent` for every replayed-or-live NotificationEvent frame.
+ * dispatching each incoming frame to the matching handler in `handlers`.
  * Callers (store.ts) own deduping/accumulating; this module only ever
- * delivers what the wire sends, once per frame, in delivery order. */
-export function connectEventsStream(
-  onEvent: (event: NotificationEvent) => void,
-): EventsClientHandle {
+ * delivers what the wire sends, once per frame, in delivery order. The
+ * `type` discriminant is checked before falling back to the bare-event
+ * guard, so a future frame shape can never be misread as a phantom
+ * NotificationEvent even if it happened to also satisfy that guard. */
+export function connectEventsStream(handlers: ConnectEventsStreamHandlers): EventsClientHandle {
+  const { onEvent, onCursors, onSeen } = handlers;
   let ws: WebSocket | null = null;
   let destroyed = false;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -76,7 +144,13 @@ export function connectEventsStream(
       } catch {
         return;
       }
-      if (isEventsWireMessage(parsed)) onEvent(parsed);
+      if (isCursorsMessage(parsed)) {
+        onCursors(parsed.bootId, parsed.cursors);
+      } else if (isSeenMessage(parsed)) {
+        onSeen(parsed.sessionId, parsed.seq);
+      } else if (isEventsWireMessage(parsed)) {
+        onEvent(parsed);
+      }
     });
 
     socket.addEventListener("close", () => {

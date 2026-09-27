@@ -146,8 +146,14 @@ describe("events route (/ws/events)", () => {
     const messages = collectJsonMessages(ws);
     await waitForOpenOrClose(ws);
 
-    await waitUntil(() => messages.length > 0);
-    expect(messages[0]).toMatchObject({
+    // Issue #1427: the very first frame on any connection is now the
+    // `cursors` frame (see the dedicated test below), sent before the
+    // replay batch — filter by `kind` (absent on a `cursors` frame) rather
+    // than asserting on messages[0] directly, the same forward-compatible
+    // pattern the other tests in this file already use.
+    await waitUntil(() => messages.some((m) => m.kind === "title_change"));
+    const replayed = messages.find((m) => m.kind === "title_change");
+    expect(replayed).toMatchObject({
       sessionId,
       kind: "title_change",
       payload: { title: "working" },
@@ -232,6 +238,117 @@ describe("events route (/ws/events)", () => {
     expect(ws.readyState).toBe(ws.OPEN);
 
     ws.close();
+  });
+
+  // Issue #1427 — the server-owned read cursor. Uses raw parsed frames
+  // (not collectJsonMessages/WireEvent, which assumes every frame is a bare
+  // NotificationEvent) since a `cursors`/`seen` control frame doesn't match
+  // that shape.
+  function collectRawMessages(ws: WebSocket): unknown[] {
+    const messages: unknown[] = [];
+    ws.addEventListener("message", (event) => messages.push(JSON.parse(event.data as string)));
+    return messages;
+  }
+
+  it("sends a cursors frame before any replayed event, reflecting this session's head/seen", async () => {
+    const { app, port } = await buildAndListen();
+    const { sessionId, pty } = await createProjectAndSession(app);
+
+    // Give the session a non-trivial head to assert on.
+    pty.emitData("\x1b]2;working\x07");
+    await new Promise((resolve) => setTimeout(resolve, TITLE_CHANGE_EVENT_DEBOUNCE_MS + 200));
+
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/events`);
+    const raw = collectRawMessages(ws);
+    await waitForOpenOrClose(ws);
+
+    await waitUntil(() => raw.length > 0);
+    const first = raw[0] as {
+      type?: string;
+      bootId?: string;
+      cursors?: Record<string, { seen: number; head: number }>;
+    };
+    expect(first.type).toBe("cursors");
+    expect(typeof first.bootId).toBe("string");
+    expect(first.bootId).not.toBe("");
+    expect(first.cursors?.[String(sessionId)]).toEqual({ seen: 0, head: 1 });
+
+    ws.close();
+  }, 10_000);
+
+  it("sends the same bootId to every connection on this process (issue #1427's restart-detection signal)", async () => {
+    const { app, port } = await buildAndListen();
+    await createProjectAndSession(app);
+
+    const ws1 = new WebSocket(`ws://127.0.0.1:${port}/ws/events`);
+    const ws2 = new WebSocket(`ws://127.0.0.1:${port}/ws/events`);
+    const raw1 = collectRawMessages(ws1);
+    const raw2 = collectRawMessages(ws2);
+    await Promise.all([waitForOpenOrClose(ws1), waitForOpenOrClose(ws2)]);
+    await waitUntil(() => raw1.length > 0 && raw2.length > 0);
+
+    const bootId1 = (raw1[0] as { bootId?: string }).bootId;
+    const bootId2 = (raw2[0] as { bootId?: string }).bootId;
+    expect(bootId1).toBe(bootId2);
+
+    ws1.close();
+    ws2.close();
+  });
+
+  it("broadcasts a 'seen' advance to another open connection, but not back to the sender", async () => {
+    const { app, port } = await buildAndListen();
+    const { sessionId } = await createProjectAndSession(app);
+
+    const ws1 = new WebSocket(`ws://127.0.0.1:${port}/ws/events`);
+    const ws2 = new WebSocket(`ws://127.0.0.1:${port}/ws/events`);
+    const raw1 = collectRawMessages(ws1);
+    const raw2 = collectRawMessages(ws2);
+    await Promise.all([waitForOpenOrClose(ws1), waitForOpenOrClose(ws2)]);
+
+    // Each connection gets its own cursors frame on connect — drain those
+    // first so they aren't mistaken for the broadcast below.
+    await waitUntil(() => raw1.length > 0 && raw2.length > 0);
+    raw1.length = 0;
+    raw2.length = 0;
+
+    ws1.send(JSON.stringify({ type: "seen", sessionId, seq: 1 }));
+
+    await waitUntil(() => raw2.some((m) => (m as { type?: string }).type === "seen"));
+    expect(raw2).toContainEqual({ type: "seen", sessionId, seq: 1 });
+    expect(raw1.some((m) => (m as { type?: string }).type === "seen")).toBe(false);
+
+    ws1.close();
+    ws2.close();
+  });
+
+  it("does not re-broadcast a 'seen' that doesn't actually advance the cursor", async () => {
+    const { app, port } = await buildAndListen();
+    const { sessionId } = await createProjectAndSession(app);
+
+    const ws1 = new WebSocket(`ws://127.0.0.1:${port}/ws/events`);
+    const ws2 = new WebSocket(`ws://127.0.0.1:${port}/ws/events`);
+    const raw2 = collectRawMessages(ws2);
+    await Promise.all([waitForOpenOrClose(ws1), waitForOpenOrClose(ws2)]);
+
+    ws1.send(JSON.stringify({ type: "seen", sessionId, seq: 5 }));
+    await waitUntil(() => raw2.some((m) => (m as { type?: string }).type === "seen"));
+    raw2.length = 0;
+
+    // A lower/equal seq is a no-op on Session.markEventsSeen (monotonic
+    // only) — must not re-broadcast either. Waiting on a bare timer tick
+    // here can't distinguish "correctly didn't broadcast" from "broadcast
+    // still in flight over the real WS round trip" — instead, send a
+    // second, definitely-advancing seq right behind it and wait for THAT
+    // one to arrive, then assert it was the ONLY frame raw2 ever received
+    // (i.e. the no-op seq truly produced nothing, not just something
+    // slow).
+    ws1.send(JSON.stringify({ type: "seen", sessionId, seq: 3 }));
+    ws1.send(JSON.stringify({ type: "seen", sessionId, seq: 8 }));
+    await waitUntil(() => raw2.some((m) => (m as { type?: string; seq?: number }).seq === 8));
+    expect(raw2).toEqual([{ type: "seen", sessionId, seq: 8 }]);
+
+    ws1.close();
+    ws2.close();
   });
 
   it("closes cleanly without leaving the session tracked incorrectly", async () => {

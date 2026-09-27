@@ -626,7 +626,7 @@ export function SessionTimeline({ params }: { params: SessionTimelineParams }) {
                 key={
                   event.rowId !== undefined
                     ? `h:${event.rowId}`
-                    : eventKey(event.sessionId ?? -1, event.seq)
+                    : eventKey(event.sessionId ?? -1, event.seq, event.ts)
                 }
                 className={`session-timeline-row sev-${severity}`}
               >

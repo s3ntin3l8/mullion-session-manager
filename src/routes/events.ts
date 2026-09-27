@@ -64,6 +64,21 @@ export interface AttachLocalEventsOptions {
    * means the full, unfiltered aggregate — unchanged behavior.
    */
   sessionIdFilter?: string;
+  /**
+   * Called whenever an incoming "seen" message genuinely advances a
+   * session's read cursor (`PtyManager.markEventsSeen`'s own return value) —
+   * issue #1427's cross-client read-state sync. Wired only by
+   * `attachAggregatedEventsSocket` below, for the unfiltered aggregate: a
+   * `sessionIdFilter`'d connection doesn't get one (broadcasting there would
+   * need its own per-session filtering to avoid leaking another session's
+   * cursor to a connection pinned to just one), and routes/internal.ts's
+   * bare `/internal/ws/events` doesn't either (its raw frames are relayed
+   * byte-for-byte to a browser by `relayRemoteEventsHost`, so a new frame
+   * shape emitted there would leak into another host's browser stream,
+   * mislabeled with this process's own — potentially colliding — numeric
+   * session ids).
+   */
+  onSeenAdvanced?: (sessionId: number, seq: number) => void;
 }
 
 /**
@@ -139,7 +154,8 @@ export function attachLocalEventsSocket(
       return;
     }
     if (isSeenMessage(parsed) && matchesFilter(parsed.sessionId)) {
-      app.pty.markEventsSeen(String(parsed.sessionId), parsed.seq);
+      const advanced = app.pty.markEventsSeen(String(parsed.sessionId), parsed.seq);
+      if (advanced) opts?.onSeenAdvanced?.(parsed.sessionId, parsed.seq);
     }
   });
 
@@ -200,6 +216,34 @@ export function relayRemoteEventsHost(
   return upstream;
 }
 
+// Issue #1427 — the subscriber set behind attachAggregatedEventsSocket's
+// cross-client "seen" broadcast: every currently-open unfiltered aggregate
+// connection to THIS process (a real /ws/events browser tab, or the control
+// socket's full-scope `events.subscribe`), so that when one of them marks a
+// session read, every other one hears about it without waiting for its own
+// reconnect. Keyed by the FastifyInstance itself (a WeakMap, not a bare
+// module-level Set) so independent app instances spun up by different tests
+// in the same process never leak subscribers into each other — an entry is
+// never explicitly deleted; it simply falls out of scope with its app.
+//
+// Deliberately hand-rolled rather than reusing services/ws-broadcast.ts's
+// createBroadcastChannel: that helper's `subscribe()` requires
+// `socket.on("error", ...)`, which `SocketLike` (services/socket-channel.ts)
+// doesn't declare — the control socket's SocketChannel never emits an
+// `error` event at all, only `message`/`close` — so a SocketChannel can't
+// satisfy createBroadcastChannel's type, and this function's `socket`
+// parameter is a SocketLike, not necessarily a real WebSocket.
+const seenSubscribers = new WeakMap<FastifyInstance, Set<SocketLike>>();
+
+function getSeenSubscribers(app: FastifyInstance): Set<SocketLike> {
+  let subs = seenSubscribers.get(app);
+  if (!subs) {
+    subs = new Set();
+    seenSubscribers.set(app, subs);
+  }
+  return subs;
+}
+
 /**
  * The full multi-host aggregate behind `/ws/events`: this process's own
  * local events (attachLocalEventsSocket) plus one relayed upstream per
@@ -213,9 +257,46 @@ export function relayRemoteEventsHost(
  * remote-hosted session's token lives in a different process entirely), so
  * there is nothing for it to gain from opening upstream relays to every
  * other host just to filter back down to its own single, local session.
+ *
+ * Issue #1427: also sends a `cursors` frame — `{type:"cursors", bootId:
+ * app.pty.bootId, cursors: app.pty.listCursors()}` — before anything else
+ * (in particular, before attachLocalEventsSocket's own replay below), and
+ * broadcasts every genuine "seen" advance to every other currently-open
+ * connection of this same kind on this process (see seenSubscribers
+ * above). Both are local-only: a remote host's own sessions/cursors never
+ * appear here, same scope as attachLocalEventsSocket's own replay.
+ * `bootId` (PtyManager's own doc comment) is what lets the client tell a
+ * genuine backend restart apart from ordinary continued growth, since raw
+ * seq/head numbers alone can't always disambiguate the two.
  */
 export function attachAggregatedEventsSocket(app: FastifyInstance, socket: SocketLike): void {
-  attachLocalEventsSocket(app, socket);
+  if (socket.readyState === socket.OPEN) {
+    socket.send(
+      JSON.stringify({
+        type: "cursors",
+        bootId: app.pty.bootId,
+        cursors: app.pty.listCursors(),
+      }),
+    );
+  }
+
+  const subs = getSeenSubscribers(app);
+  subs.add(socket);
+  socket.on("close", () => {
+    subs.delete(socket);
+  });
+
+  attachLocalEventsSocket(app, socket, {
+    onSeenAdvanced: (sessionId, seq) => {
+      const payload = JSON.stringify({ type: "seen", sessionId, seq });
+      for (const other of subs) {
+        if (other === socket) continue; // the sender already applied this locally.
+        if (other.readyState !== other.OPEN) continue;
+        if (shouldDropForBackpressure(other.bufferedAmount)) continue;
+        other.send(payload);
+      }
+    },
+  });
 
   // Known gap (acceptable for this PR): a host that's unreachable at
   // connect time isn't retried until the browser's OWN /ws/events socket

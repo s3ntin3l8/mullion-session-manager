@@ -383,7 +383,7 @@ describe("notification events (issue #166)", () => {
     }
   });
 
-  it("markEventsSeen advances the read cursor but ignores a seq behind it", async () => {
+  it("markEventsSeen advances the read cursor but ignores a seq behind it, returning whether it advanced", async () => {
     const session = manager.getOrCreate({
       id: "1",
       cwd: "/tmp",
@@ -393,13 +393,15 @@ describe("notification events (issue #166)", () => {
     });
     await waitForSpawn(session);
 
-    // No public getter for lastSeenSeq (it's WS-facing only, not part of
-    // SessionInfo/toInfo — see pty-manager.ts's own comment) — exercise it
-    // indirectly through PtyManager.markEventsSeen and confirm it doesn't
-    // throw for an unknown id either.
-    expect(() => manager.markEventsSeen("1", 5)).not.toThrow();
-    expect(() => manager.markEventsSeen("1", 2)).not.toThrow();
-    expect(() => manager.markEventsSeen("does-not-exist", 1)).not.toThrow();
+    // Issue #1427 — Session.seenSeq/eventSeqHead (public getters) and
+    // markEventsSeen's boolean return, both added for the "cursors" frame
+    // and cross-client "seen" broadcast (routes/events.ts).
+    expect(session.seenSeq).toBe(0);
+    expect(manager.markEventsSeen("1", 5)).toBe(true);
+    expect(session.seenSeq).toBe(5);
+    expect(manager.markEventsSeen("1", 2)).toBe(false); // behind the cursor — no-op
+    expect(session.seenSeq).toBe(5);
+    expect(manager.markEventsSeen("does-not-exist", 1)).toBe(false);
   });
 
   it("PtyManager.onEvent fans out events from every tracked session", async () => {
@@ -444,6 +446,47 @@ describe("notification events (issue #166)", () => {
       expect(all.map((e) => e.sessionId).sort()).toEqual([1, 2]);
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("PtyManager.listCursors snapshots every tracked session's seen/head, keyed by numeric id", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const a = manager.getOrCreate({ id: "1", cwd: "/tmp", command: "bash", cols: 80, rows: 24 });
+      const b = manager.getOrCreate({ id: "2", cwd: "/tmp", command: "bash", cols: 80, rows: 24 });
+      await waitForSpawn(a);
+      await waitForSpawn(b);
+
+      fakePtyChildren[0].emitData("\x1b]2;hi\x07");
+      await vi.advanceTimersByTimeAsync(3_000); // settle the title_change debounce
+      manager.markEventsSeen("1", 1);
+
+      // Session "2" never emitted anything and was never marked seen —
+      // still present in the snapshot at {seen: 0, head: 0}, not omitted.
+      expect(manager.listCursors()).toEqual({
+        1: { seen: 1, head: 1 },
+        2: { seen: 0, head: 0 },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("PtyManager.bootId is a fresh, non-empty id, distinct per process incarnation", () => {
+    // Issue #1427 — the restart-detection signal sent alongside listCursors
+    // in the `cursors` frame (routes/events.ts). Deterministic per THIS
+    // instance's own lifetime (unchanged across getOrCreate calls) but
+    // distinct from another instance entirely — unlike instanceId, which
+    // is derived from sessionsDir and would collide for the same dir.
+    expect(typeof manager.bootId).toBe("string");
+    expect(manager.bootId).not.toBe("");
+    expect(manager.bootId).toBe(manager.bootId);
+
+    const other = new PtyManager({ sessionsDir: `${sessionsDir}-other` });
+    try {
+      expect(other.bootId).not.toBe(manager.bootId);
+    } finally {
+      other.killAll();
     }
   });
 });

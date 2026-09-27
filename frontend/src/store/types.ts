@@ -353,18 +353,23 @@ export interface EventsSlice {
   // SessionsSlice's startLiveRefresh, which stays exactly as-is.
   events: Record<number, NotificationEvent[]>;
   // Client-side half of the 1.1 read cursor (issue #166's `lastSeenSeq`,
-  // server-side in pty-manager.ts) — PR1 wired the WS "seen" send
-  // (markEventSeen below) but never tracked what was actually marked seen on
-  // this side, so nothing could compute unread counts. Keyed by sessionId;
-  // a missing key means "nothing seen yet" (unread = every buffered event).
-  // Advanced only via markEventSeen, never decremented — mirrors the
-  // server's own monotonic-only `lastSeenSeq`. Not persisted (localStorage
-  // or otherwise): a reload legitimately re-shows the badge for events the
-  // user technically already saw last session — the same tradeoff the old
-  // localStorage-backed acknowledgedAttention overlay (removed for #169;
-  // see NotificationBell.tsx's history) used to accept. A real fix needs
-  // the server to expose its cursor on connect/replay, which PR1 didn't
-  // build — out of scope here.
+  // server-side in pty-manager.ts). Keyed by sessionId; a missing key means
+  // "nothing seen yet" (unread = every buffered event). Advanced via
+  // markEventSeen (a local user action, echoed to the server), and also via
+  // two server-driven paths added by issue #1427 (store/helpers.ts):
+  // mergeCursorsFrame, applied once per session whenever the `cursors` frame
+  // arrives right after (re)connect, and applyLiveSeen, applied to every
+  // live cross-client "seen" broadcast for the rest of the connection's
+  // life. Never decremented directly, but a `cursors` frame CAN move this
+  // backward for one session — see mergeCursorsFrame's own doc comment for
+  // why that's correct, not a regression, when the backend has restarted.
+  //
+  // Deliberately NOT persisted to localStorage: issue #1427 made the read
+  // cursor server-owned instead (the whole point of the `cursors`/`seen`
+  // frames), so a device's own local value is only ever a cache of what the
+  // server already knows — persisting it here would just be a second,
+  // redundant source of truth to keep in sync. `dismissedEventKeys` below
+  // IS persisted, because a dismiss has no server counterpart at all.
   lastSeenSeq: Record<number, number>;
   // Issue #169's other half of per-event state: an explicit "dismiss" —
   // remove from the notification panel's feed, never resurface — which is
@@ -372,11 +377,17 @@ export interface EventsSlice {
   // answers "has the user seen this" (monotonic, coexists with the tab
   // badge); this answers "should this even still be listed" and can flag an
   // individual event anywhere in a session's history, in any order, without
-  // touching the read cursor. Keyed by `eventKey(sessionId, seq)` since
-  // `seq` alone isn't unique across sessions. In-memory only, same as
-  // `events`/`lastSeenSeq` — a reload re-shows a dismissed event, which is
-  // an acceptable degrade given the underlying event itself isn't persisted
-  // past the backend's own ring buffer + replay-on-connect window either.
+  // touching the read cursor. Keyed by `eventKey(sessionId, seq, ts)` since
+  // `seq` alone isn't unique across sessions, and — since issue #1427 —
+  // isn't even unique within one session across a backend restart (the
+  // server's own seq counter resets then; `ts` breaks the tie). Persisted
+  // to localStorage (lib/persistedState.ts's readDismissedEventKeys/
+  // writeDismissedEventKeys, issue #1427) and capped at
+  // DISMISSED_EVENT_KEYS_CAP (store/helpers.ts) — unlike `events`/
+  // `lastSeenSeq`, a dismiss has no server counterpart to fall back on
+  // (the underlying event itself isn't persisted past the backend's own
+  // ring buffer + replay-on-connect window either), so it would otherwise
+  // be lost on every reload.
   dismissedEventKeys: Record<string, true>;
   // Connects the single /ws/events channel once (App.tsx's mount effect,
   // alongside startLiveRefresh/startThemeWatch) and returns a cleanup
@@ -537,8 +548,9 @@ export interface UiSlice {
   // has no `position` column, unlike workspaces/groups), so this is kept as
   // in-memory UI state only, not persisted to localStorage or the server: a
   // reload legitimately re-shows a column's sessions in their natural order,
-  // the same tradeoff `lastSeenSeq`/`dismissedEventKeys` already accept for
-  // other in-memory-only state. Keyed by KanbanBoard's column id
+  // the same tradeoff `lastSeenSeq` already accepts (see EventsSlice's own
+  // doc comment — that one now syncs from the server instead, but neither
+  // touches localStorage). Keyed by KanbanBoard's column id
   // ("working" | "attention" | "finished" | "idle" | "exited"), each value
   // an ordered array of session ids — sessions not yet present in the array
   // (new arrivals) are appended at the end by KanbanBoard's own ordering

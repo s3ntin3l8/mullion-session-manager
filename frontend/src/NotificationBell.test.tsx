@@ -23,8 +23,11 @@ let events: Record<number, NotificationEvent[]>;
 let lastSeenSeq: Record<number, number>;
 let dismissedEventKeys: Record<string, true>;
 
-function eventKey(sessionId: number, seq: number): string {
-  return `${sessionId}:${seq}`;
+// Issue #1427 — gained a third `ts` segment (see store/helpers.ts's real
+// eventKey doc comment for why: seq alone is no longer unique across a
+// backend restart).
+function eventKey(sessionId: number, seq: number, ts: number): string {
+  return `${sessionId}:${seq}:${ts}`;
 }
 
 const markEventSeen = vi.fn((sessionId: number, seq: number) => {
@@ -44,8 +47,12 @@ const markSessionRead = vi.fn((sessionId: number) => {
 });
 
 const dismissEvents = vi.fn((sessionId: number, seqs: number[]) => {
+  // Mirrors the real store action's own ts lookup (slices/events.ts) —
+  // find each seq's ts from the currently-buffered event, same source of
+  // truth production dismisses against.
+  const bySeq = new Map((events[sessionId] ?? []).map((e) => [e.seq, e.ts]));
   const next = { ...dismissedEventKeys };
-  for (const seq of seqs) next[eventKey(sessionId, seq)] = true;
+  for (const seq of seqs) next[eventKey(sessionId, seq, bySeq.get(seq) ?? Date.now())] = true;
   dismissedEventKeys = next;
 });
 
@@ -458,8 +465,8 @@ describe("NotificationBell", () => {
   });
 
   it("excludes dismissed events from the unread count", () => {
-    events = { 1: [makeEvent({ seq: 1 }), makeEvent({ seq: 2 })] };
-    dismissedEventKeys = { "1:1": true };
+    events = { 1: [makeEvent({ seq: 1, ts: 1000 }), makeEvent({ seq: 2, ts: 2000 })] };
+    dismissedEventKeys = { [eventKey(1, 1, 1000)]: true };
     render(<NotificationBell onOpenSession={vi.fn()} onOpenBrowser={vi.fn()} />);
     expect(screen.getByText("1")).toBeInTheDocument();
   });
@@ -490,7 +497,10 @@ describe("NotificationBell", () => {
   });
 
   it("dismiss removes the event from the feed and it does not resurface on a later render", async () => {
-    events = { 1: [makeEvent({ seq: 1 })] };
+    // A fixed ts (not the makeEvent default's Date.now()) — a genuine
+    // redelivery of the same event below must carry the exact same ts, the
+    // same way the server's own ring buffer would replay it unchanged.
+    events = { 1: [makeEvent({ seq: 1, ts: 1000 })] };
     const first = render(<NotificationBell onOpenSession={vi.fn()} onOpenBrowser={vi.fn()} />);
     await userEvent.click(screen.getByRole("button", { name: /notifications/i }));
     expect(screen.getByText("Bell")).toBeInTheDocument();
@@ -502,10 +512,11 @@ describe("NotificationBell", () => {
     // Simulate the dismissal actually landing in the store (the mock above
     // already updated `dismissedEventKeys`) and a fresh mount — mirrors a
     // reconnect's replay batch re-delivering an event this store already
-    // has: the SAME event object arrives again in `events`, and must still
-    // stay filtered out because dismissal is keyed on (sessionId, seq), not
-    // on the event's continued presence in the `events` slice.
-    events = { 1: [makeEvent({ seq: 1 })] };
+    // has: the SAME event (same seq AND ts) arrives again in `events`, and
+    // must still stay filtered out because dismissal is keyed on
+    // (sessionId, seq, ts), not on the event's continued presence in the
+    // `events` slice.
+    events = { 1: [makeEvent({ seq: 1, ts: 1000 })] };
     render(<NotificationBell onOpenSession={vi.fn()} onOpenBrowser={vi.fn()} />);
     await userEvent.click(screen.getByRole("button", { name: /notifications/i }));
     expect(screen.queryByText("Bell")).not.toBeInTheDocument();
@@ -1275,8 +1286,8 @@ describe("NotificationBell phone sheet", () => {
   it("does not offer a Needs you count/filter for a session the feed has nothing to list for", async () => {
     // attention persists, but every notify-worthy event was dismissed.
     sessions = [makeSession({ attention: true })];
-    events = { 1: [makeEvent({ seq: 1 })] };
-    dismissedEventKeys = { "1:1": true };
+    events = { 1: [makeEvent({ seq: 1, ts: 1000 })] };
+    dismissedEventKeys = { [eventKey(1, 1, 1000)]: true };
     await openPhoneSheet();
     expect(screen.getByRole("button", { name: "All" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "Needs you" })).toBeInTheDocument();
