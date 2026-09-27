@@ -158,10 +158,10 @@ systemd user service if it should survive sleep, network changes, and login.
 For each host, Mullion resolves the session socket in this order
 (`resolveSshAuthSock`, `ssh-agent-socket.ts`):
 
-1. `MULLION_SSH_AUTH_SOCK`, when explicitly configured — always wins.
+1. `MULLION_SSH_AUTH_SOCK`, when explicitly configured — wins over both 2 and 3.
 2. Otherwise, an **ambient** `SSH_AUTH_SOCK` this host process already
-   inherited (`systemd --user` environment, PAM, a desktop keyring) —
-   deliberately outranks the bridge. This is an upgrade-safety trade-off:
+   inherited (`systemd --user` environment, PAM, a desktop keyring) — wins
+   over 3, the paired bridge. This is an upgrade-safety trade-off:
    a host that already had a working agent before ever pairing a bridge
    keeps using it unchanged, rather than a newly-paired bridge silently
    taking over sessions that worked fine before. It applies on both the
