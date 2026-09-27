@@ -11,6 +11,7 @@ import {
   explicitModelError,
   resolveCliModel,
   validateCliModel,
+  validateModel,
   resolveOpenCodeModel,
   resolveOpenCodeSmallModel,
 } from "../../src/services/task-model-resolve.js";
@@ -277,6 +278,46 @@ describe("resolveCliModel", () => {
     });
     expect(result).toBe("sonnet");
     expect(app.log.warn).toHaveBeenCalled();
+  });
+});
+
+// Issue #1423 (CodeQL, PR #1448) — validateModel used to be a single regex
+// (`/^\S+\/\S+$/`) vulnerable to catastrophic backtracking, since `\S` also
+// matches "/" and gives the engine no unique split point between its two
+// halves. Rewritten as a plain substring search; this both re-asserts the
+// original semantics and guards against a regex regression, since a
+// backtracking reintroduction wouldn't show up as a wrong boolean on a short
+// input — only as this test hanging/timing out on a pathological one.
+describe("validateModel", () => {
+  it("requires a slash strictly between the first and last character, and no whitespace", () => {
+    expect(validateModel("anthropic/claude-sonnet-4-5")).toBe(true);
+    expect(validateModel("openrouter/anthropic/claude-sonnet-4-5")).toBe(true);
+    expect(validateModel("a/b")).toBe(true);
+    // A slash only at a boundary doesn't count on its own...
+    expect(validateModel("/foo")).toBe(false);
+    expect(validateModel("foo/")).toBe(false);
+    // ...even combined with another slash at the other boundary, as long as
+    // there's still an interior one somewhere.
+    expect(validateModel("/foo/bar")).toBe(true);
+    expect(validateModel("no-slash-at-all")).toBe(false);
+    expect(validateModel("has a/space")).toBe(false);
+    expect(validateModel("a/b\tc")).toBe(false);
+    expect(validateModel("a")).toBe(false);
+    expect(validateModel("")).toBe(false);
+  });
+
+  it("stays fast on the pathological input CodeQL flagged for the old backtracking regex", () => {
+    // GitHub's own alert named "!/" repeated many times as the trigger for
+    // the old `/^\S+\/\S+$/`. A match on that shape alone actually succeeds
+    // fast (the engine's first, greedy split attempt already works) — the
+    // worst case is a near-miss that FAILS only after every one of the
+    // ~50,000 candidate split points has been tried and discarded, which a
+    // trailing space (breaking \S+'s final segment) forces here. Verified
+    // empirically: the old regex hung (>10s) on this exact input.
+    const pathological = "!/".repeat(50_000) + " ";
+    const start = performance.now();
+    expect(validateModel(pathological)).toBe(false); // whitespace present — rejected outright
+    expect(performance.now() - start).toBeLessThan(50);
   });
 });
 

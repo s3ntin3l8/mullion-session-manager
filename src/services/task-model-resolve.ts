@@ -19,10 +19,22 @@ const SMALL_MODEL_LINE_RE = /^\s*SmallModel:\s*(\S+)\s*$/im;
 // too-strict pattern actually reachable, so it's fixed here too rather than
 // shipping a Models dropdown whose majority of entries silently fail
 // validation at spawn time and fall back to "no override".
-const MODEL_FORMAT_RE = /^\S+\/\S+$/;
-
+//
+// Issue #1423 (CodeQL, PR #1448) — this used to be the single regex
+// `/^\S+\/\S+$/`. `\S` also matches "/", so that pattern has no unique split
+// point between its two halves: for input like `"!/".repeat(n)`, the engine
+// can divide the string between the two `\S+` groups at every "/" before
+// backtracking to try the next one, which is polynomial in `n`. This PR
+// (issue #1423) is what first calls `validateModel` directly on a raw,
+// caller-supplied `model`/`smallModel` from an HTTP body (`explicitModelError`
+// below) rather than only on a value already sourced from settings/task
+// state, so CodeQL now flags a genuine attacker-reachable path. Rewritten as
+// plain substring search — same semantics (a `/` strictly between the first
+// and last character; a `/` immediately at either boundary, e.g. "/foo" or
+// "foo/", doesn't count on its own), but linear and non-backtracking.
 export function validateModel(value: string): boolean {
-  return MODEL_FORMAT_RE.test(value);
+  if (value.length < 3 || /\s/.test(value)) return false;
+  return value.slice(1, -1).includes("/");
 }
 
 function parseModelDirective(body: string | null): string | null {
