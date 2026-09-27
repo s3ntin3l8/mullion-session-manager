@@ -116,3 +116,33 @@ export function updateFaviconBadge(count: number, dotColor = "#e5575a"): void {
   ctx.fill();
   link.href = canvas.toDataURL("image/png");
 }
+
+// Narrow, ambient-lib-free typing for the Badging API — not yet in
+// TypeScript's own lib.dom.d.ts navigator typings as of this repo's
+// TS/lib version, and not universal across browsers (Safari/Firefox lack
+// it as of writing) — every call site feature-detects via `?.` rather than
+// assuming these exist.
+interface NavigatorWithBadging {
+  setAppBadge?: (count?: number) => Promise<void>;
+  clearAppBadge?: () => Promise<void>;
+}
+
+/** Issue #1433 — the OS-level taskbar/dock/home-screen icon badge
+ * (Badging API), alongside the title/favicon badges above. Unlike
+ * updateFaviconBadge, this needs no DOM and no caching to skip redundant
+ * calls: setAppBadge()/clearAppBadge() are cheap OS-level calls, not a
+ * canvas rebuild, so calling them every tick regardless of whether the
+ * count actually changed costs nothing worth guarding against. Swallows a
+ * rejection the same way pushClient.ts's own showNotification fallback
+ * does — a badge failing to set is never worth surfacing to the user or
+ * throwing over. A negative or non-finite count is treated as 0 (cleared)
+ * rather than passed through — the Badging API's own setAppBadge(0) throws
+ * a TypeError in some implementations for exactly that input. */
+export function updateAppBadge(count: number): void {
+  const nav = navigator as Navigator & NavigatorWithBadging;
+  if (count > 0) {
+    void nav.setAppBadge?.(count)?.catch(() => {});
+  } else {
+    void nav.clearAppBadge?.()?.catch(() => {});
+  }
+}

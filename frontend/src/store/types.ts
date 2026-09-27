@@ -428,6 +428,18 @@ export interface EventsSlice {
   // sequential ones, each of which would otherwise re-spread the whole
   // `dismissedEventKeys` map.
   dismissEvents: (sessionId: number, seqs: number[]) => void;
+  // Issue #1430 — the server-side "acknowledge" call every EXPLICIT read
+  // action fires alongside its own markSessionRead/markEventSeen/
+  // dismissEvents call (row open, Mark read, Read all, Dismiss —
+  // NotificationBell.tsx, useSessionDeepLink.ts, useOpenSessionRequest.ts,
+  // App.tsx's push-open path). Clears non-blocking attention only — a 409
+  // for a still-blocking kind (its own dedicated resolve route is what's
+  // actually needed) is an expected, silent outcome, not surfaced to the
+  // caller. Fire-and-forget: see AttentionTracker.acknowledgeAttention's
+  // own doc comment (backend) for the exact semantics, and this file's
+  // markSessionRead doc comment above for why this is a SEPARATE action
+  // rather than folded into it.
+  ackAttention: (sessionId: number) => void;
 }
 
 export interface WorkspacesSlice {

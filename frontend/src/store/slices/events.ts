@@ -1,4 +1,5 @@
 import type { StateCreator } from "zustand";
+import { api, ApiError } from "../../api/index.js";
 import { connectEventsStream, type EventsClientHandle } from "../../eventsClient.js";
 import {
   addEvent,
@@ -239,6 +240,33 @@ export const createEventsSlice: StateCreator<DashboardState, [], [], EventsSlice
         dismissedEventKeys = capDismissedEventKeys(dismissedEventKeys);
         writeDismissedEventKeys(dismissedEventKeys);
         return { dismissedEventKeys };
+      });
+    },
+
+    // Issue #1430 — server-side "acknowledge": clears NON-blocking
+    // attention (POST /api/sessions/:id/attention/ack, refused with a 409
+    // for a still-blocking kind or a session this process doesn't locally
+    // track — see AttentionTracker.acknowledgeAttention's own doc comment
+    // on the backend for the exact semantics). Deliberately its own
+    // action, not folded into markSessionRead/markEventSeen above (see
+    // EventsSlice's own doc comment on markSessionRead for why): a passive
+    // view advancing the read cursor is not the same as a user's explicit
+    // action, so every EXPLICIT read call site (row open, Mark read, Read
+    // all, Dismiss — NotificationBell.tsx, useSessionDeepLink.ts,
+    // useOpenSessionRequest.ts, App.tsx's push-open path) calls this
+    // alongside its own markSessionRead/markEventSeen/dismissEvents call,
+    // not instead of it. Fire-and-forget either way — the read-cursor side
+    // of the action already succeeded locally regardless of whether the
+    // server-side ack landed — but a 409 is distinguished from every other
+    // failure: it's an EXPECTED outcome (nothing useful for the UI to
+    // surface), while a genuine failure (network error, 500, ...) is
+    // logged rather than silently swallowed identically, so a real bug
+    // here doesn't vanish without a trace the way an expected refusal
+    // should.
+    ackAttention: (sessionId) => {
+      void api.ackAttention(sessionId).catch((err: unknown) => {
+        if (err instanceof ApiError && err.statusCode === 409) return;
+        console.error("ackAttention failed", err);
       });
     },
   };

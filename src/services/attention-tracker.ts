@@ -45,6 +45,7 @@ import type { NotificationEvent } from "../shared/types.js";
 import type { BackgroundTask } from "./hook-protocol.js";
 import { filterOutstandingBackgroundTasks } from "./background-tasks.js";
 import {
+  ACK_BLOCKING_KINDS,
   advanceAttention,
   INITIAL_ATTENTION_STATE,
   type AttentionMachineState,
@@ -268,6 +269,55 @@ export class AttentionTracker {
     this.applyAttentionTransition(
       advanceAttention(this.state, { type: "userInput", now: Date.now() }),
     );
+  }
+
+  /**
+   * Issue #1430 — the "acknowledge" action every explicit read (row open,
+   * Mark read, Read all, Dismiss) calls: clears NON-blocking attention
+   * only. A no-op that returns `false` when the currently-confirmed kind is
+   * one of ACK_BLOCKING_KINDS (attention-detect.ts) — those five are
+   * genuinely blocked pending a human DECISION with their own dedicated
+   * resolve route (review-gate, promote, permission, plan,
+   * elicitation/question); a generic ack silently discarding that
+   * requirement instead of routing the user to the real decision would be
+   * wrong. Deliberately checked BEFORE touching any state, so a refusal
+   * never partially clears anything.
+   *
+   * Otherwise — nothing currently confirmed, or a non-blocking kind
+   * (including hookNotification; see ACK_BLOCKING_KINDS' own doc comment
+   * for why that one's excluded from the refusal set) — this both runs a
+   * normal clearAttention() AND clears the `finished` latch
+   * (lastTurnEndedAt/turnEndPingSent, same paired reset pty-manager.ts's
+   * own reset()/similar call sites already use). That second clear is not
+   * optional: session-status.ts's deriveSessionStatus deliberately makes
+   * `finished` outrank `needs_input`, so a bare attention-machine clear
+   * alone would leave documentBadge.ts's countAttentionRequired (and thus
+   * the title/favicon/app badge) still counting this session — acking a
+   * "Finished" row needs to release the OTHER latch that made it show up
+   * in the first place, not just the attention flag layered on top of it.
+   * Returns `true` in every case that isn't a refusal, whether or not
+   * there was actually anything to clear (clearAttention() itself is
+   * already unconditional/idempotent the same way).
+   *
+   * Emits its own "attention" event unconditionally on success — clearing
+   * the finished latch alone (no live attentionState confirmation, so
+   * clearAttention()'s own transition produces no `emit` entry) would
+   * otherwise never tell an already-connected client anything changed;
+   * see PtyManager.acknowledgeAttention's own doc comment for why relying
+   * solely on the next 4s poll picking up the new `lastTurnEndedAt` isn't
+   * enough here. A harmless redundant emit in the case clearAttention()
+   * DID already emit one — over-delivery, never under-delivery, same
+   * posture routes/events.ts's replay-vs-live dedupe already assumes.
+   */
+  acknowledgeAttention(): boolean {
+    if (this.state.confirmedKind !== null && ACK_BLOCKING_KINDS.has(this.state.confirmedKind)) {
+      return false;
+    }
+    this.clearAttention();
+    this.lastTurnEndedAt = null;
+    this.turnEndPingSent = false;
+    this.host.emitEvent("attention", { attention: false });
+    return true;
   }
 
   /**

@@ -57,6 +57,17 @@ async function handlePush(event) {
   if (hasVisibleClient) {
     const shown = await self.registration.getNotifications({ tag });
     shown.forEach((n) => n.close());
+  } else if (self.navigator.setAppBadge) {
+    // Issue #1433 — a killed/backgrounded PWA has no open tab to run
+    // useAttentionNotifications.ts's own count-driven updateAppBadge() at
+    // all, so this SW-level push handler is the only place a badge can
+    // still get set for that case. Deliberately a bare dot (no count
+    // argument) rather than trying to derive a real number here: the SW
+    // has no access to the live session list this push arrived for, only
+    // this one payload — a real count belongs to the app's own next
+    // foreground tick, which will overwrite this with the accurate value
+    // the moment it runs.
+    self.navigator.setAppBadge().catch(() => {});
   }
 }
 

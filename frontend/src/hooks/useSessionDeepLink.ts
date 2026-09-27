@@ -141,6 +141,8 @@ export function useSessionDeepLink({
           // open the terminal without clearing its unread badge, unlike
           // every other "tap a notification" path.
           useDashboardStore.getState().markSessionRead(session.id);
+          // Issue #1430 — an explicit open (a deep link tap is a real click).
+          useDashboardStore.getState().ackAttention(session.id);
           onOpenSession(session);
         }, 0);
         return () => clearTimeout(timer);

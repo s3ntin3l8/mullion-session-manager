@@ -92,6 +92,8 @@ export function useOpenSessionRequest({
       // effects' own equivalent lookups.
       if (session && session.status !== "killed") {
         useDashboardStore.getState().markSessionRead(session.id);
+        // Issue #1430 — an explicit open (this store-level "intent" request).
+        useDashboardStore.getState().ackAttention(session.id);
         onOpenSession(session);
       }
     }, 0);

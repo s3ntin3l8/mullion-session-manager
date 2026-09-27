@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   countAttentionRequired,
   formatDocumentTitle,
+  updateAppBadge,
   updateFaviconBadge,
   clearFaviconBadgeCacheForTests,
   BASE_TITLE,
@@ -112,5 +113,64 @@ describe("updateFaviconBadge", () => {
     updateFaviconBadge(3, "#ff0000");
     updateFaviconBadge(3, "#00ff00");
     expect(getContextSpy).toHaveBeenCalledTimes(2);
+  });
+});
+
+// Issue #1433 — the Badging API (taskbar/dock/home-screen icon), alongside
+// the title/favicon badges above. Not a real jsdom API — stubbed directly
+// on `navigator` per call (deleted afterward so other test files' own
+// jsdom navigator stays pristine).
+describe("updateAppBadge (issue #1433)", () => {
+  let setAppBadge: ReturnType<typeof vi.fn>;
+  let clearAppBadge: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    setAppBadge = vi.fn().mockResolvedValue(undefined);
+    clearAppBadge = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { setAppBadge, clearAppBadge });
+  });
+
+  afterEach(() => {
+    delete (navigator as { setAppBadge?: unknown }).setAppBadge;
+    delete (navigator as { clearAppBadge?: unknown }).clearAppBadge;
+  });
+
+  it("calls setAppBadge with the count when positive", () => {
+    updateAppBadge(3);
+    expect(setAppBadge).toHaveBeenCalledWith(3);
+    expect(clearAppBadge).not.toHaveBeenCalled();
+  });
+
+  it("calls clearAppBadge when the count is zero", () => {
+    updateAppBadge(0);
+    expect(clearAppBadge).toHaveBeenCalledTimes(1);
+    expect(setAppBadge).not.toHaveBeenCalled();
+  });
+
+  it("calls clearAppBadge for a negative count too", () => {
+    updateAppBadge(-1);
+    expect(clearAppBadge).toHaveBeenCalledTimes(1);
+    expect(setAppBadge).not.toHaveBeenCalled();
+  });
+
+  it("does not throw when the Badging API isn't supported at all", () => {
+    delete (navigator as { setAppBadge?: unknown }).setAppBadge;
+    delete (navigator as { clearAppBadge?: unknown }).clearAppBadge;
+    expect(() => updateAppBadge(3)).not.toThrow();
+    expect(() => updateAppBadge(0)).not.toThrow();
+  });
+
+  it("swallows a rejection from setAppBadge without throwing", async () => {
+    setAppBadge.mockRejectedValue(new Error("nope"));
+    expect(() => updateAppBadge(3)).not.toThrow();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
+  it("swallows a rejection from clearAppBadge without throwing", async () => {
+    clearAppBadge.mockRejectedValue(new Error("nope"));
+    expect(() => updateAppBadge(0)).not.toThrow();
+    await Promise.resolve();
+    await Promise.resolve();
   });
 });

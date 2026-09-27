@@ -15,6 +15,7 @@ import {
 import {
   countAttentionRequired,
   formatDocumentTitle,
+  updateAppBadge,
   updateFaviconBadge,
 } from "../documentBadge.js";
 
@@ -305,5 +306,9 @@ export function useAttentionNotifications({
     const count = countAttentionRequired(sessions);
     document.title = formatDocumentTitle(count);
     updateFaviconBadge(count);
+    // Issue #1433 — the same count also drives the OS-level app badge
+    // (taskbar/dock/home-screen icon), for a backgrounded or fully closed
+    // tab a title/favicon change can't reach.
+    updateAppBadge(count);
   }, [sessions]);
 }

@@ -3246,6 +3246,51 @@ export class Session {
     return true;
   }
 
+  /**
+   * Self-review fix (issue #1430) — the PRIMARY blocking gate, checked
+   * BEFORE ever delegating into the composed AttentionTracker. The
+   * attention machine's own `confirmedKind` (which
+   * AttentionTracker.acknowledgeAttention's own ACK_BLOCKING_KINDS check
+   * guards, kept as defense-in-depth) is a single, debounced slot — it can
+   * disagree with what's actually blocking this session in two real ways:
+   *
+   * 1. A blocking kind can be silently settling in the attention tracker's
+   *    OWN deferred queue (ATTENTION_SETTLE_MS) while a DIFFERENT,
+   *    non-blocking kind is the currently CONFIRMED one — e.g. Claude Code
+   *    fires a generic `hookNotification` moments before a
+   *    `permissionRequest` for the same decision (hasRecentStructuredAsk's
+   *    own doc comment, hook-handlers.ts). If ack were allowed to proceed
+   *    in that window, AttentionTracker.clearAttention()'s unconditional
+   *    `this.deferred.clear()` would silently discard the still-settling
+   *    permission request's own NotificationEvent forever — no bell row,
+   *    no timeline row, no push, for a decision the agent is genuinely
+   *    still blocked on.
+   * 2. `moreAuthoritativeKind` (attention-detect.ts) lets one confirmed
+   *    blocking kind be silently superseded by a different one — the
+   *    FIRST kind's own per-decision latch can still be genuinely pending
+   *    even after `confirmedKind` has moved on.
+   *
+   * These six fields are the actual, non-debounced source of truth
+   * session-status.ts's own `deriveSessionStatus` reads directly for the
+   * five `awaiting_*` statuses (same field, same active-value string) —
+   * checking them here directly, instead of re-deriving "still blocked"
+   * from the attention machine's own derived state, can't be fooled by
+   * either race above.
+   */
+  acknowledgeAttention(): boolean {
+    if (
+      this.gateState === "waiting" ||
+      this.promoteState === "pending" ||
+      this.permissionState === "pending" ||
+      this.planState === "pending" ||
+      this.elicitationState === "pending" ||
+      this.questionState === "pending"
+    ) {
+      return false;
+    }
+    return this.attention.acknowledgeAttention();
+  }
+
   // emitAttentionSignalWithExtras()/setBackgroundTasks()/
   // resolveDeferredTurnEnd() moved to the composed AttentionTracker (PR 33b,
   // Wave 6) — see this.attention and attention-tracker.ts's own doc
@@ -4554,6 +4599,22 @@ export class PtyManager {
    * "unknown id is quietly ignored" posture as acceptDevServerPort above. */
   dismissDevServerPort(id: string, port: string): boolean {
     return this.sessions.get(id)?.dismissDevServerPort(port) ?? false;
+  }
+
+  /** Issue #1430 — see Session.acknowledgeAttention's (and, underneath it,
+   * AttentionTracker.acknowledgeAttention's) doc comments. Same "unknown id
+   * is quietly ignored" posture as acceptDevServerPort/dismissDevServerPort
+   * above, but with a caveat those two don't have: an id this process
+   * isn't tracking does NOT always mean the route's own DB lookup already
+   * 404'd — the `sessions` DB row is shared across hosts, so a
+   * remote-hosted session's row still exists here and passes that check;
+   * `false` from this method for that case gets reported as the SAME 409
+   * as "tracked, but still blocked" (routes/sessions.ts's own doc comment
+   * spells this out). Acknowledging a remote-hosted session's attention is
+   * out of scope for this local-only route — filed as a follow-up
+   * (issue #1472) rather than silently descoped. */
+  acknowledgeAttention(id: string): boolean {
+    return this.sessions.get(id)?.acknowledgeAttention() ?? false;
   }
 
   /**

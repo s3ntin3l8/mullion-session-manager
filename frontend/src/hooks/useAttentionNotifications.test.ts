@@ -522,3 +522,68 @@ describe("useAttentionNotifications — document title / favicon badge effect", 
     expect(document.title).toBe(`(1) ${BASE_TITLE}`);
   });
 });
+
+// Issue #1433 — the same effect also drives the OS-level app badge.
+// navigator.setAppBadge/clearAppBadge aren't real jsdom APIs — stubbed
+// directly, same approach as documentBadge.test.ts's own updateAppBadge
+// tests, just exercised through the real hook instead of calling the
+// function directly.
+describe("useAttentionNotifications — app badge effect (issue #1433)", () => {
+  let setAppBadge: ReturnType<typeof vi.fn>;
+  let clearAppBadge: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    setAppBadge = vi.fn().mockResolvedValue(undefined);
+    clearAppBadge = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { setAppBadge, clearAppBadge });
+  });
+
+  afterEach(() => {
+    delete (navigator as { setAppBadge?: unknown }).setAppBadge;
+    delete (navigator as { clearAppBadge?: unknown }).clearAppBadge;
+  });
+
+  it("clears the badge when no session needs attention", () => {
+    renderAttentionNotifications({
+      sessions: [makeSession({ id: 1, sessionStatusAttentionRequired: false })],
+    });
+    expect(clearAppBadge).toHaveBeenCalled();
+    expect(setAppBadge).not.toHaveBeenCalled();
+  });
+
+  it("sets the badge to the attention-required count", () => {
+    renderAttentionNotifications({
+      sessions: [
+        makeSession({ id: 1, sessionStatusAttentionRequired: true }),
+        makeSession({ id: 2, sessionStatusAttentionRequired: true }),
+        makeSession({ id: 3, sessionStatusAttentionRequired: false }),
+      ],
+    });
+    expect(setAppBadge).toHaveBeenCalledWith(2);
+  });
+
+  it("updates the badge again on a later re-render with a different count", () => {
+    const { rerender } = renderAttentionNotifications({
+      sessions: [makeSession({ id: 1, sessionStatusAttentionRequired: false })],
+    });
+    expect(clearAppBadge).toHaveBeenCalledTimes(1);
+
+    rerender({
+      events: {},
+      sessions: [makeSession({ id: 1, sessionStatusAttentionRequired: true })],
+      settings: DEFAULT_SETTINGS,
+      activePanelId: null,
+    });
+    expect(setAppBadge).toHaveBeenCalledWith(1);
+  });
+
+  it("does not throw when the Badging API isn't supported at all", () => {
+    delete (navigator as { setAppBadge?: unknown }).setAppBadge;
+    delete (navigator as { clearAppBadge?: unknown }).clearAppBadge;
+    expect(() =>
+      renderAttentionNotifications({
+        sessions: [makeSession({ id: 1, sessionStatusAttentionRequired: true })],
+      }),
+    ).not.toThrow();
+  });
+});

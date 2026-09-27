@@ -11,6 +11,9 @@ import type { DockviewApi } from "dockview-react";
 // calls `markSessionRead` via `.getState()`.
 let openSessionRequest: { sessionId: number; nonce: number } | null = null;
 const markSessionRead = vi.fn();
+// Issue #1430 — an explicit open (this store-level "intent" request) calls
+// ackAttention alongside markSessionRead.
+const ackAttention = vi.fn();
 // Mirrors the real store's own nonce-guarded clear (store/slices/ui.ts) —
 // tests can assert this hook only ever clears the exact request it just
 // resolved, never a newer one.
@@ -19,7 +22,7 @@ const clearOpenSessionRequest = vi.fn((nonce: number) => {
 });
 
 function storeState() {
-  return { openSessionRequest, markSessionRead, clearOpenSessionRequest };
+  return { openSessionRequest, markSessionRead, ackAttention, clearOpenSessionRequest };
 }
 
 vi.mock("../store/index.js", () => {
@@ -34,6 +37,7 @@ vi.mock("../store/index.js", () => {
 beforeEach(() => {
   openSessionRequest = null;
   markSessionRead.mockClear();
+  ackAttention.mockClear();
   clearOpenSessionRequest.mockClear();
 });
 
@@ -106,6 +110,8 @@ describe("useOpenSessionRequest", () => {
     vi.advanceTimersByTime(0);
     expect(onOpenSession).toHaveBeenCalledTimes(1);
     expect(markSessionRead).toHaveBeenCalledWith(7);
+    // Issue #1430 — an explicit open acknowledges attention too.
+    expect(ackAttention).toHaveBeenCalledWith(7);
   });
 
   it("retries via setTimeout(0) while restoringRef.current is true, and succeeds once it flips false", () => {
@@ -255,6 +261,7 @@ describe("useOpenSessionRequest", () => {
 
     expect(onOpenSession).not.toHaveBeenCalled();
     expect(markSessionRead).not.toHaveBeenCalled();
+    expect(ackAttention).not.toHaveBeenCalled();
   });
 
   it("resolves a SECOND request (a fresh nonce) for a different session, without re-firing the first", () => {
