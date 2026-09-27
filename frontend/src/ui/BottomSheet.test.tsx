@@ -309,4 +309,50 @@ describe("BottomSheet", () => {
     );
     expect(() => ref.current?.()).not.toThrow();
   });
+
+  // Hermes review on #1454 — the test above only proved the ref gets
+  // written, not that calling it actually does what NotificationBell's own
+  // row tap relies on: without it, closing the sheet snaps focus back to
+  // whatever triggered it (this trap's own restore-on-close), undoing
+  // whatever the caller's close action just focused instead (the newly
+  // opened session's terminal, here stood in for by `elsewhere`).
+  it("suppressRestoreRef actually prevents the restore-on-close focus snap-back", async () => {
+    const ref = { current: null as (() => void) | null };
+    function Harness({ open }: { open: boolean }) {
+      return (
+        <>
+          <button>Trigger</button>
+          <input aria-label="elsewhere" />
+          <BottomSheet
+            open={open}
+            onClose={vi.fn()}
+            label="Example"
+            closeLabel="Close"
+            title="Title"
+            suppressRestoreRef={ref}
+          >
+            body
+          </BottomSheet>
+        </>
+      );
+    }
+    const user = userEvent.setup();
+    const { rerender } = render(<Harness open={false} />);
+    await user.click(screen.getByRole("button", { name: "Trigger" }));
+    expect(screen.getByRole("button", { name: "Trigger" })).toHaveFocus();
+
+    rerender(<Harness open={true} />);
+    // The trap moved focus into the sheet on open — same restore-on-close
+    // baseline every other caller gets.
+    expect(screen.getByRole("button", { name: "Trigger" })).not.toHaveFocus();
+
+    // The caller's own action: move focus elsewhere, suppress this trap's
+    // restore, THEN close.
+    screen.getByLabelText("elsewhere").focus();
+    ref.current?.();
+    rerender(<Harness open={false} />);
+
+    expect(screen.getByLabelText("elsewhere")).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Trigger" })).not.toHaveFocus();
+  });
 });
