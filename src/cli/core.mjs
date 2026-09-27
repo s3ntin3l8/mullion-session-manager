@@ -1289,7 +1289,7 @@ Commands:
   browser navigate|click|fill|type|press|select|check|uncheck|hover|
           scroll|wait|dialog|get|eval|snapshot|screenshot|find|console|errors|
           download
-  project list|actions|dock
+  project list|actions|dock|tooling
   preview create|get|delete|list
   dock start|stop|list
   device list|create|pair|pair-and-connect|discovered|connect|start|stop|delete|screenshot|tap|swipe|text|key|logcat

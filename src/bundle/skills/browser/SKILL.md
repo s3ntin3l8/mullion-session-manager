@@ -18,7 +18,8 @@ reason, not a bug.
 tools) drives the pane: `navigate`, `snapshot`, `click`, `fill`, `type`,
 `press`, `select`, `check`/`uncheck`, `hover`, `scroll`, `wait`, `dialog`,
 `get`, `eval`, `screenshot`, `console`, `errors`, `find`, `download`. See
-`docs/cli.md`'s browser table for each action's full argument shape.
+[`docs/cli.md`](https://github.com/s3ntin3l8/mullion-session-manager/blob/main/docs/cli.md)'s
+browser table for each action's full argument shape.
 
 ## Capturing a file download
 

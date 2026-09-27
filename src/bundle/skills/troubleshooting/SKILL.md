@@ -28,19 +28,22 @@ Prints the resolved socket path, which env var supplied the token, your own
 session id, and the **resolved scope** (`full`/`session`) — determined by
 actually probing a full-scope-only op, not just inspecting which token you
 were handed. Run this first whenever behavior doesn't match what the
-the Mullion host skill's scope table says it should.
+Mullion host skill's scope table says it should.
 
 ## A hook that silently stopped firing
 
 If a hook-driven feature (a SessionStart nudge, a notification) that used
 to work has gone quiet, and you're on Codex or agy: their hook registration
 lives in a global, host-wide file (`~/.codex/hooks.json`,
-`~/.gemini/config/hooks.json`) that only gets rewritten when a session of
-that agent type is spawned. If the forwarder path it points at was deleted
-(a `make dev` worktree that's since been removed, for example), every hook
-for that agent silently no-ops until the next spawn self-heals it. Not
-something you can fix mid-session — flag it to a human rather than assuming
-a code regression.
+`~/.gemini/config/hooks.json`) that points at a fixed, host-stable shim
+(`~/.mullion/hooks/mullion-forwarder-shim.sh`), never at a live forwarder
+path directly. Each session resolves its own real forwarder at run time
+from the per-session `MULLION_FORWARDER_PATH` env var Mullion injects at
+launch. If that path (or `node` itself) is ever unavailable, the shim fails
+open — it prints a safe fallback decision and exits 0 instead of blocking
+the tool call outright — so a hook-driven feature just silently no-ops
+instead of breaking anything. Not something you can fix mid-session either
+way — flag it to a human rather than assuming a code regression.
 
 ## Codex specifically: hooks need a one-time trust grant
 
