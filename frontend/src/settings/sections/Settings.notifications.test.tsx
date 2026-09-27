@@ -249,6 +249,38 @@ describe("Settings -> Notifications", () => {
     expect(requestPermission).not.toHaveBeenCalled();
   });
 
+  // Issue #1428 — useAttentionNotifications.ts's own request now waits for
+  // a user gesture instead of firing from an effect; this button (a real
+  // click) is what lets a user who never touches the browser-channel
+  // toggle (it defaults to on) grant permission at all.
+  it("offers an Enable button next to the permission row while permission is default, gone once granted", async () => {
+    const requestPermission = vi.fn(() => Promise.resolve("granted" as NotificationPermission));
+    vi.stubGlobal("Notification", {
+      permission: "default" as NotificationPermission,
+      requestPermission,
+    });
+
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="notifications" />);
+
+    const enableBtn = await screen.findByRole("button", { name: "Enable" });
+    await user.click(enableBtn);
+
+    expect(requestPermission).toHaveBeenCalledTimes(1);
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Enable" })).not.toBeInTheDocument(),
+    );
+    expect(screen.getByText("granted")).toBeInTheDocument();
+  });
+
+  it("does not offer the Enable button once permission is already granted", async () => {
+    vi.stubGlobal("Notification", { permission: "granted" as NotificationPermission });
+    render(<Settings onClose={vi.fn()} initialSection="notifications" />);
+
+    await screen.findByText("Browser permission");
+    expect(screen.queryByRole("button", { name: "Enable" })).not.toBeInTheDocument();
+  });
+
   it("renders the push channel toggle disabled with explanatory copy when unsupported", async () => {
     pushClientMock.isPushSupported.mockReturnValue(false);
     render(<Settings onClose={vi.fn()} initialSection="notifications" />);

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { renderHook } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import { useAttentionNotifications } from "./useAttentionNotifications.js";
 import type { UseAttentionNotificationsParams } from "./useAttentionNotifications.js";
 import { makeSession } from "../test/fixtures.js";
@@ -12,13 +12,13 @@ import { playNotificationSound } from "../notifySound.js";
 
 // Mirrors useAppStreams.test.ts's own store-mock shape: a `storeState()`
 // factory serving `useDashboardStore.getState()`, the only call form this
-// hook uses (openNotificationsPanel, from the Notification's onclick).
+// hook uses (requestOpenSession, from the Notification's onclick).
 // `mutedSessionIds` is the one extra field this hook now subscribes to
 // (#719); kept mutable so the mute test can flip it without re-mocking.
-const openNotificationsPanel = vi.fn();
+const requestOpenSession = vi.fn();
 let mutedSessionIds: number[] = [];
 function storeState() {
-  return { openNotificationsPanel, mutedSessionIds };
+  return { requestOpenSession, mutedSessionIds };
 }
 vi.mock("../store/index.js", () => {
   const useDashboardStore = (selector?: (s: unknown) => unknown) => {
@@ -34,6 +34,15 @@ vi.mock("../store/index.js", () => {
 // called with the right sound name", same split as documentBadge.ts's own
 // "DOM-touching glue stays untested beyond call-count" posture.
 vi.mock("../notifySound.js", () => ({ playNotificationSound: vi.fn() }));
+
+// Issue #1428's SW-showNotification fallback — a controllable mock so tests
+// can simulate both "a SW is ready" (resolves) and "no SW at all" (rejects,
+// matching serviceWorkerReady's own real no-registration/timeout behavior).
+const showNotification = vi.fn();
+const serviceWorkerReady = vi.fn(() =>
+  Promise.resolve({ showNotification } as unknown as ServiceWorkerRegistration),
+);
+vi.mock("../pushClient.js", () => ({ serviceWorkerReady: () => serviceWorkerReady() }));
 
 function makeEvent(overrides: Partial<NotificationEvent> = {}): NotificationEvent {
   return {
@@ -58,13 +67,21 @@ let notificationInstances: FakeNotification[] = [];
 class FakeNotification {
   static permission: NotificationPermission = "granted";
   static requestPermission = vi.fn(() => Promise.resolve<NotificationPermission>("granted"));
+  // Issue #1428 — simulates Android Chrome's real "Illegal constructor"
+  // throw for a page-context `new Notification()`.
+  static shouldThrow = false;
   title: string;
   body?: string;
+  tag?: string;
+  data?: unknown;
   onclick: (() => void) | null = null;
   close = vi.fn();
   constructor(title: string, options?: NotificationOptions) {
+    if (FakeNotification.shouldThrow) throw new DOMException("Illegal constructor");
     this.title = title;
     this.body = options?.body;
+    this.tag = options?.tag;
+    this.data = options?.data;
     notificationInstances.push(this);
   }
 }
@@ -91,6 +108,12 @@ beforeEach(() => {
   mutedSessionIds = [];
   FakeNotification.permission = "granted";
   FakeNotification.requestPermission.mockClear();
+  FakeNotification.shouldThrow = false;
+  showNotification.mockClear();
+  serviceWorkerReady.mockClear();
+  serviceWorkerReady.mockImplementation(() =>
+    Promise.resolve({ showNotification } as unknown as ServiceWorkerRegistration),
+  );
   vi.stubGlobal("Notification", FakeNotification);
   document.head.innerHTML = '<link rel="icon" type="image/svg+xml" href="/favicon.svg" />';
   document.title = BASE_TITLE;
@@ -234,10 +257,18 @@ describe("useAttentionNotifications — desktop notification effect", () => {
     expect(notificationInstances).toHaveLength(2);
   });
 
-  it("requests Notification permission on the first attention event when permission is still 'default'", () => {
+  // Issue #1428 — Notification.requestPermission() only reliably grants (or
+  // works at all on some platforms) in direct response to a user gesture;
+  // an effect firing off a WS event is not one. The old immediate-request
+  // behavior is exactly the gap this defers.
+  it("does not request Notification permission immediately on the first attention event — only on the next user gesture", () => {
     FakeNotification.permission = "default";
     const event = makeEvent({ ts: FIXED_NOW + 1 });
     renderAttentionNotifications({ events: { 1: [event] } });
+
+    expect(FakeNotification.requestPermission).not.toHaveBeenCalled();
+
+    act(() => void window.dispatchEvent(new MouseEvent("click")));
 
     expect(FakeNotification.requestPermission).toHaveBeenCalledTimes(1);
     // canShowBrowserNotification requires permission === "granted", so no
@@ -245,7 +276,16 @@ describe("useAttentionNotifications — desktop notification effect", () => {
     expect(notificationInstances).toHaveLength(0);
   });
 
-  it("requests permission at most once per hook instance, even across two attention events", () => {
+  it("also requests on a keydown gesture, not just a click", () => {
+    FakeNotification.permission = "default";
+    renderAttentionNotifications({ events: { 1: [makeEvent({ ts: FIXED_NOW + 1 })] } });
+
+    act(() => void window.dispatchEvent(new KeyboardEvent("keydown")));
+
+    expect(FakeNotification.requestPermission).toHaveBeenCalledTimes(1);
+  });
+
+  it("requests permission at most once per hook instance, even across two attention events and two later gestures", () => {
     FakeNotification.permission = "default";
     const first = makeEvent({ seq: 1, ts: FIXED_NOW + 1 });
     const { rerender } = renderAttentionNotifications({ events: { 1: [first] } });
@@ -258,6 +298,14 @@ describe("useAttentionNotifications — desktop notification effect", () => {
       settings: DEFAULT_SETTINGS,
       activePanelId: null,
     });
+
+    // The first gesture (dispatched inside its own `act`, so React commits
+    // the resulting setAwaitingGesturePermission(false) — and the effect
+    // cleanup that removes the keydown listener — before the second
+    // dispatch) is what proves "at most once", not just that the two
+    // listeners share one flag.
+    act(() => void window.dispatchEvent(new MouseEvent("click")));
+    act(() => void window.dispatchEvent(new KeyboardEvent("keydown")));
 
     expect(FakeNotification.requestPermission).toHaveBeenCalledTimes(1);
   });
@@ -335,7 +383,10 @@ describe("useAttentionNotifications — desktop notification effect", () => {
     expect(notificationInstances).toHaveLength(0);
   });
 
-  it("wires the notification's onclick to focus the window, open the notifications panel, and close itself", () => {
+  // Issue #1429 — one click destination everywhere: the session itself
+  // (via the store-level requestOpenSession "intent", since this hook has
+  // no direct onOpenSession of its own), not the notifications panel.
+  it("wires the notification's onclick to focus the window, request opening the session, and close itself", () => {
     const focusSpy = vi.spyOn(window, "focus").mockImplementation(() => {});
     const event = makeEvent({ ts: FIXED_NOW + 1 });
     renderAttentionNotifications({ events: { 1: [event] } });
@@ -345,8 +396,65 @@ describe("useAttentionNotifications — desktop notification effect", () => {
     notification.onclick?.();
 
     expect(focusSpy).toHaveBeenCalledTimes(1);
-    expect(openNotificationsPanel).toHaveBeenCalledTimes(1);
+    expect(requestOpenSession).toHaveBeenCalledWith(1);
     expect(notification.close).toHaveBeenCalledTimes(1);
+  });
+
+  // Issue #1429 — the same tag/data shape push-sw.js's own showNotification
+  // call uses, so a later push notification for this session collapses onto
+  // this one instead of stacking a duplicate.
+  it("tags the notification with the session id, so it collapses with a later push for the same session", () => {
+    const event = makeEvent({ ts: FIXED_NOW + 1 });
+    renderAttentionNotifications({ events: { 1: [event] } });
+
+    expect(notificationInstances[0].tag).toBe("mullion-session-1");
+    expect(notificationInstances[0].data).toEqual({ sessionId: 1 });
+  });
+
+  // Issue #1428 — the real-world case this guards: Android Chrome throws
+  // "Illegal constructor" for a page-context `new Notification()` on
+  // exactly this reachable path (browser channel on, permission granted,
+  // backgrounded tab).
+  it("falls back to the service worker's showNotification when the constructor throws", async () => {
+    FakeNotification.shouldThrow = true;
+    const event = makeEvent({ ts: FIXED_NOW + 1 });
+    renderAttentionNotifications({ events: { 1: [event] } });
+
+    expect(notificationInstances).toHaveLength(0);
+    await vi.waitFor(() => expect(showNotification).toHaveBeenCalledTimes(1));
+    expect(showNotification).toHaveBeenCalledWith(
+      "claude code",
+      expect.objectContaining({ tag: "mullion-session-1", data: { sessionId: 1 } }),
+    );
+  });
+
+  it("does not throw when the constructor throws and no service worker is registered either", async () => {
+    FakeNotification.shouldThrow = true;
+    serviceWorkerReady.mockImplementation(() => Promise.reject(new Error("no SW registered")));
+    const event = makeEvent({ ts: FIXED_NOW + 1 });
+
+    expect(() => renderAttentionNotifications({ events: { 1: [event] } })).not.toThrow();
+    // Nothing more to assert on — the point is that this doesn't reject
+    // unhandled or crash the effect; the bell/tab badge/title still work.
+    await vi.waitFor(() => expect(serviceWorkerReady).toHaveBeenCalledTimes(1));
+  });
+
+  // Self-review — a genuine showNotification() failure (unlike "no SW
+  // registered at all") used to be swallowed exactly the same silent way;
+  // it's now logged so it isn't indistinguishable from the expected case.
+  it("logs (but does not throw) when the service worker itself is ready but showNotification() fails", async () => {
+    FakeNotification.shouldThrow = true;
+    showNotification.mockRejectedValue(new Error("storage quota exceeded"));
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const event = makeEvent({ ts: FIXED_NOW + 1 });
+
+    expect(() => renderAttentionNotifications({ events: { 1: [event] } })).not.toThrow();
+    await vi.waitFor(() =>
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("showNotification"),
+        expect.any(Error),
+      ),
+    );
   });
 
   it("uses session.name over session.command when both are present", () => {

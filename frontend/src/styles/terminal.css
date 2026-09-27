@@ -626,6 +626,22 @@
   color: var(--dim);
   font-family: "Geist Mono", monospace;
 }
+/* Issue #1429 — desktop's own compact default for the row's "Timeline"
+   secondary action (same button phone's own sheet renders, sidebar.css's
+   .mobile-notif-sheet scopes a 44px touch-target override on top of this).
+   A plain small link, not a 44px button — this row's other actions
+   (.notif-event-action-btn) are 20px, and the desktop popover has no room
+   for a phone-sized target. */
+.notif-timeline-btn {
+  align-self: flex-start;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--accent-solid);
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
 .notif-event-actions {
   flex-shrink: 0;
   display: flex;

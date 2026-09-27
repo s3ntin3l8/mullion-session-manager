@@ -2117,14 +2117,10 @@
   /* 16px, not smaller: iOS zooms the page on focusing a smaller input. */
   font-size: 16px;
 }
-.mobile-notif-timeline {
-  align-self: flex-start;
+/* Issue #1429 — overrides terminal.css's own desktop-compact default
+   (.notif-timeline-btn) with a real touch target, now that the Timeline
+   button is no longer phone-only. */
+.mobile-notif-sheet .notif-timeline-btn {
   min-height: 44px;
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: var(--accent-solid);
-  font-family: inherit;
   font-size: 13px;
-  cursor: pointer;
 }

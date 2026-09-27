@@ -3,6 +3,7 @@ import type { MutableRefObject } from "react";
 import type { DockviewApi } from "dockview-react";
 import type { Session, Workspace } from "../api/index.js";
 import { parseDeepLinkSessionId } from "../panelUtils.js";
+import { useDashboardStore } from "../store/index.js";
 
 export interface UseSessionDeepLinkParams {
   dockviewApi: DockviewApi | null;
@@ -134,7 +135,14 @@ export function useSessionDeepLink({
         // the restoringRef retry timer above, since onOpenSession reads
         // dockviewApi by closure and would otherwise run against a
         // torn-down instance if unmount lands inside this window.
-        const timer = setTimeout(() => onOpenSession(session), 0);
+        const timer = setTimeout(() => {
+          // Issue #1429 — a `?session=` deep link (push-sw.js's own
+          // fallback when no window client is open to postMessage) used to
+          // open the terminal without clearing its unread badge, unlike
+          // every other "tap a notification" path.
+          useDashboardStore.getState().markSessionRead(session.id);
+          onOpenSession(session);
+        }, 0);
         return () => clearTimeout(timer);
       }
     }

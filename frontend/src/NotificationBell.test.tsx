@@ -22,7 +22,6 @@ let projects: Project[];
 let events: Record<number, NotificationEvent[]>;
 let lastSeenSeq: Record<number, number>;
 let dismissedEventKeys: Record<string, true>;
-let notificationsPanelOpenRequest: number;
 
 function eventKey(sessionId: number, seq: number): string {
   return `${sessionId}:${seq}`;
@@ -31,6 +30,17 @@ function eventKey(sessionId: number, seq: number): string {
 const markEventSeen = vi.fn((sessionId: number, seq: number) => {
   const current = lastSeenSeq[sessionId] ?? 0;
   if (seq > current) lastSeenSeq = { ...lastSeenSeq, [sessionId]: seq };
+});
+
+// Issue #1429 — mirrors the real store's own markSessionRead (advances to
+// events[sessionId]'s own true max seq), routed through the mock
+// markEventSeen above so tests can assert on lastSeenSeq the same way they
+// already do for a direct markEventSeen call.
+const markSessionRead = vi.fn((sessionId: number) => {
+  const sessionEvents = events[sessionId] ?? [];
+  if (sessionEvents.length === 0) return;
+  const maxSeq = sessionEvents.reduce((max, e) => Math.max(max, e.seq), 0);
+  markEventSeen(sessionId, maxSeq);
 });
 
 const dismissEvents = vi.fn((sessionId: number, seqs: number[]) => {
@@ -48,8 +58,8 @@ function storeState() {
     lastSeenSeq,
     dismissedEventKeys,
     markEventSeen,
+    markSessionRead,
     dismissEvents,
-    notificationsPanelOpenRequest,
     mutedSessionIds: [],
     toggleSessionMute: vi.fn(),
   };
@@ -230,8 +240,8 @@ beforeEach(() => {
   events = {};
   lastSeenSeq = {};
   dismissedEventKeys = {};
-  notificationsPanelOpenRequest = 0;
   markEventSeen.mockClear();
+  markSessionRead.mockClear();
   dismissEvents.mockClear();
   resolveReviewGate.mockClear();
   resolveReviewGate.mockResolvedValue(undefined);
@@ -532,18 +542,21 @@ describe("NotificationBell", () => {
     expect(markEventSeen).toHaveBeenCalledWith(1, 2);
   });
 
-  it("clicking an event row opens the session and closes the panel", async () => {
+  // Issue #1429 — one click destination everywhere (the phone sheet, push,
+  // the ?session= deep link): the terminal, marked read.
+  it("clicking an event row opens the session, marks it read, and closes the panel", async () => {
     events = { 1: [makeEvent({ seq: 1 })] };
     const onOpenSession = await openPanel();
     await userEvent.click(screen.getByText("Bell"));
     expect(onOpenSession).toHaveBeenCalledWith(sessions[0]);
+    expect(markSessionRead).toHaveBeenCalledWith(1);
     expect(screen.queryByText("Bell")).not.toBeInTheDocument();
   });
 
-  // Issue #270 — the roadmap's own framing is that the notification panel's
-  // per-session complement is the timeline, distinct from the terminal the
-  // sidebar/Kanban click paths keep opening.
-  it("clicking an event row opens the timeline instead of the session when onOpenTimeline is provided", async () => {
+  // Issue #1429 — Timeline is now a secondary action alongside the row's
+  // own open-the-session behavior, not an alternate destination for the
+  // row click itself.
+  it("offers a secondary Timeline button that opens the timeline without also opening the session", async () => {
     events = { 1: [makeEvent({ seq: 1 })] };
     const onOpenSession = vi.fn();
     const onOpenTimeline = vi.fn();
@@ -555,10 +568,16 @@ describe("NotificationBell", () => {
       />,
     );
     await userEvent.click(screen.getByRole("button", { name: /notifications/i }));
-    await userEvent.click(screen.getByText("Bell"));
+    await userEvent.click(screen.getByRole("button", { name: "Timeline" }));
     expect(onOpenTimeline).toHaveBeenCalledWith(sessions[0]);
     expect(onOpenSession).not.toHaveBeenCalled();
     expect(screen.queryByText("Bell")).not.toBeInTheDocument();
+  });
+
+  it("does not render a Timeline button when onOpenTimeline isn't provided", async () => {
+    events = { 1: [makeEvent({ seq: 1 })] };
+    await openPanel();
+    expect(screen.queryByRole("button", { name: "Timeline" })).not.toBeInTheDocument();
   });
 
   it("keeps an already-read event visible in the feed (history, not just unread inbox), without a mark-read button", async () => {
@@ -576,30 +595,6 @@ describe("NotificationBell", () => {
     lastSeenSeq = { 1: 1 };
     await openPanel();
     expect(screen.queryByRole("button", { name: "Mark all read" })).not.toBeInTheDocument();
-  });
-});
-
-// Issue #170: a desktop notification's onclick handler opens the panel by
-// bumping store.ts's `notificationsPanelOpenRequest` (App.tsx can't reach
-// this component's local `open` state with a prop) rather than the trigger
-// button being clicked directly.
-describe("notificationsPanelOpenRequest (issue #170)", () => {
-  it("does not open the panel on initial mount, even with a nonzero request already pending", () => {
-    notificationsPanelOpenRequest = 3;
-    render(<NotificationBell onOpenSession={vi.fn()} onOpenBrowser={vi.fn()} />);
-    expect(screen.queryByText("No notifications yet")).not.toBeInTheDocument();
-  });
-
-  it("opens the panel when the request counter changes after mount", () => {
-    const { rerender } = render(
-      <NotificationBell onOpenSession={vi.fn()} onOpenBrowser={vi.fn()} />,
-    );
-    expect(screen.queryByText("No notifications yet")).not.toBeInTheDocument();
-
-    notificationsPanelOpenRequest += 1;
-    rerender(<NotificationBell onOpenSession={vi.fn()} onOpenBrowser={vi.fn()} />);
-
-    expect(screen.getByText("No notifications yet")).toBeInTheDocument();
   });
 });
 
@@ -1275,18 +1270,6 @@ describe("NotificationBell phone sheet", () => {
     await userEvent.click(screen.getByRole("button", { name: /notifications/i }));
     await userEvent.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).toBeNull();
-  });
-
-  it("a desktop-notification open request opens the phone sheet too", async () => {
-    events = { 1: [makeEvent({ seq: 1 })] };
-    const { rerender } = render(
-      <NotificationBell onOpenSession={vi.fn()} onOpenBrowser={vi.fn()} phone />,
-    );
-    notificationsPanelOpenRequest = 1;
-    rerender(<NotificationBell onOpenSession={vi.fn()} onOpenBrowser={vi.fn()} phone />);
-    expect(await screen.findByRole("dialog", { name: "Notifications" })).toHaveClass(
-      "mobile-notif-sheet",
-    );
   });
 
   it("does not offer a Needs you count/filter for a session the feed has nothing to list for", async () => {

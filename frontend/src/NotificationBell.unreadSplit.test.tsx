@@ -97,7 +97,6 @@ describe("NotificationBell unread/feed split (P3)", () => {
       events: { 1: sessionEvents },
       lastSeenSeq: { 1: 8 },
       dismissedEventKeys: {},
-      notificationsPanelOpenRequest: 0,
     });
   });
 

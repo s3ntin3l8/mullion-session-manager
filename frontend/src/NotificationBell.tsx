@@ -389,9 +389,9 @@ export function NotificationBell({
   const lastSeenSeq = useDashboardStore((s) => s.lastSeenSeq);
   const dismissedEventKeys = useDashboardStore((s) => s.dismissedEventKeys);
   const markEventSeen = useDashboardStore((s) => s.markEventSeen);
+  const markSessionRead = useDashboardStore((s) => s.markSessionRead);
   const dismissEvents = useDashboardStore((s) => s.dismissEvents);
   const mutedSessionIds = useDashboardStore((s) => s.mutedSessionIds);
-  const openRequest = useDashboardStore((s) => s.notificationsPanelOpenRequest);
 
   const [open, setOpen] = useState(false);
   // Phone sheet only: which sessions' groups the feed shows.
@@ -557,25 +557,6 @@ export function NotificationBell({
   }, []);
   useVisualViewportChange(open, reposition);
 
-  // Issue #170: a desktop notification's onclick handler bumps
-  // `notificationsPanelOpenRequest` via the store (this component can't be
-  // reached with a prop from App.tsx — see that field's own comment) instead
-  // of setting `open` directly. The ref starts equal to the current value so
-  // the initial render never opens the panel — only an actual *change*
-  // (a fresh click) does, same "transition, not level" shape as the
-  // seenAttentionRef-style effects this issue's App.tsx side replaces.
-  const openRequestRef = useRef(openRequest);
-  useEffect(() => {
-    if (openRequest === openRequestRef.current) return;
-    openRequestRef.current = openRequest;
-    if (!btnRef.current) return;
-    const rect = btnRef.current.getBoundingClientRect();
-    setPos(panelPosition(rect, window.innerWidth));
-    openFilter();
-    setOpen(true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- fires on a fresh request only; openFilter reads the latest needsYouIds on that render
-  }, [openRequest]);
-
   // Advances every session with at least one unread feed item to that
   // session's true latest seq (across ALL its buffered events, not just the
   // notification-worthy ones shown here) — the same "seen everything"
@@ -587,10 +568,7 @@ export function NotificationBell({
         .filter((i): i is FeedEventItem => i.type === "event" && !i.read)
         .map((i) => i.sessionId),
     );
-    for (const sessionId of unreadSessionIds) {
-      const maxSeq = (events[sessionId] ?? []).reduce((max, e) => Math.max(max, e.seq), 0);
-      if (maxSeq > 0) markEventSeen(sessionId, maxSeq);
-    }
+    for (const sessionId of unreadSessionIds) markSessionRead(sessionId);
   };
 
   return (
@@ -677,11 +655,7 @@ export function NotificationBell({
                     onOpen={(target) => {
                       phoneSuppressRestoreRef.current?.();
                       setOpen(false);
-                      const maxSeq = (events[target.id] ?? []).reduce(
-                        (max, e) => Math.max(max, e.seq),
-                        0,
-                      );
-                      if (maxSeq > 0) markEventSeen(target.id, maxSeq);
+                      markSessionRead(target.id);
                       onOpenSession(target);
                     }}
                     onTimeline={
@@ -718,7 +692,12 @@ export function NotificationBell({
           >
             <div className="notif-panel-header">
               <span className="notif-panel-title">Notifications</span>
-              {unreadCount > 0 && (
+              {/* Issue #1431 — was gated on unreadCount, which excludes
+                  muted sessions (countUnread's own mute filter); those rows
+                  still render unread here, so the button used to hide with
+                  unread rows still on screen. Same rule the phone sheet's
+                  own "Read all" already uses. */}
+              {items.some((i) => i.type === "event" && !i.read) && (
                 <button
                   className="notif-mark-all-btn"
                   onClick={markAllRead}
@@ -778,15 +757,30 @@ export function NotificationBell({
                             item={item}
                             session={sessions.find((s) => s.id === item.sessionId)}
                             onOpen={(session) => {
-                              // P11 — opening a session/timeline moves focus
-                              // to whatever it opened (a terminal pane, per
+                              // P11 — opening a session moves focus to
+                              // whatever it opened (a terminal pane, per
                               // PR13/U7); suppress the trap's restore so it
                               // doesn't fight that by snapping focus back to
                               // the bell button right after.
                               suppressRestore();
                               setOpen(false);
-                              (onOpenTimeline ?? onOpenSession)(session);
+                              // Issue #1429 — one click destination
+                              // everywhere (the phone sheet, push, the
+                              // ?session= deep link): the terminal, marked
+                              // read. Timeline is a secondary action now
+                              // (the button below).
+                              markSessionRead(session.id);
+                              onOpenSession(session);
                             }}
+                            onTimeline={
+                              onOpenTimeline
+                                ? (session) => {
+                                    suppressRestore();
+                                    setOpen(false);
+                                    onOpenTimeline(session);
+                                  }
+                                : undefined
+                            }
                             onOpenBrowser={onOpenBrowser}
                             onMarkRead={() => markEventSeen(item.sessionId, item.event.seq)}
                             // Making notifications relevant/scannable — a
@@ -983,7 +977,7 @@ function EventRow({
         )}
         {onTimeline && session && (
           <button
-            className="mobile-notif-timeline"
+            className="notif-timeline-btn"
             onClick={(e) => {
               e.stopPropagation();
               onTimeline(session);

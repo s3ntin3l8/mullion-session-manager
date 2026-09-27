@@ -391,6 +391,21 @@ export interface EventsSlice {
   // already recorded is ignored), mirroring the server's own monotonic
   // `lastSeenSeq`.
   markEventSeen: (sessionId: number, seq: number) => void;
+  // Issue #1429 — advances a session's read cursor to its own current max
+  // buffered seq (events[sessionId] is kept seq-ascending by addEvent, so
+  // the last entry IS the max — PaneTab.tsx's own mark-seen effect already
+  // relies on this same invariant). The one shared "mark this session as
+  // fully read" primitive every explicit-open call site now uses (the
+  // desktop/phone notification rows, "Mark all read", the push/deep-link/
+  // requestOpenSession session openers) instead of each duplicating its own
+  // `.reduce(Math.max...)`. A no-op when the session has no buffered
+  // events (nothing to mark). Deliberately just `markEventSeen` under the
+  // hood — it does NOT touch server-side session.attention (issue #1430's
+  // separate acknowledge concept); a passive view (PaneTab's own active-tab
+  // effect, SessionTimeline while visible) advancing the read cursor is not
+  // the same as a user's explicit action, so #1430 hangs its own ack calls
+  // off the explicit call sites directly, not off this shared primitive.
+  markSessionRead: (sessionId: number) => void;
   // Issue #169's "dismiss" action — flags one event as permanently removed
   // from the notification feed (see `dismissedEventKeys` above for why this
   // is deliberately separate from markEventSeen/lastSeenSeq). Idempotent;
@@ -541,14 +556,6 @@ export interface UiSlice {
   checkCodexHookTrust: () => Promise<void>;
   dismissCodexHookTrust: () => void;
   splitRequest: SplitRequest | null;
-  // Issue #170: a desktop notification's click handler (App.tsx) can't reach
-  // into NotificationBell.tsx's own component-local `open`/position state
-  // directly — same reason `splitRequest` above exists rather than a prop
-  // (PaneHeaderActions.tsx can't receive one either; dockview owns that
-  // component's render). Bumped (not a boolean) so requesting "open" while
-  // it's already open still re-triggers NotificationBell.tsx's effect — a
-  // plain boolean toggled true->true wouldn't change.
-  notificationsPanelOpenRequest: number;
   // Panel id to show a brief highlight flash on (set via triggerPanelHighlight,
   // auto-clears after HIGHLIGHT_DURATION_MS). Both the tab (PaneTab.tsx) and
   // the panel body (TerminalPanelWrapper) read this to apply the flash.
@@ -624,10 +631,33 @@ export interface UiSlice {
   setKanbanColumnOrder: (columnId: KanbanColumnId, order: number[]) => void;
   requestSplit: (referencePanelId: string, direction: "right" | "below") => void;
   clearSplitRequest: () => void;
-  // Issue #170's counterpart to `notificationsPanelOpenRequest` above — a
-  // desktop notification's onclick handler calls this instead of setting
-  // NotificationBell.tsx's local state directly.
-  openNotificationsPanel: () => void;
+  // Issue #1429 — a desktop OS notification's onclick opens the session
+  // directly (same destination the bell row/phone sheet/push click/deep
+  // link all converged on) — but useAttentionNotifications.ts has no
+  // direct access to onOpenSession (App.tsx's usePanelOpener owns it), so
+  // it goes through this store-level "intent" instead. Replaces issue
+  // #170's `notificationsPanelOpenRequest`/`openNotificationsPanel` (opened
+  // the bell rather than a specific session; removed once this had no more
+  // producers). `nonce` (not a plain sessionId) so App.tsx's resolver
+  // effect can tell two requests for the SAME session apart — otherwise
+  // re-clicking a notification for a session that's already open would be
+  // indistinguishable from the request that already resolved. Resolved in
+  // App.tsx via the same dockviewApi/workspace-restored/sessionsLoaded
+  // gates the push-message and `?session=` deep-link effects use, then
+  // calls markSessionRead.
+  openSessionRequest: { sessionId: number; nonce: number } | null;
+  requestOpenSession: (sessionId: number) => void;
+  // Hermes review, PR #1456 — cosmetic (the nonce check already prevents a
+  // resolved request from re-firing on its own), but a resolved request
+  // otherwise sits in the store forever, one stale object per session ever
+  // opened via notification. Symmetric with clearSplitRequest above, EXCEPT
+  // it takes the nonce being cleared and only actually clears when the
+  // store's current request still has that exact nonce — a bare
+  // unconditional clear could otherwise wipe out a BRAND NEW request that
+  // arrived in the narrow gap between useOpenSessionRequest.ts's own
+  // setTimeout(0) being scheduled and it firing (two notifications clicked
+  // in quick succession).
+  clearOpenSessionRequest: (nonce: number) => void;
   // Re-resolves `theme` whenever the OS-level color-scheme preference
   // changes, but only while settings.theme === "system" — a no-op the rest
   // of the time. Returns a cleanup function; called once from App.tsx

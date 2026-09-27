@@ -65,7 +65,10 @@ function sameKey(a: ArrayBuffer | null, b: Uint8Array): boolean {
 // toggle.
 const SERVICE_WORKER_READY_TIMEOUT_MS = 10_000;
 
-function serviceWorkerReady(): Promise<ServiceWorkerRegistration> {
+// Exported for useAttentionNotifications.ts's own SW-showNotification
+// fallback (issue #1428) — this file's other callers all stayed internal
+// before that.
+export function serviceWorkerReady(): Promise<ServiceWorkerRegistration> {
   let timer: ReturnType<typeof setTimeout>;
   const timeout = new Promise<ServiceWorkerRegistration>((_resolve, reject) => {
     timer = setTimeout(
