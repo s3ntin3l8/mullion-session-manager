@@ -721,9 +721,10 @@ export const schema = {
     // host GPU and needs a usable GL/EGL display plus access to the host GPU
     // driver stack. Headless hosts can provide this with a virtual GL display
     // and GPU render-device access; for -gpu host, set DISPLAY on the Mullion
-    // service because the emulator inherits the service process environment
-    // through systemd-run --user --scope. See docs/device-panel.md. Common
-    // values: auto, host, swiftshader_indirect, swangle_indirect, guest.
+    // service (e.g. its EnvironmentFile or a systemd drop-in), not just in a
+    // login shell: the emulator inherits the service process environment via
+    // systemd-run --user --scope. See docs/device-panel.md. Common values: auto,
+    // host, swiftshader_indirect, swangle_indirect, guest.
     // Deliberately not an enum: newer emulators add modes.
     DEVICE_EMULATOR_GPU: {
       type: "string",
