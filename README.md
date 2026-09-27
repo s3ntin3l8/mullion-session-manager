@@ -78,13 +78,15 @@ CI/CD. Frontend: React + [dockview](https://dockview.dev/) (tiled splits/tabs) a
   1Password instead of starting dictation, rebind either side (Settings →
   Keyboard & input → "Hotkey" here, or 1Password's own Settings → General →
   Shortcuts).
-- **Resource monitoring.** Settings → Server polls live CPU, memory, and
+- **Resource monitoring.** Settings → Server shows CPU, memory, and
   per-path disk usage (home, Mullion's own data/sessions directories, every
   configured project root) sampled from the host, plus a Docker storage
-  breakdown (measured once, when the page opens or refreshes — not polled)
-  with a one-click prune for objects older than 7 days. A dashboard-wide
-  banner surfaces a warning/critical low-disk-space alert (dismissible for
-  24h at the warning level) even if you never open Settings.
+  breakdown — both measured when the page opens (or you click "Refresh
+  resources"), not continuously polled — with a one-click Docker prune for
+  objects older than 7 days. Separately, a dashboard-wide banner polls the
+  same disk-usage data every 60s in the background and surfaces a
+  warning/critical low-disk-space alert (dismissible for 24h at the warning
+  level) even if you never open Settings.
 - **Mobile.** On a phone, a session switcher replaces the old scrolling tab
   strip: tap the toolbar's title to open a bottom sheet listing every open
   session (status dot, agent logo, unread, rename, close), or swipe the
