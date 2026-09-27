@@ -409,8 +409,8 @@ describe("refreshTaskBlockers", () => {
   // recheck reads. Stamping it here would leak a 30-minute-stale freshness
   // window into a 5-minute-TTL claim decision the very next time
   // autoClaimReadyTasks looks at this row (see task-dependencies.ts's own
-  // doc comment on this param, and docs/tasks.md's "Backoff on a hard error
-  // only").
+  // doc comment on this param, and docs/tasks-internals.md's "Backoff on a
+  // hard error only").
   it("stampOnFailure: true does NOT stamp blockedByCheckedAt on a shortfall — the claim path's own TTL reads the same column", async () => {
     const { task } = await createProjectAndTask({
       dependencyCount: 2,

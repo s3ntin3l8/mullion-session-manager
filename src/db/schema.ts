@@ -216,8 +216,8 @@ export const projects = sqliteTable("projects", {
   //
   // mergeOnApprove: approving a task (reviewing -> done) sets
   // tasks.mergeRequestedAt; task-reconciler.ts's processMergeRequests sweep
-  // lands the merge asynchronously once GitHub allows it (see docs/tasks.md's
-  // Task -> PR promotion section).
+  // lands the merge asynchronously once GitHub allows it (see
+  // docs/tasks-internals.md's Task -> PR promotion section).
   mergeOnApprove: integer("merge_on_approve", { mode: "boolean" }),
   // autoApprove: task-reconciler.ts's processAutoApprovals sweep approves a
   // "reviewing" task on its own once its review agent's last verdict is
@@ -1013,7 +1013,7 @@ export const tasks = sqliteTable(
     // sequence a task's PR undraft around an external, GitHub-Actions-
     // triggered reviewer's convergence. Retired: such a workflow now
     // excludes Task Master's own branches from its automatic trigger
-    // entirely (see docs/tasks.md's "External review workflows"), so there
+    // entirely (see docs/tasks-internals.md's "External review workflows"), so there
     // is no external reviewer left to sequence with. No code reads or
     // writes these anymore. Left in place rather than dropped — this repo's
     // migrations are additive-only by convention (no prior DROP COLUMN

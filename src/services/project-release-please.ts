@@ -6,7 +6,7 @@
 // Commits ones. release-please's parser rejected 16 of 21 squash-merged
 // commits since the last release, and `release-please-action` exits 0 on "no
 // release needed" — so the failure was completely silent for weeks. See
-// docs/tasks.md's "Commit title caveat, and the opt-in fix (#761)" section
+// docs/tasks-internals.md's "Commit title caveat, and the opt-in fix (#761)" section
 // for the feature this sweep now turns on automatically where it matters.
 import type { FastifyInstance } from "fastify";
 import { and, eq, isNull } from "drizzle-orm";

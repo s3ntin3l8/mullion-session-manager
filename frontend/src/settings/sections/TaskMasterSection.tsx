@@ -13,9 +13,8 @@ import { clampNumberFieldOnCommit, clampTaskMasterFieldMax } from "../clamp.js";
 import { AGENT_OPTIONS, REVIEW_AGENT_OPTIONS } from "../agentOptions.js";
 
 // Task Master Settings UI follow-up — the first place settings.taskMaster
-// is surfaced at all (it previously only had a backend/API surface, per
-// docs/tasks.md's own "No dedicated Settings UI" limitation entry, which
-// this section retires). Every control here writes and displays the
+// is surfaced at all (it previously only had a backend/API surface). Every
+// control here writes and displays the
 // *effective* (env-default-or-override) value — the -1/"inherit" sentinels
 // settings.ts's taskMaster field uses are never shown to the user, per the
 // plan's "sentinels are invisible in the UI" decision; Reset below is the

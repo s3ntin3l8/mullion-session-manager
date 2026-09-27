@@ -15,8 +15,8 @@
 // happens only at approve (`promoteTaskToPR`'s own mark-ready call below,
 // unchanged) — the fix for #83 is structural instead: such a workflow
 // excludes Task Master's own branches from its automatic trigger entirely
-// (`mullion/task-*`, a closed namespace — see `docs/tasks.md`'s "External
-// review workflows"), so there is no external reviewer left to race against
+// (`mullion/task-*`, a closed namespace — see `docs/tasks-internals.md`'s
+// "External review workflows"), so there is no external reviewer left to race against
 // this timing at all. An earlier design (PR #989) instead tried to
 // sequence the undraft around an external reviewer's convergence; retired
 // once the branch-exclusion made that sequencing unnecessary — see issues
@@ -594,7 +594,7 @@ export async function promoteTaskToPR(
  * close). Best-effort and fire-and-forget from the caller's point of view,
  * same posture as cleanupTaskWorktree (routes/tasks.ts) it's meant to run
  * alongside: a failure here is a real, no-retry-queue GitHub write gap
- * (docs/tasks.md's GitHub sync section already accepts this for every
+ * (docs/tasks-internals.md's GitHub sync section already accepts this for every
  * other write in this module), so it's recorded via recordGithubSyncError
  * rather than silently swallowed — a task already in its terminal "failed"
  * state won't get another chance to sync, but a human looking at the row

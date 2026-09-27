@@ -18,6 +18,7 @@
 - [ ] `make typecheck`
 - [ ] `make test`
 - [ ] `make format-check` (repo-wide — also covers `frontend/`)
+- [ ] `make test-patch-coverage` (≥75% patch coverage on new/modified `src/`/`frontend/src/` lines against `origin/main`)
 - [ ] Frontend changes: `cd frontend && npm run lint && npm run typecheck`, exercised manually in the browser
 - [ ] Schema changes (`src/db/schema.ts`): ran `npm run db:generate` and committed the migration
 

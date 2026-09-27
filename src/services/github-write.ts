@@ -473,7 +473,7 @@ export async function getPullRequestByNumber(
  * silently merging a commit nobody has reviewed/CI'd. `commitTitle` is passed
  * explicitly (not left to the repo's own `squash_merge_commit_title`
  * setting) so the resulting `main` commit message is deterministic regardless
- * of repo config — see docs/tasks.md's note on task PR titles not being
+ * of repo config — see docs/tasks-internals.md's note on task PR titles not being
  * Conventional-Commits-prefixed.
  *
  * `405` ("Pull Request is not mergeable") and `409` (the head-SHA mismatch
