@@ -1086,6 +1086,137 @@ describe("runCommand", () => {
       expect(client.request).toHaveBeenCalledWith("sessions.get", { sessionId: "9" });
     });
 
+    // Issue #1457 — mirrors mcp/client.mjs's own ownSessionId retry (issue
+    // #1291/#1292): on an auth-disabled host the control socket has no
+    // pinned session to resolve "self" from, so the omit-it-to-target-
+    // yourself shape 400s there. Retry against MULLION_SESSION_ID, never an
+    // eager substitution — a "does not retry" companion test locks in that
+    // the already-working (real session-scope) case takes no extra round
+    // trip at all.
+    describe("MULLION_SESSION_ID fallback on an auth-disabled host (issue #1457)", () => {
+      it("session get retries with MULLION_SESSION_ID after the direct attempt 400s", async () => {
+        let calls = 0;
+        const client = fakeClient({
+          request: vi.fn(async (op, body) => {
+            calls += 1;
+            if (calls === 1) {
+              expect(op).toBe("sessions.get");
+              expect(body).toEqual({});
+              throw new MullionSocketError(400, "'sessionId' is required");
+            }
+            expect(body).toEqual({ sessionId: "42" });
+            return { id: 42 };
+          }),
+        });
+        const io = fakeIo();
+        io.env = { MULLION_SESSION_ID: "42" };
+        await runCommand(["session", "get"], { client, io });
+        expect(calls).toBe(2);
+      });
+
+      it("session get does not retry when the direct attempt already succeeds", async () => {
+        const client = fakeClient({ request: vi.fn(async () => ({ id: 1 })) });
+        const io = fakeIo();
+        io.env = { MULLION_SESSION_ID: "42" };
+        await runCommand(["session", "get"], { client, io });
+        expect(client.request).toHaveBeenCalledTimes(1);
+        expect(client.request).toHaveBeenCalledWith("sessions.get", {});
+      });
+
+      it("session get propagates the error unchanged when MULLION_SESSION_ID is absent", async () => {
+        const client = fakeClient({
+          request: vi.fn(async () => {
+            throw new MullionSocketError(400, "'sessionId' is required");
+          }),
+        });
+        const io = fakeIo();
+        const code = await runCommand(["session", "get"], { client, io });
+        expect(code).toBe(1);
+        expect(client.request).toHaveBeenCalledTimes(1);
+      });
+
+      it("session get propagates an unrelated error without retrying, even with MULLION_SESSION_ID set", async () => {
+        const client = fakeClient({
+          request: vi.fn(async () => {
+            throw new MullionSocketError(404, "no such session");
+          }),
+        });
+        const io = fakeIo();
+        io.env = { MULLION_SESSION_ID: "42" };
+        const code = await runCommand(["session", "get"], { client, io });
+        expect(code).toBe(1);
+        expect(client.request).toHaveBeenCalledTimes(1);
+      });
+
+      it("session spawn-child retries with MULLION_SESSION_ID as parentSessionId after the direct attempt 400s", async () => {
+        let calls = 0;
+        const client = fakeClient({
+          request: vi.fn(async (op, body) => {
+            calls += 1;
+            if (calls === 1) {
+              expect(op).toBe("sessions.spawn_child");
+              expect(body).toEqual({ command: "bash" });
+              throw new MullionSocketError(400, "'parentSessionId' is required");
+            }
+            expect(body).toEqual({ command: "bash", parentSessionId: "42" });
+            return { id: 5 };
+          }),
+        });
+        const io = fakeIo();
+        io.env = { MULLION_SESSION_ID: "42" };
+        await runCommand(["session", "spawn-child", "--command", "bash"], { client, io });
+        expect(calls).toBe(2);
+      });
+
+      it("session spawn-child does not retry when --parent/--session was already given", async () => {
+        const client = fakeClient({ request: vi.fn(async () => ({ id: 5 })) });
+        const io = fakeIo();
+        io.env = { MULLION_SESSION_ID: "42" };
+        await runCommand(["session", "spawn-child", "--command", "bash", "--parent", "9"], {
+          client,
+          io,
+        });
+        expect(client.request).toHaveBeenCalledTimes(1);
+        expect(client.request).toHaveBeenCalledWith("sessions.spawn_child", {
+          command: "bash",
+          parentSessionId: "9",
+        });
+      });
+
+      it("browser click retries with MULLION_SESSION_ID after the direct attempt 400s", async () => {
+        let calls = 0;
+        const client = fakeClient({
+          request: vi.fn(async (op, body) => {
+            calls += 1;
+            if (calls === 1) {
+              expect(op).toBe("browser.action");
+              expect(body).toEqual({ action: "click", ref: "e1" });
+              throw new MullionSocketError(400, "'sessionId' is required");
+            }
+            expect(body).toEqual({ action: "click", ref: "e1", sessionId: "42" });
+            return { ok: true };
+          }),
+        });
+        const io = fakeIo();
+        io.env = { MULLION_SESSION_ID: "42" };
+        await runCommand(["browser", "click", "--ref", "e1"], { client, io });
+        expect(calls).toBe(2);
+      });
+
+      it("browser click does not retry when --session was already given", async () => {
+        const client = fakeClient({ request: vi.fn(async () => ({ ok: true })) });
+        const io = fakeIo();
+        io.env = { MULLION_SESSION_ID: "42" };
+        await runCommand(["browser", "click", "--ref", "e1", "--session", "9"], { client, io });
+        expect(client.request).toHaveBeenCalledTimes(1);
+        expect(client.request).toHaveBeenCalledWith("browser.action", {
+          action: "click",
+          ref: "e1",
+          sessionId: "9",
+        });
+      });
+    });
+
     it("session create requires --project and --command", async () => {
       const io = fakeIo();
       expect(

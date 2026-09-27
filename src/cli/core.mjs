@@ -9,7 +9,7 @@
 
 import fs from "node:fs";
 import net from "node:net";
-import { MullionSocketError } from "./client.mjs";
+import { MullionSocketError, isMissingIdError, resolveOwnSessionId } from "./client.mjs";
 
 /** Read all of stdin as a string. Used for --flag/- piped input. */
 function readStdin() {
@@ -710,6 +710,29 @@ function withSessionId(body, opts) {
   return opts.session !== undefined ? { ...body, sessionId: opts.session } : body;
 }
 
+/** Issue #1457 — mirrors the MCP client's own ownSessionId retry (issue
+ * #1291/#1292, src/mcp/client.mjs): on an auth-disabled host every
+ * connection resolves to full scope with no pinned session
+ * (control-socket.ts's resolveHandshake), so the "omit it, get your own"
+ * shape a session-scope-reachable op supports 400s there instead. Retries
+ * ONCE, only on the exact missing-id error, substituting
+ * `MULLION_SESSION_ID` — never an eager substitution, so a healthy
+ * session-scoped connection (the common case) takes no extra round trip.
+ * Callers skip this entirely when an id was already supplied explicitly
+ * (see sessionCommands.get/spawn-child and the browserCommands loop below),
+ * same as getScrollback/spawnChildSession's own "id already supplied, skip
+ * the whole fallback" shape in mcp/client.mjs. */
+async function requestOwnSessionFallback(client, op, body, io, missingIdMessage, buildRetryBody) {
+  try {
+    return await client.request(op, body);
+  } catch (err) {
+    if (!isMissingIdError(err, missingIdMessage)) throw err;
+    const ownId = resolveOwnSessionId(io.env);
+    if (ownId === undefined) throw err;
+    return client.request(op, buildRetryBody(ownId));
+  }
+}
+
 function requireOne(args, label) {
   const value = args[0];
   if (value === undefined) throw new CliUsageError(`${label} is required`);
@@ -725,9 +748,20 @@ const sessionCommands = {
     const result = await client.request("sessions.list", body);
     return { json: result };
   },
-  async get(client, args, opts) {
+  async get(client, args, opts, io) {
     const id = args[0] ?? opts.session;
-    const result = await client.request("sessions.get", id !== undefined ? { sessionId: id } : {});
+    if (id !== undefined) {
+      const result = await client.request("sessions.get", { sessionId: id });
+      return { json: result };
+    }
+    const result = await requestOwnSessionFallback(
+      client,
+      "sessions.get",
+      {},
+      io,
+      "'sessionId' is required",
+      (ownId) => ({ sessionId: ownId }),
+    );
     return { json: result };
   },
   async create(client, args) {
@@ -765,7 +799,7 @@ const sessionCommands = {
   // SESSION_SPAWN_CHILD_SPEC's own comment): the project is always derived
   // from the parent session. --parent defaults to the current --session
   // when omitted, matching sessions.spawn_child's own session-scope default.
-  "spawn-child": async (client, args, opts) => {
+  "spawn-child": async (client, args, opts, io) => {
     const { flags } = extractFlags(args, SESSION_SPAWN_CHILD_SPEC);
     if (flags.command === undefined) throw new CliUsageError("--command is required");
     const body = { command: flags.command };
@@ -776,7 +810,18 @@ const sessionCommands = {
     if (flags.kind !== undefined) body.kind = flags.kind;
     if (flags["skip-permissions"] === true) body.skipPermissions = true;
     if (flags["initial-prompt"] !== undefined) body.seedPrompt = flags["initial-prompt"];
-    const result = await client.request("sessions.spawn_child", body);
+    if (parentId !== undefined) {
+      const result = await client.request("sessions.spawn_child", body);
+      return { json: result };
+    }
+    const result = await requestOwnSessionFallback(
+      client,
+      "sessions.spawn_child",
+      body,
+      io,
+      "'parentSessionId' is required",
+      (ownId) => ({ ...body, parentSessionId: ownId }),
+    );
     return { json: result };
   },
   async rename(client, args, opts) {
@@ -828,10 +873,21 @@ const sessionCommands = {
 
 const browserCommands = {};
 for (const action of Object.keys(BROWSER_ACTIONS)) {
-  browserCommands[action] = async (client, args, opts) => {
+  browserCommands[action] = async (client, args, opts, io) => {
     const { body, cliFlags } = parseBrowserArgs(action, args);
     const op = body.by !== undefined ? "browser.find" : "browser.action";
-    const result = await client.request(op, withSessionId(body, opts));
+    const requestBody = withSessionId(body, opts);
+    const result =
+      opts.session !== undefined
+        ? await client.request(op, requestBody)
+        : await requestOwnSessionFallback(
+            client,
+            op,
+            requestBody,
+            io,
+            "'sessionId' is required",
+            (ownId) => ({ ...requestBody, sessionId: ownId }),
+          );
     // `json: result` carries the raw response through even on this branch —
     // not just `{screenshot}` — so a future field the server adds to the
     // screenshot response isn't silently dropped from `--json` output.
