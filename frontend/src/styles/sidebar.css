@@ -460,6 +460,16 @@
 .workspace-item:not(.active) .workspace-attn-dot {
   background: var(--ring);
 }
+/* Hermes review, issue #1465's collapsible-section follow-up — the
+   aggregate attention dot on `.ws-section-header` (WorkspaceSwitcher.tsx)
+   isn't inside a `.workspace-item` at all, so it fell through to the base
+   rule's literal `#fff` above (chosen for contrast against an ACTIVE
+   item's own accent background) — invisible against the light theme's
+   sidebar background. Same `var(--ring)` treatment as the non-active-item
+   case above, which is the only one that ever applies to this dot. */
+.ws-section-header .workspace-attn-dot {
+  background: var(--ring);
+}
 .workspace-working-dot {
   width: 6px;
   height: 6px;

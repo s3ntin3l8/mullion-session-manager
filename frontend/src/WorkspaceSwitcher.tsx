@@ -269,10 +269,20 @@ export function WorkspaceSwitcher({ onSelectWorkspace }: WorkspaceSwitcherProps 
           collapse, same "signal survives collapse" treatment
           ProjectHeader's own project-attn-pill gives a project's sessions. */}
         {sectionCollapsed && aggregateLiveStatus === "attention" && (
-          <span className="workspace-attn-dot" title="A workspace has a session that needs input" />
+          <span
+            className="workspace-attn-dot"
+            role="img"
+            aria-label="A workspace has a session that needs input"
+            title="A workspace has a session that needs input"
+          />
         )}
         {sectionCollapsed && aggregateLiveStatus === "working" && (
-          <span className="workspace-working-dot" title="A workspace has a working session" />
+          <span
+            className="workspace-working-dot"
+            role="img"
+            aria-label="A workspace has a working session"
+            title="A workspace has a working session"
+          />
         )}
         <button
           className="toolbar-icon-btn"
