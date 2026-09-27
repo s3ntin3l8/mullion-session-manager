@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { BottomSheet } from "./ui/BottomSheet.js";
 import { defaultRangeExtractor, useVirtualizer } from "@tanstack/react-virtual";
 import type { Range } from "@tanstack/react-virtual";
 import { eventKey, useDashboardStore } from "./store/index.js";
@@ -17,7 +18,6 @@ import type { NotificationEvent, Project, Session } from "./api/index.js";
 import { BellIcon, BlockedIcon, CheckIcon, CloseIcon, WarningTriangleIcon } from "./ui/icons.js";
 import { formatRelativeAge } from "./relativeTime.js";
 import { useFocusTrap } from "./hooks/useFocusTrap.js";
-import { usePhoneBackStack } from "./hooks/usePhoneBackStack.js";
 import { useVisualViewportChange } from "./hooks/useVisualViewportChange.js";
 import { truncateHead } from "./lib/truncatePath.js";
 import { formatStatusLabel, STATUS_PRESENTATION } from "./sessionStatus.js";
@@ -517,13 +517,19 @@ export function NotificationBell({
   // no focus-in on open, no Tab trap, no focus-restore on close. Same shared
   // hook as Settings/CommandPalette/PaneTab's menu. No `aria-modal` — same
   // "no backdrop, background stays interactive" rule as PaneTab's menu and
-  // UnifiedBoard.tsx's drawer.
-  // Phone sheet only (`phone` gates it): Android back closes it.
-  usePhoneBackStack(phone && open, () => setOpen(false));
+  // UnifiedBoard.tsx's drawer. Desktop only (`!phone`) — the phone sheet
+  // below is a ui/BottomSheet.tsx, which runs its own instance of this same
+  // hook against the very same `panelRef`; without this gate both instances
+  // would fight over focus-in/restore-on-close on the one DOM node.
   const { onKeyDown: onTrapKeyDown, suppressRestore } = useFocusTrap({
-    active: open,
+    active: !phone && open,
     containerRef: panelRef,
   });
+  // The phone sheet's own suppressRestore (a separate useFocusTrap instance,
+  // above) — written to by BottomSheet during render, read by the phone
+  // row-tap handlers below, same U7 race useFocusTrap.ts's own doc comment
+  // covers for the desktop popover's `suppressRestore` right above.
+  const phoneSuppressRestoreRef = useRef<(() => void) | null>(null);
   // Escape scoped to the popover's own onKeyDown (bubbling), not a
   // window-level listener — same reasoning as PaneTab's menu/UnifiedBoard's
   // drawer: a global listener would also catch an Escape meant for some
@@ -613,108 +619,90 @@ export function NotificationBell({
         <BellIcon size={17} />
         {unreadCount > 0 && <span className="attention-badge">{unreadCount}</span>}
       </button>
-      {open &&
-        phone &&
-        createPortal(
-          <div
-            className={`cmux-root${theme === "light" ? " light" : ""} mobile-session-backdrop`}
-            onClick={() => setOpen(false)}
-          >
-            <div
-              ref={panelRef}
-              className="mobile-session-sheet mobile-notif-sheet"
-              role="dialog"
-              aria-modal="true"
-              aria-label="Notifications"
-              onClick={(e) => e.stopPropagation()}
-              onKeyDown={onPanelKeyDown}
+      {phone && (
+        <BottomSheet
+          open={open}
+          onClose={() => setOpen(false)}
+          label="Notifications"
+          closeLabel="Close notifications"
+          title="Notifications"
+          sheetClassName="mobile-notif-sheet"
+          backStack
+          sheetRef={panelRef}
+          suppressRestoreRef={phoneSuppressRestoreRef}
+          headerActions={
+            shownItems.some((i) => i.type === "event" && !i.read) && (
+              <button className="mobile-notif-readall" onClick={markAllRead}>
+                <CheckIcon size={13} />
+                Read all
+              </button>
+            )
+          }
+        >
+          <div className="mobile-notif-filters" role="group" aria-label="Filter notifications">
+            <button
+              className={`mobile-notif-filter${filter === "needs" ? " active" : ""}`}
+              aria-pressed={filter === "needs"}
+              onClick={() => setFilter("needs")}
             >
-              <div className="mobile-session-sheet-header">
-                <span>Notifications</span>
-                <span className="mobile-notif-header-actions">
-                  {shownItems.some((i) => i.type === "event" && !i.read) && (
-                    <button className="mobile-notif-readall" onClick={markAllRead}>
-                      <CheckIcon size={13} />
-                      Read all
-                    </button>
-                  )}
-                  <button
-                    className="mobile-tab-btn"
-                    aria-label="Close notifications"
-                    onClick={() => setOpen(false)}
-                  >
-                    <CloseIcon size={14} />
-                  </button>
-                </span>
+              Needs you{needsYouIds.size > 0 ? ` ${needsYouIds.size}` : ""}
+            </button>
+            <button
+              className={`mobile-notif-filter${filter === "all" ? " active" : ""}`}
+              aria-pressed={filter === "all"}
+              onClick={() => setFilter("all")}
+            >
+              All
+            </button>
+          </div>
+          <div className="mobile-notif-scroll">
+            {shownItems.length === 0 ? (
+              <div className="notif-empty">
+                {filter === "needs" ? "Nothing needs you right now" : "No notifications yet"}
               </div>
-              <div className="mobile-notif-filters" role="group" aria-label="Filter notifications">
-                <button
-                  className={`mobile-notif-filter${filter === "needs" ? " active" : ""}`}
-                  aria-pressed={filter === "needs"}
-                  onClick={() => setFilter("needs")}
-                >
-                  Needs you{needsYouIds.size > 0 ? ` ${needsYouIds.size}` : ""}
-                </button>
-                <button
-                  className={`mobile-notif-filter${filter === "all" ? " active" : ""}`}
-                  aria-pressed={filter === "all"}
-                  onClick={() => setFilter("all")}
-                >
-                  All
-                </button>
-              </div>
-              <div className="mobile-notif-scroll">
-                {shownItems.length === 0 ? (
-                  <div className="notif-empty">
-                    {filter === "needs" ? "Nothing needs you right now" : "No notifications yet"}
-                  </div>
-                ) : (
-                  shownItems.map((item) => {
-                    const session = sessions.find((s) => s.id === item.sessionId);
-                    if (item.type === "header") {
-                      return (
-                        <FeedHeader key={`h-${item.sessionId}`} item={item} session={session} />
+            ) : (
+              shownItems.map((item) => {
+                const session = sessions.find((s) => s.id === item.sessionId);
+                if (item.type === "header") {
+                  return <FeedHeader key={`h-${item.sessionId}`} item={item} session={session} />;
+                }
+                return (
+                  <EventRow
+                    key={`e-${item.sessionId}-${item.event.seq}`}
+                    item={item}
+                    session={session}
+                    // Tap = the session's terminal (maximized by the
+                    // opener), and reading it marks that session seen —
+                    // the timeline view never advances the read cursor.
+                    onOpen={(target) => {
+                      phoneSuppressRestoreRef.current?.();
+                      setOpen(false);
+                      const maxSeq = (events[target.id] ?? []).reduce(
+                        (max, e) => Math.max(max, e.seq),
+                        0,
                       );
+                      if (maxSeq > 0) markEventSeen(target.id, maxSeq);
+                      onOpenSession(target);
+                    }}
+                    onTimeline={
+                      onOpenTimeline
+                        ? (target) => {
+                            phoneSuppressRestoreRef.current?.();
+                            setOpen(false);
+                            onOpenTimeline(target);
+                          }
+                        : undefined
                     }
-                    return (
-                      <EventRow
-                        key={`e-${item.sessionId}-${item.event.seq}`}
-                        item={item}
-                        session={session}
-                        // Tap = the session's terminal (maximized by the
-                        // opener), and reading it marks that session seen —
-                        // the timeline view never advances the read cursor.
-                        onOpen={(target) => {
-                          suppressRestore();
-                          setOpen(false);
-                          const maxSeq = (events[target.id] ?? []).reduce(
-                            (max, e) => Math.max(max, e.seq),
-                            0,
-                          );
-                          if (maxSeq > 0) markEventSeen(target.id, maxSeq);
-                          onOpenSession(target);
-                        }}
-                        onTimeline={
-                          onOpenTimeline
-                            ? (target) => {
-                                suppressRestore();
-                                setOpen(false);
-                                onOpenTimeline(target);
-                              }
-                            : undefined
-                        }
-                        onOpenBrowser={onOpenBrowser}
-                        onMarkRead={() => markEventSeen(item.sessionId, item.event.seq)}
-                        onDismiss={() => dismissEvents(item.sessionId, item.foldedSeqs)}
-                      />
-                    );
-                  })
-                )}
-              </div>
-            </div>
-          </div>,
-          document.body,
-        )}
+                    onOpenBrowser={onOpenBrowser}
+                    onMarkRead={() => markEventSeen(item.sessionId, item.event.seq)}
+                    onDismiss={() => dismissEvents(item.sessionId, item.foldedSeqs)}
+                  />
+                );
+              })
+            )}
+          </div>
+        </BottomSheet>
+      )}
       {open &&
         !phone &&
         pos &&

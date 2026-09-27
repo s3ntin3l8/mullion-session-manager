@@ -1,10 +1,9 @@
-import { useRef, useState } from "react";
+import { useState } from "react";
 import type { ReactNode } from "react";
 import { ApiError } from "../api/index.js";
 import type { ClearDoneResult } from "../api/index.js";
-import { CloseIcon, PlusIcon } from "../ui/icons.js";
-import { useFocusTrap } from "../hooks/useFocusTrap.js";
-import { usePhoneBackStack } from "../hooks/usePhoneBackStack.js";
+import { PlusIcon } from "../ui/icons.js";
+import { BottomSheet } from "../ui/BottomSheet.js";
 
 // Split out of UnifiedBoard.tsx (Wave 5 / PR 28 of
 // .claude/plans/can-we-do-a-warm-cocke.md) — the board's own "New task"
@@ -134,21 +133,7 @@ export function TasksToolbar({
 
   // Phone filter sheet (see `phone` above).
   const [filterSheetOpen, setFilterSheetOpen] = useState(false);
-  const sheetRef = useRef<HTMLDivElement>(null);
   const closeFilterSheet = () => setFilterSheetOpen(false);
-  usePhoneBackStack(phone && filterSheetOpen, closeFilterSheet);
-  const { onKeyDown: onTrapKeyDown } = useFocusTrap({
-    active: phone && filterSheetOpen,
-    containerRef: sheetRef,
-  });
-  const onSheetKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (e.key === "Escape") {
-      e.stopPropagation();
-      closeFilterSheet();
-      return;
-    }
-    onTrapKeyDown(e);
-  };
 
   const newBtn = (
     <button className="tasks-panel-new-btn" onClick={onToggleCreate}>
@@ -297,38 +282,25 @@ export function TasksToolbar({
           Filter{activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}
         </button>
         {newForm}
-        {filterSheetOpen && (
-          <div className="mobile-session-backdrop" onClick={closeFilterSheet}>
-            <div
-              ref={sheetRef}
-              className="mobile-session-sheet tasks-phone-filter-sheet"
-              role="dialog"
-              aria-modal="true"
-              aria-label="Task filters"
-              onClick={(e) => e.stopPropagation()}
-              onKeyDown={onSheetKeyDown}
-            >
-              <div className="mobile-session-sheet-header">
-                <span>Filters</span>
-                <button
-                  className="mobile-tab-btn"
-                  aria-label="Close filters"
-                  onClick={closeFilterSheet}
-                >
-                  <CloseIcon size={14} />
-                </button>
-              </div>
-              <div className="tasks-phone-filter-body">
-                <div className="tasks-phone-filter-chips">
-                  {hideDoneBtn}
-                  {showArchivedBtn}
-                </div>
-                {filterSheetContent}
-                <div className="tasks-phone-filter-danger">{clearDoneUi}</div>
-              </div>
+        <BottomSheet
+          open={filterSheetOpen}
+          onClose={closeFilterSheet}
+          label="Task filters"
+          closeLabel="Close filters"
+          title="Filters"
+          sheetClassName="tasks-phone-filter-sheet"
+          backStack
+          portal={false}
+        >
+          <div className="tasks-phone-filter-body">
+            <div className="tasks-phone-filter-chips">
+              {hideDoneBtn}
+              {showArchivedBtn}
             </div>
+            {filterSheetContent}
+            <div className="tasks-phone-filter-danger">{clearDoneUi}</div>
           </div>
-        )}
+        </BottomSheet>
       </div>
     );
   }
