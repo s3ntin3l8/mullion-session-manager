@@ -1604,6 +1604,20 @@
   color: var(--muted);
   border-bottom: 1px solid var(--border);
 }
+/* ui/BottomSheet.tsx's own trailing flex group (headerActions + the close
+   button) — one item against `.mobile-session-sheet-header`'s own
+   `space-between`, so an extra action (the notifications sheet's "Read all")
+   sits flush against the close button instead of drifting to the header's
+   midpoint. A single child (every other sheet) renders identically to not
+   having this wrapper at all. */
+.mobile-session-sheet-header-actions {
+  display: flex;
+  align-items: center;
+  /* Matches the old .mobile-notif-header-actions this replaces — gap has no
+     effect on the other three sheets, whose group holds only the close
+     button. */
+  gap: 2px;
+}
 .mobile-session-list {
   /* A flex child of the max-height sheet: without min-height: 0 it grows to
      its content and never scrolls, pushing later projects and "New session"
@@ -1739,41 +1753,19 @@
   cursor: pointer;
   touch-action: manipulation;
 }
-/* terminal-pane/CopyModeSheet.tsx — touch copy view. Same bottom-sheet
-   shape as the session switcher's. */
-.copy-mode-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 55;
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
-  padding-top: var(--shell-top, 0px);
-  padding-bottom: var(--kb-inset, 0px);
-  background: color-mix(in srgb, #000 40%, transparent);
-}
+/* terminal-pane/CopyModeSheet.tsx — touch copy view, built on ui/BottomSheet.tsx
+   (issue #1435). `.copy-mode-backdrop` carries no rules of its own anymore —
+   it's an extra class alongside the shared `.mobile-session-backdrop` base,
+   kept only so CopyModeSheet.test.tsx's own pre-existing selector still
+   resolves. `.copy-mode-sheet` is the one genuine difference from the other
+   three sheets: a fixed height rather than a max-height. */
 .copy-mode-sheet {
-  display: flex;
-  flex-direction: column;
   height: min(80dvh, 720px);
-  background: var(--chrome);
-  color: var(--fg);
-  border-top: 1px solid var(--border);
-  border-radius: 14px 14px 0 0;
-  padding-bottom: env(safe-area-inset-bottom);
-  padding-left: env(safe-area-inset-left);
-  padding-right: env(safe-area-inset-right);
-  box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.25);
-}
-.copy-mode-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 4px 4px 4px 16px;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--muted);
-  border-bottom: 1px solid var(--border);
+  /* Without this, the shared `.mobile-session-sheet` base's own
+     `max-height: min(75dvh, 640px)` still clamps `height` above (the used
+     value is min(height, max-height) per spec) — same reason
+     `.mobile-notif-sheet` right below carries this too. */
+  max-height: none;
 }
 .copy-mode-text {
   flex: 1;
@@ -2048,11 +2040,6 @@
 .mobile-notif-sheet {
   height: min(88dvh, 760px);
   max-height: none;
-}
-.mobile-notif-header-actions {
-  display: flex;
-  align-items: center;
-  gap: 2px;
 }
 .mobile-notif-readall {
   display: flex;

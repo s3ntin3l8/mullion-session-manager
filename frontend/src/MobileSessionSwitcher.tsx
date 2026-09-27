@@ -1,9 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import type { KeyboardEvent as ReactKeyboardEvent, ReactNode, RefObject } from "react";
-import { createPortal } from "react-dom";
-import { useDashboardStore } from "./store/index.js";
-import { useFocusTrap } from "./hooks/useFocusTrap.js";
-import { usePhoneBackStack } from "./hooks/usePhoneBackStack.js";
+import type { ReactNode, RefObject } from "react";
+import { BottomSheet } from "./ui/BottomSheet.js";
 import { ChevronDownIcon, CloseIcon, PlusIcon } from "./ui/icons.js";
 import { matchesQuery } from "./matchQuery.js";
 import {
@@ -89,7 +86,6 @@ export function MobileSessionSwitcher({
   onRenameCommit: () => void;
   onRenameCancel: () => void;
 }) {
-  const theme = useDashboardStore((s) => s.theme);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const sheetRef = useRef<HTMLDivElement>(null);
@@ -106,23 +102,6 @@ export function MobileSessionSwitcher({
     if (renamingId !== null) onRenameCancel();
     setOpen(false);
     setQuery("");
-  };
-
-  // Phone-only component: Android back closes the sheet (cancelling a rename).
-  usePhoneBackStack(open, closeSheet);
-
-  const { onKeyDown: onTrapKeyDown } = useFocusTrap({ active: open, containerRef: sheetRef });
-  const onSheetKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
-    if (e.key === "Escape") {
-      e.stopPropagation();
-      // Escape first backs out of a rename (the input's own Escape handler
-      // does the same, and this catches it when focus is elsewhere); a
-      // second Escape closes the sheet.
-      if (renamingId !== null) onRenameCancel();
-      else closeSheet();
-      return;
-    }
-    onTrapKeyDown(e);
   };
 
   // Ending a rename unmounts the focused input; hand focus back to the sheet
@@ -256,144 +235,133 @@ export function MobileSessionSwitcher({
         )}
         <ChevronDownIcon size={14} />
       </button>
-      {open &&
-        createPortal(
-          <div
-            className={`cmux-root${theme === "light" ? " light" : ""} mobile-session-backdrop`}
-            onClick={closeSheet}
-          >
-            <div
-              ref={sheetRef}
-              className="mobile-session-sheet"
-              role="dialog"
-              aria-modal="true"
-              aria-label="Sessions"
-              onClick={(e) => e.stopPropagation()}
-              onKeyDown={onSheetKeyDown}
-            >
-              <div className="mobile-session-sheet-header">
-                <span>Sessions ({listedRows.length})</span>
-                <button
-                  className="mobile-tab-btn"
-                  aria-label="Close session list"
-                  onClick={closeSheet}
-                >
-                  <CloseIcon size={14} />
-                </button>
-              </div>
-              {showSearch && (
-                <input
-                  type="search"
-                  className="mobile-session-search"
-                  aria-label="Search sessions"
-                  placeholder="Search sessions"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                />
-              )}
-              <div className="mobile-session-list">
-                {visibleSections.map((section) => (
-                  <section key={section.key} className="mobile-session-section">
-                    <h3
-                      className={`mobile-session-section-head${
-                        section.kind === "needs-you" ? " needs-you" : ""
+      <BottomSheet
+        open={open}
+        onClose={closeSheet}
+        label="Sessions"
+        closeLabel="Close session list"
+        title={`Sessions (${listedRows.length})`}
+        backStack
+        sheetRef={sheetRef}
+        onEscape={() => {
+          // Escape first backs out of a rename (the input's own Escape
+          // handler does the same, and this catches it when focus is
+          // elsewhere); a second Escape closes the sheet.
+          if (renamingId === null) return false;
+          onRenameCancel();
+          return true;
+        }}
+      >
+        {showSearch && (
+          <input
+            type="search"
+            className="mobile-session-search"
+            aria-label="Search sessions"
+            placeholder="Search sessions"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        )}
+        <div className="mobile-session-list">
+          {visibleSections.map((section) => (
+            <section key={section.key} className="mobile-session-section">
+              <h3
+                className={`mobile-session-section-head${
+                  section.kind === "needs-you" ? " needs-you" : ""
+                }`}
+              >
+                <span>{section.label}</span>
+                <span className="mobile-session-section-count">{section.rows.length}</span>
+              </h3>
+              <ul>
+                {section.rows.map((row) => {
+                  // The pin only repeats rows that live under their
+                  // project, so it carries no actions / active mark.
+                  const pinned = section.kind === "needs-you";
+                  const isOpenRow = row.panelId !== null;
+                  const isActive = !pinned && row.panelId === active?.id;
+                  return (
+                    <li
+                      key={row.key}
+                      className={`mobile-session-row${isActive ? " active" : ""}${
+                        isOpenRow ? "" : " closed"
                       }`}
                     >
-                      <span>{section.label}</span>
-                      <span className="mobile-session-section-count">{section.rows.length}</span>
-                    </h3>
-                    <ul>
-                      {section.rows.map((row) => {
-                        // The pin only repeats rows that live under their
-                        // project, so it carries no actions / active mark.
-                        const pinned = section.kind === "needs-you";
-                        const isOpenRow = row.panelId !== null;
-                        const isActive = !pinned && row.panelId === active?.id;
-                        return (
-                          <li
-                            key={row.key}
-                            className={`mobile-session-row${isActive ? " active" : ""}${
-                              isOpenRow ? "" : " closed"
-                            }`}
-                          >
-                            {!pinned && renamingId !== null && renamingId === row.panelId ? (
-                              <input
-                                ref={renameInputRef}
-                                className="mobile-session-rename-input"
-                                aria-label="Session name"
-                                value={renameDraft}
-                                onChange={(e) => onRenameDraftChange(e.target.value)}
-                                onKeyDown={(e) => {
-                                  if (e.key === "Enter") onRenameCommit();
-                                  else if (e.key === "Escape") {
-                                    // Handled here; don't also reach the sheet's
-                                    // Escape handler (a second cancel).
-                                    e.stopPropagation();
-                                    onRenameCancel();
-                                  }
-                                }}
-                                onBlur={onRenameCommit}
-                              />
-                            ) : (
-                              <button
-                                className="mobile-session-row-main"
-                                aria-current={isActive ? "true" : undefined}
-                                onClick={() => select(row)}
-                              >
-                                <span
-                                  className="mobile-session-dot"
-                                  style={{ background: row.dotColor }}
-                                />
-                                {row.agentLogo && (
-                                  <img
-                                    src={row.agentLogo}
-                                    alt=""
-                                    width={16}
-                                    height={16}
-                                    className="mobile-session-logo"
-                                  />
-                                )}
-                                <span className="mobile-session-title">{row.title}</span>
-                                {row.unreadCount > 0 && (
-                                  <span className="mobile-session-unread">{row.unreadCount}</span>
-                                )}
-                              </button>
-                            )}
-                            {isActive && renamingId !== row.panelId && renderActiveActions()}
-                            {!pinned && row.panelId !== null && (
-                              <button
-                                className="mobile-tab-btn"
-                                title="Close pane — detaches your view, session keeps running"
-                                aria-label={`Close ${row.title}`}
-                                onClick={() => onClose(row.panelId as string)}
-                              >
-                                <CloseIcon size={13} />
-                              </button>
-                            )}
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  </section>
-                ))}
-                {visibleSections.length === 0 && (
-                  <p className="mobile-session-empty">No sessions match “{trimmedQuery}”.</p>
-                )}
-              </div>
-              <button
-                className="mobile-session-new"
-                onClick={() => {
-                  closeSheet();
-                  onNewSession();
-                }}
-              >
-                <PlusIcon size={15} />
-                New session
-              </button>
-            </div>
-          </div>,
-          document.body,
-        )}
+                      {!pinned && renamingId !== null && renamingId === row.panelId ? (
+                        <input
+                          ref={renameInputRef}
+                          className="mobile-session-rename-input"
+                          aria-label="Session name"
+                          value={renameDraft}
+                          onChange={(e) => onRenameDraftChange(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") onRenameCommit();
+                            else if (e.key === "Escape") {
+                              // Handled here; don't also reach the sheet's
+                              // Escape handler (a second cancel).
+                              e.stopPropagation();
+                              onRenameCancel();
+                            }
+                          }}
+                          onBlur={onRenameCommit}
+                        />
+                      ) : (
+                        <button
+                          className="mobile-session-row-main"
+                          aria-current={isActive ? "true" : undefined}
+                          onClick={() => select(row)}
+                        >
+                          <span
+                            className="mobile-session-dot"
+                            style={{ background: row.dotColor }}
+                          />
+                          {row.agentLogo && (
+                            <img
+                              src={row.agentLogo}
+                              alt=""
+                              width={16}
+                              height={16}
+                              className="mobile-session-logo"
+                            />
+                          )}
+                          <span className="mobile-session-title">{row.title}</span>
+                          {row.unreadCount > 0 && (
+                            <span className="mobile-session-unread">{row.unreadCount}</span>
+                          )}
+                        </button>
+                      )}
+                      {isActive && renamingId !== row.panelId && renderActiveActions()}
+                      {!pinned && row.panelId !== null && (
+                        <button
+                          className="mobile-tab-btn"
+                          title="Close pane — detaches your view, session keeps running"
+                          aria-label={`Close ${row.title}`}
+                          onClick={() => onClose(row.panelId as string)}
+                        >
+                          <CloseIcon size={13} />
+                        </button>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          ))}
+          {visibleSections.length === 0 && (
+            <p className="mobile-session-empty">No sessions match “{trimmedQuery}”.</p>
+          )}
+        </div>
+        <button
+          className="mobile-session-new"
+          onClick={() => {
+            closeSheet();
+            onNewSession();
+          }}
+        >
+          <PlusIcon size={15} />
+          New session
+        </button>
+      </BottomSheet>
     </>
   );
 }
