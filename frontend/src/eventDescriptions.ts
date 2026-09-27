@@ -92,8 +92,10 @@ function firstChangedFileName(files: unknown[]): string | null {
 // Shared kind/payload interpretation for Phase 1's notification event model
 // (issue #166) — the one place that turns a raw `NotificationEvent` into
 // human text, an unread-worthiness classification, or both. Originally lived
-// split across Sidebar.tsx (describeEvent/describeLatestEvent, issue #167)
-// and PaneTab.tsx (notifyKind, issue #168); pulled out here for #169 so the
+// split across Sidebar.tsx (describeEvent, issue #167 — that file's own
+// describeLatestEvent has since been removed, superseded by
+// lib/sessionNowLine.ts's deriveNowLine) and PaneTab.tsx (notifyKind, issue
+// #168); pulled out here for #169 so the
 // notification panel can reuse the exact same rules instead of a third,
 // possibly-drifting copy. Mirrors pty-manager.ts's emitEvent() call sites
 // 1:1 (payload shapes there are the source of truth) — update this

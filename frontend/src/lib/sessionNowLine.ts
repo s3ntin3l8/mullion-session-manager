@@ -80,7 +80,15 @@ function firstMeaningfulLine(message: string | null): string | null {
       continue;
     }
     if (inFence || line.length === 0) continue;
-    const cleaned = line.replace(/^#{1,6}\s+/, "").replace(/^(?:[-*]|\d+\.)\s+/, "");
+    // Hermes review (issue #1467) — a heading is skipped ENTIRELY, not
+    // stripped-and-used: "## Summary" is markup labeling the prose that
+    // follows, not itself the prose. The original implementation only
+    // stripped the `#` marker, so a message opening with a heading returned
+    // the heading text ("Summary") instead of continuing to the actual
+    // content below it. A list marker, by contrast, prefixes real content
+    // on the SAME line, so that's still just stripped rather than skipped.
+    if (/^#{1,6}\s+/.test(line)) continue;
+    const cleaned = line.replace(/^(?:[-*]|\d+\.)\s+/, "");
     if (cleaned.length > 0) return cleaned;
   }
   return null;

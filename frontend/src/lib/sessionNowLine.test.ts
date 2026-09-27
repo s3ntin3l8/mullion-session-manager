@@ -196,13 +196,13 @@ describe("deriveNowLine", () => {
       expect(line?.suffix).toMatch(/ago$/);
     });
 
-    it("strips a leading heading marker rather than skipping the whole line", () => {
+    it("skips a leading heading line entirely, landing on the prose below it (Hermes review)", () => {
       const session = makeSession({
         sessionStatus: "idle",
         lastAssistantMessage: "## Summary\n\nEverything passed.",
       });
       const line = deriveNowLine(session, [], "claude code");
-      expect(line?.text).toBe('"Summary"');
+      expect(line?.text).toBe('"Everything passed."');
     });
 
     it("skips a leading code fence and blank lines, then strips a list marker", () => {
