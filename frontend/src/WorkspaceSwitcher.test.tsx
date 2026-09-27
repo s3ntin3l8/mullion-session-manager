@@ -421,4 +421,120 @@ describe("WorkspaceSwitcher", () => {
       expect(showWorkspaceSpy).toHaveBeenCalledWith(4);
     });
   });
+
+  // Sidebar declutter (issue #1465) — WORKSPACES gets the same collapse
+  // chevron every other sidebar section already has.
+  describe("section collapse (issue #1465)", () => {
+    beforeEach(() => {
+      localStorage.clear();
+    });
+
+    it("starts expanded by default and shows the workspace list", () => {
+      const { container } = render(<WorkspaceSwitcher />);
+      const header = container.querySelector(".ws-section-header") as HTMLElement;
+      expect(header).toHaveAttribute("aria-expanded", "true");
+      expect(container.querySelector(".workspace-item")).not.toBeNull();
+    });
+
+    it("hides the workspace list and 'New workspace' button on click, and shows them again on a second click", async () => {
+      const user = userEvent.setup();
+      const { container } = render(<WorkspaceSwitcher />);
+      const header = container.querySelector(".ws-section-header") as HTMLElement;
+
+      await user.click(header);
+
+      expect(header).toHaveAttribute("aria-expanded", "false");
+      expect(container.querySelector(".workspace-item")).toBeNull();
+      expect(container.querySelector(".discover-title")).toBeNull();
+
+      await user.click(header);
+
+      expect(header).toHaveAttribute("aria-expanded", "true");
+      expect(container.querySelector(".workspace-item")).not.toBeNull();
+    });
+
+    it("toggles on Enter/Space when the header itself has focus", async () => {
+      const user = userEvent.setup();
+      const { container } = render(<WorkspaceSwitcher />);
+      const header = container.querySelector(".ws-section-header") as HTMLElement;
+      expect(header).toHaveAttribute("role", "button");
+      expect(header).toHaveAttribute("tabIndex", "0");
+
+      header.focus();
+      await user.keyboard("{Enter}");
+      expect(header).toHaveAttribute("aria-expanded", "false");
+
+      await user.keyboard(" ");
+      expect(header).toHaveAttribute("aria-expanded", "true");
+    });
+
+    it("clicking the '+' new-group button does not also toggle the section", async () => {
+      const user = userEvent.setup();
+      const { container } = render(<WorkspaceSwitcher />);
+      const header = container.querySelector(".ws-section-header") as HTMLElement;
+
+      await user.click(header.querySelector(".toolbar-icon-btn")!);
+
+      expect(header).toHaveAttribute("aria-expanded", "true");
+    });
+
+    it("persists the collapsed state across remounts via localStorage", async () => {
+      const user = userEvent.setup();
+      const first = render(<WorkspaceSwitcher />);
+      await user.click(first.container.querySelector(".ws-section-header")!);
+      expect(
+        first.container.querySelector(".ws-section-header")!.getAttribute("aria-expanded"),
+      ).toBe("false");
+      first.unmount();
+
+      const second = render(<WorkspaceSwitcher />);
+      expect(
+        second.container.querySelector(".ws-section-header")!.getAttribute("aria-expanded"),
+      ).toBe("false");
+    });
+
+    it("shows an aggregate attention dot on the collapsed header when a workspace's session needs input", async () => {
+      resetStore({
+        workspaces: [makeWorkspace()],
+        groups: [],
+        sessions: [makeSession({ attention: true })],
+        activeWorkspaceId: 1,
+        tasks: [],
+      });
+      const user = userEvent.setup();
+      const { container } = render(<WorkspaceSwitcher />);
+
+      // No dot while expanded — each workspace already shows its own.
+      expect(container.querySelector(".ws-section-header .workspace-attn-dot")).toBeNull();
+
+      await user.click(container.querySelector(".ws-section-header")!);
+
+      expect(container.querySelector(".ws-section-header .workspace-attn-dot")).not.toBeNull();
+    });
+
+    it("shows an aggregate working dot (not attention) when a session is working but none need input", async () => {
+      resetStore({
+        workspaces: [makeWorkspace()],
+        groups: [],
+        sessions: [makeSession({ activity: "working" })],
+        activeWorkspaceId: 1,
+        tasks: [],
+      });
+      const user = userEvent.setup();
+      const { container } = render(<WorkspaceSwitcher />);
+      await user.click(container.querySelector(".ws-section-header")!);
+
+      expect(container.querySelector(".ws-section-header .workspace-working-dot")).not.toBeNull();
+      expect(container.querySelector(".ws-section-header .workspace-attn-dot")).toBeNull();
+    });
+
+    it("shows no aggregate dot when collapsed and no session needs a look", async () => {
+      const user = userEvent.setup();
+      const { container } = render(<WorkspaceSwitcher />);
+      await user.click(container.querySelector(".ws-section-header")!);
+
+      expect(container.querySelector(".ws-section-header .workspace-attn-dot")).toBeNull();
+      expect(container.querySelector(".ws-section-header .workspace-working-dot")).toBeNull();
+    });
+  });
 });

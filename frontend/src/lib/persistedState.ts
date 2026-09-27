@@ -28,6 +28,12 @@ export const STORAGE_KEYS = {
   lastLaunchProjectId: "crs.lastLaunchProjectId",
   activeWorkspaceId: "crs.activeWorkspaceId",
   sidebarCollapsed: "crs.sidebarCollapsed",
+  // Sidebar declutter (issue #1465) — collapses WorkspaceSwitcher.tsx's own
+  // WORKSPACES section header, same as every other sidebar section
+  // (Devices, each Project) already can. A plain boolean, not a per-group
+  // Record like `projectCollapsed` below — there's exactly one WORKSPACES
+  // header, not one per item.
+  workspacesSectionCollapsed: "crs.workspacesSectionCollapsed",
   sidebarWidth: "crs.sidebarWidth",
   themeHint: "crs.themeHint",
   dismissedUpdateVersion: "crs.dismissedUpdateVersion",

@@ -214,6 +214,17 @@
   font-weight: 700;
   flex: 1;
 }
+/* Sidebar declutter (issue #1465) — WorkspaceSwitcher's own collapse toggle
+   on `.sidebar-section-header`, same "own modifier class, not the shared
+   base" posture as `.source-control-header` (empty-states.css) — Devices'
+   and Tasks' own headers reuse the base class without a click handler, so
+   the pointer cursor/hover can't live there. */
+.ws-section-header {
+  cursor: pointer;
+}
+.ws-section-header:hover {
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+}
 
 /* U3 (audit finding — "nothing degrades gracefully past ~20 sessions") —
    the sidebar's search box + status chips. `position: sticky` keeps it

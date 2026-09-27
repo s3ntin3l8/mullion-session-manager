@@ -8,6 +8,7 @@ import { computeReorder } from "./reorder.js";
 import type { ReorderItem } from "./reorder.js";
 import type { Group, Session, Workspace } from "./api/index.js";
 import { extractSessionIds } from "./panelUtils.js";
+import { STORAGE_KEYS, readBool, writeBool } from "./lib/persistedState.js";
 import {
   CheckIcon,
   ChevronDownIcon,
@@ -125,6 +126,19 @@ export function WorkspaceSwitcher({ onSelectWorkspace }: WorkspaceSwitcherProps 
   const [addGroupOpen, setAddGroupOpen] = useState(false);
   const [dragging, setDragging] = useState<DragState | null>(null);
   const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
+  // Sidebar declutter (issue #1465) — collapses the whole section, same
+  // localStorage-backed boolean shape as App.tsx's own sidebarCollapsed.
+  // Read once at mount (not through the Zustand store — this is a per-
+  // browser UI preference with no backend field, same posture as
+  // Sidebar.tsx's own `crs.projectCollapsed`).
+  const [sectionCollapsed, setSectionCollapsed] = useState(() =>
+    readBool(STORAGE_KEYS.workspacesSectionCollapsed, false),
+  );
+  const toggleSectionCollapsed = () => {
+    const next = !sectionCollapsed;
+    setSectionCollapsed(next);
+    writeBool(STORAGE_KEYS.workspacesSectionCollapsed, next);
+  };
 
   const handleSelectWorkspace = (id: number) => {
     if (onSelectWorkspace) {
@@ -158,6 +172,22 @@ export function WorkspaceSwitcher({ onSelectWorkspace }: WorkspaceSwitcherProps 
   const ungrouped = workspaces
     .filter((w) => w.groupId === null)
     .sort((a, b) => a.position - b.position);
+
+  // Sidebar declutter (issue #1465) — collapsing the section hides every
+  // workspace's own attention/working dot; this rolls them up into one
+  // aggregate dot on the header itself, same "signal survives collapse"
+  // treatment ProjectHeader's own `project-attn-pill` gives a project's
+  // sessions. Attention outranks working, matching deriveWorkspaceLiveStatus's
+  // own per-workspace precedence.
+  const aggregateLiveStatus = useMemo<WorkspaceLiveStatus>(() => {
+    let working = false;
+    for (const w of workspaces) {
+      const status = deriveWorkspaceLiveStatus(sessionIdsByWorkspace.get(w.id), sessions);
+      if (status === "attention") return "attention";
+      if (status === "working") working = true;
+    }
+    return working ? "working" : null;
+  }, [workspaces, sessionIdsByWorkspace, sessions]);
 
   // dragTokenRef guards the deferred setDragging call below (see
   // startWorkspaceDrag): applying dragging state synchronously inside the
@@ -206,13 +236,52 @@ export function WorkspaceSwitcher({ onSelectWorkspace }: WorkspaceSwitcherProps 
 
   return (
     <div className="workspace-switcher">
-      <div className="sidebar-section-header">
+      {/* Sidebar declutter (issue #1465) — WORKSPACES gets the same
+        collapse chevron every other sidebar section (Devices, each
+        Project) already has, instead of always taking its ~5 rows of
+        space. P10 role="button"/tabIndex/Enter-Space/e.target guard
+        pattern, matching Sidebar.tsx's ProjectHeader — the nested "+" and
+        (while collapsed) attention/working dot already stop propagation or
+        carry no click handler, so the guard is only load-bearing for
+        keyboard activation of the nested "+" button. */}
+      <div
+        className="sidebar-section-header ws-section-header"
+        onClick={toggleSectionCollapsed}
+        role="button"
+        tabIndex={0}
+        aria-expanded={!sectionCollapsed}
+        aria-controls="workspaces-section-body"
+        onKeyDown={(e) => {
+          if (e.target !== e.currentTarget) return;
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            toggleSectionCollapsed();
+          }
+        }}
+      >
+        <ChevronDownIcon
+          size={12}
+          className={`ws-group-chevron${sectionCollapsed ? " collapsed" : ""}`}
+        />
         <span className="sidebar-section-title">Workspaces</span>
+        {/* Collapsing hides every workspace's own attention/working dot —
+          this rolls them up into one aggregate so the signal survives
+          collapse, same "signal survives collapse" treatment
+          ProjectHeader's own project-attn-pill gives a project's sessions. */}
+        {sectionCollapsed && aggregateLiveStatus === "attention" && (
+          <span className="workspace-attn-dot" title="A workspace has a session that needs input" />
+        )}
+        {sectionCollapsed && aggregateLiveStatus === "working" && (
+          <span className="workspace-working-dot" title="A workspace has a working session" />
+        )}
         <button
           className="toolbar-icon-btn"
           style={{ width: 22, height: 22 }}
           title="New workspace group"
-          onClick={() => setAddGroupOpen(true)}
+          onClick={(e) => {
+            e.stopPropagation();
+            setAddGroupOpen(true);
+          }}
         >
           <PlusIcon size={15} strokeLinecap="round" strokeWidth={1.9} />
         </button>
@@ -225,79 +294,85 @@ export function WorkspaceSwitcher({ onSelectWorkspace }: WorkspaceSwitcherProps 
         />
       )}
 
-      {sortedGroups.map((group) => (
-        <GroupSection
-          key={group.id}
-          group={group}
-          workspaces={workspaces
-            .filter((w) => w.groupId === group.id)
-            .sort((a, b) => a.position - b.position)}
-          sessions={sessions}
-          sessionIdsByWorkspace={sessionIdsByWorkspace}
-          activeWorkspaceId={displayActiveWorkspaceId}
-          onSelect={(id) => handleSelectWorkspace(id)}
-          onRename={(id, name) => void useDashboardStore.getState().renameWorkspace(id, name)}
-          onDelete={(id) => void useDashboardStore.getState().deleteWorkspace(id)}
-          onToggleCollapsed={() =>
-            void useDashboardStore.getState().updateGroup(group.id, { collapsed: !group.collapsed })
-          }
-          onEditGroup={(name, color) =>
-            void useDashboardStore.getState().updateGroup(group.id, { name, color })
-          }
-          onRenameGroup={(name) =>
-            void useDashboardStore.getState().updateGroup(group.id, { name })
-          }
-          onDeleteGroup={() => void useDashboardStore.getState().deleteGroup(group.id)}
-          dragCtx={dragCtx}
-          onHeaderDragOver={(e) => {
-            if (!dragCtx.dragging) return;
-            e.preventDefault();
-            dragCtx.setDropTarget({ mode: "workspace-assign", groupId: group.id });
-          }}
-          onHeaderDrop={(e) => {
-            if (!dragCtx.dragging) return;
-            e.preventDefault();
-            if (dragCtx.dropTarget?.mode === "workspace-assign") {
-              dragCtx.commitWorkspaceDrop(dragCtx.dropTarget.groupId, 0);
-            }
-            dragCtx.endDrag();
-          }}
-        />
-      ))}
+      {!sectionCollapsed && (
+        <div id="workspaces-section-body">
+          {sortedGroups.map((group) => (
+            <GroupSection
+              key={group.id}
+              group={group}
+              workspaces={workspaces
+                .filter((w) => w.groupId === group.id)
+                .sort((a, b) => a.position - b.position)}
+              sessions={sessions}
+              sessionIdsByWorkspace={sessionIdsByWorkspace}
+              activeWorkspaceId={displayActiveWorkspaceId}
+              onSelect={(id) => handleSelectWorkspace(id)}
+              onRename={(id, name) => void useDashboardStore.getState().renameWorkspace(id, name)}
+              onDelete={(id) => void useDashboardStore.getState().deleteWorkspace(id)}
+              onToggleCollapsed={() =>
+                void useDashboardStore
+                  .getState()
+                  .updateGroup(group.id, { collapsed: !group.collapsed })
+              }
+              onEditGroup={(name, color) =>
+                void useDashboardStore.getState().updateGroup(group.id, { name, color })
+              }
+              onRenameGroup={(name) =>
+                void useDashboardStore.getState().updateGroup(group.id, { name })
+              }
+              onDeleteGroup={() => void useDashboardStore.getState().deleteGroup(group.id)}
+              dragCtx={dragCtx}
+              onHeaderDragOver={(e) => {
+                if (!dragCtx.dragging) return;
+                e.preventDefault();
+                dragCtx.setDropTarget({ mode: "workspace-assign", groupId: group.id });
+              }}
+              onHeaderDrop={(e) => {
+                if (!dragCtx.dragging) return;
+                e.preventDefault();
+                if (dragCtx.dropTarget?.mode === "workspace-assign") {
+                  dragCtx.commitWorkspaceDrop(dragCtx.dropTarget.groupId, 0);
+                }
+                dragCtx.endDrag();
+              }}
+            />
+          ))}
 
-      <WorkspaceList
-        bucketGroupId={null}
-        items={ungrouped}
-        dragCtx={dragCtx}
-        activeWorkspaceId={displayActiveWorkspaceId}
-        sessions={sessions}
-        sessionIdsByWorkspace={sessionIdsByWorkspace}
-        onSelect={(id) => handleSelectWorkspace(id)}
-        onRename={(id, name) => void useDashboardStore.getState().renameWorkspace(id, name)}
-        onDelete={(id) => void useDashboardStore.getState().deleteWorkspace(id)}
-      />
-
-      <div style={{ padding: "4px 12px 10px" }}>
-        {showNewWorkspace ? (
-          <NewWorkspaceForm
-            onCreated={(workspace) => {
-              setShowNewWorkspace(false);
-              handleSelectWorkspace(workspace.id);
-            }}
-            onCancel={() => setShowNewWorkspace(false)}
-            createWorkspace={(name) => useDashboardStore.getState().createWorkspace(name)}
+          <WorkspaceList
+            bucketGroupId={null}
+            items={ungrouped}
+            dragCtx={dragCtx}
+            activeWorkspaceId={displayActiveWorkspaceId}
+            sessions={sessions}
+            sessionIdsByWorkspace={sessionIdsByWorkspace}
+            onSelect={(id) => handleSelectWorkspace(id)}
+            onRename={(id, name) => void useDashboardStore.getState().renameWorkspace(id, name)}
+            onDelete={(id) => void useDashboardStore.getState().deleteWorkspace(id)}
           />
-        ) : (
-          <button
-            className="discover-header"
-            style={{ border: "1px dashed var(--border)", width: "100%" }}
-            onClick={() => setShowNewWorkspace(true)}
-          >
-            <PlusIcon size={13} strokeLinecap="round" strokeWidth={2.2} />
-            <span className="discover-title">New workspace</span>
-          </button>
-        )}
-      </div>
+
+          <div style={{ padding: "4px 12px 10px" }}>
+            {showNewWorkspace ? (
+              <NewWorkspaceForm
+                onCreated={(workspace) => {
+                  setShowNewWorkspace(false);
+                  handleSelectWorkspace(workspace.id);
+                }}
+                onCancel={() => setShowNewWorkspace(false)}
+                createWorkspace={(name) => useDashboardStore.getState().createWorkspace(name)}
+              />
+            ) : (
+              <button
+                className="discover-header"
+                style={{ border: "1px dashed var(--border)", width: "100%" }}
+                onClick={() => setShowNewWorkspace(true)}
+              >
+                <PlusIcon size={13} strokeLinecap="round" strokeWidth={2.2} />
+                <span className="discover-title">New workspace</span>
+              </button>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

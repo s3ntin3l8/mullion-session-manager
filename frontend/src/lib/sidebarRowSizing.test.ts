@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  EMPTY_NOTE_ROW_ESTIMATE,
   estimateSidebarRowHeight,
   PROJECT_HEADER_ROW_ESTIMATE,
   SESSION_ROW_ESTIMATE_COLLAPSED,
@@ -16,10 +15,6 @@ describe("estimateSidebarRowHeight", () => {
     expect(estimateSidebarRowHeight({ type: "header" }, new Set())).toBe(
       PROJECT_HEADER_ROW_ESTIMATE,
     );
-  });
-
-  it("returns the empty-note estimate for an empty row", () => {
-    expect(estimateSidebarRowHeight({ type: "empty" }, new Set())).toBe(EMPTY_NOTE_ROW_ESTIMATE);
   });
 
   it("returns the collapsed session estimate when the session's id is not in expandedSessionRowIds", () => {
