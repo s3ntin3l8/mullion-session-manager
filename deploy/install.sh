@@ -257,6 +257,19 @@ else
   echo "==> mullion CLI not present in this release (dist/cli/mullion.mjs missing) — skipping ~/.local/bin/mullion link"
 fi
 
+# Hermes review, PR #529 (fifth round): src/app.ts checks `.trim() !== ""`,
+# not just non-empty — a whitespace-only value (e.g. a stray space from a
+# templating bug) would pass a plain `[ -n ]` check but still fail app.ts's
+# own check at boot. Hoisted above the role branches below (was previously
+# defined only inside the agent branch) — issue #1458 needs the same check
+# for the primary branch's own auth-completeness warning.
+is_blank() {
+  local v="$1"
+  while [[ "$v" == [[:space:]]* ]]; do v="${v#[[:space:]]}"; done
+  while [[ "$v" == *[[:space:]] ]]; do v="${v%[[:space:]]}"; done
+  [ -z "$v" ]
+}
+
 if [ -f "$MULLION_HOME/.env" ]; then
   # Role-mismatch already checked and enforced right after $MULLION_HOME
   # was resolved, above — before any expensive/mutating step ran.
@@ -292,9 +305,39 @@ MULLION_ROLE=primary
 # later needs no reinstall. See deploy/README.md's Playwright prerequisites.
 PLAYWRIGHT_BROWSERS_PATH=$MULLION_HOME/browsers
 BROWSER_DATA_DIR=$MULLION_HOME/data/browsers
+
+# Issue #603 / #1458 — src/app.ts refuses to boot a primary with none of
+# MULLION_TRUST_GATEWAY/MULLION_AUTH_TOKEN/MULLION_OIDC_* configured. Pick
+# ONE. See deploy/README.md's reverse-proxy gateway section / docs/auth.md.
 EOF
   )
+  # Issue #1458 — mirrors the agent branch's own MULLION_AGENT_* passthrough
+  # below: set ONE of these two env vars before running this script (e.g.
+  # from an Ansible role) to configure auth non-interactively instead of
+  # hitting the WARNING further down. MULLION_INSTALL_AUTH_TOKEN goes
+  # through printf, not the interpolated heredoc above, for the same
+  # shell-injection reason the agent branch's MULLION_AGENT_* values do
+  # (Hermes review, PR #529, fifth round) — a caller-supplied token
+  # containing `$`/`` ` ``/`\` must never be shell-expanded at write time.
+  # OIDC isn't offered here: all four MULLION_OIDC_* keys are required
+  # together (oidc.ts's isOidcEnabled) and typically need a real, already-
+  # provisioned client — better configured by hand or via Settings after
+  # first boot than half-wired through install-time flags.
+  if [ "${MULLION_INSTALL_TRUST_GATEWAY:-}" = "true" ]; then
+    printf 'MULLION_TRUST_GATEWAY=true\n' >>"$MULLION_HOME/.env"
+  elif ! is_blank "${MULLION_INSTALL_AUTH_TOKEN:-}"; then
+    printf 'MULLION_AUTH_TOKEN=%s\n' "$MULLION_INSTALL_AUTH_TOKEN" >>"$MULLION_HOME/.env"
+  fi
   chmod 600 "$MULLION_HOME/.env"
+  # Issue #1458 — without one of the two paths above (or a subsequent hand
+  # edit), this primary crash-loops under systemd (`enable --now` below
+  # starts a unit that immediately fails, every ~2s, per src/app.ts's #603
+  # boot guard) instead of install.sh itself catching it up front — same
+  # "warn here so journald spam isn't the first sign something's missing"
+  # posture as the agent branch's own credential-completeness warning.
+  if [ "${MULLION_INSTALL_TRUST_GATEWAY:-}" != "true" ] && is_blank "${MULLION_INSTALL_AUTH_TOKEN:-}"; then
+    echo "WARNING: this primary has no auth configured in the generated .env — neither MULLION_TRUST_GATEWAY=true (if a reverse-proxy gateway like Traefik+Authentik already authenticates every request, see deploy/README.md) nor MULLION_AUTH_TOKEN (a shared secret, issue #19) nor MULLION_OIDC_* (issue #30, all four required together — see docs/auth.md) is set. It will fail to boot at all (src/app.ts's #603 fail-closed check) and crash-loop under systemd until one is configured. Set MULLION_INSTALL_TRUST_GATEWAY=true or MULLION_INSTALL_AUTH_TOKEN before running this script, or edit \$MULLION_HOME/.env by hand." >&2
+  fi
 else
   echo "==> Writing $MULLION_HOME/.env (agent)"
   # Issue #245 / roadmap 7.1 + 7.7 — deliberately NO DATABASE_URL,
@@ -371,18 +414,9 @@ EOF
   # not just "both vars empty" — MULLION_AGENT_ENROLLMENT_TOKEN alone,
   # with MULLION_AGENT_PRIMARY_URL forgotten, previously passed this check
   # silently while app.ts's own boot-time check still refuses to start.
-  # Hermes review, PR #529 (fifth round): src/app.ts checks
-  # `.trim() !== ""`, not just non-empty — a whitespace-only value (e.g.
-  # a stray space from a templating bug) would pass a plain `[ -n ]` check
-  # here but still fail app.ts's own check at boot. is_blank mirrors
-  # .trim() === "" using the same bash-native whitespace strip as
-  # EXISTING_ROLE above (no sed, no dialect ambiguity).
-  is_blank() {
-    local v="$1"
-    while [[ "$v" == [[:space:]]* ]]; do v="${v#[[:space:]]}"; done
-    while [[ "$v" == *[[:space:]] ]]; do v="${v%[[:space:]]}"; done
-    [ -z "$v" ]
-  }
+  # is_blank (hoisted above the role branches, issue #1458) mirrors
+  # src/app.ts's `.trim() === ""` check using the same bash-native
+  # whitespace strip as EXISTING_ROLE above (no sed, no dialect ambiguity).
   HAS_MANUAL_TOKEN=false
   is_blank "${MULLION_AGENT_TOKEN:-}" || HAS_MANUAL_TOKEN=true
   HAS_ENROLLMENT_PATH=false
