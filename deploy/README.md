@@ -518,9 +518,12 @@ cd mullion-session-manager
 # first try, instead of crash-looping under systemd until you notice the
 # WARNING install.sh prints and fix it by hand:
 MULLION_INSTALL_TRUST_GATEWAY=true ./deploy/install.sh ~/opt/mullion   # if the Traefik+Authentik config below is already in front
-# — or, for a bare deployment with no gateway, a real credential instead:
-#   MULLION_INSTALL_AUTH_TOKEN="$(openssl rand -hex 32)" ./deploy/install.sh ~/opt/mullion
-#   echo 'MULLION_SESSION_SECRET='"$(openssl rand -hex 32)" >> ~/opt/mullion/.env
+# — or, for a bare deployment with no gateway, a real credential pair
+# instead (BOTH required together — src/app.ts refuses to boot with only
+# one set):
+#   MULLION_INSTALL_AUTH_TOKEN="$(openssl rand -hex 32)" \
+#   MULLION_INSTALL_SESSION_SECRET="$(openssl rand -hex 32)" \
+#   ./deploy/install.sh ~/opt/mullion
 systemctl --user status mullion.service
 
 # 2. Traefik dynamic config (still manual — see "Before installing anything")
@@ -530,11 +533,15 @@ cp deploy/traefik-dynamic.yml <your-traefik-dynamic-config-dir>/
 # depending on your config) — no Traefik restart should be needed.
 ```
 
-Ran the plain `./deploy/install.sh ~/opt/mullion` with neither variable set
-anyway? install.sh prints a `WARNING:` naming exactly what's missing instead
-of silently writing a `.env` guaranteed to crash-loop — append one of the
-two lines it suggests to the generated `.env`, then `systemctl --user
-restart mullion.service`.
+Ran the plain `./deploy/install.sh ~/opt/mullion` with none of those set
+anyway? On a **fresh** `$MULLION_HOME`, install.sh prints a `WARNING:`
+naming exactly what's missing instead of silently writing a `.env`
+guaranteed to crash-loop — append the lines it suggests to the generated
+`.env`, then `systemctl --user restart mullion.service`. That warning only
+fires when install.sh actually generates the file: re-running it against an
+**already-installed** host (an existing `.env`) leaves that file untouched
+with no warning at all, so setting these env vars on a re-run does nothing
+— edit `~/opt/mullion/.env` by hand in that case instead.
 
 After this, updates go through the in-app "Update now" button (see "Layout
 and updates" above), not by re-running `install.sh` or `git pull`ing this

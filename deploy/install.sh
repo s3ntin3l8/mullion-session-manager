@@ -312,12 +312,13 @@ BROWSER_DATA_DIR=$MULLION_HOME/data/browsers
 EOF
   )
   # Issue #1458 — mirrors the agent branch's own MULLION_AGENT_* passthrough
-  # below: set ONE of these two env vars before running this script (e.g.
-  # from an Ansible role) to configure auth non-interactively instead of
-  # hitting the WARNING further down. MULLION_INSTALL_AUTH_TOKEN goes
-  # through printf, not the interpolated heredoc above, for the same
-  # shell-injection reason the agent branch's MULLION_AGENT_* values do
-  # (Hermes review, PR #529, fifth round) — a caller-supplied token
+  # below: set MULLION_INSTALL_TRUST_GATEWAY, or BOTH
+  # MULLION_INSTALL_AUTH_TOKEN and MULLION_INSTALL_SESSION_SECRET, before
+  # running this script (e.g. from an Ansible role) to configure auth
+  # non-interactively instead of hitting the WARNING further down. Both
+  # secrets go through printf, not the interpolated heredoc above, for the
+  # same shell-injection reason the agent branch's MULLION_AGENT_* values do
+  # (Hermes review, PR #529, fifth round) — a caller-supplied value
   # containing `$`/`` ` ``/`\` must never be shell-expanded at write time.
   # OIDC isn't offered here: all four MULLION_OIDC_* keys are required
   # together (oidc.ts's isOidcEnabled) and typically need a real, already-
@@ -326,17 +327,34 @@ EOF
   if [ "${MULLION_INSTALL_TRUST_GATEWAY:-}" = "true" ]; then
     printf 'MULLION_TRUST_GATEWAY=true\n' >>"$MULLION_HOME/.env"
   elif ! is_blank "${MULLION_INSTALL_AUTH_TOKEN:-}"; then
+    # Hermes review — src/app.ts:130-138 refuses to boot with
+    # MULLION_AUTH_TOKEN set and MULLION_SESSION_SECRET blank (nothing to
+    # sign a session cookie with); MULLION_INSTALL_AUTH_TOKEN alone used to
+    # trade the no-auth-at-all crash-loop for this one instead. Both or
+    # neither.
     printf 'MULLION_AUTH_TOKEN=%s\n' "$MULLION_INSTALL_AUTH_TOKEN" >>"$MULLION_HOME/.env"
+    printf 'MULLION_SESSION_SECRET=%s\n' "${MULLION_INSTALL_SESSION_SECRET:-}" \
+      >>"$MULLION_HOME/.env"
   fi
   chmod 600 "$MULLION_HOME/.env"
-  # Issue #1458 — without one of the two paths above (or a subsequent hand
-  # edit), this primary crash-loops under systemd (`enable --now` below
-  # starts a unit that immediately fails, every ~2s, per src/app.ts's #603
-  # boot guard) instead of install.sh itself catching it up front — same
-  # "warn here so journald spam isn't the first sign something's missing"
-  # posture as the agent branch's own credential-completeness warning.
-  if [ "${MULLION_INSTALL_TRUST_GATEWAY:-}" != "true" ] && is_blank "${MULLION_INSTALL_AUTH_TOKEN:-}"; then
-    echo "WARNING: this primary has no auth configured in the generated .env — neither MULLION_TRUST_GATEWAY=true (if a reverse-proxy gateway like Traefik+Authentik already authenticates every request, see deploy/README.md) nor MULLION_AUTH_TOKEN (a shared secret, issue #19) nor MULLION_OIDC_* (issue #30, all four required together — see docs/auth.md) is set. It will fail to boot at all (src/app.ts's #603 fail-closed check) and crash-loop under systemd until one is configured. Set MULLION_INSTALL_TRUST_GATEWAY=true or MULLION_INSTALL_AUTH_TOKEN before running this script, or edit \$MULLION_HOME/.env by hand." >&2
+  # Issue #1458 — mirrors app.ts's ACTUAL boot condition (same "must mirror
+  # the real check, not just 'is anything set'" lesson as the agent
+  # branch's own HAS_MANUAL_TOKEN/HAS_ENROLLMENT_PATH check above, Hermes
+  # review PR #529 fourth round): AUTH_TOKEN with no SESSION_SECRET is
+  # still a fail-closed boot, not a configured one, so it must not silently
+  # suppress this warning. Without one of the two complete paths above (or
+  # a subsequent hand edit), this primary crash-loops under systemd
+  # (`enable --now` below starts a unit that immediately fails, every ~2s,
+  # per src/app.ts's #603/#19 boot guards) instead of install.sh itself
+  # catching it up front — same "warn here so journald spam isn't the
+  # first sign something's missing" posture as the agent branch's own
+  # credential-completeness warning. Only fires on a FRESH .env — the
+  # existing-.env branch above leaves a pre-existing file untouched with no
+  # warning at all, so re-running install.sh with these vars set against an
+  # already-installed host does nothing; edit that file by hand instead.
+  if [ "${MULLION_INSTALL_TRUST_GATEWAY:-}" != "true" ] &&
+    { is_blank "${MULLION_INSTALL_AUTH_TOKEN:-}" || is_blank "${MULLION_INSTALL_SESSION_SECRET:-}"; }; then
+    echo "WARNING: this primary has no auth configured in the generated .env — neither MULLION_TRUST_GATEWAY=true (if a reverse-proxy gateway like Traefik+Authentik already authenticates every request, see deploy/README.md) nor both MULLION_AUTH_TOKEN and MULLION_SESSION_SECRET (a shared secret pair, issues #19/#30 — required TOGETHER, one without the other still refuses to boot) nor MULLION_OIDC_* (all four required together — see docs/auth.md, or configure via Settings after first boot) is set. It will fail to boot at all (src/app.ts's #603 fail-closed check) and crash-loop under systemd until one full path is configured. Set MULLION_INSTALL_TRUST_GATEWAY=true, or both MULLION_INSTALL_AUTH_TOKEN and MULLION_INSTALL_SESSION_SECRET, before running this script, or edit \$MULLION_HOME/.env by hand." >&2
   fi
 else
   echo "==> Writing $MULLION_HOME/.env (agent)"
