@@ -141,7 +141,7 @@ hand a shared enrollment secret to automation:
 3. **Start it.** It boots to `/health`/`/ready` plus the internal API; there
    is no UI to open on the agent itself — you never point a browser at it.
 4. **Register it on the primary**: open the primary's dashboard →
-   **Settings → Hosts & SSH bridges → Add host**, and fill in:
+   **Settings → Hosts & SSH bridges → Add a host**, and fill in:
    - **Name** — any label (e.g. `home-server`).
    - **Base URL** — where the agent is reachable, e.g.
      `http://192.168.1.20:4000`.

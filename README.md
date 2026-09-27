@@ -33,12 +33,14 @@ CI/CD. Frontend: React + [dockview](https://dockview.dev/) (tiled splits/tabs) a
   signals (exited detection, activity/attention) so you always know what's
   running and what needs you.
 - **Per-CLI default model.** Settings → Models sets a default model for each
-  agent CLI independently — one "Default model" for Claude Code, Codex, and
-  agy; opencode gets three roles (implementer/reviewer/small model) — added
-  as a `--model` flag to new sessions and Task Master workers. A task's own
-  `Model:` directive (`Reviewer-Model:`/`SmallModel:` for opencode) overrides
-  the default; a launcher command that already passes its own `--model` is
-  left alone.
+  agent CLI independently. Claude Code, Codex, and agy each get one "Default
+  model," added as a `--model` flag to new sessions and Task Master workers
+  (a launcher command that already passes its own `--model` is left alone,
+  and a task's own `Model:` directive overrides the default). opencode
+  instead gets three roles — implementer, reviewer, and a small model for
+  lightweight jobs like generating titles — covering Task Master's
+  implementer/reviewer sessions and small-model jobs (a task's own
+  `Reviewer-Model:`/`SmallModel:` directive overrides those).
 - **Settings, reorganized.** Settings is grouped into Personal/Sessions &
   agents/Workspace/Connections/System sections, and several values that used
   to be env-var-only are now editable from the UI at runtime (GitHub polling

@@ -206,10 +206,13 @@ individual issue, only a repository):
   red-required-CI-return gate (`#755`) depends on exactly that lookup. On any
   repo where this App is configured and installed — `resolveGitHubToken`
   tries the App's token before ever falling back to the PAT/OAuth token —
-  `#755` is silently a no-op with no operator-side fix; only a code change
-  (widening this permission set) fixes it. `#1360`/`#1361` instead added a
-  throttled reconcile-log warning so the condition is at least visible in
-  logs. See [`tasks.md`](tasks.md#auto-approve) for the full mechanics.
+  `#755` is a no-op, surfaced only as a throttled reconcile-log warning
+  since `#1360`/`#1361` (not on the task itself). Granting the App broader
+  permissions on GitHub doesn't help: `READ_PERMISSIONS` in `github-app.ts`
+  is what actually gets requested when the token is minted, regardless of
+  what the App is allowed to hold — only widening that constant (a code
+  change) fixes it. See [`tasks.md`](tasks.md#auto-approve) for the full
+  mechanics.
 - **dispatch** (#744) — Actions: write, Metadata — used only for the
   release-please "Run" trigger (`POST .../actions/workflows/:id/dispatches`),
   which needs `actions: write`, a permission neither of the other two sets
