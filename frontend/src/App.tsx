@@ -902,6 +902,8 @@ export function App() {
         // without ever clearing its unread badge, unlike every other "tap a
         // notification" path (the bell rows, the phone sheet).
         useDashboardStore.getState().markSessionRead(session.id);
+        // Issue #1430 — a push click is a real, explicit open.
+        useDashboardStore.getState().ackAttention(session.id);
         onOpenSessionRef.current(session);
       }
     };

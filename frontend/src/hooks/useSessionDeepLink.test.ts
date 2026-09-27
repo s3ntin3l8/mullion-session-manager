@@ -22,9 +22,18 @@ const layoutMode = "desktop";
 // useDashboardStore.getState().markSessionRead(...) before onOpenSession,
 // so every test in this file (not just the composed one above) needs it.
 const markSessionRead = vi.fn();
+// Issue #1430 — a deep-link tap is an explicit open; calls ackAttention
+// alongside markSessionRead.
+const ackAttention = vi.fn();
 
 function storeState() {
-  return { sessions: mockSessions, saveWorkspaceLayout, settings: { layoutMode }, markSessionRead };
+  return {
+    sessions: mockSessions,
+    saveWorkspaceLayout,
+    settings: { layoutMode },
+    markSessionRead,
+    ackAttention,
+  };
 }
 
 vi.mock("../store/index.js", () => {
@@ -72,6 +81,7 @@ beforeEach(() => {
   mockSessions = [];
   saveWorkspaceLayout.mockClear();
   markSessionRead.mockClear();
+  ackAttention.mockClear();
 });
 
 afterEach(() => {
@@ -215,6 +225,8 @@ describe("useSessionDeepLink", () => {
     // Issue #1429 — a deep-linked session now gets its unread cleared too,
     // the same "tap a notification" semantics every other opener uses.
     expect(markSessionRead).toHaveBeenCalledWith(7);
+    // Issue #1430 — and acknowledges attention too.
+    expect(ackAttention).toHaveBeenCalledWith(7);
   });
 
   it("does not open a killed session, but still clears the query param and never retries", () => {

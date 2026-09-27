@@ -1147,6 +1147,39 @@ export async function sessionsRoute(app: FastifyInstance) {
     },
   );
 
+  // Issue #1430 — the explicit "acknowledge" action every read call site
+  // (NotificationBell's row open/Mark read/Read all/Dismiss, phone sheet
+  // equivalents) fires alongside markSessionRead/markEventSeen. Local-only
+  // (app.pty directly, not resolveBackend) — same posture as
+  // acceptDevServerPort/dismissDevServerPort just above, which are also
+  // local-only despite living in this same "per-session action route"
+  // family; a remote-hosted session's attention isn't acknowledgeable from
+  // here yet — filed as issue #1472 rather than silently descoped.
+  app.post<{ Params: { id: string } }>(
+    "/api/sessions/:id/attention/ack",
+    async (request, reply) => {
+      const sessionId = Number(request.params.id);
+      if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
+
+      const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+      if (!row) return reply.notFound();
+
+      const acked = app.pty.acknowledgeAttention(String(sessionId));
+      if (!acked) {
+        // Either a blocking kind is still pending (its own dedicated
+        // resolve route — review-gate/promote/permission/plan/elicitation-
+        // question — is what this session actually needs), or this
+        // process doesn't track the session at all (a remote-hosted
+        // session, or one this process's PtyManager never spawned) — both
+        // collapse to the same "can't ack right now" response; the route
+        // has no way to distinguish them without also implementing
+        // multi-host dispatch (issue #1472).
+        return reply.conflict("Attention can't be acknowledged for this session right now");
+      }
+      reply.code(204);
+    },
+  );
+
   // Issue #68: a pasted/attached image can't travel the terminal's own byte
   // stream (no Sixel/Kitty/iTerm2 support, and the CLI in the PTY couldn't
   // read inline image bytes off stdin even if it could parse them) — this

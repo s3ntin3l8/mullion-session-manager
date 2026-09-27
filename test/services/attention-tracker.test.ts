@@ -187,6 +187,90 @@ describe("AttentionTracker.clearAttention", () => {
   });
 });
 
+describe("AttentionTracker.acknowledgeAttention (issue #1430)", () => {
+  it("clears a non-blocking confirmed kind and returns true", () => {
+    const { tracker, emitEvent } = makeTracker();
+    tracker.emitAttentionSignalWithExtras("toolFailure", { title: "Tool failed" });
+    expect(tracker.state.state).toBe("attention");
+    emitEvent.mockClear();
+
+    expect(tracker.acknowledgeAttention()).toBe(true);
+
+    expect(tracker.state.state).toBe("idle");
+    expect(tracker.state.confirmedKind).toBeNull();
+  });
+
+  it("clears hookNotification and returns true — output-immune, but not ack-blocking", () => {
+    const { tracker } = makeTracker();
+    tracker.emitAttentionSignalWithExtras("hookNotification", { title: "hi", body: "" });
+    expect(tracker.state.confirmedKind).toBe("hookNotification");
+
+    expect(tracker.acknowledgeAttention()).toBe(true);
+
+    expect(tracker.state.state).toBe("idle");
+  });
+
+  it.each([
+    "reviewGate",
+    "promoteRequest",
+    "permissionRequest",
+    "planReady",
+    "elicitation",
+    "question",
+  ] as const)(
+    "refuses to clear a pending %s — returns false and leaves state untouched",
+    (kind) => {
+      const { tracker, emitEvent } = makeTracker();
+      tracker.emitAttentionSignalWithExtras(kind, {});
+      expect(tracker.state.confirmedKind).toBe(kind);
+      emitEvent.mockClear();
+
+      expect(tracker.acknowledgeAttention()).toBe(false);
+
+      expect(tracker.state.state).toBe("attention");
+      expect(tracker.state.confirmedKind).toBe(kind);
+      expect(emitEvent).not.toHaveBeenCalled();
+    },
+  );
+
+  it("clears the finished latch (lastTurnEndedAt/turnEndPingSent) even with nothing confirmed", () => {
+    const { tracker, emitEvent } = makeTracker();
+    tracker.lastTurnEndedAt = Date.now();
+    tracker.turnEndPingSent = true;
+    emitEvent.mockClear();
+
+    expect(tracker.acknowledgeAttention()).toBe(true);
+
+    expect(tracker.lastTurnEndedAt).toBeNull();
+    expect(tracker.turnEndPingSent).toBe(false);
+    // The finished latch alone produces no `emit` entry from
+    // clearAttention()'s own transition (nothing was confirmed) — this is
+    // exactly the case acknowledgeAttention's own unconditional emit
+    // exists for; otherwise no connected client would ever hear the
+    // "Finished" row just got cleared.
+    expect(emitEvent).toHaveBeenCalledWith("attention", { attention: false });
+  });
+
+  it("is a harmless no-op (still returns true) when there's nothing to clear at all", () => {
+    const { tracker } = makeTracker();
+    expect(tracker.acknowledgeAttention()).toBe(true);
+    expect(tracker.state.state).toBe("idle");
+  });
+
+  it("a refusal never touches the finished latch either — a fully atomic no-op", () => {
+    const { tracker } = makeTracker();
+    tracker.emitAttentionSignalWithExtras("reviewGate", {});
+    tracker.lastTurnEndedAt = Date.now();
+    tracker.turnEndPingSent = true;
+    const before = tracker.lastTurnEndedAt;
+
+    expect(tracker.acknowledgeAttention()).toBe(false);
+
+    expect(tracker.lastTurnEndedAt).toBe(before);
+    expect(tracker.turnEndPingSent).toBe(true);
+  });
+});
+
 describe("AttentionTracker.setBackgroundTasks", () => {
   it("stamps backgroundTasksAt to now when outstanding tasks remain", () => {
     const { tracker } = makeTracker();

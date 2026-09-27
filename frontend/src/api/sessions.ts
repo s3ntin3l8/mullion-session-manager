@@ -149,6 +149,16 @@ export const sessionsApi = {
       body: JSON.stringify({ port }),
     }),
 
+  // Issue #1430 — acknowledges (clears) this session's non-blocking
+  // attention, called alongside every explicit read action (row open, Mark
+  // read, Read all, Dismiss — see store/slices/events.ts's ackAttention
+  // action for the exact call sites). A 409 (a blocking kind is still
+  // pending — its own dedicated resolve route is what's actually needed)
+  // is an expected, silent outcome here, not a real failure — the caller
+  // treats this as fire-and-forget either way.
+  ackAttention: (id: number) =>
+    request<void>(`/api/sessions/${id}/attention/ack`, { method: "POST" }),
+
   // Issue #68: uploads a pasted/attached image (Blob straight off the
   // clipboard or a file input — never re-encoded) so the backend can write
   // it under this session's own cwd and hand back the path to inject into

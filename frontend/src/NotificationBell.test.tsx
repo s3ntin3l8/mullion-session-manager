@@ -56,6 +56,12 @@ const dismissEvents = vi.fn((sessionId: number, seqs: number[]) => {
   dismissedEventKeys = next;
 });
 
+// Issue #1430 — a bare spy (no assumed effect on any local mock state,
+// unlike markEventSeen/dismissEvents above): tests only assert on whether
+// and with what sessionId it was called, mirroring the real store action's
+// own fire-and-forget-to-the-server posture.
+const ackAttention = vi.fn();
+
 function storeState() {
   return {
     theme: "dark",
@@ -67,6 +73,7 @@ function storeState() {
     markEventSeen,
     markSessionRead,
     dismissEvents,
+    ackAttention,
     mutedSessionIds: [],
     toggleSessionMute: vi.fn(),
   };
@@ -250,6 +257,7 @@ beforeEach(() => {
   markEventSeen.mockClear();
   markSessionRead.mockClear();
   dismissEvents.mockClear();
+  ackAttention.mockClear();
   resolveReviewGate.mockClear();
   resolveReviewGate.mockResolvedValue(undefined);
   acceptDevServerPort.mockClear();
@@ -494,6 +502,8 @@ describe("NotificationBell", () => {
     // Rows render newest-first — the first "Mark read" button belongs to seq 2.
     await userEvent.click(markReadButtons[0]);
     expect(markEventSeen).toHaveBeenCalledWith(1, 2);
+    // Issue #1430 — "Mark read" is an explicit read action.
+    expect(ackAttention).toHaveBeenCalledWith(1);
   });
 
   it("dismiss removes the event from the feed and it does not resurface on a later render", async () => {
@@ -507,6 +517,8 @@ describe("NotificationBell", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
     expect(dismissEvents).toHaveBeenCalledWith(1, [1]);
+    // Issue #1430 — "Dismiss" is an explicit read action.
+    expect(ackAttention).toHaveBeenCalledWith(1);
     first.unmount();
 
     // Simulate the dismissal actually landing in the store (the mock above
@@ -551,6 +563,8 @@ describe("NotificationBell", () => {
     await openPanel();
     await userEvent.click(screen.getByRole("button", { name: "Mark all read" }));
     expect(markEventSeen).toHaveBeenCalledWith(1, 2);
+    // Issue #1430 — "Mark all read" is an explicit read action.
+    expect(ackAttention).toHaveBeenCalledWith(1);
   });
 
   // Issue #1429 — one click destination everywhere (the phone sheet, push,
@@ -561,6 +575,8 @@ describe("NotificationBell", () => {
     await userEvent.click(screen.getByText("Bell"));
     expect(onOpenSession).toHaveBeenCalledWith(sessions[0]);
     expect(markSessionRead).toHaveBeenCalledWith(1);
+    // Issue #1430 — opening the row is an explicit read action.
+    expect(ackAttention).toHaveBeenCalledWith(1);
     expect(screen.queryByText("Bell")).not.toBeInTheDocument();
   });
 
@@ -1206,6 +1222,8 @@ describe("NotificationBell phone sheet", () => {
     expect(onOpenTimeline).not.toHaveBeenCalled();
     // Cursor advances to the session's true latest seq (not just this row's).
     expect(markEventSeen).toHaveBeenCalledWith(1, 7);
+    // Issue #1430 — tapping the row is an explicit read action.
+    expect(ackAttention).toHaveBeenCalledWith(1);
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
@@ -1233,6 +1251,9 @@ describe("NotificationBell phone sheet", () => {
     await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
     expect(dismissEvents).toHaveBeenCalledWith(1, [4]);
     expect(onOpenSession).not.toHaveBeenCalled();
+    // Issue #1430 — both "Mark read" and "Dismiss" are explicit read actions.
+    expect(ackAttention).toHaveBeenCalledWith(1);
+    expect(ackAttention).toHaveBeenCalledTimes(2);
   });
 
   it("Read all only marks the sessions currently shown", async () => {
@@ -1250,6 +1271,10 @@ describe("NotificationBell phone sheet", () => {
     await userEvent.click(screen.getByRole("button", { name: "Read all" }));
     expect(markEventSeen).toHaveBeenCalledWith(1, 5);
     expect(markEventSeen).not.toHaveBeenCalledWith(2, expect.anything());
+    // Issue #1430 — "Read all" is an explicit read action, scoped the same
+    // way markSessionRead already is (only the currently-shown sessions).
+    expect(ackAttention).toHaveBeenCalledWith(1);
+    expect(ackAttention).not.toHaveBeenCalledWith(2);
   });
 
   it("approves a pending gate inline from the sheet", async () => {

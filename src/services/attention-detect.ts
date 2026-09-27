@@ -236,7 +236,9 @@ export const ATTENTION_CONFIRM_MS: Record<AttentionSignalKind, number> = {
 // agy have) and the byte-parsed kinds (`bell`/`notification`/`titleIdle`/
 // `altScreenExit`/`silence`), all of which stay output-clearable exactly as
 // before — see advanceAttention's "attention"+"output" case below.
-const OUTPUT_IMMUNE_KINDS = new Set<AttentionSignalKind>([
+// Exported (only) so ACK_BLOCKING_KINDS below can derive from it rather than
+// duplicating the list — every other reader still stays inside this file.
+export const OUTPUT_IMMUNE_KINDS = new Set<AttentionSignalKind>([
   "hookNotification",
   "reviewGate",
   "promoteRequest",
@@ -251,6 +253,39 @@ const OUTPUT_IMMUNE_KINDS = new Set<AttentionSignalKind>([
   // it can proceed.
   "question",
 ]);
+
+// Issue #1430 — the subset of OUTPUT_IMMUNE_KINDS a generic "acknowledge"
+// action (AttentionTracker.acknowledgeAttention, routes/sessions.ts's
+// POST .../attention/ack) still refuses to clear: these six are genuinely
+// blocked pending a human DECISION with their own dedicated resolve route
+// (review-gate, promote, permission, plan, elicitation/question) — clearing
+// them via a generic ack would silently discard that requirement instead of
+// routing the user to the actual decision. `hookNotification` is
+// deliberately EXCLUDED here even though it's also output-immune: it's
+// immune to a same-session OUTPUT chunk clearing it (so a cosmetic terminal
+// repaint — a resize/selection SIGWINCH redraw — can't silently dismiss it),
+// but a user's own explicit acknowledge action is exactly the kind of
+// authoritative signal that should still be able to clear it — unlike the
+// other six, there's no dedicated "resolve hookNotification" route for an
+// ack to be pre-empting.
+//
+// Self-review fix — this set alone is NOT the primary "still blocked" gate:
+// Session.acknowledgeAttention (pty-manager.ts) checks the six real
+// per-decision latches (gateState/promoteState/permissionState/planState/
+// elicitationState/questionState) FIRST, before ever delegating down to
+// AttentionTracker.acknowledgeAttention, which is what this set guards.
+// Those latches are the actual, non-debounced source of truth (same fields
+// session-status.ts's own deriveSessionStatus reads) — the attention
+// machine's own confirmedKind (a single, debounced slot) can disagree with
+// them in two real ways: a blocking kind silently settling in the
+// tracker's own deferred queue while a DIFFERENT kind is the currently
+// confirmed one, or moreAuthoritativeKind's supersession orphaning an
+// older confirmed kind's own still-pending latch. This set (and the
+// AttentionTracker-level check it guards) stays as defense-in-depth, not
+// the sole gate.
+export const ACK_BLOCKING_KINDS = new Set<AttentionSignalKind>(
+  [...OUTPUT_IMMUNE_KINDS].filter((kind) => kind !== "hookNotification"),
+);
 
 // Fix: sticky needs_input — deliberately excludes `toolFailure`/`apiError`.
 // A failed tool call or an API error the agent is actively recovering from

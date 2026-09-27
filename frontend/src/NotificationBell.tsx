@@ -393,6 +393,7 @@ export function NotificationBell({
   const markEventSeen = useDashboardStore((s) => s.markEventSeen);
   const markSessionRead = useDashboardStore((s) => s.markSessionRead);
   const dismissEvents = useDashboardStore((s) => s.dismissEvents);
+  const ackAttention = useDashboardStore((s) => s.ackAttention);
   const mutedSessionIds = useDashboardStore((s) => s.mutedSessionIds);
 
   const [open, setOpen] = useState(false);
@@ -570,7 +571,11 @@ export function NotificationBell({
         .filter((i): i is FeedEventItem => i.type === "event" && !i.read)
         .map((i) => i.sessionId),
     );
-    for (const sessionId of unreadSessionIds) markSessionRead(sessionId);
+    for (const sessionId of unreadSessionIds) {
+      markSessionRead(sessionId);
+      // Issue #1430 — "Read all"/"Mark all read" is an explicit action.
+      ackAttention(sessionId);
+    }
   };
 
   return (
@@ -658,6 +663,7 @@ export function NotificationBell({
                       phoneSuppressRestoreRef.current?.();
                       setOpen(false);
                       markSessionRead(target.id);
+                      ackAttention(target.id);
                       onOpenSession(target);
                     }}
                     onTimeline={
@@ -670,8 +676,14 @@ export function NotificationBell({
                         : undefined
                     }
                     onOpenBrowser={onOpenBrowser}
-                    onMarkRead={() => markEventSeen(item.sessionId, item.event.seq)}
-                    onDismiss={() => dismissEvents(item.sessionId, item.foldedSeqs)}
+                    onMarkRead={() => {
+                      markEventSeen(item.sessionId, item.event.seq);
+                      ackAttention(item.sessionId);
+                    }}
+                    onDismiss={() => {
+                      dismissEvents(item.sessionId, item.foldedSeqs);
+                      ackAttention(item.sessionId);
+                    }}
                   />
                 );
               })
@@ -772,6 +784,7 @@ export function NotificationBell({
                               // read. Timeline is a secondary action now
                               // (the button below).
                               markSessionRead(session.id);
+                              ackAttention(session.id);
                               onOpenSession(session);
                             }}
                             onTimeline={
@@ -784,7 +797,10 @@ export function NotificationBell({
                                 : undefined
                             }
                             onOpenBrowser={onOpenBrowser}
-                            onMarkRead={() => markEventSeen(item.sessionId, item.event.seq)}
+                            onMarkRead={() => {
+                              markEventSeen(item.sessionId, item.event.seq);
+                              ackAttention(item.sessionId);
+                            }}
                             // Making notifications relevant/scannable — a
                             // collapsed row dismisses EVERY folded seq, not
                             // just the newest: dismissedEventKeys is a
@@ -795,6 +811,7 @@ export function NotificationBell({
                             // very next render.
                             onDismiss={() => {
                               dismissEvents(item.sessionId, item.foldedSeqs);
+                              ackAttention(item.sessionId);
                             }}
                           />
                         )}

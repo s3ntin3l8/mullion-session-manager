@@ -62,6 +62,13 @@ const markEventSeen = vi.fn((sessionId: number, seq: number) => {
   const current = lastSeenSeq[sessionId] ?? 0;
   if (seq > current) lastSeenSeq = { ...lastSeenSeq, [sessionId]: seq };
 });
+// Issue #1430 — PaneTab's own active-tab effect must NEVER call this: a
+// passive view advancing the read cursor is not the same as a user's
+// explicit action (see store/types.ts's markSessionRead doc comment).
+// PaneTab.tsx doesn't reference `ackAttention` at all today; this spy
+// exists purely so a future refactor that accidentally wires it in gets
+// caught by this file's own assertion, not just left to Hermes review.
+const ackAttention = vi.fn();
 // Issue: narrow headers overflow — PaneActionsMenu.tsx's own "Split right"/
 // "Split down" items (a fallback for PaneHeaderActions.tsx's header-level
 // buttons, which hide entirely below a certain group width) read this.
@@ -87,6 +94,7 @@ function storeState() {
     },
     markEventSeen,
     requestSplit,
+    ackAttention,
   };
 }
 
@@ -224,6 +232,7 @@ beforeEach(() => {
   mutedSessionIds = [];
   markEventSeen.mockClear();
   requestSplit.mockClear();
+  ackAttention.mockClear();
   vi.stubGlobal(
     "ResizeObserver",
     vi.fn(function () {
@@ -517,6 +526,9 @@ describe("PaneTab", () => {
       // follow-up effect that needs a flushed render to run.
       act(() => activeChangeHandler?.({ isActive: true }));
       expect(markEventSeen).toHaveBeenCalledWith(session.id, 5);
+      // Issue #1430 — a passive view becoming active must NOT acknowledge
+      // server-side attention, unlike every explicit read action.
+      expect(ackAttention).not.toHaveBeenCalled();
 
       // Re-render with the store's lastSeenSeq now reflecting that call
       // (the mock's markEventSeen updates the shared `lastSeenSeq`, same as
