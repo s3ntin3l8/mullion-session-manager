@@ -10,7 +10,7 @@
 // FileChanges.tsx itself never touches, it only receives the already-capped
 // array as a prop).
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, act } from "@testing-library/react";
+import { render, screen, act, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SessionRow } from "../Sidebar.js";
 import {
@@ -55,6 +55,21 @@ vi.mock("../store/index.js", () => ({
 }));
 
 const PROJECT: Project = makeProject();
+
+// Sidebar declutter — rows 4/5/6 now render behind SessionRow's own details
+// chevron (session-row/Header.tsx's `.session-git-toggle`, renamed in
+// meaning but not in class — see that component's own comment), collapsed
+// by default. Every test below that expects file chips has to open it first.
+// Checks `aria-expanded` rather than clicking unconditionally: the toggle's
+// open/closed state persists via a module-level Set read once at import time
+// (GitLine.test.tsx's own comment explains why), so several of these tests
+// share session id 1 and would otherwise re-toggle each other's state closed.
+function openDetails(container: HTMLElement): void {
+  const toggle = container.querySelector(".session-git-toggle");
+  if (toggle && toggle.getAttribute("aria-expanded") !== "true") {
+    fireEvent.click(toggle);
+  }
+}
 
 beforeEach(() => {
   events = {};
@@ -106,6 +121,7 @@ describe("SessionRow row 4 — file changes (issue #177)", () => {
     const { container } = render(
       <SessionRow session={makeSession({})} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
     );
+    openDetails(container);
     const chips = container.querySelectorAll(".session-file-change-chip");
     expect(chips).toHaveLength(2);
     // seq 2 (b.ts) is more recent than seq 1 (a.ts) -> shown first.
@@ -148,6 +164,7 @@ describe("SessionRow row 4 — file changes (issue #177)", () => {
     const { container } = render(
       <SessionRow session={makeSession({})} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
     );
+    openDetails(container);
     const chips = container.querySelectorAll(".session-file-change-chip");
     expect(chips).toHaveLength(1);
     expect(chips[0].querySelector(".session-file-change-letter")?.textContent).toBe("M");
@@ -168,6 +185,7 @@ describe("SessionRow row 4 — file changes (issue #177)", () => {
     const { container } = render(
       <SessionRow session={makeSession({})} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
     );
+    openDetails(container);
     const chip = container.querySelector(".session-file-change-chip");
     expect(chip?.querySelector(".session-file-change-letter")?.textContent).toBe("D");
     expect(chip?.querySelector(".github-panel-ci-dot")?.classList.contains("bad")).toBe(true);
@@ -186,11 +204,51 @@ describe("SessionRow row 4 — file changes (issue #177)", () => {
     const { container } = render(
       <SessionRow session={makeSession({})} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
     );
+    openDetails(container);
     const chips = container.querySelectorAll(".session-file-change-chip");
     expect(chips).toHaveLength(5);
     // Most recent 5 of 7 -> file-2 through file-6.
     expect(chips[0].querySelector(".session-file-change-name")?.textContent).toBe("file-6.ts");
     expect(chips[4].querySelector(".session-file-change-name")?.textContent).toBe("file-2.ts");
+  });
+
+  it("shows a '+N' marker for files past the cap, with the hidden paths in its title (sidebar declutter)", () => {
+    events = {
+      1: Array.from({ length: 7 }, (_, i) => ({
+        seq: i + 1,
+        sessionId: 1,
+        kind: "file_change" as const,
+        ts: Date.now(),
+        payload: { path: `src/file-${i}.ts`, action: "modify" as const },
+      })),
+    };
+    const { container } = render(
+      <SessionRow session={makeSession({})} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+    );
+    openDetails(container);
+    const more = container.querySelector(".session-file-change-more");
+    expect(more?.textContent).toBe("+2");
+    // The 2 oldest of 7 (file-0, file-1) are the ones cut by the 5-chip cap.
+    expect(more?.getAttribute("title")).toBe("src/file-1.ts\nsrc/file-0.ts");
+  });
+
+  it("shows no '+N' marker when everything fits under the cap", () => {
+    events = {
+      1: [
+        {
+          seq: 1,
+          sessionId: 1,
+          kind: "file_change",
+          ts: Date.now(),
+          payload: { path: "src/a.ts", action: "modify" },
+        },
+      ],
+    };
+    const { container } = render(
+      <SessionRow session={makeSession({})} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+    );
+    openDetails(container);
+    expect(container.querySelector(".session-file-change-more")).toBeNull();
   });
 
   it("expands a minimal path + action + count detail on click, and collapses on a second click", async () => {
@@ -216,6 +274,7 @@ describe("SessionRow row 4 — file changes (issue #177)", () => {
     const { container } = render(
       <SessionRow session={makeSession({})} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
     );
+    openDetails(container);
 
     expect(container.querySelector(".session-file-change-detail")).toBeNull();
 
@@ -247,6 +306,7 @@ describe("SessionRow row 4 — file changes (issue #177)", () => {
     const { container } = render(
       <SessionRow session={makeSession({})} project={PROJECT} onOpen={onOpen} onEnd={vi.fn()} />,
     );
+    openDetails(container);
 
     await user.click(container.querySelector(".session-file-change-chip")!);
 
@@ -280,6 +340,7 @@ describe("SessionRow row 4 — file changes (issue #177)", () => {
         onEnd={vi.fn()}
       />,
     );
+    openDetails(container);
 
     const chip = container.querySelector(".session-file-change-chip")!;
     await user.click(chip);
@@ -340,6 +401,7 @@ describe("SessionRow row 4 — file changes (issue #177)", () => {
         onEnd={vi.fn()}
       />,
     );
+    openDetails(container);
 
     const chip = container.querySelector(".session-file-change-chip")!;
     await user.click(chip);

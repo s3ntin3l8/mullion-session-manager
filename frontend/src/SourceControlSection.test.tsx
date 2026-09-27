@@ -103,6 +103,7 @@ const BASE_SESSION_FIELDS = {
   attentionKind: null,
   errorDetail: null,
   lastAssistantMessage: null,
+  currentTodo: null,
   compactState: "idle" as const,
   subagentCount: 0,
   subagents: [],

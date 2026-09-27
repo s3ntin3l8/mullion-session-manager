@@ -629,7 +629,7 @@
 }
 /* P9 — a failed "Delete project" (see ProjectHeader's kebab menu handler in
    Sidebar.tsx), rendered as a second line under the header, same slot
-   .session-event-line/.session-end-error occupy for a session row. */
+   .session-now-line/.session-end-error occupy for a session row. */
 .project-row-error {
   font-size: 11px;
   color: var(--r);
@@ -985,11 +985,18 @@
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
-/* Issue #167 — latest notification-event text, one line below the session
-   name/title. Idle-ish events (title changes, alt-screen flips, exit, an
-   attention "clear") get the gray/italic treatment; a live attention event
-   reuses the same --ring accent as the attention dot/status-label above. */
-.session-event-line {
+/* Sidebar declutter — the single folded-state "now" line (lib/
+   sessionNowLine.ts), replacing the old always-on .session-event-line (the
+   latest describable NotificationEvent, however stale/content-free). Same
+   ellipsis-truncated single-line posture as before. `.idle` is the dim/
+   italic default (a quoted last message, or a fallback context string);
+   `.working` drops the italic for the in-progress todo/file/agent-count
+   text; `.attention` reuses the same --ring accent as the attention dot/
+   status-label above. */
+.session-now-line {
+  display: flex;
+  align-items: baseline;
+  gap: 0;
   font-size: 11px;
   font-style: italic;
   color: var(--dim);
@@ -998,12 +1005,21 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.session-event-line.attention {
+.session-now-line.working {
+  font-style: normal;
+  color: var(--fg);
+}
+.session-now-line.attention {
   font-style: normal;
   color: var(--ring);
 }
+.session-now-suffix {
+  flex-shrink: 0;
+  color: var(--dim);
+  font-style: normal;
+}
 /* P9 — a failed "End this session" (SessionRow's handleEnd), same slot as
-   .session-event-line just above but tinted like .task-detail-error/
+   .session-now-line just above but tinted like .task-detail-error/
    .project-row-error (var(--r)) rather than --dim/--ring. */
 .session-end-error {
   font-size: 11px;
@@ -1029,17 +1045,59 @@
 .session-git-toggle:hover {
   color: var(--fg);
 }
-/* Row 3 (issue #202) — collapsible worktree/branch/PR/diff-stats line,
-   directly below row 2's .session-event-line. One line, ellipsis-truncated
-   like row 2, rather than wrapping — .project-git-dot/.github-panel-ci-dot
-   are reused as-is for the dirty/PR dots so this stays visually consistent
-   with the project row and GitHubPanel rather than inventing a third dot
-   language. */
+/* Sidebar declutter — the details section (session-row/Details.tsx), holding
+   the git/files/agents/said rows below row 2's .session-now-line, all folded
+   behind SessionRow's own chevron. A left border rule under the same 22px
+   indent as the now-line marks it as a group, and each row is a label/content
+   pair. */
+.session-details {
+  padding-left: 22px;
+  border-left: 1px solid var(--border-soft);
+  margin-left: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.session-detail-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.session-detail-label {
+  flex-shrink: 0;
+  width: 34px;
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--dim);
+}
+.session-detail-content {
+  min-width: 0;
+  flex: 1;
+}
+/* The agent's last message (Details.tsx's "said" row) — clamped to 3 lines
+   rather than truncated to one, since it's often a genuinely useful summary
+   worth reading in full; the row-4/5/6-style single-line ellipsis would cut
+   it off mid-sentence. */
+.session-said {
+  font-size: 11px;
+  color: var(--dim);
+  font-style: italic;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+/* Row 3 (issue #202) — collapsible worktree/branch/PR/diff-stats line. One
+   line, ellipsis-truncated rather than wrapping — .project-git-dot/
+   .github-panel-ci-dot are reused as-is for the dirty/PR dots so this stays
+   visually consistent with the project row and GitHubPanel rather than
+   inventing a third dot language. */
 .session-git-line {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding-left: 22px;
   font-size: 11px;
   color: var(--dim);
   white-space: nowrap;
@@ -1092,12 +1150,12 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding-left: 22px;
   overflow: hidden;
   white-space: nowrap;
 }
 .session-file-change-chip {
-  flex-shrink: 0;
+  flex-shrink: 1;
+  min-width: 0;
   display: inline-flex;
   align-items: center;
   gap: 3px;
@@ -1111,6 +1169,17 @@
 }
 .session-file-change-chip:hover {
   color: var(--fg);
+}
+/* Sidebar declutter — the "+N" overflow marker for files past
+   Sidebar.tsx's FILE_CHANGE_MAX_SHOWN cap. flex-shrink: 0 (unlike the
+   chips above, which shrink first) so it's the last thing to give up space,
+   not the first thing squeezed out by .session-file-changes-line's own
+   overflow: hidden. */
+.session-file-change-more {
+  flex-shrink: 0;
+  color: var(--dim);
+  font-size: 10.5px;
+  font-family: "Geist Mono", monospace;
 }
 .session-file-change-letter {
   flex-shrink: 0;
@@ -1128,7 +1197,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 2px 8px 2px 22px;
+  padding: 2px 8px 2px 0;
   font-size: 10.5px;
   color: var(--dim);
   overflow: hidden;
@@ -1201,7 +1270,35 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  padding: 2px 8px 2px 22px;
+}
+/* Sidebar declutter — the "N done" summary toggle for finished subagents
+   (lib/sidebarStatus.ts's partitionSubagents), same chip shape as
+   .session-subagent-chip so it reads as one more member of the strip rather
+   than a different control. */
+.session-subagent-history-toggle {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--dim);
+  font-size: 10.5px;
+}
+.session-subagent-history-toggle:hover {
+  color: var(--fg);
+}
+/* The revealed finished-subagent list — a column, not another wrapped flex
+   row, so a long history reads top-to-bottom (newest first) rather than
+   wrapping unpredictably alongside the live chips above it. */
+.session-subagent-history {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding-top: 4px;
 }
 .session-subagent-chip {
   flex-shrink: 0;
@@ -1239,7 +1336,7 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 2px 8px 4px 22px;
+  padding: 2px 8px 4px 0;
   font-size: 10.5px;
   color: var(--dim);
 }
@@ -1263,7 +1360,6 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  padding: 2px 8px 2px 22px;
 }
 .session-background-task-chip {
   flex-shrink: 0;

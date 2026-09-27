@@ -914,6 +914,43 @@ describe("Sidebar Phase 4 — never-scaffolded badge", () => {
   });
 });
 
+describe("Sidebar declutter — project header trim", () => {
+  it("hides the session-count badge for a project with no sessions", () => {
+    projects = [PROJECT];
+    sessions = [];
+    renderSidebar();
+
+    expect(document.querySelector(".project-row-header .project-session-count")).toBeNull();
+  });
+
+  it("shows the session-count badge once the project has at least one session", () => {
+    projects = [PROJECT];
+    sessions = [makeSession({ projectId: PROJECT.id })];
+    renderSidebar();
+
+    expect(document.querySelector(".project-row-header .project-session-count")?.textContent).toBe(
+      "1",
+    );
+  });
+
+  it("carries agent-rules info in the project name's own tooltip, not a separate icon", () => {
+    projects = [makeProject({ id: PROJECT.id, ruleFiles: ["AGENTS.md", "CLAUDE.md"] })];
+    renderSidebar();
+
+    expect(document.querySelector(".project-rules-indicator")).toBeNull();
+    const name = screen.getByText(PROJECT.name);
+    expect(name.getAttribute("title")).toBe(`${PROJECT.cwd}\nAgent rules: AGENTS.md, CLAUDE.md`);
+  });
+
+  it("falls back to just the cwd in the tooltip when the project has no rule files", () => {
+    projects = [makeProject({ id: PROJECT.id, ruleFiles: [] })];
+    renderSidebar();
+
+    const name = screen.getByText(PROJECT.name);
+    expect(name.getAttribute("title")).toBe(PROJECT.cwd);
+  });
+});
+
 describe("Sidebar Phase 4 — 'Scaffold Mullion' kebab-menu entry", () => {
   it("calls onOpenProjectSetup with this project's id", async () => {
     const onOpenProjectSetup = vi.fn();

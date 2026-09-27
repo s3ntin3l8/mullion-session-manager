@@ -75,6 +75,11 @@ export function LaneCard({
         onOpen={onOpen}
         onEnd={onEnd}
         showSubagents={false}
+        // Sidebar declutter — keeps this card's pre-existing "files and
+        // outstanding background tasks are always visible" behavior; only
+        // the row's newly-folded git/agents/said sections stay behind the
+        // chevron here, same as before this change.
+        foldDetails={false}
       />
     </div>
   );

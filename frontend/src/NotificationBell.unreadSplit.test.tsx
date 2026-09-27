@@ -55,6 +55,7 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     attentionKind: null,
     errorDetail: null,
     lastAssistantMessage: null,
+    currentTodo: null,
     compactState: "idle",
     subagentCount: 0,
     subagents: [],

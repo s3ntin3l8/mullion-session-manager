@@ -9,7 +9,7 @@
 // session.hookEmits via isStatusReachable, a SessionRow-level derivation
 // Chips.tsx never performs itself).
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render } from "@testing-library/react";
+import { render, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SessionRow } from "../Sidebar.js";
 import {
@@ -52,6 +52,20 @@ vi.mock("../store/index.js", () => ({
 }));
 
 const PROJECT: Project = makeProject();
+
+// Sidebar declutter — rows 5/6 now render behind SessionRow's own details
+// chevron (session-row/Header.tsx's `.session-git-toggle`, renamed in
+// meaning but not in class — see that component's own comment), collapsed
+// by default. Every test below that expects a chip strip has to open it
+// first. Checks `aria-expanded` rather than clicking unconditionally, same
+// as FileChanges.test.tsx's own helper — belt-and-suspenders against the
+// module-level expanded-rows Set some tests below might otherwise share.
+function openDetails(container: HTMLElement): void {
+  const toggle = container.querySelector(".session-git-toggle");
+  if (toggle && toggle.getAttribute("aria-expanded") !== "true") {
+    fireEvent.click(toggle);
+  }
+}
 
 beforeEach(() => {
   events = {};
@@ -110,7 +124,17 @@ describe("SessionRow row 5 — subagents (Phase 5 Track A, #195/5.5a)", () => {
     expect(container.querySelector(".session-subagents-line")).toBeNull();
   });
 
-  it("renders one chip per subagent when gated conditions are met", () => {
+  // Sidebar declutter — a live subagent always renders as its own chip; a
+  // finished one collapses behind a "N done" summary toggle instead (see
+  // lib/sidebarStatus.ts's partitionSubagents and Chips.tsx's own history
+  // toggle). Every test below opens the row's details chevron first
+  // (openDetails), and the ones exercising a finished subagent also open the
+  // history toggle to reach its chip.
+  function openSubagentHistory(container: HTMLElement): void {
+    fireEvent.click(container.querySelector(".session-subagent-history-toggle")!);
+  }
+
+  it("renders the running subagent as a chip and the finished one behind a history toggle", () => {
     const session = makeRow5Session({
       hookEmits: ["subagent"],
       subagents: [RUNNING_SUBAGENT, FINISHED_SUBAGENT],
@@ -118,14 +142,85 @@ describe("SessionRow row 5 — subagents (Phase 5 Track A, #195/5.5a)", () => {
     const { container } = render(
       <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
     );
-    const chips = container.querySelectorAll(".session-subagent-chip");
-    expect(chips).toHaveLength(2);
-    expect(chips[0].querySelector(".session-subagent-name")?.textContent).toBe("code-reviewer");
-    expect(chips[0].querySelector(".github-panel-ci-dot")?.classList.contains("pending")).toBe(
+    openDetails(container);
+
+    const liveChips = container.querySelectorAll(".session-subagents-line .session-subagent-chip");
+    expect(liveChips).toHaveLength(1);
+    expect(liveChips[0].querySelector(".session-subagent-name")?.textContent).toBe("code-reviewer");
+    expect(liveChips[0].querySelector(".github-panel-ci-dot")?.classList.contains("pending")).toBe(
       true,
     );
-    expect(chips[1].querySelector(".session-subagent-name")?.textContent).toBe("explore");
-    expect(chips[1].querySelector(".github-panel-ci-dot")?.classList.contains("good")).toBe(true);
+
+    const toggle = container.querySelector(".session-subagent-history-toggle")!;
+    expect(toggle.textContent).toContain("1 done");
+    expect(container.querySelector(".session-subagent-history")).toBeNull();
+
+    openSubagentHistory(container);
+    const historyChips = container.querySelectorAll(
+      ".session-subagent-history .session-subagent-chip",
+    );
+    expect(historyChips).toHaveLength(1);
+    expect(historyChips[0].querySelector(".session-subagent-name")?.textContent).toBe("explore");
+    expect(historyChips[0].querySelector(".github-panel-ci-dot")?.classList.contains("good")).toBe(
+      true,
+    );
+  });
+
+  it("shows finished subagents newest-first in the history list", () => {
+    const OLDER_FINISHED = {
+      ...FINISHED_SUBAGENT,
+      agentId: "subagent-test-id-3",
+      agentType: "older-agent",
+      startedAt: Date.now() - 300_000,
+      endedAt: Date.now() - 200_000,
+    };
+    const session = makeRow5Session({
+      hookEmits: ["subagent"],
+      subagents: [OLDER_FINISHED, FINISHED_SUBAGENT],
+    });
+    const { container } = render(
+      <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+    );
+    openDetails(container);
+    openSubagentHistory(container);
+
+    const names = Array.from(
+      container.querySelectorAll(".session-subagent-history .session-subagent-name"),
+    ).map((el) => el.textContent);
+    // FINISHED_SUBAGENT ended more recently than OLDER_FINISHED -> shown first.
+    expect(names).toEqual(["explore", "older-agent"]);
+  });
+
+  it("shows no history toggle when every subagent is live", () => {
+    const session = makeRow5Session({
+      hookEmits: ["subagent"],
+      subagents: [RUNNING_SUBAGENT],
+    });
+    const { container } = render(
+      <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+    );
+    openDetails(container);
+    expect(container.querySelector(".session-subagent-history-toggle")).toBeNull();
+  });
+
+  it("persists the history toggle's open state across remounts via localStorage", () => {
+    const session = makeRow5Session({
+      hookEmits: ["subagent"],
+      subagents: [FINISHED_SUBAGENT],
+    });
+    const first = render(
+      <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+    );
+    openDetails(first.container);
+    openSubagentHistory(first.container);
+    expect(first.container.querySelector(".session-subagent-history")).toBeTruthy();
+    first.unmount();
+
+    const second = render(
+      <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+    );
+    openDetails(second.container);
+    expect(second.container.querySelector(".session-subagent-history")).toBeTruthy();
   });
 
   it("falls back to a truncated agentId when agentType is null", () => {
@@ -136,16 +231,18 @@ describe("SessionRow row 5 — subagents (Phase 5 Track A, #195/5.5a)", () => {
     const { container } = render(
       <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
     );
+    openDetails(container);
     expect(container.querySelector(".session-subagent-name")?.textContent).toBe(
       RUNNING_SUBAGENT.agentId.slice(0, 8),
     );
   });
 
-  it("renders no control other than the chip itself (no kill handle for a subagent)", () => {
+  it("renders no control other than the chip itself (no kill handle for a live subagent)", () => {
     const session = makeRow5Session({ hookEmits: ["subagent"], subagents: [RUNNING_SUBAGENT] });
     const { container } = render(
       <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
     );
+    openDetails(container);
     const line = container.querySelector(".session-subagents-line")!;
     const chips = line.querySelectorAll(".session-subagent-chip");
     expect(line.querySelectorAll("button")).toHaveLength(chips.length);
@@ -160,6 +257,8 @@ describe("SessionRow row 5 — subagents (Phase 5 Track A, #195/5.5a)", () => {
     const { container } = render(
       <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
     );
+    openDetails(container);
+    openSubagentHistory(container);
 
     expect(container.querySelector(".session-subagent-detail")).toBeNull();
 
@@ -183,72 +282,30 @@ describe("SessionRow row 5 — subagents (Phase 5 Track A, #195/5.5a)", () => {
     const { container } = render(
       <SessionRow session={session} project={PROJECT} onOpen={onOpen} onEnd={vi.fn()} />,
     );
+    openDetails(container);
 
     await user.click(container.querySelector(".session-subagent-chip")!);
 
     expect(onOpen).not.toHaveBeenCalled();
   });
 
-  it("persists a chip's expanded state across remounts via localStorage", async () => {
+  it("does not confuse two different finished subagents' expanded state within the same session", async () => {
+    const OTHER_FINISHED = { ...FINISHED_SUBAGENT, agentId: "subagent-test-id-4" };
     const session = makeRow5Session({
       hookEmits: ["subagent"],
-      subagents: [FINISHED_SUBAGENT],
-    });
-    const user = userEvent.setup();
-    const first = render(
-      <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
-    );
-    await user.click(first.container.querySelector(".session-subagent-chip")!);
-    expect(first.container.querySelector(".session-subagent-detail")).toBeTruthy();
-    first.unmount();
-
-    const second = render(
-      <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
-    );
-    expect(second.container.querySelector(".session-subagent-detail")).toBeTruthy();
-  });
-
-  it("does not confuse two different subagents' expanded state within the same session", async () => {
-    const session = makeRow5Session({
-      hookEmits: ["subagent"],
-      subagents: [RUNNING_SUBAGENT, FINISHED_SUBAGENT],
+      subagents: [FINISHED_SUBAGENT, OTHER_FINISHED],
     });
     const user = userEvent.setup();
     const { container } = render(
       <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
     );
+    openDetails(container);
+    openSubagentHistory(container);
 
-    const chips = container.querySelectorAll(".session-subagent-chip");
+    const chips = container.querySelectorAll(".session-subagent-history .session-subagent-chip");
     await user.click(chips[0]);
 
     expect(container.querySelectorAll(".session-subagent-detail")).toHaveLength(1);
-  });
-
-  it("shows both details when two subagent chips are expanded at once, each directly after its own chip", async () => {
-    const session = makeRow5Session({
-      hookEmits: ["subagent"],
-      subagents: [RUNNING_SUBAGENT, FINISHED_SUBAGENT],
-    });
-    const user = userEvent.setup();
-    const { container } = render(
-      <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
-    );
-
-    const chips = container.querySelectorAll(".session-subagent-chip");
-    await user.click(chips[0]);
-    await user.click(chips[1]);
-
-    expect(container.querySelectorAll(".session-subagent-detail")).toHaveLength(2);
-    // Each detail block immediately follows its own chip in DOM order — the
-    // .session-subagent-detail's flex-basis:100% (styles.css) relies on this
-    // markup order to lay each one out directly under its own chip rather
-    // than sharing a flex line with an unrelated neighboring chip.
-    const line = container.querySelector(".session-subagents-line")!;
-    const children = Array.from(line.children);
-    expect(children[0]).toHaveClass("session-subagent-chip");
-    expect(children[1]).toHaveClass("session-subagent-detail");
-    expect(children[2]).toHaveClass("session-subagent-chip");
-    expect(children[3]).toHaveClass("session-subagent-detail");
   });
 });
 
@@ -300,6 +357,7 @@ describe("SessionRow row 6 — background tasks (issue #428)", () => {
     const { container } = render(
       <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
     );
+    openDetails(container);
     const chips = container.querySelectorAll(".session-background-task-chip");
     expect(chips).toHaveLength(2);
     expect(chips[0].querySelector(".session-background-task-desc")?.textContent).toBe(
@@ -317,6 +375,7 @@ describe("SessionRow row 6 — background tasks (issue #428)", () => {
     const { container } = render(
       <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
     );
+    openDetails(container);
     const chip = container.querySelector(".session-background-task-chip")!;
     expect(chip.getAttribute("title")).toBe("subagent: Explore");
   });
@@ -329,6 +388,7 @@ describe("SessionRow row 6 — background tasks (issue #428)", () => {
     const { container } = render(
       <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
     );
+    openDetails(container);
     const line = container.querySelector(".session-background-tasks-line")!;
     expect(line.querySelectorAll("button")).toHaveLength(0);
   });

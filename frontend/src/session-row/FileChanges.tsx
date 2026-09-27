@@ -61,9 +61,15 @@ function SessionFileDiff({ sessionId, filePath }: SessionFileDiffProps) {
 export interface FileChangesProps {
   sessionId: number;
   fileChanges: FileChangeSummary[];
+  // Sidebar declutter — the count of files summarizeFileChanges found beyond
+  // the FILE_CHANGE_MAX_SHOWN slice Sidebar.tsx already passes in
+  // `fileChanges`. Rendered as a trailing "+N" chip so a session that touched
+  // more than the cap says so, instead of the row silently clipping with no
+  // sign anything was cut.
+  hiddenFileChanges: FileChangeSummary[];
 }
 
-export function FileChanges({ sessionId, fileChanges }: FileChangesProps) {
+export function FileChanges({ sessionId, fileChanges, hiddenFileChanges }: FileChangesProps) {
   const [expandedFilePath, setExpandedFilePath] = useState<string | null>(null);
   const expandedFileChange = expandedFilePath
     ? fileChanges.find((fc) => fc.path === expandedFilePath)
@@ -93,6 +99,14 @@ export function FileChanges({ sessionId, fileChanges }: FileChangesProps) {
             </button>
           );
         })}
+        {hiddenFileChanges.length > 0 && (
+          <span
+            className="session-file-change-more"
+            title={hiddenFileChanges.map((fc) => fc.path).join("\n")}
+          >
+            +{hiddenFileChanges.length}
+          </span>
+        )}
       </div>
       {/* Click-to-expand detail (issue #177's explicit scope: path + action
         + occurrence count, no actual diff content — see the follow-up issue

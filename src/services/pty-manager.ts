@@ -462,6 +462,18 @@ export interface SessionInfo {
    * "thinking"/"generating" progress message) so a poll landing between
    * turns still has something to show. In-memory only. */
   lastAssistantMessage: string | null;
+  /** Issue: sidebar now-line — the model's current in-progress (or, absent
+   * one, pending) todo item from its most recent TodoWrite call, kept across
+   * turns the same way lastAssistantMessage above is (not cleared until the
+   * next TodoWrite says otherwise) so a poll landing mid-task still has
+   * something to show. Cleared unconditionally once every remaining todo in
+   * a call is terminal (completed/cancelled) — content-agnostic, same
+   * "no todo beats stale todo" rule as eventDescriptions.ts's
+   * sessionContextMap, since todos have no stable per-item id to match
+   * against. Claude Code only, so far (the only TodoWrite-mapping adapter —
+   * see hooks/forwarder-core.mjs's mapClaudeCodePostToolUse). In-memory
+   * only. */
+  currentTodo: { content: string; status: string } | null;
   /** Rich statuses — "compacting" while a PreCompact/PostCompact hook pair
    * is in flight (Claude Code only, so far — see hook-adapters/claude-code.ts).
    * In-memory only. */
@@ -981,6 +993,7 @@ type StoredStateFields = Pick<
   | "questionAt"
   | "lastTurnEndedAt"
   | "lastAssistantMessage"
+  | "currentTodo"
   | "backgroundTasks"
 > & {
   termModes?: { inAltScreen: boolean; mouseTracking: MouseTrackingState; bracketedPaste?: boolean };
@@ -1468,6 +1481,7 @@ export class Session {
   // directly — see that field's own doc comment for why).
   private errorDetail: string | null = null;
   private lastAssistantMessage: string | null = null;
+  private currentTodo: { content: string; status: string } | null = null;
   private compactState: "idle" | "compacting" = "idle";
   private compactAt: number | null = null;
   private subagentCount = 0;
@@ -1786,6 +1800,7 @@ export class Session {
     if (s.questionAt !== undefined) this.questionAt = s.questionAt;
     if (s.lastTurnEndedAt !== undefined) this.attention.lastTurnEndedAt = s.lastTurnEndedAt;
     if (s.lastAssistantMessage !== undefined) this.lastAssistantMessage = s.lastAssistantMessage;
+    if (s.currentTodo !== undefined) this.currentTodo = s.currentTodo;
     // Issue #428 — the persisted `backgroundTasksAt` timestamp itself is
     // NOT restored (same posture as subagentCountAt above — a restored
     // process shouldn't trust a clock value from before the restart), but
@@ -1891,6 +1906,7 @@ export class Session {
       questionAt: this.questionAt,
       lastTurnEndedAt: this.attention.lastTurnEndedAt,
       lastAssistantMessage: this.lastAssistantMessage,
+      currentTodo: this.currentTodo,
       backgroundTasks: this.attention.backgroundTasks,
       termModes: {
         inAltScreen: this.inAltScreen,
@@ -2045,6 +2061,7 @@ export class Session {
     // just above.
     this.errorDetail = null;
     this.lastAssistantMessage = null;
+    this.currentTodo = null;
     this.compactState = "idle";
     this.compactAt = null;
     this.subagentCount = 0;
@@ -2127,6 +2144,7 @@ export class Session {
       this.questionAt = savedState.questionAt;
       this.attention.lastTurnEndedAt = savedState.lastTurnEndedAt;
       this.lastAssistantMessage = savedState.lastAssistantMessage;
+      this.currentTodo = savedState.currentTodo;
       // The persisted backgroundTasksAt itself is NOT restored — going
       // through setBackgroundTasks() re-stamps it to NOW instead, same
       // reasoning as the state-file restore path's own comment above.
@@ -2929,6 +2947,12 @@ export class Session {
       },
       set lastAssistantMessage(v) {
         self.lastAssistantMessage = v;
+      },
+      get currentTodo() {
+        return self.currentTodo;
+      },
+      set currentTodo(v) {
+        self.currentTodo = v;
       },
       get lastTurnEndedAt() {
         return self.attention.lastTurnEndedAt;
@@ -4126,6 +4150,7 @@ export class Session {
       attentionKind: this.attention.state.confirmedKind,
       errorDetail: this.errorDetail,
       lastAssistantMessage: this.lastAssistantMessage,
+      currentTodo: this.currentTodo,
       compactState: this.compactState,
       compactAt: this.compactAt,
       subagentCount: this.subagentCount,

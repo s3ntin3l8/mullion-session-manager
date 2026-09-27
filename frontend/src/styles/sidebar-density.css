@@ -281,19 +281,11 @@
   margin-bottom: 4px;
 }
 
-/* Sidebar.tsx's per-project agent-rules indicator (issue #431) — a small
-   icon-only signal, distinct from .project-host-badge's pill shape (which
-   carries text) since this only ever carries a title tooltip. */
-.project-rules-indicator {
-  display: inline-flex;
-  align-items: center;
-  color: var(--dim);
-  flex-shrink: 0;
-}
-
 /* Sidebar.tsx's per-project "never scaffolded with Mullion" indicator
-   (Phase 4, Gap F) — same icon-only, tooltip-only shape as
-   .project-rules-indicator above. */
+   (Phase 4, Gap F) — icon-only, tooltip-only. Its sibling agent-rules
+   indicator (issue #431) was removed in the sidebar declutter pass — that
+   signal never changed state, so it moved into the project name's own
+   tooltip instead (see Sidebar.tsx's ProjectHeader). */
 .project-unscaffolded-indicator {
   display: inline-flex;
   align-items: center;

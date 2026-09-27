@@ -43,6 +43,33 @@ export function subagentDotClass(subagent: SubagentInfo): "good" | "pending" {
   return isSubagentLive(subagent) ? "pending" : "good";
 }
 
+export interface PartitionedSubagents {
+  live: SubagentInfo[];
+  finished: SubagentInfo[];
+  // The newest finished entry's endedAt, or null when nothing has finished
+  // yet — feeds the "N done · last <age>" summary chip's age label.
+  lastFinishedAt: number | null;
+}
+
+// Sidebar now-line — splits a session's `subagents` (pty-manager.ts's
+// insertion-order list, oldest first, capped at 50 and never pruned except by
+// that cap) into the always-visible live chips and a `finished` list a
+// summary chip reveals on demand, newest first. Both lists are freshly
+// sorted rather than trusting insertion order, since a live entry can finish
+// between polls without the array itself being reordered.
+export function partitionSubagents(subagents: SubagentInfo[]): PartitionedSubagents {
+  const live: SubagentInfo[] = [];
+  const finished: SubagentInfo[] = [];
+  for (const subagent of subagents) {
+    (isSubagentLive(subagent) ? live : finished).push(subagent);
+  }
+  live.sort((a, b) => b.startedAt - a.startedAt);
+  finished.sort((a, b) => (b.endedAt ?? b.startedAt) - (a.endedAt ?? a.startedAt));
+  const lastFinishedAt =
+    finished.length > 0 ? (finished[0].endedAt ?? finished[0].startedAt) : null;
+  return { live, finished, lastFinishedAt };
+}
+
 // Issue #428 — the first letter of a background task's `type` (e.g.
 // "shell"/"subagent"/"mcp"), same one-glyph-badge convention as
 // fileChangeLetter below. Falls back to "?" for an empty/malformed type —

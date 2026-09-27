@@ -596,6 +596,11 @@ export interface Session {
   errorDetail: string | null;
   lastAssistantMessage: string | null;
   compactState: "idle" | "compacting";
+  // Sidebar now-line — mirrors pty-manager.ts's SessionInfo.currentTodo 1:1:
+  // the model's current in-progress (or, absent one, pending) todo item from
+  // its most recent TodoWrite call. Null when idle/never reported, or once
+  // every remaining todo in a call went terminal. Claude Code only so far.
+  currentTodo: { content: string; status: string } | null;
   subagentCount: number;
   /** Phase 5 (Track A) — mirrors pty-manager.ts's SessionInfo.subagents 1:1.
    * May be shorter than subagentCount when an adapter can't supply identity

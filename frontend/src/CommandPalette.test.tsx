@@ -1252,6 +1252,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
       attentionKind: null,
       errorDetail: null,
       lastAssistantMessage: null,
+      currentTodo: null,
       compactState: "idle",
       subagentCount: 0,
       subagents: [],

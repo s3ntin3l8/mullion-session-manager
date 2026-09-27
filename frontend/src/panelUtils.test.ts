@@ -165,6 +165,7 @@ const EXISTING_SESSION: Session = {
   attentionKind: null,
   errorDetail: null,
   lastAssistantMessage: null,
+  currentTodo: null,
   compactState: "idle",
   subagentCount: 0,
   subagents: [],
