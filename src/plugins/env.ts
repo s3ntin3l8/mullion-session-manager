@@ -718,10 +718,13 @@ export const schema = {
     },
     // Emulator `-gpu` mode. The default keeps guest rendering in software
     // (SwiftShader), which works headless anywhere. `host` renders on the
-    // host GPU but is environment-specific: it needs a GL/EGL display (a
-    // headless container usually has none — the emulator fails with "Failed
-    // to get EGL display"), so it is opt-in and unverified headless. Common
-    // values: auto, host, swiftshader_indirect, swangle_indirect, guest.
+    // host GPU and needs a usable GL/EGL display plus access to the host GPU
+    // driver stack. Headless hosts can provide this with a virtual GL display
+    // and GPU render-device access; for -gpu host, set DISPLAY on the Mullion
+    // service (e.g. its EnvironmentFile or a systemd drop-in), not just in a
+    // login shell: the emulator inherits the service process environment via
+    // systemd-run --user --scope. See docs/device-panel.md. Common values: auto,
+    // host, swiftshader_indirect, swangle_indirect, guest.
     // Deliberately not an enum: newer emulators add modes.
     DEVICE_EMULATOR_GPU: {
       type: "string",
