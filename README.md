@@ -9,9 +9,8 @@ attach-client, not the process owner.
 
 Backend: [Fastify](https://fastify.dev/) + TypeScript (ESM) +
 SQLite/[Drizzle](https://orm.drizzle.team/), with security middleware and full
-CI/CD. Frontend: React + [dockview](https://dockview.dev/) (tiled splits/tabs)
-
-- [xterm.js](https://xtermjs.org/).
+CI/CD. Frontend: React + [dockview](https://dockview.dev/) (tiled splits/tabs) and
+[xterm.js](https://xtermjs.org/).
 
 <p align="center">
   <img src="frontend/public/screenshots/desktop-dashboard.png" width="49%" alt="A live terminal session, with the project sidebar showing sessions across multiple projects" />
@@ -33,6 +32,19 @@ CI/CD. Frontend: React + [dockview](https://dockview.dev/) (tiled splits/tabs)
   selection and optional live-sync preview worktrees, and session status
   signals (exited detection, activity/attention) so you always know what's
   running and what needs you.
+- **Per-CLI default model.** Settings → Models sets a default model for each
+  agent CLI independently — one "Default model" for Claude Code, Codex, and
+  agy; opencode gets three roles (implementer/reviewer/small model) — added
+  as a `--model` flag to new sessions and Task Master workers. A task's own
+  `Model:` directive (`Reviewer-Model:`/`SmallModel:` for opencode) overrides
+  the default; a launcher command that already passes its own `--model` is
+  left alone.
+- **Settings, reorganized.** Settings is grouped into Personal/Sessions &
+  agents/Workspace/Connections/System sections, and several values that used
+  to be env-var-only are now editable from the UI at runtime (GitHub polling
+  intervals, host health-check interval, browser pool size/frame rate,
+  logging) — each still shows the server's own configured default and marks
+  itself when a change needs a server restart to take effect.
 - **Push notifications (mobile/background).** Install Mullion as a home-screen
   PWA and enable the Push toggle in Settings to get attention alerts even
   when the tab is closed or the phone is asleep — in addition to the
@@ -48,7 +60,7 @@ CI/CD. Frontend: React + [dockview](https://dockview.dev/) (tiled splits/tabs)
   notification feed are kept). Web-push to other devices is unaffected.
 - **Voice dictation.** Hold or tap the mic button in a terminal pane (or hold
   the desktop hotkey — Ctrl+Shift+Space by default, rebindable in Settings →
-  Terminal) to dictate into the CLI's prompt via your browser's speech
+  Keyboard & input) to dictate into the CLI's prompt via your browser's speech
   engine — the transcript is inserted for you to review, never sent
   automatically. Requires a secure (`https://`) origin, and only works in
   browsers that expose the Web Speech API (Chrome and Safari today; the mic
@@ -62,8 +74,26 @@ CI/CD. Frontend: React + [dockview](https://dockview.dev/) (tiled splits/tabs)
   **Default hotkey collision:** Ctrl+Shift+Space is 1Password's factory
   Quick Access shortcut on Windows and Linux — if pressing it opens
   1Password instead of starting dictation, rebind either side (Settings →
-  Terminal → "Hotkey combo" here, or 1Password's own Settings → General →
+  Keyboard & input → "Hotkey" here, or 1Password's own Settings → General →
   Shortcuts).
+- **Resource monitoring.** Settings → Server polls live CPU, memory, and
+  per-path disk usage (home, Mullion's own data/sessions directories, every
+  configured project root) sampled from the host, plus a Docker storage
+  breakdown (measured once, when the page opens or refreshes — not polled)
+  with a one-click prune for objects older than 7 days. A dashboard-wide
+  banner surfaces a warning/critical low-disk-space alert (dismissible for
+  24h at the warning level) even if you never open Settings.
+- **Mobile.** On a phone, a session switcher replaces the old scrolling tab
+  strip: tap the toolbar's title to open a bottom sheet listing every open
+  session (status dot, agent logo, unread, rename, close), or swipe the
+  title left/right to move to the next/previous one. A redesigned key bar
+  gives touch typing a sticky Ctrl (tap/lock/off), Esc/Tab/⇧Tab/arrows,
+  paste, a copy-view action, and an in-bar dictation mic, without the old
+  row's tail keys running off-screen.
+- **Live session status in notifications.** The notification panel's group
+  headers now show each session's current status live (e.g. "Needs
+  permission," "Plan ready," "Finished," "exited"), not just a static
+  summary from when the event fired.
 - **Multi-host.** Run sessions on more than one machine from a single
   dashboard — every other machine runs the same Mullion build, just started
   as an `agent` instead of the `primary`. See
@@ -166,13 +196,16 @@ table; it's the single source now.
 
 Backend (repo root):
 
-- `make install` / `make install-hooks` — install dependencies / pre-commit
-  - pre-push git hooks
+- `make install` / `make install-hooks` — install dependencies / pre-commit +
+  pre-push git hooks
 - `make dev` — backend + frontend dev servers together, with reload
 - `make test` / `make lint` / `make typecheck` — Vitest / ESLint / `tsc`,
   across **both** the backend and `frontend/` workspaces
 - `make test-backend` — Vitest, backend only (the fast inner loop)
 - `make test-coverage` — Vitest with coverage, backend only
+- `make test-patch-coverage` — verify ≥75% patch test coverage on new/modified
+  lines against `origin/main` (required before pushing — see
+  [`AGENTS.md`](AGENTS.md))
 - `make test-e2e` — opt-in socket API e2e suite (real Unix sockets, a real
   spawned `mullion` CLI process, a real Chromium); not part of `make test`,
   but **is** its own job in CI — see [`test/e2e/README.md`](test/e2e/README.md)
@@ -180,6 +213,13 @@ Backend (repo root):
   `frontend/` too)
 - `make build` — production build to `dist/`
 - `make clean` — remove `node_modules`, `dist`, and caches
+- `make wt name=<slug>` — create a developer worktree under `.wt/` off the
+  latest `origin/main`, running both `npm ci`s for you
+  (see [`CONTRIBUTING.md`](CONTRIBUTING.md))
+- `make review` — request a Hermes re-review on the current branch's open
+  PR (Hermes already reviews automatically when a PR opens)
+- `make check-scope-leaks` — scan for leaked `crs-session-*` systemd scopes
+  (issue #1137); standalone, not part of `make test`/`make lint`
 - `make help` — list every target (the `.DEFAULT_GOAL`)
 - `npm run db:generate` — generate a migration from schema changes
 - `npm run db:migrate` — apply migrations (also run automatically at startup)

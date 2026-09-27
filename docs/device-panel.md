@@ -11,7 +11,12 @@ verify its own UI changes, the same way it already can for the web via
 Gated by `DEVICE_ENABLED=true` (default off) — this needs real host
 provisioning most deployments won't have: `/dev/kvm` passthrough, an
 installed Android SDK emulator + system image, and the `scrcpy-server`
-binary. See the `ansible-playbooks` repo's `lxc-kvm`/`android-sdk` roles.
+binary (its path configured via `DEVICE_SCRCPY_SERVER_PATH`, empty by
+default — see [`configuration.md`](configuration.md)). See the
+`ansible-playbooks` repo's `lxc-kvm`/`android-sdk` roles. `DEVICE_ADB_SERVER_PORT`
+(default `5037`, adb's own universal default) is the TCP port the local adb
+server listens on — only worth changing if something else on the host
+already holds `5037`.
 
 ### Stream tuning
 
@@ -145,16 +150,20 @@ deliberately a **separate** implementation from `PtyManager`/
   fanned out from one `Device` don't each re-encode the same packet. The
   server can also send out-of-band **JSON text frames** on the same socket:
   `{"type":"error","message":string}` (a `getOrCreate()` failure, socket
-  closed right after) and `{"type":"exited"}` (the device process died,
-  socket closed right after). Client→server messages are JSON text frames, a
-  `type`-discriminated union: `tap`/`touchDown`/`touchMove`/`touchUp`/
-  `scroll` (all carry `x`/`y` plus `videoWidth`/`videoHeight` — the device's
-  **video-pixel space**, see §1 below — touch messages also carry
-  `pointerId`), `text` (`{text: string}`), `keyEvent`
-  (`{androidKeyCode: number, action: "down"|"up"}`), and `back` (no fields).
-  Neither a malformed (unparseable JSON, server-logged) nor an unrecognized
-  (valid JSON, wrong shape, silently ignored) message ever produces an error
-  frame back to the client — see `parseInputMessage`'s own comment.
+  closed right after), `{"type":"exited"}` (the device process died, socket
+  closed right after), and `{"type":"clipboard", text}` (the device's own
+  clipboard changed — see "Clipboard and screenshots in the panel" below).
+  Client→server messages are JSON text frames, a `type`-discriminated union:
+  `tap`/`touchDown`/`touchMove`/`touchUp`/`scroll` (all carry `x`/`y` plus
+  `videoWidth`/`videoHeight` — the device's **video-pixel space**, see §1
+  below — touch messages also carry `pointerId`), `text` (`{text: string}`),
+  `keyEvent` (`{androidKeyCode: number, action: "down"|"up"}`), `clipboard`
+  (`{text: string}`, host clipboard text to paste onto the device — see
+  below), `back` (no fields), and `rotate` (no fields — toggles the
+  emulator's orientation). Neither a malformed (unparseable JSON,
+  server-logged) nor an unrecognized (valid JSON, wrong shape, silently
+  ignored) message ever produces an error frame back to the client — see
+  `parseInputMessage`'s own comment.
 
 - **`DevicePane.tsx`** decodes with
   [`@yume-chan/scrcpy-decoder-webcodecs`](https://www.npmjs.com/package/@yume-chan/scrcpy-decoder-webcodecs)
@@ -210,8 +219,10 @@ the post-hoc override when Android rotates the connect port.
 
 **Reconnect prompt (issue #1380).** Android picks a new connect port every time
 Wireless debugging is toggled, which used to strand a paired phone until the
-user clicked **Edit address** (issue #1347). When `DEVICE_DISCOVERY_ENABLED` is
-on, Settings → Devices polls `GET /api/devices/discovered` every ~5 s (only
+user clicked **Edit address** (issue #1347). When discovery is on
+(`DEVICE_DISCOVERY_ENABLED`, UI-configurable as Settings → Devices → "Find
+phones on the network" — a change there needs a server restart to take
+effect), Settings → Devices polls `GET /api/devices/discovered` every ~5 s (only
 while an active physical row exists and the tab is visible) and compares it
 with the stored rows. A row whose stored address is no longer advertised, but
 whose host is (or, if the phone also changed IP, whose name matches the
@@ -224,6 +235,35 @@ the advertised name/model while the real one is offline, so that case is always
 shown as a confirm-style prompt. If the phone needs a fresh pairing code, delete and re-pair as before.
 The prompt only appears when mDNS can reach the device; otherwise **Edit
 address** remains the manual path.
+
+### Toolbar and gestures (issue #1419)
+
+`DevicePane.tsx` carries a toolbar (`role="toolbar"`) above the video, in
+three groups: **Navigation** (Back, Home, Recent apps — Home/Recent apps are
+`keyEvent`s, `KEYCODE_HOME`/`KEYCODE_APP_SWITCH`; Back sends the dedicated
+`back` message), **Device buttons** (Power, Volume down, Volume up, all
+`keyEvent`s), and **Display** (Rotate — sends `rotate`, see the wire
+protocol above; Download screenshot and, where supported, Copy screenshot to
+clipboard — see "Clipboard and screenshots in the panel" below; and
+Show/hide device frame, a purely client-side toggle with no live-device
+effect that wraps the canvas in a phone-shaped chrome, persisted per browser
+via `localStorage`). Every button except the frame toggle is disabled while
+the socket isn't `open` or the device is stopped/removed — the frame toggle
+has no live-device dependency, so it stays clickable regardless. Every
+button swallows its own `pointerdown` so clicking it never also fires a
+canvas gesture underneath it.
+
+Pointer/touch input on the canvas itself sends a real drag, not just a
+single tap: `pointerdown` starts a touch (`touchDown`), `pointermove` while
+that same pointer is captured streams `touchMove`, and `pointerup`/
+`pointercancel`/losing capture ends it with `touchUp`. Only one pointer is
+tracked at a time (multi-touch/pinch isn't supported). The active pointer is
+always released — sending a synthetic `touchUp` — on a video resize, a
+window blur, a socket close, or an unmount, so a drag that was in progress
+when the connection drops or the tab loses focus never leaves the device
+thinking a finger is still down; a `touchUp` that can't send immediately
+(socket not open yet) is queued and flushed the moment the reconnected
+socket opens.
 
 ### Clipboard and screenshots in the panel
 
@@ -271,7 +311,8 @@ CLI's own explicit-id convention avoids elsewhere).
 mullion device list
 mullion device create <avdName> [--project <id>] [--name <label>]
 mullion device pair <pairingAddress> <code>
-mullion device pair-and-connect [--discovery-id <id> | --pairing-address <addr>] --connect-address <addr> --pairing-code <code> [--name <label>]
+mullion device pair-and-connect --discovery-id <id> --pairing-code <code> [--connect-address <addr>] [--name <label>]
+mullion device pair-and-connect --pairing-address <addr> --connect-address <addr> --pairing-code <code> [--name <label>]
 mullion device connect <address> [--project <id>] [--name <label>]
 mullion device discovered
 mullion device start <id>
@@ -291,9 +332,12 @@ longer-lived connect address — and they're not the same port. `pair` doesn't
 create a device row (see the `devices` table bullet above); `connect` does,
 and is the `kind: "physical"` counterpart to `create`. `pair-and-connect`
 (added in issue #1378) collapses both steps into one CLI call and is the
-text-equivalent of the new "Pair a phone" modal — supply `--discovery-id`
+text-equivalent of the "Pair a phone or tablet" modal — supply `--discovery-id`
 (use `mullion device discovered` to find one) to drive pair+connect from a
-cached mDNS entry, or `--pairing-address` to type both ports by hand.
+cached mDNS entry (`--connect-address` there is optional, only needed to
+override the cached connect port when mDNS reached the wrong transport), or
+`--pairing-address` to type both ports by hand (`--connect-address` is
+required in that mode — there's no cached entry to fall back on).
 
 `x`/`y` (and `x1 y1 x2 y2`) are in the device's native **screen pixels** —
 the same space a `screenshot` comes back in, since `tap`/`swipe` run as
@@ -329,15 +373,22 @@ exists for — an agent inside a normal session can call these with no elevated
 credential. Stop is reachable there too: it's reversible, and an agent that can
 stop a device can start it again.
 
-Three things are **full scope only**, all gated on the same "bigger blast
+Four things are **full scope only**, all gated on the same "bigger blast
 radius than driving a device Mullion already manages" reasoning: `device.pair`
-always, `device.create` when its body sets `kind: "physical"` (session
-scope still works for an ordinary emulator `device.create`) — `wireless.connect()`
-lets the caller dial an arbitrary address, an outbound-dial/internal-network-
-probe primitive the emulator path never had (see `control-socket.ts`'s own
-comments on both) — and `delete_device`/`device delete`, which drops the row
-and the id that identifies its systemd scope with no undo. MCP does not expose
-`device pair`/`connect` — only the CLI and REST do.
+and `device.pair-and-connect` always — `wireless.connect()` lets the caller
+dial an arbitrary address, an outbound-dial/internal-network-probe primitive
+the emulator path never had — `device.create` when its body sets
+`kind: "physical"` (session scope still works for an ordinary emulator
+`device.create`), same reasoning (see `control-socket.ts`'s own comments on
+all three) — and `delete_device`/`device delete`, which drops the row
+and the id that identifies its systemd scope with no undo. MCP's device
+surface is narrower than the CLI's: only `list_devices` (`device list`),
+`use_device`/`device_action` (`device screenshot`/`tap`/`swipe`/`text`/
+`key`/`logcat`), `start_device` (`device start`), `stop_device`
+(`device stop`), and `delete_device` (`device delete`) exist as MCP tools —
+`device create`, `device pair`, `device pair-and-connect`, `device connect`,
+and `device discovered` have no MCP counterpart; only the CLI and REST
+expose them.
 
 ## 3. REST API
 
@@ -422,7 +473,8 @@ afterward via `POST /api/devices {avdName}` (§3 above), the same way
 `kind: "emulator"` has always worked.
 
 - **`GET /api/avds`** — `avdmanager list avd`, parsed from its `Name:` lines.
-  This is what feeds the "New device" form's AVD picker.
+  This is what feeds the "Create an emulator" flow's "Virtual device"
+  picker (and its "+ New AVD" sub-form for provisioning a fresh one).
 - **`GET /api/device-profiles`** — `avdmanager list device`, parsed from its
   `id: N or "..."` lines (the token `-d` actually accepts, not the
   human-readable `Name:` line below it, which can contain spaces/parens
@@ -468,6 +520,15 @@ afterward via `POST /api/devices {avdName}` (§3 above), the same way
 Gated by `DEVICE_SDKMANAGER_PATH` (the `sdkmanager` binary from the SDK's
 cmdline-tools), which follows the same "empty means not configured" posture
 as the other `DEVICE_*_PATH` vars.
+
+Settings → Devices → **SDK system images** is this layer's UI: four filters
+AND together to narrow the list client-side (issue #1386) — an
+installed-status segmented control ("All" / "Not installed" / "Installed"),
+a variant dropdown, an API-level dropdown, and a free-text search box — and
+each row offers Install/Uninstall. A license rejection from an install
+attempt (the `{type: "error", code: "license"}` frame below) automatically
+opens a licenses modal that drives the `/ws/sdk-licenses` acceptance flow
+below for you, then retries the failed install once accepted.
 
 - **`GET /api/system-images/available`** — runs `sdkmanager --list` against
   Google's repository, parses the tabular output into structured objects

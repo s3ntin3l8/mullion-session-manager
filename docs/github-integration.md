@@ -199,7 +199,17 @@ individual issue, only a repository):
 - **write** — Issues, Pull requests, Contents — used for Task Master's own
   writes and its issue-label ingest reads.
 - **read** — Actions, Metadata, Pull requests — used for the repo-status
-  widget and PR/CI poller.
+  widget and PR/CI poller. Deliberately excludes `administration` — a call
+  needing `GET /repos/{owner}/{repo}/branches/{branch}/protection` (branch
+  protection contexts) 403s on this App's read-scope token, and that 403
+  is read as fail-closed, not as "nothing is required." [Task Master](tasks.md)'s
+  red-required-CI-return gate (`#755`) depends on exactly that lookup. On any
+  repo where this App is configured and installed — `resolveGitHubToken`
+  tries the App's token before ever falling back to the PAT/OAuth token —
+  `#755` is silently a no-op with no operator-side fix; only a code change
+  (widening this permission set) fixes it. `#1360`/`#1361` instead added a
+  throttled reconcile-log warning so the condition is at least visible in
+  logs. See [`tasks.md`](tasks.md#auto-approve) for the full mechanics.
 - **dispatch** (#744) — Actions: write, Metadata — used only for the
   release-please "Run" trigger (`POST .../actions/workflows/:id/dispatches`),
   which needs `actions: write`, a permission neither of the other two sets
@@ -532,8 +542,14 @@ http:
     mullion:
       loadBalancer:
         servers:
-          - url: "http://localhost:3456"
+          - url: "http://localhost:3000"
 ```
+
+`3000` above is `PORT`'s own default (`src/plugins/env.ts`) — use whatever
+you've actually set it to; `deploy/traefik-dynamic.yml`'s own template
+points its example service at `http://127.0.0.1:3450` instead, so match
+whichever value your `.env` actually sets `PORT` to, not either example
+literally.
 
 Set `MULLION_WEBHOOK_BASE_URL=https://hooks.yourdomain.com` in the Mullion
 environment. The `deploy/traefik-dynamic.yml` template includes a
@@ -545,7 +561,8 @@ For local development or hosts without a public IP:
 
 1. Install the smee client: `npm install -g smee-client`
 2. Start the tunnel:
-   `smee --url https://smee.io/YOUR_CHANNEL --path /api/webhooks/github --port 3456`
+   `smee --url https://smee.io/YOUR_CHANNEL --path /api/webhooks/github --port <PORT>`
+   (your instance's own `PORT`, default `3000`)
 3. Set `MULLION_WEBHOOK_BASE_URL=https://smee.io/YOUR_CHANNEL` in the
    Mullion environment.
 4. The smee client forwards POSTs to your local instance.
@@ -570,24 +587,28 @@ performs its own HMAC verification and does not require app-level auth.
 
 ## API surface
 
-| Endpoint                                   | Method | Notes                                                                                                                                                                                                                                                             |
-| ------------------------------------------ | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/api/integrations/github`                 | GET    | Connection summary (`connected`, `tokenType`, `login`, `scopes`, `deviceFlowAvailable`, `webhookEnabled`) — never the token itself                                                                                                                                |
-| `/api/integrations/github/token`           | PUT    | Set a PAT; validates against `GET /user` first. Rate-limited 10/min                                                                                                                                                                                               |
-| `/api/integrations/github`                 | DELETE | Disconnect                                                                                                                                                                                                                                                        |
-| `/api/integrations/github/device/start`    | POST   | Start device flow; 400 if `GITHUB_OAUTH_CLIENT_ID` isn't set. Rate-limited 10/min                                                                                                                                                                                 |
-| `/api/integrations/github/device/status`   | GET    | Poll device-flow progress; 404 if none in progress                                                                                                                                                                                                                |
-| `/api/integrations/github/app`             | PUT    | Configure (or rotate) a GitHub App's `appId`/`privateKey`. Verifies against `GET /app` first; 400 on a rejected/mismatched credential, otherwise `200 { verified, appSlug?, keyFingerprint, warning? }`. Rate-limited 10/min — see Rotating the private key above |
-| `/api/integrations/github/app`             | DELETE | Clear the configured GitHub App                                                                                                                                                                                                                                   |
-| `/api/integrations/github/reviewer-app`    | PUT    | Configure (or rotate) the reviewer App (#737) — same shape/verification as the App route above, plus a 400 if `appId` matches the primary App's. Rate-limited 10/min                                                                                              |
-| `/api/integrations/github/reviewer-app`    | DELETE | Clear the configured reviewer App                                                                                                                                                                                                                                 |
-| `/api/integrations/github/webhooks/status` | GET    | Whether webhooks are enabled and the configured base URL                                                                                                                                                                                                          |
-| `/api/integrations/github/webhooks`        | POST   | Enable webhooks: registers hooks on every connected repo. Rate-limited 10/min                                                                                                                                                                                     |
-| `/api/integrations/github/webhooks`        | DELETE | Disable webhooks: tears down registered hooks                                                                                                                                                                                                                     |
-| `/api/projects/:id/github`                 | GET    | Per-project repo status (issues, PRs, Actions runs, `ciStatus`). Rate-limited 30/min                                                                                                                                                                              |
-| `/api/projects/:id/release`                | GET    | release-please detection + the open release PR's status (#744). Rate-limited 30/min                                                                                                                                                                               |
-| `/api/projects/:id/release/run`            | POST   | Dispatches the release-please workflow. Needs a `dispatch`-scoped token. Rate-limited 10/min                                                                                                                                                                      |
-| `/api/projects/:id/release/merge`          | POST   | Merges the open release PR, gated hard on GitHub's own mergeability verdict. Rate-limited 10/min                                                                                                                                                                  |
+| Endpoint                                                   | Method | Notes                                                                                                                                                                                                                                                                                                                           |
+| ---------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/api/integrations/github`                                 | GET    | Connection summary (`connected`, `tokenType`, `login`, `scopes`, `deviceFlowAvailable`, `webhookEnabled`), plus `githubApp`/`reviewerApp` (each `{configured, appId, installationCount, keyFingerprint, keyRotatedAt}`, all `null` when unconfigured — see the GitHub App/Reviewer App sections above) — never the token itself |
+| `/api/integrations/github/token`                           | PUT    | Set a PAT; validates against `GET /user` first. Rate-limited 10/min                                                                                                                                                                                                                                                             |
+| `/api/integrations/github`                                 | DELETE | Disconnect                                                                                                                                                                                                                                                                                                                      |
+| `/api/integrations/github/device/start`                    | POST   | Start device flow; 400 if `GITHUB_OAUTH_CLIENT_ID` isn't set. Rate-limited 10/min                                                                                                                                                                                                                                               |
+| `/api/integrations/github/device/status`                   | GET    | Poll device-flow progress; 404 if none in progress                                                                                                                                                                                                                                                                              |
+| `/api/integrations/github/app`                             | PUT    | Configure (or rotate) a GitHub App's `appId`/`privateKey`. Verifies against `GET /app` first; 400 on a rejected/mismatched credential, otherwise `200 { verified, appSlug?, keyFingerprint, warning? }`. Rate-limited 10/min — see Rotating the private key above                                                               |
+| `/api/integrations/github/app`                             | DELETE | Clear the configured GitHub App                                                                                                                                                                                                                                                                                                 |
+| `/api/integrations/github/reviewer-app`                    | PUT    | Configure (or rotate) the reviewer App (#737) — same shape/verification as the App route above, plus a 400 if `appId` matches the primary App's. Rate-limited 10/min                                                                                                                                                            |
+| `/api/integrations/github/reviewer-app`                    | DELETE | Clear the configured reviewer App                                                                                                                                                                                                                                                                                               |
+| `/api/integrations/github/webhooks/status`                 | GET    | Whether webhooks are enabled and the configured base URL                                                                                                                                                                                                                                                                        |
+| `/api/integrations/github/webhooks`                        | POST   | Enable webhooks: registers hooks on every connected repo. Rate-limited 10/min                                                                                                                                                                                                                                                   |
+| `/api/integrations/github/webhooks`                        | DELETE | Disable webhooks: tears down registered hooks                                                                                                                                                                                                                                                                                   |
+| `/api/projects/:id/github`                                 | GET    | Per-project repo status (issues, PRs, Actions runs, `ciStatus`). Rate-limited 30/min                                                                                                                                                                                                                                            |
+| `/api/projects/:id/github/prs`                             | GET    | Open PR list for the project's repo; optional `?branch=<name>` filters to the PR (if any) whose head is that branch. Rate-limited 30/min                                                                                                                                                                                        |
+| `/api/projects/:id/github/actions/:runId/jobs`             | GET    | Jobs for one Actions workflow run. Rate-limited 30/min                                                                                                                                                                                                                                                                          |
+| `/api/projects/:id/github/actions/:runId/jobs/:jobId/logs` | GET    | A job's own log lines; optional `?lines=<n>` (default 50). Rate-limited 30/min                                                                                                                                                                                                                                                  |
+| `/api/projects/:id/release`                                | GET    | release-please detection + the open release PR's status (#744). Rate-limited 30/min                                                                                                                                                                                                                                             |
+| `/api/projects/:id/release-please/recheck`                 | POST   | Forces a fresh release-please-config detection probe, bypassing the normal one-shot auto-enable sweep (pairs with the project edit modal's "Re-check now" button). Rate-limited 10/min                                                                                                                                          |
+| `/api/projects/:id/release/run`                            | POST   | Dispatches the release-please workflow. Needs a `dispatch`-scoped token. Rate-limited 10/min                                                                                                                                                                                                                                    |
+| `/api/projects/:id/release/merge`                          | POST   | Merges the open release PR, gated hard on GitHub's own mergeability verdict. Rate-limited 10/min                                                                                                                                                                                                                                |
 
 `GET /api/projects/:id/github` degrades gracefully rather than erroring: it
 returns 204 for no github.com remote, no connected account, or any GitHub
@@ -614,18 +635,26 @@ for `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_POLL_INTERVAL_ACTIVE`,
 copy of this table now, so it doesn't drift from `.env.example` the way it
 once did.
 
+The three poll intervals above are also UI-configurable at runtime:
+Settings → Integrations → GitHub → **Update checks** shows "Active
+repositories," "Quiet repositories," and "Webhook silence limit" (each a
+live override of its env default, no restart needed).
+
 ## Security
 
 - The token is stored in the `integrations` table and encrypted at rest via
   `app.encryption` (AES-256-GCM) whenever `DB_ENCRYPTION_KEY` is set — same
   convention as remote-host tokens in `hosts`. As elsewhere in Mullion, this
   encryption is opt-in, not enforced specifically for this feature.
-- No route has its own auth hook; like every other route, it relies on the
-  app-wide gateway auth (external Traefik + Authentik `forwardAuth`) — see
-  the main [README](../README.md). The one exception is
+- No route here has its own auth hook; like every other route, it relies on
+  whichever gate is actually configured — an external forwardAuth gateway
+  (Traefik + Authentik) and/or Mullion's own optional in-process auth
+  (`MULLION_AUTH_TOKEN`/OIDC, see [`auth.md`](auth.md)), either or both, off
+  by default — see the main [README](../README.md). The one exception is
   `/api/webhooks/github`, which is intentionally unauthenticated at the app
-  level (GitHub cannot send custom auth headers). Webhook payloads are
-  verified via HMAC-SHA256 instead.
+  level (GitHub cannot send custom auth headers) regardless of which gate(s)
+  are configured for everything else. Webhook payloads are verified via
+  HMAC-SHA256 instead.
 - Webhook secrets are encrypted at rest using the same `DB_ENCRYPTION_KEY`
   used for token storage.
 - The token is never returned by any API response.

@@ -19,15 +19,16 @@ There are two kinds of preview, in either mode:
 - **Project preview** — one per project (opening it again reuses the same
   slug in proxy mode). Resolves to the project's configured dev-server
   URL/port.
-- **External preview** — any URL you paste via "Open URL" or "New browser
-  tab", validated against SSRF guards at creation time in proxy mode (see
-  Security below); direct-embed mode has no server-side fetch, so there's
-  nothing to validate — the guard simply doesn't apply.
+- **External preview** — any URL you paste via "New preview tab", validated
+  against SSRF guards at creation time in proxy mode (see Security below);
+  direct-embed mode has no server-side fetch, so there's nothing to
+  validate — the guard simply doesn't apply.
 
-Open a preview from a project's Dock row ("Open browser preview"), the
-command palette ("Preview: `<project>`"), "Open URL…", or "New browser
-tab" (an empty pane with the address bar focused, for typing a URL
-directly) for an arbitrary site.
+Open a preview by clicking the dev-server URL row in a project's Dock
+section (see [`dock.md`](dock.md)'s UI reference), the command palette
+("Preview: `<project>`" for the project preview, or "New preview tab" for
+an empty pane with the address bar focused, for typing an arbitrary URL
+directly).
 
 ## Why the proxy exists (and when you need it)
 
@@ -183,6 +184,35 @@ curl -sS -I https://preview-<any-real-slug>.<PREVIEW_BASE_HOST>/
   present on this direct request, which is expected for a `curl` probe (see
   "Preview-host auth token" in [`auth.md`](auth.md)).
 
+**Recognizing the Authentik outpost singleton-store bug specifically.** If a
+preview behind a gateway-forwardAuth Authentik outpost fails to load — Chrome
+reporting "This content is blocked", or a redirect loop back to Authentik's
+login screen — check the outpost's own logs before assuming a Mullion bug.
+The confirmed signature is an `invalid state` error alongside a session-ID
+mismatch line reading `mismatched session ID … should:""`; the empty
+`should:` value is diagnostic — it means the OAuth `state` cookie Authentik
+set never reached the callback host at all, not that Mullion sent the wrong
+one.
+
+Root cause, confirmed upstream and **not** fixable from this repo: on an
+outpost that fronts more than one Provider, `goauthentik/authentik`'s
+`filesystemstore.GetPersistentStore` returns a single process-wide store, and
+each Provider's own `getStore` call overwrites `globalStore.Options.Domain`
+on it — so only the last Provider loaded gets its `cookie_domain` applied,
+and every other Provider's login flow sets a state cookie scoped to the
+wrong domain. Filed upstream as
+[goauthentik/authentik#26228](https://github.com/goauthentik/authentik/issues/26228),
+with repro steps and source citations (`session.go:53-72`,
+`filesystemstore.go:167-195`).
+
+There is no workaround on Mullion's side — the bug lives in the outpost's
+shared session store, before any request reaches Mullion. If you hit this
+signature on a deployment that still routes preview auth through an
+Authentik outpost fronting multiple Providers, the fix is to stop depending
+on gateway forwardAuth for previews and set `PREVIEW_AUTH_REQUIRED=true`
+instead (Setup step 5 above), so Mullion's own bootstrap-token flow handles
+preview auth in-process and bypasses the outpost's singleton store entirely.
+
 ### Worked example: `mullion.s3ntin3l8.de`
 
 A concrete instance of the steps above, for the production deployment
@@ -287,7 +317,11 @@ agent's own loopback, never pivot into its LAN.
 - `GET /api/server-info` exposes `previewsEnabled`/`previewBaseHost` so the
   frontend can gate the preview UI on it; there's nothing sensitive in that
   response.
-- A preview host is a rate-limit-exempt (`src/plugins/security.ts`),
+- A preview host is exempt from the app-wide `RATE_LIMIT_MAX` limiter
+  (`src/plugins/security.ts`) but has its own dedicated per-IP ceiling
+  instead — `PREVIEW_RATE_LIMIT_MAX` (default `2000`/min, see
+  [`configuration.md`](configuration.md)) — sized for a single page load's
+  dozens of subresource requests rather than API traffic. It's an
   every-HTTP-method proxy, and Mullion's own in-process auth
   (`MULLION_AUTH_TOKEN`/OIDC, see [`auth.md`](auth.md)) cannot cover it at
   all by default — a session cookie can't reach a cross-subdomain iframe,
@@ -304,37 +338,6 @@ agent's own loopback, never pivot into its LAN.
   (the default), gateway forwardAuth remains the only thing standing between
   an open preview subdomain and the dev server behind it.
 
-## Verifying the preview router
-
-If a preview behind a gateway-forwardAuth Authentik outpost fails to load —
-Chrome reporting "This content is blocked", or a redirect loop back to
-Authentik's login screen — check the outpost's own logs before assuming a
-Mullion bug. The confirmed signature is an `invalid state` error alongside a
-session-ID mismatch line reading `mismatched session ID … should:""`; the
-empty `should:` value is diagnostic — it means the OAuth `state` cookie
-Authentik set never reached the callback host at all, not that Mullion sent
-the wrong one.
-
-Root cause, confirmed upstream and **not** fixable from this repo: on an
-outpost that fronts more than one Provider, `goauthentik/authentik`'s
-`filesystemstore.GetPersistentStore` returns a single process-wide store,
-and each Provider's own `getStore` call overwrites `globalStore.Options.Domain`
-on it — so only the last Provider loaded gets its `cookie_domain`
-applied, and every other Provider's login flow sets a state cookie scoped to
-the wrong domain. Filed upstream as
-[goauthentik/authentik#26228](https://github.com/goauthentik/authentik/issues/26228),
-with repro steps and source citations
-(`session.go:53-72`, `filesystemstore.go:167-195`).
-
-There is no workaround on Mullion's side — the bug lives in the outpost's
-shared session store, before any request reaches Mullion. If you hit this
-signature on a deployment that still routes preview auth through an
-Authentik outpost fronting multiple Providers, the fix is to stop depending
-on gateway forwardAuth for previews and set `PREVIEW_AUTH_REQUIRED=true`
-instead (issue #383, Setup step 5 above), so Mullion's own bootstrap-token
-flow handles preview auth in-process and bypasses the outpost's singleton
-store entirely.
-
 ## Current limitations
 
 - Direct-embed mode can't show an `http://` dev server once Mullion itself
@@ -350,14 +353,17 @@ store entirely.
   itself; it has no visibility into a remote agent's terminal scrollback.
 - `BrowserPanel.tsx`'s pre-mount probe (issue #1318) can tell a proxy error
   apart from a real load, but not which proxy error it was — 404 (unknown
-  slug), 401 (`PREVIEW_AUTH_REQUIRED`), 429 (rate-limited), and 502/503 (dev
-  server down) all surface as the same generic "not reachable through the
-  proxy" message, since the frontend only ever gets a bare status code, by
-  design (`src/plugins/preview-proxy.ts`'s own early-return responses stay
+  slug), 401 (`PREVIEW_AUTH_REQUIRED`), and 429 (rate-limited) all surface as
+  the same generic "not reachable through the proxy" message, since the
+  frontend only ever gets a bare status code, by design
+  (`src/plugins/preview-proxy.ts`'s own early-return responses stay
   detail-free even to the dashboard's own origin — see that file's
-  Access-Control-Allow-Origin comment). The devServerOnline poll's own
-  dot indicator is still the only same-origin, unambiguous signal
-  specifically for the dev-server-down case.
+  Access-Control-Allow-Origin comment). The 502/503 (dev server down) case is
+  the one exception: it's covered instead by the same-origin
+  `devServerOnline` poll, which pre-empts the generic message with a
+  dedicated "Dev server not reachable. It may have crashed or stopped — check
+  the session, then retry." before the iframe even has a chance to report a
+  generic error, for a project preview reached through the proxy.
   The same "not reachable" state is deliberately _not_ shown for
   a saved URL or the no-proxy direct-embed fallback (`previewsEnabled`
   false): those already surface a connection failure via the iframe's own
