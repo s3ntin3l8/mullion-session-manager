@@ -227,7 +227,7 @@ export interface WorkerPreambleOptions {
  * cannot see from inside the worktree that its diff goes to a separately
  * spawned reviewer that cannot edit files and draws on a small, never-reset
  * round budget shared with CI and PR-comment auto-returns (see
- * `buildReviewPrompt` and `docs/tasks.md`'s "The round budget") — so a
+ * `buildReviewPrompt` and `docs/tasks-internals.md`'s "The round budget") — so a
  * defect the worker catches itself is free, and the same defect caught
  * downstream is not.
  *
@@ -807,8 +807,8 @@ export function renderCiSummary(ci: ReviewCiInfo): string {
  * - The zero case is worded to guard against the obvious misreading ("no
  *   rounds left, so the verdict doesn't matter"). It's the opposite: at
  *   zero, a "changes-requested" verdict still posts as a gating
- *   REQUEST_CHANGES a human reads (docs/tasks.md's Task -> PR promotion
- *   section), so under-reporting here has no automatic fix-up round to
+ *   REQUEST_CHANGES a human reads (docs/tasks-internals.md's Task -> PR
+ *   promotion section), so under-reporting here has no automatic fix-up round to
  *   fall back on.
  */
 export function renderRoundsRemaining(roundsRemaining: number): string {
@@ -836,7 +836,7 @@ export function renderRoundsRemaining(roundsRemaining: number): string {
  * regardless). It is no longer purely advisory, though: a "changes-requested"
  * verdict can now drive one bounded `reviewing -> in_progress` round back to
  * the worker (see task-reconciler.ts's review-feedback loop) before a human
- * reviews again — see docs/tasks.md's Task → PR promotion section. Keeps
+ * reviews again — see docs/tasks-internals.md's Task → PR promotion section. Keeps
  * the one hazard the original prompt already warned about: the reviewer
  * runs in the WORKER's own worktree, not a copy, so anything it writes
  * there (other than the findings file below, which lives outside it)

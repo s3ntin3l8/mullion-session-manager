@@ -11,16 +11,22 @@ is to catch violations of this repo's own domain invariants — the kind of
 mistake that looks reasonable in isolation but breaks an assumption another
 part of the codebase depends on. Read `.claude/skills/mullion-review-invariants/SKILL.md`
 first; it's the compact checklist this review is built on. For broader
-architectural context, `CLAUDE.md` at the repo root and `docs/architecture.md`
+architectural context, `AGENTS.md` at the repo root and `docs/architecture.md`
 are the deeper references — read them if the diff touches something the
 skill's checklist doesn't cover.
 
 ## What to check, in order
 
 1. **The opaque-blob invariant.** Does anything parse `session.command` or
-   `workspace.layout` outside `src/services/hook-adapters/claude-code.ts`'s
-   `commandTransform`? That's the one sanctioned exception; anything else
-   parsing either field is very likely a bug even if it "works."
+   `workspace.layout` outside a `src/services/hook-adapters/` adapter's own
+   `commandTransform`, or outside the sanctioned `commandIsOpencode`/
+   `commandModelCli` (`hook-adapters/index.ts`), `buildModelFlag`
+   (`hook-adapters/shared.ts`), `validateModel`/`validateCliModel`
+   (`services/task-model-resolve.ts`), or `commandSupportsSeed`
+   (`services/task-agent-resolve.ts`) helpers those adapters and their
+   callers (`task-claim.ts`, `task-reconciler.ts`, `routes/sessions.ts`) use?
+   Those are the sanctioned exceptions; anything else parsing either field is
+   very likely a bug even if it "works."
 
 2. **The three `NODE_ENV=test` guards.** If the diff touches `test/setup.ts`,
    `frontend/vitest.config.ts`, or `frontend/vite.config.ts`, check it hasn't

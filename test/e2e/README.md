@@ -1,8 +1,12 @@
-# Phase 4 socket API — end-to-end verification suite (issue #407)
+# End-to-end verification suite
 
-Phase 4 (the Unix control socket, the `mullion` CLI, and browser automation
-over the socket — see `docs/socket-api.md` and `docs/cli.md`) shipped fully
-unit/integration-tested via `app.inject()` and a mocked Playwright `Page`
+Started life as the Phase 4 socket API suite (issue #407) and has since
+grown beyond it — this directory is now the home for every opt-in,
+real-binary/real-browser end-to-end test, not just the original socket API
+checklist. That original scope: Phase 4 (the Unix control socket, the
+`mullion` CLI, and browser automation over the socket — see
+`docs/socket-api.md` and `docs/cli.md`) shipped fully unit/integration-tested
+via `app.inject()` and a mocked Playwright `Page`
 (`test/plugins/control-socket.test.ts`, `test/cli/mullion.test.ts`,
 `test/routes/browser-automation.test.ts`, ...), but its own plan document's
 manual **Verification** checklist — a raw socket smoke test, the full CLI
@@ -10,7 +14,9 @@ sequence, all 20 browser actions against a real page, persistence across a
 backend restart, multi-host proxying, and a handful of security checks — was
 never executed against a live instance. This directory automates everything
 on that checklist that doesn't require a human at a keyboard or a real
-`systemd --user` + `dtach` process tree.
+`systemd --user` + `dtach` process tree, plus later additions that need the
+same "real binary, not a mock" posture (a real opencode/agy CLI, not a
+mocked `spawn`).
 
 ## Running it
 
@@ -39,7 +45,13 @@ first.
   `test-node`/`test-frontend` use: that reusable job has no hook to run an
   arbitrary setup command (like installing a browser) before its own Test
   step, and this repo can't add one without editing the upstream
-  `s3ntin3l8/.github` repo. `test-e2e` is deliberately **not yet** a required
+  `s3ntin3l8/.github` repo. The job also installs a **pinned, integrity-
+  checked `opencode` binary** (currently `1.18.26`, via `test/e2e/opencode/`'s
+  own `package.json`/`package-lock.json` — `npm ci` there enforces the
+  lockfile's integrity hash) and prepends it to `PATH` before the test step,
+  for `opencode-permission-merge.e2e.test.ts` below — see that test's own
+  header comment for why the version is pinned rather than "whatever's
+  latest." `test-e2e` is deliberately **not yet** a required
   branch-protection status check — give it a run of real, unattended CI
   before gating every merge on it.
 - **Running it locally from inside a Mullion-hosted session**: scrub the
@@ -98,6 +110,24 @@ first.
   one path neither `test/integration/multi-host.test.ts` (pty proxying only)
   nor `test/routes/browser-automation.test.ts` (local browser only)
   exercises.
+- **`opencode-permission-merge.e2e.test.ts`** (PR #966) — a real, pinned
+  `opencode` binary (`opencode debug config`), asserting that
+  `OPENCODE_CONFIG_CONTENT`'s `permission` key deep-merges per top-level key
+  with the user's own `~/.config/opencode/opencode.json`/project config,
+  rather than shallow-replacing it — the assumption Task Master's per-skill
+  permission deny list for unattended workers depends on. Skips gracefully
+  if `opencode` isn't on `PATH` (CI installs it explicitly; see above).
+- **`scaffold-generate-agy.e2e.test.ts`** (issue #1130) — a real, live agy
+  generation turn (`scaffold-generate.ts`'s `buildInvocation` `"agy"` case)
+  against a throwaway fixture repo, asserting the output reflects a
+  contrived invariant agy could not have produced without actually reading
+  the repo — catching two bugs a mocked `spawn` can't: a prompt-attachment
+  argument-parsing bug, and agy denying every tool call in headless/print
+  mode without `--dangerously-skip-permissions` (a turn can exit 0 with
+  plausible-looking output while never having read anything). Skips
+  gracefully if the `agy` binary isn't on `PATH` — CI's `test-e2e` job does
+  not install/authenticate agy, so this makes a real model call only on a
+  developer's own machine that has it configured.
 
 ## What stays manual (see issue #407's own checklist)
 

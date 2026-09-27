@@ -66,7 +66,7 @@ never blocked by a GitHub failure), but the failure itself is not silent:
 every write failure — including that first claim — is logged server-side
 **and** recorded on the task's `githubSyncError` field, rendered directly
 in the task detail drawer regardless of the task's status (see
-[`tasks.md`](tasks.md#github-sync)). If claiming a task never actually
+[`tasks-internals.md`](tasks-internals.md#github-sync)). If claiming a task never actually
 labels/comments on its GitHub issue, the task itself will say why. If
 you're setting this up ahead of time, save yourself that round trip and
 provision write access up front.
@@ -97,7 +97,7 @@ reconciler sweep instead of a click — same token scope as **Merge**, nothing
 additional. Unlike **Run**, the sweep never dispatches: a task PR's own merge
 is already the push that regenerates the release PR, so the sweep needs no
 `Actions: write`/`dispatch`-scoped token at all. See
-[Autorelease after tasks land](tasks.md#autorelease-after-tasks-land-744) for
+[Autorelease after tasks land](tasks-internals.md#autorelease-after-tasks-land-744) for
 the trigger, the quiet-window batching, and the `workflow_dispatch`-only
 degradation (a repo without an `on: push` trigger on its release workflow
 never gets a release PR out of a task landing, so the sweep waits forever —
@@ -220,7 +220,7 @@ steady state for any repo the App simply isn't installed on, or any
 installation that hasn't re-approved a widened permission set. Only a
 _subsequent failure of the fallback write itself_ (e.g. the PAT also
 lacking scope) reaches the task's `githubSyncError` field, the same way
-any other write failure does (see [`tasks.md`](tasks.md#github-sync)). A
+any other write failure does (see [`tasks-internals.md`](tasks-internals.md#github-sync)). A
 "not installed on this owner" or "permission denied" result is itself
 cached for the same ~1h per repo _and_ per flavor, so installing the App on
 a new owner (or re-approving a widened permission set) and expecting the
@@ -409,7 +409,7 @@ for the primary App.
 A reviewer App is **not** a substitute for a CODEOWNERS entry — a GitHub App
 can't be a CODEOWNER. It can only satisfy a branch protection rule's numeric
 "required approving reviews" count, and only when granted `Contents: Read &
-write` per above. See [`tasks.md`](tasks.md#merge-on-approve) for what this
+write` per above. See [`tasks-internals.md`](tasks-internals.md#merge-on-approve) for what this
 means for merge behavior once branch protection actually requires an
 approval, and what an operator needs to turn on for any of this to matter:
 with no `required_pull_request_reviews` rule on the target branch, a
@@ -491,7 +491,7 @@ handler's immediate registration or the periodic reconciler catches up
 (see the registration paragraph above).
 
 Dependency-aware claiming (`#667`, see
-[`tasks.md`](tasks.md#dependency-aware-claiming-667)) rides the same
+[`tasks-internals.md`](tasks-internals.md#dependency-aware-claiming-667)) rides the same
 webhook two ways: an `issue_dependencies`/`blocked_by_added` or
 `blocked_by_removed` delivery re-checks the blocked task's own dependency
 state immediately, and a `closed` delivery for an issue with dependents

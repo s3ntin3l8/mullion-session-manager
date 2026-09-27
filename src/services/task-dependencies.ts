@@ -62,7 +62,7 @@ export interface DependencyGateRow {
 
 /**
  * The single truth table dependency-aware claiming is built on — see
- * docs/tasks.md's "Dependency-aware claiming" section for the full
+ * docs/tasks-internals.md's "Dependency-aware claiming" section for the full
  * rationale. `issueNumber` is part of the input, not an afterthought: it's
  * what separates "local task, never gated" (always `clear`, zero cost, zero
  * network dependency — preserves the pre-#667 "auto-claim works with no

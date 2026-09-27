@@ -270,8 +270,8 @@ describe("autoClaimReadyTasks — dependency-aware claiming (#667)", () => {
   });
 
   // Hermes review — the shared-TTL interaction between the claim path and
-  // the decoupled display pass (docs/tasks.md's "Backoff on a hard error
-  // only" / "No same-tick double-refresh with the claim path"). Both halves
+  // the decoupled display pass (docs/tasks-internals.md's "Backoff on a
+  // hard error only" / "No same-tick double-refresh with the claim path"). Both halves
   // of the guarantee matter and were both broken by an earlier version of
   // this fix: (1) within one sweep, a row the claim path already
   // shortfall-checked must not be checked a second time by the display

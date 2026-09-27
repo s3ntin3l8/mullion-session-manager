@@ -5,7 +5,7 @@
 ```bash
 make install          # backend deps
 make install-hooks    # pre-commit + pre-push git hooks (see below — do this before your first commit)
-cd frontend && npm install
+cd frontend && npm ci
 ```
 
 See the [Quick Start](README.md#-quick-start) in `README.md` for running the
@@ -42,6 +42,11 @@ make lint && make typecheck && make test && make format-check
 ```
 
 If `make format-check` fails, `make format` applies the fix in place.
+
+Any new or modified executable line in `src/` or `frontend/src/` must also
+meet **≥75% patch test coverage** against `origin/main` — verify with `make
+test-patch-coverage` before pushing; Codecov enforces the same floor on the
+PR.
 
 If you changed `src/db/schema.ts`, also run `npm run db:generate` and commit
 the generated migration under `drizzle/`.

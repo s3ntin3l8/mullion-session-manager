@@ -809,7 +809,8 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
   // badge, independent of autoClaimReadyTasks' own claim-gate check. Any
   // status a task can sit in pre-`done`/`failed` is a candidate, not just
   // `ready`: a manually-claimed task never goes through dependencyGate at
-  // all (claiming bypasses the gate — see docs/tasks.md), so it can be
+  // all (claiming bypasses the gate — see docs/tasks-internals.md's
+  // "Dependency-aware claiming" section), so it can be
   // sitting in `claimed`/`in_progress`/`reviewing` with a never-resolved
   // dependency state and the board has no other path to ever check it.
   async function resolveStaleTaskBlockers(

@@ -56,6 +56,10 @@ when you'd reach for it.
 - [`agent-guide.md`](agent-guide.md) — the agent-facing guide auto-injected
   into a session at `SessionStart`; read this if you're an agent CLI
   running inside a Mullion-managed session.
+- [`tasks-internals.md`](tasks-internals.md) — Task Master's reconciler
+  mechanics: the gates, auto-return, auto-approve, auto-rebase, rate-limit
+  grace, GitHub sync, and review-agent internals behind [`tasks.md`](tasks.md)'s
+  operator-facing model.
 
 ## Contributing
 

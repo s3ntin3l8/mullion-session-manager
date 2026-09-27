@@ -13,14 +13,28 @@ wrong even if it's internally consistent and well-tested.
 
 ## The opaque-blob invariant
 
-See `AGENTS.md`. The **one** deliberate exception is Claude Code's hook
-adapter (`src/services/hook-adapters/claude-code.ts`), which appends
-`--settings`/`--mcp-config` flags via a `commandTransform`.
+See `AGENTS.md`. The deliberate exception is `src/services/hook-adapters/`:
+each adapter's own `commandTransform` (Claude Code's appends `--settings`/
+`--mcp-config`/`--plugin-dir`; Codex's and agy's append their own MCP/model
+flags the same way) inspects and rewrites the launch command at spawn time.
+Alongside that, a narrow set of helpers inspects `session.command` from
+outside the adapters: `commandIsOpencode`/`commandModelCli`
+(`hook-adapters/index.ts`) and `buildModelFlag` (`hook-adapters/shared.ts`),
+plus `validateModel`/`validateCliModel` (`services/task-model-resolve.ts`)
+and `commandSupportsSeed` (`services/task-agent-resolve.ts`) — what callers
+elsewhere (`task-claim.ts`, `task-reconciler.ts`, `routes/sessions.ts`) use
+to branch on a command's agent family, inject a model flag, or decide
+whether a real first-turn prompt can be delivered.
 
 **Red flag:** any new code that calls `.split()`, a regex, or a shell
-parser on `session.command` or `workspace.layout` outside that one adapter.
-If a change needs to know something about a command's shape, that's a sign
-the data belongs in a typed field, not squeezed out of the opaque string.
+parser on `session.command` or `workspace.layout` **outside** a hook
+adapter's own `commandTransform` or one of those sanctioned helpers. A
+caller reaching for `commandIsOpencode`/`commandModelCli`/
+`commandSupportsSeed`/`buildModelFlag` is fine — that's the invariant's
+whole point, a single place the shape lives, not everyone re-deriving it.
+If a change needs to know something new about a command's shape that none
+of those helpers already expose, that's a sign the data belongs in a typed
+field, not squeezed out of the opaque string.
 
 ## The three `NODE_ENV=test` guards — do not simplify or combine
 

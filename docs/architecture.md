@@ -12,7 +12,19 @@ lives only in `PtyManager`'s in-memory map, and routes merge the two rather
 than trusting the DB column alone. `sessions.command` and
 `workspaces.layout` are deliberately **opaque blobs** — the backend never
 parses a shell command line or a dockview layout, it just stores and
-replays what it's given.
+replays what it's given. **The exception** is `src/services/hook-adapters/`:
+each adapter's own `commandTransform` (Claude Code appends `--settings`/
+`--mcp-config`/`--plugin-dir`; Codex and agy append their own MCP/model
+flags the same way) inspects and rewrites the launch command at spawn time,
+and a handful of narrow, purpose-built helpers exported alongside them —
+`commandIsOpencode`/`commandModelCli`/`commandSupportsSeed`/`buildModelFlag`/
+`validateModel`/`validateCliModel` (`hook-adapters/index.ts`/`shared.ts`) —
+are what callers elsewhere (`task-claim.ts`, `task-reconciler.ts`,
+`task-model-resolve.ts`, `routes/sessions.ts`) use to branch on a command's
+agent family or inject a model flag, rather than re-deriving that shape
+themselves with their own ad-hoc parsing. Any `session.command` inspection
+outside these sanctioned adapter/helper call sites is the red flag, not a
+call into one of them.
 
 The scope's unit name (`crs-session-<instanceId>-<id>`,
 `session-process.ts`'s `scopeUnitName`) is namespaced per Mullion instance
@@ -55,16 +67,43 @@ way as a namespaced one.
   `host-heartbeat`, `github-pr-poller`, `webhook-reconciler`, `task-watcher`,
   `git-fetcher` — these are the always-on primary-side pollers/reconcilers
   for multi-host, GitHub, Task Master, and webhook registration; see those
-  subsystems' own docs for what each does. `agent-enrollment` and
-  `request-nonce` are the mirror image: registered only on an `agent`-role
-  host, not the primary, for enrolling with and verifying signed requests
-  from its primary. `bundle-sync` is the one plugin that runs on both roles
-  (issue #941 — a boot-time `onReady` hook, registered on both the primary
-  and an `agent`-role host, that syncs the shipped `src/bundle/skills/`
-  bundle into each CLI's own global skill/agent directory once per process
-  start, tracked by a manifest at `~/.mullion/bundle-sync.json`; see
+  subsystems' own docs for what each does. `runtime-settings` applies
+  Settings → Server's log-level override once the DB is available (and on
+  every later Settings change). `agent-bridge` decorates `app.connectedBridges`
+  (the live SSH-agent bridge connection map `routes/agent-bridge.ts` and
+  `ssh-agent-fanout.ts` both read) and `bridge-cleanup` periodically sweeps
+  expired pairing codes off the `bridges` table — both primary-only, part of
+  the SSH-agent bridge (issue #820, see `docs/ssh-agent.md`). `ssh-agent`
+  registers on **both** roles: on an `agent`-role host it materializes the
+  local unix socket a launched session's `SSH_AUTH_SOCK` points at, wired to
+  the primary's dial-in; on the primary it serves that same socket for the
+  primary's own local sessions directly. `ssh-agent-fanout` (primary-only)
+  reconciles which bridge serves which enrolled host whenever a bridge
+  connects/disconnects or a host is enrolled/removed. `agent-enrollment` and
+  `request-nonce` are the mirror image of the primary-side pollers above:
+  registered only on an `agent`-role host, not the primary, for enrolling
+  with and verifying signed requests from its primary. `bundle-sync` is the
+  one plugin that runs on both roles (issue #941 — a boot-time `onReady`
+  hook, registered on both the primary and an `agent`-role host, that syncs
+  the shipped `src/bundle/skills/` bundle into **all four CLIs'** (Claude
+  Code, codex, agy, opencode) own global skill/agent directory once per
+  process start, tracked by a manifest at `~/.mullion/bundle-sync.json`; see
   `src/services/bundle-sync.ts` and
   [`agent-guide.md`](agent-guide.md#where-your-skills-actually-come-from)).
+  Before this shipped, codex and agy got a real per-launch copy
+  (`installBundleSkills`, called fire-and-forget on every session spawn —
+  still called today too, as a cheap idempotent fallback for the rare case
+  where boot-time sync hasn't run yet on this host) while Claude Code and
+  opencode got a zero-copy per-session pointer instead
+  (`hook-adapters/claude-code.ts`'s `--plugin-dir`,
+  `hook-adapters/opencode.ts`'s `skills.paths`); `bundle-sync` aligned all
+  four onto the one boot-time mechanism. Claude Code's `--plugin-dir` is
+  **not** fully retired by this, though: it's still emitted per-session
+  whenever a project has its own DB-authored skill/reviewer content to
+  compose alongside the shipped bundle (`composeClaudeSessionBundle`), and
+  it falls back to pointing at the plain shipped bundle directly whenever
+  `isBundleSyncedFor("claude-code")` reports the boot-time sync hasn't run
+  yet on this host.
   Ownership of installed content the manifest didn't (yet) track — e.g. the
   first sync after a shipped skill/agent gets renamed, or a
   deleted/corrupted manifest — is settled by two orphan-scan-safe markers,
@@ -111,10 +150,28 @@ way as a namespaced one.
   read/delete browser previews — see [`browser-previews.md`](browser-previews.md)),
   `events` (`/ws/events` — the live notification-event stream, plus `GET
 /api/events`, the opt-in persisted-history query — see
-  [`socket-api.md`](socket-api.md)), `tasks` (Task Master's CRUD,
-  claim/approve/reject/retry/give-up endpoints — see [`tasks.md`](tasks.md)),
+  [`socket-api.md`](socket-api.md)), `tasks` (Task Master's CRUD plus its
+  action verbs — claim/approve/reject/retry/re-review/give-up/archive/
+  unarchive/archive-merged/clear-done/merge — see [`tasks.md`](tasks.md)),
   `ws-tasks` (`/ws/tasks` — live task-transition push, see
-  [`tasks.md`](tasks.md)), `skills` (per-agent Skill enable/disable),
+  [`tasks.md`](tasks.md)), `bundle-sync` (`GET`/`POST /api/bundle-sync/*` —
+  reports and re-triggers THIS process's own boot-time bundle sync,
+  host-local by design; see the `bundle-sync` plugin above),
+  `agent-bridge` (the primary-side SSH-agent bridge surface — pairing-code
+  issue/redeem, bridge list/reorder/rotate/delete, and the
+  `/internal/ws/ssh-agent` dial-in an agent host uses to connect back — see
+  `docs/ssh-agent.md`), `dock-config` (`GET`/`PUT
+/api/projects/:id/dock/config` — the write half of a project's dock
+  config; the existing `GET /api/projects/:id/dock` on `projects` stays the
+  merged, Docker-discovery-aware read), `opencode-models` (`GET
+/api/opencode/models` and `GET /api/agy/models` — bare-array model catalogs
+  for the Settings model pickers, despite the route's own name only naming
+  opencode), `system-resources` (Settings → Server's resource-monitoring
+  surface — CPU/memory/disk sampling and Docker storage inspection/prune),
+  `internal-schemas` (not a route file at all — the extracted JSON Schema
+  bodies/params `internal.ts`'s DB-less agent API registers, kept out of
+  `internal.ts` itself to stop ~450 lines of hand-written schema literals
+  drifting from their own parallel TS interfaces), `skills` (per-agent Skill enable/disable),
   `agent-rules` (per-agent rule-file read/write), `settings` (the runtime
   Settings-override store backing Task Master's safety envelope and other
   deploy-time-default overrides), `updates` (Settings → Server's
@@ -149,97 +206,126 @@ way as a namespaced one.
   `settings.sessions.workflowConventionsText` value, which rides the
   ordinary `PATCH /api/settings` path — see
   [`agent-context.md`](agent-context.md#workflow-conventions-issue-937)).
-- `src/services/` — `pty-manager` (dtach/node-pty session lifecycle),
-  `project-config` (layered `.crs/actions.json`/`dock.json` + `package.json`/
-  `tasks.json` resolution), `agent-detect`, `attention-detect` (BEL/OSC
-  parsing), `session-reconciler`, `cgroup-inventory` (per-session process
-  inventory via each dtach master's own transient systemd scope),
-  `event-history` (query/insert/retention logic behind the opt-in persisted
-  session-event history — see `src/plugins/event-store.ts`), `encryption`
-  (AES-256-GCM), `date-utils`, `host-registry`/`remote-host-client`/
-  `session-backend` (multi-host routing — see [`multi-host.md`](multi-host.md)),
-  `github`/`github-integration`/`github-device-flow`/`git-remote`/
-  `github-webhook`/`github-pr-poller`/`github-activity-tracker`/
-  `github-ws-broadcast`/`github-app`/`github-write` (GitHub status +
-  connect flows + webhook registration + adaptive polling + WS push +
-  GitHub App installation-token minting + the write-side API client Task
-  Master's sync/promote use — see [`github-integration.md`](github-integration.md)),
-  `task-state`/`task-claim`/`task-github-sync`/`task-promote`/
-  `task-reconciler`/`task-watcher`/`task-events`/`task-config`/
-  `task-agent-resolve` (Task Master: the transition table and live
-  `/ws/tasks` broadcast, claim, GitHub sync, PR promotion, the reconciler
-  that drives autonomous progress, the poll/webhook ingest watcher, runtime
-  Settings-override config, and worker/review agent resolution — see
-  [`tasks.md`](tasks.md)), `git-worktree` (per-task worktree
-  create/remove/prune, including the boot-time orphan sweep and remote-host
-  proxying — see [`tasks.md`](tasks.md)), `git-branch`/`git-branch-delete`/
-  `git-status`/`git-diff`/`git-fetch`/`git-push`/`git-refs`/`git-ignore`/
-  `git-env` (the Git panel's own read/write operations — see
-  [`git-panel.md`](git-panel.md); every call routes through `git-env.ts`'s
-  `gitEnv()` to stay outside the env-leak-corruption class), `preview-registry`/
-  `preview-host`/`http-proxy`/`dev-server-detect`/`docker-service-detect`/
-  `url-guard`/`pinned-connect` (browser previews, Docker Compose discovery,
-  and their SSRF guards, including connection-time IP pinning — see
-  [`browser-previews.md`](browser-previews.md)), `hook-protocol` (hook
-  message validation), `hook-adapters/` (per-agent hook auto-injection at
-  spawn — Claude Code, OpenCode, Codex, and agy; Codex's and agy's are both
-  managed merges into the user's real `~/.codex/hooks.json` /
-  `~/.gemini/config/hooks.json`, not ephemeral like Claude Code/OpenCode —
-  Codex's own hook-trust model and `CODEX_HOME`'s all-or-nothing scope rule
-  out an ephemeral injection there; agy has no documented env var to
-  relocate its config at all — see [`agent-hooks.md`](agent-hooks.md)),
-  `hook-adapters/mullion-bundle` (ships `src/bundle/skills/`'s eight skills
-  — `host`, `browser`, `troubleshooting`, `session-ops`, `taskmaster-issues`,
-  `task-worker`, `task-reviewer`, `manual-review-methodology` — into every
-  Claude Code session via a session-scoped `--plugin-dir`,
-  installs the same skills into codex's/agy's own real global skill dirs
-  (each `mullion-`-prefixed there to avoid colliding with a user's own
-  skill) for the two agents with no ephemeral overlay, and — the same
-  mechanism,
-  extended — composes a per-session bundle carrying a PROJECT's own
-  DB-authored skill/reviewer subagent alongside it; opencode's project
-  skill/reviewer instead ride its own `skills.paths`/`agent/` config keys
-  directly, no bundle involved — see
-  [`agent-context.md`](agent-context.md)), `skills` (per-agent Skill
-  discovery/enable-disable across Claude Code/codex/opencode/agy's own
-  config locations, plus the hand-rolled SKILL.md frontmatter parser
-  `mullion-bundle.ts`/`mullion-scaffold.ts` both reuse), `marked-region`
-  (the `<!-- mullion:*:start/end -->` marker-delimited-region read/write
-  helpers shared by `agent-guide.ts`, `project-briefing.ts`, and
-  `mullion-scaffold.ts`), `project-briefing`/`project-tooling` (a project's
-  own DB-authored briefing/skill/reviewer — resolution vs. a committed
-  AGENTS.md region, and the primary-only DB row backing it, respectively —
-  see [`agent-context.md`](agent-context.md)), `mullion-scaffold`
-  (pure "current file contents + options → target file set" computation
-  backing the scaffold-as-PR flow — see
-  [`agent-context.md`](agent-context.md#scaffolding-it-into-the-repo-instead)),
-  `opencode-session-transfer` (PR #696 — full opencode conversation-history
-  carryover into a promoted worktree via `opencode export`/`import`,
-  re-keying the imported session to the worktree's project/directory; local
-  host only — see [`agent-hooks.md`](agent-hooks.md)),
-  `agent-guide` (serves this doc set's own [`agent-guide.md`](agent-guide.md)
-  into a spawned session at `SessionStart`), `push-delivery`/`push-store`
-  (the web-push subscription/delivery surface behind `src/routes/push.ts`),
-  `control-protocol`/`control-socket-addr`/`socket-channel`/`unix-socket`/
-  `ws-pipe` (the control socket's transport — see [`socket-api.md`](socket-api.md)),
-  `browser-manager`/`browser-cookie-import`/`session-browsers` (the
-  Playwright pool, per-project storage state, and cookie-profile import
-  behind [`browser-automation.md`](browser-automation.md)), `oidc`
-  (native OIDC login — see [`auth.md`](auth.md)), `device-manager`/
-  `device-process` (the Android emulator/scrcpy lifecycle — spawn under a
-  transient `systemd --user` scope, adb+scrcpy attach, restart-survival
-  reattach, port allocation — and its scope-naming/marker-file/liveness
-  plumbing, deliberately a separate implementation from
-  `pty-manager`/`session-process`, not a generalization of them),
-  `avd-manager` (AVD listing/creation and installed-system-image scanning —
-  the provisioning counterpart to `device-manager`'s running half; see
-  [`device-panel.md`](device-panel.md)), `systemd-unit`
-  (cgroup-based autodetection of the running unit for self-update),
-  `update-checker` (Settings → Server's update surface).
+- `src/services/` — ~140 files; grouped here by subsystem rather than
+  listed flat (see each subsystem's own doc for the full detail):
+  - **Sessions & hosting**: `pty-manager` (dtach/node-pty session
+    lifecycle), `project-config` (layered `.crs/actions.json`/`dock.json` +
+    `package.json`/`tasks.json` resolution), `agent-detect`,
+    `attention-detect` (BEL/OSC parsing), `session-reconciler`,
+    `cgroup-inventory` (per-session process inventory via each dtach
+    master's own transient systemd scope), `event-history` (query/insert/
+    retention logic behind the opt-in persisted session-event history — see
+    `src/plugins/event-store.ts`), `encryption` (AES-256-GCM), `date-utils`,
+    `host-registry`/`remote-host-client`/`session-backend` (multi-host
+    routing — see [`multi-host.md`](multi-host.md)), `control-protocol`/
+    `control-socket-addr`/`socket-channel`/`unix-socket`/`ws-pipe` (the
+    control socket's transport — see [`socket-api.md`](socket-api.md)),
+    `oidc` (native OIDC login — see [`auth.md`](auth.md)), `push-delivery`/
+    `push-store` (the web-push subscription/delivery surface behind
+    `src/routes/push.ts`).
+  - **Git & browser previews**: `git-branch`/`git-branch-delete`/
+    `git-status`/`git-diff`/`git-fetch`/`git-push`/`git-refs`/`git-ignore`/
+    `git-env` (the Git panel's own read/write operations — see
+    [`git-panel.md`](git-panel.md); every call routes through `git-env.ts`'s
+    `gitEnv()` to stay outside the env-leak-corruption class),
+    `preview-registry`/`preview-host`/`http-proxy`/`dev-server-detect`/
+    `docker-service-detect`/`url-guard`/`pinned-connect` (browser previews,
+    Docker Compose discovery, and their SSRF guards, including
+    connection-time IP pinning — see
+    [`browser-previews.md`](browser-previews.md)), `browser-manager`/
+    `browser-cookie-import`/`session-browsers` (the Playwright pool,
+    per-project storage state, and cookie-profile import behind
+    [`browser-automation.md`](browser-automation.md)).
+  - **Task Master**: `task-state`/`task-claim`/`task-dispatch`/
+    `task-github-sync`/`task-promote`/`task-approve`/`task-reconciler`/
+    `task-watcher`/`task-events`/`task-config`/`task-agent-resolve`/
+    `task-model-resolve`/`task-dependencies`/`task-issue-context`/
+    `task-prompt`/`task-reseed`/`task-rate-limit-grace` (the transition
+    table and live `/ws/tasks` broadcast, the claim/dispatch queue, GitHub
+    sync, PR promotion and approval, the reconciler that drives autonomous
+    progress — gates, auto-return, auto-approve, auto-rebase, rate-limit
+    grace — the poll/webhook ingest watcher, dependency-aware claiming,
+    prompt construction, re-seeding, and worker/review agent + model
+    resolution — see [`tasks.md`](tasks.md) and
+    [`tasks-internals.md`](tasks-internals.md)), `git-worktree` (per-task
+    worktree create/remove/prune, including the boot-time orphan sweep and
+    remote-host proxying), `release-merge`/`project-release-please`
+    (autorelease-after-merge decision logic and the release-please
+    detection/auto-enable sweep — see
+    [`tasks-internals.md`](tasks-internals.md#autorelease-after-tasks-land-744)).
+  - **Bundle & agent context**: `hook-protocol` (hook message validation),
+    `hook-adapters/` (per-agent hook auto-injection at spawn — Claude Code,
+    OpenCode, Codex, and agy; Codex's and agy's are both managed merges into
+    the user's real `~/.codex/hooks.json` / `~/.gemini/config/hooks.json`,
+    not ephemeral like Claude Code/OpenCode — Codex's own hook-trust model
+    and `CODEX_HOME`'s all-or-nothing scope rule out an ephemeral injection
+    there; agy has no documented env var to relocate its config at all —
+    see [`agent-hooks.md`](agent-hooks.md)), `hook-adapters/mullion-bundle`
+    (ships `src/bundle/skills/`'s eight skills — `host`, `browser`,
+    `troubleshooting`, `session-ops`, `taskmaster-issues`, `task-worker`,
+    `task-reviewer`, `manual-review-methodology` — into all four CLIs' own
+    global skill/agent directories via `bundle-sync.ts`'s boot-time sync
+    (see the `bundle-sync` plugin above), and — the same mechanism,
+    extended — composes a per-session Claude Code `--plugin-dir` carrying a
+    PROJECT's own DB-authored skill/reviewer subagent alongside the shipped
+    bundle when one is configured; opencode's own project skill/reviewer
+    instead ride its `skills.paths`/`agent/` config keys directly — see
+    [`agent-context.md`](agent-context.md)), `skills` (per-agent Skill
+    discovery/enable-disable across Claude Code/codex/opencode/agy's own
+    config locations, plus the hand-rolled SKILL.md frontmatter parser
+    `mullion-bundle.ts`/`mullion-scaffold.ts` both reuse), `marked-region`
+    (the `<!-- mullion:*:start/end -->` marker-delimited-region read/write
+    helpers shared by `agent-guide.ts`, `project-briefing.ts`, and
+    `mullion-scaffold.ts`), `project-briefing`/`project-tooling` (a
+    project's own DB-authored briefing/skill/reviewer — resolution vs. a
+    committed AGENTS.md region, and the primary-only DB row backing it,
+    respectively — see [`agent-context.md`](agent-context.md)),
+    `mullion-scaffold` (pure "current file contents + options → target file
+    set" computation backing the scaffold-as-PR flow — see
+    [`agent-context.md`](agent-context.md#scaffolding-it-into-the-repo-instead)),
+    `opencode-session-transfer` (PR #696 — full opencode conversation-
+    history carryover into a promoted worktree via `opencode export`/
+    `import`, re-keying the imported session to the worktree's project/
+    directory; local host only — see [`agent-hooks.md`](agent-hooks.md)),
+    `agent-guide` (serves this doc set's own
+    [`agent-guide.md`](agent-guide.md) into a spawned session at
+    `SessionStart`).
+  - **Devices**: `device-manager`/`device-process`/`device-defaults`/
+    `device-discovery` (the Android emulator/scrcpy lifecycle — spawn under
+    a transient `systemd --user` scope, adb+scrcpy attach, restart-survival
+    reattach, port allocation, mDNS discovery — and its scope-naming/
+    marker-file/liveness plumbing, deliberately a separate implementation
+    from `pty-manager`/`session-process`, not a generalization of them),
+    `avd-manager` (AVD listing/creation and installed-system-image scanning
+    — the provisioning counterpart to `device-manager`'s running half; see
+    [`device-panel.md`](device-panel.md)).
+  - **SSH agent** (issue #820, see [`ssh-agent.md`](ssh-agent.md)):
+    `ssh-agent-socket` (the local unix socket a launched session's
+    `SSH_AUTH_SOCK` points at), `ssh-agent-mux` (the multiplexed channel
+    protocol carried over the primary↔agent-host bridge websocket),
+    `ssh-agent-fanout` (which bridge serves which enrolled host),
+    `ssh-agent-filter` (per-project/session key-forwarding scope),
+    `ssh-agent-relay`, `bridge-registry` (the `bridges` table's pairing-code
+    issue/redeem/rotate/expiry logic), `request-scheme`.
+  - **GitHub & release**: `github`/`github-integration`/
+    `github-device-flow`/`git-remote`/`github-webhook`/`github-pr-poller`/
+    `github-activity-tracker`/`github-ws-broadcast`/`github-app`/
+    `github-write` (GitHub status + connect flows + webhook registration +
+    adaptive polling + WS push + GitHub App installation-token minting +
+    the write-side API client Task Master's sync/promote use — see
+    [`github-integration.md`](github-integration.md)).
+  - **Host & update**: `systemd-unit` (cgroup-based autodetection of the
+    running unit for self-update), `update-checker` (Settings → Server's
+    update surface).
 - `src/mcp/` — the MCP server Mullion exposes over the same control socket
   the `mullion` CLI uses: `server.mjs` (the MCP protocol handler),
-  `client.mjs` (control-socket client), `tools.mjs` (session/project/
-  preview/browser tool definitions). Copied byte-for-byte into `dist/mcp/`
+  `client.mjs` (control-socket client), `tools.mjs` (21 tool definitions
+  spanning session/project/preview/browser control, device control
+  (`list_devices`/`use_device`/`device_action`/`start_device`/`stop_device`/
+  `delete_device`), and a project's DB-authored tooling
+  (`get_project_tooling`/`set_project_tooling`) — `list_previews`/
+  `set_project_tooling`/`delete_device` are full-scope-only, refused for an
+  in-session agent's own session-scoped token). Copied byte-for-byte into `dist/mcp/`
   by `make build`; exec'd by `src/cli/mullion.mjs`'s `mullion mcp` command —
   see [`cli.md`](cli.md).
 - `src/hooks/` — plain-JavaScript (not TypeScript) files loaded directly by
@@ -267,13 +353,25 @@ way as a namespaced one.
 - `src/db/` — Drizzle schema, client, seed. Migrations live in `drizzle/`.
 - `frontend/` — standalone Vite + React + TypeScript app (own
   `package.json`/tsconfig/eslint); dockview-based tiled terminal UI.
-- `deploy/` — systemd `--user` unit + Traefik/Authentik config templates
-  (fully supported native host deployment — see
-  [`../deploy/README.md`](../deploy/README.md)).
+- `deploy/` — `install.sh` (the versioned-install/self-update flow),
+  `mullion.service`/`mullion-agent.service` (the primary/agent-role
+  `systemd --user` unit templates), `traefik-dynamic.yml`/
+  `authentik-middleware-example.yml` (reverse-proxy + identity-header
+  templates for the trusted-gateway posture — see [`auth.md`](auth.md)),
+  `macos/` (the macOS tray-app installer's background image) — fully
+  supported native host deployment; see
+  [`../deploy/README.md`](../deploy/README.md).
 - `docs/` — see [`README.md`](README.md) for the full index.
 - `.github/workflows/` — thin callers of the reusable workflows in
   `s3ntin3l8/.github` — see [`ci-cd.md`](ci-cd.md).
 - `.claude/` — `settings.json` + `hooks/session-start.sh`: a SessionStart
   hook that installs deps and tooling so
   [Claude Code on the web](https://code.claude.com/docs/en/claude-code-on-the-web)
-  sessions can build, test, and lint. Runs only in the remote env.
+  sessions can build, test, and lint (runs only in the remote env);
+  `agents/mullion-reviewer.md` (a Claude Code sub-agent preloaded with this
+  repo's own review invariants — see
+  [`.claude/skills/mullion-review-invariants/SKILL.md`](../.claude/skills/mullion-review-invariants/SKILL.md),
+  which the sub-agent reads first) and `skills/mullion-review-invariants/`
+  (that skill itself, the mechanically-checkable form of this doc's own
+  session model / opaque-blob / ESM / config / migration / worktree
+  invariants).

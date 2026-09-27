@@ -15,9 +15,11 @@ context if you're running inside a Mullion-hosted session.
 
 - **Work in a worktree.** Developer worktrees live under `.wt/`, e.g.
   `.wt/<slug>`. Create one with `git fetch origin && git worktree add
-.wt/<slug> -b <slug> origin/main`. A fresh worktree does **not** inherit
-  `node_modules` — run `npm ci` at the repo root **and** `npm ci` in
-  `frontend/` before testing or building.
+.wt/<slug> -b <slug> origin/main`, or `make wt name=<slug>` — the Makefile
+  target that does the fetch/worktree-add and runs both `npm ci`s for you
+  in one step. A fresh worktree does **not** inherit `node_modules` — run
+  `npm ci` at the repo root **and** `npm ci` in `frontend/` before testing
+  or building (already done for you by `make wt`).
 - **Never commit directly to `main`.** Branch protection has no bypass.
   Always branch off the latest `origin/main` and open a PR.
 - **PR title needs a Conventional Commits prefix** (`feat:`, `fix:`, `chore:`,
@@ -36,7 +38,11 @@ context if you're running inside a Mullion-hosted session.
   trigger entirely — see `docs/tasks.md`'s "External review workflows" for
   why. A re-review can be requested the same way
   (`@s3ntin3l8-hermes Review` on the PR) after pushing fixes, but keep it to
-  a couple of rounds — don't loop on it indefinitely. Fixing
+  a couple of rounds — don't loop on it indefinitely. `make review` posts
+  that same `@s3ntin3l8-hermes Review` comment on the current branch's PR
+  (via `gh pr comment`) — a shorthand for requesting a re-review after
+  pushing fixes, not something to run right after opening the PR (the
+  auto-review already covers that). Fixing
   the code is not enough to address feedback — reply to each inline comment
   via the GitHub API, then resolve the thread via the GraphQL
   `resolveReviewThread` mutation. See "Addressing review feedback" below for
@@ -82,7 +88,22 @@ context if you're running inside a Mullion-hosted session.
   `terminate()`/`stopScope()` on an id it didn't itself create.
 - **`sessions.command` and `workspaces.layout` are opaque blobs.** The
   backend never parses a shell command line or a dockview layout — it just
-  stores and replays what it's given.
+  stores and replays what it's given. **The exception** is
+  `src/services/hook-adapters/`: each adapter's own `commandTransform`
+  (Claude Code's appends `--settings`/`--mcp-config`/`--plugin-dir`; Codex's
+  and agy's append their own MCP/model flags the same way) inspects and
+  rewrites the launch command at spawn time. The same is true of a narrow
+  set of helpers that inspect `session.command` from outside the adapters
+  themselves: `commandIsOpencode`/`commandModelCli` (`hook-adapters/index.ts`)
+  and `buildModelFlag` (`hook-adapters/shared.ts`), plus `validateModel`/
+  `validateCliModel` (`services/task-model-resolve.ts`) and
+  `commandSupportsSeed` (`services/task-agent-resolve.ts`) — used by callers
+  like `task-claim.ts`, `task-reconciler.ts`, and `routes/sessions.ts` to
+  branch on a command's agent family, inject a model flag, or decide whether
+  a real first-turn prompt can be delivered, rather than re-deriving that
+  shape with their own ad-hoc parsing. Any `session.command` inspection
+  outside these sanctioned adapter/helper call sites is the red flag, not a
+  call into one of them.
 - **ESM throughout.** Import specifiers end in `.js` even when importing
   `.ts` source files (Node16 resolution). Use `import type` for type-only
   imports.
@@ -111,6 +132,11 @@ context if you're running inside a Mullion-hosted session.
 
 ## Everyday commands
 
+- `make wt name=<slug>` — create `.wt/<slug>` off the latest `origin/main`
+  and run both `npm ci`s.
+- `make review` — post `@s3ntin3l8-hermes Review` on the current branch's
+  PR, to request a re-review after pushing fixes (not for the initial
+  review — that fires automatically on open).
 - `make dev` — backend (`tsx watch`) + frontend (Vite, HMR) together.
 - `make test-backend` — backend tests only, the fast inner loop; `make test`
   runs both workspaces.

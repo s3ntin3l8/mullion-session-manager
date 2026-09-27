@@ -3467,9 +3467,9 @@ async function unlinkFindingsFileIfPresent(
  * D1 — on any repo with `required_conversation_resolution` enabled (this
  * repo's own `main` included), an anchored review finding blocks merge
  * FOREVER once its thread is created: nothing before this called GitHub's
- * thread-resolution mutation at all (`docs/tasks.md`'s own known-limitations
- * section documented the resulting false-positive "blocked" read, but never
- * closed it). Confirmed live in a dry run (2026-08-27): a real anchored
+ * thread-resolution mutation at all (`docs/tasks-internals.md`'s own
+ * Auto-approve section documented the resulting false-positive "blocked"
+ * read, but never closed it). Confirmed live in a dry run (2026-08-27): a real anchored
  * finding, fixed and re-reviewed clean, still left `mergeStateStatus:
  * BLOCKED` with green CI — resolving the stale thread by hand was the only
  * way to unstick it.
