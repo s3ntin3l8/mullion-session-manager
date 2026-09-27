@@ -11,6 +11,7 @@ import {
   GroupHeading,
   ListRow,
   Row,
+  SecondaryButton,
   Slider,
   StyledList,
   Toggle,
@@ -71,6 +72,17 @@ export function NotificationsSection() {
         desc="If denied, allow notifications in your browser's site settings."
       >
         <span className="settings-readonly-value">{permission}</span>
+        {/* Issue #1428 — the browser-channel toggle below defaults to on,
+            so a click here (a real user gesture, unlike the events effect
+            in useAttentionNotifications.ts, which now waits for one
+            instead of requesting immediately) is often the only place a
+            user who never touches that toggle can grant permission at
+            all. */}
+        {permission === "default" && (
+          <SecondaryButton onClick={() => requestNotificationPermission(setPermission)}>
+            Enable
+          </SecondaryButton>
+        )}
       </Row>
 
       <div style={{ paddingTop: 6 }}>

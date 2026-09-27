@@ -49,6 +49,7 @@ import type { LayoutTier, LayoutContext } from "./lib/layoutTier.js";
 import { attachSidebarSwipeGesture } from "./lib/sidebarSwipeGesture.js";
 import { MobileSessionBar } from "./MobileSessionBar.js";
 import { useSessionDeepLink } from "./hooks/useSessionDeepLink.js";
+import { useOpenSessionRequest } from "./hooks/useOpenSessionRequest.js";
 import { useLayoutPresentation } from "./hooks/useLayoutPresentation.js";
 import { useDockviewDrop } from "./hooks/useDockviewDrop.js";
 import { useGlobalShortcuts } from "./hooks/useGlobalShortcuts.js";
@@ -896,7 +897,13 @@ export function App() {
       // once its gates are satisfied (Hermes review, third pass).
       const session = sessionsRef.current.find((s) => s.id === sessionId);
       pendingPushSessionIdRef.current = null;
-      if (session && session.status !== "killed") onOpenSessionRef.current(session);
+      if (session && session.status !== "killed") {
+        // Issue #1429 — a push click used to open the session's terminal
+        // without ever clearing its unread badge, unlike every other "tap a
+        // notification" path (the bell rows, the phone sheet).
+        useDashboardStore.getState().markSessionRead(session.id);
+        onOpenSessionRef.current(session);
+      }
     };
     const onMessage = (event: MessageEvent) => {
       if (event.data?.type !== "mullion-open-session") return;
@@ -925,6 +932,22 @@ export function App() {
     restoringRef,
     restoredWorkspaceIdRef,
   ]);
+
+  // Issue #1429 — resolves store/slices/ui.ts's requestOpenSession
+  // (useAttentionNotifications.ts's in-app Notification onclick has no
+  // direct access to onOpenSession). Same "AFTER useWorkspacePersistence,
+  // same restoringRef/restoredWorkspaceIdRef objects" ordering contract as
+  // useSessionDeepLink above — see that hook's own header comment, and this
+  // one's, for the full argument.
+  useOpenSessionRequest({
+    dockviewApi,
+    activeWorkspaceId,
+    sessionsLoaded,
+    sessions,
+    onOpenSession,
+    restoringRef,
+    restoredWorkspaceIdRef,
+  });
 
   // Issue #95 — re-syncs a push subscription on load (settings.notifications
   // .channels.push is the source of truth, not the presence of a live

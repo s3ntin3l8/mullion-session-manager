@@ -215,6 +215,62 @@ describe("store /ws/events integration (issue #166)", () => {
   });
 });
 
+// Issue #1429 — the one shared "mark this session as fully read" primitive
+// every explicit-open call site now uses (NotificationBell's rows/mark-all,
+// the push/deep-link/requestOpenSession session openers), replacing each
+// site's own duplicated `.reduce(Math.max...)`.
+describe("markSessionRead (issue #1429)", () => {
+  beforeEach(() => {
+    useDashboardStore.setState({ events: {}, lastSeenSeq: {} });
+  });
+
+  it("advances lastSeenSeq to the session's own highest buffered seq", () => {
+    // Seeded already seq-ascending, same invariant addEvent (store/
+    // helpers.ts) actually maintains in production — markSessionRead reads
+    // the LAST entry, not a max-scan, relying on that ordering.
+    useDashboardStore.setState({
+      events: { 5: [event({ seq: 1 }), event({ seq: 2 }), event({ seq: 3 })] },
+    });
+    useDashboardStore.getState().markSessionRead(5);
+    expect(useDashboardStore.getState().lastSeenSeq[5]).toBe(3);
+  });
+
+  it("is a no-op when the session has no buffered events", () => {
+    expect(() => useDashboardStore.getState().markSessionRead(404)).not.toThrow();
+    expect(useDashboardStore.getState().lastSeenSeq[404]).toBeUndefined();
+  });
+
+  it("never regresses the cursor, same monotonic guarantee as markEventSeen", () => {
+    useDashboardStore.getState().markEventSeen(5, 10);
+    useDashboardStore.setState({ events: { 5: [event({ seq: 3 })] } });
+    useDashboardStore.getState().markSessionRead(5);
+    expect(useDashboardStore.getState().lastSeenSeq[5]).toBe(10);
+  });
+});
+
+// Issue #1429 — store/slices/ui.ts's requestOpenSession, the store-level
+// "intent" useAttentionNotifications.ts's in-app Notification onclick uses
+// since it has no direct access to onOpenSession (resolved by
+// hooks/useOpenSessionRequest.ts, App.tsx).
+describe("requestOpenSession (issue #1429)", () => {
+  beforeEach(() => {
+    useDashboardStore.setState({ openSessionRequest: null });
+  });
+
+  it("sets openSessionRequest with the given sessionId and an incrementing nonce", () => {
+    useDashboardStore.getState().requestOpenSession(7);
+    expect(useDashboardStore.getState().openSessionRequest).toEqual({ sessionId: 7, nonce: 1 });
+
+    // A SECOND request — even for the same session — bumps the nonce, so a
+    // resolver that already handled nonce 1 can tell this one apart.
+    useDashboardStore.getState().requestOpenSession(7);
+    expect(useDashboardStore.getState().openSessionRequest).toEqual({ sessionId: 7, nonce: 2 });
+
+    useDashboardStore.getState().requestOpenSession(9);
+    expect(useDashboardStore.getState().openSessionRequest).toEqual({ sessionId: 9, nonce: 3 });
+  });
+});
+
 describe("dismissEvent / dismissedEventKeys (issue #169)", () => {
   beforeEach(() => {
     useDashboardStore.setState({ events: {}, lastSeenSeq: {}, dismissedEventKeys: {} });

@@ -18,9 +18,13 @@ let mockSessions: Array<{ id: number; status: string }> = [];
 // straight off the store now; "desktop" keeps this composed test's own
 // saves un-suppressed, matching its layoutTier prop below.
 const layoutMode = "desktop";
+// Issue #1429 — useSessionDeepLink.ts itself now calls
+// useDashboardStore.getState().markSessionRead(...) before onOpenSession,
+// so every test in this file (not just the composed one above) needs it.
+const markSessionRead = vi.fn();
 
 function storeState() {
-  return { sessions: mockSessions, saveWorkspaceLayout, settings: { layoutMode } };
+  return { sessions: mockSessions, saveWorkspaceLayout, settings: { layoutMode }, markSessionRead };
 }
 
 vi.mock("../store/index.js", () => {
@@ -67,6 +71,7 @@ function setUrl(pathAndQuery: string) {
 beforeEach(() => {
   mockSessions = [];
   saveWorkspaceLayout.mockClear();
+  markSessionRead.mockClear();
 });
 
 afterEach(() => {
@@ -207,6 +212,9 @@ describe("useSessionDeepLink", () => {
     vi.advanceTimersByTime(0);
     expect(onOpenSession).toHaveBeenCalledTimes(1);
     expect(onOpenSession).toHaveBeenCalledWith(session);
+    // Issue #1429 — a deep-linked session now gets its unread cleared too,
+    // the same "tap a notification" semantics every other opener uses.
+    expect(markSessionRead).toHaveBeenCalledWith(7);
   });
 
   it("does not open a killed session, but still clears the query param and never retries", () => {

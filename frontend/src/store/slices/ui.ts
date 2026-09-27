@@ -103,7 +103,7 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     hierarchicalView: readStoredHierarchicalView(),
     kanbanOrder: {},
     splitRequest: null,
-    notificationsPanelOpenRequest: 0,
+    openSessionRequest: null,
     highlightedPanelId: null,
     activePanelId: null,
     activeWorkspaceId: readStoredActiveWorkspaceId(),
@@ -236,8 +236,10 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
       set({ splitRequest: null });
     },
 
-    openNotificationsPanel: () => {
-      set((state) => ({ notificationsPanelOpenRequest: state.notificationsPanelOpenRequest + 1 }));
+    requestOpenSession: (sessionId) => {
+      set((state) => ({
+        openSessionRequest: { sessionId, nonce: (state.openSessionRequest?.nonce ?? 0) + 1 },
+      }));
     },
 
     startThemeWatch: () => {

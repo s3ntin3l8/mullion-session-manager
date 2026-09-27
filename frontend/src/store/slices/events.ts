@@ -122,6 +122,15 @@ export const createEventsSlice: StateCreator<DashboardState, [], [], EventsSlice
       eventsClientHandle?.sendSeen(sessionId, seq);
     },
 
+    markSessionRead: (sessionId) => {
+      const events = get().events[sessionId];
+      if (!events || events.length === 0) return;
+      // addEvent (below) keeps each session's list sorted ascending by seq,
+      // so the last entry is always the highest — same invariant
+      // PaneTab.tsx's own mark-seen effect relies on.
+      get().markEventSeen(sessionId, events[events.length - 1].seq);
+    },
+
     dismissEvent: (sessionId, seq) => {
       set((state) => ({
         dismissedEventKeys: { ...state.dismissedEventKeys, [eventKey(sessionId, seq)]: true },

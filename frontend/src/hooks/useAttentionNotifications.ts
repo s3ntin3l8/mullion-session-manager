@@ -1,8 +1,9 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { AppSettings, NotificationEvent, Session } from "../api/index.js";
 import { useDashboardStore } from "../store/index.js";
 import { describeEvent } from "../eventDescriptions.js";
 import { playNotificationSound } from "../notifySound.js";
+import { serviceWorkerReady } from "../pushClient.js";
 import {
   pickNewNotifiableEvents,
   notificationChannelEnabled,
@@ -121,6 +122,14 @@ export function useAttentionNotifications({
   // the very next candidate event, not only on the next events/sessions/
   // settings tick.
   const mutedSessionIds = useDashboardStore((s) => s.mutedSessionIds);
+  // Issue #1428 — Notification.requestPermission() (and this hook used to
+  // call it directly, synchronously inside the events effect below) only
+  // grants without a prompt-blocking browser warning, or works at all on
+  // some platforms, when called in direct response to a user gesture; an
+  // effect firing off a WS event is not one. Flips true the moment
+  // shouldRequestNotificationPermission first fires; the effect below
+  // listens for the NEXT gesture and requests then, instead of immediately.
+  const [awaitingGesturePermission, setAwaitingGesturePermission] = useState(false);
 
   // Issue #170: fires a browser Notification (and/or the notification
   // sound) when the live /ws/events channel (issue #166, store.ts's
@@ -181,7 +190,7 @@ export function useAttentionNotifications({
       const permission = typeof Notification !== "undefined" ? Notification.permission : "denied";
       if (shouldRequestNotificationPermission(kind, permission, permissionRequestedRef.current)) {
         permissionRequestedRef.current = true;
-        requestNotificationPermission();
+        setAwaitingGesturePermission(true);
       }
 
       // Per-status sound: the global channels.sound toggle AND the
@@ -212,16 +221,79 @@ export function useAttentionNotifications({
       }
 
       const described = describeEvent(event);
-      const notification = new Notification(session.name || session.command || "Mullion", {
-        body: described?.text ?? "Needs your attention",
-      });
-      notification.onclick = () => {
-        window.focus();
-        useDashboardStore.getState().openNotificationsPanel();
-        notification.close();
-      };
+      const title = session.name || session.command || "Mullion";
+      const body = described?.text ?? "Needs your attention";
+      // Issue #1429 — the same tag/data shape push-sw.js's own showNotification
+      // call uses, so a later push notification for this session collapses
+      // onto this one (or vice versa) instead of stacking duplicates.
+      const tag = `mullion-session-${sessionId}`;
+      const data = { sessionId };
+      // Issue #1428 — a page-context `new Notification()` throws "Illegal
+      // constructor" on Android Chrome (the browser-channel-on, permission-
+      // granted, backgrounded-tab path above is exactly the one that can
+      // reach this). Falls back to the installed service worker's own
+      // showNotification, same as every push notification already uses —
+      // that path's own notificationclick listener (push-sw.js) already
+      // knows how to route `data.sessionId`, so no click handler is needed
+      // here for the fallback. serviceWorkerReady() itself degrades safely
+      // (rejects) when no SW is registered at all (only registers in PROD —
+      // vite.config.ts's devOptions.enabled: false), in which case this
+      // session's OS notification is silently skipped; the bell/tab badge/
+      // title still reflect it.
+      try {
+        const notification = new Notification(title, { body, tag, data });
+        notification.onclick = () => {
+          window.focus();
+          useDashboardStore.getState().requestOpenSession(sessionId);
+          notification.close();
+        };
+      } catch (err) {
+        console.error(
+          "[useAttentionNotifications] new Notification() threw, falling back to the service worker",
+          err,
+        );
+        // Two separately-handled failure modes, not one shared `.catch()` —
+        // self-review: swallowing both alike hid a genuine
+        // `showNotification()` failure (bad options, storage quota, ...)
+        // the same way it correctly hides "no SW ever registered".
+        void serviceWorkerReady()
+          .then((registration) =>
+            registration.showNotification(title, { body, tag, data }).catch((err) => {
+              console.error("[useAttentionNotifications] SW showNotification() failed", err);
+            }),
+          )
+          .catch(() => {
+            // No SW registered, or ready() timed out — nothing more to do.
+          });
+      }
     }
   }, [events, sessions, settings.notifications, activePanelId, mutedSessionIds]);
+
+  // Issue #1428 — requests Notification permission on the next user gesture
+  // rather than immediately from the events effect above (which never runs
+  // in response to one) — Safari/Chrome can silently ignore (or, on some
+  // platforms, refuse to ever grant) a request outside a gesture. `click`
+  // and `keydown` (not `pointerdown`: per the HTML spec's activation-
+  // triggering input event list, a pointerdown only counts for a mouse
+  // pointerType — touch activation comes from pointerup/touchend/click),
+  // capture-phase so this fires before whatever the gesture actually
+  // targets, `{ once: true }` so at most one of the two ever fires.
+  // requestNotificationPermission() runs synchronously as this handler's
+  // first statement — no await before it — so the gesture's activation
+  // context is still live when it calls Notification.requestPermission().
+  useEffect(() => {
+    if (!awaitingGesturePermission) return;
+    const onGesture = () => {
+      requestNotificationPermission();
+      setAwaitingGesturePermission(false);
+    };
+    window.addEventListener("click", onGesture, { once: true, capture: true });
+    window.addEventListener("keydown", onGesture, { once: true, capture: true });
+    return () => {
+      window.removeEventListener("click", onGesture, { capture: true });
+      window.removeEventListener("keydown", onGesture, { capture: true });
+    };
+  }, [awaitingGesturePermission]);
 
   // Rich statuses (issue: extend surfaced session statuses) — a backgrounded
   // tab previously gave no signal at all that something happened (static
