@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import type { DockviewApi } from "dockview-react";
-import type { SerializedDockview } from "dockview";
 import { useDashboardStore } from "../store/index.js";
 import type { Workspace } from "../api/index.js";
 import {
@@ -10,9 +9,27 @@ import {
   closeLegacyPanels,
   reseedSessionPanelTitles,
 } from "../panelUtils.js";
+import { resolveLayoutTier } from "../lib/layoutTier.js";
 import type { LayoutTier } from "../lib/layoutTier.js";
 
 const AUTOSAVE_DEBOUNCE_MS = 800;
+
+// Issue #1426 — phone shouldn't mutate the workspace layouts desktop shares.
+// A LIVE, synchronous check (not the `layoutTier` prop below) on purpose:
+// App.tsx's own `layoutTier` state starts at the literal "desktop" default
+// and is only corrected by useLayoutPresentation's breakpoint effect, which
+// (by that hook's own ordering comment) runs AFTER this hook's restore
+// effect on the very first commit — so a page loaded at phone width would
+// otherwise still see `layoutTier === "desktop"` for the restore (and its
+// own prune-save) that runs on that exact commit. Resolving straight from
+// `resolveLayoutTier` (a bare matchMedia read) sidesteps that render-timing
+// race entirely: it's accurate the instant it's called, every time, never
+// stale for even one commit. Also covers a forced `settings.layoutMode:
+// "phone"` override, which is server-global — see AppearanceSection.tsx's
+// own hint text for that consequence.
+function isPhoneTierNow(): boolean {
+  return resolveLayoutTier(useDashboardStore.getState().settings.layoutMode) === "phone";
+}
 
 interface PendingSave {
   // Captured at *schedule* time, not read live at fire time — the load-
@@ -65,9 +82,18 @@ export interface UseWorkspacePersistenceResult {
 
 // Extracted from App.tsx (PR 34a of the hook-extraction series) — restores
 // the active workspace's saved dockview layout on mount/workspace-switch,
-// and autosaves layout changes back as they happen. Effect ordering here is
-// load-bearing: App.tsx calls this hook at the exact same point in its
-// render body that these two effects previously occupied, so their
+// and autosaves layout changes back as they happen. Issue #1426: phone
+// tier is a read-only view of a workspace layout, not a peer editor of it —
+// opening/closing panes on phone stays purely local (isPhoneTierNow and
+// phoneTouchedRef, below), since the layout is shared, server-side state
+// desktop reads too, and a phone edit re-tiling/re-maximizing to fit its own
+// single-pane model would otherwise skew desktop's own split ratios on
+// every save. A reload rebuilds from whatever the server still has; the
+// universal phone session picker lists every session regardless of what's
+// actually open, so nothing phone-specific is lost by not persisting it.
+// Effect ordering here is load-bearing: App.tsx calls this hook at the
+// exact same point in its render body that these two effects previously
+// occupied, so their
 // execution order relative to every other effect in App.tsx (in particular,
 // the auto-open-child-panel/push-message effects further down in App.tsx,
 // and useSessionDeepLink's own effect — hooks/useSessionDeepLink.ts, PR 34g,
@@ -108,8 +134,32 @@ export function useWorkspacePersistence({
   // A/B workspace switch must compare each workspace's save against its
   // OWN last-persisted blob, not the other one's.
   const lastPersistedRef = useRef<Map<number, string>>(new Map());
+  // Issue #1426 — a workspace whose layout was touched (restored into, or
+  // edited) while phone tier stays save-suspended until its NEXT restore at
+  // a non-phone tier (a reload or workspace switch), even if the device
+  // later rotates into tablet width without leaving this workspace — a live
+  // tier flip doesn't re-run the restore effect (restoredWorkspaceIdRef
+  // guards that), so nothing else would ever clear the taint. Checked (and
+  // set) inside persistIfChanged below, at the moment each save actually
+  // fires, not when it's scheduled — an autosave debounces 800ms and the
+  // post-restore prune-save defers a tick, so the tier can genuinely differ
+  // by the time either one runs.
+  const phoneTouchedRef = useRef<Set<number>>(new Set());
 
-  const persistIfChanged = useCallback((workspaceId: number, serialized: SerializedDockview) => {
+  const persistIfChanged = useCallback((workspaceId: number, api: DockviewApi) => {
+    if (isPhoneTierNow()) {
+      phoneTouchedRef.current.add(workspaceId);
+      return;
+    }
+    if (phoneTouchedRef.current.has(workspaceId)) return;
+    // Issue #1426 — serializeForPersist runs dockview's own maximize/exit
+    // cycle (see its own header comment on the pane-skew fix this
+    // interacts with), which is exactly what can skew a DESKTOP layout's
+    // split ratios when it runs at phone width. Called only after both
+    // suppression checks above, not before — unlike the pre-#1426 shape,
+    // which serialized unconditionally and only decided whether to PATCH
+    // the result afterward.
+    const serialized = serializeForPersist(api);
     const json = JSON.stringify(serialized);
     if (lastPersistedRef.current.get(workspaceId) === json) return;
     // Marked persisted optimistically, before the request resolves — matches
@@ -136,12 +186,8 @@ export function useWorkspacePersistence({
       clearTimeout(pending.timer);
       pendingSaveRef.current = null;
       // Read *before* the caller clears/replaces the grid — this is still
-      // the outgoing workspace's own layout at this point. Issue #85: goes
-      // through serializeForPersist (not raw api.toJSON()) so a
-      // workspace-switch save strips floating panels AND maximization the
-      // same way the debounced scheduleSave below does — this previously
-      // wrote the raw blob and leaked both.
-      persistIfChanged(pending.workspaceId, serializeForPersist(api));
+      // the outgoing workspace's own layout at this point.
+      persistIfChanged(pending.workspaceId, api);
     },
     [persistIfChanged],
   );
@@ -151,7 +197,7 @@ export function useWorkspacePersistence({
       if (pendingSaveRef.current) clearTimeout(pendingSaveRef.current.timer);
       const timer = setTimeout(() => {
         pendingSaveRef.current = null;
-        persistIfChanged(workspaceId, serializeForPersist(api));
+        persistIfChanged(workspaceId, api);
       }, AUTOSAVE_DEBOUNCE_MS);
       pendingSaveRef.current = { workspaceId, timer };
     },
@@ -172,6 +218,19 @@ export function useWorkspacePersistence({
     if (restoredWorkspaceIdRef.current === activeWorkspaceId) return;
     const workspace = workspaces.find((w) => w.id === activeWorkspaceId);
     if (!workspace) return;
+
+    // Issue #1426 — a restore is the only thing that can clear an earlier
+    // phone taint (see phoneTouchedRef's own comment): mark this incoming
+    // workspace touched right away if it's being restored at phone tier, so
+    // even a save that fires later (the prune-save below defers a tick, an
+    // autosave debounces 800ms) after an in-between tier flip still treats
+    // it as phone-tainted. Untouch it on a genuine non-phone restore, the
+    // only path that's supposed to lift the taint.
+    if (isPhoneTierNow()) {
+      phoneTouchedRef.current.add(activeWorkspaceId);
+    } else {
+      phoneTouchedRef.current.delete(activeWorkspaceId);
+    }
 
     // Flush the OUTGOING workspace's pending autosave synchronously before
     // tearing down its layout below.
