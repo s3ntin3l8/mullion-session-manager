@@ -45,6 +45,15 @@ const THEME_LABELS: Record<AppSettings["theme"], string> = {
   system: "System",
 };
 
+// Shared between the theme button and the ⋯ menu's theme row (Hermes
+// review, PR #1449) — a single place to update if the Theme union ever
+// grows beyond these three.
+function themeIcon(pref: AppSettings["theme"], size: number) {
+  if (pref === "light") return <SunIcon size={size} />;
+  if (pref === "system") return <AppearanceIcon size={size} />;
+  return <MoonIcon size={size} />;
+}
+
 // Ported 1:1 from the design's toolbar: sidebar toggle, attention bell with
 // count badge, "+" new-session (opens the global command palette), a
 // centered active-workspace/pane-count summary, "Run command… ⌘K", theme
@@ -201,13 +210,7 @@ export function Toolbar({
           onClick={() => useDashboardStore.getState().cycleTheme()}
           title={`Theme: ${THEME_LABELS[themePreference]} (click for ${THEME_LABELS[nextThemePreference]})`}
         >
-          {themePreference === "light" ? (
-            <SunIcon size={16} />
-          ) : themePreference === "system" ? (
-            <AppearanceIcon size={16} />
-          ) : (
-            <MoonIcon size={16} />
-          )}
+          {themeIcon(themePreference, 16)}
         </button>
         {currentVersion !== null && (
           <button
@@ -245,14 +248,7 @@ export function Toolbar({
                 {
                   key: "theme",
                   label: `Theme: ${THEME_LABELS[themePreference]}`,
-                  icon:
-                    themePreference === "light" ? (
-                      <SunIcon size={14} />
-                    ) : themePreference === "system" ? (
-                      <AppearanceIcon size={14} />
-                    ) : (
-                      <MoonIcon size={14} />
-                    ),
+                  icon: themeIcon(themePreference, 14),
                   onClick: () => useDashboardStore.getState().cycleTheme(),
                 },
                 {
