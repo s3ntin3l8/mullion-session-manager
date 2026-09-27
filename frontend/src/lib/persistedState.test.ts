@@ -3,12 +3,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   STORAGE_KEYS,
   readBool,
+  readDismissedEventKeys,
   readJSON,
   readMutedSessionIds,
   readNumber,
   readString,
   removeItem,
   writeBool,
+  writeDismissedEventKeys,
   writeJSON,
   writeMutedSessionIds,
   writeNumber,
@@ -20,9 +22,9 @@ beforeEach(() => {
 });
 
 describe("STORAGE_KEYS", () => {
-  it("has 33 entries, each a distinct crs.* key", () => {
+  it("has 34 entries, each a distinct crs.* key", () => {
     const values = Object.values(STORAGE_KEYS);
-    expect(values).toHaveLength(33);
+    expect(values).toHaveLength(34);
     expect(new Set(values).size).toBe(values.length);
     for (const key of values) {
       expect(key.startsWith("crs.")).toBe(true);
@@ -159,6 +161,44 @@ describe("readMutedSessionIds / writeMutedSessionIds (#719)", () => {
     });
     expect(() => readMutedSessionIds()).not.toThrow();
     expect(readMutedSessionIds()).toEqual([]);
+    spy.mockRestore();
+  });
+});
+
+describe("readDismissedEventKeys / writeDismissedEventKeys (issue #1427)", () => {
+  it("returns {} when the key is absent", () => {
+    expect(readDismissedEventKeys()).toEqual({});
+  });
+
+  it("round-trips a written record", () => {
+    writeDismissedEventKeys({ "1:2:1000": true, "3:4:2000": true });
+    expect(readDismissedEventKeys()).toEqual({ "1:2:1000": true, "3:4:2000": true });
+  });
+
+  it("returns {} on malformed JSON", () => {
+    localStorage.setItem(STORAGE_KEYS.dismissedEventKeys, "not json");
+    expect(readDismissedEventKeys()).toEqual({});
+  });
+
+  it("returns {} for a non-object (e.g. an array) blob", () => {
+    localStorage.setItem(STORAGE_KEYS.dismissedEventKeys, "[1,2,3]");
+    expect(readDismissedEventKeys()).toEqual({});
+  });
+
+  it("drops entries whose value isn't exactly `true` from a hand-edited blob", () => {
+    localStorage.setItem(
+      STORAGE_KEYS.dismissedEventKeys,
+      '{"1:2:1000": true, "3:4:2000": false, "5:6:3000": "yes"}',
+    );
+    expect(readDismissedEventKeys()).toEqual({ "1:2:1000": true });
+  });
+
+  it("falls back to {} when localStorage throws (e.g. private mode)", () => {
+    const spy = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new DOMException("blocked", "SecurityError");
+    });
+    expect(() => readDismissedEventKeys()).not.toThrow();
+    expect(readDismissedEventKeys()).toEqual({});
     spy.mockRestore();
   });
 });

@@ -215,6 +215,85 @@ describe("store /ws/events integration (issue #166)", () => {
   });
 });
 
+// Issue #1427 — the server-owned read cursor's two wire frames, driven
+// through the same mocked WebSocket as the block above.
+describe("cursors/seen frames (issue #1427)", () => {
+  beforeEach(() => {
+    instances = [];
+    vi.stubGlobal("WebSocket", MockWebSocket as unknown as typeof WebSocket);
+    useDashboardStore.setState({ events: {}, lastSeenSeq: {}, dismissedEventKeys: {} });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("normal reconnect: takes the higher of local and the server's cursor", () => {
+    useDashboardStore.setState({ lastSeenSeq: { 5: 3 } });
+    const stop = useDashboardStore.getState().startEventsStream();
+    instances[0].__open();
+
+    instances[0].__message(
+      JSON.stringify({ type: "cursors", cursors: { "5": { seen: 7, head: 20 } } }),
+    );
+
+    expect(useDashboardStore.getState().lastSeenSeq[5]).toBe(7);
+    stop();
+  });
+
+  it("restart: local sitting above the server's head is not treated as ahead — adopts the server's cursor", () => {
+    useDashboardStore.setState({ lastSeenSeq: { 5: 50 } });
+    const stop = useDashboardStore.getState().startEventsStream();
+    instances[0].__open();
+
+    // The server has only ever emitted up to seq 10 in this process's
+    // lifetime — a local cursor of 50 can only mean the server restarted.
+    instances[0].__message(
+      JSON.stringify({ type: "cursors", cursors: { "5": { seen: 2, head: 10 } } }),
+    );
+
+    expect(useDashboardStore.getState().lastSeenSeq[5]).toBe(2);
+    stop();
+  });
+
+  it("leaves a session absent from the cursors frame untouched", () => {
+    useDashboardStore.setState({ lastSeenSeq: { 9: 40 } });
+    const stop = useDashboardStore.getState().startEventsStream();
+    instances[0].__open();
+
+    instances[0].__message(
+      JSON.stringify({ type: "cursors", cursors: { "5": { seen: 1, head: 1 } } }),
+    );
+
+    expect(useDashboardStore.getState().lastSeenSeq[9]).toBe(40);
+    stop();
+  });
+
+  it("a live 'seen' broadcast from another client advances the cursor without re-sending 'seen'", () => {
+    const stop = useDashboardStore.getState().startEventsStream();
+    instances[0].__open();
+
+    instances[0].__message(JSON.stringify({ type: "seen", sessionId: 5, seq: 9 }));
+
+    expect(useDashboardStore.getState().lastSeenSeq[5]).toBe(9);
+    // Applying an incoming broadcast must not itself echo a "seen" back —
+    // that would be a pointless (and potentially loopy) round trip.
+    expect(instances[0].sent).toHaveLength(0);
+    stop();
+  });
+
+  it("a live 'seen' broadcast is monotonic-only, same as a local markEventSeen", () => {
+    useDashboardStore.setState({ lastSeenSeq: { 5: 9 } });
+    const stop = useDashboardStore.getState().startEventsStream();
+    instances[0].__open();
+
+    instances[0].__message(JSON.stringify({ type: "seen", sessionId: 5, seq: 3 }));
+
+    expect(useDashboardStore.getState().lastSeenSeq[5]).toBe(9);
+    stop();
+  });
+});
+
 // Issue #1429 — the one shared "mark this session as fully read" primitive
 // every explicit-open call site now uses (NotificationBell's rows/mark-all,
 // the push/deep-link/requestOpenSession session openers), replacing each
@@ -293,22 +372,41 @@ describe("clearOpenSessionRequest (issue #1429)", () => {
   });
 });
 
+// Issue #1427 — eventKey() gained a third `ts` segment, so every dismiss
+// test below now seeds `events` with the exact events being dismissed
+// (mirroring every real call site: dismissEvent/dismissEvents are only ever
+// called on an event the UI is currently rendering, i.e. one still in the
+// buffer) rather than dismissing a bare (sessionId, seq) pair with no
+// backing event — that would only exercise dismissEvent's Date.now()
+// fallback, which is nondeterministic and not what production code paths
+// hit.
 describe("dismissEvent / dismissedEventKeys (issue #169)", () => {
   beforeEach(() => {
-    useDashboardStore.setState({ events: {}, lastSeenSeq: {}, dismissedEventKeys: {} });
+    useDashboardStore.setState({
+      events: {
+        5: [
+          event({ sessionId: 5, seq: 1, ts: 1000 }),
+          event({ sessionId: 5, seq: 3, ts: 3000 }),
+          event({ sessionId: 5, seq: 10, ts: 10000 }),
+        ],
+        9: [event({ sessionId: 9, seq: 1, ts: 2000 })],
+      },
+      lastSeenSeq: {},
+      dismissedEventKeys: {},
+    });
   });
 
   it("flags a (sessionId, seq) pair as dismissed", () => {
     useDashboardStore.getState().dismissEvent(5, 3);
-    expect(useDashboardStore.getState().dismissedEventKeys[eventKey(5, 3)]).toBe(true);
+    expect(useDashboardStore.getState().dismissedEventKeys[eventKey(5, 3, 3000)]).toBe(true);
   });
 
   it("keeps dismissals independent per session even with the same seq", () => {
     useDashboardStore.getState().dismissEvent(5, 1);
     useDashboardStore.getState().dismissEvent(9, 1);
     const dismissed = useDashboardStore.getState().dismissedEventKeys;
-    expect(dismissed[eventKey(5, 1)]).toBe(true);
-    expect(dismissed[eventKey(9, 1)]).toBe(true);
+    expect(dismissed[eventKey(5, 1, 1000)]).toBe(true);
+    expect(dismissed[eventKey(9, 1, 2000)]).toBe(true);
     expect(Object.keys(dismissed)).toHaveLength(2);
   });
 
@@ -325,19 +423,35 @@ describe("dismissEvent / dismissedEventKeys (issue #169)", () => {
     useDashboardStore.getState().dismissEvent(5, 3);
     expect(Object.keys(useDashboardStore.getState().dismissedEventKeys)).toHaveLength(1);
   });
+
+  it("falls back to Date.now() rather than throwing when the event isn't buffered", () => {
+    useDashboardStore.getState().dismissEvent(5, 999);
+    const dismissed = useDashboardStore.getState().dismissedEventKeys;
+    expect(Object.keys(dismissed).some((k) => k.startsWith("5:999:"))).toBe(true);
+  });
 });
 
 describe("dismissEvents (batched, PR #717 — NotificationBell.tsx's folded-row dismiss)", () => {
   beforeEach(() => {
-    useDashboardStore.setState({ events: {}, lastSeenSeq: {}, dismissedEventKeys: {} });
+    useDashboardStore.setState({
+      events: {
+        5: [
+          event({ sessionId: 5, seq: 1, ts: 1000 }),
+          event({ sessionId: 5, seq: 2, ts: 2000 }),
+          event({ sessionId: 5, seq: 3, ts: 3000 }),
+        ],
+      },
+      lastSeenSeq: {},
+      dismissedEventKeys: {},
+    });
   });
 
   it("flags every seq in the array as dismissed in a single call", () => {
     useDashboardStore.getState().dismissEvents(5, [3, 2, 1]);
     const dismissed = useDashboardStore.getState().dismissedEventKeys;
-    expect(dismissed[eventKey(5, 3)]).toBe(true);
-    expect(dismissed[eventKey(5, 2)]).toBe(true);
-    expect(dismissed[eventKey(5, 1)]).toBe(true);
+    expect(dismissed[eventKey(5, 3, 3000)]).toBe(true);
+    expect(dismissed[eventKey(5, 2, 2000)]).toBe(true);
+    expect(dismissed[eventKey(5, 1, 1000)]).toBe(true);
   });
 
   it("is a no-op for an empty array", () => {

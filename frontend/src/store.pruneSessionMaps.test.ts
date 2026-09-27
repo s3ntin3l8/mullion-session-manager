@@ -100,7 +100,10 @@ describe("store per-session-id map pruning (P6)", () => {
     useDashboardStore.setState({
       events: { 1: [makeEvent({ sessionId: 1 })], 2: [makeEvent({ sessionId: 2, seq: 5 })] },
       lastSeenSeq: { 1: 1, 2: 5 },
-      dismissedEventKeys: { [eventKey(1, 1)]: true, [eventKey(2, 5)]: true },
+      dismissedEventKeys: {
+        [eventKey(1, 1, 1_700_000_000_000)]: true,
+        [eventKey(2, 5, 1_700_000_000_000)]: true,
+      },
     });
     // Session 2's project was deleted (FK cascade) — it no longer comes back
     // from GET /api/sessions at all.
@@ -111,14 +114,14 @@ describe("store per-session-id map pruning (P6)", () => {
     const state = useDashboardStore.getState();
     expect(state.events).toEqual({ 1: [makeEvent({ sessionId: 1 })] });
     expect(state.lastSeenSeq).toEqual({ 1: 1 });
-    expect(state.dismissedEventKeys).toEqual({ [eventKey(1, 1)]: true });
+    expect(state.dismissedEventKeys).toEqual({ [eventKey(1, 1, 1_700_000_000_000)]: true });
   });
 
   it("does NOT prune a session that's merely killed — it still appears in the live list", async () => {
     useDashboardStore.setState({
       events: { 1: [makeEvent({ sessionId: 1 })] },
       lastSeenSeq: { 1: 1 },
-      dismissedEventKeys: { [eventKey(1, 1)]: true },
+      dismissedEventKeys: { [eventKey(1, 1, 1_700_000_000_000)]: true },
     });
     // Killed, but the row still comes back from the endpoint (soft delete).
     vi.spyOn(api, "listSessions").mockResolvedValue([makeSession({ id: 1, status: "killed" })]);
@@ -128,13 +131,13 @@ describe("store per-session-id map pruning (P6)", () => {
     const state = useDashboardStore.getState();
     expect(state.events[1]).toBeDefined();
     expect(state.lastSeenSeq[1]).toBe(1);
-    expect(state.dismissedEventKeys[eventKey(1, 1)]).toBe(true);
+    expect(state.dismissedEventKeys[eventKey(1, 1, 1_700_000_000_000)]).toBe(true);
   });
 
   it("preserves object identity for all three maps when nothing needs pruning", async () => {
     const events = { 1: [makeEvent({ sessionId: 1 })] };
     const lastSeenSeq = { 1: 1 };
-    const dismissedEventKeys = { [eventKey(1, 1)]: true as const };
+    const dismissedEventKeys = { [eventKey(1, 1, 1_700_000_000_000)]: true as const };
     useDashboardStore.setState({ events, lastSeenSeq, dismissedEventKeys });
     vi.spyOn(api, "listSessions").mockResolvedValue([makeSession({ id: 1 })]);
 

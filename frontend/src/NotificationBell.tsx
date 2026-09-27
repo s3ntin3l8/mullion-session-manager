@@ -196,7 +196,9 @@ function buildFeedItems(
     // would be O(rows × events) on every tick this panel is open).
     const contextMap = sessionContextMap(sessionEvents, session.name || session.command);
     const rawRows = sessionEvents
-      .filter((e) => notifyKind(e) !== null && !dismissedEventKeys[eventKey(session.id, e.seq)])
+      .filter(
+        (e) => notifyKind(e) !== null && !dismissedEventKeys[eventKey(session.id, e.seq, e.ts)],
+      )
       .map((e) => {
         const described = describeEvent(e);
         // Only a content-free row's OWN text is ever replaced — one that
@@ -285,7 +287,7 @@ function countUnread(
     for (const e of sessionEvents) {
       if (e.seq <= cursor) continue;
       if (notifyKind(e) === null) continue;
-      if (dismissedEventKeys[eventKey(session.id, e.seq)]) continue;
+      if (dismissedEventKeys[eventKey(session.id, e.seq, e.ts)]) continue;
       count += 1;
     }
   }
@@ -310,7 +312,7 @@ function collectNeedsYouIds(
   for (const session of sessions) {
     const sessionEvents = events[session.id];
     const listable = sessionEvents?.some(
-      (e) => notifyKind(e) !== null && !dismissedEventKeys[eventKey(session.id, e.seq)],
+      (e) => notifyKind(e) !== null && !dismissedEventKeys[eventKey(session.id, e.seq, e.ts)],
     );
     if (
       listable &&

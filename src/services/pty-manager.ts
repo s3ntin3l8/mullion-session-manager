@@ -3416,14 +3416,40 @@ export class Session {
     return [...this.events];
   }
 
+  /** Public accessor for `eventSeq` — the highest seq this session has ever
+   * emitted, i.e. the head of its event log. Neither this nor `seenSeq`
+   * below is persisted (not part of `StoredStateFields`), so both reset to
+   * 0 whenever this process restarts and reconstructs the `Session` — issue
+   * #1427's "cursors" frame (routes/events.ts) relies on that reset being
+   * visible so a client can tell "the server restarted, my seq is stale"
+   * apart from "I've simply seen further than the server has replayed". */
+  get eventSeqHead(): number {
+    return this.eventSeq;
+  }
+
+  /** Public accessor for `lastSeenSeq` — this session's own server-side read
+   * cursor. See `eventSeqHead` above for why it's ephemeral by design. */
+  get seenSeq(): number {
+    return this.lastSeenSeq;
+  }
+
   /** Advance this session's read cursor to `seq` (a no-op if `seq` is behind
    * the cursor already — e.g. a duplicate or out-of-order "seen" message).
    * Never rejects an out-of-range seq outright: a client-supplied cursor
    * ahead of what this process has ever emitted (e.g. right after a
    * restart wiped the in-memory ring buffer but the client's own
-   * last-known seq survived) is harmless to just accept. */
-  markEventsSeen(seq: number): void {
-    if (seq > this.lastSeenSeq) this.lastSeenSeq = seq;
+   * last-known seq survived) is harmless to just accept.
+   *
+   * Returns whether the cursor actually advanced — issue #1427's
+   * cross-client "seen" broadcast (routes/events.ts) uses this so a
+   * stale/duplicate "seen" message (e.g. replayed by a reconnecting
+   * client) doesn't re-broadcast a no-op update to every other connection. */
+  markEventsSeen(seq: number): boolean {
+    if (seq > this.lastSeenSeq) {
+      this.lastSeenSeq = seq;
+      return true;
+    }
+    return false;
   }
 
   /**
@@ -4408,11 +4434,29 @@ export class PtyManager {
     return [...this.sessions.values()].flatMap((s) => s.getEvents());
   }
 
+  /** Snapshot of every locally-tracked session's read-cursor state, keyed by
+   * numeric session id — issue #1427's "cursors" frame
+   * (attachAggregatedEventsSocket, routes/events.ts), sent to a newly
+   * connecting /ws/events client before its replay so it can reconcile its
+   * own locally-persisted read cursor against what this process currently
+   * knows. Covers local sessions only, same as listEvents() above — a
+   * remote host's own sessions are outside this process's `this.sessions`
+   * map entirely, so a client must leave any session id absent from this
+   * snapshot untouched rather than treating it as "fully read". */
+  listCursors(): Record<number, { seen: number; head: number }> {
+    const cursors: Record<number, { seen: number; head: number }> = {};
+    for (const [id, session] of this.sessions) {
+      cursors[Number(id)] = { seen: session.seenSeq, head: session.eventSeqHead };
+    }
+    return cursors;
+  }
+
   /** Advance a tracked session's read cursor — a no-op (not an error) for an
    * id this process isn't tracking, the same "unknown id is harmless" shape
-   * as every other per-id lookup in this class (e.g. get()). */
-  markEventsSeen(id: string, seq: number): void {
-    this.sessions.get(id)?.markEventsSeen(seq);
+   * as every other per-id lookup in this class (e.g. get()). Returns
+   * whether the cursor actually advanced (see Session.markEventsSeen). */
+  markEventsSeen(id: string, seq: number): boolean {
+    return this.sessions.get(id)?.markEventsSeen(seq) ?? false;
   }
 
   /** Routes one validated hook message (src/plugins/hooks.ts) to the session

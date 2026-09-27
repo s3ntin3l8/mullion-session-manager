@@ -1,6 +1,13 @@
 import type { StateCreator } from "zustand";
 import { connectEventsStream, type EventsClientHandle } from "../../eventsClient.js";
-import { addEvent, eventKey } from "../helpers.js";
+import {
+  addEvent,
+  applyLiveSeen,
+  capDismissedEventKeys,
+  eventKey,
+  mergeCursorsFrame,
+} from "../helpers.js";
+import { readDismissedEventKeys, writeDismissedEventKeys } from "../../lib/persistedState.js";
 import { EVENTS_REFRESH_THROTTLE_MS } from "../constants.js";
 import { getSessionRefreshBlockedUntil } from "./sessions.js";
 import type { DashboardState, EventsSlice } from "../types.js";
@@ -94,12 +101,35 @@ export const createEventsSlice: StateCreator<DashboardState, [], [], EventsSlice
   return {
     events: {},
     lastSeenSeq: {},
-    dismissedEventKeys: {},
+    // Issue #1427 — dismissals are purely local UI state (no server
+    // counterpart), so they're read from localStorage synchronously at
+    // slice-init the same way mutedSessionIds is (slices/ui.ts) — unlike
+    // lastSeenSeq above, which starts empty and is populated from the
+    // server's own `cursors` frame once startEventsStream connects (see
+    // below), since it's now server-owned.
+    dismissedEventKeys: readDismissedEventKeys(),
 
     startEventsStream: () => {
-      const handle = connectEventsStream((event) => {
-        set((state) => ({ events: addEvent(state.events, event) }));
-        if (!NON_STATUS_EVENT_KINDS.has(event.kind)) onStatusBearingEvent();
+      const handle = connectEventsStream({
+        onEvent: (event) => {
+          set((state) => ({ events: addEvent(state.events, event) }));
+          if (!NON_STATUS_EVENT_KINDS.has(event.kind)) onStatusBearingEvent();
+        },
+        // Issue #1427 — reconcile the local read cursor against the
+        // server's own, per session, via mergeCursorsFrame's restart-aware
+        // merge rule. Arrives once per connection, before any replayed
+        // event, so this always runs before addEvent above has a chance to
+        // make lastSeenSeq's staleness visible as a wrong unread count.
+        onCursors: (cursors) => {
+          set((state) => ({ lastSeenSeq: mergeCursorsFrame(state.lastSeenSeq, cursors) }));
+        },
+        // Issue #1427 — another connection (this tab, another tab, another
+        // device) just advanced this session's cursor. Deliberately does
+        // NOT go through markEventSeen/sendSeen below — the server already
+        // knows; this only needs to update local state to match.
+        onSeen: (sessionId, seq) => {
+          set((state) => ({ lastSeenSeq: applyLiveSeen(state.lastSeenSeq, sessionId, seq) }));
+        },
       });
       eventsClientHandle = handle;
       return () => {
@@ -132,16 +162,35 @@ export const createEventsSlice: StateCreator<DashboardState, [], [], EventsSlice
     },
 
     dismissEvent: (sessionId, seq) => {
-      set((state) => ({
-        dismissedEventKeys: { ...state.dismissedEventKeys, [eventKey(sessionId, seq)]: true },
-      }));
+      // ts comes from the buffered event itself (eventKey's own doc
+      // comment — needed to disambiguate a (sessionId, seq) pair that
+      // repeats across a backend restart). Every caller dismisses an event
+      // it's currently rendering, i.e. one still present in `events`, so
+      // this should always find it; Date.now() is a harmless fallback for
+      // the theoretical case it doesn't (still dismisses, just without the
+      // restart-disambiguation benefit for that one key).
+      const ts = get().events[sessionId]?.find((e) => e.seq === seq)?.ts ?? Date.now();
+      set((state) => {
+        const dismissedEventKeys = capDismissedEventKeys({
+          ...state.dismissedEventKeys,
+          [eventKey(sessionId, seq, ts)]: true,
+        });
+        writeDismissedEventKeys(dismissedEventKeys);
+        return { dismissedEventKeys };
+      });
     },
 
     dismissEvents: (sessionId, seqs) => {
       if (seqs.length === 0) return;
+      const bySeq = new Map(get().events[sessionId]?.map((e) => [e.seq, e.ts]));
       set((state) => {
-        const dismissedEventKeys = { ...state.dismissedEventKeys };
-        for (const seq of seqs) dismissedEventKeys[eventKey(sessionId, seq)] = true;
+        let dismissedEventKeys = { ...state.dismissedEventKeys };
+        for (const seq of seqs) {
+          const ts = bySeq.get(seq) ?? Date.now();
+          dismissedEventKeys[eventKey(sessionId, seq, ts)] = true;
+        }
+        dismissedEventKeys = capDismissedEventKeys(dismissedEventKeys);
+        writeDismissedEventKeys(dismissedEventKeys);
         return { dismissedEventKeys };
       });
     },

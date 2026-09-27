@@ -56,8 +56,98 @@ export function readThemeHint(fallback: Theme = "dark"): Theme {
 // across sessions. Exported so PaneTab.tsx's badge filter and
 // NotificationBell.tsx's feed use the exact same key shape as
 // dismissEvent() writes.
-export function eventKey(sessionId: number, seq: number): string {
-  return `${sessionId}:${seq}`;
+//
+// Issue #1427: gained a third `ts` segment. `seq` is also no longer unique
+// on its own ACROSS A BACKEND RESTART — pty-manager.ts's `Session.eventSeq`
+// resets to 0 when the process restarts (it's not persisted), so two
+// genuinely different events for the same session can now share a
+// (sessionId, seq) pair. `ts` (the event's own wall-clock timestamp) breaks
+// that tie without needing any new counter. pruneDismissedEventKeys' own
+// parsing (below) only ever reads the prefix up to the FIRST colon, so it
+// keeps working unmodified against this wider key.
+export function eventKey(sessionId: number, seq: number, ts: number): string {
+  return `${sessionId}:${seq}:${ts}`;
+}
+
+// Issue #1427's read-cursor merge rule, applied per session id whenever a
+// `cursors` frame arrives (routes/events.ts's attachAggregatedEventsSocket,
+// sent right after connect, before replay) or synced against a *stored*
+// starting point. The server's own read cursor is itself ephemeral — not
+// persisted, see pty-manager.ts's Session.seenSeq doc comment — so this
+// can't simply always trust the server's value (that would regress a
+// cursor this same client advanced moments before a brief reconnect) or
+// always trust the local value (that would leave events the server has
+// forgotten about — because it restarted — looking unread forever).
+//
+// `local > server.head` is the restart signal: `head` (the server's own
+// eventSeq) is monotonic and never decreases within one backend process's
+// lifetime (Session.eventSeqHead's doc comment), so a local cursor sitting
+// ABOVE anything the server has ever emitted can only mean the server's
+// own counters reset out from under it — the local cursor's numbering no
+// longer corresponds to anything the server can replay, so the server's
+// value (even though it's numerically lower) is authoritative. Any other
+// case is an ordinary reconnect or a second device's cursor arriving, and
+// the higher of the two wins — this also fixes a pre-existing bug: without
+// this frame at all, a bare reconnect after a backend restart used to
+// leave every already-buffered event looking already-read, because the
+// local cursor (still holding its old, now out-of-range value) was never
+// reconciled against anything.
+export function mergeServerCursor(local: number, server: { seen: number; head: number }): number {
+  if (local > server.head) return server.seen;
+  return Math.max(local, server.seen);
+}
+
+// Applies mergeServerCursor across every session id present in a `cursors`
+// frame. A session id ABSENT from `cursors` — a remote host's own session,
+// or one this process doesn't track — is left completely untouched, not
+// defaulted to anything: `cursors` only ever describes this process's own
+// local sessions (PtyManager.listCursors's own doc comment), so silence
+// about a session says nothing about its read state either way.
+export function mergeCursorsFrame(
+  lastSeenSeq: Record<number, number>,
+  cursors: Record<string, { seen: number; head: number }>,
+): Record<number, number> {
+  const next = { ...lastSeenSeq };
+  for (const [key, server] of Object.entries(cursors)) {
+    const sessionId = Number(key);
+    if (!Number.isFinite(sessionId)) continue;
+    next[sessionId] = mergeServerCursor(next[sessionId] ?? 0, server);
+  }
+  return next;
+}
+
+// Applies one live "seen" broadcast (issue #1427 — another currently-open
+// connection just advanced this session's cursor) to the local
+// `lastSeenSeq` record. Monotonic-only, same as markEventSeen's own local
+// half — but this deliberately does NOT also call eventsClientHandle's
+// sendSeen: the update already originated server-side (some other
+// connection sent it), so echoing it back would be a pointless round trip,
+// not a bug fix.
+export function applyLiveSeen(
+  lastSeenSeq: Record<number, number>,
+  sessionId: number,
+  seq: number,
+): Record<number, number> {
+  const current = lastSeenSeq[sessionId] ?? 0;
+  if (seq <= current) return lastSeenSeq;
+  return { ...lastSeenSeq, [sessionId]: seq };
+}
+
+// Issue #1427 — bounds dismissedEventKeys the same way EVENTS_PER_SESSION_CAP
+// bounds `events`, so an old, long-lived browser tab's localStorage entry
+// can't grow unboundedly. Object key insertion order is preserved for
+// string keys that aren't canonical array indices — eventKey()'s
+// `sid:seq:ts` format always contains a colon, so it never qualifies as one
+// — meaning `Object.keys` here really does return dismissal order, oldest
+// first, so trimming the front evicts the oldest dismissals first.
+export const DISMISSED_EVENT_KEYS_CAP = 500;
+
+export function capDismissedEventKeys(record: Record<string, true>): Record<string, true> {
+  const keys = Object.keys(record);
+  if (keys.length <= DISMISSED_EVENT_KEYS_CAP) return record;
+  const next: Record<string, true> = {};
+  for (const key of keys.slice(keys.length - DISMISSED_EVENT_KEYS_CAP)) next[key] = true;
+  return next;
 }
 
 // Merges one incoming NotificationEvent into the per-session accumulated

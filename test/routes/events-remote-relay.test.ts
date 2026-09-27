@@ -66,6 +66,7 @@ function fakeAppWithPty(): FastifyInstance {
     pty: {
       onEvent: vi.fn(() => () => {}),
       listEvents: vi.fn(() => []),
+      listCursors: vi.fn(() => ({})),
       markEventsSeen: vi.fn(),
     },
   } as unknown as FastifyInstance;

@@ -114,6 +114,14 @@ export const STORAGE_KEYS = {
   // MobileKeyBar.tsx — whether the second key row (⋯) is expanded.
   mobileKeyBarMore: "crs.mobileKeyBarMore",
   deviceFrame: "crs.deviceFrame",
+  // Issue #1427 — dismissed notification-event keys (EventsSlice's
+  // dismissedEventKeys), so a dismissed event stays dismissed across a
+  // reload. Unlike lastSeenSeq (the read cursor, server-owned as of this
+  // same issue — see store/types.ts's EventsSlice doc comment), a dismiss
+  // is purely local UI state with no server counterpart, so it round-trips
+  // through localStorage the same way mutedSessions does, not through the
+  // WS `cursors`/`seen` frames.
+  dismissedEventKeys: "crs.dismissedEventKeys",
 } as const;
 
 export type StorageKey = (typeof STORAGE_KEYS)[keyof typeof STORAGE_KEYS];
@@ -235,4 +243,29 @@ export function readMutedSessionIds(): number[] {
 
 export function writeMutedSessionIds(ids: number[]): void {
   writeJSON(STORAGE_KEYS.mutedSessions, ids);
+}
+
+// Issue #1427 — dismissed-event keys, same defensive-read posture as
+// readMutedSessionIds above (a malformed/hand-edited blob collapses to
+// empty rather than poisoning a later lookup): every key must be present
+// with value `true` exactly, matching EventsSlice's `Record<string, true>`
+// shape, and anything else is dropped rather than trusted as-is.
+export function readDismissedEventKeys(): Record<string, true> {
+  const raw = readRaw(STORAGE_KEYS.dismissedEventKeys);
+  if (raw === null) return {};
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
+    const next: Record<string, true> = {};
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (value === true) next[key] = true;
+    }
+    return next;
+  } catch {
+    return {};
+  }
+}
+
+export function writeDismissedEventKeys(keys: Record<string, true>): void {
+  writeJSON(STORAGE_KEYS.dismissedEventKeys, keys);
 }
