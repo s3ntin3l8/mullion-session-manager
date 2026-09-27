@@ -277,16 +277,17 @@ const spawnChildSession = {
       model: {
         type: "string",
         description:
-          "Optional opencode model override for the child session. When omitted and " +
-          "parentSessionId is set, inherits the parent session's model. Only honored " +
-          "when command resolves to an opencode adapter.",
+          "Optional model override for the child session: opencode's provider/model, or " +
+          "the bare --model value for a Claude Code, Codex, or agy command. When omitted " +
+          "and parentSessionId is set, inherits the parent session's model (opencode only). " +
+          "Ignored for any other command. An invalid value is rejected.",
       },
       smallModel: {
         type: "string",
         description:
           "Optional opencode small_model override for the child session. When omitted " +
           "and parentSessionId is set, inherits the parent session's smallModel. Only " +
-          "honored when command resolves to an opencode adapter.",
+          "honored when command resolves to an opencode adapter; ignored otherwise.",
       },
     },
   },

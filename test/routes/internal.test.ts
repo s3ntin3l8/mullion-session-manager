@@ -208,11 +208,30 @@ vi.mock("node:child_process", async (importOriginal) => {
 // directory) instead of early-returning, so that has to be mocked here too
 // or the real module resolves and either does that filesystem I/O or, since
 // this factory replaces the whole module, throws on a missing export.
+//
+// Issue #1423 follow-up — this factory replaces the WHOLE module, so any
+// export the claude-code/opencode hook adapters import from it directly
+// (not through a route) must be stubbed too, or a claude-code/opencode spawn
+// anywhere in this file throws deep inside prepareLaunch (Vitest's "no
+// export defined on the mock" error) the moment it reaches that adapter's
+// injectMullionBundle branch (claude-code.ts/opencode.ts's own
+// `isBundleSyncedFor` check) — silently swallowed by applyHookAdapters's own
+// catch-and-log-warn, so the command falls back to un-transformed rather
+// than failing the request, which is what let this gap go unnoticed until a
+// test asserted on the resulting `--model` flag (issue #1423) rather than on
+// something appended outside prepareLaunch's own commandTransform (e.g. the
+// initial-prompt argv, a separate mechanism). `false` mirrors this route's
+// real "nothing synced yet" state in a test's fresh temp home directory —
+// the adapters' own soft-failure fallback (per-session --plugin-dir, itself
+// gated on resolveMullionBundleDir() finding nothing in a dev checkout) then
+// applies exactly as it would on a fresh, real install.
 const uninstallBundleContentMock = vi.fn(async () => ({ removed: 0, legacySwept: 0 }));
 const runBundleSyncExclusiveMock = vi.fn(async () => ({ changed: true }));
 vi.mock("../../src/services/bundle-sync.js", () => ({
   uninstallBundleContent: () => uninstallBundleContentMock(),
   runBundleSyncExclusive: (enabled: boolean) => runBundleSyncExclusiveMock(enabled),
+  isBundleSyncedFor: () => false,
+  removeBundleContentForCli: vi.fn(),
 }));
 
 // Issue #1101 — POST /internal/run-generation-turn's own handler calls
@@ -1205,6 +1224,80 @@ describe("internal routes (agent role, issue #26)", () => {
       payload: { id: "weird id", cwd: "/tmp", command: "bash", cols: 80, rows: 24 },
     });
     expect(spawnRes.statusCode).toBe(400);
+
+    await app.close();
+  });
+
+  // Issue #1423 — defense in depth. The primary (POST /api/sessions)
+  // already validates model/smallModel before it forwards a spawn here, so
+  // this only matters for a direct caller of this agent-side route.
+  it("rejects a spawn whose explicit smallModel isn't provider/model-shaped for an opencode command", async () => {
+    const app = await buildApp();
+
+    const spawnRes = await app.inject({
+      method: "POST",
+      url: "/internal/sessions",
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: {
+        id: "505",
+        cwd: "/tmp",
+        command: "opencode",
+        cols: 80,
+        rows: 24,
+        smallModel: "sonnet",
+      },
+    });
+    expect(spawnRes.statusCode).toBe(400);
+
+    await app.close();
+  });
+
+  it("rejects a spawn whose explicit model would inject a flag into a Claude Code command line", async () => {
+    const app = await buildApp();
+
+    const spawnRes = await app.inject({
+      method: "POST",
+      url: "/internal/sessions",
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: {
+        id: "503",
+        cwd: "/tmp",
+        command: "claude",
+        cols: 80,
+        rows: 24,
+        model: "--dangerously-skip-permissions",
+      },
+    });
+    expect(spawnRes.statusCode).toBe(400);
+
+    await app.close();
+  });
+
+  it("accepts a valid explicit model on a spawn and lands it as --model in the command line", async () => {
+    const app = await buildApp();
+    const before = fakePtyChildren.length;
+
+    const spawnRes = await app.inject({
+      method: "POST",
+      url: "/internal/sessions",
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: {
+        id: "504",
+        cwd: "/tmp",
+        command: "claude",
+        cols: 80,
+        rows: 24,
+        model: "opusplan",
+      },
+    });
+    expect(spawnRes.statusCode).toBe(201);
+    await waitUntil(() => fakePtyChildren.length > before);
+
+    const call = vi
+      .mocked(childProcessSpawn)
+      .mock.calls.findLast(([command]) => command === "systemd-run");
+    const args = call?.[1] as string[];
+    expect(args[args.length - 1]).toContain("--model 'opusplan'");
 
     await app.close();
   });

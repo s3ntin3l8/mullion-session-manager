@@ -132,6 +132,7 @@ import {
 import type { AgentAction, FindElementsBody } from "./browser-automation.js";
 import { attachSocketToBrowser } from "./browser.js";
 import { adapterHasInitialPromptArgs } from "../services/hook-adapters/index.js";
+import { explicitModelError } from "../services/task-model-resolve.js";
 import {
   SESSION_ID_PATTERN,
   SESSION_ID_PARAMS_SCHEMA,
@@ -1903,6 +1904,18 @@ export async function internalRoutes(app: FastifyInstance) {
         model,
         smallModel,
       } = request.body;
+      // Issue #1423 — defense in depth. The primary has already validated
+      // these (POST /api/sessions), so this only matters if a compromised
+      // or buggy primary, or a direct caller, reaches this agent-side route
+      // directly with an unvalidated value.
+      if (model !== undefined) {
+        const err = explicitModelError(command, "model", model);
+        if (err) return reply.badRequest(err);
+      }
+      if (smallModel !== undefined) {
+        const err = explicitModelError(command, "smallModel", smallModel);
+        if (err) return reply.badRequest(err);
+      }
       const session = app.pty.getOrCreate({
         id,
         cwd: expandHome(cwd),

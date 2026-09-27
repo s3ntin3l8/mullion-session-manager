@@ -8,8 +8,10 @@ vi.mock("../../src/services/settings.js", () => ({
 }));
 
 import {
+  explicitModelError,
   resolveCliModel,
   validateCliModel,
+  validateModel,
   resolveOpenCodeModel,
   resolveOpenCodeSmallModel,
 } from "../../src/services/task-model-resolve.js";
@@ -279,6 +281,46 @@ describe("resolveCliModel", () => {
   });
 });
 
+// Issue #1423 (CodeQL, PR #1448) — validateModel used to be a single regex
+// (`/^\S+\/\S+$/`) vulnerable to catastrophic backtracking, since `\S` also
+// matches "/" and gives the engine no unique split point between its two
+// halves. Rewritten as a plain substring search; this both re-asserts the
+// original semantics and guards against a regex regression, since a
+// backtracking reintroduction wouldn't show up as a wrong boolean on a short
+// input — only as this test hanging/timing out on a pathological one.
+describe("validateModel", () => {
+  it("requires a slash strictly between the first and last character, and no whitespace", () => {
+    expect(validateModel("anthropic/claude-sonnet-4-5")).toBe(true);
+    expect(validateModel("openrouter/anthropic/claude-sonnet-4-5")).toBe(true);
+    expect(validateModel("a/b")).toBe(true);
+    // A slash only at a boundary doesn't count on its own...
+    expect(validateModel("/foo")).toBe(false);
+    expect(validateModel("foo/")).toBe(false);
+    // ...even combined with another slash at the other boundary, as long as
+    // there's still an interior one somewhere.
+    expect(validateModel("/foo/bar")).toBe(true);
+    expect(validateModel("no-slash-at-all")).toBe(false);
+    expect(validateModel("has a/space")).toBe(false);
+    expect(validateModel("a/b\tc")).toBe(false);
+    expect(validateModel("a")).toBe(false);
+    expect(validateModel("")).toBe(false);
+  });
+
+  it("stays fast on the pathological input CodeQL flagged for the old backtracking regex", () => {
+    // GitHub's own alert named "!/" repeated many times as the trigger for
+    // the old `/^\S+\/\S+$/`. A match on that shape alone actually succeeds
+    // fast (the engine's first, greedy split attempt already works) — the
+    // worst case is a near-miss that FAILS only after every one of the
+    // ~50,000 candidate split points has been tried and discarded, which a
+    // trailing space (breaking \S+'s final segment) forces here. Verified
+    // empirically: the old regex hung (>10s) on this exact input.
+    const pathological = "!/".repeat(50_000) + " ";
+    const start = performance.now();
+    expect(validateModel(pathological)).toBe(false); // whitespace present — rejected outright
+    expect(performance.now() - start).toBeLessThan(50);
+  });
+});
+
 describe("validateCliModel", () => {
   it("accepts bare names and rejects shell-hostile or flag-like values", () => {
     expect(validateCliModel("claude-opus-4-5[1m]")).toBe(true);
@@ -287,5 +329,49 @@ describe("validateCliModel", () => {
     expect(validateCliModel("a b")).toBe(false);
     expect(validateCliModel("$(x)")).toBe(false);
     expect(validateCliModel("a'b")).toBe(false);
+  });
+});
+
+// Issue #1423 — explicitModelError gates a caller-supplied model/smallModel
+// on POST /api/sessions and /internal/sessions, where an invalid value has
+// no "next precedence tier" to fall through to (unlike the resolvers above).
+describe("explicitModelError", () => {
+  it("validates a claude-code command's model against CLI_MODEL_RE", () => {
+    expect(explicitModelError("claude", "model", "opusplan")).toBeNull();
+    expect(explicitModelError("claude", "model", "claude-opus-4-5[1m]")).toBeNull();
+    expect(explicitModelError("claude", "model", "--dangerously-skip-permissions")).not.toBeNull();
+    expect(explicitModelError("claude", "model", "a b")).not.toBeNull();
+    expect(explicitModelError("claude", "model", "$(x)")).not.toBeNull();
+  });
+
+  it("validates codex and agy commands the same way", () => {
+    expect(explicitModelError("codex", "model", "gpt-6-sol")).toBeNull();
+    expect(explicitModelError("codex", "model", "-m")).not.toBeNull();
+    expect(explicitModelError("agy", "model", "gemini-3")).toBeNull();
+    expect(explicitModelError("agy", "model", "'; rm -rf /'")).not.toBeNull();
+  });
+
+  it("never errors on smallModel for a claude-code/codex/agy command — it's meaningless there", () => {
+    expect(explicitModelError("claude", "smallModel", "--anything at all")).toBeNull();
+    expect(explicitModelError("codex", "smallModel", "$(x)")).toBeNull();
+  });
+
+  it("requires an opencode model/smallModel to be both provider/model-shaped and charset-safe", () => {
+    expect(explicitModelError("opencode", "model", "anthropic/claude-sonnet-4-5")).toBeNull();
+    expect(
+      explicitModelError("opencode", "model", "openrouter/anthropic/claude-sonnet-4-5"),
+    ).toBeNull();
+    expect(explicitModelError("opencode", "smallModel", "opencode-go/cheap")).toBeNull();
+    // No "/" at all — fails validateModel.
+    expect(explicitModelError("opencode", "model", "sonnet")).not.toBeNull();
+    // Has a "/", but a leading "-" and a "$()" are still a shell/argv hazard
+    // once this lands in OPENCODE_CONFIG_CONTENT — validateModel alone
+    // wouldn't catch it, so validateCliModel must run too.
+    expect(explicitModelError("opencode", "model", "-x/$(y)")).not.toBeNull();
+  });
+
+  it("returns null for any value on a command with no model concept — the route drops it instead of erroring", () => {
+    expect(explicitModelError("bash", "model", "anything, even garbage")).toBeNull();
+    expect(explicitModelError("npm run build", "smallModel", "$(x)")).toBeNull();
   });
 });
