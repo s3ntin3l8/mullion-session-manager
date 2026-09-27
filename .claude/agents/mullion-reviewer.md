@@ -19,10 +19,12 @@ skill's checklist doesn't cover.
 
 1. **The opaque-blob invariant.** Does anything parse `session.command` or
    `workspace.layout` outside a `src/services/hook-adapters/` adapter's own
-   `commandTransform`, or outside the sanctioned `command*`/`buildModelFlag`/
-   `validateModel`/`validateCliModel` helpers (`hook-adapters/index.ts`/
-   `shared.ts`) those adapters and their callers (`task-claim.ts`,
-   `task-reconciler.ts`, `task-model-resolve.ts`, `routes/sessions.ts`) use?
+   `commandTransform`, or outside the sanctioned `commandIsOpencode`/
+   `commandModelCli` (`hook-adapters/index.ts`), `buildModelFlag`
+   (`hook-adapters/shared.ts`), `validateModel`/`validateCliModel`
+   (`services/task-model-resolve.ts`), or `commandSupportsSeed`
+   (`services/task-agent-resolve.ts`) helpers those adapters and their
+   callers (`task-claim.ts`, `task-reconciler.ts`, `routes/sessions.ts`) use?
    Those are the sanctioned exceptions; anything else parsing either field is
    very likely a bug even if it "works."
 

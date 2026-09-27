@@ -92,14 +92,18 @@ context if you're running inside a Mullion-hosted session.
   `src/services/hook-adapters/`: each adapter's own `commandTransform`
   (Claude Code's appends `--settings`/`--mcp-config`/`--plugin-dir`; Codex's
   and agy's append their own MCP/model flags the same way) inspects and
-  rewrites the launch command at spawn time, and the narrow `command*`/
-  `buildModelFlag`/`validateModel`/`validateCliModel` helpers exported
-  alongside them (`hook-adapters/index.ts`/`shared.ts`) are what callers
-  elsewhere (`task-claim.ts`, `task-reconciler.ts`, `task-model-resolve.ts`,
-  `routes/sessions.ts`) use to branch on a command's agent family or inject
-  a model flag, rather than re-deriving that shape with their own ad-hoc
-  parsing. Any `session.command` inspection outside these sanctioned
-  adapter/helper call sites is the red flag, not a call into one of them.
+  rewrites the launch command at spawn time. The same is true of a narrow
+  set of helpers that inspect `session.command` from outside the adapters
+  themselves: `commandIsOpencode`/`commandModelCli` (`hook-adapters/index.ts`)
+  and `buildModelFlag` (`hook-adapters/shared.ts`), plus `validateModel`/
+  `validateCliModel` (`services/task-model-resolve.ts`) and
+  `commandSupportsSeed` (`services/task-agent-resolve.ts`) — used by callers
+  like `task-claim.ts`, `task-reconciler.ts`, and `routes/sessions.ts` to
+  branch on a command's agent family, inject a model flag, or decide whether
+  a real first-turn prompt can be delivered, rather than re-deriving that
+  shape with their own ad-hoc parsing. Any `session.command` inspection
+  outside these sanctioned adapter/helper call sites is the red flag, not a
+  call into one of them.
 - **ESM throughout.** Import specifiers end in `.js` even when importing
   `.ts` source files (Node16 resolution). Use `import type` for type-only
   imports.

@@ -16,12 +16,15 @@ wrong even if it's internally consistent and well-tested.
 See `AGENTS.md`. The deliberate exception is `src/services/hook-adapters/`:
 each adapter's own `commandTransform` (Claude Code's appends `--settings`/
 `--mcp-config`/`--plugin-dir`; Codex's and agy's append their own MCP/model
-flags the same way) inspects and rewrites the launch command at spawn time,
-and the narrow `command*`/`buildModelFlag`/`validateModel`/`validateCliModel`
-helpers exported alongside them (`hook-adapters/index.ts`/`shared.ts`) are
-what callers elsewhere (`task-claim.ts`, `task-reconciler.ts`,
-`task-model-resolve.ts`, `routes/sessions.ts`) use to branch on a command's
-agent family or inject a model flag.
+flags the same way) inspects and rewrites the launch command at spawn time.
+Alongside that, a narrow set of helpers inspects `session.command` from
+outside the adapters: `commandIsOpencode`/`commandModelCli`
+(`hook-adapters/index.ts`) and `buildModelFlag` (`hook-adapters/shared.ts`),
+plus `validateModel`/`validateCliModel` (`services/task-model-resolve.ts`)
+and `commandSupportsSeed` (`services/task-agent-resolve.ts`) — what callers
+elsewhere (`task-claim.ts`, `task-reconciler.ts`, `routes/sessions.ts`) use
+to branch on a command's agent family, inject a model flag, or decide
+whether a real first-turn prompt can be delivered.
 
 **Red flag:** any new code that calls `.split()`, a regex, or a shell
 parser on `session.command` or `workspace.layout` **outside** a hook
