@@ -996,6 +996,214 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
   });
 });
 
+// Issue #1424 — the per-session model picker in the options strip, keyed to
+// whichever launcher is currently highlighted.
+describe("CommandPalette -> per-session model picker (issue #1424)", () => {
+  const CLAUDE: Launcher = {
+    id: "agent:claude",
+    kind: "agent",
+    title: "claude",
+    command: "claude",
+  };
+  const CODEX: Launcher = {
+    id: "agent:codex",
+    kind: "agent",
+    title: "codex",
+    command: "codex",
+  };
+  const BASH: Launcher = { id: "shell:bash", kind: "shell", title: "bash", command: "bash" };
+  // A custom (.crs/actions.json) launcher, not kind "agent" — the picker
+  // must still key off the COMMAND, not the launcher kind/id.
+  const CUSTOM_CLAUDE: Launcher = {
+    id: "custom:claude-review",
+    kind: "custom",
+    title: "claude review",
+    command: "claude --foo",
+  };
+  const CUSTOM_ALREADY_HAS_MODEL: Launcher = {
+    id: "custom:claude-opus",
+    kind: "custom",
+    title: "claude opus",
+    command: "claude --model opus",
+  };
+
+  beforeEach(() => {
+    useDashboardStore.setState({ projects: [PROJECT], sessions: [], settings: DEFAULT_SETTINGS });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function mockFetch(opts: {
+    launchers?: Launcher[];
+    onCreateSession?: (body: unknown) => void;
+    codexModels?: string[];
+  }) {
+    const launchers = opts.launchers ?? [CLAUDE, CODEX, BASH];
+    return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/actions")) return Promise.resolve(jsonResponse(200, launchers));
+      if (url.includes("/urls")) return Promise.resolve(jsonResponse(200, []));
+      if (url.endsWith("/api/codex/models"))
+        return Promise.resolve(jsonResponse(200, opts.codexModels ?? []));
+      if (url.endsWith("/api/agy/models")) return Promise.resolve(jsonResponse(200, []));
+      if (url.endsWith("/api/opencode/models")) return Promise.resolve(jsonResponse(200, []));
+      if (url.endsWith("/api/sessions") && init?.method === "POST") {
+        opts.onCreateSession?.(JSON.parse(String(init.body)));
+        return Promise.resolve(
+          jsonResponse(201, { id: 1, projectId: PROJECT.id, command: "bash", status: "active" }),
+        );
+      }
+      if (url.startsWith("/api/sessions")) return Promise.resolve(jsonResponse(200, []));
+      return Promise.reject(new Error(`unhandled fetch in test: ${url}`));
+    });
+  }
+
+  function renderPalette(overrides: Partial<ComponentProps<typeof CommandPalette>> = {}) {
+    return render(
+      <CommandPalette
+        scope="project"
+        projectId={PROJECT.id}
+        onClose={vi.fn()}
+        onLaunched={vi.fn()}
+        onOpenSession={vi.fn()}
+        onOpenGitHub={vi.fn()}
+        onOpenGit={vi.fn()}
+        onOpenAgentRules={vi.fn()}
+        onOpenProjectBriefing={vi.fn()}
+        onOpenProjectSetup={vi.fn()}
+        onOpenDockConfig={vi.fn()}
+        onOpenSkills={vi.fn()}
+        onOpenBrowser={vi.fn()}
+        onOpenBlankBrowser={vi.fn()}
+        onOpenIntegrationsSettings={vi.fn()}
+        onOpenBrowserUrl={vi.fn()}
+        onOpenTasks={vi.fn()}
+        {...overrides}
+      />,
+    );
+  }
+
+  it("sends the picked model when launching the highlighted Claude Code launcher", async () => {
+    const onCreateSession = vi.fn();
+    vi.stubGlobal("fetch", mockFetch({ onCreateSession }));
+    const user = userEvent.setup();
+    renderPalette();
+
+    // Claude is settings.launchers.defaultAgent — highlighted without typing.
+    await screen.findByText("Matching commands");
+    const select = await screen.findByRole("combobox", { name: "Model for this session" });
+    await user.selectOptions(select, "opusplan");
+    // Enter launches entries[activeIndex] (Claude, still highlighted) — the
+    // search input, not the select, must have focus for its onKeyDown to see it.
+    await user.click(screen.getByPlaceholderText(/Launch a session/));
+    await user.keyboard("{Enter}");
+
+    expect(onCreateSession).toHaveBeenCalledWith(expect.objectContaining({ model: "opusplan" }));
+  });
+
+  it("sends no model key when the picker is left on its default option", async () => {
+    const onCreateSession = vi.fn();
+    vi.stubGlobal("fetch", mockFetch({ onCreateSession }));
+    const user = userEvent.setup();
+    renderPalette();
+
+    await screen.findByText("Matching commands");
+    await screen.findByRole("combobox", { name: "Model for this session" });
+    await user.click(screen.getByPlaceholderText(/Launch a session/));
+    await user.keyboard("{Enter}");
+
+    expect(onCreateSession).toHaveBeenCalled();
+    expect(onCreateSession.mock.calls[0]![0]).not.toHaveProperty("model");
+  });
+
+  it("does not carry a model picked for Claude over to a Codex launch", async () => {
+    const onCreateSession = vi.fn();
+    vi.stubGlobal("fetch", mockFetch({ onCreateSession }));
+    const user = userEvent.setup();
+    renderPalette();
+
+    await screen.findByText("Matching commands");
+    const select = await screen.findByRole("combobox", { name: "Model for this session" });
+    await user.selectOptions(select, "opusplan");
+
+    // Move the highlight from Claude (index 0) to Codex (index 1) and launch
+    // with Enter, which launches entries[activeIndex] — the search input
+    // must be focused for its own onKeyDown handler to see the arrow key.
+    const input = screen.getByPlaceholderText(/Launch a session/);
+    await user.click(input);
+    await user.keyboard("{ArrowDown}");
+    await user.keyboard("{Enter}");
+
+    expect(onCreateSession).toHaveBeenCalled();
+    expect(onCreateSession.mock.calls[0]![0]).not.toHaveProperty("model");
+  });
+
+  it("shows no model control for a plain shell launcher", async () => {
+    vi.stubGlobal("fetch", mockFetch({}));
+    const user = userEvent.setup();
+    renderPalette();
+
+    await screen.findByText("Matching commands");
+    await user.click(screen.getByPlaceholderText(/Launch a session/));
+    await user.clear(screen.getByPlaceholderText(/Launch a session/));
+    await user.type(screen.getByPlaceholderText(/Launch a session/), "bash");
+
+    expect(
+      screen.queryByRole("combobox", { name: "Model for this session" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows no model control for a custom launcher whose command already has --model", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({ launchers: [CLAUDE, CODEX, BASH, CUSTOM_ALREADY_HAS_MODEL] }),
+    );
+    const user = userEvent.setup();
+    renderPalette();
+
+    await screen.findByText("Matching commands");
+    await user.click(screen.getByPlaceholderText(/Launch a session/));
+    await user.clear(screen.getByPlaceholderText(/Launch a session/));
+    await user.type(screen.getByPlaceholderText(/Launch a session/), "claude opus");
+
+    expect(
+      screen.queryByRole("combobox", { name: "Model for this session" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows the model control for a custom (non-agent-kind) launcher matched by command", async () => {
+    vi.stubGlobal("fetch", mockFetch({ launchers: [CLAUDE, CODEX, BASH, CUSTOM_CLAUDE] }));
+    const user = userEvent.setup();
+    renderPalette();
+
+    await screen.findByText("Matching commands");
+    await user.click(screen.getByPlaceholderText(/Launch a session/));
+    await user.clear(screen.getByPlaceholderText(/Launch a session/));
+    await user.type(screen.getByPlaceholderText(/Launch a session/), "claude review");
+
+    expect(await screen.findByRole("combobox", { name: "Model for this session" })).toBeVisible();
+  });
+
+  it("populates Codex's options from the live catalog", async () => {
+    vi.stubGlobal("fetch", mockFetch({ codexModels: ["gpt-6-astra", "gpt-6-luna"] }));
+    const user = userEvent.setup();
+    renderPalette();
+
+    await screen.findByText("Matching commands");
+    await user.click(screen.getByPlaceholderText(/Launch a session/));
+    await user.clear(screen.getByPlaceholderText(/Launch a session/));
+    await user.type(screen.getByPlaceholderText(/Launch a session/), "codex");
+
+    const select = await screen.findByRole("combobox", { name: "Model for this session" });
+    expect(within(select).getByRole("option", { name: "gpt-6-astra" })).toBeInTheDocument();
+    expect(within(select).getByRole("option", { name: "gpt-6-luna" })).toBeInTheDocument();
+    // The static fallback list is NOT shown once the live catalog answers.
+    expect(within(select).queryByRole("option", { name: "gpt-6-sol" })).not.toBeInTheDocument();
+  });
+});
+
 // U2 (audit finding: "⌘K is a launcher, not a switcher") — the Sessions and
 // Workspaces result groups, plus the flattened keyboard nav across all three
 // groups (Sessions -> Workspaces -> Matching commands).
