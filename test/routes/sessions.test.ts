@@ -3989,6 +3989,198 @@ describe("sessions route", () => {
     });
   });
 
+  // Issue #1423 — an explicit, caller-supplied model/smallModel used to
+  // reach argv (for claude-code/codex/agy) or OPENCODE_CONFIG_CONTENT (for
+  // opencode) with no validation at all — only shell-quoted. This is
+  // reachable from spawn_child_session (MCP) and the control socket, not
+  // just this REST route directly.
+  describe("explicit model validation (issue #1423)", () => {
+    it("rejects a flag-injection attempt as an explicit model for a Claude Code command", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "claude", model: "--dangerously-skip-permissions" },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().message).toMatch(/model/i);
+
+      // No session row was created for the rejected request.
+      const list = await app.inject({ method: "GET", url: `/api/sessions?projectId=${projectId}` });
+      expect(list.json()).toEqual([]);
+
+      await app.close();
+    });
+
+    it("accepts a valid opusplan model for Claude Code and lands it as --model in argv", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "claude", model: "opusplan" },
+      });
+
+      expect(res.statusCode).toBe(201);
+      expect(res.json().model).toBe("opusplan");
+
+      const call = vi
+        .mocked(spawnChildProcess)
+        .mock.calls.findLast(([command]) => command === "systemd-run");
+      const args = call?.[1] as string[];
+      expect(args[args.length - 1]).toContain("--model 'opusplan'");
+
+      await app.close();
+    });
+
+    it("rejects an invalid explicit model for a Codex command", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "codex", model: "a b" },
+      });
+
+      expect(res.statusCode).toBe(400);
+
+      await app.close();
+    });
+
+    it("rejects an opencode model that isn't provider/model-shaped", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "opencode", model: "sonnet" },
+      });
+
+      expect(res.statusCode).toBe(400);
+
+      await app.close();
+    });
+
+    it("rejects an opencode smallModel that is provider/model-shaped but still shell-hostile", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "opencode", smallModel: "-x/$(y)" },
+      });
+
+      expect(res.statusCode).toBe(400);
+
+      await app.close();
+    });
+
+    it("drops (does not store or reject) a model/smallModel sent for a bash command", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash", model: "anything", smallModel: "anything" },
+      });
+
+      expect(res.statusCode).toBe(201);
+      expect(res.json().model).toBeNull();
+      expect(res.json().smallModel).toBeNull();
+
+      await app.close();
+    });
+
+    it("drops smallModel sent alongside a valid model for a Claude Code command", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "claude", model: "sonnet", smallModel: "irrelevant here" },
+      });
+
+      expect(res.statusCode).toBe(201);
+      expect(res.json().model).toBe("sonnet");
+      expect(res.json().smallModel).toBeNull();
+
+      await app.close();
+    });
+
+    it("falls through to the settings default when a parent session's stored opencode model is invalid", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+      const { sessions } = await import("../../src/db/schema.js");
+
+      const parentCreated = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "opencode" },
+      });
+      const parentId = parentCreated.json().id as number;
+      // Simulate a value written by an older backend build that pre-dates
+      // this validation, bypassing the route's own checks entirely.
+      app.db.update(sessions).set({ model: "-x/$(y)" }).where(eq(sessions.id, parentId)).run();
+
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { opencode: { implementerModel: "openrouter/minimax-m3" } },
+      });
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "opencode", parentSessionId: parentId },
+      });
+
+      expect(res.statusCode).toBe(201);
+      expect(res.json().model).toBe("openrouter/minimax-m3");
+
+      await app.close();
+    });
+
+    it("falls through to the settings default when a parent session's stored opencode smallModel is invalid", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+      const { sessions } = await import("../../src/db/schema.js");
+
+      const parentCreated = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "opencode" },
+      });
+      const parentId = parentCreated.json().id as number;
+      app.db.update(sessions).set({ smallModel: "sonnet" }).where(eq(sessions.id, parentId)).run();
+
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { opencode: { defaultSmallModel: "opencode-go/cheap" } },
+      });
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "opencode", parentSessionId: parentId },
+      });
+
+      expect(res.statusCode).toBe(201);
+      expect(res.json().smallModel).toBe("opencode-go/cheap");
+
+      await app.close();
+    });
+  });
+
   // Phase 5 (Track B, issue #196 5.6) — killSession's cascade parameter,
   // exercised via the DELETE route's own ?cascade= querystring.
   describe("cascade kill (Phase 5, issue #196 5.6)", () => {

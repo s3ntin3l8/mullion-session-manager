@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { getStoredSettings } from "./settings.js";
+import { commandIsOpencode, commandModelCli } from "./hook-adapters/index.js";
 
 export type OpenCodeModelRole = "implementer" | "reviewer";
 
@@ -18,10 +19,22 @@ const SMALL_MODEL_LINE_RE = /^\s*SmallModel:\s*(\S+)\s*$/im;
 // too-strict pattern actually reachable, so it's fixed here too rather than
 // shipping a Models dropdown whose majority of entries silently fail
 // validation at spawn time and fall back to "no override".
-const MODEL_FORMAT_RE = /^\S+\/\S+$/;
-
+//
+// Issue #1423 (CodeQL, PR #1448) — this used to be the single regex
+// `/^\S+\/\S+$/`. `\S` also matches "/", so that pattern has no unique split
+// point between its two halves: for input like `"!/".repeat(n)`, the engine
+// can divide the string between the two `\S+` groups at every "/" before
+// backtracking to try the next one, which is polynomial in `n`. This PR
+// (issue #1423) is what first calls `validateModel` directly on a raw,
+// caller-supplied `model`/`smallModel` from an HTTP body (`explicitModelError`
+// below) rather than only on a value already sourced from settings/task
+// state, so CodeQL now flags a genuine attacker-reachable path. Rewritten as
+// plain substring search — same semantics (a `/` strictly between the first
+// and last character; a `/` immediately at either boundary, e.g. "/foo" or
+// "foo/", doesn't count on its own), but linear and non-backtracking.
 export function validateModel(value: string): boolean {
-  return MODEL_FORMAT_RE.test(value);
+  if (value.length < 3 || /\s/.test(value)) return false;
+  return value.slice(1, -1).includes("/");
 }
 
 function parseModelDirective(body: string | null): string | null {
@@ -170,6 +183,51 @@ export function resolveCliModel(
       { model: value, agent },
       `[task-model-resolve] ${source} is not a valid ${agent} model name, falling through`,
     );
+  }
+  return null;
+}
+
+/**
+ * Validate an explicit, caller-supplied `model`/`smallModel` value against
+ * `command` (issue #1423). Unlike the resolvers above, which warn and fall
+ * through to the next precedence tier on a bad value, an explicit value has
+ * no "next tier" to fall through to — a session creation request that
+ * supplies one is either honored or rejected outright, so this returns an
+ * error message instead of `null`.
+ *
+ * - claude-code/codex/agy commands: `model` must pass `validateCliModel`
+ *   (the same charset allowlist `resolveCliModel` uses). `smallModel` is
+ *   meaningless for these CLIs — callers shouldn't be sending it, and there
+ *   is nothing to validate it against, so it is always accepted here; the
+ *   route drops it before it reaches the session row.
+ * - opencode commands: both `model` and `smallModel` must pass
+ *   `validateModel` (the `provider/model` shape) AND `validateCliModel` (the
+ *   charset allowlist) — `validateModel` alone doesn't reject a value like
+ *   `-x/$(y)`, which is still a shell/argv hazard once it lands in
+ *   `OPENCODE_CONFIG_CONTENT`.
+ * - Any other command (bash, npm scripts, unmatched custom launchers): no
+ *   model concept applies, so this returns `null` — the route drops the
+ *   field entirely rather than rejecting the request outright, since a
+ *   value here is inert, not malicious.
+ *
+ * Returns `null` when `value` is acceptable, or a human-readable message
+ * suitable for `reply.badRequest` when it isn't.
+ */
+export function explicitModelError(
+  command: string,
+  field: "model" | "smallModel",
+  value: string,
+): string | null {
+  const cli = commandModelCli(command);
+  if (cli !== null) {
+    if (field === "smallModel") return null;
+    return validateCliModel(value)
+      ? null
+      : `model must match the CLI model name format (letters, digits, and . _ : / @ [ ] - only, starting with a letter or digit)`;
+  }
+  if (commandIsOpencode(command)) {
+    if (validateModel(value) && validateCliModel(value)) return null;
+    return `${field} must be in "provider/model" format, using only letters, digits, and . _ : / @ [ ] -`;
   }
   return null;
 }
