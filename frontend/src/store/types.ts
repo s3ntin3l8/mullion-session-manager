@@ -161,6 +161,11 @@ export interface SessionsSlice {
       skipPermissions?: boolean;
       // Issue #822 — a dock control's own env, forwarded verbatim.
       env?: Record<string, string>;
+      // Issue #1424 — see api/sessions.ts's createSession opts for the full
+      // doc comment; kept in sync with it by convention, not by import (this
+      // interface is the store slice's own contract, api/sessions.ts is the
+      // HTTP layer's).
+      model?: string;
     },
   ) => Promise<Session>;
   renameSession: (id: number, name: string) => Promise<void>;
