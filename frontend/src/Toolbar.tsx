@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { useDashboardStore } from "./store/index.js";
 import {
+  AppearanceIcon,
   ChevronLeftIcon,
   GridIcon,
   LayersIcon,
@@ -13,7 +14,7 @@ import {
 } from "./ui/icons.js";
 import { NotificationBell } from "./NotificationBell.js";
 import { KebabMenu } from "./ui/KebabMenu.js";
-import type { Session } from "./api/index.js";
+import type { AppSettings, Session } from "./api/index.js";
 import type { SettingsSection } from "./Settings.js";
 
 interface ToolbarProps {
@@ -38,6 +39,12 @@ interface ToolbarProps {
   phone?: boolean;
 }
 
+const THEME_LABELS: Record<AppSettings["theme"], string> = {
+  dark: "Dark",
+  light: "Light",
+  system: "System",
+};
+
 // Ported 1:1 from the design's toolbar: sidebar toggle, attention bell with
 // count badge, "+" new-session (opens the global command palette), a
 // centered active-workspace/pane-count summary, "Run command… ⌘K", theme
@@ -60,10 +67,16 @@ export function Toolbar({
   // it's the identical whole-store-subscription defect (`useDashboardStore()`
   // with no selector) in one of the four components its own App.tsx finding
   // names as dragged along by App's re-renders; fixed here for the same
-  // reason as the cited call sites. `toggleTheme` is a pure action-caller
+  // reason as the cited call sites. `cycleTheme` is a pure action-caller
   // (only used inside the theme button's onClick below) — see the
   // getState() call at that call site instead of subscribing to it here.
-  const theme = useDashboardStore((s) => s.theme);
+  // Selecting the *preference* (dark/light/system) rather than the resolved
+  // `theme` field (always dark or light) — the button needs to show
+  // "System" as its own state (issue #1432), which the resolved value can't
+  // distinguish.
+  const themePreference = useDashboardStore((s) => s.settings.theme);
+  const nextThemePreference =
+    themePreference === "dark" ? "light" : themePreference === "light" ? "system" : "dark";
   // Tasks is an install-wide board, not a workspace view — reading viewMode
   // here (rather than threading it through a list/Kanban toggle, issue #211's
   // now-removed ViewModeToggle.tsx) lets the toolbar say so honestly: the
@@ -185,10 +198,16 @@ export function Toolbar({
         </button>
         <button
           className="toolbar-icon-btn toolbar-theme-btn"
-          onClick={() => useDashboardStore.getState().toggleTheme()}
-          title="Toggle theme"
+          onClick={() => useDashboardStore.getState().cycleTheme()}
+          title={`Theme: ${THEME_LABELS[themePreference]} (click for ${THEME_LABELS[nextThemePreference]})`}
         >
-          {theme === "light" ? <SunIcon size={16} /> : <MoonIcon size={16} />}
+          {themePreference === "light" ? (
+            <SunIcon size={16} />
+          ) : themePreference === "system" ? (
+            <AppearanceIcon size={16} />
+          ) : (
+            <MoonIcon size={16} />
+          )}
         </button>
         {currentVersion !== null && (
           <button
@@ -225,9 +244,16 @@ export function Toolbar({
                 },
                 {
                   key: "theme",
-                  label: theme === "light" ? "Dark theme" : "Light theme",
-                  icon: theme === "light" ? <MoonIcon size={14} /> : <SunIcon size={14} />,
-                  onClick: () => useDashboardStore.getState().toggleTheme(),
+                  label: `Theme: ${THEME_LABELS[themePreference]}`,
+                  icon:
+                    themePreference === "light" ? (
+                      <SunIcon size={14} />
+                    ) : themePreference === "system" ? (
+                      <AppearanceIcon size={14} />
+                    ) : (
+                      <MoonIcon size={14} />
+                    ),
+                  onClick: () => useDashboardStore.getState().cycleTheme(),
                 },
                 {
                   key: "settings",

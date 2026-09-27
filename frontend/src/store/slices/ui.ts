@@ -27,7 +27,7 @@ import {
   readThemeHint,
   resolveTheme,
 } from "../helpers.js";
-import type { DashboardState, Theme, UiSlice } from "../types.js";
+import type { DashboardState, UiSlice } from "../types.js";
 
 function deriveTerminalPrefs(settings: AppSettings): UiSlice["terminalPrefs"] {
   return {
@@ -185,8 +185,10 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
       patchTimer = setTimeout(flushPendingPatch, SETTINGS_PATCH_DEBOUNCE_MS);
     },
 
-    toggleTheme: () => {
-      const next: Theme = get().theme === "dark" ? "light" : "dark";
+    cycleTheme: () => {
+      const current = get().settings.theme;
+      const next: AppSettings["theme"] =
+        current === "dark" ? "light" : current === "light" ? "system" : "dark";
       get().updateSettings({ theme: next });
     },
 

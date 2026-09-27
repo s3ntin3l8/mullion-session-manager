@@ -13,11 +13,12 @@ import userEvent from "@testing-library/user-event";
 import { Toolbar } from "./Toolbar.js";
 
 let viewMode: string;
+let themePreference: string;
 const setViewMode = vi.fn();
-const toggleTheme = vi.fn();
+const cycleTheme = vi.fn();
 
 function storeState() {
-  return { theme: "dark", viewMode, setViewMode, toggleTheme };
+  return { settings: { theme: themePreference }, viewMode, setViewMode, cycleTheme };
 }
 
 vi.mock("./store/index.js", () => {
@@ -48,8 +49,9 @@ const NOOP_PROPS = {
 
 beforeEach(() => {
   viewMode = "list";
+  themePreference = "dark";
   setViewMode.mockClear();
-  toggleTheme.mockClear();
+  cycleTheme.mockClear();
 });
 
 describe("Toolbar — workspace view (viewMode !== kanban)", () => {
@@ -161,12 +163,29 @@ describe("Toolbar — phone session switcher slot and app menu", () => {
     expect(onOpenLauncher).toHaveBeenCalledTimes(1);
 
     await user.click(screen.getByTitle("Menu"));
-    await user.click(screen.getByText("Light theme"));
-    expect(toggleTheme).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByText("Theme: Dark"));
+    expect(cycleTheme).toHaveBeenCalledTimes(1);
 
     await user.click(screen.getByTitle("Menu"));
     await user.click(screen.getByText("Settings · v0.3.29"));
     expect(onOpenSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it("cycles the theme button through dark -> light -> system, never getting stuck", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(<Toolbar {...NOOP_PROPS} />);
+
+    expect(screen.getByTitle(/^Theme: Dark/)).toBeInTheDocument();
+    await user.click(screen.getByTitle(/^Theme: Dark/));
+    expect(cycleTheme).toHaveBeenCalledTimes(1);
+
+    themePreference = "light";
+    rerender(<Toolbar {...NOOP_PROPS} />);
+    expect(screen.getByTitle(/^Theme: Light/)).toBeInTheDocument();
+
+    themePreference = "system";
+    rerender(<Toolbar {...NOOP_PROPS} />);
+    expect(screen.getByTitle("Theme: System (click for Dark)")).toBeInTheDocument();
   });
 });
 

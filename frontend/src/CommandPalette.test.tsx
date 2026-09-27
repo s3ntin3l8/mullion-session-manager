@@ -72,6 +72,7 @@ describe("CommandPalette -> Integrations section", () => {
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
     );
@@ -100,6 +101,7 @@ describe("CommandPalette -> Integrations section", () => {
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
     );
@@ -128,6 +130,7 @@ describe("CommandPalette -> Integrations section", () => {
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
     );
@@ -156,6 +159,7 @@ describe("CommandPalette -> Integrations section", () => {
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
     );
@@ -184,6 +188,7 @@ describe("CommandPalette -> Integrations section", () => {
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
     );
@@ -212,6 +217,7 @@ describe("CommandPalette -> Integrations section", () => {
         onOpenBrowser={onOpenBrowser}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
     );
@@ -240,6 +246,7 @@ describe("CommandPalette -> Integrations section", () => {
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={onOpenBlankBrowser}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
     );
@@ -269,6 +276,7 @@ describe("CommandPalette -> Integrations section", () => {
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={onOpenIntegrationsSettings}
         onOpenBrowserUrl={vi.fn()}
+        onOpenTasks={vi.fn()}
       />,
     );
 
@@ -276,7 +284,40 @@ describe("CommandPalette -> Integrations section", () => {
     expect(onOpenIntegrationsSettings).toHaveBeenCalled();
   });
 
-  it("hides the Integrations section while mid-search", async () => {
+  // Issue #1434 — the palette used to claim it had a Tasks entry (its own
+  // and App.tsx's comments said so) without actually having one.
+  it("opens the task board and closes the palette, regardless of project scope", async () => {
+    const onOpenTasks = vi.fn();
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <CommandPalette
+        scope="global"
+        projectId={null}
+        onClose={onClose}
+        onLaunched={vi.fn()}
+        onOpenSession={vi.fn()}
+        onOpenGitHub={vi.fn()}
+        onOpenGit={vi.fn()}
+        onOpenAgentRules={vi.fn()}
+        onOpenProjectBriefing={vi.fn()}
+        onOpenProjectSetup={vi.fn()}
+        onOpenDockConfig={vi.fn()}
+        onOpenSkills={vi.fn()}
+        onOpenBrowser={vi.fn()}
+        onOpenBlankBrowser={vi.fn()}
+        onOpenIntegrationsSettings={vi.fn()}
+        onOpenBrowserUrl={vi.fn()}
+        onOpenTasks={onOpenTasks}
+      />,
+    );
+
+    await user.click(await screen.findByText("Task board"));
+    expect(onOpenTasks).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides the Task board and Integrations rows while mid-search", async () => {
     const user = userEvent.setup();
     render(
       <CommandPalette
@@ -295,13 +336,16 @@ describe("CommandPalette -> Integrations section", () => {
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
     );
 
     await screen.findByText("Manage integrations…");
+    expect(screen.getByText("Task board")).toBeInTheDocument();
     await user.type(screen.getByPlaceholderText(/Launch a session/), "bash");
     expect(screen.queryByText("Manage integrations…")).not.toBeInTheDocument();
+    expect(screen.queryByText("Task board")).not.toBeInTheDocument();
   });
 });
 
@@ -333,6 +377,7 @@ describe("CommandPalette -> P9 silent failures", () => {
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
         {...overrides}
       />,
@@ -425,6 +470,7 @@ describe("CommandPalette -> focus management (P11)", () => {
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
         {...overrides}
       />,
@@ -708,6 +754,7 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
     );
@@ -736,6 +783,7 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
     );
@@ -768,6 +816,7 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
     );
@@ -800,6 +849,7 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
     );
@@ -847,6 +897,7 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
     );
@@ -882,6 +933,7 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
     );
@@ -918,6 +970,7 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
     );
@@ -1063,6 +1116,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
     );
@@ -1109,6 +1163,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
     );
@@ -1153,6 +1208,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
     );
@@ -1199,6 +1255,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
     );
@@ -1246,6 +1303,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
     );
@@ -1290,6 +1348,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
     );
@@ -1347,6 +1406,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
     );
@@ -1397,6 +1457,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
     );
@@ -1440,6 +1501,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
     );
@@ -1484,6 +1546,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
         onShowWorkspace={onShowWorkspace}
       />,
@@ -1525,6 +1588,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
         onShowWorkspace={onShowWorkspace}
       />,
@@ -1605,6 +1669,7 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
     );
@@ -1642,6 +1707,7 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
     );
@@ -1678,6 +1744,7 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
     );
@@ -1711,6 +1778,7 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
     );
@@ -1748,6 +1816,7 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
     );
@@ -1785,6 +1854,7 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
     );
@@ -1828,6 +1898,7 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
     );

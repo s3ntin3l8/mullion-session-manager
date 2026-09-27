@@ -1625,6 +1625,7 @@ export function App() {
           onOpenBlankBrowser={onOpenBlankBrowser}
           onOpenBrowserUrl={onOpenBrowserUrl}
           onShowWorkspace={handleSelectWorkspace}
+          onOpenTasks={onOpenTasks}
         />
       )}
       {settingsOpen && (
