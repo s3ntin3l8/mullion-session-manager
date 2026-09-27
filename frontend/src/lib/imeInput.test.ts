@@ -232,4 +232,15 @@ describe("attachImeInput against a real xterm Terminal", () => {
     typeLine("a");
     expect(spy).not.toHaveBeenCalled();
   });
+
+  it("removes every listener it attached, leaking none", () => {
+    const root = term.element as HTMLElement;
+    const addSpy = vi.spyOn(root, "addEventListener");
+    const removeSpy = vi.spyOn(root, "removeEventListener");
+    const off = attachImeInput(term);
+    off();
+    const added = addSpy.mock.calls.map(([type]) => type).sort();
+    const removed = removeSpy.mock.calls.map(([type]) => type).sort();
+    expect(removed).toEqual(added);
+  });
 });

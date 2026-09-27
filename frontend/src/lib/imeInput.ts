@@ -131,6 +131,7 @@ export function attachImeInput(term: Pick<Terminal, "input" | "textarea" | "elem
     root.removeEventListener("compositionstart", onCompositionStart, opts);
     root.removeEventListener("compositionend", onCompositionEnd, opts);
     root.removeEventListener("blur", onBlur, opts);
+    root.removeEventListener("paste", onPaste, opts);
     root.removeEventListener("keydown", onKeyDown, opts);
     root.removeEventListener("beforeinput", onBeforeInput as EventListener, opts);
     root.removeEventListener("input", onInput, opts);
