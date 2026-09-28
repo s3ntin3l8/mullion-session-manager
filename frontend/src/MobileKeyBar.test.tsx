@@ -172,6 +172,27 @@ describe("MobileKeyBar", () => {
     expect(tab.className).toContain("pressed");
   });
 
+  // The ⋯ button is the one button whose aria-label changes on click
+  // ("More keys" <-> "Fewer keys"), so it's the case press feedback would
+  // get wrong by keying off the label: pointerdown records the label as
+  // pressed, the click swaps the label mid-press, and a label-keyed check
+  // would then find no match and drop the highlight before the finger
+  // lifts. Press state keys off a stable id instead (MORE_KEY).
+  it("the ⋯ button stays 'pressed' across its own label swap", () => {
+    render(<MobileKeyBar sessionId={SESSION_ID} />);
+    const button = screen.getByRole("button", { name: "More keys" });
+
+    fireEvent.pointerDown(button);
+    expect(button.className).toContain("pressed");
+
+    fireEvent.click(button);
+    expect(button).toHaveAttribute("aria-label", "Fewer keys");
+    expect(button.className).toContain("pressed");
+
+    fireEvent.pointerUp(button);
+    expect(button.className).not.toContain("pressed");
+  });
+
   it("does not throw when no session is registered (e.g. panel torn down mid-tap)", async () => {
     unregisterTerminalInput(SESSION_ID, handle);
     const user = userEvent.setup();

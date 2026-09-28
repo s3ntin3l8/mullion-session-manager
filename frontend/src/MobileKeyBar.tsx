@@ -82,6 +82,12 @@ const ROW2: KeyBarKey[] = [
   { label: "Copy", ariaLabel: "Copy text", send: (h) => h.openCopyMode() },
 ];
 
+// Stable press-feedback id for the ⋯ button, whose aria-label flips
+// between "More keys" and "Fewer keys" as it toggles: press state has to
+// key off an id that doesn't move, or the highlight would silently stop
+// matching the moment the label is renamed or (as today) swapped.
+const MORE_KEY = "More";
+
 // preventDefault on pointerdown, not just onClick, is what keeps the
 // on-screen keyboard up WHILE it's already showing: a plain click's own
 // default mousedown behavior shifts focus to the button itself first, which
@@ -96,14 +102,18 @@ const keepFocus = (e: { preventDefault: () => void }) => e.preventDefault();
 export function MobileKeyBar({ sessionId }: MobileKeyBarProps) {
   const [moreOpen, setMoreOpen] = useState(() => readBool(STORAGE_KEYS.mobileKeyBarMore, false));
   const [ctrlMode, setCtrlMode] = useState<CtrlModifierMode>("off");
-  // The ariaLabel of whichever key the user is currently pressing; null
-  // when nothing is. Touch browsers get implicit pointer capture, so
+  // The stable id of whichever key the user is currently pressing; null
+  // when nothing is. An id, not an aria-label: most buttons use their
+  // (static) aria-label as the id for lack of a better one, but the Ctrl
+  // and ⋯ buttons have aria-labels that change with their state ("Ctrl
+  // (locked)", "Fewer keys"), and press feedback must key off something
+  // that doesn't move. Touch browsers get implicit pointer capture, so
   // `pointerup` is guaranteed to fire on the same element that received
   // `pointerdown` (even if the finger has drifted off), and a lost capture
   // surfaces as `pointercancel` — the union of those two plus a defensive
   // `pointerleave` covers every way a press can end. See the file header
   // for why this is JS-driven instead of CSS `:active`.
-  const [pressedAriaLabel, setPressedAriaLabel] = useState<string | null>(null);
+  const [pressedKey, setPressedKey] = useState<string | null>(null);
   const voice = useVoiceControls(sessionId);
 
   // Push the sticky-Ctrl state to the terminal; a one-shot modifier reports
@@ -122,7 +132,7 @@ export function MobileKeyBar({ sessionId }: MobileKeyBarProps) {
   if (prevSessionId !== sessionId) {
     setPrevSessionId(sessionId);
     setCtrlMode("off");
-    setPressedAriaLabel(null);
+    setPressedKey(null);
   }
 
   const toggleMore = () => {
@@ -140,17 +150,14 @@ export function MobileKeyBar({ sessionId }: MobileKeyBarProps) {
   // event, page hidden mid-press, etc.), the *next* pointerdown on any
   // other key still overwrites the state cleanly, so no key can be stuck
   // indefinitely.
-  const onKeyPressStart = (ariaLabel: string) => {
-    keepFocus({ preventDefault: () => {} });
-    setPressedAriaLabel(ariaLabel);
-  };
-  const onKeyPressEnd = () => setPressedAriaLabel(null);
+  const onKeyPressStart = (keyId: string) => setPressedKey(keyId);
+  const onKeyPressEnd = () => setPressedKey(null);
 
   const renderKey = ({ label, ariaLabel, send }: KeyBarKey) => (
     <button
       key={ariaLabel}
       type="button"
-      className={`mobile-key-bar-btn${pressedAriaLabel === ariaLabel ? " pressed" : ""}`}
+      className={`mobile-key-bar-btn${pressedKey === ariaLabel ? " pressed" : ""}`}
       aria-label={ariaLabel}
       onPointerDown={(event) => {
         keepFocus(event);
@@ -175,7 +182,7 @@ export function MobileKeyBar({ sessionId }: MobileKeyBarProps) {
         <button
           type="button"
           className={`mobile-key-bar-btn mobile-key-bar-ctrl${ctrlMode !== "off" ? ` ${ctrlMode}` : ""}${
-            pressedAriaLabel === "Ctrl" ? " pressed" : ""
+            pressedKey === "Ctrl" ? " pressed" : ""
           }`}
           aria-label={
             ctrlMode === "locked"
@@ -212,13 +219,13 @@ export function MobileKeyBar({ sessionId }: MobileKeyBarProps) {
         <button
           type="button"
           className={`mobile-key-bar-btn${moreOpen ? " active" : ""}${
-            pressedAriaLabel === (moreOpen ? "Fewer keys" : "More keys") ? " pressed" : ""
+            pressedKey === MORE_KEY ? " pressed" : ""
           }`}
           aria-label={moreOpen ? "Fewer keys" : "More keys"}
           aria-expanded={moreOpen}
           onPointerDown={(event) => {
             keepFocus(event);
-            onKeyPressStart(moreOpen ? "Fewer keys" : "More keys");
+            onKeyPressStart(MORE_KEY);
           }}
           onPointerUp={onKeyPressEnd}
           onPointerCancel={onKeyPressEnd}

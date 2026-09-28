@@ -119,11 +119,56 @@ function decodedOscSends(): string[] {
     .filter((decoded) => oscRegex().test(decoded));
 }
 
+// Put the mocked Terminal into the state a TUI's own screen puts it in:
+// `buffer.active.type` reports "alternate" while `buffer.normal` keeps an
+// inline transcript — the exact divergence scrollbackToText exists for
+// (lib/terminalBufferText.ts). `lines` is the transcript the scrollback
+// viewer should then show, one array entry per buffer row. Mirrors real
+// xterm, where the two buffers are one and the same object until the
+// program switches screens.
+function stubAlternateScreen(term: unknown, lines: string[]): void {
+  const t = term as {
+    buffer: {
+      active: { type: string };
+      normal: { length: number; getLine: (i: number) => unknown };
+    };
+  };
+  Object.defineProperty(t.buffer.active, "type", {
+    configurable: true,
+    get: () => "alternate",
+  });
+  Object.defineProperty(t.buffer, "normal", {
+    configurable: true,
+    get: () => ({
+      length: lines.length,
+      getLine: (i: number) =>
+        lines[i] === undefined
+          ? undefined
+          : { isWrapped: false, translateToString: () => lines[i] },
+    }),
+  });
+}
+
 vi.mock("@xterm/xterm", () => {
   function createDisposable() {
     return { dispose: vi.fn() };
   }
   const Terminal = vi.fn(function () {
+    // Real xterm.js: on the main screen `buffer.normal` IS
+    // `buffer.active` — the very identity scrollbackToText relies on to be
+    // a no-op there (lib/terminalBufferText.ts). Sharing one object keeps
+    // that true by default; the alt-screen test below redefines
+    // `buffer.normal` to the inline transcript so the two diverge the way
+    // they do while a TUI owns the alternate screen.
+    const activeBuffer = {
+      type: "normal" as "normal" | "alternate",
+      // lib/terminalLinks.ts's own LinkBufferSource wraps this — never
+      // exercised here since registerLinkProvider below is a bare
+      // disposable-returning stub that never calls provideLinks, but
+      // present so the wrapper object TerminalPane builds around
+      // `term.buffer.active` type-checks against the real shape.
+      getLine: vi.fn(() => undefined),
+    };
     return {
       options: {} as Record<string, unknown>,
       unicode: {
@@ -189,17 +234,7 @@ vi.mock("@xterm/xterm", () => {
       // fallback row-height path, same as it does in real jsdom (no layout,
       // clientHeight always 0) — not a stand-in for anything more specific.
       element: undefined as HTMLElement | undefined,
-      buffer: {
-        active: {
-          type: "normal" as "normal" | "alternate",
-          // lib/terminalLinks.ts's own LinkBufferSource wraps this — never
-          // exercised here since registerLinkProvider below is a bare
-          // disposable-returning stub that never calls provideLinks, but
-          // present so the wrapper object TerminalPane builds around
-          // `term.buffer.active` type-checks against the real shape.
-          getLine: vi.fn(() => undefined),
-        },
-      },
+      buffer: { active: activeBuffer, normal: activeBuffer },
       scrollLines: vi.fn(),
       onData: vi.fn(() => createDisposable()),
       onTitleChange: vi.fn(() => createDisposable()),
@@ -2412,42 +2447,8 @@ describe("TerminalPane scrollback search (U1)", () => {
   it("the find bar's 'View scrollback' button opens the scrollback viewer", () => {
     stubFakeWebSocket(true);
     renderPane();
-    const term = getLatestTermInstance() as unknown as {
-      buffer: {
-        active: { type: string };
-        normal: {
-          length: number;
-          getLine: (
-            i: number,
-          ) =>
-            { isWrapped: boolean; translateToString: (trimRight?: boolean) => string } | undefined;
-        };
-      };
-    };
-    // Simulate a TUI that owns the alternate screen: active.type flips,
-    // normal buffer still carries the inline transcript.
-    Object.defineProperty(term.buffer.active, "type", {
-      configurable: true,
-      get: () => "alternate",
-    });
-    Object.defineProperty(term.buffer, "normal", {
-      configurable: true,
-      get: () => ({
-        length: 2,
-        getLine: (i: number) =>
-          i === 0
-            ? {
-                isWrapped: false,
-                translateToString: () => "$ echo hi",
-              }
-            : i === 1
-              ? {
-                  isWrapped: false,
-                  translateToString: () => "hi",
-                }
-              : undefined,
-      }),
-    });
+    const term = getLatestTermInstance();
+    stubAlternateScreen(term, ["$ echo hi", "hi"]);
 
     triggerFindChord();
 
@@ -4226,6 +4227,23 @@ describe("TerminalPane key-bar handle: arrows, sticky Ctrl, paste, copy view", (
     act(() => handle.openCopyMode());
     unmount();
     expect(screen.queryByRole("dialog", { name: "Copy terminal text" })).toBeNull();
+  });
+
+  // The mobile key-bar Copy button's entry: while a TUI owns the alternate
+  // screen the sheet is titled "Scrollback" (telling the user they're
+  // reading the history the program is parked on, not the live screen) and
+  // the text comes from term.buffer.normal, not the dialog itself. Same
+  // copySheetSnapshot the long-press and the find bar use — pinned here
+  // because this is the branch the Copy button takes, and the title is the
+  // only thing distinguishing the two intents the button covers.
+  it("openCopyMode on the alt screen is titled 'Scrollback' and reads term.buffer.normal", () => {
+    stubFakeWebSocket(true);
+    renderPane();
+    const { handle, term } = handleAndTerm();
+    stubAlternateScreen(term, ["$ echo hi", "hi"]);
+    act(() => handle.openCopyMode());
+    expect(screen.getByText("Scrollback")).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Terminal text" })).toHaveValue("$ echo hi\nhi");
   });
 
   it("an IME word-commit chunk gets Ctrl on its first letter and loses the committing space", async () => {
