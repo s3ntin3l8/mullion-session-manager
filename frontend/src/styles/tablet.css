@@ -177,7 +177,16 @@
   .mobile-key-bar-btn:last-child {
     border-right: none;
   }
-  .mobile-key-bar-btn:active,
+  /* Press feedback is JS-driven (.pressed, set on pointerdown and cleared
+     on pointerup / pointercancel / pointerleave — see MobileKeyBar.tsx's
+     own comment for why). The CSS `:active` pseudo can't be used here:
+     `keepFocus` calls `preventDefault()` on `pointerdown` to keep the
+     soft keyboard up across taps, and on touch browsers that strands
+     `:active` after the finger lifts — the button stays tinted until
+     the user taps somewhere else. `.active` stays in the selector for
+     the ⋯ toggle button, whose expanded state is deliberately persistent
+     until tapped again. */
+  .mobile-key-bar-btn.pressed,
   .mobile-key-bar-btn.active {
     background: color-mix(in srgb, var(--fg) 12%, transparent);
   }
@@ -224,6 +233,19 @@
     height: 44px;
     -webkit-tap-highlight-color: transparent;
     touch-action: manipulation;
+  }
+  /* The command palette's close affordance (CommandPalette.tsx's .kbd-btn
+     "esc" / "Back" chips): the keycap look is intentionally tiny on
+     desktop (~20px), and on a coarse pointer that's below the 44px touch-
+     target floor. On phones the same .kbd-btn renders an X icon rather
+     than the "esc" text and is the *only* way to dismiss the palette
+     (the dialog is full-bleed, so the backdrop has no tappable area, and
+     the soft keyboard has no Esc key). */
+  .cmd-palette-search .kbd-btn,
+  .cmd-palette-footer .kbd-btn {
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0 12px;
   }
   /* Independent code review, PR #621 (originally mobile.css) —
      .view-mode-toggle/.hierarchy-toggle's own `.toolbar-icon-btn` override

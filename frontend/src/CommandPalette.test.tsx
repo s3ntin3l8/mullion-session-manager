@@ -2127,3 +2127,88 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
     expect(screen.getByText("bash alpha")).toBeInTheDocument();
   });
 });
+
+describe("CommandPalette -> close affordance (issue: mobile 'esc' chip did nothing)", () => {
+  // The mobile-new-session '+' button (MobileSessionSwitcher) routes
+  // through this palette. On a phone the palette is full-bleed, the
+  // backdrop has zero tappable area, focus is anchored to modalRef
+  // (not the search input, which is what would handle Escape), and
+  // the soft keyboard has no Esc key — so the "esc" hint sitting in
+  // the search row was a strictly cosmetic <span> that did nothing
+  // on tap. The fix turns it into a real <button className="kbd
+  // kbd-btn" onClick={onClose}>, and gives the footer's picker-Back
+  // chip the same treatment.
+  const LAUNCHER: Launcher = { id: "agent:bash", kind: "shell", title: "bash", command: "bash" };
+
+  function renderPalette(overrides: Partial<ComponentProps<typeof CommandPalette>> = {}) {
+    return render(
+      <CommandPalette
+        scope="project"
+        projectId={PROJECT.id}
+        onClose={vi.fn()}
+        onLaunched={vi.fn()}
+        onOpenSession={vi.fn()}
+        onOpenGitHub={vi.fn()}
+        onOpenGit={vi.fn()}
+        onOpenAgentRules={vi.fn()}
+        onOpenProjectBriefing={vi.fn()}
+        onOpenProjectSetup={vi.fn()}
+        onOpenDockConfig={vi.fn()}
+        onOpenSkills={vi.fn()}
+        onOpenIntegrationsSettings={vi.fn()}
+        onOpenTasks={vi.fn()}
+        onOpenBrowser={vi.fn()}
+        onOpenBlankBrowser={vi.fn()}
+        onOpenBrowserUrl={vi.fn()}
+        {...overrides}
+      />,
+    );
+  }
+
+  it("renders a real 'Close command palette' button next to the search input", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/projects/") && url.endsWith("/urls")) {
+          return Promise.resolve(jsonResponse(200, []));
+        }
+        if (url.includes("/actions")) return Promise.resolve(jsonResponse(200, [LAUNCHER]));
+        if (url.startsWith("/api/sessions") && (url.includes("?") || url.endsWith("/sessions"))) {
+          return Promise.resolve(jsonResponse(200, []));
+        }
+        if (url.endsWith("/api/sessions") || url.includes("/api/sessions?")) {
+          return Promise.resolve(jsonResponse(200, []));
+        }
+        return Promise.resolve(jsonResponse(200, []));
+      }),
+    );
+    renderPalette();
+    const close = await screen.findByRole("button", { name: "Close command palette" });
+    expect(close).toBeInTheDocument();
+    // It carries the kbd keycap look — the literal "esc" text is only
+    // rendered for fine pointers, so a jsdom default-pointer test sees
+    // that fallback text. The button itself is always there regardless.
+    expect(close).toHaveTextContent("esc");
+  });
+
+  it("clicking the close button fires onClose", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/projects/") && url.endsWith("/urls")) {
+          return Promise.resolve(jsonResponse(200, []));
+        }
+        if (url.includes("/actions")) return Promise.resolve(jsonResponse(200, [LAUNCHER]));
+        if (url.startsWith("/api/sessions")) return Promise.resolve(jsonResponse(200, []));
+        return Promise.resolve(jsonResponse(200, []));
+      }),
+    );
+    const onClose = vi.fn();
+    renderPalette({ onClose });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Close command palette" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});

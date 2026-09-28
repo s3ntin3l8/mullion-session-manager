@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MobileKeyBar } from "./MobileKeyBar.js";
 import { registerTerminalInput, unregisterTerminalInput } from "./terminalInputRegistry.js";
@@ -124,6 +124,52 @@ describe("MobileKeyBar", () => {
     const prevented = !button.dispatchEvent(event);
 
     expect(prevented).toBe(true);
+  });
+
+  // Press feedback is JS-driven (see MobileKeyBar.tsx's own header) so a
+  // `preventDefault()` on `pointerdown` can't strand the CSS `:active`
+  // pseudo-class on touch browsers. The contract tested here: pointerdown
+  // adds the `pressed` class, pointerup/pointercancel remove it. jsdom
+  // doesn't model implicit pointer capture, so the same sequence also
+  // tests pointerleave as a defensive fallback.
+  it("applies the JS-driven 'pressed' class on pointerdown and clears it on pointerup/cancel/leave", () => {
+    render(<MobileKeyBar sessionId={SESSION_ID} />);
+    const button = screen.getByRole("button", { name: "Escape" });
+    expect(button.className).not.toContain("pressed");
+
+    fireEvent.pointerDown(button);
+    expect(button.className).toContain("pressed");
+
+    fireEvent.pointerUp(button);
+    expect(button.className).not.toContain("pressed");
+
+    fireEvent.pointerDown(button);
+    expect(button.className).toContain("pressed");
+    fireEvent.pointerCancel(button);
+    expect(button.className).not.toContain("pressed");
+
+    fireEvent.pointerDown(button);
+    expect(button.className).toContain("pressed");
+    fireEvent.pointerLeave(button);
+    expect(button.className).not.toContain("pressed");
+  });
+
+  it("the 'pressed' class is exclusive to the key currently being pressed", () => {
+    render(<MobileKeyBar sessionId={SESSION_ID} />);
+    const esc = screen.getByRole("button", { name: "Escape" });
+    const tab = screen.getByRole("button", { name: "Tab" });
+
+    fireEvent.pointerDown(esc);
+    expect(esc.className).toContain("pressed");
+    expect(tab.className).not.toContain("pressed");
+
+    fireEvent.pointerDown(tab);
+    // Implicit pointer capture on touch means pointerup is always
+    // dispatched on the original target even after a press drifts across
+    // a sibling, so the *new* press replaces the stale `pressed` rather
+    // than tacking on. Verifying that here is the regression net.
+    expect(esc.className).not.toContain("pressed");
+    expect(tab.className).toContain("pressed");
   });
 
   it("does not throw when no session is registered (e.g. panel torn down mid-tap)", async () => {

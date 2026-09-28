@@ -2403,6 +2403,68 @@ describe("TerminalPane scrollback search (U1)", () => {
     expect(getLatestTermInstance().focus).toHaveBeenCalledTimes(1);
   });
 
+  // The find bar's "View scrollback as text" button (sibling of Prev/Next/
+  // Close) is the desktop entry to the same scrollback viewer the mobile
+  // key bar's Copy button opens. While the program is on the alt screen
+  // (Codex question dialog, vim, tmux copy mode, ...) the only path to
+  // history is reading term.buffer.normal — verified here by switching
+  // `buffer.active.type` to "alternate" before the click.
+  it("the find bar's 'View scrollback' button opens the scrollback viewer", () => {
+    stubFakeWebSocket(true);
+    renderPane();
+    const term = getLatestTermInstance() as unknown as {
+      buffer: {
+        active: { type: string };
+        normal: {
+          length: number;
+          getLine: (
+            i: number,
+          ) =>
+            { isWrapped: boolean; translateToString: (trimRight?: boolean) => string } | undefined;
+        };
+      };
+    };
+    // Simulate a TUI that owns the alternate screen: active.type flips,
+    // normal buffer still carries the inline transcript.
+    Object.defineProperty(term.buffer.active, "type", {
+      configurable: true,
+      get: () => "alternate",
+    });
+    Object.defineProperty(term.buffer, "normal", {
+      configurable: true,
+      get: () => ({
+        length: 2,
+        getLine: (i: number) =>
+          i === 0
+            ? {
+                isWrapped: false,
+                translateToString: () => "$ echo hi",
+              }
+            : i === 1
+              ? {
+                  isWrapped: false,
+                  translateToString: () => "hi",
+                }
+              : undefined,
+      }),
+    });
+
+    triggerFindChord();
+
+    // The find bar should be open and the new button should be in it.
+    const button = screen.getByRole("button", { name: "View scrollback as text" });
+    fireEvent.click(button);
+
+    // The scrollback viewer is mounted with the alt-screen title (because
+    // buffer.active.type is "alternate") and the normal-buffer text — the
+    // whole point of routing through term.buffer.normal in
+    // scrollbackToText().
+    expect(screen.getByText("Scrollback")).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Terminal text" })).toHaveValue("$ echo hi\nhi");
+    // And the find bar closed, so the two UI surfaces never overlap.
+    expect(screen.queryByPlaceholderText("Find in scrollback…")).toBeNull();
+  });
+
   it("does not open the find bar on plain Ctrl+F (left to the browser's own find)", () => {
     stubFakeWebSocket(true);
     const { queryByPlaceholderText } = renderPane();

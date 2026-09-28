@@ -54,6 +54,11 @@ describe("CopyModeSheet", () => {
     expect(screen.getByRole("button", { name: "Copy failed" })).toBeInTheDocument();
   });
 
+  it("honors a custom title for the scrollback case (Codex question/dialog)", () => {
+    render(<CopyModeSheet text="history" title="Scrollback" onClose={vi.fn()} />);
+    expect(screen.getByText("Scrollback")).toBeInTheDocument();
+  });
+
   it("closes on Escape, the close button, and a backdrop tap — not a tap inside", async () => {
     const onClose = vi.fn();
     const user = userEvent.setup();

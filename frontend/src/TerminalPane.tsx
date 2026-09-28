@@ -20,7 +20,7 @@ import {
 import { registerTerminalInput, unregisterTerminalInput } from "./terminalInputRegistry.js";
 import type { CtrlModifierMode, TerminalInputHandle } from "./terminalInputRegistry.js";
 import { applyCtrlToChunk } from "./lib/ctrlModifier.js";
-import { bufferToText } from "./lib/terminalBufferText.js";
+import { bufferToText, scrollbackToText } from "./lib/terminalBufferText.js";
 import { publishVoiceControls, unpublishVoiceControls } from "./lib/terminalVoiceRegistry.js";
 import { CopyModeSheet } from "./terminal-pane/CopyModeSheet.js";
 import {
@@ -200,8 +200,18 @@ export function TerminalPane(props: {
     mode: "off",
     onConsumed: () => {},
   });
-  // Touch copy view (CopyModeSheet): the buffer text while open, else null.
-  const [copyModeText, setCopyModeText] = useState<string | null>(null);
+  // Touch copy view / scrollback viewer (CopyModeSheet): null while closed,
+  // `{text, title}` while open. `title` distinguishes the two intents the
+  // same affordance covers — "Select text to copy" on a normal session (the
+  // original use) vs. "Scrollback" when the program has switched to the
+  // alternate screen and the only path to history is reading
+  // `term.buffer.normal` (the Codex-during-question case). Both open the
+  // same component: the textarea is fed by `scrollbackToText(term)` in
+  // either case, and the title just tells the user what they're looking at.
+  const [copyModeSheet, setCopyModeSheet] = useState<{
+    text: string;
+    title: string;
+  } | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const [reconnectAttempt, setReconnectAttempt] = useState(0);
   const [copied, setCopied] = useState(false);
@@ -1097,7 +1107,20 @@ export function TerminalPane(props: {
         term.focus();
         pasteHandlerRef.current();
       },
-      openCopyMode: () => setCopyModeText(bufferToText(term.buffer.active)),
+      // Opens the copy / scrollback sheet. Both the mobile Copy key-bar
+      // button and the Find bar's "view as text" button call this — they
+      // want the same component, just titled for the current mode. While
+      // the program is on the normal screen, `term.buffer.normal` is the
+      // same object as `active`, so `scrollbackToText` is a no-op there
+      // and the user sees a faithful plain-text copy of the inline
+      // transcript. While on the alternate screen, it's the only way to
+      // reach history xterm has parked behind the TUI.
+      openCopyMode: () =>
+        setCopyModeSheet(
+          term.buffer.active.type === "alternate"
+            ? { text: scrollbackToText(term), title: "Scrollback" }
+            : { text: bufferToText(term.buffer.active), title: "Select text to copy" },
+        ),
       setCtrlModifier: (mode, onConsumed) => {
         ctrlModifierRef.current = { mode, onConsumed };
         if (mode !== "off") term.focus();
@@ -1448,7 +1471,11 @@ export function TerminalPane(props: {
       const pointerType = (event as PointerEvent).pointerType;
       if (pointerType ? pointerType === "touch" : isCoarsePointerRef.current) {
         event.preventDefault();
-        setCopyModeText(bufferToText(term.buffer.active));
+        setCopyModeSheet(
+          term.buffer.active.type === "alternate"
+            ? { text: scrollbackToText(term), title: "Scrollback" }
+            : { text: bufferToText(term.buffer.active), title: "Select text to copy" },
+        );
         return;
       }
       if (!prefsRef.current.pasteOnRightClick) return;
@@ -1810,9 +1837,9 @@ export function TerminalPane(props: {
       refitRef.current = () => {};
       unregisterTerminalRepaint(props.params.sessionId);
       unregisterTerminalInput(props.params.sessionId, inputHandle);
-      // The copy view shows this session's buffer — never carry it over to
-      // the next session this pane is switched to.
-      setCopyModeText(null);
+      // The copy/scrollback sheet shows this session's buffer — never carry
+      // it over to the next session this pane is switched to.
+      setCopyModeSheet(null);
       uploadImageRef.current = () => {};
       voiceInsertRef.current = () => {};
       // Drops any window/document listeners left by an in-progress hold —
@@ -2232,12 +2259,13 @@ export function TerminalPane(props: {
         // top-right corner (`.terminal-attach-image-btn`, always visible) so
         // the two never collide.
       }
-      {copyModeText !== null && (
+      {copyModeSheet !== null && (
         <CopyModeSheet
-          text={copyModeText}
+          text={copyModeSheet.text}
+          title={copyModeSheet.title}
           // No terminal refocus on close: on touch that would pop the soft
           // keyboard back up over the output the user was just reading.
-          onClose={() => setCopyModeText(null)}
+          onClose={() => setCopyModeSheet(null)}
         />
       )}
       {findOpen && (
@@ -2247,6 +2275,20 @@ export function TerminalPane(props: {
           matchState={matchState}
           findInputRef={findInputRef}
           onRunSearch={runSearch}
+          onOpenScrollback={() => {
+            // Same setter the handle's openCopyMode uses, with the alt-
+            // screen title so the user knows they're seeing the history
+            // hidden behind whatever prompted them to open the find bar in
+            // the first place. Closing the find bar first keeps the
+            // viewport clean — the sheet itself is modal and already
+            // covers the terminal. `term` here is the live Terminal
+            // instance owned by the mount effect; the `termRef` indirection
+            // is what makes it reachable from this render-scope callback.
+            const liveTerm = termRef.current;
+            if (!liveTerm) return;
+            setCopyModeSheet({ text: scrollbackToText(liveTerm), title: "Scrollback" });
+            setFindOpen(false);
+          }}
           onClose={() => setFindOpen(false)}
         />
       )}
