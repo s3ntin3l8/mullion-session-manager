@@ -19,8 +19,8 @@ applied by anything in this repo or its CI. `install.sh` and
   ([`docs/cli.md`](../docs/cli.md)) at `~/.local/bin/mullion` (pointed at
   `current`, so later updates need no changes there). Run once per host;
   updates after that go through the in-app "Update now" button instead (see
-  below). `--role primary` (default) or `--role agent` — see "Automating
-  agent deploys" below for the latter.
+  below). Accepts `--role primary` (default) or `--role agent`, and `--no-systemd`
+  (or `MULLION_SKIP_SYSTEMD=1`) to skip installing/reloading the systemd unit.
 - `mullion.service` — `systemd --user` unit template that `install.sh`
   (`--role primary`) fills in and installs; runs `node dist/server.js` with
   `WorkingDirectory` set to the `current` symlink below.
@@ -547,6 +547,16 @@ After this, updates go through the in-app "Update now" button (see "Layout
 and updates" above), not by re-running `install.sh` or `git pull`ing this
 checkout — the checkout was only ever needed to get `install.sh` and
 `mullion.service` onto the host once.
+
+### Skipping systemd unit installation
+
+If you run inside containers, test scratchpads, or manage the systemd service independently (e.g. via Ansible), pass `--no-systemd` or set `MULLION_SKIP_SYSTEMD=1`:
+
+```sh
+./deploy/install.sh --no-systemd ~/opt/mullion
+```
+
+This installs the release package, node_modules, and `.env`, but skips writing `~/.config/systemd/user/` and invoking `systemctl`.
 
 ## Automating agent deploys (issue #245 / roadmap 7.1 + 7.7)
 
