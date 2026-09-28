@@ -67,7 +67,11 @@ const SKILLS_CONFIG: ProjectPanelKindConfig = {
 // an oversight introduced by this generalization. See
 // ProjectPanelKindConfig's own doc comment in panelUtils.ts and the
 // regression test guarding this ("applyDesktopPositioning: false omits both
-// floating and position...") in panelUtils.test.ts.
+// floating and position...") in panelUtils.test.ts. This flag governs
+// desktop/tablet only, though — on phone, openOrFocusProjectPanel always
+// applies phonePositioning's float-avoidance fix (issue #1452), so a Browser
+// pane opened on phone can't bare-add into a stranded floating group the way
+// it could before.
 const BROWSER_CONFIG: ProjectPanelKindConfig = {
   kind: "browser",
   titleLabel: "Preview",

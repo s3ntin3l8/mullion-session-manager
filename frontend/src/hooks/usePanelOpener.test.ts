@@ -391,6 +391,38 @@ describe("usePanelOpener — project-scoped panel kinds", () => {
     expect(browserCall).not.toHaveProperty("position");
   });
 
+  // Issue #1452 — onOpenBrowser's BROWSER_CONFIG sets applyDesktopPositioning:
+  // false, which used to gate phone too, so a Browser pane opened on phone
+  // while `activeGroup` was a stranded float could bare-add right back into
+  // it. `openOrFocusProjectPanel` now routes phone through positioningForTier
+  // regardless of that flag, so phonePositioning's float-avoidance (#1450)
+  // reaches the Browser pane the same as every other panel kind.
+  it("onOpenBrowser on phone still targets a tiled panel when activeGroup is a stranded float", () => {
+    const api = mockDockviewApi();
+    api.addPanel({ id: "session-1", component: "terminal", params: {} }); // tiled
+    (api as unknown as { activeGroup: unknown }).activeGroup = {
+      id: "float-group",
+      api: { location: { type: "floating" } },
+    };
+    const { result } = setup({ dockviewApi: api, layout: PHONE_LAYOUT });
+
+    result.current.onOpenBrowser(1);
+
+    const browserCall = (api.addPanel as ReturnType<typeof vi.fn>).mock.calls.find(
+      (call) => call[0].id === "browser-1",
+    )![0];
+    expect(browserCall).toEqual(
+      expect.objectContaining({
+        position: {
+          referencePanel: expect.objectContaining({ id: "session-1" }),
+          direction: "within",
+        },
+      }),
+    );
+    expect(browserCall).not.toHaveProperty("floating");
+    expect(api.maximizeGroup).toHaveBeenCalledTimes(1);
+  });
+
   it("every other panel kind DOES apply desktop positioning with a tiled panel present", () => {
     const api = mockDockviewApi();
     api.addPanel({ id: "session-1", component: "terminal", params: {} }); // tiled
