@@ -257,6 +257,19 @@ else
   echo "==> mullion CLI not present in this release (dist/cli/mullion.mjs missing) — skipping ~/.local/bin/mullion link"
 fi
 
+# Hermes review, PR #529 (fifth round): src/app.ts checks `.trim() !== ""`,
+# not just non-empty — a whitespace-only value (e.g. a stray space from a
+# templating bug) would pass a plain `[ -n ]` check but still fail app.ts's
+# own check at boot. Hoisted above the role branches below (was previously
+# defined only inside the agent branch) — issue #1458 needs the same check
+# for the primary branch's own auth-completeness warning.
+is_blank() {
+  local v="$1"
+  while [[ "$v" == [[:space:]]* ]]; do v="${v#[[:space:]]}"; done
+  while [[ "$v" == *[[:space:]] ]]; do v="${v%[[:space:]]}"; done
+  [ -z "$v" ]
+}
+
 if [ -f "$MULLION_HOME/.env" ]; then
   # Role-mismatch already checked and enforced right after $MULLION_HOME
   # was resolved, above — before any expensive/mutating step ran.
@@ -292,9 +305,65 @@ MULLION_ROLE=primary
 # later needs no reinstall. See deploy/README.md's Playwright prerequisites.
 PLAYWRIGHT_BROWSERS_PATH=$MULLION_HOME/browsers
 BROWSER_DATA_DIR=$MULLION_HOME/data/browsers
+
+# Issue #603 / #1458 — src/app.ts refuses to boot a primary with none of
+# MULLION_TRUST_GATEWAY/MULLION_AUTH_TOKEN/MULLION_OIDC_* configured. Pick
+# ONE. See deploy/README.md's reverse-proxy gateway section / docs/auth.md.
 EOF
   )
+  # Issue #1458 — mirrors the agent branch's own MULLION_AGENT_* passthrough
+  # below: set MULLION_INSTALL_TRUST_GATEWAY, or BOTH
+  # MULLION_INSTALL_AUTH_TOKEN and MULLION_INSTALL_SESSION_SECRET, before
+  # running this script (e.g. from an Ansible role) to configure auth
+  # non-interactively instead of hitting the WARNING further down. Both
+  # secrets go through printf, not the interpolated heredoc above, for the
+  # same shell-injection reason the agent branch's MULLION_AGENT_* values do
+  # (Hermes review, PR #529, fifth round) — a caller-supplied value
+  # containing `$`/`` ` ``/`\` must never be shell-expanded at write time.
+  # OIDC isn't offered here: all four MULLION_OIDC_* keys are required
+  # together (oidc.ts's isOidcEnabled) and typically need a real, already-
+  # provisioned client — better configured by hand or via Settings after
+  # first boot than half-wired through install-time flags.
+  if [ "${MULLION_INSTALL_TRUST_GATEWAY:-}" = "true" ]; then
+    # Hermes review — TRUST_GATEWAY wins outright when both paths are set
+    # (README already says "Set ONE"); this NOTICE is the runtime backstop
+    # for a misconfigured Ansible role that sets both without noticing.
+    if ! is_blank "${MULLION_INSTALL_AUTH_TOKEN:-}" || ! is_blank "${MULLION_INSTALL_SESSION_SECRET:-}"; then
+      echo "NOTICE: MULLION_INSTALL_AUTH_TOKEN/MULLION_INSTALL_SESSION_SECRET are set but ignored — MULLION_INSTALL_TRUST_GATEWAY=true already configures this primary's auth. Unset MULLION_INSTALL_TRUST_GATEWAY if you meant to use the token pair instead." >&2
+    fi
+    printf 'MULLION_TRUST_GATEWAY=true\n' >>"$MULLION_HOME/.env"
+  elif ! is_blank "${MULLION_INSTALL_AUTH_TOKEN:-}" && ! is_blank "${MULLION_INSTALL_SESSION_SECRET:-}"; then
+    # Hermes review (two rounds) — src/app.ts:130-138 refuses to boot with
+    # MULLION_AUTH_TOKEN set and MULLION_SESSION_SECRET blank (nothing to
+    # sign a session cookie with). Requiring BOTH here, not just writing
+    # AUTH_TOKEN and letting SESSION_SECRET default to blank, means the
+    # WARNING below is the only way this branch ever produces a half-
+    # configured .env — an Ansible role that ships AUTH_TOKEN without
+    # SESSION_SECRET gets neither line written (falls through to the
+    # WARNING) instead of a silently-still-crash-looping "partial success".
+    printf 'MULLION_AUTH_TOKEN=%s\n' "$MULLION_INSTALL_AUTH_TOKEN" >>"$MULLION_HOME/.env"
+    printf 'MULLION_SESSION_SECRET=%s\n' "$MULLION_INSTALL_SESSION_SECRET" >>"$MULLION_HOME/.env"
+  fi
   chmod 600 "$MULLION_HOME/.env"
+  # Issue #1458 — mirrors app.ts's ACTUAL boot condition (same "must mirror
+  # the real check, not just 'is anything set'" lesson as the agent
+  # branch's own HAS_MANUAL_TOKEN/HAS_ENROLLMENT_PATH check above, Hermes
+  # review PR #529 fourth round): AUTH_TOKEN with no SESSION_SECRET is
+  # still a fail-closed boot, not a configured one, so it must not silently
+  # suppress this warning. Without one of the two complete paths above (or
+  # a subsequent hand edit), this primary crash-loops under systemd
+  # (`enable --now` below starts a unit that immediately fails, every ~2s,
+  # per src/app.ts's #603/#19 boot guards) instead of install.sh itself
+  # catching it up front — same "warn here so journald spam isn't the
+  # first sign something's missing" posture as the agent branch's own
+  # credential-completeness warning. Only fires on a FRESH .env — the
+  # existing-.env branch above leaves a pre-existing file untouched with no
+  # warning at all, so re-running install.sh with these vars set against an
+  # already-installed host does nothing; edit that file by hand instead.
+  if [ "${MULLION_INSTALL_TRUST_GATEWAY:-}" != "true" ] &&
+    { is_blank "${MULLION_INSTALL_AUTH_TOKEN:-}" || is_blank "${MULLION_INSTALL_SESSION_SECRET:-}"; }; then
+    echo "WARNING: this primary has no auth configured in the generated .env — neither MULLION_TRUST_GATEWAY=true (if a reverse-proxy gateway like Traefik+Authentik already authenticates every request, see deploy/README.md) nor both MULLION_AUTH_TOKEN and MULLION_SESSION_SECRET (a shared secret pair, issues #19/#30 — required TOGETHER, one without the other still refuses to boot) nor MULLION_OIDC_* (all four required together — see docs/auth.md) is set. It will fail to boot at all (src/app.ts's #603 fail-closed check) and crash-loop under systemd until one full path is configured. Set MULLION_INSTALL_TRUST_GATEWAY=true, or both MULLION_INSTALL_AUTH_TOKEN and MULLION_INSTALL_SESSION_SECRET, before running this script, or edit \$MULLION_HOME/.env by hand." >&2
+  fi
 else
   echo "==> Writing $MULLION_HOME/.env (agent)"
   # Issue #245 / roadmap 7.1 + 7.7 — deliberately NO DATABASE_URL,
@@ -371,18 +440,9 @@ EOF
   # not just "both vars empty" — MULLION_AGENT_ENROLLMENT_TOKEN alone,
   # with MULLION_AGENT_PRIMARY_URL forgotten, previously passed this check
   # silently while app.ts's own boot-time check still refuses to start.
-  # Hermes review, PR #529 (fifth round): src/app.ts checks
-  # `.trim() !== ""`, not just non-empty — a whitespace-only value (e.g.
-  # a stray space from a templating bug) would pass a plain `[ -n ]` check
-  # here but still fail app.ts's own check at boot. is_blank mirrors
-  # .trim() === "" using the same bash-native whitespace strip as
-  # EXISTING_ROLE above (no sed, no dialect ambiguity).
-  is_blank() {
-    local v="$1"
-    while [[ "$v" == [[:space:]]* ]]; do v="${v#[[:space:]]}"; done
-    while [[ "$v" == *[[:space:]] ]]; do v="${v%[[:space:]]}"; done
-    [ -z "$v" ]
-  }
+  # is_blank (hoisted above the role branches, issue #1458) mirrors
+  # src/app.ts's `.trim() === ""` check using the same bash-native
+  # whitespace strip as EXISTING_ROLE above (no sed, no dialect ambiguity).
   HAS_MANUAL_TOKEN=false
   is_blank "${MULLION_AGENT_TOKEN:-}" || HAS_MANUAL_TOKEN=true
   HAS_ENROLLMENT_PATH=false

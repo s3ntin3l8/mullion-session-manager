@@ -510,19 +510,20 @@ the three placeholders above:
 # placeholders filled in for you.
 git clone https://github.com/s3ntin3l8/mullion-session-manager.git
 cd mullion-session-manager
-./deploy/install.sh ~/opt/mullion
-systemctl --user status mullion.service
 
-# The unit above will crash-loop on first boot (issue #1458): install.sh's
-# generated primary .env sets MULLION_ROLE but neither an auth mechanism
-# nor MULLION_TRUST_GATEWAY, and src/app.ts's #603 boot guard refuses to
-# start with neither configured — see "Optional: in-process auth" above.
-# Append ONE of the following to the generated .env, then restart:
-echo 'MULLION_TRUST_GATEWAY=true' >> ~/opt/mullion/.env   # if the Traefik+Authentik config below is already in front
-# — or, for a bare deployment with no gateway, a real credential instead:
-#   echo 'MULLION_AUTH_TOKEN='"$(openssl rand -hex 32)" >> ~/opt/mullion/.env
-#   echo 'MULLION_SESSION_SECRET='"$(openssl rand -hex 32)" >> ~/opt/mullion/.env
-systemctl --user restart mullion.service
+# src/app.ts's #603 boot guard refuses to start a primary with neither an
+# auth mechanism nor MULLION_TRUST_GATEWAY configured — see "Optional:
+# in-process auth" above. Set ONE of the two install.sh env vars below
+# before running it (issue #1458) so the generated .env boots clean on
+# first try, instead of crash-looping under systemd until you notice the
+# WARNING install.sh prints and fix it by hand:
+MULLION_INSTALL_TRUST_GATEWAY=true ./deploy/install.sh ~/opt/mullion   # if the Traefik+Authentik config below is already in front
+# — or, for a bare deployment with no gateway, a real credential pair
+# instead (BOTH required together — src/app.ts refuses to boot with only
+# one set):
+#   MULLION_INSTALL_AUTH_TOKEN="$(openssl rand -hex 32)" \
+#   MULLION_INSTALL_SESSION_SECRET="$(openssl rand -hex 32)" \
+#   ./deploy/install.sh ~/opt/mullion
 systemctl --user status mullion.service
 
 # 2. Traefik dynamic config (still manual — see "Before installing anything")
@@ -531,6 +532,16 @@ cp deploy/traefik-dynamic.yml <your-traefik-dynamic-config-dir>/
 # Traefik's file provider picks it up automatically (watch or poll,
 # depending on your config) — no Traefik restart should be needed.
 ```
+
+Ran the plain `./deploy/install.sh ~/opt/mullion` with none of those set
+anyway? On a **fresh** `$MULLION_HOME`, install.sh prints a `WARNING:`
+naming exactly what's missing instead of silently writing a `.env`
+guaranteed to crash-loop — append the lines it suggests to the generated
+`.env`, then `systemctl --user restart mullion.service`. That warning only
+fires when install.sh actually generates the file: re-running it against an
+**already-installed** host (an existing `.env`) leaves that file untouched
+with no warning at all, so setting these env vars on a re-run does nothing
+— edit `~/opt/mullion/.env` by hand in that case instead.
 
 After this, updates go through the in-app "Update now" button (see "Layout
 and updates" above), not by re-running `install.sh` or `git pull`ing this
