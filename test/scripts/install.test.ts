@@ -252,6 +252,7 @@ describeOnLinux("deploy/install.sh", () => {
       // stdout.
       const { stderr } = await runScript(["--help"]);
       expect(stderr).toMatch(/^usage: deploy\/install\.sh/m);
+      expect(stderr).toContain("--no-systemd");
       expect(readSystemctlLog()).toEqual([]);
     });
 
@@ -552,6 +553,30 @@ esac
       await runScript(["--role", "primary", mullionHome]);
       const log = readSystemctlLog();
       expect(log).toContainEqual("--user disable --now mullion-agent.service");
+    });
+  });
+
+  describe("systemd unit installation skipping", () => {
+    it("skips systemd installation and systemctl calls when --no-systemd is passed", async () => {
+      const mullionHome = freshMullionHome();
+      skipDownload(mullionHome);
+      const { stdout } = await runScript(["--no-systemd", "--role", "primary", mullionHome]);
+      expect(stdout).toMatch(/Skipping systemd user unit installation/);
+      expect(readSystemctlLog()).toEqual([]);
+      const unitPath = path.join(fakeHome, ".config", "systemd", "user", "mullion.service");
+      expect(fs.existsSync(unitPath)).toBe(false);
+    });
+
+    it("skips systemd installation and systemctl calls when MULLION_SKIP_SYSTEMD=1 is set", async () => {
+      const mullionHome = freshMullionHome();
+      skipDownload(mullionHome);
+      const { stdout } = await runScript(["--role", "primary", mullionHome], {
+        env: { MULLION_SKIP_SYSTEMD: "1" },
+      });
+      expect(stdout).toMatch(/Skipping systemd user unit installation/);
+      expect(readSystemctlLog()).toEqual([]);
+      const unitPath = path.join(fakeHome, ".config", "systemd", "user", "mullion.service");
+      expect(fs.existsSync(unitPath)).toBe(false);
     });
   });
 });

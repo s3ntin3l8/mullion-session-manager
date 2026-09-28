@@ -244,6 +244,8 @@ fi
 # scopes (pty-manager.ts's bootstrapMaster), outside this unit's cgroup, so
 # KillMode=control-group only stops the app process itself. The DB migrates
 # forward automatically on the new process's startup (ensureDb()).
+# Reload the systemd user manager in case the unit on disk was updated or marked dirty.
+systemctl --user daemon-reload 2>/dev/null || true
 systemctl --user restart "$UNIT_NAME" || fail "systemctl --user restart $UNIT_NAME failed"
 
 # --- prune old releases, keep the 3 most recent (by version) ---
