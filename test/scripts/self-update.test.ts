@@ -59,9 +59,18 @@ src="\${url#file://}"
 cp "$src" "$output"
 `,
   );
-  for (const name of ["npm", "npx", "systemctl"]) {
+  for (const name of ["npm", "npx"]) {
     writeShim(binDir, name, "#!/usr/bin/env bash\nexit 0\n");
   }
+  writeShim(
+    binDir,
+    "systemctl",
+    `#!/usr/bin/env bash
+DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+echo "$*" >> "$DIR/systemctl.log"
+exit 0
+`,
+  );
   // The script's own `export PATH="$(dirname "$NODE_EXEC_PATH"):$PATH"`
   // (needed in production, where systemd's minimal PATH means npm/node
   // aren't reliably on it — see the script's own header comment) would
@@ -137,6 +146,12 @@ describeOnLinux("scripts/self-update.sh", () => {
     return JSON.parse(fs.readFileSync(path.join(mullionHome, ".update-status.json"), "utf8"));
   }
 
+  function readSystemctlLog(): string[] {
+    const p = path.join(binDir, "systemctl.log");
+    if (!fs.existsSync(p)) return [];
+    return fs.readFileSync(p, "utf8").trim().split("\n").filter(Boolean);
+  }
+
   function runScript(opts: {
     version: string;
     assetUrl: string;
@@ -178,6 +193,10 @@ describeOnLinux("scripts/self-update.sh", () => {
     expect(fs.existsSync(path.join(mullionHome, "releases", "9.9.9", "dist", "server.js"))).toBe(
       true,
     );
+    expect(readSystemctlLog()).toEqual([
+      "--user daemon-reload",
+      "--user restart fake-mullion.service",
+    ]);
   });
 
   it("leaves current untouched when checksum verification fails", async () => {
