@@ -1858,6 +1858,75 @@ describe("runCommand", () => {
       });
       expect(io.stdout.write).toHaveBeenCalledWith(expect.stringContaining("log line 1"));
     });
+
+    describe("device clipboard (issue #1422)", () => {
+      it("device clipboard get forwards op: get and prints the cached text", async () => {
+        const client = fakeClient({
+          request: vi.fn(async () => ({ text: "copied text" })),
+        });
+        const io = fakeIo();
+        await runCommand(["device", "clipboard", "get", "5"], { client, io });
+        expect(client.request).toHaveBeenCalledWith("device.action", {
+          deviceId: "5",
+          action: "clipboard",
+          op: "get",
+        });
+        expect(io.stdout.write).toHaveBeenCalledWith(expect.stringContaining("copied text"));
+      });
+
+      it("device clipboard get prints an empty line when nothing is cached", async () => {
+        const client = fakeClient({ request: vi.fn(async () => ({ text: null })) });
+        const io = fakeIo();
+        await runCommand(["device", "clipboard", "get", "5"], { client, io });
+        expect(io.stdout.write).toHaveBeenCalledWith("\n");
+      });
+
+      it("device clipboard get without a device id throws usage error (exit 2)", async () => {
+        const io = fakeIo();
+        expect(await runCommand(["device", "clipboard", "get"], { client: fakeClient(), io })).toBe(
+          2,
+        );
+      });
+
+      it("device clipboard set forwards op: set and text", async () => {
+        const client = fakeClient();
+        const io = fakeIo();
+        await runCommand(["device", "clipboard", "set", "5", "hello", "world"], { client, io });
+        expect(client.request).toHaveBeenCalledWith("device.action", {
+          deviceId: "5",
+          action: "clipboard",
+          op: "set",
+          text: "hello world",
+        });
+      });
+
+      it("device clipboard set --paste forwards paste: true", async () => {
+        const client = fakeClient();
+        const io = fakeIo();
+        await runCommand(["device", "clipboard", "set", "5", "--paste", "hi"], { client, io });
+        expect(client.request).toHaveBeenCalledWith("device.action", {
+          deviceId: "5",
+          action: "clipboard",
+          op: "set",
+          text: "hi",
+          paste: true,
+        });
+      });
+
+      it("device clipboard set without text throws usage error (exit 2)", async () => {
+        const io = fakeIo();
+        expect(
+          await runCommand(["device", "clipboard", "set", "5"], { client: fakeClient(), io }),
+        ).toBe(2);
+      });
+
+      it("device clipboard with an invalid sub-command throws usage error (exit 2)", async () => {
+        const io = fakeIo();
+        expect(
+          await runCommand(["device", "clipboard", "bogus", "5"], { client: fakeClient(), io }),
+        ).toBe(2);
+      });
+    });
   });
 
   describe("project tooling (issue #938)", () => {

@@ -612,10 +612,18 @@ describe("device route (/ws/device/:deviceId)", () => {
       const send = (socket: MockWebSocket, msg: unknown) =>
         socket.emit("message", Buffer.from(JSON.stringify(msg)), false);
 
-      it("pastes host clipboard text via setClipboard (no ACK sequence)", async () => {
+      it("pastes host clipboard text via Device.setClipboard (paste: true)", async () => {
+        // Routed through Device.setClipboard (device-manager.ts), NOT
+        // controller.setClipboard directly — see dispatchInput's own
+        // comment on the "clipboard" case for why (issue #1422's REST
+        // action verb and this WS path now share one cache-updating code
+        // path). Device.setClipboard's own unit tests
+        // (test/services/device-manager.test.ts) cover the exact
+        // `{sequence: 0n, paste, content}` shape it hands the controller.
         const setClipboard = vi.fn().mockResolvedValue(undefined);
         const socket = await attach({
-          controller: { resetVideo: vi.fn().mockResolvedValue(undefined), setClipboard },
+          controller: { resetVideo: vi.fn().mockResolvedValue(undefined) },
+          setClipboard,
           onVideoPacket: vi.fn(() => vi.fn()),
           onClipboard: vi.fn(() => vi.fn()),
           onExit: vi.fn(() => vi.fn()),
@@ -624,18 +632,15 @@ describe("device route (/ws/device/:deviceId)", () => {
         send(socket, { type: "clipboard", text: "häll\u00f6 \u{1F600}" });
 
         await vi.waitFor(() =>
-          expect(setClipboard).toHaveBeenCalledWith({
-            sequence: 0n,
-            paste: true,
-            content: "häll\u00f6 \u{1F600}",
-          }),
+          expect(setClipboard).toHaveBeenCalledWith("häll\u00f6 \u{1F600}", true),
         );
       });
 
       it("drops empty, non-string and oversized clipboard messages", async () => {
         const setClipboard = vi.fn().mockResolvedValue(undefined);
         const socket = await attach({
-          controller: { resetVideo: vi.fn().mockResolvedValue(undefined), setClipboard },
+          controller: { resetVideo: vi.fn().mockResolvedValue(undefined) },
+          setClipboard,
           onVideoPacket: vi.fn(() => vi.fn()),
           onClipboard: vi.fn(() => vi.fn()),
           onExit: vi.fn(() => vi.fn()),
@@ -651,7 +656,7 @@ describe("device route (/ws/device/:deviceId)", () => {
         send(socket, { type: "clipboard", text: "ok" });
 
         await vi.waitFor(() => expect(setClipboard).toHaveBeenCalledTimes(1));
-        expect(setClipboard).toHaveBeenCalledWith(expect.objectContaining({ content: "ok" }));
+        expect(setClipboard).toHaveBeenCalledWith("ok", true);
       });
 
       it("forwards device clipboard text as a JSON frame and unsubscribes on close", async () => {

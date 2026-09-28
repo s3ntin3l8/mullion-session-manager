@@ -6,6 +6,7 @@ import { AndroidMotionEventAction, AndroidMotionEventButton } from "@yume-chan/s
 import type { AndroidKeyCode, ScrcpyMediaStreamPacket } from "@yume-chan/scrcpy";
 import { devices } from "../db/schema.js";
 import type { Device, DeviceKind } from "../services/device-manager.js";
+import { CLIPBOARD_MAX_BYTES } from "../services/device-defaults.js";
 
 // Streams a device's screen to the frontend DevicePane as binary H.264
 // packets over WebSocket, and proxies touch/key/scroll input back —
@@ -39,12 +40,6 @@ const BACKPRESSURE_MAX_BUFFERED_BYTES = 4 * 1024 * 1024;
 // socket (the attach-time resetVideo() rejected, no controller, or the device
 // ignored the request) would otherwise be invisible.
 const KEYFRAME_STALL_MS = 5000;
-
-// scrcpy server's CONTROL_MSG_CLIPBOARD_TEXT_MAX_LENGTH ((1 << 18) - 14):
-// a longer SET_CLIPBOARD payload makes the server drop the message, and an
-// oversized frame risks desyncing the whole control socket, which would kill
-// every later input. Measured in UTF-8 bytes — that's what goes on the wire.
-const CLIPBOARD_MAX_BYTES = (1 << 18) - 14;
 
 // Wire framing for a video packet: [1 byte type][1 byte flags][payload].
 // type: 0 = configuration (SPS/PPS), 1 = data. flags bit0 = keyframe.
@@ -320,10 +315,17 @@ async function dispatchInput(device: Device, message: DeviceInputMessage): Promi
       });
       break;
     case "clipboard":
-      // sequence 0n = fire-and-forget: a non-zero sequence makes the library
-      // wait for an ACK_CLIPBOARD device message, which we'd rather not
-      // depend on (see Device.pumpClipboard).
-      await controller.setClipboard({ sequence: 0n, paste: true, content: message.text });
+      // Routed through Device.setClipboard (device-manager.ts) rather than
+      // calling controller.setClipboard directly, so a host-initiated paste
+      // from this panel updates the SAME last-known-clipboard cache the
+      // one-shot REST `clipboard get` action verb reads
+      // (routes/devices.ts) — scrcpy does NOT echo a host-initiated
+      // SET_CLIPBOARD back through the autosync clipboard stream
+      // (Device.pumpClipboard only ever sees DEVICE-initiated copies), so
+      // without this an agent's `clipboard get` right after a panel paste
+      // would return stale data. See Device.setClipboard's own comment for
+      // the sequence-0n/fire-and-forget reasoning.
+      await device.setClipboard(message.text, true);
       break;
     case "back":
       await controller.backOrScreenOn(AndroidKeyEventAction.Down);

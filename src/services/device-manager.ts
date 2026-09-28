@@ -187,6 +187,25 @@ export class Device {
   private videoListeners = new Set<(packet: ScrcpyMediaStreamPacket) => void>();
   private exitListeners = new Set<() => void>();
   private clipboardListeners = new Set<(text: string) => void>();
+  /** Last known clipboard text — updated by pumpClipboard() (a device-
+   * initiated copy) and by setClipboard() (a host-initiated set, which
+   * scrcpy does NOT echo back through the autosync clipboard stream, so
+   * without setClipboard()'s own update this cache would silently miss
+   * every host-initiated write). Serves ONE consumer only: the one-shot
+   * REST/CLI/MCP `clipboard get` action verb (routes/devices.ts) asking
+   * "what's on the device clipboard right now." Deliberately a SEPARATE
+   * contract from onClipboard()'s listener set below — that one is
+   * live-only, no-replay-on-subscribe, by design (issue #1251: a
+   * reconnecting or second panel must never have a stale device value
+   * pushed at it, since that would silently overwrite the user's own host
+   * clipboard). A `get` right after boot, before scrcpy has ever attached
+   * or before anything has been copied, has nothing to report — the cache
+   * can't see whatever was on the device's clipboard before this scrcpy
+   * session existed (issue #1476, tracked separately; no live
+   * GET_CLIPBOARD round-trip is possible here since Mullion runs with
+   * scrcpy's clipboardAutosync enabled — see setClipboard()'s own doc
+   * comment). */
+  private clipboardCache: string | null = null;
   /** Set at the start of spawn(), read (and released) by teardownProcess() —
    * whichever teardown path fires (an in-flight spawn() failing partway
    * through, kill(), or handleExit() after an unexpected scrcpy exit) needs
@@ -674,6 +693,11 @@ export class Device {
       for (;;) {
         const { value, done } = await reader.read();
         if (done) break;
+        // Updated BEFORE fanning out to live listeners — see
+        // clipboardCache's own doc comment for why this is a different,
+        // additional contract from the fan-out below, not a replacement
+        // for it.
+        this.clipboardCache = value;
         for (const listener of this.clipboardListeners) {
           // One throwing listener (e.g. socket.send on a closing socket) must
           // not end the drain — an undrained stream is the stall this pump
@@ -722,6 +746,41 @@ export class Device {
   onClipboard(listener: (text: string) => void): () => void {
     this.clipboardListeners.add(listener);
     return () => this.clipboardListeners.delete(listener);
+  }
+
+  /** Last known device clipboard text, for the one-shot REST/CLI/MCP
+   * `clipboard get` action verb — `null` if nothing has been copied on the
+   * device or set from the host yet this session. See `clipboardCache`'s
+   * own doc comment for why this is a deliberately different contract from
+   * `onClipboard()`'s live-only subscription. */
+  get lastClipboard(): string | null {
+    return this.clipboardCache;
+  }
+
+  /** Sets the device's clipboard via the scrcpy control channel — the
+   * one-shot `clipboard set` REST/CLI/MCP action verb's implementation
+   * (routes/devices.ts), and also what the live WS panel's own clipboard
+   * paste uses (routes/device.ts's dispatchInput), so both paths share one
+   * code path and update the SAME cache. `sequence: 0n` is fire-and-forget:
+   * a non-zero sequence makes the library wait for an ACK_CLIPBOARD device
+   * message, which we'd rather not depend on (see pumpClipboard's own
+   * comment on why an unread clipboard stream stalls the whole device-
+   * message loop). The cache is updated only AFTER the write resolves
+   * (never on a rejected write) and only HERE, not inside
+   * controller.setClipboard itself — scrcpy does NOT echo a host-initiated
+   * SET_CLIPBOARD back through its autosync clipboard stream, so
+   * pumpClipboard() never sees this write and the cache would otherwise go
+   * stale the moment an agent (or a panel paste) sets the clipboard.
+   * Throws if no scrcpy controller is live yet — callers are expected to
+   * check `controller` first for a clean 400 (see routes/devices.ts's
+   * `text` action verb for the same shape) rather than let this throw
+   * surface as a 500. */
+  async setClipboard(text: string, paste: boolean): Promise<void> {
+    if (!this.controller) {
+      throw new Error(`device ${this.id} has no live scrcpy control connection`);
+    }
+    await this.controller.setClipboard({ sequence: 0n, paste, content: text });
+    this.clipboardCache = text;
   }
 
   onExit(listener: () => void): () => void {

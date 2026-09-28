@@ -318,9 +318,12 @@ device and vice versa.
   instead; it only appears in a secure context (HTTPS or localhost) with
   `ClipboardItem` support.
 
-Not covered (tracked in #1422): a clipboard verb for the CLI/MCP
-`device_action`, Ctrl+A and other modifier chords, and clipboard sync for the
-streamed browser pane.
+Not covered: Ctrl+A and other modifier chords, and clipboard sync for the
+streamed browser pane (both still tracked under #1422). A CLI/MCP clipboard
+verb for `device_action` is covered — see §1 below — but its `get` only ever
+answers from a last-known cache populated once scrcpy has attached this
+session; whatever was on the device's clipboard **before** that (or before
+Mullion ever ran) is invisible to it, tracked separately as issue #1476.
 
 ---
 
@@ -349,6 +352,8 @@ mullion device swipe <id> <x1> <y1> <x2> <y2> [<durationMs>]
 mullion device text <id> <text...>
 mullion device key <id> <androidKeyCode>
 mullion device logcat <id> [--lines <n>] [--filter <expr>]
+mullion device clipboard get <id>
+mullion device clipboard set <id> <text...> [--paste]
 ```
 
 `pair`/`connect` are two separate steps because Android's Wireless debugging
@@ -375,13 +380,31 @@ sending them over the WebSocket.
 commands against the device's live adb connection
 (`Device.adbConnection`) — they work independently of whether the device's
 video panel is currently open anywhere, and do **not** go through the
-scrcpy control channel the live panel uses. **`text` is the one exception**:
-`routes/devices.ts` routes it through `device.controller.injectText()` — the
-same scrcpy control channel the live WS panel's own "text" input message
-uses (`routes/device.ts`'s `dispatchInput`) — rather than `adb shell input
-text`, since `injectText` needs no shell at all. It 400s if no scrcpy
-controller exists yet (a narrow window during boot, after adb comes up but
-before scrcpy does) rather than falling back to the shell.
+scrcpy control channel the live panel uses. **`text` and `clipboard` are the
+two exceptions**: `routes/devices.ts` routes `text` through
+`device.controller.injectText()` — the same scrcpy control channel the live
+WS panel's own "text" input message uses (`routes/device.ts`'s
+`dispatchInput`) — rather than `adb shell input text`, since `injectText`
+needs no shell at all. Both 400 if no scrcpy controller exists yet (a narrow
+window during boot, after adb comes up but before scrcpy does) rather than
+falling back to the shell.
+
+`clipboard set` similarly calls the new `Device.setClipboard()` (which wraps
+`controller.setClipboard`) — the same method the live WS panel's own
+clipboard paste now calls too, so both paths keep one shared last-known-
+clipboard cache up to date. `clipboard get` reads that cache
+(`Device.lastClipboard`) directly — it is **not** a live `GET_CLIPBOARD`
+round-trip: scrcpy only replies to that control message when
+`clipboardAutosync` is disabled, and Mullion runs with it enabled (the AVD
+panel's own clipboard-sync feature, #1436, depends on it). The cache is
+updated from two places — the device's own autosync clipboard stream (a
+device-initiated copy) and `setClipboard()` itself (a host-initiated set,
+which scrcpy does not echo back through that stream) — and is a **separate**
+contract from `onClipboard()`'s live-only, no-replay panel subscription
+described above (issue #1251): an explicit `get` query wants the last known
+value, replay included, while a panel subscriber must never have a stale
+value pushed at it. It cannot see anything copied on the device before this
+scrcpy session attached (issue #1476).
 
 ## 2. `mullion mcp` tools
 
@@ -409,7 +432,7 @@ all three) — and `delete_device`/`device delete`, which drops the row
 and the id that identifies its systemd scope with no undo. MCP's device
 surface is narrower than the CLI's: only `list_devices` (`device list`),
 `use_device`/`device_action` (`device screenshot`/`tap`/`swipe`/`text`/
-`key`/`logcat`), `start_device` (`device start`), `stop_device`
+`key`/`logcat`/`clipboard`), `start_device` (`device start`), `stop_device`
 (`device stop`), and `delete_device` (`device delete`) exist as MCP tools —
 `device create`, `device pair`, `device pair-and-connect`, `device connect`,
 and `device discovered` have no MCP counterpart; only the CLI and REST
@@ -421,8 +444,10 @@ expose them.
 `POST /api/devices/pair-and-connect`, `GET /api/devices/discovered`,
 `GET/PATCH/DELETE /api/devices/:id`, `POST /api/devices/:id/start`,
 `POST /api/devices/:id/stop`, `POST /api/devices/:id/action` (body:
-`{action: "screenshot"|"tap"|"swipe"|"text"|"key"|"logcat", ...}`, same shape
-the CLI/MCP surface forwards). Lifecycle: `POST /:id/start` flips a stopped row
+`{action: "screenshot"|"tap"|"swipe"|"text"|"key"|"logcat"|"clipboard", ...}`
+— `clipboard` additionally carries `{op: "get"}` or
+`{op: "set", text, paste?}` — same shape the CLI/MCP surface forwards).
+Lifecycle: `POST /:id/start` flips a stopped row
 back to `active` and runs `getOrCreate()` so something is actually running
 behind it. Errors: 400 when `getOrCreate()` throws — synchronously, so a
 stopped row is reverted to `killed` and never left "active" with nothing

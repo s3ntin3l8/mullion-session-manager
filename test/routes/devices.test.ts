@@ -733,6 +733,185 @@ describe("devices routes", () => {
       });
     });
 
+    describe("clipboard action (issue #1422)", () => {
+      const createDeviceWithController = async (app: Awaited<ReturnType<typeof buildTestApp>>) => {
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/devices",
+          payload: { avdName: "dev35" },
+        });
+        const id = created.json().id;
+        const device = app.device.get(String(id))!;
+        // The route's own top-level guard requires `device.adbConnection`
+        // for EVERY action verb, clipboard included, even though clipboard
+        // (like `text`) never touches the adb shell — same reason the
+        // existing screenshot/tap/swipe/text/key/logcat test above sets
+        // both `adb` and `scrcpyClient`.
+        (device as unknown as { adb: unknown }).adb = {
+          subprocess: { noneProtocol: { spawnWait: vi.fn(), spawnWaitText: vi.fn() } },
+        };
+        const setClipboard = vi.fn().mockResolvedValue(undefined);
+        (device as unknown as { scrcpyClient: unknown }).scrcpyClient = {
+          controller: { injectText: vi.fn(), setClipboard },
+        };
+        return { id, device, setClipboard };
+      };
+
+      it("get returns { text: null } when nothing has been cached yet", async () => {
+        const app = await buildTestApp();
+        const { id } = await createDeviceWithController(app);
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/devices/${id}/action`,
+          payload: { action: "clipboard", op: "get" },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toEqual({ text: null });
+      });
+
+      it("get returns the value the device's own clipboard stream delivered", async () => {
+        const app = await buildTestApp();
+        const { id, device } = await createDeviceWithController(app);
+
+        let push!: (text: string) => void;
+        const stream = new ReadableStream<string>({
+          start(controller) {
+            push = (text) => controller.enqueue(text);
+          },
+        });
+        (device as unknown as { scrcpyClient: { clipboard: unknown } }).scrcpyClient.clipboard =
+          stream;
+        // pumpClipboard() is normally kicked off by spawn() — this suite's
+        // spawn() is fire-and-forget against a faked systemd-run and never
+        // reaches "streaming" (see this file's own header comment), so it's
+        // invoked directly here, the same way the private pump is exercised
+        // in test/services/device-manager.test.ts.
+        void (device as unknown as { pumpClipboard(): Promise<void> }).pumpClipboard();
+        push("copied on device");
+
+        await vi.waitFor(async () => {
+          const res = await app.inject({
+            method: "POST",
+            url: `/api/devices/${id}/action`,
+            payload: { action: "clipboard", op: "get" },
+          });
+          expect(res.json()).toEqual({ text: "copied on device" });
+        });
+      });
+
+      it("get returns the value a prior set wrote, and set validates oversize text", async () => {
+        const app = await buildTestApp();
+        const { id, setClipboard } = await createDeviceWithController(app);
+
+        const rSet = await app.inject({
+          method: "POST",
+          url: `/api/devices/${id}/action`,
+          payload: { action: "clipboard", op: "set", text: "hello clipboard" },
+        });
+        expect(rSet.statusCode).toBe(200);
+        expect(rSet.json()).toEqual({ ok: true });
+        expect(setClipboard).toHaveBeenCalledWith({
+          sequence: 0n,
+          paste: false,
+          content: "hello clipboard",
+        });
+
+        const rGet = await app.inject({
+          method: "POST",
+          url: `/api/devices/${id}/action`,
+          payload: { action: "clipboard", op: "get" },
+        });
+        expect(rGet.json()).toEqual({ text: "hello clipboard" });
+
+        // Oversize text (matching CLIPBOARD_MAX_BYTES, the same scrcpy
+        // protocol limit the WS route's clipboard message enforces) is
+        // rejected before ever reaching Device.setClipboard/the controller.
+        const oversized = "€".repeat((1 << 18) / 3);
+        const rOversize = await app.inject({
+          method: "POST",
+          url: `/api/devices/${id}/action`,
+          payload: { action: "clipboard", op: "set", text: oversized },
+        });
+        expect(rOversize.statusCode).toBe(400);
+        expect(setClipboard).toHaveBeenCalledTimes(1);
+      });
+
+      it("set with --paste forwards paste: true", async () => {
+        const app = await buildTestApp();
+        const { id, setClipboard } = await createDeviceWithController(app);
+
+        await app.inject({
+          method: "POST",
+          url: `/api/devices/${id}/action`,
+          payload: { action: "clipboard", op: "set", text: "pasted", paste: true },
+        });
+        expect(setClipboard).toHaveBeenCalledWith({
+          sequence: 0n,
+          paste: true,
+          content: "pasted",
+        });
+      });
+
+      it("400s get and set when device.controller is not live yet", async () => {
+        const app = await buildTestApp();
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/devices",
+          payload: { avdName: "dev35" },
+        });
+        const id = created.json().id;
+        // No scrcpyClient assigned at all — `controller` stays undefined,
+        // same "boot window between adb and scrcpy" case `text` guards
+        // against.
+        (app.device.get(String(id)) as unknown as { adb: unknown }).adb = {
+          subprocess: { noneProtocol: { spawnWaitText: vi.fn() } },
+        };
+
+        const rGet = await app.inject({
+          method: "POST",
+          url: `/api/devices/${id}/action`,
+          payload: { action: "clipboard", op: "get" },
+        });
+        expect(rGet.statusCode).toBe(400);
+        expect(rGet.json().message).toMatch(/no live scrcpy control connection/);
+
+        const rSet = await app.inject({
+          method: "POST",
+          url: `/api/devices/${id}/action`,
+          payload: { action: "clipboard", op: "set", text: "x" },
+        });
+        expect(rSet.statusCode).toBe(400);
+        expect(rSet.json().message).toMatch(/no live scrcpy control connection/);
+      });
+
+      it("400s a clipboard body with an invalid or missing op", async () => {
+        const app = await buildTestApp();
+        const { id } = await createDeviceWithController(app);
+
+        const res1 = await app.inject({
+          method: "POST",
+          url: `/api/devices/${id}/action`,
+          payload: { action: "clipboard" },
+        });
+        expect(res1.statusCode).toBe(400);
+
+        const res2 = await app.inject({
+          method: "POST",
+          url: `/api/devices/${id}/action`,
+          payload: { action: "clipboard", op: "not-a-real-op" },
+        });
+        expect(res2.statusCode).toBe(400);
+
+        const res3 = await app.inject({
+          method: "POST",
+          url: `/api/devices/${id}/action`,
+          payload: { action: "clipboard", op: "set" },
+        });
+        expect(res3.statusCode).toBe(400);
+      });
+    });
+
     describe("physical devices", () => {
       it("POST /api/devices with kind: physical creates a row with kind/serial persisted, avdName/port null", async () => {
         const app = await buildTestApp();

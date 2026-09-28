@@ -402,6 +402,37 @@ describe("use_device and device_action handlers (PR #1324)", () => {
     expect(deviceAction).toHaveBeenCalledWith("2", { action: "screenshot" });
     expect(JSON.parse(result)).toEqual({ screenshot: "base64" });
   });
+
+  it("use_device clipboard get forwards deviceId, action, and op", async () => {
+    const deviceAction = vi.fn().mockResolvedValue({ text: "copied text" });
+    const result = await useDevTool.handler(
+      { deviceId: "3", action: "clipboard", op: "get" },
+      { deviceAction },
+    );
+    expect(deviceAction).toHaveBeenCalledWith("3", { action: "clipboard", op: "get" });
+    expect(JSON.parse(result)).toEqual({ text: "copied text" });
+  });
+
+  it("use_device clipboard set forwards text and paste", async () => {
+    const deviceAction = vi.fn().mockResolvedValue({ ok: true });
+    const result = await useDevTool.handler(
+      { deviceId: "3", action: "clipboard", op: "set", text: "hello", paste: true },
+      { deviceAction },
+    );
+    expect(deviceAction).toHaveBeenCalledWith("3", {
+      action: "clipboard",
+      op: "set",
+      text: "hello",
+      paste: true,
+    });
+    expect(JSON.parse(result)).toEqual({ ok: true });
+  });
+
+  it("use_device's inputSchema advertises the clipboard action, op, and paste properties", () => {
+    expect(useDevTool.inputSchema.properties.action.enum).toContain("clipboard");
+    expect(useDevTool.inputSchema.properties.op.enum).toEqual(["get", "set"]);
+    expect(useDevTool.inputSchema.properties.paste.type).toBe("boolean");
+  });
 });
 
 describe("start_device / stop_device / delete_device handlers (device lifecycle)", () => {
