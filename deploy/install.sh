@@ -325,6 +325,12 @@ EOF
   # provisioned client — better configured by hand or via Settings after
   # first boot than half-wired through install-time flags.
   if [ "${MULLION_INSTALL_TRUST_GATEWAY:-}" = "true" ]; then
+    # Hermes review — TRUST_GATEWAY wins outright when both paths are set
+    # (README already says "Set ONE"); this NOTICE is the runtime backstop
+    # for a misconfigured Ansible role that sets both without noticing.
+    if ! is_blank "${MULLION_INSTALL_AUTH_TOKEN:-}" || ! is_blank "${MULLION_INSTALL_SESSION_SECRET:-}"; then
+      echo "NOTICE: MULLION_INSTALL_AUTH_TOKEN/MULLION_INSTALL_SESSION_SECRET are set but ignored — MULLION_INSTALL_TRUST_GATEWAY=true already configures this primary's auth. Unset MULLION_INSTALL_TRUST_GATEWAY if you meant to use the token pair instead." >&2
+    fi
     printf 'MULLION_TRUST_GATEWAY=true\n' >>"$MULLION_HOME/.env"
   elif ! is_blank "${MULLION_INSTALL_AUTH_TOKEN:-}" && ! is_blank "${MULLION_INSTALL_SESSION_SECRET:-}"; then
     # Hermes review (two rounds) — src/app.ts:130-138 refuses to boot with
