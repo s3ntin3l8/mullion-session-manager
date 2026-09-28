@@ -913,6 +913,56 @@ describe("openOrFocusProjectPanel", () => {
     expect(addCall).not.toHaveProperty("floating");
     expect(addCall).not.toHaveProperty("position");
   });
+
+  // Issue #1452 — applyDesktopPositioning: false (the Browser pane's real
+  // config, BROWSER_CONFIG in usePanelOpener.ts) used to gate ALL tiers,
+  // which meant phonePositioning's float-avoidance fix (#1450) never
+  // reached the Browser pane: a bare add on phone landed right back inside
+  // a stranded floating activeGroup. Phone now gets its own gate,
+  // independent of applyDesktopPositioning, so this must still position
+  // explicitly even with the config that suppresses desktop/tablet.
+  it("phone: still targets a tiled panel when activeGroup is floating, even with applyDesktopPositioning: false", () => {
+    const api = mockDockviewApi();
+    api.addPanel({ id: "session-1", component: "terminal", params: {} }); // tiled
+    (api as unknown as { activeGroup: DockviewGroupPanel }).activeGroup = mockGroup(
+      "float-group",
+      "floating",
+    );
+
+    openOrFocusProjectPanel(api, 1, PROJECTS, PHONE_LAYOUT, {
+      kind: "browser",
+      titleLabel: "Preview",
+      applyDesktopPositioning: false,
+    });
+
+    const addCall = (api.addPanel as ReturnType<typeof vi.fn>).mock.calls[1][0];
+    expect(addCall).toEqual(
+      expect.objectContaining({
+        position: {
+          referencePanel: expect.objectContaining({ id: "session-1" }),
+          direction: "within",
+        },
+      }),
+    );
+    expect(addCall).not.toHaveProperty("floating");
+    expect(api.maximizeGroup).toHaveBeenCalledTimes(1);
+  });
+
+  // Tablet still must be suppressed by applyDesktopPositioning: false — the
+  // phone-specific gate above must not accidentally widen to tablet too.
+  it("tablet: applyDesktopPositioning: false still suppresses positioning (bare add)", () => {
+    const api = mockDockviewApi();
+
+    openOrFocusProjectPanel(api, 1, PROJECTS, TABLET_LAYOUT_CAP2, {
+      kind: "browser",
+      titleLabel: "Preview",
+      applyDesktopPositioning: false,
+    });
+
+    const addCall = (api.addPanel as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(addCall).not.toHaveProperty("floating");
+    expect(addCall).not.toHaveProperty("position");
+  });
 });
 
 describe("closeLegacyPanels", () => {

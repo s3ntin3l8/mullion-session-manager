@@ -321,11 +321,13 @@ function tabletPositioning(
 // open helper that actually routes through `positioningForTier` shares
 // this fix, not just the stranded-float path that surfaced it — session,
 // timeline, task detail, device, and the project GitHub/Git/Agent Rules/
-// Dock Config/Skills panels. The project Browser pane is the one
-// exception: `openOrFocusProjectPanel`'s `applyDesktopPositioning` gate
-// (a pre-existing quirk, see that config's own doc comment) skips this
-// function entirely for it, on every tier — tracked separately (issue
-// #1452), not fixed here.
+// Dock Config/Skills panels. The project Browser pane used to be the one
+// exception — `openOrFocusProjectPanel`'s `applyDesktopPositioning` gate (a
+// pre-existing quirk, see that config's own doc comment) skipped this
+// function entirely for it, on every tier, so this fix never reached it
+// (issue #1452). `openOrFocusProjectPanel` now routes phone through here
+// regardless of that gate — which still governs desktop/tablet only — so
+// the Browser pane gets the same float-avoidance as every other panel kind.
 function phonePositioning(
   api: DockviewApi,
 ): { position: { referencePanel: IDockviewPanel; direction: "within" } } | Record<string, never> {
@@ -626,14 +628,19 @@ export interface ProjectPanelKindConfig {
   // "GitHub"), so a single field covers both rather than two.
   titleLabel: string;
   // Whether to apply tier-based positioning (positioningForTier above) when
-  // creating a NEW panel. True for every kind except `browser`: App.tsx's
-  // pre-existing onOpenBrowser never carried this spread — a genuine
-  // asymmetry from the other five, not an oversight in this generalization
-  // — so usePanelOpener.ts's onOpenBrowser passes `false` here specifically
-  // to preserve that exact (surprising but load-bearing "zero behavior
-  // change") quirk. See that hook's own onOpenBrowser doc comment. Gates
-  // ALL tier positioning, not just desktop's — a `browser` panel opened on
-  // tablet also stays a bare add, same reasoning.
+  // creating a NEW panel, on desktop and tablet. True for every kind except
+  // `browser`: App.tsx's pre-existing onOpenBrowser never carried this
+  // spread — a genuine asymmetry from the other five, not an oversight in
+  // this generalization — so usePanelOpener.ts's onOpenBrowser passes
+  // `false` here specifically to preserve that exact (surprising but
+  // load-bearing "zero behavior change") quirk. See that hook's own
+  // onOpenBrowser doc comment. Gates desktop and tablet positioning only —
+  // a `browser` panel opened on tablet still stays a bare add, same
+  // reasoning — but NOT phone: `openOrFocusProjectPanel` always routes
+  // phone through `positioningForTier` regardless of this flag, so
+  // `phonePositioning`'s float-avoidance fix (issue #1450) reaches the
+  // Browser pane too (issue #1452) rather than leaving it able to bare-add
+  // into a stranded floating group the way this flag would otherwise allow.
   applyDesktopPositioning: boolean;
 }
 
@@ -658,7 +665,9 @@ export function openOrFocusProjectPanel(
     component: config.kind,
     title: project ? `${config.titleLabel}: ${project.name}` : config.titleLabel,
     params: { projectId },
-    ...(config.applyDesktopPositioning ? positioningForTier(api, layout) : {}),
+    ...(layout.tier === "phone" || config.applyDesktopPositioning
+      ? positioningForTier(api, layout)
+      : {}),
   });
   if (layout.tier === "phone") maximizeIfTiled(api, panel);
 }
