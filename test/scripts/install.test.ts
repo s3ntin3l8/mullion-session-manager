@@ -479,10 +479,7 @@ describeOnLinux("deploy/install.sh", () => {
         new RegExp(`^WorkingDirectory=${escapeRegExp(path.join(homeReal, "current"))}$`, "m"),
       );
       expect(unit).toMatch(
-        new RegExp(
-          `^ExecStart=${escapeRegExp(path.join(binDir, "node"))} dist/server\\.js$`,
-          "m",
-        ),
+        new RegExp(`^ExecStart=${escapeRegExp(path.join(binDir, "node"))} dist/server\\.js$`, "m"),
       );
       expect(unit).toMatch(
         new RegExp(`^EnvironmentFile=${escapeRegExp(path.join(homeReal, ".env"))}$`, "m"),
