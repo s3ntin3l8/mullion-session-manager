@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.3.34](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.33...v0.3.34) (2026-09-28)
+
+
+### Features
+
+* **devices:** clipboard sync and copy-screenshot for the AVD panel ([#1436](https://github.com/s3ntin3l8/mullion-session-manager/issues/1436)) ([34a577c](https://github.com/s3ntin3l8/mullion-session-manager/commit/34a577cb103c4a1e0b885de90b477053ee64d398))
+* **launcher:** per-session model picker in the command palette ([#1451](https://github.com/s3ntin3l8/mullion-session-manager/issues/1451)) ([3c2e75f](https://github.com/s3ntin3l8/mullion-session-manager/commit/3c2e75fe7ee9f65f34ab8870fad15e9c4862d48a))
+* **mobile:** full-screen phone navigator, toolbar cleanup, back button ([#1443](https://github.com/s3ntin3l8/mullion-session-manager/issues/1443)) ([e77137e](https://github.com/s3ntin3l8/mullion-session-manager/commit/e77137e74b5d63a040d2b925ed1375f0d8ff4769))
+* **mobile:** phone never saves workspace layouts ([#1453](https://github.com/s3ntin3l8/mullion-session-manager/issues/1453)) ([8c108e3](https://github.com/s3ntin3l8/mullion-session-manager/commit/8c108e31c72875d076c2b5f56c605d334db8edae)), closes [#1426](https://github.com/s3ntin3l8/mullion-session-manager/issues/1426)
+* **mobile:** phone notifications bottom sheet ([#1442](https://github.com/s3ntin3l8/mullion-session-manager/issues/1442)) ([8bd5a90](https://github.com/s3ntin3l8/mullion-session-manager/commit/8bd5a900d004c4756ccf2f2a94a872ef47a7fcde))
+* **mobile:** settings polish on phone ([#1447](https://github.com/s3ntin3l8/mullion-session-manager/issues/1447)) ([ae74320](https://github.com/s3ntin3l8/mullion-session-manager/commit/ae74320d0d4f0f513724893b68ca19b984c90f85))
+* **mobile:** task board one column at a time on phone ([#1446](https://github.com/s3ntin3l8/mullion-session-manager/issues/1446)) ([10af9e3](https://github.com/s3ntin3l8/mullion-session-manager/commit/10af9e332f584c2c02fb3c8c4920cd90cd14ed34))
+* **mobile:** universal phone session picker grouped by project ([#1441](https://github.com/s3ntin3l8/mullion-session-manager/issues/1441)) ([551a757](https://github.com/s3ntin3l8/mullion-session-manager/commit/551a757d003c35290f07bd215c0518baafbecf94))
+* **notifications:** acknowledge clears non-blocking attention; app badge ([#1473](https://github.com/s3ntin3l8/mullion-session-manager/issues/1473)) ([76f4032](https://github.com/s3ntin3l8/mullion-session-manager/commit/76f40324fb798bd84e451b563ff4906e5e61fa94)), closes [#1430](https://github.com/s3ntin3l8/mullion-session-manager/issues/1430) [#1433](https://github.com/s3ntin3l8/mullion-session-manager/issues/1433)
+* **notifications:** one click destination, safe browser notifications ([#1456](https://github.com/s3ntin3l8/mullion-session-manager/issues/1456)) ([69c9c9c](https://github.com/s3ntin3l8/mullion-session-manager/commit/69c9c9c089db450a596cbf777b9a362276e26be9))
+* **notifications:** read state survives reload and syncs across devices ([#1460](https://github.com/s3ntin3l8/mullion-session-manager/issues/1460)) ([b6a1332](https://github.com/s3ntin3l8/mullion-session-manager/commit/b6a1332f3ab27e7e3a486456ceb09caaf8fc02e1))
+* **settings:** per-CLI default model pickers in a new Models section ([#1437](https://github.com/s3ntin3l8/mullion-session-manager/issues/1437)) ([afd129e](https://github.com/s3ntin3l8/mullion-session-manager/commit/afd129e929305c062634f58243af102102ea9725))
+* **sidebar:** collapsible Workspaces section and drop 'No sessions yet' ([4da5e97](https://github.com/s3ntin3l8/mullion-session-manager/commit/4da5e9775577b3d8145b0cfc159940869c0e5512))
+* **sidebar:** collapsible Workspaces section and drop 'No sessions yet' ([#1474](https://github.com/s3ntin3l8/mullion-session-manager/issues/1474)) ([4da5e97](https://github.com/s3ntin3l8/mullion-session-manager/commit/4da5e9775577b3d8145b0cfc159940869c0e5512))
+* **sidebar:** compact density also hides the working/idle now-line ([22cfb90](https://github.com/s3ntin3l8/mullion-session-manager/commit/22cfb901854b91fe227602d3c08a698faf148860))
+* **sidebar:** compact density also hides the working/idle now-line ([#1475](https://github.com/s3ntin3l8/mullion-session-manager/issues/1475)) ([22cfb90](https://github.com/s3ntin3l8/mullion-session-manager/commit/22cfb901854b91fe227602d3c08a698faf148860))
+* **sidebar:** surface what each session is doing with a now line and fold details ([6f3ac6c](https://github.com/s3ntin3l8/mullion-session-manager/commit/6f3ac6c96d6f24ceef40fe6cd55095a11ddd774b))
+* **sidebar:** surface what each session is doing with a now line and fold details ([#1467](https://github.com/s3ntin3l8/mullion-session-manager/issues/1467)) ([6f3ac6c](https://github.com/s3ntin3l8/mullion-session-manager/commit/6f3ac6c96d6f24ceef40fe6cd55095a11ddd774b))
+
+
+### Bug Fixes
+
+* **bundle:** correct stale claims in shipped skills and MCP/CLI help text ([#1463](https://github.com/s3ntin3l8/mullion-session-manager/issues/1463)) ([1adbcda](https://github.com/s3ntin3l8/mullion-session-manager/commit/1adbcdaf6d74478e4e526c65ab1319115ad53860))
+* **cli:** give the mullion CLI the same MULLION_SESSION_ID fallback as MCP ([#1471](https://github.com/s3ntin3l8/mullion-session-manager/issues/1471)) ([235e015](https://github.com/s3ntin3l8/mullion-session-manager/commit/235e015dd1a647d9a4bedcf69b59d8ac64ca2536))
+* **deploy:** give install.sh a way to configure primary auth up front ([#1470](https://github.com/s3ntin3l8/mullion-session-manager/issues/1470)) ([8d00fac](https://github.com/s3ntin3l8/mullion-session-manager/commit/8d00fac1639f6c79ff51caae307dedce4b07c6ee))
+* **mobile:** give the project Browser pane phone float-avoidance ([#1479](https://github.com/s3ntin3l8/mullion-session-manager/issues/1479)) ([d8c81ab](https://github.com/s3ntin3l8/mullion-session-manager/commit/d8c81abe4d93fe139a927a60ff065ab34ad1ad9a)), closes [#1452](https://github.com/s3ntin3l8/mullion-session-manager/issues/1452)
+* **mobile:** picker edge cases from [#1438](https://github.com/s3ntin3l8/mullion-session-manager/issues/1438) review (float re-tile, missing project, search fields) ([#1450](https://github.com/s3ntin3l8/mullion-session-manager/issues/1450)) ([ff6fa0b](https://github.com/s3ntin3l8/mullion-session-manager/commit/ff6fa0b87174428edfc6dd8998ee917f517ca943))
+* **notifications:** SessionTimeline marks its sessions read while active ([#1480](https://github.com/s3ntin3l8/mullion-session-manager/issues/1480)) ([0ed03e9](https://github.com/s3ntin3l8/mullion-session-manager/commit/0ed03e95bcf91c17436e04a3696e8e789d406612)), closes [#1455](https://github.com/s3ntin3l8/mullion-session-manager/issues/1455)
+* **sessions:** validate explicit model/smallModel on session create ([#1448](https://github.com/s3ntin3l8/mullion-session-manager/issues/1448)) ([0a83047](https://github.com/s3ntin3l8/mullion-session-manager/commit/0a830479cc2083e3e46aca951104f9e7ce7b0b57))
+* **terminal:** stop Android autocomplete from re-sending the typed line ([#1421](https://github.com/s3ntin3l8/mullion-session-manager/issues/1421)) ([adf5c49](https://github.com/s3ntin3l8/mullion-session-manager/commit/adf5c4923c33d5eb0cffa118ea5f5d89e6896d09))
+* **ui:** theme toggle keeps System; add a Task board palette entry ([#1449](https://github.com/s3ntin3l8/mullion-session-manager/issues/1449)) ([54af333](https://github.com/s3ntin3l8/mullion-session-manager/commit/54af3333a4c80ea44f2a51a9ef5b9931ed78dee7))
+
 ## [0.3.33](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.32...v0.3.33) (2026-09-26)
 
 
