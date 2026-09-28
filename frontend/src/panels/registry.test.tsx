@@ -10,11 +10,15 @@ import { makeSession, makeProject } from "../test/fixtures.js";
 import { resetStore } from "../test/resetStore.js";
 import { ErrorBoundary } from "../ErrorBoundary.js";
 import { useRetriableLazy } from "../lib/retriableLazy.js";
+import { jsonResponse } from "../test/jsonResponse.js";
 
 // Minimal stand-in for the dockview panel props every real wrapper receives
 // — only `params` is read by makePanelWrapper itself; `api`/`containerApi`
 // are supplied so the type checks, same "as unknown as" pattern PaneTab.test.tsx
-// already uses for the same interface.
+// already uses for the same interface. `api` is a bare `{}` here — fine for
+// every wrapper that never touches it, but components.timeline (below) reads
+// `api.isActive`/`api.onDidActiveChange` through its own `extraProps`, so
+// that one test builds its own richer `api` mock instead of using this one.
 function makeProps<Params extends { [index: string]: unknown }>(
   params: Params,
 ): IDockviewPanelProps<Params> {
@@ -410,5 +414,56 @@ describe("components.device (PR #1324)", () => {
     const DeviceWrapper = components.device;
     render(<DeviceWrapper {...makeProps({ deviceId: 1 })} />);
     expect(await screen.findByTestId("device-pane-loaded")).toBeInTheDocument();
+  });
+});
+
+// Issue #1455 — the first production use of `extraProps` (MakePanelWrapperOptions,
+// registry.tsx): the "timeline" panel registration threads dockview's own
+// `api` down to SessionTimeline as `panelApi`, so it can mark its own
+// sessions read while active. Renders the REAL SessionTimeline (not a mock)
+// against a richer `api` than the shared `makeProps` helper's bare `api: {}`
+// — SessionTimeline's own mark-read effect calls `panelApi.onDidActiveChange`
+// unconditionally once `panelApi` is defined, which would throw against
+// `makeProps`' bare object. See SessionTimeline.test.tsx's own
+// "mark-read while active" describe block for coverage of the marking
+// behavior itself; this test only proves the wiring reaches the component.
+describe("components.timeline — panelApi wiring (issue #1455)", () => {
+  beforeEach(() => {
+    resetStore();
+    useDashboardStore.setState({
+      sessions: [makeSession({ id: 1, projectId: 1 })],
+      projects: [makeProject({ id: 1, name: "demo" })],
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          jsonResponse(200, { persistenceEnabled: false, events: [], nextCursor: null }),
+        ),
+      ),
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("passes panelApi through to SessionTimeline, which subscribes to it", async () => {
+    const TimelineWrapper = components.timeline;
+    const onDidActiveChange = vi.fn(() => ({ dispose: vi.fn() }));
+    const props = {
+      params: { sessionIds: [1] },
+      api: { isActive: true, onDidActiveChange },
+      containerApi: {},
+    } as unknown as IDockviewPanelProps<{ sessionIds: number[] }>;
+
+    render(<TimelineWrapper {...props} />);
+
+    // Only reachable if the real SessionTimeline actually received a
+    // defined `panelApi` and called onDidActiveChange on it from its own
+    // mark-read-while-active effect — proving the extraProps wiring
+    // end-to-end, not just that some prop landed unused.
+    expect(onDidActiveChange).toHaveBeenCalled();
+    expect(await screen.findByText("No events yet.")).toBeInTheDocument();
   });
 });

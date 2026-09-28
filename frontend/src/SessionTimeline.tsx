@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { DockviewPanelApi } from "dockview-react";
 import { useDashboardStore, eventKey } from "./store/index.js";
 import {
   ALL_KINDS,
@@ -193,7 +194,20 @@ async function fetchInitialHistoryPage(sessionId: number): Promise<SessionHistor
   }
 }
 
-export function SessionTimeline({ params }: { params: SessionTimelineParams }) {
+export function SessionTimeline({
+  params,
+  panelApi,
+}: {
+  params: SessionTimelineParams;
+  // Issue #1455 — dockview's own panel api, threaded down by registry.tsx's
+  // makePanelWrapper `extraProps` (the "timeline" panel registration) so
+  // this component can observe onDidActiveChange and mark its own sessions
+  // read while visible, the same way PaneTab.tsx's terminal tab already
+  // does for a single session. Optional and undefined when TaskDetail.tsx
+  // renders this component directly (no dockview panel behind it, see its
+  // own two render sites) — that path must never mark anything read.
+  panelApi?: DockviewPanelApi;
+}) {
   // Independent review, PR #477 — normalized once here rather than at every
   // call site: a persisted pre-6.5 workspace layout restores this panel
   // with the old `{ sessionId: N }` shape (see SessionTimelineParams's own
@@ -377,6 +391,51 @@ export function SessionTimeline({ params }: { params: SessionTimelineParams }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [eventsBySession, sessionIdsKey],
   );
+
+  // Issue #1455 — mirrors PaneTab.tsx's own two-effect "mark seen while
+  // active" split for a terminal tab (see that file's own comment for the
+  // full reasoning). Split the same way here: this subscription must NOT
+  // depend on live event data (it would re-subscribe on every new event),
+  // but marking read DOES need to re-run on every new event while already
+  // active. `panelApi` is undefined when TaskDetail.tsx renders this
+  // component directly (see this component's own `panelApi` doc comment) —
+  // every effect below is a no-op in that case, by design.
+  const [isActive, setIsActive] = useState(panelApi?.isActive ?? false);
+  useEffect(() => {
+    if (!panelApi) return;
+    const disposable = panelApi.onDidActiveChange((e) => setIsActive(e.isActive));
+    return () => disposable.dispose();
+  }, [panelApi]);
+
+  // A stable dep key derived from each requested session's own current max
+  // live seq (addEvent, store.ts, keeps each session's array seq-ascending,
+  // same invariant PaneTab.tsx's own mark-seen effect and markSessionRead
+  // itself both already rely on) — NOT `liveEvents` itself, which is a
+  // fresh array reference on every store change (including ones unrelated
+  // to these sessionIds), and would otherwise re-fire this effect (and
+  // re-send a "seen" WS message per session, markEventSeen's own
+  // unconditional sendSeen call) far more often than an actual new event
+  // for one of THESE sessions.
+  const liveMaxSeqKey = sessionIds
+    .map((id) => `${id}:${eventsBySession[id]?.at(-1)?.seq ?? 0}`)
+    .join(",");
+
+  // Marks every requested session read (store/slices/events.ts's
+  // markSessionRead, issue #1429 — already handles "no events yet" as a
+  // no-op) while this panel is both wired to a real dockview `api` and
+  // currently active: on the activation transition above, and again
+  // whenever any of these sessions' own live events advance while already
+  // active. Deliberately markSessionRead, not ackAttention — a passive view
+  // advancing the read cursor is not the same as a user's explicit action
+  // (see markSessionRead's own doc comment in store/types.ts).
+  useEffect(() => {
+    if (!panelApi) return;
+    if (!isActive) return;
+    for (const id of sessionIds) {
+      useDashboardStore.getState().markSessionRead(id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [panelApi, isActive, sessionIdsKey, liveMaxSeqKey]);
 
   // Describes every event across every requested session — persisted
   // history unioned with the live store (see eventHistory.ts's
