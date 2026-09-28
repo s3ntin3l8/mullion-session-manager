@@ -11,6 +11,20 @@
 .density-compact .session-item {
   padding: 3px 8px 3px 9px;
 }
+/* Issue #1466 — compact density's next lean-density step: drop the folded-
+   state now-line (lib/sessionNowLine.ts), leaving just the title row per
+   session. Scoped to `.sidebar-wrapper` (not a bare `.density-compact
+   .session-now-line`) because `.density-compact` lands on the app root —
+   without that scope this would also hide the now-line on kanban lane
+   cards (UnifiedBoard.tsx's LaneCard.tsx), which live outside the sidebar
+   tree and rely on the now-line as their primary status line regardless of
+   this sidebar-only setting. `.attention` is deliberately excluded: it's
+   often the only signal a session needs a look at all, so compact density
+   only drops the working/idle tones. */
+.density-compact .sidebar-wrapper .session-now-line.working,
+.density-compact .sidebar-wrapper .session-now-line.idle {
+  display: none;
+}
 
 .dev-server-status-dot {
   width: 7px;
