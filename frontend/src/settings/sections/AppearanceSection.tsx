@@ -22,7 +22,10 @@ export function AppearanceSection() {
           ]}
         />
       </Row>
-      <Row label="Sidebar density" desc="Row height in the workspace and project sidebar.">
+      <Row
+        label="Sidebar density"
+        desc="Row height in the workspace and project sidebar. Compact also hides a session's working/idle status line — attention lines always stay visible."
+      >
         <Segmented
           value={settings.sidebarDensity}
           onChange={(v) => updateSettings({ sidebarDensity: v })}
