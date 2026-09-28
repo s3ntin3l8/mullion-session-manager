@@ -383,11 +383,11 @@ export function Sidebar({
         derivedDefault,
       });
       if (collapsed) continue;
+      // Sidebar declutter (issue #1465) — no "empty" placeholder row: an
+      // empty `filtered` list just contributes nothing here, same as
+      // ProjectSection's own `rows.map(...)` below the threshold (see that
+      // component's matching comment).
       const filtered = filteredSessionsByProject.get(project.id) ?? [];
-      if (filtered.length === 0) {
-        rows.push({ key: `e-${project.id}`, type: "empty" });
-        continue;
-      }
       const hRows = hierarchicalView
         ? buildHierarchicalRows(filtered)
         : filtered.map((session) => ({ session, depth: 0 }));
@@ -761,11 +761,7 @@ interface SessionFlatRow {
   project: Project;
   depth: number;
 }
-interface EmptyProjectFlatRow {
-  key: string;
-  type: "empty";
-}
-type SidebarFlatRow = ProjectHeaderFlatRow | SessionFlatRow | EmptyProjectFlatRow;
+type SidebarFlatRow = ProjectHeaderFlatRow | SessionFlatRow;
 
 // Extracted out of ProjectSection so both the plain (below-threshold) and
 // virtualized (above-threshold) rendering paths share the exact same header
@@ -1253,35 +1249,41 @@ export function ProjectSection({
         bodyId={`project-row-body-${project.id}`}
       />
 
+      {/* Sidebar declutter (issue #1465) — a project with no visible sessions
+        renders nothing here (an empty, zero-height body) rather than a
+        permanent "No sessions yet" line: that line never conveyed anything
+        actionable, and could get stuck showing indefinitely once a
+        project's sessions all end/get hidden by `hideEndedSessions` while a
+        manual expand from when it DID have sessions was still persisted
+        (`manualCollapsed ?? sessions.length === 0` above only supplies a
+        DEFAULT — an explicit prior expand always wins over it). `rows` is
+        derived straight from `sessions`, so an empty list here already
+        renders nothing on its own; no separate empty-state branch needed. */}
       {!collapsed && (
         <div className="project-row-body" id={`project-row-body-${project.id}`}>
-          {sessions.length === 0 ? (
-            <div className="project-empty-note">No sessions yet</div>
-          ) : (
-            rows.map(({ session, depth }) => (
-              <SessionRow
-                key={session.id}
-                session={session}
-                project={project}
-                depth={depth}
-                onOpen={() => onOpenSession(session)}
-                onOpenAsFloat={() => onOpenSessionAsFloat(session)}
-                // P9 — returns the promise (not `void`-discarded) so
-                // SessionRow's own handleEnd can catch a rejection and
-                // surface it inline instead of it disappearing.
-                onEnd={() =>
-                  useDashboardStore
-                    .getState()
-                    .deleteSession(session.id)
-                    .then(() => onSessionEnded(session))
-                }
-                onPromoted={(newSession) => {
-                  onSessionEnded(session);
-                  onOpenSession(newSession);
-                }}
-              />
-            ))
-          )}
+          {rows.map(({ session, depth }) => (
+            <SessionRow
+              key={session.id}
+              session={session}
+              project={project}
+              depth={depth}
+              onOpen={() => onOpenSession(session)}
+              onOpenAsFloat={() => onOpenSessionAsFloat(session)}
+              // P9 — returns the promise (not `void`-discarded) so
+              // SessionRow's own handleEnd can catch a rejection and
+              // surface it inline instead of it disappearing.
+              onEnd={() =>
+                useDashboardStore
+                  .getState()
+                  .deleteSession(session.id)
+                  .then(() => onSessionEnded(session))
+              }
+              onPromoted={(newSession) => {
+                onSessionEnded(session);
+                onOpenSession(newSession);
+              }}
+            />
+          ))}
         </div>
       )}
     </div>
@@ -1410,10 +1412,6 @@ function VirtualizedProjectTree({
                   onSessionEnded={onSessionEnded}
                   onOpenProjectSetup={() => onOpenProjectSetup(row.project.id)}
                 />
-              </div>
-            ) : row.type === "empty" ? (
-              <div className="sidebar-vrow-session">
-                <div className="project-empty-note">No sessions yet</div>
               </div>
             ) : (
               <div className="sidebar-vrow-session">

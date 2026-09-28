@@ -1,9 +1,11 @@
 // VirtualizedProjectTree's (Sidebar.tsx) row-height estimator, extracted as
 // PR 27 phase 1 (Wave 5, .claude/plans/can-we-do-a-warm-cocke.md). The
-// `SidebarFlatRow` union itself (header/session/empty, carrying full
-// `Project`/`Session` render state) stays in Sidebar.tsx — it's render
-// shape, not a pure-helper concern. PR 27 phase 2 (the SessionRow split into
-// Header/GitLine/FileChanges/Chips under ./session-row/) deliberately did
+// `SidebarFlatRow` union itself (header/session, carrying full
+// `Project`/`Session` render state — its third "empty" placeholder variant
+// was removed by issue #1465's sidebar declutter follow-up) stays in
+// Sidebar.tsx — it's render shape, not a pure-helper concern. PR 27 phase 2
+// (the SessionRow split into Header/GitLine/FileChanges/Chips under
+// ./session-row/) deliberately did
 // NOT reshape `SidebarFlatRow` or this estimator's own two-tier
 // estimate/measureElement contract: every sub-component returns the exact
 // same DOM (no new wrapper elements at the component boundaries), so the
@@ -14,11 +16,9 @@
 // slice this estimator actually reads; `SidebarFlatRow` is assignable to it
 // at the one call site (Sidebar.tsx's VirtualizedProjectTree) with no cast
 // needed.
-export type SidebarRowSizeInput =
-  { type: "header" } | { type: "empty" } | { type: "session"; session: { id: number } };
+export type SidebarRowSizeInput = { type: "header" } | { type: "session"; session: { id: number } };
 
 export const PROJECT_HEADER_ROW_ESTIMATE = 32;
-export const EMPTY_NOTE_ROW_ESTIMATE = 28;
 export const SESSION_ROW_ESTIMATE_COLLAPSED = 54;
 export const SESSION_ROW_ESTIMATE_EXPANDED = 92;
 
@@ -44,7 +44,6 @@ export function estimateSidebarRowHeight(
 ): number {
   if (!row) return SESSION_ROW_ESTIMATE_COLLAPSED;
   if (row.type === "header") return PROJECT_HEADER_ROW_ESTIMATE;
-  if (row.type === "empty") return EMPTY_NOTE_ROW_ESTIMATE;
   return expandedSessionRowIds.has(row.session.id)
     ? SESSION_ROW_ESTIMATE_EXPANDED
     : SESSION_ROW_ESTIMATE_COLLAPSED;

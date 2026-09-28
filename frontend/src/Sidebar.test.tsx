@@ -626,16 +626,14 @@ describe("Sidebar virtualization (U3, above VIRTUALIZE_SESSION_THRESHOLD)", () =
     expect(container.querySelector(".project-host-badge")?.textContent).toBe("build-box");
   });
 
-  // Hermes review, PR #583 (suggestion, declined — see the reply on that
-  // thread): flagged the "empty" flat-row branch as unreachable, reasoning
-  // that a zero-session project is always auto-collapsed before it. That's
-  // only true absent an explicit override — a project the user has
-  // manually EXPANDED (independent of its session count; ProjectHeader's
-  // collapse toggle has no session-count gate) and which currently has zero
-  // sessions reaches it, exactly mirroring the plain ProjectSection path's
-  // own pre-existing "No sessions yet" note for the identical case. This
-  // proves the branch live rather than asserting it in the abstract.
-  it("reaches the empty-project row when a zero-session project is explicitly expanded", async () => {
+  // Sidebar declutter (issue #1465) — a project the user has manually
+  // EXPANDED (independent of its session count; ProjectHeader's collapse
+  // toggle has no session-count gate) and which currently has zero sessions
+  // used to permanently show a "No sessions yet" note here — exactly the
+  // stuck-empty-but-expanded state the linked issue's screenshot showed.
+  // That note (and the "empty" flat-row type carrying it) is now gone: an
+  // explicitly-expanded, zero-session project renders an empty body instead.
+  it("renders an empty body, with no placeholder text, for a zero-session project that's explicitly expanded", async () => {
     stubVirtualizerLayout();
     const emptyProject: Project = { ...PROJECT, id: 77_401, name: "empty-but-expanded" };
     const filler: Project = { ...PROJECT, id: 77_402, name: "filler" };
@@ -653,7 +651,8 @@ describe("Sidebar virtualization (U3, above VIRTUALIZE_SESSION_THRESHOLD)", () =
     // filter, not by being empty).
     await user.click(screen.getByText("empty-but-expanded"));
 
-    expect(screen.getByText("No sessions yet")).toBeTruthy();
+    expect(screen.queryByText("No sessions yet")).toBeNull();
+    expect(document.querySelector(".project-empty-note")).toBeNull();
   });
 });
 

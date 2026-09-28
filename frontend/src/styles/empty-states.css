@@ -97,15 +97,6 @@
   border-color: var(--muted);
 }
 
-/* Compact alternative to .empty-state for an expanded-but-empty project row
-   (design's "03 · No sessions · compact") — a single muted line instead of
-   the full icon/title/body/CTA block used for the top-level empty states. */
-.project-empty-note {
-  font-size: 11.5px;
-  color: var(--dim);
-  padding: 4px 9px 6px 32px;
-}
-
 /* Phase 6 Task Master (6.5/#218) — the sidebar's standalone nav entry that
    opens the global Tasks panel, replacing the 2.5 thin slice's inline
    TasksSection list. Same row density/icon-plus-label shape as a project

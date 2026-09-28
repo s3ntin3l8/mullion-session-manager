@@ -214,6 +214,17 @@
   font-weight: 700;
   flex: 1;
 }
+/* Sidebar declutter (issue #1465) — WorkspaceSwitcher's own collapse toggle
+   on `.sidebar-section-header`, same "own modifier class, not the shared
+   base" posture as `.source-control-header` (empty-states.css) — Devices'
+   and Tasks' own headers reuse the base class without a click handler, so
+   the pointer cursor/hover can't live there. */
+.ws-section-header {
+  cursor: pointer;
+}
+.ws-section-header:hover {
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+}
 
 /* U3 (audit finding — "nothing degrades gracefully past ~20 sessions") —
    the sidebar's search box + status chips. `position: sticky` keeps it
@@ -447,6 +458,16 @@
   animation: cmuxPulse 1.4s ease-in-out infinite;
 }
 .workspace-item:not(.active) .workspace-attn-dot {
+  background: var(--ring);
+}
+/* Hermes review, issue #1465's collapsible-section follow-up — the
+   aggregate attention dot on `.ws-section-header` (WorkspaceSwitcher.tsx)
+   isn't inside a `.workspace-item` at all, so it fell through to the base
+   rule's literal `#fff` above (chosen for contrast against an ACTIVE
+   item's own accent background) — invisible against the light theme's
+   sidebar background. Same `var(--ring)` treatment as the non-active-item
+   case above, which is the only one that ever applies to this dot. */
+.ws-section-header .workspace-attn-dot {
   background: var(--ring);
 }
 .workspace-working-dot {
