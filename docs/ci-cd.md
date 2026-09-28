@@ -60,6 +60,23 @@ gate). This repo's own `.secrets.baseline` is verified clean, so
 - **`test-node` (backend)**: Runs at root. Script: `test:coverage`,
   `coverage-fail-under: 80`. Runs `npm ci`, lint, typecheck, format-check, and
   tests.
+- **Shell scripts under `deploy/`/`scripts/` get coverage here too** — this
+  is the same `vitest run` invocation, and `vitest.config.ts` has no
+  `include` override, so its default glob already sweeps up
+  `test/scripts/*.test.ts` alongside every other backend test file (verified
+  against a real CI run: `test/scripts/self-update.test.ts` shows up in a
+  `test-node / test-shard` job's own log). `test/scripts/install.test.ts`
+  (issue #1469) and `test/scripts/self-update.test.ts` (issue #647) both
+  exercise a **real** shell script via `execFile`, with PATH-shimmed
+  `curl`/`npm`/`npx`/`systemctl`/`systemd-run` so the suite never reaches
+  the network or a real `systemd --user` manager — `deploy/install.sh`'s own
+  test additionally redirects `$HOME` to a fresh temp dir, since that
+  script's systemd-unit and CLI-symlink writes are bash tilde-expansions of
+  `$HOME`, independent of the `<mullion-home>` argument it's given. Any
+  future test that shells out to a real script under `deploy/`/`scripts/`
+  must follow the same sandboxing shape — never let a real `systemctl`/
+  `systemd-run`/network call fire, and never let `$HOME` resolve to the
+  machine's real home directory.
 - **`test-frontend`**: Runs under `frontend/`. Script: `test:coverage`,
   `coverage-fail-under: 70`. Skips format-check in CI (root-level
   `make format-check` hook covers it).

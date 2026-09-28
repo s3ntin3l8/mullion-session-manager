@@ -46,7 +46,17 @@ If `make format-check` fails, `make format` applies the fix in place.
 Any new or modified executable line in `src/` or `frontend/src/` must also
 meet **≥75% patch test coverage** against `origin/main` — verify with `make
 test-patch-coverage` before pushing; Codecov enforces the same floor on the
-PR.
+PR. `make test-patch-coverage`'s istanbul instrumentation only covers
+`src/`/`frontend/src/`, so a shell-only change under `deploy/`/`scripts/`
+reports "no source changes" regardless of how much `.sh` logic changed —
+that's expected, not a gap to work around. Those scripts still get
+regression coverage via `test/scripts/*.test.ts` (see
+[`docs/ci-cd.md`](docs/ci-cd.md)), which runs a real script via `execFile`
+against real temp directories, with the network and the host's real
+`systemd --user` manager PATH-shimmed out. Any new test in that style must
+stay sandboxed the same way: never let a real `systemctl`/`systemd-run`/
+network call fire, and redirect `$HOME` if the script under test writes
+anywhere under it.
 
 If you changed `src/db/schema.ts`, also run `npm run db:generate` and commit
 the generated migration under `drizzle/`.

@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # First-time bootstrap for the versioned-release deploy layout (see
-# deploy/README.md). NOT run by this repo's CI, and not idempotent in every
-# regard — this is a one-shot "set up a fresh prod install" script, run by
+# deploy/README.md). Never run by this repo's CI to actually provision
+# anything — this is a one-shot "set up a fresh prod install" script, run by
 # hand once per host (or by an Ansible role — see deploy/README.md's
-# "Automating agent deploys" section). Applying an update afterwards is the
+# "Automating agent deploys" section). CI does exercise this script's own
+# logic under test/scripts/install.test.ts (issue #1469), sandboxed with a
+# temp $HOME and stubbed systemd/network — see that file and docs/ci-cd.md.
+# Also not idempotent in every regard. Applying an update afterwards is the
 # in-app Settings -> Server info "Update now" button
 # (POST /api/updates/apply), which uses scripts/self-update.sh instead.
 #
