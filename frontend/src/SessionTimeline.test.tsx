@@ -1,20 +1,31 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SessionTimeline } from "./SessionTimeline.js";
+import type { DockviewPanelApi } from "dockview-react";
 import type { EventHistoryPage, NotificationEvent, Session } from "./api/index.js";
 import { jsonResponse } from "./test/jsonResponse.js";
 
 let sessions: Session[];
 let events: Record<number, NotificationEvent[]>;
+// Issue #1455 — mark-read-while-active coverage below needs both
+// useDashboardStore.getState() (SessionTimeline's mark-read effect reads
+// through that, same as PaneTab.tsx's own effect does — see PaneTab.test.tsx's
+// own mock for the established pattern) and a markSessionRead spy.
+// ackAttention is spied too, purely so an accidental future call from
+// SessionTimeline's passive view gets caught here — see store/types.ts's
+// markSessionRead doc comment on why a passive view must never call it.
+const markSessionRead = vi.fn();
+const ackAttention = vi.fn();
 
 function storeState() {
-  return { sessions, events };
+  return { sessions, events, markSessionRead, ackAttention };
 }
 
 vi.mock("./store/index.js", () => {
   const useDashboardStore = (selector: (s: unknown) => unknown) => selector(storeState());
+  useDashboardStore.getState = () => storeState();
   const eventKey = (sessionId: number, seq: number) => `${sessionId}:${seq}`;
   return { useDashboardStore, eventKey };
 });
@@ -113,6 +124,8 @@ beforeEach(() => {
   localStorage.clear();
   sessions = [makeSession()];
   events = {};
+  markSessionRead.mockClear();
+  ackAttention.mockClear();
   fetchImpl = () => ({ persistenceEnabled: false, events: [], nextCursor: null });
   // Route by URL, reject unhandled requests loudly — same convention as
   // SkillsPanel.test.tsx's mockFetch.
@@ -820,5 +833,112 @@ describe("SessionTimeline severity/pairing/persistence", () => {
       "aria-pressed",
       "true",
     );
+  });
+});
+
+// Issue #1455 — SessionTimeline never marked its own sessions read while
+// visible, unlike PaneTab.tsx's terminal-tab "mark seen while active" effect.
+// Mirrors PaneTab.test.tsx's own mark-seen coverage, adapted for an array of
+// sessionIds and an optional `panelApi` (undefined when TaskDetail.tsx
+// renders this component directly — see registry.tsx's SessionTimelineWrapper
+// and this component's own `panelApi` doc comment).
+describe("SessionTimeline mark-read while active (issue #1455)", () => {
+  // Captures the handler passed to panelApi.onDidActiveChange, same pattern
+  // as PaneTab.test.tsx's own activeChangeHandler capture.
+  let activeChangeHandler: ((e: { isActive: boolean }) => void) | null;
+
+  function makePanelApi(isActive: boolean) {
+    activeChangeHandler = null;
+    return {
+      isActive,
+      onDidActiveChange: vi.fn((cb: (e: { isActive: boolean }) => void) => {
+        activeChangeHandler = cb;
+        return { dispose: vi.fn() };
+      }),
+    } as unknown as DockviewPanelApi;
+  }
+
+  beforeEach(() => {
+    sessions = [makeSession({ id: 1 }), makeSession({ id: 2 })];
+  });
+
+  it("marks read once the panel becomes active", () => {
+    events = { 1: [makeEvent({ sessionId: 1, seq: 5 })] };
+    const panelApi = makePanelApi(false);
+    render(<SessionTimeline params={{ sessionIds: [1] }} panelApi={panelApi} />);
+
+    expect(markSessionRead).not.toHaveBeenCalled();
+
+    act(() => activeChangeHandler?.({ isActive: true }));
+
+    expect(markSessionRead).toHaveBeenCalledWith(1);
+    // Issue #1430 — a passive view becoming active must NOT acknowledge
+    // server-side attention, unlike an explicit read action.
+    expect(ackAttention).not.toHaveBeenCalled();
+  });
+
+  it("marks read for every requested session when already active on mount", () => {
+    events = {
+      1: [makeEvent({ sessionId: 1, seq: 1 })],
+      2: [makeEvent({ sessionId: 2, seq: 1 })],
+    };
+    const panelApi = makePanelApi(true);
+    render(<SessionTimeline params={{ sessionIds: [1, 2] }} panelApi={panelApi} />);
+
+    expect(markSessionRead).toHaveBeenCalledWith(1);
+    expect(markSessionRead).toHaveBeenCalledWith(2);
+  });
+
+  it("re-marks read when a new event arrives for an already-active panel", () => {
+    events = { 1: [makeEvent({ sessionId: 1, seq: 1 })] };
+    const panelApi = makePanelApi(true);
+    const { rerender } = render(
+      <SessionTimeline params={{ sessionIds: [1] }} panelApi={panelApi} />,
+    );
+    expect(markSessionRead).toHaveBeenCalledTimes(1);
+
+    markSessionRead.mockClear();
+    events = { 1: [makeEvent({ sessionId: 1, seq: 1 }), makeEvent({ sessionId: 1, seq: 2 })] };
+    rerender(<SessionTimeline params={{ sessionIds: [1] }} panelApi={panelApi} />);
+
+    expect(markSessionRead).toHaveBeenCalledWith(1);
+  });
+
+  it("does not mark read while the panel is inactive", () => {
+    events = { 1: [makeEvent({ sessionId: 1, seq: 1 })] };
+    const panelApi = makePanelApi(false);
+    render(<SessionTimeline params={{ sessionIds: [1] }} panelApi={panelApi} />);
+
+    expect(markSessionRead).not.toHaveBeenCalled();
+  });
+
+  it("stops marking read once the panel goes inactive, even as new events keep arriving", () => {
+    // Starts active (so mounting itself marks read once), then transitions
+    // to inactive — the realistic "user switched away" case. A test that
+    // only ever mounts inactive (the test above) would still pass even if
+    // the mark-read effect ignored `isActive` entirely, since it'd never
+    // observe a false->true->false round trip.
+    events = { 1: [makeEvent({ sessionId: 1, seq: 1 })] };
+    const panelApi = makePanelApi(true);
+    const { rerender } = render(
+      <SessionTimeline params={{ sessionIds: [1] }} panelApi={panelApi} />,
+    );
+    expect(markSessionRead).toHaveBeenCalledWith(1);
+
+    act(() => activeChangeHandler?.({ isActive: false }));
+    markSessionRead.mockClear();
+
+    events = { 1: [makeEvent({ sessionId: 1, seq: 1 }), makeEvent({ sessionId: 1, seq: 2 })] };
+    rerender(<SessionTimeline params={{ sessionIds: [1] }} panelApi={panelApi} />);
+
+    expect(markSessionRead).not.toHaveBeenCalled();
+  });
+
+  it("does not mark read when panelApi is absent, simulating TaskDetail.tsx's own direct usage", () => {
+    events = { 1: [makeEvent({ sessionId: 1, seq: 1 })] };
+    render(<SessionTimeline params={{ sessionIds: [1] }} />);
+
+    expect(markSessionRead).not.toHaveBeenCalled();
+    expect(ackAttention).not.toHaveBeenCalled();
   });
 });
