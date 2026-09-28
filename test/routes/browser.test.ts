@@ -53,11 +53,20 @@ class FakePage extends EventEmitter {
   titleValue = "Test Page";
   screenshotCalls = 0;
   mouseSpy = { move: vi.fn(), down: vi.fn(), up: vi.fn(), click: vi.fn(), wheel: vi.fn() };
-  keyboardSpy = { down: vi.fn(), up: vi.fn(), press: vi.fn() };
+  keyboardSpy = { down: vi.fn(), up: vi.fn(), press: vi.fn(), insertText: vi.fn() };
   gotoSpy = vi.fn();
   goBackSpy = vi.fn();
   goForwardSpy = vi.fn();
   reloadSpy = vi.fn();
+  evaluateSpy = vi.fn();
+  // What the fake page's "selection" currently holds — set by a test before
+  // sending a copy/cut message, read by the evaluate() mock below the same
+  // way the real READ_SELECTION_SCRIPT reads document.activeElement/
+  // getSelection(). Tests order evaluateSpy/keyboardSpy.press calls in a
+  // shared `callOrder` array (see below) to prove the read-then-reply-then-
+  // press ordering routes/browser.ts's dispatchInput actually implements.
+  selectionText = "";
+  callOrder: string[] = [];
 
   mouse = {
     move: async (x: number, y: number) => this.mouseSpy.move(x, y),
@@ -69,8 +78,18 @@ class FakePage extends EventEmitter {
   keyboard = {
     down: async (key: string) => this.keyboardSpy.down(key),
     up: async (key: string) => this.keyboardSpy.up(key),
-    press: async (key: string) => this.keyboardSpy.press(key),
+    press: async (key: string) => {
+      this.callOrder.push("press");
+      return this.keyboardSpy.press(key);
+    },
+    insertText: async (text: string) => this.keyboardSpy.insertText(text),
   };
+
+  async evaluate(_script: string) {
+    this.callOrder.push("evaluate");
+    this.evaluateSpy();
+    return this.selectionText;
+  }
 
   constructor(url: string) {
     super();
@@ -475,6 +494,146 @@ describe("browser route (/ws/browser/:sessionId)", () => {
 
     ws.send(JSON.stringify({ type: "reload" }));
     await waitUntilReal(() => page.reloadSpy.mock.calls.length > 0);
+
+    ws.close();
+    await app.close();
+  });
+
+  it("pastes clipboard text into the page via insertText", async () => {
+    const { app, port } = await buildAndListen();
+    const { sessionId } = await createProjectAndSession(app);
+
+    const pageCountBefore = launchedPages.length;
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/browser/${sessionId}`);
+    await waitForOpenOrClose(ws);
+    const page = await waitForNewestPage(pageCountBefore);
+
+    ws.send(JSON.stringify({ type: "clipboard", text: "hello wörld \u{1F600}" }));
+    await waitUntilReal(() => page.keyboardSpy.insertText.mock.calls.length > 0);
+    expect(page.keyboardSpy.insertText).toHaveBeenCalledWith("hello wörld \u{1F600}");
+
+    ws.close();
+    await app.close();
+  });
+
+  it("rejects an oversize clipboard paste without calling insertText", async () => {
+    const { app, port } = await buildAndListen();
+    const { sessionId } = await createProjectAndSession(app);
+
+    const pageCountBefore = launchedPages.length;
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/browser/${sessionId}`);
+    await waitForOpenOrClose(ws);
+    const page = await waitForNewestPage(pageCountBefore);
+
+    // Comfortably over BROWSER_CLIPBOARD_MAX_BYTES ((1 << 18) - 14) but well
+    // under the WS transport's own maxPayload (1 MiB, src/plugins/
+    // websocket.ts), so this exercises the route's own cap, not a transport
+    // frame-size rejection.
+    const oversize = "a".repeat(300_000);
+    ws.send(JSON.stringify({ type: "clipboard", text: oversize }));
+
+    // Deterministic confirmation the oversize paste never reached
+    // insertText(): send a small valid one afterward and assert it's the
+    // only call recorded, same pattern as the unsafe-navigate-URL test.
+    ws.send(JSON.stringify({ type: "clipboard", text: "ok" }));
+    await waitUntilReal(() => page.keyboardSpy.insertText.mock.calls.length > 0);
+    expect(page.keyboardSpy.insertText).toHaveBeenCalledTimes(1);
+    expect(page.keyboardSpy.insertText).toHaveBeenCalledWith("ok");
+
+    ws.close();
+    await app.close();
+  });
+
+  it("copy: reads the selection, replies with clipboard, then presses Control+c, in that order", async () => {
+    const { app, port } = await buildAndListen();
+    const { sessionId } = await createProjectAndSession(app);
+
+    const pageCountBefore = launchedPages.length;
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/browser/${sessionId}`);
+    const messages = collectMessages(ws);
+    await waitForOpenOrClose(ws);
+    const page = await waitForNewestPage(pageCountBefore);
+    page.selectionText = "selected text";
+
+    let clientSawClipboard = false;
+    ws.addEventListener("message", (event) => {
+      if (typeof event.data === "string" && JSON.parse(event.data).type === "clipboard") {
+        clientSawClipboard = true;
+      }
+    });
+
+    // Blocks the actual press() call on the client having already seen the
+    // clipboard reply — if dispatchInput ever presses the key before (or
+    // without) sending the reply, this proves it by making the assertion
+    // below observe `clientSawClipboard === false` right when press fires,
+    // rather than by racing on wall-clock timing.
+    page.keyboardSpy.press.mockImplementationOnce(() => waitUntilReal(() => clientSawClipboard));
+
+    ws.send(JSON.stringify({ type: "copy" }));
+    await waitUntilReal(() => page.keyboardSpy.press.mock.calls.length > 0);
+
+    expect(page.evaluateSpy).toHaveBeenCalledTimes(1);
+    expect(clientSawClipboard).toBe(true);
+    expect(page.keyboardSpy.press).toHaveBeenCalledWith("Control+c");
+    expect(page.callOrder).toEqual(["evaluate", "press"]);
+    expect(
+      messages.some((m) => !m.binary && JSON.parse(m.data as string).type === "clipboard"),
+    ).toBe(true);
+
+    ws.close();
+    await app.close();
+  });
+
+  it("cut: same read-reply-press order, but presses Control+x", async () => {
+    const { app, port } = await buildAndListen();
+    const { sessionId } = await createProjectAndSession(app);
+
+    const pageCountBefore = launchedPages.length;
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/browser/${sessionId}`);
+    await waitForOpenOrClose(ws);
+    const page = await waitForNewestPage(pageCountBefore);
+    page.selectionText = "cut me";
+
+    let clientSawClipboard = false;
+    ws.addEventListener("message", (event) => {
+      if (typeof event.data === "string" && JSON.parse(event.data).type === "clipboard") {
+        clientSawClipboard = true;
+      }
+    });
+    page.keyboardSpy.press.mockImplementationOnce(() => waitUntilReal(() => clientSawClipboard));
+
+    ws.send(JSON.stringify({ type: "cut" }));
+    await waitUntilReal(() => page.keyboardSpy.press.mock.calls.length > 0);
+
+    expect(clientSawClipboard).toBe(true);
+    expect(page.keyboardSpy.press).toHaveBeenCalledWith("Control+x");
+    expect(page.callOrder).toEqual(["evaluate", "press"]);
+
+    ws.close();
+    await app.close();
+  });
+
+  it("sends no clipboard reply for an empty selection, but still presses the key", async () => {
+    const { app, port } = await buildAndListen();
+    const { sessionId } = await createProjectAndSession(app);
+
+    const pageCountBefore = launchedPages.length;
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/browser/${sessionId}`);
+    const messages = collectMessages(ws);
+    await waitForOpenOrClose(ws);
+    const page = await waitForNewestPage(pageCountBefore);
+    page.selectionText = "";
+
+    ws.send(JSON.stringify({ type: "copy" }));
+    await waitUntilReal(() => page.keyboardSpy.press.mock.calls.length > 0);
+    expect(page.keyboardSpy.press).toHaveBeenCalledWith("Control+c");
+
+    // Give any (incorrect) reply a moment to arrive before asserting its
+    // absence.
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(
+      messages.some((m) => !m.binary && JSON.parse(m.data as string).type === "clipboard"),
+    ).toBe(false);
 
     ws.close();
     await app.close();

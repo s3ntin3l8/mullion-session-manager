@@ -33,6 +33,15 @@ import { getStoredSettings } from "../services/settings.js";
 
 const BACKPRESSURE_MAX_BUFFERED_BYTES = 4 * 1024 * 1024;
 
+// Mirrors routes/device.ts's own CLIPBOARD_MAX_BYTES (scrcpy server's
+// CONTROL_MSG_CLIPBOARD_TEXT_MAX_LENGTH) — that constant isn't exported (and
+// importing it here would pull @yume-chan/scrcpy into this route for no
+// reason), so this is a separate constant with the same value: a paste into
+// a page has no analogous wire-protocol limit of its own, but reusing the
+// device feature's already-chosen sanity cap is more defensible than
+// inventing a new magic number. Keep the two in sync if either changes.
+const BROWSER_CLIPBOARD_MAX_BYTES = (1 << 18) - 14;
+
 interface MouseInputMessage {
   type: "mouse";
   action: "move" | "down" | "up" | "click" | "wheel";
@@ -61,8 +70,37 @@ interface HistoryInputMessage {
   type: "back" | "forward" | "reload";
 }
 
+// Paste: host -> page. Sent by BrowserPane.tsx's own `paste` DOM listener,
+// fired only on an explicit host paste gesture (never a page-initiated
+// clipboard read) — see this route's own copy/cut comment below for the
+// matching page -> host direction and the security posture both share.
+interface ClipboardInputMessage {
+  type: "clipboard";
+  text: string;
+}
+
+// Copy/cut: page -> host, but only ever in response to one of these, which
+// BrowserPane.tsx sends solely from its own keydown handler on an explicit
+// Ctrl/Cmd+C or +X gesture inside the pane — never from a page-initiated
+// clipboard write (issue #1478, an explicit descope, not an oversight: the
+// pane can browse untrusted content, so auto-syncing whatever a page's own
+// script writes to its in-page clipboard would let any page silently plant
+// data on the real host clipboard).
+interface CopyInputMessage {
+  type: "copy";
+}
+interface CutInputMessage {
+  type: "cut";
+}
+
 type BrowserInputMessage =
-  MouseInputMessage | KeyInputMessage | NavigateInputMessage | HistoryInputMessage;
+  | MouseInputMessage
+  | KeyInputMessage
+  | NavigateInputMessage
+  | HistoryInputMessage
+  | ClipboardInputMessage
+  | CopyInputMessage
+  | CutInputMessage;
 
 const MOUSE_ACTIONS_REQUIRING_POSITION = new Set(["move", "down", "click"]);
 
@@ -109,11 +147,33 @@ function isHistoryMessage(value: unknown): value is HistoryInputMessage {
   );
 }
 
+// Same byte cap enforced at parse time as routes/device.ts's own clipboard
+// message (see BROWSER_CLIPBOARD_MAX_BYTES above) — an oversize message is
+// silently dropped (parseInputMessage returns null), same as any other
+// malformed/unrecognized control message this route already ignores.
+function isClipboardMessage(value: unknown): value is ClipboardInputMessage {
+  const v = value as Partial<ClipboardInputMessage> | null;
+  return (
+    typeof v === "object" &&
+    v !== null &&
+    v.type === "clipboard" &&
+    typeof v.text === "string" &&
+    Buffer.byteLength(v.text, "utf8") <= BROWSER_CLIPBOARD_MAX_BYTES
+  );
+}
+
+function isCopyOrCutMessage(value: unknown): value is CopyInputMessage | CutInputMessage {
+  const v = value as Partial<CopyInputMessage | CutInputMessage> | null;
+  return typeof v === "object" && v !== null && (v.type === "copy" || v.type === "cut");
+}
+
 function parseInputMessage(value: unknown): BrowserInputMessage | null {
   if (isMouseMessage(value)) return value;
   if (isKeyMessage(value)) return value;
   if (isNavigateMessage(value)) return value;
   if (isHistoryMessage(value)) return value;
+  if (isClipboardMessage(value)) return value;
+  if (isCopyOrCutMessage(value)) return value;
   return null;
 }
 
@@ -130,6 +190,34 @@ export function isSafeNavigationUrl(url: string): boolean {
     return false;
   }
 }
+
+// Runs inside the page to read the current selection ahead of a copy/cut —
+// see dispatchInput's "copy"/"cut" case for why this must happen BEFORE any
+// key is pressed (a cut destroys the selection). Written as a plain string
+// wrapped in a self-invoking IIFE, not a typed TS function, same reasoning
+// as browser-automation.ts's own TAG_INTERACTIVE_ELEMENTS_SCRIPT: this
+// project's tsconfig has no "dom" lib (it's a Node backend), so
+// document/window/HTMLInputElement aren't typecheckable here anyway, and a
+// bare (non-self-invoking) function string passed to Playwright's evaluate
+// evaluates to the function value itself rather than being called.
+//
+// Main frame only (`page.evaluate` always targets the page's main frame) —
+// a selection inside a cross-origin iframe isn't reachable this way; that
+// gap is tracked as issue #1477, not solved here.
+const READ_SELECTION_SCRIPT = `
+(() => {
+  const el = document.activeElement;
+  if (
+    el &&
+    "selectionStart" in el &&
+    typeof el.selectionStart === "number" &&
+    typeof el.selectionEnd === "number"
+  ) {
+    return el.value.slice(el.selectionStart, el.selectionEnd);
+  }
+  return window.getSelection()?.toString() ?? "";
+})()
+`;
 
 async function dispatchInput(
   app: FastifyInstance,
@@ -203,6 +291,28 @@ async function dispatchInput(
     case "reload":
       await page.reload();
       break;
+    case "clipboard":
+      // Host -> page paste. Byte cap already enforced at parse time
+      // (isClipboardMessage). insertText (not a `type`/keypress simulation)
+      // handles Unicode/emoji in one shot and doesn't depend on the page's
+      // own keydown handlers to build up the string character by character.
+      await page.keyboard.insertText(message.text);
+      break;
+    case "copy":
+    case "cut": {
+      // Read BEFORE pressing the key: a cut's Ctrl+X both copies and
+      // deletes the selection, so reading after the press would see an
+      // already-empty selection. The reply is sent before the key press too
+      // (order matters here, not just for the read) so the client's host
+      // clipboard write and the page's own copy/cut handlers don't race in
+      // a surprising order from the caller's perspective.
+      const text = (await page.evaluate(READ_SELECTION_SCRIPT)) as string;
+      if (text && socket.readyState === socket.OPEN) {
+        socket.send(JSON.stringify({ type: "clipboard", text }));
+      }
+      await page.keyboard.press(message.type === "copy" ? "Control+c" : "Control+x");
+      break;
+    }
   }
 }
 
@@ -330,6 +440,13 @@ export async function attachSocketToBrowser(
   });
 }
 
+// `clipboard`/`copy`/`cut` flow through this proxy unchanged, like every
+// other control message: it forwards opaque JSON bytes in both directions
+// with no per-type handling. The one caveat is the backpressure drop each
+// direction already has below — a control frame sent while the buffered
+// bytes exceed BACKPRESSURE_MAX_BUFFERED_BYTES is silently dropped just like
+// a JPEG frame would be, so delivery isn't guaranteed under sustained
+// backpressure (pre-existing behavior, not new to these message types).
 function proxyToRemoteBrowser(
   app: FastifyInstance,
   browserSocket: WebSocket,

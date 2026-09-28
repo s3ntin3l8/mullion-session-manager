@@ -23,7 +23,17 @@ interface ErrorMessage {
   type: "error";
   message: string;
 }
-type ControlMessage = UrlMessage | TitleMessage | ExitedMessage | ErrorMessage;
+// Page -> host clipboard, sent by the server only in reply to this pane's
+// own `{type:"copy"}`/`{type:"cut"}` request (see the onKeyDown Ctrl/Cmd+C/X
+// handling below) — never unprompted. That asymmetry is deliberate: see
+// DevicePane.tsx's matching `clipboard` message for the same host-write
+// posture, and issue #1478 for why a page-initiated clipboard write (e.g.
+// the page's own navigator.clipboard.writeText()) must never reach here.
+interface ClipboardMessage {
+  type: "clipboard";
+  text: string;
+}
+type ControlMessage = UrlMessage | TitleMessage | ExitedMessage | ErrorMessage | ClipboardMessage;
 
 function parseControlMessage(raw: string): ControlMessage | null {
   let parsed: unknown;
@@ -39,6 +49,9 @@ function parseControlMessage(raw: string): ControlMessage | null {
   if (v.type === "exited") return { type: "exited" };
   if (v.type === "error" && typeof v.message === "string") {
     return { type: "error", message: v.message };
+  }
+  if (v.type === "clipboard" && typeof v.text === "string") {
+    return { type: "clipboard", text: v.text };
   }
   return null;
 }
@@ -138,6 +151,17 @@ export function BrowserPane(props: {
           else if (message.type === "title") onTitleChangeRef.current?.(message.title);
           else if (message.type === "exited") setStatus("failed");
           else if (message.type === "error") setLastError(message.message);
+          else if (message.type === "clipboard") {
+            // Page -> host clipboard, only ever in reply to our own
+            // copy/cut request (see onKeyDown below) — never a page-
+            // initiated write (issue #1478). Only the focused pane writes
+            // (every open panel for this session gets the same reply),
+            // and a permission/insecure-context failure stays silent, same
+            // posture as DevicePane.tsx's matching handler.
+            if (document.hasFocus()) {
+              void navigator.clipboard?.writeText(message.text).catch(() => {});
+            }
+          }
           return;
         }
         paintFrame(event.data as ArrayBuffer);
@@ -203,15 +227,74 @@ export function BrowserPane(props: {
     canvas.addEventListener("wheel", onWheel, { passive: false });
     canvas.addEventListener("contextmenu", onContextMenu);
 
+    // Keys whose keydown was intercepted below for a clipboard chord (not
+    // forwarded as a `key` message) — the matching keyup must also be
+    // suppressed, or the page would see a keyup for a key it never got the
+    // keydown for. Tracked by event.key rather than re-checking
+    // ctrlKey/metaKey on keyup, since the user may release Ctrl/Cmd before
+    // releasing v/c/x.
+    const interceptedKeys = new Set<string>();
     const onKeyDown = (event: KeyboardEvent) => {
+      // AltGr reports as ctrl+alt on Windows, so a chord excludes
+      // Alt/AltGraph — otherwise "@ { [ \ €" on European layouts (and
+      // Ctrl+Alt+C-style combos) could not be typed. Also excludes Shift,
+      // unlike DevicePane.tsx's own chord check: Ctrl/Cmd+Shift+C/V/X are
+      // real, distinct browser/app shortcuts in their own right (e.g.
+      // "paste without formatting"), not this pane's copy/cut/paste
+      // gesture — swallowing them here would silently drop them instead of
+      // forwarding them to the page like any other chord.
+      const chord =
+        (event.ctrlKey || event.metaKey) &&
+        !event.altKey &&
+        !event.shiftKey &&
+        !event.getModifierState("AltGraph");
+      if (chord) {
+        const key = event.key.toLowerCase();
+        if (key === "v") {
+          // Do NOT preventDefault and do NOT forward the raw key: forwarding
+          // it would make headless Chromium try to paste its own separate,
+          // likely-empty clipboard, and preventing default would cancel the
+          // native `paste` DOM event the onPaste listener below relies on.
+          // Still tracked in interceptedKeys so the matching keyup (which
+          // DOES still fire, even though this keydown was never forwarded)
+          // isn't sent as an orphaned "up" for a key the page never saw
+          // go down.
+          interceptedKeys.add(event.key);
+          return;
+        }
+        if (key === "c" || key === "x") {
+          // Do NOT forward the raw key either — the server reads the page's
+          // own selection and replies (see routes/browser.ts's "copy"/"cut"
+          // handling), then presses the real key itself so the page's own
+          // copy/cut handlers still run normally.
+          event.preventDefault();
+          interceptedKeys.add(event.key);
+          sendControl({ type: key === "c" ? "copy" : "cut" });
+          return;
+        }
+        // Any other chord (Ctrl+A, Ctrl+Z, ...) forwards normally below.
+      }
       event.preventDefault();
       sendControl({ type: "key", action: "down", key: event.key });
     };
     const onKeyUp = (event: KeyboardEvent) => {
+      if (interceptedKeys.delete(event.key)) return;
       sendControl({ type: "key", action: "up", key: event.key });
     };
     canvas.addEventListener("keydown", onKeyDown);
     canvas.addEventListener("keyup", onKeyUp);
+
+    // Host -> page paste. The native paste event is the single read path
+    // (no readText(): no permission prompt, works over plain HTTP, and no
+    // double paste) — mirrors DevicePane.tsx's own onPaste. Do NOT
+    // preventDefault on the Ctrl/Cmd+V keydown above: cancelling it would
+    // cancel this native `paste` event before it ever fires.
+    const onPaste = (event: ClipboardEvent) => {
+      event.preventDefault();
+      const text = event.clipboardData?.getData("text/plain") ?? "";
+      if (text) sendControl({ type: "clipboard", text });
+    };
+    canvas.addEventListener("paste", onPaste);
 
     return () => {
       destroyed = true;
@@ -223,6 +306,7 @@ export function BrowserPane(props: {
       canvas.removeEventListener("contextmenu", onContextMenu);
       canvas.removeEventListener("keydown", onKeyDown);
       canvas.removeEventListener("keyup", onKeyUp);
+      canvas.removeEventListener("paste", onPaste);
       ws?.close();
       sendControlRef.current = () => {};
       retryRef.current = () => {};

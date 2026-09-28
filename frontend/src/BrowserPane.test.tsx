@@ -256,6 +256,155 @@ describe("BrowserPane", () => {
     expect(sentTypes).toContainEqual({ type: "key", action: "up", key: "Enter" });
   });
 
+  describe("clipboard", () => {
+    it("does not prevent or forward a Ctrl+V keydown, leaving it to the native paste event", () => {
+      const { container } = render(<BrowserPane params={{ sessionId: 1 }} />);
+      openSocket();
+      const canvas = container.querySelector("canvas")!;
+
+      const event = fireEvent.keyDown(canvas, { key: "v", ctrlKey: true });
+      // testing-library's fireEvent returns false when preventDefault() was
+      // called during dispatch.
+      expect(event).toBe(true);
+      expect(fakeSocket.send).not.toHaveBeenCalled();
+
+      // Cmd+V (macOS) behaves the same.
+      const metaEvent = fireEvent.keyDown(canvas, { key: "v", metaKey: true });
+      expect(metaEvent).toBe(true);
+      expect(fakeSocket.send).not.toHaveBeenCalled();
+    });
+
+    it("does not forward the matching Ctrl+V keyup either, since the keydown was never sent", () => {
+      const { container } = render(<BrowserPane params={{ sessionId: 1 }} />);
+      openSocket();
+      const canvas = container.querySelector("canvas")!;
+
+      fireEvent.keyDown(canvas, { key: "v", ctrlKey: true });
+      fireEvent.keyUp(canvas, { key: "v", ctrlKey: true });
+
+      // A raw "up" with no matching "down" would be an orphaned keyup on
+      // the page — the keydown above was deliberately never forwarded (see
+      // the previous test), so the keyup must be suppressed too.
+      expect(fakeSocket.send).not.toHaveBeenCalled();
+    });
+
+    it("forwards Ctrl+Shift+V/C/X as ordinary keys, not as the clipboard gesture", () => {
+      const { container } = render(<BrowserPane params={{ sessionId: 1 }} />);
+      openSocket();
+      const canvas = container.querySelector("canvas")!;
+
+      fireEvent.keyDown(canvas, { key: "v", ctrlKey: true, shiftKey: true });
+      fireEvent.keyDown(canvas, { key: "c", ctrlKey: true, shiftKey: true });
+      fireEvent.keyDown(canvas, { key: "x", ctrlKey: true, shiftKey: true });
+
+      const sentTypes = fakeSocket.send.mock.calls.map((c) => JSON.parse(c[0] as string));
+      expect(sentTypes).toContainEqual({ type: "key", action: "down", key: "v" });
+      expect(sentTypes).toContainEqual({ type: "key", action: "down", key: "c" });
+      expect(sentTypes).toContainEqual({ type: "key", action: "down", key: "x" });
+      expect(sentTypes).not.toContainEqual({ type: "copy" });
+      expect(sentTypes).not.toContainEqual({ type: "cut" });
+    });
+
+    it("sends a paste's clipboard text as a clipboard control message", () => {
+      const { container } = render(<BrowserPane params={{ sessionId: 1 }} />);
+      openSocket();
+      const canvas = container.querySelector("canvas")!;
+
+      const paste = new Event("paste", { bubbles: true, cancelable: true });
+      Object.assign(paste, { clipboardData: { getData: () => "hällö \u{1F600}" } });
+      canvas.dispatchEvent(paste);
+
+      expect(paste.defaultPrevented).toBe(true);
+      expect(fakeSocket.send).toHaveBeenCalledWith(
+        JSON.stringify({ type: "clipboard", text: "hällö \u{1F600}" }),
+      );
+    });
+
+    it("sends nothing on paste when the clipboard text is empty", () => {
+      const { container } = render(<BrowserPane params={{ sessionId: 1 }} />);
+      openSocket();
+      const canvas = container.querySelector("canvas")!;
+
+      const paste = new Event("paste", { bubbles: true, cancelable: true });
+      Object.assign(paste, { clipboardData: { getData: () => "" } });
+      canvas.dispatchEvent(paste);
+
+      expect(fakeSocket.send).not.toHaveBeenCalled();
+    });
+
+    it("sends a copy control message on Ctrl+C and does not forward the raw key", () => {
+      const { container } = render(<BrowserPane params={{ sessionId: 1 }} />);
+      openSocket();
+      const canvas = container.querySelector("canvas")!;
+
+      const event = fireEvent.keyDown(canvas, { key: "c", ctrlKey: true });
+      expect(event).toBe(false); // preventDefault() was called
+      expect(fakeSocket.send).toHaveBeenCalledWith(JSON.stringify({ type: "copy" }));
+      expect(fakeSocket.send).not.toHaveBeenCalledWith(
+        JSON.stringify({ type: "key", action: "down", key: "c" }),
+      );
+
+      // The matching keyup for the intercepted key must also not forward.
+      fireEvent.keyUp(canvas, { key: "c", ctrlKey: true });
+      expect(fakeSocket.send).not.toHaveBeenCalledWith(
+        JSON.stringify({ type: "key", action: "up", key: "c" }),
+      );
+    });
+
+    it("sends a cut control message on Cmd+X", () => {
+      const { container } = render(<BrowserPane params={{ sessionId: 1 }} />);
+      openSocket();
+      const canvas = container.querySelector("canvas")!;
+
+      fireEvent.keyDown(canvas, { key: "x", metaKey: true });
+      expect(fakeSocket.send).toHaveBeenCalledWith(JSON.stringify({ type: "cut" }));
+    });
+
+    it("still forwards other Ctrl chords (e.g. Ctrl+A) as a raw key", () => {
+      const { container } = render(<BrowserPane params={{ sessionId: 1 }} />);
+      openSocket();
+      const canvas = container.querySelector("canvas")!;
+
+      fireEvent.keyDown(canvas, { key: "a", ctrlKey: true });
+      expect(fakeSocket.send).toHaveBeenCalledWith(
+        JSON.stringify({ type: "key", action: "down", key: "a" }),
+      );
+    });
+
+    it("writes an inbound clipboard message to the host clipboard only while focused", () => {
+      const writeText = vi.fn(() => Promise.resolve());
+      vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+      render(<BrowserPane params={{ sessionId: 1 }} />);
+      openSocket();
+
+      const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+      emitControlMessage({ type: "clipboard", text: "from page" });
+      expect(writeText).not.toHaveBeenCalled();
+
+      hasFocus.mockReturnValue(true);
+      emitControlMessage({ type: "clipboard", text: "from page" });
+      expect(writeText).toHaveBeenCalledWith("from page");
+      hasFocus.mockRestore();
+    });
+
+    it("swallows a rejected host clipboard write silently", async () => {
+      const writeText = vi.fn(() => Promise.reject(new Error("denied")));
+      vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+      render(<BrowserPane params={{ sessionId: 1 }} />);
+      openSocket();
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+
+      expect(() => {
+        emitControlMessage({ type: "clipboard", text: "x" });
+      }).not.toThrow();
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(writeText).toHaveBeenCalled();
+    });
+  });
+
   it("closes the socket on unmount", () => {
     const { unmount } = render(<BrowserPane params={{ sessionId: 1 }} />);
     openSocket();
