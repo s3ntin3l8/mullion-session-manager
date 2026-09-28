@@ -182,7 +182,10 @@ deliberately a **separate** implementation from `PtyManager`/
   `tap`/`touchDown`/`touchMove`/`touchUp`/`scroll` (all carry `x`/`y` plus
   `videoWidth`/`videoHeight` — the device's **video-pixel space**, see §1
   below — touch messages also carry `pointerId`), `text` (`{text: string}`),
-  `keyEvent` (`{androidKeyCode: number, action: "down"|"up"}`), `clipboard`
+  `keyEvent` (`{androidKeyCode: number, action: "down"|"up"}`, plus an
+  optional `metaState?: number` — scrcpy's `AndroidKeyEventMeta` bitmask,
+  e.g. the Ctrl/Shift bits a modifier chord sets; defaults to `0`),
+  `clipboard`
   (`{text: string}`, host clipboard text to paste onto the device — see
   below), `back` (no fields), and `rotate` (no fields — toggles the
   emulator's orientation). Neither a malformed (unparseable JSON,
@@ -310,20 +313,30 @@ device and vice versa.
   `navigator.clipboard.writeText`; unfocused tabs ignore it, and failures are
   silent. It is live-only: a reconnecting or second panel is **never** sent
   the last value, since that would overwrite whatever you copied since.
-- **Chords.** Ctrl/Cmd+C and +X send the device's `KEYCODE_COPY` / `KEYCODE_CUT`;
-  other Ctrl/Cmd chords are swallowed rather than typed as letters. AltGr
-  characters (`@`, `{`, `€`, ...) still type normally.
+- **Chords.** Ctrl/Cmd+C and +X send the device's `KEYCODE_COPY` / `KEYCODE_CUT`
+  (no `metaState`). Any other single alphanumeric Ctrl/Cmd chord (Ctrl+A
+  select-all, Ctrl+Z undo, Ctrl+Shift+Z redo, Ctrl+1..9, ...) maps to the AOSP
+  `KEYCODE_*` for that letter/digit and forwards it with the Ctrl `metaState`
+  bit set (both `ctrlKey` and `metaKey`/Cmd map to the same Android Ctrl bits
+  — there's no separate "Cmd" concept on the device); a non-alphanumeric
+  chord (e.g. Ctrl+/) is still swallowed rather than typed as a letter. AltGr
+  characters (`@`, `{`, `€`, ...) still type normally. Arrow keys, Tab,
+  Delete, Escape, Home and End are also forwarded as `keyEvent`s (not typed),
+  each carrying Shift's `metaState` bit when held — so Shift+ArrowLeft/Right
+  extends a selection alongside Ctrl+A. Backspace and Enter are forwarded the
+  same way but deliberately never carry a Shift bit, since Shift+Enter means
+  something different (newline vs. send) in many apps.
 - **Toolbar.** The screenshot button downloads a PNG. The adjacent **Copy
   screenshot to clipboard** button puts the same PNG on the clipboard
   instead; it only appears in a secure context (HTTPS or localhost) with
   `ClipboardItem` support.
 
-Not covered: Ctrl+A and other modifier chords, and clipboard sync for the
-streamed browser pane (both still tracked under #1422). A CLI/MCP clipboard
-verb for `device_action` is covered — see §1 below — but its `get` only ever
-answers from a last-known cache populated once scrcpy has attached this
-session; whatever was on the device's clipboard **before** that (or before
-Mullion ever ran) is invisible to it, tracked separately as issue #1476.
+Not covered: clipboard sync for the streamed browser pane (still tracked
+under #1422). A CLI/MCP clipboard verb for `device_action` is covered — see
+§1 below — but its `get` only ever answers from a last-known cache populated
+once scrcpy has attached this session; whatever was on the device's
+clipboard **before** that (or before Mullion ever ran) is invisible to it,
+tracked separately as issue #1476.
 
 ---
 
