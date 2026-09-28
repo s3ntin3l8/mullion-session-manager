@@ -5,6 +5,7 @@ import {
   fileChangeDotClass,
   fileChangeLetter,
   isSubagentLive,
+  partitionSubagents,
   sessionGitDotClass,
   sessionPrDotClass,
   subagentDotClass,
@@ -82,6 +83,39 @@ describe("isSubagentLive / subagentDotClass", () => {
     const subagent = makeSubagent({ endedAt: 2000 });
     expect(isSubagentLive(subagent)).toBe(false);
     expect(subagentDotClass(subagent)).toBe("good");
+  });
+});
+
+describe("partitionSubagents", () => {
+  it("returns empty lists and a null lastFinishedAt for no subagents", () => {
+    expect(partitionSubagents([])).toEqual({ live: [], finished: [], lastFinishedAt: null });
+  });
+
+  it("splits live from finished and sorts each newest-first", () => {
+    const olderLive = makeSubagent({ agentId: "live-old", startedAt: 1000, endedAt: null });
+    const newerLive = makeSubagent({ agentId: "live-new", startedAt: 2000, endedAt: null });
+    const olderFinished = makeSubagent({
+      agentId: "done-old",
+      startedAt: 500,
+      endedAt: 1500,
+    });
+    const newerFinished = makeSubagent({
+      agentId: "done-new",
+      startedAt: 1600,
+      endedAt: 3000,
+    });
+    const result = partitionSubagents([olderLive, olderFinished, newerLive, newerFinished]);
+    expect(result.live.map((s) => s.agentId)).toEqual(["live-new", "live-old"]);
+    expect(result.finished.map((s) => s.agentId)).toEqual(["done-new", "done-old"]);
+    expect(result.lastFinishedAt).toBe(3000);
+  });
+
+  it("falls back to startedAt for a finished entry's own ordering key (defensive — endedAt is always set once finished)", () => {
+    // isSubagentLive treats endedAt === null as the only "live" signal, so a
+    // finished entry always has endedAt set in practice — this exercises the
+    // `?? startedAt` fallback in the sort/lastFinishedAt math regardless.
+    const finished = makeSubagent({ agentId: "done", startedAt: 100, endedAt: 200 });
+    expect(partitionSubagents([finished]).lastFinishedAt).toBe(200);
   });
 });
 

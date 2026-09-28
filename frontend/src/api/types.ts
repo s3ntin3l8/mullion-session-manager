@@ -596,6 +596,14 @@ export interface Session {
   errorDetail: string | null;
   lastAssistantMessage: string | null;
   compactState: "idle" | "compacting";
+  // Sidebar now-line — mirrors pty-manager.ts's SessionInfo.currentTodo 1:1:
+  // the model's current in-progress (or, absent one, pending) todo item.
+  // Null when idle/never reported, or once the latest report went terminal.
+  // Reported by both Claude Code and OpenCode — see currentTodo's own doc
+  // comment on the backend side for why OpenCode's per-item update stream
+  // can clear this a little more eagerly than Claude Code's own
+  // pre-resolved-per-call one does.
+  currentTodo: { content: string; status: string } | null;
   subagentCount: number;
   /** Phase 5 (Track A) — mirrors pty-manager.ts's SessionInfo.subagents 1:1.
    * May be shorter than subagentCount when an adapter can't supply identity

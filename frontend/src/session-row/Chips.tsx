@@ -2,7 +2,12 @@ import { useCallback, useState } from "react";
 import type { BackgroundTask, SubagentInfo } from "../api/index.js";
 import { formatRelativeAge } from "../relativeTime.js";
 import { STORAGE_KEYS, readJSON, writeJSON } from "../lib/persistedState.js";
-import { backgroundTaskLetter, isSubagentLive, subagentDotClass } from "../lib/sidebarStatus.js";
+import {
+  backgroundTaskLetter,
+  isSubagentLive,
+  partitionSubagents,
+  subagentDotClass,
+} from "../lib/sidebarStatus.js";
 
 // SessionRow's rows 5 (subagents, Phase 5 Track A #195/5.5a) and 6
 // (background tasks, issue #428) — extracted verbatim from SessionRow
@@ -30,6 +35,24 @@ function setSubagentRowExpanded(sessionId: number, agentId: string, expanded: bo
   if (expanded) expandedSubagentRows.add(key);
   else expandedSubagentRows.delete(key);
   writeJSON(STORAGE_KEYS.expandedSubagentRows, [...expandedSubagentRows]);
+}
+
+// Sidebar declutter — whether a session's finished-subagent history toggle
+// (below) is open, revealing the full list. Separate key/Set from
+// expandedSubagentRows above: that one tracks each individual chip's own
+// summary expand, this tracks the "N done" toggle itself. Same module-level
+// Set + readJSON/writeJSON pattern.
+function readExpandedSubagentHistory(): Set<number> {
+  const parsed = readJSON<unknown>(STORAGE_KEYS.expandedSubagentHistory, []);
+  return new Set(Array.isArray(parsed) ? parsed.filter((n) => typeof n === "number") : []);
+}
+
+const expandedSubagentHistory = readExpandedSubagentHistory();
+
+function setSubagentHistoryExpanded(sessionId: number, expanded: boolean): void {
+  if (expanded) expandedSubagentHistory.add(sessionId);
+  else expandedSubagentHistory.delete(sessionId);
+  writeJSON(STORAGE_KEYS.expandedSubagentHistory, [...expandedSubagentHistory]);
 }
 
 interface SubagentChipProps {
@@ -127,11 +150,57 @@ export function Chips({
   showBackgroundTasksRow,
   outstandingBackgroundTasks,
 }: ChipsProps) {
+  const [historyOpen, setHistoryOpen] = useState(() => expandedSubagentHistory.has(sessionId));
+  const toggleHistoryOpen = useCallback(() => {
+    setHistoryOpen((prev) => {
+      const next = !prev;
+      setSubagentHistoryExpanded(sessionId, next);
+      return next;
+    });
+  }, [sessionId]);
+
+  // Sidebar declutter — a long-running session can rack up dozens of
+  // finished subagents (pty-manager.ts keeps up to MAX_TRACKED_SUBAGENTS=50,
+  // persisted across restarts), which used to render as an ever-growing
+  // wrapped strip. Live ones stay always-visible chips; finished ones
+  // collapse behind one summary toggle.
+  const { live, finished, lastFinishedAt } = partitionSubagents(subagents);
+
   return (
     <>
       {showSubagentsRow && (
         <div className="session-subagents-line" onClick={(e) => e.stopPropagation()}>
-          {subagents.map((subagent) => (
+          {live.map((subagent) => (
+            <SubagentChip key={subagent.agentId} sessionId={sessionId} subagent={subagent} />
+          ))}
+          {finished.length > 0 && (
+            <button
+              type="button"
+              className="session-subagent-history-toggle"
+              aria-expanded={historyOpen}
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleHistoryOpen();
+              }}
+            >
+              <span className="github-panel-ci-dot good" />
+              {historyOpen ? "▾" : "▸"} {finished.length} done
+              {lastFinishedAt != null && ` · last ${formatRelativeAge(lastFinishedAt)}`}
+            </button>
+          )}
+        </div>
+      )}
+      {/* Gated on showSubagentsRow, same as the toggle button above whose
+        click sets `historyOpen` in the first place — that toggle lives
+        inside the showSubagentsRow block, but the persisted open/closed
+        state itself is keyed only by sessionId (crs.expandedSubagentHistory),
+        not per-view. Without this same gate here, a session viewed both in
+        the sidebar and as a showSubagents={false} kanban card
+        (LaneCard.tsx) would leak the history list onto the card with no
+        toggle rendered there to close it. */}
+      {showSubagentsRow && historyOpen && finished.length > 0 && (
+        <div className="session-subagent-history" onClick={(e) => e.stopPropagation()}>
+          {finished.map((subagent) => (
             <SubagentChip key={subagent.agentId} sessionId={sessionId} subagent={subagent} />
           ))}
         </div>

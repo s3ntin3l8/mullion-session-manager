@@ -8,7 +8,7 @@ import { KebabMenu } from "./ui/KebabMenu.js";
 import { api, ApiError, LOCAL_HOST_ID } from "./api/index.js";
 import type { Device, DiscoveredProject, Host, Project, Session } from "./api/index.js";
 import { SidebarDevices } from "./SidebarDevices.js";
-import { describeLatestEvent } from "./eventDescriptions.js";
+import { deriveNowLine } from "./lib/sessionNowLine.js";
 import {
   formatStatusLabel,
   isStatusReachable,
@@ -29,7 +29,6 @@ import { PromoteDialog } from "./PromoteDialog.js";
 import {
   ChevronDownIcon,
   CloseIcon,
-  FileTextIcon,
   FolderIcon,
   HostsIcon,
   LayersIcon,
@@ -55,9 +54,7 @@ import {
 import { summarizeFileChanges } from "./lib/sidebarStatus.js";
 import { estimateSidebarRowHeight } from "./lib/sidebarRowSizing.js";
 import { Header } from "./session-row/Header.js";
-import { GitLine } from "./session-row/GitLine.js";
-import { FileChanges } from "./session-row/FileChanges.js";
-import { Chips } from "./session-row/Chips.js";
+import { Details } from "./session-row/Details.js";
 
 // U3's three status filter chips. Deliberately only 3 of kanban.ts's 5
 // severity-derived columns (not "Finished"/"Idle") — matches the finding's
@@ -916,7 +913,20 @@ function ProjectHeader({
           className={collapsed ? "ws-group-chevron collapsed" : "ws-group-chevron"}
         />
         <FolderIcon size={15} />
-        <span className="project-row-name" title={project.cwd}>
+        <span
+          className="project-row-name"
+          // Sidebar declutter — the agent-rules presence icon (issue #431)
+          // used to sit in the header as its own always-on glyph; since it
+          // never changes state (it's just "does this project have rule
+          // files"), it's folded into this tooltip instead, alongside the
+          // cwd. The command palette's "Agent Rules: <project>" entry stays
+          // the actual click target — this was never interactive.
+          title={
+            project.ruleFiles.length > 0
+              ? `${project.cwd}\nAgent rules: ${project.ruleFiles.join(", ")}`
+              : project.cwd
+          }
+        >
           {project.name}
         </span>
         <span className={`project-git-dot ${gitDotClass}`} title={gitDotTitle} />
@@ -935,21 +945,6 @@ function ProjectHeader({
             {gitStatus.behind > 0 && (
               <span className="project-git-behind">↓{gitStatus.behind}</span>
             )}
-          </span>
-        )}
-        {/* Issue #431 — a lightweight presence indicator for this project's
-          agent-rules files, riding along on the same GET /api/projects
-          response as currentBranch above (see ruleFiles's own doc
-          comment on api.ts's Project). Non-interactive — the command
-          palette's "Agent Rules: <project>" entry is the click target;
-          this is purely a signal, so it doesn't compete with the row's
-          own collapse-on-click handler. */}
-        {project.ruleFiles.length > 0 && (
-          <span
-            className="project-rules-indicator"
-            title={`Agent rules: ${project.ruleFiles.join(", ")}`}
-          >
-            <FileTextIcon size={11} />
           </span>
         )}
         {/* Phase 4 (Gap F) — `project.conventionsHash` (Phase 3) is null
@@ -971,7 +966,10 @@ function ProjectHeader({
           </span>
         )}
         {attentionCount > 0 && <span className="project-attn-pill">{attentionCount}</span>}
-        <span className="project-session-count">{sessions.length}</span>
+        {/* Sidebar declutter — a project with no sessions at all doesn't need
+          a "0" sitting in its header; the plain count only earns its place
+          once there's something to count. */}
+        {sessions.length > 0 && <span className="project-session-count">{sessions.length}</span>}
         <button
           className="project-add-session"
           title={
@@ -1463,10 +1461,10 @@ function VirtualizedProjectTree({
 // priority over working/idle since it's the highest-value signal for an
 // unwatched dashboard.
 
-// describeEvent/describeLatestEvent (the kind/payload interpretation this
-// row's status line uses) moved to eventDescriptions.ts for #169, which
-// needed the exact same rules for its event-feed panel — see that module's
-// own doc comment.
+// describeEvent (the kind/payload interpretation this row's now-line —
+// lib/sessionNowLine.ts's deriveNowLine — and the notification panel both
+// build on) moved to eventDescriptions.ts for #169, which needed the same
+// rules for its own event-feed panel — see that module's own doc comment.
 
 // Row 3's expand/collapse toggle (issue #202) persists per session, same
 // single-localStorage-key convention as the sidebar's own collapse/width
@@ -1523,6 +1521,7 @@ export function SessionRow({
   onPromoted,
   alwaysExpandGit = false,
   showSubagents = true,
+  foldDetails = true,
   depth = 0,
 }: {
   session: Session;
@@ -1557,6 +1556,14 @@ export function SessionRow({
   // meant to stay flat (issue #195/5.5a), same opt-out shape as
   // alwaysExpandGit above, not a new mechanism.
   showSubagents?: boolean;
+  // Sidebar declutter — whether session-row/Details.tsx's files/background-
+  // tasks rows render only behind the details chevron (the sidebar's
+  // default) or always (LaneCard.tsx passes `false` to keep its own
+  // pre-existing "files and outstanding background tasks are always
+  // visible" kanban-card behavior — unlike git and agents, which were
+  // already gated behind their own toggle/showSubagents opt-out before this
+  // change, so they aren't affected by this flag).
+  foldDetails?: boolean;
   // Phase 5 (Track B, issue #195 5.5b) — how many levels deep this row
   // renders (project → session → child session, so only 0 or 1 is possible
   // today: nesting is capped at one level server-side, see
@@ -1590,23 +1597,28 @@ export function SessionRow({
   // eventsClient.ts), scoped to just this session's list. Selector-based so
   // a live event for a DIFFERENT session's list doesn't re-render this row.
   const sessionEvents = useDashboardStore((s) => s.events[session.id]);
-  const eventLine = describeLatestEvent(sessionEvents);
   const agentLogo = resolveAgentLogo(session.command, theme);
   const agentBinary = commandToBinary(session.command);
   const renameSession = useDashboardStore((s) => s.renameSession);
 
   // Row 4 (issue #177) — recent file changes, derived from the same
-  // sessionEvents slice as row 2's eventLine above (no separate fetch).
-  // Passed down to ./session-row/FileChanges.tsx as a prop rather than
-  // computed there — it stays here because sessionEvents (its input) is
-  // ALSO row 2's eventLine source above, so this can't become a
-  // FileChanges-only concern without either re-subscribing to the same
-  // store slice twice or splitting sessionEvents itself across two
-  // components. FileChanges owns `expandedFilePath` itself, though —
-  // nothing outside its own chip row + detail pairing ever reads that.
+  // sessionEvents slice the now-line (below) also reads. Passed down to
+  // ./session-row/Details.tsx as a prop rather than computed there — it
+  // stays here because sessionEvents (its input) is ALSO the now-line's own
+  // fallback-context source, so this can't become a Details-only concern
+  // without either re-subscribing to the same store slice twice or
+  // splitting sessionEvents itself across two components. `hiddenFileChanges`
+  // (sidebar declutter) is what's left over past FILE_CHANGE_MAX_SHOWN —
+  // Details.tsx renders it as a trailing "+N" so a session that touched more
+  // files than the cap says so instead of silently clipping.
+  const allFileChanges = useMemo(() => summarizeFileChanges(sessionEvents), [sessionEvents]);
   const fileChanges = useMemo(
-    () => summarizeFileChanges(sessionEvents).slice(0, FILE_CHANGE_MAX_SHOWN),
-    [sessionEvents],
+    () => allFileChanges.slice(0, FILE_CHANGE_MAX_SHOWN),
+    [allFileChanges],
+  );
+  const hiddenFileChanges = useMemo(
+    () => allFileChanges.slice(FILE_CHANGE_MAX_SHOWN),
+    [allFileChanges],
   );
 
   // Row 3's data (issue #202) — worktree/branch/PR/diff-stats. Selector-based
@@ -1737,6 +1749,30 @@ export function SessionRow({
   const showBackgroundTasksRow =
     backgroundTasksReachable && session.outstandingBackgroundTasks.length > 0;
 
+  // Sidebar declutter — the folded-state "now" line, replacing the old
+  // always-on eventLine (the latest describable NotificationEvent, however
+  // stale or content-free — "No longer needs attention" being the worst
+  // offender). See lib/sessionNowLine.ts for the full priority chain.
+  const nowLine = useMemo(
+    () => deriveNowLine(session, sessionEvents, title),
+    [session, sessionEvents, title],
+  );
+
+  // Sidebar declutter — whether the details chevron (Header.tsx's
+  // `hasDetails`) renders at all: is there ANYTHING session-row/Details.tsx
+  // would show. Files/background-tasks only count here when `foldDetails`
+  // (the sidebar's default) actually hides them behind the toggle — when a
+  // caller sets `foldDetails={false}` (LaneCard.tsx), those two already
+  // render unconditionally, so they shouldn't also make an otherwise-empty
+  // toggle appear.
+  const showSaidRow = session.lastAssistantMessage != null;
+  const detailsAvailable =
+    gitStatus != null ||
+    displayBranch != null ||
+    showSubagentsRow ||
+    showSaidRow ||
+    (foldDetails && (fileChanges.length > 0 || showBackgroundTasksRow));
+
   const presentation = STATUS_PRESENTATION[session.sessionStatus];
   const statusClass = rowClassNameForSeverity(session.sessionStatusSeverity);
   const dot = (
@@ -1839,7 +1875,7 @@ export function SessionRow({
           agentBinary={agentBinary}
           dot={dot}
           statusLabel={statusLabel}
-          gitStatus={gitStatus}
+          hasDetails={detailsAvailable}
           alwaysExpandGit={alwaysExpandGit}
           gitLineExpanded={gitLineExpanded}
           onToggleGitLineExpanded={toggleGitLineExpanded}
@@ -1855,12 +1891,14 @@ export function SessionRow({
           confirmBeforeKill={confirmBeforeKill}
           onConfirmEnd={handleEnd}
         />
-        {eventLine && (
-          <span
-            className={`session-event-line${eventLine.attention ? " attention" : ""}`}
-            title={eventLine.text}
-          >
-            {eventLine.text}
+        {/* Sidebar declutter — replaces the old always-on eventLine (the
+          latest describable NotificationEvent, however stale/content-free)
+          with the single most relevant "what is this session doing right
+          now" line. See lib/sessionNowLine.ts. */}
+        {nowLine && (
+          <span className={`session-now-line ${nowLine.tone}`} title={nowLine.text}>
+            {nowLine.text}
+            {nowLine.suffix && <span className="session-now-suffix"> · {nowLine.suffix}</span>}
           </span>
         )}
         {endError && (
@@ -1868,46 +1906,29 @@ export function SessionRow({
             {endError}
           </span>
         )}
-        {/* Single-line summary, not a second-tier "full" layout with its own
-          narrow variant: the sidebar's resizable width defaults to (and can
-          go no lower than) SIDEBAR_MIN_WIDTH (store.ts), so any JS width
-          threshold for hiding content here would either be unreachable or
-          hide content at the *default* width — neither is "shrinks when
-          space is tight." `.session-git-line`'s own `overflow: hidden` +
-          ellipsis (styles.css) is what actually delivers that: the line
-          truncates as the sidebar narrows, same as row 2's
-          `.session-event-line` already does. */}
-        {/* Show git info when the row is expanded AND there's either
-          per-session git status or a hook-reported liveBranch to show. */}
-        {gitExpanded && (gitStatus != null || displayBranch) ? (
-          <GitLine
-            gitStatus={gitStatus}
-            displayBranch={displayBranch}
-            worktreeLabel={worktreeLabel}
-            effectiveCwd={effectiveCwd}
-            matchedPr={matchedPr}
-            diffStats={diffStats}
-          />
-        ) : null}
-        {/* Row 4 (issue #177) — recent file changes from the structured hook
-          channel (Phase 2), not the git working-tree diff row 3 shows above.
-          Always visible once there's at least one file_change event, same
-          ungated posture as row 2 — not nested inside the git-details
-          toggle, since an agent can emit these without the session's cwd
-          even being a git repo. Owns its own expand/collapse state and the
-          expanded-diff fetch internally — see FileChanges.tsx. */}
-        <FileChanges sessionId={session.id} fileChanges={fileChanges} />
-        {/* Row 5 (Phase 5 Track A, #195/5.5a, subagents) and row 6 (issue
-          #428, background tasks) — both "always visible once there's
-          something to show" chip strips, gated on session.hookEmits via
-          isStatusReachable above (a sessionStatus.ts concern, so it stays
-          here rather than moving into Chips.tsx). See Chips.tsx. */}
-        <Chips
+        {/* Sidebar declutter — history (git/files/agents/last message), all
+          folded behind the row's details chevron by default (see
+          `detailsAvailable`/`gitExpanded` above and Header.tsx's toggle).
+          `foldDetails` is LaneCard.tsx's escape hatch to keep its own files/
+          background-tasks rows unconditionally visible, matching their
+          pre-existing kanban-card behavior. See session-row/Details.tsx. */}
+        <Details
+          open={gitExpanded}
           sessionId={session.id}
+          gitStatus={gitStatus}
+          displayBranch={displayBranch}
+          worktreeLabel={worktreeLabel}
+          effectiveCwd={effectiveCwd}
+          matchedPr={matchedPr}
+          diffStats={diffStats}
+          foldDetails={foldDetails}
+          fileChanges={fileChanges}
+          hiddenFileChanges={hiddenFileChanges}
           showSubagentsRow={showSubagentsRow}
           subagents={session.subagents}
           showBackgroundTasksRow={showBackgroundTasksRow}
           outstandingBackgroundTasks={session.outstandingBackgroundTasks}
+          lastAssistantMessage={session.lastAssistantMessage}
         />
       </div>
       {promoteOpen && (

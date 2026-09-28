@@ -153,6 +153,7 @@ const SESSION: Session = {
   attentionKind: null,
   errorDetail: null,
   lastAssistantMessage: null,
+  currentTodo: null,
   compactState: "idle",
   subagentCount: 0,
   subagents: [],
@@ -417,35 +418,54 @@ describe("SessionRow title display", () => {
   });
 });
 
-describe("SessionRow status line (issue #167)", () => {
-  it("renders no status line when the session has no events yet", () => {
+// Sidebar declutter — the old "status line" (issue #167's eventLine, showing
+// the latest describable NotificationEvent verbatim regardless of session
+// status) was replaced by lib/sessionNowLine.ts's `deriveNowLine`, which
+// picks the single most relevant thing to say given the session's OWN rich
+// status, using events only as supporting context (the in-progress todo,
+// last file touched, or — for a hookless session — the terminal title).
+// deriveNowLine's own priority-chain edge cases live in
+// lib/sessionNowLine.test.ts; this file only covers that SessionRow wires
+// the store's `events` slice and `session` into it correctly.
+describe("SessionRow now line", () => {
+  it("renders no now line when there's nothing to show", () => {
     const { container } = render(
-      <SessionRow session={makeSession({})} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+      <SessionRow
+        session={makeSession({ sessionStatus: "idle", lastAssistantMessage: null })}
+        project={PROJECT}
+        onOpen={vi.fn()}
+        onEnd={vi.fn()}
+      />,
     );
-    expect(container.querySelector(".session-event-line")).toBeNull();
+    expect(container.querySelector(".session-now-line")).toBeNull();
   });
 
-  it("shows the latest event's text, uncolored, for an idle-ish event", () => {
+  it("shows the last file touched while working, from a file_change event", () => {
     events = {
       1: [
         {
           seq: 1,
           sessionId: 1,
-          kind: "title_change",
+          kind: "file_change",
           ts: Date.now(),
-          payload: { title: "running tests" },
+          payload: { path: "src/a.ts", action: "modify" },
         },
       ],
     };
     const { container } = render(
-      <SessionRow session={makeSession({})} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+      <SessionRow
+        session={makeSession({ sessionStatus: "working" })}
+        project={PROJECT}
+        onOpen={vi.fn()}
+        onEnd={vi.fn()}
+      />,
     );
-    const line = container.querySelector(".session-event-line");
-    expect(line?.textContent).toBe("running tests");
-    expect(line?.classList.contains("attention")).toBe(false);
+    const line = container.querySelector(".session-now-line");
+    expect(line?.textContent).toBe("edited src/a.ts");
+    expect(line?.classList.contains("working")).toBe(true);
   });
 
-  it("shows the latest event's text, colored, for an attention event", () => {
+  it("shows the matching attention event's text, prefixed with a warning glyph, when the status needs attention", () => {
     events = {
       1: [
         {
@@ -453,71 +473,57 @@ describe("SessionRow status line (issue #167)", () => {
           sessionId: 1,
           kind: "attention",
           ts: Date.now(),
-          payload: { attention: true, signal: "bell" },
+          payload: { attention: true, signal: "hookNotification", title: "Needs a decision" },
         },
       ],
     };
     const { container } = render(
-      <SessionRow session={makeSession({})} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+      <SessionRow
+        session={makeSession({ sessionStatus: "needs_input", sessionStatusSeverity: "waiting" })}
+        project={PROJECT}
+        onOpen={vi.fn()}
+        onEnd={vi.fn()}
+      />,
     );
-    const line = container.querySelector(".session-event-line");
-    expect(line?.textContent).toBe("Bell");
+    const line = container.querySelector(".session-now-line");
+    expect(line?.textContent).toBe("⚠ Needs a decision");
     expect(line?.classList.contains("attention")).toBe(true);
   });
 
-  it("falls back to an earlier describable event when the latest event's shape isn't recognized", () => {
-    events = {
-      1: [
-        {
-          seq: 1,
-          sessionId: 1,
-          kind: "title_change",
-          ts: Date.now(),
-          payload: { title: "running tests" },
-        },
-        {
-          // A status_change with neither "exited" nor a recognized screen
-          // value describeEvent() returns null for — the line should still
-          // show the earlier title_change rather than going blank.
-          seq: 2,
-          sessionId: 1,
-          kind: "status_change",
-          ts: Date.now(),
-          payload: { reason: "something-not-yet-taught" },
-        },
-      ],
-    };
+  it("shows the agent's last message, quoted, once the turn is finished", () => {
     const { container } = render(
-      <SessionRow session={makeSession({})} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+      <SessionRow
+        session={makeSession({
+          sessionStatus: "finished",
+          sessionStatusSeverity: "done",
+          lastAssistantMessage: "All tests pass.",
+          lastTurnEndedAt: Date.now(),
+        })}
+        project={PROJECT}
+        onOpen={vi.fn()}
+        onEnd={vi.fn()}
+      />,
     );
-    const line = container.querySelector(".session-event-line");
-    expect(line?.textContent).toBe("running tests");
-    expect(line?.classList.contains("attention")).toBe(false);
+    const line = container.querySelector(".session-now-line");
+    expect(line?.textContent).toContain('"All tests pass."');
+    expect(line?.classList.contains("idle")).toBe(true);
   });
 
-  it("picks the highest-seq event when several are buffered for a session", () => {
-    events = {
-      1: [
-        {
-          seq: 1,
-          sessionId: 1,
-          kind: "title_change",
-          ts: Date.now() - 1000,
-          payload: { title: "older title" },
-        },
-        {
-          seq: 2,
-          sessionId: 1,
-          kind: "status_change",
-          ts: Date.now(),
-          payload: { reason: "exited" },
-        },
-      ],
-    };
+  it("renders no now line for an exited session", () => {
     const { container } = render(
-      <SessionRow session={makeSession({})} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+      <SessionRow
+        session={makeSession({
+          status: "exited",
+          sessionStatus: "exited",
+          sessionStatusSeverity: "gone",
+          lastAssistantMessage: "leftover message",
+        })}
+        project={PROJECT}
+        onOpen={vi.fn()}
+        onEnd={vi.fn()}
+      />,
     );
-    expect(container.querySelector(".session-event-line")?.textContent).toBe("Exited");
+    expect(container.querySelector(".session-now-line")).toBeNull();
   });
 });
 

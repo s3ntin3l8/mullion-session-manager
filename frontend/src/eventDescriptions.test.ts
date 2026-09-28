@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   describeEvent,
-  describeLatestEvent,
+  latestFileContext,
+  latestTitleContext,
   notifyKind,
   notifyLabel,
   notifySeverity,
@@ -823,20 +824,56 @@ describe("eventDescriptions (Phase 2, issue #176)", () => {
     });
   });
 
-  describe("describeLatestEvent — walks back through Phase 2 kinds too", () => {
-    it("prefers the newest describable event across mixed kinds", () => {
+  // Sidebar now-line (frontend/src/lib/sessionNowLine.ts) — standalone
+  // helpers factored out alongside sessionContextMap above: same file_change/
+  // session_diff/title_change cases, but returning a single "value after the
+  // last event" rather than a per-seq map (see each function's own doc
+  // comment for why they're separate, not a slice of sessionContextMap's own
+  // map).
+  describe("latestFileContext", () => {
+    it("returns null when there's no file_change or session_diff event", () => {
       const events: NotificationEvent[] = [
-        makeEvent({ seq: 1, kind: "file_change", payload: { path: "a.ts", action: "modify" } }),
-        makeEvent({
-          seq: 2,
-          kind: "review_gate",
-          payload: { state: "waiting", prompt: "Merge?" },
-        }),
+        makeEvent({ seq: 1, kind: "todo", payload: { content: "x", status: "pending" } }),
       ];
-      expect(describeLatestEvent(events)).toEqual({
-        text: "Waiting for review: Merge?",
-        attention: true,
-      });
+      expect(latestFileContext(events)).toBeNull();
+    });
+
+    it("returns the most recent file_change, ignoring an earlier session_diff", () => {
+      const events: NotificationEvent[] = [
+        makeEvent({ seq: 1, kind: "session_diff", payload: { files: [{ file: "b.ts" }] } }),
+        makeEvent({ seq: 2, kind: "file_change", payload: { path: "a.ts", action: "create" } }),
+      ];
+      expect(latestFileContext(events)).toBe("created a.ts");
+    });
+
+    it("falls back to session_diff when there's no file_change at all", () => {
+      const events: NotificationEvent[] = [
+        makeEvent({ seq: 1, kind: "session_diff", payload: { files: [{ file: "b.ts" }] } }),
+      ];
+      expect(latestFileContext(events)).toBe("changed b.ts");
+    });
+
+    it("sorts by seq before scanning, not array order", () => {
+      const events: NotificationEvent[] = [
+        makeEvent({ seq: 2, kind: "file_change", payload: { path: "b.ts", action: "modify" } }),
+        makeEvent({ seq: 1, kind: "file_change", payload: { path: "a.ts", action: "modify" } }),
+      ];
+      expect(latestFileContext(events)).toBe("edited b.ts");
+    });
+  });
+
+  describe("latestTitleContext", () => {
+    it("returns null when there's no title_change event", () => {
+      expect(latestTitleContext([], "my-session")).toBeNull();
+    });
+
+    it("returns the most recent title, skipping one that just repeats the label", () => {
+      const events: NotificationEvent[] = [
+        makeEvent({ seq: 1, kind: "title_change", payload: { title: "npm run dev" } }),
+        makeEvent({ seq: 2, kind: "title_change", payload: { title: "my-session" } }),
+      ];
+      // seq 2 repeats the label, so it doesn't overwrite the earlier real title.
+      expect(latestTitleContext(events, "my-session")).toBe("npm run dev");
     });
   });
 

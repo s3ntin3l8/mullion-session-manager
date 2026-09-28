@@ -400,7 +400,7 @@ describe("SessionRow row 3 — git details (issue #202)", () => {
     // SIDEBAR_MIN_WIDTH), so a JS threshold for hiding row 3 content would
     // either be unreachable or hide content at the *default* width. Row 3
     // is one line with CSS overflow/ellipsis truncation (same as row 2's
-    // .session-event-line) — this test asserts everything renders
+    // .session-now-line) — this test asserts everything renders
     // regardless of viewport, i.e. that no such gating crept back in.
     const session = makeRow3Session({ cwd: "/home/x/demo-worktrees/feature-x" });
     sessionGitStatuses = { [session.id]: { ...DIRTY_STATUS, branch: "feature/x" } };

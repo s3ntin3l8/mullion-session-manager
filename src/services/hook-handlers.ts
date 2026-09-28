@@ -119,6 +119,7 @@ export interface SessionHookContext {
   errorDetail: string | null;
 
   lastAssistantMessage: string | null;
+  currentTodo: { content: string; status: string } | null;
   lastTurnEndedAt: number | null;
   turnEndPingSent: boolean;
 
@@ -1010,6 +1011,17 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
         status: todo.status,
         priority: todo.priority,
       });
+      // Sidebar now-line — mirrors eventDescriptions.ts's sessionContextMap
+      // tracking: pending/in_progress sets the live currentTodo field,
+      // completed/cancelled clears it unconditionally (content-agnostic —
+      // TodoWrite's own completion fallback, forwarder-core.mjs's
+      // mapClaudeCodePostToolUse, can report a DIFFERENT item's content than
+      // whatever this is currently tracking, so a content match would miss).
+      if (todo.status === "pending" || todo.status === "in_progress") {
+        ctx.currentTodo = { content: todo.content, status: todo.status };
+      } else {
+        ctx.currentTodo = null;
+      }
     },
   ],
   [

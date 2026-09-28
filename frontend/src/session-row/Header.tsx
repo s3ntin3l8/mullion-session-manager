@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import type { GitStatus } from "../api/index.js";
 import { ConfirmButton } from "../ui/ConfirmButton.js";
 import { KebabMenu } from "../ui/KebabMenu.js";
 import {
@@ -44,7 +43,14 @@ export interface HeaderProps {
   agentBinary: string;
   dot: ReactNode;
   statusLabel: ReactNode;
-  gitStatus: GitStatus | null | undefined;
+  // Sidebar declutter — the chevron now toggles ALL of SessionRow's history
+  // sections (session-row/Details.tsx: git/files/agents/said), not just git
+  // as the surrounding prop names' history suggests (`alwaysExpandGit`/
+  // `gitLineExpanded` kept as-is rather than renamed detail-generic — see
+  // SessionRow's own comment). `hasDetails` is "is there ANYTHING to show",
+  // computed across every section (SessionRow's `detailsAvailable`), which
+  // is what actually decides whether the toggle renders at all.
+  hasDetails: boolean;
   alwaysExpandGit: boolean;
   gitLineExpanded: boolean;
   onToggleGitLineExpanded: () => void;
@@ -76,7 +82,7 @@ export function Header({
   agentBinary,
   dot,
   statusLabel,
-  gitStatus,
+  hasDetails,
   alwaysExpandGit,
   gitLineExpanded,
   onToggleGitLineExpanded,
@@ -156,17 +162,20 @@ export function Header({
         </span>
       )}
       {statusLabel}
-      {/* Row 3's toggle (issue #202) — only rendered once there's a fetched,
-        non-null git status for this session's effective cwd; "nothing to
-        show" (not a repo, or not fetched yet) means no toggle at all, not a
-        toggle that expands to an empty row. Suppressed entirely when
-        `alwaysExpandGit` is set (a caller with room to always show
-        details) — there's nothing to toggle then. */}
-      {gitStatus != null && !alwaysExpandGit && (
+      {/* Sidebar declutter — was row 3's git-only toggle (issue #202); now
+        gates every history section session-row/Details.tsx renders (git,
+        files, agents, the agent's last message), not just git. `hasDetails`
+        (SessionRow's own `detailsAvailable`) is "is there ANYTHING to show",
+        computed across all those sections — "nothing to show" means no
+        toggle at all, not one that expands to an empty row. Suppressed
+        entirely when `alwaysExpandGit` is set (a caller with room to always
+        show details) — there's nothing to toggle then. */}
+      {hasDetails && !alwaysExpandGit && (
         <span onClick={(e) => e.stopPropagation()}>
           <button
             className="session-git-toggle"
-            title={gitLineExpanded ? "Hide git details" : "Show git details"}
+            title={gitLineExpanded ? "Hide details" : "Show details"}
+            aria-expanded={gitLineExpanded}
             onClick={onToggleGitLineExpanded}
           >
             <ChevronDownIcon

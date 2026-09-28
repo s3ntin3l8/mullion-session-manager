@@ -4463,6 +4463,79 @@ describe("PtyManager", () => {
       });
     });
 
+    // Sidebar now-line (frontend's lib/sessionNowLine.ts) — currentTodo is a
+    // live SessionInfo field, not just an event: it's what the now-line reads
+    // for "what is this session working on", since the event itself can fall
+    // out of the events ring buffer (EVENTS_MAX) while the task is still
+    // running.
+    it("todo: sets currentTodo on pending/in_progress, and clears it unconditionally on a terminal status", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "claude",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      session.emitHookEvent({
+        kind: "todo",
+        content: "Fix the bug",
+        status: "pending",
+        priority: "high",
+      });
+      expect(session.toInfo().currentTodo).toEqual({ content: "Fix the bug", status: "pending" });
+
+      session.emitHookEvent({
+        kind: "todo",
+        content: "Fix the bug",
+        status: "in_progress",
+        priority: "high",
+      });
+      expect(session.toInfo().currentTodo).toEqual({
+        content: "Fix the bug",
+        status: "in_progress",
+      });
+
+      session.emitHookEvent({
+        kind: "todo",
+        content: "Fix the bug",
+        status: "completed",
+        priority: "high",
+      });
+      expect(session.toInfo().currentTodo).toBeNull();
+    });
+
+    it("todo: a terminal update clears currentTodo even when it names a different item (forwarder-core.mjs's own completion fallback can)", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "claude",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      session.emitHookEvent({
+        kind: "todo",
+        content: "Task A",
+        status: "in_progress",
+        priority: "high",
+      });
+      expect(session.toInfo().currentTodo?.content).toBe("Task A");
+
+      // The last remaining todo in the call, not necessarily the one
+      // currently tracked — same content-agnostic clear as
+      // eventDescriptions.ts's own sessionContextMap.
+      session.emitHookEvent({
+        kind: "todo",
+        content: "Task B",
+        status: "completed",
+        priority: "low",
+      });
+      expect(session.toInfo().currentTodo).toBeNull();
+    });
+
     it("session_diff: emits a session_diff event carrying the file list", async () => {
       const session = manager.getOrCreate({
         id: "1",

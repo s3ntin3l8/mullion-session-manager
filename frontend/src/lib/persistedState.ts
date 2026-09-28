@@ -88,6 +88,13 @@ export const STORAGE_KEYS = {
   projectCollapsed: "crs.projectCollapsed",
   expandedSessionRows: "crs.expandedSessionRows",
   expandedSubagentRows: "crs.expandedSubagentRows",
+  // Sidebar now-line — separate from expandedSubagentRows above: that key
+  // tracks each individual finished chip's own summary expand, this tracks
+  // whether the "N done" summary toggle itself is open, revealing that list
+  // at all. Keyed by bare sessionId, not the `${sessionId}:${agentId}`
+  // composite expandedSubagentRows uses — there's exactly one toggle per
+  // session, not one per subagent (see Chips.tsx).
+  expandedSubagentHistory: "crs.expandedSubagentHistory",
   sourceControlCollapsed: "crs.sourceControlCollapsed",
   taskDrawerWidth: "crs.taskDrawerWidth",
   taskProjectFilter: "crs.taskProjectFilter",
