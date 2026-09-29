@@ -97,6 +97,13 @@ const MORE_KEY = "More";
 // focus was elsewhere) before the tap, TerminalPane.tsx's own registered
 // handle explicitly (re)focuses the terminal itself (Hermes review, PR #616
 // round 2), so a tap's effect is never silently invisible.
+//
+// The inline object type is deliberate, not laziness: React's own
+// `PointerEvent` is structurally compatible (its `preventDefault` is the
+// only member this reads), so a bare `onPointerDown={keepFocus}` would
+// typecheck just as well. The `(event) => { keepFocus(event); ... }`
+// wrappers below exist so each can also record press state — not because
+// the type demands a wrapper. (Hermes review, PR #1488.)
 const keepFocus = (e: { preventDefault: () => void }) => e.preventDefault();
 
 export function MobileKeyBar({ sessionId }: MobileKeyBarProps) {

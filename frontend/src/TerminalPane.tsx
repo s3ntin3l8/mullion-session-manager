@@ -2305,6 +2305,11 @@ export function TerminalPane(props: {
             // this just survives a future reordering of the two.
             const liveTerm = termRef.current;
             if (liveTerm) setCopyModeSheet(copySheetSnapshot(liveTerm, "Scrollback"));
+            // Deliberately NOT inside the `if` above: the bar closes either
+            // way. A null term means "nothing to show", not "leave the bar
+            // hanging open over a Terminal that was never mounted" — moving
+            // this line up into the `if` would resurrect exactly that edge
+            // case. (Hermes review, PR #1488.)
             setFindOpen(false);
           }}
           onClose={() => setFindOpen(false)}
