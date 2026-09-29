@@ -12,6 +12,7 @@ function renderBar(overrides: Partial<Parameters<typeof TerminalFindBar>[0]> = {
     matchState: null,
     findInputRef: createRef<HTMLInputElement>(),
     onRunSearch: vi.fn(),
+    onOpenScrollback: vi.fn(),
     onClose: vi.fn(),
     ...overrides,
   };
@@ -65,5 +66,11 @@ describe("TerminalFindBar", () => {
     const props = renderBar();
     await userEvent.click(screen.getByTitle("Close (Esc)"));
     expect(props.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("'View scrollback as text' button calls onOpenScrollback", async () => {
+    const props = renderBar();
+    await userEvent.click(screen.getByRole("button", { name: "View scrollback as text" }));
+    expect(props.onOpenScrollback).toHaveBeenCalledTimes(1);
   });
 });
