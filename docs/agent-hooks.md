@@ -788,6 +788,29 @@ decision object on stdout, the shared forwarder now always prints `{}` to
 stdout right before exiting (harmless for Claude Code/Codex, which don't
 require or forbid any stdout output).
 
+**Plan auto-approval under skip-permissions (observed 2026-09-30).** Since
+roughly 2026-09-13 (an agy update; it isn't in agy's changelog), launching agy
+with `--dangerously-skip-permissions` also makes agy's own Artifact Review
+policy behave as "always proceeds": once the agent writes an
+`implementation_plan` artifact and tries to stop, agy injects `Stop hook
+blocked termination: The user has automatically approved the artifact through
+their review policy. Proceed to execution.` and the agent carries on
+implementing. This is agy's internal behavior, not Mullion's — the Stop hook
+Mullion registers only ever prints `{}` and has no way to block or continue a
+Stop. Before that date, agent plans launched the same way waited for review.
+
+It only matters once a session is in **plan mode**: Mullion launches agy with
+`--mode accept-edits` (`SKIP_PERMISSION_FLAGS` in `launch-plan.ts`), so a
+session only gets there when someone switches to it by hand.
+
+To keep plan review under skip-permissions, set agy's `/config` → **Artifact
+Review** to `asks for review`; verified to make a skip-permissions plan-mode
+session hold at the plan. agy 1.2.14 has no CLI flag or env var for this, and
+the setting is host-global — it applies to every agy launch on the host,
+including Task Master workers. (agy did not write an `artifactReviewPolicy`
+key into `~/.gemini/antigravity-cli/settings.json` when it was set this way,
+so don't rely on that file to inspect or provision it.)
+
 ### Skills Manager: agy skills are listed, never toggleable (issue #467)
 
 The Skills Manager (`docs/roadmap.md`'s Phase-adjacent work, `#432`/`#463`)
