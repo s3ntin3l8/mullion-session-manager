@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { AndroidKeyEventMeta } from "@yume-chan/scrcpy";
 import { DevicePane } from "./DevicePane.js";
 import type { Device } from "./api/index.js";
 import { jsonResponse } from "./test/jsonResponse.js";
@@ -396,11 +397,10 @@ describe("DevicePane (issue #1326)", () => {
       expect(sent()).toHaveLength(1);
     });
 
-    it("maps Ctrl/Cmd+C and +X to the device's COPY/CUT keycodes; other chords type nothing", () => {
+    it("maps Ctrl/Cmd+C and +X to the device's COPY/CUT keycodes with no metaState (no regression)", () => {
       const { sent, key } = setup();
       expect(key({ key: "c", ctrlKey: true }).defaultPrevented).toBe(true);
       key({ key: "X", metaKey: true });
-      key({ key: "a", ctrlKey: true });
       expect(sent()).toEqual([
         { type: "keyEvent", androidKeyCode: 278, action: "down" },
         { type: "keyEvent", androidKeyCode: 278, action: "up" },
@@ -409,11 +409,95 @@ describe("DevicePane (issue #1326)", () => {
       ]);
     });
 
+    it("swallows a non-alphanumeric chord (e.g. Ctrl+/) rather than typing it", () => {
+      const { sent, key } = setup();
+      expect(key({ key: "/", ctrlKey: true }).defaultPrevented).toBe(true);
+      expect(sent()).toEqual([]);
+    });
+
     it("still types AltGr characters (reported as ctrl+alt on Windows)", () => {
       const { sent, key } = setup();
       const event = key({ key: "@", ctrlKey: true, altKey: true });
       expect(event.defaultPrevented).toBe(true);
       expect(sent()).toEqual([{ type: "text", text: "@" }]);
+    });
+
+    describe("modifier chords and selection keys (metaState, issue #1422)", () => {
+      const CTRL_BITS = AndroidKeyEventMeta.Ctrl | AndroidKeyEventMeta.CtrlLeft;
+      const SHIFT_BITS = AndroidKeyEventMeta.Shift | AndroidKeyEventMeta.ShiftLeft;
+
+      it("Ctrl+A sends KEYCODE_A with the Ctrl meta bits set", () => {
+        const { sent, key } = setup();
+        expect(key({ key: "a", ctrlKey: true }).defaultPrevented).toBe(true);
+        expect(sent()).toEqual([
+          { type: "keyEvent", androidKeyCode: 29, action: "down", metaState: CTRL_BITS },
+          { type: "keyEvent", androidKeyCode: 29, action: "up", metaState: CTRL_BITS },
+        ]);
+      });
+
+      it("Cmd+A (metaKey, not ctrlKey) sends the same Ctrl meta bits", () => {
+        const { sent, key } = setup();
+        key({ key: "a", metaKey: true });
+        expect(sent()).toEqual([
+          { type: "keyEvent", androidKeyCode: 29, action: "down", metaState: CTRL_BITS },
+          { type: "keyEvent", androidKeyCode: 29, action: "up", metaState: CTRL_BITS },
+        ]);
+      });
+
+      it("Ctrl+1 sends KEYCODE_1 with the Ctrl meta bits set (digit mapping)", () => {
+        const { sent, key } = setup();
+        key({ key: "1", ctrlKey: true });
+        expect(sent()).toEqual([
+          { type: "keyEvent", androidKeyCode: 8, action: "down", metaState: CTRL_BITS },
+          { type: "keyEvent", androidKeyCode: 8, action: "up", metaState: CTRL_BITS },
+        ]);
+      });
+
+      it("Ctrl+Shift+Z sends KEYCODE_Z with both Ctrl and Shift meta bits", () => {
+        const { sent, key } = setup();
+        key({ key: "Z", ctrlKey: true, shiftKey: true });
+        expect(sent()).toEqual([
+          {
+            type: "keyEvent",
+            androidKeyCode: 54,
+            action: "down",
+            metaState: CTRL_BITS | SHIFT_BITS,
+          },
+          {
+            type: "keyEvent",
+            androidKeyCode: 54,
+            action: "up",
+            metaState: CTRL_BITS | SHIFT_BITS,
+          },
+        ]);
+      });
+
+      it("Shift+ArrowLeft sends KEYCODE_DPAD_LEFT with the Shift meta bit (extends a selection)", () => {
+        const { sent, key } = setup();
+        expect(key({ key: "ArrowLeft", shiftKey: true }).defaultPrevented).toBe(true);
+        expect(sent()).toEqual([
+          { type: "keyEvent", androidKeyCode: 21, action: "down", metaState: SHIFT_BITS },
+          { type: "keyEvent", androidKeyCode: 21, action: "up", metaState: SHIFT_BITS },
+        ]);
+      });
+
+      it("plain ArrowLeft (no shift) sends KEYCODE_DPAD_LEFT with metaState 0", () => {
+        const { sent, key } = setup();
+        key({ key: "ArrowLeft" });
+        expect(sent()).toEqual([
+          { type: "keyEvent", androidKeyCode: 21, action: "down", metaState: 0 },
+          { type: "keyEvent", androidKeyCode: 21, action: "up", metaState: 0 },
+        ]);
+      });
+
+      it("Shift+Enter still sends plain KEYCODE_ENTER with metaState 0 (Enter is deliberately not shift-aware)", () => {
+        const { sent, key } = setup();
+        key({ key: "Enter", shiftKey: true });
+        expect(sent()).toEqual([
+          { type: "keyEvent", androidKeyCode: 66, action: "down", metaState: 0 },
+          { type: "keyEvent", androidKeyCode: 66, action: "up", metaState: 0 },
+        ]);
+      });
     });
 
     it("writes device clipboard text to the host clipboard only while the tab is focused", () => {

@@ -5,7 +5,7 @@ import {
   WebGLVideoFrameRenderer,
 } from "@yume-chan/scrcpy-decoder-webcodecs";
 import type { ScrcpyMediaStreamPacket } from "@yume-chan/scrcpy";
-import { ScrcpyVideoCodecId } from "@yume-chan/scrcpy";
+import { AndroidKeyEventMeta, ScrcpyVideoCodecId } from "@yume-chan/scrcpy";
 import {
   CheckIcon,
   ChevronLeftIcon,
@@ -76,6 +76,43 @@ const TOOLBAR_ICON = { size: 18, strokeWidth: 1.8 } as const;
 // the device's clipboard stream reports it back).
 const KEYCODE_COPY = 278;
 const KEYCODE_CUT = 277;
+
+// scrcpy's own desktop client (keyboard_sdk.c's autocomplete_metastate) sets
+// BOTH the specific Left/Right bit for whichever key was held AND the
+// generic bit, since some apps check one and some the other. We don't
+// distinguish left/right Ctrl or Shift here (KeyboardEvent doesn't give us a
+// reliable side for a chord), so default to the Left variant — true for most
+// keyboards, and functionally identical to Right for every app that only
+// checks the generic bit.
+//
+// Both ctrlKey and metaKey (Cmd on a Mac keyboard) map to this SAME Android
+// Ctrl bitmask: Android keyboard shortcuts (Ctrl+A, Ctrl+C, Ctrl+Z, ...) are
+// Ctrl-based even when sent from a Mac client — there is no separate "Cmd"
+// concept on the device side.
+const CTRL_META_BITS = AndroidKeyEventMeta.Ctrl | AndroidKeyEventMeta.CtrlLeft;
+const SHIFT_META_BITS = AndroidKeyEventMeta.Shift | AndroidKeyEventMeta.ShiftLeft;
+
+// AOSP KEYCODE_* for KeyboardEvent.key values with no printable character of
+// their own — one table rather than a separate special-cased `if` per key.
+// `shiftAware` entries additionally forward Shift's meta bit: arrow/Tab/
+// Home/End/Delete selection gestures (e.g. Shift+ArrowLeft to extend a
+// selection, alongside the new Ctrl+A) rely on it. Backspace/Enter
+// deliberately do NOT forward Shift — a bare Enter and a Shift+Enter mean
+// different things in many apps (send vs. newline), and this table must not
+// change that pre-existing behavior.
+const NAMED_KEYS: Record<string, { code: number; shiftAware: boolean }> = {
+  Backspace: { code: 67, shiftAware: false }, // AOSP KEYCODE_DEL
+  Enter: { code: 66, shiftAware: false }, // AOSP KEYCODE_ENTER
+  ArrowLeft: { code: 21, shiftAware: true },
+  ArrowRight: { code: 22, shiftAware: true },
+  ArrowUp: { code: 19, shiftAware: true },
+  ArrowDown: { code: 20, shiftAware: true },
+  Tab: { code: 61, shiftAware: true },
+  Delete: { code: 112, shiftAware: true },
+  Escape: { code: 111, shiftAware: true },
+  Home: { code: 122, shiftAware: true },
+  End: { code: 123, shiftAware: true },
+};
 
 // Async Clipboard API image write needs a secure context (HTTPS/localhost),
 // ClipboardItem and clipboard.write — hide the copy button rather than show
@@ -559,6 +596,13 @@ export function DevicePane(props: {
     canvas.addEventListener("wheel", onWheel, { passive: false });
     canvas.addEventListener("contextmenu", onContextMenu);
 
+    // Sends a keyEvent down+up pair with the given AOSP KEYCODE_* and
+    // AndroidKeyEventMeta bitmask (0 for "no modifiers").
+    function sendKeyEvent(androidKeyCode: number, metaState: number) {
+      sendControl({ type: "keyEvent", androidKeyCode, action: "down", metaState });
+      sendControl({ type: "keyEvent", androidKeyCode, action: "up", metaState });
+    }
+
     const onKeyDown = (event: KeyboardEvent) => {
       // Ctrl/Cmd chords must never fall through to the printable-key branch
       // below (Ctrl+V used to type a literal "v"). AltGr reports as
@@ -573,28 +617,39 @@ export function DevicePane(props: {
         if (key === "v") return;
         event.preventDefault();
         if (key === "c" || key === "x") {
+          // No metaState here — deliberately unchanged from before this
+          // component sent metaState at all, since KEYCODE_COPY/CUT already
+          // unambiguously encode the operation.
           const androidKeyCode = key === "c" ? KEYCODE_COPY : KEYCODE_CUT;
           sendControl({ type: "keyEvent", androidKeyCode, action: "down" });
           sendControl({ type: "keyEvent", androidKeyCode, action: "up" });
+          return;
+        }
+        // Any other single alphanumeric chord (Ctrl+A select-all, Ctrl+Z
+        // undo, Ctrl+Shift+Z redo, Ctrl+1..9, ...) — map to the AOSP
+        // KEYCODE_* for that letter/digit and forward it with the Ctrl meta
+        // bit (see CTRL_META_BITS above), folding in Shift's bit too. A
+        // non-alphanumeric chord (e.g. Ctrl+/) has no mapping here and is
+        // swallowed, same as every chord was before this change.
+        let androidKeyCode: number | null = null;
+        if (key.length === 1 && key >= "a" && key <= "z") {
+          // KEYCODE_A(29)..KEYCODE_Z(54) map linearly from 'a'.
+          androidKeyCode = 29 + (key.charCodeAt(0) - "a".charCodeAt(0));
+        } else if (key.length === 1 && key >= "0" && key <= "9") {
+          // KEYCODE_0(7)..KEYCODE_9(16) map linearly from '0'.
+          androidKeyCode = 7 + (key.charCodeAt(0) - "0".charCodeAt(0));
+        }
+        if (androidKeyCode !== null) {
+          const metaState = CTRL_META_BITS | (event.shiftKey ? SHIFT_META_BITS : 0);
+          sendKeyEvent(androidKeyCode, metaState);
         }
         return;
       }
-      if (event.key === "Backspace") {
+      const named = NAMED_KEYS[event.key];
+      if (named) {
         event.preventDefault();
-        // AOSP KEYCODE_DEL — the one key worth a dedicated, ergonomic
-        // mapping here; a full browser-key-to-AOSP-keycode table is out of
-        // scope for this component (use the `text` action for everything
-        // else typeable, and the MCP/CLI `key` action for anything needing
-        // a specific KEYCODE_*).
-        sendControl({ type: "keyEvent", androidKeyCode: 67, action: "down" });
-        sendControl({ type: "keyEvent", androidKeyCode: 67, action: "up" });
-        return;
-      }
-      if (event.key === "Enter") {
-        event.preventDefault();
-        // AOSP KEYCODE_ENTER
-        sendControl({ type: "keyEvent", androidKeyCode: 66, action: "down" });
-        sendControl({ type: "keyEvent", androidKeyCode: 66, action: "up" });
+        const metaState = named.shiftAware && event.shiftKey ? SHIFT_META_BITS : 0;
+        sendKeyEvent(named.code, metaState);
         return;
       }
       if (event.key.length === 1) {

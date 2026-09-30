@@ -62,7 +62,7 @@ mullion project list|actions|dock|tooling
 mullion preview create|get|delete|list
 mullion dock start|stop|list
 mullion device list|create|pair|discovered|pair-and-connect|connect|start|
-               stop|delete|screenshot|tap|swipe|text|key|logcat
+               stop|delete|screenshot|tap|swipe|text|key|logcat|clipboard
 mullion bundle status|resync|remove
 mullion events tail
 mullion history [--session <id>] [--kind <k>] [--since <ms>] [--until <ms>]
@@ -266,6 +266,13 @@ sessionId), not scoped to any project or session.
 - `device text <id> <text...>`
 - `device key <id> <androidKeyCode>`
 - `device logcat <id> [--lines <n>] [--filter <expr>]`
+- `device clipboard get <id>` — prints the device's last-known clipboard text
+  (empty if nothing has been copied or set this session). Answers from a
+  cache, never a live round-trip — see
+  [`docs/device-panel.md`](device-panel.md#1-mullion-device-cli) for why.
+- `device clipboard set <id> <text...> [--paste]` — sets the device clipboard
+  via the scrcpy control channel; `--paste` also simulates a paste after
+  setting it.
 
 `x`/`y` are in the device's native **screen pixels** — the same space as a
 `screenshot`, and independent of the (downscaled) live-panel stream. Every verb

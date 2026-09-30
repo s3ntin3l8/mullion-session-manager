@@ -97,6 +97,7 @@ let mockClipboardStream: ReadableStream<string> | undefined;
 const mockController = {
   injectText: vi.fn(async () => {}),
   resetVideo: vi.fn(async () => {}),
+  setClipboard: vi.fn(async () => {}),
 };
 // `exited` deliberately never resolves by default — a test that wants to
 // exercise handleExit() replaces this before calling spawn().
@@ -313,6 +314,7 @@ beforeEach(() => {
   mockScrcpyClose.mockClear();
   mockController.injectText.mockClear();
   mockController.resetVideo.mockClear();
+  mockController.setClipboard.mockClear();
   mockWirelessConnectAlreadyConnected = false;
   mockWirelessConnectError = null;
   mockWirelessPair.mockClear();
@@ -1144,6 +1146,97 @@ describe("DeviceManager", () => {
       mockClipboardStream = undefined;
       const device = await spawnDevice();
       expect(device.isAlive).toBe(true);
+    });
+
+    // `lastClipboard`/`setClipboard()` are a DELIBERATELY separate contract
+    // from `onClipboard()`'s live-only subscription above — see
+    // clipboardCache's own doc comment (device-manager.ts). These tests
+    // cover the one-shot action endpoint's `clipboard get`/`set` verbs
+    // (routes/devices.ts), not the live WS panel.
+    describe("lastClipboard cache (issue #1422)", () => {
+      it("starts null, then reflects a value the device's own clipboard stream delivers", async () => {
+        let push!: (text: string) => void;
+        mockClipboardStream = new ReadableStream<string>({
+          start(controller) {
+            push = (text) => controller.enqueue(text);
+          },
+        });
+        const device = await spawnDevice();
+        expect(device.lastClipboard).toBeNull();
+
+        push("copied on device");
+        await vi.waitFor(() => expect(device.lastClipboard).toBe("copied on device"));
+      });
+
+      it("setClipboard writes via the controller (sequence 0n, fire-and-forget) and updates the cache immediately", async () => {
+        const device = await spawnDevice();
+        expect(device.lastClipboard).toBeNull();
+
+        await device.setClipboard("hello from host", true);
+
+        expect(mockController.setClipboard).toHaveBeenCalledWith({
+          sequence: 0n,
+          paste: true,
+          content: "hello from host",
+        });
+        expect(device.lastClipboard).toBe("hello from host");
+      });
+
+      it("setClipboard defaults paste as given by the caller and does not update the cache on a rejected write", async () => {
+        const device = await spawnDevice();
+        mockController.setClipboard.mockRejectedValueOnce(new Error("control socket closed"));
+
+        await expect(device.setClipboard("should not stick", false)).rejects.toThrow(
+          "control socket closed",
+        );
+        expect(device.lastClipboard).toBeNull();
+      });
+
+      it("setClipboard throws when no scrcpy controller is live yet", async () => {
+        mockDeviceList = [{ serial: "emulator-5554" }];
+        const manager = new DeviceManager(baseOpts());
+        const device = await manager.getOrCreate({
+          id: "1",
+          kind: "emulator",
+          avdName: "dev35",
+          serial: null,
+          label: null,
+          port: null,
+        });
+        // Deliberately NOT awaiting "streaming" — `controller` is undefined
+        // during the boot window between adb coming up and scrcpy attaching.
+        await expect(device.setClipboard("x", false)).rejects.toThrow(
+          "no live scrcpy control connection",
+        );
+        // Clean up the marker file kill()'s teardown removes — this test
+        // never reaches "streaming" naturally, and a later test reusing id
+        // "1" would otherwise hit the isScopeAlive() "left running from
+        // before a restart" guard against this test's own leftover marker.
+        await device.kill();
+      });
+
+      it("does NOT replay lastClipboard to a late onClipboard subscriber — the no-replay contract stays live-only", async () => {
+        let push!: (text: string) => void;
+        mockClipboardStream = new ReadableStream<string>({
+          start(controller) {
+            push = (text) => controller.enqueue(text);
+          },
+        });
+        const device = await spawnDevice();
+        push("stream value");
+        await vi.waitFor(() => expect(device.lastClipboard).toBe("stream value"));
+
+        await device.setClipboard("set value", false);
+        expect(device.lastClipboard).toBe("set value");
+
+        // Both writes to the CACHE happened, but a new subscriber gets
+        // neither — same #1251 bug class onClipboard's own no-replay test
+        // above already covers for the stream-only case.
+        const late = vi.fn();
+        device.onClipboard(late);
+        await new Promise((r) => setTimeout(r, 20));
+        expect(late).not.toHaveBeenCalled();
+      });
     });
   });
 

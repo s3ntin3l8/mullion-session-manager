@@ -291,6 +291,32 @@ GET /ws/browser/:sessionId
 - **Binary Frame Streaming:** Playwright captures page screenshot frames (`page.screenshot()`) and streams them down to the client as raw JPEG binary blobs.
 - **Backpressure Handling:** To prevent network flooding and buffering lag, Mullion monitors socket queue size (`BACKPRESSURE_MAX_BUFFERED_BYTES = 4MB`). If client rendering falls behind, newer frames are dropped rather than queued.
 - **Event Proxying:** Mouse clicks, movements, scroll wheels, and key events are serialized in the frontend and sent up to the WebSocket server, which replays them using Playwright's `page.mouse` and `page.keyboard` input APIs.
+- **Clipboard sync:** Three additional message types cover paste/copy/cut,
+  gated behind an explicit user gesture inside the pane rather than any
+  generic clipboard mirroring:
+  - `{type: "clipboard", text}` (client → server): a host paste
+    (Ctrl/Cmd+V), captured by the client's own `paste` DOM event, not by
+    forwarding the raw keystroke — the server calls `page.keyboard.insertText()`.
+    Text is capped at the same byte limit the device clipboard feature uses
+    (`docs/device-panel.md`) to bound the payload.
+  - `{type: "copy"}` / `{type: "cut"}` (client → server): sent only from the
+    client's own keydown handler on an explicit Ctrl/Cmd+C or +X inside the
+    pane. The server reads the page's current selection via `page.evaluate()`
+    _before_ pressing the real key (a cut destroys the selection), replies
+    with `{type: "clipboard", text}` if non-empty, then presses
+    `Control+c`/`Control+x` so the page's own copy/cut handlers (and, for
+    cut, the deletion) still run.
+  - `{type: "clipboard", text}` (server → client): the reply to the above,
+    written to the host clipboard by the client only while the tab has
+    focus.
+  - **Main-frame only:** the selection read for copy/cut does not reach into
+    a cross-origin iframe — see
+    [issue #1477](https://github.com/s3ntin3l8/mullion-session-manager/issues/1477).
+  - **By design, not a gap:** a page's own clipboard writes (e.g. its own
+    `navigator.clipboard.writeText()` call, or an in-page "Copy" button) are
+    never synced to the host — only an explicit Ctrl/Cmd+C/+X gesture inside
+    the pane triggers a copy/cut read. See
+    [issue #1478](https://github.com/s3ntin3l8/mullion-session-manager/issues/1478).
 
 ---
 

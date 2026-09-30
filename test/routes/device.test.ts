@@ -520,7 +520,7 @@ describe("device route (/ws/device/:deviceId)", () => {
       socket.emit("message", Buffer.from(JSON.stringify({ type: "text", text: "hello" })), false);
       await vi.waitFor(() => expect(mockController.injectText).toHaveBeenCalledWith("hello"));
 
-      // 5. keyEvent
+      // 5. keyEvent — metaState absent defaults to 0
       socket.emit(
         "message",
         Buffer.from(JSON.stringify({ type: "keyEvent", androidKeyCode: 4, action: "down" })),
@@ -532,6 +532,45 @@ describe("device route (/ws/device/:deviceId)", () => {
         false,
       );
       await vi.waitFor(() => expect(mockController.injectKeyCode).toHaveBeenCalledTimes(2));
+      expect(mockController.injectKeyCode).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ keyCode: 4, metaState: 0 }),
+      );
+
+      // 5b. keyEvent — an explicit metaState (e.g. the Ctrl meta bits a
+      // chord sets) is parsed and forwarded unchanged.
+      socket.emit(
+        "message",
+        Buffer.from(
+          JSON.stringify({ type: "keyEvent", androidKeyCode: 29, action: "down", metaState: 4096 }),
+        ),
+        false,
+      );
+      await vi.waitFor(() => expect(mockController.injectKeyCode).toHaveBeenCalledTimes(3));
+      expect(mockController.injectKeyCode).toHaveBeenNthCalledWith(
+        3,
+        expect.objectContaining({ keyCode: 29, metaState: 4096 }),
+      );
+
+      // 5c. an invalid metaState (negative, non-integer, or over a u32) drops
+      // the whole message rather than dispatching it — a valid sentinel
+      // right after confirms none of the three invalid ones were dispatched
+      // (call count rises by exactly one, not four).
+      for (const metaState of [-1, 1.5, 0x100000000]) {
+        socket.emit(
+          "message",
+          Buffer.from(
+            JSON.stringify({ type: "keyEvent", androidKeyCode: 4, action: "down", metaState }),
+          ),
+          false,
+        );
+      }
+      socket.emit(
+        "message",
+        Buffer.from(JSON.stringify({ type: "keyEvent", androidKeyCode: 4, action: "down" })),
+        false,
+      );
+      await vi.waitFor(() => expect(mockController.injectKeyCode).toHaveBeenCalledTimes(4));
 
       // 6. back
       socket.emit("message", Buffer.from(JSON.stringify({ type: "back" })), false);
@@ -612,10 +651,18 @@ describe("device route (/ws/device/:deviceId)", () => {
       const send = (socket: MockWebSocket, msg: unknown) =>
         socket.emit("message", Buffer.from(JSON.stringify(msg)), false);
 
-      it("pastes host clipboard text via setClipboard (no ACK sequence)", async () => {
+      it("pastes host clipboard text via Device.setClipboard (paste: true)", async () => {
+        // Routed through Device.setClipboard (device-manager.ts), NOT
+        // controller.setClipboard directly — see dispatchInput's own
+        // comment on the "clipboard" case for why (issue #1422's REST
+        // action verb and this WS path now share one cache-updating code
+        // path). Device.setClipboard's own unit tests
+        // (test/services/device-manager.test.ts) cover the exact
+        // `{sequence: 0n, paste, content}` shape it hands the controller.
         const setClipboard = vi.fn().mockResolvedValue(undefined);
         const socket = await attach({
-          controller: { resetVideo: vi.fn().mockResolvedValue(undefined), setClipboard },
+          controller: { resetVideo: vi.fn().mockResolvedValue(undefined) },
+          setClipboard,
           onVideoPacket: vi.fn(() => vi.fn()),
           onClipboard: vi.fn(() => vi.fn()),
           onExit: vi.fn(() => vi.fn()),
@@ -624,18 +671,15 @@ describe("device route (/ws/device/:deviceId)", () => {
         send(socket, { type: "clipboard", text: "häll\u00f6 \u{1F600}" });
 
         await vi.waitFor(() =>
-          expect(setClipboard).toHaveBeenCalledWith({
-            sequence: 0n,
-            paste: true,
-            content: "häll\u00f6 \u{1F600}",
-          }),
+          expect(setClipboard).toHaveBeenCalledWith("häll\u00f6 \u{1F600}", true),
         );
       });
 
       it("drops empty, non-string and oversized clipboard messages", async () => {
         const setClipboard = vi.fn().mockResolvedValue(undefined);
         const socket = await attach({
-          controller: { resetVideo: vi.fn().mockResolvedValue(undefined), setClipboard },
+          controller: { resetVideo: vi.fn().mockResolvedValue(undefined) },
+          setClipboard,
           onVideoPacket: vi.fn(() => vi.fn()),
           onClipboard: vi.fn(() => vi.fn()),
           onExit: vi.fn(() => vi.fn()),
@@ -651,7 +695,7 @@ describe("device route (/ws/device/:deviceId)", () => {
         send(socket, { type: "clipboard", text: "ok" });
 
         await vi.waitFor(() => expect(setClipboard).toHaveBeenCalledTimes(1));
-        expect(setClipboard).toHaveBeenCalledWith(expect.objectContaining({ content: "ok" }));
+        expect(setClipboard).toHaveBeenCalledWith("ok", true);
       });
 
       it("forwards device clipboard text as a JSON frame and unsubscribes on close", async () => {
