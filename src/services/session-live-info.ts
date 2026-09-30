@@ -218,7 +218,10 @@ const SESSION_HOST_LOOKUP_CHUNK_SIZE = 500;
  * chunked at SESSION_HOST_LOOKUP_CHUNK_SIZE, so a `cursors` frame naming many
  * sessions costs one query per chunk, not one per session.
  */
-export function resolveSessionHostIds(app: FastifyInstance, sessionIds: number[]): Map<number, string> {
+export function resolveSessionHostIds(
+  app: FastifyInstance,
+  sessionIds: number[],
+): Map<number, string> {
   const owners = new Map<number, string>();
   const uniqueIds = [...new Set(sessionIds)];
   for (let i = 0; i < uniqueIds.length; i += SESSION_HOST_LOOKUP_CHUNK_SIZE) {

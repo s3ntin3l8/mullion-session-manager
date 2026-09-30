@@ -423,7 +423,11 @@ describe("cursors/seen frames (issue #1427)", () => {
     instances[0].__open();
 
     instances[0].__message(
-      JSON.stringify({ type: "cursors", bootId: "local-boot-1", cursors: { "1": { seen: 1, head: 1 } } }),
+      JSON.stringify({
+        type: "cursors",
+        bootId: "local-boot-1",
+        cursors: { "1": { seen: 1, head: 1 } },
+      }),
     );
     instances[0].__message(
       JSON.stringify({
@@ -437,7 +441,11 @@ describe("cursors/seen frames (issue #1427)", () => {
     // Same bootId again for the LOCAL key — ordinary merge, not a restart.
     useDashboardStore.setState({ lastSeenSeq: { 1: 1, 2: 2 } });
     instances[0].__message(
-      JSON.stringify({ type: "cursors", bootId: "local-boot-1", cursors: { "1": { seen: 0, head: 5 } } }),
+      JSON.stringify({
+        type: "cursors",
+        bootId: "local-boot-1",
+        cursors: { "1": { seen: 0, head: 5 } },
+      }),
     );
     expect(useDashboardStore.getState().lastSeenSeq[1]).toBe(1); // unchanged: merge, not adopt.
 

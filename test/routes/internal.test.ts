@@ -4596,18 +4596,19 @@ describe("internal routes (agent role, issue #26)", () => {
       await new Promise((resolve) => setTimeout(resolve, 3_200));
 
       const connect = () =>
-        new Promise<{ ws: InstanceType<typeof NodeWebSocket>; messages: Array<Record<string, unknown>> }>(
-          (resolve, reject) => {
-            const ws = new NodeWebSocket(`ws://127.0.0.1:${port}/internal/ws/events?cursors=1`, {
-              headers: { authorization: `Bearer ${TOKEN}` },
-            });
-            const messages: Array<Record<string, unknown>> = [];
-            ws.on("message", (data) => messages.push(JSON.parse(data.toString("utf8"))));
-            ws.once("open", () => resolve({ ws, messages }));
-            ws.once("close", () => reject(new Error("WS closed instead of opening")));
-            ws.once("error", reject);
-          },
-        );
+        new Promise<{
+          ws: InstanceType<typeof NodeWebSocket>;
+          messages: Array<Record<string, unknown>>;
+        }>((resolve, reject) => {
+          const ws = new NodeWebSocket(`ws://127.0.0.1:${port}/internal/ws/events?cursors=1`, {
+            headers: { authorization: `Bearer ${TOKEN}` },
+          });
+          const messages: Array<Record<string, unknown>> = [];
+          ws.on("message", (data) => messages.push(JSON.parse(data.toString("utf8"))));
+          ws.once("open", () => resolve({ ws, messages }));
+          ws.once("close", () => reject(new Error("WS closed instead of opening")));
+          ws.once("error", reject);
+        });
 
       const a = await connect();
       const b = await connect();
@@ -4662,7 +4663,9 @@ describe("internal routes (agent role, issue #26)", () => {
       ws.on("message", (data) => messages.push(JSON.parse(data.toString("utf8"))));
       await new Promise<void>((resolve, reject) => {
         ws.once("open", () => resolve());
-        ws.once("close", () => reject(new Error("WS closed instead of opening — signature rejected")));
+        ws.once("close", () =>
+          reject(new Error("WS closed instead of opening — signature rejected")),
+        );
         ws.once("error", reject);
       });
 

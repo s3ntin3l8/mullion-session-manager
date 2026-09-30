@@ -210,7 +210,13 @@ describe("relayRemoteEventsHost (issue #166's multi-host twin)", () => {
 
     relayRemoteEventsHost(fakeApp(), browserSocket as unknown as WebSocket, "remote-host");
 
-    const wireEvent = JSON.stringify({ seq: 9, sessionId: 5, kind: "attention", ts: 0, payload: {} });
+    const wireEvent = JSON.stringify({
+      seq: 9,
+      sessionId: 5,
+      kind: "attention",
+      ts: 0,
+      payload: {},
+    });
     const buf = Buffer.from(wireEvent);
     upstream.emit("message", buf, false);
 

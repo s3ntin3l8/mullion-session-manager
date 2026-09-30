@@ -322,7 +322,9 @@ export function relayRemoteEventsHost(
         if (isSeenMessage(parsed)) {
           const owners = resolveSessionHostIds(app, [parsed.sessionId]);
           if (owners.get(parsed.sessionId) === hostId) {
-            browserSocket.send(JSON.stringify({ type: "seen", sessionId: parsed.sessionId, seq: parsed.seq }));
+            browserSocket.send(
+              JSON.stringify({ type: "seen", sessionId: parsed.sessionId, seq: parsed.seq }),
+            );
           }
         }
         return;

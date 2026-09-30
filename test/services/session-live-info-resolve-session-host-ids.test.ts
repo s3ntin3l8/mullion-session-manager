@@ -18,7 +18,10 @@ import { resolveSessionHostIds } from "../../src/services/session-live-info.js";
 // actually owns, mirroring filterHostOwnership's own role for persisted
 // events.
 
-const tmpDb = path.join(os.tmpdir(), `session-live-info-resolve-session-host-ids-test-${process.pid}.db`);
+const tmpDb = path.join(
+  os.tmpdir(),
+  `session-live-info-resolve-session-host-ids-test-${process.pid}.db`,
+);
 
 describe("resolveSessionHostIds", () => {
   let app: Awaited<ReturnType<typeof buildApp>>;
