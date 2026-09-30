@@ -204,16 +204,30 @@ export function isSafeNavigationUrl(url: string): boolean {
 // Main frame only (`page.evaluate` always targets the page's main frame) —
 // a selection inside a cross-origin iframe isn't reachable this way; that
 // gap is tracked as issue #1477, not solved here.
+//
+// Wrapped in try/catch: a contenteditable <div> has no `.value` (checked
+// with `typeof el.value === "string"` below, not just the `selectionStart`
+// probe alone, which a contenteditable div can also satisfy depending on
+// the browser), and some <input> types (number/email/color) throw a
+// DOMException merely from *reading* `.selectionStart`/`.selectionEnd` —
+// this must never let an uncaught rejection reach dispatchInput's caller,
+// since that would skip the subsequent `page.keyboard.press(...)` entirely
+// and silently swallow the user's Ctrl/Cmd+C or +X.
 const READ_SELECTION_SCRIPT = `
 (() => {
-  const el = document.activeElement;
-  if (
-    el &&
-    "selectionStart" in el &&
-    typeof el.selectionStart === "number" &&
-    typeof el.selectionEnd === "number"
-  ) {
-    return el.value.slice(el.selectionStart, el.selectionEnd);
+  try {
+    const el = document.activeElement;
+    if (
+      el &&
+      "selectionStart" in el &&
+      typeof el.value === "string" &&
+      typeof el.selectionStart === "number" &&
+      typeof el.selectionEnd === "number"
+    ) {
+      return el.value.slice(el.selectionStart, el.selectionEnd);
+    }
+  } catch {
+    // Fall through to the generic selection below.
   }
   return window.getSelection()?.toString() ?? "";
 })()

@@ -154,10 +154,17 @@ export function BrowserPane(props: {
           else if (message.type === "clipboard") {
             // Page -> host clipboard, only ever in reply to our own
             // copy/cut request (see onKeyDown below) — never a page-
-            // initiated write (issue #1478). Only the focused pane writes
-            // (every open panel for this session gets the same reply),
-            // and a permission/insecure-context failure stays silent, same
-            // posture as DevicePane.tsx's matching handler.
+            // initiated write (issue #1478). Unlike DevicePane.tsx's
+            // device->host clipboard stream (fanned out to every attached
+            // socket for that device), the server replies only on the same
+            // socket that sent the copy/cut request (routes/browser.ts's
+            // dispatchInput), and panelUtils.ts's openBrowserPanePanel keys
+            // panels by session id, focusing an existing one rather than
+            // opening a second — so there's normally only one recipient
+            // anyway. The document.hasFocus() gate is still the right call
+            // (a background browser tab/window must not silently steal
+            // clipboard focus) and matches DevicePane.tsx's own posture; a
+            // permission/insecure-context write failure stays silent too.
             if (document.hasFocus()) {
               void navigator.clipboard?.writeText(message.text).catch(() => {});
             }
@@ -227,12 +234,15 @@ export function BrowserPane(props: {
     canvas.addEventListener("wheel", onWheel, { passive: false });
     canvas.addEventListener("contextmenu", onContextMenu);
 
-    // Keys whose keydown was intercepted below for a clipboard chord (not
-    // forwarded as a `key` message) — the matching keyup must also be
-    // suppressed, or the page would see a keyup for a key it never got the
-    // keydown for. Tracked by event.key rather than re-checking
-    // ctrlKey/metaKey on keyup, since the user may release Ctrl/Cmd before
-    // releasing v/c/x.
+    // Keys whose keydown was intercepted by onKeyDown below for a clipboard
+    // chord (not forwarded as a `key` message) — the matching keyup must
+    // also be suppressed, or the page would see a keyup for a key it never
+    // got the keydown for. The set is keyed by event.key rather than
+    // re-checking ctrlKey/metaKey at keyup time: the boundary condition
+    // that matters is "was THIS key's own keydown intercepted", not
+    // "is the modifier still held" — the user may release Ctrl/Cmd before
+    // releasing v/c/x, so the modifier state at keyup can't be trusted to
+    // tell the two cases apart.
     const interceptedKeys = new Set<string>();
     const onKeyDown = (event: KeyboardEvent) => {
       // AltGr reports as ctrl+alt on Windows, so a chord excludes
