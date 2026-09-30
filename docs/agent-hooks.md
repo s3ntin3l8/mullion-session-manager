@@ -803,13 +803,15 @@ It only matters once a session is in **plan mode**: Mullion launches agy with
 `--mode accept-edits` (`SKIP_PERMISSION_FLAGS` in `launch-plan.ts`), so a
 session only gets there when someone switches to it by hand.
 
-To keep plan review under skip-permissions, set agy's `/config` → **Artifact
-Review** to `asks for review`; verified to make a skip-permissions plan-mode
-session hold at the plan. agy 1.2.14 has no CLI flag or env var for this, and
-the setting is host-global — it applies to every agy launch on the host,
-including Task Master workers. (agy did not write an `artifactReviewPolicy`
-key into `~/.gemini/antigravity-cli/settings.json` when it was set this way,
-so don't rely on that file to inspect or provision it.)
+There is **no durable fix on the agy side**. On a fresh launch, agy's
+`/config` → **Artifact Review** shows `always proceeds (current) (overridden by
+dangerously-skip-permissions)`: the flag forces it, whatever you had chosen
+before. Switching it to `asks for review` from inside a running session does
+make that one session hold at the plan (verified), but nothing is persisted —
+agy wrote no `artifactReviewPolicy` (or any other) key to
+`~/.gemini/antigravity-cli/settings.json` or any other file we could find — so
+the choice is lost on restart and must be repeated in every session, before the
+first plan. agy 1.2.14 has no CLI flag or env var for it either.
 
 ### Skills Manager: agy skills are listed, never toggleable (issue #467)
 
