@@ -472,6 +472,10 @@ export interface AppSettings {
   agy: { defaultModel: string | null };
   taskMaster: {
     autoClaimPaused: boolean;
+    // GitHub logins trusted in addition to OWNER/MEMBER/COLLABORATOR
+    // authors (task-trust.ts). Unioned with MULLION_TASK_TRUSTED_LOGINS,
+    // not sentinel-overridden.
+    trustedLogins: string[];
     enabled: "inherit" | "on" | "off";
     maxConcurrent: number;
     budgetMinutes: number;
@@ -695,6 +699,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     progressCommentMinutes: -1,
     rateLimitGraceMinutes: -1,
     skipPermissions: "inherit",
+    trustedLogins: [],
     reviewCiWaitMinutes: 15,
     defaultAgent: "claude",
     defaultReviewAgent: "none",
@@ -1063,6 +1068,11 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
         settings.taskMaster.skipPermissions === "off"
           ? settings.taskMaster.skipPermissions
           : DEFAULT_SETTINGS.taskMaster.skipPermissions,
+      trustedLogins: Array.isArray(settings.taskMaster.trustedLogins)
+        ? settings.taskMaster.trustedLogins.filter(
+            (l): l is string => typeof l === "string" && l.trim() !== "",
+          )
+        : DEFAULT_SETTINGS.taskMaster.trustedLogins,
       // No sentinel — 0 is a legitimate "never wait" value (same "0 is a
       // real floor" shape as budgetMinutes/progressCommentMinutes' own 0,
       // just without an "inherit" case to also preserve).

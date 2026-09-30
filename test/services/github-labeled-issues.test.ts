@@ -13,6 +13,8 @@ const ISSUE = {
   title: "Fix the thing",
   body: "some details",
   html_url: "https://github.com/o/r/issues/42",
+  user: { login: "alice" },
+  author_association: "MEMBER",
 };
 const PR_WITH_LABEL = {
   number: 43,
@@ -57,6 +59,8 @@ describe("listLabeledIssues", () => {
         title: "Fix the thing",
         body: "some details",
         htmlUrl: ISSUE.html_url,
+        authorLogin: "alice",
+        authorAssociation: "MEMBER",
         // #701 — ISSUE has no parent_issue_url, so this resolves to a
         // definite `null` (no parent), not `undefined` (unknown) — see
         // parseParentIssueUrl's own doc comment.

@@ -603,6 +603,7 @@ function renderPane(extra: { active?: boolean; inputAffordances?: boolean } = {}
         progressCommentMinutes: -1,
         rateLimitGraceMinutes: -1,
         skipPermissions: "inherit",
+        trustedLogins: [],
         reviewCiWaitMinutes: 15,
         defaultAgent: "claude",
         defaultReviewAgent: "none",

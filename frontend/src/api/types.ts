@@ -1699,6 +1699,9 @@ export interface AppSettings {
     progressCommentMinutes: number;
     rateLimitGraceMinutes: number;
     skipPermissions: "inherit" | "on" | "off";
+    // GitHub logins trusted in addition to repo owners/members/collaborators
+    // — mirrors settings.ts's AppSettings.taskMaster.trustedLogins.
+    trustedLogins: string[];
     // #741 — Task Master's install-wide worker/review agent defaults,
     // mirroring settings.ts's AppSettings.taskMaster 1:1. Independent of
     // launchers.defaultAgent (which only drives the terminal launcher).

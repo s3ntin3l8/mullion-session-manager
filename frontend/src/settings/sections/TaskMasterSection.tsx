@@ -35,6 +35,7 @@ export function TaskMasterSection() {
   const [throttleDraft, setThrottleDraft] = useState<number | null>(null);
   const [graceDraft, setGraceDraft] = useState<number | null>(null);
   const [ciWaitDraft, setCiWaitDraft] = useState<number | null>(null);
+  const [trustedDraft, setTrustedDraft] = useState<string | null>(null);
 
   return (
     <>
@@ -181,6 +182,35 @@ export function TaskMasterSection() {
           on={resolved.skipPermissions}
           onChange={(v) => updateSettings({ taskMaster: { skipPermissions: v ? "on" : "off" } })}
         />
+      </Row>
+      <Row
+        label="Trusted GitHub logins"
+        desc="Task Master only picks up issues (and reads comments) from repo owners, members and collaborators. List extra logins to trust — e.g. a bot account — separated by commas."
+        align="start"
+      >
+        <div className="settings-numberfield" style={{ width: 260 }}>
+          <input
+            type="text"
+            autoComplete="off"
+            style={{ flex: 1, textAlign: "left", width: "auto" }}
+            placeholder="octocat, my-bot"
+            aria-label="Trusted GitHub logins"
+            value={trustedDraft ?? tm.trustedLogins.join(", ")}
+            onChange={(e) => setTrustedDraft(e.target.value)}
+            onBlur={() => {
+              if (trustedDraft === null) return;
+              updateSettings({
+                taskMaster: {
+                  trustedLogins: trustedDraft
+                    .split(",")
+                    .map((l) => l.trim())
+                    .filter((l) => l !== ""),
+                },
+              });
+              setTrustedDraft(null);
+            }}
+          />
+        </div>
       </Row>
       <Row
         label="Default agent"

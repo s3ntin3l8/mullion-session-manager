@@ -611,6 +611,21 @@ mapping each one to its Settings key and explaining what it actually gates.
 | Review-agent CI wait                  | `settings.taskMaster.reviewCiWaitMinutes`    | — (no env equivalent; default `15`)            | How long the reconciler holds a `reviewing` task whose PR has CI still `in_progress` or not yet registered before spawning the review agent anyway. `0` disables waiting. See [`tasks-internals.md`](tasks-internals.md#review-agent-mechanics).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | Rate-limit grace window               | `settings.taskMaster.rateLimitGraceMinutes`  | `MULLION_TASK_RATE_LIMIT_GRACE_MINUTES` (`5`)  | How long the reconciler holds a task alive after the agent reports a subscription-quota `rate_limit` failure (Claude Code's weekly limit, opencode go's quota, agy's `RESOURCE_EXHAUSTED`) before falling through to the normal fail path. Max 1440 (24h); `0` opts out. Durable on the task row, so it survives the session's own error-state TTL clearing — see [`tasks-internals.md`](tasks-internals.md#rate-limit-grace) for the full mechanism.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 
+### Trusted authors
+
+The label alone isn't a trust boundary: on a public repo an outsider can open
+issues and comment freely, and a template or Action can label an issue on
+their behalf. So Task Master only ingests an issue whose author has
+GitHub `author_association` `OWNER`, `MEMBER` or `COLLABORATOR`, or whose
+login is in the trusted list (`settings.taskMaster.trustedLogins`, unioned with
+comma-separated `MULLION_TASK_TRUSTED_LOGINS`; case-insensitive — use it for
+bot accounts, which never carry those associations). An issue from anyone else
+is ignored entirely (logged once), and comments from anyone else are dropped
+from the worker's prompt, replaced by a one-line "N comments from unverified
+authors omitted" marker. The comment fetch pages back (at most 5 requests
+per thread) past untrusted comments, so an outsider flood can't crowd out an
+earlier maintainer comment. A missing association is treated as untrusted.
+
 No separate control for dependency-aware claiming (`#667`) — a
 zero-dependency issue costs nothing extra to begin with, so there's
 nothing to opt out of. Its own cost is bounded by the mechanisms in

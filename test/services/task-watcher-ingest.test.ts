@@ -62,6 +62,7 @@ describe("upsertIssueTask (#490a)", () => {
       title: "New issue",
       body: null,
       htmlUrl: "https://x/900",
+      authorAssociation: "OWNER",
     });
 
     const [row] = app.db
@@ -83,6 +84,7 @@ describe("upsertIssueTask (#490a)", () => {
       title: "Original",
       body: null,
       htmlUrl: "https://x/901",
+      authorAssociation: "OWNER",
     });
     mockBroadcastTaskEvent.mockClear();
 
@@ -91,6 +93,7 @@ describe("upsertIssueTask (#490a)", () => {
       title: "Retitled",
       body: null,
       htmlUrl: "https://x/901",
+      authorAssociation: "OWNER",
     });
 
     expect(mockBroadcastTaskEvent).not.toHaveBeenCalled();
@@ -108,6 +111,7 @@ describe("upsertIssueTask (#490a)", () => {
       title: "Stable",
       body: null,
       htmlUrl: "https://x/902",
+      authorAssociation: "OWNER",
     });
     mockBroadcastTaskEvent.mockClear();
 
@@ -116,6 +120,7 @@ describe("upsertIssueTask (#490a)", () => {
       title: "Stable",
       body: null,
       htmlUrl: "https://x/902",
+      authorAssociation: "OWNER",
     });
 
     expect(mockBroadcastTaskEvent).not.toHaveBeenCalled();
@@ -127,6 +132,7 @@ describe("upsertIssueTask (#490a)", () => {
       title: "Claim me",
       body: null,
       htmlUrl: "https://x/903",
+      authorAssociation: "OWNER",
     });
     app.db
       .update(tasks)
@@ -140,6 +146,7 @@ describe("upsertIssueTask (#490a)", () => {
       title: "Claim me (edited)",
       body: null,
       htmlUrl: "https://x/903",
+      authorAssociation: "OWNER",
     });
 
     expect(mockBroadcastTaskEvent).not.toHaveBeenCalled();
@@ -171,6 +178,7 @@ describe("upsertIssueTask (#490a)", () => {
         title: "Child",
         body: null,
         htmlUrl: "https://x/910",
+        authorAssociation: "OWNER",
         parent: { repo: "owner/repo", number: 21 },
       });
       const row = rowFor(910);
@@ -185,6 +193,7 @@ describe("upsertIssueTask (#490a)", () => {
         title: "Was a child",
         body: null,
         htmlUrl: "https://x/911",
+        authorAssociation: "OWNER",
         parent: { repo: "owner/repo", number: 22 },
       });
       upsertIssueTask(app, projectId, {
@@ -192,6 +201,7 @@ describe("upsertIssueTask (#490a)", () => {
         title: "Was a child",
         body: null,
         htmlUrl: "https://x/911",
+        authorAssociation: "OWNER",
         parent: null,
       });
       const row = rowFor(911);
@@ -205,6 +215,7 @@ describe("upsertIssueTask (#490a)", () => {
         title: "Child",
         body: null,
         htmlUrl: "https://x/912",
+        authorAssociation: "OWNER",
         parent: { repo: "owner/repo", number: 23 },
       });
       // Simulates routes/webhooks.ts's ingest path, which has no
@@ -214,6 +225,7 @@ describe("upsertIssueTask (#490a)", () => {
         title: "Child (retitled)",
         body: null,
         htmlUrl: "https://x/912",
+        authorAssociation: "OWNER",
       });
       const row = rowFor(912);
       expect(row.parentIssueNumber).toBe(23);
@@ -227,6 +239,7 @@ describe("upsertIssueTask (#490a)", () => {
         title: "Child",
         body: null,
         htmlUrl: "https://x/913",
+        authorAssociation: "OWNER",
         parent: { repo: "owner/repo", number: 24 },
       });
       app.db
@@ -241,6 +254,7 @@ describe("upsertIssueTask (#490a)", () => {
         title: "Child",
         body: null,
         htmlUrl: "https://x/913",
+        authorAssociation: "OWNER",
         parent: { repo: "owner/repo", number: 25 }, // re-parented
       });
 
@@ -255,6 +269,7 @@ describe("upsertIssueTask (#490a)", () => {
         title: "Child",
         body: null,
         htmlUrl: "https://x/914",
+        authorAssociation: "OWNER",
         parent: { repo: "owner/repo", number: 26 },
       });
       app.db
@@ -271,6 +286,7 @@ describe("upsertIssueTask (#490a)", () => {
         title: "Child (edited)",
         body: null,
         htmlUrl: "https://x/914",
+        authorAssociation: "OWNER",
         parent: { repo: "owner/repo", number: 26 },
       });
 
@@ -286,6 +302,7 @@ describe("upsertIssueTask (#490a)", () => {
         title: "Parent-shaped task",
         body: null,
         htmlUrl: "https://x/915",
+        authorAssociation: "OWNER",
         subIssues: { total: 3, completed: 1 },
       });
       expect(rowFor(915).subIssueTotal).toBe(3);
@@ -296,6 +313,7 @@ describe("upsertIssueTask (#490a)", () => {
         title: "Parent-shaped task",
         body: null,
         htmlUrl: "https://x/915",
+        authorAssociation: "OWNER",
         subIssues: { total: 3, completed: 2 },
       });
       expect(rowFor(915).subIssueCompleted).toBe(2);
@@ -307,6 +325,7 @@ describe("upsertIssueTask (#490a)", () => {
         title: "Parent-shaped task",
         body: null,
         htmlUrl: "https://x/916",
+        authorAssociation: "OWNER",
         subIssues: { total: 4, completed: 0 },
       });
       upsertIssueTask(app, projectId, {
@@ -314,6 +333,7 @@ describe("upsertIssueTask (#490a)", () => {
         title: "Parent-shaped task (retitled)",
         body: null,
         htmlUrl: "https://x/916",
+        authorAssociation: "OWNER",
       });
       const row = rowFor(916);
       expect(row.subIssueTotal).toBe(4);
@@ -340,6 +360,7 @@ describe("upsertIssueTask (#490a)", () => {
         title: "Tracking epic",
         body: null,
         htmlUrl: "https://x/960",
+        authorAssociation: "OWNER",
         subIssues: { total: 5, completed: 0 },
       });
 
@@ -352,6 +373,7 @@ describe("upsertIssueTask (#490a)", () => {
         title: "Leaf work",
         body: null,
         htmlUrl: "https://x/961",
+        authorAssociation: "OWNER",
         subIssues: { total: 0, completed: 0 },
       });
 
@@ -364,6 +386,7 @@ describe("upsertIssueTask (#490a)", () => {
         title: "Was leaf-shaped",
         body: null,
         htmlUrl: "https://x/962",
+        authorAssociation: "OWNER",
       });
       expect(rowFor(962).status).toBe("ready");
       mockBroadcastTaskEvent.mockClear();
@@ -373,6 +396,7 @@ describe("upsertIssueTask (#490a)", () => {
         title: "Was leaf-shaped",
         body: null,
         htmlUrl: "https://x/962",
+        authorAssociation: "OWNER",
         subIssues: { total: 2, completed: 0 },
       });
 
@@ -395,6 +419,7 @@ describe("upsertIssueTask (#490a)", () => {
         title: "Already claimed",
         body: null,
         htmlUrl: "https://x/963",
+        authorAssociation: "OWNER",
       });
       app.db
         .update(tasks)
@@ -408,6 +433,7 @@ describe("upsertIssueTask (#490a)", () => {
         title: "Already claimed",
         body: null,
         htmlUrl: "https://x/963",
+        authorAssociation: "OWNER",
         subIssues: { total: 2, completed: 0 },
       });
 
@@ -431,6 +457,7 @@ describe("upsertIssueTask (#490a)", () => {
         title: "Epic",
         body: null,
         htmlUrl: "https://x/9631",
+        authorAssociation: "OWNER",
         subIssues: { total: 3, completed: 0 },
       });
       expect(rowFor(9631).status).toBe("backlog");
@@ -451,6 +478,7 @@ describe("upsertIssueTask (#490a)", () => {
         title: "Epic",
         body: null,
         htmlUrl: "https://x/9631",
+        authorAssociation: "OWNER",
         subIssues: { total: 3, completed: 3 },
       });
 
@@ -467,6 +495,7 @@ describe("upsertIssueTask (#490a)", () => {
         title: "Leaf-shaped",
         body: null,
         htmlUrl: "https://x/964",
+        authorAssociation: "OWNER",
       });
       expect(rowFor(964).status).toBe("ready");
 
@@ -475,6 +504,7 @@ describe("upsertIssueTask (#490a)", () => {
         title: "Leaf-shaped (retitled)",
         body: null,
         htmlUrl: "https://x/964",
+        authorAssociation: "OWNER",
       });
 
       expect(rowFor(964).status).toBe("ready");
@@ -518,6 +548,7 @@ describe("upsertIssueTask (#490a)", () => {
         title: "Comes back",
         body: null,
         htmlUrl: "https://x/950",
+        authorAssociation: "OWNER",
       });
       failTask(950);
       mockBroadcastTaskEvent.mockClear();
@@ -527,6 +558,7 @@ describe("upsertIssueTask (#490a)", () => {
         title: "Comes back",
         body: null,
         htmlUrl: "https://x/950",
+        authorAssociation: "OWNER",
       });
 
       const row = rowFor(950);
@@ -549,6 +581,7 @@ describe("upsertIssueTask (#490a)", () => {
         title: "Manual task",
         body: "## Notes\n\nManual: true\n",
         htmlUrl: "https://x/951",
+        authorAssociation: "OWNER",
       });
       failTask(951);
 
@@ -557,6 +590,7 @@ describe("upsertIssueTask (#490a)", () => {
         title: "Manual task",
         body: "## Notes\n\nManual: true\n",
         htmlUrl: "https://x/951",
+        authorAssociation: "OWNER",
       });
 
       expect(rowFor(951).status).toBe("backlog");
@@ -568,6 +602,7 @@ describe("upsertIssueTask (#490a)", () => {
         title: "Epic task",
         body: null,
         htmlUrl: "https://x/9510",
+        authorAssociation: "OWNER",
         subIssues: { total: 3, completed: 0 },
       });
       failTask(9510);
@@ -577,6 +612,7 @@ describe("upsertIssueTask (#490a)", () => {
         title: "Epic task",
         body: null,
         htmlUrl: "https://x/9510",
+        authorAssociation: "OWNER",
         subIssues: { total: 3, completed: 0 },
       });
 
@@ -589,6 +625,7 @@ describe("upsertIssueTask (#490a)", () => {
         title: "Was closed",
         body: null,
         htmlUrl: "https://x/952",
+        authorAssociation: "OWNER",
       });
       failTask(952, { failureReason: FAILURE_REASON_ISSUE_CLOSED });
       mockBroadcastTaskEvent.mockClear();
@@ -598,6 +635,7 @@ describe("upsertIssueTask (#490a)", () => {
         title: "Was closed",
         body: null,
         htmlUrl: "https://x/952",
+        authorAssociation: "OWNER",
       });
 
       expect(rowFor(952).status).toBe("failed");
@@ -616,6 +654,7 @@ describe("upsertIssueTask (#490a)", () => {
         title: "Was closed",
         body: null,
         htmlUrl: "https://x/956",
+        authorAssociation: "OWNER",
       });
       failTask(956, { failureReason: FAILURE_REASON_ISSUE_CLOSED });
       mockBroadcastTaskEvent.mockClear();
@@ -625,6 +664,7 @@ describe("upsertIssueTask (#490a)", () => {
         title: "Was closed (retitled)",
         body: null,
         htmlUrl: "https://x/956",
+        authorAssociation: "OWNER",
       });
 
       const row = rowFor(956);
@@ -639,6 +679,7 @@ describe("upsertIssueTask (#490a)", () => {
         title: "Had a branch",
         body: null,
         htmlUrl: "https://x/953",
+        authorAssociation: "OWNER",
       });
       failTask(953, { branchName: "mullion/task-953" });
       mockBroadcastTaskEvent.mockClear();
@@ -648,6 +689,7 @@ describe("upsertIssueTask (#490a)", () => {
         title: "Had a branch",
         body: null,
         htmlUrl: "https://x/953",
+        authorAssociation: "OWNER",
       });
 
       expect(rowFor(953).status).toBe("failed");
@@ -660,6 +702,7 @@ describe("upsertIssueTask (#490a)", () => {
         title: "Had a worktree",
         body: null,
         htmlUrl: "https://x/954",
+        authorAssociation: "OWNER",
       });
       failTask(954, { worktreePath: "/tmp/mullion-task-954" });
       mockBroadcastTaskEvent.mockClear();
@@ -669,6 +712,7 @@ describe("upsertIssueTask (#490a)", () => {
         title: "Had a worktree",
         body: null,
         htmlUrl: "https://x/954",
+        authorAssociation: "OWNER",
       });
 
       expect(rowFor(954).status).toBe("failed");
@@ -681,6 +725,7 @@ describe("upsertIssueTask (#490a)", () => {
         title: "Fine as-is",
         body: null,
         htmlUrl: "https://x/955",
+        authorAssociation: "OWNER",
       });
       app.db
         .update(tasks)
@@ -694,6 +739,7 @@ describe("upsertIssueTask (#490a)", () => {
         title: "Fine as-is (retitled)",
         body: null,
         htmlUrl: "https://x/955",
+        authorAssociation: "OWNER",
       });
 
       expect(rowFor(955).status).toBe("claimed");

@@ -360,6 +360,17 @@ describe("sanitizeSettings", () => {
       expect(result.taskMaster.defaultReviewAgent).toBe("agy");
     });
 
+    it("keeps only non-empty string entries in trustedLogins and repairs a non-array", () => {
+      expect(
+        mergeSettings({ taskMaster: { trustedLogins: ["octocat", "  ", "bot"] } }).taskMaster
+          .trustedLogins,
+      ).toEqual(["octocat", "bot"]);
+      const dirty = { ...DEFAULT_SETTINGS, taskMaster: { ...DEFAULT_SETTINGS.taskMaster } };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- deliberately invalid shape
+      (dirty.taskMaster as any).trustedLogins = "octocat";
+      expect(sanitizeSettings(dirty).taskMaster.trustedLogins).toEqual([]);
+    });
+
     // skipPermissions (Task Master unattended-spawn fix) mirrors `enabled`'s
     // own "inherit"/"on"/"off" sentinel shape, not a numeric -1 — same
     // coverage pattern as the `enabled` tests above.

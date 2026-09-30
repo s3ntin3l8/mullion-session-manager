@@ -18,6 +18,7 @@ import {
 } from "./task-github-sync.js";
 import { canTransition, recordTaskTransition, type TaskStatus } from "./task-state.js";
 import { broadcastTaskEvent } from "./task-events.js";
+import { isTrustedAuthor, resolveTrustedLogins } from "./task-trust.js";
 import {
   dependencyGate,
   refreshTaskBlockers,
@@ -146,6 +147,14 @@ export function isManualOnly(body: string | null): boolean {
 // sub_issues_summary to read) is treated as "not known to be an epic" —
 // the same "leave it alone, no fail-closed reasoning" posture #701 already
 // established for this field, not "not an epic."
+// Issues already warned about as untrusted — see upsertIssueTask's trust gate.
+// Bounded: once full, further issues are counted (not warned individually) and
+// a running "suppressed" total is logged at the 1st and every 100th, so a
+// sustained influx stays visible instead of going silent.
+const MAX_WARNED_UNTRUSTED = 500;
+const warnedUntrustedIssues = new Set<string>();
+let suppressedUntrustedWarnings = 0;
+
 function isEpicIssue(issue: TaskIssue): boolean {
   return (issue.subIssues?.total ?? 0) - (issue.subIssues?.completed ?? 0) > 0;
 }
@@ -159,6 +168,90 @@ function isEpicIssue(issue: TaskIssue): boolean {
  * onConflictDoUpdate target/set split, the `IS NOT` no-op guard).
  */
 export function upsertIssueTask(app: FastifyInstance, projectId: number, issue: TaskIssue): void {
+  // Trust gate — an issue opened by someone with no standing in the repo
+  // (or with the label added by a template/Action rather than a maintainer)
+  // must not become an autonomous worker's spec. Runs before the upsert, so
+  // no insert and no title/body update of an already-known row (author and
+  // association are fixed per issue, so this also stops post-label body
+  // edits by an outsider); the only write is the ready→backlog demotion below.
+  if (!isTrustedAuthor(issue.authorAssociation, issue.authorLogin, resolveTrustedLogins(app))) {
+    // Warn once per issue, not once per 60s sweep — bounded so a flood of
+    // untrusted labeled issues can't grow the set without limit.
+    const key = `${projectId}#${issue.number}`;
+    if (!warnedUntrustedIssues.has(key)) {
+      if (warnedUntrustedIssues.size < MAX_WARNED_UNTRUSTED) {
+        warnedUntrustedIssues.add(key);
+        app.log.warn(
+          { projectId, issueNumber: issue.number, author: issue.authorLogin },
+          "[task-watcher] ignoring labeled issue from untrusted author — add the login to Task Master's trusted logins to allow it",
+        );
+      } else {
+        suppressedUntrustedWarnings++;
+        if (suppressedUntrustedWarnings === 1 || suppressedUntrustedWarnings % 100 === 0) {
+          app.log.warn(
+            { suppressed: suppressedUntrustedWarnings },
+            "[task-watcher] untrusted-author warning limit reached — further untrusted issues are ignored without individual warnings",
+          );
+        }
+      }
+    }
+    // An already-known row (ingested before this gate, or its author since
+    // dropped off the allowlist) must not stay auto-claimable: demote an
+    // unstarted `ready` one to backlog, so it only runs if a human drags it.
+    const demoted = app.db
+      .update(tasks)
+      .set({ status: "backlog" satisfies TaskStatus })
+      .where(
+        and(
+          eq(tasks.projectId, projectId),
+          eq(tasks.issueNumber, issue.number),
+          eq(tasks.status, "ready" satisfies TaskStatus),
+          isNull(tasks.sessionId),
+        ),
+      )
+      .returning({ id: tasks.id })
+      .all();
+    for (const { id } of demoted) {
+      recordTaskTransition(app, {
+        taskId: id,
+        projectId,
+        from: "ready",
+        to: "backlog",
+        via: "github-sync-untrusted-author",
+        context: { issueNumber: issue.number },
+      });
+    }
+    // A worker already running on this issue (author since removed from the
+    // allowlist, or ingested before the gate existed) is deliberately left
+    // alone — a human approves its output — but surface the drift so an
+    // operator notices an in-flight task whose spec is no longer trusted.
+    const inFlight = app.db
+      .select({ id: tasks.id, status: tasks.status })
+      .from(tasks)
+      .where(
+        and(
+          eq(tasks.projectId, projectId),
+          eq(tasks.issueNumber, issue.number),
+          inArray(tasks.status, ["claimed", "in_progress", "reviewing"] satisfies TaskStatus[]),
+        ),
+      )
+      .all();
+    for (const t of inFlight) {
+      const flightKey = `${projectId}#${issue.number}#in-flight-${t.id}`;
+      if (
+        warnedUntrustedIssues.has(flightKey) ||
+        warnedUntrustedIssues.size >= MAX_WARNED_UNTRUSTED
+      ) {
+        continue;
+      }
+      warnedUntrustedIssues.add(flightKey);
+      app.log.warn(
+        { projectId, issueNumber: issue.number, taskId: t.id, status: t.status },
+        "[task-watcher] in-flight task's issue is from an untrusted author — left running; review its output before approving",
+      );
+    }
+    return;
+  }
   // #490a — checked BEFORE the write so a genuinely new task can be told
   // apart from a re-sighting update (even a real one, where a column
   // actually changed) for the /ws/tasks broadcast below. Widened beyond a

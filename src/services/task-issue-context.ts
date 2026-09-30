@@ -26,7 +26,8 @@ import { and, eq, isNotNull, ne } from "drizzle-orm";
 import { tasks } from "../db/schema.js";
 import { resolveRepoRef } from "./host-git.js";
 import { resolveGitHubToken } from "./github-integration.js";
-import { getIssue, listIssueComments } from "./github.js";
+import { getIssue, listIssueComments, type GitHubIssueComment } from "./github.js";
+import { isTrustedAuthor, resolveTrustedLogins } from "./task-trust.js";
 import type { TaskPromptComment, TaskPromptParent, TaskPromptSibling } from "./task-prompt.js";
 
 // Fetch-side cap, independent of task-prompt.ts's own MAX_RENDERED_COMMENTS
@@ -36,6 +37,13 @@ import type { TaskPromptComment, TaskPromptParent, TaskPromptSibling } from "./t
 // informally (both currently 10); a future divergence is fine; this cap is
 // what protects the API call, not the prompt.
 const MAX_FETCHED_COMMENTS = 10;
+
+// How many pages back to look for trusted comments. The trust filter runs
+// after the fetch, so on a public issue a burst of outsider comments could
+// fill the whole newest window and hide an earlier maintainer comment; this
+// pages back past them, bounded so a flooded thread costs at most this many
+// requests per worker spawn.
+const MAX_COMMENT_PAGES = 5;
 
 export interface TaskIssueContext {
   comments: TaskPromptComment[];
@@ -57,6 +65,68 @@ export interface TaskIssueContextInput {
 export interface TaskIssueContextProject {
   cwd: string;
   hostId: string;
+}
+
+/**
+ * The last `MAX_FETCHED_COMMENTS` TRUSTED comments on an issue (oldest-first),
+ * paging back past untrusted ones — up to `MAX_COMMENT_PAGES` requests — so
+ * an outsider flood can't crowd a maintainer's comment out of the window.
+ * Untrusted comments seen along the way are counted into one omission marker
+ * (see filterTrustedComments).
+ */
+async function listTrustedComments(
+  token: string,
+  owner: string,
+  repo: string,
+  issueNumber: number,
+  trustedLogins: ReadonlySet<string>,
+): Promise<TaskPromptComment[]> {
+  let fetched: GitHubIssueComment[] = [];
+  for (let page = 1; page <= MAX_COMMENT_PAGES; page++) {
+    const batch = await listIssueComments(
+      token,
+      owner,
+      repo,
+      issueNumber,
+      MAX_FETCHED_COMMENTS,
+      page,
+    );
+    // Pages walk backwards in time, so each batch is older than what we hold.
+    fetched = [...batch, ...fetched];
+    const trustedCount = fetched.filter((c) =>
+      isTrustedAuthor(c.authorAssociation, c.author, trustedLogins),
+    ).length;
+    if (trustedCount >= MAX_FETCHED_COMMENTS || batch.length < MAX_FETCHED_COMMENTS) break;
+  }
+  return filterTrustedComments(fetched, trustedLogins);
+}
+
+/**
+ * Drops comments from authors with no standing in the repo (see
+ * task-trust.ts) — a public repo lets anyone comment, and this text goes
+ * straight into an unattended agent's prompt. When any were dropped, a
+ * trailing marker tells the worker the thread is incomplete rather than
+ * letting it treat the remainder as the whole conversation.
+ */
+function filterTrustedComments(
+  comments: GitHubIssueComment[],
+  trustedLogins: ReadonlySet<string>,
+): TaskPromptComment[] {
+  const trusted = comments.filter((c) =>
+    isTrustedAuthor(c.authorAssociation, c.author, trustedLogins),
+  );
+  const dropped = comments.length - trusted.length;
+  // Paging can collect more than one window's worth — keep the newest.
+  const kept = trusted.slice(-MAX_FETCHED_COMMENTS);
+  if (dropped === 0) return kept;
+  return [
+    ...kept,
+    {
+      author: null,
+      body: `[Mullion: ${dropped} comment${dropped === 1 ? "" : "s"} from unverified authors omitted]`,
+      createdAt: new Date().toISOString(),
+    },
+  ];
 }
 
 /**
@@ -93,12 +163,13 @@ export async function resolveTaskIssueContext(
   // The task's own comments are fetched independently of the parent — a
   // cross-repo parent failure (token 403, network blip, deleted issue)
   // must not drop the child's own comment block (Hermes review, #1025).
-  const comments = await listIssueComments(
+  const trustedLogins = resolveTrustedLogins(app);
+  const comments = await listTrustedComments(
     token,
     repoRef.owner,
     repoRef.repo,
     task.issueNumber,
-    MAX_FETCHED_COMMENTS,
+    trustedLogins,
   );
 
   // Parent: resolved with a token scoped to the parent's OWN repo, not the
@@ -115,15 +186,26 @@ export async function resolveTaskIssueContext(
       if (parentToken) {
         const [parentIssue, parentComments] = await Promise.all([
           getIssue(parentToken, parentOwner!, parentRepo!, task.parentIssueNumber!),
-          listIssueComments(
+          listTrustedComments(
             parentToken,
             parentOwner!,
             parentRepo!,
             task.parentIssueNumber!,
-            MAX_FETCHED_COMMENTS,
+            trustedLogins,
           ),
         ]);
-        if (parentIssue) {
+        if (
+          parentIssue &&
+          !isTrustedAuthor(parentIssue.authorAssociation, parentIssue.authorLogin, trustedLogins)
+        ) {
+          // The parent's own title/body is prompt text too — an untrusted
+          // author's tracking issue must not reach the worker any more than
+          // their comments may.
+          app.log.warn(
+            { taskId: task.id, parentIssueNumber: task.parentIssueNumber },
+            "[task-issue-context] parent issue is from an untrusted author — proceeding with child context only",
+          );
+        } else if (parentIssue) {
           parent = {
             number: task.parentIssueNumber!,
             repo: task.parentIssueRepo!,
