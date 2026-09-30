@@ -205,29 +205,26 @@ export function isSafeNavigationUrl(url: string): boolean {
 // a selection inside a cross-origin iframe isn't reachable this way; that
 // gap is tracked as issue #1477, not solved here.
 //
-// Wrapped in try/catch: a contenteditable <div> has no `.value` (checked
-// with `typeof el.value === "string"` below, not just the `selectionStart`
-// probe alone, which a contenteditable div can also satisfy depending on
-// the browser), and some <input> types (number/email/color) throw a
-// DOMException merely from *reading* `.selectionStart`/`.selectionEnd` —
-// this must never let an uncaught rejection reach dispatchInput's caller,
-// since that would skip the subsequent `page.keyboard.press(...)` entirely
-// and silently swallow the user's Ctrl/Cmd+C or +X.
+// `typeof el.value === "string"` is checked before touching
+// selectionStart/selectionEnd — some elements that pass the
+// `"selectionStart" in el` probe don't carry a usable string `.value`, and
+// this must never throw and skip the `.slice()` below. Any rejection this
+// script itself can't anticipate (including one from `page.evaluate` never
+// returning at all, e.g. a mid-copy navigation destroying the execution
+// context) is handled by dispatchInput's own try/catch around the call
+// site below, not here — that's the layer that must guarantee the
+// subsequent `page.keyboard.press(...)` still runs.
 const READ_SELECTION_SCRIPT = `
 (() => {
-  try {
-    const el = document.activeElement;
-    if (
-      el &&
-      "selectionStart" in el &&
-      typeof el.value === "string" &&
-      typeof el.selectionStart === "number" &&
-      typeof el.selectionEnd === "number"
-    ) {
-      return el.value.slice(el.selectionStart, el.selectionEnd);
-    }
-  } catch {
-    // Fall through to the generic selection below.
+  const el = document.activeElement;
+  if (
+    el &&
+    "selectionStart" in el &&
+    typeof el.value === "string" &&
+    typeof el.selectionStart === "number" &&
+    typeof el.selectionEnd === "number"
+  ) {
+    return el.value.slice(el.selectionStart, el.selectionEnd);
   }
   return window.getSelection()?.toString() ?? "";
 })()
@@ -320,7 +317,22 @@ async function dispatchInput(
       // (order matters here, not just for the read) so the client's host
       // clipboard write and the page's own copy/cut handlers don't race in
       // a surprising order from the caller's perspective.
-      const text = (await page.evaluate(READ_SELECTION_SCRIPT)) as string;
+      //
+      // page.evaluate() itself can reject independently of anything
+      // READ_SELECTION_SCRIPT guards against — e.g. "Execution context was
+      // destroyed" if a navigation lands mid-copy. That must never skip the
+      // key press below: the user's physical Ctrl/Cmd+C or +X keydown
+      // already reached the page as an ordinary forwarded key (BrowserPane
+      // only intercepts it to request this copy/cut, not to swallow it),
+      // so the page still expects the matching chord to complete. Losing
+      // the clipboard reply on a failed read is an acceptable degradation;
+      // losing the key press entirely is not.
+      let text = "";
+      try {
+        text = (await page.evaluate(READ_SELECTION_SCRIPT)) as string;
+      } catch (err) {
+        app.log.warn({ err }, "failed to read browser page selection for copy/cut");
+      }
       if (text && socket.readyState === socket.OPEN) {
         socket.send(JSON.stringify({ type: "clipboard", text }));
       }

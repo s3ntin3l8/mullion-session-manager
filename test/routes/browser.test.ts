@@ -639,6 +639,37 @@ describe("browser route (/ws/browser/:sessionId)", () => {
     await app.close();
   });
 
+  it("still presses the key and sends no clipboard reply when the selection read rejects", async () => {
+    const { app, port } = await buildAndListen();
+    const { sessionId } = await createProjectAndSession(app);
+
+    const pageCountBefore = launchedPages.length;
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/browser/${sessionId}`);
+    const messages = collectMessages(ws);
+    await waitForOpenOrClose(ws);
+    const page = await waitForNewestPage(pageCountBefore);
+    page.selectionText = "would have been the selection";
+    // page.evaluate() can reject independently of anything the in-page
+    // script itself guards against — e.g. Playwright's own "Execution
+    // context was destroyed" if a navigation lands mid-copy. dispatchInput
+    // must still press the key even though the read failed.
+    page.evaluateSpy.mockImplementationOnce(() => {
+      throw new Error("Execution context was destroyed");
+    });
+
+    ws.send(JSON.stringify({ type: "copy" }));
+    await waitUntilReal(() => page.keyboardSpy.press.mock.calls.length > 0);
+    expect(page.keyboardSpy.press).toHaveBeenCalledWith("Control+c");
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(
+      messages.some((m) => !m.binary && JSON.parse(m.data as string).type === "clipboard"),
+    ).toBe(false);
+
+    ws.close();
+    await app.close();
+  });
+
   it("rejects navigation to a non-http(s) URL and sends an error", async () => {
     const { app, port } = await buildAndListen();
     const { sessionId } = await createProjectAndSession(app);
