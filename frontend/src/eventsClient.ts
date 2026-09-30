@@ -57,8 +57,17 @@ function isEventsWireMessage(value: unknown): value is NotificationEvent {
 // genuine restart apart from an ordinary reconnect, since raw seq/head
 // numbers alone can't always disambiguate the two (see
 // mergeServerCursor's doc comment).
+//
+// Issue #1459 — `hostId` is optional and absent on the primary's own local
+// frame (attachAggregatedEventsSocket's first send is unchanged); only a
+// frame relayed from a remote host (`relayRemoteEventsHost`,
+// routes/events.ts) carries one, tagging which host's own boot generation
+// this frame describes. store/slices/events.ts keys its per-connection
+// bootId tracking off `hostId ?? "local"` specifically so a remote host's
+// restart is never conflated with the primary's own.
 export interface CursorsWireMessage {
   type: "cursors";
+  hostId?: string;
   bootId: string;
   cursors: Record<string, { seen: number; head: number }>;
 }
@@ -68,6 +77,8 @@ function isCursorsMessage(value: unknown): value is CursorsWireMessage {
     typeof value === "object" &&
     value !== null &&
     (value as { type?: unknown }).type === "cursors" &&
+    ((value as { hostId?: unknown }).hostId === undefined ||
+      typeof (value as { hostId?: unknown }).hostId === "string") &&
     typeof (value as { bootId?: unknown }).bootId === "string" &&
     typeof (value as { cursors?: unknown }).cursors === "object" &&
     (value as { cursors?: unknown }).cursors !== null
@@ -101,8 +112,13 @@ export interface ConnectEventsStreamHandlers {
   /** Called for every replayed-or-live NotificationEvent frame. */
   onEvent: (event: NotificationEvent) => void;
   /** Called once per connection, right after it opens, before any replayed
-   * event — see CursorsWireMessage above. */
-  onCursors: (bootId: string, cursors: Record<string, { seen: number; head: number }>) => void;
+   * event — see CursorsWireMessage above. `hostId` is `undefined` for the
+   * primary's own local frame, and a remote host's id for a relayed one. */
+  onCursors: (
+    bootId: string,
+    cursors: Record<string, { seen: number; head: number }>,
+    hostId?: string,
+  ) => void;
   /** Called for every live cross-client "seen" broadcast — see
    * SeenWireMessage above. Never called for this connection's own outgoing
    * sendSeen (the server excludes the sender). */
@@ -145,7 +161,7 @@ export function connectEventsStream(handlers: ConnectEventsStreamHandlers): Even
         return;
       }
       if (isCursorsMessage(parsed)) {
-        onCursors(parsed.bootId, parsed.cursors);
+        onCursors(parsed.bootId, parsed.cursors, parsed.hostId);
       } else if (isSeenMessage(parsed)) {
         onSeen(parsed.sessionId, parsed.seq);
       } else if (isEventsWireMessage(parsed)) {

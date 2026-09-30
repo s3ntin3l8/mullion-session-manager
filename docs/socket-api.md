@@ -485,6 +485,33 @@ way for a full-scope connection to filter down to one session's events via
 this op; use `sessions.get`'s own polling shape, or a session-scoped
 connection, for that.
 
+**The raw `/ws/events` WS route's own `cursors`/`seen` frames (issue
+#1427, multi-host as of #1459).** Before any replay, a real `/ws/events`
+browser connection (and the control socket's own full-scope
+`events.subscribe`, via the same `attachAggregatedEventsSocket`) receives
+`{"type":"cursors","bootId":"...","cursors":{"<sessionId>":{"seen":N,"head":M},...}}`
+— this process's own locally-tracked sessions' read cursors, so a client can
+reconcile its own possibly-stale local cursor against the server's. A
+subsequent `{"type":"seen","sessionId":N,"seq":M}` is a live cross-client
+broadcast: another connection just advanced that session's read cursor.
+Multi-host deployments get one additional `cursors`/`seen` frame per
+enrolled remote host, each tagged with that host's own `hostId` field (e.g.
+`{"type":"cursors","hostId":"remote-a","bootId":"...","cursors":{...}}`) —
+absent (`undefined`) on the primary's own local frame, meaning "local". A
+client must track each `hostId` (or the absence of one) as an independent
+boot generation, not a single shared one, since a local restart and a
+remote host's own restart are unrelated events. This is opt-in on the wire:
+the primary's `relayRemoteEventsHost` opens each remote agent's
+`/internal/ws/events?cursors=1` with the flag set, and the agent only sends
+its own `cursors`/joins its own "seen" broadcast when it sees that flag —
+an older agent, or an older primary that never sets it, behaves exactly as
+it did before issue #1459 (no `cursors`/`seen` frames for that host at
+all). The primary also filters every remote `cursors`/`seen` entry down to
+sessions that host's `sessions` DB row actually resolves to (the same
+numeric-session-id collision hazard plain events already guard against) —
+an entry for a session that doesn't belong to the reporting host is
+silently dropped, never forwarded.
+
 ## Browser automation ops (`browser.action`/`find`/`bindings`)
 
 See [browser-automation.md](browser-automation.md) for the full action set

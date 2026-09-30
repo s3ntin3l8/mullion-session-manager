@@ -6,6 +6,7 @@ import { listHosts } from "../services/host-registry.js";
 import { getRemoteHostClient } from "../services/remote-host-client.js";
 import { getStoredSettings } from "../services/settings.js";
 import { querySessionEvents } from "../services/event-history.js";
+import { resolveSessionHostIds } from "../services/session-live-info.js";
 
 // Phase 1's notification-event channel (issue #166): a single, JSON-only WS
 // stream that replays every tracked session's buffered events on connect and
@@ -46,6 +47,30 @@ function isSeenMessage(value: unknown): value is SeenMessage {
   );
 }
 
+// Issue #1459 — the shape an agent's own /internal/ws/events?cursors=1 sends
+// (attachCursorsAndSeenBroadcast below, reused on both sides): the exact
+// same `{type:"cursors", bootId, cursors}` local browsers already get from
+// attachAggregatedEventsSocket, with no `hostId` — an agent has no concept
+// of its own hostId (that's a primary-side DB column on `hosts`). Only
+// relayRemoteEventsHost's own re-emission (below) tags a frame with hostId,
+// once it's confirmed to be forwarding it to a browser.
+interface CursorsUpstreamFrame {
+  type: "cursors";
+  bootId: string;
+  cursors: Record<string, { seen: number; head: number }>;
+}
+
+function isCursorsUpstreamFrame(value: unknown): value is CursorsUpstreamFrame {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { type?: unknown }).type === "cursors" &&
+    typeof (value as { bootId?: unknown }).bootId === "string" &&
+    typeof (value as { cursors?: unknown }).cursors === "object" &&
+    (value as { cursors?: unknown }).cursors !== null
+  );
+}
+
 function sendEvent(socket: SocketLike, event: NotificationEvent): void {
   if (socket.readyState !== socket.OPEN) return;
   if (shouldDropForBackpressure(socket.bufferedAmount)) return;
@@ -67,16 +92,22 @@ export interface AttachLocalEventsOptions {
   /**
    * Called whenever an incoming "seen" message genuinely advances a
    * session's read cursor (`PtyManager.markEventsSeen`'s own return value) —
-   * issue #1427's cross-client read-state sync. Wired only by
-   * `attachAggregatedEventsSocket` below, for the unfiltered aggregate: a
-   * `sessionIdFilter`'d connection doesn't get one (broadcasting there would
-   * need its own per-session filtering to avoid leaking another session's
-   * cursor to a connection pinned to just one), and routes/internal.ts's
-   * bare `/internal/ws/events` doesn't either (its raw frames are relayed
-   * byte-for-byte to a browser by `relayRemoteEventsHost`, so a new frame
-   * shape emitted there would leak into another host's browser stream,
-   * mislabeled with this process's own — potentially colliding — numeric
-   * session ids).
+   * issue #1427's cross-client read-state sync. Wired by
+   * `attachAggregatedEventsSocket` below, for the primary's own unfiltered
+   * aggregate, and — as of issue #1459 — by routes/internal.ts's
+   * `/internal/ws/events?cursors=1` too, via the same
+   * `attachCursorsAndSeenBroadcast` helper both call sites share: an agent
+   * has its own independent seenSubscribers set (keyed by its own `app`, a
+   * different FastifyInstance than the primary's), so this broadcasts to
+   * every OTHER currently-open opted-in internal connection on that same
+   * agent, and `relayRemoteEventsHost` (below) relays the resulting `seen`
+   * frame up to the primary, ownership-filtered, exactly like a `cursors`
+   * frame. A `sessionIdFilter`'d connection still doesn't get one
+   * (broadcasting there would need its own per-session filtering to avoid
+   * leaking another session's cursor to a connection pinned to just one),
+   * and the agent's bare (non-opted-in) `/internal/ws/events` doesn't either
+   * — see `relayRemoteEventsHost`'s own doc comment for why the opt-in flag
+   * exists at all.
    */
   onSeenAdvanced?: (sessionId: number, seq: number) => void;
 }
@@ -164,15 +195,81 @@ export function attachLocalEventsSocket(
   });
 }
 
+// Issue #1459 — the two frame-type prefixes relayRemoteEventsHost's own
+// message handler (below) checks for before paying for a JSON.parse. Both
+// are built by JSON.stringify()ing an object literal with `type` as its
+// first key (attachCursorsAndSeenBroadcast's `cursors` send, and this same
+// file's "seen" broadcast payload) — a plain NotificationEvent never starts
+// this way (its own field order is `{seq, sessionId, kind, ts, payload}`,
+// see pty-manager.ts), so this prefix check can never false-positive on the
+// hot path's actual majority case (ordinary event frames).
+//
+// Hermes review, PR #1493 — kept as `Buffer`s, compared directly against
+// the raw frame via `.subarray(...).equals(...)`, rather than the string
+// prefixes this started as: `data.toString("utf8")` on every single
+// incoming frame just to run `startsWith` on ~16 bytes would allocate a
+// full UTF-8 string of EVERY plain event frame too (the hot path's actual
+// majority case) — a real per-frame cost pre-#1459 never had. `.equals()`
+// does a byte-for-byte compare with no allocation; `data.toString("utf8")`
+// (and the subsequent `JSON.parse`) now only run for the rare frame that
+// already matched one of these two prefixes.
+const CURSORS_FRAME_PREFIX = Buffer.from('{"type":"cursors"');
+const SEEN_FRAME_PREFIX = Buffer.from('{"type":"seen"');
+
+// `data` here is `ws`'s own `RawData` (`Buffer | ArrayBuffer | Buffer[]`) —
+// narrowed with `Buffer.isBuffer` rather than typed as `Buffer` outright,
+// since this channel's payload is a Buffer in practice (see the isBinary
+// comment above) but the type itself doesn't guarantee it. Anything else
+// (a fragmented/streamed frame arriving as `ArrayBuffer`/`Buffer[]`, which
+// shouldn't happen for this JSON-only channel) simply doesn't match either
+// prefix and falls through to the unparsed forward path below.
+function startsWithPrefix(data: Buffer | ArrayBuffer | Buffer[], prefix: Buffer): boolean {
+  return (
+    Buffer.isBuffer(data) &&
+    data.length >= prefix.length &&
+    data.subarray(0, prefix.length).equals(prefix)
+  );
+}
+
 /**
- * Opens one upstream `/internal/ws/events` connection to `hostId` and relays
- * its events into `browserSocket` — the multi-host half of `/ws/events`
- * (issue #26's own pattern, mirroring terminal.ts's proxyToRemoteAttach).
- * Pulled out as its own function (rather than inlined in eventsRoute below)
- * specifically so it's directly unit-testable against mock sockets, the same
- * way test/routes/terminal-remote-proxy.test.ts drives proxyToRemoteAttach —
- * a real end-to-end multi-host WS test needs two full listening servers and
- * is proportionally much more expensive for the same coverage.
+ * Opens one upstream `/internal/ws/events?cursors=1` connection to `hostId`
+ * and relays its events into `browserSocket` — the multi-host half of
+ * `/ws/events` (issue #26's own pattern, mirroring terminal.ts's
+ * proxyToRemoteAttach). Pulled out as its own function (rather than inlined
+ * in eventsRoute below) specifically so it's directly unit-testable against
+ * mock sockets, the same way test/routes/terminal-remote-proxy.test.ts
+ * drives proxyToRemoteAttach — a real end-to-end multi-host WS test needs
+ * two full listening servers and is proportionally much more expensive for
+ * the same coverage.
+ *
+ * The `cursors: true` opt-in flag (translated by RemoteHostClient into
+ * `?cursors=1` on the wire) is what makes this issue #1459's multi-host
+ * counterpart to attachAggregatedEventsSocket's own local `cursors` send: it
+ * tells the agent's own `/internal/ws/events` to ALSO send its own
+ * `{type:"cursors", bootId, cursors}` frame first and join its own
+ * seenSubscribers broadcast set (routes/internal.ts). This is opt-in, not
+ * unconditional, specifically so an OLDER primary — one that predates this
+ * issue and still relays `/internal/ws/events` byte-for-byte with zero
+ * parsing — never receives a frame shape it doesn't understand: only a NEW
+ * primary (this function) ever sets the flag, so an old primary's agents
+ * simply never emit these frames at all, unchanged from today.
+ *
+ * Every incoming frame is now checked (via the cheap prefix check above)
+ * against the two new frame types before being forwarded — a plain
+ * NotificationEvent frame (the hot-path majority case) still gets forwarded
+ * completely unparsed, verbatim, exactly as before. A `cursors`/`seen` frame
+ * is JSON.parsed, filtered down to sessions this call's OWN `hostId`
+ * actually owns (resolveSessionHostIds — the same numeric-session-id
+ * collision hazard this file's own comments on events themselves already
+ * call out), and re-emitted — a `cursors` frame tagged with `hostId` so the
+ * frontend can track this host's own boot generation independently of any
+ * other host's (store/slices/events.ts's per-hostId knownBootIds map), a
+ * `seen` frame unchanged in shape (inherently single-session, just
+ * ownership-gated). No primary-side rebroadcast-to-other-upstreams is
+ * needed for either: a local seen-broadcast already exists (seenSubscribers
+ * below), and a remote agent's own seenSubscribers broadcast (routes/
+ * internal.ts) already reaches every browser connected through THIS primary
+ * with an open upstream to that same agent.
  *
  * Returns the opened upstream socket (so the caller can track it for
  * close-propagation and "seen" forwarding), or null if opening it failed
@@ -188,7 +285,7 @@ export function relayRemoteEventsHost(
 ): NodeWebSocket | null {
   let upstream: NodeWebSocket;
   try {
-    upstream = getRemoteHostClient(app, hostId).openEventsStream();
+    upstream = getRemoteHostClient(app, hostId).openEventsStream({ cursors: true });
   } catch (err) {
     app.log.error({ err, hostId }, "failed to open remote events stream");
     return null;
@@ -207,6 +304,58 @@ export function relayRemoteEventsHost(
   upstream.on("message", (data, isBinary) => {
     if (browserSocket.readyState !== browserSocket.OPEN) return;
     if (shouldDropForBackpressure(browserSocket.bufferedAmount)) return;
+
+    // Issue #1459 — only a text frame can possibly be a cursors/seen frame
+    // (this channel is JSON-only to begin with; isBinary should never be
+    // true here in practice, but the check below is what actually decides,
+    // not an assumption). startsWithPrefix is a zero-allocation byte
+    // compare (see its own doc comment) — `data.toString("utf8")` (and the
+    // `JSON.parse` after it) only happen for a frame that already matched
+    // one of the two prefixes. A frame that matches neither is forwarded
+    // completely unparsed, `data` untouched — the exact same byte-for-byte
+    // relay this did before this issue, with no per-frame string
+    // allocation on that (hot-path, majority-case) path either.
+    if (!isBinary && startsWithPrefix(data, CURSORS_FRAME_PREFIX)) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(data.toString("utf8"));
+      } catch {
+        return; // malformed — drop rather than forward garbage to the browser.
+      }
+      if (isCursorsUpstreamFrame(parsed)) {
+        const ids = Object.keys(parsed.cursors)
+          .map(Number)
+          .filter((id) => Number.isFinite(id));
+        const owners = resolveSessionHostIds(app, ids);
+        const filtered: Record<number, { seen: number; head: number }> = {};
+        for (const [key, value] of Object.entries(parsed.cursors)) {
+          const id = Number(key);
+          if (Number.isFinite(id) && owners.get(id) === hostId) filtered[id] = value;
+        }
+        browserSocket.send(
+          JSON.stringify({ type: "cursors", hostId, bootId: parsed.bootId, cursors: filtered }),
+        );
+      }
+      return;
+    }
+    if (!isBinary && startsWithPrefix(data, SEEN_FRAME_PREFIX)) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(data.toString("utf8"));
+      } catch {
+        return;
+      }
+      if (isSeenMessage(parsed)) {
+        const owners = resolveSessionHostIds(app, [parsed.sessionId]);
+        if (owners.get(parsed.sessionId) === hostId) {
+          browserSocket.send(
+            JSON.stringify({ type: "seen", sessionId: parsed.sessionId, seq: parsed.seq }),
+          );
+        }
+      }
+      return;
+    }
+
     browserSocket.send(data, { binary: isBinary });
   });
   upstream.on("error", (err) => {
@@ -245,31 +394,37 @@ function getSeenSubscribers(app: FastifyInstance): Set<SocketLike> {
 }
 
 /**
- * The full multi-host aggregate behind `/ws/events`: this process's own
- * local events (attachLocalEventsSocket) plus one relayed upstream per
- * non-local host (relayRemoteEventsHost), with "seen" messages broadcast to
- * every open upstream too. Extracted from eventsRoute's handler (Phase 4
- * #188) so the control socket's full-scope `events.subscribe` can drive the
- * exact same aggregation logic through a SocketChannel — a session-scoped
- * `events.subscribe` deliberately does NOT call this (see control-socket.ts):
- * a session-scoped connection's pinned session is always local (its hook
- * token can only ever resolve against this process's own PtyManager — a
- * remote-hosted session's token lives in a different process entirely), so
- * there is nothing for it to gain from opening upstream relays to every
- * other host just to filter back down to its own single, local session.
+ * Shared by attachAggregatedEventsSocket below (the primary's own unfiltered
+ * `/ws/events` aggregate) and, as of issue #1459, routes/internal.ts's
+ * `/internal/ws/events?cursors=1` (an agent opting in to being covered by
+ * the multi-host `cursors`/"seen" story too — see relayRemoteEventsHost's
+ * own doc comment for why that's opt-in). Both call sites want the exact
+ * same two things for their own `app`/`socket` pair: send a `cursors` frame
+ * — `{type:"cursors", bootId: app.pty.bootId, cursors: app.pty.listCursors()}`
+ * — before anything else (in particular, before attachLocalEventsSocket's
+ * own replay), and join this `app`'s own seenSubscribers set so a "seen"
+ * advance from ANY connection sharing this same `app` broadcasts to every
+ * OTHER one. `app` is what scopes this correctly for BOTH call sites without
+ * either needing to know about the other: on the primary, `app` is the
+ * primary's own FastifyInstance, so this broadcasts to every other browser
+ * tab; on an agent, `app` is that agent's own, entirely separate
+ * FastifyInstance, so this broadcasts to every other opted-in internal
+ * connection on that same agent — never across processes, which is exactly
+ * what relayRemoteEventsHost's own upstream relay (not this function) is
+ * responsible for instead.
  *
- * Issue #1427: also sends a `cursors` frame — `{type:"cursors", bootId:
- * app.pty.bootId, cursors: app.pty.listCursors()}` — before anything else
- * (in particular, before attachLocalEventsSocket's own replay below), and
- * broadcasts every genuine "seen" advance to every other currently-open
- * connection of this same kind on this process (see seenSubscribers
- * above). Both are local-only: a remote host's own sessions/cursors never
- * appear here, same scope as attachLocalEventsSocket's own replay.
- * `bootId` (PtyManager's own doc comment) is what lets the client tell a
- * genuine backend restart apart from ordinary continued growth, since raw
- * seq/head numbers alone can't always disambiguate the two.
+ * Returns the `onSeenAdvanced` callback the caller should pass straight
+ * through to attachLocalEventsSocket's own options — pulled out as a return
+ * value rather than this function taking a socket-agnostic "just wire
+ * everything" shape so each caller stays free to layer its own additional
+ * attachLocalEventsSocket options (sessionIdFilter, etc.) alongside it,
+ * exactly like attachAggregatedEventsSocket already had to before this was
+ * extracted.
  */
-export function attachAggregatedEventsSocket(app: FastifyInstance, socket: SocketLike): void {
+export function attachCursorsAndSeenBroadcast(
+  app: FastifyInstance,
+  socket: SocketLike,
+): (sessionId: number, seq: number) => void {
   if (socket.readyState === socket.OPEN) {
     socket.send(
       JSON.stringify({
@@ -286,17 +441,50 @@ export function attachAggregatedEventsSocket(app: FastifyInstance, socket: Socke
     subs.delete(socket);
   });
 
-  attachLocalEventsSocket(app, socket, {
-    onSeenAdvanced: (sessionId, seq) => {
-      const payload = JSON.stringify({ type: "seen", sessionId, seq });
-      for (const other of subs) {
-        if (other === socket) continue; // the sender already applied this locally.
-        if (other.readyState !== other.OPEN) continue;
-        if (shouldDropForBackpressure(other.bufferedAmount)) continue;
-        other.send(payload);
-      }
-    },
-  });
+  return (sessionId, seq) => {
+    const payload = JSON.stringify({ type: "seen", sessionId, seq });
+    for (const other of subs) {
+      if (other === socket) continue; // the sender already applied this locally.
+      if (other.readyState !== other.OPEN) continue;
+      if (shouldDropForBackpressure(other.bufferedAmount)) continue;
+      other.send(payload);
+    }
+  };
+}
+
+/**
+ * The full multi-host aggregate behind `/ws/events`: this process's own
+ * local events (attachLocalEventsSocket) plus one relayed upstream per
+ * non-local host (relayRemoteEventsHost), with "seen" messages broadcast to
+ * every open upstream too. Extracted from eventsRoute's handler (Phase 4
+ * #188) so the control socket's full-scope `events.subscribe` can drive the
+ * exact same aggregation logic through a SocketChannel — a session-scoped
+ * `events.subscribe` deliberately does NOT call this (see control-socket.ts):
+ * a session-scoped connection's pinned session is always local (its hook
+ * token can only ever resolve against this process's own PtyManager — a
+ * remote-hosted session's token lives in a different process entirely), so
+ * there is nothing for it to gain from opening upstream relays to every
+ * other host just to filter back down to its own single, local session.
+ *
+ * Issue #1427: also sends a `cursors` frame and broadcasts every genuine
+ * "seen" advance to every other currently-open connection of this same kind
+ * on this process — both via attachCursorsAndSeenBroadcast above, shared
+ * with the agent-side opt-in counterpart (routes/internal.ts). As of issue
+ * #1459, a remote host's own sessions/cursors DO eventually appear to a
+ * browser too — not from this function (still local-only, same scope as
+ * attachLocalEventsSocket's own replay), but from relayRemoteEventsHost's
+ * own upstream relay below, re-emitted as a separate, `hostId`-tagged
+ * `cursors`/`seen` frame. `bootId` (PtyManager's own doc comment) is what
+ * lets the client tell a genuine backend restart apart from ordinary
+ * continued growth, since raw seq/head numbers alone can't always
+ * disambiguate the two — per-hostId now (store/slices/events.ts's
+ * knownBootIds map), since a local restart and a remote host's own restart
+ * are independent events.
+ */
+export function attachAggregatedEventsSocket(app: FastifyInstance, socket: SocketLike): void {
+  const onSeenAdvanced = attachCursorsAndSeenBroadcast(app, socket);
+
+  attachLocalEventsSocket(app, socket, { onSeenAdvanced });
 
   // Known gap (acceptable for this PR): a host that's unreachable at
   // connect time isn't retried until the browser's OWN /ws/events socket

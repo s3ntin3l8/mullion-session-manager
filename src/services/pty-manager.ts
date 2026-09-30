@@ -4532,7 +4532,18 @@ export class PtyManager {
    * knows. Covers local sessions only, same as listEvents() above — a
    * remote host's own sessions are outside this process's `this.sessions`
    * map entirely, so a client must leave any session id absent from this
-   * snapshot untouched rather than treating it as "fully read". */
+   * snapshot untouched rather than treating it as "fully read".
+   *
+   * As of issue #1459, that's no longer the whole multi-host story: a
+   * remote host's OWN PtyManager.listCursors() (this same method, called on
+   * that host's own agent process) reaches the primary's browsers too, via
+   * that agent's own `/internal/ws/events?cursors=1` (routes/internal.ts)
+   * and the primary's relayRemoteEventsHost (routes/events.ts), which
+   * re-emits it as a separate, `hostId`-tagged `cursors` frame after
+   * filtering it down to sessions that host actually owns. This method
+   * itself is unchanged — still local-only — that multi-host reach is
+   * composed entirely on the routing side, not by teaching PtyManager
+   * anything about other hosts. */
   listCursors(): Record<number, { seen: number; head: number }> {
     const cursors: Record<number, { seen: number; head: number }> = {};
     for (const [id, session] of this.sessions) {

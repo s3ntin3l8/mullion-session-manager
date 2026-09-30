@@ -89,7 +89,7 @@ import { pushBranch } from "../services/git-push.js";
 import { getCachedAgents } from "../services/agent-detect.js";
 import { resolveGlobalPresets } from "./actions.js";
 import { attachSocketToSession } from "./terminal.js";
-import { attachLocalEventsSocket } from "./events.js";
+import { attachLocalEventsSocket, attachCursorsAndSeenBroadcast } from "./events.js";
 import { createMuxConnection } from "../services/ssh-agent-mux.js";
 import { resolveSshAuthSock } from "../services/ssh-agent-socket.js";
 import type { SessionInfo } from "../services/pty-manager.js";
@@ -2293,16 +2293,43 @@ export async function internalRoutes(app: FastifyInstance) {
   // The DB-less counterpart to /ws/events (routes/events.ts) — issue #166's
   // multi-host twin. The primary opens one of these per registered remote
   // host and relays its events into its own aggregated /ws/events stream
-  // (see events.ts's own comment on that relay). No query params: like the
-  // primary's own /ws/events, this is one aggregated stream covering every
-  // session THIS agent tracks, not a per-session attach — attachLocalEventsSocket
-  // is the exact same shared core the primary's own route uses, just reused
-  // against this agent's own app.pty instead.
-  app.get(
+  // (see events.ts's own comment on that relay). Mostly no query params:
+  // like the primary's own /ws/events, this is one aggregated stream
+  // covering every session THIS agent tracks, not a per-session attach —
+  // attachLocalEventsSocket is the exact same shared core the primary's own
+  // route uses, just reused against this agent's own app.pty instead.
+  //
+  // Issue #1459 — the one opt-in exception: `?cursors=1`, set only by a NEW
+  // primary's own relayRemoteEventsHost (routes/events.ts,
+  // RemoteHostClient.openEventsStream's own doc comment explains why this is
+  // opt-in rather than unconditional). When present, this ALSO sends this
+  // agent's own `cursors` frame first and joins this agent's own
+  // seenSubscribers broadcast set — attachCursorsAndSeenBroadcast is the
+  // exact same helper attachAggregatedEventsSocket (routes/events.ts) uses
+  // for the primary's own local browsers, reused here against THIS agent's
+  // own `app` (a distinct FastifyInstance from the primary's, so the
+  // broadcast set this joins is scoped to this agent's own internal
+  // connections, never leaking across processes). Without the flag (an old
+  // primary, or a primary not currently relaying with cursors on), behavior
+  // is byte-for-byte unchanged from before this issue.
+  app.get<{ Querystring: { cursors?: string } }>(
     "/internal/ws/events",
     { websocket: true, config: INTERNAL_RATE_LIMIT.config },
-    (socket) => {
-      attachLocalEventsSocket(app, socket);
+    (socket, req) => {
+      // Hermes review, PR #1493 — exactly "1", not merely "present", so this
+      // matches the documented contract byte-for-byte: RemoteHostClient.
+      // openEventsStream's own `?cursors=1` is the only value any caller
+      // ever sends. Not a security boundary either way (the flag only
+      // decides whether THIS agent emits an extra frame, never a privilege
+      // check), but a stray `?cursors=` or `?cursors=0` from a future/buggy
+      // caller should read as "flag not set", not "flag set to something
+      // weird".
+      if (req.query.cursors === "1") {
+        const onSeenAdvanced = attachCursorsAndSeenBroadcast(app, socket);
+        attachLocalEventsSocket(app, socket, { onSeenAdvanced });
+      } else {
+        attachLocalEventsSocket(app, socket);
+      }
     },
   );
 

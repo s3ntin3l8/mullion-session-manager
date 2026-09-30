@@ -1,7 +1,6 @@
 import type { FastifyInstance } from "fastify";
-import { eq } from "drizzle-orm";
-import { projects } from "../db/schema.js";
-import type { sessions } from "../db/schema.js";
+import { eq, inArray } from "drizzle-orm";
+import { projects, sessions } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import type { SessionInfo } from "./pty-manager.js";
 import { deriveSessionStatus } from "./session-status.js";
@@ -190,6 +189,52 @@ export function resolveProjectHostId(app: FastifyInstance, projectId: number): s
     .where(eq(projects.id, projectId))
     .all();
   return project?.hostId ?? LOCAL_HOST_ID;
+}
+
+// Batch size for the inArray lookup below — same value and same reasoning as
+// event-store.ts's own OWNERSHIP_LOOKUP_CHUNK_SIZE (its filterHostOwnership
+// is the sibling collision guard for persisted events; this one guards the
+// live `cursors`/`seen` relay instead): a numeric sessionId set arriving over
+// the wire from an agent is bounded only by how many sessions that host
+// tracks, not attacker-controlled the same way, but chunking here too keeps
+// this from ever depending on staying under SQLite's ~32,766 bind-parameter
+// limit as an invariant a busy host could someday violate.
+const SESSION_HOST_LOOKUP_CHUNK_SIZE = 500;
+
+/**
+ * Resolves a batch of numeric `sessions.id` values to their owning host, via
+ * the same `sessions -> projects.hostId` join resolveProjectHostId uses one
+ * project at a time (`sessions` itself has no `hostId` column). Issue
+ * #1459's collision guard: `relayRemoteEventsHost` (routes/events.ts) uses
+ * this to drop a `cursors`/`seen` entry a remote agent reports for a
+ * sessionId that doesn't actually resolve to the host reporting it — the
+ * same numeric-id-collision hazard event-store.ts's filterHostOwnership
+ * guards against for persisted events, just for the live relay instead.
+ *
+ * A sessionId absent from the returned map means no session row resolves to
+ * it at all (already deleted, or simply bogus) — every caller treats that
+ * the same as "does not belong to this host" and drops it, mirroring
+ * filterHostOwnership's own droppedNotFound case. Batched via `inArray`,
+ * chunked at SESSION_HOST_LOOKUP_CHUNK_SIZE, so a `cursors` frame naming many
+ * sessions costs one query per chunk, not one per session.
+ */
+export function resolveSessionHostIds(
+  app: FastifyInstance,
+  sessionIds: number[],
+): Map<number, string> {
+  const owners = new Map<number, string>();
+  const uniqueIds = [...new Set(sessionIds)];
+  for (let i = 0; i < uniqueIds.length; i += SESSION_HOST_LOOKUP_CHUNK_SIZE) {
+    const chunk = uniqueIds.slice(i, i + SESSION_HOST_LOOKUP_CHUNK_SIZE);
+    const rows = app.db
+      .select({ sessionId: sessions.id, hostId: projects.hostId })
+      .from(sessions)
+      .innerJoin(projects, eq(sessions.projectId, projects.id))
+      .where(inArray(sessions.id, chunk))
+      .all();
+    for (const row of rows) owners.set(row.sessionId, row.hostId);
+  }
+  return owners;
 }
 
 // Exported for routes/tasks.ts's claim endpoint (issue #216) and

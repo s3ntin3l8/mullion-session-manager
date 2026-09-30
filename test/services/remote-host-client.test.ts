@@ -1358,6 +1358,36 @@ describe("RemoteHostClient", () => {
         expect(verify("the-secret", canonicalString, options.headers[SIGNATURE_HEADER])).toBe(true);
       });
 
+      // Issue #1459 — the opt-in cursors flag: `requestTarget` (built BEFORE
+      // being used for either the URL or the signature) must be the
+      // identical "/internal/ws/events?cursors=1" string in both places, or
+      // the agent's own preValidation signature check (request.url, which
+      // includes the query string verbatim) would reject a perfectly
+      // legitimate request.
+      it("openEventsStream({cursors:true}) signs and dials /internal/ws/events?cursors=1 — the identical requestTarget in both the URL and the signature", () => {
+        sessionClient("the-secret").openEventsStream({ cursors: true });
+        const [url, options] = wsConstructorCalls[0] as [
+          string,
+          { headers: Record<string, string> },
+        ];
+        expect(url).toBe("ws://example.invalid:1234/internal/ws/events?cursors=1");
+        const canonicalString = buildCanonicalString({
+          method: "GET",
+          requestTarget: "/internal/ws/events?cursors=1",
+          timestamp: options.headers[TIMESTAMP_HEADER],
+          nonce: options.headers[NONCE_HEADER],
+          bodyHashed: true,
+          bodyHash: hashBody(""),
+        });
+        expect(verify("the-secret", canonicalString, options.headers[SIGNATURE_HEADER])).toBe(true);
+      });
+
+      it("openEventsStream() with no options omits the cursors query param — unchanged from before issue #1459", () => {
+        sessionClient("the-secret").openEventsStream();
+        const [url] = wsConstructorCalls[0] as [string, unknown];
+        expect(url).toBe("ws://example.invalid:1234/internal/ws/events");
+      });
+
       // Regression test (Hermes review, PR #564 round 4): without this,
       // `ws`'s 100 MiB default leaves both callers (relayRemoteEventsHost,
       // remote-event-subscriber.ts) exposed to an oversized frame from a

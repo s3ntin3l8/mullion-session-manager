@@ -4502,6 +4502,179 @@ describe("internal routes (agent role, issue #26)", () => {
       ws.close();
       await app.close();
     }, 10_000);
+
+    // Issue #1459 — the opt-in `?cursors=1` flag: without it, this route's
+    // behavior must stay byte-for-byte identical to before this issue (an
+    // older primary never sets it, so it must never see a frame shape it
+    // doesn't understand — see relayRemoteEventsHost's own doc comment,
+    // routes/events.ts).
+    it("without ?cursors=1, sends no cursors frame at all — matching pre-#1459 behavior exactly", async () => {
+      const { app, port } = await buildAndListen();
+
+      const before = fakePtyChildren.length;
+      const spawn = await app.inject({
+        method: "POST",
+        url: "/internal/sessions",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { id: "91", cwd: "/tmp", command: "bash", cols: 80, rows: 24 },
+      });
+      expect(spawn.statusCode).toBe(201);
+      await waitUntil(() => fakePtyChildren.length > before);
+      const pty = fakePtyChildren[fakePtyChildren.length - 1];
+
+      pty.emitData("\x1b]2;working\x07");
+      await new Promise((resolve) => setTimeout(resolve, 3_200));
+
+      const ws = new NodeWebSocket(`ws://127.0.0.1:${port}/internal/ws/events`, {
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      const messages: Array<Record<string, unknown>> = [];
+      ws.on("message", (data) => {
+        messages.push(JSON.parse(data.toString("utf8")));
+      });
+      await new Promise<void>((resolve, reject) => {
+        ws.once("open", () => resolve());
+        ws.once("close", () => reject(new Error("WS closed instead of opening")));
+        ws.once("error", reject);
+      });
+
+      await waitUntil(() => messages.length > 0);
+      // The very first frame is the replayed event itself, not a cursors
+      // frame — no message on this connection ever carries type: "cursors".
+      expect(messages[0]).toMatchObject({ sessionId: 91, kind: "title_change" });
+      expect(messages.some((m) => m.type === "cursors")).toBe(false);
+
+      ws.close();
+      await app.close();
+    }, 10_000);
+
+    it("?cursors=1 sends this agent's own cursors frame first, before any replayed event", async () => {
+      const { app, port } = await buildAndListen();
+
+      const ws = new NodeWebSocket(`ws://127.0.0.1:${port}/internal/ws/events?cursors=1`, {
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      const messages: Array<Record<string, unknown>> = [];
+      ws.on("message", (data) => {
+        messages.push(JSON.parse(data.toString("utf8")));
+      });
+      await new Promise<void>((resolve, reject) => {
+        ws.once("open", () => resolve());
+        ws.once("close", () => reject(new Error("WS closed instead of opening")));
+        ws.once("error", reject);
+      });
+
+      // No sessions spawned yet on this fresh app — an empty cursors map is
+      // still a real cursors frame (attachCursorsAndSeenBroadcast sends one
+      // unconditionally, same as attachAggregatedEventsSocket's own local
+      // send), not something this route skips just because it's empty.
+      await waitUntil(() => messages.length > 0);
+      expect(messages[0]).toMatchObject({ type: "cursors", cursors: {} });
+      expect(typeof messages[0].bootId).toBe("string");
+
+      ws.close();
+      await app.close();
+    });
+
+    it("?cursors=1 broadcasts a 'seen' advance from one internal connection to every OTHER open one on the same agent", async () => {
+      const { app, port } = await buildAndListen();
+
+      const before = fakePtyChildren.length;
+      const spawn = await app.inject({
+        method: "POST",
+        url: "/internal/sessions",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { id: "92", cwd: "/tmp", command: "bash", cols: 80, rows: 24 },
+      });
+      expect(spawn.statusCode).toBe(201);
+      await waitUntil(() => fakePtyChildren.length > before);
+      const pty = fakePtyChildren[fakePtyChildren.length - 1];
+      // Emit a real event so this session has a genuine event-seq head to
+      // advance a read cursor against (markEventsSeen accepts any seq
+      // regardless, but a real emit keeps this test's setup realistic).
+      pty.emitData("\x1b]2;working\x07");
+      await new Promise((resolve) => setTimeout(resolve, 3_200));
+
+      const connect = () =>
+        new Promise<{
+          ws: InstanceType<typeof NodeWebSocket>;
+          messages: Array<Record<string, unknown>>;
+        }>((resolve, reject) => {
+          const ws = new NodeWebSocket(`ws://127.0.0.1:${port}/internal/ws/events?cursors=1`, {
+            headers: { authorization: `Bearer ${TOKEN}` },
+          });
+          const messages: Array<Record<string, unknown>> = [];
+          ws.on("message", (data) => messages.push(JSON.parse(data.toString("utf8"))));
+          ws.once("open", () => resolve({ ws, messages }));
+          ws.once("close", () => reject(new Error("WS closed instead of opening")));
+          ws.once("error", reject);
+        });
+
+      const a = await connect();
+      const b = await connect();
+      await waitUntil(() => a.messages.length > 0 && b.messages.length > 0);
+      // Both connections' own replay/cursors traffic settles before the
+      // "seen" send below, so the broadcast is unambiguous to find.
+      const bBefore = b.messages.length;
+
+      a.ws.send(JSON.stringify({ type: "seen", sessionId: 92, seq: 1 }));
+
+      await waitUntil(() => b.messages.length > bBefore);
+      const seenMsg = b.messages.slice(bBefore).find((m) => m.type === "seen");
+      expect(seenMsg).toMatchObject({ type: "seen", sessionId: 92, seq: 1 });
+      // The sender itself never gets its own "seen" echoed back.
+      expect(a.messages.some((m) => m.type === "seen")).toBe(false);
+
+      a.ws.close();
+      b.ws.close();
+      await app.close();
+    }, 10_000);
+
+    it("accepts ?cursors=1 on a session-signed request — the signature covers the query string", async () => {
+      const { app, port } = await buildAndListen();
+      const sessionSecret = "cursors-flag-session-secret"; // pragma: allowlist secret
+      app.agentSession = {
+        hostId: "host-x",
+        sessionId: "cursors-flag-session-id",
+        sessionSecret,
+        expiresAt: new Date(Date.now() + 60_000),
+      };
+      const requestTarget = "/internal/ws/events?cursors=1";
+      const timestamp = String(Date.now());
+      const nonce = "nonce-cursors-flag";
+      const canonicalString = buildCanonicalString({
+        method: "GET",
+        requestTarget,
+        timestamp,
+        nonce,
+        bodyHashed: true,
+        bodyHash: hashBody(""),
+      });
+
+      const ws = new NodeWebSocket(`ws://127.0.0.1:${port}${requestTarget}`, {
+        headers: {
+          authorization: "Bearer cursors-flag-session-id",
+          [SIGNATURE_HEADER]: sign(sessionSecret, canonicalString),
+          [TIMESTAMP_HEADER]: timestamp,
+          [NONCE_HEADER]: nonce,
+        },
+      });
+      const messages: Array<Record<string, unknown>> = [];
+      ws.on("message", (data) => messages.push(JSON.parse(data.toString("utf8"))));
+      await new Promise<void>((resolve, reject) => {
+        ws.once("open", () => resolve());
+        ws.once("close", () =>
+          reject(new Error("WS closed instead of opening — signature rejected")),
+        );
+        ws.once("error", reject);
+      });
+
+      await waitUntil(() => messages.length > 0);
+      expect(messages[0]).toMatchObject({ type: "cursors" });
+
+      ws.close();
+      await app.close();
+    });
   });
 
   describe("/internal/ws/ssh-agent (issue #820, PR5b)", () => {

@@ -37,17 +37,26 @@ export const createEventsSlice: StateCreator<DashboardState, [], [], EventsSlice
   let eventsClientHandle: EventsClientHandle | null = null;
 
   // Issue #1427 — the bootId this connection last saw in a `cursors` frame
-  // (PtyManager.bootId's own doc comment). Scoped alongside
-  // eventsClientHandle (survives a stop()/start() cycle within the same
-  // page load, resets only on an actual page reload — a fresh module
-  // init) so a reconnect can compare against what THIS tab has already
-  // observed, not just whatever a single connection's lifetime saw. `null`
-  // means "no cursors frame seen yet this page load" — the very first one
-  // is never treated as a restart (there's nothing to compare against, and
-  // a fresh page load's lastSeenSeq already starts empty, so
-  // mergeCursorsFrame's normal path already adopts the server's cursor
-  // wholesale for every session in that case).
-  let knownBootId: string | null = null;
+  // (PtyManager.bootId's own doc comment), for each independent boot
+  // generation this tab has observed. Scoped alongside eventsClientHandle
+  // (survives a stop()/start() cycle within the same page load, resets only
+  // on an actual page reload — a fresh module init) so a reconnect can
+  // compare against what THIS tab has already observed, not just whatever a
+  // single connection's lifetime saw.
+  //
+  // Issue #1459 — a bare `let knownBootId: string | null` (this variable's
+  // shape before this issue) assumed exactly one boot generation existed at
+  // all: the primary's own. A multi-host `cursors` frame now carries a
+  // `hostId` (undefined for the primary's own local frame), and each host's
+  // process restarts entirely independently of any other — so this is now a
+  // `Map<string, string>` keyed by `hostId ?? "local"`, one entry per boot
+  // generation this tab has ever seen. A key absent from the map (including
+  // "local" itself, on the very first cursors frame this page load has ever
+  // received for that key) is never treated as a restart — there's nothing
+  // to compare against, and a fresh page load's lastSeenSeq already starts
+  // empty, so mergeCursorsFrame's normal path already adopts the server's
+  // cursor wholesale for every session in that case.
+  const knownBootIds = new Map<string, string>();
 
   // Issue #673 — fixed-window throttle (not the tasks.ts/github.ts precedent's
   // pure trailing debounce): refreshSessions() is called immediately on the
@@ -136,16 +145,36 @@ export const createEventsSlice: StateCreator<DashboardState, [], [], EventsSlice
         // has a chance to make lastSeenSeq's staleness visible as a wrong
         // unread count.
         //
-        // A changed bootId (vs. the last cursors frame THIS tab saw) is a
-        // confirmed backend restart — mergeServerCursor's numeric
-        // heuristic alone can't always catch this (see its own doc
-        // comment for the scenario it misses), so that case bypasses it
-        // entirely via adoptServerCursors. Same bootId (including "no
-        // prior bootId at all," the very first frame this page load has
-        // seen) uses the normal merge.
-        onCursors: (bootId, cursors) => {
-          const restarted = knownBootId !== null && knownBootId !== bootId;
-          knownBootId = bootId;
+        // A changed bootId (vs. the last cursors frame THIS tab saw for the
+        // SAME hostKey — issue #1459) is a confirmed restart of that one
+        // host's backend process — mergeServerCursor's numeric heuristic
+        // alone can't always catch this (see its own doc comment for the
+        // scenario it misses), so that case bypasses it entirely via
+        // adoptServerCursors. Same bootId for that hostKey (including "no
+        // prior bootId at all for this hostKey," the very first frame this
+        // page load has seen from it) uses the normal merge. `hostKey`
+        // (`hostId ?? "local"`) is what keeps a remote host's own restart
+        // from being conflated with the primary's own, or with a different
+        // remote host's — each tracked entirely independently.
+        //
+        // Hermes review, PR #1493 — the `"local"` fallback here relies on
+        // `"local"` staying reserved for the primary's own frame (never a
+        // real remote host's own hostId): `LOCAL_HOST_ID` (backend
+        // services/host-registry.ts) is exactly that reserved id, and every
+        // remote host is registered under a different one. A remote host
+        // that somehow ended up registered as `"local"` (a misconfigured
+        // import, or a test fixture reusing the constant as a placeholder)
+        // would have its own boot generation silently conflated with the
+        // primary's here — this frontend module has no way to see or
+        // enforce that invariant itself, since it never receives a
+        // `hostId` for the primary's own local frame in the first place
+        // (relayRemoteEventsHost, routes/events.ts, is what enforces it
+        // server-side, by construction: it only ever tags a frame with the
+        // REMOTE host's own hostId).
+        onCursors: (bootId, cursors, hostId) => {
+          const hostKey = hostId ?? "local";
+          const restarted = knownBootIds.has(hostKey) && knownBootIds.get(hostKey) !== bootId;
+          knownBootIds.set(hostKey, bootId);
           set((state) => ({
             lastSeenSeq: restarted
               ? adoptServerCursors(state.lastSeenSeq, cursors)
