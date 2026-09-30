@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { and, eq } from "drizzle-orm";
 import { devices } from "../db/schema.js";
 import type { DeviceInfo, DeviceKind } from "../services/device-manager.js";
+import { CLIPBOARD_MAX_BYTES } from "../services/device-defaults.js";
 
 // CRUD + one-shot action execution for devices (the `devices` DB table's
 // own route — routes/device.ts, singular, is the separate live WS video/
@@ -108,7 +109,9 @@ type DeviceAction =
   | { action: "swipe"; x1: number; y1: number; x2: number; y2: number; durationMs?: number }
   | { action: "text"; text: string }
   | { action: "key"; androidKeyCode: number }
-  | { action: "logcat"; lines?: number; filter?: string };
+  | { action: "logcat"; lines?: number; filter?: string }
+  | { action: "clipboard"; op: "get" }
+  | { action: "clipboard"; op: "set"; text: string; paste?: boolean };
 
 function isDeviceAction(value: unknown): value is DeviceAction {
   const v = value as Partial<DeviceAction> | null;
@@ -140,6 +143,24 @@ function isDeviceAction(value: unknown): value is DeviceAction {
         (v.lines === undefined || typeof v.lines === "number") &&
         (v.filter === undefined || typeof v.filter === "string")
       );
+    case "clipboard": {
+      // `op` is itself a sub-discriminant — narrow on it before touching
+      // `text`/`paste`, same reasoning logcat's own comment gives for
+      // typing optional fields strictly rather than letting a malformed
+      // body slip through to the handler below.
+      const c = v as Partial<{ op: "get" | "set"; text: string; paste: boolean }>;
+      // `get` takes no fields of its own — same strict "reject anything
+      // that doesn't belong" posture as logcat's own optional-field
+      // checks above, even though a stray `text`/`paste` alongside
+      // `op: "get"` would otherwise be harmlessly ignored by the handler.
+      if (c.op === "get") return c.text === undefined && c.paste === undefined;
+      if (c.op === "set") {
+        return (
+          typeof c.text === "string" && (c.paste === undefined || typeof c.paste === "boolean")
+        );
+      }
+      return false;
+    }
     default:
       return false;
   }
@@ -894,6 +915,44 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
           if (action.filter) args.push(action.filter);
           const output = await shell.spawnWaitText(shellExecArgv(args));
           return { logcat: output };
+        }
+        case "clipboard": {
+          // Same "requires the scrcpy connection specifically, not just
+          // adb" reasoning as `text` above, for BOTH sub-ops — including
+          // `get`, even though it only ever reads a local cache: this
+          // action family is scoped to "while a live scrcpy session for
+          // this device exists," matching `text`'s own 400 window rather
+          // than letting `get` answer from a stale cache after that
+          // session has gone away.
+          if (!device.controller) {
+            return reply.badRequest(
+              `device ${id} has no live scrcpy control connection yet (status: ${device.toInfo().status})`,
+            );
+          }
+          if (action.op === "get") {
+            // Reads the last-known-clipboard CACHE (Device.lastClipboard),
+            // never a live GET_CLIPBOARD round-trip — see that getter's own
+            // doc comment for why: scrcpy only replies to GET_CLIPBOARD
+            // when clipboardAutosync is disabled, and Mullion runs with it
+            // enabled (the AVD panel's own clipboard-sync feature, #1436,
+            // depends on it). `null` — not a 404 — is the correct answer
+            // for "nothing copied or set yet this session"; a `get` is a
+            // query, not an assertion that something exists.
+            return { text: device.lastClipboard };
+          }
+          // op === "set" — routed through Device.setClipboard
+          // (device-manager.ts) rather than calling
+          // device.controller.setClipboard directly, so this verb and the
+          // live WS panel's own clipboard paste (routes/device.ts) share one
+          // code path and keep the SAME cache up to date — see that
+          // method's own comment.
+          if (Buffer.byteLength(action.text, "utf8") > CLIPBOARD_MAX_BYTES) {
+            return reply.badRequest(
+              `clipboard text exceeds scrcpy's ${CLIPBOARD_MAX_BYTES}-byte limit`,
+            );
+          }
+          await device.setClipboard(action.text, action.paste ?? false);
+          return { ok: true };
         }
       }
     },

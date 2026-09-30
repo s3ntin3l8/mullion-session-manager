@@ -1232,6 +1232,37 @@ const deviceCommands = {
     const result = await client.request("device.action", body);
     return { json: result, text: result.logcat };
   },
+  // Unlike every other verb here, `clipboard` itself takes a sub-verb
+  // (`get`/`set`) as its own first positional arg, with the device id
+  // second — the REST/socket `action: "clipboard"` body's own `op` field
+  // (routes/devices.ts) needs exactly one of the two, so this mirrors that
+  // shape rather than splitting into two top-level CLI verbs.
+  async clipboard(client, args) {
+    const [op, deviceId, ...rest] = args;
+    if (op !== "get" && op !== "set") {
+      throw new CliUsageError("clipboard sub-command must be 'get' or 'set'");
+    }
+    if (deviceId === undefined) throw new CliUsageError("device id is required");
+    if (op === "get") {
+      const result = await client.request("device.action", {
+        deviceId,
+        action: "clipboard",
+        op: "get",
+      });
+      // Same "{json, text}" convention as `logcat` above — printing the raw
+      // cached text lets `mullion device clipboard get <id>` pipe cleanly,
+      // rather than forcing every caller through --json + a jq extraction.
+      // No cached value yet (nothing copied/set this session) prints as an
+      // empty line rather than the literal string "null".
+      return { json: result, text: result.text ?? "" };
+    }
+    const { flags, rest: textArgs } = extractFlags(rest, { paste: "boolean" });
+    const text = textArgs.join(" ");
+    if (text.length === 0) throw new CliUsageError("text is required");
+    const body = { deviceId, action: "clipboard", op: "set", text };
+    if (flags.paste !== undefined) body.paste = flags.paste;
+    return { json: await client.request("device.action", body) };
+  },
 };
 
 // Issue #944/#945 — thin passthroughs to the bundle.status/resync/remove
@@ -1348,7 +1379,7 @@ Commands:
   project list|actions|dock|tooling
   preview create|get|delete|list
   dock start|stop|list
-  device list|create|pair|pair-and-connect|discovered|connect|start|stop|delete|screenshot|tap|swipe|text|key|logcat
+  device list|create|pair|pair-and-connect|discovered|connect|start|stop|delete|screenshot|tap|swipe|text|key|logcat|clipboard
   bundle status|resync|remove
   events tail
   history [--session <id>] [--kind <k>] [--since <ms>] [--until <ms>]

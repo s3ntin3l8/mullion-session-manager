@@ -1039,6 +1039,29 @@ describe("RemoteHostClient", () => {
     await expect(client().resolveReviewGate("1", undefined, "approved")).resolves.toBe(false);
   });
 
+  it("posts an attention ack to /internal/sessions/:id/attention/ack and returns its ok flag (issue #1472)", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, { ok: true }));
+    await expect(client().acknowledgeAttention("1")).resolves.toBe(true);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://example.invalid:1234/internal/sessions/1/attention/ack",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("acknowledgeAttention returns false when the agent reports nothing to acknowledge (issue #1472)", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, { ok: false }));
+    await expect(client().acknowledgeAttention("1")).resolves.toBe(false);
+  });
+
+  it("acknowledgeAttention throws HostRequestError on a 404 from an agent that predates this route (version skew, issue #1472)", async () => {
+    fetchMock.mockResolvedValue(new Response("Not Found", { status: 404 }));
+    const err = await client()
+      .acknowledgeAttention("1")
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(HostRequestError);
+    expect((err as HostRequestError).statusCode).toBe(404);
+  });
+
   it("bypasses fetch entirely for an empty ids array", async () => {
     await expect(client().bulkLiveStatus([], 1000)).resolves.toEqual({});
     await expect(client().bulkIsMasterAlive([])).resolves.toEqual({});

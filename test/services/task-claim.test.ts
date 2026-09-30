@@ -428,6 +428,7 @@ describe("claimTask", () => {
       getScrollback: vi.fn().mockResolvedValue(Buffer.alloc(0)),
       uploadImage: vi.fn().mockResolvedValue({ path: "/tmp/upload" }),
       resolveReviewGate: vi.fn().mockResolvedValue(false),
+      acknowledgeAttention: vi.fn().mockResolvedValue(true),
       createWorktree: vi.fn().mockResolvedValue({
         created: true,
         path: deriveWorktreePathForTask(cwd, task),
@@ -747,6 +748,7 @@ describe("claimTask", () => {
       getScrollback: vi.fn().mockResolvedValue(Buffer.alloc(0)),
       uploadImage: vi.fn().mockResolvedValue({ path: "/remote/upload" }),
       resolveReviewGate: vi.fn().mockResolvedValue(false),
+      acknowledgeAttention: vi.fn().mockResolvedValue(true),
       createWorktree: vi.fn().mockResolvedValue({
         created: true,
         path: "/remote/project/.mullion-worktrees/mullion-task-x",
@@ -802,6 +804,7 @@ describe("claimTask", () => {
       getScrollback: vi.fn().mockResolvedValue(Buffer.alloc(0)),
       uploadImage: vi.fn().mockResolvedValue({ path: "/remote/upload" }),
       resolveReviewGate: vi.fn().mockResolvedValue(false),
+      acknowledgeAttention: vi.fn().mockResolvedValue(true),
       createWorktree: vi.fn().mockResolvedValue({
         created: true,
         path: "/remote/project/.mullion-worktrees/mullion-task-x",
@@ -860,6 +863,7 @@ describe("claimTask", () => {
       getScrollback: vi.fn().mockResolvedValue(Buffer.alloc(0)),
       uploadImage: vi.fn().mockResolvedValue({ path: "/remote/upload" }),
       resolveReviewGate: vi.fn().mockResolvedValue(false),
+      acknowledgeAttention: vi.fn().mockResolvedValue(true),
       createWorktree: vi.fn().mockResolvedValue({
         created: true,
         path: "/remote/project/.mullion-worktrees/mullion-task-x",
@@ -918,6 +922,7 @@ describe("claimTask", () => {
       getScrollback: vi.fn().mockResolvedValue(Buffer.alloc(0)),
       uploadImage: vi.fn().mockResolvedValue({ path: "/remote/upload" }),
       resolveReviewGate: vi.fn().mockResolvedValue(false),
+      acknowledgeAttention: vi.fn().mockResolvedValue(true),
       createWorktree: vi.fn().mockResolvedValue({
         created: true,
         path: "/remote/project/.mullion-worktrees/mullion-task-x",
@@ -1110,6 +1115,7 @@ describe("retryTask (#483)", () => {
       getScrollback: vi.fn().mockResolvedValue(Buffer.alloc(0)),
       uploadImage: vi.fn().mockResolvedValue({ path: "/remote/upload" }),
       resolveReviewGate: vi.fn().mockResolvedValue(false),
+      acknowledgeAttention: vi.fn().mockResolvedValue(true),
       createWorktree: vi.fn().mockResolvedValue(null),
       checkoutBranchWorktree: vi.fn().mockResolvedValue(null),
       resumeTaskWorktree: vi.fn().mockResolvedValue({
@@ -1171,6 +1177,7 @@ describe("retryTask (#483)", () => {
       getScrollback: vi.fn().mockResolvedValue(Buffer.alloc(0)),
       uploadImage: vi.fn().mockResolvedValue({ path: "/remote/upload" }),
       resolveReviewGate: vi.fn().mockResolvedValue(false),
+      acknowledgeAttention: vi.fn().mockResolvedValue(true),
       createWorktree: vi.fn().mockResolvedValue(null),
       checkoutBranchWorktree: vi.fn().mockResolvedValue(null),
       // Simulates an agent build old enough that
