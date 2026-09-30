@@ -348,6 +348,114 @@ describe("cursors/seen frames (issue #1427)", () => {
     expect(useDashboardStore.getState().lastSeenSeq[5]).toBe(9);
     stop();
   });
+
+  // Issue #1459 — a multi-host cursors frame carries its own `hostId`, and
+  // each host's boot generation must be tracked independently (the module's
+  // knownBootIds map, keyed by `hostId ?? "local"`) rather than colliding on
+  // one shared bootId the way a pre-#1459 single `knownBootId` variable
+  // would have.
+  it("a remote host's cursors frame with a DIFFERENT bootId than one previously seen for that SAME hostId triggers adopt for that host only", () => {
+    const stop = useDashboardStore.getState().startEventsStream();
+    instances[0].__open();
+
+    // Local session 5 and remote-host-A's session 100 both start out fully
+    // read locally.
+    useDashboardStore.setState({ lastSeenSeq: { 5: 5, 100: 20 } });
+
+    instances[0].__message(
+      JSON.stringify({
+        type: "cursors",
+        hostId: "remote-a",
+        bootId: "remote-a-boot-1",
+        cursors: { "100": { seen: 20, head: 20 } },
+      }),
+    );
+    expect(useDashboardStore.getState().lastSeenSeq[100]).toBe(20);
+
+    // remote-a restarts and re-emits new events before the next frame —
+    // a changed bootId for the SAME hostId ("remote-a") must adopt the
+    // server's cursor outright, exactly like a local restart would.
+    instances[0].__message(
+      JSON.stringify({
+        type: "cursors",
+        hostId: "remote-a",
+        bootId: "remote-a-boot-2",
+        cursors: { "100": { seen: 0, head: 30 } },
+      }),
+    );
+    expect(useDashboardStore.getState().lastSeenSeq[100]).toBe(0);
+
+    // The LOCAL session (no hostId, tracked under "local") is completely
+    // untouched by remote-a's own restart — a different hostKey entirely.
+    expect(useDashboardStore.getState().lastSeenSeq[5]).toBe(5);
+
+    stop();
+  });
+
+  it("a cursors frame for a NEW hostId never seen before is a fresh boot for that host, not a restart", () => {
+    const stop = useDashboardStore.getState().startEventsStream();
+    instances[0].__open();
+    useDashboardStore.setState({ lastSeenSeq: { 200: 999 } });
+
+    // The very first frame this tab has ever seen for "remote-b" — even
+    // though a local cursors frame (hostId undefined) may already have been
+    // observed, "remote-b" is a distinct, never-before-seen hostKey, so this
+    // must use the normal merge (Math.max), not force-adopt.
+    instances[0].__message(
+      JSON.stringify({
+        type: "cursors",
+        hostId: "remote-b",
+        bootId: "remote-b-boot-1",
+        cursors: { "200": { seen: 5, head: 999 } },
+      }),
+    );
+
+    // local(999) is not above server.head(999), so the normal merge takes
+    // Math.max(999, 5) = 999 — proving this went through mergeCursorsFrame,
+    // not adoptServerCursors (which would have unconditionally set it to 5).
+    expect(useDashboardStore.getState().lastSeenSeq[200]).toBe(999);
+
+    stop();
+  });
+
+  it("a local (no hostId) cursors frame and a remote host's cursors frame track independent boot generations", () => {
+    const stop = useDashboardStore.getState().startEventsStream();
+    instances[0].__open();
+
+    instances[0].__message(
+      JSON.stringify({ type: "cursors", bootId: "local-boot-1", cursors: { "1": { seen: 1, head: 1 } } }),
+    );
+    instances[0].__message(
+      JSON.stringify({
+        type: "cursors",
+        hostId: "remote-c",
+        bootId: "remote-c-boot-1",
+        cursors: { "2": { seen: 2, head: 2 } },
+      }),
+    );
+
+    // Same bootId again for the LOCAL key — ordinary merge, not a restart.
+    useDashboardStore.setState({ lastSeenSeq: { 1: 1, 2: 2 } });
+    instances[0].__message(
+      JSON.stringify({ type: "cursors", bootId: "local-boot-1", cursors: { "1": { seen: 0, head: 5 } } }),
+    );
+    expect(useDashboardStore.getState().lastSeenSeq[1]).toBe(1); // unchanged: merge, not adopt.
+
+    // A genuinely changed bootId for remote-c alone forces an adopt for
+    // session 2 only — session 1 (local) stays exactly as it was.
+    instances[0].__message(
+      JSON.stringify({
+        type: "cursors",
+        hostId: "remote-c",
+        bootId: "remote-c-boot-2",
+        cursors: { "2": { seen: 0, head: 9 } },
+      }),
+    );
+    expect(useDashboardStore.getState().lastSeenSeq[2]).toBe(0); // adopted.
+    expect(useDashboardStore.getState().lastSeenSeq[1]).toBe(1); // still untouched.
+
+    stop();
+  });
 });
 
 // Issue #1429 — the one shared "mark this session as fully read" primitive

@@ -53,6 +53,19 @@ vi.mock("../../src/services/host-registry.js", () => ({
   listHosts: listHostsMock,
 }));
 
+// Issue #1459 — relayRemoteEventsHost's own ownership-filtering collision
+// guard. Mocked here (rather than exercised against a real DB, the way
+// test/services/session-live-info-resolve-session-host-ids.test.ts already
+// covers resolveSessionHostIds' own real-join correctness) so this file can
+// keep its existing lightweight fakeApp()/fakeAppWithPty() harness — a real
+// buildApp() here would also pull in `LOCAL_HOST_ID` and other exports this
+// file's own host-registry.js/remote-host-client.js mocks don't provide,
+// throwing at import time.
+const resolveSessionHostIdsMock = vi.fn();
+vi.mock("../../src/services/session-live-info.js", () => ({
+  resolveSessionHostIds: resolveSessionHostIdsMock,
+}));
+
 const { relayRemoteEventsHost, attachAggregatedEventsSocket } =
   await import("../../src/routes/events.js");
 
@@ -76,6 +89,18 @@ function fakeAppWithPty(): FastifyInstance {
 describe("relayRemoteEventsHost (issue #166's multi-host twin)", () => {
   beforeEach(() => {
     openEventsStreamMock.mockReset();
+    resolveSessionHostIdsMock.mockReset();
+  });
+
+  it("opens the upstream with the cursors:true opt-in flag", () => {
+    const browserSocket = new MockSocket();
+    browserSocket.readyState = MockSocket.OPEN;
+    const upstream = new MockSocket();
+    openEventsStreamMock.mockReturnValue(upstream);
+
+    relayRemoteEventsHost(fakeApp(), browserSocket as unknown as WebSocket, "remote-host");
+
+    expect(openEventsStreamMock).toHaveBeenCalledWith({ cursors: true });
   });
 
   it("relays an upstream event message into the browser socket, explicitly forwarding isBinary", () => {
@@ -175,6 +200,98 @@ describe("relayRemoteEventsHost (issue #166's multi-host twin)", () => {
       expect.objectContaining({ hostId: "remote-host" }),
       "remote events ws upstream error",
     );
+  });
+
+  it("still forwards a plain event frame completely unparsed, byte-for-byte — no regression on the hot path", () => {
+    const browserSocket = new MockSocket();
+    browserSocket.readyState = MockSocket.OPEN;
+    const upstream = new MockSocket();
+    openEventsStreamMock.mockReturnValue(upstream);
+
+    relayRemoteEventsHost(fakeApp(), browserSocket as unknown as WebSocket, "remote-host");
+
+    const wireEvent = JSON.stringify({ seq: 9, sessionId: 5, kind: "attention", ts: 0, payload: {} });
+    const buf = Buffer.from(wireEvent);
+    upstream.emit("message", buf, false);
+
+    // Forwarded as the EXACT SAME Buffer instance, never re-stringified —
+    // and resolveSessionHostIds is never even called for a frame that isn't
+    // a cursors/seen type, confirming the prefix check short-circuits
+    // before any JSON.parse.
+    expect(browserSocket.sendSpy).toHaveBeenCalledWith(buf, { binary: false });
+    expect(resolveSessionHostIdsMock).not.toHaveBeenCalled();
+  });
+
+  it("re-emits a remote cursors frame tagged with hostId, filtered to sessions this host owns", () => {
+    const browserSocket = new MockSocket();
+    browserSocket.readyState = MockSocket.OPEN;
+    const upstream = new MockSocket();
+    openEventsStreamMock.mockReturnValue(upstream);
+
+    // session 5 belongs to remote-host, session 6 belongs to a DIFFERENT
+    // host despite being reported in remote-host's own cursors frame — the
+    // exact numeric-session-id-collision hazard this filter exists for.
+    resolveSessionHostIdsMock.mockReturnValue(
+      new Map([
+        [5, "remote-host"],
+        [6, "some-other-host"],
+      ]),
+    );
+
+    relayRemoteEventsHost(fakeApp(), browserSocket as unknown as WebSocket, "remote-host");
+
+    const cursorsFrame = JSON.stringify({
+      type: "cursors",
+      bootId: "agent-boot-1",
+      cursors: { "5": { seen: 3, head: 10 }, "6": { seen: 0, head: 1 } },
+    });
+    upstream.emit("message", Buffer.from(cursorsFrame), false);
+
+    expect(resolveSessionHostIdsMock).toHaveBeenCalledWith(expect.anything(), [5, 6]);
+    expect(browserSocket.sendSpy).toHaveBeenCalledWith(
+      JSON.stringify({
+        type: "cursors",
+        hostId: "remote-host",
+        bootId: "agent-boot-1",
+        cursors: { 5: { seen: 3, head: 10 } },
+      }),
+      undefined,
+    );
+  });
+
+  it("relays a remote seen frame for a session OWNED by this host", () => {
+    const browserSocket = new MockSocket();
+    browserSocket.readyState = MockSocket.OPEN;
+    const upstream = new MockSocket();
+    openEventsStreamMock.mockReturnValue(upstream);
+    resolveSessionHostIdsMock.mockReturnValue(new Map([[5, "remote-host"]]));
+
+    relayRemoteEventsHost(fakeApp(), browserSocket as unknown as WebSocket, "remote-host");
+
+    const seenFrame = JSON.stringify({ type: "seen", sessionId: 5, seq: 4 });
+    upstream.emit("message", Buffer.from(seenFrame), false);
+
+    expect(resolveSessionHostIdsMock).toHaveBeenCalledWith(expect.anything(), [5]);
+    expect(browserSocket.sendSpy).toHaveBeenCalledWith(
+      JSON.stringify({ type: "seen", sessionId: 5, seq: 4 }),
+      undefined,
+    );
+  });
+
+  it("silently drops a remote seen frame for a session NOT owned by this host", () => {
+    const browserSocket = new MockSocket();
+    browserSocket.readyState = MockSocket.OPEN;
+    const upstream = new MockSocket();
+    openEventsStreamMock.mockReturnValue(upstream);
+    // session 5 actually belongs to a different host than the one reporting it.
+    resolveSessionHostIdsMock.mockReturnValue(new Map([[5, "some-other-host"]]));
+
+    relayRemoteEventsHost(fakeApp(), browserSocket as unknown as WebSocket, "remote-host");
+
+    const seenFrame = JSON.stringify({ type: "seen", sessionId: 5, seq: 4 });
+    upstream.emit("message", Buffer.from(seenFrame), false);
+
+    expect(browserSocket.sendSpy).not.toHaveBeenCalled();
   });
 });
 

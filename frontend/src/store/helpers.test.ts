@@ -80,6 +80,56 @@ describe("mergeCursorsFrame (issue #1427)", () => {
   });
 });
 
+// Issue #1459 — the frontend receives one independent `cursors` frame per
+// enrolled host (routes/events.ts's relayRemoteEventsHost re-emits a
+// separate, hostId-tagged frame per remote host, alongside the primary's
+// own local one). store/slices/events.ts's onCursors handler applies
+// mergeCursorsFrame/adoptServerCursors once per frame, sequentially,
+// against the SAME shared `lastSeenSeq` record — these two functions
+// already leave any session id absent from a given frame untouched
+// (asserted individually above), which is exactly what makes that
+// composable: applying frame A then frame B must never let B clobber a
+// session A already resolved, and vice versa.
+describe("mergeCursorsFrame/adoptServerCursors compose across independent per-host frames (issue #1459)", () => {
+  it("a local frame followed by a remote host's frame: each only touches its own sessions", () => {
+    // Simulates onCursors firing once for the primary's own local frame
+    // (session 1), then once more for remote-host-a's frame (session 100) —
+    // two independent calls threaded through the same lastSeenSeq record,
+    // exactly as store/slices/events.ts's shared `set()` calls do.
+    let lastSeenSeq: Record<number, number> = { 1: 2, 100: 40 };
+    lastSeenSeq = mergeCursorsFrame(lastSeenSeq, { 1: { seen: 5, head: 10 } });
+    expect(lastSeenSeq).toEqual({ 1: 5, 100: 40 });
+
+    lastSeenSeq = mergeCursorsFrame(lastSeenSeq, { 100: { seen: 45, head: 50 } });
+    expect(lastSeenSeq).toEqual({ 1: 5, 100: 45 });
+  });
+
+  it("a remote host's adopt (confirmed restart) leaves an already-merged LOCAL session's cursor untouched", () => {
+    let lastSeenSeq: Record<number, number> = { 1: 5, 100: 40 };
+    // Local frame merges normally first.
+    lastSeenSeq = mergeCursorsFrame(lastSeenSeq, { 1: { seen: 5, head: 5 } });
+    expect(lastSeenSeq[1]).toBe(5);
+
+    // remote-a's own restart forces an adopt for session 100 only —
+    // session 1 (this frame doesn't mention it at all) stays exactly as the
+    // local merge left it.
+    lastSeenSeq = adoptServerCursors(lastSeenSeq, { 100: { seen: 0, head: 60 } });
+    expect(lastSeenSeq).toEqual({ 1: 5, 100: 0 });
+  });
+
+  it("two different remote hosts' frames, applied independently, never clobber each other's sessions", () => {
+    let lastSeenSeq: Record<number, number> = {};
+    lastSeenSeq = mergeCursorsFrame(lastSeenSeq, { 200: { seen: 3, head: 3 } }); // remote-a
+    lastSeenSeq = mergeCursorsFrame(lastSeenSeq, { 300: { seen: 7, head: 7 } }); // remote-b
+    expect(lastSeenSeq).toEqual({ 200: 3, 300: 7 });
+
+    // remote-a alone restarts — remote-b's session is absent from this
+    // frame and must be left exactly as it was.
+    lastSeenSeq = adoptServerCursors(lastSeenSeq, { 200: { seen: 0, head: 9 } });
+    expect(lastSeenSeq).toEqual({ 200: 0, 300: 7 });
+  });
+});
+
 describe("adoptServerCursors (issue #1427)", () => {
   it("adopts the server's value unconditionally, even when it's lower than local", () => {
     // The whole point: mergeServerCursor's numeric heuristic can't always

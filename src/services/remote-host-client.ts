@@ -1418,9 +1418,22 @@ export class RemoteHostClient {
    * connection (RFC 6455 1009) rather than deliver it — both callers
    * already handle an unexpected close via their normal reconnect/relay
    * teardown paths, so this doesn't need its own error handling.
+   *
+   * Issue #1459 — `opts.cursors` (only ever passed by
+   * routes/events.ts's relayRemoteEventsHost, never by
+   * remote-event-subscriber.ts's own history-capture subscription, which has
+   * no browser-facing cursors/seen story to opt into) appends `?cursors=1`
+   * to `requestTarget` — BEFORE it's used for both the actual URL and the
+   * signature's canonical request-target string, so the two can never
+   * diverge (buildCanonicalString's own doc comment: the signed target must
+   * match byte-for-byte what's actually sent on the wire). This is what
+   * tells the agent's own `/internal/ws/events` route to also send its own
+   * `cursors` frame and join its seenSubscribers broadcast set — see
+   * relayRemoteEventsHost's own doc comment for why this is opt-in rather
+   * than unconditional.
    */
-  openEventsStream(): NodeWebSocket {
-    const requestTarget = "/internal/ws/events";
+  openEventsStream(opts?: { cursors?: boolean }): NodeWebSocket {
+    const requestTarget = opts?.cursors ? "/internal/ws/events?cursors=1" : "/internal/ws/events";
     return new NodeWebSocket(`${this.wsBaseUrl}${requestTarget}`, {
       headers: {
         authorization: `Bearer ${this.token}`,
