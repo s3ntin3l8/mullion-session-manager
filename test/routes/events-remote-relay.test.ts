@@ -278,6 +278,33 @@ describe("relayRemoteEventsHost (issue #166's multi-host twin)", () => {
     );
   });
 
+  it("drops a malformed cursors-prefixed frame without forwarding or throwing", () => {
+    const browserSocket = new MockSocket();
+    browserSocket.readyState = MockSocket.OPEN;
+    const upstream = new MockSocket();
+    openEventsStreamMock.mockReturnValue(upstream);
+
+    relayRemoteEventsHost(fakeApp(), browserSocket as unknown as WebSocket, "remote-host");
+
+    // Starts with the cursors prefix but isn't valid JSON past that point.
+    const garbage = Buffer.from('{"type":"cursors", not valid json');
+    expect(() => upstream.emit("message", garbage, false)).not.toThrow();
+    expect(browserSocket.sendSpy).not.toHaveBeenCalled();
+  });
+
+  it("drops a malformed seen-prefixed frame without forwarding or throwing", () => {
+    const browserSocket = new MockSocket();
+    browserSocket.readyState = MockSocket.OPEN;
+    const upstream = new MockSocket();
+    openEventsStreamMock.mockReturnValue(upstream);
+
+    relayRemoteEventsHost(fakeApp(), browserSocket as unknown as WebSocket, "remote-host");
+
+    const garbage = Buffer.from('{"type":"seen", not valid json');
+    expect(() => upstream.emit("message", garbage, false)).not.toThrow();
+    expect(browserSocket.sendSpy).not.toHaveBeenCalled();
+  });
+
   it("silently drops a remote seen frame for a session NOT owned by this host", () => {
     const browserSocket = new MockSocket();
     browserSocket.readyState = MockSocket.OPEN;
