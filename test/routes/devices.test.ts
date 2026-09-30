@@ -909,6 +909,16 @@ describe("devices routes", () => {
           payload: { action: "clipboard", op: "set" },
         });
         expect(res3.statusCode).toBe(400);
+
+        // Hermes review — `get` takes no fields of its own; a stray
+        // `text`/`paste` alongside it must 400 rather than be silently
+        // ignored, same strict posture logcat's own optional fields get.
+        const res4 = await app.inject({
+          method: "POST",
+          url: `/api/devices/${id}/action`,
+          payload: { action: "clipboard", op: "get", text: "unexpected" },
+        });
+        expect(res4.statusCode).toBe(400);
       });
     });
 

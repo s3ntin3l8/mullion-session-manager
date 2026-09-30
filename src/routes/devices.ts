@@ -149,7 +149,11 @@ function isDeviceAction(value: unknown): value is DeviceAction {
       // typing optional fields strictly rather than letting a malformed
       // body slip through to the handler below.
       const c = v as Partial<{ op: "get" | "set"; text: string; paste: boolean }>;
-      if (c.op === "get") return true;
+      // `get` takes no fields of its own — same strict "reject anything
+      // that doesn't belong" posture as logcat's own optional-field
+      // checks above, even though a stray `text`/`paste` alongside
+      // `op: "get"` would otherwise be harmlessly ignored by the handler.
+      if (c.op === "get") return c.text === undefined && c.paste === undefined;
       if (c.op === "set") {
         return (
           typeof c.text === "string" && (c.paste === undefined || typeof c.paste === "boolean")

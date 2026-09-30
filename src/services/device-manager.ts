@@ -696,7 +696,16 @@ export class Device {
         // Updated BEFORE fanning out to live listeners — see
         // clipboardCache's own doc comment for why this is a different,
         // additional contract from the fan-out below, not a replacement
-        // for it.
+        // for it. `value` is already a decoded `string` here — the
+        // `ReadableStream<string>` type on `scrcpyClient.clipboard`
+        // means @yume-chan/adb-scrcpy itself UTF-8-decodes the device's
+        // CLIPBOARD_TEXT payload before this pump ever sees it. That's
+        // the INBOUND side; `CLIPBOARD_MAX_BYTES`'s `Buffer.byteLength`
+        // check (device-defaults.ts, applied in routes/devices.ts and
+        // routes/device.ts) is the OUTBOUND side — measuring a host
+        // string's UTF-8 byte length before it goes out over
+        // SET_CLIPBOARD. The two aren't the same direction, so don't read
+        // this line as implying `value` needs (or gets) that same check.
         this.clipboardCache = value;
         for (const listener of this.clipboardListeners) {
           // One throwing listener (e.g. socket.send on a closing socket) must
