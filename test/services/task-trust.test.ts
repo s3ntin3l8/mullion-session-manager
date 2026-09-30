@@ -4,7 +4,7 @@ import { isTrustedAuthor } from "../../src/services/task-trust.js";
 const none = new Set<string>();
 
 describe("isTrustedAuthor", () => {
-  it.each(["OWNER", "MEMBER", "COLLABORATOR", "owner"])("trusts association %s", (a) => {
+  it.each(["OWNER", "MEMBER", "COLLABORATOR"])("trusts association %s", (a) => {
     expect(isTrustedAuthor(a, "someone", none)).toBe(true);
   });
 
@@ -14,6 +14,10 @@ describe("isTrustedAuthor", () => {
       expect(isTrustedAuthor(a, "someone", none)).toBe(false);
     },
   );
+
+  it("matches GitHub's uppercase association exactly (no case folding)", () => {
+    expect(isTrustedAuthor("owner", "someone", none)).toBe(false);
+  });
 
   it("fails closed on a missing association", () => {
     expect(isTrustedAuthor(undefined, "someone", none)).toBe(false);

@@ -38,6 +38,13 @@ import type { TaskPromptComment, TaskPromptParent, TaskPromptSibling } from "./t
 // what protects the API call, not the prompt.
 const MAX_FETCHED_COMMENTS = 10;
 
+// How many pages back to look for trusted comments. The trust filter runs
+// after the fetch, so on a public issue a burst of outsider comments could
+// fill the whole newest window and hide an earlier maintainer comment; this
+// pages back past them, bounded so a flooded thread costs at most this many
+// requests per worker spawn.
+const MAX_COMMENT_PAGES = 5;
+
 export interface TaskIssueContext {
   comments: TaskPromptComment[];
   parent: TaskPromptParent | null;
@@ -61,6 +68,40 @@ export interface TaskIssueContextProject {
 }
 
 /**
+ * The last `MAX_FETCHED_COMMENTS` TRUSTED comments on an issue (oldest-first),
+ * paging back past untrusted ones — up to `MAX_COMMENT_PAGES` requests — so
+ * an outsider flood can't crowd a maintainer's comment out of the window.
+ * Untrusted comments seen along the way are counted into one omission marker
+ * (see filterTrustedComments).
+ */
+async function listTrustedComments(
+  token: string,
+  owner: string,
+  repo: string,
+  issueNumber: number,
+  trustedLogins: ReadonlySet<string>,
+): Promise<TaskPromptComment[]> {
+  let fetched: GitHubIssueComment[] = [];
+  for (let page = 1; page <= MAX_COMMENT_PAGES; page++) {
+    const batch = await listIssueComments(
+      token,
+      owner,
+      repo,
+      issueNumber,
+      MAX_FETCHED_COMMENTS,
+      page,
+    );
+    // Pages walk backwards in time, so each batch is older than what we hold.
+    fetched = [...batch, ...fetched];
+    const trustedCount = fetched.filter((c) =>
+      isTrustedAuthor(c.authorAssociation, c.author, trustedLogins),
+    ).length;
+    if (trustedCount >= MAX_FETCHED_COMMENTS || batch.length < MAX_FETCHED_COMMENTS) break;
+  }
+  return filterTrustedComments(fetched, trustedLogins);
+}
+
+/**
  * Drops comments from authors with no standing in the repo (see
  * task-trust.ts) — a public repo lets anyone comment, and this text goes
  * straight into an unattended agent's prompt. When any were dropped, a
@@ -71,10 +112,12 @@ function filterTrustedComments(
   comments: GitHubIssueComment[],
   trustedLogins: ReadonlySet<string>,
 ): TaskPromptComment[] {
-  const kept = comments.filter((c) =>
+  const trusted = comments.filter((c) =>
     isTrustedAuthor(c.authorAssociation, c.author, trustedLogins),
   );
-  const dropped = comments.length - kept.length;
+  const dropped = comments.length - trusted.length;
+  // Paging can collect more than one window's worth — keep the newest.
+  const kept = trusted.slice(-MAX_FETCHED_COMMENTS);
   if (dropped === 0) return kept;
   return [
     ...kept,
@@ -121,14 +164,11 @@ export async function resolveTaskIssueContext(
   // cross-repo parent failure (token 403, network blip, deleted issue)
   // must not drop the child's own comment block (Hermes review, #1025).
   const trustedLogins = resolveTrustedLogins(app);
-  const comments = filterTrustedComments(
-    await listIssueComments(
-      token,
-      repoRef.owner,
-      repoRef.repo,
-      task.issueNumber,
-      MAX_FETCHED_COMMENTS,
-    ),
+  const comments = await listTrustedComments(
+    token,
+    repoRef.owner,
+    repoRef.repo,
+    task.issueNumber,
     trustedLogins,
   );
 
@@ -146,12 +186,12 @@ export async function resolveTaskIssueContext(
       if (parentToken) {
         const [parentIssue, parentComments] = await Promise.all([
           getIssue(parentToken, parentOwner!, parentRepo!, task.parentIssueNumber!),
-          listIssueComments(
+          listTrustedComments(
             parentToken,
             parentOwner!,
             parentRepo!,
             task.parentIssueNumber!,
-            MAX_FETCHED_COMMENTS,
+            trustedLogins,
           ),
         ]);
         if (
@@ -171,7 +211,7 @@ export async function resolveTaskIssueContext(
             repo: task.parentIssueRepo!,
             title: parentIssue.title,
             body: parentIssue.body,
-            comments: filterTrustedComments(parentComments, trustedLogins),
+            comments: parentComments,
           };
         }
       }

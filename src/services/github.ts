@@ -482,6 +482,7 @@ export async function listIssueComments(
   repo: string,
   issueNumber: number,
   perPage: number,
+  page = 1,
 ): Promise<GitHubIssueComment[]> {
   validateGitHubRepoRef(owner, repo);
   const headers: Record<string, string> = {
@@ -489,7 +490,7 @@ export async function listIssueComments(
   };
 
   const res = await githubApiFetch(
-    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${issueNumber}/comments?per_page=${perPage}&sort=created&direction=desc`,
+    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${issueNumber}/comments?per_page=${perPage}&page=${page}&sort=created&direction=desc`,
     { headers },
   );
 

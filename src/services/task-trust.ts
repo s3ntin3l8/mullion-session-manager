@@ -24,7 +24,7 @@ export function isTrustedAuthor(
   login: string | null | undefined,
   trustedLogins: ReadonlySet<string>,
 ): boolean {
-  if (association !== undefined && TRUSTED_ASSOCIATIONS.has(association.toUpperCase())) {
+  if (association !== undefined && TRUSTED_ASSOCIATIONS.has(association)) {
     return true;
   }
   return login != null && trustedLogins.has(login.toLowerCase());

@@ -622,7 +622,9 @@ comma-separated `MULLION_TASK_TRUSTED_LOGINS`; case-insensitive — use it for
 bot accounts, which never carry those associations). An issue from anyone else
 is ignored entirely (logged once), and comments from anyone else are dropped
 from the worker's prompt, replaced by a one-line "N comments from unverified
-authors omitted" marker. A missing association is treated as untrusted.
+authors omitted" marker. The comment fetch pages back (at most 5 requests
+per thread) past untrusted comments, so an outsider flood can't crowd out an
+earlier maintainer comment. A missing association is treated as untrusted.
 
 No separate control for dependency-aware claiming (`#667`) — a
 zero-dependency issue costs nothing extra to begin with, so there's

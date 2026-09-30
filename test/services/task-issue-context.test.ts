@@ -201,6 +201,116 @@ describe("resolveTaskIssueContext (#939/#1016)", () => {
     expect(rowFor(761).title).toBe("T");
   });
 
+  it("pages back past an untrusted flood to reach an earlier maintainer comment", async () => {
+    upsertIssueTask(app, projectId, {
+      number: 770,
+      title: "T",
+      body: null,
+      htmlUrl: "https://x/770",
+      authorAssociation: "OWNER",
+    });
+    const spam = (n: number) =>
+      Array.from({ length: 10 }, (_, i) => ({
+        author: "rando",
+        authorAssociation: "NONE",
+        body: `spam ${n}-${i}`,
+        createdAt: "2026-01-02T00:00:00Z",
+      }));
+    mockListIssueComments.mockImplementation(
+      async (_t: string, _o: string, _r: string, _n: number, _pp: number, page = 1) => {
+        if (page === 1) return spam(1);
+        if (page === 2) {
+          return [
+            {
+              author: "alice",
+              authorAssociation: "MEMBER",
+              body: "maintainer instructions",
+              createdAt: "2026-01-01T00:00:00Z",
+            },
+            ...spam(2).slice(1),
+          ];
+        }
+        return [];
+      },
+    );
+    const result = await resolveTaskIssueContext(app, rowFor(770), project);
+    expect(result!.comments.map((c) => c.body)).toEqual([
+      "maintainer instructions",
+      "[Mullion: 19 comments from unverified authors omitted]",
+    ]);
+    // Page 2 still had only one trusted comment, so it looks one page further.
+    expect(mockListIssueComments).toHaveBeenCalledTimes(3);
+  });
+
+  it("stops paging after a bounded number of requests on an all-untrusted thread", async () => {
+    upsertIssueTask(app, projectId, {
+      number: 771,
+      title: "T",
+      body: null,
+      htmlUrl: "https://x/771",
+      authorAssociation: "OWNER",
+    });
+    mockListIssueComments.mockImplementation(async () =>
+      Array.from({ length: 10 }, () => ({
+        author: "rando",
+        authorAssociation: "NONE",
+        body: "spam",
+        createdAt: "2026-01-01T00:00:00Z",
+      })),
+    );
+    await resolveTaskIssueContext(app, rowFor(771), project);
+    expect(mockListIssueComments).toHaveBeenCalledTimes(5);
+  });
+
+  it("warns about an in-flight task whose issue author is untrusted, without touching it", async () => {
+    upsertIssueTask(app, projectId, {
+      number: 772,
+      title: "T",
+      body: null,
+      htmlUrl: "https://x/772",
+      authorAssociation: "OWNER",
+    });
+    app.db
+      .update(tasks)
+      .set({ status: "in_progress" })
+      .where(and(eq(tasks.projectId, projectId), eq(tasks.issueNumber, 772)))
+      .run();
+    const warn = vi.spyOn(app.log, "warn");
+    upsertIssueTask(app, projectId, {
+      number: 772,
+      title: "T",
+      body: null,
+      htmlUrl: "https://x/772",
+      authorLogin: "rando",
+      authorAssociation: "NONE",
+    });
+    expect(rowFor(772).status).toBe("in_progress");
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ issueNumber: 772, status: "in_progress" }),
+      expect.stringContaining("in-flight task"),
+    );
+    warn.mockRestore();
+  });
+
+  it("keeps a running suppressed-count once the per-process untrusted warning limit is reached", async () => {
+    const warn = vi.spyOn(app.log, "warn");
+    for (let n = 3000; n < 3000 + 520; n++) {
+      upsertIssueTask(app, projectId, {
+        number: n,
+        title: "T",
+        body: null,
+        htmlUrl: `https://x/${n}`,
+        authorLogin: "rando",
+        authorAssociation: "NONE",
+      });
+    }
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ suppressed: 1 }),
+      expect.stringContaining("warning limit reached"),
+    );
+    warn.mockRestore();
+  });
+
   it("resolves the task's own comments", async () => {
     mockListIssueComments.mockResolvedValue([
       {
@@ -226,7 +336,7 @@ describe("resolveTaskIssueContext (#939/#1016)", () => {
         createdAt: "2026-01-01T00:00:00Z",
       },
     ]);
-    expect(mockListIssueComments).toHaveBeenCalledWith("tok", "acme", "widgets", 702, 10);
+    expect(mockListIssueComments).toHaveBeenCalledWith("tok", "acme", "widgets", 702, 10, 1);
     expect(result?.parent).toBeNull();
     expect(result?.siblings).toEqual([]);
   });
