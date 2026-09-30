@@ -202,10 +202,34 @@ export function attachLocalEventsSocket(
 // file's "seen" broadcast payload) — a plain NotificationEvent never starts
 // this way (its own field order is `{seq, sessionId, kind, ts, payload}`,
 // see pty-manager.ts), so this prefix check can never false-positive on the
-// hot path's actual majority case (ordinary event frames) and only ever
-// costs a cheap string comparison for those.
-const CURSORS_FRAME_PREFIX = '{"type":"cursors"';
-const SEEN_FRAME_PREFIX = '{"type":"seen"';
+// hot path's actual majority case (ordinary event frames).
+//
+// Hermes review, PR #1493 — kept as `Buffer`s, compared directly against
+// the raw frame via `.subarray(...).equals(...)`, rather than the string
+// prefixes this started as: `data.toString("utf8")` on every single
+// incoming frame just to run `startsWith` on ~16 bytes would allocate a
+// full UTF-8 string of EVERY plain event frame too (the hot path's actual
+// majority case) — a real per-frame cost pre-#1459 never had. `.equals()`
+// does a byte-for-byte compare with no allocation; `data.toString("utf8")`
+// (and the subsequent `JSON.parse`) now only run for the rare frame that
+// already matched one of these two prefixes.
+const CURSORS_FRAME_PREFIX = Buffer.from('{"type":"cursors"');
+const SEEN_FRAME_PREFIX = Buffer.from('{"type":"seen"');
+
+// `data` here is `ws`'s own `RawData` (`Buffer | ArrayBuffer | Buffer[]`) —
+// narrowed with `Buffer.isBuffer` rather than typed as `Buffer` outright,
+// since this channel's payload is a Buffer in practice (see the isBinary
+// comment above) but the type itself doesn't guarantee it. Anything else
+// (a fragmented/streamed frame arriving as `ArrayBuffer`/`Buffer[]`, which
+// shouldn't happen for this JSON-only channel) simply doesn't match either
+// prefix and falls through to the unparsed forward path below.
+function startsWithPrefix(data: Buffer | ArrayBuffer | Buffer[], prefix: Buffer): boolean {
+  return (
+    Buffer.isBuffer(data) &&
+    data.length >= prefix.length &&
+    data.subarray(0, prefix.length).equals(prefix)
+  );
+}
 
 /**
  * Opens one upstream `/internal/ws/events?cursors=1` connection to `hostId`
@@ -284,51 +308,52 @@ export function relayRemoteEventsHost(
     // Issue #1459 — only a text frame can possibly be a cursors/seen frame
     // (this channel is JSON-only to begin with; isBinary should never be
     // true here in practice, but the check below is what actually decides,
-    // not an assumption). A frame whose string form doesn't start with
-    // either known prefix is forwarded completely unparsed, `data` untouched
-    // — the exact same byte-for-byte relay this did before this issue.
-    if (!isBinary) {
-      const text = data.toString("utf8");
-      if (text.startsWith(CURSORS_FRAME_PREFIX)) {
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(text);
-        } catch {
-          return; // malformed — drop rather than forward garbage to the browser.
+    // not an assumption). startsWithPrefix is a zero-allocation byte
+    // compare (see its own doc comment) — `data.toString("utf8")` (and the
+    // `JSON.parse` after it) only happen for a frame that already matched
+    // one of the two prefixes. A frame that matches neither is forwarded
+    // completely unparsed, `data` untouched — the exact same byte-for-byte
+    // relay this did before this issue, with no per-frame string
+    // allocation on that (hot-path, majority-case) path either.
+    if (!isBinary && startsWithPrefix(data, CURSORS_FRAME_PREFIX)) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(data.toString("utf8"));
+      } catch {
+        return; // malformed — drop rather than forward garbage to the browser.
+      }
+      if (isCursorsUpstreamFrame(parsed)) {
+        const ids = Object.keys(parsed.cursors)
+          .map(Number)
+          .filter((id) => Number.isFinite(id));
+        const owners = resolveSessionHostIds(app, ids);
+        const filtered: Record<number, { seen: number; head: number }> = {};
+        for (const [key, value] of Object.entries(parsed.cursors)) {
+          const id = Number(key);
+          if (Number.isFinite(id) && owners.get(id) === hostId) filtered[id] = value;
         }
-        if (isCursorsUpstreamFrame(parsed)) {
-          const ids = Object.keys(parsed.cursors)
-            .map(Number)
-            .filter((id) => Number.isFinite(id));
-          const owners = resolveSessionHostIds(app, ids);
-          const filtered: Record<number, { seen: number; head: number }> = {};
-          for (const [key, value] of Object.entries(parsed.cursors)) {
-            const id = Number(key);
-            if (Number.isFinite(id) && owners.get(id) === hostId) filtered[id] = value;
-          }
+        browserSocket.send(
+          JSON.stringify({ type: "cursors", hostId, bootId: parsed.bootId, cursors: filtered }),
+        );
+      }
+      return;
+    }
+    if (!isBinary && startsWithPrefix(data, SEEN_FRAME_PREFIX)) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(data.toString("utf8"));
+      } catch {
+        return;
+      }
+      if (isSeenMessage(parsed)) {
+        const owners = resolveSessionHostIds(app, [parsed.sessionId]);
+        if (owners.get(parsed.sessionId) === hostId) {
           browserSocket.send(
-            JSON.stringify({ type: "cursors", hostId, bootId: parsed.bootId, cursors: filtered }),
+            JSON.stringify({ type: "seen", sessionId: parsed.sessionId, seq: parsed.seq }),
           );
         }
-        return;
       }
-      if (text.startsWith(SEEN_FRAME_PREFIX)) {
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(text);
-        } catch {
-          return;
-        }
-        if (isSeenMessage(parsed)) {
-          const owners = resolveSessionHostIds(app, [parsed.sessionId]);
-          if (owners.get(parsed.sessionId) === hostId) {
-            browserSocket.send(
-              JSON.stringify({ type: "seen", sessionId: parsed.sessionId, seq: parsed.seq }),
-            );
-          }
-        }
-        return;
-      }
+      return;
     }
 
     browserSocket.send(data, { binary: isBinary });

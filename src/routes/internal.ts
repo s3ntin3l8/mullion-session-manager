@@ -2316,7 +2316,15 @@ export async function internalRoutes(app: FastifyInstance) {
     "/internal/ws/events",
     { websocket: true, config: INTERNAL_RATE_LIMIT.config },
     (socket, req) => {
-      if (req.query.cursors !== undefined) {
+      // Hermes review, PR #1493 — exactly "1", not merely "present", so this
+      // matches the documented contract byte-for-byte: RemoteHostClient.
+      // openEventsStream's own `?cursors=1` is the only value any caller
+      // ever sends. Not a security boundary either way (the flag only
+      // decides whether THIS agent emits an extra frame, never a privilege
+      // check), but a stray `?cursors=` or `?cursors=0` from a future/buggy
+      // caller should read as "flag not set", not "flag set to something
+      // weird".
+      if (req.query.cursors === "1") {
         const onSeenAdvanced = attachCursorsAndSeenBroadcast(app, socket);
         attachLocalEventsSocket(app, socket, { onSeenAdvanced });
       } else {

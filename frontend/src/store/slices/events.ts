@@ -156,6 +156,21 @@ export const createEventsSlice: StateCreator<DashboardState, [], [], EventsSlice
         // (`hostId ?? "local"`) is what keeps a remote host's own restart
         // from being conflated with the primary's own, or with a different
         // remote host's — each tracked entirely independently.
+        //
+        // Hermes review, PR #1493 — the `"local"` fallback here relies on
+        // `"local"` staying reserved for the primary's own frame (never a
+        // real remote host's own hostId): `LOCAL_HOST_ID` (backend
+        // services/host-registry.ts) is exactly that reserved id, and every
+        // remote host is registered under a different one. A remote host
+        // that somehow ended up registered as `"local"` (a misconfigured
+        // import, or a test fixture reusing the constant as a placeholder)
+        // would have its own boot generation silently conflated with the
+        // primary's here — this frontend module has no way to see or
+        // enforce that invariant itself, since it never receives a
+        // `hostId` for the primary's own local frame in the first place
+        // (relayRemoteEventsHost, routes/events.ts, is what enforces it
+        // server-side, by construction: it only ever tags a frame with the
+        // REMOTE host's own hostId).
         onCursors: (bootId, cursors, hostId) => {
           const hostKey = hostId ?? "local";
           const restarted = knownBootIds.has(hostKey) && knownBootIds.get(hostKey) !== bootId;
