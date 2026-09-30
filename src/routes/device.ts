@@ -3,7 +3,11 @@ import type { WebSocket } from "@fastify/websocket";
 import { eq } from "drizzle-orm";
 import { AndroidKeyEventAction } from "@yume-chan/scrcpy";
 import { AndroidMotionEventAction, AndroidMotionEventButton } from "@yume-chan/scrcpy";
-import type { AndroidKeyCode, ScrcpyMediaStreamPacket } from "@yume-chan/scrcpy";
+import type {
+  AndroidKeyCode,
+  AndroidKeyEventMeta,
+  ScrcpyMediaStreamPacket,
+} from "@yume-chan/scrcpy";
 import { devices } from "../db/schema.js";
 import type { Device, DeviceKind } from "../services/device-manager.js";
 import { CLIPBOARD_MAX_BYTES } from "../services/device-defaults.js";
@@ -105,11 +109,15 @@ interface TextMessage {
 /** `androidKeyCode` is an AOSP `KEYCODE_*` numeric value — the frontend owns
  * mapping a browser KeyboardEvent to this, same division of labor as
  * `injectKeyCode`'s own doc comment implies (this route is a thin proxy,
- * not a keymap). */
+ * not a keymap). `metaState` is the same scrcpy `AndroidKeyEventMeta` bitmask
+ * `injectKeyCode` takes (Ctrl/Shift/Alt/Meta bits OR'd together) — optional
+ * and defaulting to 0 (no modifiers) so older frontend builds and every
+ * pre-existing message on the wire keep working unchanged. */
 interface KeyEventMessage {
   type: "keyEvent";
   androidKeyCode: number;
   action: "down" | "up";
+  metaState?: number;
 }
 
 /** Host clipboard text to place on the device and paste (scrcpy
@@ -139,6 +147,14 @@ type DeviceInputMessage =
 
 function isFiniteNumber(v: unknown): v is number {
   return typeof v === "number" && Number.isFinite(v);
+}
+
+// scrcpy's InjectKeyCode control message packs metaState into a u32 on the
+// wire — reject anything that couldn't round-trip through that (negative,
+// fractional, or too large), rather than silently truncating or wrapping it.
+const MAX_META_STATE = 0xffffffff;
+function isValidMetaState(v: unknown): v is number {
+  return isFiniteNumber(v) && Number.isInteger(v) && v >= 0 && v <= MAX_META_STATE;
 }
 
 function parseInputMessage(value: unknown): DeviceInputMessage | null {
@@ -213,10 +229,16 @@ function parseInputMessage(value: unknown): DeviceInputMessage | null {
     }
     case "keyEvent": {
       const m = v as Partial<KeyEventMessage>;
-      if (isFiniteNumber(m.androidKeyCode) && (m.action === "down" || m.action === "up")) {
-        return { type: "keyEvent", androidKeyCode: m.androidKeyCode, action: m.action };
+      if (!isFiniteNumber(m.androidKeyCode) || (m.action !== "down" && m.action !== "up")) {
+        return null;
       }
-      return null;
+      if (m.metaState !== undefined && !isValidMetaState(m.metaState)) return null;
+      return {
+        type: "keyEvent",
+        androidKeyCode: m.androidKeyCode,
+        action: m.action,
+        metaState: m.metaState ?? 0,
+      };
     }
     case "clipboard": {
       const m = v as Partial<ClipboardMessage>;
@@ -311,7 +333,14 @@ async function dispatchInput(device: Device, message: DeviceInputMessage): Promi
         // there's no closed set to validate against here.
         keyCode: message.androidKeyCode as AndroidKeyCode,
         repeat: 0,
-        metaState: 0,
+        // Same proxy posture as keyCode above: parseInputMessage already
+        // validated this is a safe u32 and normalized a missing metaState to
+        // 0, so it's just forwarded — the frontend owns which
+        // AndroidKeyEventMeta bits to set. `?? 0` is belt-and-suspenders for
+        // metaState's `?` in the KeyEventMessage type (any caller of
+        // dispatchInput that skips parseInputMessage would otherwise see
+        // `undefined` reach the wire as NaN).
+        metaState: (message.metaState ?? 0) as AndroidKeyEventMeta,
       });
       break;
     case "clipboard":
