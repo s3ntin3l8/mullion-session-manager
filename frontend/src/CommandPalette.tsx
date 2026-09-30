@@ -7,6 +7,7 @@ import { useShallow } from "zustand/react/shallow";
 import {
   CheckIcon,
   ChevronDownIcon,
+  CloseIcon,
   DockIcon,
   FileTextIcon,
   FolderIcon,
@@ -635,7 +636,31 @@ export function CommandPalette({
               }
             }}
           />
-          <span className="kbd">esc</span>
+          {
+            // The "esc" keycap sits inside the search row as a hint — looks
+            // like a button, but is a plain <span> with no onClick. On a
+            // phone it's the only close affordance a user can see at all
+            // (the palette is full-bleed, the backdrop has zero tappable
+            // area, and there's no Esc key on a soft keyboard), and the
+            // input that normally handles Escape isn't focused on coarse
+            // pointers either — `initialFocusRef: isCoarsePointer ? modalRef
+            // : inputRef` (see the useFocusTrap setup above) anchors focus
+            // to the dialog div instead. So on mobile that "esc" hint was
+            // strictly cosmetic, and tapping it did nothing. Make it a
+            // real <button> that closes the palette, and on coarse pointers
+            // swap the literal "esc" for a CloseIcon so the touch target
+            // reads as a close button rather than a keyboard hint.
+            // Hardware Esc still works via App.tsx's global handleGlobalEscape.
+          }
+          <button
+            type="button"
+            className="kbd kbd-btn"
+            onClick={onClose}
+            aria-label="Close command palette"
+            title="Close"
+          >
+            {isCoarsePointer ? <CloseIcon size={14} /> : "esc"}
+          </button>
         </div>
 
         {launchError && (
@@ -1231,7 +1256,23 @@ export function CommandPalette({
           </span>
           {pickerOpen && (
             <span className="cmd-palette-footer-item">
-              <span className="kbd">esc</span>Back
+              {
+                // Same problem as the search-row "esc" — same fix. The
+                // picker is only open from inside the palette (so the
+                // backdrop is still tappable on desktop, but on mobile
+                // the user needs a button), and Escape-in-input doesn't
+                // apply because focus is on modalRef.
+              }
+              <button
+                type="button"
+                className="kbd kbd-btn"
+                onClick={closeProjectPicker}
+                aria-label="Back from project picker"
+                title="Back"
+              >
+                {isCoarsePointer ? <CloseIcon size={14} /> : "esc"}
+              </button>
+              Back
             </span>
           )}
         </div>

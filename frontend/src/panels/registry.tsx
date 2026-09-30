@@ -1,6 +1,6 @@
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import type { ComponentType, FunctionComponent } from "react";
-import type { IDockviewPanelProps } from "dockview-react";
+import type { DockviewPanelApi, IDockviewPanelProps } from "dockview-react";
 import { TerminalPane } from "../TerminalPane.js";
 import type { TerminalPaneParams } from "../TerminalPane.js";
 import { GitHubPanel } from "../GitHubPanel.js";
@@ -425,7 +425,18 @@ export function KanbanBoardOverlay(props: {
 // Same reasoning as GitHubPanelWrapper above — SessionTimeline reads
 // straight off the store, no fetch of its own, but a bad event payload
 // shouldn't blank the whole dashboard either.
-const SessionTimelineWrapper = makePanelWrapper<SessionTimelineParams>(SessionTimeline);
+//
+// Issue #1455 — the first production use of `extraProps`: threads dockview's
+// `api` down as `panelApi` (NOT `api` — SessionTimeline.tsx already has its
+// own `import { api } from "./api/index.js"`, which a prop named `api` would
+// shadow) so SessionTimeline can observe onDidActiveChange and mark its own
+// sessions read while the panel is active, the same way PaneTab.tsx's
+// terminal tab already does. TaskDetail.tsx renders SessionTimeline directly
+// with no `api` at all, so `panelApi` stays optional end-to-end.
+const SessionTimelineWrapper = makePanelWrapper<
+  SessionTimelineParams,
+  { panelApi: DockviewPanelApi }
+>(SessionTimeline, { extraProps: (props) => ({ panelApi: props.api }) });
 
 // The task board (formerly TasksPanel.tsx, this "tasks" panel's own
 // component) is now the unified Kanban view (UnifiedBoard.tsx) — this

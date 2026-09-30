@@ -22,6 +22,18 @@ import { readBool, STORAGE_KEYS, writeBool } from "./lib/persistedState.js";
 // session; `sessionId` is that session's id, used to look up its live
 // TerminalPane instance via terminalInputRegistry.ts (nothing else can reach
 // a session's `Terminal`/WebSocket from outside TerminalPane.tsx itself).
+//
+// Press feedback is driven by JS (a per-button `pressed` class set on
+// pointerdown, cleared on pointerup/cancel/leave) rather than the CSS
+// `:active` pseudo-class. Reason: `keepFocus` (below) calls `preventDefault()`
+// on `pointerdown` to keep the on-screen keyboard up across taps, and on
+// touch browsers (notably iOS Safari and some Chromium-on-Android builds)
+// `preventDefault()` on `pointerdown` strands the `:active` pseudo-state
+// after the finger lifts — the button stays tinted until the user taps
+// somewhere else. JS-driven state guarantees the press visual always
+// clears, on every device, with no browser-dependence. Mouse users still
+// get the expected instant press (pointerdown fires for mouse too), and
+// the click that follows still dispatches the key.
 export interface MobileKeyBarProps {
   sessionId: number;
 }
@@ -70,6 +82,12 @@ const ROW2: KeyBarKey[] = [
   { label: "Copy", ariaLabel: "Copy text", send: (h) => h.openCopyMode() },
 ];
 
+// Stable press-feedback id for the ⋯ button, whose aria-label flips
+// between "More keys" and "Fewer keys" as it toggles: press state has to
+// key off an id that doesn't move, or the highlight would silently stop
+// matching the moment the label is renamed or (as today) swapped.
+const MORE_KEY = "More";
+
 // preventDefault on pointerdown, not just onClick, is what keeps the
 // on-screen keyboard up WHILE it's already showing: a plain click's own
 // default mousedown behavior shifts focus to the button itself first, which
@@ -79,11 +97,30 @@ const ROW2: KeyBarKey[] = [
 // focus was elsewhere) before the tap, TerminalPane.tsx's own registered
 // handle explicitly (re)focuses the terminal itself (Hermes review, PR #616
 // round 2), so a tap's effect is never silently invisible.
+//
+// The inline object type is deliberate, not laziness: React's own
+// `PointerEvent` is structurally compatible (its `preventDefault` is the
+// only member this reads), so a bare `onPointerDown={keepFocus}` would
+// typecheck just as well. The `(event) => { keepFocus(event); ... }`
+// wrappers below exist so each can also record press state — not because
+// the type demands a wrapper. (Hermes review, PR #1488.)
 const keepFocus = (e: { preventDefault: () => void }) => e.preventDefault();
 
 export function MobileKeyBar({ sessionId }: MobileKeyBarProps) {
   const [moreOpen, setMoreOpen] = useState(() => readBool(STORAGE_KEYS.mobileKeyBarMore, false));
   const [ctrlMode, setCtrlMode] = useState<CtrlModifierMode>("off");
+  // The stable id of whichever key the user is currently pressing; null
+  // when nothing is. An id, not an aria-label: most buttons use their
+  // (static) aria-label as the id for lack of a better one, but the Ctrl
+  // and ⋯ buttons have aria-labels that change with their state ("Ctrl
+  // (locked)", "Fewer keys"), and press feedback must key off something
+  // that doesn't move. Touch browsers get implicit pointer capture, so
+  // `pointerup` is guaranteed to fire on the same element that received
+  // `pointerdown` (even if the finger has drifted off), and a lost capture
+  // surfaces as `pointercancel` — the union of those two plus a defensive
+  // `pointerleave` covers every way a press can end. See the file header
+  // for why this is JS-driven instead of CSS `:active`.
+  const [pressedKey, setPressedKey] = useState<string | null>(null);
   const voice = useVoiceControls(sessionId);
 
   // Push the sticky-Ctrl state to the terminal; a one-shot modifier reports
@@ -102,6 +139,7 @@ export function MobileKeyBar({ sessionId }: MobileKeyBarProps) {
   if (prevSessionId !== sessionId) {
     setPrevSessionId(sessionId);
     setCtrlMode("off");
+    setPressedKey(null);
   }
 
   const toggleMore = () => {
@@ -110,13 +148,31 @@ export function MobileKeyBar({ sessionId }: MobileKeyBarProps) {
     writeBool(STORAGE_KEYS.mobileKeyBarMore, next);
   };
 
+  // Shared press handlers for every key-bar button. The pointerdown
+  // handler is intentionally separate from the click handler so the press
+  // visual lights up the instant the finger lands, not after the synthetic
+  // click would have dispatched. The "press" and "release" pair are
+  // deliberately `set` + `clear` (not a state machine): if for any reason
+  // the matching pointerup/pointercancel never fires (browser dropped the
+  // event, page hidden mid-press, etc.), the *next* pointerdown on any
+  // other key still overwrites the state cleanly, so no key can be stuck
+  // indefinitely.
+  const onKeyPressStart = (keyId: string) => setPressedKey(keyId);
+  const onKeyPressEnd = () => setPressedKey(null);
+
   const renderKey = ({ label, ariaLabel, send }: KeyBarKey) => (
     <button
       key={ariaLabel}
       type="button"
-      className="mobile-key-bar-btn"
+      className={`mobile-key-bar-btn${pressedKey === ariaLabel ? " pressed" : ""}`}
       aria-label={ariaLabel}
-      onPointerDown={keepFocus}
+      onPointerDown={(event) => {
+        keepFocus(event);
+        onKeyPressStart(ariaLabel);
+      }}
+      onPointerUp={onKeyPressEnd}
+      onPointerCancel={onKeyPressEnd}
+      onPointerLeave={onKeyPressEnd}
       onClick={() => {
         const handle = getTerminalInputHandle(sessionId);
         if (handle) send(handle);
@@ -132,7 +188,9 @@ export function MobileKeyBar({ sessionId }: MobileKeyBarProps) {
         {ROW1_BEFORE_CTRL.map(renderKey)}
         <button
           type="button"
-          className={`mobile-key-bar-btn mobile-key-bar-ctrl${ctrlMode !== "off" ? ` ${ctrlMode}` : ""}`}
+          className={`mobile-key-bar-btn mobile-key-bar-ctrl${ctrlMode !== "off" ? ` ${ctrlMode}` : ""}${
+            pressedKey === "Ctrl" ? " pressed" : ""
+          }`}
           aria-label={
             ctrlMode === "locked"
               ? "Ctrl (locked)"
@@ -142,7 +200,13 @@ export function MobileKeyBar({ sessionId }: MobileKeyBarProps) {
           }
           aria-pressed={ctrlMode !== "off"}
           title="Ctrl for the next key; tap again to lock, again to release"
-          onPointerDown={keepFocus}
+          onPointerDown={(event) => {
+            keepFocus(event);
+            onKeyPressStart("Ctrl");
+          }}
+          onPointerUp={onKeyPressEnd}
+          onPointerCancel={onKeyPressEnd}
+          onPointerLeave={onKeyPressEnd}
           onClick={() => setCtrlMode(nextCtrlMode)}
         >
           Ctrl
@@ -161,10 +225,18 @@ export function MobileKeyBar({ sessionId }: MobileKeyBarProps) {
         )}
         <button
           type="button"
-          className={`mobile-key-bar-btn${moreOpen ? " active" : ""}`}
+          className={`mobile-key-bar-btn${moreOpen ? " active" : ""}${
+            pressedKey === MORE_KEY ? " pressed" : ""
+          }`}
           aria-label={moreOpen ? "Fewer keys" : "More keys"}
           aria-expanded={moreOpen}
-          onPointerDown={keepFocus}
+          onPointerDown={(event) => {
+            keepFocus(event);
+            onKeyPressStart(MORE_KEY);
+          }}
+          onPointerUp={onKeyPressEnd}
+          onPointerCancel={onKeyPressEnd}
+          onPointerLeave={onKeyPressEnd}
           onClick={toggleMore}
         >
           <OverflowIcon size={15} />

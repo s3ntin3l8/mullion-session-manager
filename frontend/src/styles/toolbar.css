@@ -203,6 +203,37 @@
   background: color-mix(in srgb, var(--fg) 9%, transparent);
   color: var(--dim);
 }
+/* Same keycap look as .kbd, but for the now-interactive esc/close chips in
+   the command palette (CommandPalette.tsx). The plain .kbd rule above is a
+   <span> cosmetic; .kbd-btn is a <button>, so this resets the browser
+   default button chrome, keeps the keycap visual, and adds the same
+   hover/active feedback every other interactive .kbd-style element has. */
+.kbd-btn {
+  font-family: "Geist Mono", monospace;
+  font-size: 10.5px;
+  padding: 2px 5px;
+  border: 1px solid color-mix(in srgb, var(--fg) 12%, transparent);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--fg) 9%, transparent);
+  color: var(--dim);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+.kbd-btn:hover {
+  background: color-mix(in srgb, var(--fg) 14%, transparent);
+  color: var(--fg);
+}
+.kbd-btn:active {
+  background: color-mix(in srgb, var(--fg) 20%, transparent);
+  color: var(--fg);
+}
+.kbd-btn:focus-visible {
+  outline: 2px solid var(--accent-solid);
+  outline-offset: 1px;
+}
 
 .toolbar-version-label {
   font-family: "Geist Mono", monospace;

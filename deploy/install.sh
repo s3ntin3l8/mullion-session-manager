@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # First-time bootstrap for the versioned-release deploy layout (see
-# deploy/README.md). NOT run by this repo's CI, and not idempotent in every
-# regard — this is a one-shot "set up a fresh prod install" script, run by
+# deploy/README.md). Never run by this repo's CI to actually provision
+# anything — this is a one-shot "set up a fresh prod install" script, run by
 # hand once per host (or by an Ansible role — see deploy/README.md's
-# "Automating agent deploys" section). Applying an update afterwards is the
+# "Automating agent deploys" section). CI does exercise this script's own
+# logic under test/scripts/install.test.ts (issue #1469), sandboxed with a
+# temp $HOME and stubbed systemd/network — see that file and docs/ci-cd.md.
+# Also not idempotent in every regard. Applying an update afterwards is the
 # in-app Settings -> Server info "Update now" button
 # (POST /api/updates/apply), which uses scripts/self-update.sh instead.
 #
@@ -18,6 +21,10 @@
 #                 contract table for what each role's .env needs. Installs
 #                 mullion.service for primary, mullion-agent.service for
 #                 agent (issue #245 / roadmap 7.1 and 7.7).
+#   --no-systemd  skip installing/reloading the systemd --user service unit
+#                 (useful for sandboxes, tests, containers, or when systemd
+#                 is managed externally). Can also be enabled via
+#                 MULLION_SKIP_SYSTEMD=1 or MULLION_SKIP_SYSTEMD=true.
 #   mullion-home  absolute (or relative, resolved to absolute) path to the
 #                 install root — parent of releases/, current, data/, .env.
 #                 e.g. ~/opt/mullion
@@ -28,10 +35,14 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: deploy/install.sh [--role primary|agent] <mullion-home> [owner/repo]" >&2
+  echo "usage: deploy/install.sh [--role primary|agent] [--no-systemd] <mullion-home> [owner/repo]" >&2
 }
 
 ROLE="primary"
+SKIP_SYSTEMD=false
+if [ "${MULLION_SKIP_SYSTEMD:-}" = "1" ] || [ "${MULLION_SKIP_SYSTEMD:-}" = "true" ]; then
+  SKIP_SYSTEMD=true
+fi
 POSITIONAL=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -59,6 +70,10 @@ while [ $# -gt 0 ]; do
       ROLE="${1#--role=}"
       shift
       ;;
+    --no-systemd)
+      SKIP_SYSTEMD=true
+      shift
+      ;;
     --*)
       # Hermes review, PR #529: an unrecognized --flag (e.g. a typo'd
       # --roll) previously fell into the positional bucket below and got
@@ -80,16 +95,19 @@ if [ "$ROLE" != "primary" ] && [ "$ROLE" != "agent" ]; then
   exit 1
 fi
 
-MULLION_HOME_INPUT="${1:?usage: deploy/install.sh [--role primary|agent] <mullion-home> [owner/repo]}"
+MULLION_HOME_INPUT="${1:?usage: deploy/install.sh [--role primary|agent] [--no-systemd] <mullion-home> [owner/repo]}"
 REPO="${2:-s3ntin3l8/mullion-session-manager}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 echo "==> Role: $ROLE"
 
 echo "==> Checking host prerequisites"
 missing=()
-for bin in node npm dtach systemd-run systemctl curl tar timeout sha256sum; do
+for bin in node npm dtach systemd-run curl tar timeout sha256sum; do
   command -v "$bin" >/dev/null 2>&1 || missing+=("$bin")
 done
+if [ "$SKIP_SYSTEMD" = false ]; then
+  command -v systemctl >/dev/null 2>&1 || missing+=("systemctl")
+fi
 if [ "${#missing[@]}" -gt 0 ]; then
   echo "Missing required host binaries: ${missing[*]}" >&2
   echo "See deploy/README.md's prerequisites (Node 26, dtach, a systemd --user" >&2
@@ -468,57 +486,61 @@ EOF
   chmod 600 "$MULLION_HOME/.env"
 fi
 
-echo "==> Installing the systemd --user unit"
-mkdir -p ~/.config/systemd/user
-if [ "$ROLE" = "primary" ]; then
-  UNIT_NAME="mullion.service"
-  UNIT_TEMPLATE="$SCRIPT_DIR/mullion.service"
-  OTHER_UNIT_NAME="mullion-agent.service"
+if [ "$SKIP_SYSTEMD" = true ]; then
+  echo "==> Skipping systemd user unit installation (--no-systemd / MULLION_SKIP_SYSTEMD)"
 else
-  UNIT_NAME="mullion-agent.service"
-  UNIT_TEMPLATE="$SCRIPT_DIR/mullion-agent.service"
-  OTHER_UNIT_NAME="mullion.service"
+  echo "==> Installing the systemd --user unit"
+  mkdir -p ~/.config/systemd/user
+  if [ "$ROLE" = "primary" ]; then
+    UNIT_NAME="mullion.service"
+    UNIT_TEMPLATE="$SCRIPT_DIR/mullion.service"
+    OTHER_UNIT_NAME="mullion-agent.service"
+  else
+    UNIT_NAME="mullion-agent.service"
+    UNIT_TEMPLATE="$SCRIPT_DIR/mullion-agent.service"
+    OTHER_UNIT_NAME="mullion.service"
+  fi
+  sed \
+    -e "s#^WorkingDirectory=.*#WorkingDirectory=$MULLION_HOME/current#" \
+    -e "s#^ExecStart=.*#ExecStart=$NODE_PATH dist/server.js#" \
+    -e "s#^EnvironmentFile=.*#EnvironmentFile=$MULLION_HOME/.env#" \
+    "$UNIT_TEMPLATE" \
+    > ~/.config/systemd/user/"$UNIT_NAME"
+
+  systemctl --user daemon-reload
+
+  # Hermes review, PR #529: enabling THIS role's unit never disabled the
+  # OTHER one on its own — a host that switched roles by hand-flipping .env
+  # and re-running this script (rather than starting fresh) could end up
+  # with both units enabled, both loading the same .env, and both binding
+  # the same PORT — a crash loop, not just a mismatch warning. Best-effort:
+  # the other unit may simply never have existed on this host, which is not
+  # an error. Done BEFORE `enable --now` below (Hermes review, PR #529,
+  # second round): stopping the old unit first means the new one starts
+  # clean, rather than colliding on PORT and crash-looping (self-healing
+  # either way under Restart=on-failure, but a clean transition is better).
+  if systemctl --user --quiet is-enabled "$OTHER_UNIT_NAME" 2>/dev/null ||
+    systemctl --user --quiet is-active "$OTHER_UNIT_NAME" 2>/dev/null; then
+    # Hermes review, PR #529 (fourth round): is-enabled alone misses a unit
+    # started manually without ever being enabled (e.g. `systemctl --user
+    # start mullion-agent.service` while testing) — it would still be
+    # running and still PORT-collide, just outside what is-enabled reports.
+    echo "==> Disabling $OTHER_UNIT_NAME (this host is now role: $ROLE)"
+    # Hermes review, PR #529 (third round): `|| true` alone would silently
+    # swallow a genuine failure here (the new unit would then start and
+    # PORT-collide with the still-running old one) — surface it instead of
+    # just continuing quietly. Still non-fatal: self-healing under
+    # Restart=on-failure either way, and this is best-effort by design (see
+    # above).
+    systemctl --user disable --now "$OTHER_UNIT_NAME" ||
+      echo "WARNING: failed to disable $OTHER_UNIT_NAME — it may still be running and could collide with $UNIT_NAME on PORT until stopped by hand (systemctl --user disable --now $OTHER_UNIT_NAME)." >&2
+  fi
+
+  systemctl --user enable --now "$UNIT_NAME"
+
+  echo "==> Done. Status:"
+  systemctl --user --no-pager status "$UNIT_NAME" || true
 fi
-sed \
-  -e "s#^WorkingDirectory=.*#WorkingDirectory=$MULLION_HOME/current#" \
-  -e "s#^ExecStart=.*#ExecStart=$NODE_PATH dist/server.js#" \
-  -e "s#^EnvironmentFile=.*#EnvironmentFile=$MULLION_HOME/.env#" \
-  "$UNIT_TEMPLATE" \
-  > ~/.config/systemd/user/"$UNIT_NAME"
-
-systemctl --user daemon-reload
-
-# Hermes review, PR #529: enabling THIS role's unit never disabled the
-# OTHER one on its own — a host that switched roles by hand-flipping .env
-# and re-running this script (rather than starting fresh) could end up
-# with both units enabled, both loading the same .env, and both binding
-# the same PORT — a crash loop, not just a mismatch warning. Best-effort:
-# the other unit may simply never have existed on this host, which is not
-# an error. Done BEFORE `enable --now` below (Hermes review, PR #529,
-# second round): stopping the old unit first means the new one starts
-# clean, rather than colliding on PORT and crash-looping (self-healing
-# either way under Restart=on-failure, but a clean transition is better).
-if systemctl --user --quiet is-enabled "$OTHER_UNIT_NAME" 2>/dev/null ||
-  systemctl --user --quiet is-active "$OTHER_UNIT_NAME" 2>/dev/null; then
-  # Hermes review, PR #529 (fourth round): is-enabled alone misses a unit
-  # started manually without ever being enabled (e.g. `systemctl --user
-  # start mullion-agent.service` while testing) — it would still be
-  # running and still PORT-collide, just outside what is-enabled reports.
-  echo "==> Disabling $OTHER_UNIT_NAME (this host is now role: $ROLE)"
-  # Hermes review, PR #529 (third round): `|| true` alone would silently
-  # swallow a genuine failure here (the new unit would then start and
-  # PORT-collide with the still-running old one) — surface it instead of
-  # just continuing quietly. Still non-fatal: self-healing under
-  # Restart=on-failure either way, and this is best-effort by design (see
-  # above).
-  systemctl --user disable --now "$OTHER_UNIT_NAME" ||
-    echo "WARNING: failed to disable $OTHER_UNIT_NAME — it may still be running and could collide with $UNIT_NAME on PORT until stopped by hand (systemctl --user disable --now $OTHER_UNIT_NAME)." >&2
-fi
-
-systemctl --user enable --now "$UNIT_NAME"
-
-echo "==> Done. Status:"
-systemctl --user --no-pager status "$UNIT_NAME" || true
 
 if [ "$ROLE" = "primary" ]; then
   cat <<EOF

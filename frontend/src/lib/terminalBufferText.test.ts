@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import type { IBuffer, IBufferLine } from "@xterm/xterm";
-import { bufferToText } from "./terminalBufferText.js";
+import type { IBuffer, IBufferLine, Terminal } from "@xterm/xterm";
+import { bufferToText, scrollbackToText } from "./terminalBufferText.js";
 
 function fakeBuffer(rows: [string, boolean][]): IBuffer {
   return {
@@ -14,6 +14,12 @@ function fakeBuffer(rows: [string, boolean][]): IBuffer {
           } as unknown as IBufferLine)
         : undefined,
   } as unknown as IBuffer;
+}
+
+// Minimal Terminal stub — we only need .buffer.normal; the only call site for
+// scrollbackToText reads that one field.
+function fakeTerm(normal: IBuffer): Terminal {
+  return { buffer: { normal } } as unknown as Terminal;
 }
 
 describe("bufferToText", () => {
@@ -49,5 +55,21 @@ describe("bufferToText", () => {
 
   it("returns an empty string for an empty buffer", () => {
     expect(bufferToText(fakeBuffer([]))).toBe("");
+  });
+});
+
+describe("scrollbackToText", () => {
+  it("reads term.buffer.normal (the persistent history, not the active one)", () => {
+    // The "active" buffer is the Codex question dialog (a single row, "y/n
+    // (y/N)"), but the persistent scrollback — held in the normal buffer —
+    // is the inline transcript the user wants to see. The point of
+    // scrollbackToText is to ignore `active` and route through `normal`.
+    const normal = fakeBuffer([
+      ["$ echo hello", false],
+      ["hello", false],
+      ["$ ", false],
+    ]);
+    const term = fakeTerm(normal);
+    expect(scrollbackToText(term)).toBe("$ echo hello\nhello\n$");
   });
 });
