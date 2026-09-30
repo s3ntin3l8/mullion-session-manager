@@ -2145,6 +2145,27 @@ export async function internalRoutes(app: FastifyInstance) {
     },
   );
 
+  // Issue #1472 — the agent-side counterpart of
+  // POST /api/sessions/:id/attention/ack, for a remote-hosted session.
+  // Mirrors /internal/sessions/:id/review-gate's shape (`{ok}`, not a bare
+  // 204) for the same reason: `false` is a genuine, expected outcome (a
+  // blocking kind is still pending, or this agent doesn't track the id at
+  // all — see PtyManager.acknowledgeAttention's own doc comment), not an
+  // error. A successful ack here also fires this agent's own "attention"
+  // NotificationEvent (AttentionTracker.acknowledgeAttention) exactly as it
+  // would for a local session; that event already reaches a browser
+  // connected to the primary unchanged, via the existing byte-for-byte
+  // /internal/ws/events relay (routes/events.ts's relayRemoteEventsHost) —
+  // no new plumbing needed for the badge to clear.
+  app.post<{ Params: { id: string } }>(
+    "/internal/sessions/:id/attention/ack",
+    { ...INTERNAL_RATE_LIMIT, schema: { params: SESSION_ID_PARAMS_SCHEMA } },
+    async (request) => {
+      const ok = app.pty.acknowledgeAttention(request.params.id);
+      return { ok };
+    },
+  );
+
   // The agent-side counterpart to POST /api/sessions/:id/uploads (issue
   // #68): writes a pasted/attached image under a session's cwd on THIS
   // host's filesystem — where the CLI reading it back by path actually

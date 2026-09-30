@@ -1149,12 +1149,17 @@ export async function sessionsRoute(app: FastifyInstance) {
 
   // Issue #1430 — the explicit "acknowledge" action every read call site
   // (NotificationBell's row open/Mark read/Read all/Dismiss, phone sheet
-  // equivalents) fires alongside markSessionRead/markEventSeen. Local-only
-  // (app.pty directly, not resolveBackend) — same posture as
-  // acceptDevServerPort/dismissDevServerPort just above, which are also
-  // local-only despite living in this same "per-session action route"
-  // family; a remote-hosted session's attention isn't acknowledgeable from
-  // here yet — filed as issue #1472 rather than silently descoped.
+  // equivalents) fires alongside markSessionRead/markEventSeen. Issue #1472
+  // — routed (via resolveBackend, same as review-gate/promote above) to
+  // whichever host actually tracks this session's live PtyManager state,
+  // rather than always reaching into this process's own app.pty; a
+  // remote-hosted session's row still exists here (shared across hosts) and
+  // passes the 404 check below, so acking it always used to silently no-op
+  // as a 409 indistinguishable from "genuinely still blocked" — see
+  // PtyManager.acknowledgeAttention's own doc comment. A transport/host
+  // failure (including a 404 from an agent whose build predates this
+  // route — version skew) maps to a 502, the same posture the review-gate
+  // route above already uses.
   app.post<{ Params: { id: string } }>(
     "/api/sessions/:id/attention/ack",
     async (request, reply) => {
@@ -1164,16 +1169,22 @@ export async function sessionsRoute(app: FastifyInstance) {
       const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
       if (!row) return reply.notFound();
 
-      const acked = app.pty.acknowledgeAttention(String(sessionId));
+      const hostId = resolveProjectHostId(app, row.projectId);
+      let acked: boolean;
+      try {
+        acked = await resolveBackend(app, hostId).acknowledgeAttention(String(sessionId));
+      } catch (err) {
+        app.log.error({ err, sessionId, hostId }, "attention ack failed to reach host");
+        return reply.badGateway("Failed to deliver acknowledgement to host");
+      }
       if (!acked) {
-        // Either a blocking kind is still pending (its own dedicated
-        // resolve route — review-gate/promote/permission/plan/elicitation-
-        // question — is what this session actually needs), or this
-        // process doesn't track the session at all (a remote-hosted
-        // session, or one this process's PtyManager never spawned) — both
-        // collapse to the same "can't ack right now" response; the route
-        // has no way to distinguish them without also implementing
-        // multi-host dispatch (issue #1472).
+        // Either a blocking kind is still pending on the owning host (its
+        // own dedicated resolve route — review-gate/promote/permission/
+        // plan/elicitation-question — is what this session actually
+        // needs), or the owning host doesn't track the session at all
+        // (e.g. a restart before reattach) — both collapse to the same
+        // "can't ack right now" response; the caller has no way to
+        // distinguish them further.
         return reply.conflict("Attention can't be acknowledged for this session right now");
       }
       reply.code(204);

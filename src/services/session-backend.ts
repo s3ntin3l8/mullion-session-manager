@@ -149,6 +149,15 @@ export interface SessionBackend {
     decision: "approved" | "denied",
     reason?: string,
   ): Promise<boolean>;
+  // Issue #1472 — clears non-blocking attention (issue #1430's explicit
+  // "acknowledge" action) on whichever host actually tracks this session's
+  // live PtyManager state, the same local/remote split resolveReviewGate
+  // above already uses. Returns `false` for the same two cases
+  // PtyManager.acknowledgeAttention's own doc comment describes — a
+  // genuinely still-pending blocking kind, or an id the OWNING host itself
+  // doesn't track — both of which the route reports as the same 409; a
+  // caller here has no way (and no need) to distinguish them further.
+  acknowledgeAttention(id: string): Promise<boolean>;
   // Issue #271 — creates a worktree on whichever host actually owns `cwd`'s
   // filesystem, for the launcher-toggle and promote flows. Returns
   // `{ created: false, reason, detail? }` when creation fails for a
@@ -420,6 +429,10 @@ class LocalBackend implements SessionBackend {
     return this.app.resolveHookGate(id, gateId, decision, reason);
   }
 
+  async acknowledgeAttention(id: string): Promise<boolean> {
+    return this.app.pty.acknowledgeAttention(id);
+  }
+
   createWorktree(
     cwd: string,
     baseRef: string,
@@ -648,6 +661,10 @@ class RemoteBackend implements SessionBackend {
     reason?: string,
   ): Promise<boolean> {
     return this.client.resolveReviewGate(id, gateId, decision, reason);
+  }
+
+  acknowledgeAttention(id: string): Promise<boolean> {
+    return this.client.acknowledgeAttention(id);
   }
 
   createWorktree(

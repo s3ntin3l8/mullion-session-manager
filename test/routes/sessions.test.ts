@@ -3915,6 +3915,146 @@ describe("sessions route", () => {
 
       await app.close();
     });
+
+    it("502s an attention ack for a session whose remote host is unreachable (issue #1472)", async () => {
+      const app = await buildApp();
+      const { sessions } = await import("../../src/db/schema.js");
+      const projectId = await createRemoteProject(app);
+      const [orphan] = app.db
+        .insert(sessions)
+        .values({ projectId, command: "bash" })
+        .returning()
+        .all();
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${orphan.id}/attention/ack`,
+      });
+      expect(res.statusCode).toBe(502);
+
+      await app.close();
+    });
+
+    // Issue #1472 — routes a remote-hosted session's attention/ack through
+    // resolveBackend/SessionBackend, the same way review-gate/promote
+    // already do; mocks resolveBackend (rather than a real host) to
+    // exercise the route's own ok:true/ok:false/thrown-error branches
+    // directly, mirroring option 2's own makeFakeBackend pattern above.
+    describe("POST /api/sessions/:id/attention/ack (issue #1472)", () => {
+      async function createRemoteAttentionProject(app: Awaited<ReturnType<typeof buildApp>>) {
+        const host = await app.inject({
+          method: "POST",
+          url: "/api/hosts",
+          // Deliberately unreachable — resolveBackend is spied per-test to
+          // return a fake backend, so this baseUrl is never actually hit.
+          payload: { name: "attention-ack-remote", baseUrl: "http://127.0.0.1:1", token: "t" },
+        });
+        const hostId = host.json().id as string;
+        const project = await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: { name: "remote-attention-ack-p", cwd: "/remote/project", hostId },
+        });
+        const { sessions } = await import("../../src/db/schema.js");
+        const [row] = app.db
+          .insert(sessions)
+          .values({ projectId: project.json().id as number, command: "bash" })
+          .returning()
+          .all();
+        return row.id as number;
+      }
+
+      function makeFakeBackend(acknowledgeAttention: ReturnType<typeof vi.fn>) {
+        return { acknowledgeAttention };
+      }
+
+      it("204s when the owning host reports ok: true", async () => {
+        const app = await buildApp();
+        const sessionBackendModule = await import("../../src/services/session-backend.js");
+        const sessionId = await createRemoteAttentionProject(app);
+
+        const fakeBackend = makeFakeBackend(vi.fn().mockResolvedValue(true));
+        const resolveBackendSpy = vi
+          .spyOn(sessionBackendModule, "resolveBackend")
+          .mockReturnValue(fakeBackend as never);
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/sessions/${sessionId}/attention/ack`,
+        });
+        expect(res.statusCode).toBe(204);
+        expect(fakeBackend.acknowledgeAttention).toHaveBeenCalledWith(String(sessionId));
+
+        resolveBackendSpy.mockRestore();
+        await app.close();
+      });
+
+      it("409s when the owning host reports ok: false (still blocked, or not tracked there either)", async () => {
+        const app = await buildApp();
+        const sessionBackendModule = await import("../../src/services/session-backend.js");
+        const sessionId = await createRemoteAttentionProject(app);
+
+        const fakeBackend = makeFakeBackend(vi.fn().mockResolvedValue(false));
+        const resolveBackendSpy = vi
+          .spyOn(sessionBackendModule, "resolveBackend")
+          .mockReturnValue(fakeBackend as never);
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/sessions/${sessionId}/attention/ack`,
+        });
+        expect(res.statusCode).toBe(409);
+
+        resolveBackendSpy.mockRestore();
+        await app.close();
+      });
+
+      it("502s when delivering the ack throws (HostRequestError, e.g. a 404 from an agent build that predates this route)", async () => {
+        const app = await buildApp();
+        const sessionBackendModule = await import("../../src/services/session-backend.js");
+        const { HostRequestError } = await import("../../src/services/remote-host-client.js");
+        const sessionId = await createRemoteAttentionProject(app);
+
+        const fakeBackend = makeFakeBackend(
+          vi.fn().mockRejectedValue(new HostRequestError("attention-ack-remote", 404, "not found")),
+        );
+        const resolveBackendSpy = vi
+          .spyOn(sessionBackendModule, "resolveBackend")
+          .mockReturnValue(fakeBackend as never);
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/sessions/${sessionId}/attention/ack`,
+        });
+        expect(res.statusCode).toBe(502);
+
+        resolveBackendSpy.mockRestore();
+        await app.close();
+      });
+
+      it("502s when delivering the ack throws (HostUnreachableError)", async () => {
+        const app = await buildApp();
+        const sessionBackendModule = await import("../../src/services/session-backend.js");
+        const { HostUnreachableError } = await import("../../src/services/remote-host-client.js");
+        const sessionId = await createRemoteAttentionProject(app);
+
+        const fakeBackend = makeFakeBackend(
+          vi.fn().mockRejectedValue(new HostUnreachableError("attention-ack-remote", "refused")),
+        );
+        const resolveBackendSpy = vi
+          .spyOn(sessionBackendModule, "resolveBackend")
+          .mockReturnValue(fakeBackend as never);
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/sessions/${sessionId}/attention/ack`,
+        });
+        expect(res.statusCode).toBe(502);
+
+        resolveBackendSpy.mockRestore();
+        await app.close();
+      });
+    });
   });
 
   // Phase 5 (Track B, issue #193 5.3b) — parentSessionId validation and the

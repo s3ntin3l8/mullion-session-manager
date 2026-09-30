@@ -4164,6 +4164,86 @@ describe("internal routes (agent role, issue #26)", () => {
     });
   });
 
+  describe("POST /internal/sessions/:id/attention/ack (issue #1472)", () => {
+    it("reports {ok: true} for a session with nothing to acknowledge, and clears this agent's own attention state", async () => {
+      const app = await buildApp();
+      const before = fakePtyChildren.length;
+      await app.inject({
+        method: "POST",
+        url: "/internal/sessions",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { id: "9101", cwd: "/tmp", command: "bash", cols: 80, rows: 24 },
+      });
+      await waitUntil(() => fakePtyChildren.length > before);
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/internal/sessions/9101/attention/ack",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ ok: true });
+
+      // AttentionTracker.acknowledgeAttention emits its own "attention"
+      // NotificationEvent unconditionally on success — this is what the
+      // primary's /internal/ws/events relay (relayRemoteEventsHost)
+      // forwards byte-for-byte to a connected browser, clearing its badge,
+      // with no further plumbing needed (issue #1472).
+      const events = app.pty.listEvents();
+      expect(events.some((e) => e.sessionId === 9101 && e.kind === "attention")).toBe(true);
+
+      await app.close();
+    });
+
+    it("reports {ok: false} while a blocking kind (a pending review gate) is confirmed", async () => {
+      const app = await buildApp();
+      const before = fakePtyChildren.length;
+      await app.inject({
+        method: "POST",
+        url: "/internal/sessions",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { id: "9102", cwd: "/tmp", command: "bash", cols: 80, rows: 24 },
+      });
+      await waitUntil(() => fakePtyChildren.length > before);
+      const session = app.pty.get("9102");
+      if (!session) throw new Error("session not tracked");
+
+      const socket = await new Promise<net.Socket>((resolve, reject) => {
+        const s = net.createConnection(app.pty.hookSocketPath);
+        s.once("connect", () => resolve(s));
+        s.once("error", reject);
+      });
+      socket.write(`${JSON.stringify({ token: session.hookToken })}\n`);
+      socket.write(
+        `${JSON.stringify({ kind: "review_gate", state: "waiting", prompt: "rm -rf /tmp/x" })}\n`,
+      );
+      await waitUntil(() => session.toInfo().gateState === "waiting");
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/internal/sessions/9102/attention/ack",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ ok: false });
+      expect(session.toInfo().gateState).toBe("waiting");
+
+      socket.destroy();
+      await app.close();
+    });
+
+    it("rejects a request with the wrong token", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/internal/sessions/9103/attention/ack",
+        headers: { authorization: "Bearer wrong" },
+      });
+      expect(res.statusCode).toBe(401);
+      await app.close();
+    });
+  });
+
   it("expands a leading ~ in a spawned session's cwd against this host's own home dir", async () => {
     const app = await buildApp();
     const before = fakePtyChildren.length;
