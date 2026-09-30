@@ -536,10 +536,10 @@ const listDevices = {
 const useDevice = {
   name: "use_device",
   description:
-    "Execute a one-shot Android device action (screenshot, tap, swipe, text, key, logcat) " +
-    "against the device's live adb/scrcpy connection — works independently of whether the " +
-    "device's video panel is currently open in the dashboard. Use list_devices to find a " +
-    "deviceId first.",
+    "Execute a one-shot Android device action (screenshot, tap, swipe, text, key, logcat, " +
+    "clipboard) against the device's live adb/scrcpy connection — works independently of " +
+    "whether the device's video panel is currently open in the dashboard. Use list_devices " +
+    "to find a deviceId first.",
   inputSchema: {
     type: "object",
     required: ["deviceId", "action"],
@@ -547,7 +547,7 @@ const useDevice = {
       deviceId: { type: "string", description: "The device's row id, from list_devices." },
       action: {
         type: "string",
-        enum: ["screenshot", "tap", "swipe", "text", "key", "logcat"],
+        enum: ["screenshot", "tap", "swipe", "text", "key", "logcat", "clipboard"],
         description: "The device action to execute.",
       },
       x: {
@@ -575,7 +575,10 @@ const useDevice = {
         description: "End Y, screen pixels — same space as screenshot (swipe).",
       },
       durationMs: { type: "number", description: "Swipe duration in milliseconds (swipe)." },
-      text: { type: "string", description: "Text to type (text)." },
+      text: {
+        type: "string",
+        description: "Text to type (text), or the text to place on the clipboard (clipboard set).",
+      },
       androidKeyCode: {
         type: "number",
         description: "AOSP KEYCODE_* numeric value to send (key).",
@@ -584,6 +587,21 @@ const useDevice = {
       filter: {
         type: "string",
         description: "logcat filter expression, e.g. 'MyApp:D *:S' (logcat).",
+      },
+      op: {
+        type: "string",
+        enum: ["get", "set"],
+        description:
+          "clipboard sub-operation (clipboard). 'get' returns the last-known device " +
+          "clipboard text from a cache — never a live round-trip to the device, which scrcpy " +
+          "only supports with clipboard autosync disabled (Mullion runs with it enabled). " +
+          "'set' writes `text` to the device clipboard via the scrcpy control channel.",
+      },
+      paste: {
+        type: "boolean",
+        description:
+          "Also simulate a paste action after setting the clipboard (clipboard set). " +
+          "Defaults to false — set without pasting.",
       },
     },
   },
