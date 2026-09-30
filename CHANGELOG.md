@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.3.35](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.34...v0.3.35) (2026-09-30)
+
+
+### Features
+
+* **browser:** clipboard sync for the streamed browser pane ([#1490](https://github.com/s3ntin3l8/mullion-session-manager/issues/1490)) ([3cf3188](https://github.com/s3ntin3l8/mullion-session-manager/commit/3cf318858d65609bbdb7c483e833e33cf51c3612))
+* **devices:** add a clipboard get/set verb to device_action ([#1484](https://github.com/s3ntin3l8/mullion-session-manager/issues/1484)) ([260d27c](https://github.com/s3ntin3l8/mullion-session-manager/commit/260d27cc4544d2b219d73db7f24334694b27b47c))
+* **devices:** plumb modifier chords (Ctrl+A etc.) through the AVD panel via metaState ([#1494](https://github.com/s3ntin3l8/mullion-session-manager/issues/1494)) ([3702597](https://github.com/s3ntin3l8/mullion-session-manager/commit/3702597bb008850c2a07b7670bece95768396bd9)), closes [#1422](https://github.com/s3ntin3l8/mullion-session-manager/issues/1422)
+* **notifications:** support acknowledging attention for remote-hosted sessions ([#1483](https://github.com/s3ntin3l8/mullion-session-manager/issues/1483)) ([d8f534b](https://github.com/s3ntin3l8/mullion-session-manager/commit/d8f534bf33d73bf5bb408ced9f5ec78cea9b63a4)), closes [#1472](https://github.com/s3ntin3l8/mullion-session-manager/issues/1472)
+* **notifications:** sync read-cursor and cross-client 'seen' broadcast to remote-hosted sessions ([#1493](https://github.com/s3ntin3l8/mullion-session-manager/issues/1493)) ([b7275d7](https://github.com/s3ntin3l8/mullion-session-manager/commit/b7275d7518df63a2274204d9bc30807198825627))
+
+
+### Bug Fixes
+
+* **deploy:** allow skipping systemd in install.sh and reload daemon on self-update ([#1487](https://github.com/s3ntin3l8/mullion-session-manager/issues/1487)) ([2013f1c](https://github.com/s3ntin3l8/mullion-session-manager/commit/2013f1c4d3cca84eebcf9a67665e99016c681381))
+* **mobile:** scrollback viewer, mobile key-bar pressed state, palette close ([#1488](https://github.com/s3ntin3l8/mullion-session-manager/issues/1488)) ([40ec5f4](https://github.com/s3ntin3l8/mullion-session-manager/commit/40ec5f47d1210f07236da3c9ea3e5c38c2795d3f))
+* **tasks:** only ingest issues and comments from trusted authors ([#1496](https://github.com/s3ntin3l8/mullion-session-manager/issues/1496)) ([6e5ee79](https://github.com/s3ntin3l8/mullion-session-manager/commit/6e5ee797b43af9d7a7379f8253db6e7855ea7b47))
+
 ## [0.3.34](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.33...v0.3.34) (2026-09-28)
 
 
