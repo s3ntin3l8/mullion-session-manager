@@ -50,6 +50,12 @@ body is. The label is a deploy-time setting, not something a project or an
 issue can override; Settings → Task Master shows the configured label
 read-only. If you're not sure of it, ask a human or check there.
 
+**The issue's author also has to be trusted.** Task Master ignores a labeled
+issue unless its author is a repo owner, member or collaborator (or is on the
+Trusted GitHub logins list in Settings → Task Master — e.g. a bot account you
+file from). Comments from anyone else are left out of the worker's prompt. If a
+correctly labeled issue never appears, check who opened it.
+
 ## Writing a body a worker can implement
 
 This is the part that decides whether autonomous pickup produces a usable

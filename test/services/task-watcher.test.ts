@@ -232,6 +232,7 @@ function mockApp(
       MULLION_TASK_MAX_CONCURRENT: 2,
       MULLION_TASK_BUDGET_MINUTES: 120,
       MULLION_TASK_PROGRESS_COMMENT_MINUTES: 15,
+      MULLION_TASK_TRUSTED_LOGINS: "",
     },
   } as unknown as FastifyInstance;
 }
@@ -246,6 +247,7 @@ describe("startTaskWatcher", () => {
     mockGetStoredSettings.mockReset();
     mockGetStoredSettings.mockReturnValue({
       taskMaster: {
+        trustedLogins: [],
         autoClaimPaused: false,
         enabled: "inherit",
         maxConcurrent: -1,
@@ -292,7 +294,13 @@ describe("startTaskWatcher", () => {
   it("#484 — polls a remote-hosted project too, resolving its repo via resolveRepoRef(app, {cwd, hostId})", async () => {
     mockResolveGitHubToken.mockReturnValue("ghp_token");
     mockListLabeledIssues.mockResolvedValue([
-      { number: 44, title: "Remote-hosted issue", body: null, htmlUrl: "https://x/44" },
+      {
+        number: 44,
+        title: "Remote-hosted issue",
+        body: null,
+        htmlUrl: "https://x/44",
+        authorAssociation: "OWNER",
+      },
     ]);
     const rows = [{ id: 1, cwd: "/tmp/remote", hostId: "agent-1" }];
     const inserted: InsertedTaskRow[] = [];
@@ -352,10 +360,76 @@ describe("startTaskWatcher", () => {
     vi.useRealTimers();
   });
 
+  it("ignores a labeled issue from an untrusted author (no insert)", async () => {
+    mockResolveGitHubToken.mockReturnValue("ghp_token");
+    mockListLabeledIssues.mockResolvedValue([
+      {
+        number: 90,
+        title: "Outsider",
+        body: "do evil",
+        htmlUrl: "https://x/90",
+        authorLogin: "rando",
+        authorAssociation: "NONE",
+      },
+      {
+        number: 91,
+        title: "No association",
+        body: null,
+        htmlUrl: "https://x/91",
+        authorLogin: "rando",
+      },
+    ]);
+    const inserted: InsertedTaskRow[] = [];
+    const app = mockApp([{ id: 1, cwd: "/tmp/one", hostId: "local" }], inserted);
+    vi.useFakeTimers();
+    const cleanup = startTaskWatcher(app);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(inserted).toEqual([]);
+    expect(app.log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ issueNumber: 90, author: "rando" }),
+      expect.stringContaining("untrusted author"),
+    );
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  it("ingests an untrusted-association issue whose author is allowlisted", async () => {
+    mockResolveGitHubToken.mockReturnValue("ghp_token");
+    mockGetStoredSettings.mockReturnValue({
+      taskMaster: { trustedLogins: ["Hermes-Bot"], autoClaimPaused: true, enabled: "on" },
+    });
+    mockListLabeledIssues.mockResolvedValue([
+      {
+        number: 92,
+        title: "Bot issue",
+        body: null,
+        htmlUrl: "https://x/92",
+        authorLogin: "hermes-bot",
+        authorAssociation: "NONE",
+      },
+    ]);
+    const inserted: InsertedTaskRow[] = [];
+    const app = mockApp([{ id: 1, cwd: "/tmp/one", hostId: "local" }], inserted);
+    vi.useFakeTimers();
+    const cleanup = startTaskWatcher(app);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(inserted.map((r) => r.issueNumber)).toEqual([92]);
+    cleanup();
+    vi.useRealTimers();
+  });
+
   it("fetches labeled issues for a local project and inserts a ready task row per issue", async () => {
     mockResolveGitHubToken.mockReturnValue("ghp_token");
     mockListLabeledIssues.mockResolvedValue([
-      { number: 42, title: "Fix the thing", body: "details", htmlUrl: "https://x/42" },
+      {
+        number: 42,
+        title: "Fix the thing",
+        body: "details",
+        htmlUrl: "https://x/42",
+        authorAssociation: "OWNER",
+      },
     ]);
     const rows = [{ id: 1, cwd: "/tmp/one", hostId: "local" }];
     const inserted: InsertedTaskRow[] = [];
@@ -399,7 +473,14 @@ describe("startTaskWatcher", () => {
   it("#667 — captures dependencyCount on ingest when the issue carries one", async () => {
     mockResolveGitHubToken.mockReturnValue("ghp_token");
     mockListLabeledIssues.mockResolvedValue([
-      { number: 47, title: "Has deps", body: null, htmlUrl: "https://x/47", dependencyCount: 3 },
+      {
+        number: 47,
+        title: "Has deps",
+        body: null,
+        htmlUrl: "https://x/47",
+        authorAssociation: "OWNER",
+        dependencyCount: 3,
+      },
     ]);
     const rows = [{ id: 1, cwd: "/tmp/one", hostId: "local" }];
     const inserted: InsertedTaskRow[] = [];
@@ -423,6 +504,7 @@ describe("startTaskWatcher", () => {
         title: "Needs a human first",
         body: "Some spec text.\nManual: true\nMore text.",
         htmlUrl: "https://x/43",
+        authorAssociation: "OWNER",
       },
     ]);
     const rows = [{ id: 1, cwd: "/tmp/one", hostId: "local" }];
@@ -447,6 +529,7 @@ describe("startTaskWatcher", () => {
         title: "Discusses the convention",
         body: "Note: this repo uses a Manual: true convention for opt-out, see docs.",
         htmlUrl: "https://x/44",
+        authorAssociation: "OWNER",
       },
     ]);
     const rows = [{ id: 1, cwd: "/tmp/one", hostId: "local" }];
@@ -466,7 +549,13 @@ describe("startTaskWatcher", () => {
   it("passes a where clause to onConflictDoUpdate so an unchanged issue doesn't churn updatedAt (Hermes review, PR #471)", async () => {
     mockResolveGitHubToken.mockReturnValue("ghp_token");
     mockListLabeledIssues.mockResolvedValue([
-      { number: 46, title: "Fix the thing", body: "details", htmlUrl: "https://x/46" },
+      {
+        number: 46,
+        title: "Fix the thing",
+        body: "details",
+        htmlUrl: "https://x/46",
+        authorAssociation: "OWNER",
+      },
     ]);
     const rows = [{ id: 1, cwd: "/tmp/one", hostId: "local" }];
     const inserted: InsertedTaskRow[] = [];
@@ -496,7 +585,13 @@ describe("startTaskWatcher", () => {
     // from routes/webhooks.ts, which has no issue_dependencies_summary to
     // read.
     mockListLabeledIssues.mockResolvedValue([
-      { number: 48, title: "Fix the thing", body: "details", htmlUrl: "https://x/48" },
+      {
+        number: 48,
+        title: "Fix the thing",
+        body: "details",
+        htmlUrl: "https://x/48",
+        authorAssociation: "OWNER",
+      },
     ]);
     const rows = [{ id: 1, cwd: "/tmp/one", hostId: "local" }];
     const inserted: InsertedTaskRow[] = [];

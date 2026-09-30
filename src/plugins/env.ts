@@ -531,6 +531,15 @@ export const schema = {
       type: "boolean",
       default: false,
     },
+    // Comma-separated GitHub logins (e.g. bot accounts, whose
+    // author_association is never OWNER/MEMBER/COLLABORATOR) whose issues and
+    // comments Task Master trusts in addition to repo owners/members/
+    // collaborators. Unioned with settings.taskMaster.trustedLogins — see
+    // task-trust.ts.
+    MULLION_TASK_TRUSTED_LOGINS: {
+      type: "string",
+      default: "",
+    },
     // Public base URL for GitHub webhook delivery (issue #221). This is the
     // URL GitHub posts events to — typically a path behind the reverse proxy
     // that serves the frontend (e.g. https://mullion.example.com/api/webhooks/github).
@@ -967,6 +976,7 @@ declare module "fastify" {
       MULLION_TASK_PROGRESS_COMMENT_MINUTES: number;
       MULLION_TASK_RATE_LIMIT_GRACE_MINUTES: number;
       MULLION_TASK_SKIP_PERMISSIONS: boolean;
+      MULLION_TASK_TRUSTED_LOGINS: string;
       BROWSER_ENABLED: boolean;
       BROWSER_MAX_INSTANCES: number;
       BROWSER_FRAMERATE: number;

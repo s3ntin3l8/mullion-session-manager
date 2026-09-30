@@ -36,6 +36,8 @@ interface GitHubIssuePayload {
   body?: string | null;
   html_url?: string;
   state?: "open" | "closed";
+  user?: { login?: string } | null;
+  author_association?: string;
   labels?: Array<{ name?: string }>;
   // #667 — present on the same "issues" webhook payload as the REST issue
   // object (verified live during planning); read only for the
@@ -347,6 +349,8 @@ export async function webhookRoutes(app: FastifyInstance) {
                     title: issue.title,
                     body: issue.body ?? null,
                     htmlUrl: issue.html_url,
+                    authorLogin: issue.user?.login ?? null,
+                    authorAssociation: issue.author_association,
                   });
                 } else if (action === "closed" || action === "unlabeled") {
                   // "unlabeled" only proceeds when the label GitHub reports

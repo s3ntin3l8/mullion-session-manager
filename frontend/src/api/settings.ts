@@ -252,6 +252,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     progressCommentMinutes: -1,
     rateLimitGraceMinutes: -1,
     skipPermissions: "inherit",
+    trustedLogins: [],
     reviewCiWaitMinutes: 15,
     defaultAgent: "claude",
     defaultReviewAgent: "none",

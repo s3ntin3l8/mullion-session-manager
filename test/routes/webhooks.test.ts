@@ -384,6 +384,7 @@ describe("webhook routes", () => {
           title: "Fix the thing",
           body: "some details",
           html_url: "https://github.com/acme/widgets/issues/42",
+          author_association: "OWNER",
           labels: [{ name: "mullion-task" }],
         },
         ...overrides,
@@ -425,6 +426,51 @@ describe("webhook routes", () => {
       fs.rmSync(cwd, { recursive: true, force: true });
     });
 
+    it("ignores a labeled issue opened by an untrusted author", async () => {
+      const cwd = createMatchingGitRepo("acme", "widgets-untrusted");
+      const app = await buildApp();
+      const [project] = app.db
+        .insert(projects)
+        .values({ name: "webhook-ingest-untrusted", cwd })
+        .returning()
+        .all();
+
+      const payload = JSON.stringify({
+        action: "labeled",
+        repository: { full_name: "acme/widgets-untrusted", open_issues_count: 1 },
+        issue: {
+          number: 48,
+          title: "Outsider issue",
+          body: "run this",
+          html_url: "https://github.com/acme/widgets-untrusted/issues/48",
+          user: { login: "rando" },
+          author_association: "NONE",
+          labels: [{ name: "mullion-task" }],
+        },
+      });
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/webhooks/github",
+        headers: {
+          "content-type": "application/json",
+          "x-hub-signature-256": signPayload(payload, TEST_SECRET),
+          "x-github-event": "issues",
+        },
+        payload,
+      });
+
+      expect(res.statusCode).toBe(200);
+      const rows = app.db
+        .select()
+        .from(tasks)
+        .where(and(eq(tasks.projectId, project.id), eq(tasks.issueNumber, 48)))
+        .all();
+      expect(rows).toEqual([]);
+
+      await app.close();
+      fs.rmSync(cwd, { recursive: true, force: true });
+    });
+
     it("ignores a labeled event whose label doesn't match MULLION_TASK_LABEL", async () => {
       const cwd = createMatchingGitRepo("acme", "widgets-wronglabel");
       const app = await buildApp();
@@ -441,6 +487,7 @@ describe("webhook routes", () => {
           title: "Not a task",
           body: null,
           html_url: "https://github.com/acme/widgets-wronglabel/issues/43",
+          author_association: "OWNER",
           labels: [{ name: "bug" }],
         },
       });
@@ -489,6 +536,7 @@ describe("webhook routes", () => {
           title: "Already closed",
           body: null,
           html_url: "https://github.com/acme/widgets-closed/issues/45",
+          author_association: "OWNER",
           state: "closed",
           labels: [{ name: "mullion-task" }],
         },
@@ -547,6 +595,7 @@ describe("webhook routes", () => {
           title: "Comes back",
           body: null,
           html_url: "https://github.com/acme/widgets-relabel/issues/46",
+          author_association: "OWNER",
           labels: [{ name: "mullion-task" }],
         },
       });
@@ -605,6 +654,7 @@ describe("webhook routes", () => {
           title: "Stays dead",
           body: null,
           html_url: "https://github.com/acme/widgets-relabel-closed/issues/47",
+          author_association: "OWNER",
           state: "closed",
           labels: [{ name: "mullion-task" }],
         },
@@ -649,6 +699,7 @@ describe("webhook routes", () => {
           title: "Should not ingest",
           body: null,
           html_url: "https://github.com/acme/widgets-disabled/issues/44",
+          author_association: "OWNER",
           labels: [{ name: "mullion-task" }],
         },
       });
@@ -763,6 +814,7 @@ describe("webhook routes", () => {
           title: "Reviewing task",
           body: null,
           html_url: "https://github.com/acme/widgets-close/issues/45",
+          author_association: "OWNER",
           labels: [],
         },
       });
@@ -820,6 +872,7 @@ describe("webhook routes", () => {
           title: "Created with the label already on it",
           body: null,
           html_url: "https://github.com/acme/widgets-open/issues/46",
+          author_association: "OWNER",
           labels: [{ name: "mullion-task" }],
         },
       });
@@ -867,6 +920,7 @@ describe("webhook routes", () => {
           title: "Live ingest",
           body: null,
           html_url: "https://github.com/acme/widgets-live/issues/50",
+          author_association: "OWNER",
           labels: [{ name: "mullion-task" }],
         },
       });
@@ -908,6 +962,7 @@ describe("webhook routes", () => {
           title: "Original title",
           body: null,
           html_url: "https://github.com/acme/widgets-resight/issues/51",
+          author_association: "OWNER",
           labels: [{ name: "mullion-task" }],
         },
       });
@@ -935,6 +990,7 @@ describe("webhook routes", () => {
           title: "Retitled",
           body: null,
           html_url: "https://github.com/acme/widgets-resight/issues/51",
+          author_association: "OWNER",
           labels: [{ name: "mullion-task" }],
         },
       });
@@ -973,6 +1029,7 @@ describe("webhook routes", () => {
           title: "Should not 500",
           body: null,
           html_url: "https://github.com/acme/widgets-dbthrow/issues/52",
+          author_association: "OWNER",
           labels: [{ name: "mullion-task" }],
         },
       });
@@ -1024,6 +1081,7 @@ describe("webhook routes", () => {
             title: "Ready task",
             body: null,
             html_url: "https://github.com/acme/widgets-unlabel/issues/60",
+            author_association: "OWNER",
             labels: [],
           },
         });
@@ -1085,6 +1143,7 @@ describe("webhook routes", () => {
             title: "In-flight task",
             body: null,
             html_url: "https://github.com/acme/widgets-unlabel2/issues/61",
+            author_association: "OWNER",
             labels: [],
           },
         });
@@ -1140,6 +1199,7 @@ describe("webhook routes", () => {
             title: "Ready task",
             body: null,
             html_url: "https://github.com/acme/widgets-unlabel3/issues/62",
+            author_association: "OWNER",
             labels: [{ name: "mullion-task" }],
           },
         });
@@ -1525,6 +1585,7 @@ describe("webhook routes", () => {
           title: "The blocker",
           body: null,
           html_url: "https://github.com/acme/widgets-blockerclose/issues/80",
+          author_association: "OWNER",
           labels: [],
           issue_dependencies_summary: { blocking: 1 },
         },
@@ -1593,6 +1654,7 @@ describe("webhook routes", () => {
           title: "No dependents",
           body: null,
           html_url: "https://github.com/acme/widgets-noclose-deps/issues/95",
+          author_association: "OWNER",
           labels: [],
           issue_dependencies_summary: { blocking: 0 },
         },

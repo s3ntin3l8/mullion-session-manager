@@ -297,6 +297,29 @@ describe("Settings -> Task Master", () => {
     );
   });
 
+  it("commits the trusted logins list as a trimmed array on blur", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="tasks" />);
+
+    const input = await screen.findByLabelText("Trusted GitHub logins");
+    await user.type(input, " octocat ,, my-bot ");
+    await user.tab();
+
+    expect(useDashboardStore.getState().settings.taskMaster.trustedLogins).toEqual([
+      "octocat",
+      "my-bot",
+    ]);
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/settings",
+        expect.objectContaining({
+          method: "PATCH",
+          body: JSON.stringify({ taskMaster: { trustedLogins: ["octocat", "my-bot"] } }),
+        }),
+      ),
+    );
+  });
+
   it("Reset writes every sentinel back in one patch, from an install with every field overridden", async () => {
     const user = userEvent.setup();
     useDashboardStore.setState({
@@ -310,6 +333,7 @@ describe("Settings -> Task Master", () => {
           progressCommentMinutes: 5,
           rateLimitGraceMinutes: 5,
           skipPermissions: "on",
+          trustedLogins: [],
           reviewCiWaitMinutes: 30,
           defaultAgent: "codex",
           defaultReviewAgent: "agy",

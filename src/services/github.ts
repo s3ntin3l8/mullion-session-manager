@@ -140,6 +140,7 @@ interface GitHubIssueApiItem {
   title: string;
   html_url: string;
   user: { login: string } | null;
+  author_association?: string;
   pull_request?: unknown;
   // #667 — present on the plain issues-list response (verified live against
   // the API during planning, no extra Accept header or API version needed).
@@ -341,6 +342,11 @@ export interface TaskIssue {
   title: string;
   body: string | null;
   htmlUrl: string;
+  // Who opened the issue and their relationship to the repo — task-trust.ts
+  // gates ingest on these. Optional only so a payload missing them can be
+  // represented; an absent association is treated as untrusted.
+  authorLogin?: string | null;
+  authorAssociation?: string;
   // #667 — GitHub's `issue_dependencies_summary.total_blocked_by`, when the
   // response carried it. `undefined` (not `0`) when absent — a webhook-built
   // TaskIssue (routes/webhooks.ts, which has no summary to read) omits this
@@ -427,6 +433,8 @@ export async function listLabeledIssues(
       title: item.title,
       body: item.body ?? null,
       htmlUrl: item.html_url,
+      authorLogin: item.user?.login ?? null,
+      authorAssociation: item.author_association,
       dependencyCount: item.issue_dependencies_summary?.total_blocked_by,
       // #701 — parent_issue_url is `null` for an issue with no parent (not
       // absent), so this always resolves to a definite value on a real
@@ -452,6 +460,7 @@ export async function listLabeledIssues(
 
 export interface GitHubIssueComment {
   author: string | null;
+  authorAssociation?: string;
   body: string;
   createdAt: string;
 }
@@ -493,12 +502,14 @@ export async function listIssueComments(
 
   const items = (await res.json()) as {
     user: { login: string } | null;
+    author_association?: string;
     body?: string | null;
     created_at: string;
   }[];
   return items
     .map((item) => ({
       author: item.user?.login ?? null,
+      authorAssociation: item.author_association,
       body: item.body ?? "",
       createdAt: item.created_at,
     }))
@@ -509,6 +520,8 @@ export interface GitHubIssueSummary {
   number: number;
   title: string;
   body: string | null;
+  authorLogin?: string | null;
+  authorAssociation?: string;
 }
 
 /** A single issue's title+body — used to resolve a parent tracking issue's
@@ -537,8 +550,20 @@ export async function getIssue(
     );
   }
 
-  const item = (await res.json()) as { number: number; title: string; body?: string | null };
-  return { number: item.number, title: item.title, body: item.body ?? null };
+  const item = (await res.json()) as {
+    number: number;
+    title: string;
+    body?: string | null;
+    user?: { login: string } | null;
+    author_association?: string;
+  };
+  return {
+    number: item.number,
+    title: item.title,
+    body: item.body ?? null,
+    authorLogin: item.user?.login ?? null,
+    authorAssociation: item.author_association,
+  };
 }
 
 // ────────────────────────────────────────────────────────────────────────────
