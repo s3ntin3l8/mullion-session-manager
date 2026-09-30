@@ -4635,15 +4635,19 @@ export class PtyManager {
   /** Issue #1430 — see Session.acknowledgeAttention's (and, underneath it,
    * AttentionTracker.acknowledgeAttention's) doc comments. Same "unknown id
    * is quietly ignored" posture as acceptDevServerPort/dismissDevServerPort
-   * above, but with a caveat those two don't have: an id this process
-   * isn't tracking does NOT always mean the route's own DB lookup already
-   * 404'd — the `sessions` DB row is shared across hosts, so a
-   * remote-hosted session's row still exists here and passes that check;
-   * `false` from this method for that case gets reported as the SAME 409
-   * as "tracked, but still blocked" (routes/sessions.ts's own doc comment
-   * spells this out). Acknowledging a remote-hosted session's attention is
-   * out of scope for this local-only route — filed as a follow-up
-   * (issue #1472) rather than silently descoped. */
+   * above: `false` for an id THIS process isn't tracking, whether that's
+   * because it's genuinely unknown or because it belongs to a
+   * remote-hosted session (the `sessions` DB row is shared across hosts, so
+   * such a row still exists and passes routes/sessions.ts's own 404 check).
+   * Issue #1472 — as of that fix, this is no longer reachable for a
+   * remote-hosted session at all: routes/sessions.ts's ack route resolves
+   * the OWNING host via resolveBackend/SessionBackend first, so this method
+   * only ever runs against an id this process's own PtyManager should be
+   * tracking. A `false` here now means only "tracked, but still blocked" or
+   * "not tracked by this process's PtyManager for some other reason (e.g. a
+   * restart before reattach)" — both still collapse to the same 409 the
+   * route reports, since there's nothing more specific to tell the caller
+   * either way. */
   acknowledgeAttention(id: string): boolean {
     return this.sessions.get(id)?.acknowledgeAttention() ?? false;
   }

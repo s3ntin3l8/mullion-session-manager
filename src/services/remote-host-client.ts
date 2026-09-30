@@ -1213,6 +1213,27 @@ export class RemoteHostClient {
   }
 
   /**
+   * Clears non-blocking attention (issue #1472) on whichever agent actually
+   * tracks this session's live PtyManager state — the agent's own
+   * /internal/sessions/:id/attention/ack, mirroring resolveReviewGate's
+   * shape exactly (same `{ok}` body, same POST-with-no-meaningful-body
+   * request). A 404 here (an OLDER agent that predates this route
+   * entirely) surfaces as an ordinary HostRequestError from request()
+   * below, same as any other 4xx — session-backend.ts's RemoteBackend lets
+   * it propagate unchanged, and routes/sessions.ts's ack route maps any
+   * thrown error (this version-skew 404 included) to a 502, the same
+   * posture the review-gate route already uses for a transport/host
+   * failure.
+   */
+  async acknowledgeAttention(id: string): Promise<boolean> {
+    const result = await this.request<{ ok: boolean }>(
+      `/internal/sessions/${encodeURIComponent(id)}/attention/ack`,
+      { method: "POST" },
+    );
+    return result.ok;
+  }
+
+  /**
    * Uploads a pasted/attached image (issue #68) to this agent's own
    * `/internal/uploads`, which writes it under the given session cwd — on
    * *this* host's filesystem, not the primary's, since that's where the
