@@ -613,6 +613,134 @@ describe("browser route (/ws/browser/:sessionId)", () => {
     await app.close();
   });
 
+  // #1491: the client forwards the real Ctrl/Cmd keydown before sending
+  // copy/cut, and Playwright's own `press("Control+c")` would release that
+  // Control on completion. These tests pin what the server does instead
+  // when its tracked modifier state says one is still held.
+  describe("copy/cut with a modifier still held (#1491)", () => {
+    async function connect() {
+      const { app, port } = await buildAndListen();
+      const { sessionId } = await createProjectAndSession(app);
+      const pageCountBefore = launchedPages.length;
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/browser/${sessionId}`);
+      await waitForOpenOrClose(ws);
+      const page = await waitForNewestPage(pageCountBefore);
+      page.selectionText = "selected";
+      const send = (msg: object) => ws.send(JSON.stringify(msg));
+      return { app, ws, page, send };
+    }
+
+    it.each([
+      ["copy", "c"],
+      ["cut", "x"],
+    ])("%s while Control is held presses bare %s and leaves Control down", async (type, key) => {
+      const { app, ws, page, send } = await connect();
+
+      send({ type: "key", action: "down", key: "Control" });
+      await waitUntilReal(() => page.keyboardSpy.down.mock.calls.length > 0);
+      send({ type });
+      await waitUntilReal(() => page.keyboardSpy.press.mock.calls.length > 0);
+      send({ type: "key", action: "down", key: "a" });
+      await waitUntilReal(() => page.keyboardSpy.down.mock.calls.length > 1);
+
+      expect(page.keyboardSpy.press).toHaveBeenCalledTimes(1);
+      expect(page.keyboardSpy.press).toHaveBeenCalledWith(key);
+      expect(page.keyboardSpy.up).not.toHaveBeenCalled();
+      expect(page.keyboardSpy.down.mock.calls).toEqual([["Control"], ["a"]]);
+
+      ws.close();
+      await app.close();
+    });
+
+    it("uses the Control+c chord when Control is released while the selection read is in flight", async () => {
+      const { app, ws, page, send } = await connect();
+
+      let releaseEvaluate!: () => void;
+      const gate = new Promise<void>((resolve) => (releaseEvaluate = resolve));
+      page.evaluate = async (_script: string) => {
+        page.evaluateSpy();
+        await gate;
+        return page.selectionText;
+      };
+
+      send({ type: "key", action: "down", key: "Control" });
+      await waitUntilReal(() => page.keyboardSpy.down.mock.calls.length > 0);
+      send({ type: "copy" });
+      await waitUntilReal(() => page.evaluateSpy.mock.calls.length > 0);
+      send({ type: "key", action: "up", key: "Control" });
+      await waitUntilReal(() => page.keyboardSpy.up.mock.calls.length > 0);
+      releaseEvaluate();
+      await waitUntilReal(() => page.keyboardSpy.press.mock.calls.length > 0);
+
+      expect(page.keyboardSpy.press).toHaveBeenCalledWith("Control+c");
+
+      ws.close();
+      await app.close();
+    });
+
+    it("lifts Meta around the Control chord and restores it afterwards", async () => {
+      const { app, ws, page, send } = await connect();
+      const order: string[] = [];
+      page.keyboardSpy.down.mockImplementation((k: string) => void order.push(`down:${k}`));
+      page.keyboardSpy.up.mockImplementation((k: string) => void order.push(`up:${k}`));
+      page.keyboardSpy.press.mockImplementation((k: string) => void order.push(`press:${k}`));
+
+      send({ type: "key", action: "down", key: "Meta" });
+      await waitUntilReal(() => order.length > 0);
+      send({ type: "cut" });
+      await waitUntilReal(() => order.length >= 4);
+
+      expect(order).toEqual(["down:Meta", "up:Meta", "press:Control+x", "down:Meta"]);
+
+      ws.close();
+      await app.close();
+    });
+
+    it("does not re-press Meta if it was released while the synthetic chord was in flight", async () => {
+      const { app, ws, page, send } = await connect();
+      const order: string[] = [];
+      let finishPress!: () => void;
+      const pressGate = new Promise<void>((resolve) => (finishPress = resolve));
+      page.keyboardSpy.down.mockImplementation((k: string) => void order.push(`down:${k}`));
+      page.keyboardSpy.up.mockImplementation((k: string) => void order.push(`up:${k}`));
+      page.keyboardSpy.press.mockImplementation(async (k: string) => {
+        order.push(`press:${k}`);
+        await pressGate;
+      });
+
+      send({ type: "key", action: "down", key: "Meta" });
+      await waitUntilReal(() => order.length > 0);
+      send({ type: "copy" });
+      await waitUntilReal(() => order.includes("press:Control+c"));
+      send({ type: "key", action: "up", key: "Meta" });
+      await waitUntilReal(() => order.filter((e) => e === "up:Meta").length > 1);
+      finishPress();
+      // Let the dispatch's `finally` run before asserting nothing followed.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(order).toEqual(["down:Meta", "up:Meta", "press:Control+c", "up:Meta"]);
+
+      ws.close();
+      await app.close();
+    });
+
+    it("forgets a Control released by a chord press, so a later copy uses the full chord", async () => {
+      const { app, ws, page, send } = await connect();
+
+      send({ type: "key", action: "down", key: "Control" });
+      await waitUntilReal(() => page.keyboardSpy.down.mock.calls.length > 0);
+      send({ type: "key", action: "press", key: "Control+a" });
+      await waitUntilReal(() => page.keyboardSpy.press.mock.calls.length > 0);
+      send({ type: "copy" });
+      await waitUntilReal(() => page.keyboardSpy.press.mock.calls.length > 1);
+
+      expect(page.keyboardSpy.press.mock.calls).toEqual([["Control+a"], ["Control+c"]]);
+
+      ws.close();
+      await app.close();
+    });
+  });
+
   it("sends no clipboard reply for an empty selection, but still presses the key", async () => {
     const { app, port } = await buildAndListen();
     const { sessionId } = await createProjectAndSession(app);
