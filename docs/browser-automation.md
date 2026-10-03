@@ -305,7 +305,15 @@ GET /ws/browser/:sessionId
     _before_ pressing the real key (a cut destroys the selection), replies
     with `{type: "clipboard", text}` if non-empty, then presses
     `Control+c`/`Control+x` so the page's own copy/cut handlers (and, for
-    cut, the deletion) still run.
+    cut, the deletion) still run. The press is modifier-aware (#1491): the
+    server tracks, per page, which of Control/Meta/Alt/Shift the client's
+    forwarded key down/up stream says are held. If Control is held it
+    presses the bare `c`/`x` instead of the chord, so Control stays down in
+    Playwright (a chord press would release it, and a follow-up Ctrl+A would
+    type a literal). If Meta (Cmd) is held it lifts Meta, presses
+    `Control+c`/`Control+x`, then re-presses Meta. A `press` message naming a
+    modifier (e.g. `Control+a`) clears it from the tracked state. General
+    Cmd→Ctrl mapping for other chords is not done here.
   - `{type: "clipboard", text}` (server → client): the reply to the above,
     written to the host clipboard by the client only while the tab has
     focus.

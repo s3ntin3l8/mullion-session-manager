@@ -230,6 +230,34 @@ const READ_SELECTION_SCRIPT = `
 })()
 `;
 
+// Which modifier keys the client has forwarded as held, per Page (not per
+// socket: BrowserManager pools one page per project, so several sockets can
+// drive the same Playwright keyboard). Playwright keeps its own modifier
+// state, and a synthetic `keyboard.press("Control+c")` ends by releasing
+// Control in it — even while the user is still physically holding Ctrl.
+// This mirrors what the forwarded key down/up stream says is held so
+// copy/cut can avoid clobbering it (#1491). Updated synchronously right
+// before each keyboard call, so a read in the same tick is never stale.
+const TRACKED_MODIFIERS = new Set(["Control", "Meta", "Alt", "Shift"]);
+const heldModifiers = new WeakMap<Page, Set<string>>();
+
+function heldFor(page: Page): Set<string> {
+  let held = heldModifiers.get(page);
+  if (!held) {
+    held = new Set();
+    heldModifiers.set(page, held);
+  }
+  return held;
+}
+
+// A `press` of "Control+a" (or a bare "Control") is a down+up pair in
+// Playwright, so every modifier it names ends up released.
+function releaseChordModifiers(page: Page, chord: string): void {
+  const held = heldModifiers.get(page);
+  if (!held) return;
+  for (const part of chord.split("+")) held.delete(part);
+}
+
 async function dispatchInput(
   app: FastifyInstance,
   socket: WebSocket,
@@ -265,12 +293,17 @@ async function dispatchInput(
     case "key":
       switch (message.action) {
         case "down":
+          if (TRACKED_MODIFIERS.has(message.key)) heldFor(page).add(message.key);
           await page.keyboard.down(message.key);
           break;
         case "up":
+          heldModifiers.get(page)?.delete(message.key);
           await page.keyboard.up(message.key);
           break;
         case "press":
+          // Playwright releases every modifier a chord press names, so the
+          // tracked state has to follow even though no `up` was forwarded.
+          releaseChordModifiers(page, message.key);
           await page.keyboard.press(message.key);
           break;
       }
@@ -321,12 +354,11 @@ async function dispatchInput(
       // page.evaluate() itself can reject independently of anything
       // READ_SELECTION_SCRIPT guards against — e.g. "Execution context was
       // destroyed" if a navigation lands mid-copy. That must never skip the
-      // key press below: the user's physical Ctrl/Cmd+C or +X keydown
-      // already reached the page as an ordinary forwarded key (BrowserPane
-      // only intercepts it to request this copy/cut, not to swallow it),
-      // so the page still expects the matching chord to complete. Losing
-      // the clipboard reply on a failed read is an acceptable degradation;
-      // losing the key press entirely is not.
+      // key press below: BrowserPane forwards the Ctrl/Cmd modifier keydown
+      // itself but swallows the C/X keydown (it only sends this copy/cut
+      // request instead), so the page still expects the chord to complete
+      // here. Losing the clipboard reply on a failed read is an acceptable
+      // degradation; losing the key press entirely is not.
       let text = "";
       try {
         text = (await page.evaluate(READ_SELECTION_SCRIPT)) as string;
@@ -336,7 +368,33 @@ async function dispatchInput(
       if (text && socket.readyState === socket.OPEN) {
         socket.send(JSON.stringify({ type: "clipboard", text }));
       }
-      await page.keyboard.press(message.type === "copy" ? "Control+c" : "Control+x");
+      const key = message.type === "copy" ? "c" : "x";
+      const held = heldFor(page);
+      // Read the held state only now, after the awaited evaluate(): a
+      // modifier keyup that landed meanwhile is already reflected, and
+      // nothing below awaits before the press, so it can't go stale.
+      if (held.has("Control")) {
+        // The client's own Control keydown is still live in Playwright. A
+        // `Control+c` chord press would release it on completion, so a
+        // follow-up chord (Ctrl+A) would type a literal. The bare key rides
+        // on the Control already held, and leaves it held.
+        await page.keyboard.press(key);
+      } else if (held.has("Meta")) {
+        // Meta+Control+C isn't the native copy/cut binding, so cut would
+        // never delete. Lift Meta around the synthetic chord, then restore
+        // it so Playwright still matches the user's physical key.
+        await page.keyboard.up("Meta");
+        try {
+          await page.keyboard.press(`Control+${key}`);
+        } finally {
+          // Only if the user is still holding it: a Meta keyup that landed
+          // during the press already cleared the tracked state, and
+          // re-pressing it now would leave Meta stuck down in Playwright.
+          if (held.has("Meta")) await page.keyboard.down("Meta");
+        }
+      } else {
+        await page.keyboard.press(`Control+${key}`);
+      }
       break;
     }
   }
