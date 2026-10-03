@@ -60,6 +60,18 @@ vi.mock("../../src/services/github-write.js", () => ({
   listBlockedByIssues: mockListBlockedByIssues,
 }));
 
+// The app's own taskWatcherPlugin (plugins/task-watcher.ts) calls
+// startTaskWatcher(app) in onReady. The first app.inject() below boots the app
+// before any test calls vi.useFakeTimers(), so that second watcher would arm a
+// REAL setInterval (MULLION_TASK_POLL_INTERVAL=1) that fake timers can't
+// control. It polls the same DB and calls the same mocks as the sweep each
+// test drives itself, so under host CPU contention the two watchers split a
+// sweep's work (#1492). Stub the plugin out; these tests start their own.
+vi.mock("../../src/plugins/task-watcher.js", async () => {
+  const { default: fp } = await import("fastify-plugin");
+  return { taskWatcherPlugin: fp(async () => {}) };
+});
+
 const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
 const { tasks, projects, settings } = await import("../../src/db/schema.js");
