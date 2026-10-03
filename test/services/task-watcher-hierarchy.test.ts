@@ -46,6 +46,18 @@ vi.mock("../../src/services/task-events.js", () => ({
   broadcastTaskEvent: mockBroadcastTaskEvent,
 }));
 
+// The app's own taskWatcherPlugin (plugins/task-watcher.ts) calls
+// startTaskWatcher(app) in onReady. The first app.inject() below boots the app
+// before any test calls vi.useFakeTimers(), so that second watcher would arm a
+// REAL setInterval (MULLION_TASK_POLL_INTERVAL=1) that fake timers can't
+// control. It polls the same DB and calls the same mocks as the sweep each
+// test drives itself, so under host CPU contention the two watchers split a
+// sweep's work (#1492). Stub the plugin out; these tests start their own.
+vi.mock("../../src/plugins/task-watcher.js", async () => {
+  const { default: fp } = await import("fastify-plugin");
+  return { taskWatcherPlugin: fp(async () => {}) };
+});
+
 const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
 const { tasks, projects } = await import("../../src/db/schema.js");
@@ -381,6 +393,20 @@ describe("fillParentIssueTitles — sub-issue hierarchy (#701)", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     expect(mockGetIssueTitle).toHaveBeenCalledTimes(25);
     expect(ids.every((id) => getTask(id).parentIssueTitle !== null)).toBe(true);
+  });
+
+  // #1492 regression: the app's own plugin watcher must not run alongside the
+  // watcher a test starts itself. Real timers here on purpose — an unmocked
+  // plugin arms a real 1s setInterval at boot that a fake-timer sweep can't
+  // see, so waiting real time past one interval is what exposes it.
+  it("does not run a second, real-time watcher from the app's own plugin", async () => {
+    const projectId = await createProject();
+    mockGetIssueTitle.mockResolvedValue("Parent");
+    insertChildTask(projectId, { parentIssueNumber: 4242 });
+
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+
+    expect(mockGetIssueTitle).not.toHaveBeenCalled();
   });
 
   it("gives up on a persistently-failing parent after MAX_PARENT_TITLE_ATTEMPTS, without blocking other parents", async () => {
