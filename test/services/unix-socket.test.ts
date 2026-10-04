@@ -11,6 +11,7 @@ import {
   reclaimSocketPath,
   SocketAlreadyListeningError,
   PROBE_TIMEOUT_MS,
+  RECLAIM_PROBE_TIMEOUTS_MS,
 } from "../../src/services/unix-socket.js";
 
 function tmpSocketPath(name: string): string {
@@ -157,4 +158,119 @@ describe("reclaimSocketPath", () => {
       fs.rmSync(p, { force: true });
     }
   });
+});
+
+// #1502: under heavy host CPU contention a starved event loop can miss a
+// stale socket's ECONNREFUSED callback, so the probe timer fires first and a
+// merely slow loop gets reported as a live listener. reclaimSocketPath
+// retries a timed-out probe with a longer budget; these tests drive each
+// attempt's outcome through a mocked net.createConnection (no real waits).
+describe("reclaimSocketPath retries timed-out probes (#1502)", () => {
+  type Attempt = "hang" | "refused" | "connect" | { error: string };
+
+  function setup(attempts: Attempt[]) {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "unix-socket-test-retry-"));
+    const p = path.join(dir, "retry.sock");
+    // existsSync() only needs to see something at the path; a plain marker
+    // file is enough (the connection itself is mocked below).
+    fs.writeFileSync(p, "");
+    let call = 0;
+    const spy = vi.spyOn(net, "createConnection").mockImplementation((() => {
+      const attempt = attempts[Math.min(call++, attempts.length - 1)];
+      const fake = new EventEmitter() as EventEmitter & { destroy: () => void };
+      fake.destroy = vi.fn();
+      if (attempt === "connect") {
+        queueMicrotask(() => fake.emit("connect"));
+      } else if (attempt === "refused") {
+        queueMicrotask(() =>
+          fake.emit("error", Object.assign(new Error("refused"), { code: "ECONNREFUSED" })),
+        );
+      } else if (attempt !== "hang") {
+        queueMicrotask(() =>
+          fake.emit("error", Object.assign(new Error("boom"), { code: attempt.error })),
+        );
+      }
+      return fake as unknown as net.Socket;
+    }) as unknown as typeof net.createConnection);
+    const cleanup = () => {
+      spy.mockRestore();
+      vi.useRealTimers();
+      fs.rmSync(dir, { recursive: true, force: true });
+    };
+    return { p, spy, cleanup };
+  }
+
+  it("retries a timed-out probe and reclaims when a later attempt reports dead", async () => {
+    const { p, spy, cleanup } = setup(["hang", "hang", "refused"]);
+    try {
+      const done = reclaimSocketPath(p);
+      await vi.advanceTimersByTimeAsync(
+        RECLAIM_PROBE_TIMEOUTS_MS[0] + RECLAIM_PROBE_TIMEOUTS_MS[1],
+      );
+      await expect(done).resolves.toBeUndefined();
+      expect(spy).toHaveBeenCalledTimes(3);
+      expect(fs.existsSync(p)).toBe(false);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("throws immediately when a retried probe turns out live", async () => {
+    const { p, spy, cleanup } = setup(["hang", "connect"]);
+    try {
+      const done = reclaimSocketPath(p);
+      const assertion = expect(done).rejects.toThrow(SocketAlreadyListeningError);
+      await vi.advanceTimersByTimeAsync(RECLAIM_PROBE_TIMEOUTS_MS[0]);
+      await assertion;
+      expect(spy).toHaveBeenCalledTimes(2);
+      expect(fs.existsSync(p)).toBe(true);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("throws after exhausting every attempt when the probe stays slow", async () => {
+    const { p, spy, cleanup } = setup(["hang"]);
+    try {
+      const done = reclaimSocketPath(p);
+      const assertion = expect(done).rejects.toThrow(SocketAlreadyListeningError);
+      await vi.advanceTimersByTimeAsync(RECLAIM_PROBE_TIMEOUTS_MS.reduce((a, b) => a + b, 0));
+      await assertion;
+      expect(spy).toHaveBeenCalledTimes(RECLAIM_PROBE_TIMEOUTS_MS.length);
+      expect(fs.existsSync(p)).toBe(true);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("uses each attempt's own, growing timeout", async () => {
+    const { p, spy, cleanup } = setup(["hang"]);
+    try {
+      const done = reclaimSocketPath(p, [100, 200]);
+      const assertion = expect(done).rejects.toThrow(SocketAlreadyListeningError);
+      await vi.advanceTimersByTimeAsync(99);
+      expect(spy).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(spy).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(200);
+      await assertion;
+    } finally {
+      cleanup();
+    }
+  });
+
+  it.each(["EACCES", "ENOTSOCK"])(
+    "does not retry a %s probe failure — still refuses on the first attempt",
+    async (code) => {
+      const { p, spy, cleanup } = setup([{ error: code }]);
+      try {
+        await expect(reclaimSocketPath(p)).rejects.toThrow(SocketAlreadyListeningError);
+        expect(spy).toHaveBeenCalledTimes(1);
+        expect(fs.existsSync(p)).toBe(true);
+      } finally {
+        cleanup();
+      }
+    },
+  );
 });
