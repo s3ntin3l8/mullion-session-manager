@@ -256,6 +256,135 @@ describe("BrowserPane", () => {
     expect(sentTypes).toContainEqual({ type: "key", action: "up", key: "Enter" });
   });
 
+  describe("macOS Cmd mapping (#1503)", () => {
+    function sent() {
+      return fakeSocket.send.mock.calls.map((c) => JSON.parse(c[0] as string));
+    }
+    function setup(platform: string) {
+      vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+      const { container } = render(<BrowserPane params={{ sessionId: 1 }} />);
+      openSocket();
+      return container.querySelector("canvas")!;
+    }
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it("sends Cmd+A as one Control+a press and never forwards Meta", () => {
+      const canvas = setup("MacIntel");
+
+      fireEvent.keyDown(canvas, { key: "Meta", code: "MetaLeft", metaKey: true });
+      fireEvent.keyDown(canvas, { key: "a", code: "KeyA", metaKey: true });
+      fireEvent.keyUp(canvas, { key: "a", code: "KeyA", metaKey: true });
+      fireEvent.keyUp(canvas, { key: "Meta", code: "MetaLeft" });
+
+      expect(sent()).toEqual([{ type: "key", action: "press", key: "Control+a" }]);
+    });
+
+    it("maps Cmd+Left/Right to Home/End and Cmd+Up/Down to Control+Home/End", () => {
+      const canvas = setup("MacIntel");
+
+      for (const [key, code] of [
+        ["ArrowLeft", "ArrowLeft"],
+        ["ArrowRight", "ArrowRight"],
+        ["ArrowUp", "ArrowUp"],
+        ["ArrowDown", "ArrowDown"],
+      ]) {
+        fireEvent.keyDown(canvas, { key, code, metaKey: true });
+        fireEvent.keyUp(canvas, { key, code, metaKey: true });
+      }
+      fireEvent.keyDown(canvas, { key: "Backspace", code: "Backspace", metaKey: true });
+
+      expect(sent()).toEqual([
+        { type: "key", action: "press", key: "Home" },
+        { type: "key", action: "press", key: "End" },
+        { type: "key", action: "press", key: "Control+Home" },
+        { type: "key", action: "press", key: "Control+End" },
+        { type: "key", action: "press", key: "Control+Backspace" },
+      ]);
+    });
+
+    it("keeps the real Shift down and leaves it out of the chord (Cmd+Shift+Z)", () => {
+      const canvas = setup("MacIntel");
+
+      fireEvent.keyDown(canvas, { key: "Shift", code: "ShiftLeft", shiftKey: true });
+      fireEvent.keyDown(canvas, { key: "Meta", code: "MetaLeft", metaKey: true, shiftKey: true });
+      fireEvent.keyDown(canvas, { key: "Z", code: "KeyZ", metaKey: true, shiftKey: true });
+
+      expect(sent()).toEqual([
+        { type: "key", action: "down", key: "Shift" },
+        { type: "key", action: "press", key: "Control+z" },
+      ]);
+    });
+
+    it("suppresses the chord key's keyup even when Shift was released first", () => {
+      const canvas = setup("MacIntel");
+
+      fireEvent.keyDown(canvas, { key: "Z", code: "KeyZ", metaKey: true, shiftKey: true });
+      // Shift released before z, so the keyup's event.key is now lowercase.
+      fireEvent.keyUp(canvas, { key: "z", code: "KeyZ", metaKey: true });
+
+      expect(sent()).toEqual([{ type: "key", action: "press", key: "Control+z" }]);
+    });
+
+    it("keeps Cmd+C/V/X on the clipboard path", () => {
+      const canvas = setup("MacIntel");
+
+      fireEvent.keyDown(canvas, { key: "c", code: "KeyC", metaKey: true });
+      fireEvent.keyDown(canvas, { key: "x", code: "KeyX", metaKey: true });
+      fireEvent.keyDown(canvas, { key: "v", code: "KeyV", metaKey: true });
+
+      expect(sent()).toEqual([{ type: "copy" }, { type: "cut" }]);
+    });
+
+    it("forwards a real Ctrl chord and Cmd+Alt unchanged on a Mac", () => {
+      const canvas = setup("MacIntel");
+
+      fireEvent.keyDown(canvas, { key: "a", code: "KeyA", ctrlKey: true });
+      fireEvent.keyDown(canvas, { key: "a", code: "KeyA", metaKey: true, altKey: true });
+
+      expect(sent()).toEqual([
+        { type: "key", action: "down", key: "a" },
+        { type: "key", action: "down", key: "a" },
+      ]);
+    });
+
+    it("leaves Meta untouched on a non-Mac client", () => {
+      const canvas = setup("Linux x86_64");
+
+      fireEvent.keyDown(canvas, { key: "Meta", code: "MetaLeft", metaKey: true });
+      fireEvent.keyDown(canvas, { key: "a", code: "KeyA", metaKey: true });
+      fireEvent.keyUp(canvas, { key: "Meta", code: "MetaLeft" });
+
+      expect(sent()).toEqual([
+        { type: "key", action: "down", key: "Meta" },
+        { type: "key", action: "down", key: "a" },
+        { type: "key", action: "up", key: "Meta" },
+      ]);
+    });
+
+    it("prefers userAgentData.platform over navigator.platform", () => {
+      vi.spyOn(navigator, "platform", "get").mockReturnValue("Linux x86_64");
+      Object.defineProperty(navigator, "userAgentData", {
+        value: { platform: "macOS" },
+        configurable: true,
+      });
+      try {
+        const { container } = render(<BrowserPane params={{ sessionId: 1 }} />);
+        openSocket();
+        fireEvent.keyDown(container.querySelector("canvas")!, {
+          key: "a",
+          code: "KeyA",
+          metaKey: true,
+        });
+        expect(sent()).toEqual([{ type: "key", action: "press", key: "Control+a" }]);
+      } finally {
+        delete (navigator as { userAgentData?: unknown }).userAgentData;
+      }
+    });
+  });
+
   describe("clipboard", () => {
     it("does not prevent or forward a Ctrl+V keydown, leaving it to the native paste event", () => {
       const { container } = render(<BrowserPane params={{ sessionId: 1 }} />);

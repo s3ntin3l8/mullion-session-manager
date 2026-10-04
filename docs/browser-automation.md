@@ -291,6 +291,21 @@ GET /ws/browser/:sessionId
 - **Binary Frame Streaming:** Playwright captures page screenshot frames (`page.screenshot()`) and streams them down to the client as raw JPEG binary blobs.
 - **Backpressure Handling:** To prevent network flooding and buffering lag, Mullion monitors socket queue size (`BACKPRESSURE_MAX_BUFFERED_BYTES = 4MB`). If client rendering falls behind, newer frames are dropped rather than queued.
 - **Event Proxying:** Mouse clicks, movements, scroll wheels, and key events are serialized in the frontend and sent up to the WebSocket server, which replays them using Playwright's `page.mouse` and `page.keyboard` input APIs.
+- **macOS Cmd mapping (#1503):** the remote page is headless _Linux_
+  Chromium, where Meta+A/Z/… are not editing shortcuts. When the client is
+  macOS (`navigator.userAgentData.platform` / `navigator.platform`, see
+  `frontend/src/browserKeyMap.ts`), `BrowserPane` maps Cmd chords itself — the
+  server can't tell a Cmd key from a real Win/Meta key, so it does no mapping.
+  The Cmd keydown/keyup is swallowed (never sent as `Meta` or `Control`), and
+  each chord goes out as one atomic `{type: "key", action: "press"}`:
+  Cmd+_key_ → `Control+<key>` (so Cmd+A/Z/Y, Cmd+Shift+Z, …), Cmd+Left/Right →
+  `Home`/`End` (line navigation; Ctrl+Left/Right would jump a word on Linux),
+  Cmd+Up/Down → `Control+Home`/`Control+End`, and Cmd+Backspace →
+  `Control+Backspace` (an approximation: deletes the previous word, not to the
+  line start). Shift is not included in the chord string — the client already
+  forwarded the real Shift keydown, and naming it again would release it when
+  the press completes. Cmd+V/C/X keep the clipboard handling below. Cmd+Alt
+  chords are not mapped (forwarded as-is).
 - **Clipboard sync:** Three additional message types cover paste/copy/cut,
   gated behind an explicit user gesture inside the pane rather than any
   generic clipboard mirroring:
@@ -312,8 +327,9 @@ GET /ws/browser/:sessionId
     Playwright (a chord press would release it, and a follow-up Ctrl+A would
     type a literal). If Meta (Cmd) is held it lifts Meta, presses
     `Control+c`/`Control+x`, then re-presses Meta. A `press` message naming a
-    modifier (e.g. `Control+a`) clears it from the tracked state. General
-    Cmd→Ctrl mapping for other chords is not done here.
+    modifier (e.g. `Control+a`) clears it from the tracked state. A macOS
+    client never forwards Meta at all (see "macOS Cmd mapping" above), so the
+    Meta branch only matters for a real Win/Meta key on another platform.
   - `{type: "clipboard", text}` (server → client): the reply to the above,
     written to the host clipboard by the client only while the tab has
     focus.
