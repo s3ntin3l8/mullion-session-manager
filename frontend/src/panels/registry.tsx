@@ -400,11 +400,16 @@ export function KanbanBoardOverlay(props: {
   onSessionEnded: (session: Session) => void;
   // Phone tier: the board's one-column-at-a-time layout (see UnifiedBoard).
   phone?: boolean;
+  // Phone: rendered inside the navigator (in flow) instead of as a grid overlay.
+  inline?: boolean;
 }) {
   const [resetKey, resetPanel] = useResetKey();
   const LazyUnifiedBoard = useRetriableLazy(loadUnifiedBoard, resetKey);
   return (
-    <div className="kanban-board-overlay" style={{ position: "absolute", inset: 0 }}>
+    <div
+      className={props.inline ? "kanban-board-inline" : "kanban-board-overlay"}
+      style={props.inline ? undefined : { position: "absolute", inset: 0 }}
+    >
       <ErrorBoundary onReset={resetPanel}>
         <Suspense fallback={<LazyPanelFallback />}>
           {/* Same intentional new-identity-per-resetKey reasoning as

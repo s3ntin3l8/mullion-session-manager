@@ -365,8 +365,9 @@ export function usePanelOpener({
 
   const onOpenTasks = useCallback(() => {
     useDashboardStore.getState().setViewMode("kanban");
-    setSidebarOpen(false);
-  }, [setSidebarOpen]);
+    // Phone shows the board inside the navigator, so it stays open there.
+    if (layout.tier !== "phone") setSidebarOpen(false);
+  }, [layout.tier, setSidebarOpen]);
 
   const onOpenBrowserUrl = useCallback(
     (projectId: number, url: string, label: string) => {

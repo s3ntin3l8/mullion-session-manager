@@ -5,13 +5,15 @@ import type { DockviewApi, DockviewReadyEvent } from "dockview-react";
 import "dockview-react/dist/styles/dockview.css";
 import { Sidebar } from "./Sidebar.js";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher.js";
-import { PhoneNavigatorHeader, PhoneSettingsList } from "./PhoneNavigator.js";
+import { PhoneNavigatorPanel } from "./PhoneNavigator.js";
+import { sidebarPhoneSection } from "./lib/phoneNavSection.js";
 import type { PhoneNavTab } from "./PhoneNavigator.js";
 import { usePhoneBackStack } from "./hooks/usePhoneBackStack.js";
 import type { TerminalPaneParams } from "./TerminalPane.js";
 import { repaintAllTerminals } from "./terminalRepaintRegistry.js";
 import { ErrorBoundary } from "./ErrorBoundary.js";
 import { Toolbar } from "./Toolbar.js";
+import { usePhoneTasksNavigator } from "./hooks/usePhoneTasksNavigator.js";
 import { MobileKeyBar } from "./MobileKeyBar.js";
 import { PaneHeaderActions } from "./PaneHeaderActions.js";
 import { CommandPalette } from "./CommandPalette.js";
@@ -1159,9 +1161,7 @@ export function App() {
   // hooks/usePhoneBackStack.ts). Settings and the session/notification
   // sheets register themselves; the navigator and the Tasks board live here.
   usePhoneBackStack(isMobile && sidebarOpen, () => setSidebarOpen(false));
-  usePhoneBackStack(isMobile && viewMode === "kanban", () =>
-    useDashboardStore.getState().setViewMode("list"),
-  );
+  usePhoneTasksNavigator({ isMobile, viewMode, sidebarOpen, setSidebarOpen });
   useEffect(() => {
     if (layoutTier === "desktop") return;
     if (sidebarOpen) {
@@ -1180,7 +1180,7 @@ export function App() {
       commitDirection: 1,
       edgeZonePx: 24,
       // The key bar is flush with the left edge; its taps/pans stay its own.
-      ignoreSelector: ".mobile-key-bar",
+      ignoreSelector: ".mobile-key-bar, .tasks-phone-strip",
       onCommit: () => setSidebarOpen(true),
     });
   }, [layoutTier, sidebarOpen]);
@@ -1308,7 +1308,7 @@ export function App() {
 
   const sidebar = (
     <Sidebar
-      phoneSection={isMobile && navTab !== "settings" ? navTab : undefined}
+      phoneSection={isMobile ? sidebarPhoneSection(navTab) : undefined}
       onOpenSession={onOpenSession}
       onOpenSessionAsFloat={onOpenSessionAsFloat}
       onSessionEnded={onSessionEnded}
@@ -1370,18 +1370,16 @@ export function App() {
               with tabs instead of one long scroll. */}
           {isMobile ? (
             <>
-              <PhoneNavigatorHeader
-                tab={navTab}
-                onTab={setNavTab}
+              <PhoneNavigatorPanel
+                navTab={navTab}
+                setNavTab={setNavTab}
                 onOpenTasks={onOpenTasks}
-                tasksActive={viewMode === "kanban"}
                 onClose={() => setSidebarOpen(false)}
+                onSelectSetting={openSettingsFromNavigator}
+                sidebar={sidebar}
+                onOpenSession={onOpenSession}
+                onSessionEnded={onSessionEnded}
               />
-              {navTab === "settings" ? (
-                <PhoneSettingsList onSelect={openSettingsFromNavigator} />
-              ) : (
-                sidebar
-              )}
             </>
           ) : (
             <>
@@ -1592,20 +1590,11 @@ export function App() {
                   Tasks is a top-level destination, not a workspace view mode
                   — entering it now only happens from Sidebar.tsx's own
                   entry or the command palette, not a toggle that implied it
-                  was a peer of the tiled workspace grid. Unlike the empty
-                  grid dropzone (still desktop-only), this renders on mobile
-                  too — UnifiedBoard.tsx/styles.css carry their own mobile
-                  layout (stacked columns, a full-bleed detail sheet), since
-                  removing the "tasks" dockview panel means mobile has no
-                  other way to reach the task board (the Toolbar's own "Back"
-                  button renders on mobile too — see mobile.css's
-                  .toolbar-back-to-workspace override). */}
-              {viewMode === "kanban" && (
-                <KanbanBoardOverlay
-                  onOpenSession={onOpenSession}
-                  onSessionEnded={onSessionEnded}
-                  phone={isMobile}
-                />
+                  was a peer of the tiled workspace grid. Desktop/tablet only:
+                  on phone the board renders inside the navigator's Tasks tab
+                  instead (PhoneNavigatorPanel). */}
+              {viewMode === "kanban" && !isMobile && (
+                <KanbanBoardOverlay onOpenSession={onOpenSession} onSessionEnded={onSessionEnded} />
               )}
             </div>
             <Dock
