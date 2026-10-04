@@ -27,7 +27,26 @@ import { existsSync, unlinkSync } from "node:fs";
 // reasoning as control-socket.ts's own exported HANDSHAKE_TIMEOUT_MS.
 export const PROBE_TIMEOUT_MS = 2_000;
 
+// reclaimSocketPath's per-attempt probe timeouts. A probe that merely timed
+// out (as opposed to failing with EACCES/ENOTSOCK/...) can be a starved event
+// loop under heavy host CPU contention rather than a live listener, so
+// startup retries it with a longer budget before giving up (#1502). Worst
+// case a genuinely hung listener costs ~14s of startup delay before the
+// refusal — acceptable for a once-per-boot check, and the conservative
+// refusal itself is unchanged.
+export const RECLAIM_PROBE_TIMEOUTS_MS: readonly number[] = [
+  PROBE_TIMEOUT_MS,
+  PROBE_TIMEOUT_MS * 2,
+  PROBE_TIMEOUT_MS * 4,
+];
+
 export type SocketProbeResult = "live" | "dead" | "unknown";
+
+interface DetailedProbeResult {
+  result: SocketProbeResult;
+  /** True only when "unknown" came from the timeout firing, not from an error. */
+  timedOut: boolean;
+}
 
 /**
  * Connects to `socketPath` to determine whether a live process is actually
@@ -44,15 +63,19 @@ export type SocketProbeResult = "live" | "dead" | "unknown";
  *     their own reason not to (see isSocketLive vs. reclaimSocketPath below).
  */
 export function probeSocket(socketPath: string): Promise<SocketProbeResult> {
-  if (!existsSync(socketPath)) return Promise.resolve("dead");
+  return probeSocketDetailed(socketPath, PROBE_TIMEOUT_MS).then((d) => d.result);
+}
+
+function probeSocketDetailed(socketPath: string, timeoutMs: number): Promise<DetailedProbeResult> {
+  if (!existsSync(socketPath)) return Promise.resolve({ result: "dead", timedOut: false });
   return new Promise((resolve) => {
     let settled = false;
-    const finish = (result: SocketProbeResult) => {
+    const finish = (result: SocketProbeResult, timedOut = false) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       probe.destroy();
-      resolve(result);
+      resolve({ result, timedOut });
     };
     // `probe` created before `timer` is armed — a synchronous throw from
     // net.createConnection (rare, but not impossible) then aborts this
@@ -60,7 +83,7 @@ export function probeSocket(socketPath: string): Promise<SocketProbeResult> {
     // scheduled timer whose callback would later reference `probe` while
     // it's still in the temporal dead zone.
     const probe = net.createConnection(socketPath);
-    const timer = setTimeout(() => finish("unknown"), PROBE_TIMEOUT_MS);
+    const timer = setTimeout(() => finish("unknown", true), timeoutMs);
     probe.once("connect", () => finish("live"));
     probe.once("error", (err) => {
       finish((err as NodeJS.ErrnoException).code === "ECONNREFUSED" ? "dead" : "unknown");
@@ -115,8 +138,23 @@ export class SocketAlreadyListeningError extends Error {
  * this function actually defends against, and the caller's own
  * server.listen() still fails loudly (EADDRINUSE) if it's lost that race.
  */
-export async function reclaimSocketPath(socketPath: string): Promise<void> {
-  const result = await probeSocket(socketPath);
+export async function reclaimSocketPath(
+  socketPath: string,
+  probeTimeoutsMs: readonly number[] = RECLAIM_PROBE_TIMEOUTS_MS,
+): Promise<void> {
+  // Only a probe that TIMED OUT is retried (with the next, longer budget): a
+  // starved event loop under host CPU contention can miss a stale socket's
+  // ECONNREFUSED callback, and mistaking that for a live listener makes
+  // startup refuse to bind with nothing bound (#1502). "live" and the
+  // error-driven "unknown"s (EACCES, ENOTSOCK, ...) are real
+  // answers and still refuse immediately, so a running instance is never
+  // hijacked.
+  let result: SocketProbeResult = "unknown";
+  for (const timeoutMs of probeTimeoutsMs) {
+    const probed = await probeSocketDetailed(socketPath, timeoutMs);
+    result = probed.result;
+    if (!(result === "unknown" && probed.timedOut)) break;
+  }
   if (result !== "dead") {
     throw new SocketAlreadyListeningError(socketPath, result);
   }
