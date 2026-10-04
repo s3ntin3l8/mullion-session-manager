@@ -471,13 +471,11 @@
   .phone-nav-settings-title {
     flex: 1;
   }
-  /* Tasks view's title, in the slot the session switcher normally holds. */
-  .toolbar-mobile-title {
-    align-items: center;
-    gap: 6px;
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--fg);
+  /* Tasks tab: the board renders in flow inside the navigator, which
+     (.sidebar-wrapper) is the one scroller. */
+  .kanban-board-inline {
+    flex: 1 1 auto;
+    min-height: 0;
   }
   /* The navigator covers the whole viewport, so the scrim behind it is moot. */
   .app.sb-open .cmux-scrim {

@@ -142,7 +142,7 @@ export function Toolbar({
                this button's own `width: auto; height: 44px` override on
                coarse pointers, so its "Back" label still fits. */}
             <button
-              className="toolbar-icon-btn toolbar-back-to-workspace toolbar-back-to-workspace--center"
+              className="toolbar-icon-btn toolbar-back-to-workspace"
               onClick={() => useDashboardStore.getState().setViewMode("list")}
               title="Back to workspace"
             >
@@ -162,37 +162,10 @@ export function Toolbar({
           )
         )}
       </div>
-      {viewMode !== "kanban" && mobileSessionSlot && (
+      {(phone || viewMode !== "kanban") && mobileSessionSlot && (
         <div className="toolbar-mobile-session">{mobileSessionSlot}</div>
       )}
-      {/* Phone in Tasks view: the switcher is hidden and `.toolbar-center` is
-          display:none below 700px, so name where you are. */}
-      {phone && viewMode === "kanban" && (
-        <div className="toolbar-mobile-session toolbar-mobile-title">
-          <LayersIcon size={14} />
-          <span>Tasks</span>
-        </div>
-      )}
       <div className="toolbar-actions">
-        {/* Mobile-only Back button — the phone's escape hatch from Tasks
-           view. mobile.css hides `.toolbar-center` entirely below 700px,
-           so the desktop instance above disappears; toolbar.css hides this
-           one above 700px via `.toolbar-back-to-workspace--actions`. The
-           duplication is intentional — both render every Tasks entry, but
-           exactly one is visible per breakpoint, and on desktop the
-           visible one is the visually-coherent "right of Tasks" placement,
-           on phone it's the right-edge toolbar slot UnifiedBoard.tsx was
-           relying on. */}
-        {viewMode === "kanban" && (
-          <button
-            className="toolbar-icon-btn toolbar-back-to-workspace toolbar-back-to-workspace--actions"
-            onClick={() => useDashboardStore.getState().setViewMode("list")}
-            title="Back to workspace"
-          >
-            <ChevronLeftIcon size={17} />
-            <span>Back</span>
-          </button>
-        )}
         <button
           className="run-cmd-btn"
           onClick={onOpenLauncher}

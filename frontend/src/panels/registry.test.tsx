@@ -4,7 +4,7 @@ import { Suspense, useState } from "react";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { IDockviewPanelProps } from "dockview-react";
-import { makePanelWrapper, components } from "./registry.js";
+import { makePanelWrapper, components, KanbanBoardOverlay } from "./registry.js";
 import { useDashboardStore } from "../store/index.js";
 import { makeSession, makeProject } from "../test/fixtures.js";
 import { resetStore } from "../test/resetStore.js";
@@ -465,5 +465,26 @@ describe("components.timeline — panelApi wiring (issue #1455)", () => {
     // end-to-end, not just that some prop landed unused.
     expect(onDidActiveChange).toHaveBeenCalled();
     expect(await screen.findByText("No events yet.")).toBeInTheDocument();
+  });
+});
+
+vi.mock("../UnifiedBoard.js", () => ({
+  UnifiedBoard: () => <div data-testid="board" />,
+  default: () => <div data-testid="board" />,
+}));
+
+describe("KanbanBoardOverlay", () => {
+  const noop = () => {};
+  it("renders as an absolute grid overlay by default", async () => {
+    const { container } = render(<KanbanBoardOverlay onOpenSession={noop} onSessionEnded={noop} />);
+    expect(container.querySelector(".kanban-board-overlay")).not.toBeNull();
+    expect(container.querySelector(".kanban-board-inline")).toBeNull();
+  });
+  it("renders in flow when inline (phone navigator)", () => {
+    const { container } = render(
+      <KanbanBoardOverlay inline onOpenSession={noop} onSessionEnded={noop} />,
+    );
+    expect(container.querySelector(".kanban-board-inline")).not.toBeNull();
+    expect(container.querySelector(".kanban-board-overlay")).toBeNull();
   });
 });

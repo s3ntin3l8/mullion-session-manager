@@ -82,42 +82,19 @@ describe("Toolbar — Tasks view (viewMode === kanban)", () => {
     expect(screen.queryByText("3 panes")).toBeNull();
   });
 
-  it('shows a Back to workspace button that calls setViewMode("list")', async () => {
+  it('shows a single Back to workspace button that calls setViewMode("list")', async () => {
     const user = userEvent.setup();
     render(<Toolbar {...NOOP_PROPS} />);
-    // Two buttons render in kanban view (--center + --actions); either
-    // works for this assertion, so click the desktop one explicitly.
     const backs = screen.getAllByTitle("Back to workspace");
-    const desktopBack = backs.find((b) =>
-      b.classList.contains("toolbar-back-to-workspace--center"),
-    )!;
-    await user.click(desktopBack);
+    expect(backs.length).toBe(1);
+    await user.click(backs[0]!);
     expect(setViewMode).toHaveBeenCalledWith("list");
   });
 
-  // Hermes review, PR #1366 — the Back button is rendered TWICE in the
-  // kanban view: once in `.toolbar-center` (desktop, behind the Tasks
-  // title — `.toolbar-back-to-workspace--center`) and once in
-  // `.toolbar-actions` (mobile escape hatch — `--actions`). Both render
-  // every Tasks entry, but exactly one is visible per breakpoint via
-  // CSS, and the kanban-view escape hatch on phone relies on the second
-  // instance being reachable. Verify both exist and that clicking EITHER
-  // calls setViewMode("list") — the mobile one would otherwise be an
-  // untested branch.
-  it('renders both desktop and mobile Back instances, each calling setViewMode("list")', async () => {
-    const user = userEvent.setup();
-    render(<Toolbar {...NOOP_PROPS} />);
-
-    const backs = screen.getAllByTitle("Back to workspace");
-    expect(backs.length).toBe(2);
-    expect(backs.some((b) => b.classList.contains("toolbar-back-to-workspace--center"))).toBe(true);
-    expect(backs.some((b) => b.classList.contains("toolbar-back-to-workspace--actions"))).toBe(
-      true,
-    );
-
-    setViewMode.mockClear();
-    await user.click(backs[1]!);
-    expect(setViewMode).toHaveBeenCalledWith("list");
+  it("on phone keeps the session switcher and has no phone Tasks title", () => {
+    render(<Toolbar {...NOOP_PROPS} phone mobileSessionSlot={<span>switcher</span>} />);
+    expect(screen.getByText("switcher")).toBeInTheDocument();
+    expect(document.querySelector(".toolbar-mobile-title")).toBeNull();
   });
 
   it("disables the New-session and Command-palette buttons (issue #730 — no launch from Task view)", () => {
@@ -205,14 +182,5 @@ describe("Toolbar — phone tier", () => {
     expect(container.querySelector(".toolbar-lead")?.contains(bell)).toBe(true);
     expect(bell).toHaveAttribute("data-phone", "false");
     expect(container.querySelector(".toolbar-app-menu")).not.toBeNull();
-  });
-
-  it("names the Tasks view in the switcher's slot on phone only", () => {
-    viewMode = "kanban";
-    const phone = render(<Toolbar {...NOOP_PROPS} phone />);
-    expect(phone.container.querySelector(".toolbar-mobile-title")).toHaveTextContent("Tasks");
-    phone.unmount();
-    const other = render(<Toolbar {...NOOP_PROPS} />);
-    expect(other.container.querySelector(".toolbar-mobile-title")).toBeNull();
   });
 });

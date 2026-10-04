@@ -1,28 +1,28 @@
 import { Fragment } from "react";
+
 import { CloseIcon, ChevronRightIcon } from "./ui/icons.js";
 import { phoneSections } from "./settings/settingsSections.js";
 import type { SettingsSection } from "./settings/settingsSections.js";
+import { useDashboardStore } from "./store/index.js";
+import { KanbanBoardOverlay } from "./panels/registry.js";
+import type { Session } from "./api/index.js";
+import type { ReactNode } from "react";
 
 // Phone-only chrome for the full-screen navigator (App.tsx renders it inside
 // `.sidebar-wrapper`, which mobile.css stretches to the whole viewport below
 // the toolbar on phone). The drawer's sections become tabs so each gets a
 // full-height list instead of one long scroll: Projects and Devices swap the
-// Sidebar's `phoneSection`; Settings shows the section list below. Tasks is a
-// destination, not a list — its "tab" enters the board (which closes the
-// navigator) rather than becoming the selected tab.
-export type PhoneNavTab = "projects" | "devices" | "settings";
+// Sidebar's `phoneSection`; Settings shows the section list below; Tasks
+// shows the task board in place (App.tsx keeps the navigator open for it).
+export type PhoneNavTab = "projects" | "tasks" | "devices" | "settings";
 
 export function PhoneNavigatorHeader({
   tab,
   onTab,
-  onOpenTasks,
-  tasksActive,
   onClose,
 }: {
   tab: PhoneNavTab;
   onTab: (tab: PhoneNavTab) => void;
-  onOpenTasks: () => void;
-  tasksActive: boolean;
   onClose: () => void;
 }) {
   return (
@@ -42,11 +42,9 @@ export function PhoneNavigatorHeader({
           Projects
         </button>
         <button
-          className={`phone-nav-tab${tasksActive ? " current" : ""}`}
-          // A destination, not a toggle: aria-current, unlike the three
-          // real tabs' aria-pressed.
-          aria-current={tasksActive ? "page" : undefined}
-          onClick={onOpenTasks}
+          className="phone-nav-tab"
+          aria-pressed={tab === "tasks"}
+          onClick={() => onTab("tasks")}
         >
           Tasks
         </button>
@@ -89,5 +87,57 @@ export function PhoneSettingsList({ onSelect }: { onSelect: (section: SettingsSe
         </Fragment>
       ))}
     </div>
+  );
+}
+
+// Header + body of the phone navigator. viewMode === "kanban" wins over the
+// local tab, so Tasks can also be entered from outside (palette).
+export function PhoneNavigatorPanel({
+  navTab,
+  setNavTab,
+  onOpenTasks,
+  onClose,
+  onSelectSetting,
+  sidebar,
+  onOpenSession,
+  onSessionEnded,
+}: {
+  navTab: PhoneNavTab;
+  setNavTab: (tab: PhoneNavTab) => void;
+  onOpenTasks: () => void;
+  onClose: () => void;
+  onSelectSetting: (section: SettingsSection) => void;
+  sidebar: ReactNode;
+  onOpenSession: (session: Session) => void;
+  onSessionEnded: (session: Session) => void;
+}) {
+  const tasksOpen = useDashboardStore((st) => st.viewMode === "kanban");
+  return (
+    <>
+      <PhoneNavigatorHeader
+        tab={tasksOpen ? "tasks" : navTab}
+        onTab={(t) => {
+          if (t === "tasks") {
+            onOpenTasks();
+            return;
+          }
+          setNavTab(t);
+          if (tasksOpen) useDashboardStore.getState().setViewMode("list");
+        }}
+        onClose={onClose}
+      />
+      {tasksOpen ? (
+        <KanbanBoardOverlay
+          inline
+          phone
+          onOpenSession={onOpenSession}
+          onSessionEnded={onSessionEnded}
+        />
+      ) : navTab === "settings" ? (
+        <PhoneSettingsList onSelect={onSelectSetting} />
+      ) : (
+        sidebar
+      )}
+    </>
   );
 }
