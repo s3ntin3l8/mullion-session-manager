@@ -160,7 +160,7 @@ describe("events route (/ws/events)", () => {
     });
 
     ws.close();
-  }, 10_000);
+  });
 
   it("streams a live event to an already-connected client", async () => {
     const { app, port } = await buildAndListen();
@@ -195,7 +195,7 @@ describe("events route (/ws/events)", () => {
     expect(titleEvents[0].payload).toEqual({ title: "idle" });
 
     ws.close();
-  }, 10_000);
+  });
 
   it("delivers events from multiple sessions, each with its own per-session seq", async () => {
     const { app, port } = await buildAndListen();
@@ -219,7 +219,7 @@ describe("events route (/ws/events)", () => {
     expect(fromB).toMatchObject({ seq: 1, sessionId: sessionB });
 
     ws.close();
-  }, 10_000);
+  });
 
   it("accepts a 'seen' control message without erroring, and ignores malformed frames", async () => {
     const { app, port } = await buildAndListen();
@@ -274,7 +274,7 @@ describe("events route (/ws/events)", () => {
     expect(first.cursors?.[String(sessionId)]).toEqual({ seen: 0, head: 1 });
 
     ws.close();
-  }, 10_000);
+  });
 
   it("sends the same bootId to every connection on this process (issue #1427's restart-detection signal)", async () => {
     const { app, port } = await buildAndListen();
