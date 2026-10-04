@@ -37,17 +37,18 @@ import type { FastifyInstance } from "fastify";
 // need to call `closeDb()` itself. Agent-role apps never decorate `db` in
 // the first place, so there's nothing to close either way.
 //
-// One real limit on the "unforgettable close" guarantee: `onTestFinished`
-// is only registered AFTER `buildApp()` resolves. If `buildApp()` itself
-// hangs or is still in flight when the test's own timeout fires, this
-// helper never gets a chance to register the close callback, and that
-// build keeps running in the background — able to race a later test's own
-// buildApp() over the same per-file `hooks.sock` (SESSIONS_DIR). This is
-// not a regression versus the old hand-rolled `try/finally` pattern (that
-// had the identical gap: no `app` reference exists to close if the build
-// itself never returns) — just a pre-existing limit worth knowing about
-// when a whole file's tests cascade-fail with SocketAlreadyListeningError
-// under heavy parallel/CI load.
+// The "unforgettable close" guarantee also covers a build that is still in
+// flight when the test's own timeout fires (issue #1481): the
+// `onTestFinished` callback is registered synchronously, BEFORE the build
+// is awaited, and it awaits the build promise itself (swallowing a build
+// rejection — the caller already sees that one) before closing the app it
+// produced. Registering only after `buildApp()` resolved used to be the gap:
+// Vitest runs and clears a test's `onFinished` list when the test settles, so
+// a build that resolved after a timeout registered into a list nobody ever
+// ran, leaking that app's `hooks.sock` for every later `buildApp()` in the
+// same file (SESSIONS_DIR is one directory per test file, see
+// test/setup.ts) — a cascade of `SocketAlreadyListeningError`/`EADDRINUSE`
+// far from the test that actually timed out.
 //
 // Scope this to `it()`/`beforeEach()` bodies, not `afterEach()`: a handful
 // of files (e.g. test/services/github-device-flow.test.ts) build a
@@ -63,15 +64,17 @@ import type { FastifyInstance } from "fastify";
 // `await app.close()` inside `afterEach` (i.e. NOT this helper) is reliable
 // for that specific "cleanup app built in a hook, not a test body" shape.
 export async function buildTestApp(): Promise<FastifyInstance> {
-  const { buildApp } = await import("../../src/app.js");
-  const app = await buildApp();
+  // Must be called before the first `await` (including the dynamic import):
+  // `onTestFinished` is only valid while the test is still current.
+  const build = import("../../src/app.js").then(({ buildApp }) => buildApp());
 
   let closed = false;
   onTestFinished(async () => {
     if (closed) return;
     closed = true;
-    await app.close();
+    const app = await build.catch(() => null);
+    await app?.close();
   });
 
-  return app;
+  return build;
 }
