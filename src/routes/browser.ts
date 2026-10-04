@@ -354,8 +354,9 @@ async function dispatchInput(
       // page.evaluate() itself can reject independently of anything
       // READ_SELECTION_SCRIPT guards against — e.g. "Execution context was
       // destroyed" if a navigation lands mid-copy. That must never skip the
-      // key press below: BrowserPane forwards the Ctrl/Cmd modifier keydown
-      // itself but swallows the C/X keydown (it only sends this copy/cut
+      // key press below: BrowserPane forwards the Ctrl modifier keydown
+      // itself (a macOS client's Cmd never reaches here as Meta — see
+      // frontend/src/browserKeyMap.ts, #1503) but swallows the C/X keydown (it only sends this copy/cut
       // request instead), so the page still expects the chord to complete
       // here. Losing the clipboard reply on a failed read is an acceptable
       // degradation; losing the key press entirely is not.

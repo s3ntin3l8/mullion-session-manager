@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { RefreshIcon, WifiOffIcon } from "./ui/icons.js";
 import { Spinner } from "./ui/Spinner.js";
+import { isMacPlatform, macChordPress } from "./browserKeyMap.js";
 
 export interface BrowserPaneParams {
   sessionId: number;
@@ -237,14 +238,31 @@ export function BrowserPane(props: {
     // Keys whose keydown was intercepted by onKeyDown below for a clipboard
     // chord (not forwarded as a `key` message) — the matching keyup must
     // also be suppressed, or the page would see a keyup for a key it never
-    // got the keydown for. The set is keyed by event.key rather than
-    // re-checking ctrlKey/metaKey at keyup time: the boundary condition
-    // that matters is "was THIS key's own keydown intercepted", not
-    // "is the modifier still held" — the user may release Ctrl/Cmd before
-    // releasing v/c/x, so the modifier state at keyup can't be trusted to
-    // tell the two cases apart.
+    // got the keydown for. The set is keyed by the physical key
+    // (event.code, falling back to event.key) rather than re-checking
+    // ctrlKey/metaKey at keyup time: the boundary condition that matters is
+    // "was THIS key's own keydown intercepted", not "is the modifier still
+    // held" — the user may release Ctrl/Cmd before releasing v/c/x, so the
+    // modifier state at keyup can't be trusted to tell the two cases apart.
+    // (event.code, not event.key, so a Cmd chord's keyup is still matched
+    // after the user releases Shift first and event.key changes "Z" → "z".)
     const interceptedKeys = new Set<string>();
+    const physicalKey = (event: KeyboardEvent) => event.code || event.key;
+    // macOS client: Cmd is mapped to Ctrl in the remote Linux page (#1503,
+    // see browserKeyMap.ts). Evaluated once per mount, like the rest of the
+    // listener wiring.
+    const mac = isMacPlatform();
     const onKeyDown = (event: KeyboardEvent) => {
+      if (mac && event.key === "Meta") {
+        // Never forwarded: Playwright must not hold Meta (a no-op in Linux
+        // Chromium) or Control (it would turn Cmd+Left's Home into
+        // Ctrl+Home). Each Cmd chord goes out below as one atomic `press`.
+        // Swallowed here, and the matching keyup is swallowed via
+        // interceptedKeys so the page never sees an orphaned "up".
+        event.preventDefault();
+        interceptedKeys.add(physicalKey(event));
+        return;
+      }
       // AltGr reports as ctrl+alt on Windows, so a chord excludes
       // Alt/AltGraph — otherwise "@ { [ \ €" on European layouts (and
       // Ctrl+Alt+C-style combos) could not be typed. Also excludes Shift,
@@ -269,7 +287,7 @@ export function BrowserPane(props: {
           // DOES still fire, even though this keydown was never forwarded)
           // isn't sent as an orphaned "up" for a key the page never saw
           // go down.
-          interceptedKeys.add(event.key);
+          interceptedKeys.add(physicalKey(event));
           return;
         }
         if (key === "c" || key === "x") {
@@ -278,17 +296,28 @@ export function BrowserPane(props: {
           // handling), then presses the real key itself so the page's own
           // copy/cut handlers still run normally.
           event.preventDefault();
-          interceptedKeys.add(event.key);
+          interceptedKeys.add(physicalKey(event));
           sendControl({ type: key === "c" ? "copy" : "cut" });
           return;
         }
-        // Any other chord (Ctrl+A, Ctrl+Z, ...) forwards normally below.
+        // Any other Ctrl chord (Ctrl+A, Ctrl+Z, ...) forwards normally below.
+      }
+      if (mac) {
+        const press = macChordPress(event);
+        if (press) {
+          // A Cmd chord, sent as one self-contained press; the keyup is
+          // swallowed (the press already released everything it pressed).
+          event.preventDefault();
+          interceptedKeys.add(physicalKey(event));
+          sendControl({ type: "key", action: "press", key: press });
+          return;
+        }
       }
       event.preventDefault();
       sendControl({ type: "key", action: "down", key: event.key });
     };
     const onKeyUp = (event: KeyboardEvent) => {
-      if (interceptedKeys.delete(event.key)) return;
+      if (interceptedKeys.delete(physicalKey(event))) return;
       sendControl({ type: "key", action: "up", key: event.key });
     };
     canvas.addEventListener("keydown", onKeyDown);
