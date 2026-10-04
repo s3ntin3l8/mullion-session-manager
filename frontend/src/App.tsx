@@ -1590,20 +1590,11 @@ export function App() {
                   Tasks is a top-level destination, not a workspace view mode
                   — entering it now only happens from Sidebar.tsx's own
                   entry or the command palette, not a toggle that implied it
-                  was a peer of the tiled workspace grid. Unlike the empty
-                  grid dropzone (still desktop-only), this renders on mobile
-                  too — UnifiedBoard.tsx/styles.css carry their own mobile
-                  layout (stacked columns, a full-bleed detail sheet), since
-                  removing the "tasks" dockview panel means mobile has no
-                  other way to reach the task board (the Toolbar's own "Back"
-                  button renders on mobile too — see mobile.css's
-                  .toolbar-back-to-workspace override). */}
+                  was a peer of the tiled workspace grid. Desktop/tablet only:
+                  on phone the board renders inside the navigator's Tasks tab
+                  instead (PhoneNavigatorPanel). */}
               {viewMode === "kanban" && !isMobile && (
-                <KanbanBoardOverlay
-                  onOpenSession={onOpenSession}
-                  onSessionEnded={onSessionEnded}
-                  phone={isMobile}
-                />
+                <KanbanBoardOverlay onOpenSession={onOpenSession} onSessionEnded={onSessionEnded} />
               )}
             </div>
             <Dock
