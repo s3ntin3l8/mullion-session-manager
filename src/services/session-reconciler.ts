@@ -78,196 +78,215 @@ export async function reconcileExitedSessions(app: FastifyInstance): Promise<voi
       }
 
       for (const row of rows) {
-        const liveness = livenessById[String(row.session.id)];
-        // Issue #1265 — the destructive branch below requires an
-        // AFFIRMATIVE `=== "dead"`, never a fall-through default. "unknown"
-        // (agent version skew, a partial/malformed body, an unverifiable
-        // id) must never be treated as "not alive" — `liveness === "dead"`
-        // (an *explicit* answer) is the only thing allowed to flip a row to
-        // exited. Treating anything else as dead would hit the exact
-        // mass-exit landmine this function exists to avoid, just one layer
-        // deeper than "host unreachable" above.
-        if (liveness === "unknown") {
+        try {
+          await reconcileRow(app, hostId, row, livenessById);
+        } catch (err) {
+          // M6 — one row's throw (e.g. RemoteBackend's `client` getter when
+          // the host row is gone, or syncTaskTransition resolving repo/token
+          // before its own try) must not abort the rest of the tick.
           app.log.warn(
-            { hostId, sessionId: row.session.id },
-            "session reconcile: host omitted liveness for this session, skipping",
+            { err, hostId, sessionId: row.session.id },
+            "session reconcile: row failed, continuing with the rest of the tick",
           );
-          continue;
         }
-        if (liveness !== "dead") continue;
-
-        // Stop tracking our now-orphaned attach-client, if any (only
-        // meaningful for a local session — a remote agent's own PtyManager
-        // has nothing tracked here to clear), then mark the row so
-        // terminal.ts's preValidation stops offering to reattach to it.
-        if (hostId === LOCAL_HOST_ID) {
-          app.pty.kill(String(row.session.id));
-          // B9 — this loop already confirmed via the liveness check that the
-          // process is genuinely gone (not just detached), so any seed
-          // stashed for this id (the promote flow) can never be picked up
-          // by a SessionStart hook now — discard it rather than leaking it
-          // forever. See PtyManager.discardPendingSeed's own doc comment
-          // for why this must NOT happen inside kill() itself.
-          app.pty.discardPendingSeed(String(row.session.id));
-        }
-
-        // A9 — kill/attach TOCTOU: flip the row to "exited" BEFORE awaiting
-        // cleanupPreviewWorktree below, not after.
-        //
-        // This deliberately OVERRIDES PR #341's original ordering (see git
-        // blame), which flipped status only after a successful cleanup
-        // specifically so a failed cleanup left the row "active" for a
-        // future reconcile pass to retry. That protection is no longer
-        // needed, and keeping it open a real orphan window: while the row
-        // still reads "active", a `/ws/terminal` upgrade for this exact
-        // session — one this loop has already confirmed via the liveness check
-        // is NOT alive — passes preValidation and the attach re-check (both
-        // just read `active`), and bootstrapMaster() spins up a brand-new
-        // systemd-run scope for it. This loop then finishes and flips the
-        // row to "exited" underneath that brand-new master, orphaning it
-        // exactly like A9's other call site (session-lifecycle.ts's
-        // killSession).
-        //
-        // Flipping unconditionally (rather than gating this write itself on
-        // "active") is safe because the thing PR #341's ordering
-        // protected — worktree-removal retry — no longer depends on it:
-        // cleanupPreviewWorktree() (git-worktree.ts) already marks a failed
-        // removal `pendingRemoval` and the module's own 5s sync tick
-        // retries it forever, independent of this row's `status`. That's
-        // the exact mechanism killSession (session-lifecycle.ts) already
-        // relies on for the identical case, so this reconciler is now
-        // consistent with it rather than carrying its own bespoke
-        // stay-active-and-retry path.
-        //
-        // CAS'd on `status = "active"` (issue #988's residual gap, on top
-        // of #1001's fix) — this SELECT's own snapshot of "active" rows can
-        // go stale during the `SessionBackend.liveness` call above:
-        // task-reseed.ts's force re-seed (`reseedTaskIfSessionExited`)
-        // flips a still-active session to "killed" BEFORE it awaits its own
-        // `terminate()`, precisely so a slow-to-stop scope stays out of this
-        // sweep's reach for the whole stop window (#1001). But if that
-        // terminate's target process responds to SIGTERM fast enough,
-        // the liveness check can legitimately observe "dead" for a row
-        // this pass already fetched a moment earlier — i.e. the exact
-        // moment BEFORE the kill-CAS landed. Writing here unconditionally
-        // would silently overwrite that "killed" back to "exited" and, far
-        // worse, fall through into the task-failure/worktree-removal block
-        // below for a task whose re-seed is still actively spawning into
-        // that exact worktree — task 258971's incident, PR #136. `changes
-        // === 0` means some other writer already won that race for this
-        // session; that writer owns resolving whatever it's claimed to
-        // (task-reseed's own success/rollback path, or a plain kill), so
-        // this pass backs off from the task-level teardown entirely rather
-        // than racing it. This creates no NEW stuck-task exposure: any
-        // writer that moves a session off "active" already drops it out of
-        // this sweep's own re-queried WHERE clause on every later tick
-        // regardless (e.g. a human directly killing a task's worker session
-        // via DELETE /api/sessions/:id today never gets caught here either)
-        // — losing this CAS just makes the in-flight tick consistent with
-        // how every subsequent tick would already treat the row.
-        const flipped = app.db
-          .update(sessions)
-          .set({ status: "exited" })
-          .where(and(eq(sessions.id, row.session.id), eq(sessions.status, "active")))
-          .run();
-
-        // Unconditional regardless of the CAS above — both are keyed to
-        // this session id alone (a preview-worktree binding, a browser
-        // binding), idempotent no-ops if already cleared, and correct to
-        // run either way since the liveness check already confirmed the real
-        // OS-level process is gone: whether THIS pass or some other writer
-        // owns the DB row's terminal transition doesn't change that.
-        const cleaned = await cleanupPreviewWorktree(row.session.id, app.log);
-        // #182 — same teardown as the user-initiated DELETE path
-        // (session-lifecycle.ts's killSession), for the auto-detected
-        // program-exited-on-its-own case.
-        closeSessionBrowserBindings(app, row.session.id);
-
-        if (flipped.changes === 0) {
-          app.log.info(
-            { sessionId: row.session.id, hostId },
-            "session reconcile: lost the race to flip this session to exited — another writer already claimed its terminal transition (e.g. an in-flight re-seed), skipping this task's own teardown",
-          );
-          continue;
-        }
-
-        // Phase 6 Task Master (6.2/#215, issue #282) — a task claimed by
-        // this session dies with it if the session exits before the task
-        // reached "reviewing" (the turn is over and the work is committed
-        // on its branch by then — see task-state.ts's own comment on why
-        // "reviewing" is deliberately NOT session-liveness-dependent). No
-        // longer gated on `cleaned`: that gate existed only to keep this
-        // transition in lockstep with a session row that could still be
-        // "active" on a retry pass (PR #341) — now that the row above
-        // always flips to "exited" on this same pass, there is no future
-        // retry pass to desync against, so gating this on worktree-removal
-        // success would just mean a session whose worktree happened to fail
-        // to remove leaves its task stuck at "claimed"/"in_progress"
-        // forever, with nothing left to ever revisit it.
-        //
-        // Captured before the UPDATE below, purely so the transition event
-        // can report an accurate `from` — `.returning()` only gives back
-        // the row's NEW values, not what it was before this write.
-        const [taskBeforeExit] = app.db
-          .select({ id: tasks.id, status: tasks.status })
-          .from(tasks)
-          .where(
-            and(
-              eq(tasks.sessionId, row.session.id),
-              inArray(tasks.status, ["claimed", "in_progress"]),
-            ),
-          )
-          .all();
-        const [updatedTask] = app.db
-          .update(tasks)
-          .set({
-            status: "failed",
-            failureReason: "session exited before the task reached reviewing",
-            completedAt: new Date(),
-          })
-          .where(
-            and(
-              eq(tasks.sessionId, row.session.id),
-              inArray(tasks.status, ["claimed", "in_progress"]),
-            ),
-          )
-          .returning()
-          .all();
-        if (updatedTask) {
-          recordTaskTransition(app, {
-            taskId: updatedTask.id,
-            projectId: updatedTask.projectId,
-            from: (taskBeforeExit?.status as "claimed" | "in_progress" | undefined) ?? "claimed",
-            to: "failed",
-            via: "session-death",
-            context: { sessionId: row.session.id },
-          });
-          const [project] = app.db
-            .select()
-            .from(projects)
-            .where(eq(projects.id, updatedTask.projectId))
-            .all();
-          if (project) {
-            await syncTaskTransition(app, updatedTask, project, "failed");
-            // 6.8/#283 — same best-effort, leave-dirty-trees-in-place
-            // posture as task-reconciler.ts's budget-exceeded path.
-            if (updatedTask.worktreePath) {
-              await resolveBackend(app, project.hostId)
-                .removeWorktreeIfClean(updatedTask.worktreePath, project.cwd)
-                .catch((err) => {
-                  app.log.warn(
-                    { err, taskId: updatedTask.id, worktreePath: updatedTask.worktreePath },
-                    "session reconcile: removeWorktreeIfClean threw after task failure",
-                  );
-                });
-            }
-          }
-        }
-        app.log.info(
-          { sessionId: row.session.id, hostId, worktreeCleaned: cleaned },
-          "session reconciled: program exited on its own",
-        );
       }
     }),
+  );
+}
+
+type ActiveRow = { session: typeof sessions.$inferSelect; hostId: string };
+
+async function reconcileRow(
+  app: FastifyInstance,
+  hostId: string,
+  row: ActiveRow,
+  livenessById: Record<string, SessionLiveness>,
+): Promise<void> {
+  const liveness = livenessById[String(row.session.id)];
+  // Issue #1265 — the destructive branch below requires an
+  // AFFIRMATIVE `=== "dead"`, never a fall-through default. "unknown"
+  // (agent version skew, a partial/malformed body, an unverifiable
+  // id) must never be treated as "not alive" — `liveness === "dead"`
+  // (an *explicit* answer) is the only thing allowed to flip a row to
+  // exited. Treating anything else as dead would hit the exact
+  // mass-exit landmine this function exists to avoid, just one layer
+  // deeper than "host unreachable" above.
+  if (liveness === "unknown") {
+    app.log.warn(
+      { hostId, sessionId: row.session.id },
+      "session reconcile: host omitted liveness for this session, skipping",
+    );
+    return;
+  }
+  if (liveness !== "dead") return;
+
+  // Stop tracking our now-orphaned attach-client, if any (only
+  // meaningful for a local session — a remote agent's own PtyManager
+  // has nothing tracked here to clear), then mark the row so
+  // terminal.ts's preValidation stops offering to reattach to it.
+  // A9 — kill/attach TOCTOU: flip the row to "exited" BEFORE awaiting
+  // cleanupPreviewWorktree below, not after.
+  //
+  // This deliberately OVERRIDES PR #341's original ordering (see git
+  // blame), which flipped status only after a successful cleanup
+  // specifically so a failed cleanup left the row "active" for a
+  // future reconcile pass to retry. That protection is no longer
+  // needed, and keeping it open a real orphan window: while the row
+  // still reads "active", a `/ws/terminal` upgrade for this exact
+  // session — one this loop has already confirmed via the liveness check
+  // is NOT alive — passes preValidation and the attach re-check (both
+  // just read `active`), and bootstrapMaster() spins up a brand-new
+  // systemd-run scope for it. This loop then finishes and flips the
+  // row to "exited" underneath that brand-new master, orphaning it
+  // exactly like A9's other call site (session-lifecycle.ts's
+  // killSession).
+  //
+  // Flipping unconditionally (rather than gating this write itself on
+  // "active") is safe because the thing PR #341's ordering
+  // protected — worktree-removal retry — no longer depends on it:
+  // cleanupPreviewWorktree() (git-worktree.ts) already marks a failed
+  // removal `pendingRemoval` and the module's own 5s sync tick
+  // retries it forever, independent of this row's `status`. That's
+  // the exact mechanism killSession (session-lifecycle.ts) already
+  // relies on for the identical case, so this reconciler is now
+  // consistent with it rather than carrying its own bespoke
+  // stay-active-and-retry path.
+  //
+  // CAS'd on `status = "active"` (issue #988's residual gap, on top
+  // of #1001's fix) — this SELECT's own snapshot of "active" rows can
+  // go stale during the `SessionBackend.liveness` call above:
+  // task-reseed.ts's force re-seed (`reseedTaskIfSessionExited`)
+  // flips a still-active session to "killed" BEFORE it awaits its own
+  // `terminate()`, precisely so a slow-to-stop scope stays out of this
+  // sweep's reach for the whole stop window (#1001). But if that
+  // terminate's target process responds to SIGTERM fast enough,
+  // the liveness check can legitimately observe "dead" for a row
+  // this pass already fetched a moment earlier — i.e. the exact
+  // moment BEFORE the kill-CAS landed. Writing here unconditionally
+  // would silently overwrite that "killed" back to "exited" and, far
+  // worse, fall through into the task-failure/worktree-removal block
+  // below for a task whose re-seed is still actively spawning into
+  // that exact worktree — task 258971's incident, PR #136. `changes
+  // === 0` means some other writer already won that race for this
+  // session; that writer owns resolving whatever it's claimed to
+  // (task-reseed's own success/rollback path, or a plain kill), so
+  // this pass backs off from the task-level teardown entirely rather
+  // than racing it. This creates no NEW stuck-task exposure: any
+  // writer that moves a session off "active" already drops it out of
+  // this sweep's own re-queried WHERE clause on every later tick
+  // regardless (e.g. a human directly killing a task's worker session
+  // via DELETE /api/sessions/:id today never gets caught here either)
+  // — losing this CAS just makes the in-flight tick consistent with
+  // how every subsequent tick would already treat the row.
+  const flipped = app.db
+    .update(sessions)
+    .set({ status: "exited" })
+    .where(and(eq(sessions.id, row.session.id), eq(sessions.status, "active")))
+    .run();
+
+  // H7 — only after the CAS WON (this pass owns the terminal
+  // transition): terminate() = kill() + discardPendingSeed() (B9: the
+  // process is confirmed gone, so a stashed promote seed can never be
+  // picked up) + stopScope + removal of the token/state/agent-guide
+  // files that would otherwise leak forever. Local host only — a remote
+  // agent's own PtyManager owns its files. Gated on the CAS so a lost
+  // race (e.g. an in-flight re-seed spawning into this id) never has
+  // its files deleted from under it.
+  if (flipped.changes === 1 && hostId === LOCAL_HOST_ID) {
+    await app.pty.terminate(String(row.session.id));
+  }
+
+  // Unconditional regardless of the CAS above — both are keyed to
+  // this session id alone (a preview-worktree binding, a browser
+  // binding), idempotent no-ops if already cleared, and correct to
+  // run either way since the liveness check already confirmed the real
+  // OS-level process is gone: whether THIS pass or some other writer
+  // owns the DB row's terminal transition doesn't change that.
+  const cleaned = await cleanupPreviewWorktree(row.session.id, app.log);
+  // #182 — same teardown as the user-initiated DELETE path
+  // (session-lifecycle.ts's killSession), for the auto-detected
+  // program-exited-on-its-own case.
+  closeSessionBrowserBindings(app, row.session.id);
+
+  if (flipped.changes === 0) {
+    app.log.info(
+      { sessionId: row.session.id, hostId },
+      "session reconcile: lost the race to flip this session to exited — another writer already claimed its terminal transition (e.g. an in-flight re-seed), skipping this task's own teardown",
+    );
+    return;
+  }
+
+  // Phase 6 Task Master (6.2/#215, issue #282) — a task claimed by
+  // this session dies with it if the session exits before the task
+  // reached "reviewing" (the turn is over and the work is committed
+  // on its branch by then — see task-state.ts's own comment on why
+  // "reviewing" is deliberately NOT session-liveness-dependent). No
+  // longer gated on `cleaned`: that gate existed only to keep this
+  // transition in lockstep with a session row that could still be
+  // "active" on a retry pass (PR #341) — now that the row above
+  // always flips to "exited" on this same pass, there is no future
+  // retry pass to desync against, so gating this on worktree-removal
+  // success would just mean a session whose worktree happened to fail
+  // to remove leaves its task stuck at "claimed"/"in_progress"
+  // forever, with nothing left to ever revisit it.
+  //
+  // Captured before the UPDATE below, purely so the transition event
+  // can report an accurate `from` — `.returning()` only gives back
+  // the row's NEW values, not what it was before this write.
+  const [taskBeforeExit] = app.db
+    .select({ id: tasks.id, status: tasks.status })
+    .from(tasks)
+    .where(
+      and(eq(tasks.sessionId, row.session.id), inArray(tasks.status, ["claimed", "in_progress"])),
+    )
+    .all();
+  const [updatedTask] = app.db
+    .update(tasks)
+    .set({
+      status: "failed",
+      failureReason: "session exited before the task reached reviewing",
+      completedAt: new Date(),
+    })
+    .where(
+      and(eq(tasks.sessionId, row.session.id), inArray(tasks.status, ["claimed", "in_progress"])),
+    )
+    .returning()
+    .all();
+  if (updatedTask) {
+    recordTaskTransition(app, {
+      taskId: updatedTask.id,
+      projectId: updatedTask.projectId,
+      from: (taskBeforeExit?.status as "claimed" | "in_progress" | undefined) ?? "claimed",
+      to: "failed",
+      via: "session-death",
+      context: { sessionId: row.session.id },
+    });
+    const [project] = app.db
+      .select()
+      .from(projects)
+      .where(eq(projects.id, updatedTask.projectId))
+      .all();
+    if (project) {
+      await syncTaskTransition(app, updatedTask, project, "failed");
+      // 6.8/#283 — same best-effort, leave-dirty-trees-in-place
+      // posture as task-reconciler.ts's budget-exceeded path.
+      if (updatedTask.worktreePath) {
+        try {
+          await resolveBackend(app, project.hostId).removeWorktreeIfClean(
+            updatedTask.worktreePath,
+            project.cwd,
+          );
+        } catch (err) {
+          app.log.warn(
+            { err, taskId: updatedTask.id, worktreePath: updatedTask.worktreePath },
+            "session reconcile: removeWorktreeIfClean threw after task failure",
+          );
+        }
+      }
+    }
+  }
+  app.log.info(
+    { sessionId: row.session.id, hostId, worktreeCleaned: cleaned },
+    "session reconciled: program exited on its own",
   );
 }

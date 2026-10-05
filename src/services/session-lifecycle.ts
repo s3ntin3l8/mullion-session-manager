@@ -744,6 +744,84 @@ export async function createSessionRecord(
   app: FastifyInstance,
   params: CreateSessionParams,
 ): Promise<CreateSessionResult> {
+  // M5 — one rollback scope for everything createSessionRecordInner does
+  // after its worktree exists: every early exit (unique-conflict,
+  // child-cap-exceeded, cwd-outside-project, a throw between insert and
+  // spawn) must remove the worktree AND its branch, not just the
+  // spawn-failure catch. The inner function records what it has created on
+  // `rb`; this wrapper unwinds it on any non-ok result or throw. Once the
+  // spawn succeeded (`rb.spawned`) ownership has passed to the live session
+  // and nothing is rolled back.
+  const rb: CreateRollback = { done: false, spawned: false };
+  let result: CreateSessionResult;
+  try {
+    result = await createSessionRecordInner(app, params, rb);
+  } catch (err) {
+    if (!rb.spawned) await rollbackCreate(app, rb);
+    throw err;
+  }
+  if (!result.ok) await rollbackCreate(app, rb);
+  return result;
+}
+
+// What createSessionRecordInner has created so far and so must unwind.
+interface CreateRollback {
+  hostId?: string;
+  /** Worktree created by this call (never a pre-existing one). */
+  worktreePath?: string;
+  /** Repo the worktree was cut from (parentCwd for removeWorktree/deleteBranch). */
+  parentCwd?: string;
+  /** Branch created together with the worktree (baseRef path only). */
+  branch?: string;
+  /** Inserted `sessions` row id, once the insert committed. */
+  sessionId?: number;
+  spawned: boolean;
+  done: boolean;
+}
+
+// Idempotent, best-effort, never throws: terminate any scope/Session this
+// call created for `sessionId` (never an id it didn't create), remove the
+// worktree and its branch, then delete the row. Each step is its own
+// try/catch — a RemoteBackend method can throw synchronously from its
+// `client` getter (hosts row deleted mid-request), and one failing step
+// must not skip the rest.
+async function rollbackCreate(app: FastifyInstance, rb: CreateRollback): Promise<void> {
+  if (rb.done) return;
+  rb.done = true;
+  if (rb.hostId === undefined) return;
+  const backend = () => resolveBackend(app, rb.hostId!);
+  if (rb.sessionId !== undefined) {
+    try {
+      await backend().terminate(String(rb.sessionId));
+    } catch (err) {
+      app.log.warn({ err, sessionId: rb.sessionId }, "create rollback: terminate failed");
+    }
+  }
+  if (rb.worktreePath !== undefined) {
+    try {
+      await backend().removeWorktree(rb.worktreePath, rb.parentCwd);
+    } catch {
+      // Best-effort: a leaked worktree directory is the cheaper failure —
+      // same posture as cleanupPreviewWorktree's pendingRemoval retry.
+    }
+    if (rb.branch !== undefined && rb.parentCwd !== undefined) {
+      try {
+        await backend().deleteBranch(rb.parentCwd, rb.branch, { force: true });
+      } catch {
+        // Best-effort, as above.
+      }
+    }
+  }
+  if (rb.sessionId !== undefined) {
+    app.db.delete(sessions).where(eq(sessions.id, rb.sessionId)).run();
+  }
+}
+
+async function createSessionRecordInner(
+  app: FastifyInstance,
+  params: CreateSessionParams,
+  rb: CreateRollback,
+): Promise<CreateSessionResult> {
   const {
     projectId,
     command,
@@ -829,6 +907,11 @@ export async function createSessionRecord(
       }
       if (!result) return { ok: false, reason: "worktree-failed" };
       cwd = result.path;
+      // Checks out an EXISTING branch detached — nothing to delete but the
+      // directory.
+      rb.hostId = project.hostId;
+      rb.worktreePath = result.path;
+      rb.parentCwd = params.cwd ?? project.cwd;
     } else if (worktree.baseRef) {
       const resolved = await resolveWorktreeCwd(
         app,
@@ -841,6 +924,10 @@ export async function createSessionRecord(
         return { ok: false, reason: "worktree-failed", detail: resolved.detail };
       }
       cwd = resolved.path;
+      rb.hostId = project.hostId;
+      rb.worktreePath = resolved.path;
+      rb.parentCwd = params.cwd ?? project.cwd;
+      rb.branch = resolved.branch;
     }
   }
 
@@ -931,6 +1018,8 @@ export async function createSessionRecord(
   }
   if (!inserted) return { ok: false, reason: "child-cap-exceeded" };
   const [created] = inserted;
+  rb.hostId = project.hostId;
+  rb.sessionId = created.id;
 
   // Issue #678 — stashed BEFORE spawn() is called below, not after: the
   // agent's own process (and therefore its SessionStart hook) can't start
@@ -1226,14 +1315,8 @@ export async function createSessionRecord(
     // every caller of this function expects). See routes/projects.ts's own
     // "Hermes review, PR #458" comment for the same footgun fixed once
     // already elsewhere in this codebase.
-    if (worktree && cwd && cwd !== params.cwd) {
-      try {
-        await resolveBackend(app, project.hostId).removeWorktree(cwd, params.cwd ?? project.cwd);
-      } catch {
-        // Best-effort: a leaked worktree directory is the cheaper failure —
-        // same posture as cleanupPreviewWorktree's pendingRemoval retry.
-      }
-    }
+    // M5 — worktree (and its branch) removal, backend terminate and the row
+    // delete all live in rollbackCreate now (see createSessionRecord).
     // Fresh-review finding (Hermes, this PR): a LOCAL spawn failure means
     // PtyManager.getOrCreate() already inserted a Session into its own
     // `sessions`/`hookTokens` maps before spawn() was awaited — that Session
@@ -1252,7 +1335,7 @@ export async function createSessionRecord(
     // depth for the same reason kill() itself deliberately does NOT do
     // this — see PtyManager.discardPendingSeed's own doc comment).
     app.pty.discardPendingSeed(String(created.id));
-    app.db.delete(sessions).where(eq(sessions.id, created.id)).run();
+    await rollbackCreate(app, rb);
     app.log.error({ err, hostId: project.hostId }, "session spawn failed, rolled back row");
     return {
       ok: false,
@@ -1260,6 +1343,8 @@ export async function createSessionRecord(
       detail: err instanceof Error ? err.message : undefined,
     };
   }
+
+  rb.spawned = true;
 
   // Track preview worktrees for sync and cleanup
   const effectiveCwd = cwd ?? project.cwd;
