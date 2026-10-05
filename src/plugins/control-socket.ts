@@ -1615,7 +1615,7 @@ function handleConnection(
         continue;
       }
 
-      void dispatch(app, conn, result.message);
+      dispatch(app, conn, result.message).catch((err) => app.log.error({ err }, "dispatch failed"));
     }
 
     // Checked AFTER draining every complete line above, not on the raw
@@ -1641,7 +1641,11 @@ async function dispatch(
   conn: ConnectionState,
   message: ControlMessage,
 ): Promise<void> {
-  const spec = OPS[message.op];
+  // Own-property lookup: OPS is a plain object, so `OPS["toString"]` /
+  // `"__proto__"` / `"constructor"` would otherwise resolve to an inherited
+  // Object.prototype member with no `.scopes`, and the `.includes` below would
+  // throw outside the try — an unhandled rejection that takes the process down.
+  const spec = Object.hasOwn(OPS, message.op) ? OPS[message.op] : undefined;
   if (!spec) {
     send(conn.socket, {
       id: message.id,

@@ -1,3 +1,4 @@
+import { schema as envSchema } from "../plugins/env.js";
 import { GIT_ENV_KEYS_TO_STRIP } from "./git-env.js";
 
 // Mullion-owned config keys (see src/plugins/env.ts's schema) that must
@@ -71,59 +72,38 @@ import { GIT_ENV_KEYS_TO_STRIP } from "./git-env.js";
 // --hard) would silently target the wrong repo, even though the backend's
 // own git calls stayed correct. Reusing GIT_ENV_KEYS_TO_STRIP rather than
 // re-listing the same nine keys here keeps the two lists from drifting.
-export const SERVER_ENV_KEYS = [
+/**
+ * Schema keys deliberately NOT stripped: generic names a user's own tools
+ * legitimately read regardless of which Mullion process started them (zsh
+ * uses HOST; LOG_LEVEL is read by countless CLIs). Every other key in the
+ * env schema is Mullion-owned and is stripped. Adding a key to
+ * src/plugins/env.ts's schema strips it automatically; test/services/
+ * session-env.test.ts fails if a generic one needs listing here.
+ */
+export const SESSION_ENV_PASSTHROUGH_KEYS: readonly string[] = ["HOST", "LOG_LEVEL"];
+
+// Keys that are NOT in the env schema but must still be scrubbed: per-session
+// injections (hook socket/token, session id, forwarder location) plus
+// OPENCODE_CONFIG_CONTENT, described below.
+const RUNTIME_ONLY_SERVER_ENV_KEYS = [
   ...GIT_ENV_KEYS_TO_STRIP,
-  "PORT",
-  "DATABASE_URL",
-  "SESSIONS_DIR",
-  "DB_ENCRYPTION_KEY",
-  "CORS_ORIGIN",
-  "RATE_LIMIT_MAX",
-  "RATE_LIMIT_WINDOW",
-  "FRONTEND_DIST",
-  "PROJECTS_ROOTS",
-  "CRS_CONFIG_DIR",
-  "GITHUB_OAUTH_CLIENT_ID",
-  "PREVIEW_BASE_HOST",
-  "MULLION_ROLE",
-  "MULLION_AGENT_TOKEN",
-  "MULLION_PRIMARY_URL",
-  "MULLION_ENROLLMENT_TOKEN",
-  "MULLION_AGENT_ADVERTISE_URL",
-  "MULLION_AGENT_NAME",
-  "MULLION_ENROLLMENT_SECRET",
-  "MULLION_ENROLLMENT_ALLOWED_CIDRS",
-  "MULLION_AUTH_TOKEN",
-  "MULLION_SESSION_SECRET",
-  "MULLION_OIDC_ISSUER",
-  "MULLION_OIDC_CLIENT_ID",
-  "MULLION_OIDC_CLIENT_SECRET",
-  "MULLION_OIDC_REDIRECT_URI",
-  "MULLION_HOME",
-  "MULLION_UPDATE_REPO",
   "MULLION_HOOK_SOCKET",
   "MULLION_HOOK_TOKEN",
-  "MULLION_SOCKET_PATH",
-  "MULLION_SSH_AUTH_SOCK",
   "MULLION_SESSION_ID",
   "MULLION_FORWARDER_PATH",
   "MULLION_FORWARDER_NODE",
-  "NODE_ENV",
-  // OPENCODE_CONFIG_CONTENT is a per-session injection Mullion sets on the
-  // env of a spawned opencode session (hook-adapters/opencode.ts's
-  // prepareLaunch, applied AFTER buildSessionEnv() returns — so listing it
-  // here never clobbers the intended per-session value). It must be stripped
-  // from the inherited environment for the same nested-Mullion reason as the
-  // MULLION_* keys just above: when Mullion itself runs inside a Mullion-
-  // managed session (e.g. `make dev` from a terminal inside prod Mullion, the
-  // exact issue #70 scenario), the server process carries the OUTER session's
-  // OPENCODE_CONFIG_CONTENT, and every session it spawns would otherwise
-  // inherit that stale agent-guide pointer instead of getting its own. The
-  // opencode test in test/services/pty-manager.test.ts exercises this gate
-  // (omits OPENCODE_CONFIG_CONTENT when getInjectAgentGuide is off) and only
-  // fails on a host where a live Mullion has the var in its own env.
   "OPENCODE_CONFIG_CONTENT",
 ] as const;
+
+// Derived from the env schema (issue: hand-maintained denylist drifted and
+// leaked MULLION_WEBHOOK_SECRET, MULLION_TASK_*, BROWSER_*, DEVICE_*, ... into
+// every agent session) so a new schema key is stripped by default.
+export const SERVER_ENV_KEYS: readonly string[] = [
+  ...new Set([
+    ...Object.keys(envSchema.properties).filter((k) => !SESSION_ENV_PASSTHROUGH_KEYS.includes(k)),
+    ...RUNTIME_ONLY_SERVER_ENV_KEYS,
+  ]),
+];
 
 /**
  * Returns a copy of `base` (defaults to `process.env`) with every
