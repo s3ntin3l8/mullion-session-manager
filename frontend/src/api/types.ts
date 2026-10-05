@@ -1681,7 +1681,11 @@ export interface AppSettings {
   };
   // Install-wide default `--model` per non-opencode CLI; `null` means no
   // flag (the CLI picks). Mirrors src/services/settings.ts.
-  claudeCode: { defaultModel: string | null; reviewerModel: string | null };
+  claudeCode: {
+    defaultModel: string | null;
+    reviewerModel: string | null;
+    smallModel: string | null;
+  };
   codex: { defaultModel: string | null; reviewerModel: string | null };
   agy: { defaultModel: string | null; reviewerModel: string | null };
   opencode: {

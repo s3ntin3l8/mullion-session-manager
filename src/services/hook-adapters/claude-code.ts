@@ -5,6 +5,7 @@ import {
   resolveMcpServerPath,
   shellQuote,
   buildModelFlag,
+  validateCliModel,
   SHELL_METACHARACTERS_RE,
 } from "./shared.js";
 import { resolveMullionBundleDir, composeClaudeSessionBundle } from "./mullion-bundle.js";
@@ -461,6 +462,12 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
     ],
     commandTransform: (command) =>
       `${command} --settings ${JSON.stringify(settingsPath)} --mcp-config ${JSON.stringify(mcpConfigPath)}${bundleFlag}${buildModelFlag(command, ctx.model)}`,
+    // Claude Code has no small-model flag; its background/fast model comes
+    // from ANTHROPIC_DEFAULT_HAIKU_MODEL. Re-validated here because this
+    // lands in the session env verbatim.
+    ...(ctx.smallModel && validateCliModel(ctx.smallModel)
+      ? { envAdditions: { ANTHROPIC_DEFAULT_HAIKU_MODEL: ctx.smallModel } }
+      : {}),
     // Issue #1079 — the setting-off counterpart to the `--plugin-dir`
     // branches above, which only ever SKIP adding a pointer. Codex's and
     // agy's own managedInstall steps already actively uninstall their

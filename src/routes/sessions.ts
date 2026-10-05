@@ -32,6 +32,7 @@ import { commandSupportsSeed, resolveSeedDelivered } from "../services/task-agen
 import {
   explicitModelError,
   resolveCliModel,
+  resolveClaudeSmallModel,
   resolveOpenCodeModel,
   resolveOpenCodeSmallModel,
 } from "../services/task-model-resolve.js";
@@ -458,7 +459,8 @@ export async function sessionsRoute(app: FastifyInstance) {
         if (err) return reply.badRequest(err);
       }
       const explicitModel = modelCli !== null || isOpencode ? request.body.model : undefined;
-      const explicitSmallModel = isOpencode ? request.body.smallModel : undefined;
+      const explicitSmallModel =
+        isOpencode || modelCli === "claude-code" ? request.body.smallModel : undefined;
 
       // Issue #1337 — when parentSessionId is set and model/smallModel are
       // still unresolved after explicit caller-supplied values, inherit from
@@ -517,8 +519,13 @@ export async function sessionsRoute(app: FastifyInstance) {
       if (modelCli !== null) {
         resolvedModel =
           explicitModel ?? resolveCliModel(app, modelCli, { issueBody: null }) ?? undefined;
-        // smallModel has no meaning for these CLIs (see explicitSmallModel
-        // above) — resolvedSmallModel stays undefined so it's dropped.
+        // smallModel only means something to Claude Code (its
+        // ANTHROPIC_DEFAULT_HAIKU_MODEL); for codex/agy it stays undefined
+        // so it's dropped.
+        if (modelCli === "claude-code") {
+          resolvedSmallModel =
+            explicitSmallModel ?? resolveClaudeSmallModel(app, { issueBody: null }) ?? undefined;
+        }
       } else if (isOpencode) {
         resolvedModel =
           explicitModel ??

@@ -26,6 +26,7 @@ import {
 } from "./task-agent-resolve.js";
 import {
   resolveCliModel,
+  resolveClaudeSmallModel,
   resolveOpenCodeModel,
   resolveOpenCodeSmallModel,
 } from "./task-model-resolve.js";
@@ -390,7 +391,12 @@ export async function dispatchClaimedTask(
           taskSmallModel: task.smallModel ?? null,
           issueBody: task.body,
         }) ?? undefined)
-      : undefined;
+      : cliModelAgent === "claude-code"
+        ? (resolveClaudeSmallModel(app, {
+            taskSmallModel: task.smallModel ?? null,
+            issueBody: task.body,
+          }) ?? undefined)
+        : undefined;
     const result = await createSessionRecord(app, {
       projectId: project.id,
       command,
