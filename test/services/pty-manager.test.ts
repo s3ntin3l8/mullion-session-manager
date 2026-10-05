@@ -9184,6 +9184,19 @@ describe("PtyManager retire / restore hardening (PR D)", () => {
     expect(errSpy).toHaveBeenCalled();
   });
 
+  it("M9: a throwing manager-level event subscriber does not starve later subscribers", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const session = manager.getOrCreate(opts());
+    await waitForSpawnAlive(session);
+    const later = vi.fn();
+    manager.onEvent(() => {
+      throw new Error("bad manager listener");
+    });
+    manager.onEvent(later);
+    session.emitHookEvent({ kind: "review_gate", state: "waiting", prompt: "Deploy?" });
+    expect(later).toHaveBeenCalled();
+  });
+
   it("M9: a throwing redraw-nudge resize does not abort the attach", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     vi.spyOn(FakePty.prototype, "resize").mockImplementation(() => {
