@@ -51,6 +51,7 @@ import { SessionStateFile, stateFilePath, type StoredSessionState } from "./sess
 import { RedrawNudge } from "./redraw-nudge.js";
 import type { CgroupProcess } from "./cgroup-inventory.js";
 import {
+  armKillEscalation,
   stopScope,
   describeScope,
   deriveInstanceId,
@@ -751,6 +752,13 @@ const MOUSE_ENCODING_ENABLE: Record<Exclude<MouseTrackingState["encoding"], "DEF
 // doesn't have a settings row to read from.
 const IDLE_THRESHOLD_MS = 2_000;
 
+// M3 — upper bound on bootstrapMaster()'s `systemd-run` child (it normally
+// exits within milliseconds once the scope is created).
+const BOOTSTRAP_MASTER_TIMEOUT_MS = 30_000;
+// H5 — how long terminate() waits for an in-flight spawn to settle before
+// proceeding to stopScope anyway.
+const TERMINATE_SPAWN_WAIT_MS = 35_000;
+
 // Issue #320 staleness sweep — PTY output within this window of a latch
 // timestamp (e.g. gateAt, permissionAt) is treated as part of the same
 // triggering event (the dialog render that follows the hook firing), not
@@ -1378,7 +1386,13 @@ export class Session {
   // both call sites in sync if that ever happens.
   private readonly redrawNudge = new RedrawNudge({
     resize: (cols, rows) => {
-      this.ptyProcess?.resize(cols, rows);
+      // M9 — a resize against an already-dead pty (EBADF/ESRCH) must not
+      // throw out of a RedrawNudge timer callback as an uncaught exception.
+      try {
+        this.ptyProcess?.resize(cols, rows);
+      } catch (err) {
+        console.error(`[pty-manager] redraw-nudge resize failed for session ${this.id}:`, err);
+      }
     },
     getSize: () => ({ cols: this.cols, rows: this.rows }),
   });
@@ -1761,6 +1775,27 @@ export class Session {
    * If the file exists and parses correctly, all non-null state fields are
    * applied and stateRestored is set to true. A missing or corrupt file is
    * handled silently — defaults remain at their idle/zero values. */
+  /**
+   * H6 — the persisted `*At` timestamps are deliberately not restored (a
+   * restored process shouldn't trust a pre-restart clock — same posture as
+   * backgroundTasksAt), but the latch STATES are. Without a baseline, a
+   * restored non-idle latch has a null `*At`, `isStale(null, ...)` is always
+   * false, and the stale sweep could never clear it. Stamp each non-idle
+   * latch's `*At` to now (only where still null) so the sweep has something
+   * to measure from.
+   */
+  private stampRestoredLatches(): void {
+    const now = Date.now();
+    if (this.permissionState !== "idle" && this.permissionAt === null) this.permissionAt = now;
+    if (this.planState !== "idle" && this.planAt === null) this.planAt = now;
+    if (this.promoteState === "pending" && this.promoteAt === null) this.promoteAt = now;
+    if (this.elicitationState !== "idle" && this.elicitationAt === null) {
+      this.elicitationAt = now;
+    }
+    if (this.compactState !== "idle" && this.compactAt === null) this.compactAt = now;
+    if (this.subagentCount > 0 && this.subagentCountAt === null) this.subagentCountAt = now;
+  }
+
   private readStateFile(): void {
     const parsed = this.stateFile.read();
     if (parsed === null) return;
@@ -1817,6 +1852,7 @@ export class Session {
     // all until some unrelated turn_start/keystroke/hook event happened to
     // touch it (Hermes review, PR #453).
     if (Array.isArray(s.backgroundTasks)) this.attention.setBackgroundTasks(s.backgroundTasks);
+    this.stampRestoredLatches();
     // Issue: opencode/Claude Code TUI sessions surviving a backend restart
     // (dtach master lives on, but the in-memory Session doesn't) replayed a
     // stale scrollback preamble to the next attaching client — inAltScreen
@@ -1985,6 +2021,12 @@ export class Session {
   }
 
   private spawning: Promise<void> | null = null;
+  // H5 — set once, by kill(), and never cleared: this Session instance is
+  // permanently done after kill() (a later reattach builds a brand-new one).
+  // An in-flight spawnInternal() checks it after each await so it can't go
+  // on to bootstrap a master or attach a client for a session that was
+  // killed/terminated while the spawn was still awaiting.
+  private retired = false;
   // B6 — the raw (un-swallowed) promise from this session's most recent
   // spawn() attempt, kept around after `spawning` itself is nulled out by
   // that attempt's own `.finally()`. `spawning`'s truthiness is only useful
@@ -2157,6 +2199,7 @@ export class Session {
       if (Array.isArray(savedState.backgroundTasks)) {
         this.attention.setBackgroundTasks(savedState.backgroundTasks);
       }
+      this.stampRestoredLatches();
       // Fresh-review finding — same turnEndPingSent derivation as the
       // state-file restore path's own comment above: a respawn (re-applying
       // savedState after the fresh reset a few lines up) needs the same
@@ -2226,7 +2269,11 @@ export class Session {
     // module reaches the identical conclusion for the same reason (see its
     // own doc comment) — this call site now matches it instead of being the
     // one place in the codebase that guesses "unknown" means safe to delete.
+    // H5 — retired (kill()/terminate() ran) before or during any await below:
+    // stop rather than bootstrap a master / attach a client nobody owns.
+    if (this.retired) return;
     const probeResult = await probeSocket(this.socketPath);
+    if (this.retired) return;
     if (probeResult === "dead") {
       // Either this session has never run, or its master died and left a
       // stale socket file behind (dtach doesn't clean these up itself) —
@@ -2237,6 +2284,10 @@ export class Session {
         // ENOENT is the expected case (no prior session at all).
       }
       await this.bootstrapMaster();
+      // The scope bootstrapMaster just created is reaped by terminate()'s
+      // stopScope (which awaits this attempt); a plain kill() leaves it
+      // detached like any other master, so the session can reattach later.
+      if (this.retired) return;
     }
     this.attachClient();
   }
@@ -2303,7 +2354,18 @@ export class Session {
         env: plan.env,
         stdio: "ignore",
       });
+      // M3 — a wedged `--user` D-Bus bus left this promise pending forever
+      // (and, with it, spawnOutcome()/terminate()). Same SIGTERM-then-SIGKILL
+      // escalation every other timed spawn in session-process.ts uses.
+      const armed = armKillEscalation(child, BOOTSTRAP_MASTER_TIMEOUT_MS, () => {
+        reject(
+          new Error(
+            `master bootstrap timed out after ${BOOTSTRAP_MASTER_TIMEOUT_MS}ms (unit ${plan.unitName})`,
+          ),
+        );
+      });
       child.on("error", (err) => {
+        armed.clearOnSettle();
         // Issue #988's investigation: Node's own spawn ENOENT blames
         // whichever binary it was trying to exec ("spawn systemd-run
         // ENOENT") even when the REAL cause is `cwd` itself having vanished
@@ -2327,6 +2389,7 @@ export class Session {
         reject(err);
       });
       child.on("exit", (code) => {
+        armed.clearOnSettle();
         if (code === 0) {
           resolve();
           return;
@@ -2378,6 +2441,10 @@ export class Session {
 
   /** Spawn the one attach-only client this process tracks and can safely kill. */
   private attachClient(): void {
+    // H5 — never attach for a retired session (belt-and-braces alongside
+    // spawnInternal's own checks: attachClient is the one place a pty
+    // actually gets created, so guard it directly too).
+    if (this.retired) return;
     const ptyProcess = pty.spawn(
       "dtach",
       [
@@ -2595,10 +2662,21 @@ export class Session {
         this.attention.cancelDeferred("apiError");
       }
 
-      for (const listener of this.dataListeners) listener(chunk);
+      for (const listener of this.dataListeners) {
+        try {
+          listener(chunk);
+        } catch (err) {
+          console.error(`[pty-manager] data listener threw for session ${this.id}:`, err);
+        }
+      }
     });
 
     ptyProcess.onExit(() => {
+      // M2 — this handler captures `this`, not the pty instance. If a later
+      // respawn has already installed a NEWER attach-client, this is the old
+      // one's late exit: nulling ptyProcess / cancelling the nudge / emitting
+      // "exited" now would clobber the live client's state.
+      if (this.ptyProcess !== null && this.ptyProcess !== ptyProcess) return;
       this.ptyProcess = null;
       // Cancels any nudge timer still pending against this now-dead client —
       // not just for suppressingOutput tidiness, but because a stale
@@ -2641,7 +2719,13 @@ export class Session {
       // own — same "attach-client death is treated uniformly" posture, kept
       // consistent here rather than trying to discriminate the two causes.
       this.emitEvent("status_change", { reason: "exited" });
-      for (const listener of this.exitListeners) listener();
+      for (const listener of this.exitListeners) {
+        try {
+          listener();
+        } catch (err) {
+          console.error(`[pty-manager] exit listener threw for session ${this.id}:`, err);
+        }
+      }
     });
 
     this.ptyProcess = ptyProcess;
@@ -2680,7 +2764,13 @@ export class Session {
     };
     this.events.push(event);
     if (this.events.length > EVENTS_MAX) this.events.shift();
-    for (const listener of this.eventListeners) listener(event);
+    for (const listener of this.eventListeners) {
+      try {
+        listener(event);
+      } catch (err) {
+        console.error(`[pty-manager] event listener threw for session ${this.id}:`, err);
+      }
+    }
     // Issue #323: persist state to disk so it survives server restarts.
     // Every state change flows through emitEvent (directly or via
     // emitHookEvent), so this is the single funnel point for scheduling a
@@ -3841,6 +3931,15 @@ export class Session {
     }
 
     if (this.gateState === "waiting" && isStale(this.gateAt, blockedMaxAgeMs)) {
+      // M4 — the live pendingGates map is the source of truth for
+      // resolveGate()/pendingGateIds(); leaving it populated after the
+      // scalar summary is swept would let a later gate registration see
+      // `size > 0` ("not first") and a later resolveGate re-point the
+      // summary at a gate this sweep already declared dead. Resolve each
+      // as lapsed (the "nobody answered" outcome) before clearing.
+      for (const gateId of [...this.pendingGates.keys()]) {
+        this.resolveGate(gateId, "lapsed", "stale gate cleared");
+      }
       this.gateState = "idle";
       this.gateAt = null;
       this.gatePrompt = null;
@@ -4009,6 +4108,10 @@ export class Session {
 
   /** Kill our attach-client only. The dtach master and the program it's running survive. */
   kill(): void {
+    // H5 — mark this instance permanently retired FIRST, so an in-flight
+    // spawnInternal() (awaiting probeSocket/bootstrapMaster) sees it as soon
+    // as it resumes and doesn't attach a client to a killed session.
+    this.retired = true;
     // A8 (state-file lifecycle, two bugs/one fix): this must be the very
     // first thing kill() does, before anything else runs.
     //
@@ -4189,6 +4292,11 @@ export class Session {
 
 export class PtyManager {
   private sessions = new Map<string, Session>();
+  // H5 — ids with a terminate() in flight; getOrCreate() refuses these.
+  private terminating = new Set<string>();
+  // M2 — per-session unsubscribe closures for the manager-level event
+  // fan-out subscription made in getOrCreate(); called from kill().
+  private eventUnsubs = new Map<string, () => void>();
   private readonly sessionsDir: string;
   // Issue #1140 (PR 1) — a short, deterministic id for THIS instance's own
   // sessionsDir, derived once here (never from app.config.SESSIONS_DIR
@@ -4371,6 +4479,12 @@ export class PtyManager {
    * this is the fresh-dtach-reattach path.
    */
   getOrCreate(opts: CreateSessionOptions): Session {
+    // H5 — a terminate() is mid-flight for this id (draining an in-flight
+    // spawn, then stopping the scope): creating a Session now would race
+    // that teardown and resurrect the very session being deleted.
+    if (this.terminating.has(opts.id)) {
+      throw new Error(`session ${opts.id} is being terminated`);
+    }
     let session = this.sessions.get(opts.id);
     const isNewSession = !session;
     if (!session) {
@@ -4425,9 +4539,20 @@ export class PtyManager {
       // Session's own eventListeners set only otherwise loses subscribers
       // via a WS route's unsubscribe closure, which this internal one never
       // is).
-      session.onEvent((event) => {
-        for (const listener of this.eventListeners) listener(event);
+      // M2 — the unsubscribe closure is kept (eventUnsubs) and called from
+      // kill(), so a retired Session's late emits (e.g. its flushed title
+      // timer) can't reach the manager fan-out racing its successor.
+      const unsubscribe = session.onEvent((event) => {
+        // M9 — one throwing subscriber must not starve the rest.
+        for (const listener of this.eventListeners) {
+          try {
+            listener(event);
+          } catch (err) {
+            console.error(`[pty-manager] event listener threw for session ${opts.id}:`, err);
+          }
+        }
       });
+      this.eventUnsubs.set(opts.id, unsubscribe);
       this.sessions.set(opts.id, session);
       // Registered once, at creation, mirroring the onEvent subscription
       // just above — see resolveToken()/the hookTokens field doc comment.
@@ -4732,6 +4857,8 @@ export class PtyManager {
       console.error(`[pty-manager] error killing session ${id}:`, err);
     }
     this.sessions.delete(id);
+    this.eventUnsubs.get(id)?.();
+    this.eventUnsubs.delete(id);
     // B9 — deliberately NOT clearing pendingSeeds here (unlike an earlier
     // version of this fix — see discardPendingSeed's own doc comment for
     // why): this method is also reached via killAll() on a graceful
@@ -4801,8 +4928,34 @@ export class PtyManager {
    * only, during the upgrade window).
    */
   async terminate(id: string): Promise<void> {
+    this.terminating.add(id);
+    try {
+      await this.terminateInner(id);
+    } finally {
+      this.terminating.delete(id);
+    }
+  }
+
+  private async terminateInner(id: string): Promise<void> {
+    const session = this.sessions.get(id);
     this.kill(id);
     this.discardPendingSeed(id);
+    // H5 — a spawn still in flight (awaiting bootstrapMaster's systemd-run)
+    // would otherwise land its scope AFTER stopScope below ran, leaking an
+    // orphan. kill() above retired the Session, so the attempt will stop at
+    // its next check; wait for it (bounded — a wedged spawn must not wedge
+    // terminate) so stopScope sees the scope it created.
+    if (session) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        session.spawnOutcome().catch(() => undefined),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, TERMINATE_SPAWN_WAIT_MS);
+          timer.unref();
+        }),
+      ]);
+      clearTimeout(timer);
+    }
     await stopScope(this.sessionsDir, this.instanceId, id);
     try {
       unlinkSync(hookTokenPath(this.sessionsDir, id));
