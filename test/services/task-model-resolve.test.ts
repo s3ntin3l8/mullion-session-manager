@@ -247,9 +247,9 @@ describe("resolveOpenCodeSmallModel", () => {
 
 describe("resolveCliModel", () => {
   const settings = {
-    claudeCode: { defaultModel: "sonnet" },
-    codex: { defaultModel: null },
-    agy: { defaultModel: "gemini-3" },
+    claudeCode: { defaultModel: "sonnet", reviewerModel: "opus" },
+    codex: { defaultModel: null, reviewerModel: null },
+    agy: { defaultModel: "gemini-3", reviewerModel: null },
   };
   beforeEach(() => {
     mockGetStoredSettings.mockReset();
@@ -268,6 +268,21 @@ describe("resolveCliModel", () => {
 
   it("returns null when nothing is configured", () => {
     expect(resolveCliModel(mockApp(), "codex", { issueBody: null })).toBeNull();
+  });
+
+  it("resolves the reviewer role: Reviewer-Model, Model, reviewerModel, then default", () => {
+    const app = mockApp();
+    const body = "Model: haiku\nReviewer-Model: fast";
+    expect(resolveCliModel(app, "claude-code", { issueBody: body, role: "reviewer" })).toBe("fast");
+    expect(
+      resolveCliModel(app, "claude-code", { issueBody: "Model: haiku", role: "reviewer" }),
+    ).toBe("haiku");
+    expect(resolveCliModel(app, "claude-code", { issueBody: null, role: "reviewer" })).toBe("opus");
+    // No reviewerModel set: reviewers share the implementer default.
+    expect(resolveCliModel(app, "agy", { issueBody: null, role: "reviewer" })).toBe("gemini-3");
+    // The implementer role ignores reviewer-only tiers.
+    expect(resolveCliModel(app, "claude-code", { issueBody: body })).toBe("haiku");
+    expect(resolveCliModel(app, "claude-code", { issueBody: null })).toBe("sonnet");
   });
 
   it("falls through an invalid value and logs it", () => {

@@ -564,14 +564,18 @@ async function processPendingReviewSpawns(app: FastifyInstance): Promise<void> {
         const reviewCliModelAgent = commandModelCli(reviewCommand);
         const reviewModel = commandIsOpencode(reviewCommand)
           ? (resolveOpenCodeModel(app, {
-              taskModel: task.model ?? null,
+              // Not task.model: that column only records what the *worker*
+              // ran under, and passing it here would outrank (and so
+              // silently discard) the reviewer-role directive and setting.
+              taskModel: null,
               issueBody: task.body,
               role: "reviewer",
             }) ?? undefined)
           : reviewCliModelAgent !== null
             ? (resolveCliModel(app, reviewCliModelAgent, {
-                taskModel: task.model ?? null,
+                taskModel: null,
                 issueBody: task.body,
+                role: "reviewer",
               }) ?? undefined)
             : undefined;
         const reviewSmallModel = commandIsOpencode(reviewCommand)

@@ -1,6 +1,6 @@
 import { DEFAULT_VOICE_CHORD } from "../../api/index.js";
 import { useDashboardStore } from "../../store/index.js";
-import { Dropdown, Eyebrow, ListRow, Row, StyledList, Toggle } from "../../ui/primitives.js";
+import { Dropdown, Eyebrow, Row, Toggle } from "../../ui/primitives.js";
 import { KeyChordField } from "../KeyChordField.js";
 
 // Voice dictation language options — a short curated list (the languages
@@ -50,70 +50,50 @@ export function InputSection() {
         title="Key-conflict handling"
         desc="When on, the terminal receives the shortcut instead of the browser."
       />
-      <StyledList>
-        <ListRow
-          title={<span className="settings-kbd-chip">Ctrl + R</span>}
-          subtitle="Reverse search"
-          trailing={
-            <Toggle
-              size="small"
-              on={t.keyCapture.ctrlR}
-              onChange={(v) => updateSettings({ terminal: { keyCapture: { ctrlR: v } } })}
-            />
-          }
+      <Row label={<span className="settings-kbd-chip">Ctrl + R</span>} desc="Reverse search">
+        <Toggle
+          on={t.keyCapture.ctrlR}
+          onChange={(v) => updateSettings({ terminal: { keyCapture: { ctrlR: v } } })}
         />
-        <ListRow
-          title={<span className="settings-kbd-chip">Ctrl + L</span>}
-          subtitle="Clear screen"
-          trailing={
-            <Toggle
-              size="small"
-              on={t.keyCapture.ctrlL}
-              onChange={(v) => updateSettings({ terminal: { keyCapture: { ctrlL: v } } })}
-            />
-          }
+      </Row>
+      <Row label={<span className="settings-kbd-chip">Ctrl + L</span>} desc="Clear screen">
+        <Toggle
+          on={t.keyCapture.ctrlL}
+          onChange={(v) => updateSettings({ terminal: { keyCapture: { ctrlL: v } } })}
         />
-        <ListRow
-          title={<span className="settings-kbd-chip">Ctrl + K</span>}
-          subtitle="Reserved for command palette"
-          trailing={
-            <Toggle
-              size="small"
-              on={t.keyCapture.ctrlK}
-              onChange={(v) => updateSettings({ terminal: { keyCapture: { ctrlK: v } } })}
-            />
-          }
+      </Row>
+      <Row
+        label={<span className="settings-kbd-chip">Ctrl + K</span>}
+        desc="Reserved for command palette"
+      >
+        <Toggle
+          on={t.keyCapture.ctrlK}
+          onChange={(v) => updateSettings({ terminal: { keyCapture: { ctrlK: v } } })}
         />
-      </StyledList>
+      </Row>
 
       <Eyebrow
         title="Clipboard shortcuts"
         desc="Optional shortcuts for copy and paste. Ctrl+Insert and Shift+Insert (Cmd+C and Cmd+V on macOS) always work."
       />
-      <StyledList>
-        <ListRow
-          title={<span className="settings-kbd-chip">Ctrl + V</span>}
-          subtitle="Paste. Replaces the terminal's own use of Ctrl+V (for example, Visual Block in Vim)."
-          trailing={
-            <Toggle
-              size="small"
-              on={t.clipboardKeys.ctrlV}
-              onChange={(v) => updateSettings({ terminal: { clipboardKeys: { ctrlV: v } } })}
-            />
-          }
+      <Row
+        label={<span className="settings-kbd-chip">Ctrl + V</span>}
+        desc="Paste. Replaces the terminal's own use of Ctrl+V (for example, Visual Block in Vim)."
+      >
+        <Toggle
+          on={t.clipboardKeys.ctrlV}
+          onChange={(v) => updateSettings({ terminal: { clipboardKeys: { ctrlV: v } } })}
         />
-        <ListRow
-          title={<span className="settings-kbd-chip">Ctrl + C</span>}
-          subtitle="Copy the selection. Still interrupts the running program when nothing is selected."
-          trailing={
-            <Toggle
-              size="small"
-              on={t.clipboardKeys.ctrlC}
-              onChange={(v) => updateSettings({ terminal: { clipboardKeys: { ctrlC: v } } })}
-            />
-          }
+      </Row>
+      <Row
+        label={<span className="settings-kbd-chip">Ctrl + C</span>}
+        desc="Copy the selection. Still interrupts the running program when nothing is selected."
+      >
+        <Toggle
+          on={t.clipboardKeys.ctrlC}
+          onChange={(v) => updateSettings({ terminal: { clipboardKeys: { ctrlC: v } } })}
         />
-      </StyledList>
+      </Row>
 
       <Eyebrow
         title="Voice dictation"

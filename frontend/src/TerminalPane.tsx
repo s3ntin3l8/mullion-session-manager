@@ -1494,16 +1494,24 @@ export function TerminalPane(props: {
       }
       if (!prefsRef.current.pasteOnRightClick) return;
       event.preventDefault();
-      tryImagePaste()
-        .then((handled) => {
-          if (handled) return;
-          return readClipboard().then((text) => {
-            if (text) pasteToTerminal(text);
-          });
-        })
-        .catch(() => {});
+      // Capture phase + stopPropagation: xterm's own right-click handler
+      // (on term.element, below this container) copies the current terminal
+      // selection into its hidden textarea and selects it, which is what
+      // surfaces stale text alongside the pasted clipboard item. Paste must
+      // send exactly what the Ctrl+V chord sends, so keep xterm out of it.
+      event.stopPropagation();
+      term.clearSelection();
+      pasteHandlerRef.current();
     };
-    container.addEventListener("contextmenu", onContextMenu);
+    // Firefox fires no contextmenu for xterm and drives its handler off a
+    // right-button mousedown instead; swallow that one too.
+    const onRightMouseDown = (event: MouseEvent) => {
+      if (event.button !== 2 || !prefsRef.current.pasteOnRightClick) return;
+      if (isCoarsePointerRef.current) return;
+      event.stopPropagation();
+    };
+    container.addEventListener("contextmenu", onContextMenu, true);
+    container.addEventListener("mousedown", onRightMouseDown, true);
 
     // Reconnects on any drop (network blip, backend redeploy, laptop sleep)
     // with capped exponential backoff — up to prefs.reconnect.maxAttempts,
@@ -1818,7 +1826,8 @@ export function TerminalPane(props: {
       window.removeEventListener("resize", refit);
       detachTouchScroll();
       detachImeInput();
-      container.removeEventListener("contextmenu", onContextMenu);
+      container.removeEventListener("contextmenu", onContextMenu, true);
+      container.removeEventListener("mousedown", onRightMouseDown, true);
       selectionSub.dispose();
       osc52Sub.dispose();
       dataSub.dispose();

@@ -330,7 +330,7 @@
   flex-shrink: 0;
   background: var(--sidebar);
   border-right: 1px solid var(--border);
-  overflow-y: auto;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
 }
@@ -361,7 +361,18 @@
   flex-direction: column;
   gap: 2px;
   padding: 2px 10px 12px;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+}
+.settings-nav-label {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .settings-nav-item {
   display: flex;
