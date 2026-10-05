@@ -13,7 +13,7 @@ import { EventEmitter } from "node:events";
 import { execFileSync, spawn as spawnChildProcess } from "node:child_process";
 import type * as ChildProcess from "node:child_process";
 import { eq } from "drizzle-orm";
-import { projects } from "../../src/db/schema.js";
+import { projects, sessions } from "../../src/db/schema.js";
 import { gitEnv } from "../../src/services/git-env.js";
 
 // Session creation spawns real OS processes (systemd-run, dtach) via
@@ -152,6 +152,30 @@ describe("sessions route", () => {
     const opts = call?.[2] as { env?: Record<string, string> };
     expect(opts.env?.CUSTOM_VAR).toBe("hello");
 
+    await app.close();
+  });
+
+  it("a corrupt env column does not 500 the session list", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app);
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: { projectId, command: "bash", env: { A: "1" } },
+    });
+    const sessionId = created.json().id as number;
+    app.db.update(sessions).set({ env: "{not json" }).where(eq(sessions.id, sessionId)).run();
+
+    const list = await app.inject({ method: "GET", url: `/api/sessions?projectId=${projectId}` });
+    expect(list.statusCode).toBe(200);
+    expect(list.json().find((s: { id: number }) => s.id === sessionId).env).toBeNull();
+    await app.close();
+  });
+
+  it("rejects a non-integer projectId query instead of silently returning []", async () => {
+    const app = await buildApp();
+    const res = await app.inject({ method: "GET", url: "/api/sessions?projectId=abc" });
+    expect(res.statusCode).toBe(400);
     await app.close();
   });
 
@@ -2159,6 +2183,34 @@ describe("sessions route", () => {
         });
         const sourceRow = list.json().find((s: { id: number }) => s.id === sourceId);
         expect(sourceRow.status).toBe("killed");
+
+        fs.rmSync(cwd, { recursive: true, force: true });
+        await app.close();
+      });
+
+      it("rejects a concurrent promote of the same session with 409 and releases the lock afterwards", async () => {
+        const app = await buildApp();
+        const cwd = createGitRepo();
+        const projectId = await createProjectWithGitRepo(app, cwd);
+        const sourceId = await createActiveSession(app, projectId);
+        const promote = (branchName: string) =>
+          app.inject({
+            method: "POST",
+            url: `/api/sessions/${sourceId}/promote`,
+            payload: { baseRef: "main", branchName },
+          });
+
+        const [a, b] = await Promise.all([promote("feature/race-a"), promote("feature/race-b")]);
+        const codes = [a.statusCode, b.statusCode].sort();
+        expect(codes).toEqual([201, 409]);
+        const loser = a.statusCode === 409 ? a : b;
+        expect(loser.json().message).toBe("Session is already being promoted");
+
+        // Lock released in `finally`: a later call reaches the normal
+        // not-active check (source was killed by the winner) instead.
+        const later = await promote("feature/race-c");
+        expect(later.statusCode).toBe(409);
+        expect(later.json().message).toBe("Session is not active");
 
         fs.rmSync(cwd, { recursive: true, force: true });
         await app.close();

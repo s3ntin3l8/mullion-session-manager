@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { and, eq, inArray, isNull } from "drizzle-orm";
 // Issue #1255 — only used for the rename route's `instanceof
 // BetterSqlite3.SqliteError` check below; see session-lifecycle.ts's
@@ -245,8 +245,20 @@ export async function sessionsRoute(app: FastifyInstance) {
     done();
   });
 
-  app.get<{ Querystring: { projectId?: string; kind?: string; status?: string } }>(
+  app.get<{ Querystring: { projectId?: number; kind?: string; status?: string } }>(
     "/api/sessions",
+    {
+      schema: {
+        querystring: {
+          type: "object",
+          properties: {
+            projectId: { type: "integer" },
+            kind: { type: "string" },
+            status: { type: "string" },
+          },
+        },
+      },
+    },
     async (request, reply) => {
       const { kind, status } = request.query;
       if (kind !== undefined && kind !== "terminal" && kind !== "dock") {
@@ -268,7 +280,7 @@ export async function sessionsRoute(app: FastifyInstance) {
 
       const conditions = [
         request.query.projectId !== undefined
-          ? eq(sessions.projectId, Number(request.query.projectId))
+          ? eq(sessions.projectId, request.query.projectId)
           : undefined,
         kind !== undefined ? eq(sessions.kind, kind) : undefined,
         status !== undefined ? eq(sessions.status, status) : undefined,
@@ -662,13 +674,20 @@ export async function sessionsRoute(app: FastifyInstance) {
   // round trip and no argv channel either, so the `seedPrompt` fallback
   // below reaches nobody; it's a status-quo no-op, not an actual delivery
   // channel. Never both; see the `createSessionRecord` call below.
-  app.post<{ Params: { id: string }; Body: PromoteSessionBody }>(
-    "/api/sessions/:id/promote",
-    { schema: promoteSessionSchema },
-    async (request, reply) => {
-      const sessionId = Number(request.params.id);
-      if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
-
+  // Two concurrent promotes of one session would both pass the
+  // `status === "active"` check below, then create two worktrees and two
+  // replacement sessions. In-memory is enough: the guard only has to cover
+  // this process's own overlapping requests.
+  const promoting = new Set<number>();
+  const promoteHandler = async (
+    request: FastifyRequest<{ Params: { id: string }; Body: PromoteSessionBody }>,
+    reply: FastifyReply,
+  ) => {
+    const sessionId = Number(request.params.id);
+    if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
+    if (promoting.has(sessionId)) return reply.conflict("Session is already being promoted");
+    promoting.add(sessionId);
+    try {
       const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
       if (!row) return reply.notFound();
       if (row.status !== "active") return reply.conflict("Session is not active");
@@ -963,7 +982,14 @@ export async function sessionsRoute(app: FastifyInstance) {
       const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
       const liveStatus = await withLiveStatus(app, created.row, idleThresholdMs, project.hostId);
       return warnings.length > 0 ? { ...liveStatus, warnings } : liveStatus;
-    },
+    } finally {
+      promoting.delete(sessionId);
+    }
+  };
+  app.post<{ Params: { id: string }; Body: PromoteSessionBody }>(
+    "/api/sessions/:id/promote",
+    { schema: promoteSessionSchema },
+    promoteHandler,
   );
 
   // Declines a pending agent-triggered promote request without creating
