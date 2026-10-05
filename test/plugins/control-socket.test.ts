@@ -404,6 +404,27 @@ describe("controlSocketPlugin (issue #185)", () => {
       socket.destroy();
     });
 
+    it.each(["toString", "constructor", "__proto__", "hasOwnProperty"])(
+      "replies 404 (not a crash) for the Object.prototype member %s used as an op",
+      async (op) => {
+        app = await buildApp();
+        await app.ready();
+        const socket = await connect(app.pty.controlSocketPath);
+        socket.write("{}\n");
+        socket.write(`${JSON.stringify({ id: 6, op })}\n`);
+
+        const reply = await waitForReply(socket);
+        expect(reply).toEqual({ id: 6, ok: false, status: 404, error: `unknown op: ${op}` });
+
+        // The connection (and process) must still be serving real ops.
+        socket.write(`${JSON.stringify({ id: 7, op: "ping" })}\n`);
+        const pong = await waitForReply(socket);
+        expect(pong.id).toBe(7);
+        expect(pong.ok).toBe(true);
+        socket.destroy();
+      },
+    );
+
     it("replies with an error but keeps the connection open on a malformed message", async () => {
       app = await buildApp();
       await app.ready();
