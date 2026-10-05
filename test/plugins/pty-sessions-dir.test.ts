@@ -75,10 +75,12 @@ describe("ensureSessionsDir /tmp fallback hardening (finding H4)", () => {
     process.env.SESSIONS_DIR = configured;
     try {
       const app = await buildApp();
-      const marker = path.join(fallback, "keep-me");
-      mkdirSync(marker);
+      // buildApp's ptyPlugin created the fallback dir; the old onClose
+      // rmSync'd it. Nothing is written into it here — existence alone proves
+      // the shutdown no longer deletes it.
+      expect(existsSync(fallback)).toBe(true);
       await app.close();
-      expect(existsSync(marker)).toBe(true);
+      expect(existsSync(fallback)).toBe(true);
     } finally {
       if (prev === undefined) delete process.env.SESSIONS_DIR;
       else process.env.SESSIONS_DIR = prev;
