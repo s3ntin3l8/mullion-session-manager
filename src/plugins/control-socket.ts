@@ -1615,9 +1615,7 @@ function handleConnection(
         continue;
       }
 
-      dispatch(app, conn, result.message).catch((err) => {
-        app.log.error({ err }, "control-socket dispatch failed");
-      });
+      dispatch(app, conn, result.message).catch((err) => app.log.error({ err }, "dispatch failed"));
     }
 
     // Checked AFTER draining every complete line above, not on the raw
