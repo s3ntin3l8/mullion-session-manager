@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, rmSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import fp from "fastify-plugin";
 import type { FastifyInstance } from "fastify";
@@ -174,8 +174,30 @@ export function ensureSessionsDir(configured: string): string {
 
   const hash = createHash("md5").update(resolved).digest("hex").slice(0, 8);
   const fallback = `/tmp/ms-${hash}`;
-  mkdirSync(fallback, { recursive: true });
+  secureFallbackDir(fallback);
   return fallback;
+}
+
+// The fallback lives in world-writable /tmp under a predictable name, and
+// holds live dtach sockets plus hook tokens, so another local user could
+// pre-create it (or plant a symlink) to read or hijack them (H4). Create it
+// 0700, then lstat (never follow a symlink) and refuse a symlink or a
+// directory owned by anyone else. A directory that is ours but looser than
+// 0700 (made by an older release under the umask) is tightened in place
+// rather than refused, so upgrading doesn't break startup. The path itself
+// must stay stable: socket-dir ownership resolution and deriveInstanceId
+// both key off it.
+function secureFallbackDir(dir: string): void {
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const st = lstatSync(dir);
+  if (st.isSymbolicLink() || !st.isDirectory()) {
+    throw new Error(`refusing to use ${dir} as sessions dir: not a plain directory`);
+  }
+  const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
+  if (uid !== undefined && st.uid !== uid) {
+    throw new Error(`refusing to use ${dir} as sessions dir: owned by uid ${st.uid}, not ${uid}`);
+  }
+  if ((st.mode & 0o777) !== 0o700) chmodSync(dir, 0o700);
 }
 
 // Decorates app.pty with the session manager (see src/services/pty-manager.ts
@@ -469,13 +491,10 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
     if (reconcileTimer) clearInterval(reconcileTimer);
     if (devServerDetectTimer) clearInterval(devServerDetectTimer);
     manager.killAll();
-    if (sessionsDir.startsWith("/tmp/ms-")) {
-      try {
-        rmSync(sessionsDir, { recursive: true, force: true });
-      } catch {
-        /* ignore */
-      }
-    }
+    // Deliberately no rmSync of a /tmp/ms-* fallback sessionsDir here: sessions
+    // run in transient systemd scopes precisely so they survive a restart,
+    // and removing the directory would delete their live dtach sockets and
+    // hook tokens.
   });
 });
 

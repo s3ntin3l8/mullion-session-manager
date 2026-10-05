@@ -1,9 +1,9 @@
 import fp from "fastify-plugin";
-import type { FastifyInstance, FastifyRequest } from "fastify";
+import type { FastifyInstance } from "fastify";
 import fastifyCookie from "@fastify/cookie";
 import { buildPreviewHostPattern, isPreviewHost } from "../services/preview-host.js";
 import { hasValidBearerToken, hasValidSessionCookie, isAuthEnabled } from "../services/auth.js";
-import { requestScheme } from "../services/request-scheme.js";
+import { requestOrigin } from "../services/request-scheme.js";
 
 // request.url includes the query string, and onRequest fires before
 // Fastify's own routing/query parsing runs — this is the cheapest correct
@@ -12,36 +12,6 @@ import { requestScheme } from "../services/request-scheme.js";
 // trick routes/internal.ts's resolveLoopbackPreviewUrl uses.
 function requestPathname(url: string): string {
   return new URL(url, "http://placeholder").pathname;
-}
-
-const DEFAULT_PORT: Record<string, string> = { https: "443", http: "80" };
-
-// Browsers never include a scheme's default port in the Origin header they
-// send (e.g. https://host, never https://host:443) — but a Host header
-// reaching this process can carry one explicitly (a proxy config that
-// forwards Host verbatim including a literal :443/:80, or a client that set
-// it that way directly), which would otherwise false-403 an otherwise-valid
-// same-origin write (found in Hermes review on this same PR). Stripping the
-// default port for the request's own scheme before comparing makes "host"
-// and "host:443" (under https) equivalent, matching what a real browser's
-// Origin header actually looks like.
-function stripDefaultPort(scheme: string, host: string): string {
-  const suffix = `:${DEFAULT_PORT[scheme]}`;
-  return host.endsWith(suffix) ? host.slice(0, -suffix.length) : host;
-}
-
-// The dashboard's own origin, derived from the request that reached it —
-// never a hardcoded domain, since this app is deployed under whatever
-// hostname the operator points at it (see deploy/README.md). This is safe
-// to use as the comparison target specifically *because* it's paired with
-// hasValidSessionCookie: an attacker can send any Host header they like, but
-// that only changes what origin *this* request is compared against, not
-// what cookie the browser attaches — a forged Host couldn't make a foreign
-// Origin match unless the attacker already controls the session cookie too.
-function requestOrigin(request: FastifyRequest): string {
-  const scheme = requestScheme(request);
-  const host = stripDefaultPort(scheme, request.headers.host ?? "");
-  return `${scheme}://${host}`;
 }
 
 // True for exactly the surface issue #19 asks to gate: every /api/* route
@@ -239,7 +209,6 @@ export const authPlugin = fp(async (app: FastifyInstance) => {
         "the network/reverse-proxy gateway for access control; see issue #19 and " +
         "deploy/README.md",
     );
-    return;
   }
 
   const previewBaseHost = app.config.PREVIEW_BASE_HOST.trim();
@@ -253,6 +222,26 @@ export const authPlugin = fp(async (app: FastifyInstance) => {
   function isPreviewBypass(request: { headers: { host?: string } }): boolean {
     if (!previewHostPattern) return false;
     return isPreviewHost(request.headers.host, previewHostPattern);
+  }
+
+  if (!isAuthEnabled(app.config)) {
+    // Gateway-only mode (H3): no cookie to protect, but a browser still
+    // attaches whatever ambient credentials the gateway session uses, so a
+    // foreign page could open /ws/terminal or POST to a mutating route
+    // (WebSockets and simple-form POSTs aren't blocked by SOP/CORS). Reject
+    // only a PRESENT, MISMATCHED Origin: Node `ws` clients (remote-host
+    // upstream) and the control socket's app.inject send none, and a bare
+    // browser GET/HEAD can't mutate state.
+    app.addHook("onRequest", async (request, reply) => {
+      if (isPreviewBypass(request)) return;
+      const isWebSocketUpgrade = requestPathname(request.url).startsWith("/ws/");
+      if (!isWebSocketUpgrade && (request.method === "GET" || request.method === "HEAD")) return;
+      const origin = request.headers.origin;
+      if (origin !== undefined && origin !== requestOrigin(request)) {
+        return reply.forbidden("cross-origin request rejected");
+      }
+    });
+    return;
   }
 
   // CodeQL (js/missing-rate-limiting) flags this hook: it performs an
