@@ -1605,6 +1605,16 @@ export function TerminalPane(props: {
         // the pty. Also mirrored into lastCols/lastRows so the next refit()
         // (ResizeObserver-driven) computes its own delta against reality
         // instead of immediately trying to fight this back down.
+        // Issue #1520 — the server dropped output for this connection under
+        // backpressure; what's on screen may be garbled. Reset xterm and
+        // re-arm the replay guards: the next binary frame is a fresh full
+        // replay followed by a geometry frame, same as the initial attach.
+        if ((parsed as { type?: unknown } | null)?.type === "resync") {
+          term.reset();
+          sawGeometry = false;
+          replayCompleteGeneration = 0;
+          return;
+        }
         if (isGeometryMessage(parsed)) {
           const geo = parsed;
           // The first "geometry" frame on this connection is sent

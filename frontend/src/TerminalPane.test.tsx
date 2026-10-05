@@ -194,6 +194,7 @@ vi.mock("@xterm/xterm", () => {
       // the returned instance's cols/rows itself to simulate the resize
       // having taken effect.
       resize: vi.fn(),
+      reset: vi.fn(),
       open: vi.fn(),
       loadAddon: vi.fn(),
       dispose: vi.fn(),
@@ -2838,6 +2839,23 @@ describe("TerminalPane reconnect vs. session-ended (P13)", () => {
     });
 
     expect(screen.getByText("Session ended")).toBeInTheDocument();
+  });
+
+  // Issue #1520 — a {type:"resync"} frame means the server dropped output
+  // under backpressure; xterm must be reset before the fresh replay lands.
+  it('resets xterm on a {type:"resync"} message and keeps the session live', () => {
+    stubFakeWebSocket(true);
+    renderPane();
+    const term = getLatestTermInstance() as unknown as { reset: ReturnType<typeof vi.fn> };
+
+    act(() => {
+      for (const handler of fakeSocket._messageHandlers) {
+        handler({ data: JSON.stringify({ type: "resync" }) });
+      }
+    });
+
+    expect(term.reset).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("Session ended")).not.toBeInTheDocument();
   });
 
   it("an ordinary close (e.g. code 1006, abnormal closure) still retries with backoff when the session is still active in the store", () => {

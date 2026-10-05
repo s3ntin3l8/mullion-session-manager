@@ -375,3 +375,18 @@ way as a namespaced one.
   (that skill itself, the mechanically-checkable form of this doc's own
   session model / opaque-blob / ESM / config / migration / worktree
   invariants).
+
+## Terminal WebSocket backpressure and resync
+
+`/ws/terminal` carries raw binary frames (PTY bytes) plus JSON control frames
+(`src/shared/ws-protocol.ts`'s `TerminalWSMessage`: `resize` browser→server;
+`exited`, `geometry`, `resync` server→browser). When a connection's
+`bufferedAmount` exceeds 4 MiB the server drops output rather than growing
+unbounded, which would leave the client's xterm garbled. The connection is
+marked dirty (nothing more is forwarded) until the buffer drains below 256 KiB;
+the server then sends `{"type":"resync"}`, a fresh scrollback replay, a
+`geometry` frame, and a redraw nudge. On `resync` the client calls
+`term.reset()` and treats what follows as an initial attach replay. For a
+remote-host session the primary has no scrollback of its own, so it closes the
+browser socket with code `4001`; the client's normal reconnect re-attaches and
+gets the agent's replay.
