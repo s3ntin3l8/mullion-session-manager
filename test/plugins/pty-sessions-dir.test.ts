@@ -1,13 +1,5 @@
 import { createHash } from "node:crypto";
-import {
-  chmodSync,
-  existsSync,
-  writeFileSync,
-  mkdirSync,
-  rmSync,
-  statSync,
-  symlinkSync,
-} from "node:fs";
+import { chmodSync, existsSync, mkdirSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type * as ChildProcess from "node:child_process";
@@ -83,8 +75,8 @@ describe("ensureSessionsDir /tmp fallback hardening (finding H4)", () => {
     process.env.SESSIONS_DIR = configured;
     try {
       const app = await buildApp();
-      const marker = path.join(fallback, "keep-me.sock");
-      writeFileSync(marker, "x");
+      const marker = path.join(fallback, "keep-me");
+      mkdirSync(marker);
       await app.close();
       expect(existsSync(marker)).toBe(true);
     } finally {
