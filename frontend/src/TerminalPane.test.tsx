@@ -587,9 +587,9 @@ function renderPane(extra: { active?: boolean; inputAffordances?: boolean } = {}
       browser: { framerate: -1, maxInstances: -1 },
       devices: { discoveryEnabled: "inherit" },
       server: { logLevel: "inherit" },
-      claudeCode: { defaultModel: null },
-      codex: { defaultModel: null },
-      agy: { defaultModel: null },
+      claudeCode: { defaultModel: null, reviewerModel: null },
+      codex: { defaultModel: null, reviewerModel: null },
+      agy: { defaultModel: null, reviewerModel: null },
       opencode: {
         implementerModel: null,
         reviewerModel: null,
@@ -4101,6 +4101,37 @@ describe("TerminalPane paste-on-right-click vs touch long-press", () => {
     stubFakeWebSocket(true);
     const { container } = renderPane();
     expect(fireContextMenu(container).defaultPrevented).toBe(true);
+  });
+
+  it("keeps xterm's own right-click handler out of a paste-on-right-click", () => {
+    stubPointer(false);
+    stubFakeWebSocket(true);
+    const { container } = renderPane();
+    act(() => {
+      useDashboardStore.setState((st) => ({
+        settings: {
+          ...st.settings,
+          terminal: { ...st.settings.terminal, pasteOnRightClick: true },
+        },
+      }));
+    });
+    const containerDiv = container.querySelector("div[style*='inset']") as HTMLDivElement;
+    // Stands in for xterm's handler on term.element, which would otherwise
+    // copy the (stale) selection into its textarea.
+    const child = document.createElement("div");
+    containerDiv.appendChild(child);
+    const xtermHandler = vi.fn();
+    child.addEventListener("contextmenu", xtermHandler);
+    const xtermMouseDown = vi.fn();
+    child.addEventListener("mousedown", xtermMouseDown);
+    act(() => {
+      child.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+      child.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 2 }));
+      child.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
+    });
+    expect(xtermHandler).not.toHaveBeenCalled();
+    // Only the right button is swallowed; ordinary clicks still reach xterm.
+    expect(xtermMouseDown).toHaveBeenCalledTimes(1);
   });
 
   it("a mouse right-click on a coarse-primary device still pastes, not the copy view", () => {

@@ -108,14 +108,14 @@ directive that merely appears in prose (e.g. "remember to set `Agent:
 claude`") is deliberately not picked up, only a line matching exactly
 (whitespace aside):
 
-| Directive                          | Effect                                                                           |
-| ---------------------------------- | -------------------------------------------------------------------------------- |
-| `Manual: true`                     | Ingests to `backlog`, not `ready` — never auto-claimed. Still claimable by hand. |
-| `Agent: <name>`                    | Which worker agent claims this task.                                             |
-| `ReviewAgent: <name>`              | Which agent reviews the diff. `none`/`false` disables review.                    |
-| `Model: <model>`                   | Implementer model override — every claimable agent, not just opencode.           |
-| `Reviewer-Model: <provider/model>` | opencode only — reviewer model; falls back to `Model:` if unset.                 |
-| `SmallModel: <provider/model>`     | opencode only — opencode's lightweight `small_model`.                            |
+| Directive                      | Effect                                                                           |
+| ------------------------------ | -------------------------------------------------------------------------------- |
+| `Manual: true`                 | Ingests to `backlog`, not `ready` — never auto-claimed. Still claimable by hand. |
+| `Agent: <name>`                | Which worker agent claims this task.                                             |
+| `ReviewAgent: <name>`          | Which agent reviews the diff. `none`/`false` disables review.                    |
+| `Model: <model>`               | Implementer model override — every claimable agent, not just opencode.           |
+| `Reviewer-Model: <model>`      | Reviewer model — every agent; falls back to `Model:` if unset.                   |
+| `SmallModel: <provider/model>` | opencode only — opencode's lightweight `small_model`.                            |
 
 Matching rules, all six:
 
@@ -135,9 +135,9 @@ Matching rules, all six:
 - First match wins if a directive line appears more than once.
 - `Manual: true`/`Manual: True`/`Manual: TRUE` all match — only the word
   `true` counts, in any casing; `Manual: yes` is inert.
-- **`Reviewer-Model:`/`SmallModel:` only affect opencode-claimed tasks; on
-  claude/codex/agy they're silently inert.** `Model:` is different — it
-  works for every claimable agent, but the expected shape differs by agent:
+- **`SmallModel:` only affects opencode-claimed tasks; on claude/codex/agy
+  it's silently inert.** `Model:` and `Reviewer-Model:` work for every
+  claimable agent, but the expected shape differs by agent:
   opencode wants `provider/model` (more than one slash is fine, e.g.
   `openrouter/anthropic/claude-sonnet-4-5`), while claude/codex/agy take a
   bare `--model` value with no slash required (e.g. `sonnet`, `gpt-5`).

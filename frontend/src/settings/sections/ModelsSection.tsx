@@ -7,7 +7,7 @@ import { CLAUDE_MODELS, CODEX_FALLBACK_MODELS, useCatalog } from "../../models/m
 const hintStyle = { fontSize: 12, color: "var(--muted)", margin: "4px 0 0", paddingLeft: 6 };
 
 const FLAG_HINT =
-  "Adds --model to new sessions and Task Master workers. A task's Model: line overrides it; a launcher command that already passes --model is left alone.";
+  "Adds --model to new sessions and Task Master workers. A task's Model: / Reviewer-Model: line overrides these; a launcher command that already passes --model is left alone.";
 
 export function ModelsSection() {
   const { settings, updateSettings } = useDashboardStore();
@@ -26,14 +26,24 @@ export function ModelsSection() {
     <>
       <GroupHeading title="Claude Code" />
       <ModelPicker
-        label="Default model"
-        ariaLabel="Claude Code default model"
-        desc="Model for new Claude Code sessions."
+        label="Implementer model"
+        ariaLabel="Claude Code implementer model"
+        desc="Model for new Claude Code sessions and Task Master workers."
         value={settings.claudeCode?.defaultModel ?? null}
         options={CLAUDE_MODELS}
         defaultLabel="Claude Code default"
         allowCustom
         onChange={(v) => updateSettings({ claudeCode: { defaultModel: v } })}
+      />
+      <ModelPicker
+        label="Reviewer model"
+        ariaLabel="Claude Code reviewer model"
+        desc="Model for sessions that review tasks. Empty uses the implementer model."
+        value={settings.claudeCode?.reviewerModel ?? null}
+        options={CLAUDE_MODELS}
+        defaultLabel="Same as implementer"
+        allowCustom
+        onChange={(v) => updateSettings({ claudeCode: { reviewerModel: v } })}
       />
       <p style={hintStyle}>{FLAG_HINT}</p>
 
@@ -41,9 +51,9 @@ export function ModelsSection() {
         <GroupHeading title="Codex" />
       </div>
       <ModelPicker
-        label="Default model"
-        ariaLabel="Codex default model"
-        desc="Model for new Codex sessions."
+        label="Implementer model"
+        ariaLabel="Codex implementer model"
+        desc="Model for new Codex sessions and Task Master workers."
         value={settings.codex?.defaultModel ?? null}
         options={
           codex.models.length > 0 ? codex.models.map((value) => ({ value })) : CODEX_FALLBACK_MODELS
@@ -52,20 +62,42 @@ export function ModelsSection() {
         allowCustom
         onChange={(v) => updateSettings({ codex: { defaultModel: v } })}
       />
+      <ModelPicker
+        label="Reviewer model"
+        ariaLabel="Codex reviewer model"
+        desc="Model for sessions that review tasks. Empty uses the implementer model."
+        value={settings.codex?.reviewerModel ?? null}
+        options={
+          codex.models.length > 0 ? codex.models.map((value) => ({ value })) : CODEX_FALLBACK_MODELS
+        }
+        defaultLabel="Same as implementer"
+        allowCustom
+        onChange={(v) => updateSettings({ codex: { reviewerModel: v } })}
+      />
       <p style={hintStyle}>{FLAG_HINT}</p>
 
       <div style={{ paddingTop: 12 }}>
         <GroupHeading title="agy" />
       </div>
       <ModelPicker
-        label="Default model"
-        ariaLabel="agy default model"
-        desc="Model for new agy sessions."
+        label="Implementer model"
+        ariaLabel="agy implementer model"
+        desc="Model for new agy sessions and Task Master workers."
         value={settings.agy?.defaultModel ?? null}
         options={agy.models.map((value) => ({ value }))}
         defaultLabel="agy default"
         allowCustom
         onChange={(v) => updateSettings({ agy: { defaultModel: v } })}
+      />
+      <ModelPicker
+        label="Reviewer model"
+        ariaLabel="agy reviewer model"
+        desc="Model for sessions that review tasks. Empty uses the implementer model."
+        value={settings.agy?.reviewerModel ?? null}
+        options={agy.models.map((value) => ({ value }))}
+        defaultLabel="Same as implementer"
+        allowCustom
+        onChange={(v) => updateSettings({ agy: { reviewerModel: v } })}
       />
       <p style={hintStyle}>
         {agy.status === "error"

@@ -161,21 +161,29 @@ const SETTINGS_KEY = { "claude-code": "claudeCode", codex: "codex", agy: "agy" }
 
 /**
  * Resolve the `--model` value for a Claude Code, Codex, or agy session. Same
- * precedence chain as resolveOpenCodeModel: task DB row > issue-body `Model:`
- * directive > install-wide default (`settings.<cli>.defaultModel`) > `null`
- * (no flag; the CLI picks). An invalid value at any tier is logged and falls
- * through rather than reaching the command line.
+ * precedence chain as resolveOpenCodeModel: task DB row > issue-body
+ * directive (`Model:`; reviewers try `Reviewer-Model:` first) > install-wide
+ * default (`settings.<cli>.defaultModel`; reviewers try `reviewerModel`
+ * first) > `null` (no flag; the CLI picks). An invalid value at any tier is
+ * logged and falls through rather than reaching the command line.
  */
 export function resolveCliModel(
   app: FastifyInstance,
   agent: CliModelAgent,
-  opts: { taskModel?: string | null; issueBody: string | null },
+  opts: { taskModel?: string | null; issueBody: string | null; role?: OpenCodeModelRole },
 ): string | null {
-  const candidates: Array<[string, string | null | undefined]> = [
-    ["task's model", opts.taskModel],
-    ["issue body's Model: line", parseModelDirective(opts.issueBody)],
-    ["install-wide default model", getStoredSettings(app.db)[SETTINGS_KEY[agent]].defaultModel],
-  ];
+  const reviewer = opts.role === "reviewer";
+  const stored = getStoredSettings(app.db)[SETTINGS_KEY[agent]];
+  const candidates: Array<[string, string | null | undefined]> = [["task's model", opts.taskModel]];
+  if (reviewer) {
+    candidates.push([
+      "issue body's Reviewer-Model: line",
+      parseReviewerModelDirective(opts.issueBody),
+    ]);
+  }
+  candidates.push(["issue body's Model: line", parseModelDirective(opts.issueBody)]);
+  if (reviewer) candidates.push(["install-wide reviewer model", stored.reviewerModel]);
+  candidates.push(["install-wide default model", stored.defaultModel]);
   for (const [source, value] of candidates) {
     if (!value) continue;
     if (validateCliModel(value)) return value;

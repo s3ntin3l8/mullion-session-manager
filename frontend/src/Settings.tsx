@@ -238,7 +238,7 @@ export function Settings({
                     onClick={() => selectSection(s.id)}
                   >
                     {s.icon(16)}
-                    <span style={{ flex: 1 }}>{s.title}</span>
+                    <span className="settings-nav-label">{s.title}</span>
                   </button>
                 </Fragment>
               ))}

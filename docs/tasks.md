@@ -534,9 +534,11 @@ and agy resolve it as a bare `--model` value (`resolveCliModel`/
 `validateCliModel`, `task-model-resolve.ts`, a strict charset allowlist with
 no whitespace/quotes/`$`/backticks/leading `-`); opencode resolves it (along
 with `Reviewer-Model:`/`SmallModel:`) as a `provider/model` string
-(`resolveOpenCodeModel`/`validateModel`) instead. `Reviewer-Model:` and
-`SmallModel:` are opencode-only — silently inert for claude-code/codex/agy,
-since those CLIs have no separate reviewer-model or small-model concept.
+(`resolveOpenCodeModel`/`validateModel`) instead. `Reviewer-Model:` also
+works for every CLI (claude-code/codex/agy take a bare `--model` value;
+install-wide, `settings.<cli>.reviewerModel` backs it). `SmallModel:` is
+opencode-only — silently inert for claude-code/codex/agy, which have no
+small-model concept wired up.
 `commandIsOpencode`/`commandModelCli` (`hook-adapters/index.ts`) are what
 each spawn site checks to pick the right resolver.
 
@@ -544,8 +546,11 @@ each spawn site checks to pick the right resolver.
    the review agent — see
    [`tasks-internals.md`](tasks-internals.md#review-agent-mechanics)).
    Falls back to the CLI's/opencode's own default if unset.
-2. `Reviewer-Model: <provider/model>` (opencode only) — the reviewer's
-   model. Falls back to `Model:` if unset, then to the opencode default.
+2. `Reviewer-Model: <value>` — the reviewer's model (`provider/model` for
+   opencode, a bare name for the other CLIs). Falls back to `Model:` if
+   unset, then to the install-wide reviewer model, then the implementer
+   default. A task's recorded worker model (`tasks.model`) never overrides
+   the reviewer's resolution.
 3. `SmallModel: <provider/model>` (opencode only) — the model used for
    small/fast operations (e.g. title derivation in #761). Falls back to the
    opencode default if unset.
