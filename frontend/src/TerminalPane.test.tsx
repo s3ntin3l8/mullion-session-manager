@@ -587,7 +587,7 @@ function renderPane(extra: { active?: boolean; inputAffordances?: boolean } = {}
       browser: { framerate: -1, maxInstances: -1 },
       devices: { discoveryEnabled: "inherit" },
       server: { logLevel: "inherit" },
-      claudeCode: { defaultModel: null, reviewerModel: null },
+      claudeCode: { defaultModel: null, reviewerModel: null, smallModel: null },
       codex: { defaultModel: null, reviewerModel: null },
       agy: { defaultModel: null, reviewerModel: null },
       opencode: {

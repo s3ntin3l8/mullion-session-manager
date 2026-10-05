@@ -4433,18 +4433,41 @@ describe("sessions route", () => {
       await app.close();
     });
 
-    it("drops smallModel sent alongside a valid model for a Claude Code command", async () => {
+    it("keeps a valid smallModel for a Claude Code command and rejects an unsafe one", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+
+      const ok = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "claude", model: "sonnet", smallModel: "haiku" },
+      });
+      expect(ok.statusCode).toBe(201);
+      expect(ok.json().model).toBe("sonnet");
+      expect(ok.json().smallModel).toBe("haiku");
+
+      const bad = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "claude", smallModel: "--dangerously-skip-permissions" },
+      });
+      expect(bad.statusCode).toBe(400);
+
+      await app.close();
+    });
+
+    it("drops smallModel sent alongside a valid model for a Codex command", async () => {
       const app = await buildApp();
       const projectId = await createProject(app);
 
       const res = await app.inject({
         method: "POST",
         url: "/api/sessions",
-        payload: { projectId, command: "claude", model: "sonnet", smallModel: "irrelevant here" },
+        payload: { projectId, command: "codex", model: "gpt-5", smallModel: "irrelevant here" },
       });
 
       expect(res.statusCode).toBe(201);
-      expect(res.json().model).toBe("sonnet");
+      expect(res.json().model).toBe("gpt-5");
       expect(res.json().smallModel).toBeNull();
 
       await app.close();

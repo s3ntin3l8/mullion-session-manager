@@ -26,6 +26,7 @@ import {
 } from "./task-agent-resolve.js";
 import {
   resolveCliModel,
+  resolveClaudeSmallModel,
   resolveOpenCodeModel,
   resolveOpenCodeSmallModel,
 } from "./task-model-resolve.js";
@@ -583,7 +584,15 @@ async function processPendingReviewSpawns(app: FastifyInstance): Promise<void> {
               taskSmallModel: task.smallModel ?? null,
               issueBody: task.body,
             }) ?? undefined)
-          : undefined;
+          : reviewCliModelAgent === "claude-code"
+            ? (resolveClaudeSmallModel(app, {
+                // Not task.smallModel: it records the worker's resolved
+                // value (same reasoning as taskModel above), and a worker
+                // on a different CLI never has one.
+                taskSmallModel: null,
+                issueBody: task.body,
+              }) ?? undefined)
+            : undefined;
 
         const ci = await resolveReviewCi(
           app,

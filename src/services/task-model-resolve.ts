@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { getStoredSettings } from "./settings.js";
 import { commandIsOpencode, commandModelCli } from "./hook-adapters/index.js";
+import { validateCliModel } from "./hook-adapters/shared.js";
 
 export type OpenCodeModelRole = "implementer" | "reviewer";
 
@@ -147,15 +148,7 @@ export function resolveOpenCodeSmallModel(
 
 export type CliModelAgent = "claude-code" | "codex" | "agy";
 
-// Unlike opencode's `provider/model`, these CLIs take bare names (`sonnet`,
-// `gpt-5`, `claude-opus-4-5[1m]`). The value ends up in a shell command
-// line, so this is a strict allowlist with no whitespace, quotes, `$`,
-// backticks, or leading `-` (which would read as another flag).
-const CLI_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@[\]-]{0,127}$/;
-
-export function validateCliModel(value: string): boolean {
-  return CLI_MODEL_RE.test(value);
-}
+export { validateCliModel };
 
 const SETTINGS_KEY = { "claude-code": "claudeCode", codex: "codex", agy: "agy" } as const;
 
@@ -196,6 +189,34 @@ export function resolveCliModel(
 }
 
 /**
+ * Resolve the small/fast model for a Claude Code session, which Claude Code
+ * reads from `ANTHROPIC_DEFAULT_HAIKU_MODEL` (see the claude-code adapter).
+ * Same precedence chain as resolveOpenCodeSmallModel — task row > issue-body
+ * `SmallModel:` > `settings.claudeCode.smallModel` > `null` — but values are
+ * bare model names checked with `validateCliModel`, not `provider/model`.
+ * Codex and agy have no small-model concept wired up, so they get no resolver.
+ */
+export function resolveClaudeSmallModel(
+  app: FastifyInstance,
+  opts: { taskSmallModel?: string | null; issueBody: string | null },
+): string | null {
+  const candidates: Array<[string, string | null | undefined]> = [
+    ["task's small_model", opts.taskSmallModel],
+    ["issue body's SmallModel: line", parseSmallModelDirective(opts.issueBody)],
+    ["install-wide small model", getStoredSettings(app.db).claudeCode.smallModel],
+  ];
+  for (const [source, value] of candidates) {
+    if (!value) continue;
+    if (validateCliModel(value)) return value;
+    app.log.warn(
+      { model: value },
+      `[task-model-resolve] ${source} is not a valid claude-code model name, falling through`,
+    );
+  }
+  return null;
+}
+
+/**
  * Validate an explicit, caller-supplied `model`/`smallModel` value against
  * `command` (issue #1423). Unlike the resolvers above, which warn and fall
  * through to the next precedence tier on a bad value, an explicit value has
@@ -205,9 +226,11 @@ export function resolveCliModel(
  *
  * - claude-code/codex/agy commands: `model` must pass `validateCliModel`
  *   (the same charset allowlist `resolveCliModel` uses). `smallModel` is
- *   meaningless for these CLIs — callers shouldn't be sending it, and there
+ *   meaningless for codex/agy — callers shouldn't be sending it, and there
  *   is nothing to validate it against, so it is always accepted here; the
- *   route drops it before it reaches the session row.
+ *   route drops it before it reaches the session row. For claude-code it
+ *   is a real setting (`ANTHROPIC_DEFAULT_HAIKU_MODEL`) and gets the same
+ *   `validateCliModel` check as `model`.
  * - opencode commands: both `model` and `smallModel` must pass
  *   `validateModel` (the `provider/model` shape) AND `validateCliModel` (the
  *   charset allowlist) — `validateModel` alone doesn't reject a value like
@@ -228,10 +251,10 @@ export function explicitModelError(
 ): string | null {
   const cli = commandModelCli(command);
   if (cli !== null) {
-    if (field === "smallModel") return null;
+    if (field === "smallModel" && cli !== "claude-code") return null;
     return validateCliModel(value)
       ? null
-      : `model must match the CLI model name format (letters, digits, and . _ : / @ [ ] - only, starting with a letter or digit)`;
+      : `${field} must match the CLI model name format (letters, digits, and . _ : / @ [ ] - only, starting with a letter or digit)`;
   }
   if (commandIsOpencode(command)) {
     if (validateModel(value) && validateCliModel(value)) return null;

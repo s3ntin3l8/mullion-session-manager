@@ -45,6 +45,16 @@ export function ModelsSection() {
         allowCustom
         onChange={(v) => updateSettings({ claudeCode: { reviewerModel: v } })}
       />
+      <ModelPicker
+        label="Small model"
+        ariaLabel="Claude Code small model"
+        desc="Model for Claude Code's lightweight background work. Sets ANTHROPIC_DEFAULT_HAIKU_MODEL."
+        value={settings.claudeCode?.smallModel ?? null}
+        options={CLAUDE_MODELS}
+        defaultLabel="Claude Code default"
+        allowCustom
+        onChange={(v) => updateSettings({ claudeCode: { smallModel: v } })}
+      />
       <p style={hintStyle}>{FLAG_HINT}</p>
 
       <div style={{ paddingTop: 12 }}>

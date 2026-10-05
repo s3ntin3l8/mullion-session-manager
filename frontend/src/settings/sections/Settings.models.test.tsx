@@ -91,6 +91,19 @@ describe("Settings -> Models", () => {
     await expectPatch({ claudeCode: { defaultModel: "opusplan" } });
   });
 
+  it("saves a Claude Code small model", async () => {
+    const user = userEvent.setup();
+    render(<ModelsSection />);
+
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Claude Code small model" }),
+      "haiku",
+    );
+
+    expect(useDashboardStore.getState().settings.claudeCode.smallModel).toBe("haiku");
+    await expectPatch({ claudeCode: { smallModel: "haiku" } });
+  });
+
   it("PATCHes null when a CLI is set back to its default", async () => {
     const user = userEvent.setup();
     useDashboardStore.setState({
@@ -169,7 +182,7 @@ describe("Settings -> Models", () => {
     useDashboardStore.setState({
       settings: {
         ...DEFAULT_SETTINGS,
-        claudeCode: { defaultModel: "claude-opus-4-5", reviewerModel: null },
+        claudeCode: { defaultModel: "claude-opus-4-5", reviewerModel: null, smallModel: null },
       },
       settingsLoaded: true,
     });
@@ -186,7 +199,7 @@ describe("Settings -> Models", () => {
     useDashboardStore.setState({
       settings: {
         ...DEFAULT_SETTINGS,
-        claudeCode: { defaultModel: "claude-opus-4-5", reviewerModel: null },
+        claudeCode: { defaultModel: "claude-opus-4-5", reviewerModel: null, smallModel: null },
       },
       settingsLoaded: true,
     });
@@ -273,7 +286,10 @@ describe("Settings -> Models", () => {
   it("opening Custom… and leaving the field doesn't reset a stored default", async () => {
     const user = userEvent.setup();
     useDashboardStore.setState({
-      settings: { ...DEFAULT_SETTINGS, claudeCode: { defaultModel: "opus", reviewerModel: null } },
+      settings: {
+        ...DEFAULT_SETTINGS,
+        claudeCode: { defaultModel: "opus", reviewerModel: null, smallModel: null },
+      },
       settingsLoaded: true,
     });
     render(<ModelsSection />);
@@ -296,7 +312,7 @@ describe("Settings -> Models", () => {
     useDashboardStore.setState({
       settings: {
         ...DEFAULT_SETTINGS,
-        claudeCode: { defaultModel: "claude-opus-4-5", reviewerModel: null },
+        claudeCode: { defaultModel: "claude-opus-4-5", reviewerModel: null, smallModel: null },
       },
       settingsLoaded: true,
     });
@@ -308,7 +324,7 @@ describe("Settings -> Models", () => {
       useDashboardStore.setState({
         settings: {
           ...DEFAULT_SETTINGS,
-          claudeCode: { defaultModel: "claude-sonnet-4-6", reviewerModel: null },
+          claudeCode: { defaultModel: "claude-sonnet-4-6", reviewerModel: null, smallModel: null },
         },
       });
     });
