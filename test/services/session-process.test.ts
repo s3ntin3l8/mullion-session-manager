@@ -270,6 +270,21 @@ describe("listOwnedScopes", () => {
     expect(result.unverifiable.has("9")).toBe(true);
   });
 
+  it("marks an id unverifiable (never dead) for THIS instance's namespaced unit whose socket is outside sessionsDir (H7)", async () => {
+    listUnitsReply = [
+      line(
+        `crs-session-${INSTANCE_A}-8.scope`,
+        "/usr/bin/dtach -n /elsewhere/8.sock /usr/bin/zsh -lc bash",
+      ),
+    ];
+    const result = await listOwnedScopes("/inst-a", INSTANCE_A, { all: true });
+    expect(result.owned.has("8")).toBe(false);
+    expect(result.unverifiable.has("8")).toBe(true);
+    await expect(isMasterAliveStateBatch("/inst-a", INSTANCE_A, ["8"])).resolves.toEqual({
+      "8": "unknown",
+    });
+  });
+
   it("does not treat another instance's namespaced unit as a candidate for this instance's ids", async () => {
     listUnitsReply = [line(`crs-session-${INSTANCE_B}-9.scope`, "some other process, not dtach")];
     const result = await listOwnedScopes("/inst-a", INSTANCE_A, { all: true });

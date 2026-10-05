@@ -532,6 +532,13 @@ export function listOwnedScopes(
         }
         if (path.dirname(socketPath) === resolvedSessionsDir) {
           owned.set(path.basename(socketPath, ".sock"), unit);
+        } else if (unit.startsWith(`crs-session-${instanceId}-`)) {
+          // A unit carrying THIS instance's own id whose socket lives
+          // elsewhere (e.g. sessionsDir moved/symlinked) cannot be called
+          // "dead": callers now delete files on a dead verdict (reconciler
+          // -> terminate), so a mismatch here must read as unknown.
+          const candidateId = candidateIdForUnit(unit, instanceId);
+          if (candidateId !== null) unverifiable.add(candidateId);
         }
       }
       finish({ owned, unverifiable, failed: false });
