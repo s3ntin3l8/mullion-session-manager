@@ -243,6 +243,18 @@ install's own Traefik container already satisfies that; a bare `make dev`
 checkout with no gateway at all needs either a real credential above or this
 flag.
 
+**Origin check with no in-process auth.** Even with neither credential set,
+this app rejects a mutating request (anything but GET/HEAD) or a `/ws/*`
+upgrade whose `Origin` header is present and doesn't match the dashboard's own
+origin, so another site open in the user's browser can't drive a terminal
+through the gateway session. The expected origin is built from the `Host`
+header plus `X-Forwarded-Proto` (first hop), with a default `:80`/`:443`
+stripped. Your gateway must therefore forward the browser's original `Host`
+(Traefik does by default; don't rewrite it) and set `X-Forwarded-Proto: https`
+when it terminates TLS, or legitimate writes will 403. A missing `Origin` is
+still allowed (Node `ws` clients, the control socket), and preview hosts are
+exempt.
+
 **The Authentik identity-header chain, once `MULLION_TRUST_GATEWAY=true`.**
 Trusting the gateway isn't just an acknowledgement — this app also reads a
 display-only identity off the request when the gateway forwards one, so
