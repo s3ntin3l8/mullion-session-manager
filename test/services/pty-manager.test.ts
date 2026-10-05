@@ -9116,6 +9116,30 @@ describe("PtyManager retire / restore hardening (PR D)", () => {
     expect(events).not.toContain("status_change:exited");
   });
 
+  it("#1529: a duplicate exit callback from the same pty emits status_change:exited once", async () => {
+    const session = manager.getOrCreate(opts());
+    await waitForSpawnAlive(session);
+    const events: string[] = [];
+    session.onEvent((e) => events.push(`${e.kind}:${String(e.payload.reason)}`));
+    const exits = vi.fn();
+    session.onExit(exits);
+    const pty = fakePtyChildren[0];
+    for (const cb of pty.exitListeners) cb({ exitCode: 0 });
+    for (const cb of pty.exitListeners) cb({ exitCode: 0 });
+    expect(events.filter((e) => e === "status_change:exited")).toHaveLength(1);
+    expect(exits).toHaveBeenCalledTimes(1);
+  });
+
+  it("#1521: a non-numeric id is rejected before any file is written", () => {
+    for (const bad of ["../evil", "1e3", " 5", "", "12a"]) {
+      expect(() => manager.getOrCreate(opts(bad))).toThrow(/must be numeric/);
+    }
+    for (const bad of ["1e3", " 5", "12a"]) {
+      expect(fs.existsSync(path.join(sessionsDir, `${bad}.token`))).toBe(false);
+    }
+    expect(fs.existsSync(path.join(sessionsDir, "..", "evil.token"))).toBe(false);
+  });
+
   it("M2: kill() unsubscribes the manager-level event fan-out", async () => {
     const session = manager.getOrCreate(opts());
     await waitForSpawnAlive(session);
