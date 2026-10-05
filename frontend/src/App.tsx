@@ -1140,7 +1140,7 @@ export function App() {
   const toggleSidebar = useCallback(() => {
     if (compact) setSidebarOpen((v) => !v);
     else useDashboardStore.getState().setSidebarCollapsed(!sidebarCollapsed);
-  }, [layoutTier, sidebarCollapsed]);
+  }, [compact, sidebarCollapsed]);
 
   // Floating-sidebar redesign — edge-swipe open/dismiss (lib/sidebarSwipeGesture.ts's
   // own header comment covers the design: discrete threshold+commit, not a

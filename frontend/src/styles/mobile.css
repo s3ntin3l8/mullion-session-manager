@@ -388,8 +388,8 @@
 /* Phone navigator (App.tsx / PhoneNavigator.tsx): below 700px the sidebar
    drawer becomes a full-screen navigator under the toolbar — the ☰ button and
    its own ✕ close it. The header/tabs/settings-row rules below are NOT
-   width-scoped: tablet renders the same navigator in a wider slide-over, and
-   these components only mount on compact tiers. */
+   width-scoped: these components only mount on compact tiers, and a later
+   change in the tablet series renders the same navigator on tablet. */
 .phone-nav-header {
   flex: none;
   position: sticky;
