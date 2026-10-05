@@ -22,6 +22,7 @@ const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
 const sessionBackendModule = await import("../../src/services/session-backend.js");
 const settingsModule = await import("../../src/services/settings.js");
+const toolingModule = await import("../../src/services/project-tooling.js");
 const { createSessionRecord } = await import("../../src/services/session-lifecycle.js");
 
 const tmpDb = path.join(os.tmpdir(), `session-lifecycle-rollback-${process.pid}.db`);
@@ -122,12 +123,10 @@ describe("createSessionRecord rollback (M5)", () => {
 
   it("a throw between insert and spawn unwinds the worktree, branch, session and row, then rethrows", async () => {
     const { app, projectId, backend } = await setup();
-    const real = settingsModule.getStoredSettings;
-    let calls = 0;
-    vi.spyOn(settingsModule, "getStoredSettings").mockImplementation((db) => {
-      // 1st call = child cap (pre-insert); a later one runs after the insert.
-      if (++calls >= 2) throw new Error("post-insert failure");
-      return real(db);
+    // Settings are read once per create (before the insert), so fail a
+    // post-insert step instead: resolving the project's briefing.
+    vi.spyOn(toolingModule, "readProjectBriefing").mockImplementation(() => {
+      throw new Error("post-insert failure");
     });
     await expect(createSessionRecord(app, params(projectId))).rejects.toThrow(
       "post-insert failure",
