@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { SERVER_ENV_KEYS, buildSessionEnv } from "../../src/services/session-env.js";
+import { schema } from "../../src/plugins/env.js";
+import {
+  SERVER_ENV_KEYS,
+  SESSION_ENV_PASSTHROUGH_KEYS,
+  buildSessionEnv,
+} from "../../src/services/session-env.js";
 
 describe("session-env", () => {
   describe("buildSessionEnv", () => {
@@ -12,6 +17,41 @@ describe("session-env", () => {
       for (const key of SERVER_ENV_KEYS) {
         expect(result).not.toHaveProperty(key);
       }
+    });
+
+    it("strips or explicitly allowlists every key in the env schema", () => {
+      const stripped = new Set<string>(SERVER_ENV_KEYS);
+      const allowed = new Set<string>(SESSION_ENV_PASSTHROUGH_KEYS);
+      const unaccounted = Object.keys(schema.properties).filter(
+        (k) => !stripped.has(k) && !allowed.has(k),
+      );
+      // A new schema key that is generic (a name user tools read) belongs in
+      // SESSION_ENV_PASSTHROUGH_KEYS; anything else is stripped automatically.
+      expect(unaccounted).toEqual([]);
+      // The allowlist must not carry stale entries.
+      for (const k of allowed) expect(schema.properties).toHaveProperty(k);
+    });
+
+    it("strips Mullion-owned schema keys that once leaked into sessions", () => {
+      const leaked = [
+        "MULLION_WEBHOOK_SECRET",
+        "MULLION_TASK_MASTER_ENABLED",
+        "MULLION_TASK_TRUSTED_LOGINS",
+        "MULLION_TRUST_GATEWAY",
+        "MULLION_SERVICE_UNIT",
+        "BROWSER_DATA_DIR",
+        "DEVICE_ADB_PATH",
+        "GITHUB_POLL_INTERVAL_ACTIVE",
+        "PREVIEW_AUTH_REQUIRED",
+      ];
+      const base: NodeJS.ProcessEnv = Object.fromEntries(leaked.map((k) => [k, "leaked"]));
+      expect(buildSessionEnv(base)).toEqual({ COLORTERM: "truecolor", TERM: "xterm-256color" });
+    });
+
+    it("passes HOST and LOG_LEVEL through", () => {
+      const result = buildSessionEnv({ HOST: "myhost", LOG_LEVEL: "debug" });
+      expect(result.HOST).toBe("myhost");
+      expect(result.LOG_LEVEL).toBe("debug");
     });
 
     it("preserves generic vars a child process may rely on", () => {
