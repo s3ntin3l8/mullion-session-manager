@@ -4449,7 +4449,7 @@ describe("sessions route", () => {
       const bad = await app.inject({
         method: "POST",
         url: "/api/sessions",
-        payload: { projectId, command: "claude", smallModel: "irrelevant here" },
+        payload: { projectId, command: "claude", smallModel: "--dangerously-skip-permissions" },
       });
       expect(bad.statusCode).toBe(400);
 
