@@ -4,7 +4,7 @@ import { eq } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { getRemoteHostClient } from "../services/remote-host-client.js";
-import type { SocketLike } from "../services/socket-channel.js";
+import { SocketChannel, type SocketLike } from "../services/socket-channel.js";
 import { MIN_TERMINAL_COLS, MIN_TERMINAL_ROWS } from "../services/pty-manager.js";
 // ResizeMessage/ExitedMessage physically live in src/shared/ws-protocol.ts
 // (imported by the frontend from the same file too — see TerminalPane.tsx's
@@ -20,9 +20,18 @@ import type {
   ExitedMessage,
   GeometryMessage,
   ResyncMessage,
+  ResyncRequestMessage,
 } from "../shared/ws-protocol.js";
 
-export type { ResizeMessage, ExitedMessage, GeometryMessage, ResyncMessage };
+export type { ResizeMessage, ExitedMessage, GeometryMessage, ResyncMessage, ResyncRequestMessage };
+
+function isResyncRequestMessage(value: unknown): value is ResyncRequestMessage {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { type?: unknown }).type === "resync-request"
+  );
+}
 
 function isResizeMessage(value: unknown): value is ResizeMessage {
   return (
@@ -41,8 +50,12 @@ const BACKPRESSURE_MAX_BUFFERED_BYTES = 4 * 1024 * 1024;
 const RESYNC_DRAIN_BYTES = 256 * 1024;
 const RESYNC_POLL_INTERVAL_MS = 100;
 // Close code the remote proxy uses to make the browser reconnect (and so
-// replay) after it dropped upstream output — see proxyToRemoteAttach.
+// replay) after it dropped upstream output, when the agent can't resync in
+// place (an older agent that never acks) — see proxyToRemoteAttach.
 export const WS_CLOSE_RESYNC = 4001;
+// How long the proxy waits for the agent's {type:"resync"} ack after sending
+// a resync-request before assuming an older agent and falling back.
+export const REMOTE_RESYNC_ACK_TIMEOUT_MS = 3000;
 // Browser->upstream bytes buffered while the upstream is still CONNECTING.
 const REMOTE_INPUT_QUEUE_MAX_BYTES = 64 * 1024;
 
@@ -241,6 +254,13 @@ export function attachSocketToSession(
       sendGeometry();
       return;
     }
+    // Sent by a primary proxying a remote-host attach (proxyToRemoteAttach).
+    // While dirty, the drain watch's own resync is already pending and will
+    // double as the requester's ack, so don't send a second one mid-stream.
+    if (isResyncRequestMessage(parsed)) {
+      if (!dirty) sendResync();
+      return;
+    }
     // Unrecognized control frames (including a since-removed message type)
     // are dropped silently rather than erroring the socket.
   });
@@ -339,22 +359,75 @@ export function proxyToRemoteAttach(
     closeBrowser();
   });
 
+  // In-place resync (issue #1539). After the first dropped upstream chunk the
+  // proxy is "dirty": binary output is discarded until the browser's buffer
+  // drains, then a resync-request goes upstream ("awaiting") and output stays
+  // discarded until the agent's {type:"resync"} frame — forwarded to the
+  // browser as-is — marks the start of the replay. No ack within the timeout
+  // means an older agent: fall back to closing for a reconnect-replay.
+  let resyncState: "live" | "dirty" | "awaiting" = "live";
+  let resyncTimer: ReturnType<typeof setInterval> | ReturnType<typeof setTimeout> | undefined;
+  const clearResyncTimer = () => {
+    if (resyncTimer) {
+      clearInterval(resyncTimer);
+      clearTimeout(resyncTimer);
+    }
+    resyncTimer = undefined;
+  };
+  const closeForReconnect = () => {
+    clearResyncTimer();
+    // A control-socket SocketChannel has no close-code or reconnect
+    // semantics (its close() takes a `notify` flag, not a code): end the
+    // stream plainly so the client sees {type:"closed"} and re-attaches.
+    if (browserSocket instanceof SocketChannel) return closeBrowser();
+    (browserSocket as { close(code?: number, reason?: string): void }).close(
+      WS_CLOSE_RESYNC,
+      "resync",
+    );
+  };
+  const requestUpstreamResync = () => {
+    if (upstream.readyState !== upstream.OPEN) return closeForReconnect();
+    resyncState = "awaiting";
+    const request: ResyncRequestMessage = { type: "resync-request" };
+    upstream.send(JSON.stringify(request), { binary: false });
+    resyncTimer = setTimeout(closeForReconnect, REMOTE_RESYNC_ACK_TIMEOUT_MS);
+    resyncTimer.unref();
+  };
+  const startResyncDrainWatch = () => {
+    resyncState = "dirty";
+    resyncTimer = setInterval(() => {
+      if (browserSocket.readyState !== browserSocket.OPEN) return clearResyncTimer();
+      if (browserSocket.bufferedAmount > RESYNC_DRAIN_BYTES) return;
+      clearResyncTimer();
+      requestUpstreamResync();
+    }, RESYNC_POLL_INTERVAL_MS);
+    resyncTimer.unref();
+  };
+  const isResyncAck = (data: unknown): boolean => {
+    try {
+      return (JSON.parse(String(data)) as { type?: unknown } | null)?.type === "resync";
+    } catch {
+      return false;
+    }
+  };
+  browserSocket.on("close", clearResyncTimer);
+  upstream.on("close", clearResyncTimer);
+
   upstream.once("open", () => {
     app.log.info({ hostId, sessionId: opts.id }, "remote terminal ws attached");
     for (const frame of queued.splice(0)) upstream.send(frame.data, { binary: frame.isBinary });
 
     upstream.on("message", (data, isBinary) => {
       if (browserSocket.readyState !== browserSocket.OPEN) return;
-      if (browserSocket.bufferedAmount > BACKPRESSURE_MAX_BUFFERED_BYTES) {
-        // Issue #1520 — an upstream chunk was dropped, and this proxy has no
-        // scrollback of its own to replay from (it lives on the agent). Close
-        // with a dedicated code so the browser's existing reconnect logic
-        // re-attaches and gets the agent's full replay; closing also tears
-        // down upstream via browserSocket's close handler.
-        (browserSocket as { close(code?: number, reason?: string): void }).close(
-          WS_CLOSE_RESYNC,
-          "resync",
-        );
+      if (resyncState === "awaiting" && !isBinary && isResyncAck(data)) {
+        clearResyncTimer();
+        resyncState = "live";
+      } else if (resyncState !== "live") {
+        // Control frames (exited, geometry) are tiny and must not be lost;
+        // only the PTY bytes are discarded mid-resync.
+        if (isBinary) return;
+      } else if (isBinary && browserSocket.bufferedAmount > BACKPRESSURE_MAX_BUFFERED_BYTES) {
+        startResyncDrainWatch();
         return;
       }
       browserSocket.send(data, { binary: isBinary });
