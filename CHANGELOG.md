@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.3.36](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.35...v0.3.36) (2026-10-06)
+
+
+### Features
+
+* **browser:** map macOS Cmd chords to Ctrl in the streamed browser pane ([#1511](https://github.com/s3ntin3l8/mullion-session-manager/issues/1511)) ([84107f0](https://github.com/s3ntin3l8/mullion-session-manager/commit/84107f0f9993da5ab5b7ddd90cb94f53da81fdbd)), closes [#1503](https://github.com/s3ntin3l8/mullion-session-manager/issues/1503)
+* **mobile:** open Tasks inside the phone navigator ([#1512](https://github.com/s3ntin3l8/mullion-session-manager/issues/1512)) ([e7ccd3e](https://github.com/s3ntin3l8/mullion-session-manager/commit/e7ccd3ec19389983b6655d5cfd6fe25b80c967a6))
+* small model setting for Claude Code ([#1515](https://github.com/s3ntin3l8/mullion-session-manager/issues/1515)) ([17cd233](https://github.com/s3ntin3l8/mullion-session-manager/commit/17cd233480e42254faed946b41b76c0333a20dbb))
+* **tablet:** Android back closes tablet overlays ([#1537](https://github.com/s3ntin3l8/mullion-session-manager/issues/1537)) ([0e1318b](https://github.com/s3ntin3l8/mullion-session-manager/commit/0e1318b4393f66d0db4253b03b6c8f6c7c7028ff))
+* **tablet:** notifications bottom sheet on touch tablets ([#1547](https://github.com/s3ntin3l8/mullion-session-manager/issues/1547)) ([26ab624](https://github.com/s3ntin3l8/mullion-session-manager/commit/26ab6245224f4aaad0f01ded1fe3e70aaf1f897d))
+* **tablet:** tabbed navigator slide-over and two-column Tasks board ([#1552](https://github.com/s3ntin3l8/mullion-session-manager/issues/1552)) ([e4190c6](https://github.com/s3ntin3l8/mullion-session-manager/commit/e4190c6e3c8c7e06a4b44ed4b9e15edeed6f5580))
+* **tablet:** toolbar session picker and slimmer tablet toolbar ([#1550](https://github.com/s3ntin3l8/mullion-session-manager/issues/1550)) ([f7862d3](https://github.com/s3ntin3l8/mullion-session-manager/commit/f7862d3bce5d2dc47afb77f4499ec30c61785a09))
+* **tablet:** touch pane management and fold/unfold save continuity ([#1556](https://github.com/s3ntin3l8/mullion-session-manager/issues/1556)) ([e7f6412](https://github.com/s3ntin3l8/mullion-session-manager/commit/e7f6412ebac84c9690b6cc67a5c7f2e5ca63260e))
+* **terminal:** in-place resync for remote-host terminal attaches ([#1549](https://github.com/s3ntin3l8/mullion-session-manager/issues/1549)) ([320d8af](https://github.com/s3ntin3l8/mullion-session-manager/commit/320d8af56cfbf068f79def6486ddb37672ece8c6))
+
+
+### Bug Fixes
+
+* **browser:** keep Ctrl/Cmd held across synthetic copy/cut press ([#1505](https://github.com/s3ntin3l8/mullion-session-manager/issues/1505)) ([7b2f63e](https://github.com/s3ntin3l8/mullion-session-manager/commit/7b2f63e9b276c6933e3f270f4d0e79bbbae0b168)), closes [#1491](https://github.com/s3ntin3l8/mullion-session-manager/issues/1491)
+* **control-socket:** bound per-connection load and harden handshake ([#1538](https://github.com/s3ntin3l8/mullion-session-manager/issues/1538)) ([46dcb8c](https://github.com/s3ntin3l8/mullion-session-manager/commit/46dcb8cbcd77c6286e299a0205eaace336dabcc7))
+* **control-socket:** reject Object.prototype op names instead of crashing ([#1516](https://github.com/s3ntin3l8/mullion-session-manager/issues/1516)) ([7ca7090](https://github.com/s3ntin3l8/mullion-session-manager/commit/7ca7090086aab2a2dd2960d2f316aa1a0e03c75f))
+* **control-socket:** spawn_child allowlist and session-scope re-check ([#1542](https://github.com/s3ntin3l8/mullion-session-manager/issues/1542)) ([9fd99a4](https://github.com/s3ntin3l8/mullion-session-manager/commit/9fd99a43c7df1087ede702e6b0f6bc913a670437))
+* **pty-manager:** idempotent exit event and validate session id before touching files ([#1535](https://github.com/s3ntin3l8/mullion-session-manager/issues/1535)) ([5fdc460](https://github.com/s3ntin3l8/mullion-session-manager/commit/5fdc460e0bfbdd646a1c9fc63671908e5bb78e2f))
+* **pty-manager:** retire in-flight spawns and restore latch timestamps ([#1528](https://github.com/s3ntin3l8/mullion-session-manager/issues/1528)) ([4d283b2](https://github.com/s3ntin3l8/mullion-session-manager/commit/4d283b2dc63531a519923e427d4e0f5c17d89e59))
+* retry slow socket probes before treating them as a live listener ([#1510](https://github.com/s3ntin3l8/mullion-session-manager/issues/1510)) ([2b9f715](https://github.com/s3ntin3l8/mullion-session-manager/commit/2b9f7159a162e1f108d79836a86c3834d029f12f)), closes [#1502](https://github.com/s3ntin3l8/mullion-session-manager/issues/1502)
+* **security:** enforce WS/CSRF origin checks without in-app auth and harden /tmp fallback ([#1527](https://github.com/s3ntin3l8/mullion-session-manager/issues/1527)) ([471382c](https://github.com/s3ntin3l8/mullion-session-manager/commit/471382c573603505c1a971593ae7e44cbc7bb25f))
+* **session-env:** derive stripped server env keys from the env schema ([#1526](https://github.com/s3ntin3l8/mullion-session-manager/issues/1526)) ([a4b0a11](https://github.com/s3ntin3l8/mullion-session-manager/commit/a4b0a115d52e18fca056e228ebb880ca02b5209b))
+* **sessions:** harden uploads, state-file writes, promote race and session list ([#1534](https://github.com/s3ntin3l8/mullion-session-manager/issues/1534)) ([f840cd3](https://github.com/s3ntin3l8/mullion-session-manager/commit/f840cd33072863b570b1f317d13a993623613b3e))
+* **sessions:** terminate dead sessions in reconciler and close create-rollback leaks ([#1530](https://github.com/s3ntin3l8/mullion-session-manager/issues/1530)) ([129afe0](https://github.com/s3ntin3l8/mullion-session-manager/commit/129afe071c7f94bd3f9919925c9d1579141f81a1))
+* settings nav/toggle polish, right-click paste parity, per-role CLI models ([#1514](https://github.com/s3ntin3l8/mullion-session-manager/issues/1514)) ([990ba17](https://github.com/s3ntin3l8/mullion-session-manager/commit/990ba174eaddd7c3fa96763418c91748bb74dd1d))
+* **terminal:** resync after dropped PTY chunks, queue input while upstream connects ([#1536](https://github.com/s3ntin3l8/mullion-session-manager/issues/1536)) ([6882b7d](https://github.com/s3ntin3l8/mullion-session-manager/commit/6882b7d87988a9c802a304c0c1bf138144dfe46f))
+
+
+### Performance Improvements
+
+* **pty-manager:** fast paths for PTY output, scrollback slabs, hook context ([#1540](https://github.com/s3ntin3l8/mullion-session-manager/issues/1540)) ([cee5465](https://github.com/s3ntin3l8/mullion-session-manager/commit/cee5465d41a36f854c45c18885b486a2c670d6b5))
+* **session-process:** TTL cache for listOwnedScopes with spawn-time invalidation ([#1551](https://github.com/s3ntin3l8/mullion-session-manager/issues/1551)) ([5fda343](https://github.com/s3ntin3l8/mullion-session-manager/commit/5fda343b1398364720d952cda25b48f9b577afec)), closes [#1541](https://github.com/s3ntin3l8/mullion-session-manager/issues/1541)
+
 ## [0.3.35](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.34...v0.3.35) (2026-09-30)
 
 
