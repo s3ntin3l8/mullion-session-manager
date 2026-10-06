@@ -484,22 +484,52 @@ interface Route {
 const bad = (status: number, error: string): ReplyPayload => ({ ok: false, status, error });
 const json = (value: unknown): string => JSON.stringify(value ?? {});
 
+type ResolveFn = (ctx: OpContext) => Route | ReplyPayload | Promise<Route | ReplyPayload>;
+
+/**
+ * A resolver that has DECLARED how it relates to session scope — the tagged
+ * union `routeOp` requires for any op listing "session" in its scopes:
+ *  - `pinned`: the resolver verifies the request's target against the
+ *    connection's own session/project pin (resolveTargetSessionId & co).
+ *  - `unscoped`: the target is deliberately NOT pinned to the connection
+ *    (a host-global read, or an explicit resource id by design) — a
+ *    reviewed, greppable opt-out rather than an accident.
+ * `routeOp`'s full-only overload also takes a bare function, because
+ * `injectRoute` already structurally enforces full scope there; the
+ * session-reachable overload does not, so an op can't list "session" with a
+ * resolver that silently pins nothing (#1546).
+ */
+export interface DeclaredResolver {
+  readonly target: "pinned" | "unscoped";
+  readonly run: ResolveFn;
+}
+
+/** Declares that `run` pins its target to the connection's own session/project. */
+export const pinned = (run: ResolveFn): DeclaredResolver => ({ target: "pinned", run });
+
+/** Declares that `run` deliberately does not pin its target. */
+export const unscoped = (run: ResolveFn): DeclaredResolver => ({ target: "unscoped", run });
+
+type FullOnlyScopes = readonly ["full"];
+type SessionReachableScopes =
+  readonly ["full", "session"] | readonly ["session", "full"] | readonly ["session"];
+
 /**
  * Declarative request/response op: `resolve` turns the request into either a
  * `Route` to forward or an early `ReplyPayload` (validation / pin failure).
  * The runner picks `injectRoute` for full-scope-only ops (structural
  * enforcement) and `injectAndShape` for ops that list "session" — whose
- * `resolve` must itself pin the target, see resolveTargetSessionId.
+ * resolver the type system forces to be declared `pinned`/`unscoped`.
  */
-function routeOp(
-  scopes: readonly Scope[],
-  resolve: (ctx: OpContext) => Route | ReplyPayload | Promise<Route | ReplyPayload>,
-): OpSpec {
+export function routeOp(scopes: FullOnlyScopes, resolve: ResolveFn | DeclaredResolver): OpSpec;
+export function routeOp(scopes: SessionReachableScopes, resolve: DeclaredResolver): OpSpec;
+export function routeOp(scopes: readonly Scope[], resolve: ResolveFn | DeclaredResolver): OpSpec {
   const fullOnly = scopes.length === 1 && scopes[0] === "full";
+  const run = typeof resolve === "function" ? resolve : resolve.run;
   return {
     scopes,
     handler: async (ctx) => {
-      const resolved = await resolve(ctx);
+      const resolved = await run(ctx);
       if (!("method" in resolved)) {
         ctx.reply(resolved);
         return;
@@ -517,31 +547,29 @@ function routeOp(
   };
 }
 
-type Resolver = (ctx: OpContext) => Route | ReplyPayload | Promise<Route | ReplyPayload>;
+type Resolver = DeclaredResolver;
 
 /** Resolver wrapper: pins the target session (resolveTargetSessionId). */
-const onSession =
-  (fn: (id: string, ctx: OpContext) => Route | ReplyPayload): Resolver =>
-  (ctx) => {
+const onSession = (fn: (id: string, ctx: OpContext) => Route | ReplyPayload): Resolver =>
+  pinned((ctx) => {
     const target = resolveTargetSessionId(ctx.conn, ctx.body);
     return target.ok ? fn(target.id, ctx) : target.reply;
-  };
+  });
 
 /** Resolver wrapper: pins the target project (resolveTargetProjectId). */
-const onProject =
-  (fn: (id: string, ctx: OpContext) => Route | ReplyPayload): Resolver =>
-  (ctx) => {
+const onProject = (fn: (id: string, ctx: OpContext) => Route | ReplyPayload): Resolver =>
+  pinned((ctx) => {
     const target = resolveTargetProjectId(ctx.app, ctx.conn, ctx.body);
     return target.ok ? fn(target.id, ctx) : target.reply;
-  };
+  });
 
-/** Resolver wrapper: a required explicit id field, 400 when absent. */
-const onField =
-  (key: string, fn: (id: string, ctx: OpContext) => Route | ReplyPayload): Resolver =>
-  (ctx) => {
+/** Resolver wrapper: a required explicit id field, 400 when absent. Does NOT
+ * pin — the caller names the resource (see device.action's own comment). */
+const onField = (key: string, fn: (id: string, ctx: OpContext) => Route | ReplyPayload): Resolver =>
+  unscoped((ctx) => {
     const id = extractIdField(ctx.body, key);
     return id === null ? bad(400, `'${key}' is required`) : fn(id, ctx);
-  };
+  });
 
 const enc = encodeURIComponent;
 
@@ -925,14 +953,17 @@ export const OPS: Record<string, OpSpec> = {
   // scope is restricted to its own pinned session only — see
   // resolveEventsSessionFilter's own doc comment for why this reuses
   // events.subscribe's isolation model rather than inventing a new one.
-  "events.query": routeOp(["full", "session"], ({ conn, body }) => {
-    const resolved = resolveEventsSessionFilter(conn, body);
-    if (!resolved.ok) return resolved.reply;
-    const queryBody: Record<string, unknown> = { ...body };
-    if (resolved.sessionId !== undefined) queryBody.sessionId = resolved.sessionId;
-    else delete queryBody.sessionId;
-    return { method: "GET", url: buildQueryUrl("/api/events", queryBody) };
-  }),
+  "events.query": routeOp(
+    ["full", "session"],
+    pinned(({ conn, body }) => {
+      const resolved = resolveEventsSessionFilter(conn, body);
+      if (!resolved.ok) return resolved.reply;
+      const queryBody: Record<string, unknown> = { ...body };
+      if (resolved.sessionId !== undefined) queryBody.sessionId = resolved.sessionId;
+      else delete queryBody.sessionId;
+      return { method: "GET", url: buildQueryUrl("/api/events", queryBody) };
+    }),
+  ),
   // Phase 4 (#189) — request/response, not a stream: `executeBrowserAction`
   // (browser-automation.ts) already returns a full snapshot/console/errors
   // envelope in one shot, so there's nothing here that needs multiplexing
@@ -989,7 +1020,10 @@ export const OPS: Record<string, OpSpec> = {
       return { method: "POST", url: `/api/devices/${enc(id)}/action`, payload: json(actionBody) };
     }),
   ),
-  "device.list": routeOp(["full", "session"], () => ({ method: "GET", url: "/api/devices" })),
+  "device.list": routeOp(
+    ["full", "session"],
+    unscoped(() => ({ method: "GET", url: "/api/devices" })),
+  ),
   // Same "explicit deviceId, no pinning" posture as device.action above.
   "device.get": routeOp(
     ["full", "session"],
@@ -1048,10 +1082,10 @@ export const OPS: Record<string, OpSpec> = {
   })),
   // Read-only mDNS snapshot. Cheap (in-memory cache), no network side
   // effects, no scope concerns beyond the rest of the device.list family.
-  "device.discovered": routeOp(["full", "session"], () => ({
-    method: "GET",
-    url: "/api/devices/discovered",
-  })),
+  "device.discovered": routeOp(
+    ["full", "session"],
+    unscoped(() => ({ method: "GET", url: "/api/devices/discovered" })),
+  ),
   // Keeps its historical name (and its documented meaning — "flips the row
   // to `killed` and tears down the live process/scope") even though the
   // `mullion device stop` verb now maps here rather than to DELETE: stop is
