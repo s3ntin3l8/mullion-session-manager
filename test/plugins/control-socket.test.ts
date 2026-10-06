@@ -152,6 +152,7 @@ const { buildApp } = await import("../../src/app.js");
 const {
   HANDSHAKE_TIMEOUT_MS,
   buildQueryUrl,
+  OPS,
   MAX_INFLIGHT_OPS,
   MAX_OPEN_CHANNELS,
   MAX_HANDSHAKE_BYTES,
@@ -159,6 +160,8 @@ const {
   WRITE_HIGH_WATER_BYTES,
   WRITE_HARD_CEILING_BYTES,
 } = await import("../../src/plugins/control-socket.js");
+const { sessions } = await import("../../src/db/schema.js");
+const { eq } = await import("drizzle-orm");
 const { insertSessionEvents } = await import("../../src/services/event-history.js");
 
 const TEST_TOKEN = "test-auth-token-0123456789";
@@ -1218,6 +1221,95 @@ describe("controlSocketPlugin (issue #185)", () => {
     // Phase 5 (Track B, issue #193 5.3b) — the narrow, session-scope-reachable
     // path to a real child session, unlike sessions.create above.
     describe("sessions.spawn_child", () => {
+      it("session scope: forwards only the allowlisted fields (#1518)", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession();
+        const injectSpy = vi.spyOn(app, "inject");
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(
+          `${JSON.stringify({
+            id: 1,
+            op: "sessions.spawn_child",
+            body: {
+              command: "bash",
+              name: "kid",
+              nameLocked: true,
+              futureField: "x",
+              skipPermissions: true,
+            },
+          })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        expect(reply.ok).toBe(true);
+        const post = injectSpy.mock.calls
+          .map(([opts]) => opts as { method?: string; url?: string; payload?: string })
+          .find((o) => o.method === "POST" && o.url === "/api/sessions")!;
+        expect(Object.keys(JSON.parse(post.payload!)).sort()).toEqual(
+          ["command", "name", "parentSessionId", "projectId"].sort(),
+        );
+        socket.destroy();
+      });
+
+      it("session scope: a parent whose row is no longer active cannot spawn children (#1518)", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId, hookToken } = await createRealSession();
+        const socket = await sessionScopeSocket(hookToken);
+        app.db.update(sessions).set({ status: "killed" }).where(eq(sessions.id, sessionId)).run();
+        socket.write(
+          `${JSON.stringify({ id: 1, op: "sessions.spawn_child", body: { command: "bash" } })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        expect(reply).toMatchObject({ ok: false, status: 403 });
+        socket.destroy();
+      });
+
+      it("every full-scope-only op is rejected at session scope, both by dispatch and by its own handler (#1518)", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession();
+        const fullOnly = Object.entries(OPS).filter(
+          ([, spec]) => spec.scopes.length === 1 && spec.scopes[0] === "full",
+        );
+        expect(fullOnly.length).toBeGreaterThan(10);
+        const socket = await sessionScopeSocket(hookToken);
+        const frames = collectFrames(socket);
+        fullOnly.forEach(([op], i) => {
+          socket.write(`${JSON.stringify({ id: i + 1, op, body: {} })}\n`);
+        });
+        await waitUntil(() => frames.length === fullOnly.length);
+        expect(frames.every((f) => f.status === 403)).toBe(true);
+        socket.destroy();
+
+        // Defense in depth: the ops that name a full-scope-only REST route
+        // must refuse on their own even if dispatch were bypassed.
+        const injectSpy = vi.spyOn(app, "inject");
+        const sessionConn = { scope: "session", sessionId: "1", openChannels: new Map() };
+        for (const op of [
+          "device.pair",
+          "device.pair-and-connect",
+          "device.delete",
+          "projects.set_tooling",
+        ]) {
+          const replies: Array<Record<string, unknown>> = [];
+          await OPS[op].handler({
+            app: app!,
+            conn: sessionConn as never,
+            id: 1,
+            body: { deviceId: 1, projectId: 1, briefing: "x" },
+            reply: (r) => replies.push(r as Record<string, unknown>),
+          });
+          // set_tooling nests each field's own result under its name.
+          expect(replies[0]).toMatchObject(
+            op === "projects.set_tooling"
+              ? { ok: false, briefing: { status: 403 } }
+              : { ok: false, status: 403 },
+          );
+        }
+        expect(injectSpy).not.toHaveBeenCalled();
+      });
+
       it("session scope: spawns a child of its own session with no parentSessionId given", async () => {
         app = await buildApp();
         await app.ready();
