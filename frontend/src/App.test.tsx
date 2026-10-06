@@ -19,8 +19,18 @@ vi.mock("./PhoneNavigator.js", () => ({
   PhoneNavigatorPanel: () => <div data-testid="navigator" />,
 }));
 vi.mock("./Toolbar.js", () => ({
-  Toolbar: ({ onToggleSidebar }: { onToggleSidebar: () => void }) => (
-    <button data-testid="toggle-sidebar" onClick={onToggleSidebar} />
+  Toolbar: ({
+    onToggleSidebar,
+    notificationSheet,
+  }: {
+    onToggleSidebar: () => void;
+    notificationSheet?: boolean;
+  }) => (
+    <button
+      data-testid="toggle-sidebar"
+      data-notif-sheet={String(!!notificationSheet)}
+      onClick={onToggleSidebar}
+    />
   ),
 }));
 vi.mock("./MobileKeyBar.js", () => ({ MobileKeyBar: () => null }));
@@ -75,14 +85,15 @@ function setLayoutMode(layoutMode: LayoutMode) {
 }
 
 // matchMedia stub keyed on the width tier the test wants to simulate.
-function stubWidth(tier: "phone" | "tablet" | "desktop") {
+function stubWidth(tier: "phone" | "tablet" | "desktop", coarse = false) {
   vi.stubGlobal(
     "matchMedia",
     vi.fn((query: string) => ({
       matches:
         (tier === "phone" && query.includes("max-width: 699.98px")) ||
         (tier === "tablet" && query.includes("min-width: 700px")) ||
-        (tier === "desktop" && query.includes("min-width: 1280px")),
+        (tier === "desktop" && query.includes("min-width: 1280px")) ||
+        (coarse && query === "(pointer: coarse)"),
       media: query,
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
@@ -153,6 +164,18 @@ describe("App tier wiring", () => {
       expect(usePhoneBackStack).toHaveBeenLastCalledWith(expected, expect.any(Function));
     },
   );
+
+  // Notifications render as a bottom sheet on touch tablets (not the popover),
+  // but a mouse-driven tablet-width window and desktop keep the popover.
+  it.each([
+    ["tablet", true, "true"],
+    ["tablet", false, "false"],
+    ["desktop", true, "false"],
+  ] as const)("notificationSheet on %s (coarse=%s) is %s", (tier, coarse, expected) => {
+    stubWidth(tier, coarse);
+    render(<App />);
+    expect(screen.getByTestId("toggle-sidebar")).toHaveAttribute("data-notif-sheet", expected);
+  });
 
   it("collapses (rather than opens) the docked sidebar on desktop", () => {
     stubWidth("desktop");

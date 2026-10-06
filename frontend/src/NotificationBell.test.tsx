@@ -1139,7 +1139,7 @@ describe("NotificationBell phone sheet", () => {
   ): Promise<ReturnType<typeof vi.fn>> {
     const onOpenSession = vi.fn();
     render(
-      <NotificationBell onOpenSession={onOpenSession} onOpenBrowser={vi.fn()} phone {...props} />,
+      <NotificationBell onOpenSession={onOpenSession} onOpenBrowser={vi.fn()} sheet {...props} />,
     );
     await userEvent.click(screen.getByRole("button", { name: /notifications/i }));
     return onOpenSession;
@@ -1162,7 +1162,16 @@ describe("NotificationBell phone sheet", () => {
     expect(document.querySelector(".notif-panel")).toBeNull();
   });
 
-  it("keeps the desktop popover when `phone` is not set", async () => {
+  it("appends sheetClassName to the sheet (the tablet width cap)", async () => {
+    events = { 1: [makeEvent({ seq: 1 })] };
+    await openPhoneSheet({ sheetClassName: "mobile-notif-sheet--tablet" });
+    expect(screen.getByRole("dialog", { name: "Notifications" })).toHaveClass(
+      "mobile-notif-sheet",
+      "mobile-notif-sheet--tablet",
+    );
+  });
+
+  it("keeps the desktop popover when `sheet` is not set", async () => {
     events = { 1: [makeEvent({ seq: 1 })] };
     await openPanel();
     expect(document.querySelector(".notif-panel")).not.toBeNull();
