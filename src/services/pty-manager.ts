@@ -1,13 +1,6 @@
 import * as pty from "node-pty";
 import type { IPty } from "node-pty";
-import {
-  mkdirSync,
-  existsSync,
-  statSync,
-  unlinkSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, existsSync, statSync, unlinkSync, readFileSync, writeFileSync } from "node:fs";
 import { rm as rmAsync, unlink as unlinkAsync } from "node:fs/promises";
 import { spawn as spawnChild } from "node:child_process";
 import path from "node:path";
