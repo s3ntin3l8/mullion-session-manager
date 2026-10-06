@@ -1,4 +1,12 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
@@ -126,5 +134,35 @@ describe("session-upload", () => {
   it("exports a sane MAX_UPLOAD_BYTES ceiling", () => {
     expect(MAX_UPLOAD_BYTES).toBeGreaterThan(1024 * 1024);
     expect(MAX_UPLOAD_BYTES).toBeLessThanOrEqual(50 * 1024 * 1024);
+  });
+
+  describe("upload dir hardening", () => {
+    it("refuses a symlinked .mullion-uploads without writing through it", () => {
+      const target = mkdtempSync(path.join(os.tmpdir(), "mullion-upload-target-"));
+      try {
+        symlinkSync(target, path.join(cwd, UPLOAD_SUBDIR));
+        expect(() => saveSessionUpload(cwd, PNG_BYTES, "image/png")).toThrow(/not a regular/);
+        expect(existsSync(path.join(target, ".gitignore"))).toBe(false);
+      } finally {
+        rmSync(target, { recursive: true, force: true });
+      }
+    });
+
+    it("refuses a plain file at .mullion-uploads with a 409-tagged error", () => {
+      writeFileSync(path.join(cwd, UPLOAD_SUBDIR), "x");
+      try {
+        saveSessionUpload(cwd, PNG_BYTES, "image/png");
+        expect.unreachable();
+      } catch (err) {
+        expect((err as { statusCode?: number }).statusCode).toBe(409);
+      }
+    });
+
+    it("reuses an existing real directory without recreating .gitignore", () => {
+      mkdirSync(path.join(cwd, UPLOAD_SUBDIR));
+      const p = saveSessionUpload(cwd, PNG_BYTES, "image/png");
+      expect(existsSync(p)).toBe(true);
+      expect(existsSync(path.join(cwd, UPLOAD_SUBDIR, ".gitignore"))).toBe(false);
+    });
   });
 });

@@ -193,6 +193,28 @@ describe("SessionStateFile", () => {
     expect(mode).toBe(0o600);
   });
 
+  it("a failed write stays dirty and is retried by the next flush()", () => {
+    dir = mkdtempSync(path.join(os.tmpdir(), "mullion-state-file-"));
+    const sub = path.join(dir, "later");
+    const filePath = path.join(sub, "1.state.json");
+    const onWriteError = vi.fn();
+    const sf = new SessionStateFile<FakeState>(
+      filePath,
+      () => ({ v: 1, launchedAtVersion: "1.0.0", state: { n: 9 } }),
+      undefined,
+      onWriteError,
+    );
+    sf.schedule();
+    sf.flush();
+    expect(onWriteError).toHaveBeenCalledTimes(1);
+    expect(existsSync(filePath)).toBe(false);
+
+    mkdirSync(sub);
+    sf.flush();
+    expect(existsSync(filePath)).toBe(true);
+    expect(readFileSync(filePath, "utf8")).toContain('"n":9');
+  });
+
   it("flush() calls onWriteError (not throw) when the write fails, e.g. a non-existent parent directory", () => {
     dir = mkdtempSync(path.join(os.tmpdir(), "mullion-state-file-"));
     const filePath = path.join(dir, "does-not-exist", "1.state.json");
