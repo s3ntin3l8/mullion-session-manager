@@ -9,7 +9,7 @@ import {
   carryPartialOsc,
   INITIAL_MOUSE_TRACKING_STATE,
 } from "../../src/services/attention-detect.js";
-import { isGenuineUserInput } from "../../src/services/pty-manager.js";
+import { isGenuineUserInput } from "../../src/services/terminal-input-classify.js";
 
 function mulberry32(seed: number): () => number {
   let a = seed;
