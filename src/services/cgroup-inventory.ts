@@ -1,6 +1,6 @@
 import { readFileSync, readdirSync } from "node:fs";
-import { spawn as spawnChild } from "node:child_process";
 import path from "node:path";
+import { runSystemctl, SYSTEMCTL_TIMEOUT_MS } from "./systemctl-runner.js";
 
 export interface CgroupProcess {
   pid: number;
@@ -161,45 +161,19 @@ export interface ResolveScopeCgroupOptions {
   querySystemctl?: (unit: string) => Promise<string>;
 }
 
-// Bounds queryControlGroup's spawn — a hung user D-Bus (systemd restart, OOM
-// pressure) would otherwise leave this pending indefinitely. Unlike
-// PtyManager.isMasterAliveState()'s identical spawn shape (fire-and-forget
-// from an internal poll loop), this is reachable directly from a pollable HTTP
-// route, so an unbounded hang is a real request-handler leak here. Matches
-// git-diff.ts's GIT_TIMEOUT_MS budget for the same class of "external
-// process, bounded wait" call.
-const SYSTEMCTL_TIMEOUT_MS = 5_000;
-
-function queryControlGroup(unit: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let stdout = "";
-    let settled = false;
-    const child = spawnChild(
-      "systemctl",
-      ["--user", "show", unit, "-p", "ControlGroup", "--value"],
-      { stdio: ["ignore", "pipe", "ignore"] },
-    );
-
-    const finish = (fn: () => void) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      fn();
-    };
-
-    const timer = setTimeout(() => {
-      child.kill();
-      finish(() => reject(new Error(`systemctl --user show ${unit} timed out`)));
-    }, SYSTEMCTL_TIMEOUT_MS);
-
-    child.stdout?.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString("utf8");
-    });
-    child.on("error", (err) => finish(() => reject(err)));
-    // 'close', not 'exit' — see PtyManager.isMasterAliveState()'s identical
-    // reasoning: 'exit' doesn't guarantee every stdout chunk has arrived yet.
-    child.on("close", () => finish(() => resolve(stdout)));
-  });
+// Bounded by SYSTEMCTL_TIMEOUT_MS (systemctl-runner.ts) — a hung user D-Bus
+// (systemd restart, OOM pressure) would otherwise leave this pending
+// indefinitely, and unlike PtyManager.isMasterAliveState()'s fire-and-forget
+// poll loop this is reachable directly from a pollable HTTP route.
+async function queryControlGroup(unit: string): Promise<string> {
+  const res = await runSystemctl(
+    ["--user", "show", unit, "-p", "ControlGroup", "--value"],
+    SYSTEMCTL_TIMEOUT_MS,
+    { captureStdout: true },
+  );
+  if (res.errored) throw new Error(`systemctl --user show ${unit} failed to spawn`);
+  if (res.timedOut) throw new Error(`systemctl --user show ${unit} timed out`);
+  return res.stdout;
 }
 
 /**

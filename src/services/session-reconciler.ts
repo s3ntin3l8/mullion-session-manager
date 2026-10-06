@@ -2,9 +2,8 @@ import type { FastifyInstance } from "fastify";
 import { and, eq, inArray } from "drizzle-orm";
 import { projects, sessions, tasks } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
-import { resolveBackend } from "./session-backend.js";
+import { resolveBackend, warnHostError } from "./session-backend.js";
 import type { SessionLiveness } from "./session-process.js";
-import { HostRequestError } from "./remote-host-client.js";
 import { closeSessionBrowserBindings } from "./session-browsers.js";
 import { cleanupPreviewWorktree } from "./git-worktree.js";
 import { syncTaskTransition } from "./task-github-sync.js";
@@ -63,17 +62,13 @@ export async function reconcileExitedSessions(app: FastifyInstance): Promise<voi
         // HostUnreachableError it will keep recurring every cycle without
         // ever resolving on its own. Logged distinctly so that's visible
         // to an operator rather than reading identically to "network blip."
-        if (err instanceof HostRequestError) {
-          app.log.warn(
-            { hostId, err },
-            "session reconcile: host rejected the liveness request (reachable but erroring), skipping its sessions",
-          );
-        } else {
-          app.log.warn(
-            { hostId, err },
-            "session reconcile: host unreachable, skipping its sessions",
-          );
-        }
+        warnHostError(
+          app.log,
+          { hostId },
+          err,
+          "session reconcile: host rejected the liveness request (reachable but erroring), skipping its sessions",
+          "session reconcile: host unreachable, skipping its sessions",
+        );
         return;
       }
 

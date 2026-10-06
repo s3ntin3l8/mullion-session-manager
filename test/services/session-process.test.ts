@@ -853,3 +853,44 @@ describe("listSessionProcesses", () => {
     await expect(listSessionProcesses(SESSIONS_DIR, INSTANCE_ID, "1")).resolves.toEqual(processes);
   });
 });
+
+// Issue #1525 — concurrent identical listings share one in-flight spawn; a
+// stop invalidates so nothing reads a listing that began before it.
+describe("listOwnedScopes coalescing", () => {
+  const listSpawns = () =>
+    vi.mocked(spawnChildProcess).mock.calls.filter((c) => (c[1] as string[])[1] === "list-units");
+
+  it("shares one systemctl spawn between concurrent identical calls", async () => {
+    listUnitsReply = [ownedLine("1")];
+    const [a, b] = await Promise.all([
+      listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true }),
+      listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true }),
+    ]);
+    expect(listSpawns()).toHaveLength(1);
+    expect(a).toBe(b);
+  });
+
+  it("does not share between different filters, nor reuse a settled listing", async () => {
+    listUnitsReply = [ownedLine("1")];
+    await Promise.all([
+      listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true }),
+      listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { states: "active" }),
+    ]);
+    expect(listSpawns()).toHaveLength(2);
+    listUnitsReply = [];
+    const later = await listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true });
+    expect(listSpawns()).toHaveLength(3);
+    expect(later.owned.size).toBe(0);
+  });
+
+  it("stopScope resolves ownership with a fresh listing, not one already in flight", async () => {
+    listUnitsReply = [ownedLine("1")];
+    const inflight = listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true });
+    await stopScope(SESSIONS_DIR, INSTANCE_ID, "1");
+    await inflight;
+    expect(listSpawns()).toHaveLength(2);
+    // A listing asked for after the stop never joins the pre-stop one.
+    await listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true });
+    expect(listSpawns()).toHaveLength(3);
+  });
+});

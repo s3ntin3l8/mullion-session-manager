@@ -5,7 +5,7 @@ import type { SessionInfo } from "./pty-manager.js";
 import type { SessionLiveness } from "./session-process.js";
 import type { CgroupProcess } from "./cgroup-inventory.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
-import { getRemoteHostClient, type SpawnResult } from "./remote-host-client.js";
+import { getRemoteHostClient, HostRequestError, type SpawnResult } from "./remote-host-client.js";
 import { saveSessionUpload } from "./session-upload.js";
 import { taskReviewFindingsPath, taskCommitTitlePath } from "./task-prompt.js";
 import {
@@ -31,6 +31,94 @@ import { deleteBranch, type DeleteBranchResult } from "./git-branch-delete.js";
 import type { PromoteDecision } from "../plugins/hooks.js";
 import { adapterHasInitialPromptArgs } from "./hook-adapters/index.js";
 
+/**
+ * Logs a failed remote-host call, split the one way every caller needs
+ * (issue #1521): a `HostRequestError` means the agent is reachable and
+ * REJECTED the request (a persistent condition that recurs on every retry);
+ * anything else is an unreachable host (a transient blip). Conflating the
+ * two mislabels a rejection as "unreachable" (the #484 postmortem). Returns
+ * `true` for a rejection so a caller that also reports the distinction (e.g.
+ * a `host-rejected` result) doesn't re-run the instanceof check.
+ */
+export function warnHostError(
+  log: FastifyInstance["log"],
+  bindings: Record<string, unknown>,
+  err: unknown,
+  rejectedMsg: string,
+  unreachableMsg: string,
+): err is HostRequestError {
+  const rejected = err instanceof HostRequestError;
+  log.warn({ ...bindings, err }, rejected ? rejectedMsg : unreachableMsg);
+  return rejected;
+}
+
+/** Options for SessionBackend.spawn — one shape shared by the interface, LocalBackend and RemoteBackend. */
+export interface SpawnOpts {
+  id: string;
+  cwd: string;
+  command: string;
+  cols: number;
+  rows: number;
+  skipPermissions?: boolean;
+  initialPrompt?: string;
+  seedPrompt?: string;
+  // Issue #271 follow-up — local-only for now (see routes/sessions.ts's
+  // promote handler, which never sets this for a non-LOCAL_HOST_ID
+  // project): RemoteBackend.spawn below accepts it for interface
+  // uniformity with LocalBackend but does NOT forward it over the wire,
+  // since the remote agent side of opencode-session-transfer.ts doesn't
+  // exist yet.
+  resumeAgentSessionId?: string;
+  projectId?: number;
+  // Issue #822 — see CreateSessionBody.env's own doc comment
+  // (session-lifecycle.ts). Forwarded to a remote host verbatim
+  // (RemoteBackend.spawn below), unlike resumeAgentSessionId.
+  env?: Record<string, string>;
+  // Issue: per-project briefing storage (a follow-up PR) — see
+  // CreateSessionOptions.briefingOverride's own doc comment
+  // (pty-manager.ts). Forwarded to a remote host verbatim
+  // (RemoteBackend.spawn below), same as seedPrompt/env.
+  briefingOverride?: string;
+  // Issue #937 — see CreateSessionOptions.workflowConventionsText's own
+  // doc comment (pty-manager.ts). Already fully resolved (both the
+  // project's injectWorkflowConventions column and the global text's
+  // non-emptiness) by session-lifecycle.ts before this is ever called —
+  // same "forwarded to a remote host verbatim" posture as
+  // briefingOverride above.
+  workflowConventionsText?: string;
+  // PR-5 — see CreateSessionOptions.projectSkill/projectReviewerAgent's
+  // own doc comments (pty-manager.ts). Same "forwarded to a remote host
+  // verbatim" posture as briefingOverride above.
+  projectSkill?: string;
+  projectReviewerAgent?: string;
+  // Issue #957 — see CreateSessionOptions.model's own doc comment
+  // (pty-manager.ts). Forwarded to a remote host verbatim, same as
+  // projectReviewerAgent above.
+  model?: string;
+  // Issue #958 — same posture as `model` above, for opencode's
+  // `small_model` config key.
+  smallModel?: string;
+  // Issue #884 — see CreateSessionOptions.injectAgentGuide/
+  // injectProjectBriefing's own doc comments (pty-manager.ts). Already
+  // resolved to a definite boolean by session-lifecycle.ts before this is
+  // ever called — same "forwarded to a remote host verbatim, never
+  // re-derived" posture as briefingOverride above.
+  injectAgentGuide?: boolean;
+  injectProjectBriefing?: boolean;
+  // Issue #1089 — see CreateSessionOptions.injectMullionBundle's own doc
+  // comment (pty-manager.ts). Already resolved to a definite boolean by
+  // session-lifecycle.ts before this is ever called — same "forwarded to
+  // a remote host verbatim, never re-derived" posture as
+  // injectAgentGuide/injectProjectBriefing above.
+  injectMullionBundle?: boolean;
+  // See CreateSessionOptions.taskId's own doc comment (pty-manager.ts) —
+  // Task Master spawn sites set this to flag an unattended worker
+  // session, which the opencode adapter uses to deny superpowers skills
+  // that gate on a human in the loop. Same "forwarded to a remote host
+  // verbatim" posture as briefingOverride above.
+  taskId?: number;
+}
+
 // The seam that lets every route (sessions.ts, terminal.ts's non-attach
 // paths, session-reconciler.ts) spawn/query/terminate a session without
 // caring whether it lives on this process's own app.pty or on a remote
@@ -40,71 +128,7 @@ import { adapterHasInitialPromptArgs } from "./hook-adapters/index.js";
 // (remote-host-client.ts's openAttach), not a request/response call, so
 // routes/terminal.ts branches on local-vs-remote directly instead.
 export interface SessionBackend {
-  spawn(opts: {
-    id: string;
-    cwd: string;
-    command: string;
-    cols: number;
-    rows: number;
-    skipPermissions?: boolean;
-    initialPrompt?: string;
-    seedPrompt?: string;
-    // Issue #271 follow-up — local-only for now (see routes/sessions.ts's
-    // promote handler, which never sets this for a non-LOCAL_HOST_ID
-    // project): RemoteBackend.spawn below accepts it for interface
-    // uniformity with LocalBackend but does NOT forward it over the wire,
-    // since the remote agent side of opencode-session-transfer.ts doesn't
-    // exist yet.
-    resumeAgentSessionId?: string;
-    projectId?: number;
-    // Issue #822 — see CreateSessionBody.env's own doc comment
-    // (session-lifecycle.ts). Forwarded to a remote host verbatim
-    // (RemoteBackend.spawn below), unlike resumeAgentSessionId.
-    env?: Record<string, string>;
-    // Issue: per-project briefing storage (a follow-up PR) — see
-    // CreateSessionOptions.briefingOverride's own doc comment
-    // (pty-manager.ts). Forwarded to a remote host verbatim
-    // (RemoteBackend.spawn below), same as seedPrompt/env.
-    briefingOverride?: string;
-    // Issue #937 — see CreateSessionOptions.workflowConventionsText's own
-    // doc comment (pty-manager.ts). Already fully resolved (both the
-    // project's injectWorkflowConventions column and the global text's
-    // non-emptiness) by session-lifecycle.ts before this is ever called —
-    // same "forwarded to a remote host verbatim" posture as
-    // briefingOverride above.
-    workflowConventionsText?: string;
-    // PR-5 — see CreateSessionOptions.projectSkill/projectReviewerAgent's
-    // own doc comments (pty-manager.ts). Same "forwarded to a remote host
-    // verbatim" posture as briefingOverride above.
-    projectSkill?: string;
-    projectReviewerAgent?: string;
-    // Issue #957 — see CreateSessionOptions.model's own doc comment
-    // (pty-manager.ts). Forwarded to a remote host verbatim, same as
-    // projectReviewerAgent above.
-    model?: string;
-    // Issue #958 — same posture as `model` above, for opencode's
-    // `small_model` config key.
-    smallModel?: string;
-    // Issue #884 — see CreateSessionOptions.injectAgentGuide/
-    // injectProjectBriefing's own doc comments (pty-manager.ts). Already
-    // resolved to a definite boolean by session-lifecycle.ts before this is
-    // ever called — same "forwarded to a remote host verbatim, never
-    // re-derived" posture as briefingOverride above.
-    injectAgentGuide?: boolean;
-    injectProjectBriefing?: boolean;
-    // Issue #1089 — see CreateSessionOptions.injectMullionBundle's own doc
-    // comment (pty-manager.ts). Already resolved to a definite boolean by
-    // session-lifecycle.ts before this is ever called — same "forwarded to
-    // a remote host verbatim, never re-derived" posture as
-    // injectAgentGuide/injectProjectBriefing above.
-    injectMullionBundle?: boolean;
-    // See CreateSessionOptions.taskId's own doc comment (pty-manager.ts) —
-    // Task Master spawn sites set this to flag an unattended worker
-    // session, which the opencode adapter uses to deny superpowers skills
-    // that gate on a human in the loop. Same "forwarded to a remote host
-    // verbatim" posture as briefingOverride above.
-    taskId?: number;
-  }): Promise<SpawnResult>;
+  spawn(opts: SpawnOpts): Promise<SpawnResult>;
   liveStatus(
     ids: string[],
     idleThresholdMs: number,
@@ -303,36 +327,7 @@ export interface SessionBackend {
 class LocalBackend implements SessionBackend {
   constructor(private readonly app: FastifyInstance) {}
 
-  async spawn(opts: {
-    id: string;
-    cwd: string;
-    command: string;
-    cols: number;
-    rows: number;
-    skipPermissions?: boolean;
-    initialPrompt?: string;
-    seedPrompt?: string;
-    resumeAgentSessionId?: string;
-    projectId?: number;
-    env?: Record<string, string>;
-    briefingOverride?: string;
-    workflowConventionsText?: string;
-    projectSkill?: string;
-    projectReviewerAgent?: string;
-    // Issue #957 — see CreateSessionOptions.model's own doc comment
-    // (pty-manager.ts). Forwarded to PtyManager.getOrCreate() verbatim.
-    model?: string;
-    // Issue #958 — same posture as `model` above, for opencode's
-    // `small_model` config key.
-    smallModel?: string;
-    injectAgentGuide?: boolean;
-    injectProjectBriefing?: boolean;
-    // Issue #1089 — see SessionBackend.spawn's own doc comment on this
-    // field above. Forwarded to PtyManager.getOrCreate() verbatim, same as
-    // injectAgentGuide/injectProjectBriefing.
-    injectMullionBundle?: boolean;
-    taskId?: number;
-  }): Promise<SpawnResult> {
+  async spawn(opts: SpawnOpts): Promise<SpawnResult> {
     // B6 fix — PtyManager.getOrCreate()/Session.spawn() themselves never
     // throw synchronously (getOrCreate() is sync by design; a spawn failure
     // is caught-and-logged internally, not thrown out of getOrCreate() —
@@ -566,38 +561,7 @@ class RemoteBackend implements SessionBackend {
     return getRemoteHostClient(this.app, this.hostId);
   }
 
-  spawn(opts: {
-    id: string;
-    cwd: string;
-    command: string;
-    cols: number;
-    rows: number;
-    skipPermissions?: boolean;
-    initialPrompt?: string;
-    seedPrompt?: string;
-    resumeAgentSessionId?: string;
-    projectId?: number;
-    env?: Record<string, string>;
-    briefingOverride?: string;
-    workflowConventionsText?: string;
-    projectSkill?: string;
-    projectReviewerAgent?: string;
-    // Issue #957 — see CreateSessionOptions.model's own doc comment
-    // (pty-manager.ts). Forwarded to a remote host verbatim, same as
-    // projectReviewerAgent above.
-    model?: string;
-    // Issue #958 — same posture as `model` above, for opencode's
-    // `small_model` config key.
-    smallModel?: string;
-    injectAgentGuide?: boolean;
-    injectProjectBriefing?: boolean;
-    // Issue #1089 — see SessionBackend.spawn's own doc comment on this
-    // field above. Forwarded to the remote agent verbatim over the wire
-    // (this.client.spawn below), same as injectAgentGuide/
-    // injectProjectBriefing.
-    injectMullionBundle?: boolean;
-    taskId?: number;
-  }): Promise<SpawnResult> {
+  spawn(opts: SpawnOpts): Promise<SpawnResult> {
     // Issue #271 follow-up — `resumeAgentSessionId` is deliberately dropped
     // here rather than forwarded: see SessionBackend.spawn's own doc comment
     // for why remote-host transfer isn't implemented yet. The caller never
