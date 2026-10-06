@@ -45,6 +45,16 @@
 // helps.
 export const SCROLLBACK_MAX_BYTES = 1024 * 1024;
 
+// Issue #1523 — chunks smaller than this are coalesced into the tail slab;
+// the tail slab holds up to SLAB_BYTES. (16-64 KiB: big enough to amortize
+// per-chunk overhead, small enough that slab-granular eviction overshoots the
+// cap's intent by at most one slab.)
+const COALESCE_MAX_BYTES = 16 * 1024;
+const SLAB_BYTES = 64 * 1024;
+// Compact the committed-slab array once the evicted head is at least this long
+// and covers at least half of it.
+const COMPACT_MIN_HEAD = 32;
+
 /**
  * A single session's byte-level scrollback ring buffer: an ordered list of
  * chunks (oldest first) FIFO-evicted once their combined size exceeds
@@ -64,7 +74,22 @@ export const SCROLLBACK_MAX_BYTES = 1024 * 1024;
  * (single-threaded Node, no concurrent access to guard against).
  */
 export class ScrollbackBuffer {
-  private chunks: Buffer[] = [];
+  // Issue #1523 — the ring is stored as "slabs" rather than one entry per PTY
+  // read. A PTY read is often a few dozen bytes; one Buffer object per read
+  // (plus Array.shift() eviction, O(n) on a large array) is pure overhead.
+  // Chunks below COALESCE_MAX_BYTES are copied into a writable tail slab of
+  // up to SLAB_BYTES; larger chunks are stored as-is (their own slab). The
+  // replayed byte stream is identical either way — only eviction granularity
+  // changes (whole slabs, never splitting a slab).
+  //
+  // `slabs[head..]` are the committed slabs, oldest first; `head` advances on
+  // eviction (slots are cleared for GC) and the array is compacted
+  // periodically instead of shift()ing. `tailBuf[0..tailLen)` is the newest
+  // data, still being appended to.
+  private slabs: Array<Buffer | undefined> = [];
+  private head = 0;
+  private tailBuf: Buffer | null = null;
+  private tailLen = 0;
   private totalBytes = 0;
   // Issue #1296 — a monotonic total, never decremented by eviction (unlike
   // totalBytes above). A caller that needs to exclude everything written
@@ -75,27 +100,68 @@ export class ScrollbackBuffer {
   private bytesEverPushed = 0;
 
   /**
-   * Append `chunk`, then evict from the front (oldest first) until the
+   * Append `chunk`, then evict from the front (oldest slab first) until the
    * buffer is back at or under `SCROLLBACK_MAX_BYTES` — but never evict the
-   * last remaining chunk, even if that one chunk alone exceeds the cap on
-   * its own (a single oversized chunk still needs SOME representation;
-   * leaving it in is strictly better than silently emptying the buffer).
-   * This is the same invariant pty-manager.ts's original pushScrollback()
-   * carried: `chunks.length > 1` guards the eviction loop, not `> 0`.
+   * last remaining slab, even if it alone exceeds the cap on its own (a
+   * single oversized chunk still needs SOME representation; leaving it in
+   * is strictly better than silently emptying the buffer).
    */
   push(chunk: Buffer): void {
-    this.chunks.push(chunk);
-    this.totalBytes += chunk.length;
-    this.bytesEverPushed += chunk.length;
-    while (this.totalBytes > SCROLLBACK_MAX_BYTES && this.chunks.length > 1) {
-      const dropped = this.chunks.shift();
+    const len = chunk.length;
+    if (len >= COALESCE_MAX_BYTES) {
+      this.commitTail();
+      this.slabs.push(chunk);
+    } else if (len > 0) {
+      if (this.tailBuf === null || this.tailLen + len > SLAB_BYTES) {
+        this.commitTail();
+        this.tailBuf = Buffer.allocUnsafe(SLAB_BYTES);
+      }
+      chunk.copy(this.tailBuf, this.tailLen);
+      this.tailLen += len;
+    }
+    this.totalBytes += len;
+    this.bytesEverPushed += len;
+    this.evict();
+  }
+
+  /** Seal the writable tail slab (if it holds anything) into the committed list. */
+  private commitTail(): void {
+    if (this.tailBuf !== null && this.tailLen > 0) {
+      this.slabs.push(this.tailBuf.subarray(0, this.tailLen));
+    }
+    this.tailBuf = null;
+    this.tailLen = 0;
+  }
+
+  private evict(): void {
+    while (this.totalBytes > SCROLLBACK_MAX_BYTES && this.head < this.slabs.length) {
+      // The tail slab (if any) is the newest, so a committed slab is
+      // evictable whenever one exists alongside the tail; with no tail, the
+      // last committed slab is the sole survivor and must stay.
+      if (this.tailLen === 0 && this.head === this.slabs.length - 1) break;
+      const dropped = this.slabs[this.head];
+      this.slabs[this.head] = undefined;
+      this.head++;
       if (dropped) this.totalBytes -= dropped.length;
     }
+    // Amortized compaction instead of Array.shift()'s O(n) per eviction.
+    if (this.head >= COMPACT_MIN_HEAD && this.head * 2 >= this.slabs.length) {
+      this.slabs = this.slabs.slice(this.head);
+      this.head = 0;
+    }
+  }
+
+  /** Oldest-first views of everything buffered (committed slabs, then the live tail). */
+  private views(): Buffer[] {
+    const out: Buffer[] = [];
+    for (let i = this.head; i < this.slabs.length; i++) out.push(this.slabs[i]!);
+    if (this.tailBuf !== null && this.tailLen > 0) out.push(this.tailBuf.subarray(0, this.tailLen));
+    return out;
   }
 
   /**
    * Everything currently buffered, oldest first, prefixed with `preamble`
-   * bytes. The concat happens here (rather than exposing the raw chunk list
+   * bytes. The concat happens here (rather than exposing the raw slab list
    * to the caller) so this class stays the sole owner of the ring's internal
    * representation. Session.getScrollback() is the only caller, passing its
    * synthesized alt-screen/mouse-mode preamble (see that method's own doc
@@ -103,7 +169,7 @@ export class ScrollbackBuffer {
    * on Session-level state this class doesn't and shouldn't track).
    */
   toBuffer(preamble: Buffer): Buffer {
-    return Buffer.concat([preamble, ...this.chunks]);
+    return Buffer.concat([preamble, ...this.views()]);
   }
 
   /**
@@ -111,29 +177,26 @@ export class ScrollbackBuffer {
    * preamble (unlike toBuffer() above, this isn't replayed to a reattaching
    * terminal — it only ever feeds a text scan, e.g. dev-server-detect.ts's
    * banner regex, where alt-screen/mouse-tracking escape sequences are
-   * irrelevant noise). Walks the chunk list from the newest end, stopping as
-   * soon as `maxBytes` is covered, so this is O(chunks needed to reach
+   * irrelevant noise). Walks the slab list from the newest end, stopping as
+   * soon as `maxBytes` is covered, so this is O(slabs needed to reach
    * maxBytes) rather than toBuffer()'s O(entire ring) `Buffer.concat` plus
-   * the caller's own full `toString("utf8")` copy — pty.ts's
-   * dev-server-detect timer used to pay both costs every 10s for every
-   * eligible session regardless of how much (if any) of a ~1 MiB scrollback
-   * ring had ever changed. A startup banner is virtually always near the
-   * most recent output, so tail-only scanning doesn't meaningfully reduce
-   * detection accuracy.
+   * the caller's own full `toString("utf8")` copy. A startup banner is
+   * virtually always near the most recent output, so tail-only scanning
+   * doesn't meaningfully reduce detection accuracy.
    */
   tail(maxBytes: number): Buffer {
+    const views = this.views();
     const collected: Buffer[] = [];
     let total = 0;
-    for (let i = this.chunks.length - 1; i >= 0 && total < maxBytes; i--) {
-      const chunk = this.chunks[i];
-      collected.push(chunk);
-      total += chunk.length;
+    for (let i = views.length - 1; i >= 0 && total < maxBytes; i--) {
+      collected.push(views[i]);
+      total += views[i].length;
     }
     collected.reverse();
     const result = Buffer.concat(collected, total);
-    // The oldest included chunk may itself start well before the maxBytes
+    // The oldest included slab may itself start well before the maxBytes
     // boundary — trim to exactly the last maxBytes so a caller's cost bound
-    // holds regardless of how large individual chunks are.
+    // holds regardless of how large individual slabs are.
     return total > maxBytes ? result.subarray(total - maxBytes) : result;
   }
 

@@ -1,14 +1,7 @@
 import * as pty from "node-pty";
 import type { IPty } from "node-pty";
-import {
-  mkdirSync,
-  existsSync,
-  statSync,
-  unlinkSync,
-  readFileSync,
-  writeFileSync,
-  rmSync,
-} from "node:fs";
+import { mkdirSync, existsSync, statSync, unlinkSync, readFileSync, writeFileSync } from "node:fs";
+import { rm as rmAsync, unlink as unlinkAsync } from "node:fs/promises";
 import { spawn as spawnChild } from "node:child_process";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -38,6 +31,7 @@ import {
   INITIAL_ATTENTION_STATE,
   type MouseTrackingState,
   type AttentionSignalKind,
+  type AttentionSignal,
 } from "./attention-detect.js";
 import { AttentionTracker } from "./attention-tracker.js";
 import { buildSessionEnv } from "./session-env.js";
@@ -932,7 +926,18 @@ const AUTO_REPORT_SHAPES: ReadonlyArray<RegExp> = [
  * tolerant timing heuristic. Used only to gate Session.write()'s
  * authoritative "userInput" attention-clear signal (see below).
  */
-function isGenuineUserInput(data: string): boolean {
+// Result of detectAttentionSignals() for a chunk with no ESC/BEL byte — see the
+// onData fast path. Frozen: shared across every plain chunk.
+const NO_ATTENTION_SIGNALS: AttentionSignal = Object.freeze({
+  bell: false,
+  notification: false,
+  titleChange: null,
+});
+
+export function isGenuineUserInput(data: string): boolean {
+  // Every AUTO_REPORT_SHAPES entry starts with ESC, so ESC-free input (the
+  // overwhelmingly common case: plain typed characters) has nothing to strip.
+  if (!data.includes("\x1b")) return data.length > 0;
   let remainder = data;
   for (const shape of AUTO_REPORT_SHAPES) {
     remainder = remainder.replace(shape, "");
@@ -1425,6 +1430,10 @@ export class Session {
   private lastSeenSeq = 0;
   private lastActivityAt: number | null = null;
   private activityStreakStart: number | null = null;
+  // Lazily-built, then reused for every hook message — see emitHookEvent().
+  private hookContext: SessionHookContext | null = null;
+  // The `now` of the emitHookEvent() call currently dispatching.
+  private hookNow = 0;
   // PR 33b (Wave 6) — the attention state machine's own live state
   // (`attention.state`, issue #171/#98) plus issue #428's outstanding-
   // background-task tracking (`backgroundTasks`/`backgroundTasksAt`/
@@ -2498,81 +2507,96 @@ export class Session {
       // only, `data`/`chunk` above are untouched (see detectCarry's
       // docstring; feeding this into scrollback or the fan-out below would
       // duplicate the carried bytes in the replayed stream).
-      const detectChunk = this.detectCarry + data;
-      const altScreenSwitch = detectAltScreenSwitch(detectChunk);
-      // #98: exiting alt-screen (a TUI/editor closing back to the shell
-      // prompt) is itself an attention candidate — "done, awaiting input".
-      // Only a genuine alt -> primary flip counts, never a chunk that
-      // merely re-asserts a mode already tracked.
+      // Fast path: a chunk with no ESC and no BEL, arriving with both detect
+      // carries empty, cannot contain any sequence the detectors below look
+      // for (alt-screen/mouse/bracketed-paste/OSC 7/title/notification/bell
+      // all need an ESC or BEL byte) and cannot leave a carry behind, so every
+      // detector would return its "nothing found" result — skip them.
+      const plainChunk =
+        this.detectCarry === "" &&
+        this.cwdDetectCarry === "" &&
+        !data.includes("\x1b") &&
+        !data.includes("\x07");
       let altScreenExited = false;
-      if (altScreenSwitch !== null) {
-        // Transition-guarded (issue #166): detectAltScreenSwitch reports the
-        // switch a chunk landed on even when that's the same mode already
-        // tracked (e.g. two back-to-back "enter alt" sequences with no exit
-        // between them, or a chunk that happens to re-assert the current
-        // mode) — only emit a status_change event on a genuine flip, so a
-        // chatty program can't spam this session's 100-slot event ring
-        // buffer with no-op repeats.
-        const nowInAltScreen = altScreenSwitch.mode === "alt";
-        if (nowInAltScreen !== this.inAltScreen) {
-          altScreenExited = this.inAltScreen && !nowInAltScreen;
-          this.inAltScreen = nowInAltScreen;
-          if (altScreenExited) {
-            // Issue #1303 — endIndex is relative to detectChunk (this carry +
-            // data); carryPartialEscape only ever carries an UNTERMINATED
-            // prefix (no closing h/l byte), so the match's closing byte, and
-            // therefore endIndex, always falls within `data` itself, never
-            // inside the carry. Map back to a `data`-relative offset by
-            // subtracting the carry's length, then measure everything before
-            // that offset in bytes (not chars) since scrollbackBuffer tracks
-            // byte offsets — `chunk` above is exactly `data` encoded as
-            // UTF-8. The result: trailing real text sharing this PTY read
-            // with the exit sequence stays after the watermark instead of
-            // being excluded along with the whole chunk (issue #1296's
-            // conservative chunk-boundary reading).
-            //
-            // Only meaningful when this chunk actually landed in the ring
-            // (pushedToScrollback): if it didn't (a redraw-nudge suppression
-            // window), there's no trailing text IN THE RING to preserve —
-            // subtracting trailingBytes from totalBytesEverPushed() would
-            // instead walk the watermark backward into bytes from an
-            // EARLIER, already-pushed chunk (still alt-screen redraw, since
-            // the TUI was up until this one), reopening #1296's bug.
-            if (pushedToScrollback) {
-              // Clamped rather than trusted outright: this line rests on the
-              // implicit carryPartialEscape contract above never changing.
-              // Without the clamp, a future violation would pass a NEGATIVE
-              // end argument to data.slice() below, which JS reinterprets as
-              // "count back from the end" — a silently wrong bytesBeforeOffset
-              // rather than an obviously-wrong one. Clamping to 0 instead
-              // degrades to treating this whole chunk as post-exit content
-              // (trailingBytes = chunk.length), the same direction #1303's
-              // own fix already treats real trailing text.
-              const offsetInData = Math.max(0, altScreenSwitch.endIndex - this.detectCarry.length);
-              const bytesBeforeOffset = Buffer.byteLength(data.slice(0, offsetInData), "utf8");
-              const trailingBytes = chunk.length - bytesBeforeOffset;
-              this.altScreenExitedAtBytes =
-                this.scrollbackBuffer.totalBytesEverPushed() - trailingBytes;
-            } else {
-              this.altScreenExitedAtBytes = this.scrollbackBuffer.totalBytesEverPushed();
+      if (!plainChunk) {
+        const detectChunk = this.detectCarry + data;
+        const altScreenSwitch = detectAltScreenSwitch(detectChunk);
+        // #98: exiting alt-screen (a TUI/editor closing back to the shell
+        // prompt) is itself an attention candidate — "done, awaiting input".
+        // Only a genuine alt -> primary flip counts, never a chunk that
+        // merely re-asserts a mode already tracked.
+        if (altScreenSwitch !== null) {
+          // Transition-guarded (issue #166): detectAltScreenSwitch reports the
+          // switch a chunk landed on even when that's the same mode already
+          // tracked (e.g. two back-to-back "enter alt" sequences with no exit
+          // between them, or a chunk that happens to re-assert the current
+          // mode) — only emit a status_change event on a genuine flip, so a
+          // chatty program can't spam this session's 100-slot event ring
+          // buffer with no-op repeats.
+          const nowInAltScreen = altScreenSwitch.mode === "alt";
+          if (nowInAltScreen !== this.inAltScreen) {
+            altScreenExited = this.inAltScreen && !nowInAltScreen;
+            this.inAltScreen = nowInAltScreen;
+            if (altScreenExited) {
+              // Issue #1303 — endIndex is relative to detectChunk (this carry +
+              // data); carryPartialEscape only ever carries an UNTERMINATED
+              // prefix (no closing h/l byte), so the match's closing byte, and
+              // therefore endIndex, always falls within `data` itself, never
+              // inside the carry. Map back to a `data`-relative offset by
+              // subtracting the carry's length, then measure everything before
+              // that offset in bytes (not chars) since scrollbackBuffer tracks
+              // byte offsets — `chunk` above is exactly `data` encoded as
+              // UTF-8. The result: trailing real text sharing this PTY read
+              // with the exit sequence stays after the watermark instead of
+              // being excluded along with the whole chunk (issue #1296's
+              // conservative chunk-boundary reading).
+              //
+              // Only meaningful when this chunk actually landed in the ring
+              // (pushedToScrollback): if it didn't (a redraw-nudge suppression
+              // window), there's no trailing text IN THE RING to preserve —
+              // subtracting trailingBytes from totalBytesEverPushed() would
+              // instead walk the watermark backward into bytes from an
+              // EARLIER, already-pushed chunk (still alt-screen redraw, since
+              // the TUI was up until this one), reopening #1296's bug.
+              if (pushedToScrollback) {
+                // Clamped rather than trusted outright: this line rests on the
+                // implicit carryPartialEscape contract above never changing.
+                // Without the clamp, a future violation would pass a NEGATIVE
+                // end argument to data.slice() below, which JS reinterprets as
+                // "count back from the end" — a silently wrong bytesBeforeOffset
+                // rather than an obviously-wrong one. Clamping to 0 instead
+                // degrades to treating this whole chunk as post-exit content
+                // (trailingBytes = chunk.length), the same direction #1303's
+                // own fix already treats real trailing text.
+                const offsetInData = Math.max(
+                  0,
+                  altScreenSwitch.endIndex - this.detectCarry.length,
+                );
+                const bytesBeforeOffset = Buffer.byteLength(data.slice(0, offsetInData), "utf8");
+                const trailingBytes = chunk.length - bytesBeforeOffset;
+                this.altScreenExitedAtBytes =
+                  this.scrollbackBuffer.totalBytesEverPushed() - trailingBytes;
+              } else {
+                this.altScreenExitedAtBytes = this.scrollbackBuffer.totalBytesEverPushed();
+              }
             }
+            this.emitEvent("status_change", { screen: altScreenSwitch.mode });
           }
-          this.emitEvent("status_change", { screen: altScreenSwitch.mode });
         }
-      }
-      this.mouseTracking = applyMouseModeChanges(detectChunk, this.mouseTracking);
-      const bpChange = detectBracketedPaste(detectChunk);
-      if (bpChange !== null) this.bracketedPaste = bpChange;
-      this.detectCarry = carryPartialEscape(detectChunk);
+        this.mouseTracking = applyMouseModeChanges(detectChunk, this.mouseTracking);
+        const bpChange = detectBracketedPaste(detectChunk);
+        if (bpChange !== null) this.bracketedPaste = bpChange;
+        this.detectCarry = carryPartialEscape(detectChunk);
 
-      // Live cwd tracking (issue: sidebar worktree display) — its own carry
-      // chunk since an OSC 7 payload (a full path) is long enough that a PTY
-      // read boundary landing mid-path is a real possibility, unlike the
-      // short fixed-shape CSI sequences detectCarry above tracks.
-      const cwdDetectChunk = this.cwdDetectCarry + data;
-      const cwdChange = detectCwdChange(cwdDetectChunk);
-      if (cwdChange !== null) this._liveCwd = cwdChange;
-      this.cwdDetectCarry = carryPartialOsc(cwdDetectChunk);
+        // Live cwd tracking (issue: sidebar worktree display) — its own carry
+        // chunk since an OSC 7 payload (a full path) is long enough that a PTY
+        // read boundary landing mid-path is a real possibility, unlike the
+        // short fixed-shape CSI sequences detectCarry above tracks.
+        const cwdDetectChunk = this.cwdDetectCarry + data;
+        const cwdChange = detectCwdChange(cwdDetectChunk);
+        if (cwdChange !== null) this._liveCwd = cwdChange;
+        this.cwdDetectCarry = carryPartialOsc(cwdDetectChunk);
+      }
 
       const now = Date.now();
       // A gap longer than STREAK_GAP_MS since the last chunk starts a new
@@ -2583,7 +2607,7 @@ export class Session {
       }
       this.lastActivityAt = now;
 
-      const signals = detectAttentionSignals(data);
+      const signals = plainChunk ? NO_ATTENTION_SIGNALS : detectAttentionSignals(data);
 
       // #98: a working->idle TITLE transition ("program that was working
       // just became idle") is an attention candidate — only on an actual
@@ -2884,7 +2908,7 @@ export class Session {
    * provably scoped to just what's declared on SessionHookContext, not
    * Session's full surface.
    */
-  private buildHookContext(now: number = Date.now()): SessionHookContext {
+  private buildHookContext(): SessionHookContext {
     // The object literal's own get/set accessors below each have their OWN
     // dynamic `this` (bound to the ctx object itself, not this Session) —
     // an arrow function is the only way to close over the real Session
@@ -3127,7 +3151,7 @@ export class Session {
       emitAttentionSignalWithExtras: (kind, extras) =>
         self.attention.emitAttentionSignalWithExtras(kind, extras),
       emitAttentionSignalDeferred: (kind, extras, alsoEmit) =>
-        self.attention.emitAttentionSignalDeferred(kind, extras, alsoEmit, now),
+        self.attention.emitAttentionSignalDeferred(kind, extras, alsoEmit, self.hookNow),
       cancelDeferred: (kind) => self.attention.cancelDeferred(kind),
       markStateDirty: () => self.stateFile.schedule(),
       clearIfConfirmedKind: (kind) => self.attention.clearIfConfirmedKind(kind),
@@ -3169,7 +3193,20 @@ export class Session {
     // error) is a silent no-op, same as the original switch's
     // `default: return`.
     const handler = HOOK_HANDLERS.get(message.kind);
-    if (handler) handler(this.buildHookContext(now), message);
+    if (handler) {
+      // The context facade is built once per Session (lazily) rather than
+      // ~60 accessor closures per message; the only per-call input it needs
+      // is `now`, passed through hookNow (saved/restored so a handler that
+      // re-enters emitHookEvent can't clobber the outer call's clock).
+      this.hookContext ??= this.buildHookContext();
+      const prevNow = this.hookNow;
+      this.hookNow = now;
+      try {
+        handler(this.hookContext, message);
+      } finally {
+        this.hookNow = prevNow;
+      }
+    }
   }
 
   /**
@@ -3288,7 +3325,7 @@ export class Session {
       // At least one other gate is still waiting — the derived scalar
       // summary now represents the OLDEST of those (Map iteration order is
       // insertion order), not the one that just resolved.
-      const [, oldest] = [...this.pendingGates.entries()][0];
+      const oldest = this.pendingGates.values().next().value!;
       this.gatePrompt = oldest.prompt;
       this.gateAt = oldest.at;
     }
@@ -3498,10 +3535,7 @@ export class Session {
     // reasoning as the "tick" input just above.
     this.attention.drainDeferred(now);
 
-    const hadSustainedStreak =
-      this.activityStreakStart !== null &&
-      this.lastActivityAt !== null &&
-      this.lastActivityAt - this.activityStreakStart >= SUSTAIN_MS;
+    const hadSustainedStreak = this.hasSustainedStreak();
     const requiredSilenceMs = this.hooksActive ? HOOK_FALLBACK_SILENCE_MS : SUSTAINED_SILENCE_MS;
     const silentLongEnough =
       this.lastActivityAt !== null && now - this.lastActivityAt >= requiredSilenceMs;
@@ -4210,6 +4244,15 @@ export class Session {
     this.cwdDetectCarry = "";
   }
 
+  /** Whether the current activity streak has spanned at least SUSTAIN_MS (see onData's streak tracking). */
+  private hasSustainedStreak(): boolean {
+    return (
+      this.activityStreakStart !== null &&
+      this.lastActivityAt !== null &&
+      this.lastActivityAt - this.activityStreakStart >= SUSTAIN_MS
+    );
+  }
+
   toInfo(idleThresholdMs: number = IDLE_THRESHOLD_MS): SessionInfo {
     const titleSignal = classifyActivityFromTitle(this.lastTitle, this.command);
     let activity: "working" | "idle";
@@ -4221,10 +4264,7 @@ export class Session {
       // A single spawn-time prompt-draw burst doesn't count as "working" —
       // require output to have persisted for at least SUSTAIN_MS (see the
       // streak tracking in onData).
-      const sustained =
-        this.activityStreakStart !== null &&
-        this.lastActivityAt !== null &&
-        this.lastActivityAt - this.activityStreakStart >= SUSTAIN_MS;
+      const sustained = this.hasSustainedStreak();
       // Recent output that closely follows a keystroke is more likely echo
       // or a redraw of that input than autonomous work — see
       // USER_INPUT_ECHO_MS's docstring.
@@ -4972,72 +5012,27 @@ export class PtyManager {
       clearTimeout(timer);
     }
     await stopScope(this.sessionsDir, this.instanceId, id);
-    try {
-      unlinkSync(hookTokenPath(this.sessionsDir, id));
-    } catch {
-      // ENOENT (this session's hooks never fired, or it predates this
-      // feature) is the expected common case — nothing to clean up.
-    }
-    try {
-      unlinkSync(stateFilePath(this.sessionsDir, id));
-    } catch {
-      // ENOENT (never wrote a state file, or session predates this feature).
-    }
-    // agent-briefing follow-up to #405 — these two were a pre-existing leak
-    // (writeSessionAgentGuide/writeSessionBriefing write them unconditionally
-    // at spawn time, but nothing removed them at the genuinely-terminal
-    // moment this method IS) — confirmed live: dozens of stale
-    // `*.agent-guide.md` files accumulate under sessionsDir over time.
-    // Cleaned up here alongside the token/state files above rather than left
-    // as a second undecided leak once `<id>.briefing.md` joined them.
-    try {
-      unlinkSync(sessionAgentGuidePath(this.sessionsDir, id));
-    } catch {
-      // ENOENT (guide source never existed on this install, or the write
-      // itself failed — see writeSessionAgentGuide's own doc comment).
-    }
-    // Issue #937 follow-up — same pre-existing-leak shape as the guide/
-    // briefing files immediately around it: writeSessionWorkflowConventions
-    // writes this unconditionally at spawn time (or unlinks it itself when
-    // nothing should be injected — see that function's own doc comment), but
-    // nothing removed a live copy at this genuinely-terminal moment. Confirmed
-    // live: dozens of stale `*.workflow-conventions.md` files accumulate
-    // under sessionsDir the same way `*.agent-guide.md` did before #405's fix
-    // above.
-    try {
-      unlinkSync(sessionWorkflowConventionsPath(this.sessionsDir, id));
-    } catch {
-      // ENOENT (this install has no global workflow-conventions text
-      // configured, this project opted out, or writeSessionWorkflowConventions
-      // already unlinked it once the resolved text went empty).
-    }
-    try {
-      unlinkSync(sessionBriefingPath(this.sessionsDir, id));
-    } catch {
-      // ENOENT (this project never had a briefing, or writeSessionBriefing
-      // already unlinked it once the marked region disappeared).
-    }
-    // #949 — the opencode tier-0 push writes its own small file alongside
-    // the guide/briefing copies; same lifecycle, same cleanup.
-    try {
-      unlinkSync(path.join(this.sessionsDir, `${id}.opencode-tier0.md`));
-    } catch {
-      // ENOENT (opencode tier-0 was never written, or the session was
-      // never an opencode session).
-    }
-    // #949 — opencode also writes a seed file and a config directory per
-    // session; same lifecycle, same cleanup.
-    try {
-      unlinkSync(path.join(this.sessionsDir, `${id}.opencode-seed.md`));
-    } catch {
-      // ENOENT (opencode seed was never written).
-    }
-    try {
-      const configDir = path.join(this.sessionsDir, `${id}.opencode-config`);
-      rmSync(configDir, { recursive: true, force: true });
-    } catch {
-      // ENOENT or other (opencode config dir was never created).
-    }
+    // Every removal is best-effort: ENOENT is the expected common case (the
+    // file was never written — hooks never fired, the session predates the
+    // feature, this isn't an opencode session, the project opted out of a
+    // briefing/conventions text, ...). They are independent, so run them
+    // concurrently via the async fs API instead of blocking the event loop on
+    // ~8 sequential syscalls, and never let one failure skip the others.
+    //  - agent-guide/briefing (#405) and workflow-conventions (#937) are
+    //    written unconditionally at spawn time but nothing else removed them;
+    //  - the opencode tier-0/seed files and config dir (#949) share the same
+    //    lifecycle.
+    const dir = this.sessionsDir;
+    await Promise.allSettled([
+      unlinkAsync(hookTokenPath(dir, id)),
+      unlinkAsync(stateFilePath(dir, id)),
+      unlinkAsync(sessionAgentGuidePath(dir, id)),
+      unlinkAsync(sessionWorkflowConventionsPath(dir, id)),
+      unlinkAsync(sessionBriefingPath(dir, id)),
+      unlinkAsync(path.join(dir, `${id}.opencode-tier0.md`)),
+      unlinkAsync(path.join(dir, `${id}.opencode-seed.md`)),
+      rmAsync(path.join(dir, `${id}.opencode-config`), { recursive: true, force: true }),
+    ]);
   }
 
   /** Kill every tracked attach-client. Called on server shutdown; the dtach masters survive. */
