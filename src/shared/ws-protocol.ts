@@ -81,7 +81,19 @@ export interface GeometryMessage {
   minRows?: number;
 }
 
-export type TerminalWSMessage = ResizeMessage | ExitedMessage | GeometryMessage;
+// Issue #1520 — server->browser only. Sent after the server dropped PTY
+// output for this connection under backpressure (socket.bufferedAmount over
+// the cap) and the buffer has since drained: everything the client has drawn
+// so far may be garbled (a chunk missing mid-escape-sequence). The client must
+// reset its xterm; the next binary frame is a fresh full scrollback replay,
+// followed by a geometry frame, exactly like the initial attach. (The remote
+// proxy path instead closes with code 4001 so the client's reconnect logic
+// re-attaches and gets that same replay.)
+export interface ResyncMessage {
+  type: "resync";
+}
+
+export type TerminalWSMessage = ResizeMessage | ExitedMessage | GeometryMessage | ResyncMessage;
 
 // ---------------------------------------------------------------------------
 // services/github-ws-broadcast.ts — GitHubWSEvent
