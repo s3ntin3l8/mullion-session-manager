@@ -24,6 +24,7 @@ import {
   openOrFocusSessionPanel,
   resetTiledGroupWidths,
   canResetTiledGroupWidths,
+  otherTiledGroups,
 } from "./panelUtils.js";
 import { liveChildCount } from "./sidebarHierarchy.js";
 import { PromoteDialog } from "./PromoteDialog.js";
@@ -322,6 +323,21 @@ export function PaneActionsMenu({
   // there's no reason to call it on every render of the trigger button.
   const canReset = overflowOpen && canResetTiledGroupWidths(containerApi);
 
+  // Tablet only: touch can't drag a tab between columns (the strip pans
+  // instead — xterm.css), so offer the move as menu actions. Read fresh on
+  // every open, like `canReset` above, since the group layout is live state.
+  const ownGroup = api.group;
+  const moveTargets =
+    overflowOpen && layout.tier === "tablet" && ownGroup
+      ? otherTiledGroups(containerApi, ownGroup)
+      : [];
+  const canSplitOut =
+    overflowOpen &&
+    layout.tier === "tablet" &&
+    !!ownGroup &&
+    ownGroup.api.location.type === "grid" &&
+    ownGroup.panels.length > 1;
+
   return (
     <>
       <button
@@ -492,6 +508,31 @@ export function PaneActionsMenu({
                 button doesn't reliably carry the explanatory `title`, so
                 the guard against firing when `!canReset` moves into the
                 onClick handler itself instead. */}
+            {moveTargets.map(({ group, number }) => (
+              <button
+                key={group.id}
+                className="pane-tab-overflow-item"
+                role="menuitem"
+                onClick={() => closeMenuAfterAction(() => api.moveTo({ group }))}
+              >
+                <GridIcon size={14} style={{ color: "var(--muted)" }} />
+                <span style={{ flex: 1 }}>
+                  {moveTargets.length === 1 ? "Move to other pane" : `Move to pane ${number}`}
+                </span>
+              </button>
+            ))}
+            {canSplitOut && ownGroup && (
+              <button
+                className="pane-tab-overflow-item"
+                role="menuitem"
+                onClick={() =>
+                  closeMenuAfterAction(() => api.moveTo({ group: ownGroup, position: "right" }))
+                }
+              >
+                <GridIcon size={14} style={{ color: "var(--muted)" }} />
+                <span style={{ flex: 1 }}>Move to new pane</span>
+              </button>
+            )}
             <button
               className="pane-tab-overflow-item"
               role="menuitem"

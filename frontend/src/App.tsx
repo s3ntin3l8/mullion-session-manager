@@ -380,7 +380,7 @@ export function App() {
   // deep-link, and push-message effects further down, which read
   // restoringRef/restoredWorkspaceIdRef and depend on a restore having
   // already run) is unchanged — see that hook's own header comment.
-  const { restoringRef, restoredWorkspaceIdRef } = useWorkspacePersistence({
+  const { restoringRef, restoredWorkspaceIdRef, liftPhoneTaint } = useWorkspacePersistence({
     dockviewApi,
     activeWorkspaceId,
     workspaces,
@@ -434,7 +434,12 @@ export function App() {
   // render body, at the useWorkspacePersistence call above — see that hook's
   // own `setLayoutTier` param comment for why returning it here instead
   // would be a real ordering regression, not just a style difference.
-  useLayoutPresentation({ dockviewApi, layoutMode: settings.layoutMode, setLayoutTier });
+  useLayoutPresentation({
+    dockviewApi,
+    layoutMode: settings.layoutMode,
+    setLayoutTier,
+    onUnfold: liftPhoneTaint,
+  });
 
   // Sidebar session drag-to-dock — dragging a session row out of the Sidebar
   // and dropping it onto the dockview grid to open/dock its panel —

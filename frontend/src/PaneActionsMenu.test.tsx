@@ -34,6 +34,8 @@ const resetTiledGroupWidths = vi.fn();
 // existing click-through tests don't each have to opt back in — the
 // dedicated "disabled" describe block overrides it per-test.
 const canResetTiledGroupWidths = vi.fn();
+const otherTiledGroups = vi.fn();
+let layoutModeSetting = "desktop";
 
 vi.mock("./panelUtils.js", () => ({
   openTimelinePanel: vi.fn(),
@@ -41,6 +43,7 @@ vi.mock("./panelUtils.js", () => ({
   openOrFocusSessionPanel: vi.fn(),
   resetTiledGroupWidths: (...args: unknown[]) => resetTiledGroupWidths(...args),
   canResetTiledGroupWidths: (...args: unknown[]) => canResetTiledGroupWidths(...args),
+  otherTiledGroups: (...args: unknown[]) => otherTiledGroups(...args),
 }));
 
 vi.mock("./api/index.js", () => ({
@@ -69,7 +72,7 @@ function storeState() {
     theme: "dark",
     settings: {
       sessions: { confirmBeforeKill: false },
-      layoutMode: "desktop",
+      layoutMode: layoutModeSetting,
       tabletPaneCap: 2,
     },
     promoteSession: promoteSessionMock,
@@ -162,6 +165,9 @@ beforeEach(() => {
   mutedSessionIds = [];
   canResetTiledGroupWidths.mockClear();
   canResetTiledGroupWidths.mockReturnValue(true);
+  otherTiledGroups.mockReset();
+  otherTiledGroups.mockReturnValue([]);
+  layoutModeSetting = "desktop";
 });
 
 describe("PaneActionsMenu", () => {
@@ -287,6 +293,79 @@ describe("PaneActionsMenu", () => {
   // Manual repair for the fold/unfold pane-skew bug — offered from every
   // panel type (no `session` gate), same as "Move" above, since it acts on
   // the whole tiled grid rather than this specific pane.
+  describe("Move between panes (tablet only)", () => {
+    const openMenu = async (apiOverrides: Partial<DockviewPanelApi> = {}) => {
+      const user = userEvent.setup();
+      render(
+        <PaneActionsMenu
+          api={makeApi(apiOverrides)}
+          params={undefined}
+          containerApi={CONTAINER_API}
+          onRename={vi.fn()}
+          triggerClassName="pane-tab-btn"
+        />,
+      );
+      await user.click(screen.getByTitle("More…"));
+      return user;
+    };
+    const ownGroup = { id: "g1", panels: [{}, {}], api: { location: { type: "grid" } } };
+
+    it("offers one 'Move to other pane' for a single target and moves into it", async () => {
+      layoutModeSetting = "tablet";
+      const target = { id: "g2" };
+      otherTiledGroups.mockReturnValue([{ group: target, number: 2 }]);
+      const moveTo = vi.fn();
+      const user = await openMenu({ group: ownGroup, moveTo } as never);
+      await user.click(screen.getByText("Move to other pane"));
+      expect(moveTo).toHaveBeenCalledWith({ group: target });
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    });
+
+    it("numbers the targets when there are several", async () => {
+      layoutModeSetting = "tablet";
+      otherTiledGroups.mockReturnValue([
+        { group: { id: "g2" }, number: 2 },
+        { group: { id: "g3" }, number: 3 },
+      ]);
+      await openMenu({ group: ownGroup, moveTo: vi.fn() } as never);
+      expect(screen.getByText("Move to pane 2")).toBeInTheDocument();
+      expect(screen.getByText("Move to pane 3")).toBeInTheDocument();
+    });
+
+    it("splits a tab out into a new pane to the right when its group has several tabs", async () => {
+      layoutModeSetting = "tablet";
+      const moveTo = vi.fn();
+      const user = await openMenu({ group: ownGroup, moveTo } as never);
+      await user.click(screen.getByText("Move to new pane"));
+      expect(moveTo).toHaveBeenCalledWith({ group: ownGroup, position: "right" });
+    });
+
+    it("hides 'Move to new pane' for a group's only tab", async () => {
+      layoutModeSetting = "tablet";
+      await openMenu({
+        group: { id: "g1", panels: [{}], api: { location: { type: "grid" } } },
+        moveTo: vi.fn(),
+      } as never);
+      expect(screen.queryByText("Move to new pane")).toBeNull();
+    });
+
+    it("hides 'Move to new pane' for a floating group", async () => {
+      layoutModeSetting = "tablet";
+      await openMenu({
+        group: { id: "g1", panels: [{}, {}], api: { location: { type: "floating" } } },
+        moveTo: vi.fn(),
+      } as never);
+      expect(screen.queryByText("Move to new pane")).toBeNull();
+    });
+
+    it("offers neither off tablet", async () => {
+      otherTiledGroups.mockReturnValue([{ group: { id: "g2" }, number: 2 }]);
+      await openMenu({ group: ownGroup, moveTo: vi.fn() } as never);
+      expect(screen.queryByText("Move to other pane")).toBeNull();
+      expect(screen.queryByText("Move to new pane")).toBeNull();
+    });
+  });
+
   describe("Reset pane sizes", () => {
     it("calls resetTiledGroupWidths with the passed-in containerApi, closing the menu", async () => {
       const user = userEvent.setup();

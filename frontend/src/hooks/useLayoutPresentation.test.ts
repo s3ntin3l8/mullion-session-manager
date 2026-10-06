@@ -394,6 +394,94 @@ describe("useLayoutPresentation", () => {
       expect(right.api.setSize).not.toHaveBeenCalled();
     });
 
+    it("does not call onUnfold when no width snapshot was taken (opened at phone width)", async () => {
+      // Mounted already at phone, so no snapshot was ever taken: the proportions
+      // can't be trusted, so the #1426 save suspension must stay.
+      const media = stubBreakpointMedia("phone");
+      const { api } = makeMockApi();
+      const onUnfold = vi.fn();
+
+      renderHook(() =>
+        useLayoutPresentation({
+          dockviewApi: api,
+          layoutMode: "auto",
+          setLayoutTier: vi.fn(),
+          onUnfold,
+        }),
+      );
+      media.setTier("tablet");
+      media.phone.dispatchEvent(new Event("change"));
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      expect(onUnfold).not.toHaveBeenCalled();
+    });
+
+    it("calls onUnfold, after the widths are restored, on a tablet -> phone -> tablet fold cycle", async () => {
+      const media = stubBreakpointMedia("tablet");
+      const { api, addGroup } = makeMockApi();
+      addGroup("grid", { id: "left", width: 500, height: 600 });
+      addGroup("grid", { id: "right", width: 500, height: 600 });
+      const onUnfold = vi.fn();
+
+      renderHook(() =>
+        useLayoutPresentation({
+          dockviewApi: api,
+          layoutMode: "auto",
+          setLayoutTier: vi.fn(),
+          onUnfold,
+        }),
+      );
+      media.setTier("phone");
+      media.phone.dispatchEvent(new Event("change"));
+      media.setTier("tablet");
+      media.phone.dispatchEvent(new Event("change"));
+      expect(onUnfold).not.toHaveBeenCalled(); // deferred one frame
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      expect(onUnfold).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not call onUnfold when the restore no-ops because the pane count changed while folded", async () => {
+      const media = stubBreakpointMedia("tablet");
+      const { api, addGroup } = makeMockApi();
+      addGroup("grid", { id: "left", width: 500, height: 600 });
+      addGroup("grid", { id: "right", width: 500, height: 600 });
+      const onUnfold = vi.fn();
+
+      renderHook(() =>
+        useLayoutPresentation({
+          dockviewApi: api,
+          layoutMode: "auto",
+          setLayoutTier: vi.fn(),
+          onUnfold,
+        }),
+      );
+      media.setTier("phone");
+      media.phone.dispatchEvent(new Event("change"));
+      addGroup("grid", { id: "third", width: 300, height: 600 });
+      media.setTier("tablet");
+      media.phone.dispatchEvent(new Event("change"));
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      expect(onUnfold).not.toHaveBeenCalled();
+    });
+
+    it("does not call onUnfold on a tablet <-> desktop crossing", async () => {
+      const media = stubBreakpointMedia("tablet");
+      const { api } = makeMockApi();
+      const onUnfold = vi.fn();
+
+      renderHook(() =>
+        useLayoutPresentation({
+          dockviewApi: api,
+          layoutMode: "auto",
+          setLayoutTier: vi.fn(),
+          onUnfold,
+        }),
+      );
+      media.setTier("desktop");
+      media.desktop.dispatchEvent(new Event("change"));
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      expect(onUnfold).not.toHaveBeenCalled();
+    });
+
     it("does not snapshot or restore on a tablet-to-desktop crossing that never touched phone", async () => {
       const media = stubBreakpointMedia("tablet");
       const { api, addGroup } = makeMockApi();
