@@ -46,6 +46,16 @@ export interface SocketLike {
  * without bound (#1517). Shared by control-socket.ts's reply path. */
 export const WRITE_HARD_CEILING_BYTES = 16 * 1024 * 1024;
 
+/** Per-channel ceiling on `bufferedBytes` (#1546). The soft 4 MiB drop in
+ * routes/terminal.ts only protects the PTY-output path; this bounds ANY
+ * sender (proxied remote-attach frames, control messages) one channel at a
+ * time, so a single stalled stream is closed before it can consume the whole
+ * connection-level WRITE_HARD_CEILING_BYTES (16 MiB) and take every other
+ * multiplexed stream down with it. Set between the two: well above the
+ * 4 MiB soft threshold (never trips on healthy backpressure handling), at
+ * half the connection ceiling (two stalled channels still can't trip it). */
+export const CHANNEL_MAX_BUFFERED_BYTES = 8 * 1024 * 1024;
+
 export class SocketChannel {
   readonly CONNECTING = 0;
   readonly OPEN = 1;
@@ -137,6 +147,13 @@ export class SocketChannel {
     }
     const line = `${JSON.stringify(frame)}\n`;
     const bytes = Buffer.byteLength(line, "utf8");
+    // Over the per-channel cap: end just THIS stream (client gets the usual
+    // {id,type:"closed"} frame, local listeners detach) and drop the frame;
+    // the connection and its other streams are untouched.
+    if (this.bufferedBytes + bytes > CHANNEL_MAX_BUFFERED_BYTES) {
+      this.close();
+      return;
+    }
     this.bufferedBytes += bytes;
     this.socket.write(line, () => {
       this.bufferedBytes -= bytes;
