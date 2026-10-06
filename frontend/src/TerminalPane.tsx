@@ -1494,16 +1494,24 @@ export function TerminalPane(props: {
       }
       if (!prefsRef.current.pasteOnRightClick) return;
       event.preventDefault();
-      tryImagePaste()
-        .then((handled) => {
-          if (handled) return;
-          return readClipboard().then((text) => {
-            if (text) pasteToTerminal(text);
-          });
-        })
-        .catch(() => {});
+      // Capture phase + stopPropagation: xterm's own right-click handler
+      // (on term.element, below this container) copies the current terminal
+      // selection into its hidden textarea and selects it, which is what
+      // surfaces stale text alongside the pasted clipboard item. Paste must
+      // send exactly what the Ctrl+V chord sends, so keep xterm out of it.
+      event.stopPropagation();
+      term.clearSelection();
+      pasteHandlerRef.current();
     };
-    container.addEventListener("contextmenu", onContextMenu);
+    // Firefox fires no contextmenu for xterm and drives its handler off a
+    // right-button mousedown instead; swallow that one too.
+    const onRightMouseDown = (event: MouseEvent) => {
+      if (event.button !== 2 || !prefsRef.current.pasteOnRightClick) return;
+      if (isCoarsePointerRef.current) return;
+      event.stopPropagation();
+    };
+    container.addEventListener("contextmenu", onContextMenu, true);
+    container.addEventListener("mousedown", onRightMouseDown, true);
 
     // Reconnects on any drop (network blip, backend redeploy, laptop sleep)
     // with capped exponential backoff — up to prefs.reconnect.maxAttempts,
@@ -1597,6 +1605,16 @@ export function TerminalPane(props: {
         // the pty. Also mirrored into lastCols/lastRows so the next refit()
         // (ResizeObserver-driven) computes its own delta against reality
         // instead of immediately trying to fight this back down.
+        // Issue #1520 — the server dropped output for this connection under
+        // backpressure; what's on screen may be garbled. Reset xterm and
+        // re-arm the replay guards: the next binary frame is a fresh full
+        // replay followed by a geometry frame, same as the initial attach.
+        if ((parsed as { type?: unknown } | null)?.type === "resync") {
+          term.reset();
+          sawGeometry = false;
+          replayCompleteGeneration = 0;
+          return;
+        }
         if (isGeometryMessage(parsed)) {
           const geo = parsed;
           // The first "geometry" frame on this connection is sent
@@ -1818,7 +1836,8 @@ export function TerminalPane(props: {
       window.removeEventListener("resize", refit);
       detachTouchScroll();
       detachImeInput();
-      container.removeEventListener("contextmenu", onContextMenu);
+      container.removeEventListener("contextmenu", onContextMenu, true);
+      container.removeEventListener("mousedown", onRightMouseDown, true);
       selectionSub.dispose();
       osc52Sub.dispose();
       dataSub.dispose();

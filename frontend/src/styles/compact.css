@@ -1,0 +1,120 @@
+/* Phone/tablet shared chrome that is NOT width-scoped: it keys off the
+   toolbar's own `toolbar--compact-picker` marker (the session picker took the
+   centre, which only happens off phone), so it follows the layoutMode override.
+   Imported after mobile.css so it can rely on (and, where needed, undo) the
+   phone block's rules. */
+
+/* Tablet toolbar: [☰][🔔][+] [workspace · session picker] [🔍][⋯]
+   Keyed on the `toolbar--compact-picker` marker rather than `[data-tier]` on
+   purpose: the marker only exists when the picker actually replaced the
+   centre (off phone, outside Tasks view), so these rules can't strand the
+   Back button or Settings, and they follow the layoutMode override. */
+.toolbar--compact-picker .toolbar-center {
+  display: none;
+}
+.toolbar--compact-picker .toolbar-mobile-session {
+  display: flex;
+}
+.toolbar--compact-picker .toolbar-app-menu {
+  display: flex;
+}
+/* Scoped to the compact-picker marker, not just the tier: these are hidden
+   exactly when the ⋯ menu that replaces them is shown. */
+.toolbar--compact-picker .toolbar-version-label,
+.toolbar--compact-picker .toolbar-theme-btn,
+.toolbar--compact-picker .toolbar-settings-btn,
+.toolbar--compact-picker .run-cmd-btn .kbd,
+.toolbar--compact-picker .run-cmd-btn .run-cmd-label {
+  display: none;
+}
+/* The search icon alone stays, as a square 44px target. */
+.toolbar--compact-picker .run-cmd-btn {
+  min-width: 44px;
+  min-height: 44px;
+  justify-content: center;
+  padding: 0;
+}
+
+/* Workspace name ahead of the session in the picker trigger. */
+.mobile-session-context {
+  flex: 0 1 auto;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dim);
+  font-size: 12px;
+}
+.mobile-session-context::after {
+  content: "\00b7";
+  margin-left: 6px;
+}
+
+/* Tablet: the session sheet shouldn't span the whole ~880px unfolded width. */
+.mobile-session-sheet.mobile-session-sheet--tablet {
+  width: min(560px, 100%);
+  align-self: center;
+}
+
+/* Navigator slide-over (PhoneNavigatorPanel inside .sidebar-wrapper). Phone
+   stretches it to the viewport in mobile.css; tablet gets a ~440px panel, and
+   100vw while the Tasks tab is active so the two-column board has room. Width
+   snaps (sidebar.css only transitions transform). */
+@media (max-width: 1279.98px) {
+  /* Width-gated like the sidebar.css overlay these resize: a forced-tablet
+     layoutMode on a wider window keeps the docked sidebar (see #1531). */
+  .app[data-tier="tablet"] .sidebar-wrapper {
+    width: min(440px, 60vw) !important;
+  }
+  .app[data-tier="tablet"].nav-tasks .sidebar-wrapper {
+    width: 100vw !important;
+    box-shadow: none !important;
+  }
+  .app[data-tier="tablet"].nav-tasks .cmux-scrim {
+    display: none !important;
+  }
+}
+
+/* Tasks tab: the board renders in flow inside the navigator, which
+   (.sidebar-wrapper) is the one scroller. */
+.kanban-board-inline {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+/* Tablet board: the phone's single-scroller / full-bleed-detail treatment
+   (mobile.css, phone width only), but with two columns side by side. Empty
+   column bodies stay visible here: they are live drop targets between the pair. */
+.app[data-tier="tablet"] .kanban-board-inline .kanban-unified-main {
+  flex-direction: column;
+}
+.app[data-tier="tablet"] .kanban-board-inline .kanban-unified,
+.app[data-tier="tablet"] .kanban-board-inline .kanban-unified-tasks {
+  height: auto;
+  overflow: visible;
+}
+.app[data-tier="tablet"] .kanban-board-inline .kanban-unified-columns {
+  --kanban-board-pad: 10px;
+  padding: var(--kanban-board-pad);
+}
+.app[data-tier="tablet"] .kanban-board-inline .kanban-unified-tasks .tasks-board {
+  overflow: visible;
+}
+.kanban-unified-columns--split .kanban-column {
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: none;
+}
+.app[data-tier="tablet"] .kanban-board-inline .kanban-detail-drawer {
+  position: fixed;
+  inset: calc(44px + env(safe-area-inset-top) + var(--shell-top, 0px)) 0 0;
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+  flex: none;
+  z-index: 46;
+  background: var(--bg);
+  border-left: none;
+}
+.app[data-tier="tablet"] .kanban-board-inline .kanban-detail-resize-handle {
+  display: none;
+}

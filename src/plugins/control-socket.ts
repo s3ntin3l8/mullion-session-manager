@@ -18,8 +18,10 @@ import { timingSafeTokenMatch } from "../services/crypto-utils.js";
 import { CONTROL_SOCKET_ADDR } from "../services/control-socket-addr.js";
 import { resolveAndAttach } from "../routes/terminal.js";
 import { attachAggregatedEventsSocket, attachLocalEventsSocket } from "../routes/events.js";
-import { SocketChannel } from "../services/socket-channel.js";
+import { SocketChannel, WRITE_HARD_CEILING_BYTES } from "../services/socket-channel.js";
 import { reclaimSocketPath } from "../services/unix-socket.js";
+import { eq } from "drizzle-orm";
+import { sessions } from "../db/schema.js";
 
 // Phase 4 (#185) — a general-purpose Unix control socket: the transport
 // behind the `mullion` CLI (#134/#190) and any other local script that wants
@@ -57,6 +59,24 @@ const MAX_LINE_BYTES = 2 * 1024 * 1024;
 // socket timeout. Exported for test/plugins/control-socket.test.ts, same
 // reasoning as hooks.ts's own exported GATE_TIMEOUT_MS/PROMOTE_TIMEOUT_MS.
 export const HANDSHAKE_TIMEOUT_MS = 10_000;
+
+// Issue #1517 — per-connection load bounds. One session-scoped client (the
+// socket path is injected into every spawned session) must not be able to
+// queue unbounded work or reply bytes in this process.
+/** Max ops dispatched but not yet replied to on one connection; past it the
+ * socket is paused and the remaining buffered lines wait. */
+export const MAX_INFLIGHT_OPS = 32;
+/** Max open sessions.attach / events.subscribe streams per connection. */
+export const MAX_OPEN_CHANNELS = 16;
+/** Once this many reply bytes are queued unwritten, stop reading requests
+ * until the socket 'drain's. */
+export const WRITE_HIGH_WATER_BYTES = 1024 * 1024;
+export { WRITE_HARD_CEILING_BYTES };
+/** Pre-handshake input is just `{"token":"..."}`; nothing legitimate needs
+ * more than this before authenticating. */
+export const MAX_HANDSHAKE_BYTES = 4 * 1024;
+/** Global cap on simultaneously open connections (server.maxConnections). */
+export const MAX_CONNECTIONS = 256;
 
 type Scope = "full" | "session";
 
@@ -106,9 +126,45 @@ interface OpSpec {
   handler: (ctx: OpContext) => Promise<void> | void;
 }
 
+/** Body fields a session-scoped `sessions.spawn_child` may forward (#1518);
+ * verified against createSessionSchema in routes/sessions.ts. */
+const SESSION_SPAWN_CHILD_FIELDS: readonly string[] = [
+  "command",
+  "name",
+  "cwd",
+  "model",
+  "smallModel",
+  "seedPrompt",
+];
+
 function send(socket: net.Socket, message: { id: number | null } & Record<string, unknown>): void {
   if (!socket.writable) return;
   socket.write(`${JSON.stringify(message)}\n`);
+  // A peer that never reads would otherwise let replies pile up in this
+  // process's memory without bound (#1517) — drop it past the hard ceiling.
+  if (socket.writableLength > WRITE_HARD_CEILING_BYTES) socket.destroy();
+}
+
+/** The open stream for `id`, or replies 400 and returns null. */
+function requireChannel(
+  conn: ConnectionState,
+  id: number,
+  reply: (payload: ReplyPayload) => void,
+): SocketChannel | null {
+  const channel = conn.openChannels.get(id);
+  if (!channel) reply({ ok: false, status: 400, error: "no open stream for this id" });
+  return channel ?? null;
+}
+
+/** Why a new stream cannot be opened on `conn` under `id`, or null if it can. */
+function streamSlotError(conn: ConnectionState, id: number): ReplyPayload | null {
+  if (conn.openChannels.has(id)) {
+    return { ok: false, status: 400, error: "a stream is already open for this id" };
+  }
+  if (conn.openChannels.size >= MAX_OPEN_CHANNELS) {
+    return { ok: false, status: 429, error: "too many open streams on this connection" };
+  }
+  return null;
 }
 
 function safeJsonParse(payload: string): unknown {
@@ -133,6 +189,11 @@ function buildAuthHeaders(app: FastifyInstance): Record<string, string> {
   if (!isAuthEnabled(app.config)) return {};
   const cookieValue = createSessionCookieValue(app.config.MULLION_SESSION_SECRET);
   return { cookie: `${SESSION_COOKIE_NAME}=${cookieValue}` };
+}
+
+/** Auth headers plus a JSON content type, for ops forwarding a request body. */
+function jsonHeaders(app: FastifyInstance): Record<string, string> {
+  return { ...buildAuthHeaders(app), "content-type": "application/json" };
 }
 
 /** Exported for a direct unit test of URLSearchParams' own percent-encoding
@@ -236,17 +297,24 @@ async function injectRoute(
  *    connection naming a *different* session id is rejected outright, never
  *    silently redirected to its own.
  */
-function extractSessionId(body: Record<string, unknown> | undefined): string | null {
-  const rawId = body?.sessionId;
+/**
+ * Reads `body[key]` as an id: a non-empty string or a number (stringified).
+ * An empty string is never a real id — treating it as "not provided" (rather
+ * than a literal target) means a bogus `{sessionId:""}` gets the same
+ * "'sessionId' is required" 400 every other omitted-id case does, instead of
+ * silently reaching app.inject() with an empty path segment (Hermes review,
+ * PR #398).
+ */
+function extractIdField(body: Record<string, unknown> | undefined, key: string): string | null {
+  const rawId = body?.[key];
   if (rawId === undefined || rawId === null) return null;
   if (typeof rawId !== "string" && typeof rawId !== "number") return null;
   const id = String(rawId);
-  // An empty string is never a real session id — treating it as "not
-  // provided" (rather than a literal target) means a bogus `{sessionId:""}`
-  // gets the same "'sessionId' is required" 400 every other omitted-id case
-  // does, instead of silently reaching app.inject() with an empty path
-  // segment (Hermes review, PR #398).
   return id.length === 0 ? null : id;
+}
+
+function extractSessionId(body: Record<string, unknown> | undefined): string | null {
+  return extractIdField(body, "sessionId");
 }
 
 function resolveTargetSessionId(
@@ -313,22 +381,7 @@ function resolveEventsSessionFilter(
 
 /** Same shape as extractSessionId, for projects.actions' `body.projectId`. */
 function extractProjectId(body: Record<string, unknown> | undefined): string | null {
-  const rawId = body?.projectId;
-  if (rawId === undefined || rawId === null) return null;
-  if (typeof rawId !== "string" && typeof rawId !== "number") return null;
-  const id = String(rawId);
-  return id.length === 0 ? null : id;
-}
-
-/** Same shape as extractSessionId/extractProjectId, for the device.* ops'
- * always-explicit `body.deviceId` — see device.action's own comment on why
- * there's no pinning/default to resolve here, unlike resolveTargetSessionId. */
-function extractDeviceId(body: Record<string, unknown> | undefined): string | null {
-  const rawId = body?.deviceId;
-  if (rawId === undefined || rawId === null) return null;
-  if (typeof rawId !== "string" && typeof rawId !== "number") return null;
-  const id = String(rawId);
-  return id.length === 0 ? null : id;
+  return extractIdField(body, "projectId");
 }
 
 /**
@@ -380,11 +433,7 @@ function resolveTargetProjectId(
 
 /** Same shape as extractSessionId, for sessions.spawn_child's `body.parentSessionId`. */
 function extractParentSessionId(body: Record<string, unknown> | undefined): string | null {
-  const rawId = body?.parentSessionId;
-  if (rawId === undefined || rawId === null) return null;
-  if (typeof rawId !== "string" && typeof rawId !== "number") return null;
-  const id = String(rawId);
-  return id.length === 0 ? null : id;
+  return extractIdField(body, "parentSessionId");
 }
 
 /**
@@ -424,6 +473,106 @@ function resolveParentSessionId(
   return { ok: true, id: provided };
 }
 
+/** One REST request an op forwards via app.inject(). `payload` is the
+ * already-serialized JSON body (its presence adds the JSON content type). */
+interface Route {
+  method: NonNullable<InjectOptions["method"]>;
+  url: string;
+  payload?: string;
+}
+
+const bad = (status: number, error: string): ReplyPayload => ({ ok: false, status, error });
+const json = (value: unknown): string => JSON.stringify(value ?? {});
+
+type ResolveFn = (ctx: OpContext) => Route | ReplyPayload | Promise<Route | ReplyPayload>;
+
+/**
+ * A resolver that has DECLARED how it relates to session scope — the tagged
+ * union `routeOp` requires for any op listing "session" in its scopes:
+ *  - `pinned`: the resolver verifies the request's target against the
+ *    connection's own session/project pin (resolveTargetSessionId & co).
+ *  - `unscoped`: the target is deliberately NOT pinned to the connection
+ *    (a host-global read, or an explicit resource id by design) — a
+ *    reviewed, greppable opt-out rather than an accident.
+ * `routeOp`'s full-only overload also takes a bare function, because
+ * `injectRoute` already structurally enforces full scope there; the
+ * session-reachable overload does not, so an op can't list "session" with a
+ * resolver that silently pins nothing (#1546).
+ */
+export interface DeclaredResolver {
+  readonly target: "pinned" | "unscoped";
+  readonly run: ResolveFn;
+}
+
+/** Declares that `run` pins its target to the connection's own session/project. */
+export const pinned = (run: ResolveFn): DeclaredResolver => ({ target: "pinned", run });
+
+/** Declares that `run` deliberately does not pin its target. */
+export const unscoped = (run: ResolveFn): DeclaredResolver => ({ target: "unscoped", run });
+
+type FullOnlyScopes = readonly ["full"];
+type SessionReachableScopes =
+  readonly ["full", "session"] | readonly ["session", "full"] | readonly ["session"];
+
+/**
+ * Declarative request/response op: `resolve` turns the request into either a
+ * `Route` to forward or an early `ReplyPayload` (validation / pin failure).
+ * The runner picks `injectRoute` for full-scope-only ops (structural
+ * enforcement) and `injectAndShape` for ops that list "session" — whose
+ * resolver the type system forces to be declared `pinned`/`unscoped`.
+ */
+export function routeOp(scopes: FullOnlyScopes, resolve: ResolveFn | DeclaredResolver): OpSpec;
+export function routeOp(scopes: SessionReachableScopes, resolve: DeclaredResolver): OpSpec;
+export function routeOp(scopes: readonly Scope[], resolve: ResolveFn | DeclaredResolver): OpSpec {
+  const fullOnly = scopes.length === 1 && scopes[0] === "full";
+  const run = typeof resolve === "function" ? resolve : resolve.run;
+  return {
+    scopes,
+    handler: async (ctx) => {
+      const resolved = await run(ctx);
+      if (!("method" in resolved)) {
+        ctx.reply(resolved);
+        return;
+      }
+      const opts = {
+        method: resolved.method,
+        url: resolved.url,
+        headers: resolved.payload !== undefined ? jsonHeaders(ctx.app) : buildAuthHeaders(ctx.app),
+        ...(resolved.payload !== undefined ? { payload: resolved.payload } : {}),
+      };
+      ctx.reply(
+        await (fullOnly ? injectRoute(ctx.app, ctx.conn, opts) : injectAndShape(ctx.app, opts)),
+      );
+    },
+  };
+}
+
+type Resolver = DeclaredResolver;
+
+/** Resolver wrapper: pins the target session (resolveTargetSessionId). */
+const onSession = (fn: (id: string, ctx: OpContext) => Route | ReplyPayload): Resolver =>
+  pinned((ctx) => {
+    const target = resolveTargetSessionId(ctx.conn, ctx.body);
+    return target.ok ? fn(target.id, ctx) : target.reply;
+  });
+
+/** Resolver wrapper: pins the target project (resolveTargetProjectId). */
+const onProject = (fn: (id: string, ctx: OpContext) => Route | ReplyPayload): Resolver =>
+  pinned((ctx) => {
+    const target = resolveTargetProjectId(ctx.app, ctx.conn, ctx.body);
+    return target.ok ? fn(target.id, ctx) : target.reply;
+  });
+
+/** Resolver wrapper: a required explicit id field, 400 when absent. Does NOT
+ * pin — the caller names the resource (see device.action's own comment). */
+const onField = (key: string, fn: (id: string, ctx: OpContext) => Route | ReplyPayload): Resolver =>
+  unscoped((ctx) => {
+    const id = extractIdField(ctx.body, key);
+    return id === null ? bad(400, `'${key}' is required`) : fn(id, ctx);
+  });
+
+const enc = encodeURIComponent;
+
 // Op registry — the extension point every later Phase 4 PR (4.2–4.5) appends
 // to, same "adding an op is a table entry, never a dispatch-loop change"
 // shape as src/mcp/tools.mjs's own TOOLS registry. Request/response ops
@@ -432,62 +581,34 @@ function resolveParentSessionId(
 // emits its own `{id, type, ...}` frames outside this envelope — see
 // docs/socket-api.md's stream section — without needing any change to
 // handleConnection's dispatch loop below.
-const OPS: Record<string, OpSpec> = {
+/** Exported for the scope-matrix test in test/plugins/control-socket.test.ts. */
+export const OPS: Record<string, OpSpec> = {
   ping: {
     scopes: ["full", "session"],
     handler: ({ reply }) => {
       reply({ ok: true, status: 200, result: { pong: true } });
     },
   },
-  "sessions.list": {
-    scopes: ["full"],
-    handler: async ({ app, conn, body, reply }) => {
-      reply(
-        await injectRoute(app, conn, {
-          method: "GET",
-          url: buildQueryUrl("/api/sessions", body),
-          headers: buildAuthHeaders(app),
-        }),
-      );
-    },
-  },
+  "sessions.list": routeOp(["full"], ({ body }) => ({
+    method: "GET",
+    url: buildQueryUrl("/api/sessions", body),
+  })),
   // Phase 4 (#187) — single-session inspect. Reachable at session scope
   // with no `sessionId` at all (defaults to the connection's own pinned
   // session — see resolveTargetSessionId), which is the shape an agent
   // running inside that session actually uses.
-  "sessions.get": {
-    scopes: ["full", "session"],
-    handler: async ({ app, conn, body, reply }) => {
-      const target = resolveTargetSessionId(conn, body);
-      if (!target.ok) {
-        reply(target.reply);
-        return;
-      }
-      reply(
-        await injectAndShape(app, {
-          method: "GET",
-          url: `/api/sessions/${encodeURIComponent(target.id)}`,
-          headers: buildAuthHeaders(app),
-        }),
-      );
-    },
-  },
+  "sessions.get": routeOp(
+    ["full", "session"],
+    onSession((id) => ({ method: "GET", url: `/api/sessions/${enc(id)}` })),
+  ),
   // Full scope only (deliberately, not just because REST requires a
   // projectId a session-scoped connection wouldn't have handy) — an agent
   // inside a session has no business spawning an unrelated one.
-  "sessions.create": {
-    scopes: ["full"],
-    handler: async ({ app, conn, body, reply }) => {
-      reply(
-        await injectRoute(app, conn, {
-          method: "POST",
-          url: "/api/sessions",
-          headers: { ...buildAuthHeaders(app), "content-type": "application/json" },
-          payload: JSON.stringify(body ?? {}),
-        }),
-      );
-    },
-  },
+  "sessions.create": routeOp(["full"], ({ body }) => ({
+    method: "POST",
+    url: "/api/sessions",
+    payload: json(body),
+  })),
   // Phase 5 (Track B, issue #193 5.3b) — the narrow, session-scoped path to
   // a REAL child session (own PTY, own dtach socket), as opposed to
   // sessions.create's full-scope-only restriction above ("an agent inside a
@@ -524,49 +645,43 @@ const OPS: Record<string, OpSpec> = {
         reply({ ok: false, status: 400, error: "unable to resolve the parent session's project" });
         return;
       }
+      // A session-scoped connection outlives its session's own intent: a hook
+      // token stays valid until the process is reaped, so re-check the ROW
+      // (the source of intent; the in-memory PtyManager map can lack a live
+      // session) and refuse to let a killed/exited parent keep spawning (#1518).
+      if (conn.scope === "session") {
+        const row = app.db
+          .select({ status: sessions.status })
+          .from(sessions)
+          .where(eq(sessions.id, Number(parent.id)))
+          .get();
+        if (row?.status !== "active") {
+          reply({ ok: false, status: 403, error: "the parent session is no longer active" });
+          return;
+        }
+      }
       const {
         sessionId: _sessionId,
         parentSessionId: _parentSessionId,
         projectId: _projectId,
         worktree: _worktree,
         worktreeRefresh: _worktreeRefresh,
-        ...rest
+        ...fullRest
       } = body ?? {};
-      // Session-scoped callers may never set `skipPermissions` or `kind`
-      // (independent review, PR #426): both are privilege-adjacent —
-      // skipPermissions disables permission prompts for the new session,
-      // and kind:"dock" hides it from the normal per-project session list
-      // (Sidebar.tsx renders only kind:"terminal"; only Dock.tsx surfaces
-      // "dock" sessions). Letting a session-scoped connection — whose hook
-      // token is inherited by every subprocess an agent spawns — set
-      // either would hand an already-compromised or merely misbehaving
-      // subprocess a strictly MORE privileged, less visible session than
-      // its own, which is exactly the escalation `sessions.create`'s
-      // full-scope gate exists to withhold. Full scope keeps both
-      // (matching `sessions.create`'s own behavior for that scope) since a
-      // full-scope caller already has this power directly.
-      //
-      // `env` (issue #822) joins this list for the same reason: without
-      // it, a NEW field added to POST /api/sessions' schema would silently
-      // widen session scope the moment it landed — this `...rest` spread
-      // forwards anything not explicitly named above. A session-scoped
-      // agent spawning a child of its own session has no legitimate need
-      // to hand that child arbitrary extra env; a full-scope caller
-      // already has this power directly (same as skipPermissions/kind).
-      if (conn.scope === "session") {
-        delete rest.skipPermissions;
-        delete rest.kind;
-        delete rest.env;
-      }
-      // `seedPrompt` (the MCP tool's `initialPrompt` param, translated by
-      // the client — see spawnChildSession's own comment) is deliberately
-      // NOT in the session-scope strip list above: unlike
-      // skipPermissions/kind/env it grants no extra privilege or visibility
-      // to the child — it only affects what the child agent's first turn
-      // says, which a session-scoped caller already fully controls via
-      // `command` itself (e.g. `claude -- '<anything>'`). See this op's own
-      // module doc comment for why spawn_child is reachable at session
-      // scope at all.
+      // Session scope forwards an explicit ALLOWLIST (#1518), not a denylist:
+      // a field newly added to POST /api/sessions' schema (as `env` once was)
+      // must not silently widen what a session-scoped caller can set.
+      // `skipPermissions`, `kind`, `env`, `nameLocked` etc. are privilege- or
+      // visibility-adjacent and stay full-scope only (a full-scope caller has
+      // that power directly). `seedPrompt` grants nothing `command` doesn't
+      // already (a session-scoped caller fully controls its child's first turn
+      // via `command` itself).
+      const rest: Record<string, unknown> =
+        conn.scope === "session"
+          ? Object.fromEntries(
+              Object.entries(fullRest).filter(([key]) => SESSION_SPAWN_CHILD_FIELDS.includes(key)),
+            )
+          : fullRest;
       const payload = {
         ...rest,
         projectId: parentProjectId,
@@ -580,7 +695,7 @@ const OPS: Record<string, OpSpec> = {
         await injectAndShape(app, {
           method: "POST",
           url: "/api/sessions",
-          headers: { ...buildAuthHeaders(app), "content-type": "application/json" },
+          headers: jsonHeaders(app),
           payload: JSON.stringify(payload),
         }),
       );
@@ -594,88 +709,31 @@ const OPS: Record<string, OpSpec> = {
   // `body.cascade` ("detach"|"kill", default "detach" — see
   // services/session-lifecycle.ts's killSession) rides through as a querystring on the
   // proxied DELETE, same transport reasoning as that route's own comment.
-  "sessions.kill": {
-    scopes: ["full"],
-    handler: async ({ app, conn, body, reply }) => {
-      const id = extractSessionId(body);
-      if (id === null) {
-        reply({ ok: false, status: 400, error: "'sessionId' is required" });
-        return;
-      }
-      const cascade = body?.cascade;
-      // Rejected explicitly here (independent review, PR #426) rather than
-      // silently dropped — an invalid value used to fall through to the
-      // REST route's own default ("detach") instead of surfacing the same
-      // 400 a bad value gets over REST directly, which was inconsistent
-      // between the two transports for identical input.
-      if (cascade !== undefined && cascade !== "detach" && cascade !== "kill") {
-        reply({
-          ok: false,
-          status: 400,
-          error: "'cascade' must be 'detach' or 'kill'",
-        });
-        return;
-      }
-      const query = cascade !== undefined ? { cascade } : undefined;
-      reply(
-        await injectRoute(app, conn, {
-          method: "DELETE",
-          url: buildQueryUrl(`/api/sessions/${encodeURIComponent(id)}`, query),
-          headers: buildAuthHeaders(app),
-        }),
-      );
-    },
-  },
+  "sessions.kill": routeOp(["full"], ({ body }) => {
+    const id = extractSessionId(body);
+    if (id === null) return bad(400, "'sessionId' is required");
+    const cascade = body?.cascade;
+    if (cascade !== undefined && cascade !== "detach" && cascade !== "kill") {
+      return bad(400, "'cascade' must be 'detach' or 'kill'");
+    }
+    const query = cascade !== undefined ? { cascade } : undefined;
+    return { method: "DELETE", url: buildQueryUrl(`/api/sessions/${enc(id)}`, query) };
+  }),
   // Reachable at session scope (an agent renaming its own session), same
   // target-id shape as sessions.get above.
-  "sessions.rename": {
-    scopes: ["full", "session"],
-    handler: async ({ app, conn, body, reply }) => {
-      const target = resolveTargetSessionId(conn, body);
-      if (!target.ok) {
-        reply(target.reply);
-        return;
-      }
-      // Deliberately NOT trimmed before this check: PATCH /api/sessions/:id's
-      // own ajv schema is `minLength: 1` with no trim either, so a
-      // whitespace-only name is accepted by both layers alike. Trimming
-      // only here would make the socket stricter than the REST route it's
-      // supposed to be an alternative transport for, not more consistent
-      // with it (Hermes review, PR #398) — a real "reject whitespace-only
-      // names" policy change belongs in renameSessionSchema itself, for
-      // every caller, not bolted onto one transport.
-      if (typeof body?.name !== "string" || body.name.length === 0) {
-        reply({ ok: false, status: 400, error: "'name' is required" });
-        return;
-      }
-      reply(
-        await injectAndShape(app, {
-          method: "PATCH",
-          url: `/api/sessions/${encodeURIComponent(target.id)}`,
-          headers: { ...buildAuthHeaders(app), "content-type": "application/json" },
-          payload: JSON.stringify({ name: body.name }),
-        }),
-      );
-    },
-  },
+  "sessions.rename": routeOp(
+    ["full", "session"],
+    onSession((id, { body }) =>
+      typeof body?.name !== "string" || body.name.length === 0
+        ? bad(400, "'name' is required")
+        : { method: "PATCH", url: `/api/sessions/${enc(id)}`, payload: json({ name: body.name }) },
+    ),
+  ),
   // Reachable at session scope — same target-id shape as sessions.get.
-  "sessions.scrollback": {
-    scopes: ["full", "session"],
-    handler: async ({ app, conn, body, reply }) => {
-      const target = resolveTargetSessionId(conn, body);
-      if (!target.ok) {
-        reply(target.reply);
-        return;
-      }
-      reply(
-        await injectAndShape(app, {
-          method: "GET",
-          url: `/api/sessions/${encodeURIComponent(target.id)}/scrollback`,
-          headers: buildAuthHeaders(app),
-        }),
-      );
-    },
-  },
+  "sessions.scrollback": routeOp(
+    ["full", "session"],
+    onSession((id) => ({ method: "GET", url: `/api/sessions/${enc(id)}/scrollback` })),
+  ),
   // Phase 4 (#186) — opens a multiplexed PTY I/O stream on this connection,
   // keyed by this request's own `id`: attachSocketToSession/
   // proxyToRemoteAttach (terminal.ts) write scrollback replay and live
@@ -698,8 +756,9 @@ const OPS: Record<string, OpSpec> = {
         reply(target.reply);
         return;
       }
-      if (conn.openChannels.has(id)) {
-        reply({ ok: false, status: 400, error: "a stream is already open for this id" });
+      const slotError = streamSlotError(conn, id);
+      if (slotError) {
+        reply(slotError);
         return;
       }
       // Same fallback shape as /ws/terminal's own query-param defaults
@@ -747,11 +806,8 @@ const OPS: Record<string, OpSpec> = {
   "sessions.input": {
     scopes: ["full", "session"],
     handler: ({ conn, id, body, reply }) => {
-      const channel = conn.openChannels.get(id);
-      if (!channel) {
-        reply({ ok: false, status: 400, error: "no open stream for this id" });
-        return;
-      }
+      const channel = requireChannel(conn, id, reply);
+      if (!channel) return;
       const b64 = typeof body?.b64 === "string" ? body.b64 : null;
       if (b64 === null) {
         reply({ ok: false, status: 400, error: "'b64' is required" });
@@ -769,11 +825,8 @@ const OPS: Record<string, OpSpec> = {
   "sessions.resize": {
     scopes: ["full", "session"],
     handler: ({ conn, id, body, reply }) => {
-      const channel = conn.openChannels.get(id);
-      if (!channel) {
-        reply({ ok: false, status: 400, error: "no open stream for this id" });
-        return;
-      }
+      const channel = requireChannel(conn, id, reply);
+      if (!channel) return;
       const cols = body?.cols;
       const rows = body?.rows;
       // Number.isFinite, not just typeof === "number": NaN/Infinity are
@@ -802,11 +855,8 @@ const OPS: Record<string, OpSpec> = {
   "sessions.detach": {
     scopes: ["full", "session"],
     handler: ({ conn, id, reply }) => {
-      const channel = conn.openChannels.get(id);
-      if (!channel) {
-        reply({ ok: false, status: 400, error: "no open stream for this id" });
-        return;
-      }
+      const channel = requireChannel(conn, id, reply);
+      if (!channel) return;
       // notify: false — the reply() below already tells this caller the
       // stream ended; a redundant unsolicited {id,type:"closed"} frame
       // would arrive on the wire ahead of this very reply (close() runs
@@ -832,8 +882,9 @@ const OPS: Record<string, OpSpec> = {
   "events.subscribe": {
     scopes: ["full", "session"],
     handler: ({ app, conn, id, reply }) => {
-      if (conn.openChannels.has(id)) {
-        reply({ ok: false, status: 400, error: "a stream is already open for this id" });
+      const slotError = streamSlotError(conn, id);
+      if (slotError) {
+        reply(slotError);
         return;
       }
       const channel = new SocketChannel(conn.socket, id);
@@ -867,11 +918,8 @@ const OPS: Record<string, OpSpec> = {
   "events.seen": {
     scopes: ["full", "session"],
     handler: ({ conn, id, body, reply }) => {
-      const channel = conn.openChannels.get(id);
-      if (!channel) {
-        reply({ ok: false, status: 400, error: "no open stream for this id" });
-        return;
-      }
+      const channel = requireChannel(conn, id, reply);
+      if (!channel) return;
       const sessionId = body?.sessionId;
       const seq = body?.seq;
       if (
@@ -891,11 +939,8 @@ const OPS: Record<string, OpSpec> = {
   "events.unsubscribe": {
     scopes: ["full", "session"],
     handler: ({ conn, id, reply }) => {
-      const channel = conn.openChannels.get(id);
-      if (!channel) {
-        reply({ ok: false, status: 400, error: "no open stream for this id" });
-        return;
-      }
+      const channel = requireChannel(conn, id, reply);
+      if (!channel) return;
       channel.close(false);
       reply({ ok: true, status: 200 });
     },
@@ -908,26 +953,17 @@ const OPS: Record<string, OpSpec> = {
   // scope is restricted to its own pinned session only — see
   // resolveEventsSessionFilter's own doc comment for why this reuses
   // events.subscribe's isolation model rather than inventing a new one.
-  "events.query": {
-    scopes: ["full", "session"],
-    handler: async ({ app, conn, body, reply }) => {
+  "events.query": routeOp(
+    ["full", "session"],
+    pinned(({ conn, body }) => {
       const resolved = resolveEventsSessionFilter(conn, body);
-      if (!resolved.ok) {
-        reply(resolved.reply);
-        return;
-      }
+      if (!resolved.ok) return resolved.reply;
       const queryBody: Record<string, unknown> = { ...body };
       if (resolved.sessionId !== undefined) queryBody.sessionId = resolved.sessionId;
       else delete queryBody.sessionId;
-      reply(
-        await injectAndShape(app, {
-          method: "GET",
-          url: buildQueryUrl("/api/events", queryBody),
-          headers: buildAuthHeaders(app),
-        }),
-      );
-    },
-  },
+      return { method: "GET", url: buildQueryUrl("/api/events", queryBody) };
+    }),
+  ),
   // Phase 4 (#189) — request/response, not a stream: `executeBrowserAction`
   // (browser-automation.ts) already returns a full snapshot/console/errors
   // envelope in one shot, so there's nothing here that needs multiplexing
@@ -936,65 +972,32 @@ const OPS: Record<string, OpSpec> = {
   // before forwarding (it's this socket's own targeting field, not part of
   // AgentAction's schema) so the REST route only ever sees the action body
   // it actually expects.
-  "browser.action": {
-    scopes: ["full", "session"],
-    handler: async ({ app, conn, body, reply }) => {
-      const target = resolveTargetSessionId(conn, body);
-      if (!target.ok) {
-        reply(target.reply);
-        return;
-      }
+  "browser.action": routeOp(
+    ["full", "session"],
+    onSession((id, { body }) => {
       const { sessionId: _sessionId, ...actionBody } = body ?? {};
-      reply(
-        await injectAndShape(app, {
-          method: "POST",
-          url: `/api/sessions/${encodeURIComponent(target.id)}/browser`,
-          headers: { ...buildAuthHeaders(app), "content-type": "application/json" },
-          payload: JSON.stringify(actionBody),
-        }),
-      );
-    },
-  },
+      return { method: "POST", url: `/api/sessions/${enc(id)}/browser`, payload: json(actionBody) };
+    }),
+  ),
   // Same shape as browser.action — `body.sessionId` targets the session,
   // the rest (`by`/`value`/`name`/`limit`) is FindElementsBody verbatim.
-  "browser.find": {
-    scopes: ["full", "session"],
-    handler: async ({ app, conn, body, reply }) => {
-      const target = resolveTargetSessionId(conn, body);
-      if (!target.ok) {
-        reply(target.reply);
-        return;
-      }
+  "browser.find": routeOp(
+    ["full", "session"],
+    onSession((id, { body }) => {
       const { sessionId: _sessionId, ...findBody } = body ?? {};
-      reply(
-        await injectAndShape(app, {
-          method: "POST",
-          url: `/api/sessions/${encodeURIComponent(target.id)}/browser/find`,
-          headers: { ...buildAuthHeaders(app), "content-type": "application/json" },
-          payload: JSON.stringify(findBody),
-        }),
-      );
-    },
-  },
+      return {
+        method: "POST",
+        url: `/api/sessions/${enc(id)}/browser/find`,
+        payload: json(findBody),
+      };
+    }),
+  ),
   // Read-only inspect of which browser pane(s) a session is bound to —
   // same target-id shape as sessions.get, no request body beyond sessionId.
-  "browser.bindings": {
-    scopes: ["full", "session"],
-    handler: async ({ app, conn, body, reply }) => {
-      const target = resolveTargetSessionId(conn, body);
-      if (!target.ok) {
-        reply(target.reply);
-        return;
-      }
-      reply(
-        await injectAndShape(app, {
-          method: "GET",
-          url: `/api/sessions/${encodeURIComponent(target.id)}/browser`,
-          headers: buildAuthHeaders(app),
-        }),
-      );
-    },
-  },
+  "browser.bindings": routeOp(
+    ["full", "session"],
+    onSession((id) => ({ method: "GET", url: `/api/sessions/${enc(id)}/browser` })),
+  ),
   // Unlike browser.action/browser.bindings above, a device has no "belongs
   // to this session" relationship to resolve — resolveTargetSessionId's
   // whole point is pinning a session-scoped connection to ITS OWN session,
@@ -1010,55 +1013,22 @@ const OPS: Record<string, OpSpec> = {
   // (worst case here: an unrelated tap/screenshot, not a credential). Still
   // reached via injectAndShape directly, never injectRoute, per this file's
   // own structural rule for any op listing "session" in scopes.
-  "device.action": {
-    scopes: ["full", "session"],
-    handler: async ({ app, body, reply }) => {
-      const deviceId = extractDeviceId(body);
-      if (deviceId === null) {
-        reply({ ok: false, status: 400, error: "'deviceId' is required" });
-        return;
-      }
+  "device.action": routeOp(
+    ["full", "session"],
+    onField("deviceId", (id, { body }) => {
       const { deviceId: _deviceId, ...actionBody } = body ?? {};
-      reply(
-        await injectAndShape(app, {
-          method: "POST",
-          url: `/api/devices/${encodeURIComponent(String(deviceId))}/action`,
-          headers: { ...buildAuthHeaders(app), "content-type": "application/json" },
-          payload: JSON.stringify(actionBody),
-        }),
-      );
-    },
-  },
-  "device.list": {
-    scopes: ["full", "session"],
-    handler: async ({ app, reply }) => {
-      reply(
-        await injectAndShape(app, {
-          method: "GET",
-          url: "/api/devices",
-          headers: buildAuthHeaders(app),
-        }),
-      );
-    },
-  },
+      return { method: "POST", url: `/api/devices/${enc(id)}/action`, payload: json(actionBody) };
+    }),
+  ),
+  "device.list": routeOp(
+    ["full", "session"],
+    unscoped(() => ({ method: "GET", url: "/api/devices" })),
+  ),
   // Same "explicit deviceId, no pinning" posture as device.action above.
-  "device.get": {
-    scopes: ["full", "session"],
-    handler: async ({ app, body, reply }) => {
-      const deviceId = extractDeviceId(body);
-      if (deviceId === null) {
-        reply({ ok: false, status: 400, error: "'deviceId' is required" });
-        return;
-      }
-      reply(
-        await injectAndShape(app, {
-          method: "GET",
-          url: `/api/devices/${encodeURIComponent(String(deviceId))}`,
-          headers: buildAuthHeaders(app),
-        }),
-      );
-    },
-  },
+  "device.get": routeOp(
+    ["full", "session"],
+    onField("deviceId", (id) => ({ method: "GET", url: `/api/devices/${enc(id)}` })),
+  ),
   "device.create": {
     scopes: ["full", "session"],
     handler: async ({ app, conn, body, reply }) => {
@@ -1084,7 +1054,7 @@ const OPS: Record<string, OpSpec> = {
         await injectAndShape(app, {
           method: "POST",
           url: "/api/devices",
-          headers: { ...buildAuthHeaders(app), "content-type": "application/json" },
+          headers: jsonHeaders(app),
           payload: JSON.stringify(body ?? {}),
         }),
       );
@@ -1097,194 +1067,81 @@ const OPS: Record<string, OpSpec> = {
   // That's a materially bigger blast radius than driving a device Mullion
   // already manages, so it doesn't get the session-scope carve-out the rest
   // of this family does.
-  "device.pair": {
-    scopes: ["full"],
-    handler: async ({ app, body, reply }) => {
-      reply(
-        await injectAndShape(app, {
-          method: "POST",
-          url: "/api/devices/pair",
-          headers: { ...buildAuthHeaders(app), "content-type": "application/json" },
-          payload: JSON.stringify(body ?? {}),
-        }),
-      );
-    },
-  },
+  "device.pair": routeOp(["full"], ({ body }) => ({
+    method: "POST",
+    url: "/api/devices/pair",
+    payload: json(body),
+  })),
   // Same "full-only because it dials an arbitrary address" reasoning as
   // device.pair above. Accepts either a `discoveryId` (from
   // device.discovered) or a manual `pairingAddress`+`connectAddress` pair.
-  "device.pair-and-connect": {
-    scopes: ["full"],
-    handler: async ({ app, body, reply }) => {
-      reply(
-        await injectAndShape(app, {
-          method: "POST",
-          url: "/api/devices/pair-and-connect",
-          headers: { ...buildAuthHeaders(app), "content-type": "application/json" },
-          payload: JSON.stringify(body ?? {}),
-        }),
-      );
-    },
-  },
+  "device.pair-and-connect": routeOp(["full"], ({ body }) => ({
+    method: "POST",
+    url: "/api/devices/pair-and-connect",
+    payload: json(body),
+  })),
   // Read-only mDNS snapshot. Cheap (in-memory cache), no network side
   // effects, no scope concerns beyond the rest of the device.list family.
-  "device.discovered": {
-    scopes: ["full", "session"],
-    handler: async ({ app, reply }) => {
-      reply(
-        await injectAndShape(app, {
-          method: "GET",
-          url: "/api/devices/discovered",
-          headers: buildAuthHeaders(app),
-        }),
-      );
-    },
-  },
+  "device.discovered": routeOp(
+    ["full", "session"],
+    unscoped(() => ({ method: "GET", url: "/api/devices/discovered" })),
+  ),
   // Keeps its historical name (and its documented meaning — "flips the row
   // to `killed` and tears down the live process/scope") even though the
   // `mullion device stop` verb now maps here rather than to DELETE: stop is
   // reversible, the row survives, and `device.delete` below is the
   // irreversible one. Renaming the op would break every raw-socket caller
   // of a published API for no behavioural gain.
-  "device.terminate": {
-    scopes: ["full", "session"],
-    handler: async ({ app, body, reply }) => {
-      const deviceId = extractDeviceId(body);
-      if (deviceId === null) {
-        reply({ ok: false, status: 400, error: "'deviceId' is required" });
-        return;
-      }
-      reply(
-        await injectAndShape(app, {
-          method: "POST",
-          url: `/api/devices/${encodeURIComponent(String(deviceId))}/stop`,
-          headers: buildAuthHeaders(app),
-        }),
-      );
-    },
-  },
+  "device.terminate": routeOp(
+    ["full", "session"],
+    onField("deviceId", (id) => ({ method: "POST", url: `/api/devices/${enc(id)}/stop` })),
+  ),
   // Start is the mirror of terminate above and equally reversible, so it
   // gets the same full+session reachability — an agent that can stop a
   // device can start one again.
-  "device.start": {
-    scopes: ["full", "session"],
-    handler: async ({ app, body, reply }) => {
-      const deviceId = extractDeviceId(body);
-      if (deviceId === null) {
-        reply({ ok: false, status: 400, error: "'deviceId' is required" });
-        return;
-      }
-      reply(
-        await injectAndShape(app, {
-          method: "POST",
-          url: `/api/devices/${encodeURIComponent(String(deviceId))}/start`,
-          headers: buildAuthHeaders(app),
-        }),
-      );
-    },
-  },
+  "device.start": routeOp(
+    ["full", "session"],
+    onField("deviceId", (id) => ({ method: "POST", url: `/api/devices/${enc(id)}/start` })),
+  ),
   // Full scope only, on the same "bigger blast radius than driving a device
   // Mullion already manages" reasoning as device.pair and (for the same
   // destroy-something-permanently shape) sessions.kill/previews.delete:
   // this drops the row and the id that identifies its systemd scope, with
   // no undo. A session-scoped caller can still start/stop the device.
-  "device.delete": {
-    scopes: ["full"],
-    handler: async ({ app, body, reply }) => {
-      const deviceId = extractDeviceId(body);
-      if (deviceId === null) {
-        reply({ ok: false, status: 400, error: "'deviceId' is required" });
-        return;
-      }
-      reply(
-        await injectAndShape(app, {
-          method: "DELETE",
-          url: `/api/devices/${encodeURIComponent(String(deviceId))}`,
-          headers: buildAuthHeaders(app),
-        }),
-      );
-    },
-  },
-  "projects.list": {
-    scopes: ["full"],
-    handler: async ({ app, conn, reply }) => {
-      reply(
-        await injectRoute(app, conn, {
-          method: "GET",
-          url: "/api/projects",
-          headers: buildAuthHeaders(app),
-        }),
-      );
-    },
-  },
+  "device.delete": routeOp(
+    ["full"],
+    onField("deviceId", (id) => ({ method: "DELETE", url: `/api/devices/${enc(id)}` })),
+  ),
+  "projects.list": routeOp(["full"], () => ({ method: "GET", url: "/api/projects" })),
   // Phase 4 (#134, PR6) — reachable at session scope: an agent inside a
   // session asking "what launchers does my own project have" with no
   // `projectId` at all is the shape `mullion project actions` actually uses
   // — see resolveTargetProjectId. Multi-host proxying (a project on a
   // remote agent host) is inherited for free through app.inject() against
   // the real route, same as every other op here.
-  "projects.actions": {
-    scopes: ["full", "session"],
-    handler: async ({ app, conn, body, reply }) => {
-      const target = resolveTargetProjectId(app, conn, body);
-      if (!target.ok) {
-        reply(target.reply);
-        return;
-      }
-      reply(
-        await injectAndShape(app, {
-          method: "GET",
-          url: `/api/projects/${encodeURIComponent(target.id)}/actions`,
-          headers: buildAuthHeaders(app),
-        }),
-      );
-    },
-  },
+  "projects.actions": routeOp(
+    ["full", "session"],
+    onProject((id) => ({ method: "GET", url: `/api/projects/${enc(id)}/actions` })),
+  ),
   // Full scope only, per the plan's per-scope allowlist — unlike
   // projects.actions above, dock controls are an operator-facing concept
   // (persistent monitors toggled from the dashboard), not something an
   // agent inside a session needs to introspect about itself.
-  "projects.dock": {
-    scopes: ["full"],
-    handler: async ({ app, conn, body, reply }) => {
-      const id = extractProjectId(body);
-      if (id === null) {
-        reply({ ok: false, status: 400, error: "'projectId' is required" });
-        return;
-      }
-      reply(
-        await injectRoute(app, conn, {
-          method: "GET",
-          url: `/api/projects/${encodeURIComponent(id)}/dock`,
-          headers: buildAuthHeaders(app),
-        }),
-      );
-    },
-  },
+  "projects.dock": routeOp(
+    ["full"],
+    onField("projectId", (id) => ({ method: "GET", url: `/api/projects/${enc(id)}/dock` })),
+  ),
   // Full scope only — project tooling is operator-authored config, not
   // something an agent inside a session should modify about an unrelated
   // project. GET is session-scoped (agents can read their own project's
   // tooling); SET is full-scope only.
-  "projects.get_tooling": {
-    scopes: ["full", "session"],
-    handler: async ({ app, conn, body, reply }) => {
-      const target = resolveTargetProjectId(app, conn, body);
-      if (!target.ok) {
-        reply(target.reply);
-        return;
-      }
-      reply(
-        await injectAndShape(app, {
-          method: "GET",
-          url: `/api/projects/${encodeURIComponent(target.id)}/tooling`,
-          headers: buildAuthHeaders(app),
-        }),
-      );
-    },
-  },
+  "projects.get_tooling": routeOp(
+    ["full", "session"],
+    onProject((id) => ({ method: "GET", url: `/api/projects/${enc(id)}/tooling` })),
+  ),
   "projects.set_tooling": {
     scopes: ["full"],
-    handler: async ({ app, conn: _conn, body, reply }) => {
+    handler: async ({ app, conn, body, reply }) => {
       const id = extractProjectId(body);
       if (id === null) {
         reply({ ok: false, status: 400, error: "'projectId' is required" });
@@ -1298,7 +1155,7 @@ const OPS: Record<string, OpSpec> = {
       const headers = buildAuthHeaders(app);
       const b = body ?? {};
       if (b.briefing !== undefined) {
-        results.briefing = await injectAndShape(app, {
+        results.briefing = await injectRoute(app, conn, {
           method: "PUT",
           url: base,
           headers,
@@ -1307,7 +1164,7 @@ const OPS: Record<string, OpSpec> = {
         if ((results.briefing as { ok?: boolean })?.ok === false) allOk = false;
       }
       if (b.skill !== undefined) {
-        results.skill = await injectAndShape(app, {
+        results.skill = await injectRoute(app, conn, {
           method: "PUT",
           url: `${base}/skill`,
           headers,
@@ -1316,7 +1173,7 @@ const OPS: Record<string, OpSpec> = {
         if ((results.skill as { ok?: boolean })?.ok === false) allOk = false;
       }
       if (b.reviewerAgent !== undefined) {
-        results.reviewerAgent = await injectAndShape(app, {
+        results.reviewerAgent = await injectRoute(app, conn, {
           method: "PUT",
           url: `${base}/reviewer-agent`,
           headers,
@@ -1330,128 +1187,47 @@ const OPS: Record<string, OpSpec> = {
   // Full scope only — same posture as sessions.create: an agent inside a
   // session has no business minting a preview subdomain for an unrelated
   // project or arbitrary external URL through this socket.
-  "previews.create": {
-    scopes: ["full"],
-    handler: async ({ app, conn, body, reply }) => {
-      reply(
-        await injectRoute(app, conn, {
-          method: "POST",
-          url: "/api/previews",
-          headers: { ...buildAuthHeaders(app), "content-type": "application/json" },
-          payload: JSON.stringify(body ?? {}),
-        }),
-      );
-    },
-  },
-  "previews.get": {
-    scopes: ["full"],
-    handler: async ({ app, conn, body, reply }) => {
-      const slug = typeof body?.slug === "string" ? body.slug : null;
-      if (slug === null || slug.length === 0) {
-        reply({ ok: false, status: 400, error: "'slug' is required" });
-        return;
-      }
-      reply(
-        await injectRoute(app, conn, {
-          method: "GET",
-          url: `/api/previews/${encodeURIComponent(slug)}`,
-          headers: buildAuthHeaders(app),
-        }),
-      );
-    },
-  },
-  "previews.delete": {
-    scopes: ["full"],
-    handler: async ({ app, conn, body, reply }) => {
-      const slug = typeof body?.slug === "string" ? body.slug : null;
-      if (slug === null || slug.length === 0) {
-        reply({ ok: false, status: 400, error: "'slug' is required" });
-        return;
-      }
-      reply(
-        await injectRoute(app, conn, {
-          method: "DELETE",
-          url: `/api/previews/${encodeURIComponent(slug)}`,
-          headers: buildAuthHeaders(app),
-        }),
-      );
-    },
-  },
+  "previews.create": routeOp(["full"], ({ body }) => ({
+    method: "POST",
+    url: "/api/previews",
+    payload: json(body),
+  })),
+  "previews.get": routeOp(["full"], (ctx) => {
+    const slug = typeof ctx.body?.slug === "string" ? ctx.body.slug : null;
+    if (slug === null || slug.length === 0) return bad(400, "'slug' is required");
+    return { method: "GET", url: `/api/previews/${enc(slug)}` };
+  }),
+  "previews.delete": routeOp(["full"], (ctx) => {
+    const slug = typeof ctx.body?.slug === "string" ? ctx.body.slug : null;
+    if (slug === null || slug.length === 0) return bad(400, "'slug' is required");
+    return { method: "DELETE", url: `/api/previews/${enc(slug)}` };
+  }),
   // Full scope only — previews are host-global (no session/user scoping
   // column on the table), so a session-scoped connection listing all
   // previews would leak every external preview's URL to whichever session
   // happens to hold a hook token.
-  "previews.list": {
-    scopes: ["full"],
-    handler: async ({ app, conn, reply }) => {
-      reply(
-        await injectRoute(app, conn, {
-          method: "GET",
-          url: "/api/previews",
-          headers: buildAuthHeaders(app),
-        }),
-      );
-    },
-  },
+  "previews.list": routeOp(["full"], () => ({ method: "GET", url: "/api/previews" })),
   // Full scope only, matching the plan's allowlist — the set of installed
   // agent CLIs on the host is operator-facing config, not something an
   // in-session agent needs to query about itself.
-  "agents.list": {
-    scopes: ["full"],
-    handler: async ({ app, conn, reply }) => {
-      reply(
-        await injectRoute(app, conn, {
-          method: "GET",
-          url: "/api/agents",
-          headers: buildAuthHeaders(app),
-        }),
-      );
-    },
-  },
+  "agents.list": routeOp(["full"], () => ({ method: "GET", url: "/api/agents" })),
   // Full scope only — issue #944, same posture as agents.list: bundle-sync
   // status is operator-facing host config, not something an in-session
   // agent needs to introspect about itself.
-  "bundle.status": {
-    scopes: ["full"],
-    handler: async ({ app, conn, reply }) => {
-      reply(
-        await injectRoute(app, conn, {
-          method: "GET",
-          url: "/api/bundle-sync/status",
-          headers: buildAuthHeaders(app),
-        }),
-      );
-    },
-  },
-  "bundle.resync": {
-    scopes: ["full"],
-    handler: async ({ app, conn, reply }) => {
-      reply(
-        await injectRoute(app, conn, {
-          method: "POST",
-          url: "/api/bundle-sync/resync",
-          headers: { ...buildAuthHeaders(app), "content-type": "application/json" },
-          payload: "{}",
-        }),
-      );
-    },
-  },
+  "bundle.status": routeOp(["full"], () => ({ method: "GET", url: "/api/bundle-sync/status" })),
+  "bundle.resync": routeOp(["full"], () => ({
+    method: "POST",
+    url: "/api/bundle-sync/resync",
+    payload: "{}",
+  })),
   // Issue #945 — full scope only, same reasoning: removing Mullion's own
   // integration from the host is an operator action, never something an
   // in-session agent should be able to trigger against its own host.
-  "bundle.remove": {
-    scopes: ["full"],
-    handler: async ({ app, conn, reply }) => {
-      reply(
-        await injectRoute(app, conn, {
-          method: "POST",
-          url: "/api/bundle-sync/remove",
-          headers: { ...buildAuthHeaders(app), "content-type": "application/json" },
-          payload: "{}",
-        }),
-      );
-    },
-  },
+  "bundle.remove": routeOp(["full"], () => ({
+    method: "POST",
+    url: "/api/bundle-sync/remove",
+    payload: "{}",
+  })),
 };
 
 /**
@@ -1529,7 +1305,14 @@ function handleConnection(
   });
 
   let buffer = "";
+  // UTF-8 byte length of `buffer`, tracked incrementally so framing never
+  // re-measures (or re-scans) the whole buffer per chunk (#1521).
+  let bufferBytes = 0;
+  // Everything before this index has already been searched for "\n".
+  let scanFrom = 0;
   let conn: ConnectionState | null = null;
+  let inflight = 0;
+  let paused = false;
   // Per-connection decoder, not a fresh Buffer.toString("utf8") per chunk —
   // a chunk boundary landing mid-multi-byte-character would otherwise
   // silently corrupt it (U+FFFD in, real bytes gone). Matters here more
@@ -1545,14 +1328,47 @@ function handleConnection(
   }, HANDSHAKE_TIMEOUT_MS);
   handshakeTimer.unref();
 
-  socket.on("data", (chunk: Buffer) => {
-    buffer += decoder.write(chunk);
+  const overloaded = () =>
+    conn !== null &&
+    (inflight >= MAX_INFLIGHT_OPS || socket.writableLength >= WRITE_HIGH_WATER_BYTES);
 
-    let newlineIndex = buffer.indexOf("\n");
-    while (newlineIndex !== -1) {
+  // Reconciles the socket's paused state with current load and, when load has
+  // cleared, resumes processing lines that were left buffered while paused.
+  const setPaused = (next: boolean) => {
+    if (paused === next) return;
+    paused = next;
+    if (next) socket.pause();
+    else socket.resume();
+  };
+  const flow = () => {
+    if (socket.destroyed) return;
+    if (overloaded()) {
+      setPaused(true);
+      return;
+    }
+    setPaused(false);
+    pump();
+  };
+  socket.on("drain", flow);
+
+  const pump = () => {
+    while (!socket.destroyed) {
+      // Lines already buffered are NOT dispatched while overloaded — pausing
+      // the socket alone would not stop the rest of a chunk already read.
+      if (overloaded()) {
+        setPaused(true);
+        return;
+      }
+      const newlineIndex = buffer.indexOf("\n", scanFrom);
+      if (newlineIndex === -1) {
+        scanFrom = buffer.length;
+        break;
+      }
       const line = buffer.slice(0, newlineIndex);
       buffer = buffer.slice(newlineIndex + 1);
-      newlineIndex = buffer.indexOf("\n");
+      scanFrom = 0;
+      const lineBytes = Buffer.byteLength(line, "utf8");
+      bufferBytes -= lineBytes + 1;
 
       if (line.trim() === "") continue;
 
@@ -1564,13 +1380,13 @@ function handleConnection(
       // cap applied at all. Checked before any JSON.parse of the line —
       // parsing a deliberately oversized line is itself the expensive
       // operation this cap exists to avoid, so no id is recovered here.
-      if (Buffer.byteLength(line, "utf8") > MAX_LINE_BYTES) {
-        if (conn === null) {
-          app.log.warn("control connection sent an oversized handshake line, closing");
-          clearTimeout(handshakeTimer);
-          socket.destroy();
-          return;
-        }
+      if (conn === null && lineBytes > MAX_HANDSHAKE_BYTES) {
+        app.log.warn("control connection sent an oversized handshake line, closing");
+        clearTimeout(handshakeTimer);
+        socket.destroy();
+        return;
+      }
+      if (lineBytes > MAX_LINE_BYTES) {
         send(socket, {
           id: null,
           ok: false,
@@ -1590,10 +1406,12 @@ function handleConnection(
         }
         const resolved = resolveHandshake(app, handshake.token);
         if (resolved === null) {
+          // Never log any prefix of the presented token (#1521): a session's
+          // hook token is a live credential.
           const hint =
             handshake.token === null
               ? "no token presented"
-              : `token ${handshake.token.slice(0, 8)}… did not match MULLION_AUTH_TOKEN or any live session`;
+              : `presented token of length ${handshake.token.length} did not match MULLION_AUTH_TOKEN or any live session`;
           app.log.warn(`control connection presented an invalid handshake, closing (${hint})`);
           clearTimeout(handshakeTimer);
           socket.destroy();
@@ -1615,7 +1433,13 @@ function handleConnection(
         continue;
       }
 
-      void dispatch(app, conn, result.message);
+      inflight++;
+      dispatch(app, conn, result.message)
+        .catch((err) => app.log.error({ err }, "dispatch failed"))
+        .finally(() => {
+          inflight--;
+          flow();
+        });
     }
 
     // Checked AFTER draining every complete line above, not on the raw
@@ -1625,10 +1449,17 @@ function handleConnection(
     // write with no terminator yet); that valid line must still be
     // processed rather than the whole connection being destroyed before
     // ever reading it. Only an unterminated remainder counts toward the cap.
-    if (Buffer.byteLength(buffer, "utf8") > MAX_LINE_BYTES) {
+    if (!socket.destroyed && bufferBytes > (conn === null ? MAX_HANDSHAKE_BYTES : MAX_LINE_BYTES)) {
       app.log.warn("control connection sent an oversized line without a terminator, closing");
       socket.destroy();
     }
+  };
+
+  socket.on("data", (chunk: Buffer) => {
+    const text = decoder.write(chunk);
+    buffer += text;
+    bufferBytes += Buffer.byteLength(text, "utf8");
+    pump();
   });
 
   socket.on("error", (err) => {
@@ -1641,7 +1472,11 @@ async function dispatch(
   conn: ConnectionState,
   message: ControlMessage,
 ): Promise<void> {
-  const spec = OPS[message.op];
+  // Own-property lookup: OPS is a plain object, so `OPS["toString"]` /
+  // `"__proto__"` / `"constructor"` would otherwise resolve to an inherited
+  // Object.prototype member with no `.scopes`, and the `.includes` below would
+  // throw outside the try — an unhandled rejection that takes the process down.
+  const spec = Object.hasOwn(OPS, message.op) ? OPS[message.op] : undefined;
   if (!spec) {
     send(conn.socket, {
       id: message.id,
@@ -1706,14 +1541,31 @@ export const controlSocketPlugin = fp(async (app: FastifyInstance) => {
   const openSockets = new Set<net.Socket>();
 
   const server = net.createServer((socket) => handleConnection(app, socket, openSockets));
+  server.maxConnections = MAX_CONNECTIONS;
 
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(socketPath, () => {
-      server.removeListener("error", reject);
-      resolve();
+  // bind() creates the socket file with 0777 & ~umask; a 077 umask for the
+  // (synchronous) bind means it is never group/world-accessible, not even
+  // between listen() and the chmod below (#1521). Restored immediately —
+  // umask is process-wide. Unsupported in worker threads, hence the guard.
+  let previousUmask: number | null = null;
+  try {
+    previousUmask = process.umask(0o077);
+  } catch {
+    previousUmask = null;
+  }
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(socketPath, () => {
+        server.removeListener("error", reject);
+        resolve();
+      });
+      if (previousUmask !== null) process.umask(previousUmask);
+      previousUmask = null;
     });
-  });
+  } finally {
+    if (previousUmask !== null) process.umask(previousUmask);
+  }
   // 0600: filesystem perms are the first line of defense alongside the
   // handshake token above, same posture as hooks.ts's own hook socket.
   chmodSync(socketPath, 0o600);

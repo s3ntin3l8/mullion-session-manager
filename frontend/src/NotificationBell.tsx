@@ -363,7 +363,8 @@ export function NotificationBell({
   onOpenSession,
   onOpenTimeline,
   onOpenBrowser,
-  phone = false,
+  sheet = false,
+  sheetClassName,
 }: {
   onOpenSession: (session: Session) => void;
   // Issue #270 — the roadmap's own framing is that the timeline (2.8) is
@@ -378,11 +379,14 @@ export function NotificationBell({
   // dev_server_detected offer is accepted, so the user lands straight on
   // the now-wired-up preview rather than having to find it themselves.
   onOpenBrowser: (projectId: number) => void;
-  // Phone tier: render the feed as a full-height bottom sheet (tap a row =
-  // open the session's terminal, "Needs you | All" filter, 44px targets)
-  // instead of the desktop dropdown popover. Desktop/tablet leave it unset
-  // and get the popover exactly as before.
-  phone?: boolean;
+  // Render the feed as a full-height bottom sheet (tap a row = open the
+  // session's terminal, "Needs you | All" filter, 44px targets) instead of
+  // the desktop dropdown popover. Set on the phone tier and on touch
+  // tablets; a mouse-driven desktop/tablet window leaves it unset and gets
+  // the popover exactly as before.
+  sheet?: boolean;
+  // Extra class on the sheet (e.g. the tablet variant that caps its width).
+  sheetClassName?: string;
 }) {
   const theme = useDashboardStore((s) => s.theme);
   const sessions = useDashboardStore((s) => s.sessions);
@@ -397,7 +401,7 @@ export function NotificationBell({
   const mutedSessionIds = useDashboardStore((s) => s.mutedSessionIds);
 
   const [open, setOpen] = useState(false);
-  // Phone sheet only: which sessions' groups the feed shows.
+  // Sheet only: which sessions' groups the feed shows.
   const [filter, setFilter] = useState<"needs" | "all">("all");
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
@@ -420,22 +424,22 @@ export function NotificationBell({
         : EMPTY_FEED_ITEMS,
     [open, sessions, projects, events, lastSeenSeq, dismissedEventKeys],
   );
-  // Only computed while the phone sheet is open (the scan looks at every
+  // Only computed while the sheet is open (the scan looks at every
   // event, unlike countUnread's unread-only one — see the P3 perf comment on
   // countUnread); openFilter below calls the same collector once at open time
   // to pick the default filter.
   const needsYouIds = useMemo(
     () =>
-      phone && open
+      sheet && open
         ? collectNeedsYouIds(sessions, events, lastSeenSeq, dismissedEventKeys, mutedSessionIds)
         : EMPTY_ID_SET,
-    [phone, open, sessions, events, lastSeenSeq, dismissedEventKeys, mutedSessionIds],
+    [sheet, open, sessions, events, lastSeenSeq, dismissedEventKeys, mutedSessionIds],
   );
   // What the phone sheet actually lists; the desktop popover always shows
   // every group, so `items` itself is never filtered.
   const shownItems = useMemo(
-    () => (phone && filter === "needs" ? items.filter((i) => needsYouIds.has(i.sessionId)) : items),
-    [phone, filter, items, needsYouIds],
+    () => (sheet && filter === "needs" ? items.filter((i) => needsYouIds.has(i.sessionId)) : items),
+    [sheet, filter, items, needsYouIds],
   );
   // Opening defaults to "Needs you" when something does, else the full feed.
   const openFilter = () =>
@@ -520,12 +524,12 @@ export function NotificationBell({
   // no focus-in on open, no Tab trap, no focus-restore on close. Same shared
   // hook as Settings/CommandPalette/PaneTab's menu. No `aria-modal` — same
   // "no backdrop, background stays interactive" rule as PaneTab's menu and
-  // UnifiedBoard.tsx's drawer. Desktop only (`!phone`) — the phone sheet
+  // UnifiedBoard.tsx's drawer. Popover only (`!sheet`) — the bottom sheet
   // below is a ui/BottomSheet.tsx, which runs its own instance of this same
   // hook against the very same `panelRef`; without this gate both instances
   // would fight over focus-in/restore-on-close on the one DOM node.
   const { onKeyDown: onTrapKeyDown, suppressRestore } = useFocusTrap({
-    active: !phone && open,
+    active: !sheet && open,
     containerRef: panelRef,
   });
   // The phone sheet's own suppressRestore (a separate useFocusTrap instance,
@@ -604,14 +608,16 @@ export function NotificationBell({
         <BellIcon size={17} />
         {unreadCount > 0 && <span className="attention-badge">{unreadCount}</span>}
       </button>
-      {phone && (
+      {sheet && (
         <BottomSheet
           open={open}
           onClose={() => setOpen(false)}
           label="Notifications"
           closeLabel="Close notifications"
           title="Notifications"
-          sheetClassName="mobile-notif-sheet"
+          sheetClassName={`mobile-notif-sheet${sheetClassName ? ` ${sheetClassName}` : ""}`}
+          // Android / browser back closes the sheet on any tier that renders it
+          // (phone and touch tablet), via usePhoneBackStack's compact contract.
           backStack
           sheetRef={panelRef}
           suppressRestoreRef={phoneSuppressRestoreRef}
@@ -692,7 +698,7 @@ export function NotificationBell({
         </BottomSheet>
       )}
       {open &&
-        !phone &&
+        !sheet &&
         pos &&
         createPortal(
           <div

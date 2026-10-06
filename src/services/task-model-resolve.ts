@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { getStoredSettings } from "./settings.js";
 import { commandIsOpencode, commandModelCli } from "./hook-adapters/index.js";
+import { validateCliModel } from "./hook-adapters/shared.js";
 
 export type OpenCodeModelRole = "implementer" | "reviewer";
 
@@ -147,41 +148,69 @@ export function resolveOpenCodeSmallModel(
 
 export type CliModelAgent = "claude-code" | "codex" | "agy";
 
-// Unlike opencode's `provider/model`, these CLIs take bare names (`sonnet`,
-// `gpt-5`, `claude-opus-4-5[1m]`). The value ends up in a shell command
-// line, so this is a strict allowlist with no whitespace, quotes, `$`,
-// backticks, or leading `-` (which would read as another flag).
-const CLI_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@[\]-]{0,127}$/;
-
-export function validateCliModel(value: string): boolean {
-  return CLI_MODEL_RE.test(value);
-}
+export { validateCliModel };
 
 const SETTINGS_KEY = { "claude-code": "claudeCode", codex: "codex", agy: "agy" } as const;
 
 /**
  * Resolve the `--model` value for a Claude Code, Codex, or agy session. Same
- * precedence chain as resolveOpenCodeModel: task DB row > issue-body `Model:`
- * directive > install-wide default (`settings.<cli>.defaultModel`) > `null`
- * (no flag; the CLI picks). An invalid value at any tier is logged and falls
- * through rather than reaching the command line.
+ * precedence chain as resolveOpenCodeModel: task DB row > issue-body
+ * directive (`Model:`; reviewers try `Reviewer-Model:` first) > install-wide
+ * default (`settings.<cli>.defaultModel`; reviewers try `reviewerModel`
+ * first) > `null` (no flag; the CLI picks). An invalid value at any tier is
+ * logged and falls through rather than reaching the command line.
  */
 export function resolveCliModel(
   app: FastifyInstance,
   agent: CliModelAgent,
-  opts: { taskModel?: string | null; issueBody: string | null },
+  opts: { taskModel?: string | null; issueBody: string | null; role?: OpenCodeModelRole },
 ): string | null {
-  const candidates: Array<[string, string | null | undefined]> = [
-    ["task's model", opts.taskModel],
-    ["issue body's Model: line", parseModelDirective(opts.issueBody)],
-    ["install-wide default model", getStoredSettings(app.db)[SETTINGS_KEY[agent]].defaultModel],
-  ];
+  const reviewer = opts.role === "reviewer";
+  const stored = getStoredSettings(app.db)[SETTINGS_KEY[agent]];
+  const candidates: Array<[string, string | null | undefined]> = [["task's model", opts.taskModel]];
+  if (reviewer) {
+    candidates.push([
+      "issue body's Reviewer-Model: line",
+      parseReviewerModelDirective(opts.issueBody),
+    ]);
+  }
+  candidates.push(["issue body's Model: line", parseModelDirective(opts.issueBody)]);
+  if (reviewer) candidates.push(["install-wide reviewer model", stored.reviewerModel]);
+  candidates.push(["install-wide default model", stored.defaultModel]);
   for (const [source, value] of candidates) {
     if (!value) continue;
     if (validateCliModel(value)) return value;
     app.log.warn(
       { model: value, agent },
       `[task-model-resolve] ${source} is not a valid ${agent} model name, falling through`,
+    );
+  }
+  return null;
+}
+
+/**
+ * Resolve the small/fast model for a Claude Code session, which Claude Code
+ * reads from `ANTHROPIC_DEFAULT_HAIKU_MODEL` (see the claude-code adapter).
+ * Same precedence chain as resolveOpenCodeSmallModel — task row > issue-body
+ * `SmallModel:` > `settings.claudeCode.smallModel` > `null` — but values are
+ * bare model names checked with `validateCliModel`, not `provider/model`.
+ * Codex and agy have no small-model concept wired up, so they get no resolver.
+ */
+export function resolveClaudeSmallModel(
+  app: FastifyInstance,
+  opts: { taskSmallModel?: string | null; issueBody: string | null },
+): string | null {
+  const candidates: Array<[string, string | null | undefined]> = [
+    ["task's small_model", opts.taskSmallModel],
+    ["issue body's SmallModel: line", parseSmallModelDirective(opts.issueBody)],
+    ["install-wide small model", getStoredSettings(app.db).claudeCode.smallModel],
+  ];
+  for (const [source, value] of candidates) {
+    if (!value) continue;
+    if (validateCliModel(value)) return value;
+    app.log.warn(
+      { model: value },
+      `[task-model-resolve] ${source} is not a valid claude-code model name, falling through`,
     );
   }
   return null;
@@ -197,9 +226,11 @@ export function resolveCliModel(
  *
  * - claude-code/codex/agy commands: `model` must pass `validateCliModel`
  *   (the same charset allowlist `resolveCliModel` uses). `smallModel` is
- *   meaningless for these CLIs — callers shouldn't be sending it, and there
+ *   meaningless for codex/agy — callers shouldn't be sending it, and there
  *   is nothing to validate it against, so it is always accepted here; the
- *   route drops it before it reaches the session row.
+ *   route drops it before it reaches the session row. For claude-code it
+ *   is a real setting (`ANTHROPIC_DEFAULT_HAIKU_MODEL`) and gets the same
+ *   `validateCliModel` check as `model`.
  * - opencode commands: both `model` and `smallModel` must pass
  *   `validateModel` (the `provider/model` shape) AND `validateCliModel` (the
  *   charset allowlist) — `validateModel` alone doesn't reject a value like
@@ -220,10 +251,10 @@ export function explicitModelError(
 ): string | null {
   const cli = commandModelCli(command);
   if (cli !== null) {
-    if (field === "smallModel") return null;
+    if (field === "smallModel" && cli !== "claude-code") return null;
     return validateCliModel(value)
       ? null
-      : `model must match the CLI model name format (letters, digits, and . _ : / @ [ ] - only, starting with a letter or digit)`;
+      : `${field} must match the CLI model name format (letters, digits, and . _ : / @ [ ] - only, starting with a letter or digit)`;
   }
   if (commandIsOpencode(command)) {
     if (validateModel(value) && validateCliModel(value)) return null;

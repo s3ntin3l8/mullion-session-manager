@@ -8,9 +8,9 @@ import { KanbanBoardOverlay } from "./panels/registry.js";
 import type { Session } from "./api/index.js";
 import type { ReactNode } from "react";
 
-// Phone-only chrome for the full-screen navigator (App.tsx renders it inside
+// Chrome for the compact-tier navigator (App.tsx renders it inside
 // `.sidebar-wrapper`, which mobile.css stretches to the whole viewport below
-// the toolbar on phone). The drawer's sections become tabs so each gets a
+// the toolbar on phone and compact.css makes a ~440px slide-over on tablet). The drawer's sections become tabs so each gets a
 // full-height list instead of one long scroll: Projects and Devices swap the
 // Sidebar's `phoneSection`; Settings shows the section list below; Tasks
 // shows the task board in place (App.tsx keeps the navigator open for it).
@@ -101,7 +101,14 @@ export function PhoneNavigatorPanel({
   sidebar,
   onOpenSession,
   onSessionEnded,
+  workspaces,
+  tablet = false,
 }: {
+  // Tablet only: the workspace switcher, shown at the top of the Projects tab
+  // (phone has no workspaces).
+  workspaces?: ReactNode;
+  // Tablet shows two task columns side by side instead of one.
+  tablet?: boolean;
   navTab: PhoneNavTab;
   setNavTab: (tab: PhoneNavTab) => void;
   onOpenTasks: () => void;
@@ -130,13 +137,17 @@ export function PhoneNavigatorPanel({
         <KanbanBoardOverlay
           inline
           phone
+          columnCount={tablet ? 2 : 1}
           onOpenSession={onOpenSession}
           onSessionEnded={onSessionEnded}
         />
       ) : navTab === "settings" ? (
         <PhoneSettingsList onSelect={onSelectSetting} />
       ) : (
-        sidebar
+        <>
+          {workspaces}
+          {sidebar}
+        </>
       )}
     </>
   );

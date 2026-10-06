@@ -93,6 +93,113 @@ describe("auth plugin + routes (issues #19, #30)", () => {
     });
   });
 
+  describe("auth disabled: Origin check without in-app auth (finding H3)", () => {
+    // Gateway-only mode has no session cookie, but a foreign page can still
+    // fire a cross-site WebSocket or POST at the dashboard from the user's
+    // browser. A present, mismatched Origin must 403; a missing one stays
+    // allowed (Node ws clients and the control socket's app.inject send none).
+    it("403s a write carrying a foreign Origin", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        headers: { origin: "https://attacker.example.com" },
+        payload: {},
+      });
+      expect(res.statusCode).toBe(403);
+      await app.close();
+    });
+
+    it("403s a /ws/* upgrade carrying a foreign Origin", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: "/ws/terminal?sessionId=1",
+        headers: { origin: "https://attacker.example.com" },
+      });
+      expect(res.statusCode).toBe(403);
+      await app.close();
+    });
+
+    it("does not gate a GET with a foreign Origin", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: "/api/projects",
+        headers: { origin: "https://attacker.example.com" },
+      });
+      expect(res.statusCode).toBe(200);
+      await app.close();
+    });
+
+    it("lets a write with no Origin header through", async () => {
+      const app = await buildApp();
+      const res = await app.inject({ method: "POST", url: "/api/projects", payload: {} });
+      expect(res.statusCode).not.toBe(403);
+      await app.close();
+    });
+
+    it("lets a same-origin write through", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        headers: { host: "localhost:3450", origin: "http://localhost:3450" },
+        payload: {},
+      });
+      expect(res.statusCode).not.toBe(403);
+      await app.close();
+    });
+
+    it("does not 403 gateway-proxied traffic: Host without port, X-Forwarded-Proto: https, matching Origin", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        headers: {
+          host: "mullion.example.com",
+          "x-forwarded-proto": "https, http",
+          origin: "https://mullion.example.com",
+        },
+        payload: {},
+      });
+      expect(res.statusCode).not.toBe(403);
+      await app.close();
+    });
+
+    it("does not 403 when Host carries an explicit default port the Origin omits", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        headers: {
+          host: "mullion.example.com:443",
+          "x-forwarded-proto": "https",
+          origin: "https://mullion.example.com",
+        },
+        payload: {},
+      });
+      expect(res.statusCode).not.toBe(403);
+      await app.close();
+    });
+
+    it("skips preview hosts", async () => {
+      process.env.PREVIEW_BASE_HOST = "preview.example.com";
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        headers: {
+          host: "preview-abc.preview.example.com",
+          origin: "https://attacker.example.com",
+        },
+        payload: {},
+      });
+      expect(res.statusCode).not.toBe(403);
+      await app.close();
+    });
+  });
+
   describe("auth enabled (MULLION_AUTH_TOKEN set)", () => {
     beforeEach(() => {
       process.env.MULLION_AUTH_TOKEN = TEST_TOKEN;

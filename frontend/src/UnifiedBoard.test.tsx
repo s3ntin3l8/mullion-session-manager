@@ -1228,6 +1228,65 @@ describe("UnifiedBoard detail drawer resize", () => {
   });
 });
 
+describe("UnifiedBoard tablet layout (columnCount 2)", () => {
+  const renderTablet = () =>
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} phone columnCount={2} />);
+  const shownTitles = () =>
+    Array.from(document.querySelectorAll(".kanban-column-title")).map((el) => el.textContent);
+
+  beforeEach(() => {
+    tasks = [
+      makeTask({ id: 1, status: "ready", title: "r1" }),
+      makeTask({ id: 3, status: "in_progress", title: "ip1" }),
+      makeTask({ id: 4, status: "done", title: "d1" }),
+    ];
+  });
+
+  it("shows two adjacent columns starting at the default one, both chips pressed", () => {
+    renderTablet();
+    expect(shownTitles()).toHaveLength(2);
+    expect(shownTitles()[0]).toBe("In Progress");
+    expect(screen.getByRole("button", { name: /^In Progress/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    const pressed = screen
+      .getByRole("group", { name: "Task status" })
+      .querySelectorAll('[aria-pressed="true"]');
+    expect(pressed).toHaveLength(2);
+    expect(document.querySelector(".kanban-unified-columns")).toHaveClass(
+      "kanban-unified-columns--split",
+    );
+  });
+
+  it("keeps the pair put when a chip that is already on screen is picked", async () => {
+    renderTablet();
+    const before = shownTitles();
+    const second = screen
+      .getByRole("group", { name: "Task status" })
+      .querySelectorAll<HTMLElement>('[aria-pressed="true"]')[1]!;
+    await userEvent.click(second);
+    expect(shownTitles()).toEqual(before);
+  });
+
+  it("moves the window to a picked chip, clamped at the end", async () => {
+    renderTablet();
+    await userEvent.click(screen.getByRole("button", { name: /^Ready/ }));
+    expect(shownTitles()[0]).toBe("Ready");
+    await userEvent.click(screen.getByRole("button", { name: /^Failed/ }));
+    expect(shownTitles()).toHaveLength(2);
+    expect(shownTitles()[1]).toBe("Failed");
+  });
+
+  it("phone (columnCount 1) is still a single column with no split modifier", () => {
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} phone />);
+    expect(shownTitles()).toHaveLength(1);
+    expect(document.querySelector(".kanban-unified-columns")).not.toHaveClass(
+      "kanban-unified-columns--split",
+    );
+  });
+});
+
 describe("UnifiedBoard phone layout", () => {
   const renderPhone = () =>
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} phone />);

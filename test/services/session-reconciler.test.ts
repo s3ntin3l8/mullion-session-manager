@@ -24,8 +24,11 @@ vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return {
     ...actual,
-    spawn: vi.fn(() => {
+    spawn: vi.fn((_cmd: string, args?: string[]) => {
       const ee = new EventEmitter() as EventEmitter & { stdout?: EventEmitter };
+      // Created synchronously: listOwnedScopes attaches its stdout listener
+      // right after spawn(), before any of the setImmediate callbacks below.
+      ee.stdout = new EventEmitter();
       setImmediate(() => {
         ee.emit("exit", 0);
         // Issue #1140 — terminate()'s stopScope() now issues a list-units
@@ -36,13 +39,20 @@ vi.mock("node:child_process", async (importOriginal) => {
         // testTimeout) the moment any test here reached terminate(). See
         // test/helpers/mock-spawn.ts's identical fix for the full
         // reasoning.
-        ee.stdout = new EventEmitter();
-        setImmediate(() => ee.emit("close", 0));
+        setImmediate(() => {
+          // H7 test hook: a canned `systemctl --user list-units` reply.
+          if (listUnitsOut !== null && args?.includes("list-units")) {
+            ee.stdout?.emit("data", Buffer.from(listUnitsOut));
+          }
+          ee.emit("close", 0);
+        });
       });
       return ee;
     }),
   };
 });
+
+let listUnitsOut: string | null = null;
 
 const mockSyncTaskTransition = vi.fn().mockResolvedValue(undefined);
 vi.mock("../../src/services/task-github-sync.js", () => ({
@@ -70,6 +80,7 @@ describe("reconcileExitedSessions", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     mockSyncTaskTransition.mockClear();
+    listUnitsOut = null;
   });
 
   // Perf audit finding B8(2) — LocalBackend.liveness(ids) now calls
@@ -250,13 +261,15 @@ describe("reconcileExitedSessions", () => {
     // reconciler reaches the DB write, and hard-coding that depth would be
     // an implementation detail this test shouldn't need to know.
     let row: { status: string } | undefined;
-    for (let i = 0; i < 50; i++) {
+    // (terminate() is awaited between the flip and the cleanup call, so the
+    // cleanup spy is also awaited here, bounded by the loop.)
+    for (let i = 0; i < 200; i++) {
       [row] = app.db
         .select({ status: sessions.status })
         .from(sessions)
         .where(eq(sessions.id, sessionId))
         .all();
-      if (row?.status === "exited") break;
+      if (row?.status === "exited" && cleanupSpy.mock.calls.length > 0) break;
       await new Promise((resolve) => setImmediate(resolve));
     }
 
@@ -645,6 +658,92 @@ describe("reconcileExitedSessions", () => {
 
       await app.close();
     });
+  });
+
+  // H7 — a confirmed-dead local session must be fully terminated (scope
+  // stop + token/state/agent-guide files), not just kill()ed, or those
+  // files leak forever.
+  it("terminates a local session (removing its token/state files) once the row flips to exited (H7)", async () => {
+    const app = await buildApp();
+    const sessionId = await createSession(app);
+    const id = String(sessionId);
+    const terminateSpy = vi.spyOn(app.pty, "terminate");
+    const sessionsDir = (app.pty as unknown as { sessionsDir: string }).sessionsDir;
+    const tokenPath = path.join(sessionsDir, `${id}.token`);
+    mockMasterAlive(app, false);
+
+    await reconcileExitedSessions(app);
+
+    expect(terminateSpy).toHaveBeenCalledWith(id);
+    expect(fs.existsSync(tokenPath)).toBe(false);
+    await app.close();
+  });
+
+  it("does not terminate when it lost the CAS to another writer (H7)", async () => {
+    const app = await buildApp();
+    const sessionId = await createSession(app);
+    const terminateSpy = vi.spyOn(app.pty, "terminate");
+    const gitWorktreeModule = await import("../../src/services/git-worktree.js");
+    // The row is flipped by the other writer while liveness is in flight.
+    vi.spyOn(app.pty, "isMasterAliveStateBatch").mockImplementation(async (ids: string[]) => {
+      const { sessions } = await import("../../src/db/schema.js");
+      const { eq } = await import("drizzle-orm");
+      app.db.update(sessions).set({ status: "killed" }).where(eq(sessions.id, sessionId)).run();
+      const result: Record<string, SessionLiveness> = Object.create(null);
+      for (const id of ids) result[id] = "dead";
+      return result;
+    });
+    vi.spyOn(gitWorktreeModule, "cleanupPreviewWorktree").mockResolvedValue(true);
+
+    await reconcileExitedSessions(app);
+
+    expect(terminateSpy).not.toHaveBeenCalledWith(String(sessionId));
+    await app.close();
+  });
+
+  // Hardening that makes H7's delete-on-dead safe: a scope carrying THIS
+  // instance's own unit prefix whose socket lives under a different dir is
+  // "unknown", never "dead" — so it is never terminated.
+  it("never terminates a session whose this-instance unit has a socket outside sessionsDir (H7)", async () => {
+    const app = await buildApp();
+    const sessionId = await createSession(app);
+    const id = String(sessionId);
+    const { deriveInstanceId } = await import("../../src/services/session-process.js");
+    const sessionsDir = (app.pty as unknown as { sessionsDir: string }).sessionsDir;
+    const inst = deriveInstanceId(path.resolve(sessionsDir));
+    listUnitsOut = `crs-session-${inst}-${id}.scope loaded active running /usr/bin/dtach -n /somewhere/else/${id}.sock bash\n`;
+    const terminateSpy = vi.spyOn(app.pty, "terminate");
+
+    await reconcileExitedSessions(app);
+
+    expect(terminateSpy).not.toHaveBeenCalledWith(id);
+    const res = await app.inject({ method: "GET", url: "/api/sessions" });
+    const row = (res.json() as Array<{ id: number; status: string }>).find(
+      (s) => s.id === sessionId,
+    );
+    expect(row?.status).toBe("active");
+    await app.close();
+  });
+
+  // M6 — one row throwing must not abort the rest of the tick.
+  it("keeps reconciling the remaining rows when one row's teardown throws (M6)", async () => {
+    const app = await buildApp();
+    const first = await createSession(app);
+    const second = await createSession(app);
+    mockMasterAlive(app, false);
+    const gitWorktreeModule = await import("../../src/services/git-worktree.js");
+    const real = gitWorktreeModule.cleanupPreviewWorktree;
+    vi.spyOn(gitWorktreeModule, "cleanupPreviewWorktree").mockImplementation(async (id, log) => {
+      if (id === first) throw new Error("boom");
+      return real(id, log);
+    });
+
+    await expect(reconcileExitedSessions(app)).resolves.toBeUndefined();
+
+    const res = await app.inject({ method: "GET", url: "/api/sessions" });
+    const rows = res.json() as Array<{ id: number; status: string }>;
+    expect(rows.find((s) => s.id === second)?.status).toBe("exited");
+    await app.close();
   });
 
   it("does not touch an already-killed session", async () => {

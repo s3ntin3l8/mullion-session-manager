@@ -81,7 +81,32 @@ export interface GeometryMessage {
   minRows?: number;
 }
 
-export type TerminalWSMessage = ResizeMessage | ExitedMessage | GeometryMessage;
+// Issue #1520 — server->browser only. Sent after the server dropped PTY
+// output for this connection under backpressure (socket.bufferedAmount over
+// the cap) and the buffer has since drained: everything the client has drawn
+// so far may be garbled (a chunk missing mid-escape-sequence). The client must
+// reset its xterm; the next binary frame is a fresh full scrollback replay,
+// followed by a geometry frame, exactly like the initial attach. (The remote
+// proxy path asks the agent for the same replay via ResyncRequestMessage and
+// forwards it; only against an older agent does it close with code 4001 so
+// the client's reconnect logic re-attaches instead.)
+export interface ResyncMessage {
+  type: "resync";
+}
+
+// Primary -> agent only (the proxied /internal/ws/attach leg): the primary
+// has no scrollback of its own for a remote-host session, so after it drops
+// upstream output for a slow browser it asks the agent to replay in place.
+// The agent answers exactly like the local path's drain handler — a
+// ResyncMessage, fresh scrollback, a geometry frame, a redraw nudge — and
+// that ResyncMessage doubles as the ack. An older agent silently ignores the
+// unknown frame, never acks, and the primary falls back to the 4001 close.
+export interface ResyncRequestMessage {
+  type: "resync-request";
+}
+
+export type TerminalWSMessage =
+  ResizeMessage | ExitedMessage | GeometryMessage | ResyncMessage | ResyncRequestMessage;
 
 // ---------------------------------------------------------------------------
 // services/github-ws-broadcast.ts — GitHubWSEvent

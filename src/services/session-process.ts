@@ -71,12 +71,17 @@
 //   working unchanged (ownership is socket-path-derived, not name-derived);
 //   only sessions created after the upgrade get the namespaced name.
 
-import { spawn as spawnChild, execFileSync } from "node:child_process";
-import type { ChildProcess } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { listScopeProcesses } from "./cgroup-inventory.js";
 import type { CgroupProcess } from "./cgroup-inventory.js";
+import {
+  armKillEscalation,
+  KILL_ESCALATION_MS,
+  runSystemctl,
+  SYSTEMCTL_TIMEOUT_MS,
+} from "./systemctl-runner.js";
 
 // Deterministic (no timestamp) so a *future* process — one that never
 // tracked this session in memory at all, e.g. right after a restart — can
@@ -121,90 +126,7 @@ export function scopeUnitName(instanceId: string, id: string): string {
  * candidate), its exit code isn't affected by unit health, so a host with
  * one failed unit elsewhere ("degraded") doesn't false-negative here.
  */
-// Issue #1232 — every systemctl spawn in this file except describeScope()
-// had no timeout at all: a wedged `--user` D-Bus bus (systemd restart, OOM
-// pressure) left the caller pending indefinitely. isSystemctlUserAvailable's
-// execFileSync below is worse than the async cases — a synchronous call
-// blocks the entire event loop, not just one promise. SYSTEMCTL_TIMEOUT_MS
-// matches cgroup-inventory.ts's own SYSTEMCTL_TIMEOUT_MS budget for the same
-// class of call; KILL_ESCALATION_MS mirrors every other spawn-with-timeout
-// helper in this repo (git-status.ts, agent-detect.ts, ...) — SIGTERM first,
-// SIGKILL only if the process is still alive after a short grace period.
-// Exported — device-process.ts (the devices/AVD analogue of this module,
-// same "crs-<kind>-<instanceId>-<id>" scope-naming/ownership shape, a
-// deliberately separate module rather than a generalization of this
-// high-risk one, see that file's own header) reuses this budget and the
-// escalation helper below rather than hand-copying them and risking drift.
-export const SYSTEMCTL_TIMEOUT_MS = 5_000;
-export const KILL_ESCALATION_MS = 2_000;
-
-/**
- * Arms the SIGTERM-then-SIGKILL escalation every timed spawn below needs —
- * extracted once three near-identical hand-rolled copies of this same
- * bookkeeping accumulated in this file (describeScope, listOwnedScopes,
- * stopScope; code-review finding on this issue). `onTimeout` fires once,
- * synchronously, when `timeoutMs` elapses with SIGTERM already sent — its
- * ONLY job is to settle whatever promise this spawn backs (e.g. call this
- * function's own `finish`/`fail`); it must NOT call the returned
- * `clearOnSettle` itself, or the escalation timer this function just armed
- * would be cancelled before it can ever fire, defeating the whole point.
- *
- * `clearOnSettle` is what the caller's own 'error'/'close'/'exit' handlers
- * call instead, unconditionally, once the child is CONFIRMED to have
- * actually ended — whether that happens before `timeoutMs` (the ordinary,
- * on-time case) or after (SIGTERM/SIGKILL actually worked). Safe to call
- * either way: clearing an already-fired `timeoutMs` timer is a no-op: only
- * the still-pending escalation timer, if any, actually gets cancelled.
- */
-// Exported for device-process.ts's reuse — see the SYSTEMCTL_TIMEOUT_MS
-// comment above. No behavior change; this function is otherwise unmodified.
-export function armKillEscalation(
-  child: Pick<ChildProcess, "kill" | "exitCode" | "signalCode">,
-  timeoutMs: number,
-  onTimeout: () => void,
-): { clearOnSettle: () => void } {
-  let killTimer: ReturnType<typeof setTimeout> | null = null;
-  const clearKillTimer = () => {
-    if (killTimer) {
-      clearTimeout(killTimer);
-      killTimer = null;
-    }
-  };
-
-  const timer = setTimeout(() => {
-    try {
-      child.kill(); // SIGTERM
-    } catch {
-      // Best-effort — a kill() failure on an already-dead or non-standard
-      // child must not turn into an unhandled throw here.
-    }
-    // Escalate to SIGKILL if still alive after a short grace period.
-    // `killed`/`exitCode` alone don't tell us this — Node sets `killed`
-    // once a signal is successfully SENT, not once the process has
-    // actually died — so `exitCode`/`signalCode` both staying `null` is
-    // the real "still alive" signal. Deliberately NOT cancelled by
-    // `onTimeout` below — see this function's own doc comment.
-    killTimer = setTimeout(() => {
-      if (child.exitCode === null && child.signalCode === null) {
-        try {
-          child.kill("SIGKILL");
-        } catch {
-          // Same best-effort posture as the SIGTERM above.
-        }
-      }
-    }, KILL_ESCALATION_MS);
-    killTimer.unref();
-    onTimeout();
-  }, timeoutMs);
-  timer.unref();
-
-  return {
-    clearOnSettle: () => {
-      clearTimeout(timer);
-      clearKillTimer();
-    },
-  };
-}
+export { armKillEscalation, KILL_ESCALATION_MS, SYSTEMCTL_TIMEOUT_MS };
 
 export function isSystemctlUserAvailable(): boolean {
   try {
@@ -253,59 +175,31 @@ export function isSystemctlUserAvailable(): boolean {
  */
 const DESCRIBE_SCOPE_TIMEOUT_MS = 2_000;
 
-export function describeScope(instanceId: string, id: string): Promise<string | null> {
-  return new Promise((resolve) => {
-    let stdout = "";
-    let settled = false;
-    const child = spawnChild(
-      "systemctl",
-      [
-        "--user",
-        "show",
-        `${scopeUnitName(instanceId, id)}.scope`,
-        "-p",
-        "Description",
-        "-p",
-        "ActiveState",
-      ],
-      { stdio: ["ignore", "pipe", "ignore"] },
-    );
-
-    const onStdoutData = (chunk: Buffer) => {
-      stdout += chunk.toString("utf8");
-    };
-    child.stdout?.on("data", onStdoutData);
-
-    const finish = (value: string | null) => {
-      if (settled) return;
-      settled = true;
-      child.stdout?.off("data", onStdoutData);
-      resolve(value);
-    };
-
-    // #1232 — this probe already never rejects/hangs (see this function's
-    // own doc comment); bounded by DESCRIBE_SCOPE_TIMEOUT_MS the same way
-    // every other spawn below is.
-    const armed = armKillEscalation(child, DESCRIBE_SCOPE_TIMEOUT_MS, () => finish(null));
-
-    child.on("error", () => {
-      armed.clearOnSettle();
-      finish(null);
-    });
-    // 'close', not 'exit' — same stdout-delivery race isMasterAliveStateBatch()
-    // below already guards against.
-    child.on("close", () => {
-      armed.clearOnSettle();
-      const fields = Object.create(null) as Record<string, string>;
-      for (const line of stdout.split("\n")) {
-        const eq = line.indexOf("=");
-        if (eq === -1) continue;
-        fields[line.slice(0, eq)] = line.slice(eq + 1);
-      }
-      const active = fields.ActiveState === "active" || fields.ActiveState === "deactivating";
-      finish(active && fields.Description ? fields.Description : null);
-    });
-  });
+export async function describeScope(instanceId: string, id: string): Promise<string | null> {
+  // #1232 — this probe never rejects/hangs (see this function's own doc
+  // comment); bounded by DESCRIBE_SCOPE_TIMEOUT_MS like every other spawn.
+  const res = await runSystemctl(
+    [
+      "--user",
+      "show",
+      `${scopeUnitName(instanceId, id)}.scope`,
+      "-p",
+      "Description",
+      "-p",
+      "ActiveState",
+    ],
+    DESCRIBE_SCOPE_TIMEOUT_MS,
+    { captureStdout: true },
+  );
+  if (res.errored || res.timedOut) return null;
+  const fields = Object.create(null) as Record<string, string>;
+  for (const line of res.stdout.split("\n")) {
+    const eq = line.indexOf("=");
+    if (eq === -1) continue;
+    fields[line.slice(0, eq)] = line.slice(eq + 1);
+  }
+  const active = fields.ActiveState === "active" || fields.ActiveState === "deactivating";
+  return active && fields.Description ? fields.Description : null;
 }
 
 /**
@@ -465,78 +359,117 @@ export interface ScopeOwnershipListing {
   failed: boolean;
 }
 
+// Issue #1525 / #1541 — listings are shared and briefly cached per
+// (sessionsDir, instanceId, states, all) key:
+//   1. concurrent identical calls share ONE in-flight systemctl spawn (#1525);
+//   2. a settled, non-failed listing is reused for OWNED_SCOPES_TTL_MS (#1541),
+//      measured from when its spawn STARTED (so the verdict is never older
+//      than the TTL at the moment of a hit).
+// The critical invariant: a scope mutation must never be masked by a stale
+// "dead"/"absent" verdict — the reconciler would mark a live session exited
+// and (since #1530) terminate it. Hence invalidateOwnedScopesCache(), which
+// stopScope calls before and after its stop and pty-manager's bootstrapMaster
+// calls once systemd-run settles (a scope was or may have been created). It
+// clears the in-flight map and the TTL cache and bumps a generation so a
+// listing that STARTED before the invalidation can't repopulate the cache
+// when it resolves late (callers already awaiting it still get its pre-
+// mutation answer — only LATER callers are protected). A failed listing is
+// never cached. stopScope's own ownership resolution bypasses both layers
+// (a destructive action must read fresh).
+// Module-level on purpose (scope names are Unix-user-global, not per-app).
+const OWNED_SCOPES_TTL_MS = 400;
+const inflightListings = new Map<string, Promise<ScopeOwnershipListing>>();
+const listingCache = new Map<string, { listing: ScopeOwnershipListing; expiresAt: number }>();
+let listingGeneration = 0;
+
+/** Drop every cached/in-flight owned-scope listing. Call whenever a scope is
+ *  created, stopped, or may have been (see the block comment above). */
+export function invalidateOwnedScopesCache(): void {
+  listingGeneration++;
+  inflightListings.clear();
+  listingCache.clear();
+}
+
 export function listOwnedScopes(
   sessionsDir: string,
   instanceId: string,
   opts: { states?: string; all?: boolean } = {},
 ): Promise<ScopeOwnershipListing> {
-  return new Promise((resolve) => {
-    const args = ["--user", "list-units", "--type=scope"];
-    if (opts.all) args.push("--all");
-    if (opts.states) args.push(`--state=${opts.states}`);
-    args.push("--no-legend", "--plain", "crs-session-*.scope");
-
-    let stdout = "";
-    let settled = false;
-    const child = spawnChild("systemctl", args, { stdio: ["ignore", "pipe", "ignore"] });
-
-    const onStdoutData = (chunk: Buffer) => {
-      stdout += chunk.toString("utf8");
-    };
-    child.stdout?.on("data", onStdoutData);
-
-    const finish = (result: ScopeOwnershipListing) => {
-      if (settled) return;
-      settled = true;
-      child.stdout?.off("data", onStdoutData);
-      resolve(result);
-    };
-    const fail = () => finish({ owned: new Map(), unverifiable: new Set(), failed: true });
-
-    // Issue #1232 — this spawn had no timeout at all: a wedged `--user`
-    // D-Bus bus left this promise pending forever, and every
-    // isMasterAliveStateBatch/isMasterAliveBatch caller (including
-    // routes/projects.ts's withStackLock-serialized stack-session mutex,
-    // issue #1182) bottoms out here — one hung call there stalled every
-    // OTHER queued stack action for the same (projectId, composeProject)
-    // key indefinitely, not just the in-flight request. A timeout maps to
-    // the SAME `fail()` the
-    // 'error'/non-zero-exit paths below already use, never to a successful
-    // empty listing — `failed: true` is the "everything unknown" contract
-    // this interface's own doc comment documents, not "nothing is owned."
-    const armed = armKillEscalation(child, SYSTEMCTL_TIMEOUT_MS, fail);
-
-    // Spawn failure (systemctl missing, etc.) — everything unknown, per
-    // this function's own doc comment on `failed`.
-    child.on("error", () => {
-      armed.clearOnSettle();
-      fail();
-    });
-    // 'close', not 'exit' — same stdout-delivery race isMasterAliveStateBatch()
-    // below already guards against.
-    child.on("close", (code) => {
-      armed.clearOnSettle();
-      if (code !== 0) {
-        fail();
-        return;
+  const key = JSON.stringify([
+    path.resolve(sessionsDir),
+    instanceId,
+    opts.states ?? "",
+    !!opts.all,
+  ]);
+  const now = performance.now();
+  const cached = listingCache.get(key);
+  if (cached) {
+    if (now < cached.expiresAt) return Promise.resolve(cached.listing);
+    listingCache.delete(key);
+  }
+  const existing = inflightListings.get(key);
+  if (existing) return existing;
+  const generation = listingGeneration;
+  const promise = fetchOwnedScopes(sessionsDir, instanceId, opts).then(
+    (listing) => {
+      if (inflightListings.get(key) === promise) inflightListings.delete(key);
+      if (generation === listingGeneration && !listing.failed) {
+        listingCache.set(key, { listing, expiresAt: now + OWNED_SCOPES_TTL_MS });
       }
-      const resolvedSessionsDir = path.resolve(sessionsDir);
-      const owned = new Map<string, string>();
-      const unverifiable = new Set<string>();
-      for (const { unit, description } of parseScopeUnitsListing(stdout)) {
-        const socketPath = extractDtachSocketPath(description);
-        if (socketPath === null) {
-          const candidateId = candidateIdForUnit(unit, instanceId);
-          if (candidateId !== null) unverifiable.add(candidateId);
-          continue;
-        }
-        if (path.dirname(socketPath) === resolvedSessionsDir) {
-          owned.set(path.basename(socketPath, ".sock"), unit);
-        }
-      }
-      finish({ owned, unverifiable, failed: false });
-    });
-  });
+      return listing;
+    },
+    (err: unknown) => {
+      if (inflightListings.get(key) === promise) inflightListings.delete(key);
+      throw err;
+    },
+  );
+  inflightListings.set(key, promise);
+  return promise;
+}
+
+async function fetchOwnedScopes(
+  sessionsDir: string,
+  instanceId: string,
+  opts: { states?: string; all?: boolean },
+): Promise<ScopeOwnershipListing> {
+  const args = ["--user", "list-units", "--type=scope"];
+  if (opts.all) args.push("--all");
+  if (opts.states) args.push(`--state=${opts.states}`);
+  args.push("--no-legend", "--plain", "crs-session-*.scope");
+
+  // Issue #1232 — bounded: a wedged `--user` D-Bus bus used to leave this
+  // pending forever, and every isMasterAliveStateBatch/isMasterAliveBatch
+  // caller (including routes/projects.ts's withStackLock-serialized
+  // stack-session mutex, issue #1182) bottoms out here. A timeout, a spawn
+  // error and a non-zero exit all map to `failed: true` — the "everything
+  // unknown" contract ScopeOwnershipListing documents, never an empty
+  // successful listing.
+  const res = await runSystemctl(args, SYSTEMCTL_TIMEOUT_MS, { captureStdout: true });
+  if (res.errored || res.timedOut || res.code !== 0) {
+    return { owned: new Map(), unverifiable: new Set(), failed: true };
+  }
+  const resolvedSessionsDir = path.resolve(sessionsDir);
+  const owned = new Map<string, string>();
+  const unverifiable = new Set<string>();
+  for (const { unit, description } of parseScopeUnitsListing(res.stdout)) {
+    const socketPath = extractDtachSocketPath(description);
+    if (socketPath === null) {
+      const candidateId = candidateIdForUnit(unit, instanceId);
+      if (candidateId !== null) unverifiable.add(candidateId);
+      continue;
+    }
+    if (path.dirname(socketPath) === resolvedSessionsDir) {
+      owned.set(path.basename(socketPath, ".sock"), unit);
+    } else if (unit.startsWith(`crs-session-${instanceId}-`)) {
+      // A unit carrying THIS instance's own id whose socket lives
+      // elsewhere (e.g. sessionsDir moved/symlinked) cannot be called
+      // "dead": callers now delete files on a dead verdict (reconciler
+      // -> terminate), so a mismatch here must read as unknown.
+      const candidateId = candidateIdForUnit(unit, instanceId);
+      if (candidateId !== null) unverifiable.add(candidateId);
+    }
+  }
+  return { owned, unverifiable, failed: false };
 }
 
 /**
@@ -588,7 +521,7 @@ async function resolveOwningUnit(
   id: string,
   opts: { fallbackOnListingFailure: boolean },
 ): Promise<string | undefined> {
-  const listing = await listOwnedScopes(sessionsDir, instanceId, { all: true });
+  const listing = await fetchOwnedScopes(sessionsDir, instanceId, { all: true });
   if (listing.failed) {
     return opts.fallbackOnListingFailure ? `${scopeUnitName(instanceId, id)}.scope` : undefined;
   }
@@ -642,40 +575,20 @@ export async function stopScope(
     fallbackOnListingFailure: true,
   });
   if (unit === undefined) return;
-  return new Promise((resolve) => {
-    let settled = false;
-    const child = spawnChild("systemctl", ["--user", "stop", unit], {
-      stdio: "ignore",
-    });
-
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      resolve();
-    };
-
-    // Issue #1232 — this spawn had no timeout either. Unlike
-    // listOwnedScopes()'s read-only listing above, this issues a MUTATING
-    // request: killing the child on timeout does not cancel the stop —
-    // systemd already has the request over D-Bus — so timing out here means
-    // only "stop requested, outcome unknown," exactly what this best-effort
-    // cleanup already promises (see the 'error' handler's own comment
-    // below). It must not be read as "stop failed," and must not trigger
-    // any retry/teardown of its own.
-    const armed = armKillEscalation(child, SYSTEMCTL_TIMEOUT_MS, finish);
-
-    // "unit not loaded" (already stopped / never existed) is an expected,
-    // ignorable outcome here — this is a best-effort cleanup, not a
-    // correctness-critical step whose failure should propagate.
-    child.on("error", () => {
-      armed.clearOnSettle();
-      finish();
-    });
-    child.on("exit", () => {
-      armed.clearOnSettle();
-      finish();
-    });
-  });
+  // Issue #1232 — bounded. Unlike the read-only listing, this MUTATES:
+  // killing the child on timeout does not cancel the stop (systemd already
+  // has the request over D-Bus), so a timeout means only "stop requested,
+  // outcome unknown" — exactly what this best-effort cleanup promises. It
+  // must not be read as "stop failed" or trigger any retry. A spawn error
+  // ("unit not loaded", already stopped) is likewise expected and ignored.
+  // The scope set changed (or may have): nobody may join a listing that
+  // started before this point, nor read one that predates the stop.
+  invalidateOwnedScopesCache();
+  try {
+    await runSystemctl(["--user", "stop", unit], SYSTEMCTL_TIMEOUT_MS);
+  } finally {
+    invalidateOwnedScopesCache();
+  }
 }
 
 /** "alive" — this instance owns a currently active/deactivating scope for

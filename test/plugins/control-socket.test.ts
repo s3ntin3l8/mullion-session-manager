@@ -149,7 +149,19 @@ vi.mock("playwright", () => ({
 }));
 
 const { buildApp } = await import("../../src/app.js");
-const { HANDSHAKE_TIMEOUT_MS, buildQueryUrl } = await import("../../src/plugins/control-socket.js");
+const {
+  HANDSHAKE_TIMEOUT_MS,
+  buildQueryUrl,
+  OPS,
+  MAX_INFLIGHT_OPS,
+  MAX_OPEN_CHANNELS,
+  MAX_HANDSHAKE_BYTES,
+  MAX_CONNECTIONS,
+  WRITE_HIGH_WATER_BYTES,
+  WRITE_HARD_CEILING_BYTES,
+} = await import("../../src/plugins/control-socket.js");
+const { sessions } = await import("../../src/db/schema.js");
+const { eq } = await import("drizzle-orm");
 const { insertSessionEvents } = await import("../../src/services/event-history.js");
 
 const TEST_TOKEN = "test-auth-token-0123456789";
@@ -404,6 +416,27 @@ describe("controlSocketPlugin (issue #185)", () => {
       socket.destroy();
     });
 
+    it.each(["toString", "constructor", "__proto__", "hasOwnProperty"])(
+      "replies 404 (not a crash) for the Object.prototype member %s used as an op",
+      async (op) => {
+        app = await buildApp();
+        await app.ready();
+        const socket = await connect(app.pty.controlSocketPath);
+        socket.write("{}\n");
+        socket.write(`${JSON.stringify({ id: 6, op })}\n`);
+
+        const reply = await waitForReply(socket);
+        expect(reply).toEqual({ id: 6, ok: false, status: 404, error: `unknown op: ${op}` });
+
+        // The connection (and process) must still be serving real ops.
+        socket.write(`${JSON.stringify({ id: 7, op: "ping" })}\n`);
+        const pong = await waitForReply(socket);
+        expect(pong.id).toBe(7);
+        expect(pong.ok).toBe(true);
+        socket.destroy();
+      },
+    );
+
     it("replies with an error but keeps the connection open on a malformed message", async () => {
       app = await buildApp();
       await app.ready();
@@ -597,6 +630,175 @@ describe("controlSocketPlugin (issue #185)", () => {
     app = null;
     await closed;
     expect(socket.destroyed).toBe(true);
+  });
+
+  describe("bounded per-connection load (issue #1517) and handshake hardening (issue #1521)", () => {
+    /** Replaces app.inject so each call blocks until the test releases it. */
+    function blockInject(payload = "[]") {
+      const pending: Array<() => void> = [];
+      const spy = vi.spyOn(app!, "inject").mockImplementation(
+        (() =>
+          new Promise((resolve) => {
+            pending.push(() => resolve({ statusCode: 200, payload }));
+          })) as never,
+      );
+      return { spy, pending };
+    }
+    const listLine = (id: number) => `${JSON.stringify({ id, op: "sessions.list" })}\n`;
+
+    it("caps in-flight ops per connection and resumes once they complete", async () => {
+      app = await buildApp();
+      await app.ready();
+      const { spy, pending } = blockInject();
+      const socket = await connect(app.pty.controlSocketPath);
+      const frames = collectFrames(socket);
+      const total = MAX_INFLIGHT_OPS + 8;
+      let lines = "{}\n";
+      for (let i = 1; i <= total; i++) lines += listLine(i);
+      socket.write(lines);
+
+      await waitUntil(() => spy.mock.calls.length >= MAX_INFLIGHT_OPS);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(spy.mock.calls.length).toBe(MAX_INFLIGHT_OPS);
+
+      while (frames.length < total) {
+        pending.shift()?.();
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(frames.every((f) => f.ok === true)).toBe(true);
+      socket.destroy();
+    });
+
+    it("stops reading requests while replies are backed up, and continues after drain", async () => {
+      app = await buildApp();
+      await app.ready();
+      const big = JSON.stringify("x".repeat(WRITE_HIGH_WATER_BYTES * 2));
+      const { spy, pending } = blockInject(big);
+      const socket = await connect(app.pty.controlSocketPath);
+      socket.pause();
+      socket.write(`{}\n${listLine(1)}`);
+      await waitUntil(() => spy.mock.calls.length === 1);
+      pending.shift()!();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      socket.write(listLine(2));
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(spy.mock.calls.length).toBe(1);
+
+      socket.resume();
+      await waitUntil(() => spy.mock.calls.length === 2);
+      socket.destroy();
+    });
+
+    it("destroys a connection whose unread replies pass the hard ceiling", async () => {
+      app = await buildApp();
+      await app.ready();
+      const big = JSON.stringify("x".repeat(Math.ceil(WRITE_HARD_CEILING_BYTES / 4)));
+      const { spy, pending } = blockInject(big);
+      const socket = await connect(app.pty.controlSocketPath);
+      socket.pause();
+      let lines = "{}\n";
+      for (let i = 1; i <= 8; i++) lines += listLine(i);
+      socket.write(lines);
+      await waitUntil(() => spy.mock.calls.length === 8);
+      for (const release of pending) release();
+      // The server end is destroyed; the paused client still sees the close
+      // once it reads the FIN.
+      socket.resume();
+      await waitForClose(socket);
+      expect(socket.destroyed).toBe(true);
+    });
+
+    it("caps open streams per connection with 429", async () => {
+      app = await buildApp();
+      await app.ready();
+      const socket = await connect(app.pty.controlSocketPath);
+      const frames = collectFrames(socket);
+      let lines = "{}\n";
+      for (let i = 1; i <= MAX_OPEN_CHANNELS + 1; i++) {
+        lines += `${JSON.stringify({ id: i, op: "events.subscribe" })}\n`;
+      }
+      socket.write(lines);
+      await waitUntil(() => frames.some((f) => f.id === MAX_OPEN_CHANNELS + 1 && f.ok === false));
+      const rejected = frames.find((f) => f.id === MAX_OPEN_CHANNELS + 1 && f.ok === false);
+      expect(rejected?.status).toBe(429);
+      expect(frames.filter((f) => f.ok === true).length).toBe(MAX_OPEN_CHANNELS);
+      socket.destroy();
+    });
+
+    it("closes a connection that buffers more than the handshake limit before authenticating", async () => {
+      app = await buildApp();
+      await app.ready();
+      const socket = await connect(app.pty.controlSocketPath);
+      const started = Date.now();
+      socket.write(Buffer.alloc(MAX_HANDSHAKE_BYTES + 1, "a"));
+      await waitForClose(socket);
+      // Closed by the size cap, not by the 10s handshake timeout.
+      expect(Date.now() - started).toBeLessThan(HANDSHAKE_TIMEOUT_MS / 2);
+    });
+
+    it("refuses connections beyond the global limit", async () => {
+      app = await buildApp();
+      await app.ready();
+      const sockets: net.Socket[] = [];
+      for (let i = 0; i < MAX_CONNECTIONS; i++) {
+        sockets.push(await connect(app.pty.controlSocketPath));
+      }
+      const started = Date.now();
+      const extra = await connect(app.pty.controlSocketPath);
+      await waitForClose(extra);
+      expect(Date.now() - started).toBeLessThan(HANDSHAKE_TIMEOUT_MS / 2);
+      for (const s of sockets) s.destroy();
+    });
+
+    it("reassembles a line split across many chunks", async () => {
+      app = await buildApp();
+      await app.ready();
+      const socket = await connect(app.pty.controlSocketPath);
+      const replyPromise = waitForReply(socket);
+      const payload = `{}\n${JSON.stringify({ id: 7, op: "ping" })}\n`;
+      for (const ch of payload) {
+        socket.write(ch);
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      expect(await replyPromise).toEqual({ id: 7, ok: true, status: 200, result: { pong: true } });
+      socket.destroy();
+    });
+
+    it("never logs any prefix of a mismatched handshake token, only its length", async () => {
+      process.env.MULLION_AUTH_TOKEN = TEST_TOKEN;
+      process.env.MULLION_SESSION_SECRET = TEST_SECRET;
+      app = await buildApp();
+      await app.ready();
+      const warn = vi.spyOn(app.log, "warn");
+      const socket = await connect(app.pty.controlSocketPath);
+      socket.write(`${JSON.stringify({ token: "SECRETPREFIX-rest-of-token" })}\n`);
+      await waitForClose(socket);
+      const logged = warn.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(logged).toContain("invalid handshake");
+      expect(logged).not.toContain("SECRETPR");
+      expect(logged).toContain("length 26");
+    });
+
+    it("binds the socket under a 077 umask and restores the process umask", async () => {
+      const original = process.umask();
+      let umaskDuringListen: number | null = null;
+      const realListen = net.Server.prototype.listen;
+      const listenSpy = vi.spyOn(net.Server.prototype, "listen").mockImplementation(function (
+        this: net.Server,
+        ...args: unknown[]
+      ) {
+        umaskDuringListen = process.umask();
+        return (realListen as (...a: unknown[]) => net.Server).apply(this, args);
+      } as never);
+      try {
+        app = await buildApp();
+        await app.ready();
+      } finally {
+        listenSpy.mockRestore();
+      }
+      expect(umaskDuringListen! & 0o077).toBe(0o077);
+      expect(process.umask()).toBe(original);
+    });
   });
 
   describe("auth enabled (MULLION_AUTH_TOKEN + MULLION_SESSION_SECRET set)", () => {
@@ -1019,6 +1221,95 @@ describe("controlSocketPlugin (issue #185)", () => {
     // Phase 5 (Track B, issue #193 5.3b) — the narrow, session-scope-reachable
     // path to a real child session, unlike sessions.create above.
     describe("sessions.spawn_child", () => {
+      it("session scope: forwards only the allowlisted fields (#1518)", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession();
+        const injectSpy = vi.spyOn(app, "inject");
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(
+          `${JSON.stringify({
+            id: 1,
+            op: "sessions.spawn_child",
+            body: {
+              command: "bash",
+              name: "kid",
+              nameLocked: true,
+              futureField: "x",
+              skipPermissions: true,
+            },
+          })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        expect(reply.ok).toBe(true);
+        const post = injectSpy.mock.calls
+          .map(([opts]) => opts as { method?: string; url?: string; payload?: string })
+          .find((o) => o.method === "POST" && o.url === "/api/sessions")!;
+        expect(Object.keys(JSON.parse(post.payload!)).sort()).toEqual(
+          ["command", "name", "parentSessionId", "projectId"].sort(),
+        );
+        socket.destroy();
+      });
+
+      it("session scope: a parent whose row is no longer active cannot spawn children (#1518)", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId, hookToken } = await createRealSession();
+        const socket = await sessionScopeSocket(hookToken);
+        app.db.update(sessions).set({ status: "killed" }).where(eq(sessions.id, sessionId)).run();
+        socket.write(
+          `${JSON.stringify({ id: 1, op: "sessions.spawn_child", body: { command: "bash" } })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        expect(reply).toMatchObject({ ok: false, status: 403 });
+        socket.destroy();
+      });
+
+      it("every full-scope-only op is rejected at session scope, both by dispatch and by its own handler (#1518)", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession();
+        const fullOnly = Object.entries(OPS).filter(
+          ([, spec]) => spec.scopes.length === 1 && spec.scopes[0] === "full",
+        );
+        expect(fullOnly.length).toBeGreaterThan(10);
+        const socket = await sessionScopeSocket(hookToken);
+        const frames = collectFrames(socket);
+        fullOnly.forEach(([op], i) => {
+          socket.write(`${JSON.stringify({ id: i + 1, op, body: {} })}\n`);
+        });
+        await waitUntil(() => frames.length === fullOnly.length);
+        expect(frames.every((f) => f.status === 403)).toBe(true);
+        socket.destroy();
+
+        // Defense in depth: the ops that name a full-scope-only REST route
+        // must refuse on their own even if dispatch were bypassed.
+        const injectSpy = vi.spyOn(app, "inject");
+        const sessionConn = { scope: "session", sessionId: "1", openChannels: new Map() };
+        for (const op of [
+          "device.pair",
+          "device.pair-and-connect",
+          "device.delete",
+          "projects.set_tooling",
+        ]) {
+          const replies: Array<Record<string, unknown>> = [];
+          await OPS[op].handler({
+            app: app!,
+            conn: sessionConn as never,
+            id: 1,
+            body: { deviceId: 1, projectId: 1, briefing: "x" },
+            reply: (r) => replies.push(r as Record<string, unknown>),
+          });
+          // set_tooling nests each field's own result under its name.
+          expect(replies[0]).toMatchObject(
+            op === "projects.set_tooling"
+              ? { ok: false, briefing: { status: 403 } }
+              : { ok: false, status: 403 },
+          );
+        }
+        expect(injectSpy).not.toHaveBeenCalled();
+      });
+
       it("session scope: spawns a child of its own session with no parentSessionId given", async () => {
         app = await buildApp();
         await app.ready();

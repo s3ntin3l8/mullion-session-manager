@@ -467,9 +467,13 @@ export interface AppSettings {
   // resolveCliModel's precedence chain). Free-form because each CLI names
   // models differently (`sonnet`, `gpt-5`, ...); `null` means "no flag, let
   // the CLI pick".
-  claudeCode: { defaultModel: string | null };
-  codex: { defaultModel: string | null };
-  agy: { defaultModel: string | null };
+  claudeCode: {
+    defaultModel: string | null;
+    reviewerModel: string | null;
+    smallModel: string | null;
+  };
+  codex: { defaultModel: string | null; reviewerModel: string | null };
+  agy: { defaultModel: string | null; reviewerModel: string | null };
   taskMaster: {
     autoClaimPaused: boolean;
     // GitHub logins trusted in addition to OWNER/MEMBER/COLLABORATOR
@@ -593,9 +597,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
     reviewerModel: null,
     defaultSmallModel: null,
   },
-  claudeCode: { defaultModel: null },
-  codex: { defaultModel: null },
-  agy: { defaultModel: null },
+  claudeCode: { defaultModel: null, reviewerModel: null, smallModel: null },
+  codex: { defaultModel: null, reviewerModel: null },
+  agy: { defaultModel: null, reviewerModel: null },
   notifications: {
     channels: {
       browser: true,

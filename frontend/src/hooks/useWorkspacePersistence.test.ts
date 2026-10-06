@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { renderHook } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import { useWorkspacePersistence } from "./useWorkspacePersistence.js";
 import type { DockviewApi } from "dockview-react";
 import type { Workspace } from "../api/index.js";
@@ -901,6 +901,38 @@ describe("useWorkspacePersistence — issue #1426 (phone never saves)", () => {
 
     expect(api.toJSON).not.toHaveBeenCalled();
     expect(saveWorkspaceLayout).not.toHaveBeenCalled();
+  });
+
+  it("liftPhoneTaint resumes saving after a live phone -> tablet flip, without a restore", () => {
+    vi.useFakeTimers();
+    const { api, fireLayoutChange } = makeMockApi();
+    layoutMode = "phone";
+    const workspace = makeWorkspace();
+    const setPanelsVersion = makeSetPanelsVersion();
+
+    const { result } = renderHook(() =>
+      useWorkspacePersistence({
+        dockviewApi: api,
+        activeWorkspaceId: 1,
+        workspaces: [workspace],
+        layoutTier: "desktop",
+        setPanelsVersion,
+      }),
+    );
+    vi.advanceTimersByTime(0);
+
+    // Phone-tier edit taints the workspace.
+    fireLayoutChange();
+    vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS);
+    expect(api.toJSON).not.toHaveBeenCalled();
+
+    // Unfold: tier flips and the presentation hook lifts the taint.
+    layoutMode = "tablet";
+    act(() => result.current.liftPhoneTaint());
+    fireLayoutChange();
+    vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS);
+
+    expect(api.toJSON).toHaveBeenCalled();
   });
 
   it("resumes saving once the SAME workspace is restored again at a non-phone tier", () => {

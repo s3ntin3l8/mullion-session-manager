@@ -1,9 +1,10 @@
+import { StringDecoder } from "node:string_decoder";
 import type { FastifyInstance } from "fastify";
 import { eq } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { getRemoteHostClient } from "../services/remote-host-client.js";
-import type { SocketLike } from "../services/socket-channel.js";
+import { SocketChannel, type SocketLike } from "../services/socket-channel.js";
 import { MIN_TERMINAL_COLS, MIN_TERMINAL_ROWS } from "../services/pty-manager.js";
 // ResizeMessage/ExitedMessage physically live in src/shared/ws-protocol.ts
 // (imported by the frontend from the same file too — see TerminalPane.tsx's
@@ -14,9 +15,23 @@ import { MIN_TERMINAL_COLS, MIN_TERMINAL_ROWS } from "../services/pty-manager.js
 // prior importer to preserve), purely so a reader of this file can jump
 // straight to the canonical definition instead of one more hop through
 // ws-protocol.ts.
-import type { ResizeMessage, ExitedMessage, GeometryMessage } from "../shared/ws-protocol.js";
+import type {
+  ResizeMessage,
+  ExitedMessage,
+  GeometryMessage,
+  ResyncMessage,
+  ResyncRequestMessage,
+} from "../shared/ws-protocol.js";
 
-export type { ResizeMessage, ExitedMessage, GeometryMessage };
+export type { ResizeMessage, ExitedMessage, GeometryMessage, ResyncMessage, ResyncRequestMessage };
+
+function isResyncRequestMessage(value: unknown): value is ResyncRequestMessage {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { type?: unknown }).type === "resync-request"
+  );
+}
 
 function isResizeMessage(value: unknown): value is ResizeMessage {
   return (
@@ -29,6 +44,46 @@ function isResizeMessage(value: unknown): value is ResizeMessage {
 }
 
 const BACKPRESSURE_MAX_BUFFERED_BYTES = 4 * 1024 * 1024;
+// Issue #1520 — once a connection has dropped a chunk, it stays "dirty"
+// (forwarding nothing) until its send buffer falls back under this, at which
+// point a resync (control frame + fresh scrollback replay) is sent.
+const RESYNC_DRAIN_BYTES = 256 * 1024;
+const RESYNC_POLL_INTERVAL_MS = 100;
+// Close code the remote proxy uses to make the browser reconnect (and so
+// replay) after it dropped upstream output, when the agent can't resync in
+// place (an older agent that never acks) — see proxyToRemoteAttach.
+export const WS_CLOSE_RESYNC = 4001;
+// How long the proxy waits for the agent's {type:"resync"} ack after sending
+// a resync-request before assuming an older agent and falling back.
+export const REMOTE_RESYNC_ACK_TIMEOUT_MS = 3000;
+// Browser->upstream bytes buffered while the upstream is still CONNECTING.
+const REMOTE_INPUT_QUEUE_MAX_BYTES = 64 * 1024;
+
+function envFromRow(
+  raw: string,
+  sessionId: number,
+  log: FastifyInstance["log"],
+): { env?: Record<string, string> } {
+  const env = parseSessionEnv(raw, sessionId, log);
+  return env ? { env } : {};
+}
+
+function parseSessionEnv(
+  raw: string,
+  sessionId: number,
+  log: FastifyInstance["log"],
+): Record<string, string> | undefined {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+      return parsed as Record<string, string>;
+    }
+  } catch {
+    // fall through to the warning below
+  }
+  log.warn({ sessionId }, "ignoring corrupt sessions.env");
+  return undefined;
+}
 
 export interface AttachSessionParams {
   id: string;
@@ -114,8 +169,38 @@ export function attachSocketToSession(
   // one.
   if (wasAlive) session.requestRedraw();
 
+  // Issue #1520 — set on the first chunk dropped for backpressure. Until the
+  // buffer drains, nothing more is forwarded (a half-delivered stream is
+  // worse than none: later chunks would land mid-escape-sequence), then
+  // sendResync() replaces whatever the client has with a fresh replay.
+  let dirty = false;
+  let drainTimer: ReturnType<typeof setInterval> | undefined;
+  const sendResync = () => {
+    const resyncMessage: ResyncMessage = { type: "resync" };
+    socket.send(JSON.stringify(resyncMessage));
+    const fresh = session.getScrollback();
+    if (fresh.length > 0) socket.send(fresh);
+    sendGeometry();
+    session.requestRedraw();
+  };
+  const stopDrainWatch = () => {
+    if (drainTimer) clearInterval(drainTimer);
+    drainTimer = undefined;
+  };
+  const startDrainWatch = () => {
+    drainTimer = setInterval(() => {
+      if (socket.readyState !== socket.OPEN) return stopDrainWatch();
+      if (socket.bufferedAmount > RESYNC_DRAIN_BYTES) return;
+      stopDrainWatch();
+      dirty = false;
+      sendResync();
+    }, RESYNC_POLL_INTERVAL_MS);
+    drainTimer.unref();
+  };
+
   const unsubscribeData = session.onData((chunk) => {
     if (socket.readyState !== socket.OPEN) return;
+    if (dirty) return;
     // Backpressure: bufferedAmount is how much this client hasn't
     // acknowledged yet (a stalled connection, an overwhelmed mobile
     // link). Drop new output past this threshold rather than letting
@@ -124,7 +209,11 @@ export function attachSocketToSession(
     // still holds the last 256KB regardless, so a reconnect (or this
     // same connection catching back up) replays cleanly rather than
     // needing every dropped byte replayed in order.
-    if (socket.bufferedAmount > BACKPRESSURE_MAX_BUFFERED_BYTES) return;
+    if (socket.bufferedAmount > BACKPRESSURE_MAX_BUFFERED_BYTES) {
+      dirty = true;
+      startDrainWatch();
+      return;
+    }
     socket.send(chunk);
   });
 
@@ -135,6 +224,9 @@ export function attachSocketToSession(
     }
   });
 
+  // Per-socket: a multi-byte UTF-8 char split across two binary frames must
+  // be reassembled, not decoded to U+FFFD per frame.
+  const inputDecoder = new StringDecoder("utf8");
   socket.on("message", (data, isBinary) => {
     if (isBinary) {
       // RawData is Buffer | ArrayBuffer | Buffer[]; narrow each arm
@@ -144,7 +236,8 @@ export function attachSocketToSession(
         : Buffer.isBuffer(data)
           ? data
           : Buffer.from(data);
-      session.write(buf.toString("utf8"));
+      const text = inputDecoder.write(buf);
+      if (text.length > 0) session.write(text);
       return;
     }
 
@@ -161,11 +254,19 @@ export function attachSocketToSession(
       sendGeometry();
       return;
     }
+    // Sent by a primary proxying a remote-host attach (proxyToRemoteAttach).
+    // While dirty, the drain watch's own resync is already pending and will
+    // double as the requester's ack, so don't send a second one mid-stream.
+    if (isResyncRequestMessage(parsed)) {
+      if (!dirty) sendResync();
+      return;
+    }
     // Unrecognized control frames (including a since-removed message type)
     // are dropped silently rather than erroring the socket.
   });
 
   socket.on("close", () => {
+    stopDrainWatch();
     unsubscribeData();
     unsubscribeExit();
     // Deliberately not killing the session — it keeps running on the
@@ -225,7 +326,22 @@ export function proxyToRemoteAttach(
   // as the agent->browser direction below, applied to this direction too —
   // a slow/misbehaving agent must not let this browser->agent buffer grow
   // unbounded.
+  //
+  // Frames arriving while upstream is still CONNECTING (including the
+  // browser's first resize) are queued up to REMOTE_INPUT_QUEUE_MAX_BYTES and
+  // flushed on "open" rather than dropped.
+  const queued: Array<{ data: Parameters<typeof upstream.send>[0]; isBinary: boolean }> = [];
+  let queuedBytes = 0;
+  const frameBytes = (data: unknown): number =>
+    Array.isArray(data)
+      ? data.reduce((n: number, b: Buffer) => n + b.length, 0)
+      : (data as { byteLength: number }).byteLength;
   browserSocket.on("message", (data, isBinary) => {
+    if (upstream.readyState === upstream.CONNECTING) {
+      queuedBytes += frameBytes(data);
+      if (queuedBytes <= REMOTE_INPUT_QUEUE_MAX_BYTES) queued.push({ data, isBinary });
+      return;
+    }
     if (upstream.readyState !== upstream.OPEN) return;
     if (upstream.bufferedAmount > BACKPRESSURE_MAX_BUFFERED_BYTES) return;
     upstream.send(data, { binary: isBinary });
@@ -243,12 +359,77 @@ export function proxyToRemoteAttach(
     closeBrowser();
   });
 
+  // In-place resync (issue #1539). After the first dropped upstream chunk the
+  // proxy is "dirty": binary output is discarded until the browser's buffer
+  // drains, then a resync-request goes upstream ("awaiting") and output stays
+  // discarded until the agent's {type:"resync"} frame — forwarded to the
+  // browser as-is — marks the start of the replay. No ack within the timeout
+  // means an older agent: fall back to closing for a reconnect-replay.
+  let resyncState: "live" | "dirty" | "awaiting" = "live";
+  let resyncTimer: ReturnType<typeof setInterval> | ReturnType<typeof setTimeout> | undefined;
+  const clearResyncTimer = () => {
+    if (resyncTimer) {
+      clearInterval(resyncTimer);
+      clearTimeout(resyncTimer);
+    }
+    resyncTimer = undefined;
+  };
+  const closeForReconnect = () => {
+    clearResyncTimer();
+    // A control-socket SocketChannel has no close-code or reconnect
+    // semantics (its close() takes a `notify` flag, not a code): end the
+    // stream plainly so the client sees {type:"closed"} and re-attaches.
+    if (browserSocket instanceof SocketChannel) return closeBrowser();
+    (browserSocket as { close(code?: number, reason?: string): void }).close(
+      WS_CLOSE_RESYNC,
+      "resync",
+    );
+  };
+  const requestUpstreamResync = () => {
+    if (upstream.readyState !== upstream.OPEN) return closeForReconnect();
+    resyncState = "awaiting";
+    const request: ResyncRequestMessage = { type: "resync-request" };
+    upstream.send(JSON.stringify(request), { binary: false });
+    resyncTimer = setTimeout(closeForReconnect, REMOTE_RESYNC_ACK_TIMEOUT_MS);
+    resyncTimer.unref();
+  };
+  const startResyncDrainWatch = () => {
+    resyncState = "dirty";
+    resyncTimer = setInterval(() => {
+      if (browserSocket.readyState !== browserSocket.OPEN) return clearResyncTimer();
+      if (browserSocket.bufferedAmount > RESYNC_DRAIN_BYTES) return;
+      clearResyncTimer();
+      requestUpstreamResync();
+    }, RESYNC_POLL_INTERVAL_MS);
+    resyncTimer.unref();
+  };
+  const isResyncAck = (data: unknown): boolean => {
+    try {
+      return (JSON.parse(String(data)) as { type?: unknown } | null)?.type === "resync";
+    } catch {
+      return false;
+    }
+  };
+  browserSocket.on("close", clearResyncTimer);
+  upstream.on("close", clearResyncTimer);
+
   upstream.once("open", () => {
     app.log.info({ hostId, sessionId: opts.id }, "remote terminal ws attached");
+    for (const frame of queued.splice(0)) upstream.send(frame.data, { binary: frame.isBinary });
 
     upstream.on("message", (data, isBinary) => {
       if (browserSocket.readyState !== browserSocket.OPEN) return;
-      if (browserSocket.bufferedAmount > BACKPRESSURE_MAX_BUFFERED_BYTES) return;
+      if (resyncState === "awaiting" && !isBinary && isResyncAck(data)) {
+        clearResyncTimer();
+        resyncState = "live";
+      } else if (resyncState !== "live") {
+        // Control frames (exited, geometry) are tiny and must not be lost;
+        // only the PTY bytes are discarded mid-resync.
+        if (isBinary) return;
+      } else if (isBinary && browserSocket.bufferedAmount > BACKPRESSURE_MAX_BUFFERED_BYTES) {
+        startResyncDrainWatch();
+        return;
+      }
       browserSocket.send(data, { binary: isBinary });
     });
   });
@@ -344,7 +525,7 @@ export function resolveAndAttach(
     // Issue #822 — row.env is this function's only source for it (this
     // function has no access to the original create-time opts), same
     // "read straight off the row" posture as cwd/command above.
-    ...(row.env !== null ? { env: JSON.parse(row.env) as Record<string, string> } : {}),
+    ...(row.env !== null ? envFromRow(row.env, sessionId, app.log) : {}),
   };
 
   if (project.hostId === LOCAL_HOST_ID) {

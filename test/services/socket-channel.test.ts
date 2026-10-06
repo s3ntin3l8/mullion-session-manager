@@ -1,6 +1,10 @@
 import type net from "node:net";
 import { describe, it, expect, vi } from "vitest";
-import { SocketChannel } from "../../src/services/socket-channel.js";
+import {
+  SocketChannel,
+  WRITE_HARD_CEILING_BYTES,
+  CHANNEL_MAX_BUFFERED_BYTES,
+} from "../../src/services/socket-channel.js";
 
 /** Minimal net.Socket stand-in — only the surface SocketChannel actually
  * calls (`.write(data, cb)`, `.writable`). `write`'s callback fires
@@ -179,5 +183,47 @@ describe("SocketChannel", () => {
       binary: false,
     });
     expect(JSON.parse(lines[0])).toEqual({ id: 15, type: "exited" });
+  });
+
+  it("destroys the connection once unwritten bytes pass the hard ceiling (#1517)", () => {
+    const { socket } = fakeSocket();
+    const fake = socket as unknown as { writableLength: number; destroy: () => void };
+    fake.destroy = vi.fn();
+    fake.writableLength = WRITE_HARD_CEILING_BYTES;
+    const channel = new SocketChannel(socket, 1);
+    channel.send(Buffer.from("a"));
+    expect(fake.destroy).not.toHaveBeenCalled();
+    fake.writableLength = WRITE_HARD_CEILING_BYTES + 1;
+    channel.send(Buffer.from("a"));
+    expect(fake.destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes just this channel (with a closed frame) once its own buffer passes the per-channel cap", () => {
+    const { socket, lines } = fakeSocket(true);
+    const channel = new SocketChannel(socket, 4);
+    const onClose = vi.fn();
+    channel.on("close", onClose);
+    // ~2.5 MiB raw -> ~3.3 MiB base64 per frame; two fit under 8 MiB, the third trips.
+    const chunk = Buffer.alloc(2.5 * 1024 * 1024, 1);
+    channel.send(chunk);
+    channel.send(chunk);
+    expect(channel.bufferedAmount).toBeLessThanOrEqual(CHANNEL_MAX_BUFFERED_BYTES);
+    expect(channel.readyState).toBe(channel.OPEN);
+    channel.send(chunk);
+    expect(channel.readyState).toBe(channel.CLOSED);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(lines[lines.length - 1])).toEqual({ id: 4, type: "closed" });
+    // the over-cap frame itself was dropped, and later sends are no-ops
+    expect(lines.filter((l) => l.includes('"data"'))).toHaveLength(2);
+    channel.send(Buffer.from("x"));
+    expect(lines.filter((l) => l.includes('"data"'))).toHaveLength(2);
+  });
+
+  it("a drained channel does not trip the per-channel cap", () => {
+    const { socket } = fakeSocket();
+    const channel = new SocketChannel(socket, 5);
+    const chunk = Buffer.alloc(2.5 * 1024 * 1024, 1);
+    for (let i = 0; i < 6; i++) channel.send(chunk);
+    expect(channel.readyState).toBe(channel.OPEN);
   });
 });

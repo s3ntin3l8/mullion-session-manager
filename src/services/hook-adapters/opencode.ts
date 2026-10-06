@@ -73,6 +73,17 @@ const OPENCODE_COMMAND_RE = /^(?:\S*\/)?opencode(?:\s|$)/;
 // inside this set. Compaction and subagent events (see "compact" and
 // "subagent" entries below), wired in #321 from OpenCode's upstream
 // experimental.session.compacting and session.subagent hooks.
+/** Per-session files/dirs the opencode adapter writes under sessionsDir (#949). */
+export function opencodeTier0Path(sessionsDir: string, id: string): string {
+  return path.join(sessionsDir, `${id}.opencode-tier0.md`);
+}
+export function opencodeSeedPath(sessionsDir: string, id: string): string {
+  return path.join(sessionsDir, `${id}.opencode-seed.md`);
+}
+export function opencodeConfigDir(sessionsDir: string, id: string): string {
+  return path.join(sessionsDir, `${id}.opencode-config`);
+}
+
 export const OPENCODE_EMITS = [
   "progress",
   "file_change",
@@ -154,7 +165,7 @@ export function buildOpenCodeMcpConfig(
 }
 
 function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
-  const configDir = path.join(ctx.sessionsDir, `${ctx.sessionId}.opencode-config`);
+  const configDir = opencodeConfigDir(ctx.sessionsDir, ctx.sessionId);
   const pluginPath = path.join(configDir, "plugins", "mullion-hook-emitter.js");
   const pluginSource = readFileSync(resolveOpenCodePluginPath(), "utf8");
   const envAdditions: Record<string, string> = { OPENCODE_CONFIG_DIR: configDir };
@@ -240,7 +251,7 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
   // anyway).
   if (ctx.injectAgentGuide && agentGuideSourceExists()) {
     const guidePath = sessionAgentGuidePath(ctx.sessionsDir, ctx.sessionId);
-    const tier0Path = path.join(ctx.sessionsDir, `${ctx.sessionId}.opencode-tier0.md`);
+    const tier0Path = opencodeTier0Path(ctx.sessionsDir, ctx.sessionId);
     settingsFiles.push({
       path: tier0Path,
       contents: buildAgentGuideBlock(guidePath, ctx.authEnabled ?? true),
@@ -309,7 +320,7 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
   // agent-guide.ts's own writeSessionAgentGuide has for the guide file
   // (bootstrapMaster calls that before applyHookAdapters).
   if (ctx.seedPrompt && ctx.seedPrompt.length > 0) {
-    const seedPath = path.join(ctx.sessionsDir, `${ctx.sessionId}.opencode-seed.md`);
+    const seedPath = opencodeSeedPath(ctx.sessionsDir, ctx.sessionId);
     settingsFiles.push({ path: seedPath, contents: ctx.seedPrompt });
     instructions.push(seedPath);
   }

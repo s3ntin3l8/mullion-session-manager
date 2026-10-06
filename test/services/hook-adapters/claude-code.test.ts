@@ -203,6 +203,13 @@ describe("claudeCodeAdapter.prepareLaunch (issue #174)", () => {
     const plan = claudeCodeAdapter.prepareLaunch(ctx);
     expect(plan.envAdditions).toBeUndefined();
   });
+
+  it("maps a small model to ANTHROPIC_DEFAULT_HAIKU_MODEL, and refuses an unsafe one", () => {
+    const plan = claudeCodeAdapter.prepareLaunch({ ...ctx, smallModel: "haiku" });
+    expect(plan.envAdditions).toEqual({ ANTHROPIC_DEFAULT_HAIKU_MODEL: "haiku" });
+    const bad = claudeCodeAdapter.prepareLaunch({ ...ctx, smallModel: "$(x); y" });
+    expect(bad.envAdditions).toBeUndefined();
+  });
 });
 
 // Issue #1079 — Claude Code's own counterpart to codex's/agy's managedInstall

@@ -154,6 +154,16 @@ export function tomlString(value: string): string {
   return `"${escapeTomlBasicString(value)}"`;
 }
 
+// Unlike opencode's `provider/model`, these CLIs take bare names (`sonnet`,
+// `gpt-5`, `claude-opus-4-5[1m]`). The value ends up in a shell command
+// line, so this is a strict allowlist with no whitespace, quotes, `$`,
+// backticks, or leading `-` (which would read as another flag).
+const CLI_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@[\]-]{0,127}$/;
+
+export function validateCliModel(value: string): boolean {
+  return CLI_MODEL_RE.test(value);
+}
+
 /** ` --model '<value>'` to append to a launch command, or "" when there is no
  * model or the command already carries its own model flag (a hand-typed
  * `--model` always wins over a Mullion default). `shortFlag` covers CLIs

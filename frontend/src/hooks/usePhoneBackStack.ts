@@ -14,9 +14,11 @@ import { useEffect, useId, useRef } from "react";
 // (navigator closes as Settings opens) reuses the same entry instead of
 // racing history.back() against the next pushState.
 //
-// Everything is inert unless `active` is true, and callers pass
-// `isPhone && open`, so it never touches history on desktop/tablet; a tier
-// change flips `active` off, which unregisters and consumes the guard.
+// Everything is inert unless `active` is true. Callers pass `compact && open`
+// (phone or tablet), so it never touches history on the desktop tier; a
+// change to desktop flips `active` off, which unregisters and consumes the
+// guard. A phone<->tablet change (fold/unfold) leaves `active` true, so the
+// guard entry survives it instead of being consumed and re-pushed.
 
 interface Entry {
   id: string;

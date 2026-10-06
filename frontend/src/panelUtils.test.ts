@@ -25,6 +25,7 @@ import {
   restoreTiledGroupWidths,
   resetTiledGroupWidths,
   canResetTiledGroupWidths,
+  otherTiledGroups,
   attentionTransitionPanelIds,
   newChildSessionIds,
   childPanelPosition,
@@ -2002,6 +2003,65 @@ describe("snapshotTiledGroupWidths / restoreTiledGroupWidths / resetTiledGroupWi
       resetTiledGroupWidths(api);
 
       expect(only.api.setSize).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("restoreTiledGroupWidths return value", () => {
+    it("is true when the proportions were applied, false on every no-op", () => {
+      const left = mockGroup("left", "grid", { width: 300, height: 600 });
+      const right = mockGroup("right", "grid", { width: 700, height: 600 });
+      const api = mockApiWithGroups([left, right]);
+      expect(
+        restoreTiledGroupWidths(
+          api,
+          new Map([
+            ["left", 0.5],
+            ["right", 0.5],
+          ]),
+        ),
+      ).toBe(true);
+      expect(restoreTiledGroupWidths(api, new Map())).toBe(false);
+      expect(restoreTiledGroupWidths(api, new Map([["left", 1]]))).toBe(false); // count changed
+      expect(
+        restoreTiledGroupWidths(
+          api,
+          new Map([
+            ["x", 0.5],
+            ["y", 0.5],
+          ]),
+        ),
+      ).toBe(false); // ids differ
+      expect(restoreTiledGroupWidths(mockApiWithGroups([left]), new Map([["left", 1]]))).toBe(
+        false,
+      );
+    });
+  });
+
+  describe("otherTiledGroups", () => {
+    it("lists the other tiled groups, numbered among all tiled groups, excluding the own group", () => {
+      const a = mockGroup("a", "grid", { width: 300, height: 600 });
+      const b = mockGroup("b", "grid", { width: 300, height: 600 });
+      const c = mockGroup("c", "grid", { width: 300, height: 600 });
+      const api = mockApiWithGroups([a, b, c]);
+
+      expect(otherTiledGroups(api, b)).toEqual([
+        { group: a, number: 1 },
+        { group: c, number: 3 },
+      ]);
+    });
+
+    it("never offers a floating group as a target, and doesn't count it in the numbering", () => {
+      const a = mockGroup("a", "grid", { width: 300, height: 600 });
+      const float = mockGroup("f", "floating", { width: 300, height: 600 });
+      const b = mockGroup("b", "grid", { width: 300, height: 600 });
+      const api = mockApiWithGroups([a, float, b]);
+
+      expect(otherTiledGroups(api, a)).toEqual([{ group: b, number: 2 }]);
+    });
+
+    it("is empty when the own group is the only tiled one", () => {
+      const only = mockGroup("only", "grid", { width: 800, height: 600 });
+      expect(otherTiledGroups(mockApiWithGroups([only]), only)).toEqual([]);
     });
   });
 

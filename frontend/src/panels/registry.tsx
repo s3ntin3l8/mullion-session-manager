@@ -400,6 +400,8 @@ export function KanbanBoardOverlay(props: {
   onSessionEnded: (session: Session) => void;
   // Phone tier: the board's one-column-at-a-time layout (see UnifiedBoard).
   phone?: boolean;
+  // How many status columns the compact board shows at once (see UnifiedBoard).
+  columnCount?: number;
   // Phone: rendered inside the navigator (in flow) instead of as a grid overlay.
   inline?: boolean;
 }) {
@@ -420,6 +422,7 @@ export function KanbanBoardOverlay(props: {
             onOpenSession={props.onOpenSession}
             onSessionEnded={props.onSessionEnded}
             phone={props.phone}
+            columnCount={props.columnCount}
           />
         </Suspense>
       </ErrorBoundary>

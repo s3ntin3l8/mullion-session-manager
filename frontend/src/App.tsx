@@ -46,7 +46,7 @@ import {
 import { useVisualViewportInset } from "./hooks/useVisualViewportInset.js";
 import { useDragResize } from "./hooks/useDragResize.js";
 import { useWorkspacePersistence } from "./hooks/useWorkspacePersistence.js";
-import { useCoarsePointer } from "./lib/layoutTier.js";
+import { isCompactTier, resolveLayoutTier, useCoarsePointer } from "./lib/layoutTier.js";
 import type { LayoutTier, LayoutContext } from "./lib/layoutTier.js";
 import { attachSidebarSwipeGesture } from "./lib/sidebarSwipeGesture.js";
 import { MobileSessionBar } from "./MobileSessionBar.js";
@@ -129,8 +129,17 @@ export function App() {
   // toggleSidebar's dual semantics) keeps working unchanged, while
   // tier-aware call sites (session-opening's positioning, applyLayoutPresentation)
   // read `layoutTier` directly.
-  const [layoutTier, setLayoutTier] = useState<LayoutTier>("desktop");
+  // Seeded synchronously from the live width (not a "desktop" placeholder) so
+  // a cold load on a phone/tablet doesn't paint desktop chrome for one frame
+  // and run the restore effect with the wrong tier. The store is read directly
+  // because `settings` isn't destructured until further down; before the
+  // server responds `layoutMode` is "auto". A server-side override still
+  // corrects itself via useLayoutPresentation's effect.
+  const [layoutTier, setLayoutTier] = useState<LayoutTier>(() =>
+    resolveLayoutTier(useDashboardStore.getState().settings.layoutMode),
+  );
   const isMobile = layoutTier === "phone";
+  const compact = isCompactTier(layoutTier);
   // Touch affordances (key bar, tab-strip panning) are gated on pointer
   // coarseness, not layout tier — see lib/layoutTier.ts's own doc comment on
   // COARSE_POINTER_QUERY for why a tier check alone is wrong here.
@@ -371,7 +380,7 @@ export function App() {
   // deep-link, and push-message effects further down, which read
   // restoringRef/restoredWorkspaceIdRef and depend on a restore having
   // already run) is unchanged — see that hook's own header comment.
-  const { restoringRef, restoredWorkspaceIdRef } = useWorkspacePersistence({
+  const { restoringRef, restoredWorkspaceIdRef, liftPhoneTaint } = useWorkspacePersistence({
     dockviewApi,
     activeWorkspaceId,
     workspaces,
@@ -425,7 +434,12 @@ export function App() {
   // render body, at the useWorkspacePersistence call above — see that hook's
   // own `setLayoutTier` param comment for why returning it here instead
   // would be a real ordering regression, not just a style difference.
-  useLayoutPresentation({ dockviewApi, layoutMode: settings.layoutMode, setLayoutTier });
+  useLayoutPresentation({
+    dockviewApi,
+    layoutMode: settings.layoutMode,
+    setLayoutTier,
+    onUnfold: liftPhoneTaint,
+  });
 
   // Sidebar session drag-to-dock — dragging a session row out of the Sidebar
   // and dropping it onto the dockview grid to open/dock its panel —
@@ -1129,9 +1143,9 @@ export function App() {
   // clamp. `layoutTier !== "desktop"` (not `isMobile`) now drives
   // `sidebarOpen`, so tablet gets the same floating overlay as phone.
   const toggleSidebar = useCallback(() => {
-    if (layoutTier !== "desktop") setSidebarOpen((v) => !v);
+    if (compact) setSidebarOpen((v) => !v);
     else useDashboardStore.getState().setSidebarCollapsed(!sidebarCollapsed);
-  }, [layoutTier, sidebarCollapsed]);
+  }, [compact, sidebarCollapsed]);
 
   // Floating-sidebar redesign — edge-swipe open/dismiss (lib/sidebarSwipeGesture.ts's
   // own header comment covers the design: discrete threshold+commit, not a
@@ -1155,21 +1169,23 @@ export function App() {
   // MobileSessionBar.tsx's rename-cancel effect.
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (layoutTier === "desktop") setSidebarOpen(false);
-  }, [layoutTier]);
-  // Phone: Android back / the back gesture closes the topmost overlay (see
+    if (!compact) setSidebarOpen(false);
+  }, [compact]);
+  // Phone + tablet: Android back / the back gesture closes the topmost overlay (see
   // hooks/usePhoneBackStack.ts). Settings and the session/notification
   // sheets register themselves; the navigator and the Tasks board live here.
-  usePhoneBackStack(isMobile && sidebarOpen, () => setSidebarOpen(false));
-  usePhoneTasksNavigator({ isMobile, viewMode, sidebarOpen, setSidebarOpen });
+  usePhoneBackStack(compact && sidebarOpen, () => setSidebarOpen(false));
+  usePhoneTasksNavigator({ compact, viewMode, sidebarOpen, setSidebarOpen });
   useEffect(() => {
-    if (layoutTier === "desktop") return;
+    if (!compact) return;
     if (sidebarOpen) {
       const el = sidebarWrapperRef.current;
       if (!el) return;
       return attachSidebarSwipeGesture({
         element: el,
         commitDirection: -1,
+        // Panning the Tasks status strip must not dismiss the navigator.
+        ignoreSelector: ".tasks-phone-strip",
         onCommit: () => setSidebarOpen(false),
       });
     }
@@ -1183,7 +1199,7 @@ export function App() {
       ignoreSelector: ".mobile-key-bar, .tasks-phone-strip",
       onCommit: () => setSidebarOpen(true),
     });
-  }, [layoutTier, sidebarOpen]);
+  }, [compact, sidebarOpen]);
 
   // ---- Sidebar width drag (same pattern as Dock's height drag) ----
   // Persists on drag end only, via the store action (not a direct
@@ -1308,7 +1324,7 @@ export function App() {
 
   const sidebar = (
     <Sidebar
-      phoneSection={isMobile ? sidebarPhoneSection(navTab) : undefined}
+      phoneSection={compact ? sidebarPhoneSection(navTab) : undefined}
       onOpenSession={onOpenSession}
       onOpenSessionAsFloat={onOpenSessionAsFloat}
       onSessionEnded={onSessionEnded}
@@ -1321,10 +1337,12 @@ export function App() {
     />
   );
 
-  // Phone session switcher — rendered into the toolbar in place of the old
+  // Phone/tablet session switcher — rendered into the toolbar in place of the old
   // `.mobile-tabs` strip. `mobilePanels` is tiled-only (see its comment).
-  const mobileSessionSwitcher = isMobile ? (
+  const mobileSessionSwitcher = compact ? (
     <MobileSessionBar
+      tier={layoutTier}
+      contextLabel={isMobile ? undefined : activeWorkspace?.name}
       panels={mobilePanels}
       activePanelId={activePanelId}
       dockviewApi={dockviewApi}
@@ -1335,7 +1353,8 @@ export function App() {
 
   return (
     <div
-      className={`app cmux-root${theme === "light" ? " light" : ""}${sidebarOpen ? " sb-open" : ""}${sidebarCollapsed ? " sidebar-collapsed" : ""}${sidebarResizing ? " sidebar-resizing" : ""}${settings.sidebarDensity === "compact" ? " density-compact" : ""}${isCoarsePointer && activeTerminalSession ? " key-bar" : ""}`}
+      data-tier={layoutTier}
+      className={`app cmux-root${theme === "light" ? " light" : ""}${sidebarOpen ? " sb-open" : ""}${compact && viewMode === "kanban" ? " nav-tasks" : ""}${sidebarCollapsed ? " sidebar-collapsed" : ""}${sidebarResizing ? " sidebar-resizing" : ""}${settings.sidebarDensity === "compact" ? " density-compact" : ""}${isCoarsePointer && activeTerminalSession ? " key-bar" : ""}`}
       style={{ "--sidebar-width": `${sidebarWidth}px` } as CSSProperties}
     >
       <Toolbar
@@ -1350,6 +1369,7 @@ export function App() {
         currentVersion={currentVersion}
         mobileSessionSlot={mobileSessionSwitcher}
         phone={isMobile}
+        notificationSheet={compact && isCoarsePointer}
       />
       <div className="app-body" ref={appBodyRef}>
         <div className="cmux-scrim" onClick={() => setSidebarOpen(false)} />
@@ -1368,9 +1388,15 @@ export function App() {
           {/* Phone: workspaces don't exist as a concept — the session picker
               lists every session — and the drawer is a full-screen navigator
               with tabs instead of one long scroll. */}
-          {isMobile ? (
+          {compact ? (
             <>
               <PhoneNavigatorPanel
+                tablet={!isMobile}
+                workspaces={
+                  isMobile ? undefined : (
+                    <WorkspaceSwitcher onSelectWorkspace={handleSelectWorkspace} />
+                  )
+                }
                 navTab={navTab}
                 setNavTab={setNavTab}
                 onOpenTasks={onOpenTasks}
@@ -1593,7 +1619,7 @@ export function App() {
                   was a peer of the tiled workspace grid. Desktop/tablet only:
                   on phone the board renders inside the navigator's Tasks tab
                   instead (PhoneNavigatorPanel). */}
-              {viewMode === "kanban" && !isMobile && (
+              {viewMode === "kanban" && !compact && (
                 <KanbanBoardOverlay onOpenSession={onOpenSession} onSessionEnded={onSessionEnded} />
               )}
             </div>
@@ -1689,6 +1715,7 @@ export function App() {
                 initialSection={settingsSection}
                 startInContent={settingsStartInContent}
                 phone={isMobile}
+                backStack={compact}
               />
             </Suspense>
           </ErrorBoundary>

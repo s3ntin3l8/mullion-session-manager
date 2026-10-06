@@ -32,11 +32,14 @@ interface ToolbarProps {
   activeWorkspaceName: string | null;
   paneCount: number;
   currentVersion: string | null;
-  // Phone only (mobile.css shows `.toolbar-mobile-session`): App's
-  // MobileSessionSwitcher, in place of the hidden `.toolbar-center`.
+  // Phone and tablet (mobile.css / compact.css show `.toolbar-mobile-session`):
+  // App's MobileSessionSwitcher, in place of the hidden `.toolbar-center`.
   mobileSessionSlot?: ReactNode;
   // Phone tier: the bell renders its feed as a bottom sheet.
   phone?: boolean;
+  // Render the notifications feed as a bottom sheet without the full phone
+  // toolbar layout — set for touch tablets. (`phone` implies it.)
+  notificationSheet?: boolean;
 }
 
 const THEME_LABELS: Record<AppSettings["theme"], string> = {
@@ -71,6 +74,7 @@ export function Toolbar({
   currentVersion,
   mobileSessionSlot,
   phone,
+  notificationSheet = false,
 }: ToolbarProps) {
   // P1 perf fix — the plan's own audit didn't cite this file by line, but
   // it's the identical whole-store-subscription defect (`useDashboardStore()`
@@ -100,12 +104,17 @@ export function Toolbar({
       onOpenSession={onOpenSession}
       onOpenTimeline={onOpenTimeline}
       onOpenBrowser={onOpenBrowser}
-      phone={phone}
+      sheet={phone || notificationSheet}
+      sheetClassName={!phone && notificationSheet ? "mobile-notif-sheet--tablet" : undefined}
     />
   );
 
+  // Off phone, the picker takes over the centre (workspace name / pane count).
+  // Tasks view included: on compact tiers the board lives in the navigator, so
+  // there is no centre Back button to keep.
+  const compactPicker = !phone && !!mobileSessionSlot;
   return (
-    <div className="toolbar">
+    <div className={`toolbar${compactPicker ? " toolbar--compact-picker" : ""}`}>
       <div className="toolbar-lead">
         <button
           className="toolbar-icon-btn"
@@ -162,9 +171,7 @@ export function Toolbar({
           )
         )}
       </div>
-      {(phone || viewMode !== "kanban") && mobileSessionSlot && (
-        <div className="toolbar-mobile-session">{mobileSessionSlot}</div>
-      )}
+      {mobileSessionSlot && <div className="toolbar-mobile-session">{mobileSessionSlot}</div>}
       <div className="toolbar-actions">
         <button
           className="run-cmd-btn"
@@ -175,7 +182,9 @@ export function Toolbar({
           disabled={viewMode === "kanban"}
         >
           <SearchIcon size={14} strokeWidth={1.9} />
-          <span style={{ fontSize: 12 }}>Run command…</span>
+          <span className="run-cmd-label" style={{ fontSize: 12 }}>
+            Run command…
+          </span>
           <span className="kbd">⌘K</span>
         </button>
         <button

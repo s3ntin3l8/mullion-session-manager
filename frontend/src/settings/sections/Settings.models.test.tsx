@@ -80,7 +80,7 @@ describe("Settings -> Models", () => {
     const user = userEvent.setup();
     render(<ModelsSection />);
 
-    const select = screen.getByRole("combobox", { name: "Claude Code default model" });
+    const select = screen.getByRole("combobox", { name: "Claude Code implementer model" });
     const options = Array.from(select.querySelectorAll("option")).map((o) =>
       o.getAttribute("value"),
     );
@@ -91,15 +91,31 @@ describe("Settings -> Models", () => {
     await expectPatch({ claudeCode: { defaultModel: "opusplan" } });
   });
 
+  it("saves a Claude Code small model", async () => {
+    const user = userEvent.setup();
+    render(<ModelsSection />);
+
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Claude Code small model" }),
+      "haiku",
+    );
+
+    expect(useDashboardStore.getState().settings.claudeCode.smallModel).toBe("haiku");
+    await expectPatch({ claudeCode: { smallModel: "haiku" } });
+  });
+
   it("PATCHes null when a CLI is set back to its default", async () => {
     const user = userEvent.setup();
     useDashboardStore.setState({
-      settings: { ...DEFAULT_SETTINGS, codex: { defaultModel: "gpt-5.6-sol" } },
+      settings: {
+        ...DEFAULT_SETTINGS,
+        codex: { defaultModel: "gpt-5.6-sol", reviewerModel: null },
+      },
       settingsLoaded: true,
     });
     render(<ModelsSection />);
 
-    const select = screen.getByRole("combobox", { name: "Codex default model" });
+    const select = screen.getByRole("combobox", { name: "Codex implementer model" });
     expect(select).toHaveValue("gpt-5.6-sol");
     await user.selectOptions(select, "");
 
@@ -111,10 +127,10 @@ describe("Settings -> Models", () => {
     render(<ModelsSection />);
 
     await user.selectOptions(
-      screen.getByRole("combobox", { name: "Claude Code default model" }),
+      screen.getByRole("combobox", { name: "Claude Code implementer model" }),
       "__custom__",
     );
-    const input = screen.getByRole("textbox", { name: /Claude Code default model \(custom/ });
+    const input = screen.getByRole("textbox", { name: /Claude Code implementer model \(custom/ });
     // `[[` is user-event's escape for a literal `[`.
     await user.type(input, "claude-opus-4-5[[1m]");
     // Nothing is saved while typing.
@@ -130,11 +146,11 @@ describe("Settings -> Models", () => {
     render(<ModelsSection />);
 
     await user.selectOptions(
-      screen.getByRole("combobox", { name: "Codex default model" }),
+      screen.getByRole("combobox", { name: "Codex implementer model" }),
       "__custom__",
     );
     await user.type(
-      screen.getByRole("textbox", { name: /Codex default model \(custom/ }),
+      screen.getByRole("textbox", { name: /Codex implementer model \(custom/ }),
       "gpt-7{Enter}",
     );
 
@@ -146,11 +162,11 @@ describe("Settings -> Models", () => {
     render(<ModelsSection />);
 
     await user.selectOptions(
-      screen.getByRole("combobox", { name: "Claude Code default model" }),
+      screen.getByRole("combobox", { name: "Claude Code implementer model" }),
       "__custom__",
     );
     await user.type(
-      screen.getByRole("textbox", { name: /Claude Code default model \(custom/ }),
+      screen.getByRole("textbox", { name: /Claude Code implementer model \(custom/ }),
       "bad model;rm",
     );
     await user.tab();
@@ -164,12 +180,15 @@ describe("Settings -> Models", () => {
   it("clears the setting when the custom field is emptied", async () => {
     const user = userEvent.setup();
     useDashboardStore.setState({
-      settings: { ...DEFAULT_SETTINGS, claudeCode: { defaultModel: "claude-opus-4-5" } },
+      settings: {
+        ...DEFAULT_SETTINGS,
+        claudeCode: { defaultModel: "claude-opus-4-5", reviewerModel: null, smallModel: null },
+      },
       settingsLoaded: true,
     });
     render(<ModelsSection />);
 
-    const input = screen.getByRole("textbox", { name: /Claude Code default model \(custom/ });
+    const input = screen.getByRole("textbox", { name: /Claude Code implementer model \(custom/ });
     await user.clear(input);
     await user.tab();
 
@@ -178,24 +197,27 @@ describe("Settings -> Models", () => {
 
   it("opens in custom mode for a stored value the list doesn't know", () => {
     useDashboardStore.setState({
-      settings: { ...DEFAULT_SETTINGS, claudeCode: { defaultModel: "claude-opus-4-5" } },
+      settings: {
+        ...DEFAULT_SETTINGS,
+        claudeCode: { defaultModel: "claude-opus-4-5", reviewerModel: null, smallModel: null },
+      },
       settingsLoaded: true,
     });
     render(<ModelsSection />);
 
-    expect(screen.getByRole("combobox", { name: "Claude Code default model" })).toHaveValue(
+    expect(screen.getByRole("combobox", { name: "Claude Code implementer model" })).toHaveValue(
       "__custom__",
     );
-    expect(screen.getByRole("textbox", { name: /Claude Code default model \(custom/ })).toHaveValue(
-      "claude-opus-4-5",
-    );
+    expect(
+      screen.getByRole("textbox", { name: /Claude Code implementer model \(custom/ }),
+    ).toHaveValue("claude-opus-4-5");
   });
 
   it("populates the agy select from /api/agy/models and PATCHes the choice", async () => {
     const user = userEvent.setup();
     render(<ModelsSection />);
 
-    const select = screen.getByRole("combobox", { name: "agy default model" });
+    const select = screen.getByRole("combobox", { name: "agy implementer model" });
     await waitFor(() =>
       expect(within(select).getByText("gemini-3.1-pro-high")).toBeInTheDocument(),
     );
@@ -225,7 +247,7 @@ describe("Settings -> Models", () => {
     render(<ModelsSection />);
 
     expect(await screen.findByText(/couldn't load the model list/i)).toBeInTheDocument();
-    const agySelect = screen.getByRole("combobox", { name: "agy default model" });
+    const agySelect = screen.getByRole("combobox", { name: "agy implementer model" });
     await waitFor(() =>
       expect(within(agySelect).getByText("gemini-3.1-pro-high")).toBeInTheDocument(),
     );
@@ -264,16 +286,19 @@ describe("Settings -> Models", () => {
   it("opening Custom… and leaving the field doesn't reset a stored default", async () => {
     const user = userEvent.setup();
     useDashboardStore.setState({
-      settings: { ...DEFAULT_SETTINGS, claudeCode: { defaultModel: "opus" } },
+      settings: {
+        ...DEFAULT_SETTINGS,
+        claudeCode: { defaultModel: "opus", reviewerModel: null, smallModel: null },
+      },
       settingsLoaded: true,
     });
     render(<ModelsSection />);
 
     await user.selectOptions(
-      screen.getByRole("combobox", { name: "Claude Code default model" }),
+      screen.getByRole("combobox", { name: "Claude Code implementer model" }),
       "__custom__",
     );
-    const input = screen.getByRole("textbox", { name: /Claude Code default model \(custom/ });
+    const input = screen.getByRole("textbox", { name: /Claude Code implementer model \(custom/ });
     expect(input).toHaveValue("opus");
     await user.click(input);
     await user.tab();
@@ -285,16 +310,22 @@ describe("Settings -> Models", () => {
 
   it("re-syncs the custom field when the stored value changes underneath it", async () => {
     useDashboardStore.setState({
-      settings: { ...DEFAULT_SETTINGS, claudeCode: { defaultModel: "claude-opus-4-5" } },
+      settings: {
+        ...DEFAULT_SETTINGS,
+        claudeCode: { defaultModel: "claude-opus-4-5", reviewerModel: null, smallModel: null },
+      },
       settingsLoaded: true,
     });
     render(<ModelsSection />);
-    const input = screen.getByRole("textbox", { name: /Claude Code default model \(custom/ });
+    const input = screen.getByRole("textbox", { name: /Claude Code implementer model \(custom/ });
     expect(input).toHaveValue("claude-opus-4-5");
 
     act(() => {
       useDashboardStore.setState({
-        settings: { ...DEFAULT_SETTINGS, claudeCode: { defaultModel: "claude-sonnet-4-6" } },
+        settings: {
+          ...DEFAULT_SETTINGS,
+          claudeCode: { defaultModel: "claude-sonnet-4-6", reviewerModel: null, smallModel: null },
+        },
       });
     });
 
@@ -303,7 +334,7 @@ describe("Settings -> Models", () => {
 
   it("lists Codex models from the live catalog, falling back to a snapshot when it's empty", async () => {
     const first = render(<ModelsSection />);
-    const select = screen.getByRole("combobox", { name: "Codex default model" });
+    const select = screen.getByRole("combobox", { name: "Codex implementer model" });
     await waitFor(() =>
       expect(
         Array.from(select.querySelectorAll("option")).map((o) => o.getAttribute("value")),
@@ -313,7 +344,7 @@ describe("Settings -> Models", () => {
 
     routeFetch({ "/api/codex/models": () => jsonResponse(200, []) });
     render(<ModelsSection />);
-    const fallback = screen.getByRole("combobox", { name: "Codex default model" });
+    const fallback = screen.getByRole("combobox", { name: "Codex implementer model" });
     await waitFor(() => expect(within(fallback).getByText("gpt-6-astra")).toBeInTheDocument());
     expect(within(fallback).queryByText("gpt-5.5")).not.toBeInTheDocument();
   });

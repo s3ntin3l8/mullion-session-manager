@@ -26,6 +26,7 @@ import {
 } from "./task-agent-resolve.js";
 import {
   resolveCliModel,
+  resolveClaudeSmallModel,
   resolveOpenCodeModel,
   resolveOpenCodeSmallModel,
 } from "./task-model-resolve.js";
@@ -564,14 +565,18 @@ async function processPendingReviewSpawns(app: FastifyInstance): Promise<void> {
         const reviewCliModelAgent = commandModelCli(reviewCommand);
         const reviewModel = commandIsOpencode(reviewCommand)
           ? (resolveOpenCodeModel(app, {
-              taskModel: task.model ?? null,
+              // Not task.model: that column only records what the *worker*
+              // ran under, and passing it here would outrank (and so
+              // silently discard) the reviewer-role directive and setting.
+              taskModel: null,
               issueBody: task.body,
               role: "reviewer",
             }) ?? undefined)
           : reviewCliModelAgent !== null
             ? (resolveCliModel(app, reviewCliModelAgent, {
-                taskModel: task.model ?? null,
+                taskModel: null,
                 issueBody: task.body,
+                role: "reviewer",
               }) ?? undefined)
             : undefined;
         const reviewSmallModel = commandIsOpencode(reviewCommand)
@@ -579,7 +584,15 @@ async function processPendingReviewSpawns(app: FastifyInstance): Promise<void> {
               taskSmallModel: task.smallModel ?? null,
               issueBody: task.body,
             }) ?? undefined)
-          : undefined;
+          : reviewCliModelAgent === "claude-code"
+            ? (resolveClaudeSmallModel(app, {
+                // Not task.smallModel: it records the worker's resolved
+                // value (same reasoning as taskModel above), and a worker
+                // on a different CLI never has one.
+                taskSmallModel: null,
+                issueBody: task.body,
+              }) ?? undefined)
+            : undefined;
 
         const ci = await resolveReviewCi(
           app,

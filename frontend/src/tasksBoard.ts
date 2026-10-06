@@ -172,3 +172,18 @@ export function defaultPhoneColumn(
     (available.includes("ready") ? "ready" : (available[0] ?? "ready"))
   );
 }
+
+// Tablet shows `count` adjacent columns at once (phone shows one). Returns the
+// window of `count` columns that contains `selected`, starting at it and
+// clamped at the end — picking the last chip shows the last `count` columns.
+// A `selected` that isn't offered falls back to the first window.
+export function visibleColumnWindow(
+  columns: readonly TaskStatus[],
+  selected: TaskStatus,
+  count: number,
+): TaskStatus[] {
+  if (count >= columns.length) return [...columns];
+  const index = Math.max(0, columns.indexOf(selected));
+  const start = Math.min(index, columns.length - count);
+  return columns.slice(start, start + count);
+}

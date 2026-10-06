@@ -10,6 +10,7 @@ vi.mock("../../src/services/settings.js", () => ({
 import {
   explicitModelError,
   resolveCliModel,
+  resolveClaudeSmallModel,
   validateCliModel,
   validateModel,
   resolveOpenCodeModel,
@@ -245,11 +246,41 @@ describe("resolveOpenCodeSmallModel", () => {
   });
 });
 
+describe("resolveClaudeSmallModel", () => {
+  beforeEach(() => {
+    mockGetStoredSettings.mockReset();
+    mockGetStoredSettings.mockReturnValue({
+      claudeCode: { defaultModel: null, reviewerModel: null, smallModel: "haiku-default" },
+    });
+  });
+
+  it("prefers the task row, then the SmallModel: directive, then the install default", () => {
+    const app = mockApp();
+    expect(resolveClaudeSmallModel(app, { taskSmallModel: "t", issueBody: "SmallModel: d" })).toBe(
+      "t",
+    );
+    expect(resolveClaudeSmallModel(app, { issueBody: "SmallModel: d" })).toBe("d");
+    expect(resolveClaudeSmallModel(app, { issueBody: null })).toBe("haiku-default");
+  });
+
+  it("falls through an invalid value and logs it; null when nothing is set", () => {
+    const app = mockApp();
+    expect(resolveClaudeSmallModel(app, { taskSmallModel: "bad value;", issueBody: null })).toBe(
+      "haiku-default",
+    );
+    expect(app.log.warn).toHaveBeenCalled();
+    mockGetStoredSettings.mockReturnValue({
+      claudeCode: { defaultModel: null, reviewerModel: null, smallModel: null },
+    });
+    expect(resolveClaudeSmallModel(mockApp(), { issueBody: null })).toBeNull();
+  });
+});
+
 describe("resolveCliModel", () => {
   const settings = {
-    claudeCode: { defaultModel: "sonnet" },
-    codex: { defaultModel: null },
-    agy: { defaultModel: "gemini-3" },
+    claudeCode: { defaultModel: "sonnet", reviewerModel: "opus", smallModel: "haiku-default" },
+    codex: { defaultModel: null, reviewerModel: null },
+    agy: { defaultModel: "gemini-3", reviewerModel: null },
   };
   beforeEach(() => {
     mockGetStoredSettings.mockReset();
@@ -268,6 +299,21 @@ describe("resolveCliModel", () => {
 
   it("returns null when nothing is configured", () => {
     expect(resolveCliModel(mockApp(), "codex", { issueBody: null })).toBeNull();
+  });
+
+  it("resolves the reviewer role: Reviewer-Model, Model, reviewerModel, then default", () => {
+    const app = mockApp();
+    const body = "Model: haiku\nReviewer-Model: fast";
+    expect(resolveCliModel(app, "claude-code", { issueBody: body, role: "reviewer" })).toBe("fast");
+    expect(
+      resolveCliModel(app, "claude-code", { issueBody: "Model: haiku", role: "reviewer" }),
+    ).toBe("haiku");
+    expect(resolveCliModel(app, "claude-code", { issueBody: null, role: "reviewer" })).toBe("opus");
+    // No reviewerModel set: reviewers share the implementer default.
+    expect(resolveCliModel(app, "agy", { issueBody: null, role: "reviewer" })).toBe("gemini-3");
+    // The implementer role ignores reviewer-only tiers.
+    expect(resolveCliModel(app, "claude-code", { issueBody: body })).toBe("haiku");
+    expect(resolveCliModel(app, "claude-code", { issueBody: null })).toBe("sonnet");
   });
 
   it("falls through an invalid value and logs it", () => {
@@ -351,9 +397,16 @@ describe("explicitModelError", () => {
     expect(explicitModelError("agy", "model", "'; rm -rf /'")).not.toBeNull();
   });
 
-  it("never errors on smallModel for a claude-code/codex/agy command — it's meaningless there", () => {
-    expect(explicitModelError("claude", "smallModel", "--anything at all")).toBeNull();
+  it("never errors on smallModel for a codex/agy command — it's meaningless there", () => {
     expect(explicitModelError("codex", "smallModel", "$(x)")).toBeNull();
+    expect(explicitModelError("agy", "smallModel", "--anything at all")).toBeNull();
+  });
+
+  it("validates a claude-code command's smallModel like its model", () => {
+    expect(explicitModelError("claude", "smallModel", "haiku")).toBeNull();
+    expect(explicitModelError("claude", "smallModel", "--anything at all")).toContain(
+      "smallModel must match",
+    );
   });
 
   it("requires an opencode model/smallModel to be both provider/model-shaped and charset-safe", () => {

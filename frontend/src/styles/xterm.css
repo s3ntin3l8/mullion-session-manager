@@ -153,3 +153,30 @@
     display: none;
   }
 }
+
+/* Touch: dockview's sashes are transparent in every theme (the ±10px coarse
+   hit area is already added by dockview itself), so a finger has nothing to
+   aim at. A small centred pill makes the divider visible without changing its
+   hit area. */
+@media (pointer: coarse) {
+  .cmux-root .dv-sash:not(.dv-disabled)::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 4px;
+    height: 32px;
+    border-radius: 2px;
+    background: var(--border);
+    pointer-events: none;
+  }
+  /* Stacked panes (a .dv-vertical split) have a horizontal divider. */
+  .cmux-root
+    .dv-split-view-container.dv-vertical
+    > .dv-sash-container
+    > .dv-sash:not(.dv-disabled)::after {
+    width: 32px;
+    height: 4px;
+  }
+}
