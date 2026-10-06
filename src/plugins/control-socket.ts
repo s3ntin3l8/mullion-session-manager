@@ -18,7 +18,7 @@ import { timingSafeTokenMatch } from "../services/crypto-utils.js";
 import { CONTROL_SOCKET_ADDR } from "../services/control-socket-addr.js";
 import { resolveAndAttach } from "../routes/terminal.js";
 import { attachAggregatedEventsSocket, attachLocalEventsSocket } from "../routes/events.js";
-import { SocketChannel } from "../services/socket-channel.js";
+import { SocketChannel, WRITE_HARD_CEILING_BYTES } from "../services/socket-channel.js";
 import { reclaimSocketPath } from "../services/unix-socket.js";
 
 // Phase 4 (#185) — a general-purpose Unix control socket: the transport
@@ -69,8 +69,7 @@ export const MAX_OPEN_CHANNELS = 16;
 /** Once this many reply bytes are queued unwritten, stop reading requests
  * until the socket 'drain's. */
 export const WRITE_HIGH_WATER_BYTES = 1024 * 1024;
-/** A peer that lets this many reply bytes pile up is destroyed. */
-export const WRITE_HARD_CEILING_BYTES = 16 * 1024 * 1024;
+export { WRITE_HARD_CEILING_BYTES };
 /** Pre-handshake input is just `{"token":"..."}`; nothing legitimate needs
  * more than this before authenticating. */
 export const MAX_HANDSHAKE_BYTES = 4 * 1024;
@@ -1593,19 +1592,19 @@ function handleConnection(
 
   // Reconciles the socket's paused state with current load and, when load has
   // cleared, resumes processing lines that were left buffered while paused.
+  const setPaused = (next: boolean) => {
+    if (paused === next) return;
+    paused = next;
+    if (next) socket.pause();
+    else socket.resume();
+  };
   const flow = () => {
     if (socket.destroyed) return;
     if (overloaded()) {
-      if (!paused) {
-        paused = true;
-        socket.pause();
-      }
+      setPaused(true);
       return;
     }
-    if (paused) {
-      paused = false;
-      socket.resume();
-    }
+    setPaused(false);
     pump();
   };
   socket.on("drain", flow);
@@ -1615,10 +1614,7 @@ function handleConnection(
       // Lines already buffered are NOT dispatched while overloaded — pausing
       // the socket alone would not stop the rest of a chunk already read.
       if (overloaded()) {
-        if (!paused) {
-          paused = true;
-          socket.pause();
-        }
+        setPaused(true);
         return;
       }
       const newlineIndex = buffer.indexOf("\n", scanFrom);

@@ -41,6 +41,11 @@ export interface SocketLike {
   on(event: "close", listener: () => void): void;
 }
 
+/** A peer that lets this many bytes pile up unwritten on the connection (a
+ * stream consumer that stopped reading) is destroyed rather than buffered
+ * without bound (#1517). Shared by control-socket.ts's reply path. */
+export const WRITE_HARD_CEILING_BYTES = 16 * 1024 * 1024;
+
 export class SocketChannel {
   readonly CONNECTING = 0;
   readonly OPEN = 1;
@@ -136,6 +141,7 @@ export class SocketChannel {
     this.socket.write(line, () => {
       this.bufferedBytes -= bytes;
     });
+    if (this.socket.writableLength > WRITE_HARD_CEILING_BYTES) this.socket.destroy();
   }
 
   on(event: "message", listener: (data: Buffer, isBinary: boolean) => void): void;
