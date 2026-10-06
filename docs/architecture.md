@@ -380,13 +380,25 @@ way as a namespaced one.
 
 `/ws/terminal` carries raw binary frames (PTY bytes) plus JSON control frames
 (`src/shared/ws-protocol.ts`'s `TerminalWSMessage`: `resize` browser→server;
-`exited`, `geometry`, `resync` server→browser). When a connection's
+`exited`, `geometry`, `resync` server→browser; `resync-request` primary→agent only). When a connection's
 `bufferedAmount` exceeds 4 MiB the server drops output rather than growing
 unbounded, which would leave the client's xterm garbled. The connection is
 marked dirty (nothing more is forwarded) until the buffer drains below 256 KiB;
 the server then sends `{"type":"resync"}`, a fresh scrollback replay, a
 `geometry` frame, and a redraw nudge. On `resync` the client calls
 `term.reset()` and treats what follows as an initial attach replay. For a
-remote-host session the primary has no scrollback of its own, so it closes the
-browser socket with code `4001`; the client's normal reconnect re-attaches and
-gets the agent's replay.
+remote-host session the primary has no scrollback of its own, so it resyncs
+in place too (issue #1539): on the first dropped chunk it marks the proxy
+dirty (PTY bytes discarded, small control frames still forwarded), waits for
+the browser buffer to drain, then sends the agent a primary→agent
+`{"type":"resync-request"}` on the existing `/internal/ws/attach` upstream. The
+agent answers exactly like the local path (`resync`, scrollback, `geometry`,
+redraw nudge); that `resync` frame is the ack, is forwarded to the browser
+as-is, and the proxy resumes forwarding from there. This works the same for a
+control-socket `SocketChannel` browser side, since it only uses the channel's
+normal `send`. Backward compatibility: an older agent ignores the unknown
+frame and never acks, so after 3 s the proxy falls back to the previous
+behaviour — closing the browser socket with code `4001` so the client's normal
+reconnect re-attaches and replays. A `SocketChannel` has no close codes, so
+there the fallback is a plain `close()` (the client sees `{id,type:"closed"}`
+and must re-attach itself).
