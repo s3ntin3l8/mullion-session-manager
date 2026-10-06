@@ -19,20 +19,15 @@ const APP_VERSION: string = (() => {
 import {
   detectAttentionSignals,
   classifyActivityFromTitle,
-  detectAltScreenSwitch,
-  applyMouseModeChanges,
-  carryPartialEscape,
-  detectCwdChange,
-  carryPartialOsc,
   advanceAttention,
-  detectBracketedPaste,
-  INITIAL_MOUSE_TRACKING_STATE,
   INITIAL_ATTENTION_STATE,
-  type MouseTrackingState,
   type AttentionSignalKind,
   type AttentionSignal,
 } from "./attention-detect.js";
 import { AttentionTracker } from "./attention-tracker.js";
+import { GateRegistry } from "./gate-registry.js";
+import { sweepStaleLatches, isLatchStale, type StaleLatch } from "./stale-latch-sweep.js";
+import { TerminalModeTracker, type StoredTermModes } from "./terminal-mode-tracker.js";
 import { buildSessionEnv } from "./session-env.js";
 import type { HookMessageKind, HookMessage } from "./hook-protocol.js";
 import { filterOutstandingBackgroundTasks } from "./background-tasks.js";
@@ -211,31 +206,6 @@ const WRITE_BACKPRESSURE_MAX_BYTES = 4 * 1024 * 1024;
 // under normal conditions, so this only ever engages against a program
 // that's genuinely not reading its input at all.
 const WRITE_BACKPRESSURE_WINDOW_MS = 1000;
-
-// The two escape sequences synthesized as a scrollback-replay preamble (see
-// Session.getScrollback()) — the modern alt-screen-buffer pair. Prepending
-// one of these lets a fresh xterm.js land in the tracked TRUE screen mode
-// rather than whatever mode the raw buffered bytes happen to leave it in.
-const ALT_SCREEN_ENTER = "\x1b[?1049h";
-const ALT_SCREEN_EXIT = "\x1b[?1049l";
-
-// Canonical enable sequences synthesized into the scrollback-replay preamble
-// for tracked mouse-tracking state (see Session.mouseTracking and
-// MouseTrackingState in attention-detect.ts) — same "always emit the modern
-// form regardless of which variant the program actually used" rationale as
-// ALT_SCREEN_ENTER/EXIT above. Only enable sequences are needed: when tracked
-// state is the default (protocol "NONE" / encoding "DEFAULT"), nothing is
-// appended to the preamble at all — see getScrollback().
-const MOUSE_PROTOCOL_ENABLE: Record<Exclude<MouseTrackingState["protocol"], "NONE">, string> = {
-  X10: "\x1b[?9h",
-  VT200: "\x1b[?1000h",
-  DRAG: "\x1b[?1002h",
-  ANY: "\x1b[?1003h",
-};
-const MOUSE_ENCODING_ENABLE: Record<Exclude<MouseTrackingState["encoding"], "DEFAULT">, string> = {
-  SGR: "\x1b[?1006h",
-  SGR_PIXELS: "\x1b[?1016h",
-};
 
 // A session showing no output for this long is considered "idle" rather
 // than "working" — a coarse, admittedly heuristic threshold (see the plan's
@@ -426,7 +396,7 @@ type StoredStateFields = Pick<
   | "currentTodo"
   | "backgroundTasks"
 > & {
-  termModes?: { inAltScreen: boolean; mouseTracking: MouseTrackingState; bracketedPaste?: boolean };
+  termModes?: StoredTermModes;
 };
 
 const SESSION_ID_RE = /^\d+$/;
@@ -619,31 +589,19 @@ export class Session {
   // mouseTracking/detectCarry/cwdDetectCarry all stay on Session; only the
   // append/evict/read logic over raw chunks moved).
   private readonly scrollbackBuffer = new ScrollbackBuffer();
-  // Tracked screen-mode truth, updated as output streams through onData (see
-  // detectAltScreenSwitch). getScrollback() replays a preamble synthesized
-  // from this rather than trusting the buffered bytes to be a self-balanced
-  // enter/exit pair — the ring buffer's FIFO eviction can strand a dangling
-  // exit (harmless: forces primary) but never a dangling enter (an enter is
-  // always older than its matching exit), so raw-byte replay silently drifts
-  // into staying in alt-screen — hiding the scrollbar — only in scenarios
-  // where the true state actually is alt-screen. Tracking mode explicitly
-  // instead of inferring it from stream balance is what makes replay correct
-  // in both directions (see issue #83).
-  //
-  // Also restored from `.state.json` on a fresh Session (readStateFile(),
-  // "Issue: opencode/Claude Code TUI sessions..." comment) so a backend
-  // restart doesn't reset this to `false` out from under a still-running
-  // dtach master — see that comment for the full mechanism. That restore
-  // does introduce one new drift direction worth naming explicitly: if the
-  // real program leaves alt-screen while the backend is down, a restored
-  // `true` now replays the HARMFUL direction this paragraph describes
-  // (hiding the scrollbar) rather than the harmless one. Accepted
-  // deliberately — dtach keeps the program running across a restart and
-  // redeploy downtime is on the order of seconds, so a real mode change
-  // landing inside that narrow window is far less likely than the bug this
-  // restore fixes, and the live detector above self-corrects on the very
-  // next real mode change either way.
-  private inAltScreen = false;
+  // Tracked screen-mode / mouse-tracking / bracketed-paste truth plus the two
+  // detect carries (and the scrollback-replay preamble synthesized from them)
+  // live in terminal-mode-tracker.ts — see its header and Session.onData for
+  // the order the steps are driven in. Persisted/restored via
+  // collectState()/readStateFile() (`termModes`); modes deliberately persist
+  // across a respawn (they track true, ongoing screen/mouse state), unlike the
+  // carries, which kill()/onExit clear. One accepted drift direction: a
+  // restored `inAltScreen=true` replays the HARMFUL direction (hiding the
+  // scrollbar) if the real program left alt-screen while the backend was
+  // down — far less likely than the bug the restore fixes (a restart
+  // resetting it to false under a still-running dtach master), and the live
+  // detector self-corrects on the next real mode change.
+  private readonly modes = new TerminalModeTracker();
   // Issue #1296 — the scrollbackBuffer's own monotonic
   // totalBytesEverPushed() reading at the moment alt-screen was last
   // exited (the `altScreenExited` branch in onData below) — issue #1303
@@ -660,33 +618,6 @@ export class Session {
   // Session gets a brand-new, empty ScrollbackBuffer, so 0 — "nothing to
   // exclude yet" — is already correct.
   private altScreenExitedAtBytes = 0;
-  // Tracked mouse-tracking-mode truth, the same deliberate way inAltScreen
-  // above tracks screen mode — see MouseTrackingState's docstring in
-  // attention-detect.ts for the full rationale (issue #93: a reconnecting
-  // client whose fresh xterm.js never sees the program's original
-  // mouse-enabling escape, because it aged out of the bounded scrollback
-  // ring buffer, silently defaults to no tracking while the real process is
-  // never told anything changed).
-  private mouseTracking: MouseTrackingState = INITIAL_MOUSE_TRACKING_STATE;
-  // Tracked bracketed-paste mode (DECSET/DECRST 2004) — same "persist across
-  // reattach/restart" rationale as inAltScreen/mouseTracking above (issue #1155):
-  // a TUI enables bracketed paste once and expects it for the session's life;
-  // if lost across a restart, multi-line pastes are interpreted as individual
-  // keystrokes. Detected in onData alongside mouseTracking; synthesized into
-  // getScrollback()'s preamble.
-  private bracketedPaste = false;
-  // Any unterminated escape-sequence prefix left dangling at the end of the
-  // previous onData chunk (see carryPartialEscape's docstring) — prepended to
-  // the next chunk before re-running detectAltScreenSwitch/
-  // applyMouseModeChanges so a sequence split across a PTY read boundary is
-  // still recognized. Detection-only: never used for scrollback or fan-out,
-  // only for the copy fed to those two detectors.
-  private detectCarry = "";
-  // Same carry role as detectCarry above, but for the OSC-shaped (variable-
-  // length path) sequences detectCwdChange scans for — see
-  // carryPartialOsc's docstring for why OSC 7 needs its own carry logic
-  // distinct from the CSI-shaped carryPartialEscape.
-  private cwdDetectCarry = "";
   // The shell's last-announced cwd via OSC 7 — see SessionInfo.liveCwd's
   // docstring. `null` until the first OSC 7 sequence arrives (or forever, for
   // a shell without the injected integration hook).
@@ -826,15 +757,12 @@ export class Session {
   // persisted state file). `SessionInfo.gates` (see its own doc comment)
   // is the real, full list a multi-gate-aware UI (NotificationBell.tsx)
   // renders from.
-  private gateState: "idle" | "waiting" | "approved" | "denied" | "lapsed" = "idle";
-  private gatePrompt: string | null = null;
-  private gateAt: number | null = null;
-  /** The live, currently-waiting gates for this session, keyed by the
-   * forwarder-generated gateId (hook-protocol.ts's ReviewGateHookMessage/
-   * pty-manager.ts's resolveGate). In-memory only — see gateState's own
-   * doc comment for why this deliberately does NOT join
-   * StoredStateFields. */
-  private pendingGates: Map<string, { prompt: string; at: number }> = new Map();
+  // The registry owns the live pendingGates map and the derived
+  // gateState/gatePrompt/gateAt summary — see gate-registry.ts.
+  private readonly gates = new GateRegistry({
+    emitEvent: (kind, payload) => this.emitEvent(kind, payload),
+    clearReviewGateAttention: () => this.attention.clearIfConfirmedKind("reviewGate"),
+  });
 
   // Issue #271, option 2 — see SessionInfo.promoteState's doc comment. Set
   // from emitHookEvent's "promote_request" case and from resolvePromote()
@@ -1175,8 +1103,8 @@ export class Session {
     if (s.errorState !== undefined) this.errorState = s.errorState;
     if (s.errorAt !== undefined) this.errorAt = s.errorAt;
     if (s.errorDetail !== undefined) this.errorDetail = s.errorDetail;
-    if (s.gateState !== undefined) this.gateState = s.gateState;
-    if (s.gatePrompt !== undefined) this.gatePrompt = s.gatePrompt;
+    if (s.gateState !== undefined) this.gates.state = s.gateState;
+    if (s.gatePrompt !== undefined) this.gates.prompt = s.gatePrompt;
     if (s.promoteState !== undefined) this.promoteState = s.promoteState;
     if (s.promoteSummary !== undefined) this.promoteSummary = s.promoteSummary;
     if (s.promoteSuggestedBaseRef !== undefined)
@@ -1223,48 +1151,14 @@ export class Session {
     if (Array.isArray(s.backgroundTasks)) this.attention.setBackgroundTasks(s.backgroundTasks);
     this.stampRestoredLatches();
     // Issue: opencode/Claude Code TUI sessions surviving a backend restart
-    // (dtach master lives on, but the in-memory Session doesn't) replayed a
-    // stale scrollback preamble to the next attaching client — inAltScreen
-    // and mouseTracking are learned only from bytes actually observed by
-    // THIS process, so a brand-new Session always restarted them at their
-    // defaults regardless of the real, ongoing screen/mouse mode. This is
-    // issue #93 ("opencode sometimes cycles prompt history instead of
-    // scrolling on mouse wheel") one lifetime boundary deeper: #93 fixed the
-    // scrollback-ring-eviction case by tracking these in memory; that
-    // tracked state itself was never persisted. See inAltScreen's and
-    // mouseTracking's own field docs for the full mechanism, and
-    // StoredStateFields's `termModes` doc for why this is intersected onto
-    // (not part of) SessionInfo.
-    //
-    // Validated rather than trusted, matching this method's own posture for
-    // every other field above (skip an unexpected shape, don't throw): a
-    // restored `protocol`/`encoding` outside the enum xterm.js itself
-    // supports would otherwise poison getScrollback()'s preamble synthesis
-    // (MOUSE_PROTOCOL_ENABLE/MOUSE_ENCODING_ENABLE index lookups) rather than
-    // just falling back to "no tracking".
-    if (s.termModes != null && typeof s.termModes.inAltScreen === "boolean") {
-      this.inAltScreen = s.termModes.inAltScreen;
-      const { protocol, encoding } = s.termModes.mouseTracking ?? INITIAL_MOUSE_TRACKING_STATE;
-      const validProtocol = protocol === "NONE" || Object.hasOwn(MOUSE_PROTOCOL_ENABLE, protocol);
-      const validEncoding =
-        encoding === "DEFAULT" || Object.hasOwn(MOUSE_ENCODING_ENABLE, encoding);
-      if (validProtocol && validEncoding) {
-        this.mouseTracking = { protocol, encoding };
-      }
-    }
-    // Issue #1155 — bracketed paste mode: same "persist across reattach"
-    // rationale as inAltScreen/mouseTracking above. Restored from termModes
-    // alongside the other two, validated as boolean.
-    //
-    // HOWEVER: unlike alt-screen (a cosmetic no-op if stale) or mouse-
-    // tracking (a benign no-op for most programs), a stale bracketedPaste
-    //=true causes the next client paste to be wrapped in ESC[200~..ESC[201~
-    // bytes that a program NOT in bracketed-paste mode won't strip — the
-    // user sees literal wrapper bytes in the buffer. Reset to false on
-    // respawn so the new process's shell/program can re-enable it cleanly.
-    if (s.termModes != null && typeof s.termModes.bracketedPaste === "boolean") {
-      this.bracketedPaste = false;
-    }
+    // replayed a stale scrollback preamble — inAltScreen/mouseTracking are
+    // learned only from bytes observed by THIS process, so a brand-new
+    // Session always restarted them at their defaults (issue #93 one
+    // lifetime boundary deeper). Validation (a malformed shape is skipped,
+    // not thrown) and the issue #1155 forced `bracketedPaste = false` live in
+    // TerminalModeTracker.restore(); `termModes` is intersected onto (not part
+    // of) SessionInfo — see StoredStateFields.
+    this.modes.restore(s.termModes);
     // Fresh-review finding — `turnEndPingSent` itself isn't persisted (it's
     // not in StoredStateFields, same as backgroundTasksAt), so it would
     // otherwise always restore to its class-field default of `false`. That's
@@ -1301,8 +1195,8 @@ export class Session {
       errorState: this.errorState,
       errorAt: this.errorAt,
       errorDetail: this.errorDetail,
-      gateState: this.gateState,
-      gatePrompt: this.gatePrompt,
+      gateState: this.gates.state,
+      gatePrompt: this.gates.prompt,
       promoteState: this.promoteState,
       promoteSummary: this.promoteSummary,
       promoteSuggestedBaseRef: this.promoteSuggestedBaseRef,
@@ -1319,11 +1213,7 @@ export class Session {
       lastAssistantMessage: this.lastAssistantMessage,
       currentTodo: this.currentTodo,
       backgroundTasks: this.attention.backgroundTasks,
-      termModes: {
-        inAltScreen: this.inAltScreen,
-        mouseTracking: this.mouseTracking,
-        bracketedPaste: this.bracketedPaste,
-      },
+      termModes: this.modes.snapshot(),
     };
   }
 
@@ -1434,9 +1324,7 @@ export class Session {
     this.pendingPermissionTool = null;
     this.planState = "idle";
     this.planAt = null;
-    this.gateState = "idle";
-    this.gateAt = null;
-    this.gatePrompt = null;
+    this.gates.resetSummary();
     this.promoteState = "idle";
     this.promoteAt = null;
     this.promoteSummary = null;
@@ -1503,17 +1391,15 @@ export class Session {
       // getOrCreate has wired this session's events into PtyManager's
       // fan-out).
       if (savedState.gateState === "waiting") {
-        this.gateState = "lapsed";
-        this.gatePrompt = null;
-        this.gateAt = null;
+        this.gates.lapseRestoredSummary();
         this.emitEvent("review_gate", {
           state: "lapsed",
           reason: "Mullion restarted while this request was pending",
         });
         this.attention.clearIfConfirmedKind("reviewGate");
       } else {
-        this.gateState = savedState.gateState;
-        this.gatePrompt = savedState.gatePrompt;
+        this.gates.state = savedState.gateState;
+        this.gates.prompt = savedState.gatePrompt;
       }
       this.promoteState = savedState.promoteState;
       this.promoteSummary = savedState.promoteSummary;
@@ -1847,14 +1733,11 @@ export class Session {
       // all need an ESC or BEL byte) and cannot leave a carry behind, so every
       // detector would return its "nothing found" result — skip them.
       const plainChunk =
-        this.detectCarry === "" &&
-        this.cwdDetectCarry === "" &&
-        !data.includes("\x1b") &&
-        !data.includes("\x07");
+        this.modes.carriesEmpty && !data.includes("\x1b") && !data.includes("\x07");
       let altScreenExited = false;
       if (!plainChunk) {
-        const detectChunk = this.detectCarry + data;
-        const altScreenSwitch = detectAltScreenSwitch(detectChunk);
+        const detectChunk = this.modes.detectChunk(data);
+        const altScreenSwitch = this.modes.applyAltScreen(detectChunk);
         // #98: exiting alt-screen (a TUI/editor closing back to the shell
         // prompt) is itself an attention candidate — "done, awaiting input".
         // Only a genuine alt -> primary flip counts, never a chunk that
@@ -1867,10 +1750,8 @@ export class Session {
           // mode) — only emit a status_change event on a genuine flip, so a
           // chatty program can't spam this session's 100-slot event ring
           // buffer with no-op repeats.
-          const nowInAltScreen = altScreenSwitch.mode === "alt";
-          if (nowInAltScreen !== this.inAltScreen) {
-            altScreenExited = this.inAltScreen && !nowInAltScreen;
-            this.inAltScreen = nowInAltScreen;
+          if (altScreenSwitch.flipped) {
+            altScreenExited = altScreenSwitch.exited;
             if (altScreenExited) {
               // Issue #1303 — endIndex is relative to detectChunk (this carry +
               // data); carryPartialEscape only ever carries an UNTERMINATED
@@ -1904,7 +1785,7 @@ export class Session {
                 // own fix already treats real trailing text.
                 const offsetInData = Math.max(
                   0,
-                  altScreenSwitch.endIndex - this.detectCarry.length,
+                  altScreenSwitch.endIndex - this.modes.detectCarryLength,
                 );
                 const bytesBeforeOffset = Buffer.byteLength(data.slice(0, offsetInData), "utf8");
                 const trailingBytes = chunk.length - bytesBeforeOffset;
@@ -1917,19 +1798,14 @@ export class Session {
             this.emitEvent("status_change", { screen: altScreenSwitch.mode });
           }
         }
-        this.mouseTracking = applyMouseModeChanges(detectChunk, this.mouseTracking);
-        const bpChange = detectBracketedPaste(detectChunk);
-        if (bpChange !== null) this.bracketedPaste = bpChange;
-        this.detectCarry = carryPartialEscape(detectChunk);
+        this.modes.applyInputModes(detectChunk);
 
         // Live cwd tracking (issue: sidebar worktree display) — its own carry
         // chunk since an OSC 7 payload (a full path) is long enough that a PTY
         // read boundary landing mid-path is a real possibility, unlike the
         // short fixed-shape CSI sequences detectCarry above tracks.
-        const cwdDetectChunk = this.cwdDetectCarry + data;
-        const cwdChange = detectCwdChange(cwdDetectChunk);
+        const cwdChange = this.modes.detectCwd(data);
         if (cwdChange !== null) this._liveCwd = cwdChange;
-        this.cwdDetectCarry = carryPartialOsc(cwdDetectChunk);
       }
 
       const now = Date.now();
@@ -2076,7 +1952,7 @@ export class Session {
       // also die on its own (crash, not an explicit kill()), and this exit
       // handler is the only place that path passes through before a later
       // respawn's first chunk arrives.
-      this.detectCarry = "";
+      this.modes.clearDetectCarry();
       // A settling permission/tool-failure/turn-end ping has nothing left
       // to settle for once the process is gone — drop it rather than let a
       // stray drainDeferred() tick fire it for a session that already
@@ -2284,22 +2160,22 @@ export class Session {
         return self.gitIgnoreDirCache;
       },
       get gateState() {
-        return self.gateState;
+        return self.gates.state;
       },
       set gateState(v) {
-        self.gateState = v;
+        self.gates.state = v;
       },
       get gatePrompt() {
-        return self.gatePrompt;
+        return self.gates.prompt;
       },
       set gatePrompt(v) {
-        self.gatePrompt = v;
+        self.gates.prompt = v;
       },
       get gateAt() {
-        return self.gateAt;
+        return self.gates.at;
       },
       set gateAt(v) {
-        self.gateAt = v;
+        self.gates.at = v;
       },
       get promoteState() {
         return self.promoteState;
@@ -2579,20 +2455,14 @@ export class Session {
    * operation.
    */
   registerPendingGate(gateId: string, prompt: string): void {
-    const isFirstGate = this.pendingGates.size === 0;
-    this.pendingGates.set(gateId, { prompt, at: Date.now() });
-    this.gateState = "waiting";
-    if (isFirstGate) {
-      this.gatePrompt = prompt;
-      this.gateAt = Date.now();
-    }
+    this.gates.register(gateId, prompt);
   }
 
   /** The ids of every currently-waiting gate, oldest first (Map iteration
    * order is insertion order) — see SessionHookContext.pendingGateIds's
    * own doc comment for its one caller. */
   pendingGateIds(): string[] {
-    return [...this.pendingGates.keys()];
+    return this.gates.pendingIds();
   }
 
   /**
@@ -2641,28 +2511,7 @@ export class Session {
    * decision is never `"lapsed"`.
    */
   resolveGate(gateId: string, decision: "approved" | "denied" | "lapsed", reason?: string): void {
-    const pending = this.pendingGates.get(gateId);
-    if (!pending) return;
-    this.pendingGates.delete(gateId);
-    this.emitEvent("review_gate", {
-      state: decision,
-      gateId,
-      prompt: pending.prompt,
-      ...(reason !== undefined ? { reason } : {}),
-    });
-    if (this.pendingGates.size === 0) {
-      this.gateState = decision;
-      this.gatePrompt = null;
-      this.gateAt = null;
-      this.attention.clearIfConfirmedKind("reviewGate");
-    } else {
-      // At least one other gate is still waiting — the derived scalar
-      // summary now represents the OLDEST of those (Map iteration order is
-      // insertion order), not the one that just resolved.
-      const oldest = this.pendingGates.values().next().value!;
-      this.gatePrompt = oldest.prompt;
-      this.gateAt = oldest.at;
-    }
+    this.gates.resolve(gateId, decision, reason);
   }
 
   /**
@@ -2783,7 +2632,7 @@ export class Session {
    */
   acknowledgeAttention(): boolean {
     if (
-      this.gateState === "waiting" ||
+      this.gates.state === "waiting" ||
       this.promoteState === "pending" ||
       this.permissionState === "pending" ||
       this.planState === "pending" ||
@@ -2876,7 +2725,7 @@ export class Session {
 
     if (this.attention.state.state === "idle" && hadSustainedStreak && silentLongEnough) {
       const context =
-        !this.hooksActive && !this.inAltScreen ? this.silenceContextFromScrollback() : null;
+        !this.hooksActive && !this.modes.inAltScreen ? this.silenceContextFromScrollback() : null;
       this.attention.applyAttentionTransition(
         advanceAttention(this.attention.state, { type: "signal", kind: "silence", now }),
         context !== null ? { context } : undefined,
@@ -3035,19 +2884,7 @@ export class Session {
    * preamble-free bytes.
    */
   getScrollback(): Buffer {
-    const altPreamble = this.inAltScreen ? ALT_SCREEN_ENTER : ALT_SCREEN_EXIT;
-    let mousePreamble = "";
-    if (this.mouseTracking.protocol !== "NONE") {
-      mousePreamble += MOUSE_PROTOCOL_ENABLE[this.mouseTracking.protocol];
-    }
-    if (this.mouseTracking.encoding !== "DEFAULT") {
-      mousePreamble += MOUSE_ENCODING_ENABLE[this.mouseTracking.encoding];
-    }
-    let bpPreamble = "";
-    if (this.bracketedPaste) {
-      bpPreamble = "\x1b[?2004h";
-    }
-    const preamble = Buffer.from(altPreamble + mousePreamble + bpPreamble, "utf8");
+    const preamble = this.modes.buildPreamble();
     return this.scrollbackBuffer.toBuffer(preamble);
   }
 
@@ -3175,7 +3012,9 @@ export class Session {
       // of a genuine keystroke below (lastTurnEndedAt, backgroundTasks,
       // errorState) is unrelated to either and still applies
       // unconditionally.
-      if (!(this.gateState === "waiting" && this.attention.state.confirmedKind === "reviewGate")) {
+      if (!(
+        this.gates.state === "waiting" && this.attention.state.confirmedKind === "reviewGate"
+      )) {
         this.attention.applyAttentionTransition(
           advanceAttention(this.attention.state, { type: "userInput", now: Date.now() }),
         );
@@ -3235,6 +3074,121 @@ export class Session {
     return true;
   }
 
+  /** The nine blocked/busy latches the stale sweep walks, in sweep order. */
+  private staleLatches(): StaleLatch[] {
+    return [
+      {
+        name: "permissionState",
+        tier: "blocked",
+        isActive: () => this.permissionState !== "idle",
+        at: () => this.permissionAt,
+        clear: () => {
+          this.permissionState = "idle";
+          this.permissionAt = null;
+          this.pendingPermissionTool = null;
+        },
+        attentionKind: "permissionRequest",
+      },
+      {
+        name: "planState",
+        tier: "blocked",
+        isActive: () => this.planState !== "idle",
+        at: () => this.planAt,
+        clear: () => {
+          this.planState = "idle";
+          this.planAt = null;
+        },
+        attentionKind: "planReady",
+      },
+      {
+        name: "gateState",
+        tier: "blocked",
+        isActive: () => this.gates.state === "waiting",
+        at: () => this.gates.at,
+        // M4 — also resolves every pending gate as lapsed (the live map is the
+        // source of truth for resolveGate()/pendingGateIds()); see
+        // GateRegistry.clearStale().
+        clear: () => this.gates.clearStale(),
+        attentionKind: "reviewGate",
+      },
+      {
+        name: "promoteState",
+        tier: "blocked",
+        isActive: () => this.promoteState === "pending",
+        at: () => this.promoteAt,
+        clear: () => {
+          this.promoteState = "idle";
+          this.promoteAt = null;
+          this.promoteSummary = null;
+          this.promoteSuggestedBaseRef = null;
+        },
+        attentionKind: "promoteRequest",
+      },
+      {
+        name: "elicitationState",
+        tier: "blocked",
+        isActive: () => this.elicitationState !== "idle",
+        at: () => this.elicitationAt,
+        clear: () => {
+          this.elicitationState = "idle";
+          this.elicitationAt = null;
+          this.elicitationServer = null;
+        },
+        attentionKind: "elicitation",
+      },
+      {
+        name: "questionState",
+        tier: "blocked",
+        isActive: () => this.questionState !== "idle",
+        at: () => this.questionAt,
+        clear: () => {
+          this.questionState = "idle";
+          this.questionHeader = null;
+          this.questionAt = null;
+        },
+        attentionKind: "question",
+      },
+      {
+        name: "compactState",
+        tier: "busy",
+        isActive: () => this.compactState !== "idle",
+        at: () => this.compactAt,
+        clear: () => {
+          this.compactState = "idle";
+          this.compactAt = null;
+        },
+      },
+      {
+        name: "subagentCount",
+        tier: "busy",
+        isActive: () => this.subagentCount > 0,
+        at: () => this.subagentCountAt,
+        clear: () => {
+          this.subagentCount = 0;
+          this.subagentCountAt = null;
+        },
+      },
+      // Issue #428 — same busy tier as compactState/subagentCount: genuinely
+      // outstanding background work is ongoing work, not evidence something
+      // silently failed. The silence requirement catches a still-running
+      // SUBAGENT but NOT a running background Bash/MCP task that produces no
+      // PTY output — which is why this deliberately does NOT call
+      // resolveDeferredTurnEnd() (Hermes review, PR #453): clearing the list is
+      // a "give up tracking it" backstop, NOT a confirmed drain, so it must
+      // not assert "the work is done" via a possibly-wrong `agentIdle` ping.
+      {
+        name: "backgroundTasks",
+        tier: "busy",
+        isActive: () => filterOutstandingBackgroundTasks(this.attention.backgroundTasks).length > 0,
+        at: () => this.attention.backgroundTasksAt,
+        clear: () => {
+          this.attention.backgroundTasks = [];
+          this.attention.backgroundTasksAt = null;
+        },
+      },
+    ];
+  }
+
   /**
    * Issue #320 — the blocked/busy staleness backstop. Sweeps every
    * blocked/busy latch (permissionState, planState, gateState, promoteState,
@@ -3258,150 +3212,34 @@ export class Session {
     busyMaxAgeMs: number,
     now: number,
   ): boolean {
-    let changed = false;
+    // Fix: sticky needs_input (D4) — each stale latch also clears its OWN
+    // attention-machine kind via clearIfConfirmedKind(). Staleness has already
+    // established that latch is dead (past the TTL AND the session silent
+    // since), so clearing the confirmed attention flag it owns at the same
+    // moment is safe by construction — the generic net that catches ANY
+    // orphaned confirmedKind for a session nobody ever returns to.
+    // `hookNotification` (the generic immune kind) has no owning latch and is
+    // deliberately left alone here: it clears via a genuine keystroke, a
+    // resolved decision (notification_resolved), or `turn_start`'s
+    // ctx.clearAttention() — authoritative "the human responded" signals, not
+    // a TTL guess (Hermes review, PR #675).
+    //
+    // Table order is the original block order and each entry is evaluated
+    // lazily — see stale-latch-sweep.ts. The "blocked" tier is a human
+    // decision pending (short backstop); "busy" is ongoing work (longer).
+    let changed = sweepStaleLatches(this.staleLatches(), {
+      now,
+      blockedMaxAgeMs,
+      busyMaxAgeMs,
+      graceMs: BLOCKED_STALE_GRACE_MS,
+      lastActivityAt: () => this.lastActivityAt,
+      clearAttention: (kind) => this.attention.clearIfConfirmedKind(kind),
+      emit: (name) =>
+        this.emitEvent("status_change", { reason: "stale_blocked_cleared", state: name }),
+    });
 
-    // Helper: check if a latch timestamp is stale (past maxAgeMs) AND the
-    // agent hasn't produced genuine new output since the latch. Activity
-    // arriving within BLOCKED_STALE_GRACE_MS of the latch timestamp (e.g.
-    // the dialog render that follows a hook firing) is treated as part of
-    // the same triggering event — only activity well PAST the grace window
-    // counts as evidence the agent is still progressing.
     const isStale = (at: number | null, maxAgeMs: number): boolean =>
-      at !== null &&
-      now - at >= maxAgeMs &&
-      (this.lastActivityAt === null || this.lastActivityAt <= at + BLOCKED_STALE_GRACE_MS);
-
-    // Fix: sticky needs_input (D4) — each stale latch below also clears its
-    // OWN attention-machine kind via clearIfConfirmedKind(). isStale() has
-    // already established that latch is dead (its timestamp is past the
-    // TTL AND the session has been silent since); clearing the confirmed
-    // attention flag it owns at the same moment is safe by construction —
-    // no new silence/activity predicate needed. This is the generic net
-    // that catches ANY orphaned confirmedKind (not just the specific
-    // Claude Code races fixed elsewhere in this PR), for a session nobody
-    // ever returns to. `hookNotification` (the generic immune kind) has no
-    // owning latch here and is deliberately left alone within THIS sweep —
-    // it has no per-state timestamp to key a TTL clear off. It's still
-    // reachable through two other paths, both authoritative "the human
-    // responded" signals rather than a TTL guess: a genuine keystroke
-    // (write()'s userInput clear) or a resolved decision
-    // (notification_resolved's clearIfConfirmedKind), and — Hermes review,
-    // PR #675 — hook-handlers.ts's `turn_start` case, whose
-    // ctx.clearAttention() clears it unconditionally too (UserPromptSubmit
-    // is as authoritative a "the human just responded" signal as either of
-    // those, and clearAttention() isn't kind-gated the way this sweep's
-    // per-latch clears are).
-    if (this.permissionState !== "idle" && isStale(this.permissionAt, blockedMaxAgeMs)) {
-      this.permissionState = "idle";
-      this.permissionAt = null;
-      this.pendingPermissionTool = null;
-      this.attention.clearIfConfirmedKind("permissionRequest");
-      this.emitEvent("status_change", {
-        reason: "stale_blocked_cleared",
-        state: "permissionState",
-      });
-      changed = true;
-    }
-
-    if (this.planState !== "idle" && isStale(this.planAt, blockedMaxAgeMs)) {
-      this.planState = "idle";
-      this.planAt = null;
-      this.attention.clearIfConfirmedKind("planReady");
-      this.emitEvent("status_change", { reason: "stale_blocked_cleared", state: "planState" });
-      changed = true;
-    }
-
-    if (this.gateState === "waiting" && isStale(this.gateAt, blockedMaxAgeMs)) {
-      // M4 — the live pendingGates map is the source of truth for
-      // resolveGate()/pendingGateIds(); leaving it populated after the
-      // scalar summary is swept would let a later gate registration see
-      // `size > 0` ("not first") and a later resolveGate re-point the
-      // summary at a gate this sweep already declared dead. Resolve each
-      // as lapsed (the "nobody answered" outcome) before clearing.
-      for (const gateId of [...this.pendingGates.keys()]) {
-        this.resolveGate(gateId, "lapsed", "stale gate cleared");
-      }
-      this.gateState = "idle";
-      this.gateAt = null;
-      this.gatePrompt = null;
-      this.attention.clearIfConfirmedKind("reviewGate");
-      this.emitEvent("status_change", { reason: "stale_blocked_cleared", state: "gateState" });
-      changed = true;
-    }
-
-    if (this.promoteState === "pending" && isStale(this.promoteAt, blockedMaxAgeMs)) {
-      this.promoteState = "idle";
-      this.promoteAt = null;
-      this.promoteSummary = null;
-      this.promoteSuggestedBaseRef = null;
-      this.attention.clearIfConfirmedKind("promoteRequest");
-      this.emitEvent("status_change", { reason: "stale_blocked_cleared", state: "promoteState" });
-      changed = true;
-    }
-
-    if (this.elicitationState !== "idle" && isStale(this.elicitationAt, blockedMaxAgeMs)) {
-      this.elicitationState = "idle";
-      this.elicitationAt = null;
-      this.elicitationServer = null;
-      this.attention.clearIfConfirmedKind("elicitation");
-      this.emitEvent("status_change", {
-        reason: "stale_blocked_cleared",
-        state: "elicitationState",
-      });
-      changed = true;
-    }
-
-    if (this.questionState !== "idle" && isStale(this.questionAt, blockedMaxAgeMs)) {
-      this.questionState = "idle";
-      this.questionHeader = null;
-      this.questionAt = null;
-      this.attention.clearIfConfirmedKind("question");
-      this.emitEvent("status_change", { reason: "stale_blocked_cleared", state: "questionState" });
-      changed = true;
-    }
-
-    if (this.compactState !== "idle" && isStale(this.compactAt, busyMaxAgeMs)) {
-      this.compactState = "idle";
-      this.compactAt = null;
-      this.emitEvent("status_change", { reason: "stale_blocked_cleared", state: "compactState" });
-      changed = true;
-    }
-
-    if (this.subagentCount > 0 && isStale(this.subagentCountAt, busyMaxAgeMs)) {
-      this.subagentCount = 0;
-      this.subagentCountAt = null;
-      this.emitEvent("status_change", { reason: "stale_blocked_cleared", state: "subagentCount" });
-      changed = true;
-    }
-
-    // Issue #428 — same busyMaxAgeMs tier as compactState/subagentCount
-    // above: genuinely outstanding background work is ongoing work, not
-    // evidence something silently failed, so it gets the longer busy TTL
-    // rather than the short blocked one. `isStale`'s silence requirement
-    // catches a still-running SUBAGENT (its own PTY-adjacent activity keeps
-    // lastActivityAt moving), but NOT a genuinely-running background Bash/
-    // MCP task that produces no PTY output of its own at all — the session
-    // can sit silent for the full TTL while that work is still legitimately
-    // in progress. That's exactly why this deliberately does NOT call
-    // resolveDeferredTurnEnd() (Hermes review, PR #453): clearing the list
-    // is a "give up tracking it" backstop, same posture as subagentCount's
-    // own stale-clear just above (which fires no completion ping either) —
-    // NOT a confirmed drain, so it must not assert "the work is done" via an
-    // `agentIdle`/"Finished" ping that could be wrong. The status itself
-    // still degrades correctly on the next poll (deriveSessionStatus reads
-    // the now-empty outstandingBackgroundTasks), just without a false ping.
-    if (
-      filterOutstandingBackgroundTasks(this.attention.backgroundTasks).length > 0 &&
-      isStale(this.attention.backgroundTasksAt, busyMaxAgeMs)
-    ) {
-      this.attention.backgroundTasks = [];
-      this.attention.backgroundTasksAt = null;
-      this.emitEvent("status_change", {
-        reason: "stale_blocked_cleared",
-        state: "backgroundTasks",
-      });
-      changed = true;
-    }
+      isLatchStale(at, maxAgeMs, now, this.lastActivityAt, BLOCKED_STALE_GRACE_MS);
 
     // Phase 5 (Track A) — deliberately INDEPENDENT of the subagentCount
     // block above, checking each open entry against its own `startedAt`
@@ -3562,7 +3400,7 @@ export class Session {
     // chunk happened to end. It carries no meaning once that stream is gone,
     // so clear it rather than risk it being misread as a prefix of the new
     // attach-client's first chunk.
-    this.detectCarry = "";
+    this.modes.clearDetectCarry();
     // B8(3) — this Session instance is permanently done after this kill()
     // call (see this method's own doc comment above), so the per-session
     // git-ignore memoization cache has nothing left to serve; drop it
@@ -3575,7 +3413,7 @@ export class Session {
     // `_liveCwd` itself is NOT cleared here: it tracks true, ongoing shell
     // state (same posture as inAltScreen/mouseTracking) that survives a
     // respawn/reattach to the same dtach session.
-    this.cwdDetectCarry = "";
+    this.modes.clearCwdDetectCarry();
   }
 
   /** Whether the current activity streak has spanned at least SUSTAIN_MS (see onData's streak tracking). */
@@ -3622,10 +3460,10 @@ export class Session {
       attention: this.attention.state.confirmedAt !== null,
       attentionAt: this.attention.state.confirmedAt,
       lastTitle: this.lastTitle,
-      gateState: this.gateState,
-      gatePrompt: this.gatePrompt,
-      gateAt: this.gateAt,
-      gates: [...this.pendingGates].map(([gateId, g]) => ({ gateId, prompt: g.prompt, at: g.at })),
+      gateState: this.gates.state,
+      gatePrompt: this.gates.prompt,
+      gateAt: this.gates.at,
+      gates: this.gates.entries(),
       promoteState: this.promoteState,
       promoteSummary: this.promoteSummary,
       promoteSuggestedBaseRef: this.promoteSuggestedBaseRef,
