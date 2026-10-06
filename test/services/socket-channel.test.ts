@@ -1,6 +1,6 @@
 import type net from "node:net";
 import { describe, it, expect, vi } from "vitest";
-import { SocketChannel } from "../../src/services/socket-channel.js";
+import { SocketChannel, WRITE_HARD_CEILING_BYTES } from "../../src/services/socket-channel.js";
 
 /** Minimal net.Socket stand-in — only the surface SocketChannel actually
  * calls (`.write(data, cb)`, `.writable`). `write`'s callback fires
@@ -179,5 +179,18 @@ describe("SocketChannel", () => {
       binary: false,
     });
     expect(JSON.parse(lines[0])).toEqual({ id: 15, type: "exited" });
+  });
+
+  it("destroys the connection once unwritten bytes pass the hard ceiling (#1517)", () => {
+    const { socket } = fakeSocket();
+    const fake = socket as unknown as { writableLength: number; destroy: () => void };
+    fake.destroy = vi.fn();
+    fake.writableLength = WRITE_HARD_CEILING_BYTES;
+    const channel = new SocketChannel(socket, 1);
+    channel.send(Buffer.from("a"));
+    expect(fake.destroy).not.toHaveBeenCalled();
+    fake.writableLength = WRITE_HARD_CEILING_BYTES + 1;
+    channel.send(Buffer.from("a"));
+    expect(fake.destroy).toHaveBeenCalledTimes(1);
   });
 });
