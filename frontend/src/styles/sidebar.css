@@ -2151,12 +2151,17 @@
   background: color-mix(in srgb, var(--b) 14%, transparent);
 }
 
-/* Phone notifications sheet (NotificationBell.tsx's `phone` branch) — reuses
+/* Notifications bottom sheet (NotificationBell.tsx's `sheet` branch) — reuses
    the session sheet's backdrop/sheet shell; everything below is scoped to
    `.mobile-notif-sheet` so the desktop popover's rows are untouched. */
 .mobile-notif-sheet {
   height: min(88dvh, 760px);
   max-height: none;
+}
+/* Tablet (touch): the sheet shouldn't stretch the full ~880px unfolded width. */
+.mobile-notif-sheet.mobile-notif-sheet--tablet {
+  width: min(560px, 100%);
+  align-self: center;
 }
 .mobile-notif-readall {
   display: flex;

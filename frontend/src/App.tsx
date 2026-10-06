@@ -1360,6 +1360,7 @@ export function App() {
         currentVersion={currentVersion}
         mobileSessionSlot={mobileSessionSwitcher}
         phone={isMobile}
+        notificationSheet={compact && isCoarsePointer}
       />
       <div className="app-body" ref={appBodyRef}>
         <div className="cmux-scrim" onClick={() => setSidebarOpen(false)} />
