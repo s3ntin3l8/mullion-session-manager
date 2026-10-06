@@ -117,10 +117,10 @@ describe("Toolbar — phone session switcher slot and app menu", () => {
     expect(screen.getByText("switcher")).toBeInTheDocument();
   });
 
-  it("hides the mobile session slot in Task view", () => {
+  it("keeps the mobile session slot in Task view (the board lives in the navigator there)", () => {
     viewMode = "kanban";
     render(<Toolbar {...NOOP_PROPS} mobileSessionSlot={<span>switcher</span>} />);
-    expect(screen.queryByText("switcher")).toBeNull();
+    expect(screen.getByText("switcher")).toBeInTheDocument();
   });
 
   it("offers new session, theme and settings from the ⋯ app menu", async () => {
@@ -191,12 +191,12 @@ describe("Toolbar — phone tier", () => {
     expect(container.querySelector(".toolbar")).toHaveClass("toolbar--compact-picker");
   });
 
-  it("keeps the centre (Tasks Back button) instead of the picker in Tasks view", () => {
+  it("keeps the compact picker marker in Tasks view on a compact tier", () => {
     viewMode = "kanban";
     const { container } = render(
       <Toolbar {...NOOP_PROPS} mobileSessionSlot={<span>switcher</span>} />,
     );
-    expect(container.querySelector(".toolbar")).not.toHaveClass("toolbar--compact-picker");
+    expect(container.querySelector(".toolbar")).toHaveClass("toolbar--compact-picker");
   });
 
   it("does not mark phone (its own CSS owns that layout) or slot-less desktop", () => {

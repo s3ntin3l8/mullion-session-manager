@@ -7,6 +7,7 @@ import {
   computeTaskReorder,
   absoluteDropIndex,
   defaultPhoneColumn,
+  visibleColumnWindow,
 } from "./tasksBoard.js";
 import type { Task, TaskStatus } from "./api/index.js";
 
@@ -288,5 +289,32 @@ describe("defaultPhoneColumn", () => {
 
   it("degrades to the first available column when Ready isn't offered", () => {
     expect(defaultPhoneColumn(counts(), ["done", "failed"])).toBe("done");
+  });
+});
+
+describe("visibleColumnWindow", () => {
+  const COLS: TaskStatus[] = ["ready", "in_progress", "reviewing", "done"];
+
+  it("starts the window at the selected column", () => {
+    expect(visibleColumnWindow(COLS, "in_progress", 2)).toEqual(["in_progress", "reviewing"]);
+    expect(visibleColumnWindow(COLS, "ready", 2)).toEqual(["ready", "in_progress"]);
+  });
+
+  it("clamps at the end so the last chip shows the last `count` columns", () => {
+    expect(visibleColumnWindow(COLS, "done", 2)).toEqual(["reviewing", "done"]);
+    expect(visibleColumnWindow(COLS, "reviewing", 3)).toEqual(["in_progress", "reviewing", "done"]);
+  });
+
+  it("returns every column when count covers them all", () => {
+    expect(visibleColumnWindow(COLS, "reviewing", 4)).toEqual(COLS);
+    expect(visibleColumnWindow(COLS, "reviewing", 9)).toEqual(COLS);
+  });
+
+  it("falls back to the first window when the selection isn't offered (hide-done)", () => {
+    expect(visibleColumnWindow(["ready", "in_progress"], "done", 1)).toEqual(["ready"]);
+  });
+
+  it("is a single column for count 1 (phone)", () => {
+    expect(visibleColumnWindow(COLS, "reviewing", 1)).toEqual(["reviewing"]);
   });
 });

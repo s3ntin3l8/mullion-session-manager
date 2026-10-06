@@ -9,6 +9,7 @@ import {
   computeTaskReorder,
   absoluteDropIndex,
   defaultPhoneColumn,
+  visibleColumnWindow,
 } from "./tasksBoard.js";
 import {
   taskLinkedSessionIds,
@@ -83,7 +84,7 @@ export function UnifiedBoard({
   onOpenSession,
   onSessionEnded,
   phone = false,
-  backStack = false,
+  columnCount = 1,
 }: {
   onOpenSession: (session: Session) => void;
   onSessionEnded: (session: Session) => void;
@@ -91,9 +92,9 @@ export function UnifiedBoard({
   // sheet, no ad-hoc lane (the session picker covers those sessions), and
   // Android back closes the task detail. Unset elsewhere = the full board.
   phone?: boolean;
-  // Android back closes the task detail drawer. Implied by `phone`; set on its
-  // own for the tablet grid overlay, which keeps the full board layout.
-  backStack?: boolean;
+  // With `phone`: how many adjacent status columns show at once (1 on phone,
+  // 2 on tablet, where the board has the width for a pair).
+  columnCount?: number;
 }) {
   // P1 perf fix — was a single bare `useDashboardStore()` (whole-store
   // subscription). `refreshTasks`/`updateTask`/`createTask`/`deleteSession`/
@@ -426,7 +427,7 @@ export function UnifiedBoard({
     [setDetailTaskId],
   );
 
-  usePhoneBackStack((phone || backStack) && detailTaskId !== null, () => setDetailTaskId(null));
+  usePhoneBackStack(phone && detailTaskId !== null, () => setDetailTaskId(null));
 
   useEffect(() => {
     if (detailTaskId === null) return;
@@ -563,6 +564,12 @@ export function UnifiedBoard({
           statusCounts,
           phoneColumns.map((c) => c.id),
         );
+
+  const visibleColumnIds = visibleColumnWindow(
+    phoneColumns.map((c) => c.id),
+    phoneColumn,
+    columnCount,
+  );
 
   // Keep the selected chip visible: with all seven columns the strip
   // overflows a phone, and the default pick (In Progress) is 4th. Optional
@@ -704,8 +711,15 @@ export function UnifiedBoard({
                   key={column.id}
                   type="button"
                   className="tasks-phone-strip-chip"
-                  aria-pressed={column.id === phoneColumn}
-                  onClick={() => setPhoneColumnChoice(column.id)}
+                  // "On screen", not "the one selected": `phone` here is the compact
+                  // board layout, so on tablet this strip shows and both columns
+                  // of the visible pair read as pressed.
+                  aria-pressed={visibleColumnIds.includes(column.id)}
+                  onClick={() => {
+                    // Picking a chip already on screen keeps the pair put.
+                    if (columnCount > 1 && visibleColumnIds.includes(column.id)) return;
+                    setPhoneColumnChoice(column.id);
+                  }}
                 >
                   {column.title}
                   <span className="tasks-phone-strip-count">{statusCounts[column.id]}</span>
@@ -788,34 +802,37 @@ export function UnifiedBoard({
               )}
             </EmptyStateNote>
           )}
-          <div className="kanban-board tasks-board kanban-unified-columns">
-            {(phone ? TASK_COLUMNS.filter((c) => c.id === phoneColumn) : TASK_COLUMNS).map(
-              (column) => {
-                const columnTasks = orderTasksForColumn(visibleTasks, column.id);
-                const acceptsDrop =
-                  draggingTask !== null &&
-                  (draggingTask.status === column.id ||
-                    (canDragToColumn(draggingTask.status) && canDragToColumn(column.id)));
-                return (
-                  <TaskColumn
-                    key={column.id}
-                    title={column.title}
-                    projectsById={projectsById}
-                    sessionsById={sessionsById}
-                    theme={theme}
-                    tasks={columnTasks}
-                    taskMasterEnabled={taskMasterEnabled}
-                    acceptsDrop={acceptsDrop}
-                    onOpen={(task) => openDetail(task.id)}
-                    onOpenSession={onOpenSession}
-                    onDrop={(draggedId, index) => applyDrop(draggedId, column.id, index)}
-                    onDragBegin={setDraggingId}
-                    onDragFinish={() => setDraggingId(null)}
-                    collapsed={hideDone && (column.id === "done" || column.id === "failed")}
-                  />
-                );
-              },
-            )}
+          <div
+            className={`kanban-board tasks-board kanban-unified-columns${phone && columnCount > 1 ? " kanban-unified-columns--split" : ""}`}
+          >
+            {(phone
+              ? TASK_COLUMNS.filter((c) => visibleColumnIds.includes(c.id))
+              : TASK_COLUMNS
+            ).map((column) => {
+              const columnTasks = orderTasksForColumn(visibleTasks, column.id);
+              const acceptsDrop =
+                draggingTask !== null &&
+                (draggingTask.status === column.id ||
+                  (canDragToColumn(draggingTask.status) && canDragToColumn(column.id)));
+              return (
+                <TaskColumn
+                  key={column.id}
+                  title={column.title}
+                  projectsById={projectsById}
+                  sessionsById={sessionsById}
+                  theme={theme}
+                  tasks={columnTasks}
+                  taskMasterEnabled={taskMasterEnabled}
+                  acceptsDrop={acceptsDrop}
+                  onOpen={(task) => openDetail(task.id)}
+                  onOpenSession={onOpenSession}
+                  onDrop={(draggedId, index) => applyDrop(draggedId, column.id, index)}
+                  onDragBegin={setDraggingId}
+                  onDragFinish={() => setDraggingId(null)}
+                  collapsed={hideDone && (column.id === "done" || column.id === "failed")}
+                />
+              );
+            })}
           </div>
         </div>
         {detailTaskId !== null && (

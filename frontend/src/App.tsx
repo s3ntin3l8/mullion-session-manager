@@ -1170,7 +1170,7 @@ export function App() {
   // hooks/usePhoneBackStack.ts). Settings and the session/notification
   // sheets register themselves; the navigator and the Tasks board live here.
   usePhoneBackStack(compact && sidebarOpen, () => setSidebarOpen(false));
-  usePhoneTasksNavigator({ isMobile, viewMode, sidebarOpen, setSidebarOpen });
+  usePhoneTasksNavigator({ compact, viewMode, sidebarOpen, setSidebarOpen });
   useEffect(() => {
     if (!compact) return;
     if (sidebarOpen) {
@@ -1179,6 +1179,8 @@ export function App() {
       return attachSidebarSwipeGesture({
         element: el,
         commitDirection: -1,
+        // Panning the Tasks status strip must not dismiss the navigator.
+        ignoreSelector: ".tasks-phone-strip",
         onCommit: () => setSidebarOpen(false),
       });
     }
@@ -1317,7 +1319,7 @@ export function App() {
 
   const sidebar = (
     <Sidebar
-      phoneSection={isMobile ? sidebarPhoneSection(navTab) : undefined}
+      phoneSection={compact ? sidebarPhoneSection(navTab) : undefined}
       onOpenSession={onOpenSession}
       onOpenSessionAsFloat={onOpenSessionAsFloat}
       onSessionEnded={onSessionEnded}
@@ -1347,7 +1349,7 @@ export function App() {
   return (
     <div
       data-tier={layoutTier}
-      className={`app cmux-root${theme === "light" ? " light" : ""}${sidebarOpen ? " sb-open" : ""}${sidebarCollapsed ? " sidebar-collapsed" : ""}${sidebarResizing ? " sidebar-resizing" : ""}${settings.sidebarDensity === "compact" ? " density-compact" : ""}${isCoarsePointer && activeTerminalSession ? " key-bar" : ""}`}
+      className={`app cmux-root${theme === "light" ? " light" : ""}${sidebarOpen ? " sb-open" : ""}${compact && viewMode === "kanban" ? " nav-tasks" : ""}${sidebarCollapsed ? " sidebar-collapsed" : ""}${sidebarResizing ? " sidebar-resizing" : ""}${settings.sidebarDensity === "compact" ? " density-compact" : ""}${isCoarsePointer && activeTerminalSession ? " key-bar" : ""}`}
       style={{ "--sidebar-width": `${sidebarWidth}px` } as CSSProperties}
     >
       <Toolbar
@@ -1381,9 +1383,15 @@ export function App() {
           {/* Phone: workspaces don't exist as a concept — the session picker
               lists every session — and the drawer is a full-screen navigator
               with tabs instead of one long scroll. */}
-          {isMobile ? (
+          {compact ? (
             <>
               <PhoneNavigatorPanel
+                tablet={!isMobile}
+                workspaces={
+                  isMobile ? undefined : (
+                    <WorkspaceSwitcher onSelectWorkspace={handleSelectWorkspace} />
+                  )
+                }
                 navTab={navTab}
                 setNavTab={setNavTab}
                 onOpenTasks={onOpenTasks}
@@ -1606,12 +1614,8 @@ export function App() {
                   was a peer of the tiled workspace grid. Desktop/tablet only:
                   on phone the board renders inside the navigator's Tasks tab
                   instead (PhoneNavigatorPanel). */}
-              {viewMode === "kanban" && !isMobile && (
-                <KanbanBoardOverlay
-                  onOpenSession={onOpenSession}
-                  onSessionEnded={onSessionEnded}
-                  backStack={compact}
-                />
+              {viewMode === "kanban" && !compact && (
+                <KanbanBoardOverlay onOpenSession={onOpenSession} onSessionEnded={onSessionEnded} />
               )}
             </div>
             <Dock

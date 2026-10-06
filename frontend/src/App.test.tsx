@@ -14,9 +14,21 @@ import type { LayoutMode } from "./api/index.js";
 vi.mock("dockview-react", () => ({ DockviewReact: () => <div data-testid="dockview" /> }));
 vi.mock("dockview-react/dist/styles/dockview.css", () => ({}));
 vi.mock("./Sidebar.js", () => ({ Sidebar: () => <div data-testid="sidebar" /> }));
-vi.mock("./WorkspaceSwitcher.js", () => ({ WorkspaceSwitcher: () => null }));
+vi.mock("./WorkspaceSwitcher.js", () => ({
+  WorkspaceSwitcher: () => <span data-testid="workspace-switcher" />,
+}));
 vi.mock("./PhoneNavigator.js", () => ({
-  PhoneNavigatorPanel: () => <div data-testid="navigator" />,
+  PhoneNavigatorPanel: ({
+    tablet,
+    workspaces,
+  }: {
+    tablet?: boolean;
+    workspaces?: React.ReactNode;
+  }) => (
+    <div data-testid="navigator" data-tablet={String(!!tablet)}>
+      {workspaces}
+    </div>
+  ),
 }));
 vi.mock("./Toolbar.js", () => ({
   Toolbar: ({
@@ -51,7 +63,7 @@ vi.mock("./ResourceAlertBanner.js", () => ({ ResourceAlertBanner: () => null }))
 vi.mock("./panels/registry.js", () => ({
   components: {},
   tabComponents: {},
-  KanbanBoardOverlay: () => null,
+  KanbanBoardOverlay: () => <div data-testid="kanban-overlay" />,
 }));
 vi.mock("./Settings.js", () => ({ Settings: () => null }));
 vi.mock("./terminalRepaintRegistry.js", () => ({ repaintAllTerminals: vi.fn() }));
@@ -204,6 +216,44 @@ describe("App tier wiring", () => {
     stubWidth("phone");
     render(<App />);
     expect(screen.getByTestId("session-bar")).toHaveAttribute("data-context", "");
+  });
+
+  // Compact tiers get the tabbed navigator in the drawer; only tablet has
+  // workspaces, so only tablet passes the switcher slot.
+  it.each([
+    ["phone", false, false],
+    ["tablet", true, true],
+  ] as const)(
+    "renders the navigator on %s (tablet=%s, workspaces slot=%s)",
+    (tier, isTablet, hasWs) => {
+      stubWidth(tier);
+      render(<App />);
+      expect(screen.getByTestId("navigator")).toHaveAttribute("data-tablet", String(isTablet));
+      expect(!!screen.queryByTestId("workspace-switcher")).toBe(hasWs);
+    },
+  );
+
+  it("renders the plain sidebar + workspace switcher on desktop (no navigator)", () => {
+    stubWidth("desktop");
+    render(<App />);
+    expect(screen.queryByTestId("navigator")).toBeNull();
+    expect(screen.getByTestId("workspace-switcher")).toBeInTheDocument();
+    expect(screen.getByTestId("sidebar")).toBeInTheDocument();
+  });
+
+  // Tasks: the grid overlay is desktop-only; compact tiers keep the board in
+  // the navigator, which widens (nav-tasks) while it's showing.
+  it.each([
+    ["desktop", true, false],
+    ["tablet", false, true],
+    ["phone", false, true],
+  ] as const)("Tasks view on %s: overlay=%s, nav-tasks class=%s", (tier, overlay, navTasks) => {
+    stubWidth(tier);
+    useDashboardStore.setState({ viewMode: "kanban" });
+    const { container } = render(<App />);
+    expect(!!screen.queryByTestId("kanban-overlay")).toBe(overlay);
+    expect(container.querySelector(".app")!.classList.contains("nav-tasks")).toBe(navTasks);
+    useDashboardStore.setState({ viewMode: "list" });
   });
 
   it("collapses (rather than opens) the docked sidebar on desktop", () => {
