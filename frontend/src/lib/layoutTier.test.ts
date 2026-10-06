@@ -6,6 +6,7 @@ import {
   TABLET_BREAKPOINT_QUERY,
   DESKTOP_BREAKPOINT_QUERY,
   COARSE_POINTER_QUERY,
+  isCompactTier,
   resolveLayoutTier,
   useLayoutTier,
   useCoarsePointer,
@@ -128,6 +129,14 @@ describe("resolveLayoutTier", () => {
     vi.stubGlobal("matchMedia", matchMediaSpy);
     resolveLayoutTier("desktop");
     expect(matchMediaSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("isCompactTier", () => {
+  it("is true for phone and tablet, false for desktop", () => {
+    expect(isCompactTier("phone")).toBe(true);
+    expect(isCompactTier("tablet")).toBe(true);
+    expect(isCompactTier("desktop")).toBe(false);
   });
 });
 

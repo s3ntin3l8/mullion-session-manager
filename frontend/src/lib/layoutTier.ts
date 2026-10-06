@@ -60,6 +60,14 @@ export function useCoarsePointer(): boolean {
 
 export type LayoutTier = "phone" | "tablet" | "desktop";
 
+// "Compact" = phone OR tablet: the tiers where the sidebar is a floating
+// overlay (not docked) and the phone-era navigation affordances (navigator,
+// session picker, back stack) apply. Prefer this over a bare
+// `tier !== "desktop"` so the intent is greppable.
+export function isCompactTier(tier: LayoutTier): boolean {
+  return tier !== "desktop";
+}
+
 // Pure, synchronous, DOM-reading resolution — no React dependency, so
 // call sites that just need a one-off snapshot (e.g. a live matchMedia()
 // check at click time — the pattern the pre-tablet-tier codebase's own

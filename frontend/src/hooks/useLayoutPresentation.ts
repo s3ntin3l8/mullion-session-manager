@@ -49,10 +49,12 @@ export interface UseLayoutPresentationParams {
 // on the commit where `dockviewApi` first becomes non-null — is unchanged.
 // See that hook's own header comment, and the `setLayoutTier` param comment
 // above, for why that ordering matters: the restore effect applies
-// `applyLayoutPresentation` with whatever tier state already was (still
-// "desktop", the useState default, on first mount), and this hook's
-// breakpoint effect must run AFTER it to correct that — running before
-// would have the restore effect's own `clear()+fromJSON()` undo it.
+// `applyLayoutPresentation` with whatever tier state already was (App.tsx
+// seeds it synchronously from the live width, so on first mount that is
+// already the right tier unless a server-side layoutMode override differs),
+// and this hook's breakpoint effect must run AFTER it to correct any such
+// mismatch — running before would have the restore effect's own
+// `clear()+fromJSON()` undo it.
 export function useLayoutPresentation({
   dockviewApi,
   layoutMode,
