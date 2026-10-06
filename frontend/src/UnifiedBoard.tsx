@@ -83,6 +83,7 @@ export function UnifiedBoard({
   onOpenSession,
   onSessionEnded,
   phone = false,
+  backStack = false,
 }: {
   onOpenSession: (session: Session) => void;
   onSessionEnded: (session: Session) => void;
@@ -90,6 +91,9 @@ export function UnifiedBoard({
   // sheet, no ad-hoc lane (the session picker covers those sessions), and
   // Android back closes the task detail. Unset elsewhere = the full board.
   phone?: boolean;
+  // Android back closes the task detail drawer. Implied by `phone`; set on its
+  // own for the tablet grid overlay, which keeps the full board layout.
+  backStack?: boolean;
 }) {
   // P1 perf fix — was a single bare `useDashboardStore()` (whole-store
   // subscription). `refreshTasks`/`updateTask`/`createTask`/`deleteSession`/
@@ -422,7 +426,7 @@ export function UnifiedBoard({
     [setDetailTaskId],
   );
 
-  usePhoneBackStack(phone && detailTaskId !== null, () => setDetailTaskId(null));
+  usePhoneBackStack((phone || backStack) && detailTaskId !== null, () => setDetailTaskId(null));
 
   useEffect(() => {
     if (detailTaskId === null) return;

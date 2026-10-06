@@ -1166,10 +1166,10 @@ export function App() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (!compact) setSidebarOpen(false);
   }, [compact]);
-  // Phone: Android back / the back gesture closes the topmost overlay (see
+  // Phone + tablet: Android back / the back gesture closes the topmost overlay (see
   // hooks/usePhoneBackStack.ts). Settings and the session/notification
   // sheets register themselves; the navigator and the Tasks board live here.
-  usePhoneBackStack(isMobile && sidebarOpen, () => setSidebarOpen(false));
+  usePhoneBackStack(compact && sidebarOpen, () => setSidebarOpen(false));
   usePhoneTasksNavigator({ isMobile, viewMode, sidebarOpen, setSidebarOpen });
   useEffect(() => {
     if (!compact) return;
@@ -1604,7 +1604,11 @@ export function App() {
                   on phone the board renders inside the navigator's Tasks tab
                   instead (PhoneNavigatorPanel). */}
               {viewMode === "kanban" && !isMobile && (
-                <KanbanBoardOverlay onOpenSession={onOpenSession} onSessionEnded={onSessionEnded} />
+                <KanbanBoardOverlay
+                  onOpenSession={onOpenSession}
+                  onSessionEnded={onSessionEnded}
+                  backStack={compact}
+                />
               )}
             </div>
             <Dock
@@ -1699,6 +1703,7 @@ export function App() {
                 initialSection={settingsSection}
                 startInContent={settingsStartInContent}
                 phone={isMobile}
+                backStack={compact}
               />
             </Suspense>
           </ErrorBoundary>
