@@ -855,6 +855,7 @@ async function createSessionRecordInner(
 
   const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
   if (!project) return { ok: false, reason: "unknown-project" };
+  rb.hostId = project.hostId;
 
   const parent = validateParent(app, params);
   if (!parent.ok) return parent.result;

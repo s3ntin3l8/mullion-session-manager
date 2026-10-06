@@ -339,6 +339,30 @@ describe("PtyManager", () => {
   // under an in-flight re-seed) — a misleading message that sent that
   // incident's own investigation looking at the wrong binary.
   // bootstrapMaster() now classifies this against `existsSync(this.cwd)`.
+  // Issue #1541 — listOwnedScopes() is TTL-cached; a spawn must never be
+  // masked by a cached "dead"/"absent" listing read before the scope existed
+  // (the reconciler would mark the live session exited and terminate it).
+  describe("bootstrapMaster invalidates the owned-scopes cache (issue #1541)", () => {
+    it("a cached dead verdict is dropped once systemd-run creates the scope", async () => {
+      listUnitsReply = [];
+      await expect(manager.isMasterAliveState("1")).resolves.toBe("dead");
+      // The scope now exists, but the cached listing still says "dead".
+      listUnitsReply = [ownedLine("1", sessionsDir)];
+      await expect(manager.isMasterAliveState("1")).resolves.toBe("dead");
+
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: sessionsDir,
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await session.spawnOutcome();
+
+      await expect(manager.isMasterAliveState("1")).resolves.toBe("alive");
+    });
+  });
+
   describe("bootstrapMaster ENOENT classification (issue #988)", () => {
     it("reclassifies a systemd-run ENOENT as a vanished cwd when the cwd doesn't exist", async () => {
       const missingCwd = path.join(sessionsDir, "does-not-exist");

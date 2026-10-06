@@ -359,26 +359,35 @@ export interface ScopeOwnershipListing {
   failed: boolean;
 }
 
-// Issue #1525 — concurrent identical listings (the reconciler tick, the
-// liveness batch, a stack-session mutex all land here within the same few
-// ms) share ONE in-flight systemctl spawn per (sessionsDir, instanceId,
-// states, all) key. Deliberately NOT a TTL cache: a spawn (pty-manager's
-// bootstrapMaster) or any other scope mutation outside this module would
-// leave a cached "dead" verdict stale and the reconciler would then mark a
-// brand-new live session exited. A caller joins only a listing that was
-// started before it asked, never one older than the call itself. stopScope
-// bypasses sharing for its own ownership resolution (a destructive action
-// must read fresh) and invalidates after the stop, so nobody can join a
-// listing that began before the mutation.
-// Module-level on purpose (scope names are Unix-user-global, not per-app), and
-// self-cleaning: every entry deletes itself when its spawn settles, so nothing
-// outlives the call that created it. A listing that began BEFORE a stop may
-// still resolve with the pre-stop state for the callers already awaiting it —
-// invalidateScopeListings() only guarantees no LATER caller can join it.
+// Issue #1525 / #1541 — listings are shared and briefly cached per
+// (sessionsDir, instanceId, states, all) key:
+//   1. concurrent identical calls share ONE in-flight systemctl spawn (#1525);
+//   2. a settled, non-failed listing is reused for OWNED_SCOPES_TTL_MS (#1541),
+//      measured from when its spawn STARTED (so the verdict is never older
+//      than the TTL at the moment of a hit).
+// The critical invariant: a scope mutation must never be masked by a stale
+// "dead"/"absent" verdict — the reconciler would mark a live session exited
+// and (since #1530) terminate it. Hence invalidateOwnedScopesCache(), which
+// stopScope calls before and after its stop and pty-manager's bootstrapMaster
+// calls once systemd-run settles (a scope was or may have been created). It
+// clears the in-flight map and the TTL cache and bumps a generation so a
+// listing that STARTED before the invalidation can't repopulate the cache
+// when it resolves late (callers already awaiting it still get its pre-
+// mutation answer — only LATER callers are protected). A failed listing is
+// never cached. stopScope's own ownership resolution bypasses both layers
+// (a destructive action must read fresh).
+// Module-level on purpose (scope names are Unix-user-global, not per-app).
+const OWNED_SCOPES_TTL_MS = 400;
 const inflightListings = new Map<string, Promise<ScopeOwnershipListing>>();
+const listingCache = new Map<string, { listing: ScopeOwnershipListing; expiresAt: number }>();
+let listingGeneration = 0;
 
-function invalidateScopeListings(): void {
+/** Drop every cached/in-flight owned-scope listing. Call whenever a scope is
+ *  created, stopped, or may have been (see the block comment above). */
+export function invalidateOwnedScopesCache(): void {
+  listingGeneration++;
   inflightListings.clear();
+  listingCache.clear();
 }
 
 export function listOwnedScopes(
@@ -392,11 +401,28 @@ export function listOwnedScopes(
     opts.states ?? "",
     !!opts.all,
   ]);
+  const now = performance.now();
+  const cached = listingCache.get(key);
+  if (cached) {
+    if (now < cached.expiresAt) return Promise.resolve(cached.listing);
+    listingCache.delete(key);
+  }
   const existing = inflightListings.get(key);
   if (existing) return existing;
-  const promise = fetchOwnedScopes(sessionsDir, instanceId, opts).finally(() => {
-    if (inflightListings.get(key) === promise) inflightListings.delete(key);
-  });
+  const generation = listingGeneration;
+  const promise = fetchOwnedScopes(sessionsDir, instanceId, opts).then(
+    (listing) => {
+      if (inflightListings.get(key) === promise) inflightListings.delete(key);
+      if (generation === listingGeneration && !listing.failed) {
+        listingCache.set(key, { listing, expiresAt: now + OWNED_SCOPES_TTL_MS });
+      }
+      return listing;
+    },
+    (err: unknown) => {
+      if (inflightListings.get(key) === promise) inflightListings.delete(key);
+      throw err;
+    },
+  );
   inflightListings.set(key, promise);
   return promise;
 }
@@ -557,11 +583,11 @@ export async function stopScope(
   // ("unit not loaded", already stopped) is likewise expected and ignored.
   // The scope set changed (or may have): nobody may join a listing that
   // started before this point, nor read one that predates the stop.
-  invalidateScopeListings();
+  invalidateOwnedScopesCache();
   try {
     await runSystemctl(["--user", "stop", unit], SYSTEMCTL_TIMEOUT_MS);
   } finally {
-    invalidateScopeListings();
+    invalidateOwnedScopesCache();
   }
 }
 

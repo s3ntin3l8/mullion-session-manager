@@ -46,6 +46,7 @@ import type { CgroupProcess } from "./cgroup-inventory.js";
 import {
   armKillEscalation,
   stopScope,
+  invalidateOwnedScopesCache,
   describeScope,
   deriveInstanceId,
   isMasterAliveState as isMasterAliveStateProcess,
@@ -1707,6 +1708,9 @@ export class Session {
       });
       child.on("error", (err) => {
         armed.clearOnSettle();
+        // Issue #1541 — a scope may have been created; never let a cached
+        // pre-spawn listing mask it.
+        invalidateOwnedScopesCache();
         // Issue #988's investigation: Node's own spawn ENOENT blames
         // whichever binary it was trying to exec ("spawn systemd-run
         // ENOENT") even when the REAL cause is `cwd` itself having vanished
@@ -1731,6 +1735,11 @@ export class Session {
       });
       child.on("exit", (code) => {
         armed.clearOnSettle();
+        // Issue #1541 — the new scope now exists (or the attempt failed in a
+        // way that may have left one): drop any cached/in-flight owned-scope
+        // listing BEFORE liveness is next read, so a cached "dead"/"absent"
+        // verdict can't make the reconciler mark this live session exited.
+        invalidateOwnedScopesCache();
         if (code === 0) {
           resolve();
           return;

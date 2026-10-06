@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "node:events";
 import { spawn as spawnChildProcess } from "node:child_process";
 import type * as ChildProcess from "node:child_process";
@@ -156,6 +156,7 @@ const {
   scopeUnitName,
   deriveInstanceId,
   listOwnedScopes,
+  invalidateOwnedScopesCache,
   stopScope,
   describeScope,
   isMasterAliveState,
@@ -168,6 +169,7 @@ const {
 const { listScopeProcesses } = await import("../../src/services/cgroup-inventory.js");
 
 beforeEach(() => {
+  invalidateOwnedScopesCache();
   for (const key of Object.keys(showReplies)) delete showReplies[key];
   listUnitsReply = [];
   listUnitsShouldError = false;
@@ -870,17 +872,13 @@ describe("listOwnedScopes coalescing", () => {
     expect(a).toBe(b);
   });
 
-  it("does not share between different filters, nor reuse a settled listing", async () => {
+  it("does not share between different filters", async () => {
     listUnitsReply = [ownedLine("1")];
     await Promise.all([
       listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true }),
       listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { states: "active" }),
     ]);
     expect(listSpawns()).toHaveLength(2);
-    listUnitsReply = [];
-    const later = await listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true });
-    expect(listSpawns()).toHaveLength(3);
-    expect(later.owned.size).toBe(0);
   });
 
   it("stopScope resolves ownership with a fresh listing, not one already in flight", async () => {
@@ -892,5 +890,102 @@ describe("listOwnedScopes coalescing", () => {
     // A listing asked for after the stop never joins the pre-stop one.
     await listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true });
     expect(listSpawns()).toHaveLength(3);
+  });
+});
+
+// Issue #1541 — short TTL cache on top of the in-flight sharing, with
+// explicit invalidation so a scope mutation is never masked by a stale verdict.
+describe("listOwnedScopes TTL cache", () => {
+  const listSpawns = () =>
+    vi.mocked(spawnChildProcess).mock.calls.filter((c) => (c[1] as string[])[1] === "list-units");
+  let clock = 1000;
+  beforeEach(() => {
+    clock = 1000;
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("serves a settled listing from cache within the TTL, without a new spawn", async () => {
+    listUnitsReply = [ownedLine("1")];
+    const first = await listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true });
+    clock += 100;
+    const second = await listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true });
+    expect(listSpawns()).toHaveLength(1);
+    expect(second).toBe(first);
+  });
+
+  it("re-lists once the TTL has expired", async () => {
+    listUnitsReply = [ownedLine("1")];
+    await listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true });
+    listUnitsReply = [];
+    clock += 10_000;
+    const later = await listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true });
+    expect(listSpawns()).toHaveLength(2);
+    expect(later.owned.size).toBe(0);
+  });
+
+  it("keys the cache by filter", async () => {
+    listUnitsReply = [ownedLine("1")];
+    await listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true });
+    await listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { states: "active" });
+    expect(listSpawns()).toHaveLength(2);
+  });
+
+  it("never caches a failed listing", async () => {
+    listUnitsShouldError = true;
+    const failed = await listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true });
+    expect(failed.failed).toBe(true);
+    listUnitsShouldError = false;
+    listUnitsReply = [ownedLine("1")];
+    const ok = await listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true });
+    expect(ok.owned.has("1")).toBe(true);
+    expect(listSpawns()).toHaveLength(2);
+  });
+
+  it("invalidateOwnedScopesCache() forces the next call to re-list", async () => {
+    listUnitsReply = [ownedLine("1")];
+    await listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true });
+    invalidateOwnedScopesCache();
+    await listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true });
+    expect(listSpawns()).toHaveLength(2);
+  });
+
+  it("stopScope invalidates: a cached listing is not served after the stop", async () => {
+    listUnitsReply = [ownedLine("1")];
+    await listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true });
+    await stopScope(SESSIONS_DIR, INSTANCE_ID, "1"); // fresh listing + stop
+    const before = listSpawns().length;
+    listUnitsReply = [];
+    const after = await listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true });
+    expect(listSpawns()).toHaveLength(before + 1);
+    expect(after.owned.size).toBe(0);
+  });
+
+  it("does not cache a listing that started before an invalidation", async () => {
+    listUnitsReply = [];
+    const stale = listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true });
+    invalidateOwnedScopesCache(); // e.g. a spawn completes while it is in flight
+    await stale;
+    listUnitsReply = [ownedLine("1")];
+    const fresh = await listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true });
+    expect(fresh.owned.has("1")).toBe(true);
+    expect(listSpawns()).toHaveLength(2);
+  });
+
+  it("regression: a cached dead listing does not mask a scope created after it (spawn invalidates)", async () => {
+    listUnitsReply = [];
+    const dead = await listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true });
+    expect(dead.owned.has("7")).toBe(false);
+    // Without invalidation the cached "absent" verdict would be served here.
+    listUnitsReply = [ownedLine("7")];
+    expect((await listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true })).owned.has("7")).toBe(
+      false,
+    );
+    // pty-manager's bootstrapMaster does exactly this once systemd-run settles.
+    invalidateOwnedScopesCache();
+    const next = await listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true });
+    expect(next.owned.get("7")).toBe("crs-session-7.scope");
   });
 });
