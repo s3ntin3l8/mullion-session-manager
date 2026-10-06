@@ -26,8 +26,13 @@ import {
 } from "./attention-detect.js";
 import { AttentionTracker } from "./attention-tracker.js";
 import { GateRegistry } from "./gate-registry.js";
+import {
+  applyStoredState,
+  type StoredStateFields,
+  type StoredStateHost,
+} from "./session-state-persistence.js";
 import { sweepStaleLatches, isLatchStale, type StaleLatch } from "./stale-latch-sweep.js";
-import { TerminalModeTracker, type StoredTermModes } from "./terminal-mode-tracker.js";
+import { TerminalModeTracker } from "./terminal-mode-tracker.js";
 import { buildSessionEnv } from "./session-env.js";
 import type { HookMessageKind, HookMessage } from "./hook-protocol.js";
 import { filterOutstandingBackgroundTasks } from "./background-tasks.js";
@@ -359,45 +364,6 @@ const NO_ATTENTION_SIGNALS: AttentionSignal = Object.freeze({
   notification: false,
   titleChange: null,
 });
-
-// Terminal-transport mode state (issue #93 one layer deeper — see
-// inAltScreen's and mouseTracking's own field docs below for the full
-// rationale). Deliberately NOT part of the `Pick<SessionInfo, ...>` below:
-// these bytes are scrollback-replay plumbing, not UI-facing session state, so
-// they must never leak into the `SessionInfo` API payload. Intersected onto
-// StoredStateFields instead, and optional, so a `.state.json` written before
-// this field existed still parses at schema `v: 1` and falls back to today's
-// in-memory defaults (same posture as `subagents`'s
-// `Array.isArray(s.subagents)` guard in readStateFile() below) — no version
-// bump needed.
-type StoredStateFields = Pick<
-  SessionInfo,
-  | "permissionState"
-  | "planState"
-  | "errorState"
-  | "errorAt"
-  | "errorDetail"
-  | "gateState"
-  | "gatePrompt"
-  | "promoteState"
-  | "promoteSummary"
-  | "promoteSuggestedBaseRef"
-  | "attentionKind"
-  | "compactState"
-  | "subagentCount"
-  | "subagents"
-  | "elicitationState"
-  | "elicitationServer"
-  | "questionState"
-  | "questionHeader"
-  | "questionAt"
-  | "lastTurnEndedAt"
-  | "lastAssistantMessage"
-  | "currentTodo"
-  | "backgroundTasks"
-> & {
-  termModes?: StoredTermModes;
-};
 
 const SESSION_ID_RE = /^\d+$/;
 
@@ -1072,6 +1038,73 @@ export class Session {
    * If the file exists and parses correctly, all non-null state fields are
    * applied and stateRestored is set to true. A missing or corrupt file is
    * handled silently — defaults remain at their idle/zero values. */
+  /** The adapter session-state-persistence.ts's applyStoredState() writes through. */
+  private storedStateHost(): StoredStateHost {
+    return {
+      set: {
+        permissionState: (v) => {
+          this.permissionState = v;
+        },
+        planState: (v) => {
+          this.planState = v;
+        },
+        errorState: (v) => {
+          this.errorState = v;
+        },
+        errorAt: (v) => {
+          this.errorAt = v;
+        },
+        errorDetail: (v) => {
+          this.errorDetail = v;
+        },
+        promoteState: (v) => {
+          this.promoteState = v;
+        },
+        promoteSummary: (v) => {
+          this.promoteSummary = v;
+        },
+        promoteSuggestedBaseRef: (v) => {
+          this.promoteSuggestedBaseRef = v;
+        },
+        compactState: (v) => {
+          this.compactState = v;
+        },
+        subagentCount: (v) => {
+          this.subagentCount = v;
+        },
+        subagents: (v) => {
+          this.subagents = new Map(v.map((info) => [info.agentId, info]));
+        },
+        elicitationState: (v) => {
+          this.elicitationState = v;
+        },
+        elicitationServer: (v) => {
+          this.elicitationServer = v;
+        },
+        questionState: (v) => {
+          this.questionState = v;
+        },
+        questionHeader: (v) => {
+          this.questionHeader = v;
+        },
+        questionAt: (v) => {
+          this.questionAt = v;
+        },
+        lastAssistantMessage: (v) => {
+          this.lastAssistantMessage = v;
+        },
+        currentTodo: (v) => {
+          this.currentTodo = v;
+        },
+      },
+      attention: this.attention,
+      gates: this.gates,
+      modes: this.modes,
+      emitEvent: (kind, payload) => this.emitEvent(kind, payload),
+      stampRestoredLatches: () => this.stampRestoredLatches(),
+    };
+  }
+
   /**
    * H6 — the persisted `*At` timestamps are deliberately not restored (a
    * restored process shouldn't trust a pre-restart clock — same posture as
@@ -1097,85 +1130,16 @@ export class Session {
     const parsed = this.stateFile.read();
     if (parsed === null) return;
 
-    const s = parsed.state;
-    if (s.permissionState !== undefined) this.permissionState = s.permissionState;
-    if (s.planState !== undefined) this.planState = s.planState;
-    if (s.errorState !== undefined) this.errorState = s.errorState;
-    if (s.errorAt !== undefined) this.errorAt = s.errorAt;
-    if (s.errorDetail !== undefined) this.errorDetail = s.errorDetail;
-    if (s.gateState !== undefined) this.gates.state = s.gateState;
-    if (s.gatePrompt !== undefined) this.gates.prompt = s.gatePrompt;
-    if (s.promoteState !== undefined) this.promoteState = s.promoteState;
-    if (s.promoteSummary !== undefined) this.promoteSummary = s.promoteSummary;
-    if (s.promoteSuggestedBaseRef !== undefined)
-      this.promoteSuggestedBaseRef = s.promoteSuggestedBaseRef;
-    if (s.attentionKind !== undefined) {
-      const ak = this.attention.state;
-      if (s.attentionKind === null) {
-        // Explicitly cleared — keep the machine state as-is (already idle).
-      } else {
-        // We can't fully reconstruct the attention machine, but setting
-        // confirmedKind signals to the UI what was pending.
-        this.attention.applyAttentionTransition(
-          advanceAttention(ak, { type: "signal", kind: s.attentionKind, now: Date.now() }),
-        );
-      }
-    }
-    if (s.compactState !== undefined) this.compactState = s.compactState;
-    if (s.subagentCount !== undefined) this.subagentCount = s.subagentCount;
-    // Phase 5 (Track A) — a state file written before this registry existed
-    // simply has no `subagents` key (older `.state.json`, still valid), left
-    // as the constructor's empty Map default. `Array.isArray` guards against
-    // a corrupt/malformed value the same defensive way the rest of this
-    // method treats an unexpected shape (skip, don't throw).
-    if (Array.isArray(s.subagents)) {
-      this.subagents = new Map(s.subagents.map((info) => [info.agentId, info]));
-    }
-    if (s.elicitationState !== undefined) this.elicitationState = s.elicitationState;
-    if (s.elicitationServer !== undefined) this.elicitationServer = s.elicitationServer;
-    if (s.questionState !== undefined) this.questionState = s.questionState;
-    if (s.questionHeader !== undefined) this.questionHeader = s.questionHeader;
-    if (s.questionAt !== undefined) this.questionAt = s.questionAt;
-    if (s.lastTurnEndedAt !== undefined) this.attention.lastTurnEndedAt = s.lastTurnEndedAt;
-    if (s.lastAssistantMessage !== undefined) this.lastAssistantMessage = s.lastAssistantMessage;
-    if (s.currentTodo !== undefined) this.currentTodo = s.currentTodo;
-    // Issue #428 — the persisted `backgroundTasksAt` timestamp itself is
-    // NOT restored (same posture as subagentCountAt above — a restored
-    // process shouldn't trust a clock value from before the restart), but
-    // going through setBackgroundTasks() re-stamps it to NOW when the
-    // restored list still has outstanding entries, so the busy-TTL sweep
-    // has a baseline to measure from. Without this, `isStale(null, ...)` is
-    // always false and a restored outstanding set could never be swept at
-    // all until some unrelated turn_start/keystroke/hook event happened to
-    // touch it (Hermes review, PR #453).
-    if (Array.isArray(s.backgroundTasks)) this.attention.setBackgroundTasks(s.backgroundTasks);
-    this.stampRestoredLatches();
-    // Issue: opencode/Claude Code TUI sessions surviving a backend restart
-    // replayed a stale scrollback preamble — inAltScreen/mouseTracking are
-    // learned only from bytes observed by THIS process, so a brand-new
-    // Session always restarted them at their defaults (issue #93 one
-    // lifetime boundary deeper). Validation (a malformed shape is skipped,
-    // not thrown) and the issue #1155 forced `bracketedPaste = false` live in
-    // TerminalModeTracker.restore(); `termModes` is intersected onto (not part
-    // of) SessionInfo — see StoredStateFields.
-    this.modes.restore(s.termModes);
-    // Fresh-review finding — `turnEndPingSent` itself isn't persisted (it's
-    // not in StoredStateFields, same as backgroundTasksAt), so it would
-    // otherwise always restore to its class-field default of `false`. That's
-    // wrong when the restored state already represents an ended, fully-
-    // drained turn: the ORIGINAL process already sent that ping before the
-    // restart, so treating it as "not yet sent" risks a duplicate "Finished"
-    // notification the moment any later hook event calls
-    // resolveDeferredTurnEnd() again for this same still-latched turn (e.g.
-    // a second, unrelated background task starting and draining before the
-    // user's next keystroke). Derived rather than persisted: a turn counts
-    // as already-pinged on restore exactly when it's both latched AND has
-    // nothing outstanding — the same condition resolveDeferredTurnEnd()
-    // itself checks before firing.
-    if (this.attention.lastTurnEndedAt !== null) {
-      this.attention.turnEndPingSent =
-        filterOutstandingBackgroundTasks(this.attention.backgroundTasks).length === 0;
-    }
+    // Issue #1544 — the field-by-field restore (and the termModes /
+    // turnEndPingSent steps) is session-state-persistence.ts's
+    // applyStoredState(); this caller restores everything, including the
+    // persisted attentionKind and termModes, and restores a "waiting" gate
+    // verbatim (this runs mid-constructor, before any event subscription).
+    applyStoredState(this.storedStateHost(), parsed.state, {
+      lapseWaitingGate: false,
+      restoreAttentionKind: true,
+      restoreTermModes: true,
+    });
 
     this.stateRestored = true;
     this.restoredVersion = parsed.launchedAtVersion;
@@ -1358,88 +1322,24 @@ export class Session {
     this.attention.state = INITIAL_ATTENTION_STATE;
     this.attention.clearDeferred();
     // Re-apply restored state if we had it, so the UI sees the known
-    // pre-restart state until hooks catch up with fresh data.
+    // pre-restart state until hooks catch up with fresh data. Differences from
+    // readStateFile()'s restore (see session-state-persistence.ts):
+    //   - a "waiting" gate is known stale (issue #844 — the hooks.ts socket/
+    //     timer it depended on died with the previous process, and this
+    //     Session's own pendingGates is empty, so there is no per-gate id to
+    //     resolve) and is lapsed in place, emitting `review_gate` and clearing
+    //     the "reviewGate" attention badge. This call site is deliberately
+    //     AFTER construction/onEvent subscription, unlike readStateFile();
+    //   - attentionKind is NOT re-applied: the attention machine has its own
+    //     tick-based confirmations that are cleaner to let re-establish;
+    //   - termModes are untouched (they persist across a respawn as-is).
+    // endedReason/exitCode are session-scoped, not state-restorable.
     if (savedState) {
-      this.permissionState = savedState.permissionState;
-      this.planState = savedState.planState;
-      this.errorState = savedState.errorState;
-      this.errorAt = savedState.errorAt;
-      this.errorDetail = savedState.errorDetail;
-      // Issue #844 — a "waiting" gate restored from the state file is known
-      // stale: the hooks.ts `pendingGates` socket/timer(s) it depended on
-      // lived only in the PREVIOUS process's memory and cannot have
-      // survived (the hooksPlugin onClose fix resolves a graceful
-      // shutdown's pending gates to "lapsed" before this ever runs, but a
-      // hard crash/kill -9 skips onClose entirely — this is the path that
-      // actually catches that case). This Session's own `pendingGates` (in
-      // memory, per-gate — issue: correlate concurrent permission gates)
-      // is likewise guaranteed empty at this point: it's a brand-new
-      // instance, and that map is deliberately NOT part of
-      // StoredStateFields (see its own doc comment) — so there is no
-      // per-gate id to resolve individually even if the restored session
-      // had more than one gate waiting when it last wrote state. Resolves
-      // the derived scalar summary directly instead of going through
-      // resolveGate(gateId, ...) (which would no-op: nothing in the fresh
-      // `pendingGates` map matches any gateId). A bare field assignment
-      // instead of this full three-step resolution would stop
-      // `NotificationBell.tsx` from rendering live-looking Approve/Deny
-      // buttons (its isPendingGate check requires gateState === "waiting"),
-      // but would silently skip emitting a `review_gate` event for the
-      // timeline and clearing the "reviewGate" attention badge. This call
-      // site is deliberately AFTER construction/onEvent subscription
-      // (unlike readStateFile(), which runs mid-constructor, before
-      // getOrCreate has wired this session's events into PtyManager's
-      // fan-out).
-      if (savedState.gateState === "waiting") {
-        this.gates.lapseRestoredSummary();
-        this.emitEvent("review_gate", {
-          state: "lapsed",
-          reason: "Mullion restarted while this request was pending",
-        });
-        this.attention.clearIfConfirmedKind("reviewGate");
-      } else {
-        this.gates.state = savedState.gateState;
-        this.gates.prompt = savedState.gatePrompt;
-      }
-      this.promoteState = savedState.promoteState;
-      this.promoteSummary = savedState.promoteSummary;
-      this.promoteSuggestedBaseRef = savedState.promoteSuggestedBaseRef;
-      this.compactState = savedState.compactState;
-      this.subagentCount = savedState.subagentCount;
-      // Array.isArray guard for defense-in-depth, matching readStateFile's
-      // own guard (Hermes review, PR #415) — savedState always comes from
-      // this.collectState(), which always produces an array, so this is
-      // belt-and-suspenders rather than a currently-reachable case.
-      if (Array.isArray(savedState.subagents)) {
-        this.subagents = new Map(savedState.subagents.map((info) => [info.agentId, info]));
-      }
-      this.elicitationState = savedState.elicitationState;
-      this.elicitationServer = savedState.elicitationServer;
-      this.questionState = savedState.questionState;
-      this.questionHeader = savedState.questionHeader;
-      this.questionAt = savedState.questionAt;
-      this.attention.lastTurnEndedAt = savedState.lastTurnEndedAt;
-      this.lastAssistantMessage = savedState.lastAssistantMessage;
-      this.currentTodo = savedState.currentTodo;
-      // The persisted backgroundTasksAt itself is NOT restored — going
-      // through setBackgroundTasks() re-stamps it to NOW instead, same
-      // reasoning as the state-file restore path's own comment above.
-      if (Array.isArray(savedState.backgroundTasks)) {
-        this.attention.setBackgroundTasks(savedState.backgroundTasks);
-      }
-      this.stampRestoredLatches();
-      // Fresh-review finding — same turnEndPingSent derivation as the
-      // state-file restore path's own comment above: a respawn (re-applying
-      // savedState after the fresh reset a few lines up) needs the same
-      // "already-pinged" inference, not the reset's unconditional `false`.
-      if (this.attention.lastTurnEndedAt !== null) {
-        this.attention.turnEndPingSent =
-          filterOutstandingBackgroundTasks(this.attention.backgroundTasks).length === 0;
-      }
-      // attentionKind is restored from state file via readStateFile but
-      // NOT re-applied here — the attention machine has its own timing
-      // (tick-based confirmations) that's cleaner to let re-establish.
-      // endedReason/exitCode are session-scoped, not state-restorable.
+      applyStoredState(this.storedStateHost(), savedState, {
+        lapseWaitingGate: true,
+        restoreAttentionKind: false,
+        restoreTermModes: false,
+      });
     }
     const attempt = this.spawnInternal();
     this.lastSpawnAttempt = attempt;
