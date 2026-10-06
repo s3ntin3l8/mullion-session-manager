@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 // Issue #68: a pasted/attached image can't travel down the terminal's own
@@ -113,18 +113,47 @@ export function saveSessionUpload(cwd: string, buffer: Buffer, mime: string): st
   const ext = extensionForMime(mime);
   if (!ext) throw new Error(`Unsupported image type: ${mime}`);
 
-  const uploadDir = path.join(path.resolve(cwd), UPLOAD_SUBDIR);
-  const isNewDir = !existsSync(uploadDir);
-  mkdirSync(uploadDir, { recursive: true });
+  const root = path.resolve(cwd);
+  const uploadDir = path.resolve(root, UPLOAD_SUBDIR);
+  // Containment guard (also the CodeQL js/path-injection barrier): the
+  // upload dir must stay directly beneath the resolved cwd.
+  if (!uploadDir.startsWith(root + path.sep)) throw new Error("Invalid upload directory");
+  // lstat (not stat/existsSync): a symlinked `.mullion-uploads` must not be
+  // followed (it could point the write anywhere), and a plain file at that
+  // path must be a clear error rather than an opaque ENOTDIR/EEXIST 500.
+  let isNewDir = false;
+  try {
+    if (!lstatSync(uploadDir).isDirectory()) throw uploadDirError();
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    isNewDir = true;
+    mkdirSync(uploadDir, { recursive: true });
+    // Re-check: a symlink planted between the lstat above and the mkdir is
+    // followed silently by `recursive: true`. Narrows (does not fully close)
+    // the window; the dir is only ever written to with server-chosen names.
+    if (!lstatSync(uploadDir).isDirectory()) throw uploadDirError();
+  }
   if (isNewDir) {
     // Keeps a project's own git status clean of pasted-image litter — an
     // upload is transient input to the CLI, not a file the user meant to add
-    // to their repo.
-    writeFileSync(path.join(uploadDir, ".gitignore"), "*\n");
+    // to their repo. `wx` (exclusive create) so a concurrent upload that
+    // got here first is not clobbered and does not throw.
+    try {
+      writeFileSync(path.join(uploadDir, ".gitignore"), "*\n", { flag: "wx" });
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+    }
   }
 
   const filename = `${crypto.randomUUID()}${ext}`;
   const filePath = path.join(uploadDir, filename);
   writeFileSync(filePath, buffer);
   return filePath;
+}
+
+function uploadDirError(): Error {
+  return Object.assign(
+    new Error(`${UPLOAD_SUBDIR} exists but is not a regular directory (symlink or file)`),
+    { statusCode: 409 },
+  );
 }

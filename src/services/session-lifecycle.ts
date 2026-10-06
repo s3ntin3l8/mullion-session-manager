@@ -26,10 +26,9 @@ import {
   type CreateWorktreeResult,
 } from "./git-worktree.js";
 import { getStoredSettings } from "./settings.js";
-import { resolveBackend } from "./session-backend.js";
+import { resolveBackend, warnHostError, type SpawnOpts } from "./session-backend.js";
 import { listWorktrees } from "./git-refs.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
-import { HostRequestError } from "./remote-host-client.js";
 import { viaRemote } from "./host-git.js";
 import { closeSessionBrowserBindings } from "./session-browsers.js";
 import { resolveProjectHostId } from "./session-live-info.js";
@@ -221,11 +220,17 @@ export async function resolveWorktreeCwd(
     // rejection as "host-unreachable" in the 502 body the user sees (the
     // #484 postmortem's "HostRequestError covers any 4xx, not just 404" is
     // exactly this mistake).
-    if (err instanceof HostRequestError) {
-      app.log.warn({ hostId, err }, "resolveWorktreeCwd: host rejected the request");
+    if (
+      warnHostError(
+        app.log,
+        { hostId },
+        err,
+        "resolveWorktreeCwd: host rejected the request",
+        "resolveWorktreeCwd: host unreachable",
+      )
+    ) {
       return { created: false, reason: "host-rejected", detail: err.message };
     }
-    app.log.warn({ hostId, err }, "resolveWorktreeCwd: host unreachable");
     return {
       created: false,
       reason: "host-unreachable",
@@ -261,17 +266,13 @@ function logPreviewWorktreeHostError(
   alreadyWarned: boolean,
 ): false {
   if (!alreadyWarned) {
-    if (err instanceof HostRequestError) {
-      app.log.warn(
-        { hostId, worktreePath, err },
-        `preview worktree ${op}: host rejected the request (will keep retrying, further failures suppressed until it succeeds once)`,
-      );
-    } else {
-      app.log.warn(
-        { hostId, worktreePath, err },
-        `preview worktree ${op}: host unreachable (further failures suppressed until it succeeds once)`,
-      );
-    }
+    warnHostError(
+      app.log,
+      { hostId, worktreePath },
+      err,
+      `preview worktree ${op}: host rejected the request (will keep retrying, further failures suppressed until it succeeds once)`,
+      `preview worktree ${op}: host unreachable (further failures suppressed until it succeeds once)`,
+    );
   }
   return false;
 }
@@ -817,39 +818,34 @@ async function rollbackCreate(app: FastifyInstance, rb: CreateRollback): Promise
   }
 }
 
+// The createSessionRecordInner pipeline (issue #1525): each step below was a
+// contiguous block of what used to be one ~620-line function. Steps that can
+// end the create early return `Step<T>` — `{ ok: false, result }` carries the
+// CreateSessionResult to hand straight back; the caller (createSessionRecord)
+// unwinds `rb` on any non-ok result, so no step rolls back on its own except
+// spawnOrRollback, whose spawn-failure path owns extra in-memory cleanup.
+type ProjectRow = typeof projects.$inferSelect;
+type SessionRow = typeof sessions.$inferSelect;
+type StepFailure = { ok: false; result: CreateSessionResult };
+type Step<T> = ({ ok: true } & T) | StepFailure;
+const fail = (reason: Extract<CreateSessionResult, { ok: false }>["reason"]): StepFailure => ({
+  ok: false,
+  result: { ok: false, reason } as CreateSessionResult,
+});
+
 async function createSessionRecordInner(
   app: FastifyInstance,
   params: CreateSessionParams,
   rb: CreateRollback,
 ): Promise<CreateSessionResult> {
-  const {
-    projectId,
-    command,
-    name,
-    nameLocked,
-    kind,
-    worktree,
-    worktreeRefresh,
-    skipPermissions,
-    initialPrompt,
-    seedPrompt,
-    resumeAgentSessionId,
-    env,
-    briefingOverride,
-    projectSkill,
-    projectReviewerAgent,
-    model,
-    smallModel,
-    taskId,
-  } = params;
-  let cwd = params.cwd;
+  const { projectId, env } = params;
 
   // Hermes review, this PR (issue #822) — dock-config.ts's validateOneControl
   // is not the only producer of a session's `env`; a direct full-scope
   // `POST /api/sessions` call bypasses it entirely. Enforce the same
   // reserved-key rule here so it's bound regardless of caller, matching the
-  // parentSessionId validation immediately below (also re-validated here for
-  // exactly the same "not just the socket op" reason).
+  // parentSessionId validation (validateParent) — also re-validated here for
+  // exactly the same "not just the socket op" reason.
   if (env !== undefined) {
     const reservedKey = Object.keys(env).find(isReservedSessionEnvKey);
     if (reservedKey !== undefined) {
@@ -860,76 +856,16 @@ async function createSessionRecordInner(
   const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
   if (!project) return { ok: false, reason: "unknown-project" };
 
-  // Phase 5 (Track B, issue #193 5.3b) — validated here, not just in the
-  // sessions.spawn_child socket op, so a direct full-scope POST /api/sessions
-  // call carrying parentSessionId is bound by the exact same rules (same
-  // project, one level of nesting only, a live-child cap). One level of
-  // nesting: rejecting a parent that is ITSELF a child means a child can
-  // never itself become a parent, so cascade-kill (killSession, below)
-  // never needs to recurse past one level.
-  let resolvedParentId: number | null = null;
-  if (params.parentSessionId !== undefined) {
-    const [parentRow] = app.db
-      .select()
-      .from(sessions)
-      .where(eq(sessions.id, params.parentSessionId))
-      .all();
-    if (!parentRow) return { ok: false, reason: "unknown-parent" };
-    if (parentRow.projectId !== projectId) return { ok: false, reason: "parent-wrong-project" };
-    if (parentRow.parentSessionId !== null) return { ok: false, reason: "parent-is-child" };
+  const parent = validateParent(app, params);
+  if (!parent.ok) return parent.result;
 
-    resolvedParentId = params.parentSessionId;
-  }
+  // Read once per create (issue #1525): the live-child cap at insert and
+  // every injection default in resolveSpawnInputs come from this snapshot.
+  const sessionSettings = getStoredSettings(app.db).sessions;
 
-  if (worktree) {
-    if (worktree.branch) {
-      // Issue #345 — dock-preview worktrees now work on remote hosts too:
-      // checkoutBranchWorktree, the worktreeRefresh sync tick, and cleanup
-      // (below) are all routed through resolveBackend. Wrapped in try/catch
-      // (unlike the old local-only call, where the underlying runGit never
-      // rejects): a remote checkoutBranchWorktree can now genuinely throw
-      // (HostUnreachableError/HostRequestError, same as every other
-      // resolveBackend() call reachable for a remote host — see
-      // killSession's own "must never surface as a 500" comment below) —
-      // this was unreachable before #345 removed the local-only guard.
-      let result;
-      try {
-        result = await resolveBackend(app, project.hostId).checkoutBranchWorktree(
-          cwd ?? project.cwd,
-          worktree.branch,
-        );
-      } catch (err) {
-        app.log.warn(
-          { hostId: project.hostId, err },
-          "checkoutBranchWorktree: host unreachable or rejected the request",
-        );
-        return { ok: false, reason: "worktree-failed" };
-      }
-      if (!result) return { ok: false, reason: "worktree-failed" };
-      cwd = result.path;
-      // Checks out an EXISTING branch detached — nothing to delete but the
-      // directory.
-      rb.hostId = project.hostId;
-      rb.worktreePath = result.path;
-      rb.parentCwd = params.cwd ?? project.cwd;
-    } else if (worktree.baseRef) {
-      const resolved = await resolveWorktreeCwd(
-        app,
-        project.hostId,
-        cwd ?? project.cwd,
-        worktree,
-        `session-${Date.now()}`,
-      );
-      if (!resolved.created || !resolved.path) {
-        return { ok: false, reason: "worktree-failed", detail: resolved.detail };
-      }
-      cwd = resolved.path;
-      rb.hostId = project.hostId;
-      rb.worktreePath = resolved.path;
-      rb.parentCwd = params.cwd ?? project.cwd;
-      rb.branch = resolved.branch;
-    }
-  }
+  const prepared = await prepareWorktree(app, project, params, rb);
+  if (!prepared.ok) return prepared.result;
+  const cwd = prepared.cwd;
 
   // Phase 5 (Track B) — cwd containment for a child spawn only. Skipped
   // when `worktree` was requested: that path's cwd comes from
@@ -940,7 +876,7 @@ async function createSessionRecordInner(
   // only the no-worktree branch can carry unchecked. (A worktree's own cwd
   // is, in fact, nested under the project root via `.mullion-worktrees/` —
   // it just never needs this check because it was never caller-supplied.)
-  if (resolvedParentId !== null && !worktree) {
+  if (parent.parentId !== null && !params.worktree) {
     const effectiveCwd = path.resolve(cwd ?? project.cwd);
     const projectRoot = path.resolve(project.cwd);
     const withinProject =
@@ -950,35 +886,158 @@ async function createSessionRecordInner(
     }
   }
 
-  // Phase 5 (Track B) — the live-child cap is checked and the row inserted
-  // inside the SAME transaction (Hermes review, PR #426), not as two
-  // separate statements: any worktree creation above is async and already
-  // complete by this point, so this closes the check-then-act race a
-  // caller combining `parentSessionId` with `worktree` could otherwise hit
-  // (the `sessions.spawn_child` socket op itself never sets `worktree` —
-  // see that op's own comment — so it was already effectively atomic here
-  // via better-sqlite3's single-threaded, synchronous calls; this closes
-  // the gap for the direct-REST/full-scope combination too).
-  //
-  // Known limitation, accepted (independent review, PR #426): the cap only
-  // bounds CONCURRENTLY-live children, not cumulative spawns over time. An
-  // agent looping fast-exiting commands can spawn up to the cap, wait for
-  // the ~30s exited-session reconciler to flip them to "exited" (no longer
-  // counted), then spawn another batch — unbounded over a long enough
-  // window, leaving DB rows/dtach sockets/systemd scopes behind each cycle.
-  // This still bounds the WORST case (every child staying busy at once,
-  // the actual "unbounded fanout" the roadmap's Security & trust note
-  // describes), just not a sustained-low-rate abuse pattern — a rate
-  // limiter would be the real fix for that, and is a follow-up, not this PR.
-  const maxChildren = getStoredSettings(app.db).sessions.maxChildSessionsPerParent;
+  const insert = insertRow(
+    app,
+    params,
+    cwd,
+    parent.parentId,
+    sessionSettings.maxChildSessionsPerParent,
+  );
+  if (!insert.ok) return insert.result;
+  const created = insert.row;
+  rb.hostId = project.hostId;
+  rb.sessionId = created.id;
+
+  await stashSeedBestEffort(app, project, created.id, params.seedPrompt);
+
+  const spawnOpts = await resolveSpawnInputs(
+    app,
+    project,
+    params,
+    cwd,
+    created.id,
+    sessionSettings,
+  );
+  const spawned = await spawnOrRollback(app, project, created.id, spawnOpts, rb);
+  if (!spawned.ok) return spawned.result;
+
+  rb.spawned = true;
+
+  trackPreview(app, project, params, cwd, created.id);
+
+  return {
+    ok: true,
+    row: created,
+    project,
+    initialPromptApplied: spawned.initialPromptApplied,
+  };
+}
+
+// Phase 5 (Track B, issue #193 5.3b) — validated here, not just in the
+// sessions.spawn_child socket op, so a direct full-scope POST /api/sessions
+// call carrying parentSessionId is bound by the exact same rules (same
+// project, one level of nesting only, a live-child cap). One level of
+// nesting: rejecting a parent that is ITSELF a child means a child can
+// never itself become a parent, so cascade-kill (killSession, below)
+// never needs to recurse past one level.
+function validateParent(
+  app: FastifyInstance,
+  params: CreateSessionParams,
+): Step<{ parentId: number | null }> {
+  if (params.parentSessionId === undefined) return { ok: true, parentId: null };
+  const [parentRow] = app.db
+    .select()
+    .from(sessions)
+    .where(eq(sessions.id, params.parentSessionId))
+    .all();
+  if (!parentRow) return fail("unknown-parent");
+  if (parentRow.projectId !== params.projectId) return fail("parent-wrong-project");
+  if (parentRow.parentSessionId !== null) return fail("parent-is-child");
+  return { ok: true, parentId: params.parentSessionId };
+}
+
+// Creates the session's worktree when one was requested and records it on
+// `rb` (the rollback scope doubles as this step's disposer: createSessionRecord
+// removes the worktree and its branch on any later failure). Returns the cwd
+// the session should use — the worktree's path, or the caller's own `cwd`.
+async function prepareWorktree(
+  app: FastifyInstance,
+  project: ProjectRow,
+  params: CreateSessionParams,
+  rb: CreateRollback,
+): Promise<Step<{ cwd: string | undefined }>> {
+  const { worktree } = params;
+  const cwd = params.cwd;
+  if (worktree?.branch) {
+    // Issue #345 — dock-preview worktrees now work on remote hosts too:
+    // checkoutBranchWorktree, the worktreeRefresh sync tick, and cleanup
+    // are all routed through resolveBackend. Wrapped in try/catch (unlike
+    // the old local-only call, where the underlying runGit never rejects):
+    // a remote checkoutBranchWorktree can genuinely throw
+    // (HostUnreachableError/HostRequestError, same as every other
+    // resolveBackend() call reachable for a remote host — see killSession's
+    // own "must never surface as a 500" comment below).
+    let result;
+    try {
+      result = await resolveBackend(app, project.hostId).checkoutBranchWorktree(
+        cwd ?? project.cwd,
+        worktree.branch,
+      );
+    } catch (err) {
+      app.log.warn(
+        { hostId: project.hostId, err },
+        "checkoutBranchWorktree: host unreachable or rejected the request",
+      );
+      return fail("worktree-failed");
+    }
+    if (!result) return fail("worktree-failed");
+    // Checks out an EXISTING branch detached — nothing to delete but the
+    // directory.
+    rb.hostId = project.hostId;
+    rb.worktreePath = result.path;
+    rb.parentCwd = params.cwd ?? project.cwd;
+    return { ok: true, cwd: result.path };
+  }
+  if (worktree?.baseRef) {
+    const resolved = await resolveWorktreeCwd(
+      app,
+      project.hostId,
+      cwd ?? project.cwd,
+      worktree,
+      `session-${Date.now()}`,
+    );
+    if (!resolved.created || !resolved.path) {
+      return {
+        ok: false,
+        result: { ok: false, reason: "worktree-failed", detail: resolved.detail },
+      };
+    }
+    rb.hostId = project.hostId;
+    rb.worktreePath = resolved.path;
+    rb.parentCwd = params.cwd ?? project.cwd;
+    rb.branch = resolved.branch;
+    return { ok: true, cwd: resolved.path };
+  }
+  return { ok: true, cwd };
+}
+
+// Phase 5 (Track B) — the live-child cap is checked and the row inserted
+// inside the SAME transaction (Hermes review, PR #426), not as two
+// separate statements: any worktree creation above is async and already
+// complete by this point, so this closes the check-then-act race a
+// caller combining `parentSessionId` with `worktree` could otherwise hit.
+//
+// Known limitation, accepted (independent review, PR #426): the cap only
+// bounds CONCURRENTLY-live children, not cumulative spawns over time — a
+// rate limiter would be the real fix for sustained-low-rate abuse, and is a
+// follow-up, not this function.
+function insertRow(
+  app: FastifyInstance,
+  params: CreateSessionParams,
+  cwd: string | undefined,
+  parentId: number | null,
+  maxChildren: number,
+): Step<{ row: SessionRow }> {
+  const { projectId, command, name, nameLocked, kind, skipPermissions, env, model, smallModel } =
+    params;
   let inserted;
   try {
     inserted = app.db.transaction((tx) => {
-      if (resolvedParentId !== null) {
+      if (parentId !== null) {
         const liveChildren = tx
           .select()
           .from(sessions)
-          .where(and(eq(sessions.parentSessionId, resolvedParentId), eq(sessions.status, "active")))
+          .where(and(eq(sessions.parentSessionId, parentId), eq(sessions.status, "active")))
           .all();
         if (liveChildren.length >= maxChildren) return null;
       }
@@ -992,7 +1051,7 @@ async function createSessionRecordInner(
           ...(kind !== undefined ? { kind } : {}),
           ...(nameLocked !== undefined ? { nameLocked } : {}),
           ...(skipPermissions !== undefined ? { skipPermissions } : {}),
-          ...(resolvedParentId !== null ? { parentSessionId: resolvedParentId } : {}),
+          ...(parentId !== null ? { parentSessionId: parentId } : {}),
           ...(env !== undefined ? { env: JSON.stringify(env) } : {}),
           ...(model !== undefined ? { model } : {}),
           ...(smallModel !== undefined ? { smallModel } : {}),
@@ -1004,180 +1063,129 @@ async function createSessionRecordInner(
     // Issue #1223 — the only unique index any `sessions` insert can hit is
     // `sessions_stack_identity_unique` (schema.ts), scoped to exactly
     // `kind = 'dock' AND status = 'active' AND name LIKE 'docker-stack:%'`.
-    // Confirmed empirically (throwaway script against a real better-sqlite3
-    // DB, not assumed from docs): the driver throws `SqliteError` with
-    // `.code === "SQLITE_CONSTRAINT_UNIQUE"` for this violation (not the
-    // bare `SQLITE_CONSTRAINT` family), and drizzle's synchronous
+    // Confirmed empirically: the driver throws `SqliteError` with
+    // `.code === "SQLITE_CONSTRAINT_UNIQUE"`, and drizzle's synchronous
     // `db.transaction()` re-throws it unchanged. Any other `SqliteError`
     // (e.g. an unrelated FK violation) is NOT this case and must keep
     // propagating unchanged — re-throw rather than swallow it.
     if (err instanceof BetterSqlite3.SqliteError && err.code === "SQLITE_CONSTRAINT_UNIQUE") {
-      return { ok: false, reason: "unique-conflict" };
+      return fail("unique-conflict");
     }
     throw err;
   }
-  if (!inserted) return { ok: false, reason: "child-cap-exceeded" };
-  const [created] = inserted;
-  rb.hostId = project.hostId;
-  rb.sessionId = created.id;
+  if (!inserted) return fail("child-cap-exceeded");
+  return { ok: true, row: inserted[0] };
+}
 
-  // Issue #678 — stashed BEFORE spawn() is called below, not after: the
-  // agent's own process (and therefore its SessionStart hook) can't start
-  // until spawn() actually runs, so this ordering guarantees the seed is
-  // already present by the time a hook-based agent's SessionStart fires —
-  // closing the race the previous call site (routes/sessions.ts's promote
-  // handler, AFTER this function returned success) had. Also passed through
-  // into spawn()'s own opts below so an adapter with no live hook round
-  // trip (opencode) can read it from HookAdapterContext at launch time
-  // instead — see hook-adapters/opencode.ts's own comment. Non-fatal on a
-  // remote-host throw (log and continue to spawn): a seed that fails to
-  // stash is a degraded promote, not a failed one — same posture as every
-  // other best-effort remote call in this function.
-  if (seedPrompt && seedPrompt.length > 0) {
-    try {
-      await resolveBackend(app, project.hostId).stashSeed(String(created.id), seedPrompt);
-    } catch (err) {
-      app.log.warn(
-        { hostId: project.hostId, sessionId: created.id, err },
-        "stashSeed: host unreachable or rejected the request — proceeding to spawn without it",
-      );
+// Issue #678 — stashed BEFORE spawn() is called, not after: the agent's own
+// process (and therefore its SessionStart hook) can't start until spawn()
+// actually runs, so this ordering guarantees the seed is already present by
+// the time a hook-based agent's SessionStart fires. Non-fatal on a
+// remote-host throw (log and continue to spawn): a seed that fails to stash
+// is a degraded promote, not a failed one.
+async function stashSeedBestEffort(
+  app: FastifyInstance,
+  project: ProjectRow,
+  sessionId: number,
+  seedPrompt: string | undefined,
+): Promise<void> {
+  if (!seedPrompt || seedPrompt.length === 0) return;
+  try {
+    await resolveBackend(app, project.hostId).stashSeed(String(sessionId), seedPrompt);
+  } catch (err) {
+    app.log.warn(
+      { hostId: project.hostId, sessionId, err },
+      "stashSeed: host unreachable or rejected the request — proceeding to spawn without it",
+    );
+  }
+}
+
+// Resolves everything spawn() needs that is decided on the PRIMARY (where
+// the DB lives) rather than by whichever host actually spawns — an
+// agent-role host has no settings DB of its own (plugins/hooks.ts), so each
+// value must already be definite by the time it reaches spawn(), never
+// re-derived downstream.
+async function resolveSpawnInputs(
+  app: FastifyInstance,
+  project: ProjectRow,
+  params: CreateSessionParams,
+  cwd: string | undefined,
+  sessionId: number,
+  globalSessionSettings: ReturnType<typeof getStoredSettings>["sessions"],
+): Promise<SpawnOpts> {
+  // Per-project Mullion pinned note (#942 redesign): `params.briefingOverride`
+  // (an explicit caller-supplied value, currently unused by any caller) wins;
+  // otherwise this project's own DB row is used as-is. `null`/absent falls
+  // through to `undefined`, which writeSessionBriefing treats as "no note for
+  // this session" (unlinking any stale per-session copy from a previous spawn).
+  const resolvedBriefingOverride =
+    params.briefingOverride ?? readProjectBriefing(app.db, project.id) ?? undefined;
+
+  // PR-5 — an explicit caller-supplied value (currently unused by any
+  // public route) wins, otherwise this project's own DB row wins.
+  const rawProjectSkill = params.projectSkill ?? readProjectSkill(app.db, project.id) ?? undefined;
+  const rawProjectReviewerAgent =
+    params.projectReviewerAgent ?? readProjectReviewerAgent(app.db, project.id) ?? undefined;
+
+  // Issue #1082(a), rescoped by issue #1098 — once a project has been
+  // scaffolded, a committed `.claude/skills/<slug>/SKILL.md`/
+  // `.claude/agents/<slug>-reviewer.md` already reaches Claude Code/opencode
+  // via each CLI's own native discovery — re-injecting the DB-authored copy
+  // on top would double-deliver the same content, so a committed file always
+  // wins over the ephemeral DB copy. Checked HERE, on the primary, but the
+  // scan itself (issue #1124) is routed to whichever host owns
+  // `project.hostId` via `discoverCommittedScaffoldOnHost`: a remote-hosted
+  // project's committed scaffold lives on ITS filesystem. It scans for ANY
+  // scaffold-shaped slug (#1098), not the one stamped `project.slug`.
+  //
+  // The scan only decides whether to SUPPRESS the DB copy, so it is skipped
+  // outright (issue #1525) when neither a skill nor a reviewer agent is
+  // configured — there is nothing to suppress, and the scan is a directory
+  // walk (an HTTP round trip for a remote host).
+  //
+  // `cwd ?? project.cwd`, NOT `project.cwd` alone: `cwd` may have been
+  // reassigned to a `.mullion-worktrees/<name>` checkout — a SEPARATE git
+  // working tree, possibly cut from a ref that predates the scaffold commit.
+  // Claude Code's project-scope discovery is cwd-scoped (see
+  // claude-code-skills.ts), so the check must describe the SAME directory
+  // the CLI will actually search.
+  let scaffoldSkillCommitted = false;
+  let scaffoldReviewerCommitted = false;
+  if (rawProjectSkill !== undefined || rawProjectReviewerAgent !== undefined) {
+    const scaffoldCwd = cwd ?? project.cwd;
+    const scan = await discoverCommittedScaffoldOnHost(app, project.hostId, scaffoldCwd);
+    scaffoldSkillCommitted = scan.skillCommitted;
+    scaffoldReviewerCommitted = scan.reviewerCommitted;
+    if (scan.warnings.length > 0) {
+      app.log.warn({ warnings: scan.warnings, scaffoldCwd }, "scaffold scan warnings");
     }
   }
-
-  // Issue: per-project Mullion pinned note (#942 redesign) — resolved HERE,
-  // on the primary (where the DB lives), not by whichever host actually
-  // spawns. `params.briefingOverride` (an explicit caller-supplied value,
-  // currently unused by any caller) wins if ever set; otherwise this
-  // project's own DB row (project-tooling.ts) is used as-is — there is no
-  // committed-file fallback to compete with anymore, and AGENTS.md is never
-  // read or re-injected here. `null`/absent DB row falls through to
-  // `undefined`, which writeSessionBriefing treats as "no note for this
-  // session" (unlinking any stale per-session copy from a previous spawn).
-  const resolvedBriefingOverride =
-    briefingOverride ?? readProjectBriefing(app.db, project.id) ?? undefined;
-  // Issue #1082(a), rescoped by issue #1098 — once a project has been
-  // scaffolded (routes/project-setup.ts's `/setup/apply`, which commits the
-  // scaffold's files into a real worktree checkout), a committed
-  // `.claude/skills/<slug>/SKILL.md`/`.claude/agents/<slug>-reviewer.md`
-  // already reaches Claude Code/opencode via each CLI's own native
-  // discovery — re-injecting the DB-authored `project_tooling.skill`/
-  // `.reviewerAgent` copy live on top of that would just double-deliver the
-  // same content. Checked HERE, on the primary, not adapter-side — but
-  // (issue #1124) the actual scan is routed to whichever host owns
-  // `project.hostId` via `discoverCommittedScaffoldOnHost`, since a
-  // remote-hosted project's committed scaffold lives on ITS filesystem, not
-  // necessarily the primary's — see that function's own doc comment.
-  //
-  // #1098 — this USED to key off `project.slug` alone (the slug most
-  // recently STAMPED by `/setup/apply` at commit time). That drifts from
-  // reality under concurrent re-scaffolds: a project re-scaffolded under a
-  // DIFFERENT slug gets its own independent branch/worktree/PR, and
-  // `project.slug` only ever reflects whichever slug was stamped LAST — not
-  // whichever slug's PR actually MERGED into the branch this session
-  // checks out. If the stamped slug's PR never merged while a DIFFERENT
-  // slug's PR did, a single-slug gate misses the files that are actually
-  // on disk and silently falls through to re-injecting the DB copy — the
-  // exact double-delivery bug this gate exists to prevent. Fixed by
-  // `discoverCommittedScaffold` (above): it scans `scaffoldCwd` for ANY
-  // scaffold-shaped slug instead of trusting the one stamped column — see
-  // its own doc comment for the full reasoning, including why candidate
-  // slugs are sourced from both `.claude/skills/` and `.claude/agents/`,
-  // and why skill/reviewer suppression stay independent of each other.
-  //
-  // `cwd ?? project.cwd`, NOT `project.cwd` alone — same fallback `cwd`
-  // itself already resolves to a few lines below (`path.resolve(cwd ??
-  // project.cwd)`): by this point `cwd` may have been reassigned above to a
-  // `.mullion-worktrees/<name>` checkout (checkoutBranchWorktree/
-  // resolveWorktreeCwd, when `worktree` was requested) — a SEPARATE git
-  // working tree from `project.cwd`'s own checkout, not a subdirectory of
-  // it, and possibly cut from a ref that predates (or never gets) the
-  // scaffold commit. Claude Code's own project-scope discovery is
-  // cwd-scoped, not an upward walk to the git root (see
-  // claude-code-skills.ts's own live-verified finding), so this session
-  // actually launches with `<cwd>/.claude/skills`, never
-  // `<project.cwd>/.claude/skills` once `cwd` differs — the check must
-  // describe the SAME directory the CLI will actually search, which is
-  // `cwd` whenever the caller (or the worktree resolution above) set one,
-  // falling back to `project.cwd` only for the ordinary case where no
-  // override exists at all.
-  const scaffoldCwd = cwd ?? project.cwd;
-  const {
-    skillCommitted: scaffoldSkillCommitted,
-    reviewerCommitted: scaffoldReviewerCommitted,
-    warnings: scaffoldWarnings,
-  } = await discoverCommittedScaffoldOnHost(app, project.hostId, scaffoldCwd);
-  if (scaffoldWarnings.length > 0) {
-    app.log.warn({ warnings: scaffoldWarnings, scaffoldCwd }, "scaffold scan warnings");
-  }
-
-  // PR-5 — same producer posture as resolvedBriefingOverride immediately
-  // above: an explicit caller-supplied value (currently unused by any
-  // public route, same as briefingOverride) wins, otherwise this project's
-  // own DB row wins. `null`/absent falls through to `undefined`, which
-  // every adapter's prepareLaunch already treats as "no project content" —
-  // see HookAdapterContext.projectSkill/projectReviewerAgent's own doc
-  // comments. Issue #1082(a) — gated to `undefined` outright when the
-  // committed scaffold file above already exists, regardless of what an
-  // explicit caller value or the DB row would otherwise resolve to: a
-  // committed file always wins over the ephemeral DB copy for that same
-  // content, never the other way around.
-  const resolvedProjectSkill = scaffoldSkillCommitted
-    ? undefined
-    : (projectSkill ?? readProjectSkill(app.db, project.id) ?? undefined);
+  const resolvedProjectSkill = scaffoldSkillCommitted ? undefined : rawProjectSkill;
   const resolvedProjectReviewerAgent = scaffoldReviewerCommitted
     ? undefined
-    : (projectReviewerAgent ?? readProjectReviewerAgent(app.db, project.id) ?? undefined);
+    : rawProjectReviewerAgent;
 
-  // Issue #884 — per-project override of sessions.injectAgentGuide/
-  // injectProjectBriefing (settings.ts), resolved HERE on the primary for
-  // the identical multi-host reason resolvedBriefingOverride is: an
-  // agent-role host has no settings DB of its own (app.db is absent there
-  // — plugins/hooks.ts's own comment), so this must already be a definite
-  // boolean by the time it reaches spawn(), never re-derived downstream.
-  // `project.injectAgentGuide`/`injectProjectBriefing` (this project's own
-  // nullable override columns, schema.ts) win when non-null; otherwise
-  // fall through to the global setting. Unlike briefingOverride/
-  // projectSkill above, there is no caller-supplied override concept here
-  // — every session for this project gets the same resolved value.
-  const globalSessionSettings = getStoredSettings(app.db).sessions;
+  // Issue #884 — `project.injectAgentGuide`/`injectProjectBriefing` (this
+  // project's own nullable override columns, schema.ts) win when non-null;
+  // otherwise fall through to the global setting.
   const resolvedInjectAgentGuide =
     project.injectAgentGuide ?? globalSessionSettings.injectAgentGuide;
   const resolvedInjectProjectBriefing =
     project.injectProjectBriefing ?? globalSessionSettings.injectProjectBriefing;
 
-  // Issue #1089 — sessions.injectMullionBundle (settings.ts), resolved HERE
-  // on the primary for the identical multi-host reason resolvedInjectAgentGuide
-  // above is: an agent-role host has no settings DB of its own to read this
-  // from (plugins/hooks.ts's own comment), so it must already be a definite
-  // boolean by the time it reaches spawn(). Unlike injectAgentGuide/
-  // injectProjectBriefing above, there is no per-project override to merge —
-  // schema.ts's own comment on `projects.injectAgentGuide` explains why
-  // injectMullionBundle deliberately doesn't get one — so this is just the
-  // global setting, straight through.
+  // Issue #1089 — just the global setting, straight through (schema.ts's own
+  // comment on `projects.injectAgentGuide` explains why injectMullionBundle
+  // deliberately has no per-project override).
   const resolvedInjectMullionBundle = globalSessionSettings.injectMullionBundle;
 
-  // Issue #937 — the install-wide workflow-conventions text, gated the same
-  // way the boolean's own doc comment (schema.ts) describes: inject only
-  // when this project hasn't explicitly opted out AND there's actually a
-  // non-empty global text configured. Resolved to a SINGLE already-gated
-  // value here, on the primary — deliberately not threaded as a separate
-  // boolean + raw text the way injectAgentGuide/briefingOverride are two
-  // fields, because nothing downstream ever needs the boolean independently
-  // of the text (the frontend's per-project toggle reads the DB column
-  // directly, not anything echoed off a session): a single
-  // `string | undefined`, `briefingOverride`-shaped, is enough to reach a
-  // multi-host agent role with no settings DB of its own to read (see
-  // that field's own doc comment, pty-manager.ts). `undefined` here also
-  // fails CLOSED on a version-skewed remote build that strips the field —
-  // the right direction for a policy-text feature.
-  // Issue #1208 — a SECOND, independent opt-out layered on top of the one
-  // above: `injectWorkflowConventions` means "my AGENTS.md is authoritative
-  // instead" (feeds text resolution/hashing elsewhere); this one means
-  // "the committed AGENTS.md already carries this install's current text,
-  // stop delivering it a second way" and touches nothing but this gate —
-  // see its own doc comment on the schema column for why the two must stay
-  // independent. `?? false` so existing rows (column not yet set) keep
-  // today's behavior unchanged.
+  // Issue #937 — the install-wide workflow-conventions text, resolved to a
+  // SINGLE already-gated value: inject only when this project hasn't
+  // explicitly opted out AND there's a non-empty global text. `undefined`
+  // also fails CLOSED on a version-skewed remote build that strips the field.
+  // Issue #1208 — a SECOND, independent opt-out layered on top:
+  // `suppressConventionsInjectionAfterScaffold` means "the committed AGENTS.md
+  // already carries this install's current text" and touches nothing but this
+  // gate. `?? false` so existing rows keep today's behavior unchanged.
   const resolvedInjectWorkflowConventions =
     (project.injectWorkflowConventions ?? true) &&
     !(project.suppressConventionsInjectionAfterScaffold ?? false);
@@ -1186,266 +1194,219 @@ async function createSessionRecordInner(
       ? globalSessionSettings.workflowConventionsText
       : undefined;
 
-  let spawnResult: {
-    initialPromptApplied?: boolean;
-    injectAgentGuide?: boolean;
-    injectProjectBriefing?: boolean;
-    // Issue #1089 — same "echoed back, not assumed" posture as the two
-    // injectAgentGuide-style fields immediately above.
-    injectMullionBundle?: boolean;
-    // Hermes review, PR #966 — Task Master marker echo, same posture as
-    // the two injectAgentGuide-style fields above: a remote agent build
-    // that pre-dates this field never echoes the key, LocalBackend.spawn
-    // always echoes it (the value is computed from the resulting
-    // Session rather than the request body, same as injectAgentGuide).
-    taskIdApplied?: boolean;
+  return {
+    id: String(sessionId),
+    cwd: cwd ?? project.cwd,
+    command: params.command,
+    cols: DEFAULT_COLS,
+    rows: DEFAULT_ROWS,
+    skipPermissions: params.skipPermissions,
+    initialPrompt: params.initialPrompt,
+    seedPrompt: params.seedPrompt,
+    resumeAgentSessionId: params.resumeAgentSessionId,
+    projectId: params.projectId,
+    briefingOverride: resolvedBriefingOverride,
+    projectSkill: resolvedProjectSkill,
+    projectReviewerAgent: resolvedProjectReviewerAgent,
+    model: params.model,
+    smallModel: params.smallModel,
+    injectAgentGuide: resolvedInjectAgentGuide,
+    injectProjectBriefing: resolvedInjectProjectBriefing,
+    injectMullionBundle: resolvedInjectMullionBundle,
+    workflowConventionsText: resolvedWorkflowConventionsText,
+    env: params.env,
+    taskId: params.taskId,
   };
+}
+
+// Spawns the session; on failure unwinds everything this create made (see
+// the catch). On success also logs the version-skew diagnostics.
+async function spawnOrRollback(
+  app: FastifyInstance,
+  project: ProjectRow,
+  sessionId: number,
+  spawnOpts: SpawnOpts,
+  rb: CreateRollback,
+): Promise<Step<{ initialPromptApplied: boolean | undefined }>> {
+  const { injectAgentGuide, injectProjectBriefing, injectMullionBundle, taskId } = spawnOpts;
+  let spawnResult;
   try {
-    spawnResult = await resolveBackend(app, project.hostId).spawn({
-      id: String(created.id),
-      cwd: cwd ?? project.cwd,
-      command,
-      cols: DEFAULT_COLS,
-      rows: DEFAULT_ROWS,
-      skipPermissions,
-      initialPrompt,
-      seedPrompt,
-      resumeAgentSessionId,
-      projectId,
-      briefingOverride: resolvedBriefingOverride,
-      projectSkill: resolvedProjectSkill,
-      projectReviewerAgent: resolvedProjectReviewerAgent,
-      model,
-      smallModel,
-      injectAgentGuide: resolvedInjectAgentGuide,
-      injectProjectBriefing: resolvedInjectProjectBriefing,
-      injectMullionBundle: resolvedInjectMullionBundle,
-      workflowConventionsText: resolvedWorkflowConventionsText,
-      env,
-      taskId,
-    });
-    // Version-skew safety net — same "echoed back, not assumed" posture as
-    // initialPromptApplied (SpawnResult's own doc comment), but logged
-    // rather than threaded all the way up into CreateSessionResult: nothing
-    // downstream of session-lifecycle.ts currently needs to REACT to this
-    // (unlike seedDelivered, which task-claim.ts actively downgrades on a
-    // mismatch), so a warning here — actionable by an operator, cheap to
-    // add — covers it without growing the public API surface for a
-    // diagnostic-only signal. A remote build too old to echo these fields at
-    // all replies with `undefined`, and `pty-manager.ts` then falls back to
-    // `?? true` — so an absent echo for a *requested `false`* is the one
-    // silent-fail-open case worth its own warning (an absent echo for a
-    // requested `true` degrades to the same `?? true`, i.e. no divergence).
+    spawnResult = await resolveBackend(app, project.hostId).spawn(spawnOpts);
+    // Version-skew safety net — "echoed back, not assumed" (SpawnResult's
+    // own doc comment), logged rather than threaded up into
+    // CreateSessionResult: nothing downstream currently needs to REACT to
+    // this. A remote build too old to echo these fields replies `undefined`,
+    // and `pty-manager.ts` then falls back to `?? true` — so an absent echo
+    // for a *requested `false`* is the one silent-fail-open case worth its
+    // own warning (an absent echo for a requested `true` degrades to the same
+    // `?? true`, i.e. no divergence).
     for (const [field, requested, applied] of [
-      ["injectAgentGuide", resolvedInjectAgentGuide, spawnResult.injectAgentGuide],
-      ["injectProjectBriefing", resolvedInjectProjectBriefing, spawnResult.injectProjectBriefing],
-      // Issue #1089 — same version-skew safety net as the two fields
-      // above, for sessions.injectMullionBundle.
-      ["injectMullionBundle", resolvedInjectMullionBundle, spawnResult.injectMullionBundle],
+      ["injectAgentGuide", injectAgentGuide, spawnResult.injectAgentGuide],
+      ["injectProjectBriefing", injectProjectBriefing, spawnResult.injectProjectBriefing],
+      // Issue #1089 — same safety net for sessions.injectMullionBundle.
+      ["injectMullionBundle", injectMullionBundle, spawnResult.injectMullionBundle],
     ] as const) {
       if (applied !== undefined && applied !== requested) {
         app.log.warn(
-          { sessionId: created.id, hostId: project.hostId, requested, applied },
+          { sessionId, hostId: project.hostId, requested, applied },
           `${field}: remote agent applied a different value than requested — possible version skew`,
         );
       } else if (applied === undefined && requested === false) {
         app.log.warn(
-          { sessionId: created.id, hostId: project.hostId, requested },
+          { sessionId, hostId: project.hostId, requested },
           `${field}: remote agent did not echo this field, and likely predates it — an old build's own \`?? true\` fallback means it probably injected this even though it was requested off`,
         );
       }
     }
     // Hermes review, PR #966 — same version-skew safety net for the
-    // `taskId` Task Master marker. Distinct semantics from the two
-    // injectAgentGuide-style fields above: `taskId` is set ONLY for
-    // Task Master spawns (never `false` in normal use), so the
-    // "requested false / echoed undefined" branch above is a
-    // misnomer here. The two failure modes worth a warning for are:
-    //   1. `taskIdApplied` is `undefined` on the response — the agent
-    //      pre-dates this field and the opencode/codex skill denials are
-    //      silently not in effect (branchdam-mobile tasks #66/#67
-    //      will recur on this agent).
-    //   2. `taskIdApplied` is `false` even though `taskId` was sent —
-    //      the agent received the field but the resulting Session
-    //      ended up with `taskId: undefined` (a version-skewed agent
-    //      that knows the wire field but doesn't read it, OR a
-    //      reattach of a session whose original spawn predates this
-    //      change and is now reaching applyHookAdapters fresh).
+    // `taskId` Task Master marker. `taskId` is set ONLY for Task Master
+    // spawns, so the two failure modes worth a warning are:
+    //   1. `taskIdApplied` is `undefined` — the agent pre-dates this field
+    //      and the opencode/codex skill denials are silently not in effect.
+    //   2. `taskIdApplied` is `false` even though `taskId` was sent — the
+    //      resulting Session ended up with `taskId: undefined` (a skewed
+    //      agent that knows the wire field but doesn't read it, OR a
+    //      reattach of a session whose original spawn predates this change).
     if (taskId !== undefined && spawnResult.taskIdApplied === undefined) {
       app.log.warn(
-        { sessionId: created.id, hostId: project.hostId, requested: taskId },
+        { sessionId, hostId: project.hostId, requested: taskId },
         "taskId: remote agent did not echo taskIdApplied, and likely predates the Task Master skill-denial fix — opencode/codex brainstorming / writing-plans / finishing-a-development-branch are NOT being denied on this agent",
       );
     } else if (taskId !== undefined && spawnResult.taskIdApplied === false) {
       app.log.warn(
-        { sessionId: created.id, hostId: project.hostId, requested: taskId },
+        { sessionId, hostId: project.hostId, requested: taskId },
         "taskId: remote agent received the taskId but the resulting Session has taskId: undefined — possible version skew or a reattach of a session whose original spawn predates this field",
       );
     }
   } catch (err) {
     // Spawn rollback (issue #26 for the remote case; B6 for the local one):
     // leaving the row behind would be DB litter for a session that was
-    // never actually spawned anywhere. Originally reachable only for a
-    // remote host — LocalBackend.spawn() used to swallow every local spawn
-    // failure (see Session.spawn()'s doc comment in pty-manager.ts for why
-    // that silently returned 201 instead of ever reaching this catch) — but
-    // B6 made LocalBackend.spawn() await Session.spawnOutcome() and
-    // propagate a genuine first-attempt failure (missing systemd-run/dtach,
-    // a vanished cwd, a scope-name collision), so this path is now reachable
-    // for BOTH local and remote spawns; this block doesn't need to (and
-    // doesn't) distinguish which. Also clean up preview worktree if one was
-    // created (Claude review, PR #341): the worktree was created before the
-    // spawn attempt, so it must be removed even when the spawn itself fails.
-    // Routed through the backend (issue #345) rather than the local-only
-    // removeWorktree: this was already reachable for a remote host via the
-    // worktree.baseRef path above (never behind the old checkoutBranchWorktree
-    // guard), and calling local git against a path that only exists on a
-    // remote agent silently leaked it. parentCwd is passed explicitly —
-    // removeWorktree's own `path.resolve(worktreePath, "../..")` fallback
-    // would otherwise be computed on the wrong host.
-    //
-    // A real try/catch here, NOT `.catch(() => {})` (independent review,
-    // this PR): RemoteBackend.removeWorktree isn't `async`, and its own
-    // `client` getter (getRemoteHostClient) can throw SYNCHRONOUSLY — e.g. a
-    // hosts row deleted mid-request — before ever returning a promise for
-    // `.catch()` to attach to. A synchronous throw here would abort this
-    // whole `catch` block, skipping the app.pty.kill()/db.delete()/log/
-    // return below it and escaping createSessionRecord as an unhandled
-    // rejection (a bare 500, not the worktree-failed/spawn-failed contract
-    // every caller of this function expects). See routes/projects.ts's own
-    // "Hermes review, PR #458" comment for the same footgun fixed once
-    // already elsewhere in this codebase.
+    // never actually spawned anywhere. B6 made LocalBackend.spawn() await
+    // Session.spawnOutcome() and propagate a genuine first-attempt failure
+    // (missing systemd-run/dtach, a vanished cwd, a scope-name collision),
+    // so this path is reachable for BOTH local and remote spawns.
     // M5 — worktree (and its branch) removal, backend terminate and the row
-    // delete all live in rollbackCreate now (see createSessionRecord).
+    // delete all live in rollbackCreate (see createSessionRecord), whose
+    // steps are each their own try/catch: RemoteBackend's `client` getter
+    // can throw SYNCHRONOUSLY (e.g. a hosts row deleted mid-request), and a
+    // `.catch()` chained off the bare call would never attach.
+    //
     // Fresh-review finding (Hermes, this PR): a LOCAL spawn failure means
     // PtyManager.getOrCreate() already inserted a Session into its own
     // `sessions`/`hookTokens` maps before spawn() was awaited — that Session
-    // never attached anything (bootstrapMaster/attachClient never
-    // succeeded), so app.pty.kill() here is a safe, side-effect-free map
-    // eviction, not a real "detach a live client" call. Without this, a
-    // failed local spawn permanently leaks that Session object plus its
-    // hookToken -> id entry (which resolveToken() could still match against)
-    // until the whole process restarts. A no-op for the remote case (no
-    // local Session was ever created for a remote host's session id).
-    app.pty.kill(String(created.id));
+    // never attached anything, so app.pty.kill() here is a safe,
+    // side-effect-free map eviction, not a real "detach a live client" call.
+    // Without this, a failed local spawn permanently leaks that Session plus
+    // its hookToken -> id entry until the process restarts. A no-op for the
+    // remote case.
+    app.pty.kill(String(sessionId));
     // B9 — the row itself is deleted right below, so this id is genuinely
     // done: discard any stashed seed too rather than leaking it forever
-    // (a realistic promote-flow seed wouldn't normally exist yet for a
-    // session that failed its first spawn, but this is cheap defense-in-
-    // depth for the same reason kill() itself deliberately does NOT do
-    // this — see PtyManager.discardPendingSeed's own doc comment).
-    app.pty.discardPendingSeed(String(created.id));
+    // (see PtyManager.discardPendingSeed's own doc comment for why kill()
+    // itself deliberately does NOT do this).
+    app.pty.discardPendingSeed(String(sessionId));
     await rollbackCreate(app, rb);
     app.log.error({ err, hostId: project.hostId }, "session spawn failed, rolled back row");
     return {
       ok: false,
-      reason: "spawn-failed",
-      detail: err instanceof Error ? err.message : undefined,
+      result: {
+        ok: false,
+        reason: "spawn-failed",
+        detail: err instanceof Error ? err.message : undefined,
+      },
     };
   }
+  return { ok: true, initialPromptApplied: spawnResult.initialPromptApplied };
+}
 
-  rb.spawned = true;
-
-  // Track preview worktrees for sync and cleanup
+// Track preview worktrees for sync and cleanup.
+function trackPreview(
+  app: FastifyInstance,
+  project: ProjectRow,
+  params: CreateSessionParams,
+  cwd: string | undefined,
+  sessionId: number,
+): void {
+  const { worktree, worktreeRefresh, projectId } = params;
   const effectiveCwd = cwd ?? project.cwd;
-  if (worktree?.branch && isDockPreviewWorktree(effectiveCwd)) {
-    const previewBranch = worktree.branch;
-    const previewParentCwd = params.cwd ?? project.cwd;
-    trackPreviewWorktree(created.id, {
-      worktreePath: effectiveCwd,
-      branch: previewBranch,
-      worktreeRefresh: worktreeRefresh ?? false,
-      parentCwd: previewParentCwd,
-      projectId,
-      hostId: project.hostId,
-      // Issue #345 — host-routed closures, attached only for a remote host
-      // (undefined for local, which keeps git-worktree.ts's own local
-      // fallback and every existing local-path test unmodified). Never
-      // reject — logPreviewWorktreeHostError below always resolves `false`,
-      // so an unreachable/erroring remote agent reads as `false` (queues
-      // cleanupPreviewWorktree's pendingRemoval retry, or just skips one
-      // sync tick), not as a thrown error escaping into
-      // killSession/the reconciler/the sync tick's own catch.
-      //
-      // A real try/catch inside each async arrow, NOT `.catch()` chained
-      // off the bare call (independent review, this PR — same footgun as
-      // the spawn-rollback fix above): RemoteBackend.removeWorktree/
-      // syncWorktree aren't `async`, and their `client` getter
-      // (getRemoteHostClient) can throw SYNCHRONOUSLY (e.g. a hosts row
-      // deleted mid-lifetime) before ever returning a promise for
-      // `.catch()` to attach to. previewRemove/previewSync in
-      // git-worktree.ts do still catch that throw (it happens while
-      // evaluating `await info.remove()`, inside their own try) and
-      // correctly resolve `false` either way — but a `.catch()` that never
-      // attaches means logPreviewWorktreeHostError never runs, so a
-      // synchronous-throw failure retried every 5s by the sync tick would
-      // do so with zero diagnostics, forever, indistinguishable from
-      // silence. Marking these `async` makes every throw — sync or async —
-      // reach the same catch.
-      // removeWarned/syncWarned (Hermes review, this PR) — per-closure state
-      // tracking whether the LAST attempt already logged a failure, so a
-      // host that stays down or keeps rejecting warns once per outage
-      // rather than once per 5s tick forever. Reset to false on a call that
-      // doesn't throw, so a later, fresh outage warns again.
-      ...(project.hostId !== LOCAL_HOST_ID
-        ? (() => {
-            let removeWarned = false;
-            let syncWarned = false;
-            return {
-              remove: async () => {
-                try {
-                  const result = await resolveBackend(app, project.hostId).removeWorktree(
-                    effectiveCwd,
-                    previewParentCwd,
-                  );
-                  removeWarned = false;
-                  return result;
-                } catch (err) {
-                  const wasAlreadyWarned = removeWarned;
-                  removeWarned = true;
-                  return logPreviewWorktreeHostError(
-                    app,
-                    "remove",
-                    project.hostId,
-                    effectiveCwd,
-                    err,
-                    wasAlreadyWarned,
-                  );
-                }
-              },
-              sync: async () => {
-                try {
-                  const result = await resolveBackend(app, project.hostId).syncWorktree(
-                    effectiveCwd,
-                    previewBranch,
-                  );
-                  syncWarned = false;
-                  return result;
-                } catch (err) {
-                  const wasAlreadyWarned = syncWarned;
-                  syncWarned = true;
-                  return logPreviewWorktreeHostError(
-                    app,
-                    "sync",
-                    project.hostId,
-                    effectiveCwd,
-                    err,
-                    wasAlreadyWarned,
-                  );
-                }
-              },
-            };
-          })()
-        : {}),
-    });
-  }
-
-  return {
-    ok: true,
-    row: created,
-    project,
-    initialPromptApplied: spawnResult.initialPromptApplied,
-  };
+  if (!(worktree?.branch && isDockPreviewWorktree(effectiveCwd))) return;
+  const previewBranch = worktree.branch;
+  const previewParentCwd = params.cwd ?? project.cwd;
+  trackPreviewWorktree(sessionId, {
+    worktreePath: effectiveCwd,
+    branch: previewBranch,
+    worktreeRefresh: worktreeRefresh ?? false,
+    parentCwd: previewParentCwd,
+    projectId,
+    hostId: project.hostId,
+    // Issue #345 — host-routed closures, attached only for a remote host
+    // (undefined for local, which keeps git-worktree.ts's own local fallback
+    // and every existing local-path test unmodified). Never reject —
+    // logPreviewWorktreeHostError always resolves `false`, so an
+    // unreachable/erroring remote agent reads as `false` (queues
+    // cleanupPreviewWorktree's pendingRemoval retry, or skips one sync tick),
+    // not as a thrown error escaping into killSession/the reconciler/the
+    // sync tick's own catch.
+    //
+    // A real try/catch inside each async arrow, NOT `.catch()` chained off
+    // the bare call (independent review): RemoteBackend.removeWorktree/
+    // syncWorktree aren't `async`, and their `client` getter can throw
+    // SYNCHRONOUSLY before ever returning a promise for `.catch()` to attach
+    // to — marking these `async` makes every throw reach the same catch.
+    // removeWarned/syncWarned (Hermes review) — per-closure state tracking
+    // whether the LAST attempt already logged a failure, so a host that stays
+    // down warns once per outage rather than once per 5s tick forever.
+    ...(project.hostId !== LOCAL_HOST_ID
+      ? (() => {
+          let removeWarned = false;
+          let syncWarned = false;
+          return {
+            remove: async () => {
+              try {
+                const result = await resolveBackend(app, project.hostId).removeWorktree(
+                  effectiveCwd,
+                  previewParentCwd,
+                );
+                removeWarned = false;
+                return result;
+              } catch (err) {
+                const wasAlreadyWarned = removeWarned;
+                removeWarned = true;
+                return logPreviewWorktreeHostError(
+                  app,
+                  "remove",
+                  project.hostId,
+                  effectiveCwd,
+                  err,
+                  wasAlreadyWarned,
+                );
+              }
+            },
+            sync: async () => {
+              try {
+                const result = await resolveBackend(app, project.hostId).syncWorktree(
+                  effectiveCwd,
+                  previewBranch,
+                );
+                syncWarned = false;
+                return result;
+              } catch (err) {
+                const wasAlreadyWarned = syncWarned;
+                syncWarned = true;
+                return logPreviewWorktreeHostError(
+                  app,
+                  "sync",
+                  project.hostId,
+                  effectiveCwd,
+                  err,
+                  wasAlreadyWarned,
+                );
+              }
+            },
+          };
+        })()
+      : {}),
+  });
 }
 
 // Shared by DELETE /api/sessions/:id and POST /api/sessions/:id/promote (the
@@ -1486,8 +1447,22 @@ export async function killSession(
       .from(sessions)
       .where(and(eq(sessions.parentSessionId, sessionId), eq(sessions.status, "active")))
       .all();
-    for (const child of liveChildren) {
-      await killSession(app, child.id, "detach");
+    // Issue #1525 — listed once above, then stopped concurrently: each
+    // child's terminate is an independent host round trip, so awaiting them
+    // one by one made a cascade cost N sequential round trips.
+    // allSettled, not all: one child's failure must never stop the parent's
+    // own status flip below (the old sequential loop had no such short-circuit
+    // either, since it logged-and-continued inside killSession itself).
+    const results = await Promise.allSettled(
+      liveChildren.map((child) => killSession(app, child.id, "detach")),
+    );
+    for (const [i, r] of results.entries()) {
+      if (r.status === "rejected") {
+        app.log.warn(
+          { sessionId, childId: liveChildren[i].id, err: r.reason },
+          "cascade kill: child kill failed, continuing",
+        );
+      }
     }
   } else {
     // Only LIVE children — an already-`exited`/`killed` child's
@@ -1521,12 +1496,18 @@ export async function killSession(
   // (see the catch's own comment), so flipping it earlier changes nothing
   // about what happens on failure — it only narrows when a concurrent
   // attach can still succeed.
+  //
+  // Issue #1521 — guarded on `status = 'active'`: a session the reconciler
+  // already flipped to "exited" (or one already "killed") must not be
+  // rewritten, or the "it ended on its own" distinction is lost. When no row
+  // changed there is nothing live to terminate, so the row is returned as-is.
   const [updated] = app.db
     .update(sessions)
     .set({ status: "killed" })
-    .where(eq(sessions.id, sessionId))
+    .where(and(eq(sessions.id, sessionId), eq(sessions.status, "active")))
     .returning()
     .all();
+  if (!updated) return row;
 
   try {
     await resolveBackend(app, hostId).terminate(String(sessionId));
