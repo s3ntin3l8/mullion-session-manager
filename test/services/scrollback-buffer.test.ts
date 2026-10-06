@@ -152,3 +152,96 @@ describe("ScrollbackBuffer.tail", () => {
     expect(cut.toString("utf8")).toBe("�");
   });
 });
+
+// Issue #1523 — the ring now coalesces small chunks into slabs; the replayed
+// byte stream must be indistinguishable from the one-entry-per-chunk ring.
+function mulberry32(seed: number): () => number {
+  let a = seed;
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function splitRandomly(data: Buffer, rand: () => number, maxPiece: number): Buffer[] {
+  const pieces: Buffer[] = [];
+  let off = 0;
+  while (off < data.length) {
+    const n = 1 + Math.floor(rand() * maxPiece);
+    pieces.push(data.subarray(off, off + n));
+    off += n;
+  }
+  return pieces;
+}
+
+describe("ScrollbackBuffer slab coalescing equivalence (issue #1523)", () => {
+  it("random chunk splits of the same stream replay byte-identically (no eviction)", () => {
+    const rand = mulberry32(1523);
+    for (let round = 0; round < 25; round++) {
+      const stream = Buffer.alloc(Math.floor(rand() * 400_000));
+      for (let i = 0; i < stream.length; i++) stream[i] = Math.floor(rand() * 256);
+      const whole = new ScrollbackBuffer();
+      whole.push(stream);
+      const maxPiece = [3, 50, 1000, 20_000, 70_000][round % 5];
+      const split = new ScrollbackBuffer();
+      for (const piece of splitRandomly(stream, rand, maxPiece)) split.push(Buffer.from(piece));
+      const pre = Buffer.from("pre");
+      expect(split.toBuffer(pre).equals(whole.toBuffer(pre))).toBe(true);
+      expect(split.totalBufferedBytes()).toBe(stream.length);
+      expect(split.totalBytesEverPushed()).toBe(stream.length);
+      const n = Math.floor(rand() * (stream.length + 10));
+      expect(split.tail(n).equals(whole.tail(n))).toBe(true);
+      expect(split.tail(n).equals(stream.subarray(Math.max(0, stream.length - n)))).toBe(true);
+    }
+  });
+
+  it("with eviction: replay is always a suffix of the stream, within the cap, accounting exact", () => {
+    const rand = mulberry32(42);
+    const stream = Buffer.alloc(3 * SCROLLBACK_MAX_BYTES + 12_345);
+    for (let i = 0; i < stream.length; i++) stream[i] = Math.floor(rand() * 256);
+    for (const maxPiece of [7, 300, 5_000, 40_000, 200_000]) {
+      const buf = new ScrollbackBuffer();
+      let pushed = 0;
+      let pieceNo = 0;
+      for (const piece of splitRandomly(stream, rand, maxPiece)) {
+        buf.push(Buffer.from(piece));
+        pushed += piece.length;
+        // Invariants hold after every push, not only at the end.
+        if (++pieceNo % 97 === 0 || pushed === stream.length) {
+          const replay = buf.toBuffer(Buffer.alloc(0));
+          expect(replay.length).toBe(buf.totalBufferedBytes());
+          expect(replay.equals(stream.subarray(pushed - replay.length, pushed))).toBe(true);
+          expect(buf.totalBytesEverPushed()).toBe(pushed);
+        }
+      }
+      const replay = buf.toBuffer(Buffer.alloc(0));
+      // Within the cap (every piece here is < the cap, so the "sole oversized
+      // survivor" exemption can't apply), and not over-evicted by more than
+      // one slab + one chunk.
+      expect(replay.length).toBeLessThanOrEqual(SCROLLBACK_MAX_BYTES);
+      expect(replay.length).toBeGreaterThan(SCROLLBACK_MAX_BYTES - 64 * 1024 - 200_000);
+    }
+  });
+
+  it("many tiny chunks never leave the buffer empty and keep the newest bytes (compaction path)", () => {
+    const buf = new ScrollbackBuffer();
+    // ~20 MiB of 20 KiB-and-up chunks forces thousands of slab evictions and
+    // several head compactions.
+    for (let i = 0; i < 1000; i++) buf.push(Buffer.alloc(20 * 1024, i % 251));
+    const replay = buf.toBuffer(Buffer.alloc(0));
+    expect(replay.length).toBeGreaterThan(0);
+    expect(replay[replay.length - 1]).toBe(999 % 251);
+    expect(buf.totalBufferedBytes()).toBeLessThanOrEqual(SCROLLBACK_MAX_BYTES);
+  });
+
+  it("ignores empty chunks without disturbing accounting", () => {
+    const buf = new ScrollbackBuffer();
+    buf.push(Buffer.alloc(0));
+    buf.push(Buffer.from("a"));
+    buf.push(Buffer.alloc(0));
+    expect(buf.toBuffer(Buffer.alloc(0)).toString()).toBe("a");
+    expect(buf.totalBytesEverPushed()).toBe(1);
+  });
+});
