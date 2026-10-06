@@ -37,6 +37,9 @@ interface ToolbarProps {
   mobileSessionSlot?: ReactNode;
   // Phone tier: the bell renders its feed as a bottom sheet.
   phone?: boolean;
+  // Render the notifications feed as a bottom sheet without the full phone
+  // toolbar layout — set for touch tablets. (`phone` implies it.)
+  notificationSheet?: boolean;
 }
 
 const THEME_LABELS: Record<AppSettings["theme"], string> = {
@@ -71,6 +74,7 @@ export function Toolbar({
   currentVersion,
   mobileSessionSlot,
   phone,
+  notificationSheet = false,
 }: ToolbarProps) {
   // P1 perf fix — the plan's own audit didn't cite this file by line, but
   // it's the identical whole-store-subscription defect (`useDashboardStore()`
@@ -100,7 +104,8 @@ export function Toolbar({
       onOpenSession={onOpenSession}
       onOpenTimeline={onOpenTimeline}
       onOpenBrowser={onOpenBrowser}
-      phone={phone}
+      sheet={phone || notificationSheet}
+      sheetClassName={!phone && notificationSheet ? "mobile-notif-sheet--tablet" : undefined}
     />
   );
 

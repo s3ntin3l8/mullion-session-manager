@@ -31,8 +31,8 @@ vi.mock("./store/index.js", () => {
 });
 
 vi.mock("./NotificationBell.js", () => ({
-  NotificationBell: ({ phone }: { phone?: boolean }) => (
-    <span data-testid="bell" data-phone={String(!!phone)} />
+  NotificationBell: ({ sheet, sheetClassName }: { sheet?: boolean; sheetClassName?: string }) => (
+    <span data-testid="bell" data-sheet={String(!!sheet)} data-sheet-class={sheetClassName ?? ""} />
   ),
 }));
 
@@ -172,15 +172,28 @@ describe("Toolbar — phone tier", () => {
     const bell = screen.getByTestId("bell");
     expect(bell.closest(".toolbar-actions")).not.toBeNull();
     expect(container.querySelector(".toolbar-lead")?.contains(bell)).toBe(false);
-    expect(bell).toHaveAttribute("data-phone", "true");
+    expect(bell).toHaveAttribute("data-sheet", "true");
     expect(container.querySelector(".toolbar-app-menu")).toBeNull();
+  });
+
+  it("on a touch tablet keeps the lead bell but renders it as a width-capped sheet", () => {
+    const { container } = render(<Toolbar {...NOOP_PROPS} notificationSheet />);
+    const bell = screen.getByTestId("bell");
+    expect(container.querySelector(".toolbar-lead")?.contains(bell)).toBe(true);
+    expect(bell).toHaveAttribute("data-sheet", "true");
+    expect(bell).toHaveAttribute("data-sheet-class", "mobile-notif-sheet--tablet");
+  });
+
+  it("on phone the sheet takes no tablet width-cap class", () => {
+    render(<Toolbar {...NOOP_PROPS} phone notificationSheet />);
+    expect(screen.getByTestId("bell")).toHaveAttribute("data-sheet-class", "");
   });
 
   it("keeps the bell in the lead and the ⋯ menu when not phone", () => {
     const { container } = render(<Toolbar {...NOOP_PROPS} />);
     const bell = screen.getByTestId("bell");
     expect(container.querySelector(".toolbar-lead")?.contains(bell)).toBe(true);
-    expect(bell).toHaveAttribute("data-phone", "false");
+    expect(bell).toHaveAttribute("data-sheet", "false");
     expect(container.querySelector(".toolbar-app-menu")).not.toBeNull();
   });
 });

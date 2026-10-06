@@ -2158,6 +2158,11 @@
   height: min(88dvh, 760px);
   max-height: none;
 }
+/* Tablet (touch): the sheet shouldn't stretch the full ~880px unfolded width. */
+.mobile-notif-sheet.mobile-notif-sheet--tablet {
+  width: min(560px, 100%);
+  align-self: center;
+}
 .mobile-notif-readall {
   display: flex;
   align-items: center;
