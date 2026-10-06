@@ -97,7 +97,10 @@ export type { NotificationEvent };
 // -n` — see Session.spawn() for why conflating master and attach-client was
 // Milestone 1's first real finding.
 
-export type { CreateSessionOptions, SubagentInfo, SessionInfo } from "./session-types.js";
+// `export *` (not `export type {...}`) so the module is loaded at runtime and
+// the type-only file gets a (statement-free) coverage entry — the patch-
+// coverage script otherwise counts every interface member line as uncovered.
+export * from "./session-types.js";
 import type { CreateSessionOptions, SubagentInfo, SessionInfo } from "./session-types.js";
 
 type DataListener = (chunk: Buffer) => void;
