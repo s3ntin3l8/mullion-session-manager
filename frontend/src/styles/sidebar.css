@@ -2151,7 +2151,7 @@
   background: color-mix(in srgb, var(--b) 14%, transparent);
 }
 
-/* Phone notifications sheet (NotificationBell.tsx's `phone` branch) — reuses
+/* Notifications bottom sheet (NotificationBell.tsx's `sheet` branch) — reuses
    the session sheet's backdrop/sheet shell; everything below is scoped to
    `.mobile-notif-sheet` so the desktop popover's rows are untouched. */
 .mobile-notif-sheet {

@@ -401,7 +401,7 @@ export function NotificationBell({
   const mutedSessionIds = useDashboardStore((s) => s.mutedSessionIds);
 
   const [open, setOpen] = useState(false);
-  // Phone sheet only: which sessions' groups the feed shows.
+  // Sheet only: which sessions' groups the feed shows.
   const [filter, setFilter] = useState<"needs" | "all">("all");
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
@@ -424,7 +424,7 @@ export function NotificationBell({
         : EMPTY_FEED_ITEMS,
     [open, sessions, projects, events, lastSeenSeq, dismissedEventKeys],
   );
-  // Only computed while the phone sheet is open (the scan looks at every
+  // Only computed while the sheet is open (the scan looks at every
   // event, unlike countUnread's unread-only one — see the P3 perf comment on
   // countUnread); openFilter below calls the same collector once at open time
   // to pick the default filter.
@@ -524,7 +524,7 @@ export function NotificationBell({
   // no focus-in on open, no Tab trap, no focus-restore on close. Same shared
   // hook as Settings/CommandPalette/PaneTab's menu. No `aria-modal` — same
   // "no backdrop, background stays interactive" rule as PaneTab's menu and
-  // UnifiedBoard.tsx's drawer. Desktop only (`!phone`) — the phone sheet
+  // UnifiedBoard.tsx's drawer. Popover only (`!sheet`) — the bottom sheet
   // below is a ui/BottomSheet.tsx, which runs its own instance of this same
   // hook against the very same `panelRef`; without this gate both instances
   // would fight over focus-in/restore-on-close on the one DOM node.
@@ -616,6 +616,8 @@ export function NotificationBell({
           closeLabel="Close notifications"
           title="Notifications"
           sheetClassName={`mobile-notif-sheet${sheetClassName ? ` ${sheetClassName}` : ""}`}
+          // Android / browser back closes the sheet on any tier that renders it
+          // (phone and touch tablet), via usePhoneBackStack's compact contract.
           backStack
           sheetRef={panelRef}
           suppressRestoreRef={phoneSuppressRestoreRef}
