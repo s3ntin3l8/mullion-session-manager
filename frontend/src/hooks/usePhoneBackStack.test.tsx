@@ -99,6 +99,21 @@ describe("usePhoneBackStack", () => {
     expect(back).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps the guard when a phone<->tablet change leaves active true (fold/unfold)", () => {
+    // compact stays true across the 700px boundary, so `active` doesn't flip:
+    // no history.back() / pushState churn mid-transition, and back still closes.
+    const close = vi.fn();
+    const { rerender } = renderHook(({ cb }) => usePhoneBackStack(true, cb), {
+      initialProps: { cb: vi.fn() },
+    });
+    rerender({ cb: close });
+    flushTimers();
+    expect(pushState).toHaveBeenCalledTimes(1);
+    expect(back).not.toHaveBeenCalled();
+    pop();
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
   it("calls the latest onClose, not the one from when it opened", () => {
     const first = vi.fn();
     const second = vi.fn();
