@@ -261,6 +261,47 @@ describe("terminal route (/ws/terminal)", () => {
     await app.close();
   });
 
+  it("attaches (without env) instead of throwing when sessions.env is corrupt JSON (issue #1521)", async () => {
+    const { app, port } = await buildAndListen();
+    const { sessionId } = await createProjectAndSession(app);
+    app.db.update(sessions).set({ env: "{not json" }).where(eq(sessions.id, sessionId)).run();
+
+    const ws = new WebSocket(
+      `ws://127.0.0.1:${port}/ws/terminal?sessionId=${sessionId}&cols=80&rows=24`,
+    );
+    ws.binaryType = "arraybuffer";
+    const messages = collectMessages(ws);
+    await waitForOpenOrClose(ws);
+    await waitUntil(() => messages.length > 1);
+    expect(JSON.parse(messages[1].toString("utf8")).type).toBe("geometry");
+
+    // The DB is shared across this file's tests; leave no corrupt row behind
+    // for later /api/sessions listings.
+    app.db.update(sessions).set({ env: null }).where(eq(sessions.id, sessionId)).run();
+    ws.close();
+    await app.close();
+  });
+
+  it("reassembles a multi-byte UTF-8 char split across two binary input frames (issue #1521)", async () => {
+    const { app, port } = await buildAndListen();
+    const { sessionId, pty } = await createProjectAndSession(app);
+
+    const ws = new WebSocket(
+      `ws://127.0.0.1:${port}/ws/terminal?sessionId=${sessionId}&cols=80&rows=24`,
+    );
+    ws.binaryType = "arraybuffer";
+    await waitForOpenOrClose(ws);
+
+    const bytes = new TextEncoder().encode("€"); // 3 bytes
+    ws.send(bytes.slice(0, 1));
+    ws.send(bytes.slice(1));
+    await waitUntil(() => pty.writeSpy.mock.calls.length > 0);
+    expect(pty.writeSpy.mock.calls.map((c) => c[0]).join("")).toBe("€");
+
+    ws.close();
+    await app.close();
+  });
+
   it("streams pty output to the client and client input to the pty", async () => {
     const { app, port } = await buildAndListen();
     const { sessionId, pty } = await createProjectAndSession(app);
