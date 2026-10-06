@@ -46,7 +46,7 @@ export function warnHostError(
   err: unknown,
   rejectedMsg: string,
   unreachableMsg: string,
-): boolean {
+): err is HostRequestError {
   const rejected = err instanceof HostRequestError;
   log.warn({ ...bindings, err }, rejected ? rejectedMsg : unreachableMsg);
   return rejected;

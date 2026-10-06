@@ -29,7 +29,6 @@ import { getStoredSettings } from "./settings.js";
 import { resolveBackend, warnHostError, type SpawnOpts } from "./session-backend.js";
 import { listWorktrees } from "./git-refs.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
-import { HostRequestError } from "./remote-host-client.js";
 import { viaRemote } from "./host-git.js";
 import { closeSessionBrowserBindings } from "./session-browsers.js";
 import { resolveProjectHostId } from "./session-live-info.js";
@@ -221,14 +220,15 @@ export async function resolveWorktreeCwd(
     // rejection as "host-unreachable" in the 502 body the user sees (the
     // #484 postmortem's "HostRequestError covers any 4xx, not just 404" is
     // exactly this mistake).
-    warnHostError(
-      app.log,
-      { hostId },
-      err,
-      "resolveWorktreeCwd: host rejected the request",
-      "resolveWorktreeCwd: host unreachable",
-    );
-    if (err instanceof HostRequestError) {
+    if (
+      warnHostError(
+        app.log,
+        { hostId },
+        err,
+        "resolveWorktreeCwd: host rejected the request",
+        "resolveWorktreeCwd: host unreachable",
+      )
+    ) {
       return { created: false, reason: "host-rejected", detail: err.message };
     }
     return {
@@ -1450,7 +1450,20 @@ export async function killSession(
     // Issue #1525 — listed once above, then stopped concurrently: each
     // child's terminate is an independent host round trip, so awaiting them
     // one by one made a cascade cost N sequential round trips.
-    await Promise.all(liveChildren.map((child) => killSession(app, child.id, "detach")));
+    // allSettled, not all: one child's failure must never stop the parent's
+    // own status flip below (the old sequential loop had no such short-circuit
+    // either, since it logged-and-continued inside killSession itself).
+    const results = await Promise.allSettled(
+      liveChildren.map((child) => killSession(app, child.id, "detach")),
+    );
+    for (const [i, r] of results.entries()) {
+      if (r.status === "rejected") {
+        app.log.warn(
+          { sessionId, childId: liveChildren[i].id, err: r.reason },
+          "cascade kill: child kill failed, continuing",
+        );
+      }
+    }
   } else {
     // Only LIVE children — an already-`exited`/`killed` child's
     // `parentSessionId` is deliberately left pointing at this now-killed

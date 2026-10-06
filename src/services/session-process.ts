@@ -370,6 +370,11 @@ export interface ScopeOwnershipListing {
 // bypasses sharing for its own ownership resolution (a destructive action
 // must read fresh) and invalidates after the stop, so nobody can join a
 // listing that began before the mutation.
+// Module-level on purpose (scope names are Unix-user-global, not per-app), and
+// self-cleaning: every entry deletes itself when its spawn settles, so nothing
+// outlives the call that created it. A listing that began BEFORE a stop may
+// still resolve with the pre-stop state for the callers already awaiting it —
+// invalidateScopeListings() only guarantees no LATER caller can join it.
 const inflightListings = new Map<string, Promise<ScopeOwnershipListing>>();
 
 function invalidateScopeListings(): void {

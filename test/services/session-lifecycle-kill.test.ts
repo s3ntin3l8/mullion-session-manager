@@ -122,6 +122,28 @@ describe("session-lifecycle (kill + create)", () => {
     await app.close();
   });
 
+  it("one child's failed kill does not stop the parent from being marked killed", async () => {
+    const { app, projectId, backend } = await setup();
+    const parent = app.db.insert(sessions).values({ projectId, command: "bash" }).returning().get();
+    app.db
+      .insert(sessions)
+      .values({ projectId, command: "bash", parentSessionId: parent.id })
+      .run();
+    app.db
+      .insert(sessions)
+      .values({ projectId, command: "bash", parentSessionId: parent.id })
+      .run();
+    backend.terminate.mockRejectedValueOnce(new Error("x"));
+    // A rejection that escapes the child's own catch: closing browser bindings fails.
+    const browsers = await import("../../src/services/session-browsers.js");
+    vi.spyOn(browsers, "closeSessionBrowserBindings").mockImplementationOnce(() => {
+      throw new Error("child boom");
+    });
+    await killSession(app, parent.id, "kill");
+    expect(statusOf(app, parent.id)).toBe("killed");
+    await app.close();
+  });
+
   const scannedSkillsDir = () =>
     vi
       .mocked(fsMock.readdirSync)
