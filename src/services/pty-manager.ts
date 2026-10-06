@@ -1036,6 +1036,15 @@ type StoredStateFields = Pick<
 // benefit. Never throws: any read/write failure falls back to today's
 // in-memory-only token, the same fail-safe posture as the rest of the
 // hook path.
+const SESSION_ID_RE = /^\d+$/;
+
+/** Session ids are DB-issued digit strings; reject anything else before it is used to build a path. */
+function assertValidSessionId(id: string): void {
+  if (typeof id !== "string" || !SESSION_ID_RE.test(id)) {
+    throw new Error(`Session id must be numeric, got: ${JSON.stringify(id)}`);
+  }
+}
+
 function loadOrCreateHookToken(sessionsDir: string, id: string): string {
   const tokenPath = hookTokenPath(sessionsDir, id);
   let fileExists = true;
@@ -1649,6 +1658,11 @@ export class Session {
     smallModel?: string;
     taskId?: number;
   }) {
+    // Issue #1521 — validate BEFORE anything below builds a path from the id
+    // (hook token file, state file, ...): a non-digit id must never reach the
+    // filesystem. Stricter than the old Number.isNaN guard ("1e3", " 5", "")
+    // all passed Number() but are not DB-issued ids.
+    assertValidSessionId(opts.id);
     this.id = opts.id;
     this.cwd = opts.cwd;
     this.command = opts.command;
@@ -1705,16 +1719,9 @@ export class Session {
     // this is read-or-minted against a per-session file rather than always
     // freshly generated.
     this.hookToken = loadOrCreateHookToken(this.sessionsDir, this.id);
-    // Computed once here (rather than re-parsed on every emitEvent() call)
-    // and guarded: session ids are DB-issued numeric strings by domain
-    // contract, but NotificationEvent.sessionId is typed as `number`, so an
-    // unexpected non-numeric id must not silently become NaN deep inside
-    // the event stream — fail loudly at construction instead, where it's
-    // immediately traceable to the caller that passed a bad id.
+    // Computed once here (rather than re-parsed on every emitEvent() call);
+    // the id was already validated at the top of the constructor.
     const numericId = Number(this.id);
-    if (Number.isNaN(numericId)) {
-      throw new Error(`Session id must be numeric, got: ${JSON.stringify(this.id)}`);
-    }
     this.numericId = numericId;
 
     this.stateFile = new SessionStateFile<StoredStateFields>(
@@ -2671,7 +2678,13 @@ export class Session {
       }
     });
 
+    // Issue #1529 — emit/clean up at most once per pty instance. After the
+    // first exit `this.ptyProcess` is null, which the identity check below
+    // lets through, so a duplicate exit callback would otherwise re-emit.
+    let exitHandled = false;
     ptyProcess.onExit(() => {
+      if (exitHandled) return;
+      exitHandled = true;
       // M2 — this handler captures `this`, not the pty instance. If a later
       // respawn has already installed a NEWER attach-client, this is the old
       // one's late exit: nulling ptyProcess / cancelling the nudge / emitting
@@ -4479,6 +4492,8 @@ export class PtyManager {
    * this is the fresh-dtach-reattach path.
    */
   getOrCreate(opts: CreateSessionOptions): Session {
+    // Issue #1521 — before socketPathFor()/terminating lookups touch the id.
+    assertValidSessionId(opts.id);
     // H5 — a terminate() is mid-flight for this id (draining an in-flight
     // spawn, then stopping the scope): creating a Session now would race
     // that teardown and resurrect the very session being deleted.
