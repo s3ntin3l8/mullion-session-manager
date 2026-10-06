@@ -711,6 +711,9 @@ export function UnifiedBoard({
                   key={column.id}
                   type="button"
                   className="tasks-phone-strip-chip"
+                  // "On screen", not "the one selected": `phone` here is the compact
+                  // board layout, so on tablet this strip shows and both columns
+                  // of the visible pair read as pressed.
                   aria-pressed={visibleColumnIds.includes(column.id)}
                   onClick={() => {
                     // Picking a chip already on screen keeps the pair put.

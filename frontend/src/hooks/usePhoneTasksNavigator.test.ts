@@ -48,7 +48,7 @@ describe("usePhoneTasksNavigator", () => {
     expect(setSidebarOpen).not.toHaveBeenCalled();
   });
 
-  it("does nothing off phone", () => {
+  it("does nothing on the desktop tier", () => {
     const setSidebarOpen = vi.fn();
     renderHook(() =>
       usePhoneTasksNavigator({
