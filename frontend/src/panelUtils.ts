@@ -1093,19 +1093,24 @@ export function snapshotTiledGroupWidths(api: DockviewApi): Map<string, number> 
   return proportions;
 }
 
-export function restoreTiledGroupWidths(api: DockviewApi, proportions: Map<string, number>): void {
-  if (proportions.size === 0) return;
+// Returns whether the proportions were actually applied (false = a no-op: nothing
+// eligible, or the snapshot no longer matches the layout).
+export function restoreTiledGroupWidths(
+  api: DockviewApi,
+  proportions: Map<string, number>,
+): boolean {
+  if (proportions.size === 0) return false;
   const groups = eligibleTiledRowGroups(api);
-  if (!groups) return;
+  if (!groups) return false;
   // A changed group count (a pane closed/opened during the phone excursion)
   // means the snapshot no longer describes the current layout — checked
   // against every CURRENT tiled group, not just the ones the snapshot
   // happens to recognize, so a newly-added group doesn't just get silently
   // excluded from an otherwise-applied redistribution.
-  if (groups.length !== proportions.size) return;
-  if (!groups.every((group) => proportions.has(group.id))) return;
+  if (groups.length !== proportions.size) return false;
+  if (!groups.every((group) => proportions.has(group.id))) return false;
   const total = groups.reduce((sum, group) => sum + group.api.width, 0);
-  if (total <= 0) return;
+  if (total <= 0) return false;
   // Skip the last group — dockview's own relayout gives it whatever's left
   // over, so rounding from the explicit `setSize` calls below lands in one
   // place instead of compounding into a visible gap or overlap. Known gap
@@ -1118,6 +1123,7 @@ export function restoreTiledGroupWidths(api: DockviewApi, proportions: Map<strin
     if (proportion === undefined) continue;
     group.api.setSize({ width: Math.round(proportion * total) });
   }
+  return true;
 }
 
 // The "Reset pane sizes" action (PaneActionsMenu.tsx) — distributes every
@@ -1142,4 +1148,18 @@ export function resetTiledGroupWidths(api: DockviewApi): void {
 // silently do nothing, with no way for the user to tell whether it worked.
 export function canResetTiledGroupWidths(api: DockviewApi): boolean {
   return eligibleTiledRowGroups(api) !== null;
+}
+
+// The other tiled (grid) groups a panel could be moved into, numbered by their
+// position among ALL tiled groups (1-based) so a menu can label them
+// "Pane 1", "Pane 2". Floating/popout groups are never move targets, and the
+// panel's own group is excluded.
+export function otherTiledGroups(
+  api: DockviewApi,
+  ownGroup: DockviewGroupPanel,
+): Array<{ group: DockviewGroupPanel; number: number }> {
+  const tiled = api.groups.filter((g) => g.api.location.type === "grid");
+  return tiled
+    .map((group, i) => ({ group, number: i + 1 }))
+    .filter((entry) => entry.group !== ownGroup);
 }

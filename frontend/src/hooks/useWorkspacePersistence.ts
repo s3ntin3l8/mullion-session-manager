@@ -78,6 +78,12 @@ export interface UseWorkspacePersistenceResult {
   // of consumers listed above, to gate on "the CURRENT workspace's saved
   // layout has actually been applied" before acting.
   restoredWorkspaceIdRef: MutableRefObject<number | null>;
+  // Lifts the issue #1426 phone taint from the ACTIVE workspace, so saving
+  // resumes. Called by useLayoutPresentation once a live phone -> non-phone
+  // crossing (unfolding) has settled: that flip doesn't re-run the restore
+  // effect, so nothing else would clear the mark and every pane change made
+  // after unfolding would be dropped until a reload or workspace switch.
+  liftPhoneTaint: () => void;
 }
 
 // Extracted from App.tsx (PR 34a of the hook-extraction series) — restores
@@ -414,5 +420,9 @@ export function useWorkspacePersistence({
     return () => disposable.dispose();
   }, [dockviewApi, activeWorkspaceId, scheduleSave, setPanelsVersion]);
 
-  return { restoringRef, restoredWorkspaceIdRef };
+  const liftPhoneTaint = useCallback(() => {
+    if (activeWorkspaceId !== null) phoneTouchedRef.current.delete(activeWorkspaceId);
+  }, [activeWorkspaceId]);
+
+  return { restoringRef, restoredWorkspaceIdRef, liftPhoneTaint };
 }
