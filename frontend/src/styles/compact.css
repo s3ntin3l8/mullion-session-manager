@@ -1,0 +1,58 @@
+/* Phone/tablet shared chrome that is NOT width-scoped: it keys off the
+   toolbar's own `toolbar--compact-picker` marker (the session picker took the
+   centre, which only happens off phone), so it follows the layoutMode override.
+   Imported after mobile.css so it can rely on (and, where needed, undo) the
+   phone block's rules. */
+
+/* Tablet toolbar: [☰][🔔][+] [workspace · session picker] [🔍][⋯]
+   Keyed on the `toolbar--compact-picker` marker rather than `[data-tier]` on
+   purpose: the marker only exists when the picker actually replaced the
+   centre (off phone, outside Tasks view), so these rules can't strand the
+   Back button or Settings, and they follow the layoutMode override. */
+.toolbar--compact-picker .toolbar-center {
+  display: none;
+}
+.toolbar--compact-picker .toolbar-mobile-session {
+  display: flex;
+}
+.toolbar--compact-picker .toolbar-app-menu {
+  display: flex;
+}
+/* Scoped to the compact-picker marker, NOT just the tier: in Tasks view the
+   picker isn't rendered, so the ⋯ menu that replaces these stays hidden —
+   hiding them there would leave Settings and the theme control unreachable. */
+.toolbar--compact-picker .toolbar-version-label,
+.toolbar--compact-picker .toolbar-theme-btn,
+.toolbar--compact-picker .toolbar-settings-btn,
+.toolbar--compact-picker .run-cmd-btn .kbd,
+.toolbar--compact-picker .run-cmd-btn .run-cmd-label {
+  display: none;
+}
+/* The search icon alone stays, as a square 44px target. */
+.toolbar--compact-picker .run-cmd-btn {
+  min-width: 44px;
+  min-height: 44px;
+  justify-content: center;
+  padding: 0;
+}
+
+/* Workspace name ahead of the session in the picker trigger. */
+.mobile-session-context {
+  flex: 0 1 auto;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dim);
+  font-size: 12px;
+}
+.mobile-session-context::after {
+  content: "\00b7";
+  margin-left: 6px;
+}
+
+/* Tablet: the session sheet shouldn't span the whole ~880px unfolded width. */
+.mobile-session-sheet.mobile-session-sheet--tablet {
+  width: min(560px, 100%);
+  align-self: center;
+}

@@ -22,19 +22,28 @@ vi.mock("./Toolbar.js", () => ({
   Toolbar: ({
     onToggleSidebar,
     notificationSheet,
+    mobileSessionSlot,
   }: {
     onToggleSidebar: () => void;
     notificationSheet?: boolean;
+    mobileSessionSlot?: React.ReactNode;
   }) => (
-    <button
-      data-testid="toggle-sidebar"
-      data-notif-sheet={String(!!notificationSheet)}
-      onClick={onToggleSidebar}
-    />
+    <div>
+      <button
+        data-testid="toggle-sidebar"
+        data-notif-sheet={String(!!notificationSheet)}
+        onClick={onToggleSidebar}
+      />
+      {mobileSessionSlot}
+    </div>
   ),
 }));
 vi.mock("./MobileKeyBar.js", () => ({ MobileKeyBar: () => null }));
-vi.mock("./MobileSessionBar.js", () => ({ MobileSessionBar: () => null }));
+vi.mock("./MobileSessionBar.js", () => ({
+  MobileSessionBar: ({ tier, contextLabel }: { tier: string; contextLabel?: string }) => (
+    <span data-testid="session-bar" data-tier={tier} data-context={contextLabel ?? ""} />
+  ),
+}));
 vi.mock("./PaneHeaderActions.js", () => ({ PaneHeaderActions: () => null }));
 vi.mock("./CommandPalette.js", () => ({ CommandPalette: () => null }));
 vi.mock("./Dock.js", () => ({ Dock: () => null }));
@@ -175,6 +184,26 @@ describe("App tier wiring", () => {
     stubWidth(tier, coarse);
     render(<App />);
     expect(screen.getByTestId("toggle-sidebar")).toHaveAttribute("data-notif-sheet", expected);
+  });
+
+  // The session picker takes over the toolbar centre on every compact tier;
+  // only tablet (where workspaces exist) labels it with the workspace name.
+  it.each([
+    ["phone", true],
+    ["tablet", true],
+    ["desktop", false],
+  ] as const)("renders the session picker on %s: %s", (tier, expected) => {
+    stubWidth(tier);
+    render(<App />);
+    const bar = screen.queryByTestId("session-bar");
+    expect(!!bar).toBe(expected);
+    if (bar) expect(bar).toHaveAttribute("data-tier", tier);
+  });
+
+  it("gives the phone picker no workspace label (phone has no workspaces)", () => {
+    stubWidth("phone");
+    render(<App />);
+    expect(screen.getByTestId("session-bar")).toHaveAttribute("data-context", "");
   });
 
   it("collapses (rather than opens) the docked sidebar on desktop", () => {

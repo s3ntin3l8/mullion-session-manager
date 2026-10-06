@@ -27,7 +27,9 @@ function fakePanel(id: string, title: string, sessionId?: number) {
     id,
     title,
     params: sessionId === undefined ? {} : { sessionId },
-    api: { setActive: vi.fn(), close: vi.fn(), setTitle: vi.fn() },
+    // `location.type` is what panelUtils' isTiledPanel reads (App only ever
+    // hands this bar tiled panels).
+    api: { setActive: vi.fn(), close: vi.fn(), setTitle: vi.fn(), location: { type: "grid" } },
   } as unknown as IDockviewPanel;
 }
 
@@ -93,9 +95,13 @@ beforeEach(() => {
   dockviewApi = { maximizeGroup: vi.fn() } as unknown as DockviewApi;
 });
 
-function renderBar(activePanelId: string | null = "session-1") {
+function renderBar(
+  activePanelId: string | null = "session-1",
+  extra: Partial<Parameters<typeof MobileSessionBar>[0]> = {},
+) {
   return render(
     <MobileSessionBar
+      {...extra}
       panels={panels}
       activePanelId={activePanelId}
       dockviewApi={dockviewApi}
@@ -121,6 +127,41 @@ describe("MobileSessionBar", () => {
     await user.click(screen.getByText("claude"));
     expect(panels[1].api.setActive).toHaveBeenCalled();
     expect(dockviewApi.maximizeGroup).toHaveBeenCalledWith(panels[1]);
+  });
+
+  it("on tablet, activates the panel in its own column without maximizing", async () => {
+    renderBar("session-1", { tier: "tablet", contextLabel: "Default" });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /shell/ }));
+    await user.click(screen.getByText("claude"));
+    expect(panels[1].api.setActive).toHaveBeenCalled();
+    expect(dockviewApi.maximizeGroup).not.toHaveBeenCalled();
+  });
+
+  it("on tablet, labels the trigger with the workspace and caps the sheet width", async () => {
+    renderBar("session-1", { tier: "tablet", contextLabel: "Default" });
+    expect(document.querySelector(".mobile-session-context")).toHaveTextContent("Default");
+    await userEvent.setup().click(screen.getByRole("button", { name: /shell/ }));
+    expect(screen.getByRole("dialog", { name: "Sessions" })).toHaveClass(
+      "mobile-session-sheet--tablet",
+    );
+  });
+
+  it("on phone, shows no workspace label and no tablet width cap", async () => {
+    renderBar();
+    expect(document.querySelector(".mobile-session-context")).toBeNull();
+    await userEvent.setup().click(screen.getByRole("button", { name: /shell/ }));
+    expect(screen.getByRole("dialog", { name: "Sessions" })).not.toHaveClass(
+      "mobile-session-sheet--tablet",
+    );
+  });
+
+  it("falls back to a bare setActive when there is no dockview api", async () => {
+    renderBar("session-1", { dockviewApi: null, tier: "tablet" });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /shell/ }));
+    await user.click(screen.getByText("claude"));
+    expect(panels[1].api.setActive).toHaveBeenCalled();
   });
 
   it("closes a panel from the sheet", async () => {
