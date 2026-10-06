@@ -13,10 +13,11 @@ import { buildPickerSections } from "./lib/mobileSessionPicker.js";
 import { taskLinkedSessionIds } from "./unifiedBoard.js";
 import { sessionUnreadCount } from "./eventDescriptions.js";
 import type { TerminalPaneParams } from "./TerminalPane.js";
-import { panelSessionId } from "./panelUtils.js";
+import { focusPanelForTier, panelSessionId } from "./panelUtils.js";
+import type { LayoutTier } from "./lib/layoutTier.js";
 import { resolveAgentLogo } from "./cliLogos.js";
 
-// Phone-only glue between App's dockview panels and MobileSessionSwitcher
+// Phone/tablet glue between App's dockview panels and MobileSessionSwitcher
 // (which App renders into the toolbar in place of the old `.mobile-tabs`
 // strip). The sheet is a UNIVERSAL picker — every session the sidebar would
 // list, grouped by project (lib/mobileSessionPicker.ts), whichever workspace
@@ -33,7 +34,14 @@ export function MobileSessionBar({
   dockviewApi,
   onNewSession,
   onOpenSession,
+  tier = "phone",
+  contextLabel,
 }: {
+  // Phone maximizes the picked pane (one group at a time); tablet just brings
+  // it to the front of whichever column it's in.
+  tier?: LayoutTier;
+  // Active workspace name, shown in the trigger on tablet.
+  contextLabel?: string;
   // Tiled panels only: maximizeGroup on a floating panel throws.
   panels: IDockviewPanel[];
   activePanelId: string | null;
@@ -178,8 +186,8 @@ export function MobileSessionBar({
   const selectPanel = (id: string) => {
     const panel = findPanel(id);
     if (!panel) return;
-    panel.api.setActive();
-    dockviewApi?.maximizeGroup(panel);
+    if (dockviewApi) focusPanelForTier(dockviewApi, panel, tier);
+    else panel.api.setActive();
   };
 
   const commitRename = () => {
@@ -197,6 +205,8 @@ export function MobileSessionBar({
     <MobileSessionSwitcher
       items={items}
       sections={sections}
+      contextLabel={contextLabel}
+      sheetClassName={tier === "tablet" ? "mobile-session-sheet--tablet" : undefined}
       unreadElsewhere={unreadElsewhere}
       activeId={activePanelId}
       onSelect={selectPanel}

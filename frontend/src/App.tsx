@@ -1330,10 +1330,12 @@ export function App() {
     />
   );
 
-  // Phone session switcher — rendered into the toolbar in place of the old
+  // Phone/tablet session switcher — rendered into the toolbar in place of the old
   // `.mobile-tabs` strip. `mobilePanels` is tiled-only (see its comment).
-  const mobileSessionSwitcher = isMobile ? (
+  const mobileSessionSwitcher = compact ? (
     <MobileSessionBar
+      tier={layoutTier}
+      contextLabel={isMobile ? undefined : (activeWorkspace?.name ?? undefined)}
       panels={mobilePanels}
       activePanelId={activePanelId}
       dockviewApi={dockviewApi}
