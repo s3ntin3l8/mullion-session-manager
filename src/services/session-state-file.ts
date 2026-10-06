@@ -23,7 +23,8 @@
 // Session, mutated only from that Session's own single-threaded call
 // sites — no concurrent access to guard against.
 
-import { readFileSync, writeFileSync, renameSync } from "node:fs";
+import crypto from "node:crypto";
+import { readFileSync, writeFileSync, renameSync, rmSync } from "node:fs";
 import path from "node:path";
 
 // Issue #323: maximum-write ceiling. Named (unlike the 5s trailing debounce
@@ -144,8 +145,6 @@ export class SessionStateFile<TState> {
    * does NOT wait for either timer above. */
   flush(): void {
     if (!this.dirty) return;
-    this.dirty = false;
-    this.firstDirtyAt = null;
     if (this.timeout !== null) {
       clearTimeout(this.timeout);
       this.timeout = null;
@@ -154,11 +153,22 @@ export class SessionStateFile<TState> {
       clearTimeout(this.ceilingTimeout);
       this.ceilingTimeout = null;
     }
-    const tmpPath = this.filePath + ".tmp";
+    // Per-flush unique temp name so a partial leftover from a previous run
+    // (or crash) can never be reused or collide with this write.
+    const tmpPath = `${this.filePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
     try {
       writeFileSync(tmpPath, JSON.stringify(this.buildPayload()), { mode: 0o600 });
       renameSync(tmpPath, this.filePath);
+      // Cleared only after the rename succeeded, so a failed write stays
+      // dirty and the next schedule()/flush() retries it.
+      this.dirty = false;
+      this.firstDirtyAt = null;
     } catch (err) {
+      try {
+        rmSync(tmpPath, { force: true });
+      } catch {
+        /* best effort */
+      }
       this.onWriteError?.(err);
     }
   }
