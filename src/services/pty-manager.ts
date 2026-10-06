@@ -1,7 +1,6 @@
 import * as pty from "node-pty";
 import type { IPty } from "node-pty";
-import { mkdirSync, existsSync, statSync, unlinkSync, readFileSync, writeFileSync } from "node:fs";
-import { rm as rmAsync, unlink as unlinkAsync } from "node:fs/promises";
+import { mkdirSync, existsSync, statSync, unlinkSync, readFileSync } from "node:fs";
 import { spawn as spawnChild } from "node:child_process";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -35,7 +34,7 @@ import {
 } from "./attention-detect.js";
 import { AttentionTracker } from "./attention-tracker.js";
 import { buildSessionEnv } from "./session-env.js";
-import type { HookMessageKind, HookMessage, BackgroundTask } from "./hook-protocol.js";
+import type { HookMessageKind, HookMessage } from "./hook-protocol.js";
 import { filterOutstandingBackgroundTasks } from "./background-tasks.js";
 import { getAdapterEmits } from "./hook-adapters/index.js";
 import { detectDevServerPortForPlainSession } from "./dev-server-detect.js";
@@ -56,9 +55,10 @@ import {
   type SessionLiveness,
 } from "./session-process.js";
 import { buildLaunchPlan } from "./launch-plan.js";
-import { sessionAgentGuidePath } from "./agent-guide.js";
-import { sessionBriefingPath } from "./project-briefing.js";
-import { sessionWorkflowConventionsPath } from "./workflow-conventions.js";
+import { cleanupSessionFiles } from "./session-files-cleanup.js";
+import { TitleChangeDebouncer } from "./title-change-debouncer.js";
+import { loadOrCreateHookToken } from "./hook-token.js";
+import { isGenuineUserInput } from "./terminal-input-classify.js";
 import { HOOK_HANDLERS, type SessionHookContext } from "./hook-handlers.js";
 // Re-exported so existing importers (src/routes/agents.ts, this module's own
 // tests) keep reaching these through pty-manager.js unchanged — PR 32 moved
@@ -97,503 +97,11 @@ export type { NotificationEvent };
 // -n` — see Session.spawn() for why conflating master and attach-client was
 // Milestone 1's first real finding.
 
-export interface CreateSessionOptions {
-  id: string;
-  cwd: string;
-  /** Shell command line to run inside the session, e.g. "claude", "bash". */
-  command: string;
-  cols: number;
-  rows: number;
-  /** When true, append the agent's skip-permissions flag (e.g.
-   * `--dangerously-skip-permissions`, `--auto`) so the CLI skips every
-   * permission prompt — see getSkipPermissionFlag() for the per-agent
-   * mapping. Default false. */
-  skipPermissions?: boolean;
-  /** Task Master (task-claim.ts/task-reconciler.ts) and, as of the
-   * promote-flow first-turn fix, routes/sessions.ts's promote handler too —
-   * a prompt to start the agent's first turn with, delivered as argv via
-   * the matched hook adapter's `initialPromptArgs` (hook-adapters/index.ts's
-   * getAdapterInitialPromptArgs). A no-op for an agent with no such argv
-   * form at all (currently only `aider`/`gemini`/`pi`, none of which have
-   * an adapter — every registered adapter, including OpenCode's `--prompt`,
-   * has one now) — the session still spawns, just with no prompt submitted,
-   * same as before this option existed. See Session.spawn()'s own doc
-   * comment for why this can't be delivered via stashSeed's SessionStart
-   * `additionalContext` for an unattended worker. */
-  initialPrompt?: string;
-  /** Issue #678 — the promote flow's seed prompt (POST
-   * /api/sessions/:id/promote's `seedPrompt` body field, or the launcher's
-   * own equivalent), stashed against this session's id (see
-   * PtyManager.stashSeed) and also threaded through to
-   * HookAdapterContext.seedPrompt for an adapter with no live hook round
-   * trip to deliver it through (opencode — see that adapter's own header).
-   * Distinct from `initialPrompt` above: this never submits a turn, it only
-   * injects context, matching what a hook-based agent's SessionStart
-   * `additionalContext` already does for it. Since the promote-flow
-   * first-turn fix, the promote route only ever sets this for an adapter
-   * with no `initialPromptArgs` at all — opencode itself now prefers
-   * `initialPrompt` instead (see routes/sessions.ts's promote handler), so
-   * this field's `HookAdapterContext.seedPrompt` delivery is a fallback,
-   * not opencode's primary channel anymore. */
-  seedPrompt?: string;
-  /** Issue #271 follow-up — routes/sessions.ts's promote handler, when
-   * opencode-session-transfer.ts successfully imported the source session's
-   * full conversation history into this session's own worktree directory
-   * under a fresh id. Delivered as argv via the matched adapter's
-   * `resumeSessionArgs` (hook-adapters/index.ts's getAdapterResumeSessionArgs)
-   * — currently opencode-only. When both this and `initialPrompt` are set,
-   * the resume flag is appended first (see launch-plan.ts) so the prompt
-   * reads as "the resumed session's next turn," not a fresh one. A no-op
-   * for any agent whose adapter has no `resumeSessionArgs` — the session
-   * still spawns as an ordinary fresh one, same as if this were never set. */
-  resumeAgentSessionId?: string;
-  projectId?: number;
-  /** Issue #822 — extra env vars for this session's launch, on top of the
-   * usual scrub + Mullion injections (see launch-plan.ts's buildLaunchPlan,
-   * which applies this BEFORE every Mullion-owned write so none of those
-   * can be overridden by it). Sourced from sessions.env (schema.ts) on both
-   * the initial spawn and every later reattach (routes/terminal.ts) — see
-   * that column's own doc comment for why it's persisted rather than
-   * spawn-time-only. */
-  env?: Record<string, string>;
-  /** Issue: per-project briefing storage / #942 (pinned note) — resolved on
-   * the PRIMARY (where the DB lives) and threaded straight through to
-   * writeSessionBriefing's `note` param (project-briefing.ts), the same
-   * spawn-body channel `seedPrompt` above already uses. Exists because a
-   * multi-host **agent**-role process has no DB of its own (see
-   * src/plugins/hooks.ts's `app.db ? ... : DEFAULT_SETTINGS` comment for
-   * the same constraint on `injectAgentGuide`) — resolving a per-project
-   * note there directly would silently resolve to nothing on every remote
-   * host. The producer is session-lifecycle.ts's createSessionRecord; a
-   * caller that omits this leaves writeSessionBriefing with no note to
-   * write for this session — issue #942 redesigned this from a
-   * precedence-based override of a committed file region into a short,
-   * always-additive pinned note with no fallback of its own. */
-  briefingOverride?: string;
-  /** PR-5 — see HookAdapterContext.projectSkill's own doc comment
-   * (hook-adapters/types.ts). Same producer/multi-host reasoning as
-   * `briefingOverride` immediately above. */
-  projectSkill?: string;
-  /** PR-5 — see HookAdapterContext.projectReviewerAgent's own doc comment
-   * (hook-adapters/types.ts). Same producer/multi-host reasoning as
-   * `briefingOverride` above. */
-  projectReviewerAgent?: string;
-  /** Issue #957 — see HookAdapterContext.model's own doc comment
-   * (hook-adapters/types.ts). Same producer/multi-host reasoning as
-   * `projectReviewerAgent` above. Resolved on the primary by
-   * createSessionRecord and forwarded into `applyHookAdapters` →
-   * `HookAdapterContext.model` for the opencode adapter. */
-  model?: string;
-  /** Issue #958 — same threading posture as `model` above, for
-   * opencode's `small_model` config key. Forwarded into
-   * `HookAdapterContext.smallModel`. */
-  smallModel?: string;
-  /** Issue #884 — the per-project-resolved value of
-   * sessions.injectAgentGuide (settings.ts), already merged with this
-   * project's own nullable override column (projects.injectAgentGuide,
-   * schema.ts) by session-lifecycle.ts's createSessionRecord, on the
-   * PRIMARY, for the same multi-host reason `briefingOverride` above
-   * exists. When set, wins over the live `getInjectAgentGuide()` closure
-   * below (see getOrCreate()) — a caller that omits this (any getOrCreate()
-   * call outside session-lifecycle.ts's producer, e.g. a dock/reconciler
-   * respawn) keeps today's global-settings-only behavior exactly as
-   * before. */
-  injectAgentGuide?: boolean;
-  /** Same producer/multi-host reasoning and "wins over the live closure
-   * when set" posture as `injectAgentGuide` immediately above, for the
-   * independent sessions.injectProjectBriefing setting. */
-  injectProjectBriefing?: boolean;
-  /** Issue #1089 — same producer/multi-host reasoning as `injectAgentGuide`
-   * immediately above, for the independent sessions.injectMullionBundle
-   * setting (settings.ts). Unlike injectAgentGuide/injectProjectBriefing,
-   * there is no per-project override to merge (schema.ts's own comment on
-   * `projects.injectAgentGuide` explains why injectMullionBundle
-   * deliberately doesn't get one) — session-lifecycle.ts's
-   * createSessionRecord resolves this straight from the global setting and
-   * threads it through the spawn body exactly like briefingOverride
-   * already is. When set, wins over the live `getInjectMullionBundle()`
-   * closure below (see getOrCreate()) — a caller that omits this (any
-   * getOrCreate() call outside session-lifecycle.ts's producer, e.g. a
-   * dock/reconciler respawn) keeps today's global-settings-only behavior
-   * exactly as before. */
-  injectMullionBundle?: boolean;
-  /** Issue #937 — the install-wide workflow-conventions text, already fully
-   * resolved (gated on both the global text being non-empty AND this
-   * project's own injectWorkflowConventions column) by
-   * session-lifecycle.ts's createSessionRecord, on the PRIMARY, for the
-   * same multi-host reason `briefingOverride` above exists. Unlike
-   * injectAgentGuide/injectProjectBriefing immediately above, this is a
-   * SINGLE resolved `string | undefined`, not a separate boolean + raw
-   * text: nothing downstream needs the boolean independently of the text
-   * (the frontend's per-project toggle reads projects.injectWorkflowConventions
-   * directly, never anything echoed off a Session), so there is no live
-   * closure to fall back to and no caller-supplied override concept —
-   * every session for a project gets the same resolved value, same as
-   * injectAgentGuide/injectProjectBriefing's "no per-caller override"
-   * posture, just carrying a value instead of a boolean. `undefined` means
-   * "inject nothing" — see writeSessionWorkflowConventions's own doc
-   * comment (workflow-conventions.ts) for why that's also true of an empty
-   * string, unlike briefingOverride. */
-  workflowConventionsText?: string;
-  /** Set ONLY for sessions spawned by Mullion's Task Master (worker, review
-   * agent, retry, reject/auto-return re-seed — see task-claim.ts and
-   * task-reconciler.ts's spawn sites). Threaded through to the opencode
-   * and codex adapters' `HookAdapterContext.taskId` (opencode.ts's and
-   * codex.ts's prepareLaunch), which use a positive value to deny
-   * superpowers skills that gate on a human in the loop (brainstorming /
-   * writing-plans / finishing-a-development-branch). Spawn-time only: not
-   * persisted on `sessions` (no row column, no migration); a later
-   * reattach of a already-live session reads `undefined` here, which is
-   * correct since the denial config was set when the session was first
-   * spawned.
-   * Producer: session-lifecycle.ts's createSessionRecord (called from the
-   * Task Master spawn sites). A caller that omits this leaves the adapter
-   * with no taskId, which is the desired "not a Task Master session"
-   * default. */
-  taskId?: number;
-}
-
-/** Phase 5 (Track A) — one subagent's identity and activity, built from the
- * agentId-bearing hook messages (see hook-protocol.ts's agent-attribution
- * envelope). Purely additive to `subagentCount`/`subagentCountAt` above,
- * never a replacement: not every adapter can supply an `agentId` (OpenCode's
- * `session.subagent` carries none), and a `.state.json` written before this
- * registry existed restores a bare count with no entries at all — either
- * case means `subagents` may legitimately be shorter than `subagentCount`,
- * which is "count known, detail unavailable," not an inconsistency. */
-export interface SubagentInfo {
-  agentId: string;
-  agentType: string | null;
-  startedAt: number;
-  /** Set when a matching SubagentStop arrives, OR when the staleness sweep
-   * (clearStaleBlockedIfOlderThan) force-finalizes this still-open entry
-   * against its own `startedAt` — independent of subagentCount's own
-   * staleness, which only zeroes the aggregate count and never touches
-   * this field. That second (registry-side) case leaves `summary` null (no
-   * final message was ever recorded), distinguishing a genuine finish from
-   * a stale one. */
-  endedAt: number | null;
-  summary: string | null;
-  fileChanges: number;
-  toolFailures: number;
-  /** Count of `fileChanges` + `toolFailures` attributed to this subagent —
-   * NOT every hook message involving it (e.g. its own SubagentStart/Stop
-   * aren't counted here). */
-  eventCount: number;
-}
-
-export interface SessionInfo {
-  id: string;
-  cwd: string;
-  /** The shell's current working directory as last announced via an OSC 7
-   * escape sequence (see attention-detect.ts's detectCwdChange), or null if
-   * none has arrived yet — e.g. the shell doesn't have the injected
-   * shell-integration hook, or hasn't drawn a prompt since this session was
-   * created. Distinct from `cwd` above (the static spawn directory): a
-   * session whose shell `cd`s into a git worktree after launch keeps `cwd`
-   * pointing at the original directory forever, while `liveCwd` tracks where
-   * the shell actually is now — see routes/projects.ts's
-   * resolveSessionCwdTargets for why this matters (git status/branch must
-   * reflect the worktree, not the spawn directory). */
-  liveCwd: string | null;
-  browserUrl: string | null;
-  command: string;
-  cols: number;
-  rows: number;
-  createdAt: number;
-  alive: boolean;
-  subscriberCount: number;
-  /** Ms-epoch of the last PTY output, or null if none has arrived yet. */
-  lastActivityAt: number | null;
-  /** "working" if the terminal title says so, else if output has arrived
-   * recently AND persisted for at least SUSTAIN_MS (so a single spawn-time
-   * prompt-draw burst doesn't count) AND isn't closely following a user
-   * keystroke (see USER_INPUT_ECHO_MS — keystroke echo shouldn't read as
-   * work), else "idle" — a coarse heuristic, not a real "is the program
-   * busy" signal. */
-  activity: "working" | "idle";
-  /** True once one of the attention signals in attention-detect.ts's state
-   * machine (BEL, OSC 9/777 notification, a working->idle title transition,
-   * an alt-screen exit, or sustained silence after a work streak) has been
-   * CONFIRMED — i.e. survived its own per-kind debounce window uncontradicted
-   * by further output — without being cleared since. See Session.attentionState
-   * and advanceAttention() in attention-detect.ts for the full state machine
-   * (issue #171/#98) this replaces the old ad-hoc ATTENTION_CLEAR_WINDOW_MS
-   * check with. */
-  attention: boolean;
-  /** Ms-epoch this session was last confirmed as needing attention, or null
-   * if never (or since cleared) — Session.attentionState.confirmedAt. */
-  attentionAt: number | null;
-  /** Payload of the most recent OSC 0/2 title-change sequence — consulted by
-   * classifyActivityFromTitle() for a fast-path "working"/"idle" read on
-   * agent CLIs that self-report their status in the title. */
-  lastTitle: string | null;
-  /** Minimal review gate (Phase 2, issue #178; rescoped to remote permission
-   * approval in issue #264). "waiting" while at least one hook `review_gate`
-   * message is blocked on a real decision (see Session.emitHookEvent/
-   * registerPendingGate/resolveGate below); "approved"/"denied" once a
-   * human answered the LAST one (via POST /api/sessions/:id/review-gate);
-   * "lapsed" once nobody ever did — the server-side timeout, a dropped
-   * forwarder connection, or a graceful shutdown while one was pending all
-   * fall through to the agent's own native prompt rather than being denied
-   * (issue #264), and "lapsed" is what records that on this end; "idle" if
-   * no gate has ever fired. Despite the comment this replaced saying
-   * otherwise, this field is NOT in-memory only — it's in
-   * `StoredStateFields` below and persisted to the per-session state file
-   * (issue #323), restored on both `readStateFile()` and `spawn()`'s
-   * reattach path. A `"waiting"` value restored from disk is known-stale
-   * (no live gate connection can have survived a restart) and is resolved
-   * to `"lapsed"` at reattach — see `spawn()`'s savedState handling —
-   * rather than left as a live-looking gate with dead Approve/Deny
-   * buttons.
-   *
-   * Issue: correlate concurrent permission gates — this field (and
-   * `gatePrompt`/`gateAt` below) is now a DERIVED SUMMARY over the live,
-   * in-memory `gates` list below, not the source of truth: `"waiting"`
-   * means "at least one gate in `gates` is waiting", not "exactly one is".
-   * Kept as a scalar (rather than removed) because session-status.ts,
-   * session-live-info.ts, push-delivery.ts, and the persisted state file
-   * all only ever needed a single representative summary, and still do —
-   * see Session.registerPendingGate/resolveGate's own doc comments for
-   * exactly how the summary tracks the underlying list. */
-  gateState: "idle" | "waiting" | "approved" | "denied" | "lapsed";
-  /** The prompt of the OLDEST still-waiting gate while gateState is
-   * "waiting" (see gateState's own doc comment on why this is now a
-   * summary, not the whole picture), else null (cleared once the LAST gate
-   * resolves — see Session.resolveGate). */
-  gatePrompt: string | null;
-  /** Issue #320 — ms-epoch the OLDEST still-waiting gate was registered, or
-   * null while idle. */
-  gateAt: number | null;
-  /** Issue: correlate concurrent permission gates — the full list of
-   * currently-waiting gates, oldest first, each independently resolvable
-   * via `POST /api/sessions/:id/review-gate`'s optional `gateId` body
-   * field. In-memory only (see Session.pendingGates's own doc comment for
-   * why this deliberately does NOT survive a restart) — always `[]` right
-   * after a reattach, even if `gateState` briefly shows the stale
-   * `"waiting"` a beat before the reattach path resolves it to `"lapsed"`.
-   * `NotificationBell.tsx`'s `GateActions` renders one Approve/Deny row per
-   * entry here rather than assuming there's ever just one. */
-  gates: Array<{ gateId: string; prompt: string; at: number }>;
-  /** Issue #271, option 2 — "pending" while a model-invoked
-   * `promote_request` is blocked waiting for a human decision (see
-   * Session.emitHookEvent/resolvePromote below); "accepted"/"declined" once
-   * resolved; "idle" if no promote request has ever fired. Same in-memory,
-   * resets-on-restart posture as gateState above. */
-  promoteState: "idle" | "pending" | "accepted" | "declined";
-  /** The model-authored seed/summary from the most recent `promote_request`
-   * while promoteState is "pending", else null. */
-  promoteSummary: string | null;
-  /** The base ref the model suggested alongside `promoteSummary`, if any. */
-  promoteSuggestedBaseRef: string | null;
-  /** Issue #320 — ms-epoch this session's promoteState was last set to
-   * "pending", or null while idle. */
-  promoteAt: number | null;
-  /** Set to "pending" when a PermissionRequest hook fires — the agent is
-   * blocked waiting for user permission to use a tool. Cleared when the
-   * session's attention state confirms or clears. In-memory only. */
-  permissionState: "idle" | "pending";
-  /** Issue #320 — ms-epoch this session's permissionState was last set to
-   * "pending", or null while idle. Used by the staleness sweep. */
-  permissionAt: number | null;
-  /** Set to "pending" when an ExitPlanMode PreToolUse hook fires — the
-   * agent has a plan ready for human review. Cleared when the session's
-   * attention state confirms or clears. In-memory only. */
-  planState: "idle" | "pending";
-  /** Issue #320 — ms-epoch this session's planState was last set to
-   * "pending", or null while idle. */
-  planAt: number | null;
-  /** Non-null when a StopFailure hook fires (API error) or a
-   * PostToolUseFailure hook fires (tool execution error). In-memory only. */
-  errorState: "idle" | "api_error" | "tool_failure";
-  /** Rich statuses — ms-epoch this session's `errorState` was last set to a
-   * non-idle value, null while idle. Lets a staleness sweep (or a future
-   * general one — see issue #320) expire an error nothing has cleared
-   * because the resolving hook never fired. In-memory only, reset alongside
-   * `errorState` everywhere that field is. */
-  errorAt: number | null;
-  /** Set when a SessionEnd hook fires — why the session terminated.
-   * In-memory only. */
-  endedReason: string | null;
-  /** The process's real exit code, when the SessionEnd hook can report one
-   * (see SessionEndHookMessage.exitCode in hook-protocol.ts) — null when
-   * unavailable (the agent's adapter can't report one, or no SessionEnd has
-   * fired yet). In-memory only. */
-  exitCode: number | null;
-  /** The latest branch reported by this session's git worktree add,
-   * CwdChanged hook, or live branch tracking — null when unknown.
-   * In-memory only. */
-  liveBranch: string | null;
-  /** Issue #271 follow-up — opencode's own internal session id, kept live by
-   * the "agent_session" hook (hook-protocol.ts). Lets a later promote carry
-   * this session's real conversation history (opencode export/import) into
-   * the new worktree session instead of only a seed summary. `null` for
-   * every other agent, and for an opencode session before its first
-   * session.idle has fired. In-memory only, NOT part of `StoredStateFields`
-   * below — losing it across a restart just means the next promote falls
-   * back to the ordinary seed-only path, same as if opencode had never
-   * reported one; not worth the extra restore-path plumbing a state
-   * machine's own fields need. */
-  agentSessionId: string | null;
-  /** Rich statuses (issue: extend surfaced session statuses) — which
-   * attention-detect.ts signal kind is currently confirmed, or null when
-   * `attention` is false. Mirrors `attentionState.confirmedKind` directly
-   * (see toInfo()) rather than being tracked as its own field — same
-   * "attentionAt IS attentionState.confirmedAt" posture that field's own doc
-   * comment describes. Used to label WHY a session is `needs_input` (bell vs
-   * silence vs title) — see session-status.ts's deriveSessionStatus. NOT used
-   * to distinguish `finished` from `needs_input` — see `lastTurnEndedAt`
-   * below for why that would be wrong. */
-  attentionKind: AttentionSignalKind | null;
-  /** Rich statuses — a short, stable label for the current `errorState`,
-   * when the failing hook could supply one: a StopFailureHookMessage's
-   * `errorType` (falling back to its free-text `errorDetails`) for
-   * `api_error`, or the failing tool's name for `tool_failure`. Null when
-   * `errorState` is "idle", or when the hook fired with none of these
-   * fields. In-memory only. */
-  errorDetail: string | null;
-  /** The most recent Stop/progress hook's `lastAssistantMessage`, if the
-   * adapter forwarded one — kept across turns (not cleared on the next
-   * "thinking"/"generating" progress message) so a poll landing between
-   * turns still has something to show. In-memory only. */
-  lastAssistantMessage: string | null;
-  /** Issue: sidebar now-line — the model's current in-progress (or, absent
-   * one, pending) todo item, kept across turns the same way
-   * lastAssistantMessage above is (not cleared until the next `todo` message
-   * says otherwise) so a poll landing mid-task still has something to show.
-   * Cleared unconditionally once the latest `todo` message reports a
-   * terminal status (completed/cancelled) — content-agnostic, same "no todo
-   * beats stale todo" rule as eventDescriptions.ts's sessionContextMap,
-   * since todos have no stable per-item id to match against. Both Claude
-   * Code (hooks/forwarder-core.mjs's mapClaudeCodePostToolUse, which
-   * pre-resolves ONE "current" item per TodoWrite call: in_progress, else
-   * pending, else the call's last entry) and OpenCode (hooks/
-   * opencode-plugin.js's `todo.updated` handler, which instead fires once
-   * PER todo item as its own state changes) map into this same `todo` hook
-   * kind — so for OpenCode specifically, a burst of per-item updates ending
-   * on a different, now-terminal item can clear this even while another
-   * item is still genuinely in progress. Same tradeoff sessionContextMap's
-   * own doc comment already accepts for that adapter. In-memory only. */
-  currentTodo: { content: string; status: string } | null;
-  /** Rich statuses — "compacting" while a PreCompact/PostCompact hook pair
-   * is in flight (Claude Code only, so far — see hook-adapters/claude-code.ts).
-   * In-memory only. */
-  compactState: "idle" | "compacting";
-  /** Issue #320 — ms-epoch this session's compactState was last set to
-   * "compacting", or null while idle. */
-  compactAt: number | null;
-  /** Rich statuses — count of SubagentStart hooks not yet matched by a
-   * SubagentStop (Claude Code only, so far). Zero when none are running.
-   * In-memory only. */
-  subagentCount: number;
-  /** Issue #320 — ms-epoch this session's subagentCount was last updated
-   * by a subagent start event while count > 0 (re-stamps on every
-   * subsequent start, not just the initial 0 -> 1 transition), or null
-   * while at zero. Used by the staleness sweep. */
-  subagentCountAt: number | null;
-  /** Phase 5 (Track A) — named subagents built from agentId-bearing hook
-   * messages, chronological (oldest first). May be shorter than
-   * `subagentCount` when an adapter can't supply identity — see
-   * SubagentInfo's own doc comment. In-memory, persisted (trimmed) via
-   * StoredStateFields like subagentCount. */
-  subagents: SubagentInfo[];
-  /** Rich statuses — "pending" while an MCP server's Elicitation hook is
-   * blocked waiting on a human response (Claude Code only, so far).
-   * In-memory only. */
-  elicitationState: "idle" | "pending";
-  /** The MCP server name from the most recent Elicitation hook while
-   * elicitationState is "pending", else null. In-memory only. */
-  elicitationServer: string | null;
-  /** Issue #320 — ms-epoch this session's elicitationState was last set to
-   * "pending", or null while idle. */
-  elicitationAt: number | null;
-  /** OpenCode v2 question events — set to "pending" when a `question.asked`
-   * event arrives; cleared by `question.replied`/`question.rejected` or on
-   * a new turn. Mirrors elicitationState's shape. In-memory only. */
-  questionState: "idle" | "pending";
-  /** The header from the first question (short label, max 30 chars), or null
-   * while questionState is idle. In-memory only. */
-  questionHeader: string | null;
-  /** Issue #320 — ms-epoch this session's questionState was last set to
-   * "pending", or null while idle. */
-  questionAt: number | null;
-  /** Rich statuses — ms-epoch this session's turn last ended (a hook
-   * `progress` message with `phase: "done"`), latched until the NEXT turn
-   * genuinely starts (a real human keystroke — see write()'s
-   * isGenuineUserInput — or a `turn_start` hook once wired) or the session
-   * exits. This is what distinguishes `finished` (turn over, process alive)
-   * from `needs_input` (a byte-heuristic guess) — see session-status.ts's
-   * deriveSessionStatus and its own doc comment for why this must be a
-   * latch rather than read off attentionState.confirmedKind === "agentIdle"
-   * (that field is output-clearable and would flicker: `agentIdle` is
-   * deliberately NOT in attention-detect.ts's OUTPUT_IMMUNE_KINDS, since
-   * it's the ONLY attention trigger opencode/codex/agy have). In-memory
-   * only, reset on respawn. */
-  lastTurnEndedAt: number | null;
-  /** Issue #428 — the raw `backgroundTasks` list off the most recent
-   * `progress`/`subagent` hook message that carried one (present-only
-   * update: a message with no `backgroundTasks` field, e.g. Claude Code's
-   * `idle_prompt` notification path, leaves this untouched rather than
-   * wiping it — see emitHookEvent's "progress" case). Kept raw (not
-   * pre-filtered) so it round-trips through StoredStateFields unchanged;
-   * `outstandingBackgroundTasks` below is the filtered view callers
-   * actually want. Cleared on `turn_start`, a genuine keystroke, and
-   * respawn, same release paths as `lastTurnEndedAt`. In-memory only. */
-  backgroundTasks: BackgroundTask[];
-  /** Issue #428 — ms-epoch `backgroundTasks` was last updated while it
-   * contained at least one outstanding (non-terminal-status) entry, or null
-   * once none remain. Backend-internal TTL bookkeeping for the staleness
-   * sweep (clearStaleBlockedIfOlderThan) — excluded from LiveInfoKey the
-   * same way errorAt is. */
-  backgroundTasksAt: number | null;
-  /** Issue #428 — `backgroundTasks` filtered to only outstanding entries,
-   * computed once here in toInfo() rather than re-derived by every caller
-   * (deriveSessionStatus, the frontend's Row 6 chips) — keeps
-   * "presentation only, never re-derivation" true for the frontend, which
-   * has no import path to background-tasks.ts's own predicate (separate
-   * npm workspace). */
-  outstandingBackgroundTasks: BackgroundTask[];
-  /** Issue #323: whether this session's state was restored from a
-   * persisted state file (`<sessionsDir>/<id>.state.json`) on construction,
-   * rather than starting from fresh idle defaults. False for a brand-new
-   * session, or when the state file was missing or corrupt. Distinguishes
-   * "we genuinely don't know the state" (restart recovered, waiting for
-   * hooks) from "nothing pending" in the UI — see session-status.ts's
-   * deriveSessionStatus. */
-  stateRestored: boolean;
-  /** Issue #323: whether the session was launched with a different version
-   * of Mullion than is currently running. When true, the session's hook set
-   * may be out of date (frozen at launch time), and the UI should show a
-   * clock icon indicating it needs a restart to pick up new capabilities.
-   * Derived by comparing the stored `launchedAtVersion` from the state file
-   * against the current server version at construction time. */
-  staleHooks: boolean;
-  /** Issue #323: the value of `launchedAtVersion` stored in the state file
-   * at construction time, or null when no state file was present. Lets the
-   * frontend display the version the session was launched under. */
-  restoredVersion: string | null;
-  /** Rich statuses — the matched hook adapter's static `emits` capability list
-   * for this session's launch command (empty for shells/unmatched). Computed
-   * once at launch/reattach from the same adapter.matches() call that decides
-   * whether to wire hooks. In-memory only — recomputed on every construction
-   * from this.session.command, same posture as hooksActive. */
-  hookEmits: readonly HookMessageKind[];
-  /** Issue #404 — the port most recently detected in this (non-dock)
-   * session's scrollback and not yet accepted or dismissed, or null when
-   * nothing is currently pending. Set by PtyManager.sweepDevServerDetection
-   * -> Session.detectDevServerPort; cleared by Session.acceptDevServerPort/
-   * dismissDevServerPort. In-memory only, resets on restart — unlike
-   * gateState/promoteState above, which ARE in `StoredStateFields` and do
-   * survive a restart (see gateState's own doc comment for why that turned
-   * out to be a bug for gateState specifically, fixed in issue #844; a
-   * re-printed dev-server banner on the next detection sweep re-raising
-   * harmlessly is a genuinely different case, not the same accepted gap).
-   * Keying UI action-button visibility off this live field (not the
-   * immutable historical `dev_server_detected` event payload) mirrors
-   * gateState's own role for review_gate's GateActions in
-   * NotificationBell.tsx. */
-  pendingDevServerPort: string | null;
-}
+// `export *` (not `export type {...}`) so the module is loaded at runtime and
+// the type-only file gets a (statement-free) coverage entry — the patch-
+// coverage script otherwise counts every interface member line as uncovered.
+export * from "./session-types.js";
+import type { CreateSessionOptions, SubagentInfo, SessionInfo } from "./session-types.js";
 
 type DataListener = (chunk: Buffer) => void;
 type ExitListener = () => void;
@@ -873,59 +381,6 @@ const SUSTAIN_MS = 1_000;
 // not activity being masked indefinitely.
 const USER_INPUT_ECHO_MS = 1_000;
 
-// Follow-up to #275 (attention-hook hardening, gap #3): the same
-// browser->pty write() channel USER_INPUT_ECHO_MS documents above also
-// carries a handful of AUTOMATED terminal-protocol replies xterm.js sends on
-// the program's behalf (not real human keystrokes) — see that comment's
-// "Known limitation" for the enumerated set this mirrors. USER_INPUT_ECHO_MS
-// itself tolerates these as a rare, self-limiting false "idle" because the
-// cost of being wrong is small; isGenuineUserInput() below is held to a much
-// stricter bar, because it gates the ONLY thing that can clear an
-// OUTPUT_IMMUNE_KINDS-confirmed attention flag (a "needs permission"
-// notification) via a real keystroke — a false positive here would silently
-// dismiss a pending permission prompt the user never actually answered,
-// exactly the bug this hardening pass fixes. Each regex matches one COMPLETE
-// automated-reply shape; isGenuineUserInput() strips every match and treats
-// a nonempty remainder as genuine. This is a denylist, not an allowlist of
-// printable bytes, deliberately: Ctrl-C, Esc, arrow keys, and bracketed-paste
-// content must all still count as a real decision.
-// eslint-disable-next-line no-control-regex
-const FOCUS_REPORT = /\x1b\[[IO]/g; // DECSET ?1004 focus in/out report
-// eslint-disable-next-line no-control-regex
-const X10_MOUSE_REPORT = /\x1b\[M[\s\S]{3}/g; // legacy X10 mouse report (3 fixed data bytes)
-// eslint-disable-next-line no-control-regex
-const SGR_MOUSE_REPORT = /\x1b\[<\d+;\d+;\d+[Mm]/g; // SGR (?1006) mouse report
-// eslint-disable-next-line no-control-regex
-const CURSOR_POSITION_REPORT = /\x1b\[\d+;\d+R/g; // CPR
-// eslint-disable-next-line no-control-regex
-const DEVICE_ATTRIBUTES_REPLY = /\x1b\[>?\??[\d;]*c/g; // primary/secondary DA reply
-// TerminalPane.tsx's OSC 10/11/12 color-query reply (the `rgb:` form) and its
-// theme-toggle color SET push (the `#rrggbb` form) share this same OSC-ident
-// shape — see that file's oscColorSubs handler and its settings-sync effect.
-// eslint-disable-next-line no-control-regex
-const OSC_COLOR_REPLY = /\x1b\](?:10|11|12);[^\x07\x1b]*(?:\x07|\x1b\\)/g;
-// TerminalPane.tsx's DEC "color scheme update" notification, bundled into the
-// same write() as OSC_COLOR_REPLY's SET-push form on every theme toggle.
-// eslint-disable-next-line no-control-regex
-const COLOR_SCHEME_NOTIFICATION = /\x1b\[\?997;[12]n/g;
-
-const AUTO_REPORT_SHAPES: ReadonlyArray<RegExp> = [
-  FOCUS_REPORT,
-  X10_MOUSE_REPORT,
-  SGR_MOUSE_REPORT,
-  CURSOR_POSITION_REPORT,
-  DEVICE_ATTRIBUTES_REPLY,
-  OSC_COLOR_REPLY,
-  COLOR_SCHEME_NOTIFICATION,
-];
-
-/**
- * Strips every known automated terminal-protocol reply/push from `data` and
- * reports whether anything survives — see the block comment above for why
- * this must be a strict denylist rather than USER_INPUT_ECHO_MS's more
- * tolerant timing heuristic. Used only to gate Session.write()'s
- * authoritative "userInput" attention-clear signal (see below).
- */
 // Result of detectAttentionSignals() for a chunk with no ESC/BEL byte — see the
 // onData fast path. Frozen: shared across every plain chunk.
 const NO_ATTENTION_SIGNALS: AttentionSignal = Object.freeze({
@@ -933,51 +388,6 @@ const NO_ATTENTION_SIGNALS: AttentionSignal = Object.freeze({
   notification: false,
   titleChange: null,
 });
-
-export function isGenuineUserInput(data: string): boolean {
-  // Every AUTO_REPORT_SHAPES entry starts with ESC, so ESC-free input (the
-  // overwhelmingly common case: plain typed characters) has nothing to strip.
-  if (!data.includes("\x1b")) return data.length > 0;
-  let remainder = data;
-  for (const shape of AUTO_REPORT_SHAPES) {
-    remainder = remainder.replace(shape, "");
-  }
-  return remainder.length > 0;
-}
-
-// A well-formed hook token is exactly what crypto.randomBytes(24).toString("hex")
-// produces — 48 lowercase hex characters. Anything else in the token file
-// (truncated write, corruption, a stray newline) is treated as absent
-// rather than adopted, so a bad file can never downgrade this session's
-// token to something weaker or malformed.
-const HOOK_TOKEN_RE = /^[0-9a-f]{48}$/;
-
-function hookTokenPath(sessionsDir: string, id: string): string {
-  return path.join(sessionsDir, `${id}.token`);
-}
-
-// A1 (audit finding): an actively-working agent's TUI rewrites its OSC
-// title roughly once a second (elapsed-time counters, spinner frames), and
-// prior to this fix every one of those ticks produced its own persisted +
-// broadcast title_change event — measured at 93.6% of ALL session_events
-// rows in production (160,767 of 171,793 over 9 days / 25 sessions). That
-// flood evicted genuinely important events (permission_request,
-// tool_failure) from the 100-slot ring buffer within about two minutes,
-// bloated the DB, and drove a WS-broadcast + frontend re-render on every
-// tick. TITLE_CHANGE_EVENT_DEBOUNCE_MS/_CEILING_MS below coalesce the
-// title_change EVENT (ring buffer + DB persistence + WS broadcast) on a
-// trailing-edge debounce, mirroring SessionStateFile.schedule()'s shape
-// (session-state-file.ts) — see scheduleTitleChangeEvent()'s doc comment
-// for the "detection stays live, persistence gets coalesced" split this
-// relies on.
-const TITLE_CHANGE_EVENT_DEBOUNCE_MS = 3_000;
-// Ceiling mirrors SessionStateFile's own ceiling-timer role
-// (session-state-file.ts's MAX_WRITE_DELAY_MS): forces an eventual
-// title_change event even under CONTINUOUS title churn, which would
-// otherwise keep resetting the trailing debounce forever and starve the
-// event feed of any title_change at all for a session that never stops
-// retitling.
-const TITLE_CHANGE_EVENT_CEILING_MS = 15_000;
 
 // Terminal-transport mode state (issue #93 one layer deeper — see
 // inAltScreen's and mouseTracking's own field docs below for the full
@@ -1018,29 +428,6 @@ type StoredStateFields = Pick<
   termModes?: { inAltScreen: boolean; mouseTracking: MouseTrackingState; bracketedPaste?: boolean };
 };
 
-// Issue: worktree/branch detection — a session's hookToken used to be
-// minted fresh on every `Session` construction and never persisted, which
-// is fine for a brand-new session but wrong for the getOrCreate() reattach
-// path: a dtach master survives a Mullion process restart (that's the
-// whole point of dtach + systemd --user scopes), but the *env* baked into
-// it at spawn time does not change. A freshly restarted server minting a
-// new in-memory token for the same session id left the still-running
-// agent holding a token the new process would never accept again —
-// silently killing every hook (branch, file-change, attention/status,
-// promote) for that session's remaining lifetime. See this session's own
-// plan doc for the live evidence (142 "unknown or invalid token" warnings
-// after one restart).
-//
-// The fix: persist the token next to this session's other per-spawn files
-// (`<id>.sock`, `<id>.hooks.json`, `<id>.mcp.json` — all already written
-// under `sessionsDir` at 0o600) and always adopt whatever is on disk,
-// unconditionally — including on a genuine respawn (stale socket, dead
-// dtach master). Reusing an old token there is harmless: nothing else
-// still holds it, and the alternative (trying to detect "was that token
-// ever live") is a liveness check that can itself be wrong, for no
-// benefit. Never throws: any read/write failure falls back to today's
-// in-memory-only token, the same fail-safe posture as the rest of the
-// hook path.
 const SESSION_ID_RE = /^\d+$/;
 
 /** Session ids are DB-issued digit strings; reject anything else before it is used to build a path. */
@@ -1048,41 +435,6 @@ function assertValidSessionId(id: string): void {
   if (typeof id !== "string" || !SESSION_ID_RE.test(id)) {
     throw new Error(`Session id must be numeric, got: ${JSON.stringify(id)}`);
   }
-}
-
-function loadOrCreateHookToken(sessionsDir: string, id: string): string {
-  const tokenPath = hookTokenPath(sessionsDir, id);
-  let fileExists = true;
-  try {
-    const existing = readFileSync(tokenPath, "utf8").trim();
-    if (HOOK_TOKEN_RE.test(existing)) return existing;
-    // The file is there but malformed (truncated write, corruption) — fall
-    // through to minting and OVERWRITE it below; a plain (non-exclusive)
-    // write is correct here since we've already established there's
-    // nothing valid on disk worth racing to preserve.
-  } catch {
-    // ENOENT (first spawn) or a read error — fall through to minting.
-    fileExists = false;
-  }
-  const token = crypto.randomBytes(24).toString("hex");
-  try {
-    // Exclusive create only when nothing was there at all, so two
-    // concurrent first-spawns for the same id can't silently clobber each
-    // other's token; a known-malformed file is overwritten outright.
-    writeFileSync(tokenPath, token, { mode: 0o600, flag: fileExists ? "w" : "wx" });
-  } catch {
-    // The exclusive create lost a race — another concurrent spawn for this
-    // same id won and created the file first. Its token is just as valid
-    // as the one just minted, so prefer reading it over silently diverging
-    // from what's now on disk.
-    try {
-      const raced = readFileSync(tokenPath, "utf8").trim();
-      if (HOOK_TOKEN_RE.test(raced)) return raced;
-    } catch {
-      // Fall through to the in-memory-only token below.
-    }
-  }
-  return token;
 }
 
 export class Session {
@@ -1569,9 +921,9 @@ export class Session {
   // lastTitleActivity above, which stay driven by the RAW, un-coalesced
   // signal on every tick so #98's working->idle detection timing is
   // completely unaffected. See scheduleTitleChangeEvent()'s doc comment.
-  private titleChangeEventTimeout: ReturnType<typeof setTimeout> | null = null;
-  private titleChangeEventCeilingTimeout: ReturnType<typeof setTimeout> | null = null;
-  private pendingTitleChangeTitle: string | null = null;
+  private readonly titleChange = new TitleChangeDebouncer((title) =>
+    this.emitEvent("title_change", { title }),
+  );
   // Ms-epoch of the last write() call (user keystrokes, plus a couple of
   // automated terminal-protocol replies routed through the same browser->pty
   // channel — see USER_INPUT_ECHO_MS's docstring). Used by toInfo()'s timing
@@ -1974,7 +1326,7 @@ export class Session {
     };
   }
 
-  // --- Title-change event coalescing (A1) ---
+  // --- Title-change event coalescing (A1) — see title-change-debouncer.ts ---
 
   /**
    * Debounce the title_change EVENT — the thing that consumes a ring-buffer
@@ -1999,41 +1351,14 @@ export class Session {
    * worth a slot in the ring buffer or a DB row.
    */
   private scheduleTitleChangeEvent(title: string): void {
-    const wasAlreadyPending = this.pendingTitleChangeTitle !== null;
-    this.pendingTitleChangeTitle = title;
-    if (this.titleChangeEventTimeout !== null) clearTimeout(this.titleChangeEventTimeout);
-    this.titleChangeEventTimeout = setTimeout(() => {
-      this.flushTitleChangeEvent();
-    }, TITLE_CHANGE_EVENT_DEBOUNCE_MS);
-    this.titleChangeEventTimeout.unref();
-
-    if (!wasAlreadyPending) {
-      if (this.titleChangeEventCeilingTimeout !== null) {
-        clearTimeout(this.titleChangeEventCeilingTimeout);
-      }
-      this.titleChangeEventCeilingTimeout = setTimeout(() => {
-        this.flushTitleChangeEvent();
-      }, TITLE_CHANGE_EVENT_CEILING_MS);
-      this.titleChangeEventCeilingTimeout.unref();
-    }
+    this.titleChange.schedule(title);
   }
 
   /** Fire the pending (possibly coalesced) title_change event, if any, and
    * clear both timers. Safe to call directly (kill()'s flush-on-detach
    * path below, tests) — a no-op when nothing is pending. */
   private flushTitleChangeEvent(): void {
-    if (this.titleChangeEventTimeout !== null) {
-      clearTimeout(this.titleChangeEventTimeout);
-      this.titleChangeEventTimeout = null;
-    }
-    if (this.titleChangeEventCeilingTimeout !== null) {
-      clearTimeout(this.titleChangeEventCeilingTimeout);
-      this.titleChangeEventCeilingTimeout = null;
-    }
-    if (this.pendingTitleChangeTitle === null) return;
-    const title = this.pendingTitleChangeTitle;
-    this.pendingTitleChangeTitle = null;
-    this.emitEvent("title_change", { title });
+    this.titleChange.flush();
   }
 
   private spawning: Promise<void> | null = null;
@@ -5012,27 +4337,7 @@ export class PtyManager {
       clearTimeout(timer);
     }
     await stopScope(this.sessionsDir, this.instanceId, id);
-    // Every removal is best-effort: ENOENT is the expected common case (the
-    // file was never written — hooks never fired, the session predates the
-    // feature, this isn't an opencode session, the project opted out of a
-    // briefing/conventions text, ...). They are independent, so run them
-    // concurrently via the async fs API instead of blocking the event loop on
-    // ~8 sequential syscalls, and never let one failure skip the others.
-    //  - agent-guide/briefing (#405) and workflow-conventions (#937) are
-    //    written unconditionally at spawn time but nothing else removed them;
-    //  - the opencode tier-0/seed files and config dir (#949) share the same
-    //    lifecycle.
-    const dir = this.sessionsDir;
-    await Promise.allSettled([
-      unlinkAsync(hookTokenPath(dir, id)),
-      unlinkAsync(stateFilePath(dir, id)),
-      unlinkAsync(sessionAgentGuidePath(dir, id)),
-      unlinkAsync(sessionWorkflowConventionsPath(dir, id)),
-      unlinkAsync(sessionBriefingPath(dir, id)),
-      unlinkAsync(path.join(dir, `${id}.opencode-tier0.md`)),
-      unlinkAsync(path.join(dir, `${id}.opencode-seed.md`)),
-      rmAsync(path.join(dir, `${id}.opencode-config`), { recursive: true, force: true }),
-    ]);
+    await cleanupSessionFiles(this.sessionsDir, id);
   }
 
   /** Kill every tracked attach-client. Called on server shutdown; the dtach masters survive. */
