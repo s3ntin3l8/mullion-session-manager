@@ -473,12 +473,6 @@
     width: 100vw !important;
     box-shadow: none !important;
   }
-  /* Tasks tab: the board renders in flow inside the navigator, which
-     (.sidebar-wrapper) is the one scroller. */
-  .kanban-board-inline {
-    flex: 1 1 auto;
-    min-height: 0;
-  }
   /* The navigator covers the whole viewport, so the scrim behind it is moot. */
   .app.sb-open .cmux-scrim {
     display: none !important;

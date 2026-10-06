@@ -18,9 +18,8 @@
 .toolbar--compact-picker .toolbar-app-menu {
   display: flex;
 }
-/* Scoped to the compact-picker marker, NOT just the tier: in Tasks view the
-   picker isn't rendered, so the ⋯ menu that replaces these stays hidden —
-   hiding them there would leave Settings and the theme control unreachable. */
+/* Scoped to the compact-picker marker, not just the tier: these are hidden
+   exactly when the ⋯ menu that replaces them is shown. */
 .toolbar--compact-picker .toolbar-version-label,
 .toolbar--compact-picker .toolbar-theme-btn,
 .toolbar--compact-picker .toolbar-settings-btn,
@@ -55,4 +54,67 @@
 .mobile-session-sheet.mobile-session-sheet--tablet {
   width: min(560px, 100%);
   align-self: center;
+}
+
+/* Navigator slide-over (PhoneNavigatorPanel inside .sidebar-wrapper). Phone
+   stretches it to the viewport in mobile.css; tablet gets a ~440px panel, and
+   100vw while the Tasks tab is active so the two-column board has room. Width
+   snaps (sidebar.css only transitions transform). */
+@media (max-width: 1279.98px) {
+  /* Width-gated like the sidebar.css overlay these resize: a forced-tablet
+     layoutMode on a wider window keeps the docked sidebar (see #1531). */
+  .app[data-tier="tablet"] .sidebar-wrapper {
+    width: min(440px, 60vw) !important;
+  }
+  .app[data-tier="tablet"].nav-tasks .sidebar-wrapper {
+    width: 100vw !important;
+    box-shadow: none !important;
+  }
+  .app[data-tier="tablet"].nav-tasks .cmux-scrim {
+    display: none !important;
+  }
+}
+
+/* Tasks tab: the board renders in flow inside the navigator, which
+   (.sidebar-wrapper) is the one scroller. */
+.kanban-board-inline {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+/* Tablet board: the phone's single-scroller / full-bleed-detail treatment
+   (mobile.css, phone width only), but with two columns side by side. Empty
+   column bodies stay visible here: they are live drop targets between the pair. */
+.app[data-tier="tablet"] .kanban-board-inline .kanban-unified-main {
+  flex-direction: column;
+}
+.app[data-tier="tablet"] .kanban-board-inline .kanban-unified,
+.app[data-tier="tablet"] .kanban-board-inline .kanban-unified-tasks {
+  height: auto;
+  overflow: visible;
+}
+.app[data-tier="tablet"] .kanban-board-inline .kanban-unified-columns {
+  --kanban-board-pad: 10px;
+  padding: var(--kanban-board-pad);
+}
+.app[data-tier="tablet"] .kanban-board-inline .kanban-unified-tasks .tasks-board {
+  overflow: visible;
+}
+.kanban-unified-columns--split .kanban-column {
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: none;
+}
+.app[data-tier="tablet"] .kanban-board-inline .kanban-detail-drawer {
+  position: fixed;
+  inset: calc(44px + env(safe-area-inset-top) + var(--shell-top, 0px)) 0 0;
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+  flex: none;
+  z-index: 46;
+  background: var(--bg);
+  border-left: none;
+}
+.app[data-tier="tablet"] .kanban-board-inline .kanban-detail-resize-handle {
+  display: none;
 }

@@ -66,7 +66,9 @@ describe("PhoneSettingsList", () => {
 });
 
 vi.mock("./panels/registry.js", () => ({
-  KanbanBoardOverlay: () => <div>BOARD</div>,
+  KanbanBoardOverlay: ({ columnCount }: { columnCount?: number }) => (
+    <div data-cols={String(columnCount)}>BOARD</div>
+  ),
 }));
 
 describe("PhoneNavigatorPanel", () => {
@@ -91,6 +93,38 @@ describe("PhoneNavigatorPanel", () => {
     panel();
     expect(screen.getByText("SIDEBAR")).toBeInTheDocument();
     expect(screen.queryByText("BOARD")).toBeNull();
+  });
+
+  it("shows the workspaces slot above the sidebar on the Projects tab only", () => {
+    panel({ workspaces: <div>WORKSPACES</div> });
+    expect(screen.getByText("WORKSPACES")).toBeInTheDocument();
+    expect(screen.getByText("SIDEBAR")).toBeInTheDocument();
+  });
+
+  it("omits the workspaces slot on the Settings tab", () => {
+    panel({ navTab: "settings", workspaces: <div>WORKSPACES</div> });
+    expect(screen.queryByText("WORKSPACES")).toBeNull();
+  });
+
+  it("asks the board for two columns on tablet and one on phone", () => {
+    useDashboardStore.getState().setViewMode("kanban");
+    const { unmount } = render(
+      <PhoneNavigatorPanel
+        navTab="projects"
+        setNavTab={vi.fn()}
+        onOpenTasks={vi.fn()}
+        onClose={vi.fn()}
+        onSelectSetting={vi.fn()}
+        sidebar={<div>S</div>}
+        onOpenSession={vi.fn()}
+        onSessionEnded={vi.fn()}
+        tablet
+      />,
+    );
+    expect(screen.getByText("BOARD")).toHaveAttribute("data-cols", "2");
+    unmount();
+    panel();
+    expect(screen.getByText("BOARD")).toHaveAttribute("data-cols", "1");
   });
 
   it("shows the board and marks Tasks pressed while tasksOpen", () => {

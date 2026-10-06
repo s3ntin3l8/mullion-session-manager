@@ -462,6 +462,16 @@ describe("usePanelOpener — onOpenTasks", () => {
     expect(setSidebarOpen).toHaveBeenCalledWith(false);
   });
 
+  it.each([
+    ["phone", PHONE_LAYOUT],
+    ["tablet", { tier: "tablet", tabletPaneCap: 2 } as LayoutContext],
+  ])("keeps the sidebar (the navigator) open on %s, where the board lives in it", (_n, layout) => {
+    const { result } = setup({ dockviewApi: null, layout });
+    result.current.onOpenTasks();
+    expect(setViewMode).toHaveBeenCalledWith("kanban");
+    expect(setSidebarOpen).not.toHaveBeenCalled();
+  });
+
   it("is the one opener that does NOT reset viewMode to list", () => {
     const { result } = setup({ dockviewApi: null });
     result.current.onOpenTasks();

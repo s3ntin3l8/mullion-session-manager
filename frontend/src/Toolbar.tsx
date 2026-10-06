@@ -109,9 +109,10 @@ export function Toolbar({
     />
   );
 
-  // Off phone, the picker takes over the centre (workspace name / pane count)
-  // — except in Tasks view, where the centre carries the Back button.
-  const compactPicker = !phone && viewMode !== "kanban" && !!mobileSessionSlot;
+  // Off phone, the picker takes over the centre (workspace name / pane count).
+  // Tasks view included: on compact tiers the board lives in the navigator, so
+  // there is no centre Back button to keep.
+  const compactPicker = !phone && !!mobileSessionSlot;
   return (
     <div className={`toolbar${compactPicker ? " toolbar--compact-picker" : ""}`}>
       <div className="toolbar-lead">
@@ -170,9 +171,7 @@ export function Toolbar({
           )
         )}
       </div>
-      {(phone || viewMode !== "kanban") && mobileSessionSlot && (
-        <div className="toolbar-mobile-session">{mobileSessionSlot}</div>
-      )}
+      {mobileSessionSlot && <div className="toolbar-mobile-session">{mobileSessionSlot}</div>}
       <div className="toolbar-actions">
         <button
           className="run-cmd-btn"
