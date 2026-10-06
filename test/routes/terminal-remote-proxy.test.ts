@@ -34,8 +34,8 @@ class MockSocket extends EventEmitter {
     this.sendSpy(data, opts);
   }
 
-  close() {
-    this.closeSpy();
+  close(code?: number, reason?: string) {
+    this.closeSpy(code, reason);
     this.readyState = MockSocket.CLOSED;
     this.emit("close");
   }
@@ -100,7 +100,7 @@ describe("proxyToRemoteAttach (issue #26, Hermes review PR #34)", () => {
     expect(upstream.closeSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("does not forward a browser message while the upstream is still connecting", () => {
+  it("queues browser messages while the upstream is still connecting and flushes them in order on open (issue #1521)", () => {
     const browserSocket = new MockSocket();
     browserSocket.readyState = MockSocket.OPEN;
     const upstream = new MockSocket();
@@ -108,8 +108,46 @@ describe("proxyToRemoteAttach (issue #26, Hermes review PR #34)", () => {
 
     proxyToRemoteAttach(fakeApp(), browserSocket as unknown as WebSocket, "remote-host", OPTS);
 
+    const resize = Buffer.from('{"type":"resize","cols":100,"rows":30}');
+    browserSocket.emit("message", resize, false);
     browserSocket.emit("message", Buffer.from("too early"), true);
     expect(upstream.sendSpy).not.toHaveBeenCalled();
+
+    upstream.open();
+    expect(upstream.sendSpy.mock.calls).toEqual([
+      [resize, { binary: false }],
+      [Buffer.from("too early"), { binary: true }],
+    ]);
+  });
+
+  it("stops queueing past the byte limit while connecting", () => {
+    const browserSocket = new MockSocket();
+    browserSocket.readyState = MockSocket.OPEN;
+    const upstream = new MockSocket();
+    openAttachMock.mockReturnValue(upstream);
+
+    proxyToRemoteAttach(fakeApp(), browserSocket as unknown as WebSocket, "remote-host", OPTS);
+
+    browserSocket.emit("message", Buffer.alloc(60 * 1024), true);
+    browserSocket.emit("message", [Buffer.alloc(3 * 1024), Buffer.alloc(3 * 1024)], true);
+    browserSocket.emit("message", Buffer.alloc(1024), true);
+    upstream.open();
+    expect(upstream.sendSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes the browser with the resync code when upstream output is dropped under backpressure (issue #1520)", () => {
+    const browserSocket = new MockSocket();
+    browserSocket.readyState = MockSocket.OPEN;
+    const upstream = new MockSocket();
+    openAttachMock.mockReturnValue(upstream);
+
+    proxyToRemoteAttach(fakeApp(), browserSocket as unknown as WebSocket, "remote-host", OPTS);
+    upstream.open();
+    browserSocket.bufferedAmount = 4 * 1024 * 1024 + 1;
+    upstream.emit("message", Buffer.from("chunk"), true);
+
+    expect(browserSocket.sendSpy).not.toHaveBeenCalled();
+    expect(browserSocket.closeSpy).toHaveBeenCalledWith(4001, "resync");
   });
 
   it("drops a browser message when the upstream's own send buffer is over the backpressure threshold (Hermes review, PR #34)", () => {

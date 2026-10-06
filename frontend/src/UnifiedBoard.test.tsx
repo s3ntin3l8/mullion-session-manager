@@ -1381,6 +1381,14 @@ describe("UnifiedBoard phone layout", () => {
       expect(screen.queryByRole("dialog", { name: "Task detail" })).toBeNull();
     });
 
+    it("with backStack alone (tablet overlay, full board), back closes the detail", async () => {
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} backStack />);
+      await userEvent.click(screen.getByText("ip1"));
+      expect(screen.getByRole("dialog", { name: "Task detail" })).toBeInTheDocument();
+      act(() => void window.dispatchEvent(new PopStateEvent("popstate")));
+      expect(screen.queryByRole("dialog", { name: "Task detail" })).toBeNull();
+    });
+
     it("does not register a history entry off phone", async () => {
       render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
       await userEvent.click(screen.getByText("ip1"));

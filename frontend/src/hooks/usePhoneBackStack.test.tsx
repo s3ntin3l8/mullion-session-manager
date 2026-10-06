@@ -99,6 +99,22 @@ describe("usePhoneBackStack", () => {
     expect(back).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps the guard when `active` stays true across a callback swap", () => {
+    // What a fold/unfold looks like to this hook: App's `compact` stays true
+    // across the 700px boundary (pinned in App.test.tsx), so `active` doesn't
+    // flip — no history.back() / pushState churn, and back still closes.
+    const close = vi.fn();
+    const { rerender } = renderHook(({ cb }) => usePhoneBackStack(true, cb), {
+      initialProps: { cb: vi.fn() },
+    });
+    rerender({ cb: close });
+    flushTimers();
+    expect(pushState).toHaveBeenCalledTimes(1);
+    expect(back).not.toHaveBeenCalled();
+    pop();
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
   it("calls the latest onClose, not the one from when it opened", () => {
     const first = vi.fn();
     const second = vi.fn();
