@@ -65,6 +65,7 @@ describe("routeOp runtime paths", () => {
   });
 
   it("an early ReplyPayload from a declared resolver is replied verbatim", async () => {
+    // Scope is irrelevant here: an early ReplyPayload short-circuits before any pin check.
     const { ctx, inject, reply } = mk("full");
     const early = { ok: false as const, status: 400, error: "nope" };
     await routeOp(
