@@ -245,7 +245,13 @@ export async function sessionsRoute(app: FastifyInstance) {
     done();
   });
 
-  app.get<{ Querystring: { projectId?: number; kind?: string; status?: string } }>(
+  app.get<{
+    Querystring: {
+      projectId?: number;
+      kind?: "terminal" | "dock";
+      status?: "active" | "killed" | "exited";
+    };
+  }>(
     "/api/sessions",
     {
       schema: {
@@ -253,30 +259,19 @@ export async function sessionsRoute(app: FastifyInstance) {
           type: "object",
           properties: {
             projectId: { type: "integer" },
-            kind: { type: "string" },
-            status: { type: "string" },
+            kind: { type: "string", enum: ["terminal", "dock"] },
+            status: { type: "string", enum: ["active", "killed", "exited"] },
           },
         },
       },
     },
-    async (request, reply) => {
+    async (request) => {
       const { kind, status } = request.query;
-      if (kind !== undefined && kind !== "terminal" && kind !== "dock") {
-        return reply.badRequest("kind must be 'terminal' or 'dock'");
-      }
       // Perf audit finding A6 — prod's own /api/sessions payload was 293
       // rows, 284 of them `killed` tombstones the frontend already filters
       // back out client-side (Sidebar.tsx). Nothing ever purges killed
       // rows, so an unfiltered list grows without bound; this lets a caller
       // (store.ts's poll loop) ask for only the rows it actually renders.
-      if (
-        status !== undefined &&
-        status !== "active" &&
-        status !== "killed" &&
-        status !== "exited"
-      ) {
-        return reply.badRequest("status must be 'active', 'killed', or 'exited'");
-      }
 
       const conditions = [
         request.query.projectId !== undefined
@@ -1279,6 +1274,11 @@ export async function sessionsRoute(app: FastifyInstance) {
         // unreachable host or an agent-side rejection is a gateway
         // failure, never a 500 — there's no row here to roll back.
         app.log.error({ err, sessionId, hostId: project.hostId }, "session image upload failed");
+        // The local backend tags an unusable `.mullion-uploads` (symlink/file)
+        // with statusCode 409 — surface that as the client-visible conflict.
+        if ((err as { statusCode?: number }).statusCode === 409) {
+          return reply.conflict((err as Error).message);
+        }
         return reply.badGateway("Failed to upload image to host");
       }
     },

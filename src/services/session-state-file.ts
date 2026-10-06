@@ -153,7 +153,8 @@ export class SessionStateFile<TState> {
       clearTimeout(this.ceilingTimeout);
       this.ceilingTimeout = null;
     }
-    // Unique temp name so two overlapping writers never share a `.tmp`.
+    // Per-flush unique temp name so a partial leftover from a previous run
+    // (or crash) can never be reused or collide with this write.
     const tmpPath = `${this.filePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
     try {
       writeFileSync(tmpPath, JSON.stringify(this.buildPayload()), { mode: 0o600 });

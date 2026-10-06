@@ -172,6 +172,17 @@ describe("sessions route", () => {
     await app.close();
   });
 
+  it("rejects an unknown kind/status filter with 400", async () => {
+    const app = await buildApp();
+    expect((await app.inject({ method: "GET", url: "/api/sessions?kind=nope" })).statusCode).toBe(
+      400,
+    );
+    expect((await app.inject({ method: "GET", url: "/api/sessions?status=nope" })).statusCode).toBe(
+      400,
+    );
+    await app.close();
+  });
+
   it("rejects a non-integer projectId query instead of silently returning []", async () => {
     const app = await buildApp();
     const res = await app.inject({ method: "GET", url: "/api/sessions?projectId=abc" });
@@ -1080,6 +1091,31 @@ describe("sessions route", () => {
       expect(fs.readFileSync(uploadPath)).toEqual(buffer);
 
       fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("returns 409 (not 502) when .mullion-uploads is a symlink", async () => {
+      const app = await buildApp();
+      const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "sessions-upload-symlink-"));
+      const target = fs.mkdtempSync(path.join(os.tmpdir(), "sessions-upload-target-"));
+      fs.symlinkSync(target, path.join(cwd, ".mullion-uploads"));
+      const projectId = await createProjectWithCwd(app, cwd);
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${created.json().id}/uploads`,
+        headers: { "content-type": "image/png" },
+        payload: PNG_BYTES,
+      });
+      expect(res.statusCode).toBe(409);
+      expect(fs.readdirSync(target)).toEqual([]);
+
+      fs.rmSync(cwd, { recursive: true, force: true });
+      fs.rmSync(target, { recursive: true, force: true });
       await app.close();
     });
 

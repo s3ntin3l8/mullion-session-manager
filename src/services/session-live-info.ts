@@ -260,7 +260,7 @@ export async function withLiveStatus(
 }
 
 // One corrupt `env` column must not 500 GET /api/sessions for every session.
-export function parseEnvColumn(
+function parseEnvColumn(
   app: FastifyInstance,
   row: { id: number; env: string | null },
 ): Record<string, string> | null {

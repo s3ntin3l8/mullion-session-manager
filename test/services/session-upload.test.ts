@@ -158,12 +158,10 @@ describe("session-upload", () => {
       }
     });
 
-    it("keeps an existing .gitignore and tolerates one created concurrently", () => {
+    it("reuses an existing real directory without recreating .gitignore", () => {
       mkdirSync(path.join(cwd, UPLOAD_SUBDIR));
-      writeFileSync(path.join(cwd, UPLOAD_SUBDIR, "a.png"), "x");
       const p = saveSessionUpload(cwd, PNG_BYTES, "image/png");
       expect(existsSync(p)).toBe(true);
-      // existing real directory: no .gitignore is (re)created
       expect(existsSync(path.join(cwd, UPLOAD_SUBDIR, ".gitignore"))).toBe(false);
     });
   });
