@@ -1335,7 +1335,7 @@ export function App() {
   const mobileSessionSwitcher = compact ? (
     <MobileSessionBar
       tier={layoutTier}
-      contextLabel={isMobile ? undefined : (activeWorkspace?.name ?? undefined)}
+      contextLabel={isMobile ? undefined : activeWorkspace?.name}
       panels={mobilePanels}
       activePanelId={activePanelId}
       dockviewApi={dockviewApi}

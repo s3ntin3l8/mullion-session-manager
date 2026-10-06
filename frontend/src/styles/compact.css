@@ -4,7 +4,11 @@
    Imported after mobile.css so it can rely on (and, where needed, undo) the
    phone block's rules. */
 
-/* Tablet toolbar: [☰][🔔][+] [workspace · session picker] [🔍][⋯] */
+/* Tablet toolbar: [☰][🔔][+] [workspace · session picker] [🔍][⋯]
+   Keyed on the `toolbar--compact-picker` marker rather than `[data-tier]` on
+   purpose: the marker only exists when the picker actually replaced the
+   centre (off phone, outside Tasks view), so these rules can't strand the
+   Back button or Settings, and they follow the layoutMode override. */
 .toolbar--compact-picker .toolbar-center {
   display: none;
 }
