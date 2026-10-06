@@ -66,6 +66,7 @@ vi.mock("./lib/sidebarSwipeGesture.js", () => ({
 import { App } from "./App.js";
 import { useDashboardStore } from "./store/index.js";
 import { attachSidebarSwipeGesture } from "./lib/sidebarSwipeGesture.js";
+import { usePhoneBackStack } from "./hooks/usePhoneBackStack.js";
 
 function setLayoutMode(layoutMode: LayoutMode) {
   useDashboardStore.setState({
@@ -134,6 +135,24 @@ describe("App tier wiring", () => {
     fireEvent.click(screen.getByTestId("toggle-sidebar"));
     expect(app.classList.contains("sb-open")).toBe(false);
   });
+
+  // The drawer registers with the back stack on every compact tier (not just
+  // phone), so Android back closes it on the unfolded Fold too.
+  it.each([
+    ["phone", true],
+    ["tablet", true],
+    ["desktop", false],
+  ] as const)(
+    "registers the open drawer with the back stack on %s only when compact",
+    (tier, expected) => {
+      stubWidth(tier);
+      render(<App />);
+      expect(usePhoneBackStack).toHaveBeenLastCalledWith(false, expect.any(Function));
+      if (tier === "desktop") return;
+      fireEvent.click(screen.getByTestId("toggle-sidebar"));
+      expect(usePhoneBackStack).toHaveBeenLastCalledWith(expected, expect.any(Function));
+    },
+  );
 
   it("collapses (rather than opens) the docked sidebar on desktop", () => {
     stubWidth("desktop");

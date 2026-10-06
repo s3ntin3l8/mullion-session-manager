@@ -217,5 +217,19 @@ describe("Settings phone navigator integration", () => {
       render(<Settings onClose={vi.fn()} initialSection="terminal" />);
       expect(window.history.pushState).not.toHaveBeenCalled();
     });
+
+    it("backStack alone (tablet) closes Settings on back, with no section drill-down step", () => {
+      const onClose = vi.fn();
+      const { container } = render(
+        <Settings onClose={onClose} initialSection="terminal" backStack />,
+      );
+      expect(window.history.pushState).toHaveBeenCalledTimes(1);
+      pop();
+      expect(onClose).toHaveBeenCalledTimes(1);
+      // The drill-down (phone-only) never registered, so the content pane is untouched.
+      expect(container.querySelector(".settings-modal-body")).toHaveClass(
+        "settings-modal-body-showing-content",
+      );
+    });
   });
 });

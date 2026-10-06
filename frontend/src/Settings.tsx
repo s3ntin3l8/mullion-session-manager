@@ -40,6 +40,7 @@ export function Settings({
   initialSection: initialSectionLink = "appearance",
   startInContent = false,
   phone = false,
+  backStack = false,
 }: {
   onClose: () => void;
   initialSection?: SettingsSectionLink;
@@ -50,6 +51,10 @@ export function Settings({
   // Phone tier: back from a section's content returns to the list before it
   // closes Settings (usePhoneBackStack).
   phone?: boolean;
+  // Compact tiers (phone or tablet): Android back closes Settings. Separate
+  // from `phone` because the section drill-down below is phone-only UI —
+  // tablet keeps the side-by-side nav rail but still wants the back gesture.
+  backStack?: boolean;
 }) {
   const initialSection = resolveSettingsSection(initialSectionLink);
   const [section, setSection] = useState<SettingsSection>(initialSection);
@@ -82,7 +87,7 @@ export function Settings({
   // content] — effects run child-first, so registering Settings' own entry
   // from App would land it ABOVE the section entry. Back pops the section to
   // the list first, then closes Settings.
-  usePhoneBackStack(phone, onClose);
+  usePhoneBackStack(phone || backStack, onClose);
   usePhoneBackStack(phone && !mobileNavOpen, () => setMobileNavOpen(true));
 
   const visibleSections = useMemo(() => {
