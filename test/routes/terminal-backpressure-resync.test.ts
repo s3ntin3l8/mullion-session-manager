@@ -109,4 +109,22 @@ describe("attachSocketToSession backpressure resync (issue #1520)", () => {
     vi.advanceTimersByTime(1000);
     expect(socket.sent).toEqual([]);
   });
+
+  it("replays scrollback in place on a resync-request from a remote primary (issue #1539)", () => {
+    const { session, socket } = setup();
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "resync-request" })), false);
+    expect(socket.sent).toHaveLength(3);
+    expect(JSON.parse(socket.sent[0] as string)).toEqual({ type: "resync" });
+    expect(socket.sent[1]).toBe("SCROLLBACK");
+    expect(JSON.parse(socket.sent[2] as string).type).toBe("geometry");
+    expect(session.requestRedraw).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores a resync-request while its own drain-resync is pending", () => {
+    const { socket, emit } = setup();
+    socket.bufferedAmount = 5 * 1024 * 1024;
+    emit("dropped");
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "resync-request" })), false);
+    expect(socket.sent).toEqual([]);
+  });
 });
