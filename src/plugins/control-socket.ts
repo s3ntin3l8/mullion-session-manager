@@ -20,6 +20,8 @@ import { resolveAndAttach } from "../routes/terminal.js";
 import { attachAggregatedEventsSocket, attachLocalEventsSocket } from "../routes/events.js";
 import { SocketChannel, WRITE_HARD_CEILING_BYTES } from "../services/socket-channel.js";
 import { reclaimSocketPath } from "../services/unix-socket.js";
+import { eq } from "drizzle-orm";
+import { sessions } from "../db/schema.js";
 
 // Phase 4 (#185) — a general-purpose Unix control socket: the transport
 // behind the `mullion` CLI (#134/#190) and any other local script that wants
@@ -123,6 +125,17 @@ interface OpSpec {
   scopes: readonly Scope[];
   handler: (ctx: OpContext) => Promise<void> | void;
 }
+
+/** Body fields a session-scoped `sessions.spawn_child` may forward (#1518);
+ * verified against createSessionSchema in routes/sessions.ts. */
+const SESSION_SPAWN_CHILD_FIELDS: readonly string[] = [
+  "command",
+  "name",
+  "cwd",
+  "model",
+  "smallModel",
+  "seedPrompt",
+];
 
 function send(socket: net.Socket, message: { id: number | null } & Record<string, unknown>): void {
   if (!socket.writable) return;
@@ -464,7 +477,8 @@ function resolveParentSessionId(
 // emits its own `{id, type, ...}` frames outside this envelope — see
 // docs/socket-api.md's stream section — without needing any change to
 // handleConnection's dispatch loop below.
-const OPS: Record<string, OpSpec> = {
+/** Exported for the scope-matrix test in test/plugins/control-socket.test.ts. */
+export const OPS: Record<string, OpSpec> = {
   ping: {
     scopes: ["full", "session"],
     handler: ({ reply }) => {
@@ -556,49 +570,43 @@ const OPS: Record<string, OpSpec> = {
         reply({ ok: false, status: 400, error: "unable to resolve the parent session's project" });
         return;
       }
+      // A session-scoped connection outlives its session's own intent: a hook
+      // token stays valid until the process is reaped, so re-check the ROW
+      // (the source of intent; the in-memory PtyManager map can lack a live
+      // session) and refuse to let a killed/exited parent keep spawning (#1518).
+      if (conn.scope === "session") {
+        const row = app.db
+          .select({ status: sessions.status })
+          .from(sessions)
+          .where(eq(sessions.id, Number(parent.id)))
+          .get();
+        if (row?.status !== "active") {
+          reply({ ok: false, status: 403, error: "the parent session is no longer active" });
+          return;
+        }
+      }
       const {
         sessionId: _sessionId,
         parentSessionId: _parentSessionId,
         projectId: _projectId,
         worktree: _worktree,
         worktreeRefresh: _worktreeRefresh,
-        ...rest
+        ...fullRest
       } = body ?? {};
-      // Session-scoped callers may never set `skipPermissions` or `kind`
-      // (independent review, PR #426): both are privilege-adjacent —
-      // skipPermissions disables permission prompts for the new session,
-      // and kind:"dock" hides it from the normal per-project session list
-      // (Sidebar.tsx renders only kind:"terminal"; only Dock.tsx surfaces
-      // "dock" sessions). Letting a session-scoped connection — whose hook
-      // token is inherited by every subprocess an agent spawns — set
-      // either would hand an already-compromised or merely misbehaving
-      // subprocess a strictly MORE privileged, less visible session than
-      // its own, which is exactly the escalation `sessions.create`'s
-      // full-scope gate exists to withhold. Full scope keeps both
-      // (matching `sessions.create`'s own behavior for that scope) since a
-      // full-scope caller already has this power directly.
-      //
-      // `env` (issue #822) joins this list for the same reason: without
-      // it, a NEW field added to POST /api/sessions' schema would silently
-      // widen session scope the moment it landed — this `...rest` spread
-      // forwards anything not explicitly named above. A session-scoped
-      // agent spawning a child of its own session has no legitimate need
-      // to hand that child arbitrary extra env; a full-scope caller
-      // already has this power directly (same as skipPermissions/kind).
-      if (conn.scope === "session") {
-        delete rest.skipPermissions;
-        delete rest.kind;
-        delete rest.env;
-      }
-      // `seedPrompt` (the MCP tool's `initialPrompt` param, translated by
-      // the client — see spawnChildSession's own comment) is deliberately
-      // NOT in the session-scope strip list above: unlike
-      // skipPermissions/kind/env it grants no extra privilege or visibility
-      // to the child — it only affects what the child agent's first turn
-      // says, which a session-scoped caller already fully controls via
-      // `command` itself (e.g. `claude -- '<anything>'`). See this op's own
-      // module doc comment for why spawn_child is reachable at session
-      // scope at all.
+      // Session scope forwards an explicit ALLOWLIST (#1518), not a denylist:
+      // a field newly added to POST /api/sessions' schema (as `env` once was)
+      // must not silently widen what a session-scoped caller can set.
+      // `skipPermissions`, `kind`, `env`, `nameLocked` etc. are privilege- or
+      // visibility-adjacent and stay full-scope only (a full-scope caller has
+      // that power directly). `seedPrompt` grants nothing `command` doesn't
+      // already (a session-scoped caller fully controls its child's first turn
+      // via `command` itself).
+      const rest: Record<string, unknown> =
+        conn.scope === "session"
+          ? Object.fromEntries(
+              Object.entries(fullRest).filter(([key]) => SESSION_SPAWN_CHILD_FIELDS.includes(key)),
+            )
+          : fullRest;
       const payload = {
         ...rest,
         projectId: parentProjectId,
@@ -1133,9 +1141,9 @@ const OPS: Record<string, OpSpec> = {
   // of this family does.
   "device.pair": {
     scopes: ["full"],
-    handler: async ({ app, body, reply }) => {
+    handler: async ({ app, conn, body, reply }) => {
       reply(
-        await injectAndShape(app, {
+        await injectRoute(app, conn, {
           method: "POST",
           url: "/api/devices/pair",
           headers: { ...buildAuthHeaders(app), "content-type": "application/json" },
@@ -1149,9 +1157,9 @@ const OPS: Record<string, OpSpec> = {
   // device.discovered) or a manual `pairingAddress`+`connectAddress` pair.
   "device.pair-and-connect": {
     scopes: ["full"],
-    handler: async ({ app, body, reply }) => {
+    handler: async ({ app, conn, body, reply }) => {
       reply(
-        await injectAndShape(app, {
+        await injectRoute(app, conn, {
           method: "POST",
           url: "/api/devices/pair-and-connect",
           headers: { ...buildAuthHeaders(app), "content-type": "application/json" },
@@ -1224,14 +1232,14 @@ const OPS: Record<string, OpSpec> = {
   // no undo. A session-scoped caller can still start/stop the device.
   "device.delete": {
     scopes: ["full"],
-    handler: async ({ app, body, reply }) => {
+    handler: async ({ app, conn, body, reply }) => {
       const deviceId = extractDeviceId(body);
       if (deviceId === null) {
         reply({ ok: false, status: 400, error: "'deviceId' is required" });
         return;
       }
       reply(
-        await injectAndShape(app, {
+        await injectRoute(app, conn, {
           method: "DELETE",
           url: `/api/devices/${encodeURIComponent(String(deviceId))}`,
           headers: buildAuthHeaders(app),
@@ -1318,7 +1326,7 @@ const OPS: Record<string, OpSpec> = {
   },
   "projects.set_tooling": {
     scopes: ["full"],
-    handler: async ({ app, conn: _conn, body, reply }) => {
+    handler: async ({ app, conn, body, reply }) => {
       const id = extractProjectId(body);
       if (id === null) {
         reply({ ok: false, status: 400, error: "'projectId' is required" });
@@ -1332,7 +1340,7 @@ const OPS: Record<string, OpSpec> = {
       const headers = buildAuthHeaders(app);
       const b = body ?? {};
       if (b.briefing !== undefined) {
-        results.briefing = await injectAndShape(app, {
+        results.briefing = await injectRoute(app, conn, {
           method: "PUT",
           url: base,
           headers,
@@ -1341,7 +1349,7 @@ const OPS: Record<string, OpSpec> = {
         if ((results.briefing as { ok?: boolean })?.ok === false) allOk = false;
       }
       if (b.skill !== undefined) {
-        results.skill = await injectAndShape(app, {
+        results.skill = await injectRoute(app, conn, {
           method: "PUT",
           url: `${base}/skill`,
           headers,
@@ -1350,7 +1358,7 @@ const OPS: Record<string, OpSpec> = {
         if ((results.skill as { ok?: boolean })?.ok === false) allOk = false;
       }
       if (b.reviewerAgent !== undefined) {
-        results.reviewerAgent = await injectAndShape(app, {
+        results.reviewerAgent = await injectRoute(app, conn, {
           method: "PUT",
           url: `${base}/reviewer-agent`,
           headers,
