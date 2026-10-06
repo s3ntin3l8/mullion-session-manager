@@ -58,6 +58,25 @@ const MAX_LINE_BYTES = 2 * 1024 * 1024;
 // reasoning as hooks.ts's own exported GATE_TIMEOUT_MS/PROMOTE_TIMEOUT_MS.
 export const HANDSHAKE_TIMEOUT_MS = 10_000;
 
+// Issue #1517 — per-connection load bounds. One session-scoped client (the
+// socket path is injected into every spawned session) must not be able to
+// queue unbounded work or reply bytes in this process.
+/** Max ops dispatched but not yet replied to on one connection; past it the
+ * socket is paused and the remaining buffered lines wait. */
+export const MAX_INFLIGHT_OPS = 32;
+/** Max open sessions.attach / events.subscribe streams per connection. */
+export const MAX_OPEN_CHANNELS = 16;
+/** Once this many reply bytes are queued unwritten, stop reading requests
+ * until the socket 'drain's. */
+export const WRITE_HIGH_WATER_BYTES = 1024 * 1024;
+/** A peer that lets this many reply bytes pile up is destroyed. */
+export const WRITE_HARD_CEILING_BYTES = 16 * 1024 * 1024;
+/** Pre-handshake input is just `{"token":"..."}`; nothing legitimate needs
+ * more than this before authenticating. */
+export const MAX_HANDSHAKE_BYTES = 4 * 1024;
+/** Global cap on simultaneously open connections (server.maxConnections). */
+export const MAX_CONNECTIONS = 256;
+
 type Scope = "full" | "session";
 
 interface ConnectionState {
@@ -109,6 +128,20 @@ interface OpSpec {
 function send(socket: net.Socket, message: { id: number | null } & Record<string, unknown>): void {
   if (!socket.writable) return;
   socket.write(`${JSON.stringify(message)}\n`);
+  // A peer that never reads would otherwise let replies pile up in this
+  // process's memory without bound (#1517) — drop it past the hard ceiling.
+  if (socket.writableLength > WRITE_HARD_CEILING_BYTES) socket.destroy();
+}
+
+/** Why a new stream cannot be opened on `conn` under `id`, or null if it can. */
+function streamSlotError(conn: ConnectionState, id: number): ReplyPayload | null {
+  if (conn.openChannels.has(id)) {
+    return { ok: false, status: 400, error: "a stream is already open for this id" };
+  }
+  if (conn.openChannels.size >= MAX_OPEN_CHANNELS) {
+    return { ok: false, status: 429, error: "too many open streams on this connection" };
+  }
+  return null;
 }
 
 function safeJsonParse(payload: string): unknown {
@@ -698,8 +731,9 @@ const OPS: Record<string, OpSpec> = {
         reply(target.reply);
         return;
       }
-      if (conn.openChannels.has(id)) {
-        reply({ ok: false, status: 400, error: "a stream is already open for this id" });
+      const slotError = streamSlotError(conn, id);
+      if (slotError) {
+        reply(slotError);
         return;
       }
       // Same fallback shape as /ws/terminal's own query-param defaults
@@ -832,8 +866,9 @@ const OPS: Record<string, OpSpec> = {
   "events.subscribe": {
     scopes: ["full", "session"],
     handler: ({ app, conn, id, reply }) => {
-      if (conn.openChannels.has(id)) {
-        reply({ ok: false, status: 400, error: "a stream is already open for this id" });
+      const slotError = streamSlotError(conn, id);
+      if (slotError) {
+        reply(slotError);
         return;
       }
       const channel = new SocketChannel(conn.socket, id);
@@ -1529,7 +1564,14 @@ function handleConnection(
   });
 
   let buffer = "";
+  // UTF-8 byte length of `buffer`, tracked incrementally so framing never
+  // re-measures (or re-scans) the whole buffer per chunk (#1521).
+  let bufferBytes = 0;
+  // Everything before this index has already been searched for "\n".
+  let scanFrom = 0;
   let conn: ConnectionState | null = null;
+  let inflight = 0;
+  let paused = false;
   // Per-connection decoder, not a fresh Buffer.toString("utf8") per chunk —
   // a chunk boundary landing mid-multi-byte-character would otherwise
   // silently corrupt it (U+FFFD in, real bytes gone). Matters here more
@@ -1545,14 +1587,50 @@ function handleConnection(
   }, HANDSHAKE_TIMEOUT_MS);
   handshakeTimer.unref();
 
-  socket.on("data", (chunk: Buffer) => {
-    buffer += decoder.write(chunk);
+  const overloaded = () =>
+    conn !== null &&
+    (inflight >= MAX_INFLIGHT_OPS || socket.writableLength >= WRITE_HIGH_WATER_BYTES);
 
-    let newlineIndex = buffer.indexOf("\n");
-    while (newlineIndex !== -1) {
+  // Reconciles the socket's paused state with current load and, when load has
+  // cleared, resumes processing lines that were left buffered while paused.
+  const flow = () => {
+    if (socket.destroyed) return;
+    if (overloaded()) {
+      if (!paused) {
+        paused = true;
+        socket.pause();
+      }
+      return;
+    }
+    if (paused) {
+      paused = false;
+      socket.resume();
+    }
+    pump();
+  };
+  socket.on("drain", flow);
+
+  const pump = () => {
+    while (!socket.destroyed) {
+      // Lines already buffered are NOT dispatched while overloaded — pausing
+      // the socket alone would not stop the rest of a chunk already read.
+      if (overloaded()) {
+        if (!paused) {
+          paused = true;
+          socket.pause();
+        }
+        return;
+      }
+      const newlineIndex = buffer.indexOf("\n", scanFrom);
+      if (newlineIndex === -1) {
+        scanFrom = buffer.length;
+        break;
+      }
       const line = buffer.slice(0, newlineIndex);
       buffer = buffer.slice(newlineIndex + 1);
-      newlineIndex = buffer.indexOf("\n");
+      scanFrom = 0;
+      const lineBytes = Buffer.byteLength(line, "utf8");
+      bufferBytes -= lineBytes + 1;
 
       if (line.trim() === "") continue;
 
@@ -1564,13 +1642,13 @@ function handleConnection(
       // cap applied at all. Checked before any JSON.parse of the line —
       // parsing a deliberately oversized line is itself the expensive
       // operation this cap exists to avoid, so no id is recovered here.
-      if (Buffer.byteLength(line, "utf8") > MAX_LINE_BYTES) {
-        if (conn === null) {
-          app.log.warn("control connection sent an oversized handshake line, closing");
-          clearTimeout(handshakeTimer);
-          socket.destroy();
-          return;
-        }
+      if (conn === null && lineBytes > MAX_HANDSHAKE_BYTES) {
+        app.log.warn("control connection sent an oversized handshake line, closing");
+        clearTimeout(handshakeTimer);
+        socket.destroy();
+        return;
+      }
+      if (lineBytes > MAX_LINE_BYTES) {
         send(socket, {
           id: null,
           ok: false,
@@ -1590,10 +1668,12 @@ function handleConnection(
         }
         const resolved = resolveHandshake(app, handshake.token);
         if (resolved === null) {
+          // Never log any prefix of the presented token (#1521): a session's
+          // hook token is a live credential.
           const hint =
             handshake.token === null
               ? "no token presented"
-              : `token ${handshake.token.slice(0, 8)}… did not match MULLION_AUTH_TOKEN or any live session`;
+              : `presented token of length ${handshake.token.length} did not match MULLION_AUTH_TOKEN or any live session`;
           app.log.warn(`control connection presented an invalid handshake, closing (${hint})`);
           clearTimeout(handshakeTimer);
           socket.destroy();
@@ -1615,7 +1695,13 @@ function handleConnection(
         continue;
       }
 
-      dispatch(app, conn, result.message).catch((err) => app.log.error({ err }, "dispatch failed"));
+      inflight++;
+      dispatch(app, conn, result.message)
+        .catch((err) => app.log.error({ err }, "dispatch failed"))
+        .finally(() => {
+          inflight--;
+          flow();
+        });
     }
 
     // Checked AFTER draining every complete line above, not on the raw
@@ -1625,10 +1711,17 @@ function handleConnection(
     // write with no terminator yet); that valid line must still be
     // processed rather than the whole connection being destroyed before
     // ever reading it. Only an unterminated remainder counts toward the cap.
-    if (Buffer.byteLength(buffer, "utf8") > MAX_LINE_BYTES) {
+    if (!socket.destroyed && bufferBytes > (conn === null ? MAX_HANDSHAKE_BYTES : MAX_LINE_BYTES)) {
       app.log.warn("control connection sent an oversized line without a terminator, closing");
       socket.destroy();
     }
+  };
+
+  socket.on("data", (chunk: Buffer) => {
+    const text = decoder.write(chunk);
+    buffer += text;
+    bufferBytes += Buffer.byteLength(text, "utf8");
+    pump();
   });
 
   socket.on("error", (err) => {
@@ -1710,14 +1803,31 @@ export const controlSocketPlugin = fp(async (app: FastifyInstance) => {
   const openSockets = new Set<net.Socket>();
 
   const server = net.createServer((socket) => handleConnection(app, socket, openSockets));
+  server.maxConnections = MAX_CONNECTIONS;
 
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(socketPath, () => {
-      server.removeListener("error", reject);
-      resolve();
+  // bind() creates the socket file with 0777 & ~umask; a 077 umask for the
+  // (synchronous) bind means it is never group/world-accessible, not even
+  // between listen() and the chmod below (#1521). Restored immediately —
+  // umask is process-wide. Unsupported in worker threads, hence the guard.
+  let previousUmask: number | null = null;
+  try {
+    previousUmask = process.umask(0o077);
+  } catch {
+    previousUmask = null;
+  }
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(socketPath, () => {
+        server.removeListener("error", reject);
+        resolve();
+      });
+      if (previousUmask !== null) process.umask(previousUmask);
+      previousUmask = null;
     });
-  });
+  } finally {
+    if (previousUmask !== null) process.umask(previousUmask);
+  }
   // 0600: filesystem perms are the first line of defense alongside the
   // handshake token above, same posture as hooks.ts's own hook socket.
   chmodSync(socketPath, 0o600);
