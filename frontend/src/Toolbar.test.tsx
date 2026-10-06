@@ -184,6 +184,29 @@ describe("Toolbar — phone tier", () => {
     expect(bell).toHaveAttribute("data-sheet-class", "mobile-notif-sheet--tablet");
   });
 
+  it("marks the toolbar as compact-picker off phone when the session slot is shown", () => {
+    const { container } = render(
+      <Toolbar {...NOOP_PROPS} mobileSessionSlot={<span>switcher</span>} />,
+    );
+    expect(container.querySelector(".toolbar")).toHaveClass("toolbar--compact-picker");
+  });
+
+  it("keeps the centre (Tasks Back button) instead of the picker in Tasks view", () => {
+    viewMode = "kanban";
+    const { container } = render(
+      <Toolbar {...NOOP_PROPS} mobileSessionSlot={<span>switcher</span>} />,
+    );
+    expect(container.querySelector(".toolbar")).not.toHaveClass("toolbar--compact-picker");
+  });
+
+  it("does not mark phone (its own CSS owns that layout) or slot-less desktop", () => {
+    const phone = render(<Toolbar {...NOOP_PROPS} phone mobileSessionSlot={<span>s</span>} />);
+    expect(phone.container.querySelector(".toolbar")).not.toHaveClass("toolbar--compact-picker");
+    phone.unmount();
+    const desktop = render(<Toolbar {...NOOP_PROPS} />);
+    expect(desktop.container.querySelector(".toolbar")).not.toHaveClass("toolbar--compact-picker");
+  });
+
   it("on phone the sheet takes no tablet width-cap class", () => {
     render(<Toolbar {...NOOP_PROPS} phone notificationSheet />);
     expect(screen.getByTestId("bell")).toHaveAttribute("data-sheet-class", "");

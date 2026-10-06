@@ -63,7 +63,14 @@ export function MobileSessionSwitcher({
   onRenameDraftChange,
   onRenameCommit,
   onRenameCancel,
+  contextLabel,
+  sheetClassName,
 }: {
+  // Small label ahead of the session name in the trigger — the active
+  // workspace's name on tablet, where workspaces exist (phone has none).
+  contextLabel?: string;
+  // Extra class on the sheet (the tablet width cap).
+  sheetClassName?: string;
   // Open panes only, in dockview order: the swipe / `n/N` domain.
   items: MobileSessionItem[];
   // Every listed session, grouped — the sheet's content.
@@ -203,6 +210,7 @@ export function MobileSessionSwitcher({
           setOpen(true);
         }}
       >
+        {contextLabel && <span className="mobile-session-context">{contextLabel}</span>}
         {active ? (
           <>
             <span className="mobile-session-dot" style={{ background: active.dotColor }} />
@@ -241,6 +249,7 @@ export function MobileSessionSwitcher({
         label="Sessions"
         closeLabel="Close session list"
         title={`Sessions (${listedRows.length})`}
+        sheetClassName={sheetClassName}
         backStack
         sheetRef={sheetRef}
         onEscape={() => {
