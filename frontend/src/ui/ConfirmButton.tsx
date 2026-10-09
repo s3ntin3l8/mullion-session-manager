@@ -13,6 +13,7 @@ export function ConfirmButton({
   children,
   skipConfirm = false,
   disabled = false,
+  allowDoubleClickConfirm = false,
 }: {
   onConfirm: () => void;
   title: string;
@@ -25,6 +26,9 @@ export function ConfirmButton({
   // one checked out elsewhere), distinct from `skipConfirm`: this disables
   // the click entirely rather than changing whether it arms first.
   disabled?: boolean;
+  // Session kill controls enable this so a quick second click on the newly
+  // armed checkmark completes the expected two-click flow.
+  allowDoubleClickConfirm?: boolean;
 }) {
   const [armed, setArmed] = useState(false);
 
@@ -69,7 +73,7 @@ export function ConfirmButton({
         // including key auto-repeat) — those report `detail: 0` regardless —
         // but the reported, empirically-verified bug is the mouse gesture,
         // so that's what this guards.
-        if (armed && e.detail > 1) return;
+        if (!allowDoubleClickConfirm && armed && e.detail > 1) return;
         if (armed) {
           setArmed(false);
           onConfirm();
