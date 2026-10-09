@@ -27,6 +27,20 @@ describe("ui/ConfirmButton", () => {
     expect(onConfirm).not.toHaveBeenCalled();
   });
 
+  it("confirms a literal double-click when enabled", async () => {
+    const user = userEvent.setup();
+    const onConfirm = vi.fn();
+    render(
+      <ConfirmButton onConfirm={onConfirm} title="End session" allowDoubleClickConfirm>
+        End
+      </ConfirmButton>,
+    );
+
+    await user.dblClick(screen.getByText("End"));
+
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+  });
+
   it("arms on a double-click, and a subsequent deliberate click still confirms", async () => {
     const user = userEvent.setup();
     const onConfirm = vi.fn();

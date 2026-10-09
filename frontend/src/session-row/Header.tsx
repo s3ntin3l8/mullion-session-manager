@@ -238,6 +238,7 @@ export function Header({
                 : "End this session (the program will be terminated)"
             }
             onConfirm={onConfirmEnd}
+            allowDoubleClickConfirm
             // Phase 5 (Track B, issue #196 5.6) — always require the
             // arm-then-confirm step when this session has live children,
             // regardless of the global "confirm before kill" setting.

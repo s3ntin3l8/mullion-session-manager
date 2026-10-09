@@ -43,6 +43,7 @@ let prsByProject: Record<number, GitHubPRsStatus | undefined>;
 // Defaults to [] in beforeEach; tests exercising the cascade UI set it
 // before rendering.
 let sessions: Session[];
+let confirmBeforeKill = false;
 // Issue #271 — PromoteDialog (rendered from SessionRow's kebab menu / the
 // promoteState==="pending" auto-open) reads these two store actions.
 const promoteSessionMock = vi.fn().mockResolvedValue(undefined);
@@ -59,7 +60,7 @@ vi.mock("./store/index.js", () => {
   // would hit the temporal-dead-zone error vitest warns about.
   const useDashboardStore = (selector: (s: unknown) => unknown) =>
     selector({
-      settings: { sessions: { confirmBeforeKill: false } },
+      settings: { sessions: { confirmBeforeKill } },
       theme: "dark",
       events,
       sessionGitStatuses,
@@ -173,6 +174,7 @@ const SESSION: Session = {
 };
 
 beforeEach(() => {
+  confirmBeforeKill = false;
   events = {};
   sessionGitStatuses = {};
   gitDiffStats = {};
@@ -299,6 +301,20 @@ describe("SessionRow", () => {
   // With live children present it must always arm first, regardless of
   // that setting, so the detach consequence is visible before it fires.
   describe("cascade-aware end-session confirmation (issue #196 5.6)", () => {
+    it("ends the session on the second rapid click when confirmation is enabled", async () => {
+      confirmBeforeKill = true;
+      const onOpen = vi.fn();
+      const onEnd = vi.fn();
+      const user = userEvent.setup();
+      render(<SessionRow session={SESSION} project={PROJECT} onOpen={onOpen} onEnd={onEnd} />);
+      const button = screen.getByTitle("End this session (the program will be terminated)");
+
+      await user.dblClick(button);
+
+      expect(onEnd).toHaveBeenCalledTimes(1);
+      expect(onOpen).not.toHaveBeenCalled();
+    });
+
     it("fires onEnd on the first click when there are no live children", async () => {
       const onEnd = vi.fn();
       const user = userEvent.setup();
