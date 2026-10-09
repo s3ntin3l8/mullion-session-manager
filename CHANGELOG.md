@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.37](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.36...v0.3.37) (2026-10-09)
+
+
+### Bug Fixes
+
+* allow quick sidebar session kill confirmation ([#1557](https://github.com/s3ntin3l8/mullion-session-manager/issues/1557)) ([16aab1c](https://github.com/s3ntin3l8/mullion-session-manager/commit/16aab1cdb30ec3b9fb179d887d73c674323cba32))
+
 ## [0.3.36](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.35...v0.3.36) (2026-10-06)
 
 
