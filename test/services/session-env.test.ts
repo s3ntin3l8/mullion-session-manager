@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { schema } from "../../src/plugins/env.js";
+import { isReservedSessionEnvKey } from "../../src/services/session-env-keys.js";
 import {
+  HOST_DISPLAY_ENV_KEYS,
   SERVER_ENV_KEYS,
   SESSION_ENV_PASSTHROUGH_KEYS,
   buildSessionEnv,
@@ -68,6 +70,21 @@ describe("session-env", () => {
       // always overwritten (see the TERM-forcing tests below), same
       // treatment as COLORTERM.
       expect(result).toEqual({ ...base, COLORTERM: "truecolor", TERM: "xterm-256color" });
+    });
+
+    it("strips host display vars so TUIs fall back to OSC 52 for copy", () => {
+      const result = buildSessionEnv({
+        PATH: "/usr/bin",
+        DISPLAY: ":0",
+        WAYLAND_DISPLAY: "wayland-mullion",
+        XAUTHORITY: "/home/dev/.Xauthority",
+      });
+      for (const key of HOST_DISPLAY_ENV_KEYS) expect(result).not.toHaveProperty(key);
+      expect(result.PATH).toBe("/usr/bin");
+    });
+
+    it("does not reserve display vars, so session.env can opt back in", () => {
+      for (const key of HOST_DISPLAY_ENV_KEYS) expect(isReservedSessionEnvKey(key)).toBe(false);
     });
 
     it("always forces COLORTERM=truecolor, overriding any inherited value (issue #91)", () => {
