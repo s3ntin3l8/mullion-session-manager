@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { closeDb } from "../../src/db/client.js";
+import { sessions } from "../../src/db/schema.js";
+import { gitEnv } from "../../src/services/git-env.js";
 
 const tmpDb = path.join(os.tmpdir(), `project-files-test-${process.pid}.db`);
 process.env.DATABASE_URL = `file:${tmpDb}`;
@@ -133,6 +136,300 @@ describe("project-files routes", () => {
     await app.close();
   });
 
+  describe("sessionId re-roots the editor at that session's cwd", () => {
+    let outsideDir: string;
+    let subDir: string;
+
+    beforeEach(() => {
+      outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-project-files-outside-"));
+      subDir = path.join(projectCwd, "packages", "app");
+      fs.mkdirSync(subDir, { recursive: true });
+      fs.writeFileSync(path.join(subDir, ".env"), "SUB=1\n");
+      fs.writeFileSync(path.join(projectCwd, ".env"), "PROJECT=1\n");
+    });
+
+    afterEach(() => {
+      fs.rmSync(outsideDir, { recursive: true, force: true });
+    });
+
+    function addSession(
+      app: Awaited<ReturnType<typeof buildApp>>,
+      projectId: number,
+      cwd: string | null,
+    ) {
+      return app.db
+        .insert(sessions)
+        .values({ projectId, name: "s", command: "bash", cwd })
+        .returning({ id: sessions.id })
+        .get().id;
+    }
+
+    // gitEnv() strips the GIT_* vars a pre-push hook leaks into `npm test`
+    // (GIT_DIR / GIT_INDEX_FILE ...): without it `git add -A` here would run
+    // against the REAL repo's index with this temp dir as its work tree.
+    const git = (cwd: string, ...args: string[]) =>
+      execFileSync("git", ["-c", "commit.gpgsign=false", ...args], {
+        cwd,
+        stdio: "ignore",
+        env: {
+          ...gitEnv(),
+          GIT_AUTHOR_NAME: "t",
+          GIT_AUTHOR_EMAIL: "t@t",
+          GIT_COMMITTER_NAME: "t",
+          GIT_COMMITTER_EMAIL: "t@t",
+        },
+      });
+
+    it("lists, reads and writes in a session cwd inside the project, not the project root", async () => {
+      const { app, projectId } = await createProject();
+      const sessionId = addSession(app, projectId, subDir);
+
+      const read = await app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/file?path=.env&sessionId=${sessionId}`,
+      });
+      expect(read.json().content).toBe("SUB=1\n");
+      const list = await app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/files?sessionId=${sessionId}`,
+      });
+      expect(list.statusCode).toBe(200);
+
+      const put = await app.inject({
+        method: "PUT",
+        url: `/api/projects/${projectId}/file`,
+        payload: { path: ".env", content: "SUB=2\n", sessionId },
+      });
+      expect(put.statusCode).toBe(200);
+      expect(fs.readFileSync(path.join(subDir, ".env"), "utf8")).toBe("SUB=2\n");
+      expect(fs.readFileSync(path.join(projectCwd, ".env"), "utf8")).toBe("PROJECT=1\n");
+      await app.close();
+    });
+
+    it("accepts a registered git worktree that lives OUTSIDE the project root", async () => {
+      git(projectCwd, "init", "-q", "-b", "main");
+      fs.writeFileSync(path.join(projectCwd, "seed.txt"), "x");
+      git(projectCwd, "add", "-A");
+      git(projectCwd, "commit", "-q", "-m", "init");
+      const wt = path.join(outsideDir, "feat-x");
+      git(projectCwd, "worktree", "add", "-q", "-b", "feat-x", wt);
+      fs.writeFileSync(path.join(wt, ".env"), "WT=1\n");
+
+      const { app, projectId } = await createProject();
+      const sessionId = addSession(app, projectId, wt);
+      const read = await app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/file?path=.env&sessionId=${sessionId}`,
+      });
+      expect(read.statusCode).toBe(200);
+      expect(read.json().content).toBe("WT=1\n");
+      await app.close();
+    });
+
+    it("refuses a session cwd that is neither inside the project nor a registered worktree", async () => {
+      fs.writeFileSync(path.join(outsideDir, ".env"), "SECRET=1\n");
+      const { app, projectId } = await createProject();
+      const arbitrary = addSession(app, projectId, outsideDir);
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/file?path=.env&sessionId=${arbitrary}`,
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().message).toMatch(/outside the project/);
+      const del = await app.inject({
+        method: "DELETE",
+        url: `/api/projects/${projectId}/file?path=.env&sessionId=${arbitrary}`,
+      });
+      expect(del.statusCode).toBe(400);
+      expect(fs.existsSync(path.join(outsideDir, ".env"))).toBe(true);
+      await app.close();
+    });
+
+    it("refuses an in-project session cwd that is a symlink leading outside", async () => {
+      fs.writeFileSync(path.join(outsideDir, ".env"), "SECRET=1\n");
+      fs.symlinkSync(outsideDir, path.join(projectCwd, "escape"));
+      const { app, projectId } = await createProject();
+      const sessionId = addSession(app, projectId, path.join(projectCwd, "escape"));
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/file?path=.env&sessionId=${sessionId}`,
+      });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("treats an in-project session cwd that is a symlink loop as not allowed (400, not 500)", async () => {
+      fs.symlinkSync("loop-b", path.join(projectCwd, "loop-a"));
+      fs.symlinkSync("loop-a", path.join(projectCwd, "loop-b"));
+      const { app, projectId } = await createProject();
+      const sessionId = addSession(app, projectId, path.join(projectCwd, "loop-a"));
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/files?sessionId=${sessionId}`,
+      });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("rejects a non-positive sessionId and over-long paths", async () => {
+      const { app, projectId } = await createProject();
+      for (const bad of ["0", "-3"]) {
+        const res = await app.inject({
+          method: "GET",
+          url: `/api/projects/${projectId}/file?path=.env&sessionId=${bad}`,
+        });
+        expect(res.statusCode).toBe(400);
+      }
+      const put = await app.inject({
+        method: "PUT",
+        url: `/api/projects/${projectId}/file`,
+        payload: { path: "a", content: "", sessionId: 0 },
+      });
+      expect(put.statusCode).toBe(400);
+      const long = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/files/mkdir`,
+        payload: { path: "a".repeat(4097) },
+      });
+      expect(long.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("falls back to the project cwd for a session without a cwd override", async () => {
+      const { app, projectId } = await createProject();
+      const sessionId = addSession(app, projectId, null);
+      const read = await app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/file?path=.env&sessionId=${sessionId}`,
+      });
+      expect(read.json().content).toBe("PROJECT=1\n");
+      await app.close();
+    });
+
+    it("404s for another project's session and 400s for a bad id", async () => {
+      const { app, projectId } = await createProject();
+      const otherCwd = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-project-files-other-"));
+      const other = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: "other", cwd: otherCwd },
+      });
+      const foreign = addSession(app, other.json().id as number, subDir);
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/file?path=.env&sessionId=${foreign}`,
+      });
+      expect(res.statusCode).toBe(404);
+      const missing = await app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/file?path=.env&sessionId=999999`,
+      });
+      expect(missing.statusCode).toBe(404);
+      const bad = await app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/file?path=.env&sessionId=abc`,
+      });
+      expect(bad.statusCode).toBe(400);
+      fs.rmSync(otherCwd, { recursive: true, force: true });
+      await app.close();
+    });
+  });
+
+  it("creates folders, renames and deletes end to end, honouring sessionId", async () => {
+    const { app, projectId } = await createProject();
+    const mk = await app.inject({
+      method: "POST",
+      url: `/api/projects/${projectId}/files/mkdir`,
+      payload: { path: "docs" },
+    });
+    expect(mk.statusCode).toBe(200);
+    expect(mk.json()).toEqual({ path: "docs" });
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/projects/${projectId}/files/mkdir`,
+          payload: { path: "docs" },
+        })
+      ).statusCode,
+    ).toBe(409);
+
+    fs.writeFileSync(path.join(projectCwd, "docs", "a.md"), "x");
+    const mv = await app.inject({
+      method: "POST",
+      url: `/api/projects/${projectId}/files/rename`,
+      payload: { from: "docs/a.md", to: "docs/b.md" },
+    });
+    expect(mv.json()).toEqual({ path: "docs/b.md" });
+    const clash = await app.inject({
+      method: "POST",
+      url: `/api/projects/${projectId}/files/rename`,
+      payload: { from: "docs/b.md", to: "docs/b.md" },
+    });
+    expect(clash.statusCode).toBe(409);
+
+    const full = await app.inject({
+      method: "DELETE",
+      url: `/api/projects/${projectId}/file?path=docs`,
+    });
+    expect(full.statusCode).toBe(409);
+    expect(full.json().code).toBe("not_empty");
+    expect(
+      (
+        await app.inject({
+          method: "DELETE",
+          url: `/api/projects/${projectId}/file?path=docs/b.md`,
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(
+      (await app.inject({ method: "DELETE", url: `/api/projects/${projectId}/file?path=docs` }))
+        .statusCode,
+    ).toBe(200);
+    expect(fs.existsSync(path.join(projectCwd, "docs"))).toBe(false);
+    expect(
+      (await app.inject({ method: "DELETE", url: `/api/projects/${projectId}/file` })).statusCode,
+    ).toBe(400);
+    expect(
+      (await app.inject({ method: "DELETE", url: `/api/projects/${projectId}/file?path=../x` }))
+        .statusCode,
+    ).toBe(400);
+    await app.close();
+  });
+
+  it("searches filenames, honouring sessionId", async () => {
+    fs.writeFileSync(path.join(projectCwd, ".env"), "");
+    fs.mkdirSync(path.join(projectCwd, "src"));
+    fs.writeFileSync(path.join(projectCwd, "src", "env.ts"), "");
+    const { app, projectId } = await createProject();
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/projects/${projectId}/files/search?q=env`,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(
+      res
+        .json()
+        .results.map((r: { path: string }) => r.path)
+        .sort(),
+    ).toEqual([".env", "src/env.ts"]);
+    const none = await app.inject({
+      method: "GET",
+      url: `/api/projects/${projectId}/files/search`,
+    });
+    expect(none.json()).toEqual({ results: [], truncated: false });
+    const long = await app.inject({
+      method: "GET",
+      url: `/api/projects/${projectId}/files/search?q=${"a".repeat(201)}`,
+    });
+    expect(long.statusCode).toBe(400);
+    expect(
+      (await app.inject({ method: "GET", url: "/api/projects/999999/files/search?q=a" }))
+        .statusCode,
+    ).toBe(404);
+    await app.close();
+  });
+
   it("maps service errors to their http status", async () => {
     fs.writeFileSync(path.join(projectCwd, "bin"), Buffer.from([0, 1, 2]));
     const { app, projectId } = await createProject();
@@ -241,6 +538,86 @@ describe("project-files routes", () => {
       expect(stale.statusCode).toBe(409);
       expect(stale.json().code).toBe("conflict");
 
+      await primary.close();
+      await agentApp.close();
+    });
+
+    it("sends the session's cwd to the agent when sessionId is given", async () => {
+      const sub = path.join(projectCwd, "packages", "app");
+      fs.mkdirSync(sub, { recursive: true });
+      fs.writeFileSync(path.join(sub, ".env"), "REMOTE_SUB=1\n");
+      const { agentApp, port } = await startAgent("pf-token-sid");
+      const { primary, projectId } = await remoteProject(port, "pf-token-sid", projectCwd);
+      const sessionId = primary.db
+        .insert(sessions)
+        .values({ projectId, name: "s", command: "bash", cwd: sub })
+        .returning({ id: sessions.id })
+        .get().id;
+      const res = await primary.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/file?path=.env&sessionId=${sessionId}`,
+      });
+      expect(res.json().content).toBe("REMOTE_SUB=1\n");
+
+      // a remote host can't run `git worktree list` here, so a cwd outside
+      // the project is refused rather than trusted
+      const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-project-files-remote-out-"));
+      const outsideSession = primary.db
+        .insert(sessions)
+        .values({ projectId, name: "s2", command: "bash", cwd: elsewhere })
+        .returning({ id: sessions.id })
+        .get().id;
+      const refused = await primary.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/file?path=.env&sessionId=${outsideSession}`,
+      });
+      expect(refused.statusCode).toBe(400);
+      fs.rmSync(elsewhere, { recursive: true, force: true });
+      await primary.close();
+      await agentApp.close();
+    });
+
+    it("round-trips mkdir/rename/delete through the agent", async () => {
+      const { agentApp, port } = await startAgent("pf-token-ops");
+      const { primary, projectId } = await remoteProject(port, "pf-token-ops", projectCwd);
+      const base = `/api/projects/${projectId}`;
+      expect(
+        (
+          await primary.inject({
+            method: "POST",
+            url: `${base}/files/mkdir`,
+            payload: { path: "d" },
+          })
+        ).json(),
+      ).toEqual({ path: "d" });
+      fs.writeFileSync(path.join(projectCwd, "d", "f"), "");
+      const mv = await primary.inject({
+        method: "POST",
+        url: `${base}/files/rename`,
+        payload: { from: "d/f", to: "d/g" },
+      });
+      expect(mv.json()).toEqual({ path: "d/g" });
+      const full = await primary.inject({ method: "DELETE", url: `${base}/file?path=d` });
+      expect(full.statusCode).toBe(409);
+      expect(full.json().code).toBe("not_empty");
+      expect(
+        (await primary.inject({ method: "DELETE", url: `${base}/file?path=d/g` })).statusCode,
+      ).toBe(200);
+      expect(fs.existsSync(path.join(projectCwd, "d", "g"))).toBe(false);
+      await primary.close();
+      await agentApp.close();
+    });
+
+    it("searches through the agent", async () => {
+      fs.writeFileSync(path.join(projectCwd, ".env.local"), "");
+      const { agentApp, port } = await startAgent("pf-token-search");
+      const { primary, projectId } = await remoteProject(port, "pf-token-search", projectCwd);
+      const res = await primary.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/files/search?q=envlocal`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().results).toEqual([{ path: ".env.local" }]);
       await primary.close();
       await agentApp.close();
     });

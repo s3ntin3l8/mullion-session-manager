@@ -153,6 +153,41 @@ describe("GitPanel", () => {
     expect(screen.getByText("src/new.ts")).toBeInTheDocument();
   });
 
+  describe("Edit action (open in the file editor)", () => {
+    const withFiles = (files: Array<{ path: string; status: string }>) =>
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({
+          status: () => jsonResponse(200, { ...CLEAN_STATUS, isClean: false, files }),
+        }),
+      );
+
+    it("offers Edit for changed and untracked files, not deleted files or folders", async () => {
+      withFiles([
+        { path: "src/a.ts", status: "M" },
+        { path: "src/new.ts", status: "?" },
+        { path: "gone.ts", status: "D" },
+        { path: "newdir/", status: "?" },
+      ]);
+      const onEditFile = vi.fn();
+      const user = userEvent.setup();
+      render(<GitPanel params={{ projectId: 4 }} onEditFile={onEditFile} />);
+      await screen.findByText("Changes (4)");
+      expect(screen.getByLabelText("Edit src/new.ts")).toBeInTheDocument();
+      expect(screen.queryByLabelText("Edit gone.ts")).toBeNull();
+      expect(screen.queryByLabelText("Edit newdir/")).toBeNull();
+      await user.click(screen.getByLabelText("Edit src/a.ts"));
+      expect(onEditFile).toHaveBeenCalledWith("src/a.ts");
+    });
+
+    it("shows no Edit buttons without an onEditFile handler", async () => {
+      withFiles([{ path: "src/a.ts", status: "M" }]);
+      render(<GitPanel params={{ projectId: 4 }} />);
+      await screen.findByText("Changes (1)");
+      expect(screen.queryByLabelText("Edit src/a.ts")).toBeNull();
+    });
+  });
+
   it("shows ahead/behind counts when they differ from zero", async () => {
     vi.stubGlobal(
       "fetch",

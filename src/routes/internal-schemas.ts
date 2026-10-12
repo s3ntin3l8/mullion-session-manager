@@ -747,7 +747,7 @@ export const projectFilesListSchema = {
     type: "object",
     required: ["cwd"],
     additionalProperties: false,
-    properties: { cwd: { type: "string" }, path: { type: "string" } },
+    properties: { cwd: { type: "string" }, path: { type: "string", maxLength: 4096 } },
   },
 };
 
@@ -761,7 +761,7 @@ export const projectFilesReadSchema = {
     type: "object",
     required: ["cwd", "path"],
     additionalProperties: false,
-    properties: { cwd: { type: "string" }, path: { type: "string" } },
+    properties: { cwd: { type: "string" }, path: { type: "string", maxLength: 4096 } },
   },
 };
 
@@ -780,10 +780,50 @@ export const projectFilesWriteSchema = {
     additionalProperties: false,
     properties: {
       cwd: { type: "string" },
-      path: { type: "string" },
+      path: { type: "string", maxLength: 4096 },
       content: { type: "string" },
       expectedMtimeMs: { type: "number" },
       create: { type: "boolean" },
     },
+  },
+};
+
+export interface ProjectFilesPathBody {
+  cwd: string;
+  path: string;
+}
+
+export const projectFilesPathSchema = projectFilesReadSchema;
+
+export interface ProjectFilesRenameBody {
+  cwd: string;
+  from: string;
+  to: string;
+}
+
+export const projectFilesRenameSchema = {
+  body: {
+    type: "object",
+    required: ["cwd", "from", "to"],
+    additionalProperties: false,
+    properties: {
+      cwd: { type: "string" },
+      from: { type: "string", maxLength: 4096 },
+      to: { type: "string", maxLength: 4096 },
+    },
+  },
+};
+
+export interface ProjectFilesSearchBody {
+  cwd: string;
+  query: string;
+}
+
+export const projectFilesSearchSchema = {
+  body: {
+    type: "object",
+    required: ["cwd", "query"],
+    additionalProperties: false,
+    properties: { cwd: { type: "string" }, query: { type: "string", maxLength: 200 } },
   },
 };

@@ -1802,3 +1802,13 @@ export interface ProjectFileWriteResult {
   size: number;
   mtimeMs: number;
 }
+
+// Mirrors src/services/project-files.ts's ProjectSearchListing 1:1.
+export interface ProjectSearchResult {
+  path: string;
+}
+
+export interface ProjectSearchListing {
+  results: ProjectSearchResult[];
+  truncated: boolean;
+}

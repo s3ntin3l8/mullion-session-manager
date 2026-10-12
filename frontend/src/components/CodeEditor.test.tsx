@@ -54,6 +54,28 @@ describe("CodeEditor (real CodeMirror)", () => {
     expect(onSave).toHaveBeenCalled();
   });
 
+  it("moves the cursor to revealLine, re-applies on a new token, and clamps out-of-range lines", () => {
+    const doc = "one\ntwo\nthree\nfour";
+    const lineAt = (container: HTMLElement) => {
+      const state = viewOf(container).state;
+      return state.doc.lineAt(state.selection.main.head).number;
+    };
+    const { container, rerender } = render(
+      <CodeEditor value={doc} revealLine={{ line: 3, token: 1 }} />,
+    );
+    expect(lineAt(container)).toBe(3);
+
+    viewOf(container).dispatch({ selection: { anchor: 0 } });
+    expect(lineAt(container)).toBe(1);
+    rerender(<CodeEditor value={doc} revealLine={{ line: 3, token: 2 }} />);
+    expect(lineAt(container)).toBe(3);
+
+    rerender(<CodeEditor value={doc} revealLine={{ line: 999, token: 3 }} />);
+    expect(lineAt(container)).toBe(4);
+    rerender(<CodeEditor value={doc} revealLine={{ line: 0, token: 4 }} />);
+    expect(lineAt(container)).toBe(1);
+  });
+
   it("destroys the view on unmount", () => {
     const { container, unmount } = render(<CodeEditor value="x" />);
     const view = viewOf(container);

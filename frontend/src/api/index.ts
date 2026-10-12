@@ -138,6 +138,8 @@ export type {
   ProjectDirListing,
   ProjectFileContent,
   ProjectFileWriteResult,
+  ProjectSearchResult,
+  ProjectSearchListing,
   GitFileDiffResponse,
   GitStatusesBatchResult,
   GitRefsBatchResult,

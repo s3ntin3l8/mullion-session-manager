@@ -4,18 +4,25 @@
 // (services/project-files.ts), a remote-hosted one proxies through
 // /internal/project-files/* on that host. Contents are secrets-adjacent
 // (.env) — nothing here logs a request body or a file's content.
+import path from "node:path";
+import { realpathSync } from "node:fs";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { eq } from "drizzle-orm";
-import { projects } from "../db/schema.js";
+import { projects, sessions } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { getRemoteHostClient, HostRequestError } from "../services/remote-host-client.js";
 import { forwardHostRequestError } from "../services/host-error-reply.js";
+import { isSiblingWorktreeCwd } from "../services/session-lifecycle.js";
 import {
   PROJECT_FILE_BODY_LIMIT,
   ProjectFileError,
   listProjectDir,
   readProjectFile,
   writeProjectFile,
+  makeProjectDir,
+  deleteProjectPath,
+  renameProjectPath,
+  searchProjectFiles,
 } from "../services/project-files.js";
 
 const FILES_RATE_LIMIT = { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } };
@@ -26,10 +33,18 @@ const idParams = {
   properties: { id: { type: "string" } },
 };
 
+// `sessionId` (optional on every route below) re-roots the editor at that
+// session's own cwd instead of the project's — a worktree session's
+// gitignored .env lives in its worktree, which a custom worktree baseDir can
+// put outside the project root. A session row's cwd is NOT trusted on its own
+// (a top-level session may carry an arbitrary cwd): it must be inside the
+// project, or — local hosts only — a registered git worktree of the project's
+// repo (the same rule createSessionRecord applies to child spawns). A session
+// of ANOTHER project is refused.
 const pathQuery = {
   type: "object",
   additionalProperties: false,
-  properties: { path: { type: "string" } },
+  properties: { path: { type: "string", maxLength: 4096 }, sessionId: { type: "string" } },
 };
 
 const writeSchema = {
@@ -39,10 +54,11 @@ const writeSchema = {
     required: ["path", "content"],
     additionalProperties: false,
     properties: {
-      path: { type: "string" },
+      path: { type: "string", maxLength: 4096 },
       content: { type: "string" },
       expectedMtimeMs: { type: "number" },
       create: { type: "boolean" },
+      sessionId: { type: "integer", minimum: 1 },
     },
   },
 };
@@ -92,7 +108,19 @@ export async function projectFilesRoute(app: FastifyInstance) {
     return reply.serviceUnavailable(`Host ${hostId} is unreachable`);
   }
 
-  function resolveProject(id: string, reply: FastifyReply) {
+  interface Ctx {
+    hostId: string;
+    /** Absolute root this request operates in (project cwd, or a session's). */
+    cwd: string;
+  }
+
+  // Resolves the project (and, when `sessionId` is given, that session's cwd)
+  // or sends the 400/404 itself and returns null.
+  async function resolveCtx(
+    id: string,
+    sessionIdRaw: unknown,
+    reply: FastifyReply,
+  ): Promise<Ctx | null> {
     const projectId = Number(id);
     if (!Number.isInteger(projectId)) {
       reply.badRequest("Invalid project id");
@@ -103,81 +131,254 @@ export async function projectFilesRoute(app: FastifyInstance) {
       reply.notFound();
       return null;
     }
-    return project;
+    if (sessionIdRaw === undefined || sessionIdRaw === null || sessionIdRaw === "") {
+      return { hostId: project.hostId, cwd: project.cwd };
+    }
+    const sessionId = Number(sessionIdRaw);
+    if (!Number.isInteger(sessionId) || sessionId <= 0) {
+      reply.badRequest("Invalid session id");
+      return null;
+    }
+    const [session] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+    if (!session || session.projectId !== project.id) {
+      reply.notFound("Session not found in this project");
+      return null;
+    }
+    const sessionCwd = session.cwd ? path.resolve(session.cwd) : null;
+    if (!sessionCwd || sessionCwd === path.resolve(project.cwd)) {
+      return { hostId: project.hostId, cwd: project.cwd };
+    }
+    let allowed: boolean;
+    try {
+      allowed = await sessionRootAllowed(project, sessionCwd);
+    } catch (err) {
+      // Couldn't tell (EACCES on a sandboxed FS, ...) — not the same as "no".
+      app.log.warn({ err, projectId: project.id }, "couldn't verify the session's directory");
+      reply.serviceUnavailable("Couldn't verify the session's directory");
+      return null;
+    }
+    if (!allowed) {
+      reply.badRequest("The session's directory is outside the project or no longer exists");
+      return null;
+    }
+    return { hostId: project.hostId, cwd: sessionCwd };
   }
 
-  app.get<{ Params: { id: string }; Querystring: { path?: string } }>(
+  async function sessionRootAllowed(
+    project: { cwd: string; hostId: string },
+    sessionCwd: string,
+  ): Promise<boolean> {
+    const root = path.resolve(project.cwd);
+    if (!sessionCwd.startsWith(root + path.sep)) {
+      // Outside the project: only a registered worktree of its repo, and only
+      // where `git worktree list` can run (the primary's own filesystem).
+      return project.hostId === LOCAL_HOST_ID && (await isSiblingWorktreeCwd(project, sessionCwd));
+    }
+    if (project.hostId !== LOCAL_HOST_ID) return true; // the agent re-checks against PROJECTS_ROOTS
+    try {
+      // Lexically inside, but a symlinked directory could lead out of it.
+      const real = realpathSync(sessionCwd);
+      const realRoot = realpathSync(root);
+      return real === realRoot || real.startsWith(realRoot + path.sep);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      // The directory is gone or unresolvable — treat as not allowed. Anything
+      // else (EACCES, ...) is "couldn't check", surfaced by the caller as 503.
+      if (code === "ENOENT" || code === "ENOTDIR" || code === "ELOOP") return false;
+      throw err;
+    }
+  }
+
+  // The hostId-branching every route shares: run `local` against the
+  // primary's filesystem, or `remote` against the project's host.
+  async function dispatch<T>(
+    reply: FastifyReply,
+    ctx: Ctx,
+    local: (cwd: string) => T | Promise<T>,
+    remote: (client: ReturnType<typeof getRemoteHostClient>, cwd: string) => Promise<T>,
+  ) {
+    if (ctx.hostId === LOCAL_HOST_ID) {
+      try {
+        return await local(ctx.cwd);
+      } catch (err) {
+        return localErrorReply(reply, err);
+      }
+    }
+    try {
+      return await remote(getRemoteHostClient(app, ctx.hostId), ctx.cwd);
+    } catch (err) {
+      return remoteErrorReply(reply, ctx.hostId, err);
+    }
+  }
+
+  app.get<{ Params: { id: string }; Querystring: { path?: string; sessionId?: string } }>(
     "/api/projects/:id/files",
     { ...FILES_RATE_LIMIT, schema: { params: idParams, querystring: pathQuery } },
     async (request, reply) => {
-      const project = resolveProject(request.params.id, reply);
-      if (!project) return;
+      const ctx = await resolveCtx(request.params.id, request.query.sessionId, reply);
+      if (!ctx) return;
       const relPath = request.query.path ?? "";
-      if (project.hostId === LOCAL_HOST_ID) {
-        try {
-          return listProjectDir(project.cwd, relPath);
-        } catch (err) {
-          return localErrorReply(reply, err);
-        }
-      }
-      try {
-        return await getRemoteHostClient(app, project.hostId).listProjectDir(project.cwd, relPath);
-      } catch (err) {
-        return remoteErrorReply(reply, project.hostId, err);
-      }
+      return dispatch(
+        reply,
+        ctx,
+        (cwd) => listProjectDir(cwd, relPath),
+        (client, cwd) => client.listProjectDir(cwd, relPath),
+      );
     },
   );
 
-  app.get<{ Params: { id: string }; Querystring: { path?: string } }>(
+  app.get<{ Params: { id: string }; Querystring: { path?: string; sessionId?: string } }>(
     "/api/projects/:id/file",
     { ...FILES_RATE_LIMIT, schema: { params: idParams, querystring: pathQuery } },
     async (request, reply) => {
-      const project = resolveProject(request.params.id, reply);
-      if (!project) return;
+      const ctx = await resolveCtx(request.params.id, request.query.sessionId, reply);
+      if (!ctx) return;
       const relPath = request.query.path;
       if (!relPath) return reply.badRequest("path is required");
-      if (project.hostId === LOCAL_HOST_ID) {
-        try {
-          return readProjectFile(project.cwd, relPath);
-        } catch (err) {
-          return localErrorReply(reply, err);
-        }
-      }
-      try {
-        return await getRemoteHostClient(app, project.hostId).readProjectFile(project.cwd, relPath);
-      } catch (err) {
-        return remoteErrorReply(reply, project.hostId, err);
-      }
+      return dispatch(
+        reply,
+        ctx,
+        (cwd) => readProjectFile(cwd, relPath),
+        (client, cwd) => client.readProjectFile(cwd, relPath),
+      );
     },
   );
 
   app.put<{
     Params: { id: string };
-    Body: { path: string; content: string; expectedMtimeMs?: number; create?: boolean };
+    Body: {
+      path: string;
+      content: string;
+      expectedMtimeMs?: number;
+      create?: boolean;
+      sessionId?: number;
+    };
   }>(
     "/api/projects/:id/file",
     { ...FILES_RATE_LIMIT, schema: writeSchema, bodyLimit: PROJECT_FILE_BODY_LIMIT },
     async (request, reply) => {
-      const project = resolveProject(request.params.id, reply);
-      if (!project) return;
+      const ctx = await resolveCtx(request.params.id, request.body.sessionId, reply);
+      if (!ctx) return;
       const { path: relPath, content, expectedMtimeMs, create } = request.body;
-      if (project.hostId === LOCAL_HOST_ID) {
-        try {
-          return writeProjectFile(project.cwd, relPath, content, { expectedMtimeMs, create });
-        } catch (err) {
-          return localErrorReply(reply, err);
-        }
-      }
-      try {
-        return await getRemoteHostClient(app, project.hostId).writeProjectFile(
-          project.cwd,
-          relPath,
-          content,
-          { expectedMtimeMs, create },
-        );
-      } catch (err) {
-        return remoteErrorReply(reply, project.hostId, err);
-      }
+      return dispatch(
+        reply,
+        ctx,
+        (cwd) => writeProjectFile(cwd, relPath, content, { expectedMtimeMs, create }),
+        (client, cwd) =>
+          client.writeProjectFile(cwd, relPath, content, { expectedMtimeMs, create }),
+      );
+    },
+  );
+
+  const mkdirSchema = {
+    params: idParams,
+    body: {
+      type: "object",
+      required: ["path"],
+      additionalProperties: false,
+      properties: {
+        path: { type: "string", maxLength: 4096 },
+        sessionId: { type: "integer", minimum: 1 },
+      },
+    },
+  };
+
+  app.post<{ Params: { id: string }; Body: { path: string; sessionId?: number } }>(
+    "/api/projects/:id/files/mkdir",
+    { ...FILES_RATE_LIMIT, schema: mkdirSchema },
+    async (request, reply) => {
+      const ctx = await resolveCtx(request.params.id, request.body.sessionId, reply);
+      if (!ctx) return;
+      const relPath = request.body.path;
+      return dispatch(
+        reply,
+        ctx,
+        (cwd) => makeProjectDir(cwd, relPath),
+        (client, cwd) => client.makeProjectDir(cwd, relPath),
+      );
+    },
+  );
+
+  app.post<{
+    Params: { id: string };
+    Body: { from: string; to: string; sessionId?: number };
+  }>(
+    "/api/projects/:id/files/rename",
+    {
+      ...FILES_RATE_LIMIT,
+      schema: {
+        params: idParams,
+        body: {
+          type: "object",
+          required: ["from", "to"],
+          additionalProperties: false,
+          properties: {
+            from: { type: "string", maxLength: 4096 },
+            to: { type: "string", maxLength: 4096 },
+            sessionId: { type: "integer", minimum: 1 },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const ctx = await resolveCtx(request.params.id, request.body.sessionId, reply);
+      if (!ctx) return;
+      const { from, to } = request.body;
+      return dispatch(
+        reply,
+        ctx,
+        (cwd) => renameProjectPath(cwd, from, to),
+        (client, cwd) => client.renameProjectPath(cwd, from, to),
+      );
+    },
+  );
+
+  // DELETE with the path in the query (a DELETE body is unreliable through
+  // proxies). Removes a file, a symlink (the link itself), or an EMPTY folder.
+  app.delete<{ Params: { id: string }; Querystring: { path?: string; sessionId?: string } }>(
+    "/api/projects/:id/file",
+    { ...FILES_RATE_LIMIT, schema: { params: idParams, querystring: pathQuery } },
+    async (request, reply) => {
+      const ctx = await resolveCtx(request.params.id, request.query.sessionId, reply);
+      if (!ctx) return;
+      const relPath = request.query.path;
+      if (!relPath) return reply.badRequest("path is required");
+      return dispatch(
+        reply,
+        ctx,
+        (cwd) => deleteProjectPath(cwd, relPath),
+        (client, cwd) => client.deleteProjectPath(cwd, relPath),
+      );
+    },
+  );
+
+  // Filename search is fired as the user types (debounced client-side), so it
+  // gets a higher ceiling than the other file routes.
+  const SEARCH_RATE_LIMIT = { config: { rateLimit: { max: 240, timeWindow: "1 minute" } } };
+
+  app.get<{ Params: { id: string }; Querystring: { q?: string; sessionId?: string } }>(
+    "/api/projects/:id/files/search",
+    {
+      ...SEARCH_RATE_LIMIT,
+      schema: {
+        params: idParams,
+        querystring: {
+          type: "object",
+          additionalProperties: false,
+          properties: { q: { type: "string", maxLength: 200 }, sessionId: { type: "string" } },
+        },
+      },
+    },
+    async (request, reply) => {
+      const ctx = await resolveCtx(request.params.id, request.query.sessionId, reply);
+      if (!ctx) return;
+      const q = request.query.q ?? "";
+      return dispatch(
+        reply,
+        ctx,
+        (cwd) => searchProjectFiles(cwd, q),
+        (client, cwd) => client.searchProjectFiles(cwd, q),
+      );
     },
   );
 }

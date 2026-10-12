@@ -372,3 +372,62 @@
     display: inline-flex;
   }
 }
+
+.file-editor-shell {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.file-editor-shell > .agent-rules-panel {
+  flex: 1;
+  min-height: 0;
+}
+.file-editor-rootbar {
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.file-editor-root-select {
+  background: color-mix(in srgb, var(--fg) 4%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--fg);
+  font-size: 12px;
+  padding: 2px 4px;
+}
+
+/* Tree row = main button + a hover/focus-revealed actions cluster (a button
+   can't contain buttons, so the actions are siblings). */
+.file-editor-rowwrap {
+  display: flex;
+  align-items: center;
+}
+.file-editor-rowwrap > .file-editor-row,
+.file-editor-rowwrap > .file-editor-new-input {
+  flex: 1;
+  min-width: 0;
+}
+.file-editor-row-actions {
+  display: none;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.file-editor-rowwrap:hover .file-editor-row-actions,
+.file-editor-rowwrap:focus-within .file-editor-row-actions {
+  display: inline-flex;
+}
+@media (hover: none) {
+  .file-editor-row-actions {
+    display: inline-flex;
+  }
+}
+
+.file-editor-search {
+  margin-bottom: 8px;
+}
+.file-editor-results {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}

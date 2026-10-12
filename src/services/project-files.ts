@@ -22,14 +22,20 @@ import {
   constants as fsConstants,
   fstatSync,
   ftruncateSync,
+  linkSync,
   lstatSync,
+  mkdirSync,
   openSync,
   readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
+  rmdirSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { readdir } from "node:fs/promises";
 import path from "node:path";
 import { PathEscapeError, realpathExistingPrefix, resolveWithin } from "./safe-path.js";
 
@@ -51,7 +57,9 @@ export type ProjectFileErrorCode =
   | "symlink"
   | "too_large"
   | "binary"
-  | "conflict";
+  | "conflict"
+  | "not_empty"
+  | "invalid";
 
 const HTTP_STATUS: Record<ProjectFileErrorCode, number> = {
   escape: 400,
@@ -63,6 +71,8 @@ const HTTP_STATUS: Record<ProjectFileErrorCode, number> = {
   too_large: 413,
   binary: 415,
   conflict: 409,
+  not_empty: 409,
+  invalid: 400,
 };
 
 export class ProjectFileError extends Error {
@@ -205,6 +215,10 @@ function mapFsError(err: unknown, rel: string): never {
       throw new ProjectFileError("not_regular", `"${rel}" is not a regular file`);
     case "EEXIST":
       throw new ProjectFileError("conflict", `"${rel}" already exists`);
+    case "ENOTEMPTY":
+      throw new ProjectFileError("not_empty", `"${rel}" is not empty`);
+    case "EINVAL":
+      throw new ProjectFileError("invalid", `"${rel}" can't be moved there`);
     default:
       throw err;
   }
@@ -335,4 +349,227 @@ export function writeProjectFile(
   } finally {
     closeSync(fd);
   }
+}
+
+interface EntryRef {
+  realRoot: string;
+  /** Normalised project-relative path of the entry itself. */
+  rel: string;
+  /** Absolute path: the entry's REAL parent directory + its own name. The
+   * leaf is deliberately not resolved, so rename/delete act on a symlink as
+   * a link instead of following it to its target. */
+  abs: string;
+}
+
+/** Resolves a path for an operation on the ENTRY ITSELF (mkdir / rename /
+ * delete): the parent directory gets the full lexical + realpath
+ * containment of resolveInProject, the final component is kept as written
+ * (a `basename`, so it can't carry a separator or `..`). */
+function resolveEntry(root: string, relPath: string): EntryRef {
+  // Reuses resolveInProject's lexical validation + containment on the whole
+  // path first (rejects empty/absolute/NUL/`..` escapes, and the project
+  // root itself), then re-resolves just the parent for the real directory.
+  const lexical = resolveInProject(
+    root,
+    path.dirname(relPath) === "." ? "" : path.dirname(relPath),
+    true,
+  );
+  const name = path.basename(relPath);
+  if (relPath === "" || relPath.includes("\0") || path.isAbsolute(relPath)) {
+    throw new ProjectFileError("escape", `Invalid path "${relPath.replaceAll("\0", "")}"`);
+  }
+  if (name === "" || name === "." || name === "..") {
+    throw new ProjectFileError("escape", `Invalid path "${relPath}"`);
+  }
+  const rel = path.join(lexical.rel, name);
+  return { realRoot: lexical.realRoot, rel, abs: path.join(lexical.real, name) };
+}
+
+/** Creates one directory. The parent must already exist (no `-p`), and an
+ * existing entry of any kind at the path is a `conflict`. */
+export function makeProjectDir(root: string, relPath: string): { path: string } {
+  const entry = resolveEntry(root, relPath);
+  try {
+    mkdirSync(entry.abs);
+  } catch (err) {
+    return mapFsError(err, entry.rel);
+  }
+  return { path: entry.rel };
+}
+
+/** Removes a file or symlink (the link, never its target), or an EMPTY
+ * directory. A non-empty directory is `not_empty` — a recursive delete from a
+ * file-editor tree is too easy to fire by mistake. */
+export function deleteProjectPath(root: string, relPath: string): { path: string } {
+  const entry = resolveEntry(root, relPath);
+  try {
+    if (lstatSync(entry.abs).isDirectory()) rmdirSync(entry.abs);
+    else unlinkSync(entry.abs);
+  } catch (err) {
+    return mapFsError(err, entry.rel);
+  }
+  return { path: entry.rel };
+}
+
+/** Renames/moves an entry within the project. The destination must not
+ * exist and its parent must. A file or symlink is moved with link(2)+unlink(2):
+ * link(2) returns EEXIST for a destination that exists at the moment of the
+ * call (where lstat-then-rename(2) would leave a window and rename(2) would
+ * silently replace it). It is NOT atomic as a whole — if unlink(2) of the
+ * source then fails, the destination link is removed again so the entry never
+ * ends up under two names. A directory can't be hard-linked, so it keeps a
+ * check-then-rename; a destination created between the check and the rename
+ * is replaced, a residual that is bounded to the user's own project (Node has
+ * no renameat2/RENAME_NOREPLACE). A filesystem that refuses hard links
+ * (EXDEV/EPERM/ENOTSUP/EMLINK) falls back to that same check-then-rename. */
+export function renameProjectPath(root: string, fromRel: string, toRel: string): { path: string } {
+  const from = resolveEntry(root, fromRel);
+  const to = resolveEntry(root, toRel);
+  let isDir: boolean;
+  try {
+    isDir = lstatSync(from.abs).isDirectory();
+  } catch (err) {
+    return mapFsError(err, from.rel);
+  }
+  try {
+    if (!isDir) {
+      try {
+        linkSync(from.abs, to.abs);
+        try {
+          unlinkSync(from.abs);
+        } catch (unlinkErr) {
+          // Don't leave the entry under two names.
+          try {
+            unlinkSync(to.abs);
+          } catch {
+            // best effort — the original error is the one worth reporting
+          }
+          throw unlinkErr;
+        }
+        return { path: to.rel };
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code !== "EXDEV" && code !== "EPERM" && code !== "ENOTSUP" && code !== "EMLINK") {
+          throw err;
+        }
+        // fall through to check-then-rename
+      }
+    }
+    try {
+      lstatSync(to.abs);
+      throw new ProjectFileError("conflict", `"${to.rel}" already exists`);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    }
+    // Residual race (see the doc comment): a destination created right here
+    // is replaced. Accepted — it's the user's own project and Node has no
+    // no-replace rename.
+    renameSync(from.abs, to.abs);
+  } catch (err) {
+    return mapFsError(err, to.rel);
+  }
+  return { path: to.rel };
+}
+
+export const MAX_SEARCH_VISITED = 20_000;
+export const MAX_SEARCH_RESULTS = 50;
+// Directories a filename search never descends into: VCS internals, vendored
+// dependencies, and this product's own worktree checkouts (a project's
+// .mullion-worktrees/ would otherwise duplicate every file N times).
+const SEARCH_SKIP_DIRS = new Set([".git", "node_modules", ".mullion-worktrees"]);
+
+export interface ProjectSearchResult {
+  path: string;
+}
+
+export interface ProjectSearchListing {
+  results: ProjectSearchResult[];
+  /** The walk hit MAX_SEARCH_VISITED, so a match may exist that wasn't seen. */
+  truncated: boolean;
+}
+
+const BOUNDARY = new Set(["/", ".", "-", "_", " "]);
+
+/** Subsequence ("fuzzy") match of `query` in `text` (both already lower-case):
+ * null if some query char can't be found in order, else a score where
+ * consecutive runs and matches at the start of a path segment/word count for
+ * more. Leftmost-greedy — good enough to rank a quick-open list. */
+export function fuzzyScore(query: string, text: string): number | null {
+  let score = 0;
+  let pos = -1;
+  let prevMatched = -2;
+  for (const ch of query) {
+    const idx = text.indexOf(ch, pos + 1);
+    if (idx === -1) return null;
+    score += 1;
+    if (idx === prevMatched + 1) score += 5;
+    if (idx === 0 || BOUNDARY.has(text[idx - 1])) score += 4;
+    prevMatched = idx;
+    pos = idx;
+  }
+  return score;
+}
+
+function scorePath(query: string, relPath: string): number | null {
+  const lower = relPath.toLowerCase();
+  const base = lower.slice(lower.lastIndexOf("/") + 1);
+  const inBase = fuzzyScore(query, base);
+  const inFull = fuzzyScore(query, lower);
+  if (inBase === null && inFull === null) return null;
+  // A hit inside the file name outranks the same hit spread over the path;
+  // shorter paths win ties.
+  return Math.max((inBase ?? 0) * 2, inFull ?? 0) - lower.length * 0.05;
+}
+
+/** Fuzzy filename search under `root` (breadth-first, so shallow files are
+ * seen first when the visit cap bites). Regular files only; symlinks are never
+ * followed or listed. Dotfiles and gitignored files ARE searched — that's the
+ * point for a `.env`. */
+export async function searchProjectFiles(
+  root: string,
+  query: string,
+  opts: { limit?: number; maxVisited?: number } = {},
+): Promise<ProjectSearchListing> {
+  const limit = opts.limit ?? MAX_SEARCH_RESULTS;
+  const maxVisited = opts.maxVisited ?? MAX_SEARCH_VISITED;
+  const q = query.trim().toLowerCase();
+  if (q === "" || q.includes("\0")) return { results: [], truncated: false };
+  const { real: start } = resolveInProject(root, "", true);
+  const scored: Array<{ path: string; score: number }> = [];
+  const queue: Array<{ abs: string; rel: string }> = [{ abs: start, rel: "" }];
+  let visited = 0;
+  let truncated = false;
+  while (queue.length > 0 && !truncated) {
+    const dir = queue.shift()!;
+    let dirents;
+    try {
+      dirents = await readdir(dir.abs, { withFileTypes: true });
+    } catch (err) {
+      // A directory that vanished mid-walk, or one we may not read, is skipped:
+      // failing a filename search over one unreadable subtree would be worse.
+      // Anything else (we never descend symlinks, so not ELOOP) is unexpected
+      // and surfaces instead of becoming a silently empty result.
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" || code === "ENOTDIR" || code === "EACCES" || code === "EPERM")
+        continue;
+      throw err;
+    }
+    for (const d of dirents) {
+      if (++visited > maxVisited) {
+        truncated = true;
+        break;
+      }
+      const rel = dir.rel === "" ? d.name : `${dir.rel}/${d.name}`;
+      if (d.isDirectory()) {
+        if (!SEARCH_SKIP_DIRS.has(d.name)) queue.push({ abs: path.join(dir.abs, d.name), rel });
+      } else if (d.isFile()) {
+        const score = scorePath(q, rel);
+        if (score !== null) scored.push({ path: rel, score });
+      }
+    }
+  }
+  scored.sort(
+    (a, b) => b.score - a.score || a.path.length - b.path.length || (a.path < b.path ? -1 : 1),
+  );
+  return { results: scored.slice(0, limit).map(({ path: p }) => ({ path: p })), truncated };
 }

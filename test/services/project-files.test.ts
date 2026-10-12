@@ -10,6 +10,11 @@ import {
   listProjectDir,
   readProjectFile,
   writeProjectFile,
+  makeProjectDir,
+  deleteProjectPath,
+  renameProjectPath,
+  searchProjectFiles,
+  fuzzyScore,
 } from "../../src/services/project-files.js";
 
 function codeOf(fn: () => unknown): string | undefined {
@@ -249,10 +254,191 @@ describe("project-files service", () => {
     });
   });
 
+  describe("makeProjectDir", () => {
+    it("creates a directory, requires an existing parent, conflicts on existing", () => {
+      expect(makeProjectDir(root, "a")).toEqual({ path: "a" });
+      expect(fs.statSync(path.join(root, "a")).isDirectory()).toBe(true);
+      expect(makeProjectDir(root, "a/b")).toEqual({ path: "a/b" });
+      expect(codeOf(() => makeProjectDir(root, "a"))).toBe("conflict");
+      expect(codeOf(() => makeProjectDir(root, "x/y/z"))).toBe("not_found");
+      fs.writeFileSync(path.join(root, "f"), "");
+      expect(codeOf(() => makeProjectDir(root, "f"))).toBe("conflict");
+      expect(codeOf(() => makeProjectDir(root, "f/sub"))).toBe("not_directory");
+    });
+
+    it("refuses escapes and the project root", () => {
+      fs.symlinkSync(outside, path.join(root, "link"));
+      for (const p of ["../x", "/abs", "a\0b", "", ".", "a/..", "link/new"]) {
+        expect(
+          codeOf(() => makeProjectDir(root, p)),
+          p,
+        ).toBe("escape");
+      }
+      expect(fs.readdirSync(outside)).toEqual([]);
+    });
+  });
+
+  describe("deleteProjectPath", () => {
+    it("deletes a file and an empty folder, but not a non-empty folder", () => {
+      fs.writeFileSync(path.join(root, "a.txt"), "x");
+      fs.mkdirSync(path.join(root, "empty"));
+      fs.mkdirSync(path.join(root, "full"));
+      fs.writeFileSync(path.join(root, "full", "f"), "");
+      expect(deleteProjectPath(root, "a.txt")).toEqual({ path: "a.txt" });
+      expect(deleteProjectPath(root, "empty")).toEqual({ path: "empty" });
+      expect(codeOf(() => deleteProjectPath(root, "full"))).toBe("not_empty");
+      expect(fs.existsSync(path.join(root, "full", "f"))).toBe(true);
+      expect(fs.existsSync(path.join(root, "a.txt"))).toBe(false);
+      expect(codeOf(() => deleteProjectPath(root, "a.txt"))).toBe("not_found");
+    });
+
+    it("deletes a symlink itself and never its target (even outside the project)", () => {
+      fs.writeFileSync(path.join(outside, "keep"), "x");
+      fs.symlinkSync(path.join(outside, "keep"), path.join(root, "out-link"));
+      fs.writeFileSync(path.join(root, "real"), "r");
+      fs.symlinkSync("real", path.join(root, "in-link"));
+      deleteProjectPath(root, "out-link");
+      deleteProjectPath(root, "in-link");
+      expect(fs.existsSync(path.join(root, "out-link"))).toBe(false);
+      expect(fs.lstatSync(path.join(root, "real")).isFile()).toBe(true);
+      expect(fs.readFileSync(path.join(outside, "keep"), "utf8")).toBe("x");
+    });
+
+    it("refuses escapes, the root, and paths through an outside symlinked dir", () => {
+      fs.writeFileSync(path.join(outside, "secret"), "x");
+      fs.symlinkSync(outside, path.join(root, "dirlink"));
+      for (const p of ["../x", "/abs", "", ".", "..", "dirlink/secret"]) {
+        expect(
+          codeOf(() => deleteProjectPath(root, p)),
+          p,
+        ).toBe("escape");
+      }
+      expect(fs.existsSync(path.join(outside, "secret"))).toBe(true);
+    });
+  });
+
+  describe("renameProjectPath", () => {
+    it("renames a file and a folder, and moves across folders", () => {
+      fs.writeFileSync(path.join(root, "a.txt"), "x");
+      fs.mkdirSync(path.join(root, "d"));
+      expect(renameProjectPath(root, "a.txt", "b.txt")).toEqual({ path: "b.txt" });
+      expect(renameProjectPath(root, "b.txt", "d/c.txt")).toEqual({ path: "d/c.txt" });
+      expect(fs.readFileSync(path.join(root, "d", "c.txt"), "utf8")).toBe("x");
+      expect(renameProjectPath(root, "d", "e")).toEqual({ path: "e" });
+      expect(fs.existsSync(path.join(root, "e", "c.txt"))).toBe(true);
+    });
+
+    it("never replaces an existing destination", () => {
+      fs.writeFileSync(path.join(root, "a"), "A");
+      fs.writeFileSync(path.join(root, "b"), "B");
+      expect(codeOf(() => renameProjectPath(root, "a", "b"))).toBe("conflict");
+      expect(fs.readFileSync(path.join(root, "b"), "utf8")).toBe("B");
+    });
+
+    it("conflicts on any existing destination, including a folder or a dangling symlink", () => {
+      fs.writeFileSync(path.join(root, "a"), "A");
+      fs.mkdirSync(path.join(root, "d"));
+      fs.symlinkSync("nowhere", path.join(root, "dangling"));
+      expect(codeOf(() => renameProjectPath(root, "a", "d"))).toBe("conflict");
+      expect(codeOf(() => renameProjectPath(root, "a", "dangling"))).toBe("conflict");
+      expect(fs.readFileSync(path.join(root, "a"), "utf8")).toBe("A");
+      expect(fs.lstatSync(path.join(root, "dangling")).isSymbolicLink()).toBe(true);
+    });
+
+    it("maps missing source, missing destination folder, and moving a folder into itself", () => {
+      fs.mkdirSync(path.join(root, "d"));
+      fs.writeFileSync(path.join(root, "a"), "");
+      expect(codeOf(() => renameProjectPath(root, "nope", "x"))).toBe("not_found");
+      expect(codeOf(() => renameProjectPath(root, "a", "missing/a"))).toBe("not_found");
+      expect(codeOf(() => renameProjectPath(root, "d", "d/inner"))).toBe("invalid");
+    });
+
+    it("renames a symlink as a link and refuses escapes on either side", () => {
+      fs.writeFileSync(path.join(root, "real"), "r");
+      fs.symlinkSync("real", path.join(root, "link"));
+      renameProjectPath(root, "link", "link2");
+      expect(fs.lstatSync(path.join(root, "link2")).isSymbolicLink()).toBe(true);
+      expect(fs.readFileSync(path.join(root, "real"), "utf8")).toBe("r");
+
+      fs.symlinkSync(outside, path.join(root, "dirlink"));
+      expect(codeOf(() => renameProjectPath(root, "real", "../real"))).toBe("escape");
+      expect(codeOf(() => renameProjectPath(root, "real", "dirlink/real"))).toBe("escape");
+      expect(codeOf(() => renameProjectPath(root, "../x", "y"))).toBe("escape");
+      expect(codeOf(() => renameProjectPath(root, "dirlink/zzz", "y"))).toBe("escape");
+      expect(fs.readdirSync(outside)).toEqual([]);
+    });
+  });
+
+  describe("fuzzyScore", () => {
+    it("matches subsequences in order and rejects the rest", () => {
+      expect(fuzzyScore("abc", "a_b_c")).not.toBeNull();
+      expect(fuzzyScore("abc", "acb")).toBeNull();
+      expect(fuzzyScore("x", "abc")).toBeNull();
+    });
+
+    it("scores consecutive runs and word-start hits higher", () => {
+      expect(fuzzyScore("ind", "index.ts")!).toBeGreaterThan(fuzzyScore("ind", "a_i_n_d")!);
+      expect(fuzzyScore("ts", "a-ts")!).toBeGreaterThan(fuzzyScore("ts", "atxs")!);
+    });
+  });
+
+  describe("searchProjectFiles", () => {
+    const touch = (rel: string) => {
+      fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+      fs.writeFileSync(path.join(root, rel), "");
+    };
+
+    it("finds dotfiles and nested files, ranking file-name hits first", async () => {
+      touch(".env");
+      touch("src/deep/environment.ts");
+      touch("src/index.ts");
+      touch("docs/readme.md");
+      const res = await searchProjectFiles(root, "env");
+      expect(res.truncated).toBe(false);
+      expect(res.results.map((r) => r.path)).toEqual([".env", "src/deep/environment.ts"]);
+    });
+
+    it("is case-insensitive and returns nothing for an empty or unmatched query", async () => {
+      touch("README.md");
+      expect((await searchProjectFiles(root, "readme")).results).toHaveLength(1);
+      expect((await searchProjectFiles(root, "   ")).results).toEqual([]);
+      expect((await searchProjectFiles(root, "zzz")).results).toEqual([]);
+      expect((await searchProjectFiles(root, "a\0b")).results).toEqual([]);
+    });
+
+    it("skips .git, node_modules and .mullion-worktrees, and never follows symlinks", async () => {
+      touch(".git/config");
+      touch("node_modules/pkg/config.js");
+      touch(".mullion-worktrees/feat/config.yml");
+      touch("config.toml");
+      fs.writeFileSync(path.join(outside, "config.secret"), "");
+      fs.symlinkSync(outside, path.join(root, "linkdir"));
+      fs.symlinkSync(path.join(outside, "config.secret"), path.join(root, "config.link"));
+      const res = await searchProjectFiles(root, "config");
+      expect(res.results.map((r) => r.path)).toEqual(["config.toml"]);
+    });
+
+    it("caps results and reports truncation when the visit cap is hit", async () => {
+      for (let i = 0; i < 12; i++) touch(`f${i}.txt`);
+      const capped = await searchProjectFiles(root, "f", { limit: 5 });
+      expect(capped.results).toHaveLength(5);
+      const visited = await searchProjectFiles(root, "f", { maxVisited: 3 });
+      expect(visited.truncated).toBe(true);
+    });
+
+    it("rejects a missing project directory", async () => {
+      await expect(searchProjectFiles(path.join(root, "nope"), "a")).rejects.toMatchObject({
+        code: "not_found",
+      });
+    });
+  });
+
   it("exposes http statuses per error code", () => {
     expect(new ProjectFileError("conflict", "x").httpStatus).toBe(409);
     expect(new ProjectFileError("too_large", "x").httpStatus).toBe(413);
     expect(new ProjectFileError("binary", "x").httpStatus).toBe(415);
     expect(new ProjectFileError("not_found", "x").httpStatus).toBe(404);
+    expect(new ProjectFileError("not_empty", "x").httpStatus).toBe(409);
+    expect(new ProjectFileError("invalid", "x").httpStatus).toBe(400);
   });
 });
