@@ -809,3 +809,17 @@ export const projectFilesRenameSchema = {
     properties: { cwd: { type: "string" }, from: { type: "string" }, to: { type: "string" } },
   },
 };
+
+export interface ProjectFilesSearchBody {
+  cwd: string;
+  query: string;
+}
+
+export const projectFilesSearchSchema = {
+  body: {
+    type: "object",
+    required: ["cwd", "query"],
+    additionalProperties: false,
+    properties: { cwd: { type: "string" }, query: { type: "string", maxLength: 200 } },
+  },
+};

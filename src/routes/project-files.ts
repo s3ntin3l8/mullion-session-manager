@@ -19,6 +19,7 @@ import {
   makeProjectDir,
   deleteProjectPath,
   renameProjectPath,
+  searchProjectFiles,
 } from "../services/project-files.js";
 
 const FILES_RATE_LIMIT = { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } };
@@ -294,6 +295,36 @@ export async function projectFilesRoute(app: FastifyInstance) {
         ctx,
         (cwd) => deleteProjectPath(cwd, relPath),
         (client, cwd) => client.deleteProjectPath(cwd, relPath),
+      );
+    },
+  );
+
+  // Filename search is fired as the user types (debounced client-side), so it
+  // gets a higher ceiling than the other file routes.
+  const SEARCH_RATE_LIMIT = { config: { rateLimit: { max: 240, timeWindow: "1 minute" } } };
+
+  app.get<{ Params: { id: string }; Querystring: { q?: string; sessionId?: string } }>(
+    "/api/projects/:id/files/search",
+    {
+      ...SEARCH_RATE_LIMIT,
+      schema: {
+        params: idParams,
+        querystring: {
+          type: "object",
+          additionalProperties: false,
+          properties: { q: { type: "string", maxLength: 200 }, sessionId: { type: "string" } },
+        },
+      },
+    },
+    async (request, reply) => {
+      const ctx = resolveCtx(request.params.id, request.query.sessionId, reply);
+      if (!ctx) return;
+      const q = request.query.q ?? "";
+      return dispatch(
+        reply,
+        ctx,
+        (cwd) => searchProjectFiles(cwd, q),
+        (client, cwd) => client.searchProjectFiles(cwd, q),
       );
     },
   );

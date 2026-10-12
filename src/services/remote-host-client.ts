@@ -50,6 +50,7 @@ import type {
   ProjectDirListing,
   ProjectFileContent,
   ProjectFileWriteResult,
+  ProjectSearchListing,
 } from "./project-files.js";
 import type { GenerationTurnResult } from "./scaffold-generate.js";
 
@@ -1060,6 +1061,14 @@ export class RemoteHostClient {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ cwd, from, to }),
+    });
+  }
+
+  async searchProjectFiles(cwd: string, query: string): Promise<ProjectSearchListing> {
+    return this.request<ProjectSearchListing>("/internal/project-files/search", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ cwd, query }),
     });
   }
 

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { FileEditorPanel } from "./FileEditorPanel.js";
 import type { ProjectDirEntry } from "./api/index.js";
@@ -413,6 +413,133 @@ describe("FileEditorPanel", () => {
       expect(screen.getByLabelText("Rename .env")).toBeDisabled();
       expect(screen.getByLabelText("Delete .env")).toBeDisabled();
       expect(screen.getByLabelText("Rename big.bin")).not.toBeDisabled();
+    });
+  });
+
+  describe("file search (quick open)", () => {
+    const searchMock = (
+      results: Array<{ path: string }>,
+      opts: { truncated?: boolean; fail?: boolean } = {},
+    ) =>
+      mockFetch({
+        extra: (method, url) => {
+          if (method === "GET" && url.includes("/files/search")) {
+            if (opts.fail) return jsonResponse(503, { message: "Host down" });
+            const q = new URL(url, "http://x").searchParams.get("q") ?? "";
+            return jsonResponse(200, {
+              results: results.filter((r) => r.path.includes(q)),
+              truncated: opts.truncated ?? false,
+            });
+          }
+        },
+      });
+
+    it("replaces the tree with ranked results, opens one, and reveals it in the tree", async () => {
+      const { fn, calls } = searchMock([{ path: "src/index.ts" }, { path: "src/util.ts" }]);
+      vi.stubGlobal("fetch", fn);
+      const user = userEvent.setup();
+      render(<FileEditorPanel params={{ projectId: 1 }} />);
+      await screen.findByText(".env");
+      await user.type(screen.getByLabelText("Search files"), "src/");
+      const list = await screen.findByRole("listbox", { name: "Search results" });
+      expect(await within(list).findByText("index.ts")).toBeInTheDocument();
+      expect(screen.queryByText(".env")).toBeNull();
+      expect(calls.filter((c) => c.url.includes("/files/search")).length).toBeGreaterThanOrEqual(1);
+
+      await user.click(within(list).getByText("index.ts"));
+      expect(await screen.findByLabelText("editor:src/index.ts")).toBeInTheDocument();
+      // query cleared, tree back with the file's folder expanded
+      expect(screen.getByLabelText("Search files")).toHaveValue("");
+      expect(screen.getByText(".env")).toBeInTheDocument();
+      expect(screen.getAllByText("index.ts").length).toBeGreaterThan(0);
+    });
+
+    it("navigates with arrow keys, opens the active result on Enter, Escape clears", async () => {
+      const { fn } = searchMock([{ path: "a.ts" }, { path: "b.ts" }]);
+      vi.stubGlobal("fetch", fn);
+      const user = userEvent.setup();
+      render(<FileEditorPanel params={{ projectId: 1 }} />);
+      await screen.findByText(".env");
+      const input = screen.getByLabelText("Search files");
+      await user.type(input, ".ts");
+      await screen.findByText("b.ts");
+      await user.keyboard("{ArrowDown}");
+      expect(screen.getByRole("option", { name: /b\.ts/ })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+      await user.keyboard("{ArrowUp}{ArrowDown}{Enter}");
+      // opening goes through readProjectFile, which the base mock 404s -> note shown
+      await waitFor(() => expect(screen.getByLabelText("Search files")).toHaveValue(""));
+
+      await user.type(input, ".ts");
+      await screen.findByText("a.ts");
+      await user.keyboard("{Escape}");
+      expect(input).toHaveValue("");
+      expect(screen.getByText(".env")).toBeInTheDocument();
+    });
+
+    it("shows empty, truncated and error states", async () => {
+      const empty = searchMock([]);
+      vi.stubGlobal("fetch", empty.fn);
+      const user = userEvent.setup();
+      const { unmount } = render(<FileEditorPanel params={{ projectId: 1 }} />);
+      await screen.findByText(".env");
+      await user.type(screen.getByLabelText("Search files"), "zzz");
+      expect(await screen.findByText("No matching files")).toBeInTheDocument();
+      unmount();
+
+      const trunc = searchMock([{ path: "x.ts" }], { truncated: true });
+      vi.stubGlobal("fetch", trunc.fn);
+      const second = render(<FileEditorPanel params={{ projectId: 1 }} />);
+      await screen.findByText(".env");
+      await user.type(screen.getByLabelText("Search files"), "x");
+      expect(await screen.findByText(/Search stopped early/)).toBeInTheDocument();
+      second.unmount();
+
+      const failing = searchMock([], { fail: true });
+      vi.stubGlobal("fetch", failing.fn);
+      render(<FileEditorPanel params={{ projectId: 1 }} />);
+      await screen.findByText(".env");
+      await user.type(screen.getByLabelText("Search files"), "x");
+      expect(await screen.findByText("Host down")).toBeInTheDocument();
+    });
+
+    it("disables results while there are unsaved edits, and Ctrl+P focuses the search box", async () => {
+      const { fn } = searchMock([{ path: "x.ts" }]);
+      vi.stubGlobal("fetch", fn);
+      const user = userEvent.setup();
+      render(<FileEditorPanel params={{ projectId: 1 }} />);
+      await user.click(await screen.findByText(".env"));
+      const editor = await screen.findByLabelText("editor:.env");
+      fireEvent.change(editor, { target: { value: "dirty" } });
+      await user.type(screen.getByLabelText("Search files"), "x");
+      expect(await screen.findByRole("option", { name: /x\.ts/ })).toBeDisabled();
+
+      screen.getByLabelText("Search files").blur();
+      fireEvent.keyDown(editor, { key: "p", ctrlKey: true });
+      expect(screen.getByLabelText("Search files")).toHaveFocus();
+    });
+
+    it("drops a stale response when the query changed meanwhile", async () => {
+      let release: (() => void) | undefined;
+      const slow = new Promise<void>((r) => (release = r));
+      const base = searchMock([{ path: "fast.ts" }, { path: "slow.ts" }]);
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).includes("q=slow")) await slow;
+        return base.fn(input, init);
+      });
+      const user = userEvent.setup();
+      render(<FileEditorPanel params={{ projectId: 1 }} />);
+      await screen.findByText(".env");
+      const input = screen.getByLabelText("Search files");
+      await user.type(input, "slow");
+      await user.clear(input);
+      await user.type(input, "fast");
+      expect(await screen.findByText("fast.ts")).toBeInTheDocument();
+      release?.();
+      await new Promise((r) => setTimeout(r, 50));
+      expect(screen.queryByText("slow.ts")).toBeNull();
     });
   });
 

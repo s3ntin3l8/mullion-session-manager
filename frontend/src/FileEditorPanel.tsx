@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api, ApiError } from "./api/index.js";
-import type { ProjectDirEntry, ProjectFileContent } from "./api/index.js";
+import type { ProjectDirEntry, ProjectFileContent, ProjectSearchListing } from "./api/index.js";
 import { CodeEditor } from "./components/CodeEditor.js";
 import {
   ChevronDownIcon,
@@ -75,6 +75,14 @@ function FileEditorBody({
   const [newEntry, setNewEntry] = useState<{ kind: "file" | "dir"; name: string } | null>(null);
   const [renaming, setRenaming] = useState<{ path: string; value: string } | null>(null);
   const [treeOpen, setTreeOpen] = useState(false);
+  // Quick-open: while `query` is non-empty the tree is replaced by ranked
+  // filename matches.
+  const [query, setQuery] = useState("");
+  const [search, setSearch] = useState<ProjectSearchListing | null>(null);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [activeIdx, setActiveIdx] = useState(0);
+  const searchSeq = useRef(0);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const openSeq = useRef(0);
   const draftRef = useRef(draft);
   useEffect(() => {
@@ -137,28 +145,72 @@ function FileEditorBody({
     [projectId, sessionId],
   );
 
-  // Initial load: the root listing, plus `params.path` if given (with its
-  // parent directories expanded so the tree shows where it lives).
+  // Loads and expands every ancestor folder of `filePath`, so the tree shows
+  // where it lives.
+  const revealFile = useCallback(
+    async (filePath: string) => {
+      const parts = parentDir(filePath).split("/").filter(Boolean);
+      const ancestors = parts.map((_, i) => parts.slice(0, i + 1).join("/"));
+      for (const dir of ancestors) await loadDir(dir);
+      setExpanded((prev) => new Set([...prev, ...ancestors]));
+      setSelectedDir(parentDir(filePath));
+    },
+    [loadDir],
+  );
+
+  // Initial load: the root listing, plus `params.path` if given.
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       const ok = await loadDir("");
       if (!ok || cancelled || !params.path) return;
-      const parts = parentDir(params.path).split("/").filter(Boolean);
-      const ancestors = parts.map((_, i) => parts.slice(0, i + 1).join("/"));
-      for (const dir of ancestors) {
-        if (cancelled) return;
-        await loadDir(dir);
-      }
+      await revealFile(params.path);
       if (cancelled) return;
-      setExpanded((prev) => new Set([...prev, ...ancestors]));
       // Never replace an unsaved draft because the panel was re-targeted.
       if (!dirtyRef.current) await openFile(params.path);
     })();
     return () => {
       cancelled = true;
     };
-  }, [loadDir, openFile, params.path]);
+  }, [loadDir, openFile, revealFile, params.path]);
+
+  // Debounced search; a stale response (older keystroke) is dropped.
+  useEffect(() => {
+    const q = query.trim();
+    if (!q) return;
+    const seq = ++searchSeq.current;
+    const timer = setTimeout(() => {
+      void (async () => {
+        try {
+          const found = await api.searchProjectFiles(projectId, q, sessionId);
+          if (seq !== searchSeq.current) return;
+          setSearch(found);
+          setSearchError(null);
+          setActiveIdx(0);
+        } catch (err) {
+          if (seq !== searchSeq.current) return;
+          setSearchError(errorMessage(err, "Search failed"));
+        }
+      })();
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [query, projectId, sessionId]);
+
+  const clearSearch = useCallback(() => {
+    searchSeq.current++;
+    setQuery("");
+    setSearch(null);
+    setSearchError(null);
+  }, []);
+
+  const openSearchResult = useCallback(
+    async (filePath: string) => {
+      clearSearch();
+      await revealFile(filePath);
+      await openFile(filePath);
+    },
+    [clearSearch, revealFile, openFile],
+  );
 
   const toggleDir = useCallback(
     async (dirPath: string) => {
@@ -443,7 +495,16 @@ function FileEditorBody({
   }
 
   return (
-    <div className={`agent-rules-panel file-editor-panel${treeOpen ? " tree-open" : ""}`}>
+    <div
+      className={`agent-rules-panel file-editor-panel${treeOpen ? " tree-open" : ""}`}
+      onKeyDown={(e) => {
+        if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "p") {
+          e.preventDefault();
+          setTreeOpen(true);
+          searchInputRef.current?.focus();
+        }
+      }}
+    >
       <div className="agent-rules-panel-list file-editor-tree cmux-scroll">
         <div className="file-editor-tree-actions">
           <button
@@ -470,6 +531,30 @@ function FileEditorBody({
             New folder
           </button>
         </div>
+        <input
+          ref={searchInputRef}
+          className="file-editor-new-input file-editor-search"
+          value={query}
+          placeholder="Search files (Ctrl+P)"
+          aria-label="Search files"
+          onChange={(e) => {
+            setQuery(e.target.value);
+            if (!e.target.value.trim()) clearSearch();
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              clearSearch();
+            } else if (e.key === "ArrowDown" && search) {
+              e.preventDefault();
+              setActiveIdx((i) => Math.min(i + 1, search.results.length - 1));
+            } else if (e.key === "ArrowUp" && search) {
+              e.preventDefault();
+              setActiveIdx((i) => Math.max(i - 1, 0));
+            } else if (e.key === "Enter" && search?.results[activeIdx] && !dirty) {
+              void openSearchResult(search.results[activeIdx].path);
+            }
+          }}
+        />
         {newEntry !== null && (
           <div className="file-editor-new">
             <input
@@ -487,7 +572,38 @@ function FileEditorBody({
           </div>
         )}
         {treeError && <div className="agent-rules-panel-notice error">{treeError}</div>}
-        {renderDir("", 0)}
+        {query.trim() ? (
+          <div className="file-editor-results" role="listbox" aria-label="Search results">
+            {searchError && <div className="agent-rules-panel-notice error">{searchError}</div>}
+            {search && search.results.length === 0 && !searchError && (
+              <div className="agent-rules-panel-row-meta">No matching files</div>
+            )}
+            {search?.results.map((r, i) => (
+              <button
+                key={r.path}
+                role="option"
+                aria-selected={i === activeIdx}
+                className={`agent-rules-panel-row file-editor-row${i === activeIdx ? " selected" : ""}`}
+                disabled={dirty}
+                title={dirty ? "Save or discard your changes first" : r.path}
+                onClick={() => void openSearchResult(r.path)}
+              >
+                <FileTextIcon size={13} />
+                <span className="agent-rules-panel-row-name">{r.path.split("/").pop()}</span>
+                {r.path.includes("/") && (
+                  <span className="agent-rules-panel-row-meta">{parentDir(r.path)}</span>
+                )}
+              </button>
+            ))}
+            {search?.truncated && (
+              <div className="agent-rules-panel-row-meta">
+                Search stopped early — a very large project; narrow the query.
+              </div>
+            )}
+          </div>
+        ) : (
+          renderDir("", 0)
+        )}
       </div>
 
       <div className="agent-rules-panel-editor file-editor-main">

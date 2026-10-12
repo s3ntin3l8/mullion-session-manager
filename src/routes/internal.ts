@@ -92,6 +92,7 @@ import {
   makeProjectDir,
   deleteProjectPath,
   renameProjectPath,
+  searchProjectFiles,
 } from "../services/project-files.js";
 import { runGitFetch } from "../services/git-fetch.js";
 import { runGitPull } from "../services/git-pull.js";
@@ -178,6 +179,7 @@ import {
   toggleSkillBodySchema,
   projectFilesListSchema,
   projectFilesPathSchema,
+  projectFilesSearchSchema,
   projectFilesRenameSchema,
   projectFilesReadSchema,
   projectFilesWriteSchema,
@@ -206,6 +208,7 @@ import type {
   ProjectFilesReadBody,
   ProjectFilesWriteBody,
   ProjectFilesPathBody,
+  ProjectFilesSearchBody,
   ProjectFilesRenameBody,
   ScaffoldScanBody,
   GitCommitWipBody,
@@ -1469,6 +1472,20 @@ export async function internalRoutes(app: FastifyInstance) {
       if (resolvedCwd === null) return;
       try {
         return renameProjectPath(resolvedCwd, request.body.from, request.body.to);
+      } catch (err) {
+        return replyProjectFileError(reply, err);
+      }
+    },
+  );
+
+  app.post<{ Body: ProjectFilesSearchBody }>(
+    "/internal/project-files/search",
+    { ...INTERNAL_RATE_LIMIT, schema: projectFilesSearchSchema },
+    async (request, reply) => {
+      const resolvedCwd = requireWithinRoots(app, reply, request.body.cwd, "cwd");
+      if (resolvedCwd === null) return;
+      try {
+        return await searchProjectFiles(resolvedCwd, request.body.query);
       } catch (err) {
         return replyProjectFileError(reply, err);
       }

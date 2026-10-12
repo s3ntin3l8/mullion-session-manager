@@ -34,6 +34,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { readdir } from "node:fs/promises";
 import path from "node:path";
 import { PathEscapeError, realpathExistingPrefix, resolveWithin } from "./safe-path.js";
 
@@ -433,4 +434,100 @@ export function renameProjectPath(root: string, fromRel: string, toRel: string):
     return mapFsError(err, to.rel);
   }
   return { path: to.rel };
+}
+
+export const MAX_SEARCH_VISITED = 20_000;
+export const MAX_SEARCH_RESULTS = 50;
+// Directories a filename search never descends into: VCS internals, vendored
+// dependencies, and this product's own worktree checkouts (a project's
+// .mullion-worktrees/ would otherwise duplicate every file N times).
+const SEARCH_SKIP_DIRS = new Set([".git", "node_modules", ".mullion-worktrees"]);
+
+export interface ProjectSearchResult {
+  path: string;
+}
+
+export interface ProjectSearchListing {
+  results: ProjectSearchResult[];
+  /** The walk hit MAX_SEARCH_VISITED, so a match may exist that wasn't seen. */
+  truncated: boolean;
+}
+
+const BOUNDARY = new Set(["/", ".", "-", "_", " "]);
+
+/** Subsequence ("fuzzy") match of `query` in `text` (both already lower-case):
+ * null if some query char can't be found in order, else a score where
+ * consecutive runs and matches at the start of a path segment/word count for
+ * more. Leftmost-greedy — good enough to rank a quick-open list. */
+export function fuzzyScore(query: string, text: string): number | null {
+  let score = 0;
+  let pos = -1;
+  let prevMatched = -2;
+  for (const ch of query) {
+    const idx = text.indexOf(ch, pos + 1);
+    if (idx === -1) return null;
+    score += 1;
+    if (idx === prevMatched + 1) score += 5;
+    if (idx === 0 || BOUNDARY.has(text[idx - 1])) score += 4;
+    prevMatched = idx;
+    pos = idx;
+  }
+  return score;
+}
+
+function scorePath(query: string, relPath: string): number | null {
+  const lower = relPath.toLowerCase();
+  const base = lower.slice(lower.lastIndexOf("/") + 1);
+  const inBase = fuzzyScore(query, base);
+  const inFull = fuzzyScore(query, lower);
+  if (inBase === null && inFull === null) return null;
+  // A hit inside the file name outranks the same hit spread over the path;
+  // shorter paths win ties.
+  return Math.max((inBase ?? 0) * 2, inFull ?? 0) - lower.length * 0.05;
+}
+
+/** Fuzzy filename search under `root` (breadth-first, so shallow files are
+ * seen first when the visit cap bites). Regular files only; symlinks are never
+ * followed or listed. Dotfiles and gitignored files ARE searched — that's the
+ * point for a `.env`. */
+export async function searchProjectFiles(
+  root: string,
+  query: string,
+  opts: { limit?: number; maxVisited?: number } = {},
+): Promise<ProjectSearchListing> {
+  const limit = opts.limit ?? MAX_SEARCH_RESULTS;
+  const maxVisited = opts.maxVisited ?? MAX_SEARCH_VISITED;
+  const q = query.trim().toLowerCase();
+  if (q === "" || q.includes("\0")) return { results: [], truncated: false };
+  const { real: start } = resolveInProject(root, "", true);
+  const scored: Array<{ path: string; score: number }> = [];
+  const queue: Array<{ abs: string; rel: string }> = [{ abs: start, rel: "" }];
+  let visited = 0;
+  let truncated = false;
+  while (queue.length > 0 && !truncated) {
+    const dir = queue.shift()!;
+    let dirents;
+    try {
+      dirents = await readdir(dir.abs, { withFileTypes: true });
+    } catch {
+      continue; // unreadable / vanished directory — skip, don't fail the search
+    }
+    for (const d of dirents) {
+      if (++visited > maxVisited) {
+        truncated = true;
+        break;
+      }
+      const rel = dir.rel === "" ? d.name : `${dir.rel}/${d.name}`;
+      if (d.isDirectory()) {
+        if (!SEARCH_SKIP_DIRS.has(d.name)) queue.push({ abs: path.join(dir.abs, d.name), rel });
+      } else if (d.isFile()) {
+        const score = scorePath(q, rel);
+        if (score !== null) scored.push({ path: rel, score });
+      }
+    }
+  }
+  scored.sort(
+    (a, b) => b.score - a.score || a.path.length - b.path.length || (a.path < b.path ? -1 : 1),
+  );
+  return { results: scored.slice(0, limit).map(({ path: p }) => ({ path: p })), truncated };
 }

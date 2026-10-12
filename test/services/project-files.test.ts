@@ -13,6 +13,8 @@ import {
   makeProjectDir,
   deleteProjectPath,
   renameProjectPath,
+  searchProjectFiles,
+  fuzzyScore,
 } from "../../src/services/project-files.js";
 
 function codeOf(fn: () => unknown): string | undefined {
@@ -354,6 +356,70 @@ describe("project-files service", () => {
       expect(codeOf(() => renameProjectPath(root, "../x", "y"))).toBe("escape");
       expect(codeOf(() => renameProjectPath(root, "dirlink/zzz", "y"))).toBe("escape");
       expect(fs.readdirSync(outside)).toEqual([]);
+    });
+  });
+
+  describe("fuzzyScore", () => {
+    it("matches subsequences in order and rejects the rest", () => {
+      expect(fuzzyScore("abc", "a_b_c")).not.toBeNull();
+      expect(fuzzyScore("abc", "acb")).toBeNull();
+      expect(fuzzyScore("x", "abc")).toBeNull();
+    });
+
+    it("scores consecutive runs and word-start hits higher", () => {
+      expect(fuzzyScore("ind", "index.ts")!).toBeGreaterThan(fuzzyScore("ind", "a_i_n_d")!);
+      expect(fuzzyScore("ts", "a-ts")!).toBeGreaterThan(fuzzyScore("ts", "atxs")!);
+    });
+  });
+
+  describe("searchProjectFiles", () => {
+    const touch = (rel: string) => {
+      fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+      fs.writeFileSync(path.join(root, rel), "");
+    };
+
+    it("finds dotfiles and nested files, ranking file-name hits first", async () => {
+      touch(".env");
+      touch("src/deep/environment.ts");
+      touch("src/index.ts");
+      touch("docs/readme.md");
+      const res = await searchProjectFiles(root, "env");
+      expect(res.truncated).toBe(false);
+      expect(res.results.map((r) => r.path)).toEqual([".env", "src/deep/environment.ts"]);
+    });
+
+    it("is case-insensitive and returns nothing for an empty or unmatched query", async () => {
+      touch("README.md");
+      expect((await searchProjectFiles(root, "readme")).results).toHaveLength(1);
+      expect((await searchProjectFiles(root, "   ")).results).toEqual([]);
+      expect((await searchProjectFiles(root, "zzz")).results).toEqual([]);
+      expect((await searchProjectFiles(root, "a\0b")).results).toEqual([]);
+    });
+
+    it("skips .git, node_modules and .mullion-worktrees, and never follows symlinks", async () => {
+      touch(".git/config");
+      touch("node_modules/pkg/config.js");
+      touch(".mullion-worktrees/feat/config.yml");
+      touch("config.toml");
+      fs.writeFileSync(path.join(outside, "config.secret"), "");
+      fs.symlinkSync(outside, path.join(root, "linkdir"));
+      fs.symlinkSync(path.join(outside, "config.secret"), path.join(root, "config.link"));
+      const res = await searchProjectFiles(root, "config");
+      expect(res.results.map((r) => r.path)).toEqual(["config.toml"]);
+    });
+
+    it("caps results and reports truncation when the visit cap is hit", async () => {
+      for (let i = 0; i < 12; i++) touch(`f${i}.txt`);
+      const capped = await searchProjectFiles(root, "f", { limit: 5 });
+      expect(capped.results).toHaveLength(5);
+      const visited = await searchProjectFiles(root, "f", { maxVisited: 3 });
+      expect(visited.truncated).toBe(true);
+    });
+
+    it("rejects a missing project directory", async () => {
+      await expect(searchProjectFiles(path.join(root, "nope"), "a")).rejects.toMatchObject({
+        code: "not_found",
+      });
     });
   });
 

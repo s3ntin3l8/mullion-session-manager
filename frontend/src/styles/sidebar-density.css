@@ -422,3 +422,12 @@
     display: inline-flex;
   }
 }
+
+.file-editor-search {
+  margin-bottom: 8px;
+}
+.file-editor-results {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}

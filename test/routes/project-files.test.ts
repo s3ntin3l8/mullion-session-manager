@@ -287,6 +287,39 @@ describe("project-files routes", () => {
     await app.close();
   });
 
+  it("searches filenames, honouring sessionId", async () => {
+    fs.writeFileSync(path.join(projectCwd, ".env"), "");
+    fs.mkdirSync(path.join(projectCwd, "src"));
+    fs.writeFileSync(path.join(projectCwd, "src", "env.ts"), "");
+    const { app, projectId } = await createProject();
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/projects/${projectId}/files/search?q=env`,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(
+      res
+        .json()
+        .results.map((r: { path: string }) => r.path)
+        .sort(),
+    ).toEqual([".env", "src/env.ts"]);
+    const none = await app.inject({
+      method: "GET",
+      url: `/api/projects/${projectId}/files/search`,
+    });
+    expect(none.json()).toEqual({ results: [], truncated: false });
+    const long = await app.inject({
+      method: "GET",
+      url: `/api/projects/${projectId}/files/search?q=${"a".repeat(201)}`,
+    });
+    expect(long.statusCode).toBe(400);
+    expect(
+      (await app.inject({ method: "GET", url: "/api/projects/999999/files/search?q=a" }))
+        .statusCode,
+    ).toBe(404);
+    await app.close();
+  });
+
   it("maps service errors to their http status", async () => {
     fs.writeFileSync(path.join(projectCwd, "bin"), Buffer.from([0, 1, 2]));
     const { app, projectId } = await createProject();
@@ -446,6 +479,20 @@ describe("project-files routes", () => {
         (await primary.inject({ method: "DELETE", url: `${base}/file?path=d/g` })).statusCode,
       ).toBe(200);
       expect(fs.existsSync(path.join(projectCwd, "d", "g"))).toBe(false);
+      await primary.close();
+      await agentApp.close();
+    });
+
+    it("searches through the agent", async () => {
+      fs.writeFileSync(path.join(projectCwd, ".env.local"), "");
+      const { agentApp, port } = await startAgent("pf-token-search");
+      const { primary, projectId } = await remoteProject(port, "pf-token-search", projectCwd);
+      const res = await primary.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/files/search?q=envlocal`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().results).toEqual([{ path: ".env.local" }]);
       await primary.close();
       await agentApp.close();
     });

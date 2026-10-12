@@ -2,7 +2,12 @@
 // text file, write one text file (routes/project-files.ts). Paths are always
 // project-relative; the backend contains them to the project root.
 import { request } from "./client.js";
-import type { ProjectDirListing, ProjectFileContent, ProjectFileWriteResult } from "./types.js";
+import type {
+  ProjectDirListing,
+  ProjectFileContent,
+  ProjectFileWriteResult,
+  ProjectSearchListing,
+} from "./types.js";
 
 function sessionQuery(sessionId: number | undefined): string {
   return sessionId === undefined ? "" : `&sessionId=${sessionId}`;
@@ -57,5 +62,11 @@ export const filesApi = {
     request<{ path: string }>(
       `/api/projects/${projectId}/file?path=${encodeURIComponent(entryPath)}${sessionQuery(sessionId)}`,
       { method: "DELETE" },
+    ),
+
+  // Fuzzy filename search (dotfiles included; .git / node_modules skipped).
+  searchProjectFiles: (projectId: number, query: string, sessionId?: number) =>
+    request<ProjectSearchListing>(
+      `/api/projects/${projectId}/files/search?q=${encodeURIComponent(query)}${sessionQuery(sessionId)}`,
     ),
 };
