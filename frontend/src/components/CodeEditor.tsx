@@ -69,6 +69,9 @@ export interface CodeEditorProps {
   /** File name or path — only its extension/basename picks the syntax mode. */
   fileName?: string;
   readOnly?: boolean;
+  /** Moves the cursor to this 1-based line and scrolls it into view. Re-applied
+   * when `token` changes, so re-targeting the same line works. */
+  revealLine?: { line: number; token: number };
   /** Fired on Mod-s (Ctrl/Cmd+S). */
   onSave?: () => void;
   ariaLabel?: string;
@@ -83,6 +86,7 @@ export function CodeEditor({
   fileName,
   readOnly = false,
   onSave,
+  revealLine,
   ariaLabel,
 }: CodeEditorProps) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -161,6 +165,16 @@ export function CodeEditor({
       view.dispatch({ changes: { from: 0, to: current.length, insert: value } });
     }
   }, [value]);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view || !revealLine) return;
+    const line = view.state.doc.line(Math.min(Math.max(revealLine.line, 1), view.state.doc.lines));
+    view.dispatch({
+      selection: { anchor: line.from },
+      effects: EditorView.scrollIntoView(line.from, { y: "center" }),
+    });
+  }, [revealLine]);
 
   useEffect(() => {
     viewRef.current?.dispatch({

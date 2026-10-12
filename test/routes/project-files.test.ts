@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { closeDb } from "../../src/db/client.js";
 import { sessions } from "../../src/db/schema.js";
 
@@ -135,16 +136,19 @@ describe("project-files routes", () => {
   });
 
   describe("sessionId re-roots the editor at that session's cwd", () => {
-    let worktreeDir: string;
+    let outsideDir: string;
+    let subDir: string;
 
     beforeEach(() => {
-      worktreeDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-project-files-wt-"));
-      fs.writeFileSync(path.join(worktreeDir, ".env"), "WT=1\n");
+      outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-project-files-outside-"));
+      subDir = path.join(projectCwd, "packages", "app");
+      fs.mkdirSync(subDir, { recursive: true });
+      fs.writeFileSync(path.join(subDir, ".env"), "SUB=1\n");
       fs.writeFileSync(path.join(projectCwd, ".env"), "PROJECT=1\n");
     });
 
     afterEach(() => {
-      fs.rmSync(worktreeDir, { recursive: true, force: true });
+      fs.rmSync(outsideDir, { recursive: true, force: true });
     });
 
     function addSession(
@@ -159,15 +163,28 @@ describe("project-files routes", () => {
         .get().id;
     }
 
-    it("lists, reads and writes in the session's cwd, not the project's", async () => {
+    const git = (cwd: string, ...args: string[]) =>
+      execFileSync("git", args, {
+        cwd,
+        stdio: "ignore",
+        env: {
+          ...process.env,
+          GIT_AUTHOR_NAME: "t",
+          GIT_AUTHOR_EMAIL: "t@t",
+          GIT_COMMITTER_NAME: "t",
+          GIT_COMMITTER_EMAIL: "t@t",
+        },
+      });
+
+    it("lists, reads and writes in a session cwd inside the project, not the project root", async () => {
       const { app, projectId } = await createProject();
-      const sessionId = addSession(app, projectId, worktreeDir);
+      const sessionId = addSession(app, projectId, subDir);
 
       const read = await app.inject({
         method: "GET",
         url: `/api/projects/${projectId}/file?path=.env&sessionId=${sessionId}`,
       });
-      expect(read.json().content).toBe("WT=1\n");
+      expect(read.json().content).toBe("SUB=1\n");
       const list = await app.inject({
         method: "GET",
         url: `/api/projects/${projectId}/files?sessionId=${sessionId}`,
@@ -177,11 +194,63 @@ describe("project-files routes", () => {
       const put = await app.inject({
         method: "PUT",
         url: `/api/projects/${projectId}/file`,
-        payload: { path: ".env", content: "WT=2\n", sessionId },
+        payload: { path: ".env", content: "SUB=2\n", sessionId },
       });
       expect(put.statusCode).toBe(200);
-      expect(fs.readFileSync(path.join(worktreeDir, ".env"), "utf8")).toBe("WT=2\n");
+      expect(fs.readFileSync(path.join(subDir, ".env"), "utf8")).toBe("SUB=2\n");
       expect(fs.readFileSync(path.join(projectCwd, ".env"), "utf8")).toBe("PROJECT=1\n");
+      await app.close();
+    });
+
+    it("accepts a registered git worktree that lives OUTSIDE the project root", async () => {
+      git(projectCwd, "init", "-q", "-b", "main");
+      fs.writeFileSync(path.join(projectCwd, "seed.txt"), "x");
+      git(projectCwd, "add", "-A");
+      git(projectCwd, "commit", "-q", "-m", "init");
+      const wt = path.join(outsideDir, "feat-x");
+      git(projectCwd, "worktree", "add", "-q", "-b", "feat-x", wt);
+      fs.writeFileSync(path.join(wt, ".env"), "WT=1\n");
+
+      const { app, projectId } = await createProject();
+      const sessionId = addSession(app, projectId, wt);
+      const read = await app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/file?path=.env&sessionId=${sessionId}`,
+      });
+      expect(read.statusCode).toBe(200);
+      expect(read.json().content).toBe("WT=1\n");
+      await app.close();
+    });
+
+    it("refuses a session cwd that is neither inside the project nor a registered worktree", async () => {
+      fs.writeFileSync(path.join(outsideDir, ".env"), "SECRET=1\n");
+      const { app, projectId } = await createProject();
+      const arbitrary = addSession(app, projectId, outsideDir);
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/file?path=.env&sessionId=${arbitrary}`,
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().message).toMatch(/outside the project/);
+      const del = await app.inject({
+        method: "DELETE",
+        url: `/api/projects/${projectId}/file?path=.env&sessionId=${arbitrary}`,
+      });
+      expect(del.statusCode).toBe(400);
+      expect(fs.existsSync(path.join(outsideDir, ".env"))).toBe(true);
+      await app.close();
+    });
+
+    it("refuses an in-project session cwd that is a symlink leading outside", async () => {
+      fs.writeFileSync(path.join(outsideDir, ".env"), "SECRET=1\n");
+      fs.symlinkSync(outsideDir, path.join(projectCwd, "escape"));
+      const { app, projectId } = await createProject();
+      const sessionId = addSession(app, projectId, path.join(projectCwd, "escape"));
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/file?path=.env&sessionId=${sessionId}`,
+      });
+      expect(res.statusCode).toBe(400);
       await app.close();
     });
 
@@ -204,7 +273,7 @@ describe("project-files routes", () => {
         url: "/api/projects",
         payload: { createDir: true, name: "other", cwd: otherCwd },
       });
-      const foreign = addSession(app, other.json().id as number, worktreeDir);
+      const foreign = addSession(app, other.json().id as number, subDir);
       const res = await app.inject({
         method: "GET",
         url: `/api/projects/${projectId}/file?path=.env&sessionId=${foreign}`,
@@ -433,23 +502,38 @@ describe("project-files routes", () => {
     });
 
     it("sends the session's cwd to the agent when sessionId is given", async () => {
-      const wt = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-project-files-remote-wt-"));
-      fs.writeFileSync(path.join(wt, ".env"), "REMOTE_WT=1\n");
+      const sub = path.join(projectCwd, "packages", "app");
+      fs.mkdirSync(sub, { recursive: true });
+      fs.writeFileSync(path.join(sub, ".env"), "REMOTE_SUB=1\n");
       const { agentApp, port } = await startAgent("pf-token-sid");
       const { primary, projectId } = await remoteProject(port, "pf-token-sid", projectCwd);
       const sessionId = primary.db
         .insert(sessions)
-        .values({ projectId, name: "s", command: "bash", cwd: wt })
+        .values({ projectId, name: "s", command: "bash", cwd: sub })
         .returning({ id: sessions.id })
         .get().id;
       const res = await primary.inject({
         method: "GET",
         url: `/api/projects/${projectId}/file?path=.env&sessionId=${sessionId}`,
       });
-      expect(res.json().content).toBe("REMOTE_WT=1\n");
+      expect(res.json().content).toBe("REMOTE_SUB=1\n");
+
+      // a remote host can't run `git worktree list` here, so a cwd outside
+      // the project is refused rather than trusted
+      const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-project-files-remote-out-"));
+      const outsideSession = primary.db
+        .insert(sessions)
+        .values({ projectId, name: "s2", command: "bash", cwd: elsewhere })
+        .returning({ id: sessions.id })
+        .get().id;
+      const refused = await primary.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/file?path=.env&sessionId=${outsideSession}`,
+      });
+      expect(refused.statusCode).toBe(400);
+      fs.rmSync(elsewhere, { recursive: true, force: true });
       await primary.close();
       await agentApp.close();
-      fs.rmSync(wt, { recursive: true, force: true });
     });
 
     it("round-trips mkdir/rename/delete through the agent", async () => {

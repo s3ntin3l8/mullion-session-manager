@@ -22,6 +22,7 @@ import {
   constants as fsConstants,
   fstatSync,
   ftruncateSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   openSync,
@@ -411,24 +412,41 @@ export function deleteProjectPath(root: string, relPath: string): { path: string
 }
 
 /** Renames/moves an entry within the project. The destination must not
- * exist (rename(2) would silently replace a file); its parent must. The
- * existence check and the rename are not atomic — a destination created in
- * between would be replaced — which is acceptable inside one's own project. */
+ * exist and its parent must. A file or symlink is moved with link(2)+unlink(2),
+ * which fails atomically with EEXIST if the destination appears at any point
+ * (rename(2) would silently replace it); a directory can't be hard-linked, so
+ * it keeps a check-then-rename whose tiny window is bounded to the user's own
+ * project. A filesystem that refuses hard links (EXDEV/EPERM/ENOTSUP) falls
+ * back to that same check-then-rename. */
 export function renameProjectPath(root: string, fromRel: string, toRel: string): { path: string } {
   const from = resolveEntry(root, fromRel);
   const to = resolveEntry(root, toRel);
+  let isDir: boolean;
   try {
-    lstatSync(from.abs);
+    isDir = lstatSync(from.abs).isDirectory();
   } catch (err) {
     return mapFsError(err, from.rel);
   }
   try {
-    lstatSync(to.abs);
-    throw new ProjectFileError("conflict", `"${to.rel}" already exists`);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") return mapFsError(err, to.rel);
-  }
-  try {
+    if (!isDir) {
+      try {
+        linkSync(from.abs, to.abs);
+        unlinkSync(from.abs);
+        return { path: to.rel };
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code !== "EXDEV" && code !== "EPERM" && code !== "ENOTSUP" && code !== "EMLINK") {
+          throw err;
+        }
+        // fall through to check-then-rename
+      }
+    }
+    try {
+      lstatSync(to.abs);
+      throw new ProjectFileError("conflict", `"${to.rel}" already exists`);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    }
     renameSync(from.abs, to.abs);
   } catch (err) {
     return mapFsError(err, to.rel);

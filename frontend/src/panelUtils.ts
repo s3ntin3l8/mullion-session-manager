@@ -682,10 +682,16 @@ export function openFileEditorPanel(
   projectId: number,
   projects: { id: number; name: string | null }[],
   layout: LayoutContext,
-  target: { path?: string; sessionId?: number },
+  target: { path?: string; sessionId?: number; line?: number },
 ): void {
   const panelId = `file-editor-${projectId}`;
-  const params = { projectId, path: target.path, sessionId: target.sessionId, rev: Date.now() };
+  const params = {
+    projectId,
+    path: target.path,
+    sessionId: target.sessionId,
+    line: target.line,
+    rev: Date.now(),
+  };
   const existing = api.getPanel(panelId);
   if (existing) {
     existing.api.updateParameters(params);

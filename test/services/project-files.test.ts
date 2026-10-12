@@ -335,6 +335,16 @@ describe("project-files service", () => {
       expect(fs.readFileSync(path.join(root, "b"), "utf8")).toBe("B");
     });
 
+    it("conflicts on any existing destination, including a folder or a dangling symlink", () => {
+      fs.writeFileSync(path.join(root, "a"), "A");
+      fs.mkdirSync(path.join(root, "d"));
+      fs.symlinkSync("nowhere", path.join(root, "dangling"));
+      expect(codeOf(() => renameProjectPath(root, "a", "d"))).toBe("conflict");
+      expect(codeOf(() => renameProjectPath(root, "a", "dangling"))).toBe("conflict");
+      expect(fs.readFileSync(path.join(root, "a"), "utf8")).toBe("A");
+      expect(fs.lstatSync(path.join(root, "dangling")).isSymbolicLink()).toBe(true);
+    });
+
     it("maps missing source, missing destination folder, and moving a folder into itself", () => {
       fs.mkdirSync(path.join(root, "d"));
       fs.writeFileSync(path.join(root, "a"), "");

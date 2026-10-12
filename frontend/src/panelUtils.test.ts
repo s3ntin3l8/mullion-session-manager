@@ -2362,13 +2362,22 @@ describe("shouldShowCodexHookTrustBanner (issue #1189)", () => {
 describe("openFileEditorPanel", () => {
   it("opens a new file-editor panel with the path and session root", () => {
     const api = mockDockviewApi();
-    openFileEditorPanel(api, 1, PROJECTS, DESKTOP_LAYOUT, { path: "src/a.ts", sessionId: 9 });
+    openFileEditorPanel(api, 1, PROJECTS, DESKTOP_LAYOUT, {
+      path: "src/a.ts",
+      sessionId: 9,
+      line: 42,
+    });
     expect(api.addPanel).toHaveBeenCalledWith(
       expect.objectContaining({
         id: "file-editor-1",
         component: "file-editor",
         title: "Files: project-alpha",
-        params: expect.objectContaining({ projectId: 1, path: "src/a.ts", sessionId: 9 }),
+        params: expect.objectContaining({
+          projectId: 1,
+          path: "src/a.ts",
+          sessionId: 9,
+          line: 42,
+        }),
       }),
     );
   });

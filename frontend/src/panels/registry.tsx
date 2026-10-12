@@ -249,7 +249,7 @@ function TerminalPanelWrapper(props: IDockviewPanelProps<TerminalPaneParams>) {
   // call time like applyTitle above.
   const { containerApi } = props;
   const onOpenFile = useCallback(
-    (rawPath: string) => {
+    (rawPath: string, line?: number) => {
       const { sessions, projects } = useDashboardStore.getState();
       const session = sessions.find((s) => s.id === sessionId);
       const project = session && projects.find((p) => p.id === session.projectId);
@@ -266,6 +266,7 @@ function TerminalPanelWrapper(props: IDockviewPanelProps<TerminalPaneParams>) {
       openFileEditorPanel(containerApi, project.id, projects, layout, {
         path: rel,
         sessionId: session.cwd && session.cwd !== project.cwd ? session.id : undefined,
+        line,
       });
     },
     [sessionId, containerApi, layout],

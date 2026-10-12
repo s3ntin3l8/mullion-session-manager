@@ -23,6 +23,8 @@ export interface FileEditorPanelParams {
   /** Bumped by whoever re-targets an already-open panel, so the same `path`
    * is reopened even if the user navigated away from it. */
   rev?: number;
+  /** 1-based line to scroll to once `path` is open (terminal `file:line` links). */
+  line?: number;
 }
 
 interface DirState {
@@ -93,6 +95,15 @@ function FileEditorBody({
   }, [draft]);
 
   const dirty = file !== null && draft !== file.content;
+  // Scroll target for a terminal `file:line` link — only for the file that
+  // link named (params.path), so browsing elsewhere never jumps.
+  const revealLine = useMemo(
+    () =>
+      params.line && file?.path === params.path
+        ? { line: params.line, token: params.rev ?? 0 }
+        : undefined,
+    [params.line, params.rev, params.path, file?.path],
+  );
   const dirtyRef = useRef(dirty);
   useEffect(() => {
     dirtyRef.current = dirty;
@@ -668,6 +679,7 @@ function FileEditorBody({
               value={draft}
               onChange={setDraft}
               fileName={file.path}
+              revealLine={revealLine}
               onSave={handleSaveClick}
               ariaLabel={`Editing ${file.path}`}
             />
@@ -691,19 +703,27 @@ export function FileEditorPanel({ params }: { params: FileEditorPanelParams }) {
   );
   const allSessions = useDashboardStore((s) => s.sessions);
 
-  // A re-target from outside (git row "Edit", a terminal path link) names a
-  // session; follow it, but only when the param itself CHANGED (a manual
-  // picker choice must survive later renders) and never over unsaved edits.
+  // A re-target from outside (git row "Edit", a terminal path link) bumps
+  // `rev` and names the session to root at (or none = the project). Follow it
+  // whenever the target changed — including back to the project after the user
+  // picked a worktree by hand — but never over unsaved edits. A manual picker
+  // choice survives plain re-renders because only a changed rev/sessionId
+  // param triggers this.
   const dirtyRef = useRef(dirty);
   useEffect(() => {
     dirtyRef.current = dirty;
   }, [dirty]);
-  const lastParamSession = useRef(params.sessionId);
+  const lastTarget = useRef({ rev: params.rev, sessionId: params.sessionId });
   useEffect(() => {
-    if (params.sessionId === lastParamSession.current) return;
-    lastParamSession.current = params.sessionId;
+    if (
+      lastTarget.current.rev === params.rev &&
+      lastTarget.current.sessionId === params.sessionId
+    ) {
+      return;
+    }
+    lastTarget.current = { rev: params.rev, sessionId: params.sessionId };
     if (!dirtyRef.current) setSessionId(params.sessionId);
-  }, [params.sessionId]);
+  }, [params.rev, params.sessionId]);
 
   const roots = useMemo(() => {
     const seen = new Set<string>();

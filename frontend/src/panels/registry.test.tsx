@@ -318,6 +318,12 @@ describe("TerminalPanelWrapper — onOpenFile (terminal path links -> file edito
     expect(lastCall()[4]).toMatchObject({ path: "src/b.ts" });
   });
 
+  it("passes the line number through", () => {
+    mountTerminal();
+    capturedOnOpenFile!("src/a.ts", 42);
+    expect(lastCall()[4]).toEqual({ path: "src/a.ts", sessionId: undefined, line: 42 });
+  });
+
   it("roots at the session when it runs somewhere else (a worktree)", () => {
     mountTerminal({ cwd: "/elsewhere/feat-x/" });
     capturedOnOpenFile!("/elsewhere/feat-x/.env");

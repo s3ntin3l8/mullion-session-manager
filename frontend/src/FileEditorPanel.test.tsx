@@ -15,14 +15,17 @@ vi.mock("./components/CodeEditor.js", () => ({
     onChange,
     onSave,
     fileName,
+    revealLine,
   }: {
     value: string;
     onChange?: (v: string) => void;
     onSave?: () => void;
     fileName?: string;
+    revealLine?: { line: number; token: number };
   }) => (
     <textarea
       aria-label={`editor:${fileName}`}
+      data-reveal-line={revealLine?.line ?? ""}
       value={value}
       onChange={(e) => onChange?.(e.target.value)}
       onKeyDown={(e) => {
@@ -247,6 +250,26 @@ describe("FileEditorPanel", () => {
       await screen.findByText(".env");
       expect(calls[0].url).toContain("sessionId=42");
       expect(screen.getByRole("option", { name: "Session 42" })).toBeInTheDocument();
+    });
+
+    it("a re-target back to the project wins over a hand-picked worktree root", async () => {
+      seed([{ id: 7, projectId: 1, status: "active", cwd: "/elsewhere/feat-x" }]);
+      const { fn, calls } = mockFetch();
+      vi.stubGlobal("fetch", fn);
+      const user = userEvent.setup();
+      const { rerender } = render(<FileEditorPanel params={{ projectId: 1, rev: 1 }} />);
+      await screen.findByText(".env");
+      await user.selectOptions(screen.getByRole("combobox"), "7");
+      await waitFor(() => expect(calls.some((c) => c.url.includes("sessionId=7"))).toBe(true));
+
+      // e.g. the git panel's Edit: project-relative path, no sessionId, new rev
+      const before = calls.length;
+      rerender(<FileEditorPanel params={{ projectId: 1, path: ".env", rev: 2 }} />);
+      expect(await screen.findByLabelText("editor:.env")).toBeInTheDocument();
+      expect(screen.getByRole("combobox")).toHaveValue("");
+      const after = calls.slice(before).filter((c) => c.url.includes("/file?path=.env"));
+      expect(after.length).toBeGreaterThan(0);
+      expect(after.every((c) => !c.url.includes("sessionId"))).toBe(true);
     });
 
     it("follows a re-target to another session, but not over unsaved edits", async () => {
@@ -541,6 +564,22 @@ describe("FileEditorPanel", () => {
       await new Promise((r) => setTimeout(r, 50));
       expect(screen.queryByText("slow.ts")).toBeNull();
     });
+  });
+
+  it("passes params.line to the editor only for the file the link named", async () => {
+    const { fn } = mockFetch();
+    vi.stubGlobal("fetch", fn);
+    const user = userEvent.setup();
+    render(<FileEditorPanel params={{ projectId: 1, path: ".env", line: 3, rev: 1 }} />);
+    const editor = await screen.findByLabelText("editor:.env");
+    expect(editor).toHaveAttribute("data-reveal-line", "3");
+    await user.click(screen.getByText("big.bin"));
+    await user.click(screen.getByText("src"));
+    await user.click(await screen.findByText("index.ts"));
+    expect(await screen.findByLabelText("editor:src/index.ts")).toHaveAttribute(
+      "data-reveal-line",
+      "",
+    );
   });
 
   it("reopens params.path when a re-target bumps rev, even after navigating elsewhere", async () => {

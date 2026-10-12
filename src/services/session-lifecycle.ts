@@ -712,7 +712,7 @@ export async function discoverCommittedScaffoldOnHost(
  * Local hosts only: `listWorktrees` shells out on this machine, so a remote
  * host's project keeps the strict containment rule.
  */
-async function isSiblingWorktreeCwd(
+export async function isSiblingWorktreeCwd(
   project: { cwd: string; hostId: string },
   effectiveCwd: string,
 ): Promise<boolean> {

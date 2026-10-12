@@ -178,7 +178,8 @@ way as a namespaced one.
   `.../files/rename`, `GET .../files/search?q` — over `services/project-files.ts`,
   which holds every path to the project root by lexical + realpath containment
   and `O_NOFOLLOW` opens; an optional `sessionId` re-roots it at that session's
-  cwd (a worktree's own checkout); remote-hosted projects proxy through
+  cwd (a worktree's own checkout) — accepted only when that cwd is inside the project or, on
+  local hosts, a registered git worktree of its repo; remote-hosted projects proxy through
   `/internal/project-files/*`, and an agent too old to have them yields a 501),
   `settings` (the runtime
   Settings-override store backing Task Master's safety envelope and other

@@ -4,12 +4,15 @@
 // (services/project-files.ts), a remote-hosted one proxies through
 // /internal/project-files/* on that host. Contents are secrets-adjacent
 // (.env) — nothing here logs a request body or a file's content.
+import path from "node:path";
+import { realpathSync } from "node:fs";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { eq } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { getRemoteHostClient, HostRequestError } from "../services/remote-host-client.js";
 import { forwardHostRequestError } from "../services/host-error-reply.js";
+import { isSiblingWorktreeCwd } from "../services/session-lifecycle.js";
 import {
   PROJECT_FILE_BODY_LIMIT,
   ProjectFileError,
@@ -33,10 +36,11 @@ const idParams = {
 // `sessionId` (optional on every route below) re-roots the editor at that
 // session's own cwd instead of the project's — a worktree session's
 // gitignored .env lives in its worktree, which a custom worktree baseDir can
-// put outside the project root. createSessionRecord only ever stores a cwd
-// that is inside the project or a registered git worktree of its repo, so the
-// session row is a sound source for it; a session of ANOTHER project is
-// refused.
+// put outside the project root. A session row's cwd is NOT trusted on its own
+// (a top-level session may carry an arbitrary cwd): it must be inside the
+// project, or — local hosts only — a registered git worktree of the project's
+// repo (the same rule createSessionRecord applies to child spawns). A session
+// of ANOTHER project is refused.
 const pathQuery = {
   type: "object",
   additionalProperties: false,
@@ -112,7 +116,11 @@ export async function projectFilesRoute(app: FastifyInstance) {
 
   // Resolves the project (and, when `sessionId` is given, that session's cwd)
   // or sends the 400/404 itself and returns null.
-  function resolveCtx(id: string, sessionIdRaw: unknown, reply: FastifyReply): Ctx | null {
+  async function resolveCtx(
+    id: string,
+    sessionIdRaw: unknown,
+    reply: FastifyReply,
+  ): Promise<Ctx | null> {
     const projectId = Number(id);
     if (!Number.isInteger(projectId)) {
       reply.badRequest("Invalid project id");
@@ -136,7 +144,36 @@ export async function projectFilesRoute(app: FastifyInstance) {
       reply.notFound("Session not found in this project");
       return null;
     }
-    return { hostId: project.hostId, cwd: session.cwd ?? project.cwd };
+    const sessionCwd = session.cwd ? path.resolve(session.cwd) : null;
+    if (!sessionCwd || sessionCwd === path.resolve(project.cwd)) {
+      return { hostId: project.hostId, cwd: project.cwd };
+    }
+    if (!(await sessionRootAllowed(project, sessionCwd))) {
+      reply.badRequest("The session's directory is outside the project");
+      return null;
+    }
+    return { hostId: project.hostId, cwd: sessionCwd };
+  }
+
+  async function sessionRootAllowed(
+    project: { cwd: string; hostId: string },
+    sessionCwd: string,
+  ): Promise<boolean> {
+    const root = path.resolve(project.cwd);
+    if (!sessionCwd.startsWith(root + path.sep)) {
+      // Outside the project: only a registered worktree of its repo, and only
+      // where `git worktree list` can run (the primary's own filesystem).
+      return project.hostId === LOCAL_HOST_ID && (await isSiblingWorktreeCwd(project, sessionCwd));
+    }
+    if (project.hostId !== LOCAL_HOST_ID) return true; // the agent re-checks against PROJECTS_ROOTS
+    try {
+      // Lexically inside, but a symlinked directory could lead out of it.
+      const real = realpathSync(sessionCwd);
+      const realRoot = realpathSync(root);
+      return real === realRoot || real.startsWith(realRoot + path.sep);
+    } catch {
+      return false;
+    }
   }
 
   // The hostId-branching every route shares: run `local` against the
@@ -165,7 +202,7 @@ export async function projectFilesRoute(app: FastifyInstance) {
     "/api/projects/:id/files",
     { ...FILES_RATE_LIMIT, schema: { params: idParams, querystring: pathQuery } },
     async (request, reply) => {
-      const ctx = resolveCtx(request.params.id, request.query.sessionId, reply);
+      const ctx = await resolveCtx(request.params.id, request.query.sessionId, reply);
       if (!ctx) return;
       const relPath = request.query.path ?? "";
       return dispatch(
@@ -181,7 +218,7 @@ export async function projectFilesRoute(app: FastifyInstance) {
     "/api/projects/:id/file",
     { ...FILES_RATE_LIMIT, schema: { params: idParams, querystring: pathQuery } },
     async (request, reply) => {
-      const ctx = resolveCtx(request.params.id, request.query.sessionId, reply);
+      const ctx = await resolveCtx(request.params.id, request.query.sessionId, reply);
       if (!ctx) return;
       const relPath = request.query.path;
       if (!relPath) return reply.badRequest("path is required");
@@ -207,7 +244,7 @@ export async function projectFilesRoute(app: FastifyInstance) {
     "/api/projects/:id/file",
     { ...FILES_RATE_LIMIT, schema: writeSchema, bodyLimit: PROJECT_FILE_BODY_LIMIT },
     async (request, reply) => {
-      const ctx = resolveCtx(request.params.id, request.body.sessionId, reply);
+      const ctx = await resolveCtx(request.params.id, request.body.sessionId, reply);
       if (!ctx) return;
       const { path: relPath, content, expectedMtimeMs, create } = request.body;
       return dispatch(
@@ -234,7 +271,7 @@ export async function projectFilesRoute(app: FastifyInstance) {
     "/api/projects/:id/files/mkdir",
     { ...FILES_RATE_LIMIT, schema: mkdirSchema },
     async (request, reply) => {
-      const ctx = resolveCtx(request.params.id, request.body.sessionId, reply);
+      const ctx = await resolveCtx(request.params.id, request.body.sessionId, reply);
       if (!ctx) return;
       const relPath = request.body.path;
       return dispatch(
@@ -268,7 +305,7 @@ export async function projectFilesRoute(app: FastifyInstance) {
       },
     },
     async (request, reply) => {
-      const ctx = resolveCtx(request.params.id, request.body.sessionId, reply);
+      const ctx = await resolveCtx(request.params.id, request.body.sessionId, reply);
       if (!ctx) return;
       const { from, to } = request.body;
       return dispatch(
@@ -286,7 +323,7 @@ export async function projectFilesRoute(app: FastifyInstance) {
     "/api/projects/:id/file",
     { ...FILES_RATE_LIMIT, schema: { params: idParams, querystring: pathQuery } },
     async (request, reply) => {
-      const ctx = resolveCtx(request.params.id, request.query.sessionId, reply);
+      const ctx = await resolveCtx(request.params.id, request.query.sessionId, reply);
       if (!ctx) return;
       const relPath = request.query.path;
       if (!relPath) return reply.badRequest("path is required");
@@ -317,7 +354,7 @@ export async function projectFilesRoute(app: FastifyInstance) {
       },
     },
     async (request, reply) => {
-      const ctx = resolveCtx(request.params.id, request.query.sessionId, reply);
+      const ctx = await resolveCtx(request.params.id, request.query.sessionId, reply);
       if (!ctx) return;
       const q = request.query.q ?? "";
       return dispatch(
