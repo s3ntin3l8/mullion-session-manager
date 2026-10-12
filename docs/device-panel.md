@@ -43,10 +43,14 @@ Mullion service environment. A headless X server such as Xvfb can also provide
 `DISPLAY` if its GLX implementation can use the host GPU; a virtual display
 alone may still use software rendering. On systemd deployments, configure
 `DISPLAY` in Mullion's `EnvironmentFile` or a service drop-in, then restart the
-service. These service-level `DISPLAY`/`WAYLAND_DISPLAY` values are for the
-emulator only: Mullion scrubs them from terminal sessions, so TUIs such as
-Codex copy via OSC 52 (to the browser clipboard) instead of the headless
-display's invisible clipboard. Mullion launches the emulator with `systemd-run --user --scope`, so a
+service.
+
+These service-level `DISPLAY`/`WAYLAND_DISPLAY` values are for the emulator
+only: Mullion scrubs them from terminal sessions, so TUIs such as Codex copy
+via OSC 52 (to the browser clipboard) instead of the headless display's
+invisible clipboard.
+
+Mullion launches the emulator with `systemd-run --user --scope`, so a
 variable exported only in an interactive shell will not necessarily reach the
 running service. The emulator also needs access to the host GPU's render device
 (typically under `/dev/dri`) and the matching host graphics driver and GL/EGL
