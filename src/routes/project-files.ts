@@ -11,6 +11,7 @@ import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { getRemoteHostClient, HostRequestError } from "../services/remote-host-client.js";
 import { forwardHostRequestError } from "../services/host-error-reply.js";
 import {
+  PROJECT_FILE_BODY_LIMIT,
   ProjectFileError,
   listProjectDir,
   readProjectFile,
@@ -155,7 +156,7 @@ export async function projectFilesRoute(app: FastifyInstance) {
     Body: { path: string; content: string; expectedMtimeMs?: number; create?: boolean };
   }>(
     "/api/projects/:id/file",
-    { ...FILES_RATE_LIMIT, schema: writeSchema },
+    { ...FILES_RATE_LIMIT, schema: writeSchema, bodyLimit: PROJECT_FILE_BODY_LIMIT },
     async (request, reply) => {
       const project = resolveProject(request.params.id, reply);
       if (!project) return;

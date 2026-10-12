@@ -36,6 +36,12 @@ import { PathEscapeError, realpathExistingPrefix, resolveWithin } from "./safe-p
 export const MAX_PROJECT_FILE_BYTES = 1024 * 1024;
 export const MAX_DIR_ENTRIES = 2000;
 
+// Content is capped at 1 MiB of raw bytes, but it travels JSON-escaped (a
+// newline is 2 bytes, a control char up to 6) — Fastify's 1 MiB default body
+// limit would reject a file the panel just opened. Headroom, not a new cap:
+// writeProjectFile still enforces the real limit.
+export const PROJECT_FILE_BODY_LIMIT = 8 * 1024 * 1024;
+
 export type ProjectFileErrorCode =
   | "escape"
   | "not_found"
@@ -144,7 +150,10 @@ function resolveInProject(root: string, relPath: string, allowRoot: boolean): Re
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "ENOTDIR") throw new ProjectFileError("not_directory", `"${relPath}" is invalid`);
-    throw new ProjectFileError("escape", `Cannot resolve "${relPath}"`);
+    if (code === "ELOOP") throw new ProjectFileError("symlink", `"${relPath}" has a symlink loop`);
+    // EACCES/EPERM etc. propagate so the route can answer 503, not a
+    // misleading "escape".
+    throw err;
   }
   if (!isInside(realRoot, real)) {
     throw new ProjectFileError("escape", `Path "${relPath}" resolves outside the project`);
@@ -156,6 +165,23 @@ function resolveInProject(root: string, relPath: string, allowRoot: boolean): Re
     rel,
     symlinkTarget: real !== expectedReal ? path.relative(realRoot, real) : undefined,
   };
+}
+
+/** O_NOFOLLOW only guards the FINAL path component. Between resolving `real`
+ * and open(2), a process inside the project could swap an intermediate
+ * directory for a symlink to somewhere outside it. Where /proc is available
+ * (Linux), re-resolve what we actually opened and fail closed if it left the
+ * project. Elsewhere this is a no-op (residual, narrow window). */
+function assertFdInside(fd: number, realRoot: string, rel: string): void {
+  let opened: string;
+  try {
+    opened = realpathSync(`/proc/self/fd/${fd}`);
+  } catch {
+    return;
+  }
+  if (!isInside(realRoot, opened)) {
+    throw new ProjectFileError("escape", `Path "${rel}" resolves outside the project`);
+  }
 }
 
 function mapFsError(err: unknown, rel: string): never {
@@ -222,7 +248,7 @@ export function listProjectDir(root: string, relDir: string): ProjectDirListing 
 }
 
 export function readProjectFile(root: string, relPath: string): ProjectFileContent {
-  const { real, rel, symlinkTarget } = resolveInProject(root, relPath, false);
+  const { realRoot, real, rel, symlinkTarget } = resolveInProject(root, relPath, false);
   let fd: number;
   try {
     // O_NONBLOCK so opening a FIFO can't hang the request; the isFile()
@@ -232,6 +258,7 @@ export function readProjectFile(root: string, relPath: string): ProjectFileConte
     return mapFsError(err, rel);
   }
   try {
+    assertFdInside(fd, realRoot, rel);
     const st = fstatSync(fd);
     if (st.isDirectory()) throw new ProjectFileError("is_directory", `"${rel}" is a directory`);
     if (!st.isFile()) throw new ProjectFileError("not_regular", `"${rel}" is not a regular file`);
@@ -267,7 +294,7 @@ export function writeProjectFile(
   if (byteLength > MAX_PROJECT_FILE_BYTES) {
     throw new ProjectFileError("too_large", "Content is over the 1 MiB edit limit");
   }
-  const { real, rel } = resolveInProject(root, relPath, false);
+  const { realRoot, real, rel } = resolveInProject(root, relPath, false);
   // Flags are decided at the open, not via a prior existence check: create
   // is O_EXCL (a concurrent creator makes EEXIST -> conflict), update has no
   // O_CREAT (a missing file is not_found, never silently created).
@@ -283,6 +310,7 @@ export function writeProjectFile(
     return mapFsError(err, rel);
   }
   try {
+    assertFdInside(fd, realRoot, rel);
     const before = fstatSync(fd);
     if (!before.isFile())
       throw new ProjectFileError("not_regular", `"${rel}" is not a regular file`);

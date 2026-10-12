@@ -161,6 +161,29 @@ describe("FileEditorPanel", () => {
     expect(screen.getByText("big.bin").closest("button")).not.toBeDisabled();
   });
 
+  it("disables New file while there are unsaved edits", async () => {
+    const { fn } = mockFetch();
+    vi.stubGlobal("fetch", fn);
+    const user = userEvent.setup();
+    render(<FileEditorPanel params={{ projectId: 1 }} />);
+    await user.click(await screen.findByText(".env"));
+    expect(screen.getByText("New file")).not.toBeDisabled();
+    fireEvent.change(await screen.findByLabelText("editor:.env"), { target: { value: "x" } });
+    expect(screen.getByText("New file")).toBeDisabled();
+  });
+
+  it("does not replace an unsaved draft when params.path changes", async () => {
+    const { fn } = mockFetch();
+    vi.stubGlobal("fetch", fn);
+    const user = userEvent.setup();
+    const { rerender } = render(<FileEditorPanel params={{ projectId: 1 }} />);
+    await user.click(await screen.findByText(".env"));
+    fireEvent.change(await screen.findByLabelText("editor:.env"), { target: { value: "mine" } });
+    rerender(<FileEditorPanel params={{ projectId: 1, path: "src/index.ts" }} />);
+    await waitFor(() => expect(screen.getByText("index.ts")).toBeInTheDocument());
+    expect(screen.getByLabelText("editor:.env")).toHaveValue("mine");
+  });
+
   it("expands directories lazily, and shows a symlink target in the header", async () => {
     const { fn, calls } = mockFetch();
     vi.stubGlobal("fetch", fn);

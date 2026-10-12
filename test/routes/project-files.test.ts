@@ -120,6 +120,19 @@ describe("project-files routes", () => {
     await app.close();
   });
 
+  it("accepts a ~900 KB newline-heavy file whose JSON-escaped body exceeds 1 MiB", async () => {
+    const { app, projectId } = await createProject();
+    const content = "\n".repeat(900 * 1024);
+    const res = await app.inject({
+      method: "PUT",
+      url: `/api/projects/${projectId}/file`,
+      payload: { path: "nl.txt", content, create: true },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(fs.statSync(path.join(projectCwd, "nl.txt")).size).toBe(content.length);
+    await app.close();
+  });
+
   it("maps service errors to their http status", async () => {
     fs.writeFileSync(path.join(projectCwd, "bin"), Buffer.from([0, 1, 2]));
     const { app, projectId } = await createProject();

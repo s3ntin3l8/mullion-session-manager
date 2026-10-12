@@ -61,6 +61,10 @@ export function FileEditorPanel({ params }: { params: FileEditorPanelParams }) {
   }, [draft]);
 
   const dirty = file !== null && draft !== file.content;
+  const dirtyRef = useRef(dirty);
+  useEffect(() => {
+    dirtyRef.current = dirty;
+  }, [dirty]);
 
   const loadDir = useCallback(
     async (dirPath: string): Promise<boolean> => {
@@ -126,7 +130,8 @@ export function FileEditorPanel({ params }: { params: FileEditorPanelParams }) {
       }
       if (cancelled) return;
       setExpanded((prev) => new Set([...prev, ...ancestors]));
-      await openFile(params.path);
+      // Never replace an unsaved draft because the panel was re-targeted.
+      if (!dirtyRef.current) await openFile(params.path);
     })();
     return () => {
       cancelled = true;
@@ -301,7 +306,12 @@ export function FileEditorPanel({ params }: { params: FileEditorPanelParams }) {
           >
             Refresh
           </button>
-          <button className="git-panel-fetch-btn" onClick={() => setNewFileName("")}>
+          <button
+            className="git-panel-fetch-btn"
+            onClick={() => setNewFileName("")}
+            disabled={dirty}
+            title={dirty ? "Save or discard your changes first" : undefined}
+          >
             New file
           </button>
         </div>

@@ -84,6 +84,7 @@ import {
 import { uninstallBundleContent, runBundleSyncExclusive } from "../services/bundle-sync.js";
 import { PathEscapeError, realpathExistingPrefix } from "../services/safe-path.js";
 import {
+  PROJECT_FILE_BODY_LIMIT,
   ProjectFileError,
   listProjectDir,
   readProjectFile,
@@ -1408,7 +1409,11 @@ export async function internalRoutes(app: FastifyInstance) {
 
   app.post<{ Body: ProjectFilesWriteBody }>(
     "/internal/project-files/write",
-    { ...INTERNAL_RATE_LIMIT, schema: projectFilesWriteSchema },
+    {
+      ...INTERNAL_RATE_LIMIT,
+      schema: projectFilesWriteSchema,
+      bodyLimit: PROJECT_FILE_BODY_LIMIT,
+    },
     async (request, reply) => {
       const { cwd, path: relPath, content, expectedMtimeMs, create } = request.body;
       const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
