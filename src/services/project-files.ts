@@ -412,12 +412,16 @@ export function deleteProjectPath(root: string, relPath: string): { path: string
 }
 
 /** Renames/moves an entry within the project. The destination must not
- * exist and its parent must. A file or symlink is moved with link(2)+unlink(2),
- * which fails atomically with EEXIST if the destination appears at any point
- * (rename(2) would silently replace it); a directory can't be hard-linked, so
- * it keeps a check-then-rename whose tiny window is bounded to the user's own
- * project. A filesystem that refuses hard links (EXDEV/EPERM/ENOTSUP) falls
- * back to that same check-then-rename. */
+ * exist and its parent must. A file or symlink is moved with link(2)+unlink(2):
+ * link(2) returns EEXIST for a destination that exists at the moment of the
+ * call (where lstat-then-rename(2) would leave a window and rename(2) would
+ * silently replace it). It is NOT atomic as a whole — if unlink(2) of the
+ * source then fails, the destination link is removed again so the entry never
+ * ends up under two names. A directory can't be hard-linked, so it keeps a
+ * check-then-rename; a destination created between the check and the rename
+ * is replaced, a residual that is bounded to the user's own project (Node has
+ * no renameat2/RENAME_NOREPLACE). A filesystem that refuses hard links
+ * (EXDEV/EPERM/ENOTSUP/EMLINK) falls back to that same check-then-rename. */
 export function renameProjectPath(root: string, fromRel: string, toRel: string): { path: string } {
   const from = resolveEntry(root, fromRel);
   const to = resolveEntry(root, toRel);
@@ -431,7 +435,17 @@ export function renameProjectPath(root: string, fromRel: string, toRel: string):
     if (!isDir) {
       try {
         linkSync(from.abs, to.abs);
-        unlinkSync(from.abs);
+        try {
+          unlinkSync(from.abs);
+        } catch (unlinkErr) {
+          // Don't leave the entry under two names.
+          try {
+            unlinkSync(to.abs);
+          } catch {
+            // best effort — the original error is the one worth reporting
+          }
+          throw unlinkErr;
+        }
         return { path: to.rel };
       } catch (err) {
         const code = (err as NodeJS.ErrnoException).code;
@@ -447,6 +461,9 @@ export function renameProjectPath(root: string, fromRel: string, toRel: string):
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
     }
+    // Residual race (see the doc comment): a destination created right here
+    // is replaced. Accepted — it's the user's own project and Node has no
+    // no-replace rename.
     renameSync(from.abs, to.abs);
   } catch (err) {
     return mapFsError(err, to.rel);
@@ -527,8 +544,15 @@ export async function searchProjectFiles(
     let dirents;
     try {
       dirents = await readdir(dir.abs, { withFileTypes: true });
-    } catch {
-      continue; // unreadable / vanished directory — skip, don't fail the search
+    } catch (err) {
+      // A directory that vanished mid-walk, or one we may not read, is skipped:
+      // failing a filename search over one unreadable subtree would be worse.
+      // Anything else (we never descend symlinks, so not ELOOP) is unexpected
+      // and surfaces instead of becoming a silently empty result.
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" || code === "ENOTDIR" || code === "EACCES" || code === "EPERM")
+        continue;
+      throw err;
     }
     for (const d of dirents) {
       if (++visited > maxVisited) {

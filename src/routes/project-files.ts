@@ -148,8 +148,17 @@ export async function projectFilesRoute(app: FastifyInstance) {
     if (!sessionCwd || sessionCwd === path.resolve(project.cwd)) {
       return { hostId: project.hostId, cwd: project.cwd };
     }
-    if (!(await sessionRootAllowed(project, sessionCwd))) {
-      reply.badRequest("The session's directory is outside the project");
+    let allowed: boolean;
+    try {
+      allowed = await sessionRootAllowed(project, sessionCwd);
+    } catch (err) {
+      // Couldn't tell (EACCES on a sandboxed FS, ...) — not the same as "no".
+      app.log.warn({ err, projectId: project.id }, "couldn't verify the session's directory");
+      reply.serviceUnavailable("Couldn't verify the session's directory");
+      return null;
+    }
+    if (!allowed) {
+      reply.badRequest("The session's directory is outside the project or no longer exists");
       return null;
     }
     return { hostId: project.hostId, cwd: sessionCwd };
@@ -171,8 +180,12 @@ export async function projectFilesRoute(app: FastifyInstance) {
       const real = realpathSync(sessionCwd);
       const realRoot = realpathSync(root);
       return real === realRoot || real.startsWith(realRoot + path.sep);
-    } catch {
-      return false;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      // The directory is gone or unresolvable — treat as not allowed. Anything
+      // else (EACCES, ...) is "couldn't check", surfaced by the caller as 503.
+      if (code === "ENOENT" || code === "ENOTDIR" || code === "ELOOP") return false;
+      throw err;
     }
   }
 

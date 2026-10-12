@@ -258,6 +258,19 @@ describe("project-files routes", () => {
       await app.close();
     });
 
+    it("treats an in-project session cwd that is a symlink loop as not allowed (400, not 500)", async () => {
+      fs.symlinkSync("loop-b", path.join(projectCwd, "loop-a"));
+      fs.symlinkSync("loop-a", path.join(projectCwd, "loop-b"));
+      const { app, projectId } = await createProject();
+      const sessionId = addSession(app, projectId, path.join(projectCwd, "loop-a"));
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/files?sessionId=${sessionId}`,
+      });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+
     it("falls back to the project cwd for a session without a cwd override", async () => {
       const { app, projectId } = await createProject();
       const sessionId = addSession(app, projectId, null);
