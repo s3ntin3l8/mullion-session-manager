@@ -6,6 +6,7 @@ import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { closeDb } from "../../src/db/client.js";
 import { sessions } from "../../src/db/schema.js";
+import { gitEnv } from "../../src/services/git-env.js";
 
 const tmpDb = path.join(os.tmpdir(), `project-files-test-${process.pid}.db`);
 process.env.DATABASE_URL = `file:${tmpDb}`;
@@ -163,12 +164,15 @@ describe("project-files routes", () => {
         .get().id;
     }
 
+    // gitEnv() strips the GIT_* vars a pre-push hook leaks into `npm test`
+    // (GIT_DIR / GIT_INDEX_FILE ...): without it `git add -A` here would run
+    // against the REAL repo's index with this temp dir as its work tree.
     const git = (cwd: string, ...args: string[]) =>
-      execFileSync("git", args, {
+      execFileSync("git", ["-c", "commit.gpgsign=false", ...args], {
         cwd,
         stdio: "ignore",
         env: {
-          ...process.env,
+          ...gitEnv(),
           GIT_AUTHOR_NAME: "t",
           GIT_AUTHOR_EMAIL: "t@t",
           GIT_COMMITTER_NAME: "t",
