@@ -1,0 +1,250 @@
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import os from "node:os";
+import path from "node:path";
+import fs from "node:fs";
+import { execFileSync } from "node:child_process";
+import {
+  ProjectFileError,
+  MAX_PROJECT_FILE_BYTES,
+  MAX_DIR_ENTRIES,
+  listProjectDir,
+  readProjectFile,
+  writeProjectFile,
+} from "../../src/services/project-files.js";
+
+function codeOf(fn: () => unknown): string | undefined {
+  try {
+    fn();
+  } catch (err) {
+    if (err instanceof ProjectFileError) return err.code;
+    throw err;
+  }
+  return undefined;
+}
+
+describe("project-files service", () => {
+  let root: string;
+  let outside: string;
+
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-pf-root-"));
+    outside = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-pf-outside-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  });
+
+  describe("path containment", () => {
+    it("rejects traversal, absolute and NUL paths", () => {
+      expect(codeOf(() => readProjectFile(root, "../x"))).toBe("escape");
+      expect(codeOf(() => readProjectFile(root, "a/../../x"))).toBe("escape");
+      expect(codeOf(() => readProjectFile(root, "/etc/passwd"))).toBe("escape");
+      expect(codeOf(() => readProjectFile(root, "a\0b"))).toBe("escape");
+      expect(codeOf(() => readProjectFile(root, ""))).toBe("escape");
+      expect(codeOf(() => listProjectDir(root, "../"))).toBe("escape");
+    });
+
+    it("rejects a symlinked directory that points outside the project", () => {
+      fs.writeFileSync(path.join(outside, "secret"), "x");
+      fs.symlinkSync(outside, path.join(root, "link"));
+      expect(codeOf(() => readProjectFile(root, "link/secret"))).toBe("escape");
+      expect(codeOf(() => listProjectDir(root, "link"))).toBe("escape");
+      expect(codeOf(() => writeProjectFile(root, "link/new", "x", { create: true }))).toBe(
+        "escape",
+      );
+    });
+
+    it("rejects a leaf symlink that points outside the project", () => {
+      fs.writeFileSync(path.join(outside, "secret"), "x");
+      fs.symlinkSync(path.join(outside, "secret"), path.join(root, ".env"));
+      expect(codeOf(() => readProjectFile(root, ".env"))).toBe("escape");
+      expect(codeOf(() => writeProjectFile(root, ".env", "y"))).toBe("escape");
+      expect(fs.readFileSync(path.join(outside, "secret"), "utf8")).toBe("x");
+    });
+
+    it("reports not_found when the project directory is gone", () => {
+      expect(codeOf(() => listProjectDir(path.join(root, "nope"), ""))).toBe("not_found");
+    });
+  });
+
+  describe("symlinks inside the project", () => {
+    it("reads and writes through a leaf symlink, reporting the target", () => {
+      fs.writeFileSync(path.join(root, ".env.local"), "A=1\n");
+      fs.symlinkSync(".env.local", path.join(root, ".env"));
+      const read = readProjectFile(root, ".env");
+      expect(read.content).toBe("A=1\n");
+      expect(read.symlinkTarget).toBe(".env.local");
+      writeProjectFile(root, ".env", "A=2\n", { expectedMtimeMs: read.mtimeMs });
+      expect(fs.readFileSync(path.join(root, ".env.local"), "utf8")).toBe("A=2\n");
+      expect(fs.lstatSync(path.join(root, ".env")).isSymbolicLink()).toBe(true);
+    });
+
+    it("has no symlinkTarget for a plain file", () => {
+      fs.writeFileSync(path.join(root, "a.txt"), "x");
+      expect(readProjectFile(root, "a.txt").symlinkTarget).toBeUndefined();
+    });
+  });
+
+  describe("listProjectDir", () => {
+    it("lists dotfiles, dirs first then alphabetical, with symlink kinds", () => {
+      fs.mkdirSync(path.join(root, "zdir"));
+      fs.mkdirSync(path.join(root, "real"));
+      fs.writeFileSync(path.join(root, ".env"), "ab");
+      fs.writeFileSync(path.join(root, "a.txt"), "x");
+      fs.symlinkSync("real", path.join(root, "dirlink"));
+      fs.symlinkSync("a.txt", path.join(root, "filelink"));
+      fs.symlinkSync(outside, path.join(root, "outlink"));
+      fs.symlinkSync("missing", path.join(root, "dangling"));
+      const listing = listProjectDir(root, "");
+      expect(listing.path).toBe("");
+      expect(listing.truncated).toBe(false);
+      expect(listing.entries.map((e) => e.name)).toEqual([
+        "dirlink",
+        "real",
+        "zdir",
+        ".env",
+        "a.txt",
+        "dangling",
+        "filelink",
+        "outlink",
+      ]);
+      const byName = Object.fromEntries(listing.entries.map((e) => [e.name, e]));
+      expect(byName[".env"]).toMatchObject({ kind: "file", size: 2 });
+      expect(byName.real.kind).toBe("dir");
+      expect(byName.dirlink).toMatchObject({ kind: "symlink", targetKind: "dir" });
+      expect(byName.filelink).toMatchObject({ kind: "symlink", targetKind: "file" });
+      expect(byName.outlink).toMatchObject({ kind: "symlink", targetKind: "outside" });
+      expect(byName.dangling).toMatchObject({ kind: "symlink", targetKind: "outside" });
+    });
+
+    it("lists a subdirectory and a symlinked in-project directory", () => {
+      fs.mkdirSync(path.join(root, "sub"));
+      fs.writeFileSync(path.join(root, "sub", "f"), "");
+      fs.symlinkSync("sub", path.join(root, "alias"));
+      expect(listProjectDir(root, "sub").entries.map((e) => e.name)).toEqual(["f"]);
+      expect(listProjectDir(root, "alias").entries.map((e) => e.name)).toEqual(["f"]);
+    });
+
+    it("truncates past the entry cap", () => {
+      for (let i = 0; i < MAX_DIR_ENTRIES + 5; i++) fs.writeFileSync(path.join(root, `f${i}`), "");
+      const listing = listProjectDir(root, "");
+      expect(listing.truncated).toBe(true);
+      expect(listing.entries).toHaveLength(MAX_DIR_ENTRIES);
+    });
+
+    it("maps missing and non-directory targets", () => {
+      fs.writeFileSync(path.join(root, "f"), "");
+      expect(codeOf(() => listProjectDir(root, "missing"))).toBe("not_found");
+      expect(codeOf(() => listProjectDir(root, "f"))).toBe("not_directory");
+    });
+  });
+
+  describe("readProjectFile", () => {
+    it("reads text with size and mtime", () => {
+      fs.writeFileSync(path.join(root, "a.txt"), "héllo");
+      const r = readProjectFile(root, "a.txt");
+      expect(r).toMatchObject({ path: "a.txt", content: "héllo", size: 6 });
+      expect(r.mtimeMs).toBe(fs.statSync(path.join(root, "a.txt")).mtimeMs);
+    });
+
+    it("rejects directories, missing files, binary and oversized files", () => {
+      fs.mkdirSync(path.join(root, "d"));
+      fs.writeFileSync(path.join(root, "nul.bin"), Buffer.from([65, 0, 66]));
+      fs.writeFileSync(path.join(root, "bad.bin"), Buffer.from([0xff, 0xfe, 0xfd]));
+      fs.writeFileSync(path.join(root, "big"), "x".repeat(MAX_PROJECT_FILE_BYTES + 1));
+      expect(codeOf(() => readProjectFile(root, "d"))).toBe("is_directory");
+      expect(codeOf(() => readProjectFile(root, "missing"))).toBe("not_found");
+      expect(codeOf(() => readProjectFile(root, "nul.bin"))).toBe("binary");
+      expect(codeOf(() => readProjectFile(root, "bad.bin"))).toBe("binary");
+      expect(codeOf(() => readProjectFile(root, "big"))).toBe("too_large");
+      expect(codeOf(() => readProjectFile(root, "a.txt/x"))).toBe("not_found");
+      fs.writeFileSync(path.join(root, "file"), "");
+      expect(codeOf(() => readProjectFile(root, "file/x"))).toBe("not_directory");
+    });
+
+    it("rejects a FIFO without hanging", () => {
+      const fifo = path.join(root, "fifo");
+      try {
+        execFileSync("mkfifo", [fifo]);
+      } catch {
+        return; // mkfifo unavailable on this platform
+      }
+      expect(codeOf(() => readProjectFile(root, "fifo"))).toBe("not_regular");
+      expect(codeOf(() => writeProjectFile(root, "fifo", "x"))).toBe("not_regular");
+    });
+  });
+
+  describe("writeProjectFile", () => {
+    it("updates an existing file in place and returns fresh stat", () => {
+      const file = path.join(root, "a.txt");
+      fs.writeFileSync(file, "old content that is long");
+      const ino = fs.statSync(file).ino;
+      const res = writeProjectFile(root, "a.txt", "new");
+      expect(fs.readFileSync(file, "utf8")).toBe("new");
+      expect(fs.statSync(file).ino).toBe(ino);
+      expect(res).toEqual({ size: 3, mtimeMs: fs.statSync(file).mtimeMs });
+    });
+
+    it("preserves the mode of a 0600 file", () => {
+      const file = path.join(root, ".env");
+      fs.writeFileSync(file, "A=1", { mode: 0o600 });
+      fs.chmodSync(file, 0o600);
+      writeProjectFile(root, ".env", "A=2");
+      expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    });
+
+    it("does not create a missing file unless create is set", () => {
+      expect(codeOf(() => writeProjectFile(root, "new.txt", "x"))).toBe("not_found");
+      expect(fs.existsSync(path.join(root, "new.txt"))).toBe(false);
+      writeProjectFile(root, "new.txt", "x", { create: true });
+      expect(fs.readFileSync(path.join(root, "new.txt"), "utf8")).toBe("x");
+    });
+
+    it("refuses to create over an existing file and leaves it untouched", () => {
+      fs.writeFileSync(path.join(root, "a.txt"), "keep");
+      expect(codeOf(() => writeProjectFile(root, "a.txt", "x", { create: true }))).toBe("conflict");
+      expect(fs.readFileSync(path.join(root, "a.txt"), "utf8")).toBe("keep");
+    });
+
+    it("does not create missing parent directories", () => {
+      expect(codeOf(() => writeProjectFile(root, "no/dir/f", "x", { create: true }))).toBe(
+        "not_found",
+      );
+    });
+
+    it("detects an mtime conflict before truncating", () => {
+      const file = path.join(root, "a.txt");
+      fs.writeFileSync(file, "disk");
+      const { mtimeMs } = readProjectFile(root, "a.txt");
+      expect(
+        codeOf(() => writeProjectFile(root, "a.txt", "mine", { expectedMtimeMs: mtimeMs - 1000 })),
+      ).toBe("conflict");
+      expect(fs.readFileSync(file, "utf8")).toBe("disk");
+      writeProjectFile(root, "a.txt", "mine", { expectedMtimeMs: mtimeMs });
+      expect(fs.readFileSync(file, "utf8")).toBe("mine");
+    });
+
+    it("rejects oversized content, directories and a non-directory parent", () => {
+      fs.mkdirSync(path.join(root, "d"));
+      fs.writeFileSync(path.join(root, "f"), "");
+      expect(
+        codeOf(() =>
+          writeProjectFile(root, "a", "x".repeat(MAX_PROJECT_FILE_BYTES + 1), { create: true }),
+        ),
+      ).toBe("too_large");
+      expect(codeOf(() => writeProjectFile(root, "d", "x"))).toBe("is_directory");
+      expect(codeOf(() => writeProjectFile(root, "f/x", "x", { create: true }))).toBe(
+        "not_directory",
+      );
+    });
+  });
+
+  it("exposes http statuses per error code", () => {
+    expect(new ProjectFileError("conflict", "x").httpStatus).toBe(409);
+    expect(new ProjectFileError("too_large", "x").httpStatus).toBe(413);
+    expect(new ProjectFileError("binary", "x").httpStatus).toBe(415);
+    expect(new ProjectFileError("not_found", "x").httpStatus).toBe(404);
+  });
+});

@@ -1770,3 +1770,35 @@ export interface CreateProjectDirOptions {
 // other GET /api/projects consumer doesn't inherit two fields that are
 // never present there.
 export type CreateProjectResult = Project & { dirCreated?: boolean; gitInitialized?: boolean };
+
+// Mirrors src/services/project-files.ts 1:1 (project file editor). `path` is
+// always project-relative. `symlinkTarget` is set only when the requested
+// path is (or passes through) an in-project symlink — the response's
+// `content`/`mtimeMs` are for that resolved target. `targetKind` on a
+// symlink listing entry is "outside" for both an out-of-project and a
+// dangling target (neither is openable).
+export interface ProjectDirEntry {
+  name: string;
+  kind: "file" | "dir" | "symlink";
+  size: number;
+  targetKind?: "file" | "dir" | "outside";
+}
+
+export interface ProjectDirListing {
+  path: string;
+  entries: ProjectDirEntry[];
+  truncated: boolean;
+}
+
+export interface ProjectFileContent {
+  path: string;
+  content: string;
+  size: number;
+  mtimeMs: number;
+  symlinkTarget?: string;
+}
+
+export interface ProjectFileWriteResult {
+  size: number;
+  mtimeMs: number;
+}

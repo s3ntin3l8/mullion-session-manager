@@ -134,6 +134,10 @@ export type {
   AgentRuleScope,
   AgentRuleStatus,
   AgentRuleTarget,
+  ProjectDirEntry,
+  ProjectDirListing,
+  ProjectFileContent,
+  ProjectFileWriteResult,
   GitFileDiffResponse,
   GitStatusesBatchResult,
   GitRefsBatchResult,
@@ -198,6 +202,7 @@ import { bridgesApi } from "./bridges.js";
 import { workspacesApi } from "./workspaces.js";
 import { settingsApi } from "./settings.js";
 import { dockerApi } from "./docker.js";
+import { filesApi } from "./files.js";
 import { skillsApi } from "./skills.js";
 import { browserApi } from "./browser.js";
 import { systemApi } from "./system.js";
@@ -222,6 +227,7 @@ export const api = {
   ...workspacesApi,
   ...settingsApi,
   ...dockerApi,
+  ...filesApi,
   ...skillsApi,
   ...browserApi,
   ...systemApi,

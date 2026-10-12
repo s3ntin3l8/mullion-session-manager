@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import path from "node:path";
-import { realpathSync, existsSync, readFileSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { Readable } from "node:stream";
 import { WebSocket as NodeWebSocket } from "ws";
 import { pingDevServer } from "./projects.js";
@@ -82,7 +82,13 @@ import {
   writeAgentBundleDisabled,
 } from "../services/agent-bundle-state.js";
 import { uninstallBundleContent, runBundleSyncExclusive } from "../services/bundle-sync.js";
-import { PathEscapeError } from "../services/safe-path.js";
+import { PathEscapeError, realpathExistingPrefix } from "../services/safe-path.js";
+import {
+  ProjectFileError,
+  listProjectDir,
+  readProjectFile,
+  writeProjectFile,
+} from "../services/project-files.js";
 import { runGitFetch } from "../services/git-fetch.js";
 import { runGitPull } from "../services/git-pull.js";
 import { pushBranch } from "../services/git-push.js";
@@ -166,6 +172,9 @@ import {
   writeDockConfigBodySchema,
   agentRuleWriteBodySchema,
   toggleSkillBodySchema,
+  projectFilesListSchema,
+  projectFilesReadSchema,
+  projectFilesWriteSchema,
 } from "./internal-schemas.js";
 import type {
   SpawnSessionBody,
@@ -187,6 +196,9 @@ import type {
   GitWorktreeResumeBody,
   ReadFilesBody,
   WriteFilesBody,
+  ProjectFilesListBody,
+  ProjectFilesReadBody,
+  ProjectFilesWriteBody,
   ScaffoldScanBody,
   GitCommitWipBody,
   RunGenerationTurnBody,
@@ -213,51 +225,6 @@ const INTERNAL_RATE_LIMIT = { config: { rateLimit: { max: 1000, timeWindow: "1 m
 // per-route rate-limit const in this file lives here, not inside
 // internalRoutes() itself.
 const GENERATION_TURN_RATE_LIMIT = { config: { rateLimit: { max: 5, timeWindow: "10 minutes" } } };
-
-/**
- * A symlink-tolerant realpath: resolves every symlink in the deepest
- * EXISTING prefix of `absPath`, then appends whatever tail doesn't exist yet
- * unchanged (a nonexistent path component can't itself be a symlink, so
- * there's nothing left to resolve once the walk hits one). Node's own
- * fs.realpathSync throws ENOENT the instant any component is missing, which
- * doesn't work for resolveWithinRoots below — a project cwd or one of its
- * `.crs/`-relative sinks is frequently a path that doesn't exist yet (a
- * fresh project with no `.crs/dock.json` written, a PROJECTS_ROOTS entry
- * that hasn't been created on this particular agent host). Mirrors the tail
- * behavior of Python's `os.path.realpath(strict=False)`, applied one
- * component at a time so each step's containment check sees the FULLY
- * resolved parent, not a lexical guess (issue #604).
- *
- * Only ENOENT is treated as "doesn't exist yet, fall back to lexical" —
- * every other errno (EACCES, ELOOP on a symlink cycle, ENOTDIR, ...)
- * propagates instead (Hermes review, PR #612). The original catch-all here
- * would have silently reused the lexical fallback for those too, which is
- * wrong in a different way than the ENOENT case: those errors mean "this
- * component's real target is unknown or unreachable," not "there's nothing
- * here yet" — treating them the same could pass containment on a value that
- * was never actually verified, only guessed at. The caller
- * (resolveWithinRoots) turns any such throw into a clean 400 rather than
- * this silently returning something that happens to pass, or an uncaught
- * exception surfacing as a 500 at the sink.
- */
-function realpathExistingPrefix(absPath: string): string {
-  const root = path.parse(absPath).root;
-  const segments = absPath.slice(root.length).split(path.sep).filter(Boolean);
-  let real = root;
-  for (let i = 0; i < segments.length; i++) {
-    const candidate = path.join(real, segments[i]);
-    try {
-      real = realpathSync(candidate);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
-      // candidate doesn't exist — every remaining segment is a path we'd be
-      // creating, not one that could already be a pre-planted symlink, so
-      // append the rest lexically and stop walking.
-      return path.join(real, ...segments.slice(i));
-    }
-  }
-  return real;
-}
 
 /**
  * Constrain a request-supplied cwd to this agent's own PROJECTS_ROOTS before
@@ -1391,6 +1358,65 @@ export async function internalRoutes(app: FastifyInstance) {
       } catch (err) {
         if (err instanceof PathEscapeError) return reply.badRequest(err.message);
         throw err;
+      }
+    },
+  );
+
+  // Project file editor — the agent-side half of routes/project-files.ts.
+  // `cwd` gets this file's usual PROJECTS_ROOTS containment; the per-file
+  // path is contained inside `cwd` by project-files.ts itself (lexical +
+  // realpath). A ProjectFileError is replied with its structured `code` in
+  // the body so the primary can tell a genuinely missing FILE (404 +
+  // code:"not_found") from an older agent that lacks these routes entirely
+  // (bare 404, no code).
+  function replyProjectFileError(reply: FastifyReply, err: unknown) {
+    if (err instanceof ProjectFileError) {
+      return reply
+        .code(err.httpStatus)
+        .send({ statusCode: err.httpStatus, message: err.message, code: err.code });
+    }
+    throw err;
+  }
+
+  app.post<{ Body: ProjectFilesListBody }>(
+    "/internal/project-files/list",
+    { ...INTERNAL_RATE_LIMIT, schema: projectFilesListSchema },
+    async (request, reply) => {
+      const resolvedCwd = requireWithinRoots(app, reply, request.body.cwd, "cwd");
+      if (resolvedCwd === null) return;
+      try {
+        return listProjectDir(resolvedCwd, request.body.path ?? "");
+      } catch (err) {
+        return replyProjectFileError(reply, err);
+      }
+    },
+  );
+
+  app.post<{ Body: ProjectFilesReadBody }>(
+    "/internal/project-files/read",
+    { ...INTERNAL_RATE_LIMIT, schema: projectFilesReadSchema },
+    async (request, reply) => {
+      const resolvedCwd = requireWithinRoots(app, reply, request.body.cwd, "cwd");
+      if (resolvedCwd === null) return;
+      try {
+        return readProjectFile(resolvedCwd, request.body.path);
+      } catch (err) {
+        return replyProjectFileError(reply, err);
+      }
+    },
+  );
+
+  app.post<{ Body: ProjectFilesWriteBody }>(
+    "/internal/project-files/write",
+    { ...INTERNAL_RATE_LIMIT, schema: projectFilesWriteSchema },
+    async (request, reply) => {
+      const { cwd, path: relPath, content, expectedMtimeMs, create } = request.body;
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
+      try {
+        return writeProjectFile(resolvedCwd, relPath, content, { expectedMtimeMs, create });
+      } catch (err) {
+        return replyProjectFileError(reply, err);
       }
     },
   );

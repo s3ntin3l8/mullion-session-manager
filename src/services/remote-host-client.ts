@@ -46,6 +46,11 @@ import type { DeleteBranchResult } from "./git-branch-delete.js";
 import type { GitPullResult } from "./git-pull.js";
 import type { PushResult } from "./git-push.js";
 import type { ScaffoldEntry } from "./mullion-scaffold.js";
+import type {
+  ProjectDirListing,
+  ProjectFileContent,
+  ProjectFileWriteResult,
+} from "./project-files.js";
 import type { GenerationTurnResult } from "./scaffold-generate.js";
 
 // One HTTP+WS client per remote "agent" host (issue #26), talking to its
@@ -997,6 +1002,40 @@ export class RemoteHostClient {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ cwd, entries, stage }),
+    });
+  }
+
+  /** Project file editor (routes/project-files.ts) — directory listing,
+   * file read and in-place write on this agent's own filesystem. Mirrors
+   * /internal/project-files/{list,read,write}; the agent replies with a
+   * structured `code` on a ProjectFileError, which the primary route reads
+   * off HostRequestError.body. */
+  async listProjectDir(cwd: string, relPath: string): Promise<ProjectDirListing> {
+    return this.request<ProjectDirListing>("/internal/project-files/list", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ cwd, path: relPath }),
+    });
+  }
+
+  async readProjectFile(cwd: string, relPath: string): Promise<ProjectFileContent> {
+    return this.request<ProjectFileContent>("/internal/project-files/read", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ cwd, path: relPath }),
+    });
+  }
+
+  async writeProjectFile(
+    cwd: string,
+    relPath: string,
+    content: string,
+    opts: { expectedMtimeMs?: number; create?: boolean } = {},
+  ): Promise<ProjectFileWriteResult> {
+    return this.request<ProjectFileWriteResult>("/internal/project-files/write", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ cwd, path: relPath, content, ...opts }),
     });
   }
 
