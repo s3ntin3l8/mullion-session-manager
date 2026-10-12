@@ -395,3 +395,30 @@
   font-size: 12px;
   padding: 2px 4px;
 }
+
+/* Tree row = main button + a hover/focus-revealed actions cluster (a button
+   can't contain buttons, so the actions are siblings). */
+.file-editor-rowwrap {
+  display: flex;
+  align-items: center;
+}
+.file-editor-rowwrap > .file-editor-row,
+.file-editor-rowwrap > .file-editor-new-input {
+  flex: 1;
+  min-width: 0;
+}
+.file-editor-row-actions {
+  display: none;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.file-editor-rowwrap:hover .file-editor-row-actions,
+.file-editor-rowwrap:focus-within .file-editor-row-actions {
+  display: inline-flex;
+}
+@media (hover: none) {
+  .file-editor-row-actions {
+    display: inline-flex;
+  }
+}

@@ -36,4 +36,26 @@ export const filesApi = {
       method: "PUT",
       body: JSON.stringify({ path: filePath, content, ...opts, sessionId }),
     }),
+
+  // Creates one folder; the parent must exist. 409 if the path is taken.
+  mkdirProjectDir: (projectId: number, dirPath: string, sessionId?: number) =>
+    request<{ path: string }>(`/api/projects/${projectId}/files/mkdir`, {
+      method: "POST",
+      body: JSON.stringify({ path: dirPath, sessionId }),
+    }),
+
+  // Renames/moves within the project; 409 if the destination exists.
+  renameProjectPath: (projectId: number, from: string, to: string, sessionId?: number) =>
+    request<{ path: string }>(`/api/projects/${projectId}/files/rename`, {
+      method: "POST",
+      body: JSON.stringify({ from, to, sessionId }),
+    }),
+
+  // Deletes a file, a symlink (the link itself), or an EMPTY folder (409
+  // code "not_empty" otherwise).
+  deleteProjectPath: (projectId: number, entryPath: string, sessionId?: number) =>
+    request<{ path: string }>(
+      `/api/projects/${projectId}/file?path=${encodeURIComponent(entryPath)}${sessionQuery(sessionId)}`,
+      { method: "DELETE" },
+    ),
 };

@@ -2,7 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { api, ApiError } from "./api/index.js";
 import type { ProjectDirEntry, ProjectFileContent } from "./api/index.js";
 import { CodeEditor } from "./components/CodeEditor.js";
-import { ChevronDownIcon, ChevronRightIcon, FileTextIcon, FolderIcon } from "./ui/icons.js";
+import {
+  ChevronDownIcon,
+  ChevronRightIcon,
+  FileTextIcon,
+  FolderIcon,
+  TrashIcon,
+} from "./ui/icons.js";
+import { ConfirmButton } from "./ui/ConfirmButton.js";
 import { EmptyStateNote } from "./ui/EmptyState.js";
 import { useDashboardStore } from "./store/index.js";
 
@@ -62,7 +69,11 @@ function FileEditorBody({
   const [saving, setSaving] = useState(false);
   const [conflict, setConflict] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [newFileName, setNewFileName] = useState<string | null>(null);
+  // The folder New file / New folder create in: the last folder clicked, or
+  // the open file's folder.
+  const [selectedDir, setSelectedDir] = useState("");
+  const [newEntry, setNewEntry] = useState<{ kind: "file" | "dir"; name: string } | null>(null);
+  const [renaming, setRenaming] = useState<{ path: string; value: string } | null>(null);
   const [treeOpen, setTreeOpen] = useState(false);
   const openSeq = useRef(0);
   const draftRef = useRef(draft);
@@ -210,27 +221,86 @@ function FileEditorBody({
   }, [file, openFile]);
 
   const handleCreate = useCallback(async () => {
-    const name = (newFileName ?? "").trim();
-    if (!name) return;
+    const name = (newEntry?.name ?? "").trim();
+    if (!newEntry || !name) return;
     // A bare name only: the backend never creates parent directories, and the
     // tree only refreshes the immediate parent, so a nested path would land
     // on disk without showing up.
     if (name.includes("/")) {
-      setTreeError("Enter a file name, not a path — new files are created in the current folder.");
+      setTreeError("Enter a name, not a path — new items are created in the selected folder.");
       return;
     }
-    const dir = file ? parentDir(file.path) : "";
-    const target = joinPath(dir, name);
+    const target = joinPath(selectedDir, name);
     setActionError(null);
+    setTreeError(null);
     try {
-      await api.writeProjectFile(projectId, target, "", { create: true }, sessionId);
-      setNewFileName(null);
-      await loadDir(parentDir(target));
-      await openFile(target);
+      if (newEntry.kind === "dir") {
+        await api.mkdirProjectDir(projectId, target, sessionId);
+      } else {
+        await api.writeProjectFile(projectId, target, "", { create: true }, sessionId);
+      }
+      setNewEntry(null);
+      await loadDir(selectedDir);
+      setExpanded((prev) => new Set(prev).add(selectedDir));
+      if (newEntry.kind === "file") await openFile(target);
     } catch (err) {
-      setActionError(errorMessage(err, "Failed to create file"));
+      setTreeError(errorMessage(err, "Failed to create"));
     }
-  }, [newFileName, file, projectId, sessionId, loadDir, openFile]);
+  }, [newEntry, selectedDir, projectId, sessionId, loadDir, openFile]);
+
+  // Forget cached listings / expansion for `entryPath` and everything below.
+  const forgetSubtree = useCallback((entryPath: string) => {
+    const under = (k: string) => k === entryPath || k.startsWith(`${entryPath}/`);
+    setDirs((prev) => Object.fromEntries(Object.entries(prev).filter(([k]) => !under(k))));
+    setExpanded((prev) => new Set([...prev].filter((k) => !under(k))));
+  }, []);
+
+  const handleDelete = useCallback(
+    async (entryPath: string) => {
+      setTreeError(null);
+      try {
+        await api.deleteProjectPath(projectId, entryPath, sessionId);
+        forgetSubtree(entryPath);
+        await loadDir(parentDir(entryPath));
+        if (file?.path === entryPath) {
+          setFile(null);
+          setDraft("");
+          setFileNote(`${entryPath} was deleted.`);
+        }
+      } catch (err) {
+        setTreeError(errorMessage(err, "Failed to delete"));
+      }
+    },
+    [projectId, sessionId, file, forgetSubtree, loadDir],
+  );
+
+  const handleRename = useCallback(async () => {
+    if (!renaming) return;
+    const name = renaming.value.trim();
+    const from = renaming.path;
+    if (!name || name === from.split("/").pop()) {
+      setRenaming(null);
+      return;
+    }
+    if (name.includes("/")) {
+      setTreeError("Enter a name, not a path.");
+      return;
+    }
+    const to = joinPath(parentDir(from), name);
+    setTreeError(null);
+    try {
+      await api.renameProjectPath(projectId, from, to, sessionId);
+      setRenaming(null);
+      forgetSubtree(from);
+      await loadDir(parentDir(from));
+      // The open file moved with it (itself, or a folder above it): reopen.
+      if (file && (file.path === from || file.path.startsWith(`${from}/`))) {
+        await openFile(to + file.path.slice(from.length));
+      }
+    } catch (err) {
+      setTreeError(errorMessage(err, "Failed to rename"));
+    }
+  }, [renaming, projectId, sessionId, file, forgetSubtree, loadDir, openFile]);
 
   const renderDir = (dirPath: string, depth: number): ReactNode => {
     const dir = dirs[dirPath];
@@ -243,36 +313,58 @@ function FileEditorBody({
             entry.kind === "dir" || (entry.kind === "symlink" && entry.targetKind === "dir");
           const unopenable = entry.kind === "symlink" && entry.targetKind === "outside";
           const indent = { paddingLeft: 6 + depth * 14 };
-          if (isDir) {
-            const isOpen = expanded.has(entryPath);
-            return (
-              <div key={entryPath}>
-                <button
-                  className="agent-rules-panel-row file-editor-row"
-                  style={indent}
-                  onClick={() => void toggleDir(entryPath)}
-                  aria-expanded={isOpen}
-                >
-                  {isOpen ? <ChevronDownIcon size={12} /> : <ChevronRightIcon size={12} />}
-                  <FolderIcon size={13} />
-                  <span className="agent-rules-panel-row-name">{entry.name}</span>
-                </button>
-                {isOpen && renderDir(entryPath, depth + 1)}
-              </div>
-            );
-          }
-          const blocked = dirty && entryPath !== file?.path;
-          return (
+          // Renaming/deleting the open file (or a folder above it) while it
+          // has unsaved edits would orphan the draft.
+          const affectsDirtyFile =
+            dirty &&
+            file !== null &&
+            (file.path === entryPath || file.path.startsWith(`${entryPath}/`));
+          const isRenaming = renaming?.path === entryPath;
+          const mainRow = isRenaming ? (
+            <input
+              className="file-editor-new-input"
+              style={indent}
+              autoFocus
+              value={renaming.value}
+              aria-label={`Rename ${entry.name}`}
+              onChange={(e) => setRenaming({ path: entryPath, value: e.target.value })}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void handleRename();
+                if (e.key === "Escape") setRenaming(null);
+              }}
+              onBlur={() => setRenaming((r) => (r?.path === entryPath ? null : r))}
+            />
+          ) : isDir ? (
             <button
-              key={entryPath}
+              className="agent-rules-panel-row file-editor-row"
+              style={indent}
+              onClick={() => {
+                setSelectedDir(entryPath);
+                void toggleDir(entryPath);
+              }}
+              aria-expanded={expanded.has(entryPath)}
+            >
+              {expanded.has(entryPath) ? (
+                <ChevronDownIcon size={12} />
+              ) : (
+                <ChevronRightIcon size={12} />
+              )}
+              <FolderIcon size={13} />
+              <span className="agent-rules-panel-row-name">{entry.name}</span>
+            </button>
+          ) : (
+            <button
               className={`agent-rules-panel-row file-editor-row${entryPath === file?.path ? " selected" : ""}${unopenable ? " file-editor-row-muted" : ""}`}
               style={indent}
-              onClick={() => void openFile(entryPath)}
-              disabled={unopenable || blocked}
+              onClick={() => {
+                setSelectedDir(dirPath);
+                void openFile(entryPath);
+              }}
+              disabled={unopenable || (dirty && entryPath !== file?.path)}
               title={
                 unopenable
                   ? "Symlink to outside the project — can't be edited"
-                  : blocked
+                  : dirty && entryPath !== file?.path
                     ? "Save or discard your changes first"
                     : undefined
               }
@@ -281,6 +373,44 @@ function FileEditorBody({
               <span className="agent-rules-panel-row-name">{entry.name}</span>
               {entry.kind === "symlink" && <span className="agent-rules-panel-row-meta">link</span>}
             </button>
+          );
+          return (
+            <div key={entryPath}>
+              <div className="file-editor-rowwrap">
+                {mainRow}
+                {!isRenaming && (
+                  <span className="file-editor-row-actions">
+                    <button
+                      className="git-panel-toggle-reset"
+                      aria-label={`Rename ${entry.name}`}
+                      title={affectsDirtyFile ? "Save or discard your changes first" : "Rename"}
+                      disabled={affectsDirtyFile}
+                      onClick={() => setRenaming({ path: entryPath, value: entry.name })}
+                    >
+                      ✎
+                    </button>
+                    {affectsDirtyFile ? (
+                      <button
+                        className="git-panel-toggle-reset"
+                        aria-label={`Delete ${entry.name}`}
+                        title="Save or discard your changes first"
+                        disabled
+                      >
+                        <TrashIcon size={12} />
+                      </button>
+                    ) : (
+                      <ConfirmButton
+                        title={`Delete ${entry.name}? ${isDir ? "Only empty folders can be deleted." : "This can't be undone."}`}
+                        onConfirm={() => void handleDelete(entryPath)}
+                      >
+                        <TrashIcon size={12} />
+                      </ConfirmButton>
+                    )}
+                  </span>
+                )}
+              </div>
+              {isDir && expanded.has(entryPath) && renderDir(entryPath, depth + 1)}
+            </div>
           );
         })}
         {dir.truncated && (
@@ -327,25 +457,31 @@ function FileEditorBody({
           </button>
           <button
             className="git-panel-fetch-btn"
-            onClick={() => setNewFileName("")}
+            onClick={() => setNewEntry({ kind: "file", name: "" })}
             disabled={dirty}
             title={dirty ? "Save or discard your changes first" : undefined}
           >
             New file
           </button>
+          <button
+            className="git-panel-fetch-btn"
+            onClick={() => setNewEntry({ kind: "dir", name: "" })}
+          >
+            New folder
+          </button>
         </div>
-        {newFileName !== null && (
+        {newEntry !== null && (
           <div className="file-editor-new">
             <input
               className="file-editor-new-input"
               autoFocus
-              value={newFileName}
-              placeholder={`name in ${file ? parentDir(file.path) || "project root" : "project root"}`}
-              aria-label="New file name"
-              onChange={(e) => setNewFileName(e.target.value)}
+              value={newEntry.name}
+              placeholder={`${newEntry.kind === "dir" ? "folder" : "file"} name in ${selectedDir || "project root"}`}
+              aria-label={newEntry.kind === "dir" ? "New folder name" : "New file name"}
+              onChange={(e) => setNewEntry({ ...newEntry, name: e.target.value })}
               onKeyDown={(e) => {
                 if (e.key === "Enter") void handleCreate();
-                if (e.key === "Escape") setNewFileName(null);
+                if (e.key === "Escape") setNewEntry(null);
               }}
             />
           </div>

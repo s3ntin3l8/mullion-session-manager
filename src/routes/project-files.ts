@@ -16,6 +16,9 @@ import {
   listProjectDir,
   readProjectFile,
   writeProjectFile,
+  makeProjectDir,
+  deleteProjectPath,
+  renameProjectPath,
 } from "../services/project-files.js";
 
 const FILES_RATE_LIMIT = { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } };
@@ -212,6 +215,85 @@ export async function projectFilesRoute(app: FastifyInstance) {
         (cwd) => writeProjectFile(cwd, relPath, content, { expectedMtimeMs, create }),
         (client, cwd) =>
           client.writeProjectFile(cwd, relPath, content, { expectedMtimeMs, create }),
+      );
+    },
+  );
+
+  const mkdirSchema = {
+    params: idParams,
+    body: {
+      type: "object",
+      required: ["path"],
+      additionalProperties: false,
+      properties: { path: { type: "string" }, sessionId: { type: "integer" } },
+    },
+  };
+
+  app.post<{ Params: { id: string }; Body: { path: string; sessionId?: number } }>(
+    "/api/projects/:id/files/mkdir",
+    { ...FILES_RATE_LIMIT, schema: mkdirSchema },
+    async (request, reply) => {
+      const ctx = resolveCtx(request.params.id, request.body.sessionId, reply);
+      if (!ctx) return;
+      const relPath = request.body.path;
+      return dispatch(
+        reply,
+        ctx,
+        (cwd) => makeProjectDir(cwd, relPath),
+        (client, cwd) => client.makeProjectDir(cwd, relPath),
+      );
+    },
+  );
+
+  app.post<{
+    Params: { id: string };
+    Body: { from: string; to: string; sessionId?: number };
+  }>(
+    "/api/projects/:id/files/rename",
+    {
+      ...FILES_RATE_LIMIT,
+      schema: {
+        params: idParams,
+        body: {
+          type: "object",
+          required: ["from", "to"],
+          additionalProperties: false,
+          properties: {
+            from: { type: "string" },
+            to: { type: "string" },
+            sessionId: { type: "integer" },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const ctx = resolveCtx(request.params.id, request.body.sessionId, reply);
+      if (!ctx) return;
+      const { from, to } = request.body;
+      return dispatch(
+        reply,
+        ctx,
+        (cwd) => renameProjectPath(cwd, from, to),
+        (client, cwd) => client.renameProjectPath(cwd, from, to),
+      );
+    },
+  );
+
+  // DELETE with the path in the query (a DELETE body is unreliable through
+  // proxies). Removes a file, a symlink (the link itself), or an EMPTY folder.
+  app.delete<{ Params: { id: string }; Querystring: { path?: string; sessionId?: string } }>(
+    "/api/projects/:id/file",
+    { ...FILES_RATE_LIMIT, schema: { params: idParams, querystring: pathQuery } },
+    async (request, reply) => {
+      const ctx = resolveCtx(request.params.id, request.query.sessionId, reply);
+      if (!ctx) return;
+      const relPath = request.query.path;
+      if (!relPath) return reply.badRequest("path is required");
+      return dispatch(
+        reply,
+        ctx,
+        (cwd) => deleteProjectPath(cwd, relPath),
+        (client, cwd) => client.deleteProjectPath(cwd, relPath),
       );
     },
   );

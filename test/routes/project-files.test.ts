@@ -225,6 +225,68 @@ describe("project-files routes", () => {
     });
   });
 
+  it("creates folders, renames and deletes end to end, honouring sessionId", async () => {
+    const { app, projectId } = await createProject();
+    const mk = await app.inject({
+      method: "POST",
+      url: `/api/projects/${projectId}/files/mkdir`,
+      payload: { path: "docs" },
+    });
+    expect(mk.statusCode).toBe(200);
+    expect(mk.json()).toEqual({ path: "docs" });
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/projects/${projectId}/files/mkdir`,
+          payload: { path: "docs" },
+        })
+      ).statusCode,
+    ).toBe(409);
+
+    fs.writeFileSync(path.join(projectCwd, "docs", "a.md"), "x");
+    const mv = await app.inject({
+      method: "POST",
+      url: `/api/projects/${projectId}/files/rename`,
+      payload: { from: "docs/a.md", to: "docs/b.md" },
+    });
+    expect(mv.json()).toEqual({ path: "docs/b.md" });
+    const clash = await app.inject({
+      method: "POST",
+      url: `/api/projects/${projectId}/files/rename`,
+      payload: { from: "docs/b.md", to: "docs/b.md" },
+    });
+    expect(clash.statusCode).toBe(409);
+
+    const full = await app.inject({
+      method: "DELETE",
+      url: `/api/projects/${projectId}/file?path=docs`,
+    });
+    expect(full.statusCode).toBe(409);
+    expect(full.json().code).toBe("not_empty");
+    expect(
+      (
+        await app.inject({
+          method: "DELETE",
+          url: `/api/projects/${projectId}/file?path=docs/b.md`,
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(
+      (await app.inject({ method: "DELETE", url: `/api/projects/${projectId}/file?path=docs` }))
+        .statusCode,
+    ).toBe(200);
+    expect(fs.existsSync(path.join(projectCwd, "docs"))).toBe(false);
+    expect(
+      (await app.inject({ method: "DELETE", url: `/api/projects/${projectId}/file` })).statusCode,
+    ).toBe(400);
+    expect(
+      (await app.inject({ method: "DELETE", url: `/api/projects/${projectId}/file?path=../x` }))
+        .statusCode,
+    ).toBe(400);
+    await app.close();
+  });
+
   it("maps service errors to their http status", async () => {
     fs.writeFileSync(path.join(projectCwd, "bin"), Buffer.from([0, 1, 2]));
     const { app, projectId } = await createProject();
@@ -355,6 +417,37 @@ describe("project-files routes", () => {
       await primary.close();
       await agentApp.close();
       fs.rmSync(wt, { recursive: true, force: true });
+    });
+
+    it("round-trips mkdir/rename/delete through the agent", async () => {
+      const { agentApp, port } = await startAgent("pf-token-ops");
+      const { primary, projectId } = await remoteProject(port, "pf-token-ops", projectCwd);
+      const base = `/api/projects/${projectId}`;
+      expect(
+        (
+          await primary.inject({
+            method: "POST",
+            url: `${base}/files/mkdir`,
+            payload: { path: "d" },
+          })
+        ).json(),
+      ).toEqual({ path: "d" });
+      fs.writeFileSync(path.join(projectCwd, "d", "f"), "");
+      const mv = await primary.inject({
+        method: "POST",
+        url: `${base}/files/rename`,
+        payload: { from: "d/f", to: "d/g" },
+      });
+      expect(mv.json()).toEqual({ path: "d/g" });
+      const full = await primary.inject({ method: "DELETE", url: `${base}/file?path=d` });
+      expect(full.statusCode).toBe(409);
+      expect(full.json().code).toBe("not_empty");
+      expect(
+        (await primary.inject({ method: "DELETE", url: `${base}/file?path=d/g` })).statusCode,
+      ).toBe(200);
+      expect(fs.existsSync(path.join(projectCwd, "d", "g"))).toBe(false);
+      await primary.close();
+      await agentApp.close();
     });
 
     it("400s when the project cwd is outside the agent's PROJECTS_ROOTS", async () => {

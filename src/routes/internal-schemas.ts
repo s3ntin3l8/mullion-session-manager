@@ -787,3 +787,25 @@ export const projectFilesWriteSchema = {
     },
   },
 };
+
+export interface ProjectFilesPathBody {
+  cwd: string;
+  path: string;
+}
+
+export const projectFilesPathSchema = projectFilesReadSchema;
+
+export interface ProjectFilesRenameBody {
+  cwd: string;
+  from: string;
+  to: string;
+}
+
+export const projectFilesRenameSchema = {
+  body: {
+    type: "object",
+    required: ["cwd", "from", "to"],
+    additionalProperties: false,
+    properties: { cwd: { type: "string" }, from: { type: "string" }, to: { type: "string" } },
+  },
+};

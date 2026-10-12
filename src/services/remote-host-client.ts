@@ -1039,6 +1039,30 @@ export class RemoteHostClient {
     });
   }
 
+  async makeProjectDir(cwd: string, relPath: string): Promise<{ path: string }> {
+    return this.request<{ path: string }>("/internal/project-files/mkdir", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ cwd, path: relPath }),
+    });
+  }
+
+  async deleteProjectPath(cwd: string, relPath: string): Promise<{ path: string }> {
+    return this.request<{ path: string }>("/internal/project-files/delete", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ cwd, path: relPath }),
+    });
+  }
+
+  async renameProjectPath(cwd: string, from: string, to: string): Promise<{ path: string }> {
+    return this.request<{ path: string }>("/internal/project-files/rename", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ cwd, from, to }),
+    });
+  }
+
   /** Reports whether a Mullion scaffold is actually committed under `cwd`
    * on this agent's own filesystem (#1124) — mirrors
    * /internal/scaffold-scan's `{cwd}` -> `{skillCommitted, reviewerCommitted, warnings}`

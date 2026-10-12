@@ -89,6 +89,9 @@ import {
   listProjectDir,
   readProjectFile,
   writeProjectFile,
+  makeProjectDir,
+  deleteProjectPath,
+  renameProjectPath,
 } from "../services/project-files.js";
 import { runGitFetch } from "../services/git-fetch.js";
 import { runGitPull } from "../services/git-pull.js";
@@ -174,6 +177,8 @@ import {
   agentRuleWriteBodySchema,
   toggleSkillBodySchema,
   projectFilesListSchema,
+  projectFilesPathSchema,
+  projectFilesRenameSchema,
   projectFilesReadSchema,
   projectFilesWriteSchema,
 } from "./internal-schemas.js";
@@ -200,6 +205,8 @@ import type {
   ProjectFilesListBody,
   ProjectFilesReadBody,
   ProjectFilesWriteBody,
+  ProjectFilesPathBody,
+  ProjectFilesRenameBody,
   ScaffoldScanBody,
   GitCommitWipBody,
   RunGenerationTurnBody,
@@ -1420,6 +1427,48 @@ export async function internalRoutes(app: FastifyInstance) {
       if (resolvedCwd === null) return;
       try {
         return writeProjectFile(resolvedCwd, relPath, content, { expectedMtimeMs, create });
+      } catch (err) {
+        return replyProjectFileError(reply, err);
+      }
+    },
+  );
+
+  app.post<{ Body: ProjectFilesPathBody }>(
+    "/internal/project-files/mkdir",
+    { ...INTERNAL_RATE_LIMIT, schema: projectFilesPathSchema },
+    async (request, reply) => {
+      const resolvedCwd = requireWithinRoots(app, reply, request.body.cwd, "cwd");
+      if (resolvedCwd === null) return;
+      try {
+        return makeProjectDir(resolvedCwd, request.body.path);
+      } catch (err) {
+        return replyProjectFileError(reply, err);
+      }
+    },
+  );
+
+  app.post<{ Body: ProjectFilesPathBody }>(
+    "/internal/project-files/delete",
+    { ...INTERNAL_RATE_LIMIT, schema: projectFilesPathSchema },
+    async (request, reply) => {
+      const resolvedCwd = requireWithinRoots(app, reply, request.body.cwd, "cwd");
+      if (resolvedCwd === null) return;
+      try {
+        return deleteProjectPath(resolvedCwd, request.body.path);
+      } catch (err) {
+        return replyProjectFileError(reply, err);
+      }
+    },
+  );
+
+  app.post<{ Body: ProjectFilesRenameBody }>(
+    "/internal/project-files/rename",
+    { ...INTERNAL_RATE_LIMIT, schema: projectFilesRenameSchema },
+    async (request, reply) => {
+      const resolvedCwd = requireWithinRoots(app, reply, request.body.cwd, "cwd");
+      if (resolvedCwd === null) return;
+      try {
+        return renameProjectPath(resolvedCwd, request.body.from, request.body.to);
       } catch (err) {
         return replyProjectFileError(reply, err);
       }

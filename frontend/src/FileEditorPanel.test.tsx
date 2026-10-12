@@ -39,6 +39,7 @@ const ROOT = [dir("src"), file(".env"), file("big.bin")];
 const SRC = [file("index.ts")];
 
 interface Handlers {
+  extra?: (method: string, url: string, body?: Record<string, unknown>) => Response | undefined;
   write?: (body: Record<string, unknown>) => Response;
   rootError?: boolean;
 }
@@ -52,6 +53,8 @@ function mockFetch(h: Handlers = {}) {
       ? (JSON.parse(init.body as string) as Record<string, unknown>)
       : undefined;
     calls.push({ method, url, body });
+    const extra = h.extra?.(method, url, body);
+    if (extra) return Promise.resolve(extra);
     if (method === "GET" && url.includes("/files?path=")) {
       const p = new URL(url, "http://x").searchParams.get("path") ?? "";
       if (p === "" && h.rootError)
@@ -264,6 +267,155 @@ describe("FileEditorPanel", () => {
     });
   });
 
+  describe("folders, rename, delete", () => {
+    it("creates a folder in the selected folder and refreshes the tree", async () => {
+      let created = false;
+      const { fn, calls } = mockFetch({
+        extra: (method, url, body) => {
+          if (method === "POST" && url.endsWith("/files/mkdir")) {
+            created = true;
+            return jsonResponse(200, { path: body!.path });
+          }
+          if (created && url.includes("/files?path=src")) {
+            return jsonResponse(200, {
+              path: "src",
+              entries: [dir("newdir"), file("index.ts")],
+              truncated: false,
+            });
+          }
+        },
+      });
+      vi.stubGlobal("fetch", fn);
+      const user = userEvent.setup();
+      render(<FileEditorPanel params={{ projectId: 1 }} />);
+      await user.click(await screen.findByText("src"));
+      await screen.findByText("index.ts");
+      await user.click(screen.getByText("New folder"));
+      await user.type(screen.getByLabelText("New folder name"), "newdir{Enter}");
+      expect(await screen.findByText("newdir")).toBeInTheDocument();
+      expect(calls.find((c) => c.url.endsWith("/files/mkdir"))!.body).toMatchObject({
+        path: "src/newdir",
+      });
+    });
+
+    it("renames a file inline and reopens it when it was the open file", async () => {
+      let renamed = false;
+      const { fn, calls } = mockFetch({
+        extra: (method, url, body) => {
+          if (method === "POST" && url.endsWith("/files/rename")) {
+            renamed = true;
+            return jsonResponse(200, { path: body!.to });
+          }
+          if (renamed && url.includes("/files?path=")) {
+            return jsonResponse(200, {
+              path: "",
+              entries: [dir("src"), file(".env.local"), file("big.bin")],
+              truncated: false,
+            });
+          }
+          if (renamed && url.includes("/file?path=.env.local")) {
+            return jsonResponse(200, {
+              path: ".env.local",
+              content: "A=1\n",
+              size: 4,
+              mtimeMs: 100,
+            });
+          }
+        },
+      });
+      vi.stubGlobal("fetch", fn);
+      const user = userEvent.setup();
+      render(<FileEditorPanel params={{ projectId: 1 }} />);
+      await user.click(await screen.findByText(".env"));
+      await screen.findByLabelText("editor:.env");
+      await user.click(screen.getByLabelText("Rename .env"));
+      const input = screen.getByRole("textbox", { name: "Rename .env" });
+      await user.clear(input);
+      await user.type(input, ".env.local{Enter}");
+      expect(await screen.findByLabelText("editor:.env.local")).toBeInTheDocument();
+      expect(calls.find((c) => c.url.endsWith("/files/rename"))!.body).toMatchObject({
+        from: ".env",
+        to: ".env.local",
+      });
+    });
+
+    it("rejects a path as the new name, and Escape cancels a rename", async () => {
+      const { fn, calls } = mockFetch();
+      vi.stubGlobal("fetch", fn);
+      const user = userEvent.setup();
+      render(<FileEditorPanel params={{ projectId: 1 }} />);
+      await screen.findByText("big.bin");
+      await user.click(screen.getByLabelText("Rename big.bin"));
+      const input = screen.getByRole("textbox", { name: "Rename big.bin" });
+      await user.clear(input);
+      await user.type(input, "a/b{Enter}");
+      expect(await screen.findByText("Enter a name, not a path.")).toBeInTheDocument();
+      await user.keyboard("{Escape}");
+      expect(screen.queryByRole("textbox", { name: "Rename big.bin" })).toBeNull();
+      expect(calls.some((c) => c.url.endsWith("/files/rename"))).toBe(false);
+    });
+
+    it("deletes with a confirm click and clears the editor if it was the open file", async () => {
+      let deleted = false;
+      const { fn, calls } = mockFetch({
+        extra: (method, url) => {
+          if (method === "DELETE") {
+            deleted = true;
+            return jsonResponse(200, { path: ".env" });
+          }
+          if (deleted && url.endsWith("/files?path=")) {
+            return jsonResponse(200, {
+              path: "",
+              entries: [dir("src"), file("big.bin")],
+              truncated: false,
+            });
+          }
+        },
+      });
+      vi.stubGlobal("fetch", fn);
+      const user = userEvent.setup();
+      render(<FileEditorPanel params={{ projectId: 1 }} />);
+      await user.click(await screen.findByText(".env"));
+      await screen.findByLabelText("editor:.env");
+      const del = screen.getAllByTitle(/Delete \.env\?/)[0];
+      await user.click(del);
+      expect(calls.some((c) => c.method === "DELETE")).toBe(false);
+      await user.click(screen.getAllByTitle(/Delete \.env\?|Confirm/i)[0] ?? del);
+      await waitFor(() => expect(calls.some((c) => c.method === "DELETE")).toBe(true));
+      expect(await screen.findByText(".env was deleted.")).toBeInTheDocument();
+      expect(screen.queryByLabelText("editor:.env")).toBeNull();
+    });
+
+    it("shows the server's message when a non-empty folder can't be deleted", async () => {
+      const { fn } = mockFetch({
+        extra: (method) =>
+          method === "DELETE"
+            ? jsonResponse(409, { message: '"src" is not empty', code: "not_empty" })
+            : undefined,
+      });
+      vi.stubGlobal("fetch", fn);
+      const user = userEvent.setup();
+      render(<FileEditorPanel params={{ projectId: 1 }} />);
+      await screen.findByText("src");
+      const del = screen.getAllByTitle(/Delete src\?/)[0];
+      await user.click(del);
+      await user.click(screen.getAllByTitle(/Delete src\?|Confirm/i)[0] ?? del);
+      expect(await screen.findByText('"src" is not empty')).toBeInTheDocument();
+    });
+
+    it("blocks rename/delete of the open file while it has unsaved edits", async () => {
+      const { fn } = mockFetch();
+      vi.stubGlobal("fetch", fn);
+      const user = userEvent.setup();
+      render(<FileEditorPanel params={{ projectId: 1 }} />);
+      await user.click(await screen.findByText(".env"));
+      fireEvent.change(await screen.findByLabelText("editor:.env"), { target: { value: "x" } });
+      expect(screen.getByLabelText("Rename .env")).toBeDisabled();
+      expect(screen.getByLabelText("Delete .env")).toBeDisabled();
+      expect(screen.getByLabelText("Rename big.bin")).not.toBeDisabled();
+    });
+  });
+
   it("expands directories lazily, and shows a symlink target in the header", async () => {
     const { fn, calls } = mockFetch();
     vi.stubGlobal("fetch", fn);
@@ -364,7 +516,7 @@ describe("FileEditorPanel", () => {
     render(<FileEditorPanel params={{ projectId: 1 }} />);
     await user.click(await screen.findByText("New file"));
     await user.type(screen.getByLabelText("New file name"), "a/b.txt{Enter}");
-    expect(await screen.findByText(/Enter a file name, not a path/)).toBeInTheDocument();
+    expect(await screen.findByText(/Enter a name, not a path/)).toBeInTheDocument();
     expect(calls.some((c) => c.method === "PUT")).toBe(false);
   });
 

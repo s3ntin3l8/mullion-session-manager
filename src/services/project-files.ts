@@ -23,11 +23,15 @@ import {
   fstatSync,
   ftruncateSync,
   lstatSync,
+  mkdirSync,
   openSync,
   readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
+  rmdirSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
@@ -51,7 +55,9 @@ export type ProjectFileErrorCode =
   | "symlink"
   | "too_large"
   | "binary"
-  | "conflict";
+  | "conflict"
+  | "not_empty"
+  | "invalid";
 
 const HTTP_STATUS: Record<ProjectFileErrorCode, number> = {
   escape: 400,
@@ -63,6 +69,8 @@ const HTTP_STATUS: Record<ProjectFileErrorCode, number> = {
   too_large: 413,
   binary: 415,
   conflict: 409,
+  not_empty: 409,
+  invalid: 400,
 };
 
 export class ProjectFileError extends Error {
@@ -205,6 +213,10 @@ function mapFsError(err: unknown, rel: string): never {
       throw new ProjectFileError("not_regular", `"${rel}" is not a regular file`);
     case "EEXIST":
       throw new ProjectFileError("conflict", `"${rel}" already exists`);
+    case "ENOTEMPTY":
+      throw new ProjectFileError("not_empty", `"${rel}" is not empty`);
+    case "EINVAL":
+      throw new ProjectFileError("invalid", `"${rel}" can't be moved there`);
     default:
       throw err;
   }
@@ -335,4 +347,90 @@ export function writeProjectFile(
   } finally {
     closeSync(fd);
   }
+}
+
+interface EntryRef {
+  realRoot: string;
+  /** Normalised project-relative path of the entry itself. */
+  rel: string;
+  /** Absolute path: the entry's REAL parent directory + its own name. The
+   * leaf is deliberately not resolved, so rename/delete act on a symlink as
+   * a link instead of following it to its target. */
+  abs: string;
+}
+
+/** Resolves a path for an operation on the ENTRY ITSELF (mkdir / rename /
+ * delete): the parent directory gets the full lexical + realpath
+ * containment of resolveInProject, the final component is kept as written
+ * (a `basename`, so it can't carry a separator or `..`). */
+function resolveEntry(root: string, relPath: string): EntryRef {
+  // Reuses resolveInProject's lexical validation + containment on the whole
+  // path first (rejects empty/absolute/NUL/`..` escapes, and the project
+  // root itself), then re-resolves just the parent for the real directory.
+  const lexical = resolveInProject(
+    root,
+    path.dirname(relPath) === "." ? "" : path.dirname(relPath),
+    true,
+  );
+  const name = path.basename(relPath);
+  if (relPath === "" || relPath.includes("\0") || path.isAbsolute(relPath)) {
+    throw new ProjectFileError("escape", `Invalid path "${relPath.replaceAll("\0", "")}"`);
+  }
+  if (name === "" || name === "." || name === "..") {
+    throw new ProjectFileError("escape", `Invalid path "${relPath}"`);
+  }
+  const rel = path.join(lexical.rel, name);
+  return { realRoot: lexical.realRoot, rel, abs: path.join(lexical.real, name) };
+}
+
+/** Creates one directory. The parent must already exist (no `-p`), and an
+ * existing entry of any kind at the path is a `conflict`. */
+export function makeProjectDir(root: string, relPath: string): { path: string } {
+  const entry = resolveEntry(root, relPath);
+  try {
+    mkdirSync(entry.abs);
+  } catch (err) {
+    return mapFsError(err, entry.rel);
+  }
+  return { path: entry.rel };
+}
+
+/** Removes a file or symlink (the link, never its target), or an EMPTY
+ * directory. A non-empty directory is `not_empty` — a recursive delete from a
+ * file-editor tree is too easy to fire by mistake. */
+export function deleteProjectPath(root: string, relPath: string): { path: string } {
+  const entry = resolveEntry(root, relPath);
+  try {
+    if (lstatSync(entry.abs).isDirectory()) rmdirSync(entry.abs);
+    else unlinkSync(entry.abs);
+  } catch (err) {
+    return mapFsError(err, entry.rel);
+  }
+  return { path: entry.rel };
+}
+
+/** Renames/moves an entry within the project. The destination must not
+ * exist (rename(2) would silently replace a file); its parent must. The
+ * existence check and the rename are not atomic — a destination created in
+ * between would be replaced — which is acceptable inside one's own project. */
+export function renameProjectPath(root: string, fromRel: string, toRel: string): { path: string } {
+  const from = resolveEntry(root, fromRel);
+  const to = resolveEntry(root, toRel);
+  try {
+    lstatSync(from.abs);
+  } catch (err) {
+    return mapFsError(err, from.rel);
+  }
+  try {
+    lstatSync(to.abs);
+    throw new ProjectFileError("conflict", `"${to.rel}" already exists`);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") return mapFsError(err, to.rel);
+  }
+  try {
+    renameSync(from.abs, to.abs);
+  } catch (err) {
+    return mapFsError(err, to.rel);
+  }
+  return { path: to.rel };
 }
