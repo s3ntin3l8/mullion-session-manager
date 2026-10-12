@@ -44,7 +44,7 @@ const idParams = {
 const pathQuery = {
   type: "object",
   additionalProperties: false,
-  properties: { path: { type: "string" }, sessionId: { type: "string" } },
+  properties: { path: { type: "string", maxLength: 4096 }, sessionId: { type: "string" } },
 };
 
 const writeSchema = {
@@ -54,11 +54,11 @@ const writeSchema = {
     required: ["path", "content"],
     additionalProperties: false,
     properties: {
-      path: { type: "string" },
+      path: { type: "string", maxLength: 4096 },
       content: { type: "string" },
       expectedMtimeMs: { type: "number" },
       create: { type: "boolean" },
-      sessionId: { type: "integer" },
+      sessionId: { type: "integer", minimum: 1 },
     },
   },
 };
@@ -135,7 +135,7 @@ export async function projectFilesRoute(app: FastifyInstance) {
       return { hostId: project.hostId, cwd: project.cwd };
     }
     const sessionId = Number(sessionIdRaw);
-    if (!Number.isInteger(sessionId)) {
+    if (!Number.isInteger(sessionId) || sessionId <= 0) {
       reply.badRequest("Invalid session id");
       return null;
     }
@@ -276,7 +276,10 @@ export async function projectFilesRoute(app: FastifyInstance) {
       type: "object",
       required: ["path"],
       additionalProperties: false,
-      properties: { path: { type: "string" }, sessionId: { type: "integer" } },
+      properties: {
+        path: { type: "string", maxLength: 4096 },
+        sessionId: { type: "integer", minimum: 1 },
+      },
     },
   };
 
@@ -310,9 +313,9 @@ export async function projectFilesRoute(app: FastifyInstance) {
           required: ["from", "to"],
           additionalProperties: false,
           properties: {
-            from: { type: "string" },
-            to: { type: "string" },
-            sessionId: { type: "integer" },
+            from: { type: "string", maxLength: 4096 },
+            to: { type: "string", maxLength: 4096 },
+            sessionId: { type: "integer", minimum: 1 },
           },
         },
       },

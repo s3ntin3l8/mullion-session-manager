@@ -747,7 +747,7 @@ export const projectFilesListSchema = {
     type: "object",
     required: ["cwd"],
     additionalProperties: false,
-    properties: { cwd: { type: "string" }, path: { type: "string" } },
+    properties: { cwd: { type: "string" }, path: { type: "string", maxLength: 4096 } },
   },
 };
 
@@ -761,7 +761,7 @@ export const projectFilesReadSchema = {
     type: "object",
     required: ["cwd", "path"],
     additionalProperties: false,
-    properties: { cwd: { type: "string" }, path: { type: "string" } },
+    properties: { cwd: { type: "string" }, path: { type: "string", maxLength: 4096 } },
   },
 };
 
@@ -780,7 +780,7 @@ export const projectFilesWriteSchema = {
     additionalProperties: false,
     properties: {
       cwd: { type: "string" },
-      path: { type: "string" },
+      path: { type: "string", maxLength: 4096 },
       content: { type: "string" },
       expectedMtimeMs: { type: "number" },
       create: { type: "boolean" },
@@ -806,7 +806,11 @@ export const projectFilesRenameSchema = {
     type: "object",
     required: ["cwd", "from", "to"],
     additionalProperties: false,
-    properties: { cwd: { type: "string" }, from: { type: "string" }, to: { type: "string" } },
+    properties: {
+      cwd: { type: "string" },
+      from: { type: "string", maxLength: 4096 },
+      to: { type: "string", maxLength: 4096 },
+    },
   },
 };
 

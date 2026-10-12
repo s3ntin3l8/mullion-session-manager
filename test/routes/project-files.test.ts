@@ -271,6 +271,30 @@ describe("project-files routes", () => {
       await app.close();
     });
 
+    it("rejects a non-positive sessionId and over-long paths", async () => {
+      const { app, projectId } = await createProject();
+      for (const bad of ["0", "-3"]) {
+        const res = await app.inject({
+          method: "GET",
+          url: `/api/projects/${projectId}/file?path=.env&sessionId=${bad}`,
+        });
+        expect(res.statusCode).toBe(400);
+      }
+      const put = await app.inject({
+        method: "PUT",
+        url: `/api/projects/${projectId}/file`,
+        payload: { path: "a", content: "", sessionId: 0 },
+      });
+      expect(put.statusCode).toBe(400);
+      const long = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/files/mkdir`,
+        payload: { path: "a".repeat(4097) },
+      });
+      expect(long.statusCode).toBe(400);
+      await app.close();
+    });
+
     it("falls back to the project cwd for a session without a cwd override", async () => {
       const { app, projectId } = await createProject();
       const sessionId = addSession(app, projectId, null);
