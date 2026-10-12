@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.38](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.37...v0.3.38) (2026-10-12)
+
+
+### Features
+
+* file editor follow-ups — worktree roots, rename/delete, search, open from git/terminal ([#1574](https://github.com/s3ntin3l8/mullion-session-manager/issues/1574)) ([d7371e9](https://github.com/s3ntin3l8/mullion-session-manager/commit/d7371e9dffbbd1507db616e95388ec4713db1340))
+* project file editor panel ([#1572](https://github.com/s3ntin3l8/mullion-session-manager/issues/1572)) ([833e217](https://github.com/s3ntin3l8/mullion-session-manager/commit/833e217a4fd5ac89e3f5026b045fb874632c76e3))
+
 ## [0.3.37](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.36...v0.3.37) (2026-10-12)
 
 
