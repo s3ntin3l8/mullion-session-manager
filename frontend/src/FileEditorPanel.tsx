@@ -200,6 +200,13 @@ export function FileEditorPanel({ params }: { params: FileEditorPanelParams }) {
   const handleCreate = useCallback(async () => {
     const name = (newFileName ?? "").trim();
     if (!name) return;
+    // A bare name only: the backend never creates parent directories, and the
+    // tree only refreshes the immediate parent, so a nested path would land
+    // on disk without showing up.
+    if (name.includes("/")) {
+      setTreeError("Enter a file name, not a path — new files are created in the current folder.");
+      return;
+    }
     const dir = file ? parentDir(file.path) : "";
     const target = joinPath(dir, name);
     setActionError(null);

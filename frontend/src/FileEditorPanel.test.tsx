@@ -277,6 +277,17 @@ describe("FileEditorPanel", () => {
     expect(put.body).toEqual({ path: "notes.txt", content: "", create: true });
   });
 
+  it("rejects a nested path for a new file instead of creating an invisible one", async () => {
+    const { fn, calls } = mockFetch();
+    vi.stubGlobal("fetch", fn);
+    const user = userEvent.setup();
+    render(<FileEditorPanel params={{ projectId: 1 }} />);
+    await user.click(await screen.findByText("New file"));
+    await user.type(screen.getByLabelText("New file name"), "a/b.txt{Enter}");
+    expect(await screen.findByText(/Enter a file name, not a path/)).toBeInTheDocument();
+    expect(calls.some((c) => c.method === "PUT")).toBe(false);
+  });
+
   it("opens params.path on mount, expanding its parent directories", async () => {
     const { fn } = mockFetch();
     vi.stubGlobal("fetch", fn);
