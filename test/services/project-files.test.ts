@@ -180,11 +180,19 @@ describe("project-files service", () => {
     it("updates an existing file in place and returns fresh stat", () => {
       const file = path.join(root, "a.txt");
       fs.writeFileSync(file, "old content that is long");
-      const ino = fs.statSync(file).ino;
-      const res = writeProjectFile(root, "a.txt", "new");
-      expect(fs.readFileSync(file, "utf8")).toBe("new");
-      expect(fs.statSync(file).ino).toBe(ino);
-      expect(res).toEqual({ size: 3, mtimeMs: fs.statSync(file).mtimeMs });
+      // One fd for every check, so nothing re-resolves the path between a
+      // stat and a read (CodeQL js/file-system-race).
+      const fd = fs.openSync(file, "r");
+      try {
+        const ino = fs.fstatSync(fd).ino;
+        const res = writeProjectFile(root, "a.txt", "new");
+        expect(fs.readFileSync(fd, "utf8")).toBe("new");
+        const after = fs.fstatSync(fd);
+        expect(after.ino).toBe(ino);
+        expect(res).toEqual({ size: 3, mtimeMs: after.mtimeMs });
+      } finally {
+        fs.closeSync(fd);
+      }
     });
 
     it("preserves the mode of a 0600 file", () => {

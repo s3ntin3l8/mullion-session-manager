@@ -88,6 +88,10 @@ if (typeof window !== "undefined" && window.isSecureContext === undefined) {
 // above. Layout is meaningless in jsdom, so zero-size stubs are enough.
 if (typeof globalThis.ResizeObserver === "undefined") {
   globalThis.ResizeObserver = class {
+    // Accepts (and ignores) the callback real callers pass — without it
+    // CodeQL flags every `new ResizeObserver(cb)` in the app as a call with a
+    // superfluous argument to an anonymous class's default constructor.
+    constructor(_callback?: ResizeObserverCallback) {}
     observe() {}
     unobserve() {}
     disconnect() {}

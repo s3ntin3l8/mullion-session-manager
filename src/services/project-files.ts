@@ -155,15 +155,20 @@ function resolveInProject(root: string, relPath: string, allowRoot: boolean): Re
     // misleading "escape".
     throw err;
   }
-  if (!isInside(realRoot, real)) {
+  // Containment check written inline, on the very value that is returned
+  // (the shape CodeQL's js/path-injection query recognises as a sanitizer —
+  // same reasoning as safe-path.ts's resolveWithin), not delegated to a
+  // helper it can't see through.
+  const contained = path.resolve(real);
+  if (contained !== realRoot && !contained.startsWith(realRoot + path.sep)) {
     throw new ProjectFileError("escape", `Path "${relPath}" resolves outside the project`);
   }
   const expectedReal = path.join(realRoot, rel);
   return {
     realRoot,
-    real,
+    real: contained,
     rel,
-    symlinkTarget: real !== expectedReal ? path.relative(realRoot, real) : undefined,
+    symlinkTarget: contained !== expectedReal ? path.relative(realRoot, contained) : undefined,
   };
 }
 
