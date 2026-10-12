@@ -106,8 +106,26 @@ export const SERVER_ENV_KEYS: readonly string[] = [
 ];
 
 /**
+ * Host display vars scrubbed from every session. The service env carries
+ * DISPLAY/WAYLAND_DISPLAY for the device panel's `-gpu host` emulator (a
+ * headless weston + Xwayland, see docs/device-panel.md), but a session's
+ * terminal is always xterm.js in a remote browser, so that display is never
+ * the user's. Codex (and other TUIs) see a display and copy into its
+ * invisible clipboard via arboard instead of emitting OSC 52, so the browser
+ * clipboard never changes. Deliberately NOT in SERVER_ENV_KEYS: that would
+ * make them reserved in session-env-keys.ts and block a per-session
+ * `session.env` opt-back-in (applied after this scrub in launch-plan.ts).
+ */
+export const HOST_DISPLAY_ENV_KEYS: readonly string[] = [
+  "DISPLAY",
+  "WAYLAND_DISPLAY",
+  "XAUTHORITY",
+];
+
+/**
  * Returns a copy of `base` (defaults to `process.env`) with every
- * Mullion-owned config key in {@link SERVER_ENV_KEYS} removed, `COLORTERM`
+ * Mullion-owned config key in {@link SERVER_ENV_KEYS} and every
+ * {@link HOST_DISPLAY_ENV_KEYS} entry removed, `COLORTERM`
  * forced to `truecolor`, and `TERM` forced to `xterm-256color`. Use this
  * instead of passing `process.env` directly whenever spawning a terminal
  * session's shell — see pty-manager.ts.
@@ -115,6 +133,9 @@ export const SERVER_ENV_KEYS: readonly string[] = [
 export function buildSessionEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const env = { ...base };
   for (const key of SERVER_ENV_KEYS) {
+    delete env[key];
+  }
+  for (const key of HOST_DISPLAY_ENV_KEYS) {
     delete env[key];
   }
   // Issue #91: pty-manager.ts spawns every session with TERM=xterm-256color
