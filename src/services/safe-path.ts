@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import path from "node:path";
 
 // Issue #895 — extracted from routes/project-setup.ts so the SAME
@@ -64,4 +65,49 @@ export function resolveSymlinkTargetWithin(
     throw new PathEscapeError(resolvedRoot, target);
   }
   return resolvedTarget;
+}
+
+/**
+ * A symlink-tolerant realpath: resolves every symlink in the deepest
+ * EXISTING prefix of `absPath`, then appends whatever tail doesn't exist yet
+ * unchanged (a nonexistent path component can't itself be a symlink, so
+ * there's nothing left to resolve once the walk hits one). Node's own
+ * fs.realpathSync throws ENOENT the instant any component is missing, which
+ * doesn't work for resolveWithinRoots below — a project cwd or one of its
+ * `.crs/`-relative sinks is frequently a path that doesn't exist yet (a
+ * fresh project with no `.crs/dock.json` written, a PROJECTS_ROOTS entry
+ * that hasn't been created on this particular agent host). Mirrors the tail
+ * behavior of Python's `os.path.realpath(strict=False)`, applied one
+ * component at a time so each step's containment check sees the FULLY
+ * resolved parent, not a lexical guess (issue #604).
+ *
+ * Only ENOENT is treated as "doesn't exist yet, fall back to lexical" —
+ * every other errno (EACCES, ELOOP on a symlink cycle, ENOTDIR, ...)
+ * propagates instead (Hermes review, PR #612). The original catch-all here
+ * would have silently reused the lexical fallback for those too, which is
+ * wrong in a different way than the ENOENT case: those errors mean "this
+ * component's real target is unknown or unreachable," not "there's nothing
+ * here yet" — treating them the same could pass containment on a value that
+ * was never actually verified, only guessed at. The caller
+ * (resolveWithinRoots) turns any such throw into a clean 400 rather than
+ * this silently returning something that happens to pass, or an uncaught
+ * exception surfacing as a 500 at the sink.
+ */
+export function realpathExistingPrefix(absPath: string): string {
+  const root = path.parse(absPath).root;
+  const segments = absPath.slice(root.length).split(path.sep).filter(Boolean);
+  let real = root;
+  for (let i = 0; i < segments.length; i++) {
+    const candidate = path.join(real, segments[i]);
+    try {
+      real = realpathSync(candidate);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+      // candidate doesn't exist — every remaining segment is a path we'd be
+      // creating, not one that could already be a pre-planted symlink, so
+      // append the rest lexically and stop walking.
+      return path.join(real, ...segments.slice(i));
+    }
+  }
+  return real;
 }

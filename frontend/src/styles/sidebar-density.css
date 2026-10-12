@@ -306,3 +306,69 @@
   color: var(--dim);
   flex-shrink: 0;
 }
+
+/* FileEditorPanel.tsx — reuses .agent-rules-panel's two-pane shell; only the
+   tree rows, the new-file input, the CodeMirror host and the narrow-width
+   tree toggle are new. */
+.file-editor-tree-actions {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.file-editor-row {
+  padding-right: 6px;
+}
+.file-editor-row-muted {
+  opacity: 0.5;
+  cursor: default;
+}
+.file-editor-new {
+  margin-bottom: 8px;
+}
+.file-editor-new-input {
+  width: 100%;
+  background: color-mix(in srgb, var(--fg) 4%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 4px 6px;
+  color: var(--fg);
+  font-size: 12px;
+}
+.file-editor-new-input:focus {
+  outline: none;
+  border-color: var(--accent-solid);
+}
+.file-editor-main {
+  overflow: hidden;
+}
+.code-editor {
+  flex: 1;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.code-editor:focus-within {
+  border-color: var(--accent-solid);
+}
+.file-editor-tree-toggle {
+  display: none;
+  align-self: flex-start;
+  margin-bottom: 8px;
+}
+@media (max-width: 700px) {
+  .file-editor-panel .file-editor-tree {
+    display: none;
+    width: 100%;
+    border-right: none;
+  }
+  .file-editor-panel.tree-open .file-editor-tree {
+    display: block;
+  }
+  .file-editor-panel.tree-open .file-editor-main {
+    display: none;
+  }
+  .file-editor-tree-toggle {
+    display: inline-flex;
+  }
+}

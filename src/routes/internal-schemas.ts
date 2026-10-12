@@ -732,3 +732,58 @@ export const toggleSkillBodySchema = {
     },
   },
 };
+
+export interface ProjectFilesListBody {
+  cwd: string;
+  path?: string;
+}
+
+// Project file editor — the agent-side counterpart of routes/project-
+// files.ts. Hand-written (not schemaFor): these carry fields the shared
+// git-field table has no entry for. Same additionalProperties:false
+// discipline as every schema above.
+export const projectFilesListSchema = {
+  body: {
+    type: "object",
+    required: ["cwd"],
+    additionalProperties: false,
+    properties: { cwd: { type: "string" }, path: { type: "string" } },
+  },
+};
+
+export interface ProjectFilesReadBody {
+  cwd: string;
+  path: string;
+}
+
+export const projectFilesReadSchema = {
+  body: {
+    type: "object",
+    required: ["cwd", "path"],
+    additionalProperties: false,
+    properties: { cwd: { type: "string" }, path: { type: "string" } },
+  },
+};
+
+export interface ProjectFilesWriteBody {
+  cwd: string;
+  path: string;
+  content: string;
+  expectedMtimeMs?: number;
+  create?: boolean;
+}
+
+export const projectFilesWriteSchema = {
+  body: {
+    type: "object",
+    required: ["cwd", "path", "content"],
+    additionalProperties: false,
+    properties: {
+      cwd: { type: "string" },
+      path: { type: "string" },
+      content: { type: "string" },
+      expectedMtimeMs: { type: "number" },
+      create: { type: "boolean" },
+    },
+  },
+};

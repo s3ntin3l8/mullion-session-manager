@@ -93,6 +93,8 @@ interface CommandPaletteProps {
   // Issue #431: same section, opening the CLAUDE.md/AGENTS.md/GEMINI.md
   // editor for this project.
   onOpenAgentRules: (projectId: number) => void;
+  // Same section, opening the project file editor (.env and other text files).
+  onOpenFileEditor: (projectId: number) => void;
   // Same section, opening this project's DB-backed Mullion briefing editor.
   onOpenProjectBriefing: (projectId: number) => void;
   onOpenProjectSetup: (projectId: number) => void;
@@ -143,6 +145,7 @@ export function CommandPalette({
   onOpenGitHub,
   onOpenGit,
   onOpenAgentRules,
+  onOpenFileEditor,
   onOpenProjectBriefing,
   onOpenProjectSetup,
   onOpenDockConfig,
@@ -912,6 +915,28 @@ export function CommandPalette({
                         Agent Rules: {target?.name ?? "this project"}
                       </span>
                       <span className="cmd-row-subtitle">CLAUDE.md, AGENTS.md, GEMINI.md</span>
+                    </span>
+                  </button>
+                )}
+                {effectiveProjectId !== null && (
+                  <button
+                    className="cmd-row"
+                    onClick={() => {
+                      onOpenFileEditor(effectiveProjectId);
+                      closeAfterAction();
+                    }}
+                  >
+                    <span
+                      className="cmd-row-icon"
+                      style={{ background: "color-mix(in srgb, var(--fg) 8%, transparent)" }}
+                    >
+                      <FileTextIcon size={13} style={{ color: "var(--muted)" }} />
+                    </span>
+                    <span className="cmd-row-body">
+                      <span className="cmd-row-title">
+                        Edit project files: {target?.name ?? "this project"}
+                      </span>
+                      <span className="cmd-row-subtitle">.env and other text files</span>
                     </span>
                   </button>
                 )}

@@ -81,3 +81,39 @@ if (typeof window !== "undefined" && !window.matchMedia) {
 if (typeof window !== "undefined" && window.isSecureContext === undefined) {
   Object.defineProperty(window, "isSecureContext", { value: true, configurable: true });
 }
+
+// jsdom has no ResizeObserver or Range geometry, which CodeMirror's view
+// reads on mount/measure. Plain assignments (not vi.stubGlobal) so they
+// survive every test's own unstubAllGlobals(), like the matchMedia default
+// above. Layout is meaningless in jsdom, so zero-size stubs are enough.
+if (typeof globalThis.ResizeObserver === "undefined") {
+  globalThis.ResizeObserver = class {
+    // Accepts (and ignores) the callback real callers pass — without it
+    // CodeQL flags every `new ResizeObserver(cb)` in the app as a call with a
+    // superfluous argument to an anonymous class's default constructor.
+    constructor(_callback?: ResizeObserverCallback) {}
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof ResizeObserver;
+}
+if (typeof Range !== "undefined") {
+  const emptyRect = {
+    x: 0,
+    y: 0,
+    width: 0,
+    height: 0,
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    toJSON: () => ({}),
+  } as DOMRect;
+  Range.prototype.getBoundingClientRect ??= () => emptyRect;
+  Range.prototype.getClientRects ??= () =>
+    ({
+      length: 0,
+      item: () => null,
+      [Symbol.iterator]: [][Symbol.iterator],
+    }) as unknown as DOMRectList;
+}

@@ -18,6 +18,7 @@ import type { DockConfigPanelParams } from "../DockConfigPanel.js";
 import { SkillsPanel } from "../SkillsPanel.js";
 import type { SkillsPanelParams } from "../SkillsPanel.js";
 import type { BrowserPanelParams } from "../BrowserPanel.js";
+import type { FileEditorPanelParams } from "../FileEditorPanel.js";
 import type { BrowserPaneParams } from "../BrowserPane.js";
 import type { DevicePaneParams } from "../DevicePane.js";
 import { SessionTimeline } from "../SessionTimeline.js";
@@ -53,6 +54,8 @@ const loadUnifiedBoard = () =>
   import("../UnifiedBoard.js").then((m) => ({ default: m.UnifiedBoard }));
 const loadBrowserPanel = () =>
   import("../BrowserPanel.js").then((m) => ({ default: m.BrowserPanel }));
+const loadFileEditorPanel = () =>
+  import("../FileEditorPanel.js").then((m) => ({ default: m.FileEditorPanel }));
 const loadBrowserPane = () => import("../BrowserPane.js").then((m) => ({ default: m.BrowserPane }));
 const loadDevicePane = () => import("../DevicePane.js").then((m) => ({ default: m.DevicePane }));
 
@@ -314,6 +317,26 @@ const DockConfigPanelWrapper = makePanelWrapper<DockConfigPanelParams>(DockConfi
 // shouldn't blank the whole dashboard either.
 const SkillsPanelWrapper = makePanelWrapper<SkillsPanelParams>(SkillsPanel);
 
+// Lazy because it pulls in CodeMirror (the only place in the app that does);
+// hand-written for the same reason as BrowserPanelWrapper below — it needs
+// useRetriableLazy so "Reload pane" can retry a failed chunk load.
+function FileEditorPanelWrapper(props: IDockviewPanelProps<FileEditorPanelParams>) {
+  const [resetKey, resetPanel] = useResetKey();
+  const LazyFileEditorPanel = useRetriableLazy(loadFileEditorPanel, resetKey);
+  return (
+    <ErrorBoundary onReset={resetPanel}>
+      <div style={{ position: "relative", width: "100%", height: "100%" }}>
+        <Suspense fallback={<LazyPanelFallback />}>
+          {/* Same intentional per-resetKey component identity as
+              BrowserPanelWrapper below. */}
+          {/* eslint-disable-next-line react-hooks/static-components */}
+          <LazyFileEditorPanel key={resetKey} params={props.params} />
+        </Suspense>
+      </div>
+    </ErrorBoundary>
+  );
+}
+
 // Same reasoning as GitHubPanelWrapper above — a crashing iframe/preview
 // fetch shouldn't blank the whole dashboard either. Hand-written (rather
 // than makePanelWrapper, which every other suspense-less/no-extra-hooks
@@ -514,6 +537,7 @@ export const components = {
   github: GitHubPanelWrapper,
   git: GitPanelWrapper,
   "agent-rules": AgentRulesPanelWrapper,
+  "file-editor": FileEditorPanelWrapper,
   "project-briefing": ProjectBriefingPanelWrapper,
   "project-setup": ProjectSetupPanelWrapper,
   "dock-config": DockConfigPanelWrapper,
