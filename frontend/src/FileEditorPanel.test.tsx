@@ -543,6 +543,23 @@ describe("FileEditorPanel", () => {
     });
   });
 
+  it("reopens params.path when a re-target bumps rev, even after navigating elsewhere", async () => {
+    const { fn, calls } = mockFetch();
+    vi.stubGlobal("fetch", fn);
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <FileEditorPanel params={{ projectId: 1, path: ".env", rev: 1 }} />,
+    );
+    expect(await screen.findByLabelText("editor:.env")).toBeInTheDocument();
+    await user.click(screen.getByText("big.bin"));
+    await screen.findByText(/isn't a UTF-8 text file/);
+    const before = calls.filter((c) => c.url.includes("/file?path=.env")).length;
+
+    rerender(<FileEditorPanel params={{ projectId: 1, path: ".env", rev: 2 }} />);
+    expect(await screen.findByLabelText("editor:.env")).toBeInTheDocument();
+    expect(calls.filter((c) => c.url.includes("/file?path=.env")).length).toBe(before + 1);
+  });
+
   it("expands directories lazily, and shows a symlink target in the header", async () => {
     const { fn, calls } = mockFetch();
     vi.stubGlobal("fetch", fn);

@@ -7,6 +7,7 @@ import {
   openDevicePanel,
   openTaskDetailPanel,
   openOrFocusProjectPanel,
+  openFileEditorPanel,
   closeLegacyPanels,
   dropSessionPanel,
   hasTiledPanels,
@@ -48,7 +49,12 @@ import type { Session, Task, Device } from "./api/index.js";
 function mockPanel(id: string, locationType: "grid" | "floating" = "grid", overrides = {}) {
   return {
     id,
-    api: { setActive: vi.fn(), close: vi.fn(), location: { type: locationType } },
+    api: {
+      setActive: vi.fn(),
+      close: vi.fn(),
+      updateParameters: vi.fn(),
+      location: { type: locationType },
+    },
     ...overrides,
   } as unknown as ReturnType<DockviewApi["getPanel"]>;
 }
@@ -2350,5 +2356,49 @@ describe("shouldShowCodexHookTrustBanner (issue #1189)", () => {
         currentVersion: null,
       }),
     ).toBe(false);
+  });
+});
+
+describe("openFileEditorPanel", () => {
+  it("opens a new file-editor panel with the path and session root", () => {
+    const api = mockDockviewApi();
+    openFileEditorPanel(api, 1, PROJECTS, DESKTOP_LAYOUT, { path: "src/a.ts", sessionId: 9 });
+    expect(api.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "file-editor-1",
+        component: "file-editor",
+        title: "Files: project-alpha",
+        params: expect.objectContaining({ projectId: 1, path: "src/a.ts", sessionId: 9 }),
+      }),
+    );
+  });
+
+  it("falls back to a bare title for an unknown project", () => {
+    const api = mockDockviewApi();
+    openFileEditorPanel(api, 99, PROJECTS, DESKTOP_LAYOUT, { path: "a" });
+    expect(api.addPanel).toHaveBeenCalledWith(expect.objectContaining({ title: "Files" }));
+  });
+
+  it("re-targets and focuses an existing panel instead of opening a second", () => {
+    const api = mockDockviewApi();
+    api.addPanel({ id: "file-editor-1", component: "file-editor", params: {} });
+    const existing = api.getPanel("file-editor-1")!;
+
+    openFileEditorPanel(api, 1, PROJECTS, DESKTOP_LAYOUT, { path: ".env" });
+
+    expect(api.addPanel).toHaveBeenCalledTimes(1);
+    expect(existing.api.updateParameters).toHaveBeenCalledWith(
+      expect.objectContaining({ projectId: 1, path: ".env", rev: expect.any(Number) }),
+    );
+    expect(existing.api.setActive).toHaveBeenCalledTimes(1);
+    expect(api.maximizeGroup).not.toHaveBeenCalled();
+  });
+
+  it("maximizes the re-targeted panel on phone", () => {
+    const api = mockDockviewApi();
+    api.addPanel({ id: "file-editor-1", component: "file-editor", params: {} });
+    const existing = api.getPanel("file-editor-1")!;
+    openFileEditorPanel(api, 1, PROJECTS, PHONE_LAYOUT, { path: "a" });
+    expect(api.maximizeGroup).toHaveBeenCalledWith(existing);
   });
 });

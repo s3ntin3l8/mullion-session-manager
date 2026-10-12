@@ -32,7 +32,7 @@ import { Spinner } from "../ui/Spinner.js";
 import { useDashboardStore } from "../store/index.js";
 import type { Session } from "../api/index.js";
 import { formatPaneTitle } from "../paneTitle.js";
-import { openSessionPanel } from "../panelUtils.js";
+import { openFileEditorPanel, openSessionPanel } from "../panelUtils.js";
 import { useLayoutContext } from "../lib/layoutTier.js";
 import { useRetriableLazy } from "../lib/retriableLazy.js";
 
@@ -242,6 +242,34 @@ function TerminalPanelWrapper(props: IDockviewPanelProps<TerminalPaneParams>) {
   // TerminalPane itself stays dockview-agnostic (see its own header
   // comment), so this wrapper is where the dockview panel API lives and
   // where the resulting plain boolean gets threaded down.
+  const layout = useLayoutContext();
+  // Ctrl/Cmd-click on a path in the terminal -> the project's file editor,
+  // rooted at this session's cwd (an agent prints paths relative to where it
+  // runs, which for a worktree session is the worktree). Reads the store at
+  // call time like applyTitle above.
+  const { containerApi } = props;
+  const onOpenFile = useCallback(
+    (rawPath: string) => {
+      const { sessions, projects } = useDashboardStore.getState();
+      const session = sessions.find((s) => s.id === sessionId);
+      const project = session && projects.find((p) => p.id === session.projectId);
+      if (!session || !project) return;
+      const root = (session.cwd ?? project.cwd).replace(/\/+$/, "");
+      let rel = rawPath;
+      if (rel.startsWith("/")) {
+        // Absolute: only meaningful when it's inside this session's root.
+        if (!rel.startsWith(`${root}/`)) return;
+        rel = rel.slice(root.length + 1);
+      }
+      rel = rel.replace(/^(\.\/)+/, "");
+      if (rel === "" || rel.startsWith("../")) return;
+      openFileEditorPanel(containerApi, project.id, projects, layout, {
+        path: rel,
+        sessionId: session.cwd && session.cwd !== project.cwd ? session.id : undefined,
+      });
+    },
+    [sessionId, containerApi, layout],
+  );
   const [isActive, setIsActive] = useState(props.api.isActive);
   useEffect(() => {
     const disposable = props.api.onDidActiveChange((e) => setIsActive(e.isActive));
@@ -264,6 +292,7 @@ function TerminalPanelWrapper(props: IDockviewPanelProps<TerminalPaneParams>) {
           params={props.params}
           onTitleChange={onTitleChange}
           active={isActive}
+          onOpenFile={onOpenFile}
         />
       </ErrorBoundary>
     </div>
@@ -290,6 +319,11 @@ function GitPanelWrapper(props: IDockviewPanelProps<GitPanelParams>) {
         params={props.params}
         onOpenSession={(session) => {
           openSessionPanel(props.containerApi, session, layout, projects);
+        }}
+        onEditFile={(path) => {
+          openFileEditorPanel(props.containerApi, props.params.projectId, projects, layout, {
+            path,
+          });
         }}
       />
     </ErrorBoundary>

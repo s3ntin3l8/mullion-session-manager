@@ -172,7 +172,15 @@ way as a namespaced one.
   bodies/params `internal.ts`'s DB-less agent API registers, kept out of
   `internal.ts` itself to stop ~450 lines of hand-written schema literals
   drifting from their own parallel TS interfaces), `skills` (per-agent Skill enable/disable),
-  `agent-rules` (per-agent rule-file read/write), `settings` (the runtime
+  `agent-rules` (per-agent rule-file read/write), `project-files` (the
+  file-editor panel's surface — `GET /api/projects/:id/files[?path]` listing,
+  `GET`/`PUT`/`DELETE /api/projects/:id/file`, `POST .../files/mkdir` and
+  `.../files/rename`, `GET .../files/search?q` — over `services/project-files.ts`,
+  which holds every path to the project root by lexical + realpath containment
+  and `O_NOFOLLOW` opens; an optional `sessionId` re-roots it at that session's
+  cwd (a worktree's own checkout); remote-hosted projects proxy through
+  `/internal/project-files/*`, and an agent too old to have them yields a 501),
+  `settings` (the runtime
   Settings-override store backing Task Master's safety envelope and other
   deploy-time-default overrides), `updates` (Settings → Server's
   "Update now" flow), `push` (`GET /api/push/vapid-public-key`, `POST

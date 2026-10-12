@@ -37,6 +37,7 @@ import { computeFitFontSize } from "./lib/terminalFontFit.js";
 import { clampTerminalGridSize } from "./lib/terminalGridSize.js";
 import { useCoarsePointer } from "./lib/layoutTier.js";
 import { computeLinksForRow, isSafeLinkUrl, type LinkBufferSource } from "./lib/terminalLinks.js";
+import { computePathLinksForRow } from "./lib/terminalPathLinks.js";
 import { useTerminalSearch } from "./hooks/useTerminalSearch.js";
 import { TerminalFindBar } from "./terminal-pane/TerminalFindBar.js";
 import { TerminalToasts } from "./terminal-pane/TerminalToasts.js";
@@ -174,7 +175,18 @@ export function TerminalPane(props: {
   // renders a terminal outside any real dockview panel, simply omits it —
   // the effect below is a no-op for `undefined`, same as for `false`.
   active?: boolean;
+  // When provided, file paths printed in the terminal (`src/a.ts:42`, `.env`)
+  // become Ctrl/Cmd-click (tap on touch) links that call this with the path as
+  // printed and its line number, if any. Resolving it against the session's
+  // cwd and opening the editor is the wrapper's job (this component stays
+  // dockview/project-agnostic, see the header comment); Dock.tsx omits it,
+  // which registers no path provider at all.
+  onOpenFile?: (path: string, line?: number) => void;
 }) {
+  const onOpenFileRef = useRef(props.onOpenFile);
+  useEffect(() => {
+    onOpenFileRef.current = props.onOpenFile;
+  }, [props.onOpenFile]);
   const containerRef = useRef<HTMLDivElement>(null);
   // PR 6 (review corrections applied — see PR #797) — @xterm/addon-webgl
   // v0.19.0's own MAIN glyph-rendering canvas is sized wrong whenever
@@ -780,6 +792,43 @@ export function TerminalPane(props: {
         );
       },
     });
+    // File-path links (lib/terminalPathLinks.ts), registered AFTER the URL
+    // provider so a URL always wins an overlapping column. Gated on a
+    // modifier (or a coarse pointer, which has none): an underline-only
+    // affordance must not turn every stray click or text selection into an
+    // editor pane opening.
+    const pathProviderSub = onOpenFileRef.current
+      ? term.registerLinkProvider({
+          provideLinks: (bufferLineNumber, callback) => {
+            if (!onOpenFileRef.current) {
+              callback(undefined);
+              return;
+            }
+            const links = computePathLinksForRow(linkBuffer, bufferLineNumber - 1);
+            callback(
+              links.map((link) => ({
+                range: {
+                  start: { x: link.startCol + 1, y: bufferLineNumber },
+                  end: { x: link.endCol, y: bufferLineNumber },
+                },
+                text: link.text,
+                decorations: { pointerCursor: true, underline: true },
+                activate: (event: MouseEvent) => {
+                  if (!isCoarsePointerRef.current && !event.ctrlKey && !event.metaKey) return;
+                  onOpenFileRef.current?.(link.path, link.line);
+                },
+                hover: (event: MouseEvent) =>
+                  hoverLink(
+                    event,
+                    isCoarsePointerRef.current ? link.text : `Ctrl+click to edit ${link.text}`,
+                    1,
+                  ),
+                leave: leaveLink,
+              })),
+            );
+          },
+        })
+      : undefined;
     // Terminal scrollback search (U1). See SEARCH_HIGHLIGHT_LIMIT's own
     // comment (lib/terminalKeys.ts) for why this is passed explicitly rather
     // than left at the addon's default.
@@ -1858,6 +1907,7 @@ export function TerminalPane(props: {
       searchResultsSub.dispose();
       searchAddon.dispose();
       linkProviderSub.dispose();
+      pathProviderSub?.dispose();
       ws?.close();
       term.dispose();
       termRef.current = null;

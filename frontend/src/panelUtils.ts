@@ -672,6 +672,38 @@ export function openOrFocusProjectPanel(
   if (layout.tier === "phone") maximizeIfTiled(api, panel);
 }
 
+/** Opens the project's file editor on `target.path` — focusing the existing
+ * panel and re-targeting it (a fresh `rev` makes the panel reopen the same
+ * path even if it was navigated away from meanwhile) rather than opening a
+ * second one. `target.sessionId` roots it at that session's cwd (a worktree
+ * session's own checkout); omitted/undefined roots it at the project. */
+export function openFileEditorPanel(
+  api: DockviewApi,
+  projectId: number,
+  projects: { id: number; name: string | null }[],
+  layout: LayoutContext,
+  target: { path?: string; sessionId?: number },
+): void {
+  const panelId = `file-editor-${projectId}`;
+  const params = { projectId, path: target.path, sessionId: target.sessionId, rev: Date.now() };
+  const existing = api.getPanel(panelId);
+  if (existing) {
+    existing.api.updateParameters(params);
+    existing.api.setActive();
+    if (layout.tier === "phone") maximizeIfTiled(api, existing);
+    return;
+  }
+  const project = projects.find((p) => p.id === projectId);
+  const panel = api.addPanel({
+    id: panelId,
+    component: "file-editor",
+    title: project ? `Files: ${project.name}` : "Files",
+    params,
+    ...positioningForTier(api, layout),
+  });
+  if (layout.tier === "phone") maximizeIfTiled(api, panel);
+}
+
 function buildPanelBase(session: Session, projects: { id: number; name: string | null }[]) {
   const projectName = projects.find((p) => p.id === session.projectId)?.name ?? undefined;
   return {

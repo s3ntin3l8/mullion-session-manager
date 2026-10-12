@@ -5,6 +5,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { IDockviewPanelProps } from "dockview-react";
 import { makePanelWrapper, components, KanbanBoardOverlay } from "./registry.js";
+import type * as PanelUtilsModule from "../panelUtils.js";
 import { useDashboardStore } from "../store/index.js";
 import { makeSession, makeProject } from "../test/fixtures.js";
 import { resetStore } from "../test/resetStore.js";
@@ -169,10 +170,30 @@ describe("makePanelWrapper", () => {
 // explains, capturing the onTitleChange callback this wrapper passes down
 // so tests can drive it directly, like a real OSC event stream would.
 let capturedOnTitleChange: ((title: string) => void) | null = null;
+let capturedOnOpenFile: ((path: string, line?: number) => void) | null = null;
 vi.mock("../TerminalPane.js", () => ({
-  TerminalPane: (props: { onTitleChange?: (title: string) => void }) => {
+  TerminalPane: (props: {
+    onTitleChange?: (title: string) => void;
+    onOpenFile?: (path: string, line?: number) => void;
+  }) => {
     capturedOnTitleChange = props.onTitleChange ?? null;
+    capturedOnOpenFile = props.onOpenFile ?? null;
     return <div data-testid="terminal-pane" />;
+  },
+}));
+
+// Only the file-editor opener is replaced; the rest of panelUtils stays real.
+const openFileEditorPanelMock = vi.fn();
+vi.mock("../panelUtils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof PanelUtilsModule>()),
+  openFileEditorPanel: (...args: unknown[]) => openFileEditorPanelMock(...args),
+}));
+
+let capturedOnEditFile: ((path: string) => void) | null = null;
+vi.mock("../GitPanel.js", () => ({
+  GitPanel: (props: { onEditFile?: (path: string) => void }) => {
+    capturedOnEditFile = props.onEditFile ?? null;
+    return <div data-testid="git-panel" />;
   },
 }));
 
@@ -255,6 +276,85 @@ describe("TerminalPanelWrapper — OSC title throttling (workspace-autosave stor
     vi.advanceTimersByTime(1000);
 
     expect(setTitle).not.toHaveBeenCalled();
+  });
+});
+
+describe("TerminalPanelWrapper — onOpenFile (terminal path links -> file editor)", () => {
+  const containerApi = { tag: "containerApi" };
+
+  function mountTerminal(sessionOverrides: Record<string, unknown> = {}) {
+    capturedOnOpenFile = null;
+    openFileEditorPanelMock.mockClear();
+    resetStore();
+    useDashboardStore.setState({
+      sessions: [makeSession({ id: 1, projectId: 1, cwd: null, ...sessionOverrides })],
+      projects: [makeProject({ id: 1, name: "demo", cwd: "/proj" })],
+    });
+    const props = {
+      params: { sessionId: 1 },
+      api: { setTitle: vi.fn(), isActive: false, onDidActiveChange: () => ({ dispose: () => {} }) },
+      containerApi,
+    } as unknown as IDockviewPanelProps<{ sessionId: number }>;
+    render(<components.terminal {...props} />);
+  }
+
+  const lastCall = () => openFileEditorPanelMock.mock.calls.at(-1)!;
+
+  it("opens a relative path at the project root (no session re-root)", () => {
+    mountTerminal();
+    capturedOnOpenFile!("src/a.ts");
+    expect(openFileEditorPanelMock).toHaveBeenCalledTimes(1);
+    const [api, projectId, , , target] = lastCall();
+    expect(api).toBe(containerApi);
+    expect(projectId).toBe(1);
+    expect(target).toEqual({ path: "src/a.ts", sessionId: undefined });
+  });
+
+  it("normalises ./ prefixes and strips the root from an absolute path inside it", () => {
+    mountTerminal();
+    capturedOnOpenFile!("./src/a.ts");
+    expect(lastCall()[4]).toMatchObject({ path: "src/a.ts" });
+    capturedOnOpenFile!("/proj/src/b.ts");
+    expect(lastCall()[4]).toMatchObject({ path: "src/b.ts" });
+  });
+
+  it("roots at the session when it runs somewhere else (a worktree)", () => {
+    mountTerminal({ cwd: "/elsewhere/feat-x/" });
+    capturedOnOpenFile!("/elsewhere/feat-x/.env");
+    expect(lastCall()[4]).toEqual({ path: ".env", sessionId: 1 });
+  });
+
+  it("ignores paths outside the root, parent-relative paths and unknown sessions", () => {
+    mountTerminal();
+    capturedOnOpenFile!("/etc/passwd.conf");
+    capturedOnOpenFile!("../up/x.ts");
+    capturedOnOpenFile!("/proj");
+    expect(openFileEditorPanelMock).not.toHaveBeenCalled();
+
+    useDashboardStore.setState({ sessions: [] });
+    capturedOnOpenFile!("src/a.ts");
+    expect(openFileEditorPanelMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("GitPanelWrapper — onEditFile", () => {
+  it("opens the file editor at the changed path for this project", () => {
+    capturedOnEditFile = null;
+    openFileEditorPanelMock.mockClear();
+    resetStore();
+    useDashboardStore.setState({ projects: [makeProject({ id: 7, name: "demo", cwd: "/proj" })] });
+    const containerApi = { tag: "containerApi" };
+    const props = {
+      params: { projectId: 7 },
+      api: {},
+      containerApi,
+    } as unknown as IDockviewPanelProps<{ projectId: number }>;
+    render(<components.git {...props} />);
+    capturedOnEditFile!("src/changed.ts");
+    const [api, projectId, , , target] = openFileEditorPanelMock.mock.calls[0]!;
+    expect(api).toBe(containerApi);
+    expect(projectId).toBe(7);
+    expect(target).toEqual({ path: "src/changed.ts" });
   });
 });
 

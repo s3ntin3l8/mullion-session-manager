@@ -127,6 +127,7 @@ function statusDotClass(status: GitFileStatus["status"]): string {
 export function GitPanel({
   params,
   onOpenSession,
+  onEditFile,
 }: {
   params: GitPanelParams;
   // U6 — a plain React prop, deliberately NOT a `GitPanelParams` field:
@@ -140,6 +141,9 @@ export function GitPanel({
   // `<GitPanel params={...} />` (no onOpenSession) keeps working — a real
   // mount always comes through GitPanelWrapper, which always provides it.
   onOpenSession?: (session: Session) => void;
+  // Opens a changed file in the project's file editor. Optional like
+  // onOpenSession — a bare `<GitPanel params={...} />` simply shows no Edit.
+  onEditFile?: (path: string) => void;
 }) {
   const [status, setStatus] = useState<GitStatus | null | undefined>(undefined);
   // Branches + worktrees (issue #162's "worktree awareness") — fetched once
@@ -555,6 +559,16 @@ export function GitPanel({
             <span className={`github-panel-ci-dot ${statusDotClass(file.status)}`} />
             <span className="github-panel-row-number">{file.status}</span>
             <span className="github-panel-row-title">{file.path}</span>
+            {onEditFile && file.status !== "D" && !file.path.endsWith("/") && (
+              <button
+                className="git-panel-fetch-btn"
+                aria-label={`Edit ${file.path}`}
+                title={`Open ${file.path} in the file editor`}
+                onClick={() => onEditFile(file.path)}
+              >
+                Edit
+              </button>
+            )}
           </div>
         ))}
       </div>

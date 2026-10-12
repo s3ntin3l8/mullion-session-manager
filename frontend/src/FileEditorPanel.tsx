@@ -20,6 +20,9 @@ export interface FileEditorPanelParams {
   /** Roots the editor at this session's cwd (e.g. its worktree) instead of
    * the project's. */
   sessionId?: number;
+  /** Bumped by whoever re-targets an already-open panel, so the same `path`
+   * is reopened even if the user navigated away from it. */
+  rev?: number;
 }
 
 interface DirState {
@@ -172,7 +175,7 @@ function FileEditorBody({
     return () => {
       cancelled = true;
     };
-  }, [loadDir, openFile, revealFile, params.path]);
+  }, [loadDir, openFile, revealFile, params.path, params.rev]);
 
   // Debounced search; a stale response (older keystroke) is dropped.
   useEffect(() => {

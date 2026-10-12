@@ -497,7 +497,13 @@ afterEach(() => {
 // very first render, e.g. mount-already-active) is optional and defaults to
 // unset so every existing `renderPane()` call site — none of which know or
 // care about it — keeps behaving identically.
-function renderPane(extra: { active?: boolean; inputAffordances?: boolean } = {}) {
+function renderPane(
+  extra: {
+    active?: boolean;
+    inputAffordances?: boolean;
+    onOpenFile?: (path: string, line?: number) => void;
+  } = {},
+) {
   useDashboardStore.setState({
     settings: {
       theme: "dark",
@@ -875,6 +881,116 @@ describe("TerminalPane wrap-aware link provider", () => {
       options.linkHandler.leave(fakeEvent, "https://example.com/pull/1234", {});
     });
     expect(screen.queryByText("https://example.com/pull/1234")).not.toBeInTheDocument();
+  });
+});
+
+// File-path links (lib/terminalPathLinks.ts) — the matching itself is covered
+// by that module's own tests; these cover TerminalPane's wiring: the provider
+// exists only when a handler is passed, activation needs a modifier (or a
+// coarse pointer), and the handler gets the path + line as printed.
+describe("TerminalPane file-path link provider", () => {
+  type PathProvider = {
+    provideLinks: (
+      n: number,
+      cb: (
+        links:
+          | {
+              range: { start: { x: number; y: number }; end: { x: number; y: number } };
+              text: string;
+              activate: (e: MouseEvent) => void;
+              hover: (e: MouseEvent) => void;
+              leave: () => void;
+            }[]
+          | undefined,
+      ) => void,
+    ) => void;
+  };
+
+  function pathProvider(rowText: string | undefined) {
+    const term = getLatestTermInstance() as unknown as {
+      registerLinkProvider: ReturnType<typeof vi.fn>;
+      buffer: { active: { getLine: ReturnType<typeof vi.fn> } };
+    };
+    if (rowText !== undefined) {
+      const fakeLine = {
+        isWrapped: false,
+        length: rowText.length,
+        translateToString: () => rowText,
+        getCell: (x: number) => (x < rowText.length ? { getChars: () => rowText[x] } : undefined),
+      };
+      term.buffer.active.getLine.mockImplementation((y: number) =>
+        y === 0 ? fakeLine : undefined,
+      );
+    }
+    return term.registerLinkProvider.mock.calls[1]![0] as PathProvider;
+  }
+
+  it("registers no path provider without onOpenFile, and disposes it on unmount with one", () => {
+    stubFakeWebSocket(true);
+    const bare = renderPane();
+    expect(
+      (getLatestTermInstance() as unknown as { registerLinkProvider: ReturnType<typeof vi.fn> })
+        .registerLinkProvider,
+    ).toHaveBeenCalledTimes(1);
+    bare.unmount();
+
+    const { unmount } = renderPane({ onOpenFile: vi.fn() });
+    const term = getLatestTermInstance() as unknown as {
+      registerLinkProvider: ReturnType<typeof vi.fn>;
+    };
+    expect(term.registerLinkProvider).toHaveBeenCalledTimes(2);
+    const sub = term.registerLinkProvider.mock.results[1]!.value as {
+      dispose: ReturnType<typeof vi.fn>;
+    };
+    unmount();
+    expect(sub.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("maps a path to an ILink range and opens it on Ctrl/Cmd-click only", () => {
+    stubFakeWebSocket(true);
+    const onOpenFile = vi.fn();
+    renderPane({ onOpenFile });
+    const provider = pathProvider("fail at src/app.ts:42:7");
+
+    let links: Parameters<Parameters<PathProvider["provideLinks"]>[1]>[0] = [];
+    provider.provideLinks(1, (result) => {
+      links = result;
+    });
+    expect(links).toHaveLength(1);
+    expect(links![0].text).toBe("src/app.ts:42:7");
+    expect(links![0].range).toEqual({ start: { x: 9, y: 1 }, end: { x: 23, y: 1 } });
+
+    links![0].activate({ ctrlKey: false, metaKey: false } as MouseEvent);
+    expect(onOpenFile).not.toHaveBeenCalled();
+    links![0].activate({ ctrlKey: true } as MouseEvent);
+    expect(onOpenFile).toHaveBeenLastCalledWith("src/app.ts", 42);
+    links![0].activate({ metaKey: true } as MouseEvent);
+    expect(onOpenFile).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows a Ctrl+click hint tooltip on hover and clears it on leave", () => {
+    stubFakeWebSocket(true);
+    renderPane({ onOpenFile: vi.fn() });
+    const provider = pathProvider("see .env");
+    let links: Parameters<Parameters<PathProvider["provideLinks"]>[1]>[0] = [];
+    provider.provideLinks(1, (result) => {
+      links = result;
+    });
+    act(() => links![0].hover({ clientX: 10, clientY: 10 } as MouseEvent));
+    expect(screen.getByText("Ctrl+click to edit .env")).toBeInTheDocument();
+    act(() => links![0].leave());
+    expect(screen.queryByText("Ctrl+click to edit .env")).not.toBeInTheDocument();
+  });
+
+  it("returns no links for a row with no paths, or when the handler is gone", () => {
+    stubFakeWebSocket(true);
+    renderPane({ onOpenFile: vi.fn() });
+    const provider = pathProvider("nothing to see here");
+    let links: Parameters<Parameters<PathProvider["provideLinks"]>[1]>[0] = [{} as never];
+    provider.provideLinks(1, (result) => {
+      links = result;
+    });
+    expect(links).toEqual([]);
   });
 });
 
