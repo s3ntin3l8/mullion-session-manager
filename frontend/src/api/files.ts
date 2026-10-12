@@ -4,15 +4,22 @@
 import { request } from "./client.js";
 import type { ProjectDirListing, ProjectFileContent, ProjectFileWriteResult } from "./types.js";
 
+function sessionQuery(sessionId: number | undefined): string {
+  return sessionId === undefined ? "" : `&sessionId=${sessionId}`;
+}
+
 export const filesApi = {
-  listProjectFiles: (projectId: number, dirPath = "") =>
+  // Every call takes an optional trailing `sessionId`: the editor is then
+  // rooted at that session's cwd (a worktree session's own checkout) instead
+  // of the project's.
+  listProjectFiles: (projectId: number, dirPath = "", sessionId?: number) =>
     request<ProjectDirListing>(
-      `/api/projects/${projectId}/files?path=${encodeURIComponent(dirPath)}`,
+      `/api/projects/${projectId}/files?path=${encodeURIComponent(dirPath)}${sessionQuery(sessionId)}`,
     ),
 
-  readProjectFile: (projectId: number, filePath: string) =>
+  readProjectFile: (projectId: number, filePath: string, sessionId?: number) =>
     request<ProjectFileContent>(
-      `/api/projects/${projectId}/file?path=${encodeURIComponent(filePath)}`,
+      `/api/projects/${projectId}/file?path=${encodeURIComponent(filePath)}${sessionQuery(sessionId)}`,
     ),
 
   // `expectedMtimeMs` makes the write fail with 409 (code "conflict") if the
@@ -23,9 +30,10 @@ export const filesApi = {
     filePath: string,
     content: string,
     opts: { expectedMtimeMs?: number; create?: boolean } = {},
+    sessionId?: number,
   ) =>
     request<ProjectFileWriteResult>(`/api/projects/${projectId}/file`, {
       method: "PUT",
-      body: JSON.stringify({ path: filePath, content, ...opts }),
+      body: JSON.stringify({ path: filePath, content, ...opts, sessionId }),
     }),
 };

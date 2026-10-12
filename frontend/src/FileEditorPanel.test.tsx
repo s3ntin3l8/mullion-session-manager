@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { FileEditorPanel } from "./FileEditorPanel.js";
 import type { ProjectDirEntry } from "./api/index.js";
 import { jsonResponse } from "./test/jsonResponse.js";
+import { useDashboardStore } from "./store/index.js";
 
 // CodeMirror is exercised for real in components/CodeEditor.test.tsx; here a
 // textarea stands in so the panel's own behaviour is the thing under test.
@@ -52,7 +53,7 @@ function mockFetch(h: Handlers = {}) {
       : undefined;
     calls.push({ method, url, body });
     if (method === "GET" && url.includes("/files?path=")) {
-      const p = decodeURIComponent(url.split("path=")[1]);
+      const p = new URL(url, "http://x").searchParams.get("path") ?? "";
       if (p === "" && h.rootError)
         return Promise.resolve(jsonResponse(503, { message: "Host down" }));
       if (p === "")
@@ -61,7 +62,7 @@ function mockFetch(h: Handlers = {}) {
         return Promise.resolve(jsonResponse(200, { path: "src", entries: SRC, truncated: false }));
     }
     if (method === "GET" && url.includes("/file?path=")) {
-      const p = decodeURIComponent(url.split("path=")[1]);
+      const p = new URL(url, "http://x").searchParams.get("path") ?? "";
       if (p === ".env") {
         return Promise.resolve(
           jsonResponse(200, { path: ".env", content: "A=1\n", size: 4, mtimeMs: 100 }),
@@ -182,6 +183,85 @@ describe("FileEditorPanel", () => {
     rerender(<FileEditorPanel params={{ projectId: 1, path: "src/index.ts" }} />);
     await waitFor(() => expect(screen.getByText("index.ts")).toBeInTheDocument());
     expect(screen.getByLabelText("editor:.env")).toHaveValue("mine");
+  });
+
+  describe("root picker (session / worktree roots)", () => {
+    const seed = (sessions: Array<Record<string, unknown>>) =>
+      useDashboardStore.setState({
+        projects: [{ id: 1, name: "p", cwd: "/proj" }] as never,
+        sessions: sessions as never,
+      });
+
+    afterEach(() => {
+      useDashboardStore.setState({ projects: [], sessions: [] });
+    });
+
+    it("shows no picker when every session runs in the project directory", async () => {
+      seed([{ id: 7, projectId: 1, status: "active", cwd: "/proj" }]);
+      const { fn } = mockFetch();
+      vi.stubGlobal("fetch", fn);
+      render(<FileEditorPanel params={{ projectId: 1 }} />);
+      await screen.findByText(".env");
+      expect(screen.queryByText("Root")).toBeNull();
+    });
+
+    it("lists a worktree session and re-roots the tree on selection", async () => {
+      seed([
+        { id: 7, projectId: 1, status: "active", cwd: "/elsewhere/feat-x" },
+        { id: 8, projectId: 1, status: "killed", cwd: "/elsewhere/dead" },
+        { id: 9, projectId: 2, status: "active", cwd: "/other/proj" },
+      ]);
+      const { fn, calls } = mockFetch();
+      vi.stubGlobal("fetch", fn);
+      const user = userEvent.setup();
+      render(<FileEditorPanel params={{ projectId: 1 }} />);
+      await screen.findByText(".env");
+      expect(screen.getByRole("option", { name: "Worktree: feat-x" })).toBeInTheDocument();
+      expect(screen.queryByRole("option", { name: /dead/ })).toBeNull();
+      expect(screen.queryByRole("option", { name: /proj$/ })).toBeNull();
+
+      await user.selectOptions(screen.getByRole("combobox"), "7");
+      await waitFor(() =>
+        expect(calls.some((c) => c.url.includes("/files?path=&sessionId=7"))).toBe(true),
+      );
+      await user.click(await screen.findByText(".env"));
+      await waitFor(() =>
+        expect(calls.some((c) => c.url.includes("/file?path=.env&sessionId=7"))).toBe(true),
+      );
+
+      fireEvent.change(await screen.findByLabelText("editor:.env"), { target: { value: "x" } });
+      expect(screen.getByRole("combobox")).toBeDisabled();
+      await user.click(screen.getByText("Save"));
+      const put = calls.find((c) => c.method === "PUT")!;
+      expect(put.body).toMatchObject({ path: ".env", sessionId: 7 });
+    });
+
+    it("starts rooted at params.sessionId even when the store doesn't know the session", async () => {
+      seed([]);
+      const { fn, calls } = mockFetch();
+      vi.stubGlobal("fetch", fn);
+      render(<FileEditorPanel params={{ projectId: 1, sessionId: 42 }} />);
+      await screen.findByText(".env");
+      expect(calls[0].url).toContain("sessionId=42");
+      expect(screen.getByRole("option", { name: "Session 42" })).toBeInTheDocument();
+    });
+
+    it("follows a re-target to another session, but not over unsaved edits", async () => {
+      seed([]);
+      const { fn, calls } = mockFetch();
+      vi.stubGlobal("fetch", fn);
+      const user = userEvent.setup();
+      const { rerender } = render(<FileEditorPanel params={{ projectId: 1, sessionId: 42 }} />);
+      await user.click(await screen.findByText(".env"));
+      fireEvent.change(await screen.findByLabelText("editor:.env"), { target: { value: "dirty" } });
+      rerender(<FileEditorPanel params={{ projectId: 1, sessionId: 43 }} />);
+      expect(screen.getByLabelText("editor:.env")).toHaveValue("dirty");
+      expect(calls.some((c) => c.url.includes("sessionId=43"))).toBe(false);
+
+      await user.click(screen.getByText("Discard"));
+      rerender(<FileEditorPanel params={{ projectId: 1, sessionId: 44 }} />);
+      await waitFor(() => expect(calls.some((c) => c.url.includes("sessionId=44"))).toBe(true));
+    });
   });
 
   it("expands directories lazily, and shows a symlink target in the header", async () => {

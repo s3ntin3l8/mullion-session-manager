@@ -372,3 +372,26 @@
     display: inline-flex;
   }
 }
+
+.file-editor-shell {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.file-editor-shell > .agent-rules-panel {
+  flex: 1;
+  min-height: 0;
+}
+.file-editor-rootbar {
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.file-editor-root-select {
+  background: color-mix(in srgb, var(--fg) 4%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--fg);
+  font-size: 12px;
+  padding: 2px 4px;
+}

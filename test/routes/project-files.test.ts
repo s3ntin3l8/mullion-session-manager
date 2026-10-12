@@ -4,6 +4,7 @@ import path from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import { closeDb } from "../../src/db/client.js";
+import { sessions } from "../../src/db/schema.js";
 
 const tmpDb = path.join(os.tmpdir(), `project-files-test-${process.pid}.db`);
 process.env.DATABASE_URL = `file:${tmpDb}`;
@@ -133,6 +134,97 @@ describe("project-files routes", () => {
     await app.close();
   });
 
+  describe("sessionId re-roots the editor at that session's cwd", () => {
+    let worktreeDir: string;
+
+    beforeEach(() => {
+      worktreeDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-project-files-wt-"));
+      fs.writeFileSync(path.join(worktreeDir, ".env"), "WT=1\n");
+      fs.writeFileSync(path.join(projectCwd, ".env"), "PROJECT=1\n");
+    });
+
+    afterEach(() => {
+      fs.rmSync(worktreeDir, { recursive: true, force: true });
+    });
+
+    function addSession(
+      app: Awaited<ReturnType<typeof buildApp>>,
+      projectId: number,
+      cwd: string | null,
+    ) {
+      return app.db
+        .insert(sessions)
+        .values({ projectId, name: "s", command: "bash", cwd })
+        .returning({ id: sessions.id })
+        .get().id;
+    }
+
+    it("lists, reads and writes in the session's cwd, not the project's", async () => {
+      const { app, projectId } = await createProject();
+      const sessionId = addSession(app, projectId, worktreeDir);
+
+      const read = await app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/file?path=.env&sessionId=${sessionId}`,
+      });
+      expect(read.json().content).toBe("WT=1\n");
+      const list = await app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/files?sessionId=${sessionId}`,
+      });
+      expect(list.statusCode).toBe(200);
+
+      const put = await app.inject({
+        method: "PUT",
+        url: `/api/projects/${projectId}/file`,
+        payload: { path: ".env", content: "WT=2\n", sessionId },
+      });
+      expect(put.statusCode).toBe(200);
+      expect(fs.readFileSync(path.join(worktreeDir, ".env"), "utf8")).toBe("WT=2\n");
+      expect(fs.readFileSync(path.join(projectCwd, ".env"), "utf8")).toBe("PROJECT=1\n");
+      await app.close();
+    });
+
+    it("falls back to the project cwd for a session without a cwd override", async () => {
+      const { app, projectId } = await createProject();
+      const sessionId = addSession(app, projectId, null);
+      const read = await app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/file?path=.env&sessionId=${sessionId}`,
+      });
+      expect(read.json().content).toBe("PROJECT=1\n");
+      await app.close();
+    });
+
+    it("404s for another project's session and 400s for a bad id", async () => {
+      const { app, projectId } = await createProject();
+      const otherCwd = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-project-files-other-"));
+      const other = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: "other", cwd: otherCwd },
+      });
+      const foreign = addSession(app, other.json().id as number, worktreeDir);
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/file?path=.env&sessionId=${foreign}`,
+      });
+      expect(res.statusCode).toBe(404);
+      const missing = await app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/file?path=.env&sessionId=999999`,
+      });
+      expect(missing.statusCode).toBe(404);
+      const bad = await app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/file?path=.env&sessionId=abc`,
+      });
+      expect(bad.statusCode).toBe(400);
+      fs.rmSync(otherCwd, { recursive: true, force: true });
+      await app.close();
+    });
+  });
+
   it("maps service errors to their http status", async () => {
     fs.writeFileSync(path.join(projectCwd, "bin"), Buffer.from([0, 1, 2]));
     const { app, projectId } = await createProject();
@@ -243,6 +335,26 @@ describe("project-files routes", () => {
 
       await primary.close();
       await agentApp.close();
+    });
+
+    it("sends the session's cwd to the agent when sessionId is given", async () => {
+      const wt = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-project-files-remote-wt-"));
+      fs.writeFileSync(path.join(wt, ".env"), "REMOTE_WT=1\n");
+      const { agentApp, port } = await startAgent("pf-token-sid");
+      const { primary, projectId } = await remoteProject(port, "pf-token-sid", projectCwd);
+      const sessionId = primary.db
+        .insert(sessions)
+        .values({ projectId, name: "s", command: "bash", cwd: wt })
+        .returning({ id: sessions.id })
+        .get().id;
+      const res = await primary.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/file?path=.env&sessionId=${sessionId}`,
+      });
+      expect(res.json().content).toBe("REMOTE_WT=1\n");
+      await primary.close();
+      await agentApp.close();
+      fs.rmSync(wt, { recursive: true, force: true });
     });
 
     it("400s when the project cwd is outside the agent's PROJECTS_ROOTS", async () => {

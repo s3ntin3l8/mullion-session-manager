@@ -1,14 +1,18 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api, ApiError } from "./api/index.js";
 import type { ProjectDirEntry, ProjectFileContent } from "./api/index.js";
 import { CodeEditor } from "./components/CodeEditor.js";
 import { ChevronDownIcon, ChevronRightIcon, FileTextIcon, FolderIcon } from "./ui/icons.js";
 import { EmptyStateNote } from "./ui/EmptyState.js";
+import { useDashboardStore } from "./store/index.js";
 
 export interface FileEditorPanelParams {
   projectId: number;
   /** Project-relative file to open on mount. */
   path?: string;
+  /** Roots the editor at this session's cwd (e.g. its worktree) instead of
+   * the project's. */
+  sessionId?: number;
 }
 
 interface DirState {
@@ -39,8 +43,14 @@ function errorMessage(err: unknown, fallback: string): string {
 // dirty (same posture as AgentRulesPanel), and a save sends the mtime the
 // file was loaded with so a concurrent on-disk change surfaces as a conflict
 // instead of being silently overwritten.
-export function FileEditorPanel({ params }: { params: FileEditorPanelParams }) {
-  const { projectId } = params;
+function FileEditorBody({
+  params,
+  onDirtyChange,
+}: {
+  params: FileEditorPanelParams;
+  onDirtyChange?: (dirty: boolean) => void;
+}) {
+  const { projectId, sessionId } = params;
   const [dirs, setDirs] = useState<Record<string, DirState>>({});
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set([""]));
   const [rootError, setRootError] = useState<string | null>(null);
@@ -64,12 +74,13 @@ export function FileEditorPanel({ params }: { params: FileEditorPanelParams }) {
   const dirtyRef = useRef(dirty);
   useEffect(() => {
     dirtyRef.current = dirty;
-  }, [dirty]);
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
 
   const loadDir = useCallback(
     async (dirPath: string): Promise<boolean> => {
       try {
-        const listing = await api.listProjectFiles(projectId, dirPath);
+        const listing = await api.listProjectFiles(projectId, dirPath, sessionId);
         setDirs((prev) => ({
           ...prev,
           [dirPath]: { entries: listing.entries, truncated: listing.truncated },
@@ -82,7 +93,7 @@ export function FileEditorPanel({ params }: { params: FileEditorPanelParams }) {
         return false;
       }
     },
-    [projectId],
+    [projectId, sessionId],
   );
 
   const openFile = useCallback(
@@ -91,7 +102,7 @@ export function FileEditorPanel({ params }: { params: FileEditorPanelParams }) {
       setActionError(null);
       setConflict(false);
       try {
-        const loaded = await api.readProjectFile(projectId, filePath);
+        const loaded = await api.readProjectFile(projectId, filePath, sessionId);
         if (seq !== openSeq.current) return;
         setFile(loaded);
         setDraft(loaded.content);
@@ -112,7 +123,7 @@ export function FileEditorPanel({ params }: { params: FileEditorPanelParams }) {
         setTreeOpen(false);
       }
     },
-    [projectId],
+    [projectId, sessionId],
   );
 
   // Initial load: the root listing, plus `params.path` if given (with its
@@ -169,6 +180,7 @@ export function FileEditorPanel({ params }: { params: FileEditorPanelParams }) {
           file.path,
           saved,
           overwrite ? {} : { expectedMtimeMs: file.mtimeMs },
+          sessionId,
         );
         setFile((prev) =>
           prev ? { ...prev, content: saved, size: res.size, mtimeMs: res.mtimeMs } : prev,
@@ -181,7 +193,7 @@ export function FileEditorPanel({ params }: { params: FileEditorPanelParams }) {
         setSaving(false);
       }
     },
-    [file, projectId],
+    [file, projectId, sessionId],
   );
 
   const handleSaveClick = useCallback(() => void handleSave(false), [handleSave]);
@@ -211,14 +223,14 @@ export function FileEditorPanel({ params }: { params: FileEditorPanelParams }) {
     const target = joinPath(dir, name);
     setActionError(null);
     try {
-      await api.writeProjectFile(projectId, target, "", { create: true });
+      await api.writeProjectFile(projectId, target, "", { create: true }, sessionId);
       setNewFileName(null);
       await loadDir(parentDir(target));
       await openFile(target);
     } catch (err) {
       setActionError(errorMessage(err, "Failed to create file"));
     }
-  }, [newFileName, file, projectId, loadDir, openFile]);
+  }, [newFileName, file, projectId, sessionId, loadDir, openFile]);
 
   const renderDir = (dirPath: string, depth: number): ReactNode => {
     const dir = dirs[dirPath];
@@ -407,6 +419,82 @@ export function FileEditorPanel({ params }: { params: FileEditorPanelParams }) {
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+// The panel proper: a root picker (the project, or one of its sessions that
+// runs in a different directory — typically a git worktree, whose gitignored
+// .env is its own) above the editor body. Switching root remounts the body
+// (via `key`) so the tree, open file and draft never leak across roots, and
+// the picker is disabled while the body reports unsaved edits.
+export function FileEditorPanel({ params }: { params: FileEditorPanelParams }) {
+  const [sessionId, setSessionId] = useState<number | undefined>(params.sessionId);
+  const [dirty, setDirty] = useState(false);
+  const projectCwd = useDashboardStore(
+    (s) => s.projects.find((p) => p.id === params.projectId)?.cwd,
+  );
+  const allSessions = useDashboardStore((s) => s.sessions);
+
+  // A re-target from outside (git row "Edit", a terminal path link) names a
+  // session; follow it, but only when the param itself CHANGED (a manual
+  // picker choice must survive later renders) and never over unsaved edits.
+  const dirtyRef = useRef(dirty);
+  useEffect(() => {
+    dirtyRef.current = dirty;
+  }, [dirty]);
+  const lastParamSession = useRef(params.sessionId);
+  useEffect(() => {
+    if (params.sessionId === lastParamSession.current) return;
+    lastParamSession.current = params.sessionId;
+    if (!dirtyRef.current) setSessionId(params.sessionId);
+  }, [params.sessionId]);
+
+  const roots = useMemo(() => {
+    const seen = new Set<string>();
+    const list: Array<{ sessionId: number; label: string }> = [];
+    for (const s of allSessions) {
+      if (s.projectId !== params.projectId || s.status !== "active" || !s.cwd) continue;
+      if (s.cwd === projectCwd || seen.has(s.cwd)) continue;
+      seen.add(s.cwd);
+      list.push({ sessionId: s.id, label: s.cwd.split("/").filter(Boolean).pop() ?? s.cwd });
+    }
+    return list;
+  }, [allSessions, params.projectId, projectCwd]);
+
+  return (
+    <div className="file-editor-shell">
+      {(roots.length > 0 || sessionId !== undefined) && (
+        <div className="file-editor-rootbar">
+          <label>
+            <span className="agent-rules-panel-row-meta">Root</span>{" "}
+            <select
+              className="file-editor-root-select"
+              value={sessionId ?? ""}
+              disabled={dirty}
+              title={dirty ? "Save or discard your changes first" : undefined}
+              onChange={(e) =>
+                setSessionId(e.target.value === "" ? undefined : Number(e.target.value))
+              }
+            >
+              <option value="">Project</option>
+              {roots.map((r) => (
+                <option key={r.sessionId} value={r.sessionId}>
+                  Worktree: {r.label}
+                </option>
+              ))}
+              {sessionId !== undefined && !roots.some((r) => r.sessionId === sessionId) && (
+                <option value={sessionId}>Session {sessionId}</option>
+              )}
+            </select>
+          </label>
+        </div>
+      )}
+      <FileEditorBody
+        key={sessionId ?? "project"}
+        params={{ ...params, sessionId }}
+        onDirtyChange={setDirty}
+      />
     </div>
   );
 }
