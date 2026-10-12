@@ -307,6 +307,23 @@ describe("buildLaunchPlan — issue #822 caller-supplied env", () => {
     expect(plan.env.SSH_AUTH_SOCK).toBe("/x.sock");
   });
 
+  it("scrubs inherited host display vars, but session.env can opt DISPLAY back in", () => {
+    process.env.DISPLAY = ":0";
+    process.env.WAYLAND_DISPLAY = "wayland-mullion";
+    try {
+      const scrubbed = buildLaunchPlan(baseSession());
+      expect(scrubbed.env).not.toHaveProperty("DISPLAY");
+      expect(scrubbed.env).not.toHaveProperty("WAYLAND_DISPLAY");
+
+      const optedIn = buildLaunchPlan(baseSession({ env: { DISPLAY: ":7" } }));
+      expect(optedIn.env.DISPLAY).toBe(":7");
+      expect(optedIn.env).not.toHaveProperty("WAYLAND_DISPLAY");
+    } finally {
+      delete process.env.DISPLAY;
+      delete process.env.WAYLAND_DISPLAY;
+    }
+  });
+
   it("an adapter's envAdditions still wins over session.env (Object.assign runs last)", () => {
     mockApplyHookAdapters.mockImplementation((command: string) => ({
       command,
