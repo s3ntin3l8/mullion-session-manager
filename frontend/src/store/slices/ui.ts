@@ -15,13 +15,16 @@ import {
   writeString,
 } from "../../lib/persistedState.js";
 import {
+  DEFAULT_RIGHT_SIDEBAR_VIEW,
   FALLBACK_TASK_MASTER_ENV,
   HIGHLIGHT_DURATION_MS,
   SETTINGS_PATCH_DEBOUNCE_MS,
 } from "../constants.js";
 import {
+  clampRightSidebarWidth,
   readStoredActiveWorkspaceId,
   readStoredHierarchicalView,
+  readStoredRightSidebarWidth,
   readStoredSidebarWidth,
   readStoredViewMode,
   readThemeHint,
@@ -86,6 +89,8 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     writeString(STORAGE_KEYS.themeHint, resolveTheme(next.theme));
   }
 
+  const rightSidebarPinned = readBool(STORAGE_KEYS.rightSidebarPinned, false);
+
   return {
     settings: DEFAULT_SETTINGS,
     settingsLoaded: false,
@@ -99,6 +104,11 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     // open-by-default panel the user can choose to hide).
     sidebarCollapsed: readBool(STORAGE_KEYS.sidebarCollapsed, false),
     sidebarWidth: readStoredSidebarWidth(),
+    rightSidebarView: readString(STORAGE_KEYS.rightSidebarView, DEFAULT_RIGHT_SIDEBAR_VIEW),
+    rightSidebarPinned,
+    // Only a pinned drawer reopens on load — see STORAGE_KEYS.rightSidebarOpen.
+    rightSidebarOpen: rightSidebarPinned && readBool(STORAGE_KEYS.rightSidebarOpen, false),
+    rightSidebarWidth: readStoredRightSidebarWidth(),
     viewMode: readStoredViewMode(),
     hierarchicalView: readStoredHierarchicalView(),
     kanbanOrder: {},
@@ -212,6 +222,41 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     setSidebarWidth: (value) => {
       writeNumber(STORAGE_KEYS.sidebarWidth, value);
       set({ sidebarWidth: value });
+    },
+
+    toggleRightSidebarView: (view) => {
+      const { rightSidebarOpen, rightSidebarView } = get();
+      if (rightSidebarOpen && rightSidebarView === view) {
+        writeBool(STORAGE_KEYS.rightSidebarOpen, false);
+        set({ rightSidebarOpen: false });
+        return;
+      }
+      writeString(STORAGE_KEYS.rightSidebarView, view);
+      writeBool(STORAGE_KEYS.rightSidebarOpen, true);
+      set({ rightSidebarView: view, rightSidebarOpen: true });
+    },
+
+    toggleRightSidebar: () => {
+      const next = !get().rightSidebarOpen;
+      writeBool(STORAGE_KEYS.rightSidebarOpen, next);
+      set({ rightSidebarOpen: next });
+    },
+
+    closeRightSidebar: () => {
+      if (!get().rightSidebarOpen) return;
+      writeBool(STORAGE_KEYS.rightSidebarOpen, false);
+      set({ rightSidebarOpen: false });
+    },
+
+    setRightSidebarPinned: (value) => {
+      writeBool(STORAGE_KEYS.rightSidebarPinned, value);
+      set({ rightSidebarPinned: value });
+    },
+
+    setRightSidebarWidth: (value) => {
+      const clamped = clampRightSidebarWidth(value);
+      writeNumber(STORAGE_KEYS.rightSidebarWidth, clamped);
+      set({ rightSidebarWidth: clamped });
     },
 
     setViewMode: (value) => {

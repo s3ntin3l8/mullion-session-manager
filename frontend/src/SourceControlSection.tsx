@@ -6,13 +6,9 @@ import { parseUnifiedDiff, type DiffLine } from "./diffUtils.js";
 import { useAsyncData } from "./hooks/useAsyncData.js";
 import { Dropdown } from "./ui/primitives.js";
 import { ChevronDownIcon, GitBranchIcon } from "./ui/icons.js";
-import { resolveActiveProjectId } from "./panelUtils.js";
+import { useFollowedProject } from "./hooks/useFollowedProject.js";
+import type { FollowedProject } from "./hooks/useFollowedProject.js";
 import { STORAGE_KEYS, readBool, writeBool } from "./lib/persistedState.js";
-
-// Sentinel Dropdown value meaning "go back to following the active panel" —
-// distinct from any real project id (Dropdown is generic over string, and
-// project ids stringify to plain digits, so this can't collide).
-const FOLLOW_SENTINEL = "__follow__";
 
 // Same threshold/reasoning as Sidebar.tsx's own BEHIND_STALE_THRESHOLD for
 // the project row badge — kept as a separate constant (not exported/shared)
@@ -97,6 +93,12 @@ function ProjectFileDiff({ projectId, filePath }: ProjectFileDiffProps) {
 
 export interface SourceControlSectionProps {
   onOpenGit: (projectId: number) => void;
+  // Controlled project (the right sidebar resolves it once for every view);
+  // hides the section's own follow/pin dropdown.
+  projectId?: number | null;
+  // Rendered inside the right sidebar: no collapsible "Source Control"
+  // header, always expanded, ignores the persisted sidebar collapse flag.
+  embedded?: boolean;
 }
 
 // Always-visible complement to the dockview GitPanel (issue #433 scope B) —
@@ -105,10 +107,42 @@ export interface SourceControlSectionProps {
 // "active". Collapsed by default; persists that across reloads the same way
 // Sidebar.tsx's own row-expand state does (single boolean here, since this
 // is one section rather than one entry per id).
-export function SourceControlSection({ onOpenGit }: SourceControlSectionProps) {
+export function SourceControlSection(props: SourceControlSectionProps) {
+  // A controlled project (right sidebar) never needs the follow/pin machinery
+  // — and its projects/sessions/activePanelId subscriptions — so the hook
+  // only runs in the uncontrolled wrapper.
+  return props.projectId !== undefined ? (
+    <SourceControlView {...props} effectiveProjectId={props.projectId} followed={null} />
+  ) : (
+    <FollowingSourceControl {...props} />
+  );
+}
+
+function FollowingSourceControl(props: SourceControlSectionProps) {
+  const followed = useFollowedProject();
+  return (
+    <SourceControlView
+      {...props}
+      effectiveProjectId={followed.effectiveProjectId}
+      followed={followed}
+    />
+  );
+}
+
+interface SourceControlViewProps extends SourceControlSectionProps {
+  effectiveProjectId: number | null;
+  // Present only when the section follows/pins its own project (it owns the
+  // picker); null when a parent controls the project.
+  followed: FollowedProject | null;
+}
+
+function SourceControlView({
+  onOpenGit,
+  embedded = false,
+  effectiveProjectId,
+  followed,
+}: SourceControlViewProps) {
   const projects = useDashboardStore((s) => s.projects);
-  const sessions = useDashboardStore((s) => s.sessions);
-  const activePanelId = useDashboardStore((s) => s.activePanelId);
   const gitStatuses = useDashboardStore((s) => s.gitStatuses);
   const fetchProjectGit = useDashboardStore((s) => s.fetchProjectGit);
   const pullProjectGit = useDashboardStore((s) => s.pullProjectGit);
@@ -124,64 +158,6 @@ export function SourceControlSection({ onOpenGit }: SourceControlSectionProps) {
     });
   }, []);
 
-  // Pin (explicit user choice via the picker) and follow (the dockview
-  // panel currently in focus) are deliberately separate pieces of state —
-  // collapsing them into one would mean focusing a panel in another project
-  // silently clobbers a pin. `lastDerivedId` exists only so the section
-  // doesn't blank out when a non-project panel (Settings, Tasks) is
-  // focused. Resolution order: pin > derived > last-derived > first project.
-  //
-  // Adjusts state during render (React's own recommended pattern — see
-  // https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes
-  // and Sidebar.tsx's own promoteOpen/prevPromoteState for the identical
-  // shape) rather than a `useEffect` + setState, which the project's lint
-  // config (react-hooks/set-state-in-effect) rejects as a cascading-render
-  // risk.
-  const [pinnedProjectId, setPinnedProjectId] = useState<number | null>(null);
-  // Issue #1136 — only trust a derived id that names a project we actually
-  // have. `resolveActiveProjectId` can return an id for a project that
-  // hasn't loaded yet: on a cold load the restored dockview layout sets
-  // `activePanelId` while `projects` is still `[]` (store/slices/events.ts's
-  // WS-driven refreshSessions() can populate `sessions` well before
-  // refreshProjects() resolves, and a 429 on the latter leaves `projects`
-  // at `[]` for even longer). Without this guard, the "adopt derived id"
-  // adjustment below and the "release id no longer in projects" guard
-  // after it write `lastDerivedId` with overlapping predicates — when
-  // `derivedId` is absent from `projects`, each one's postcondition
-  // satisfies the other's precondition, and since render-phase re-renders
-  // are synchronous (`projects` can't change between iterations) they spin
-  // forever and React throws "Too many re-renders" (error #301).
-  // Validating here keeps the two disjoint: the adopt guard only fires when
-  // `derivedId ∈ projects`, the release guard only when
-  // `lastDerivedId ∉ projects` — never both on the same value.
-  const rawDerivedId = resolveActiveProjectId(activePanelId, sessions);
-  const derivedId =
-    rawDerivedId != null && projects.some((p) => p.id === rawDerivedId) ? rawDerivedId : null;
-  const [lastDerivedId, setLastDerivedId] = useState<number | null>(derivedId);
-  if (derivedId != null && derivedId !== lastDerivedId) {
-    setLastDerivedId(derivedId);
-  }
-
-  // A pinned or last-derived project can be deleted out from under this
-  // section (Hermes review, PR #506) — release it rather than let the
-  // Dropdown's value keep pointing at an option that no longer exists and
-  // the body keep showing a project that's gone. `derivedId` doesn't need
-  // this guard: unlike `pinnedProjectId`/`lastDerivedId` (state, so it can
-  // go stale across renders), `derivedId` is validated against `projects`
-  // membership above (issue #1136) on every render it's computed — it is
-  // never held as stale state. Recomputing "fresh" alone is NOT why it's
-  // safe (that reasoning is exactly what issue #1136 disproved: a fresh
-  // recompute from `sessions` can still name a project that hasn't loaded
-  // into `projects` yet) — the membership check is load-bearing.
-  if (pinnedProjectId != null && !projects.some((p) => p.id === pinnedProjectId)) {
-    setPinnedProjectId(null);
-  }
-  if (lastDerivedId != null && !projects.some((p) => p.id === lastDerivedId)) {
-    setLastDerivedId(null);
-  }
-
-  const effectiveProjectId =
-    pinnedProjectId ?? derivedId ?? lastDerivedId ?? projects[0]?.id ?? null;
   const effectiveProject = projects.find((p) => p.id === effectiveProjectId);
 
   const gitStatus = effectiveProjectId != null ? (gitStatuses[effectiveProjectId] ?? null) : null;
@@ -279,12 +255,6 @@ export function SourceControlSection({ onOpenGit }: SourceControlSectionProps) {
     }
   }, [effectiveProjectId, pullProjectGit]);
 
-  const dropdownOptions = [
-    { value: FOLLOW_SENTINEL, label: "Follow active panel" },
-    ...projects.map((p) => ({ value: String(p.id), label: p.name })),
-  ];
-  const dropdownValue = pinnedProjectId != null ? String(pinnedProjectId) : FOLLOW_SENTINEL;
-
   // Sticky combined sync summary — visible even while collapsed, since it's
   // the one number worth surfacing without expanding the section. `null`
   // entries in gitStatuses (not a repo, or never fetched) are routine, not
@@ -299,34 +269,36 @@ export function SourceControlSection({ onOpenGit }: SourceControlSectionProps) {
 
   return (
     <div className="source-control-section">
-      <div className="sidebar-section-header source-control-header" onClick={toggleCollapsed}>
-        <ChevronDownIcon
-          size={12}
-          className={collapsed ? "ws-group-chevron collapsed" : "ws-group-chevron"}
-        />
-        <span className="sidebar-section-title">Source Control</span>
-        {hasTotals && (
-          <span
-            className={`source-control-totals${totals.behind > BEHIND_STALE_THRESHOLD ? " stale" : ""}`}
-            title={`${totals.ahead} ahead, ${totals.behind} behind origin across all projects (as of last fetch)`}
-          >
-            {totals.ahead > 0 && <span className="project-git-ahead">↑{totals.ahead}</span>}
-            {totals.behind > 0 && <span className="project-git-behind">↓{totals.behind}</span>}
-          </span>
-        )}
-      </div>
-      {!collapsed && effectiveProjectId != null && (
+      {!embedded && (
+        <div className="sidebar-section-header source-control-header" onClick={toggleCollapsed}>
+          <ChevronDownIcon
+            size={12}
+            className={collapsed ? "ws-group-chevron collapsed" : "ws-group-chevron"}
+          />
+          <span className="sidebar-section-title">Source Control</span>
+          {hasTotals && (
+            <span
+              className={`source-control-totals${totals.behind > BEHIND_STALE_THRESHOLD ? " stale" : ""}`}
+              title={`${totals.ahead} ahead, ${totals.behind} behind origin across all projects (as of last fetch)`}
+            >
+              {totals.ahead > 0 && <span className="project-git-ahead">↑{totals.ahead}</span>}
+              {totals.behind > 0 && <span className="project-git-behind">↓{totals.behind}</span>}
+            </span>
+          )}
+        </div>
+      )}
+      {(embedded || !collapsed) && effectiveProjectId != null && (
         <div className="source-control-body">
-          <div onClick={(e) => e.stopPropagation()}>
-            <Dropdown
-              small
-              options={dropdownOptions}
-              value={dropdownValue}
-              onChange={(v) =>
-                setPinnedProjectId(v === FOLLOW_SENTINEL ? null : Number.parseInt(v, 10))
-              }
-            />
-          </div>
+          {followed && (
+            <div onClick={(e) => e.stopPropagation()}>
+              <Dropdown
+                small
+                options={followed.dropdownOptions}
+                value={followed.dropdownValue}
+                onChange={followed.onDropdownChange}
+              />
+            </div>
+          )}
 
           {/* Same last-known-good convention as the store's batched
               gitStatuses map elsewhere (ProjectSection's own gitDotClass,

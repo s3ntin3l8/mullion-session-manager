@@ -89,6 +89,9 @@ interface SidebarProps {
   // full-screen navigator shows Projects and Devices as separate tabs).
   // Unset — desktop and tablet — renders the whole sidebar exactly as before.
   phoneSection?: "projects" | "devices";
+  // Source Control lives in the right sidebar on desktop and tablet; only the
+  // phone navigator (which has no right sidebar) still renders it here.
+  showSourceControl: boolean;
   onOpenSession: (session: Session) => void;
   onOpenSessionAsFloat: (session: Session) => void;
   onSessionEnded: (session: Session) => void;
@@ -117,6 +120,7 @@ interface SidebarProps {
 
 export function Sidebar({
   phoneSection,
+  showSourceControl,
   onOpenSession,
   onOpenSessionAsFloat,
   onSessionEnded,
@@ -563,7 +567,7 @@ export function Sidebar({
               )}
             </>
           )}
-          <SourceControlSection onOpenGit={onOpenGit} />
+          {showSourceControl && <SourceControlSection onOpenGit={onOpenGit} />}
           <DiscoverProjects
             collapsed={discoverCollapsed}
             onToggleCollapsed={() => setDiscoverCollapsed((v) => !v)}
