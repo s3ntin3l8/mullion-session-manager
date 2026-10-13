@@ -31,6 +31,17 @@ export function SidebarToggleIcon(props: IconProps) {
   );
 }
 
+// Mirror of SidebarToggleIcon with the divider on the right — the right
+// sidebar's palette affordance.
+export function RightSidebarIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <rect x="3" y="4" width="18" height="16" rx="2.5" />
+      <line x1="15" y1="4" x2="15" y2="20" />
+    </Svg>
+  );
+}
+
 export function PinIcon(props: IconProps) {
   return (
     <Svg strokeLinecap="round" strokeLinejoin="round" {...props}>

@@ -154,6 +154,8 @@ interface CommandPaletteProps {
   // empty browser pane (BrowserPanel's own "empty" state, address bar
   // auto-focused) for typing a URL straight in, no modal detour.
   onOpenBlankBrowser: () => void;
+  // Toggles the right sidebar; omitted on phone, where it doesn't exist.
+  onToggleRightSidebar?: () => void;
   // Issue #109: opens a browser pane for a specific saved URL (favorited).
   // The same BrowserPanel component handles navigation once opened.
   onOpenBrowserUrl: (projectId: number, url: string, label: string) => void;
@@ -191,6 +193,7 @@ export function CommandPalette({
   onOpenIntegrationsSettings,
   onOpenTasks,
   onOpenBlankBrowser,
+  onToggleRightSidebar,
   onOpenBrowserUrl,
   onShowWorkspace,
 }: CommandPaletteProps) {
@@ -355,6 +358,7 @@ export function CommandPalette({
       browserUrl: onOpenBrowserUrl,
       integrationsSettings: onOpenIntegrationsSettings,
       blankBrowser: onOpenBlankBrowser,
+      toggleRightSidebar: onToggleRightSidebar,
     },
   });
   const topCommands = commands.filter((c) => c.placement === "top");
