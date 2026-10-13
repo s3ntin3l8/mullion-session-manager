@@ -39,6 +39,11 @@ export const BACKEND_UNREACHABLE_THRESHOLD = 2;
 export const SIDEBAR_MIN_WIDTH = 288;
 export const SIDEBAR_MAX_WIDTH = 500;
 
+export const RIGHT_SIDEBAR_MIN_WIDTH = 260;
+export const RIGHT_SIDEBAR_MAX_WIDTH = 560;
+export const RIGHT_SIDEBAR_DEFAULT_WIDTH = 340;
+export const DEFAULT_RIGHT_SIDEBAR_VIEW = "git";
+
 // Used to resolve taskMasterEnabled before the real env has ever loaded
 // (matches the pre-existing initial state of false: settings.taskMaster's
 // own default is "inherit", and this fallback's enabled is false). Once

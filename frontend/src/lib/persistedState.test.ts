@@ -22,9 +22,9 @@ beforeEach(() => {
 });
 
 describe("STORAGE_KEYS", () => {
-  it("has 36 entries, each a distinct crs.* key", () => {
+  it("has 40 entries, each a distinct crs.* key", () => {
     const values = Object.values(STORAGE_KEYS);
-    expect(values).toHaveLength(36);
+    expect(values).toHaveLength(40);
     expect(new Set(values).size).toBe(values.length);
     for (const key of values) {
       expect(key.startsWith("crs.")).toBe(true);

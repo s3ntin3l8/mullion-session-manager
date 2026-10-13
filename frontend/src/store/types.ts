@@ -549,6 +549,14 @@ export interface UiSlice {
   showTaskSessions: boolean;
   sidebarCollapsed: boolean;
   sidebarWidth: number;
+  // Right sidebar: `rightSidebarView` is the last-active view id (kept while
+  // closed so toggling reopens it), `rightSidebarOpen` whether the drawer is
+  // showing, `rightSidebarPinned` whether it docks (desktop only) instead of
+  // overlaying the grid.
+  rightSidebarView: string;
+  rightSidebarOpen: boolean;
+  rightSidebarPinned: boolean;
+  rightSidebarWidth: number;
   // Issue #211 — see ViewMode's own doc comment.
   viewMode: ViewMode;
   // Phase 5 (Track B, issue #195 5.5b) — see ViewMode's own doc comment.
@@ -645,6 +653,13 @@ export interface UiSlice {
   setShowTaskSessions: (value: boolean) => void;
   setSidebarCollapsed: (value: boolean) => void;
   setSidebarWidth: (value: number) => void;
+  // Opens `view` (or, when it is already the open view, closes the drawer).
+  toggleRightSidebarView: (view: string) => void;
+  // Palette / shortcut entry point: close if open, else reopen the last view.
+  toggleRightSidebar: () => void;
+  closeRightSidebar: () => void;
+  setRightSidebarPinned: (value: boolean) => void;
+  setRightSidebarWidth: (value: number) => void;
   setViewMode: (value: ViewMode) => void;
   setHierarchicalView: (value: boolean) => void;
   // Replaces one severity sub-group's whole order array (UnifiedBoard.tsx's

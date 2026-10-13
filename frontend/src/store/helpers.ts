@@ -1,11 +1,28 @@
 import type { NotificationEvent, Theme as ThemePreference } from "../api/index.js";
 import { STORAGE_KEYS, readBool, readNumber, readString } from "../lib/persistedState.js";
-import { EVENTS_PER_SESSION_CAP, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from "./constants.js";
+import {
+  EVENTS_PER_SESSION_CAP,
+  RIGHT_SIDEBAR_DEFAULT_WIDTH,
+  RIGHT_SIDEBAR_MAX_WIDTH,
+  RIGHT_SIDEBAR_MIN_WIDTH,
+  SIDEBAR_MIN_WIDTH,
+  SIDEBAR_MAX_WIDTH,
+} from "./constants.js";
 import type { Theme, ViewMode } from "./types.js";
 
 export function readStoredSidebarWidth(): number {
   const parsed = readNumber(STORAGE_KEYS.sidebarWidth, SIDEBAR_MIN_WIDTH);
   return Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, parsed));
+}
+
+export function clampRightSidebarWidth(value: number): number {
+  return Math.max(RIGHT_SIDEBAR_MIN_WIDTH, Math.min(RIGHT_SIDEBAR_MAX_WIDTH, value));
+}
+
+export function readStoredRightSidebarWidth(): number {
+  return clampRightSidebarWidth(
+    readNumber(STORAGE_KEYS.rightSidebarWidth, RIGHT_SIDEBAR_DEFAULT_WIDTH),
+  );
 }
 
 // Which workspace was last active survives a reload via localStorage (not

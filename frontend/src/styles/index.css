@@ -20,6 +20,7 @@
 @import "./app-shell.css";
 @import "./toolbar.css";
 @import "./sidebar.css";
+@import "./right-sidebar.css";
 @import "./xterm.css";
 @import "./terminal.css";
 @import "./dock.css";

@@ -35,6 +35,14 @@ export const STORAGE_KEYS = {
   // header, not one per item.
   workspacesSectionCollapsed: "crs.workspacesSectionCollapsed",
   sidebarWidth: "crs.sidebarWidth",
+  // Right sidebar (icon rail + view drawer): which view was last active,
+  // whether it is open, whether it is pinned (docked, pushing the grid) vs.
+  // an overlay, and the drawer width. `rightSidebarOpen` is only honored on
+  // load when pinned — an unpinned overlay never reopens itself on reload.
+  rightSidebarView: "crs.rightSidebarView",
+  rightSidebarOpen: "crs.rightSidebarOpen",
+  rightSidebarPinned: "crs.rightSidebarPinned",
+  rightSidebarWidth: "crs.rightSidebarWidth",
   themeHint: "crs.themeHint",
   dismissedUpdateVersion: "crs.dismissedUpdateVersion",
   dismissedCodexHookTrustVersion: "crs.dismissedCodexHookTrustVersion",

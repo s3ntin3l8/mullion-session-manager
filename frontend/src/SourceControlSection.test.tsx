@@ -143,6 +143,45 @@ afterEach(() => {
   });
 });
 
+describe("SourceControlSection — embedded / controlled (right sidebar)", () => {
+  function seed() {
+    useDashboardStore.setState({
+      projects: [PROJECT_A, PROJECT_B],
+      sessions: [],
+      activePanelId: null,
+      gitStatuses: {
+        [PROJECT_A.id]: statusWith({ branch: "branch-a" }),
+        [PROJECT_B.id]: statusWith({ branch: "branch-b" }),
+      },
+    });
+  }
+
+  it("embedded renders expanded with no collapsible header and ignores the persisted collapse flag", () => {
+    seed();
+    localStorage.setItem("crs.sourceControlCollapsed", "true");
+    render(<SourceControlSection embedded onOpenGit={vi.fn()} />);
+
+    expect(screen.queryByText("Source Control")).toBeNull();
+    expect(screen.getByText("Working tree clean")).toBeTruthy();
+  });
+
+  it("a controlled projectId wins over follow/pin and hides the project dropdown", () => {
+    seed();
+    render(<SourceControlSection embedded projectId={PROJECT_B.id} onOpenGit={vi.fn()} />);
+
+    expect(screen.getByText("branch-b")).toBeTruthy();
+    expect(screen.queryByText("branch-a")).toBeNull();
+    expect(screen.queryByText("Follow active panel")).toBeNull();
+  });
+
+  it("without a controlled projectId, embedded still shows its own project dropdown", () => {
+    seed();
+    render(<SourceControlSection embedded onOpenGit={vi.fn()} />);
+
+    expect(screen.getByText("Follow active panel")).toBeTruthy();
+  });
+});
+
 describe("SourceControlSection (issue #433 scope B)", () => {
   it("is collapsed by default — header renders, body does not", () => {
     useDashboardStore.setState({

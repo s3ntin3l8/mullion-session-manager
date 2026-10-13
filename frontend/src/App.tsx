@@ -45,6 +45,7 @@ import {
 } from "./panelUtils.js";
 import { useVisualViewportInset } from "./hooks/useVisualViewportInset.js";
 import { useDragResize } from "./hooks/useDragResize.js";
+import { RightSidebar } from "./right-sidebar/RightSidebar.js";
 import { useWorkspacePersistence } from "./hooks/useWorkspacePersistence.js";
 import { isCompactTier, resolveLayoutTier, useCoarsePointer } from "./lib/layoutTier.js";
 import type { LayoutTier, LayoutContext } from "./lib/layoutTier.js";
@@ -1323,8 +1324,11 @@ export function App() {
   // dockview's tab text colors.
   const dockviewChromeBg = getSchemeBackground(settings.terminal.colorScheme, theme);
 
+  const rightSidebarActions = useMemo(() => ({ onOpenGit }), [onOpenGit]);
+
   const sidebar = (
     <Sidebar
+      showSourceControl={isMobile}
       phoneSection={compact ? sidebarPhoneSection(navTab) : undefined}
       onOpenSession={onOpenSession}
       onOpenSessionAsFloat={onOpenSessionAsFloat}
@@ -1643,6 +1647,7 @@ export function App() {
             )}
           </div>
         </div>
+        <RightSidebar tier={layoutTier} actions={rightSidebarActions} />
       </div>
       {paletteOpen && (
         <CommandPalette

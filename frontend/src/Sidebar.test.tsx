@@ -104,7 +104,7 @@ vi.mock("./store/index.js", () => {
 // "stub the unrelated child" pattern Dock.test.tsx uses for TerminalPane and
 // UnifiedBoard.test.tsx uses for TaskDetail.
 vi.mock("./SourceControlSection.js", () => ({
-  SourceControlSection: () => null,
+  SourceControlSection: () => <div data-testid="source-control" />,
 }));
 
 // DiscoverProjects (inline in Sidebar.tsx, not separately mockable) calls
@@ -127,6 +127,7 @@ const NOOP_PROPS = {
   onOpenGit: vi.fn(),
   onOpenProjectSetup: vi.fn(),
   onOpenDevice: vi.fn(),
+  showSourceControl: false,
 };
 
 // App.tsx always renders <Sidebar> as the sole child of `.sidebar-wrapper`
@@ -1109,6 +1110,23 @@ describe("Sidebar phoneSection (phone navigator tabs)", () => {
       </div>,
     );
   };
+
+  it("renders Source Control only when showSourceControl is set (phone has no right sidebar)", () => {
+    const { unmount } = render(
+      <div className="sidebar-wrapper">
+        <Sidebar {...NOOP_PROPS} showSourceControl={false} />
+      </div>,
+    );
+    expect(screen.queryByTestId("source-control")).toBeNull();
+    unmount();
+
+    render(
+      <div className="sidebar-wrapper">
+        <Sidebar {...NOOP_PROPS} showSourceControl />
+      </div>,
+    );
+    expect(screen.getByTestId("source-control")).toBeInTheDocument();
+  });
 
   it("renders everything when unset (desktop/tablet)", () => {
     renderSection();
