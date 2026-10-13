@@ -1,0 +1,43 @@
+/* Project panel — tab strip over the five setup panels it hosts. Each tab
+   body is an existing full-size panel, so the body fills the rest. */
+.project-hub {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.project-hub-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 6px 10px 0;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+.project-hub-tab {
+  padding: 6px 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.project-hub-tab:hover {
+  color: var(--fg);
+}
+.project-hub-tab.active {
+  color: var(--fg);
+  border-bottom-color: var(--ring);
+}
+.project-hub-body {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  overflow: auto;
+}
+.project-hub-body[hidden] {
+  display: none;
+}

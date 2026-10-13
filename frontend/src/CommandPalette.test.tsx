@@ -138,7 +138,9 @@ describe("CommandPalette -> Integrations section", () => {
       />,
     );
 
-    await user.click(await screen.findByText(/Agent Rules: mullion/));
+    // These setup entries live under the "Project ›" drill-in now.
+    await user.click(await screen.findByText(/Project: mullion/));
+    await user.click(await screen.findByText("Agent Rules"));
     expect(onOpenAgentRules).toHaveBeenCalledWith(PROJECT.id);
   });
 
@@ -168,7 +170,9 @@ describe("CommandPalette -> Integrations section", () => {
       />,
     );
 
-    await user.click(await screen.findByText(/Edit project files: mullion/));
+    // These setup entries live under the "Project ›" drill-in now.
+    await user.click(await screen.findByText(/Project: mullion/));
+    await user.click(await screen.findByText("Edit project files"));
     expect(onOpenFileEditor).toHaveBeenCalledWith(PROJECT.id);
   });
 
@@ -198,7 +202,9 @@ describe("CommandPalette -> Integrations section", () => {
       />,
     );
 
-    await user.click(await screen.findByText(/Dock: mullion/));
+    // These setup entries live under the "Project ›" drill-in now.
+    await user.click(await screen.findByText(/Project: mullion/));
+    await user.click(await screen.findByText("Dock"));
     expect(onOpenDockConfig).toHaveBeenCalledWith(PROJECT.id);
   });
 
@@ -228,7 +234,9 @@ describe("CommandPalette -> Integrations section", () => {
       />,
     );
 
-    await user.click(await screen.findByText(/Skills: mullion/));
+    // These setup entries live under the "Project ›" drill-in now.
+    await user.click(await screen.findByText(/Project: mullion/));
+    await user.click(await screen.findByText("Skills"));
     expect(onOpenSkills).toHaveBeenCalledWith(PROJECT.id);
   });
 
@@ -2279,5 +2287,169 @@ describe("CommandPalette -> close affordance (issue: mobile 'esc' chip did nothi
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Close command palette" }));
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});
+
+// The "Project ›" drill-in and searchable Integrations commands.
+describe("CommandPalette -> Project drill-in and command search", () => {
+  const openers = () => ({
+    onOpenGitHub: vi.fn(),
+    onOpenGit: vi.fn(),
+    onOpenAgentRules: vi.fn(),
+    onOpenFileEditor: vi.fn(),
+    onOpenProjectBriefing: vi.fn(),
+    onOpenProjectSetup: vi.fn(),
+    onOpenDockConfig: vi.fn(),
+    onOpenSkills: vi.fn(),
+    onOpenBrowser: vi.fn(),
+    onOpenBlankBrowser: vi.fn(),
+    onOpenIntegrationsSettings: vi.fn(),
+    onOpenTasks: vi.fn(),
+    onOpenBrowserUrl: vi.fn(),
+  });
+
+  function renderPalette(
+    o: ReturnType<typeof openers>,
+    props: Partial<ComponentProps<typeof CommandPalette>> = {},
+  ) {
+    return render(
+      <CommandPalette
+        scope="project"
+        projectId={PROJECT.id}
+        onClose={props.onClose ?? vi.fn()}
+        onLaunched={vi.fn()}
+        onOpenSession={vi.fn()}
+        {...o}
+        {...props}
+      />,
+    );
+  }
+
+  beforeEach(() => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(jsonResponse(200, []))),
+    );
+    useDashboardStore.setState({ projects: [PROJECT], sessions: [] });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("collapses the setup entries into one Project row on the empty-query list", async () => {
+    renderPalette(openers());
+
+    expect(await screen.findByText("Project: mullion")).toBeTruthy();
+    expect(screen.getByText("GitHub: mullion")).toBeTruthy();
+    expect(screen.getByText("Git: mullion")).toBeTruthy();
+    expect(screen.getByText("Preview: mullion")).toBeTruthy();
+    expect(screen.getByText("Manage integrations…")).toBeTruthy();
+    for (const hidden of [
+      "Agent Rules",
+      "Mullion Briefing",
+      "Scaffold Mullion",
+      "Skills",
+      "Dock",
+    ]) {
+      expect(screen.queryByText(hidden)).toBeNull();
+    }
+  });
+
+  it("drills into the sub-list, switching the placeholder, and runs an item", async () => {
+    const o = openers();
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    renderPalette(o, { onClose });
+
+    await user.click(await screen.findByText("Project: mullion"));
+
+    expect(screen.getByPlaceholderText("Project: mullion › filter…")).toBeTruthy();
+    for (const item of [
+      "Agent Rules",
+      "Mullion Briefing",
+      "Scaffold Mullion",
+      "Dock",
+      "Skills",
+      "Edit project files",
+    ]) {
+      expect(screen.getByText(item)).toBeTruthy();
+    }
+    expect(screen.queryByText("GitHub: mullion")).toBeNull();
+
+    await user.click(screen.getByText("Scaffold Mullion"));
+    expect(o.onOpenProjectSetup).toHaveBeenCalledWith(PROJECT.id);
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("filters the sub-list by the query", async () => {
+    const user = userEvent.setup();
+    renderPalette(openers());
+    await user.click(await screen.findByText("Project: mullion"));
+
+    await user.type(screen.getByPlaceholderText("Project: mullion › filter…"), "skil");
+
+    expect(screen.getByText("Skills")).toBeTruthy();
+    expect(screen.queryByText("Dock")).toBeNull();
+  });
+
+  it("navigates the sub-list with arrows and Enter", async () => {
+    const o = openers();
+    const user = userEvent.setup();
+    renderPalette(o);
+    await user.click(await screen.findByText("Project: mullion"));
+
+    // Agent Rules (0) -> Briefing (1) -> Scaffold (2) -> Dock (3) -> back up to Scaffold (2).
+    await user.keyboard("{ArrowDown}{ArrowDown}{ArrowDown}{ArrowUp}{Enter}");
+
+    expect(o.onOpenProjectSetup).toHaveBeenCalledWith(PROJECT.id);
+    expect(o.onOpenDockConfig).not.toHaveBeenCalled();
+  });
+
+  it("Escape and Backspace-on-empty step back out instead of closing the palette", async () => {
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    renderPalette(openers(), { onClose });
+
+    await user.click(await screen.findByText("Project: mullion"));
+    await user.keyboard("{Escape}");
+    expect(screen.getByText("GitHub: mullion")).toBeTruthy();
+    expect(onClose).not.toHaveBeenCalled();
+
+    await user.click(screen.getByText("Project: mullion"));
+    await user.keyboard("{Backspace}");
+    expect(screen.getByText("GitHub: mullion")).toBeTruthy();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("finds a project sub-item from the top level and Enter runs it", async () => {
+    const o = openers();
+    const user = userEvent.setup();
+    renderPalette(o);
+
+    await user.type(await screen.findByPlaceholderText(/Launch a session/), "skills");
+
+    expect(screen.getByText("Project › Skills")).toBeTruthy();
+    await user.keyboard("{Enter}");
+    expect(o.onOpenSkills).toHaveBeenCalledWith(PROJECT.id);
+  });
+
+  it("does not offer the drill-in row itself as a search result", async () => {
+    const user = userEvent.setup();
+    renderPalette(openers());
+
+    await user.type(await screen.findByPlaceholderText(/Launch a session/), "project");
+
+    expect(screen.queryByText("Project: mullion")).toBeNull();
+  });
+
+  it("hides the project entries (but keeps the global ones) without a project", async () => {
+    useDashboardStore.setState({ projects: [] });
+    renderPalette(openers(), { scope: "global", projectId: undefined });
+
+    expect(await screen.findByText("Manage integrations…")).toBeTruthy();
+    expect(screen.getByText("New preview tab")).toBeTruthy();
+    expect(screen.queryByText(/^Project:/)).toBeNull();
+    expect(screen.queryByText(/^GitHub:/)).toBeNull();
   });
 });

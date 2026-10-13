@@ -8,6 +8,8 @@ import {
   openTaskDetailPanel,
   openOrFocusProjectPanel,
   openFileEditorPanel,
+  openProjectHubPanel,
+  migrateLegacyProjectPanels,
   closeLegacyPanels,
   dropSessionPanel,
   hasTiledPanels,
@@ -2409,5 +2411,132 @@ describe("openFileEditorPanel", () => {
     const existing = api.getPanel("file-editor-1")!;
     openFileEditorPanel(api, 1, PROJECTS, PHONE_LAYOUT, { path: "a" });
     expect(api.maximizeGroup).toHaveBeenCalledWith(existing);
+  });
+});
+
+describe("openProjectHubPanel", () => {
+  it("opens a new project-hub panel on the requested tab", () => {
+    const api = mockDockviewApi();
+    openProjectHubPanel(api, 1, PROJECTS, DESKTOP_LAYOUT, "skills");
+    expect(api.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "project-hub-1",
+        component: "project-hub",
+        title: "Project: project-alpha",
+        params: { projectId: 1, tab: "skills" },
+      }),
+    );
+  });
+
+  it("falls back to a bare title for an unknown project", () => {
+    const api = mockDockviewApi();
+    openProjectHubPanel(api, 99, PROJECTS, DESKTOP_LAYOUT);
+    expect(api.addPanel).toHaveBeenCalledWith(expect.objectContaining({ title: "Project" }));
+  });
+
+  it("re-targets and focuses an existing panel with a fresh rev instead of opening a second", () => {
+    const api = mockDockviewApi();
+    api.addPanel({ id: "project-hub-1", component: "project-hub", params: {} });
+    const existing = api.getPanel("project-hub-1")!;
+
+    openProjectHubPanel(api, 1, PROJECTS, DESKTOP_LAYOUT, "dock");
+
+    expect(api.addPanel).toHaveBeenCalledTimes(1);
+    expect(existing.api.updateParameters).toHaveBeenCalledWith(
+      expect.objectContaining({ projectId: 1, tab: "dock", rev: expect.any(Number) }),
+    );
+    expect(existing.api.setActive).toHaveBeenCalledTimes(1);
+    expect(api.maximizeGroup).not.toHaveBeenCalled();
+  });
+
+  it("maximizes a re-targeted panel on phone", () => {
+    const api = mockDockviewApi();
+    api.addPanel({ id: "project-hub-1", component: "project-hub", params: {} });
+    const existing = api.getPanel("project-hub-1")!;
+    openProjectHubPanel(api, 1, PROJECTS, PHONE_LAYOUT, "dock");
+    expect(api.maximizeGroup).toHaveBeenCalledWith(existing);
+  });
+
+  it("maximizes a newly added panel on phone", () => {
+    const api = mockDockviewApi();
+    openProjectHubPanel(api, 1, PROJECTS, PHONE_LAYOUT);
+    expect(api.maximizeGroup).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("migrateLegacyProjectPanels", () => {
+  it.each([
+    ["agent-rules-1", "agent-rules"],
+    ["project-briefing-1", "briefing"],
+    ["project-setup-1", "scaffold"],
+    ["dock-config-1", "dock"],
+    ["skills-1", "skills"],
+  ] as const)("replaces %s with the project hub on the %s tab, in the same group", (id, tab) => {
+    const api = mockDockviewApi();
+    api.addPanel({ id, component: id.replace(/-\d+$/, ""), params: { projectId: 1 } });
+    const legacy = api.getPanel(id)!;
+
+    const changed = migrateLegacyProjectPanels(api, PROJECTS);
+
+    expect(changed).toBe(true);
+    expect(api.addPanel).toHaveBeenLastCalledWith({
+      id: "project-hub-1",
+      component: "project-hub",
+      title: "Project: project-alpha",
+      params: { projectId: 1, tab },
+      position: { referencePanel: id, direction: "within" },
+    });
+    expect(legacy.api.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("merges several legacy panels of one project into a single hub (first one picks the tab)", () => {
+    const api = mockDockviewApi();
+    api.addPanel({ id: "skills-1", component: "skills", params: { projectId: 1 } });
+    api.addPanel({ id: "agent-rules-1", component: "agent-rules", params: { projectId: 1 } });
+    const skills = api.getPanel("skills-1")!;
+    const rules = api.getPanel("agent-rules-1")!;
+
+    expect(migrateLegacyProjectPanels(api, PROJECTS)).toBe(true);
+
+    const hubAdds = (api.addPanel as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (c) => c[0].id === "project-hub-1",
+    );
+    expect(hubAdds).toHaveLength(1);
+    expect(hubAdds[0][0].params.tab).toBe("skills");
+    expect(skills.api.close).toHaveBeenCalledTimes(1);
+    expect(rules.api.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an existing hub and just closes the legacy panel", () => {
+    const api = mockDockviewApi();
+    api.addPanel({ id: "project-hub-1", component: "project-hub", params: { projectId: 1 } });
+    api.addPanel({ id: "skills-1", component: "skills", params: { projectId: 1 } });
+    const legacy = api.getPanel("skills-1")!;
+
+    expect(migrateLegacyProjectPanels(api, PROJECTS)).toBe(true);
+
+    expect(api.addPanel).toHaveBeenCalledTimes(2); // the two seeded above, no third
+    expect(legacy.api.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("titles the hub bare when the project is unknown, and keeps separate projects separate", () => {
+    const api = mockDockviewApi();
+    api.addPanel({ id: "skills-9", component: "skills", params: { projectId: 9 } });
+    api.addPanel({ id: "dock-config-2", component: "dock-config", params: { projectId: 2 } });
+
+    migrateLegacyProjectPanels(api, PROJECTS);
+
+    expect(api.getPanel("project-hub-9")).toMatchObject({ title: "Project" });
+    // Project 2 exists but has a null name — also falls back to the bare title.
+    expect(api.getPanel("project-hub-2")).toMatchObject({ title: "Project" });
+  });
+
+  it("is a no-op reporting false when no legacy project panel is present", () => {
+    const api = mockDockviewApi();
+    api.addPanel({ id: "github-1", component: "github", params: { projectId: 1 } });
+    api.addPanel({ id: "skills-notanid", component: "skills", params: {} });
+
+    expect(migrateLegacyProjectPanels(api, PROJECTS)).toBe(false);
+    expect(api.addPanel).toHaveBeenCalledTimes(2);
   });
 });

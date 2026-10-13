@@ -95,6 +95,8 @@ function makeMockApi() {
   const api = {
     clear: vi.fn(),
     fromJSON: vi.fn(),
+    // Only the legacy project-panel migration adds panels during a restore.
+    addPanel: vi.fn(),
     toJSON: vi.fn(() => ({ panels: {} })),
     getPanel: vi.fn((id: string) => panels.get(id) ?? null),
     get panels() {
@@ -424,6 +426,60 @@ describe("useWorkspacePersistence", () => {
     vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS);
     expect(saveWorkspaceLayout).toHaveBeenCalledTimes(1);
     expect(saveWorkspaceLayout).toHaveBeenCalledWith(1, { panels: {} });
+  });
+
+  it("migrates a restored legacy project panel into the project hub, then persists the cleaned layout", () => {
+    vi.useFakeTimers();
+    const { api, addPanel } = makeMockApi();
+    projects = [{ id: 3, name: "demo" }];
+    const legacy = addPanel("skills-3", { projectId: 3 });
+    const workspace = makeWorkspace();
+
+    renderHook(() =>
+      useWorkspacePersistence({
+        dockviewApi: api,
+        activeWorkspaceId: 1,
+        workspaces: [workspace],
+        layoutTier: "desktop",
+        setPanelsVersion: makeSetPanelsVersion(),
+      }),
+    );
+
+    expect(api.addPanel).toHaveBeenCalledWith({
+      id: "project-hub-3",
+      component: "project-hub",
+      title: "Project: demo",
+      params: { projectId: 3, tab: "skills" },
+      position: { referencePanel: "skills-3", direction: "within" },
+    });
+    expect(legacy.api.close).toHaveBeenCalledTimes(1);
+    // Done while restoringRef was true, so — like the stale-panel sweep — the
+    // restore effect must persist the migrated layout itself.
+    expect(saveWorkspaceLayout).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(0);
+    vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS);
+    expect(saveWorkspaceLayout).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not touch the layout or schedule a save when no legacy project panel is restored", () => {
+    vi.useFakeTimers();
+    const { api, addPanel } = makeMockApi();
+    addPanel("github-3", { projectId: 3 });
+
+    renderHook(() =>
+      useWorkspacePersistence({
+        dockviewApi: api,
+        activeWorkspaceId: 1,
+        workspaces: [makeWorkspace()],
+        layoutTier: "desktop",
+        setPanelsVersion: makeSetPanelsVersion(),
+      }),
+    );
+
+    expect(api.addPanel).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(0);
+    vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS);
+    expect(saveWorkspaceLayout).not.toHaveBeenCalled();
   });
 
   // Device-panel half of the "deleted device stays in the list" rework: a
