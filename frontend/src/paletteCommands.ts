@@ -186,7 +186,7 @@ export function buildPaletteCommands({
     commands.push({
       id: "toggle-right-sidebar",
       title: "Toggle right sidebar",
-      subtitle: "Show or hide the Git / GitHub drawer",
+      subtitle: "Show or hide the right sidebar",
       icon: RightSidebarIcon,
       keywords: ["sidebar", "right", "drawer", "panel"],
       placement: "top",
