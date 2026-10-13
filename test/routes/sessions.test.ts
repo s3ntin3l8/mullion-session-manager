@@ -527,6 +527,23 @@ describe("sessions route", () => {
     await app.close();
   });
 
+  it("DELETE on an exited session dismisses it (status becomes killed)", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app);
+    const row = app.db
+      .insert(sessions)
+      .values({ projectId, command: "bash", status: "exited" })
+      .returning()
+      .get();
+
+    const res = await app.inject({ method: "DELETE", url: `/api/sessions/${row.id}` });
+    expect(res.statusCode).toBe(204);
+    const after = app.db.select().from(sessions).where(eq(sessions.id, row.id)).get();
+    expect(after?.status).toBe("killed");
+
+    await app.close();
+  });
+
   it("rejects an invalid status querystring value", async () => {
     const app = await buildApp();
     const res = await app.inject({ method: "GET", url: "/api/sessions?status=bogus" });

@@ -1498,17 +1498,30 @@ export async function killSession(
   // about what happens on failure — it only narrows when a concurrent
   // attach can still succeed.
   //
-  // Issue #1521 — guarded on `status = 'active'`: a session the reconciler
-  // already flipped to "exited" (or one already "killed") must not be
-  // rewritten, or the "it ended on its own" distinction is lost. When no row
-  // changed there is nothing live to terminate, so the row is returned as-is.
+  // Issue #1521 — guarded on `status = 'active'`: only a live session is
+  // terminated, and the CAS keeps this from racing the reconciler's own
+  // flip to "exited".
   const [updated] = app.db
     .update(sessions)
     .set({ status: "killed" })
     .where(and(eq(sessions.id, sessionId), eq(sessions.status, "active")))
     .returning()
     .all();
-  if (!updated) return row;
+  if (!updated) {
+    // An explicit kill of an already-"exited" session is a dismissal: the
+    // UI only removes a row / closes its panel once it reads "killed", so
+    // leaving it "exited" made the sidebar and pane-tab kill a silent
+    // no-op. Nothing is running, so there is nothing to terminate. An
+    // already-"killed" row is returned as-is (idempotent).
+    if (row.status !== "exited") return row;
+    const [dismissed] = app.db
+      .update(sessions)
+      .set({ status: "killed" })
+      .where(and(eq(sessions.id, sessionId), eq(sessions.status, "exited")))
+      .returning()
+      .all();
+    return dismissed ?? row;
+  }
 
   try {
     await resolveBackend(app, hostId).terminate(String(sessionId));
