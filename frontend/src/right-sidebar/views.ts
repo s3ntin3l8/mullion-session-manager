@@ -1,6 +1,7 @@
 import type { ComponentType, SVGProps } from "react";
 import { useDashboardStore } from "../store/index.js";
-import { GitBranchIcon } from "../ui/icons.js";
+import { GitBranchIcon, GitHubIcon } from "../ui/icons.js";
+import { GitHubSidebarView } from "./GitHubSidebarView.js";
 import { GitSidebarView } from "./GitSidebarView.js";
 
 type ViewIconProps = SVGProps<SVGSVGElement> & { size?: number };
@@ -14,6 +15,7 @@ export type RailBadge =
 // App.tsx so the sidebar never imports panel-opening machinery itself.
 export interface RightSidebarActions {
   onOpenGit: (projectId: number) => void;
+  onOpenGitHub: (projectId: number) => void;
 }
 
 export interface RightSidebarViewProps {
@@ -51,6 +53,17 @@ function useGitBadge(projectId: number | null): RailBadge | null {
   return null;
 }
 
+// Failing PR checks come straight from the live store (kept fresh by the
+// /ws/github push), so the badge costs no extra requests. A default-branch CI
+// badge would need an always-on fetch — tracked in #1578.
+function useGitHubBadge(projectId: number | null): RailBadge | null {
+  const failing = useDashboardStore((s) =>
+    projectId != null ? (s.prsByProject[projectId]?.prSummary.fail ?? 0) : 0,
+  );
+  if (failing === 0) return null;
+  return { kind: "alert", title: `${failing} PR check${failing === 1 ? "" : "s"} failing` };
+}
+
 // Registry — adding a view (a Files tree, say) is one entry here.
 export const RIGHT_SIDEBAR_VIEWS: RightSidebarView[] = [
   {
@@ -59,5 +72,12 @@ export const RIGHT_SIDEBAR_VIEWS: RightSidebarView[] = [
     icon: GitBranchIcon,
     Component: GitSidebarView,
     useBadge: useGitBadge,
+  },
+  {
+    id: "github",
+    label: "GitHub",
+    icon: GitHubIcon,
+    Component: GitHubSidebarView,
+    useBadge: useGitHubBadge,
   },
 ];
