@@ -3,6 +3,8 @@ import type { Dispatch, SetStateAction } from "react";
 import { normalizeAgentId } from "../api/index.js";
 import type { Launcher, Project, Session, Workspace } from "../api/index.js";
 import { matchesQuery } from "../matchQuery.js";
+import { searchPaletteCommands } from "../paletteCommands.js";
+import type { PaletteCommand } from "../paletteCommands.js";
 
 // CommandPalette.tsx's three parallel filter pipelines (U2, issue #581) —
 // Sessions, Workspaces, and the launcher "Matching commands" list — plus the
@@ -20,7 +22,8 @@ import { matchesQuery } from "../matchQuery.js";
 export type PaletteEntry =
   | { type: "session"; session: Session }
   | { type: "workspace"; workspace: Workspace }
-  | { type: "launcher"; launcher: Launcher };
+  | { type: "launcher"; launcher: Launcher }
+  | { type: "command"; command: PaletteCommand };
 
 export interface UseCommandSearchOptions {
   scope: "global" | "project";
@@ -30,6 +33,9 @@ export interface UseCommandSearchOptions {
   workspaces: Workspace[];
   launchers: Launcher[];
   hiddenAgents: string[] | undefined;
+  // Integrations commands (paletteCommands.ts). Only searched on a non-empty
+  // query — the empty-query view renders them as its own fixed list.
+  commands?: PaletteCommand[];
 }
 
 export interface UseCommandSearchResult {
@@ -67,10 +73,16 @@ export interface UseCommandSearchResult {
    * Enter/highlight/the options-strip from targeting a stale index. */
   activeIndex: number;
   activeEntry: PaletteEntry | undefined;
+  /** Integrations commands matching the current query (empty on a blank
+   * query), ranked after the launchers so a typed name still lands on its
+   * launcher first. */
+  matchingCommands: PaletteCommand[];
   /** `matchingSessions.length + matchingWorkspaces.length` — the absolute
    * index the launcher ("Matching commands") group starts at within
    * `entries`. */
   groupOffset: number;
+  /** `groupOffset + filtered.length` — where the Integrations group starts. */
+  commandOffset: number;
 }
 
 export function useCommandSearch({
@@ -81,6 +93,7 @@ export function useCommandSearch({
   workspaces,
   launchers,
   hiddenAgents,
+  commands,
 }: UseCommandSearchOptions): UseCommandSearchResult {
   const [query, setQueryState] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -150,21 +163,29 @@ export function useCommandSearch({
     return workspaces.filter((w) => matchesQuery([w.name], query));
   }, [workspaces, query]);
 
-  // Sessions, Workspaces, and Matching commands render as three separate
-  // groups but share ONE selection index across all of them for arrow-key
-  // nav — this flattens the three result arrays into one ordered list purely
-  // for index math.
+  const matchingCommands = useMemo(
+    () => searchPaletteCommands(commands ?? [], query),
+    [commands, query],
+  );
+
+  // Sessions, Workspaces, Matching commands (launchers) and Integrations
+  // commands render as separate groups but share ONE selection index across
+  // all of them for arrow-key nav — this flattens the result arrays into one
+  // ordered list purely for index math. Integrations come last so the
+  // launcher offsets (and the default-agent selection seed) are unchanged.
   const entries = useMemo<PaletteEntry[]>(
     () => [
       ...matchingSessions.map((session): PaletteEntry => ({ type: "session", session })),
       ...matchingWorkspaces.map((workspace): PaletteEntry => ({ type: "workspace", workspace })),
       ...filtered.map((launcher): PaletteEntry => ({ type: "launcher", launcher })),
+      ...matchingCommands.map((command): PaletteEntry => ({ type: "command", command })),
     ],
-    [matchingSessions, matchingWorkspaces, filtered],
+    [matchingSessions, matchingWorkspaces, filtered, matchingCommands],
   );
   const activeIndex = entries.length === 0 ? -1 : Math.min(selectedIndex, entries.length - 1);
   const activeEntry = entries[activeIndex];
   const groupOffset = matchingSessions.length + matchingWorkspaces.length;
+  const commandOffset = groupOffset + filtered.length;
 
   return {
     query,
@@ -174,9 +195,11 @@ export function useCommandSearch({
     filtered,
     matchingSessions,
     matchingWorkspaces,
+    matchingCommands,
     entries,
     activeIndex,
     activeEntry,
     groupOffset,
+    commandOffset,
   };
 }

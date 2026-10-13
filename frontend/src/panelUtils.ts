@@ -10,6 +10,7 @@ import { positionToDirection } from "dockview";
 import type { Session, Device } from "./api/index.js";
 import { initialPaneTitle } from "./paneTitle.js";
 import type { LayoutContext, LayoutTier } from "./lib/layoutTier.js";
+import type { ProjectHubTab } from "./ProjectHubPanel.js";
 
 // U9 — App.tsx's global Escape handler's own action list, extracted here
 // (App.tsx itself can only export components — react-refresh/only-export-
@@ -672,6 +673,34 @@ export function openOrFocusProjectPanel(
   if (layout.tier === "phone") maximizeIfTiled(api, panel);
 }
 
+/** Opens (or focuses and re-targets) the project's tabbed Project panel on
+ * `tab` — a fresh `rev` makes an already-open panel switch to that tab. */
+export function openProjectHubPanel(
+  api: DockviewApi,
+  projectId: number,
+  projects: { id: number; name: string | null }[],
+  layout: LayoutContext,
+  tab?: ProjectHubTab,
+): void {
+  const panelId = `project-hub-${projectId}`;
+  const existing = api.getPanel(panelId);
+  if (existing) {
+    existing.api.updateParameters({ projectId, tab, rev: Date.now() });
+    existing.api.setActive();
+    if (layout.tier === "phone") maximizeIfTiled(api, existing);
+    return;
+  }
+  const project = projects.find((p) => p.id === projectId);
+  const panel = api.addPanel({
+    id: panelId,
+    component: "project-hub",
+    title: project ? `Project: ${project.name}` : "Project",
+    params: { projectId, tab },
+    ...positioningForTier(api, layout),
+  });
+  if (layout.tier === "phone") maximizeIfTiled(api, panel);
+}
+
 /** Opens the project's file editor on `target.path` — focusing the existing
  * panel and re-targeting it (a fresh `rev` makes the panel reopen the same
  * path even if it was navigated away from meanwhile) rather than opening a
@@ -796,6 +825,54 @@ function collectFloatingPanelIds(
 // so an activated workspace's blob gets rewritten (via the caller's own
 // post-restore scheduleSave) instead of carrying the id forever.
 export const LEGACY_PANEL_IDS = ["tasks"] as const;
+
+// The five per-project setup panels that now live as tabs of one
+// `project-hub-<projectId>` panel (ProjectHubPanel.tsx). Their old component
+// kinds stay registered (panels/registry.tsx renders the hub on the matching
+// tab) so a saved layout can never throw on restore; migrateLegacyProjectPanels
+// below is the self-heal half that converts any found in a live dockview.
+export const LEGACY_PROJECT_PANEL_KINDS: Record<string, ProjectHubTab> = {
+  "agent-rules": "agent-rules",
+  "project-briefing": "briefing",
+  "project-setup": "scaffold",
+  "dock-config": "dock",
+  skills: "skills",
+};
+
+const LEGACY_PROJECT_PANEL_ID_RE =
+  /^(agent-rules|project-briefing|project-setup|dock-config|skills)-(\d+)$/;
+
+// Replaces each legacy per-project setup panel with the project's hub panel,
+// in the same group (`within`); several legacy panels of one project merge
+// into one hub (the first one found picks the tab). Matches on the panel id
+// (`<kind>-<projectId>`, openOrFocusProjectPanel's scheme) rather than a
+// component-name field. Returns true if anything changed, so the caller
+// persists the cleaned layout — same contract as closeLegacyPanels.
+export function migrateLegacyProjectPanels(
+  api: DockviewApi,
+  projects: { id: number; name: string | null }[] = [],
+): boolean {
+  let changed = false;
+  for (const panel of [...api.panels]) {
+    const match = LEGACY_PROJECT_PANEL_ID_RE.exec(panel.id);
+    if (!match) continue;
+    const projectId = Number(match[2]);
+    const hubId = `project-hub-${projectId}`;
+    if (!api.getPanel(hubId)) {
+      const project = projects.find((p) => p.id === projectId);
+      api.addPanel({
+        id: hubId,
+        component: "project-hub",
+        title: project?.name ? `Project: ${project.name}` : "Project",
+        params: { projectId, tab: LEGACY_PROJECT_PANEL_KINDS[match[1]] },
+        position: { referencePanel: panel.id, direction: "within" },
+      });
+    }
+    panel.api.close();
+    changed = true;
+  }
+  return changed;
+}
 
 // Returns true if it closed anything, so the caller (App.tsx's restore
 // effect) knows to persist the cleaned layout — same shape as its existing

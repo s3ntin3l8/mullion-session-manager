@@ -11,11 +11,13 @@ import {
   maximizeIfTiled,
   openDevicePanel,
   openOrFocusProjectPanel,
+  openProjectHubPanel,
   openSessionPanel,
   openTimelinePanel,
 } from "../panelUtils.js";
 import type { ProjectPanelKindConfig } from "../panelUtils.js";
 import type { LayoutContext } from "../lib/layoutTier.js";
+import type { ProjectHubTab } from "../ProjectHubPanel.js";
 
 // The six near-identical project-scoped panel kinds (GitHub, Git, Agent
 // Rules, Dock Config, Skills, Browser) — see openOrFocusProjectPanel's own
@@ -36,34 +38,9 @@ const GIT_CONFIG: ProjectPanelKindConfig = {
   titleLabel: "Git",
   applyDesktopPositioning: true,
 };
-const AGENT_RULES_CONFIG: ProjectPanelKindConfig = {
-  kind: "agent-rules",
-  titleLabel: "Agent Rules",
-  applyDesktopPositioning: true,
-};
 const FILE_EDITOR_CONFIG: ProjectPanelKindConfig = {
   kind: "file-editor",
   titleLabel: "Files",
-  applyDesktopPositioning: true,
-};
-const PROJECT_BRIEFING_CONFIG: ProjectPanelKindConfig = {
-  kind: "project-briefing",
-  titleLabel: "Mullion Briefing",
-  applyDesktopPositioning: true,
-};
-const PROJECT_SETUP_CONFIG: ProjectPanelKindConfig = {
-  kind: "project-setup",
-  titleLabel: "Scaffold Mullion",
-  applyDesktopPositioning: true,
-};
-const DOCK_CONFIG_CONFIG: ProjectPanelKindConfig = {
-  kind: "dock-config",
-  titleLabel: "Dock",
-  applyDesktopPositioning: true,
-};
-const SKILLS_CONFIG: ProjectPanelKindConfig = {
-  kind: "skills",
-  titleLabel: "Skills",
   applyDesktopPositioning: true,
 };
 // applyDesktopPositioning: false — App.tsx's pre-existing onOpenBrowser never
@@ -137,7 +114,11 @@ export interface UsePanelOpenerResult {
   onOpenGitHub: (projectId: number) => void;
   // Opens (or focuses) a project's git status panel (issue #76).
   onOpenGit: (projectId: number) => void;
-  // Opens (or focuses) a project's agent-rules editor (issue #431).
+  // Opens (or focuses) a project's tabbed Project panel, optionally on a
+  // specific tab (Agent Rules, Briefing, Scaffold, Dock, Skills).
+  onOpenProjectHub: (projectId: number, tab?: ProjectHubTab) => void;
+  // Opens (or focuses) a project's agent-rules editor (issue #431) — the
+  // Project panel's Agent Rules tab.
   onOpenAgentRules: (projectId: number) => void;
   // Opens (or focuses) a project's file editor (tree + CodeMirror).
   onOpenFileEditor: (projectId: number) => void;
@@ -310,14 +291,37 @@ export function usePanelOpener({
     [dockviewApi, projects, layout, setSidebarOpen, leaveTaskView],
   );
 
-  const onOpenAgentRules = useCallback(
-    (projectId: number) => {
+  const onOpenProjectHub = useCallback(
+    (projectId: number, tab?: ProjectHubTab) => {
       if (!dockviewApi) return;
       leaveTaskView();
-      openOrFocusProjectPanel(dockviewApi, projectId, projects, layout, AGENT_RULES_CONFIG);
+      openProjectHubPanel(dockviewApi, projectId, projects, layout, tab);
       setSidebarOpen(false);
     },
     [dockviewApi, projects, layout, setSidebarOpen, leaveTaskView],
+  );
+
+  // The five setup panels are tabs of one Project panel now; these keep their
+  // old single-argument shape so existing callers (Sidebar, App) don't churn.
+  const onOpenAgentRules = useCallback(
+    (projectId: number) => onOpenProjectHub(projectId, "agent-rules"),
+    [onOpenProjectHub],
+  );
+  const onOpenProjectBriefing = useCallback(
+    (projectId: number) => onOpenProjectHub(projectId, "briefing"),
+    [onOpenProjectHub],
+  );
+  const onOpenProjectSetup = useCallback(
+    (projectId: number) => onOpenProjectHub(projectId, "scaffold"),
+    [onOpenProjectHub],
+  );
+  const onOpenDockConfig = useCallback(
+    (projectId: number) => onOpenProjectHub(projectId, "dock"),
+    [onOpenProjectHub],
+  );
+  const onOpenSkills = useCallback(
+    (projectId: number) => onOpenProjectHub(projectId, "skills"),
+    [onOpenProjectHub],
   );
 
   const onOpenFileEditor = useCallback(
@@ -325,46 +329,6 @@ export function usePanelOpener({
       if (!dockviewApi) return;
       leaveTaskView();
       openOrFocusProjectPanel(dockviewApi, projectId, projects, layout, FILE_EDITOR_CONFIG);
-      setSidebarOpen(false);
-    },
-    [dockviewApi, projects, layout, setSidebarOpen, leaveTaskView],
-  );
-
-  const onOpenProjectBriefing = useCallback(
-    (projectId: number) => {
-      if (!dockviewApi) return;
-      leaveTaskView();
-      openOrFocusProjectPanel(dockviewApi, projectId, projects, layout, PROJECT_BRIEFING_CONFIG);
-      setSidebarOpen(false);
-    },
-    [dockviewApi, projects, layout, setSidebarOpen, leaveTaskView],
-  );
-
-  const onOpenProjectSetup = useCallback(
-    (projectId: number) => {
-      if (!dockviewApi) return;
-      leaveTaskView();
-      openOrFocusProjectPanel(dockviewApi, projectId, projects, layout, PROJECT_SETUP_CONFIG);
-      setSidebarOpen(false);
-    },
-    [dockviewApi, projects, layout, setSidebarOpen, leaveTaskView],
-  );
-
-  const onOpenDockConfig = useCallback(
-    (projectId: number) => {
-      if (!dockviewApi) return;
-      leaveTaskView();
-      openOrFocusProjectPanel(dockviewApi, projectId, projects, layout, DOCK_CONFIG_CONFIG);
-      setSidebarOpen(false);
-    },
-    [dockviewApi, projects, layout, setSidebarOpen, leaveTaskView],
-  );
-
-  const onOpenSkills = useCallback(
-    (projectId: number) => {
-      if (!dockviewApi) return;
-      leaveTaskView();
-      openOrFocusProjectPanel(dockviewApi, projectId, projects, layout, SKILLS_CONFIG);
       setSidebarOpen(false);
     },
     [dockviewApi, projects, layout, setSidebarOpen, leaveTaskView],
@@ -457,6 +421,7 @@ export function usePanelOpener({
     onOpenTimeline,
     onOpenGitHub,
     onOpenGit,
+    onOpenProjectHub,
     onOpenAgentRules,
     onOpenFileEditor,
     onOpenProjectBriefing,

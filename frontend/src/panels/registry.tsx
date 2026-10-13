@@ -7,16 +7,8 @@ import { GitHubPanel } from "../GitHubPanel.js";
 import type { GitHubPanelParams } from "../GitHubPanel.js";
 import { GitPanel } from "../GitPanel.js";
 import type { GitPanelParams } from "../GitPanel.js";
-import { AgentRulesPanel } from "../AgentRulesPanel.js";
-import type { AgentRulesPanelParams } from "../AgentRulesPanel.js";
-import { ProjectBriefingPanel } from "../ProjectBriefingPanel.js";
-import type { ProjectBriefingPanelParams } from "../ProjectBriefingPanel.js";
-import { ProjectSetupPanel } from "../ProjectSetupPanel.js";
-import type { ProjectSetupPanelParams } from "../ProjectSetupPanel.js";
-import { DockConfigPanel } from "../DockConfigPanel.js";
-import type { DockConfigPanelParams } from "../DockConfigPanel.js";
-import { SkillsPanel } from "../SkillsPanel.js";
-import type { SkillsPanelParams } from "../SkillsPanel.js";
+import { ProjectHubPanel } from "../ProjectHubPanel.js";
+import type { ProjectHubPanelParams, ProjectHubTab } from "../ProjectHubPanel.js";
 import type { BrowserPanelParams } from "../BrowserPanel.js";
 import type { FileEditorPanelParams } from "../FileEditorPanel.js";
 import type { BrowserPaneParams } from "../BrowserPane.js";
@@ -331,26 +323,38 @@ function GitPanelWrapper(props: IDockviewPanelProps<GitPanelParams>) {
   );
 }
 
-// Same reasoning as GitHubPanelWrapper above — a crashing agent-rules fetch
-// shouldn't blank the whole dashboard either.
-const AgentRulesPanelWrapper = makePanelWrapper<AgentRulesPanelParams>(AgentRulesPanel);
+// The tabbed Project panel hosting Agent Rules / Briefing / Scaffold / Dock /
+// Skills. Hand-written (not makePanelWrapper) because it persists the user's
+// tab choice back into the panel's params, which needs dockview's own `api`.
+function ProjectHubPanelWrapper(props: IDockviewPanelProps<ProjectHubPanelParams>) {
+  const [resetKey, resetPanel] = useResetKey();
+  return (
+    <ErrorBoundary onReset={resetPanel}>
+      <ProjectHubPanel
+        key={resetKey}
+        params={props.params}
+        onTabChange={(tab) => props.api.updateParameters({ ...props.params, tab })}
+      />
+    </ErrorBoundary>
+  );
+}
 
-// Same reasoning as GitHubPanelWrapper above — a crashing project-briefing
-// fetch shouldn't blank the whole dashboard either.
-const ProjectBriefingPanelWrapper =
-  makePanelWrapper<ProjectBriefingPanelParams>(ProjectBriefingPanel);
-
-// Same reasoning as GitHubPanelWrapper above — a crashing setup-preview
-// fetch shouldn't blank the whole dashboard either.
-const ProjectSetupPanelWrapper = makePanelWrapper<ProjectSetupPanelParams>(ProjectSetupPanel);
-
-// Same reasoning as GitHubPanelWrapper above — a crashing dock-config fetch
-// shouldn't blank the whole dashboard either.
-const DockConfigPanelWrapper = makePanelWrapper<DockConfigPanelParams>(DockConfigPanel);
-
-// Same reasoning as GitHubPanelWrapper above — a crashing skills fetch
-// shouldn't blank the whole dashboard either.
-const SkillsPanelWrapper = makePanelWrapper<SkillsPanelParams>(SkillsPanel);
+// Agent Rules / Briefing / Scaffold / Dock / Skills used to be five panel
+// kinds of their own. They stay registered — rendering the hub on the
+// matching tab — so a saved workspace layout that still names one doesn't
+// throw on restore (an unregistered kind makes fromJSON wipe the whole
+// layout); the restore effect's migrateLegacyProjectPanels then converts
+// them to a real `project-hub` panel. Never delete these keys.
+function makeLegacyHubWrapper(tab: ProjectHubTab) {
+  return makePanelWrapper<{ projectId: number }>(function LegacyHubPanel({ params }) {
+    return <ProjectHubPanel params={{ projectId: params.projectId, tab }} />;
+  });
+}
+const AgentRulesPanelWrapper = makeLegacyHubWrapper("agent-rules");
+const ProjectBriefingPanelWrapper = makeLegacyHubWrapper("briefing");
+const ProjectSetupPanelWrapper = makeLegacyHubWrapper("scaffold");
+const DockConfigPanelWrapper = makeLegacyHubWrapper("dock");
+const SkillsPanelWrapper = makeLegacyHubWrapper("skills");
 
 // Lazy because it pulls in CodeMirror (the only place in the app that does);
 // hand-written for the same reason as BrowserPanelWrapper below — it needs
@@ -573,6 +577,7 @@ export const components = {
   git: GitPanelWrapper,
   "agent-rules": AgentRulesPanelWrapper,
   "file-editor": FileEditorPanelWrapper,
+  "project-hub": ProjectHubPanelWrapper,
   "project-briefing": ProjectBriefingPanelWrapper,
   "project-setup": ProjectSetupPanelWrapper,
   "dock-config": DockConfigPanelWrapper,

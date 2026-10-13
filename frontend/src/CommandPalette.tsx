@@ -8,19 +8,15 @@ import {
   CheckIcon,
   ChevronDownIcon,
   CloseIcon,
-  DockIcon,
-  FileTextIcon,
   FolderIcon,
-  GitBranchIcon,
-  GitHubIcon,
-  GlobeIcon,
   GridIcon,
   SearchIcon,
-  SkillIcon,
   TerminalPromptIcon,
 } from "./ui/icons.js";
 import { resolveLauncherLogo } from "./cliLogos.js";
 import { useCommandSearch } from "./hooks/useCommandSearch.js";
+import { buildPaletteCommands, searchPaletteCommands } from "./paletteCommands.js";
+import type { PaletteCommand } from "./paletteCommands.js";
 import { STORAGE_KEYS, readNumber, writeNumber } from "./lib/persistedState.js";
 import { WorktreeOptions } from "./command-palette/WorktreeOptions.js";
 import { useFocusTrap } from "./hooks/useFocusTrap.js";
@@ -66,6 +62,47 @@ function expandSessionNamePattern(
     .replaceAll("{n}", String(tokens.n))
     .trim();
   return expanded.length > 0 ? expanded : undefined;
+}
+
+interface CommandRowProps {
+  command: PaletteCommand;
+  selected?: boolean;
+  // A search result reads "Project › Skills"; inside its own sub-list the
+  // breadcrumb would be redundant.
+  showBreadcrumb?: boolean;
+  onClick: () => void;
+  onMouseEnter?: () => void;
+}
+
+// One Integrations row — shared by the empty-query list, the "Project ›"
+// sub-list and search results, so they can't drift apart.
+function CommandRow({ command, selected, showBreadcrumb, onClick, onMouseEnter }: CommandRowProps) {
+  const Icon = command.icon;
+  return (
+    <button
+      type="button"
+      className={`cmd-row${selected ? " selected" : ""}`}
+      onClick={onClick}
+      onMouseEnter={onMouseEnter}
+    >
+      <span
+        className="cmd-row-icon"
+        style={{ background: "color-mix(in srgb, var(--fg) 8%, transparent)" }}
+      >
+        <Icon size={13} style={{ color: "var(--muted)" }} />
+      </span>
+      <span className="cmd-row-body">
+        <span className="cmd-row-title">
+          {showBreadcrumb && command.breadcrumb
+            ? `${command.breadcrumb} › ${command.title}`
+            : command.title}
+        </span>
+        <span className="cmd-row-subtitle">{command.subtitle}</span>
+      </span>
+      {command.drillIn && <span className="kbd">›</span>}
+      {selected && !command.drillIn && <span className="kbd">↵</span>}
+    </button>
+  );
 }
 
 interface CommandPaletteProps {
@@ -295,6 +332,33 @@ export function CommandPalette({
   const [worktreeEnabled, setWorktreeEnabled] = useState(false);
   const [worktreeBaseRef, setWorktreeBaseRef] = useState("");
 
+  // The Integrations commands (paletteCommands.ts): the empty-query view lists
+  // the `top` ones and drills into the `project` ones; a typed query searches
+  // them all (useCommandSearch).
+  const commands = buildPaletteCommands({
+    projectId: effectiveProjectId,
+    projectName: projects.find((p) => p.id === effectiveProjectId)?.name ?? null,
+    favoriteUrls:
+      effectiveProjectId !== null
+        ? (projectUrls[effectiveProjectId] ?? []).filter((u) => u.favorite)
+        : [],
+    open: {
+      github: onOpenGitHub,
+      git: onOpenGit,
+      agentRules: onOpenAgentRules,
+      fileEditor: onOpenFileEditor,
+      projectBriefing: onOpenProjectBriefing,
+      projectSetup: onOpenProjectSetup,
+      dockConfig: onOpenDockConfig,
+      skills: onOpenSkills,
+      browser: onOpenBrowser,
+      browserUrl: onOpenBrowserUrl,
+      integrationsSettings: onOpenIntegrationsSettings,
+      blankBrowser: onOpenBlankBrowser,
+    },
+  });
+  const topCommands = commands.filter((c) => c.placement === "top");
+
   // The three parallel filter pipelines (Sessions / Workspaces / launcher
   // "Matching commands") plus the combined-index keyboard nav across them —
   // see useCommandSearch.ts for the full doc comment on the index math.
@@ -305,10 +369,12 @@ export function CommandPalette({
     filtered,
     matchingSessions,
     matchingWorkspaces,
+    matchingCommands,
     entries,
     activeIndex,
     activeEntry,
     groupOffset,
+    commandOffset,
   } = useCommandSearch({
     scope,
     effectiveProjectId,
@@ -317,7 +383,38 @@ export function CommandPalette({
     workspaces,
     launchers,
     hiddenAgents: settings.launchers.hiddenAgents,
+    commands,
   });
+
+  // "Project ›" drill-in. Same shape as the project picker above: while open
+  // it swaps the list and the placeholder and handles its own arrows/Enter/
+  // Escape. Entering and leaving clear the (shared) query.
+  const [subView, setSubView] = useState<"project" | null>(null);
+  const [subIndex, setSubIndex] = useState(0);
+  const subCommands = commands.filter(
+    (c) =>
+      c.placement === subView &&
+      (query.trim() === "" || searchPaletteCommands([c], query).length > 0),
+  );
+  const activeSubIndex = Math.min(Math.max(0, subIndex), Math.max(0, subCommands.length - 1));
+  // Both hand focus back to the search input: a click on the drill-in row
+  // leaves focus on that (about to unmount) button, and every arrow/Enter/
+  // Escape handler lives on the input.
+  const enterSubView = (view: "project") => {
+    setSubView(view);
+    setSubIndex(0);
+    setQuery("");
+    inputRef.current?.focus();
+  };
+  const exitSubView = () => {
+    setSubView(null);
+    setQuery("");
+    inputRef.current?.focus();
+  };
+  const runCommand = (command: PaletteCommand) => {
+    command.run();
+    closeAfterAction();
+  };
 
   const filteredProjects = useMemo(() => {
     if (!pickerOpen) return projects;
@@ -584,8 +681,15 @@ export function CommandPalette({
               if (pickerOpen) {
                 setProjectIndex(0);
               }
+              setSubIndex(0);
             }}
-            placeholder={pickerOpen ? "Filter projects…" : "Launch a session or run a command…"}
+            placeholder={
+              pickerOpen
+                ? "Filter projects…"
+                : subView
+                  ? `Project: ${target?.name ?? ""} › filter…`
+                  : "Launch a session or run a command…"
+            }
             aria-activedescendant={
               pickerOpen && filteredProjects.length > 0
                 ? `cmd-palette-project-opt-${activeProjectIndex}`
@@ -613,6 +717,27 @@ export function CommandPalette({
                 }
                 return;
               }
+              if (subView) {
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  exitSubView();
+                } else if (e.key === "Backspace" && query === "") {
+                  e.preventDefault();
+                  exitSubView();
+                } else if (e.key === "ArrowDown") {
+                  e.preventDefault();
+                  setSubIndex(Math.min(activeSubIndex + 1, subCommands.length - 1));
+                } else if (e.key === "ArrowUp") {
+                  e.preventDefault();
+                  setSubIndex(Math.max(activeSubIndex - 1, 0));
+                } else if (e.key === "Enter") {
+                  e.preventDefault();
+                  const picked = subCommands[activeSubIndex];
+                  if (picked) runCommand(picked);
+                }
+                return;
+              }
               if (e.key === "Escape") {
                 onClose();
               } else if (e.key === "ArrowDown" && (e.metaKey || e.ctrlKey)) {
@@ -633,6 +758,8 @@ export function CommandPalette({
                 } else if (picked.type === "workspace") {
                   selectWorkspace(picked.workspace.id);
                   closeAfterAction();
+                } else if (picked.type === "command") {
+                  runCommand(picked.command);
                 } else {
                   launch(picked.launcher);
                 }
@@ -824,6 +951,21 @@ export function CommandPalette({
               </button>
             ))}
           </div>
+        ) : subView ? (
+          <div className="cmux-scroll cmd-palette-list" role="listbox">
+            <div className="cmd-palette-group-label">
+              {subCommands.length === 0 ? "No matching commands" : `Project: ${target?.name ?? ""}`}
+            </div>
+            {subCommands.map((command, idx) => (
+              <CommandRow
+                key={command.id}
+                command={command}
+                selected={idx === activeSubIndex}
+                onMouseEnter={() => setSubIndex(idx)}
+                onClick={() => runCommand(command)}
+              />
+            ))}
+          </div>
         ) : (
           <div className="cmux-scroll cmd-palette-list">
             {/* Not filtered by `query` — these are fixed navigation
@@ -852,270 +994,15 @@ export function CommandPalette({
                   </span>
                 </button>
                 <div className="cmd-palette-group-label">Integrations</div>
-                {effectiveProjectId !== null && (
-                  <button
-                    className="cmd-row"
-                    onClick={() => {
-                      onOpenGitHub(effectiveProjectId);
-                      closeAfterAction();
-                    }}
-                  >
-                    <span
-                      className="cmd-row-icon"
-                      style={{ background: "color-mix(in srgb, var(--fg) 8%, transparent)" }}
-                    >
-                      <GitHubIcon size={13} style={{ color: "var(--muted)" }} />
-                    </span>
-                    <span className="cmd-row-body">
-                      <span className="cmd-row-title">
-                        GitHub: {target?.name ?? "this project"}
-                      </span>
-                      <span className="cmd-row-subtitle">
-                        Open issues, pull requests, and status
-                      </span>
-                    </span>
-                  </button>
-                )}
-                {effectiveProjectId !== null && (
-                  <button
-                    className="cmd-row"
-                    onClick={() => {
-                      onOpenGit(effectiveProjectId);
-                      closeAfterAction();
-                    }}
-                  >
-                    <span
-                      className="cmd-row-icon"
-                      style={{ background: "color-mix(in srgb, var(--fg) 8%, transparent)" }}
-                    >
-                      <GitBranchIcon size={13} style={{ color: "var(--muted)" }} />
-                    </span>
-                    <span className="cmd-row-body">
-                      <span className="cmd-row-title">Git: {target?.name ?? "this project"}</span>
-                      <span className="cmd-row-subtitle">Branch, status, and changed files</span>
-                    </span>
-                  </button>
-                )}
-                {effectiveProjectId !== null && (
-                  <button
-                    className="cmd-row"
-                    onClick={() => {
-                      onOpenAgentRules(effectiveProjectId);
-                      closeAfterAction();
-                    }}
-                  >
-                    <span
-                      className="cmd-row-icon"
-                      style={{ background: "color-mix(in srgb, var(--fg) 8%, transparent)" }}
-                    >
-                      <FileTextIcon size={13} style={{ color: "var(--muted)" }} />
-                    </span>
-                    <span className="cmd-row-body">
-                      <span className="cmd-row-title">
-                        Agent Rules: {target?.name ?? "this project"}
-                      </span>
-                      <span className="cmd-row-subtitle">CLAUDE.md, AGENTS.md, GEMINI.md</span>
-                    </span>
-                  </button>
-                )}
-                {effectiveProjectId !== null && (
-                  <button
-                    className="cmd-row"
-                    onClick={() => {
-                      onOpenFileEditor(effectiveProjectId);
-                      closeAfterAction();
-                    }}
-                  >
-                    <span
-                      className="cmd-row-icon"
-                      style={{ background: "color-mix(in srgb, var(--fg) 8%, transparent)" }}
-                    >
-                      <FileTextIcon size={13} style={{ color: "var(--muted)" }} />
-                    </span>
-                    <span className="cmd-row-body">
-                      <span className="cmd-row-title">
-                        Edit project files: {target?.name ?? "this project"}
-                      </span>
-                      <span className="cmd-row-subtitle">.env and other text files</span>
-                    </span>
-                  </button>
-                )}
-                {effectiveProjectId !== null && (
-                  <button
-                    className="cmd-row"
-                    onClick={() => {
-                      onOpenProjectBriefing(effectiveProjectId);
-                      closeAfterAction();
-                    }}
-                  >
-                    <span
-                      className="cmd-row-icon"
-                      style={{ background: "color-mix(in srgb, var(--fg) 8%, transparent)" }}
-                    >
-                      <FileTextIcon size={13} style={{ color: "var(--muted)" }} />
-                    </span>
-                    <span className="cmd-row-body">
-                      <span className="cmd-row-title">
-                        Mullion Briefing: {target?.name ?? "this project"}
-                      </span>
-                      <span className="cmd-row-subtitle">
-                        DB-authored — pushed on top of whatever AGENTS.md already says
-                      </span>
-                    </span>
-                  </button>
-                )}
-                {effectiveProjectId !== null && (
-                  <button
-                    className="cmd-row"
-                    onClick={() => {
-                      onOpenProjectSetup(effectiveProjectId);
-                      closeAfterAction();
-                    }}
-                  >
-                    <span
-                      className="cmd-row-icon"
-                      style={{ background: "color-mix(in srgb, var(--fg) 8%, transparent)" }}
-                    >
-                      <FileTextIcon size={13} style={{ color: "var(--muted)" }} />
-                    </span>
-                    <span className="cmd-row-body">
-                      <span className="cmd-row-title">
-                        Scaffold Mullion: {target?.name ?? "this project"}
-                      </span>
-                      <span className="cmd-row-subtitle">
-                        Commit a briefing region, skill, and reviewer subagent as a PR
-                      </span>
-                    </span>
-                  </button>
-                )}
-                {effectiveProjectId !== null && (
-                  <button
-                    className="cmd-row"
-                    onClick={() => {
-                      onOpenDockConfig(effectiveProjectId);
-                      closeAfterAction();
-                    }}
-                  >
-                    <span
-                      className="cmd-row-icon"
-                      style={{ background: "color-mix(in srgb, var(--fg) 8%, transparent)" }}
-                    >
-                      <DockIcon size={13} style={{ color: "var(--muted)" }} />
-                    </span>
-                    <span className="cmd-row-body">
-                      <span className="cmd-row-title">Dock: {target?.name ?? "this project"}</span>
-                      <span className="cmd-row-subtitle">Edit this project's dock monitors</span>
-                    </span>
-                  </button>
-                )}
-                {effectiveProjectId !== null && (
-                  <button
-                    className="cmd-row"
-                    onClick={() => {
-                      onOpenSkills(effectiveProjectId);
-                      closeAfterAction();
-                    }}
-                  >
-                    <span
-                      className="cmd-row-icon"
-                      style={{ background: "color-mix(in srgb, var(--fg) 8%, transparent)" }}
-                    >
-                      <SkillIcon size={13} style={{ color: "var(--muted)" }} />
-                    </span>
-                    <span className="cmd-row-body">
-                      <span className="cmd-row-title">
-                        Skills: {target?.name ?? "this project"}
-                      </span>
-                      <span className="cmd-row-subtitle">Discovered skills across every agent</span>
-                    </span>
-                  </button>
-                )}
-                {effectiveProjectId !== null && (
-                  <button
-                    className="cmd-row"
-                    onClick={() => {
-                      onOpenBrowser(effectiveProjectId);
-                      closeAfterAction();
-                    }}
-                  >
-                    <span
-                      className="cmd-row-icon"
-                      style={{ background: "color-mix(in srgb, var(--fg) 8%, transparent)" }}
-                    >
-                      <GlobeIcon size={13} style={{ color: "var(--muted)" }} />
-                    </span>
-                    <span className="cmd-row-body">
-                      <span className="cmd-row-title">
-                        Preview: {target?.name ?? "this project"}
-                      </span>
-                      <span className="cmd-row-subtitle">Open this project's dev server</span>
-                    </span>
-                  </button>
-                )}
-                {effectiveProjectId !== null &&
-                  (projectUrls[effectiveProjectId] ?? [])
-                    .filter((u) => u.favorite)
-                    .map((u) => (
-                      <button
-                        key={u.id}
-                        className="cmd-row"
-                        onClick={() => {
-                          onOpenBrowserUrl(effectiveProjectId, u.url, u.label);
-                          closeAfterAction();
-                        }}
-                      >
-                        <span
-                          className="cmd-row-icon"
-                          style={{ background: "color-mix(in srgb, var(--fg) 8%, transparent)" }}
-                        >
-                          <GlobeIcon size={13} style={{ color: "var(--muted)" }} />
-                        </span>
-                        <span className="cmd-row-body">
-                          <span className="cmd-row-title">
-                            {u.label}: {target?.name ?? "this project"}
-                          </span>
-                          <span className="cmd-row-subtitle">{u.url}</span>
-                        </span>
-                      </button>
-                    ))}
-                <button
-                  className="cmd-row"
-                  onClick={() => {
-                    onOpenIntegrationsSettings();
-                    closeAfterAction();
-                  }}
-                >
-                  <span
-                    className="cmd-row-icon"
-                    style={{ background: "color-mix(in srgb, var(--fg) 8%, transparent)" }}
-                  >
-                    <GitHubIcon size={13} style={{ color: "var(--muted)" }} />
-                  </span>
-                  <span className="cmd-row-body">
-                    <span className="cmd-row-title">Manage integrations…</span>
-                    <span className="cmd-row-subtitle">Settings → Integrations</span>
-                  </span>
-                </button>
-                <button
-                  className="cmd-row"
-                  onClick={() => {
-                    onOpenBlankBrowser();
-                    closeAfterAction();
-                  }}
-                >
-                  <span
-                    className="cmd-row-icon"
-                    style={{ background: "color-mix(in srgb, var(--fg) 8%, transparent)" }}
-                  >
-                    <GlobeIcon size={13} style={{ color: "var(--muted)" }} />
-                  </span>
-                  <span className="cmd-row-body">
-                    <span className="cmd-row-title">New preview tab</span>
-                    <span className="cmd-row-subtitle">
-                      Embed any external site — type an address directly
-                    </span>
-                  </span>
-                </button>
+                {topCommands.map((command) => (
+                  <CommandRow
+                    key={command.id}
+                    command={command}
+                    onClick={() =>
+                      command.drillIn ? enterSubView(command.drillIn) : runCommand(command)
+                    }
+                  />
+                ))}
               </>
             )}
             {/* U2 — shown above "Matching commands" whenever there's at
@@ -1198,7 +1085,7 @@ export function CommandPalette({
               </>
             )}
             <div className="cmd-palette-group-label">Matching commands</div>
-            {filtered.length === 0 && (
+            {filtered.length === 0 && matchingCommands.length === 0 && (
               <div style={{ padding: "12px 11px", fontSize: 12.5, color: "var(--muted)" }}>
                 No matching launchers.
               </div>
@@ -1257,6 +1144,24 @@ export function CommandPalette({
                 </button>
               );
             })}
+            {matchingCommands.length > 0 && (
+              <>
+                <div className="cmd-palette-group-label">Integrations</div>
+                {matchingCommands.map((command, i) => {
+                  const absoluteIndex = commandOffset + i;
+                  return (
+                    <CommandRow
+                      key={command.id}
+                      command={command}
+                      showBreadcrumb
+                      selected={absoluteIndex === activeIndex}
+                      onMouseEnter={() => setSelectedIndex(absoluteIndex)}
+                      onClick={() => runCommand(command)}
+                    />
+                  );
+                })}
+              </>
+            )}
           </div>
         )}
 

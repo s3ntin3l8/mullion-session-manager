@@ -16,6 +16,7 @@ import { renderHook, act } from "@testing-library/react";
 import { useCommandSearch } from "./useCommandSearch.js";
 import { makeSession, makeProject, makeWorkspace } from "../test/fixtures.js";
 import type { Launcher } from "../api/index.js";
+import type { PaletteCommand } from "../paletteCommands.js";
 
 const PROJECT = makeProject({ id: 5, name: "mullion" });
 
@@ -179,5 +180,76 @@ describe("useCommandSearch -> combined-index math", () => {
       type: "launcher",
       launcher: BASH,
     });
+  });
+});
+
+describe("useCommandSearch -> Integrations commands", () => {
+  const cmd = (over: Partial<PaletteCommand>): PaletteCommand => ({
+    id: "skills",
+    title: "Skills",
+    subtitle: "Discovered skills across every agent",
+    icon: () => null,
+    keywords: ["skills"],
+    placement: "project",
+    breadcrumb: "Project",
+    run: () => {},
+    ...over,
+  });
+  const SKILLS = cmd({});
+  const DOCK = cmd({ id: "dock", title: "Dock", keywords: ["dock"] });
+  const DRILL = cmd({ id: "project", title: "Project: mullion", drillIn: "project", keywords: [] });
+
+  it("matches nothing on a blank query — the empty-query view lists commands itself", () => {
+    const { result } = renderHook(() =>
+      useCommandSearch(baseOptions({ commands: [SKILLS, DOCK] })),
+    );
+
+    expect(result.current.matchingCommands).toEqual([]);
+    expect(result.current.entries.every((e) => e.type === "launcher")).toBe(true);
+  });
+
+  it("finds a sub-item from the top level by title or keyword, ignoring the drill-in row", () => {
+    const { result } = renderHook(() =>
+      useCommandSearch(baseOptions({ commands: [SKILLS, DOCK, DRILL] })),
+    );
+
+    act(() => result.current.setQuery("skills"));
+    expect(result.current.matchingCommands).toEqual([SKILLS]);
+
+    act(() => result.current.setQuery("project"));
+    // "project" hits the breadcrumb of the sub-items, never the drill-in row.
+    expect(result.current.matchingCommands).toEqual([SKILLS, DOCK]);
+  });
+
+  it("does not match on the subtitle, so a command can't outrank a launcher for a name like 'agent'", () => {
+    const { result } = renderHook(() => useCommandSearch(baseOptions({ commands: [SKILLS] })));
+
+    act(() => result.current.setQuery("agent"));
+
+    expect(result.current.matchingCommands).toEqual([]);
+  });
+
+  it("ranks commands after the launchers, leaving the launcher offsets untouched", () => {
+    const session = makeSession({ id: 1, projectId: PROJECT.id, name: "docker session" });
+    const dockerLauncher: Launcher = {
+      id: "shell:docker",
+      kind: "shell",
+      title: "docker",
+      command: "docker",
+    };
+    const { result } = renderHook(() =>
+      useCommandSearch(
+        baseOptions({ sessions: [session], launchers: [dockerLauncher], commands: [DOCK] }),
+      ),
+    );
+
+    act(() => result.current.setQuery("doc"));
+
+    expect(result.current.entries.map((e) => e.type)).toEqual(["session", "launcher", "command"]);
+    // Launchers still start right after sessions + workspaces; commands after them.
+    expect(result.current.groupOffset).toBe(1);
+    expect(result.current.commandOffset).toBe(2);
+    act(() => result.current.setSelectedIndex(2));
+    expect(result.current.activeEntry).toEqual({ type: "command", command: DOCK });
   });
 });

@@ -38,7 +38,12 @@ vi.mock("../store/index.js", () => {
 function mockPanel(id: string, locationType: "grid" | "floating" = "grid", overrides = {}) {
   return {
     id,
-    api: { setActive: vi.fn(), close: vi.fn(), location: { type: locationType } },
+    api: {
+      setActive: vi.fn(),
+      close: vi.fn(),
+      updateParameters: vi.fn(),
+      location: { type: locationType },
+    },
     ...overrides,
   } as unknown as ReturnType<DockviewApi["getPanel"]>;
 }
@@ -356,9 +361,6 @@ describe("usePanelOpener — project-scoped panel kinds", () => {
   it.each([
     ["onOpenGitHub", "github", "GitHub: project-alpha"],
     ["onOpenGit", "git", "Git: project-alpha"],
-    ["onOpenAgentRules", "agent-rules", "Agent Rules: project-alpha"],
-    ["onOpenDockConfig", "dock-config", "Dock: project-alpha"],
-    ["onOpenSkills", "skills", "Skills: project-alpha"],
     ["onOpenBrowser", "browser", "Preview: project-alpha"],
   ] as const)("%s opens a %s-<projectId> panel titled %s", (fnName, kind, title) => {
     const api = mockDockviewApi();
@@ -375,6 +377,64 @@ describe("usePanelOpener — project-scoped panel kinds", () => {
       }),
     );
     expect(setSidebarOpen).toHaveBeenCalledWith(false);
+  });
+
+  // Agent Rules / Briefing / Scaffold / Dock / Skills are tabs of one Project
+  // panel now — every legacy opener must land on `project-hub-<id>` with its
+  // own tab, not open a panel of the old kind.
+  it.each([
+    ["onOpenAgentRules", "agent-rules"],
+    ["onOpenProjectBriefing", "briefing"],
+    ["onOpenProjectSetup", "scaffold"],
+    ["onOpenDockConfig", "dock"],
+    ["onOpenSkills", "skills"],
+  ] as const)("%s opens the Project panel on its %s tab", (fnName, tab) => {
+    const api = mockDockviewApi();
+    const { result } = setup({ dockviewApi: api });
+
+    (result.current[fnName] as (projectId: number) => void)(1);
+
+    expect(api.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "project-hub-1",
+        component: "project-hub",
+        title: "Project: project-alpha",
+        params: { projectId: 1, tab },
+      }),
+    );
+    expect(setSidebarOpen).toHaveBeenCalledWith(false);
+  });
+
+  it("onOpenProjectHub without a tab opens the panel with no tab preference", () => {
+    const api = mockDockviewApi();
+    const { result } = setup({ dockviewApi: api });
+
+    result.current.onOpenProjectHub(1);
+
+    expect(api.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "project-hub-1", params: { projectId: 1, tab: undefined } }),
+    );
+  });
+
+  it("onOpenProjectHub re-targets an already-open panel instead of adding a second", () => {
+    const api = mockDockviewApi();
+    const { result } = setup({ dockviewApi: api });
+    result.current.onOpenProjectHub(1, "dock");
+
+    result.current.onOpenProjectHub(1, "skills");
+
+    expect(api.addPanel).toHaveBeenCalledTimes(1);
+    const panel = api.getPanel("project-hub-1")!;
+    expect(panel.api.updateParameters).toHaveBeenCalledWith(
+      expect.objectContaining({ projectId: 1, tab: "skills", rev: expect.any(Number) }),
+    );
+    expect(panel.api.setActive).toHaveBeenCalled();
+  });
+
+  it("onOpenProjectHub no-ops when dockviewApi is null", () => {
+    const { result } = setup({ dockviewApi: null });
+    expect(() => result.current.onOpenProjectHub(1)).not.toThrow();
+    expect(setSidebarOpen).not.toHaveBeenCalled();
   });
 
   it("onOpenBrowser omits desktop positioning even with a tiled panel present (pre-existing asymmetry, deliberately preserved)", () => {

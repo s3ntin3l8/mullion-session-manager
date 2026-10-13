@@ -7,6 +7,7 @@ import {
   serializeForPersist,
   applyLayoutPresentation,
   closeLegacyPanels,
+  migrateLegacyProjectPanels,
   reseedSessionPanelTitles,
 } from "../panelUtils.js";
 import { resolveLayoutTier } from "../lib/layoutTier.js";
@@ -332,6 +333,12 @@ export function useWorkspacePersistence({
       // than folded into closedKilledPanels above since the two sweeps close
       // panels for unrelated reasons.
       closedLegacyPanels = closeLegacyPanels(dockviewApi);
+      // Same self-heal for the five per-project setup panels that are now
+      // tabs of one `project-hub` panel (ProjectHubPanel.tsx): converts any
+      // restored legacy panel in place and flags the layout for re-save.
+      closedLegacyPanels =
+        migrateLegacyProjectPanels(dockviewApi, useDashboardStore.getState().projects) ||
+        closedLegacyPanels;
       // Terminal panel titles are deliberately excluded from the persisted
       // blob (panelUtils.ts's stripSessionPanelTitles, part of the
       // workspace-autosave rate-limit-storm fix) — re-derive them here the
