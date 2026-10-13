@@ -111,6 +111,28 @@ describe("buildPaletteCommands", () => {
     expect(commands.map((c) => c.id)).toEqual(["integrations-settings", "blank-browser"]);
   });
 
+  it("offers Toggle right sidebar only when an opener is provided", () => {
+    const { context } = ctx();
+    expect(buildPaletteCommands(context).some((c) => c.id === "toggle-right-sidebar")).toBe(false);
+
+    const toggle = vi.fn();
+    const withToggle = buildPaletteCommands({
+      ...context,
+      open: { ...context.open, toggleRightSidebar: toggle },
+    });
+    const command = withToggle.find((c) => c.id === "toggle-right-sidebar")!;
+    expect(command.placement).toBe("top");
+    command.run();
+    expect(toggle).toHaveBeenCalledTimes(1);
+    // Project-independent: still offered with no project.
+    const noProject = buildPaletteCommands({
+      ...context,
+      projectId: null,
+      open: { ...context.open, toggleRightSidebar: toggle },
+    });
+    expect(noProject.map((c) => c.id)).toContain("toggle-right-sidebar");
+  });
+
   it("the drill-in row's run is a harmless no-op (the palette handles it)", () => {
     const drill = buildPaletteCommands(ctx().context).find((c) => c.drillIn)!;
     expect(() => drill.run()).not.toThrow();

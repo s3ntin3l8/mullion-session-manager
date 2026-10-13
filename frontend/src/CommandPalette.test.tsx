@@ -2443,6 +2443,29 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     expect(screen.queryByText("Project: mullion")).toBeNull();
   });
 
+  it("runs Toggle right sidebar from the list and from a search, and omits it when unavailable", async () => {
+    const onToggleRightSidebar = vi.fn();
+    const user = userEvent.setup();
+    const { unmount } = renderPalette(openers(), { onToggleRightSidebar });
+
+    await user.click(await screen.findByText("Toggle right sidebar"));
+    expect(onToggleRightSidebar).toHaveBeenCalledTimes(1);
+    unmount();
+
+    const again = vi.fn();
+    renderPalette(openers(), { onToggleRightSidebar: again });
+    await user.type(await screen.findByPlaceholderText(/Launch a session/), "drawer");
+    await user.keyboard("{Enter}");
+    expect(again).toHaveBeenCalledTimes(1);
+  });
+
+  it("omits Toggle right sidebar when the host provides no opener (phone)", async () => {
+    renderPalette(openers());
+
+    expect(await screen.findByText("Manage integrations…")).toBeTruthy();
+    expect(screen.queryByText("Toggle right sidebar")).toBeNull();
+  });
+
   it("hides the project entries (but keeps the global ones) without a project", async () => {
     useDashboardStore.setState({ projects: [] });
     renderPalette(openers(), { scope: "global", projectId: undefined });

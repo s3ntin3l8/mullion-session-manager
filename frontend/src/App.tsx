@@ -1673,6 +1673,9 @@ export function App() {
           onOpenBrowser={onOpenBrowser}
           onOpenIntegrationsSettings={() => openSettings("integrations")}
           onOpenBlankBrowser={onOpenBlankBrowser}
+          onToggleRightSidebar={
+            isMobile ? undefined : () => useDashboardStore.getState().toggleRightSidebar()
+          }
           onOpenBrowserUrl={onOpenBrowserUrl}
           onShowWorkspace={handleSelectWorkspace}
           onOpenTasks={onOpenTasks}

@@ -5,6 +5,7 @@ import {
   GitBranchIcon,
   GitHubIcon,
   GlobeIcon,
+  RightSidebarIcon,
   SkillIcon,
 } from "./ui/icons.js";
 
@@ -47,6 +48,9 @@ export interface PaletteCommandOpeners {
   browserUrl: (projectId: number, url: string, label: string) => void;
   integrationsSettings: () => void;
   blankBrowser: () => void;
+  // Absent where there is no right sidebar (phone) — the command is then
+  // omitted rather than shown dead.
+  toggleRightSidebar?: () => void;
 }
 
 export interface PaletteCommandContext {
@@ -175,6 +179,19 @@ export function buildPaletteCommands({
         run: () => open.browserUrl(id, u.url, u.label),
       })),
     );
+  }
+
+  if (open.toggleRightSidebar) {
+    const toggle = open.toggleRightSidebar;
+    commands.push({
+      id: "toggle-right-sidebar",
+      title: "Toggle right sidebar",
+      subtitle: "Show or hide the Git / GitHub drawer",
+      icon: RightSidebarIcon,
+      keywords: ["sidebar", "right", "drawer", "panel"],
+      placement: "top",
+      run: toggle,
+    });
   }
 
   commands.push(
