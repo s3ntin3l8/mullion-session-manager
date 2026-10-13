@@ -1324,7 +1324,10 @@ export function App() {
   // dockview's tab text colors.
   const dockviewChromeBg = getSchemeBackground(settings.terminal.colorScheme, theme);
 
-  const rightSidebarActions = useMemo(() => ({ onOpenGit }), [onOpenGit]);
+  const rightSidebarActions = useMemo(
+    () => ({ onOpenGit, onOpenGitHub }),
+    [onOpenGit, onOpenGitHub],
+  );
 
   const sidebar = (
     <Sidebar

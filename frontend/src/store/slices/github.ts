@@ -9,7 +9,10 @@ import type { DashboardState, GithubSlice } from "../types.js";
 
 export const createGithubSlice: StateCreator<DashboardState, [], [], GithubSlice> = (set, get) => {
   let gitHubWS: WebSocket | null = null;
-  const gitHubWSSubscriptions: Set<number> = new Set();
+  // Ref-counted: GitHubPanel, the sidebar's project rows and the right
+  // sidebar's GitHub view can all watch the same project at once, and a plain
+  // Set let whichever unmounted first cancel everyone else's live updates.
+  const gitHubWSSubscriptions: Map<number, number> = new Map();
   // Hermes review, PR #577/#580 — connectGitHubWS's onmessage below calls
   // refreshGitRefs() on every /ws/github event with a projectId (push, PR
   // sync, CI started/completed); a single check suite can fire several in
@@ -38,7 +41,7 @@ export const createGithubSlice: StateCreator<DashboardState, [], [], GithubSlice
 
       ws.onopen = () => {
         set({ githubWSConnected: true });
-        for (const projectId of gitHubWSSubscriptions) {
+        for (const projectId of gitHubWSSubscriptions.keys()) {
           ws.send(JSON.stringify({ type: "subscribe", projectId }));
         }
       };
@@ -109,13 +112,19 @@ export const createGithubSlice: StateCreator<DashboardState, [], [], GithubSlice
     },
 
     subscribeToGitHubProject: (projectId: number) => {
-      gitHubWSSubscriptions.add(projectId);
+      gitHubWSSubscriptions.set(projectId, (gitHubWSSubscriptions.get(projectId) ?? 0) + 1);
       if (gitHubWS?.readyState === WebSocket.OPEN) {
         gitHubWS.send(JSON.stringify({ type: "subscribe", projectId }));
       }
     },
 
     unsubscribeFromGitHubProject: (projectId: number) => {
+      // Another subscriber still watching this project — keep it live.
+      const remaining = (gitHubWSSubscriptions.get(projectId) ?? 0) - 1;
+      if (remaining > 0) {
+        gitHubWSSubscriptions.set(projectId, remaining);
+        return;
+      }
       gitHubWSSubscriptions.delete(projectId);
       // P12 — this used to be local-cleanup-only: the server kept pushing
       // events for a project whose UI section had already unmounted,

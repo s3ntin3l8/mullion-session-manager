@@ -22,7 +22,7 @@ function status(overrides: Partial<GitStatus> = {}): GitStatus {
   };
 }
 
-const actions = { onOpenGit: vi.fn() };
+const actions = { onOpenGit: vi.fn(), onOpenGitHub: vi.fn() };
 
 function renderSidebar(tier: LayoutTier = "desktop") {
   return render(<RightSidebar tier={tier} actions={actions} />);
@@ -39,6 +39,7 @@ beforeEach(() => {
     rightSidebarOpen: false,
     rightSidebarPinned: false,
     rightSidebarWidth: 340,
+    prsByProject: {},
   });
 });
 
@@ -98,6 +99,37 @@ describe("RightSidebar", () => {
     const btn = screen.getByRole("button", { name: "Git" });
     expect(btn.querySelector(".right-rail-badge.alert")).toBeTruthy();
     expect(btn.title).toContain("conflicts");
+  });
+
+  it("badges the GitHub rail icon only while PR checks are failing", () => {
+    const failing = (n: number) => ({
+      prs: [],
+      prSummary: { total: n, pass: 0, fail: n, pending: 0, unknown: 0 },
+    });
+    renderSidebar();
+    const github = () => screen.getByRole("button", { name: "GitHub" });
+    expect(github().querySelector(".right-rail-badge")).toBeNull();
+
+    act(() => useDashboardStore.setState({ prsByProject: { 1: failing(2) } }));
+    expect(github().querySelector(".right-rail-badge.alert")).toBeTruthy();
+    expect(github().title).toBe("GitHub — 2 PR checks failing");
+
+    act(() => useDashboardStore.setState({ prsByProject: { 1: failing(1) } }));
+    expect(github().title).toBe("GitHub — 1 PR check failing");
+
+    act(() => useDashboardStore.setState({ prsByProject: {} }));
+    expect(github().querySelector(".right-rail-badge")).toBeNull();
+  });
+
+  it("switches views from the rail", async () => {
+    const user = userEvent.setup();
+    useDashboardStore.setState({ rightSidebarOpen: true });
+    renderSidebar();
+
+    await user.click(screen.getByRole("button", { name: "GitHub" }));
+
+    expect(screen.getByRole("complementary", { name: "GitHub sidebar" })).toBeTruthy();
+    expect(useDashboardStore.getState().rightSidebarView).toBe("github");
   });
 
   it("floats unpinned over the grid: scrim click and Escape both dismiss it", async () => {

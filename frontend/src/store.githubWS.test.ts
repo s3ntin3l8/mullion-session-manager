@@ -200,6 +200,7 @@ describe("store /ws/github integration", () => {
         JSON.stringify({ type: "subscribe", projectId: 7 }),
       );
 
+      useDashboardStore.getState().unsubscribeFromGitHubProject(7);
       stop();
     });
 
@@ -216,6 +217,38 @@ describe("store /ws/github integration", () => {
       );
 
       stop();
+    });
+
+    // Ref-counting: GitHubPanel, the sidebar's project rows and the right
+    // sidebar's GitHub view can watch one project at the same time.
+    it("keeps a project subscribed until its LAST subscriber leaves", () => {
+      const stop = useDashboardStore.getState().connectGitHubWS();
+      instances[0].__open();
+      const { subscribeToGitHubProject, unsubscribeFromGitHubProject } =
+        useDashboardStore.getState();
+      subscribeToGitHubProject(31);
+      subscribeToGitHubProject(31);
+      instances[0].send.mockClear();
+
+      unsubscribeFromGitHubProject(31);
+      // One subscriber remains: no frame, still replayed on reconnect.
+      expect(instances[0].send).not.toHaveBeenCalled();
+      const stop2 = useDashboardStore.getState().connectGitHubWS();
+      instances[1].__open();
+      const replayed = instances[1].send.mock.calls.map(
+        (c) => (JSON.parse(c[0] as string) as { projectId: number }).projectId,
+      );
+      expect(replayed).toContain(31);
+
+      // The store now talks to the newest socket (instances[1]).
+      instances[1].send.mockClear();
+      unsubscribeFromGitHubProject(31);
+      expect(instances[1].send).toHaveBeenCalledWith(
+        JSON.stringify({ type: "unsubscribe", projectId: 31 }),
+      );
+
+      stop();
+      stop2();
     });
 
     it("does not throw when unsubscribing while the socket isn't open yet", () => {
