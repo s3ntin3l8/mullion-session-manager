@@ -89,6 +89,8 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     writeString(STORAGE_KEYS.themeHint, resolveTheme(next.theme));
   }
 
+  const rightSidebarPinned = readBool(STORAGE_KEYS.rightSidebarPinned, false);
+
   return {
     settings: DEFAULT_SETTINGS,
     settingsLoaded: false,
@@ -103,11 +105,9 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     sidebarCollapsed: readBool(STORAGE_KEYS.sidebarCollapsed, false),
     sidebarWidth: readStoredSidebarWidth(),
     rightSidebarView: readString(STORAGE_KEYS.rightSidebarView, DEFAULT_RIGHT_SIDEBAR_VIEW),
-    rightSidebarPinned: readBool(STORAGE_KEYS.rightSidebarPinned, false),
+    rightSidebarPinned,
     // Only a pinned drawer reopens on load — see STORAGE_KEYS.rightSidebarOpen.
-    rightSidebarOpen:
-      readBool(STORAGE_KEYS.rightSidebarPinned, false) &&
-      readBool(STORAGE_KEYS.rightSidebarOpen, false),
+    rightSidebarOpen: rightSidebarPinned && readBool(STORAGE_KEYS.rightSidebarOpen, false),
     rightSidebarWidth: readStoredRightSidebarWidth(),
     viewMode: readStoredViewMode(),
     hierarchicalView: readStoredHierarchicalView(),
