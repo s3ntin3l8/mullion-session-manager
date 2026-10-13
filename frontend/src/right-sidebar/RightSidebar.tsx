@@ -29,6 +29,14 @@ export function RightSidebar({ tier, actions }: RightSidebarProps) {
   const followed = useFollowedProject();
 
   const [width, setWidth] = useState(storedWidth);
+  // Follow the store if it changes from outside this component's own drag
+  // (another action, a future "reset width") — render-phase adjustment, not
+  // an effect (react-hooks/set-state-in-effect).
+  const [lastStoredWidth, setLastStoredWidth] = useState(storedWidth);
+  if (storedWidth !== lastStoredWidth) {
+    setLastStoredWidth(storedWidth);
+    setWidth(storedWidth);
+  }
   const { dragging, onMouseDown } = useDragResize({
     axis: "x",
     invert: true,
@@ -46,11 +54,16 @@ export function RightSidebar({ tier, actions }: RightSidebarProps) {
   const overlay = open && !docked;
 
   // Escape dismisses the floating drawer. A docked one is part of the layout,
-  // so Escape (which terminals need) leaves it alone.
+  // so Escape (which terminals need) leaves it alone. Even when floating, an
+  // Escape that something already handled (defaultPrevented) or that came
+  // from inside a terminal belongs to that terminal (vim, an agent TUI), not
+  // to the drawer.
   useEffect(() => {
     if (!overlay) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") close();
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      if (e.target instanceof Element && e.target.closest(".xterm")) return;
+      close();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);

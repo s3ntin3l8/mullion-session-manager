@@ -114,6 +114,37 @@ describe("RightSidebar", () => {
     expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
   });
 
+  it("leaves an Escape that came from inside a terminal (or was already handled) alone", () => {
+    useDashboardStore.setState({ rightSidebarOpen: true });
+    renderSidebar();
+    const xterm = document.createElement("div");
+    xterm.className = "xterm";
+    const textarea = document.createElement("textarea");
+    xterm.appendChild(textarea);
+    document.body.appendChild(xterm);
+
+    fireEvent.keyDown(textarea, { key: "Escape" });
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
+
+    const handled = new KeyboardEvent("keydown", { key: "Escape", cancelable: true });
+    handled.preventDefault();
+    window.dispatchEvent(handled);
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
+
+    xterm.remove();
+  });
+
+  it("follows an external change to the stored width", () => {
+    useDashboardStore.setState({ rightSidebarOpen: true });
+    const { container } = renderSidebar();
+    const panel = container.querySelector(".right-sidebar-panel") as HTMLElement;
+    expect(panel.style.width).toBe("340px");
+
+    act(() => useDashboardStore.getState().setRightSidebarWidth(420));
+
+    expect(panel.style.width).toBe("420px");
+  });
+
   it("docks when pinned on desktop: no scrim, and Escape leaves it open", () => {
     useDashboardStore.setState({ rightSidebarOpen: true, rightSidebarPinned: true });
     const { container } = renderSidebar("desktop");

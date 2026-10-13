@@ -7,6 +7,7 @@ import { useAsyncData } from "./hooks/useAsyncData.js";
 import { Dropdown } from "./ui/primitives.js";
 import { ChevronDownIcon, GitBranchIcon } from "./ui/icons.js";
 import { useFollowedProject } from "./hooks/useFollowedProject.js";
+import type { FollowedProject } from "./hooks/useFollowedProject.js";
 import { STORAGE_KEYS, readBool, writeBool } from "./lib/persistedState.js";
 
 // Same threshold/reasoning as Sidebar.tsx's own BEHIND_STALE_THRESHOLD for
@@ -106,11 +107,41 @@ export interface SourceControlSectionProps {
 // "active". Collapsed by default; persists that across reloads the same way
 // Sidebar.tsx's own row-expand state does (single boolean here, since this
 // is one section rather than one entry per id).
-export function SourceControlSection({
+export function SourceControlSection(props: SourceControlSectionProps) {
+  // A controlled project (right sidebar) never needs the follow/pin machinery
+  // — and its projects/sessions/activePanelId subscriptions — so the hook
+  // only runs in the uncontrolled wrapper.
+  return props.projectId !== undefined ? (
+    <SourceControlView {...props} effectiveProjectId={props.projectId} followed={null} />
+  ) : (
+    <FollowingSourceControl {...props} />
+  );
+}
+
+function FollowingSourceControl(props: SourceControlSectionProps) {
+  const followed = useFollowedProject();
+  return (
+    <SourceControlView
+      {...props}
+      effectiveProjectId={followed.effectiveProjectId}
+      followed={followed}
+    />
+  );
+}
+
+interface SourceControlViewProps extends SourceControlSectionProps {
+  effectiveProjectId: number | null;
+  // Present only when the section follows/pins its own project (it owns the
+  // picker); null when a parent controls the project.
+  followed: FollowedProject | null;
+}
+
+function SourceControlView({
   onOpenGit,
-  projectId: controlledProjectId,
   embedded = false,
-}: SourceControlSectionProps) {
+  effectiveProjectId,
+  followed,
+}: SourceControlViewProps) {
   const projects = useDashboardStore((s) => s.projects);
   const gitStatuses = useDashboardStore((s) => s.gitStatuses);
   const fetchProjectGit = useDashboardStore((s) => s.fetchProjectGit);
@@ -127,13 +158,6 @@ export function SourceControlSection({
     });
   }, []);
 
-  // Pin/follow resolution lives in useFollowedProject (shared with the right
-  // sidebar). When a parent controls the project (`projectId` prop — the
-  // right sidebar resolves it once for every view) that wins over the
-  // section's own pin/follow state.
-  const followed = useFollowedProject();
-  const controlled = controlledProjectId !== undefined;
-  const effectiveProjectId = controlled ? controlledProjectId : followed.effectiveProjectId;
   const effectiveProject = projects.find((p) => p.id === effectiveProjectId);
 
   const gitStatus = effectiveProjectId != null ? (gitStatuses[effectiveProjectId] ?? null) : null;
@@ -265,7 +289,7 @@ export function SourceControlSection({
       )}
       {(embedded || !collapsed) && effectiveProjectId != null && (
         <div className="source-control-body">
-          {!controlled && (
+          {followed && (
             <div onClick={(e) => e.stopPropagation()}>
               <Dropdown
                 small
