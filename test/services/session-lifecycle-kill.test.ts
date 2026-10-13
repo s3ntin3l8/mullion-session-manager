@@ -73,7 +73,7 @@ describe("session-lifecycle (kill + create)", () => {
   const statusOf = (app: Awaited<ReturnType<typeof setup>>["app"], id: number) =>
     app.db.select().from(sessions).where(eq(sessions.id, id)).get()?.status;
 
-  it("does not overwrite an already-exited session with killed", async () => {
+  it("dismisses an already-exited session: flips it to killed without terminating", async () => {
     const { app, projectId, backend } = await setup();
     const row = app.db
       .insert(sessions)
@@ -81,8 +81,21 @@ describe("session-lifecycle (kill + create)", () => {
       .returning()
       .get();
     const res = await killSession(app, row.id);
-    expect(res).toMatchObject({ id: row.id, status: "exited" });
-    expect(statusOf(app, row.id)).toBe("exited");
+    expect(res).toMatchObject({ id: row.id, status: "killed" });
+    expect(statusOf(app, row.id)).toBe("killed");
+    expect(backend.terminate).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("returns an already-killed session unchanged without terminating", async () => {
+    const { app, projectId, backend } = await setup();
+    const row = app.db
+      .insert(sessions)
+      .values({ projectId, command: "bash", status: "killed" })
+      .returning()
+      .get();
+    const res = await killSession(app, row.id);
+    expect(res).toMatchObject({ id: row.id, status: "killed" });
     expect(backend.terminate).not.toHaveBeenCalled();
     await app.close();
   });
