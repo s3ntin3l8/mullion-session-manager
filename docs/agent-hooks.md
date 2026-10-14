@@ -389,7 +389,9 @@ migrates to the title agent), a project's reviewer subagent as an inline
 config-dir redirect; `deriveOpenCodeReviewerAgentConfig` drops the
 Claude-Code-only `tools`/`model` keys that would hard-fail opencode's config
 loader), and — Task Master sessions only — `permission.skill` denies for the
-three superpowers skills that gate on a human in the loop.
+three superpowers skills that gate on a human in the loop (both the user's and
+Mullion's rules apply; which wins on a shared skill name is unverified for v2,
+issue #1595).
 
 **The agent-guide tier-0 push** (issue #437c, redesigned by #949) and the
 other per-session instruction files — workflow conventions (#937), the
@@ -398,7 +400,11 @@ adapter with the same gating as ever, but delivered differently: their
 absolute paths go to the plugin as a JSON array in
 `MULLION_OPENCODE_INSTRUCTIONS`, and the plugin appends each file's text as
 a system part from its `ctx.session.hook("context", …)` hook (primary agent
-requests only; idempotent, since `setup` can run once per Location). The
+requests only; idempotent, since `setup` can run once per Location). **Evidence
+level:** verified from the v2.0.29 source (the hook receives the draft request
+whose `system` array is sent verbatim, for the primary request only), and the
+hook registers cleanly in a real server — but it has not been observed firing
+in a live model turn. The
 order is `[tier-0, workflow-conventions, briefing, seed]`, matching
 `hooks.ts`'s ordering for the other three agents. The tier-0 CONTENT is the
 same short block every other agent's SessionStart reply carries

@@ -356,9 +356,11 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
   // Emitted in 1.x's `permission.skill.<name>` shape, which v2 migrates to a
   // `{ action: "skill", resource, effect }` rule (verified). v2 evaluates
   // policy across ALL config entries (the user's own global rules plus this
-  // one — the policy plugin reads `loaded.entries`), so a user's existing
-  // rules survive; on a shared skill name the later-ranked entry wins, which
-  // is the intent here (deny these for unattended workers).
+  // one), so a user's existing rules survive. NOT verified for v2: which of
+  // two conflicting rules on the SAME skill name wins (e.g. a user's global
+  // `writing-plans: allow` vs this deny) — config precedence between the
+  // global document and OPENCODE_CONFIG_CONTENT wasn't established; see issue
+  // #1595.
   if (ctx.taskId !== undefined) {
     configContent.permission = {
       skill: {
@@ -422,10 +424,14 @@ const OPENCODE_SUBCOMMANDS = new Set([
  * header). Attached to the program token itself — never appended to the end —
  * so it can't land on the wrong part of a chained command; the adapter's
  * `matches` already anchors on the command's first token. Idempotent, and a
- * no-op when the command is an opencode subcommand rather than the TUI.
+ * no-op when the command is an opencode subcommand rather than the TUI, or
+ * already attaches to a server (`--server`).
  * One of the sanctioned `commandTransform` exceptions to the opaque-command
  * invariant (AGENTS.md). */
 export function opencodeStandaloneTransform(command: string): string {
+  // `--server <url>` attaches to an existing server; `--standalone` would
+  // contradict it (and the plugin/config then live in that server anyway).
+  if (/(?:^|\s)--server(?:\s|=)/.test(command)) return command;
   const m = /^(\s*(?:\S*\/)?opencode)(?=\s|$)(\s+(\S+))?/.exec(command);
   if (!m) return command;
   const next = m[3];

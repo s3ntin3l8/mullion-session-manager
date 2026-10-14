@@ -240,6 +240,15 @@ describe("opencodeStandaloneTransform", () => {
     );
   });
 
+  it("leaves a command that attaches to a server (--server) alone", () => {
+    expect(opencodeStandaloneTransform("opencode --server http://127.0.0.1:4000")).toBe(
+      "opencode --server http://127.0.0.1:4000",
+    );
+    expect(opencodeStandaloneTransform("opencode --server=http://h:1 --continue")).toBe(
+      "opencode --server=http://h:1 --continue",
+    );
+  });
+
   it("returns a non-opencode command unchanged", () => {
     expect(opencodeStandaloneTransform("bash -l")).toBe("bash -l");
   });

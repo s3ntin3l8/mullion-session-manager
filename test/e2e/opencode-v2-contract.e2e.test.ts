@@ -40,7 +40,7 @@ interface ConfigDoc {
   permissions?: Array<{ action: string; resource: string; effect: string }>;
   plugins?: string[];
   skills?: string[];
-  agents?: { title?: { model?: unknown } };
+  agents?: { title?: { model?: unknown }; reviewer?: Record<string, unknown> };
 }
 
 function opencodeVersion(): string | null {
@@ -156,7 +156,11 @@ describeIfOpencode("opencode v2 contract (Mullion's integration assumptions)", (
           },
           plugins: [pluginDir],
           skills: ["/some/skills"],
-          agents: { title: { model: "anthropic/claude-haiku-5-5" } },
+          agents: {
+            title: { model: "anthropic/claude-haiku-5-5" },
+            // the inline reviewer-agent shape (deriveOpenCodeReviewerAgentConfig)
+            reviewer: { description: "d", mode: "subagent", system: "be careful" },
+          },
           // The shape the adapter writes for an unattended Task Master worker.
           permission: { skill: { brainstorming: "deny" } },
         }),
@@ -177,6 +181,12 @@ describeIfOpencode("opencode v2 contract (Mullion's integration assumptions)", (
     expect(content?.plugins).toEqual([pluginDir]);
     expect(content?.skills).toEqual(["/some/skills"]);
     expect(content?.agents?.title?.model).toBeDefined();
+    // the inline reviewer agent survives schema decoding with all three fields
+    expect(content?.agents?.reviewer).toMatchObject({
+      description: "d",
+      mode: "subagent",
+      system: "be careful",
+    });
   });
 
   it("loads Mullion's plugin directory and delivers events to it (real plugin, real hook socket)", async () => {
