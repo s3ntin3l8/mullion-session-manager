@@ -9,6 +9,7 @@ import {
   focusPanelForTier,
   isTiledPanel,
   maximizeIfTiled,
+  openFileEditorPanel,
   openDevicePanel,
   openOrFocusProjectPanel,
   openProjectHubPanel,
@@ -122,6 +123,9 @@ export interface UsePanelOpenerResult {
   onOpenAgentRules: (projectId: number) => void;
   // Opens (or focuses) a project's file editor (tree + CodeMirror).
   onOpenFileEditor: (projectId: number) => void;
+  // Opens a specific file (project-relative path) in the project's file
+  // editor — the right sidebar's Files view.
+  onOpenFile: (projectId: number, path: string) => void;
   // Opens (or focuses) a project's DB-backed Mullion briefing editor.
   onOpenProjectBriefing: (projectId: number) => void;
   // PR-6 — opens (or focuses) a project's "scaffold Mullion integration as
@@ -334,6 +338,15 @@ export function usePanelOpener({
     [dockviewApi, projects, layout, setSidebarOpen, leaveTaskView],
   );
 
+  const onOpenFile = useCallback(
+    (projectId: number, path: string) => {
+      if (!dockviewApi) return;
+      leaveTaskView();
+      openFileEditorPanel(dockviewApi, projectId, projects, layout, { path });
+    },
+    [dockviewApi, projects, layout, leaveTaskView],
+  );
+
   const onOpenBrowser = useCallback(
     (projectId: number) => {
       if (!dockviewApi) return;
@@ -424,6 +437,7 @@ export function usePanelOpener({
     onOpenProjectHub,
     onOpenAgentRules,
     onOpenFileEditor,
+    onOpenFile,
     onOpenProjectBriefing,
     onOpenProjectSetup,
     onOpenDockConfig,

@@ -806,6 +806,7 @@ export function App() {
     onOpenGit,
     onOpenAgentRules,
     onOpenFileEditor,
+    onOpenFile,
     onOpenProjectBriefing,
     onOpenProjectSetup,
     onOpenDockConfig,
@@ -1325,8 +1326,8 @@ export function App() {
   const dockviewChromeBg = getSchemeBackground(settings.terminal.colorScheme, theme);
 
   const rightSidebarActions = useMemo(
-    () => ({ onOpenGit, onOpenGitHub }),
-    [onOpenGit, onOpenGitHub],
+    () => ({ onOpenGit, onOpenGitHub, onOpenFileEditor, onOpenFile }),
+    [onOpenGit, onOpenGitHub, onOpenFileEditor, onOpenFile],
   );
 
   const sidebar = (
