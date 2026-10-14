@@ -2088,6 +2088,19 @@ describe("TerminalPane image paste/upload (issue #68)", () => {
     expect(screen.queryByText("Drop image to attach")).not.toBeInTheDocument();
   });
 
+  it("swallows file drops (no navigation) but never uploads when inputAffordances is false", async () => {
+    stubFakeWebSocket(true);
+    const { container } = renderPane({ inputAffordances: false });
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    const img = new File(["fake"], "photo.png", { type: "image/png" });
+    const notPrevented = fireEvent.drop(container.firstElementChild as HTMLElement, {
+      dataTransfer: { types: ["Files"], files: [img] },
+    });
+    expect(notPrevented).toBe(false);
+    expect(api.uploadSessionImage).not.toHaveBeenCalled();
+    expect(screen.queryByText("Drop image to attach")).not.toBeInTheDocument();
+  });
+
   it("ignores non-file drags", async () => {
     stubFakeWebSocket(true);
     const { container } = renderPane();

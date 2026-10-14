@@ -2246,13 +2246,14 @@ export function TerminalPane(props: {
     return () => clearTimeout(timer);
   }, [uploadState]);
 
-  // Desktop drop-to-attach: only file drags are claimed (text/link drags fall
-  // through untouched), and only where the attach affordances are enabled.
-  const acceptsFileDrop = (e: React.DragEvent) =>
-    (props.inputAffordances ?? true) && e.dataTransfer.types.includes("Files");
+  // Desktop drop-to-attach. Any file drag is claimed (preventDefault) so a
+  // stray drop never navigates the page; only where the attach affordances are
+  // enabled (read via the ref, like attachImage) does it highlight and upload.
+  const isFileDrag = (e: React.DragEvent) => e.dataTransfer.types.includes("Files");
   const onFileDrag = (e: React.DragEvent) => {
-    if (!acceptsFileDrop(e)) return;
+    if (!isFileDrag(e)) return;
     e.preventDefault();
+    if (!inputAffordancesRef.current) return;
     e.dataTransfer.dropEffect = "copy";
     setDragActive(true);
   };
@@ -2281,9 +2282,10 @@ export function TerminalPane(props: {
         if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragActive(false);
       }}
       onDrop={(e) => {
-        if (!acceptsFileDrop(e)) return;
+        if (!isFileDrag(e)) return;
         e.preventDefault();
         setDragActive(false);
+        if (!inputAffordancesRef.current) return;
         const file = Array.from(e.dataTransfer.files).find((f) => f.type.startsWith("image/"));
         if (file) uploadImageRef.current(file);
       }}
