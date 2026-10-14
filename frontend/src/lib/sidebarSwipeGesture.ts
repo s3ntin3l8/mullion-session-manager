@@ -47,8 +47,9 @@ const COMMIT_THRESHOLD_PX = 60;
 
 export function attachSidebarSwipeGesture(params: {
   element: HTMLElement;
-  // 1: a rightward drag commits (edge-swipe open). -1: a leftward drag
-  // commits (swipe-to-dismiss on the open sidebar itself).
+  // 1: a rightward drag commits (left-edge swipe open, or dismissing the
+  // right drawer). -1: a leftward drag commits (swipe-to-dismiss on the open
+  // left sidebar, or a right-edge swipe open).
   commitDirection: 1 | -1;
   onCommit: () => void;
   // Only touches starting within this many px of `element`'s own left
@@ -56,13 +57,16 @@ export function attachSidebarSwipeGesture(params: {
   // `element` (the open sidebar's own dismiss gesture — draggable from
   // anywhere on the panel, not just one edge of it).
   edgeZonePx?: number;
+  // Which edge `edgeZonePx` is measured from. Defaults to the left edge; the
+  // right sidebar's open gesture measures from the right.
+  edge?: "left" | "right";
   // Touches starting inside an element matching this selector never begin
   // tracking — for horizontal scrollers (the phone tab strip, the key bar)
   // whose own leftward/rightward pans would otherwise be preventDefault'ed
   // and turned into a sidebar open when they happen to start in the edge zone.
   ignoreSelector?: string;
 }): () => void {
-  const { element, commitDirection, onCommit, edgeZonePx, ignoreSelector } = params;
+  const { element, commitDirection, onCommit, edgeZonePx, edge = "left", ignoreSelector } = params;
 
   let tracking = false;
   let committed = false;
@@ -88,7 +92,8 @@ export function attachSidebarSwipeGesture(params: {
     }
     if (edgeZonePx !== undefined) {
       const rect = element.getBoundingClientRect();
-      if (touch.clientX - rect.left > edgeZonePx) {
+      const distance = edge === "right" ? rect.right - touch.clientX : touch.clientX - rect.left;
+      if (distance > edgeZonePx) {
         reset();
         return;
       }

@@ -123,6 +123,7 @@ function makeFakeTerm() {
         shiftKey: false,
         altKey: false,
         metaKey: false,
+        code: "",
         preventDefault: vi.fn(),
         ...event,
       } as KeyboardEvent),
@@ -130,6 +131,23 @@ function makeFakeTerm() {
 }
 
 describe("attachKeyConflictHandler", () => {
+  it("lets Ctrl/Cmd+Alt+B bubble to the window (right-sidebar toggle) instead of sending it to the PTY", () => {
+    const { term, fire } = makeFakeTerm();
+    attachKeyConflictHandler({
+      term,
+      reservedKeys: new Set(),
+      getClipboardKeys: () => ({ ctrlV: false, ctrlC: false }),
+    });
+    expect(fire({ key: "b", code: "KeyB", ctrlKey: true, altKey: true })).toBe(false);
+    expect(fire({ key: "∫", code: "KeyB", metaKey: true, altKey: true })).toBe(false);
+    // Neighbouring chords still reach the terminal.
+    expect(fire({ key: "b", code: "KeyB", ctrlKey: true })).toBe(true);
+    expect(fire({ key: "b", code: "KeyB", altKey: true })).toBe(true);
+    expect(fire({ key: "B", code: "KeyB", ctrlKey: true, altKey: true, shiftKey: true })).toBe(
+      true,
+    );
+  });
+
   it("intercepts Ctrl+Shift+F to toggle the find bar", () => {
     const { term, fire } = makeFakeTerm();
     const onToggleFind = vi.fn();

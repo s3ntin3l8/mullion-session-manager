@@ -186,7 +186,7 @@ export function buildPaletteCommands({
     commands.push({
       id: "toggle-right-sidebar",
       title: "Toggle right sidebar",
-      subtitle: "Show or hide the right sidebar",
+      subtitle: "Show or hide the right sidebar (Ctrl/Cmd+Alt+B)",
       icon: RightSidebarIcon,
       keywords: ["sidebar", "right", "drawer", "panel"],
       placement: "top",

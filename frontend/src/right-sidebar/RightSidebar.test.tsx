@@ -3,6 +3,7 @@ import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { RightSidebar } from "./RightSidebar.js";
+import { resetPhoneBackStackForTests } from "../hooks/usePhoneBackStack.js";
 import { useDashboardStore } from "../store/index.js";
 import type { LayoutTier } from "../lib/layoutTier.js";
 import type { GitStatus, Project } from "../api/index.js";
@@ -49,6 +50,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetPhoneBackStackForTests();
   vi.clearAllMocks();
   useDashboardStore.setState({ projects: [], gitStatuses: {} });
 });
@@ -215,6 +217,74 @@ describe("RightSidebar", () => {
 
     await user.click(screen.getByRole("button", { name: "Unpin sidebar" }));
     expect(useDashboardStore.getState().rightSidebarPinned).toBe(false);
+  });
+
+  it("tablet: a rightward swipe on the open drawer dismisses it", () => {
+    useDashboardStore.setState({ rightSidebarOpen: true });
+    const { container } = renderSidebar("tablet");
+    const panel = container.querySelector(".right-sidebar-panel") as HTMLElement;
+    const touch = (type: string, x: number) =>
+      panel.dispatchEvent(
+        Object.assign(new Event(type, { bubbles: true, cancelable: true }), {
+          touches: [{ clientX: x, clientY: 0 }],
+        }),
+      );
+
+    touch("touchstart", 100);
+    touch("touchmove", 200);
+
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+  });
+
+  it("desktop: the drawer has no swipe gesture", () => {
+    useDashboardStore.setState({ rightSidebarOpen: true });
+    const { container } = renderSidebar("desktop");
+    const panel = container.querySelector(".right-sidebar-panel") as HTMLElement;
+    const touch = (type: string, x: number) =>
+      panel.dispatchEvent(
+        Object.assign(new Event(type, { bubbles: true, cancelable: true }), {
+          touches: [{ clientX: x, clientY: 0 }],
+        }),
+      );
+
+    touch("touchstart", 100);
+    touch("touchmove", 200);
+
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
+  });
+
+  it("tablet: the back gesture closes the floating drawer", () => {
+    useDashboardStore.setState({ rightSidebarOpen: true });
+    renderSidebar("tablet");
+
+    act(() => {
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+  });
+
+  it("closes the drawer when the tier changes to phone, or a floating one goes tablet → desktop", () => {
+    useDashboardStore.setState({ rightSidebarOpen: true });
+    const { rerender } = renderSidebar("tablet");
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
+
+    rerender(<RightSidebar tier="desktop" actions={actions} />);
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+
+    act(() => useDashboardStore.setState({ rightSidebarOpen: true }));
+    rerender(<RightSidebar tier="phone" actions={actions} />);
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+  });
+
+  it("keeps a pinned drawer open when going tablet → desktop (it docks)", () => {
+    useDashboardStore.setState({ rightSidebarOpen: true, rightSidebarPinned: true });
+    const { rerender, container } = renderSidebar("tablet");
+
+    rerender(<RightSidebar tier="desktop" actions={actions} />);
+
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
+    expect(container.querySelector(".right-sidebar-panel.docked")).toBeTruthy();
   });
 
   it("the close button closes the drawer", async () => {

@@ -40,6 +40,9 @@ export interface UseGlobalShortcutsParams {
   // consulted for the keyboard path too — a single enforcement point shared
   // with the toolbar/global-launcher button.
   openGlobalLauncher: () => void;
+  // Ctrl/Cmd+Alt+B toggles the right sidebar. False on phone, where the
+  // sidebar isn't rendered (same gate as its palette command).
+  rightSidebarEnabled: boolean;
 }
 
 // Extracted from App.tsx (PR 34d of the hook-extraction series) — the single
@@ -82,6 +85,7 @@ export function useGlobalShortcuts({
   setSettingsOpen,
   openSettings,
   openGlobalLauncher,
+  rightSidebarEnabled,
 }: UseGlobalShortcutsParams): void {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -94,6 +98,18 @@ export function useGlobalShortcuts({
       } else if ((e.metaKey || e.ctrlKey) && e.key === ",") {
         e.preventDefault();
         openSettings();
+      } else if (
+        rightSidebarEnabled &&
+        (e.metaKey || e.ctrlKey) &&
+        e.altKey &&
+        !e.shiftKey &&
+        // `code`, not `key`: Option+B types "∫" on macOS and AltGr layouts
+        // change `key` too. A focused terminal lets this chord through —
+        // see attachKeyConflictHandler (lib/terminalKeys.ts).
+        e.code === "KeyB"
+      ) {
+        e.preventDefault();
+        useDashboardStore.getState().toggleRightSidebar();
       } else if (e.key === "Escape") {
         // U9 — see handleGlobalEscape's own doc comment for why
         // clearSplitRequest belongs here: the palette also renders for a
@@ -122,5 +138,5 @@ export function useGlobalShortcuts({
     // stable. Same "list it for the linter, not because it changes
     // anything" pattern as `useMobileLayout`'s `[dockviewApi, setIsMobile]`
     // and `useWorkspacePersistence`'s equivalent params.
-  }, [openSettings, openGlobalLauncher, setPalette, setSettingsOpen]);
+  }, [openSettings, openGlobalLauncher, setPalette, setSettingsOpen, rightSidebarEnabled]);
 }

@@ -259,4 +259,48 @@ describe("attachSidebarSwipeGesture", () => {
 
     expect(onCommit).not.toHaveBeenCalled();
   });
+
+  describe("edge: right", () => {
+    beforeEach(() => {
+      container.getBoundingClientRect = () =>
+        ({ left: 0, top: 0, right: 500, bottom: 0, width: 500, height: 0, x: 0, y: 0 }) as DOMRect;
+    });
+
+    it("commits a leftward drag that starts inside the right edge zone", () => {
+      const onCommit = vi.fn();
+      const detach = attachSidebarSwipeGesture({
+        element: container,
+        commitDirection: -1,
+        edge: "right",
+        edgeZonePx: 24,
+        onCommit,
+      });
+
+      container.dispatchEvent(touchEvent("touchstart", [{ clientX: 490, clientY: 0 }]));
+      container.dispatchEvent(touchEvent("touchmove", [{ clientX: 420, clientY: 0 }]));
+
+      expect(onCommit).toHaveBeenCalledTimes(1);
+      detach();
+    });
+
+    it("ignores a touch that starts outside the right edge zone (including at the left edge)", () => {
+      const onCommit = vi.fn();
+      const detach = attachSidebarSwipeGesture({
+        element: container,
+        commitDirection: -1,
+        edge: "right",
+        edgeZonePx: 24,
+        onCommit,
+      });
+
+      container.dispatchEvent(touchEvent("touchstart", [{ clientX: 10, clientY: 0 }]));
+      container.dispatchEvent(touchEvent("touchmove", [{ clientX: -60, clientY: 0 }]));
+      container.dispatchEvent(touchEvent("touchend", []));
+      container.dispatchEvent(touchEvent("touchstart", [{ clientX: 300, clientY: 0 }]));
+      container.dispatchEvent(touchEvent("touchmove", [{ clientX: 220, clientY: 0 }]));
+
+      expect(onCommit).not.toHaveBeenCalled();
+      detach();
+    });
+  });
 });

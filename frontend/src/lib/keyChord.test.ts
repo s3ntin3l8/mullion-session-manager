@@ -155,6 +155,8 @@ describe("validateChord", () => {
 
   it("rejects combos claimed by a branch that runs BEFORE voice in attachKeyConflictHandler", () => {
     expect(validateChord(parseChord("Ctrl+Shift+F")!).ok).toBe(false);
+    expect(validateChord(parseChord("Ctrl+Alt+B")!).ok).toBe(false);
+    expect(validateChord(parseChord("Alt+Meta+B")!).ok).toBe(false);
     expect(validateChord(parseChord("Shift+Insert")!).ok).toBe(false);
     expect(validateChord(parseChord("Meta+V")!).ok).toBe(false);
     // Ctrl+V's terminal-paste use is itself opt-in (clipboardKeys.ctrlV,

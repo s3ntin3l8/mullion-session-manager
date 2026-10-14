@@ -9,10 +9,11 @@ import { canLaunchTerminal } from "../panelUtils.js";
 // hook uses (`clearSplitRequest()` inside the Escape branch, and the ⌘K
 // handler's `openGlobalLauncher` reads `viewMode` via getState()).
 const clearSplitRequest = vi.fn();
+const toggleRightSidebar = vi.fn();
 let viewMode: string = "list";
 
 function storeState() {
-  return { clearSplitRequest, viewMode };
+  return { clearSplitRequest, toggleRightSidebar, viewMode };
 }
 
 vi.mock("../store/index.js", () => {
@@ -44,7 +45,13 @@ function renderShortcuts(overrides: Partial<ShortcutArgs> = {}) {
   const openSettings = overrides.openSettings ?? vi.fn();
   const openGlobalLauncher = overrides.openGlobalLauncher ?? vi.fn();
   const hook = renderHook(() =>
-    useGlobalShortcuts({ setPalette, setSettingsOpen, openSettings, openGlobalLauncher }),
+    useGlobalShortcuts({
+      setPalette,
+      setSettingsOpen,
+      openSettings,
+      openGlobalLauncher,
+      rightSidebarEnabled: overrides.rightSidebarEnabled ?? true,
+    }),
   );
   return { setPalette, setSettingsOpen, openSettings, openGlobalLauncher, ...hook };
 }
@@ -213,6 +220,38 @@ describe("useGlobalShortcuts", () => {
     document.body.removeChild(input);
   });
 
+  it("Ctrl/Cmd+Alt+B toggles the right sidebar, matched on the physical key", () => {
+    renderShortcuts();
+
+    // Option+B types "∫" on macOS — `key` is useless, `code` is stable.
+    const ctrl = dispatchKeyDown({ key: "b", code: "KeyB", ctrlKey: true, altKey: true });
+    const meta = dispatchKeyDown({ key: "∫", code: "KeyB", metaKey: true, altKey: true });
+
+    expect(toggleRightSidebar).toHaveBeenCalledTimes(2);
+    expect(ctrl.defaultPrevented).toBe(true);
+    expect(meta.defaultPrevented).toBe(true);
+  });
+
+  it("Ctrl+Alt+B ignores other modifier combinations", () => {
+    renderShortcuts();
+
+    dispatchKeyDown({ key: "b", code: "KeyB", ctrlKey: true });
+    dispatchKeyDown({ key: "b", code: "KeyB", altKey: true });
+    dispatchKeyDown({ key: "B", code: "KeyB", ctrlKey: true, altKey: true, shiftKey: true });
+    dispatchKeyDown({ key: "n", code: "KeyN", ctrlKey: true, altKey: true });
+
+    expect(toggleRightSidebar).not.toHaveBeenCalled();
+  });
+
+  it("Ctrl+Alt+B does nothing when the right sidebar is disabled (phone)", () => {
+    renderShortcuts({ rightSidebarEnabled: false });
+
+    const event = dispatchKeyDown({ key: "b", code: "KeyB", ctrlKey: true, altKey: true });
+
+    expect(toggleRightSidebar).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+  });
+
   it("re-attaches the listener when openGlobalLauncher changes identity", () => {
     const openGlobalLauncher1 = vi.fn();
     const openGlobalLauncher2 = vi.fn();
@@ -224,6 +263,7 @@ describe("useGlobalShortcuts", () => {
           setSettingsOpen: vi.fn(),
           openSettings: vi.fn(),
           openGlobalLauncher,
+          rightSidebarEnabled: true,
         }),
       { initialProps: { openGlobalLauncher: openGlobalLauncher1 } },
     );

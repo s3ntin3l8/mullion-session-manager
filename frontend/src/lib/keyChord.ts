@@ -183,6 +183,8 @@ const BROWSER_RESERVED = [
 // OS-level app" to "collides with Mullion's own paste handling".
 const ALWAYS_CLAIMED: Array<[string, string]> = [
   ["Ctrl+Shift+F", "the scrollback find bar"],
+  ["Ctrl+Alt+B", "the right-sidebar toggle"],
+  ["Alt+Meta+B", "the right-sidebar toggle"],
   ["Shift+Insert", "paste"],
   ["Meta+V", "paste"],
   ["Ctrl+V", 'paste (if the opt-in "Ctrl+V paste" setting is ever turned on)'],

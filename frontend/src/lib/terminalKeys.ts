@@ -160,6 +160,19 @@ export function attachKeyConflictHandler(opts: {
         onPaste?.();
         return false;
       }
+      // Toggle right sidebar (Ctrl/Cmd+Alt+B, handled by useGlobalShortcuts).
+      // Left to xterm it would be sent to the PTY as ESC ^B and its
+      // propagation stopped, so the window listener never sees it; returning
+      // false makes xterm skip the event and let it bubble. Matched on `code`
+      // since Option+B types a different `key` on macOS.
+      if (
+        (event.ctrlKey || event.metaKey) &&
+        event.altKey &&
+        !event.shiftKey &&
+        event.code === "KeyB"
+      ) {
+        return false;
+      }
       // Voice dictation push-to-talk. The chord is user-configurable
       // (#1119 — the shipped default, Ctrl+Shift+Space, turned out to
       // collide with 1Password's Quick Access default on Windows/Linux),
