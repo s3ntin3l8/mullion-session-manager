@@ -1,4 +1,5 @@
 import { buildApp } from "./app.js";
+import { getCachedAgents } from "./services/agent-detect.js";
 
 async function start() {
   const app = await buildApp();
@@ -23,6 +24,10 @@ async function start() {
       host: app.config.HOST,
     });
     app.log.info(`Server listening at ${address}`);
+    // Warm the launcher/agent probe cache (login-shell `command -v` per
+    // binary) so the first palette open doesn't pay for it. Fire-and-forget:
+    // it must never delay or fail boot.
+    getCachedAgents().catch(() => {});
   } catch (err) {
     app.log.error(err);
     process.exit(1);

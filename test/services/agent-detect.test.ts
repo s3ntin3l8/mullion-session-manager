@@ -218,4 +218,43 @@ describe("getCachedAgents", () => {
     await getCachedAgents(true);
     expect(spawnMock.mock.calls.length).toBe(firstCallCount * 2);
   });
+  it("serves an expired cache immediately and re-probes once in the background", async () => {
+    available = {};
+    clearAgentsCacheForTests();
+    const spawnMock = vi.mocked((await import("node:child_process")).spawn);
+
+    const first = await getCachedAgents();
+    const probeCount = spawnMock.mock.calls.length;
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(Date.now() + 61_000);
+      spawnMock.mockClear();
+      const [a, b] = await Promise.all([getCachedAgents(), getCachedAgents()]);
+      // Stale data comes back right away; nothing waited on the probes.
+      expect(a).toBe(first);
+      expect(b).toBe(first);
+      await vi.waitFor(() => expect(spawnMock.mock.calls.length).toBe(probeCount));
+      // Concurrent expired callers shared a single refresh.
+      await new Promise((r) => setTimeout(r, 20));
+      expect(spawnMock.mock.calls.length).toBe(probeCount);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shares one probe batch between concurrent cold callers", async () => {
+    available = {};
+    clearAgentsCacheForTests();
+    const spawnMock = vi.mocked((await import("node:child_process")).spawn);
+    spawnMock.mockClear();
+
+    await Promise.all([getCachedAgents(), getCachedAgents(), getCachedAgents()]);
+    const shared = spawnMock.mock.calls.length;
+
+    clearAgentsCacheForTests();
+    spawnMock.mockClear();
+    await getCachedAgents();
+    expect(shared).toBe(spawnMock.mock.calls.length);
+  });
 });

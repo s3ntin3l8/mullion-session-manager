@@ -186,17 +186,44 @@ export async function detectAgents(): Promise<DetectedAgent[]> {
 const CACHE_TTL_MS = 60_000;
 
 let cache: { data: DetectedAgent[]; expiresAt: number } | null = null;
+// One shared in-flight probe batch: concurrent misses and background
+// refreshes all await the same promise instead of each spawning their own
+// set of login shells.
+let refreshPromise: Promise<DetectedAgent[]> | null = null;
 
+function refreshAgents(): Promise<DetectedAgent[]> {
+  if (refreshPromise) return refreshPromise;
+  refreshPromise = detectAgents()
+    .then((data) => {
+      cache = { data, expiresAt: Date.now() + CACHE_TTL_MS };
+      return data;
+    })
+    .finally(() => {
+      refreshPromise = null;
+    });
+  return refreshPromise;
+}
+
+/** Stale-while-revalidate: once anything is cached, callers get it back
+ * immediately and an expired entry only triggers a single background
+ * re-probe. Only the very first call (nothing cached yet) or an explicit
+ * `forceRefresh` waits on the login-shell probes — otherwise every palette
+ * open after the 60s TTL would block on them. */
 export async function getCachedAgents(forceRefresh = false): Promise<DetectedAgent[]> {
-  if (!forceRefresh && cache && cache.expiresAt > Date.now()) {
+  if (forceRefresh) return refreshAgents();
+  if (cache) {
+    if (cache.expiresAt <= Date.now()) {
+      // Best-effort — detectAgents' probes never reject, but don't let an
+      // unexpected throw become an unhandled rejection in the background.
+      refreshAgents().catch(() => {});
+    }
     return cache.data;
   }
-  const data = await detectAgents();
-  cache = { data, expiresAt: Date.now() + CACHE_TTL_MS };
-  return data;
+  return refreshAgents();
 }
 
 /** Exported for tests only — production never needs to clear this. */
 export function clearAgentsCacheForTests(): void {
   cache = null;
+  refreshPromise = null;
 }

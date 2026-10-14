@@ -38,10 +38,10 @@ describe("buildPaletteCommands", () => {
     const commands = buildPaletteCommands(ctx().context);
 
     expect(titles("top", commands)).toEqual([
-      "GitHub: mullion",
-      "Git: mullion",
+      "GitHub",
+      "Git",
       "Project: mullion",
-      "Preview: mullion",
+      "Preview",
       "Manage integrations…",
       "New preview tab",
     ]);
@@ -95,7 +95,7 @@ describe("buildPaletteCommands", () => {
     });
     const url = buildPaletteCommands(context).find((c) => c.id === "url-1")!;
 
-    expect(url.title).toBe("App: mullion");
+    expect(url.title).toBe("App");
     expect(url.subtitle).toBe("http://localhost:3000");
     url.run();
     expect(open.browserUrl).toHaveBeenCalledWith(5, "http://localhost:3000", "App");
@@ -103,7 +103,7 @@ describe("buildPaletteCommands", () => {
 
   it("falls back to 'this project' when the name is unknown", () => {
     const commands = buildPaletteCommands(ctx({ projectName: null }).context);
-    expect(commands.find((c) => c.id === "github")!.title).toBe("GitHub: this project");
+    expect(commands.find((c) => c.id === "project")!.title).toBe("Project: this project");
   });
 
   it("offers only the project-independent entries when there is no project", () => {
