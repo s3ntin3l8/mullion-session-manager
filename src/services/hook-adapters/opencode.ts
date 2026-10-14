@@ -355,22 +355,37 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
   // The other superpowers skills are either useful or neutral for an
   // unattended worker and are left alone.
   //
-  // Emitted in 1.x's `permission.skill.<name>` shape, which v2 migrates to a
-  // `{ action: "skill", resource, effect }` rule (verified). v2 evaluates
-  // policy across ALL config entries (the user's own global rules plus this
-  // one), so a user's existing rules survive. NOT verified for v2: which of
-  // two conflicting rules on the SAME skill name wins (e.g. a user's global
-  // `writing-plans: allow` vs this deny) — config precedence between the
-  // global document and OPENCODE_CONFIG_CONTENT wasn't established; see issue
-  // #1595.
+  // Two layers, because v2 orders rules as: every document's top-level
+  // `permission` (global dir first, OPENCODE_CONFIG_CONTENT after it), THEN
+  // each agent's own `agents.<id>.permissions` (documents in order), and the
+  // LAST matching rule wins (`findLast`; packages/core/src/config/plugin/
+  // agent.ts + permission.ts at v2.0.29, issue #1595). So:
+  //   - the top-level `permission.skill` denies below (1.x shape, migrated to
+  //     `{ action: "skill", resource, effect }`) beat a user's top-level
+  //     global allow, but
+  //   - a user's AGENT-level allow (`agent.build.permission.skill.<name>`)
+  //     sits after every top-level rule and would beat them — so the same
+  //     denies are repeated at agent level on the primary agents a worker
+  //     runs as. `agents.<id>` entries merge into the built-in agent (only
+  //     `permissions` is pushed), and our document loads after the user's,
+  //     so these land last.
+  // A user's custom agent can't be enumerated here; those are left to the
+  // top-level denies.
   if (ctx.taskId !== undefined) {
     configContent.permission = {
-      skill: {
-        brainstorming: "deny",
-        "writing-plans": "deny",
-        "finishing-a-development-branch": "deny",
-      },
+      skill: Object.fromEntries(TASK_DENIED_SKILLS.map((name) => [name, "deny"])),
     };
+    const agentDenies = TASK_DENIED_SKILLS.map((resource) => ({
+      action: "skill",
+      resource,
+      effect: "deny",
+    }));
+    for (const id of TASK_WORKER_PRIMARY_AGENTS) {
+      const existing = (agents[id] ?? {}) as Record<string, unknown>;
+      const prior = Array.isArray(existing.permissions) ? existing.permissions : [];
+      agents[id] = { ...existing, permissions: [...prior, ...agentDenies] };
+    }
+    configContent.agents = agents;
   }
   envAdditions.OPENCODE_CONFIG_CONTENT = JSON.stringify(configContent);
 
@@ -394,6 +409,11 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
         },
   };
 }
+
+// Skills denied for unattended Task Master workers, and the primary agents they
+// can run as (see the permission block in prepareLaunch).
+const TASK_DENIED_SKILLS = ["brainstorming", "writing-plans", "finishing-a-development-branch"];
+const TASK_WORKER_PRIMARY_AGENTS = ["build", "plan"];
 
 // opencode's own subcommands (`opencode --help` on 2.0.29). `--standalone`
 // belongs to the DEFAULT command (the TUI), not to every subcommand, so it

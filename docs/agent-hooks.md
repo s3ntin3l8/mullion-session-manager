@@ -388,10 +388,12 @@ migrates to the title agent), a project's reviewer subagent as an inline
 `agents.<name>` entry (v2's `agent/<name>.md` discovery depended on the
 config-dir redirect; `deriveOpenCodeReviewerAgentConfig` drops the
 Claude-Code-only `tools`/`model` keys that would hard-fail opencode's config
-loader), and — Task Master sessions only — `permission.skill` denies for the
-three superpowers skills that gate on a human in the loop (both the user's and
-Mullion's rules apply; which wins on a shared skill name is unverified for v2,
-issue #1595).
+loader), and — Task Master sessions only — skill denies for the three
+superpowers skills that gate on a human in the loop. v2 resolves a skill rule
+by last-match over every document's top-level `permission`, then each agent's
+own rules, so the denies are emitted both top-level (beats a user's top-level
+allow) and on the `build`/`plan` agents (beats a user's agent-level allow);
+a user's custom agent that allows the skill is not covered (issue #1595).
 
 **The agent-guide tier-0 push** (issue #437c, redesigned by #949) and the
 other per-session instruction files — workflow conventions (#937), the

@@ -40,7 +40,11 @@ interface ConfigDoc {
   permissions?: Array<{ action: string; resource: string; effect: string }>;
   plugins?: string[];
   skills?: string[];
-  agents?: { title?: { model?: unknown }; reviewer?: Record<string, unknown> };
+  agents?: {
+    title?: { model?: unknown };
+    reviewer?: Record<string, unknown>;
+    build?: { permissions?: Array<{ action: string; resource: string; effect: string }> };
+  };
 }
 
 function opencodeVersion(): string | null {
@@ -187,6 +191,46 @@ describeIfOpencode("opencode v2 contract (Mullion's integration assumptions)", (
       mode: "subagent",
       system: "be careful",
     });
+  });
+
+  // Issue #1595. v2 evaluates a skill rule by `findLast` over: every document's
+  // top-level permissions (in document order), THEN each agent's own
+  // `agents.<id>.permissions`. So a user's agent-level allow outranks any
+  // top-level deny — Task Master's worker denies are therefore repeated at
+  // agent level in a LATER document (OPENCODE_CONFIG_CONTENT). A live model
+  // run confirmed the outcome (the skill loads with only the top-level deny,
+  // is unavailable with both); this pins the layering that makes it so.
+  it("loads Mullion's agent-level skill denies in a later document than the user's agent-level allow", () => {
+    writeFileSync(
+      path.join(root, "config", "opencode", "opencode.json"),
+      JSON.stringify({
+        permission: { skill: { "writing-plans": "allow" } },
+        agent: { build: { permission: { skill: { brainstorming: "allow" } } } },
+      }),
+    );
+    const deny = { action: "skill", resource: "brainstorming", effect: "deny" };
+    const sources = JSON.parse(
+      run(["debug", "config"], {
+        OPENCODE_CONFIG_CONTENT: JSON.stringify({
+          permission: { skill: { brainstorming: "deny", "writing-plans": "deny" } },
+          agents: { build: { permissions: [deny] } },
+        }),
+      }),
+    ) as Array<{ type: string; info?: ConfigDoc }>;
+    const docs = sources.filter((s) => s.type === "document" && s.info).map((s) => s.info!);
+
+    const userIdx = docs.findIndex((d) =>
+      d.agents?.build?.permissions?.some(
+        (r) => r.resource === "brainstorming" && r.effect === "allow",
+      ),
+    );
+    const contentIdx = docs.findIndex((d) =>
+      d.agents?.build?.permissions?.some(
+        (r) => r.resource === "brainstorming" && r.effect === "deny",
+      ),
+    );
+    expect(userIdx).toBeGreaterThanOrEqual(0);
+    expect(contentIdx).toBeGreaterThan(userIdx);
   });
 
   it("loads Mullion's plugin directory and delivers events to it (real plugin, real hook socket)", async () => {
