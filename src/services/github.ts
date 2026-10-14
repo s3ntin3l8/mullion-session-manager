@@ -267,13 +267,21 @@ interface DefaultBranchCiEntry {
 
 const defaultBranchCiCache = new Map<string, DefaultBranchCiEntry>();
 
-/** Latest-run-per-workflow aggregate for the repo's default branch. */
-export async function getDefaultBranchCi(
+/**
+ * Re-reads the default branch's CI and caches it; called by the background
+ * poller. fetchActionsRuns degrades every failure (rate limit, network blip)
+ * to `[]`, which is indistinguishable from "no CI" — so a `null` result never
+ * overwrites a known status, or one failed tick would clear a red badge. A
+ * repo that genuinely lost its CI just ages out via the max-age instead.
+ */
+export async function refreshDefaultBranchCi(
   token: string,
   owner: string,
   repo: string,
-): Promise<GitHubCiStatus> {
-  return computeCiStatus(await fetchActionsRuns(token, owner, repo));
+): Promise<void> {
+  const status = computeCiStatus(await fetchActionsRuns(token, owner, repo));
+  if (status === null && getCachedDefaultBranchCi(owner, repo)) return;
+  setDefaultBranchCi(owner, repo, status);
 }
 
 /** Writes the default-branch CI aggregate; called by the background poller. */

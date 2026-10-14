@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   GitHubApiError,
   getRepoStatus,
-  getDefaultBranchCi,
+  refreshDefaultBranchCi,
   setDefaultBranchCi,
   getCachedDefaultBranchCi,
   getCacheSizeForTests,
@@ -654,7 +654,7 @@ describe("default-branch CI cache", () => {
     vi.useRealTimers();
   });
 
-  it("getDefaultBranchCi aggregates the default branch's latest runs", async () => {
+  it("refreshDefaultBranchCi caches the default branch's aggregated latest runs", async () => {
     vi.stubGlobal(
       "fetch",
       mockGithubApi({
@@ -663,12 +663,18 @@ describe("default-branch CI cache", () => {
         ],
       }),
     );
-    expect(await getDefaultBranchCi("tok", "dbci-owner", "repo")).toBe("failure");
+    await refreshDefaultBranchCi("tok", "dbci-owner", "repo");
+    expect(getCachedDefaultBranchCi("dbci-owner", "repo")).toBe("failure");
   });
 
-  it("getDefaultBranchCi degrades to null when Actions can't be read", async () => {
+  it("a failed lookup (null) never clears a known status, but records null when nothing was known", async () => {
     vi.stubGlobal("fetch", mockGithubApi({ runsOk: false }));
-    expect(await getDefaultBranchCi("tok", "dbci-owner", "repo")).toBeNull();
+    await refreshDefaultBranchCi("tok", "dbci-blip", "repo");
+    expect(getCachedDefaultBranchCi("dbci-blip", "repo")).toBeNull();
+
+    setDefaultBranchCi("dbci-blip2", "repo", "failure");
+    await refreshDefaultBranchCi("tok", "dbci-blip2", "repo");
+    expect(getCachedDefaultBranchCi("dbci-blip2", "repo")).toBe("failure");
   });
 
   it("round-trips through set/get, distinguishing 'unknown' (undefined) from 'no signal' (null)", () => {
