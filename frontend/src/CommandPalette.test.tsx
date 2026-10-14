@@ -78,7 +78,7 @@ describe("CommandPalette -> Integrations section", () => {
       />,
     );
 
-    await user.click(await screen.findByText(/GitHub: mullion/));
+    await user.click(await screen.findByText(/^GitHub$/));
     expect(onOpenGitHub).toHaveBeenCalledWith(PROJECT.id);
   });
 
@@ -108,7 +108,7 @@ describe("CommandPalette -> Integrations section", () => {
       />,
     );
 
-    await user.click(await screen.findByText(/Git: mullion/));
+    await user.click(await screen.findByText(/^Git$/));
     expect(onOpenGit).toHaveBeenCalledWith(PROJECT.id);
   });
 
@@ -266,7 +266,7 @@ describe("CommandPalette -> Integrations section", () => {
       />,
     );
 
-    await user.click(await screen.findByText(/Preview: mullion/));
+    await user.click(await screen.findByText(/^Preview$/));
     expect(onOpenBrowser).toHaveBeenCalledWith(PROJECT.id);
   });
 
@@ -1198,6 +1198,31 @@ describe("CommandPalette -> per-session model picker (issue #1424)", () => {
     expect(onCreateSession.mock.calls[0]![0]).not.toHaveProperty("model");
   });
 
+  it("shows a loading placeholder in the options strip until launchers resolve, then collapses it for a shell", async () => {
+    let resolveActions: (r: Response) => void = () => {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string | URL | Request) => {
+        const u = typeof url === "string" ? url : url.toString();
+        if (u.includes("/actions")) {
+          return new Promise<Response>((resolve) => {
+            resolveActions = resolve;
+          });
+        }
+        return Promise.resolve(jsonResponse(200, []));
+      }),
+    );
+    renderPalette();
+
+    expect(await screen.findByText("Loading launchers…")).toBeInTheDocument();
+
+    resolveActions(jsonResponse(200, [BASH]));
+    await screen.findByText("Matching commands");
+
+    expect(screen.queryByText("Loading launchers…")).not.toBeInTheDocument();
+    expect(document.querySelector(".cmd-palette-options-strip")).toHaveClass("collapsed");
+  });
+
   it("shows no model control for a plain shell launcher", async () => {
     vi.stubGlobal("fetch", mockFetch({}));
     const user = userEvent.setup();
@@ -1959,12 +1984,46 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
 
     await user.click(targetButton);
     expect(targetButton).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByText("Choose a project")).toBeInTheDocument();
+    expect(screen.getByText("Launch in which project?")).toBeInTheDocument();
     expect(screen.getByText("beta-project")).toBeInTheDocument();
 
     await user.click(targetButton);
     expect(targetButton).toHaveAttribute("aria-expanded", "false");
-    expect(screen.queryByText("Choose a project")).not.toBeInTheDocument();
+    expect(screen.queryByText("Launch in which project?")).not.toBeInTheDocument();
+  });
+
+  it("styles the picker distinctly, marks the current project and shortens the home path", async () => {
+    const user = userEvent.setup();
+    render(
+      <CommandPalette
+        scope="global"
+        projectId={null}
+        onClose={vi.fn()}
+        onLaunched={vi.fn()}
+        onOpenSession={vi.fn()}
+        onOpenGitHub={vi.fn()}
+        onOpenGit={vi.fn()}
+        onOpenAgentRules={vi.fn()}
+        onOpenFileEditor={vi.fn()}
+        onOpenProjectBriefing={vi.fn()}
+        onOpenProjectSetup={vi.fn()}
+        onOpenDockConfig={vi.fn()}
+        onOpenSkills={vi.fn()}
+        onOpenBrowser={vi.fn()}
+        onOpenBlankBrowser={vi.fn()}
+        onOpenIntegrationsSettings={vi.fn()}
+        onOpenTasks={vi.fn()}
+        onOpenBrowserUrl={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("bash alpha");
+    await user.click(screen.getByRole("button", { name: /Target project:/ }));
+
+    expect(screen.getByRole("listbox")).toHaveClass("project-picker");
+    expect(screen.getAllByLabelText("Current project")).toHaveLength(1);
+    expect(screen.getByText("~/alpha")).toBeInTheDocument();
+    expect(screen.queryByText("/home/x/alpha")).not.toBeInTheDocument();
   });
 
   it("filters the project list by query while picker is open", async () => {
@@ -2035,7 +2094,7 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
     await user.click(targetButton);
 
     await user.click(screen.getByText("beta-project"));
-    expect(screen.queryByText("Choose a project")).not.toBeInTheDocument();
+    expect(screen.queryByText("Launch in which project?")).not.toBeInTheDocument();
     await screen.findByText("bash beta");
   });
 
@@ -2107,14 +2166,14 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
     await screen.findByText("bash alpha");
     const targetButton = screen.getByRole("button", { name: /Target project:/ });
     await user.click(targetButton);
-    expect(screen.getByText("Choose a project")).toBeInTheDocument();
+    expect(screen.getByText("Launch in which project?")).toBeInTheDocument();
 
     // Focus the search input so our onKeyDown intercepts Escape
     const input = screen.getByPlaceholderText("Filter projects…");
     await user.click(input);
     await user.keyboard("{Escape}");
     expect(onClose).not.toHaveBeenCalled();
-    expect(screen.queryByText("Choose a project")).not.toBeInTheDocument();
+    expect(screen.queryByText("Launch in which project?")).not.toBeInTheDocument();
     expect(screen.getByText("bash alpha")).toBeInTheDocument();
   });
 
@@ -2341,9 +2400,9 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     renderPalette(openers());
 
     expect(await screen.findByText("Project: mullion")).toBeTruthy();
-    expect(screen.getByText("GitHub: mullion")).toBeTruthy();
-    expect(screen.getByText("Git: mullion")).toBeTruthy();
-    expect(screen.getByText("Preview: mullion")).toBeTruthy();
+    expect(screen.getByText("GitHub")).toBeTruthy();
+    expect(screen.getByText("Git")).toBeTruthy();
+    expect(screen.getByText("Preview")).toBeTruthy();
     expect(screen.getByText("Manage integrations…")).toBeTruthy();
     for (const hidden of [
       "Agent Rules",
@@ -2375,7 +2434,7 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     ]) {
       expect(screen.getByText(item)).toBeTruthy();
     }
-    expect(screen.queryByText("GitHub: mullion")).toBeNull();
+    expect(screen.queryByText("GitHub")).toBeNull();
 
     await user.click(screen.getByText("Scaffold Mullion"));
     expect(o.onOpenProjectSetup).toHaveBeenCalledWith(PROJECT.id);
@@ -2413,12 +2472,12 @@ describe("CommandPalette -> Project drill-in and command search", () => {
 
     await user.click(await screen.findByText("Project: mullion"));
     await user.keyboard("{Escape}");
-    expect(screen.getByText("GitHub: mullion")).toBeTruthy();
+    expect(screen.getByText("GitHub")).toBeTruthy();
     expect(onClose).not.toHaveBeenCalled();
 
     await user.click(screen.getByText("Project: mullion"));
     await user.keyboard("{Backspace}");
-    expect(screen.getByText("GitHub: mullion")).toBeTruthy();
+    expect(screen.getByText("GitHub")).toBeTruthy();
     expect(onClose).not.toHaveBeenCalled();
   });
 

@@ -327,6 +327,12 @@
   .cmd-palette-footer {
     padding-bottom: calc(10px + env(safe-area-inset-bottom));
   }
+  /* Nothing to show (no agent/model-capable launcher highlighted): drop the
+     strip's empty band entirely on phones. Desktop keeps the reserved height. */
+  .cmd-palette-options-strip.collapsed {
+    display: none;
+  }
+
   /* Hermes review, PR #705 — a floor under command-palette.css's `flex: 1;
      min-height: 0`, so an extreme squeeze (see .cmd-palette's own comment
      above) leaves a couple of visibly-scrollable rows rather than a

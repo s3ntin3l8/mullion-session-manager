@@ -55,6 +55,22 @@
   padding: 6px 15px;
   border-bottom: 1px solid var(--border-soft);
 }
+.cmd-palette-options-strip.loading {
+  font-size: 12px;
+  color: var(--dim);
+}
+/* Project picker: tinted like the open "Launch in" chip so it can't be
+   mistaken for the action/integration list. */
+.cmd-palette-list.project-picker {
+  background: color-mix(in srgb, var(--accent-solid) 6%, transparent);
+}
+.cmd-row-current {
+  margin-left: auto;
+  padding-left: 8px;
+  color: var(--accent-solid);
+  font-size: 13px;
+  flex-shrink: 0;
+}
 .cmd-palette-target-row {
   display: flex;
   align-items: center;

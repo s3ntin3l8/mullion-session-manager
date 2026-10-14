@@ -74,6 +74,13 @@ interface CommandRowProps {
   onMouseEnter?: () => void;
 }
 
+// /home/<user>/x -> ~/x, so a project's path subtitle is short enough to scan.
+// Deliberately only the conventional Linux/macOS home roots — an arbitrary
+// `/work/<u>/x` isn't known to be a home directory, so it's left untouched.
+function shortenHome(path: string): string {
+  return path.replace(/^\/(?:home|Users)\/[^/]+(?=\/|$)/, "~");
+}
+
 // One Integrations row — shared by the empty-query list, the "Project ›"
 // sub-list and search results, so they can't drift apart.
 function CommandRow({ command, selected, showBreadcrumb, onClick, onMouseEnter }: CommandRowProps) {
@@ -225,8 +232,13 @@ export function CommandPalette({
   const [pickerOpen, setPickerOpen] = useState(false);
   const [projectIndex, setProjectIndex] = useState(0);
   const [launchers, setLaunchers] = useState<Launcher[]>([]);
+  // The project whose GET /api/projects/:id/actions has settled — drives the
+  // options strip's loading placeholder (derived, so a project switch reads
+  // as "loading" again without a synchronous setState in the effect).
+  const [launchersLoadedFor, setLaunchersLoadedFor] = useState<number | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const effectiveProjectId = manualTargetProjectId ?? targetProjectId;
+  const launchersLoaded = launchersLoadedFor === effectiveProjectId;
 
   // P11 — same posture as Settings.tsx: a fresh mount per open (this
   // component's own header comment above already says so), so `active: true`
@@ -478,10 +490,15 @@ export function CommandPalette({
 
   useEffect(() => {
     if (effectiveProjectId === null) return;
+    // A fast project switch (1 -> 2 -> 3) must not let project 1's slower
+    // response overwrite project 3's launchers.
+    let ignore = false;
     api
       .listProjectActions(effectiveProjectId)
       .then((fetched) => {
+        if (ignore) return;
         setLaunchers(fetched);
+        setLaunchersLoadedFor(effectiveProjectId);
         // Settings -> Launchers & agents "Default agent" — pre-select the
         // matching launcher (by id, since a shell/agent launcher's id is
         // `${kind}:${bin}`, e.g. "agent:claude" — see agent-detect.ts) so
@@ -500,7 +517,14 @@ export function CommandPalette({
         // and this is exactly the old plain-launcher-index behavior.
         setSelectedIndex(query.trim() !== "" ? 0 : defaultIndex >= 0 ? defaultIndex : 0);
       })
-      .catch(() => setLaunchers([]));
+      .catch(() => {
+        if (ignore) return;
+        setLaunchers([]);
+        setLaunchersLoadedFor(effectiveProjectId);
+      });
+    return () => {
+      ignore = true;
+    };
     // Only re-resolve the default on a genuine project switch — re-running
     // this whenever `settings.launchers.defaultAgent` itself changes would
     // yank the current selection out from under a mid-search user.
@@ -861,8 +885,20 @@ export function CommandPalette({
           )}
         </div>
 
-        {!pickerOpen && effectiveProjectId !== null && (
-          <div className="cmd-palette-options-strip">
+        {!pickerOpen && effectiveProjectId !== null && !launchersLoaded && (
+          <div className="cmd-palette-options-strip loading" role="status" aria-live="polite">
+            Loading launchers…
+          </div>
+        )}
+        {!pickerOpen && effectiveProjectId !== null && launchersLoaded && (
+          <div
+            className={`cmd-palette-options-strip${
+              (activeEntry?.type === "launcher" && activeEntry.launcher.kind === "agent") ||
+              showModelPicker
+                ? ""
+                : " collapsed"
+            }`}
+          >
             <div
               style={{
                 visibility:
@@ -922,9 +958,13 @@ export function CommandPalette({
         )}
 
         {pickerOpen ? (
-          <div className="cmux-scroll cmd-palette-list" role="listbox" ref={projectListRef}>
+          <div
+            className="cmux-scroll cmd-palette-list project-picker"
+            role="listbox"
+            ref={projectListRef}
+          >
             <div className="cmd-palette-group-label">
-              {filteredProjects.length === 0 ? "No matching projects" : "Choose a project"}
+              {filteredProjects.length === 0 ? "No matching projects" : "Launch in which project?"}
             </div>
             {filteredProjects.map((p, idx) => (
               <button
@@ -943,14 +983,19 @@ export function CommandPalette({
               >
                 <span
                   className="cmd-row-icon"
-                  style={{ background: "color-mix(in srgb, var(--fg) 8%, transparent)" }}
+                  style={{ background: "color-mix(in srgb, var(--accent-solid) 14%, transparent)" }}
                 >
-                  <FolderIcon size={14} style={{ color: "var(--muted)" }} />
+                  <FolderIcon size={14} style={{ color: "var(--accent-solid)" }} />
                 </span>
                 <span className="cmd-row-body">
                   <span className="cmd-row-title">{p.name}</span>
-                  <span className="cmd-row-subtitle">{p.cwd}</span>
+                  <span className="cmd-row-subtitle">{shortenHome(p.cwd)}</span>
                 </span>
+                {p.id === effectiveProjectId && (
+                  <span className="cmd-row-current" aria-label="Current project">
+                    ✓
+                  </span>
+                )}
                 {idx === activeProjectIndex && <span className="kbd">↵</span>}
               </button>
             ))}

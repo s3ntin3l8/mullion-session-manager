@@ -74,7 +74,7 @@ export function buildPaletteCommands({
     commands.push(
       {
         id: "github",
-        title: `GitHub: ${name}`,
+        title: "GitHub",
         subtitle: "Open issues, pull requests, and status",
         icon: GitHubIcon,
         keywords: ["github", "issues", "pull requests", "prs", "ci"],
@@ -83,7 +83,7 @@ export function buildPaletteCommands({
       },
       {
         id: "git",
-        title: `Git: ${name}`,
+        title: "Git",
         subtitle: "Branch, status, and changed files",
         icon: GitBranchIcon,
         keywords: ["git", "branch", "changes", "diff"],
@@ -162,7 +162,7 @@ export function buildPaletteCommands({
       },
       {
         id: "preview",
-        title: `Preview: ${name}`,
+        title: "Preview",
         subtitle: "Open this project's dev server",
         icon: GlobeIcon,
         keywords: ["preview", "dev server", "browser"],
@@ -171,7 +171,7 @@ export function buildPaletteCommands({
       },
       ...favoriteUrls.map((u): PaletteCommand => ({
         id: `url-${u.id}`,
-        title: `${u.label}: ${name}`,
+        title: u.label,
         subtitle: u.url,
         icon: GlobeIcon,
         keywords: [u.label, u.url],
