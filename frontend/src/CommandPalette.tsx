@@ -75,6 +75,8 @@ interface CommandRowProps {
 }
 
 // /home/<user>/x -> ~/x, so a project's path subtitle is short enough to scan.
+// Deliberately only the conventional Linux/macOS home roots — an arbitrary
+// `/work/<u>/x` isn't known to be a home directory, so it's left untouched.
 function shortenHome(path: string): string {
   return path.replace(/^\/(?:home|Users)\/[^/]+(?=\/|$)/, "~");
 }
@@ -488,9 +490,13 @@ export function CommandPalette({
 
   useEffect(() => {
     if (effectiveProjectId === null) return;
+    // A fast project switch (1 -> 2 -> 3) must not let project 1's slower
+    // response overwrite project 3's launchers.
+    let ignore = false;
     api
       .listProjectActions(effectiveProjectId)
       .then((fetched) => {
+        if (ignore) return;
         setLaunchers(fetched);
         setLaunchersLoadedFor(effectiveProjectId);
         // Settings -> Launchers & agents "Default agent" — pre-select the
@@ -512,9 +518,13 @@ export function CommandPalette({
         setSelectedIndex(query.trim() !== "" ? 0 : defaultIndex >= 0 ? defaultIndex : 0);
       })
       .catch(() => {
+        if (ignore) return;
         setLaunchers([]);
         setLaunchersLoadedFor(effectiveProjectId);
       });
+    return () => {
+      ignore = true;
+    };
     // Only re-resolve the default on a genuine project switch — re-running
     // this whenever `settings.launchers.defaultAgent` itself changes would
     // yank the current selection out from under a mid-search user.
@@ -876,7 +886,7 @@ export function CommandPalette({
         </div>
 
         {!pickerOpen && effectiveProjectId !== null && !launchersLoaded && (
-          <div className="cmd-palette-options-strip loading" role="status">
+          <div className="cmd-palette-options-strip loading" role="status" aria-live="polite">
             Loading launchers…
           </div>
         )}
