@@ -3,10 +3,16 @@ import os from "node:os";
 import path from "node:path";
 import { getStoredSettings } from "../services/settings.js";
 import { expandHome, parseProjectsRootsEnv } from "../services/project-config.js";
-import { inspectDockerStorage, pruneDockerStorage } from "../services/docker-storage.js";
+import {
+  inspectDockerStorage,
+  pruneDockerStorage,
+  type DockerPruneMode,
+} from "../services/docker-storage.js";
 import { sampleSystemStats, type MonitoredPath } from "../services/system-stats.js";
 
 const STATS_CACHE_MS = 10_000;
+// `docker system df -v` is slow on large hosts; share one result across polls.
+const DOCKER_STORAGE_CACHE_MS = 30_000;
 const DOCKER_PRUNE_RATE_LIMIT = { max: 3, timeWindow: "1 minute" };
 
 function databaseDirectory(databaseUrl: string): string {
@@ -40,15 +46,35 @@ export async function systemResourcesRoute(app: FastifyInstance) {
     return value;
   });
 
-  app.get("/api/storage/docker", async () => inspectDockerStorage());
+  let dockerCached: {
+    expiresAt: number;
+    value: Promise<Awaited<ReturnType<typeof inspectDockerStorage>>>;
+  } | null = null;
 
-  app.post(
+  app.get("/api/storage/docker", async () => {
+    if (dockerCached && dockerCached.expiresAt > Date.now()) return dockerCached.value;
+    const value = inspectDockerStorage();
+    dockerCached = { expiresAt: Date.now() + DOCKER_STORAGE_CACHE_MS, value };
+    return value;
+  });
+
+  app.post<{ Body?: { mode?: DockerPruneMode } }>(
     "/api/storage/docker/prune",
-    { config: { rateLimit: DOCKER_PRUNE_RATE_LIMIT } },
-    async (_request, reply) => {
+    {
+      config: { rateLimit: DOCKER_PRUNE_RATE_LIMIT },
+      schema: {
+        body: {
+          type: ["object", "null"],
+          properties: { mode: { type: "string", enum: ["safe", "aggressive"] } },
+          additionalProperties: false,
+        },
+      },
+    },
+    async (request, reply) => {
       try {
-        const result = await pruneDockerStorage();
+        const result = await pruneDockerStorage(request.body?.mode ?? "safe");
         cached = null;
+        dockerCached = null;
         return result;
       } catch (error) {
         if (error instanceof Error && error.message === "DOCKER_PRUNE_IN_PROGRESS") {

@@ -88,6 +88,8 @@ export type {
   SystemStats,
   ResourceSeverity,
   DockerStorageStatus,
+  DockerPruneMode,
+  DockerPruneResult,
   Project,
   CreateProjectDirOptions,
   CreateProjectResult,
