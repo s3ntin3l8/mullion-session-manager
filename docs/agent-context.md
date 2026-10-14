@@ -169,10 +169,10 @@ entries.
 Delivery is per-CLI, since none of the four agents share a config format or
 an ephemeral-overlay mechanism:
 
-|                   | Claude Code                                       | opencode                                   | codex                                                       | agy                                                       |
-| ----------------- | ------------------------------------------------- | ------------------------------------------ | ----------------------------------------------------------- | --------------------------------------------------------- |
-| Project skill     | composed into a per-session `--plugin-dir` bundle | `skills.paths` config key, ephemeral       | committed scaffold mirror only, never live                  | committed scaffold mirror only, never live                |
-| Reviewer subagent | same composed bundle, `agents/<name>.md`          | translated, `<CONFIG_DIR>/agent/<name>.md` | committed scaffold mirror, conditional (issue #943 — below) | none — no committed path exists for it (permanent, #1083) |
+|                   | Claude Code                                       | opencode                                 | codex                                                       | agy                                                       |
+| ----------------- | ------------------------------------------------- | ---------------------------------------- | ----------------------------------------------------------- | --------------------------------------------------------- |
+| Project skill     | composed into a per-session `--plugin-dir` bundle | `skills` config entry, ephemeral         | committed scaffold mirror only, never live                  | committed scaffold mirror only, never live                |
+| Reviewer subagent | same composed bundle, `agents/<name>.md`          | translated, inline `agents.<name>` entry | committed scaffold mirror, conditional (issue #943 — below) | none — no committed path exists for it (permanent, #1083) |
 
 - **Claude Code**: `hook-adapters/mullion-bundle.ts`'s
   `composeClaudeSessionBundle` materializes a per-session plugin directory —
@@ -182,16 +182,17 @@ an ephemeral-overlay mechanism:
   at it instead of the static shipped bundle. If this install hasn't shipped
   a bundle at all, a minimal manifest is synthesized so the project's own
   content still gets through.
-- **opencode**: the project skill rides the same `skills.paths` config key
+- **opencode** (v2): the project skill rides the same `skills` config entry
   (set via `OPENCODE_CONFIG_CONTENT`) the shipped bundle already uses, just
   pointed at an extra, session-scoped directory. The reviewer subagent is
-  **translated**, not passed through verbatim — opencode's own
-  `agent/<name>.md` config schema hard-rejects Claude Code's
+  **translated**, not passed through verbatim, into an inline `agents.<name>`
+  entry (`description`/`mode: subagent`/`system`) — opencode's own
+  agent config schema hard-rejects Claude Code's
   `tools:`/`model:` frontmatter fields at config-load time (verified
   empirically: a bare `tools: Read, Grep, ...` string throws
   `Configuration is invalid ... Expected object | undefined`, and the
-  session never starts at all) — `deriveOpenCodeReviewerAgentFile` strips
-  it down to `description`/`mode: subagent` plus the body before writing it.
+  session never starts at all) — `deriveOpenCodeReviewerAgentConfig` strips
+  it down to `description`/`mode: subagent` plus the body as `system`.
 - **codex and agy**: neither has an ephemeral per-project overlay — their
   own project-scope skill discovery is a fixed, workspace-relative
   `.agents/skills/<name>/SKILL.md` path in the repo itself. Codex has no
@@ -500,7 +501,7 @@ own text default of ""):
   doesn't affect the file's own existence, just whether an agent's own
   SessionStart channel is told to look at it.
 - **Inject Mullion tooling bundle** — gates the whole `--plugin-dir`/
-  `skills.paths` delivery mechanism for both the shipped bundle skills
+  `skills` delivery mechanism for both the shipped bundle skills
   and any project skill/reviewer subagent, and — since issue #941 — the
   boot-time host-local sync that installs the shipped bundle skills into
   each CLI's own global skill directory (see

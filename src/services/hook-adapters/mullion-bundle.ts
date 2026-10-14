@@ -707,6 +707,35 @@ export function deriveOpenCodeReviewerAgentFile(
   return { name: parsed.name, contents };
 }
 
+/**
+ * opencode v2 counterpart of deriveOpenCodeReviewerAgentFile for the
+ * per-session path: a project's reviewer agent delivered as an
+ * `agents.<name>` entry in `OPENCODE_CONFIG_CONTENT` rather than an
+ * `agent/<name>.md` file under a redirected `OPENCODE_CONFIG_DIR` (v2's
+ * `OPENCODE_CONFIG_DIR` REPLACES the user's global config root instead of
+ * adding to it, so Mullion no longer sets it — see hook-adapters/opencode.ts).
+ * v2's `agents.<name>` schema takes an inline `system` prompt, a
+ * `description`, and `mode` (verified against `@opencode/schema`'s
+ * `ConfigAgent.Info`); Claude-Code-only keys (`tools`, `model`) are dropped
+ * for the same hard-fail reason deriveOpenCodeReviewerAgentFile documents.
+ * `mode: "subagent"` keeps it out of the primary-agent picker.
+ *
+ * `null` for the same unparseable/unsafe-frontmatter cases as the file
+ * variant — same silent-skip posture.
+ */
+export function deriveOpenCodeReviewerAgentConfig(raw: string): {
+  name: string;
+  config: { description: string; mode: "subagent"; system: string };
+} | null {
+  const parsed = parseSkillFrontmatter(raw);
+  if (!parsed || isDangerousSkillName(parsed.name)) return null;
+  const body = raw.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "").trim();
+  return {
+    name: parsed.name,
+    config: { description: parsed.description, mode: "subagent", system: body },
+  };
+}
+
 // Issue #941/#950 — agy's flat-file agent convention
 // (`~/.gemini/config/agents/mullion-<name>.md`, confirmed working by #950's
 // spike) is materially simpler than opencode's: no config-loader hard-fail

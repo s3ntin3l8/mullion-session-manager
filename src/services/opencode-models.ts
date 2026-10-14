@@ -120,9 +120,13 @@ function createModelCatalog(config: {
   };
 }
 
+// `--standalone`: opencode v2 otherwise routes every subcommand through the
+// user's shared background service — and, if none is running, SPAWNS one
+// carrying this Mullion process's own env, which the user's own opencode
+// would then attach to. A private per-call server avoids both.
 const opencodeCatalog = createModelCatalog({
   file: "opencode",
-  args: ["models"],
+  args: ["models", "--standalone"],
   parse: (stdout) =>
     Array.from(
       new Set(

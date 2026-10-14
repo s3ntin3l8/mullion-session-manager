@@ -556,12 +556,12 @@ function projectAgentAndCommandDirs(cwd: string): FileSourceDir[] {
  * `<CONFIG_DIR>/agent/<name>.md` convention (singular `agent`, not `agents`)
  * hangs off `resolveOpenCodeConfigHome()`, the same XDG-aware root as its
  * global skills dir — the singular-`agent/` directory name itself was
- * live-verified only for the EPHEMERAL `OPENCODE_CONFIG_DIR` case
- * (mullion-bundle.ts's `deriveOpenCodeReviewerAgentFile`), not this real
- * config-home root; applying the same convention here is a reasonable but
- * unverified inference, not a repeated spike. Fails closed if wrong — the
- * directory simply won't exist and this scan finds nothing, same as any
- * other absent directory in this file. opencode has no slash-command
+ * live-verified only against a scratch config dir (mullion-bundle.ts's
+ * `deriveOpenCodeReviewerAgentFile`), and opencode v2's config discovery
+ * (`{agent,agents}/**\/*.md` under every config dir) accepts it for this
+ * real config-home root too (read from the v2.0.29 source, not a live
+ * spike). Fails closed if wrong — the directory simply won't exist and this
+ * scan finds nothing, same as any other absent directory in this file. opencode has no slash-command
  * concept Mullion discovers here.
  *
  * Issue #1080 — agy's global agent root (`resolveAgyGlobalAgentsDir()`,

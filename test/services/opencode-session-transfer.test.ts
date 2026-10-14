@@ -7,10 +7,10 @@ import type * as ChildProcess from "node:child_process";
 // spawns for real) — every test here runs against a fully controlled fake
 // child_process, same approach as test/services/git-kill-escalation.test.ts,
 // rather than the real binary. The id-rewrite logic (rewriteSessionIds) is
-// exported and unit-tested directly against a fixture shaped exactly like a
-// real `opencode export` payload captured during this feature's own
-// pre-implementation spike (see opencode-session-transfer.ts's header
-// comment for that spike's full writeup).
+// exported and unit-tested directly against a fixture shaped like opencode
+// v2's `opencode session export` payload (`{ info, messages }` with FLAT
+// messages — assistant content lives inline, there are no per-message
+// `parts` arrays as in 1.x; see opencode-session-transfer.ts's header).
 
 class FakeChild extends EventEmitter {
   stdout = new EventEmitter();
@@ -41,9 +41,8 @@ beforeEach(() => {
   spawnQueue = [];
 });
 
-// A minimal, realistically-shaped fixture — one session, two messages, one
-// part each — matching the real `opencode export` output captured during
-// the spike (info + messages[].info/.parts, sessionID/messageID cross-refs).
+// A minimal fixture shaped like v2's `SessionTransfer.Data` — one session,
+// two flat messages carrying their own id (+ a sessionID cross-reference).
 const EXPORT_FIXTURE = {
   info: {
     id: "ses_ff7c7aa42ffeR8htL6o3tdEqhl",
@@ -53,34 +52,14 @@ const EXPORT_FIXTURE = {
   },
   messages: [
     {
-      info: {
-        id: "msg_0083857590015ySjnn7VuIJAM6",
-        sessionID: "ses_ff7c7aa42ffeR8htL6o3tdEqhl",
-        role: "user",
-      },
-      parts: [
-        {
-          id: "prt_008385759001aaaaaaaaaaaaaa",
-          messageID: "msg_0083857590015ySjnn7VuIJAM6",
-          sessionID: "ses_ff7c7aa42ffeR8htL6o3tdEqhl",
-          type: "text",
-        },
-      ],
+      id: "msg_0083857590015ySjnn7VuIJAM6",
+      sessionID: "ses_ff7c7aa42ffeR8htL6o3tdEqhl",
+      type: "user",
     },
     {
-      info: {
-        id: "msg_00838576f001FYZbKwMmPQPHHS",
-        sessionID: "ses_ff7c7aa42ffeR8htL6o3tdEqhl",
-        role: "assistant",
-      },
-      parts: [
-        {
-          id: "prt_00838576f001bbbbbbbbbbbbbb",
-          messageID: "msg_00838576f001FYZbKwMmPQPHHS",
-          sessionID: "ses_ff7c7aa42ffeR8htL6o3tdEqhl",
-          type: "text",
-        },
-      ],
+      id: "msg_00838576f001FYZbKwMmPQPHHS",
+      sessionID: "ses_ff7c7aa42ffeR8htL6o3tdEqhl",
+      type: "assistant",
     },
   ],
 };
@@ -96,34 +75,26 @@ describe("rewriteSessionIds (issue #271 follow-up)", () => {
 
   it("remaps every message id and its sessionID reference to the new session id", () => {
     const result = rewriteSessionIds(EXPORT_FIXTURE) as {
-      payload: { messages: Array<{ info: { id: string; sessionID: string } }> };
+      payload: { messages: Array<{ id: string; sessionID: string }> };
       newSessionId: string;
     };
     const [first, second] = result.payload.messages;
-    expect(first!.info.id).not.toBe(EXPORT_FIXTURE.messages[0]!.info.id);
-    expect(second!.info.id).not.toBe(EXPORT_FIXTURE.messages[1]!.info.id);
-    expect(first!.info.id).not.toBe(second!.info.id);
-    expect(first!.info.sessionID).toBe(result.newSessionId);
-    expect(second!.info.sessionID).toBe(result.newSessionId);
+    expect(first!.id).not.toBe(EXPORT_FIXTURE.messages[0]!.id);
+    expect(second!.id).not.toBe(EXPORT_FIXTURE.messages[1]!.id);
+    expect(first!.id).not.toBe(second!.id);
+    // v2's importer returns 409 on an existing id rather than upserting, so a
+    // message must never keep its source id.
+    expect(first!.id.startsWith("msg_")).toBe(true);
+    expect(first!.sessionID).toBe(result.newSessionId);
+    expect(second!.sessionID).toBe(result.newSessionId);
   });
 
-  it("remaps each part's id, messageID, and sessionID to match its rewritten message", () => {
-    const result = rewriteSessionIds(EXPORT_FIXTURE) as {
-      payload: {
-        messages: Array<{
-          info: { id: string };
-          parts: Array<{ id: string; messageID: string; sessionID: string }>;
-        }>;
-      };
-      newSessionId: string;
-    };
-    for (const message of result.payload.messages) {
-      const part = message.parts[0]!;
-      expect(part.messageID).toBe(message.info.id);
-      expect(part.sessionID).toBe(result.newSessionId);
-      expect(part.id).not.toMatch(/^prt_008385759001aaaaaaaaaaaaaa$/);
-      expect(part.id).not.toMatch(/^prt_00838576f001bbbbbbbbbbbbbb$/);
-    }
+  it("leaves a message without a usable id untouched", () => {
+    const result = rewriteSessionIds({
+      info: { id: "ses_x_1234567890abcdef" },
+      messages: [{ type: "user" }, "junk", { id: "" }],
+    }) as { payload: { messages: unknown[] } };
+    expect(result.payload.messages).toEqual([{ type: "user" }, "junk", { id: "" }]);
   });
 
   it("returns null for a payload missing a usable info.id", () => {
@@ -180,7 +151,7 @@ describe("transferOpencodeSession (issue #271 follow-up)", () => {
 
     const result = await resultPromise;
     expect(result.transferred).toBe(false);
-    expect(result.reason).toMatch(/opencode export failed/);
+    expect(result.reason).toMatch(/opencode session export failed/);
     expect(result.reason).toMatch(/session not found/);
   });
 
@@ -200,7 +171,7 @@ describe("transferOpencodeSession (issue #271 follow-up)", () => {
     const result = await resultPromise;
     expect(result).toEqual({
       transferred: false,
-      reason: "opencode export produced unparseable JSON",
+      reason: "opencode session export produced unparseable JSON",
     });
   });
 
@@ -220,7 +191,7 @@ describe("transferOpencodeSession (issue #271 follow-up)", () => {
     const result = await resultPromise;
     expect(result).toEqual({
       transferred: false,
-      reason: "opencode export payload had an unrecognized shape",
+      reason: "opencode session export payload had an unrecognized shape",
     });
   });
 
@@ -272,7 +243,48 @@ describe("transferOpencodeSession (issue #271 follow-up)", () => {
 
     const result = await resultPromise;
     expect(result.transferred).toBe(false);
-    expect(result.reason).toMatch(/opencode import failed/);
+    expect(result.reason).toMatch(/opencode session import failed/);
     expect(result.reason).toMatch(/Invalid id format/);
+  });
+
+  // opencode v2: `session export/import` subcommands (1.x's top-level
+  // `export`/`import --pure` are gone), `--standalone` on BOTH legs so each
+  // runs against a private server — never attaching to (or spawning, with
+  // Mullion's own env) the user's shared background service — and
+  // `--directory` so the importer re-keys the session to the worktree.
+  it("runs `session export <id> --standalone` then `session import <file> --directory <target> --standalone`", async () => {
+    const spawnMock = (await import("node:child_process")).spawn as unknown as ReturnType<
+      typeof vi.fn
+    >;
+    spawnMock.mockClear();
+    const exportChild = new FakeChild();
+    const importChild = new FakeChild();
+    spawnQueue = [exportChild, importChild];
+
+    const resultPromise = transferOpencodeSession({
+      sourceCwd: "/abs/source",
+      agentSessionId: EXPORT_FIXTURE.info.id,
+      targetCwd: "/abs/target",
+    });
+    exportChild.stdout.emit("data", Buffer.from(JSON.stringify(EXPORT_FIXTURE)));
+    exportChild.exitCode = 0;
+    exportChild.emit("close", 0);
+    await vi.waitFor(() => expect(spawnQueue.length).toBe(0));
+    importChild.exitCode = 0;
+    importChild.emit("close", 0);
+    await resultPromise;
+
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+    const [exportCall, importCall] = spawnMock.mock.calls as Array<
+      [string, string[], { cwd: string }]
+    >;
+    expect(exportCall[0]).toBe("opencode");
+    expect(exportCall[1]).toEqual(["session", "export", EXPORT_FIXTURE.info.id, "--standalone"]);
+    expect(exportCall[2].cwd).toBe("/abs/source");
+    expect(importCall[0]).toBe("opencode");
+    expect(importCall[1].slice(0, 2)).toEqual(["session", "import"]);
+    expect(importCall[1].slice(3)).toEqual(["--directory", "/abs/target", "--standalone"]);
+    expect(importCall[1]).not.toContain("--pure");
+    expect(importCall[2].cwd).toBe("/abs/target");
   });
 });

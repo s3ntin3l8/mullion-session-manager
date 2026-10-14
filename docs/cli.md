@@ -312,7 +312,7 @@ working — the boot-time sync already runs automatically with no user action.
   `sessions.injectMullionBundle` off so it stays removed on the primary.
   Issue #884-style threading propagates this setting to a new _session's_
   own ephemeral per-launch gate on a remote agent host (the
-  `--plugin-dir`/`skills.paths`/`installBundleSkills` decision each CLI
+  `--plugin-dir`/`skills`/`installBundleSkills` decision each CLI
   adapter makes at launch time). Issue #1089 closed the boot-time-reinstall
   half of the remaining gap this used to have: this command now ALSO fans
   out to every registered agent host, removing bundle content there too

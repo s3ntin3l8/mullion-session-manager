@@ -105,7 +105,7 @@ describe("applyHookAdapters (issue #174)", () => {
   it("falls back to the unmodified command and logs when the settings write fails", () => {
     const c = ctx();
     // mkdirSync's `recursive: true` (added for issue #175's nested
-    // <id>.opencode-config/plugins/ path) means a merely-nonexistent
+    // <id>.opencode-config/plugin/ path) means a merely-nonexistent
     // directory no longer fails — it gets created. A genuinely unwritable
     // parent (chmod 0o500, restored in afterEach) is what actually forces
     // the write to fail now.
@@ -117,22 +117,18 @@ describe("applyHookAdapters (issue #174)", () => {
   });
 
   describe("OpenCode adapter (issue #175)", () => {
-    it("writes the plugin file into a newly-created nested plugins/ directory and sets OPENCODE_CONFIG_DIR", () => {
+    it("writes the plugin into a newly-created nested plugin/ directory and wires it via OPENCODE_CONFIG_CONTENT (no OPENCODE_CONFIG_DIR)", () => {
       const c = ctx();
       const result = applyHookAdapters("opencode", c);
-      const pluginPath = path.join(
-        c.sessionsDir,
-        "1.opencode-config",
-        "plugins",
-        "mullion-hook-emitter.js",
-      );
-      expect(existsSync(pluginPath)).toBe(true);
+      const pluginDir = path.join(c.sessionsDir, "1.opencode-config", "plugin");
+      expect(existsSync(path.join(pluginDir, "server.js"))).toBe(true);
       // Issue #881 — mcp.mullion is unconditional, so OPENCODE_CONFIG_CONTENT
-      // is always present now, not just OPENCODE_CONFIG_DIR.
+      // is always present. opencode v2 resolves server.js inside a configured
+      // plugin DIRECTORY, and `--standalone` keeps the TUI on a private server
+      // (see hook-adapters/opencode.ts's header).
       expect(result).toEqual({
-        command: "opencode",
+        command: "opencode --standalone",
         envAdditions: {
-          OPENCODE_CONFIG_DIR: path.join(c.sessionsDir, "1.opencode-config"),
           OPENCODE_CONFIG_CONTENT: JSON.stringify({
             mcp: buildOpenCodeMcpConfig(
               resolveMcpServerPath(),
@@ -140,13 +136,14 @@ describe("applyHookAdapters (issue #174)", () => {
               c.hookToken,
               c.controlSocketPath,
             ),
+            plugins: [pluginDir],
           }),
         },
         matched: true,
         emits: expect.any(Array) as unknown,
       });
       expect(result.emits.length).toBeGreaterThan(0);
-      expect(result.emits).toContain("notification");
+      expect(result.emits).toContain("permission_request");
     });
   });
 });

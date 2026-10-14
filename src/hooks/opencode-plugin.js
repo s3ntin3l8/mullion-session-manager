@@ -1,366 +1,267 @@
-// OpenCode hook plugin (issue #175) — OpenCode has no shell-command hooks
-// (unlike Claude Code/Codex/agy), only a JS/TS plugin API, so it can't reuse
-// forwarder.mjs. This is that agent's own bridge to the same hook socket
-// protocol, auto-injected per session (see hook-adapters/opencode.ts) via
-// OPENCODE_CONFIG_DIR pointing at an ephemeral per-session directory — never
-// a write to the user's real ~/.config/opencode or a project's .opencode/.
+// OpenCode hook plugin (issue #175, rewritten for opencode v2 — minimum
+// 2.0.29) — OpenCode has no shell-command hooks (unlike Claude Code/Codex/
+// agy), only a JS plugin API, so it can't reuse forwarder.mjs. This is that
+// agent's own bridge to the same hook socket protocol, auto-injected per
+// session (see hook-adapters/opencode.ts) as a directory plugin referenced
+// from `OPENCODE_CONFIG_CONTENT`'s `plugins` — never a write to the user's
+// real ~/.config/opencode or a project's .opencode/.
 //
-// Deliberately plain JavaScript, not TypeScript, for the same reason
-// forwarder.mjs is: this file is copied byte-for-byte into that ephemeral
-// directory and loaded directly by OpenCode's OWN plugin loader/runtime, not
-// imported by Mullion's server process — it must run unmodified whether
-// Mullion itself is under `tsx watch` (dev) or the compiled `dist/` build,
-// with no tsc step of its own (see package.json's build script, which copies
-// the whole src/hooks/ directory verbatim).
+// Deliberately plain JavaScript importing only `node:*`, for the same reason
+// forwarder.mjs is: this file is copied byte-for-byte into an ephemeral
+// directory (as `server.js`) and loaded directly by OpenCode's OWN plugin
+// loader, not imported by Mullion's server process. v2's loader requires
+// exactly `export default { id, setup }`; it provides `effect` and
+// `@opencode/plugin` to plugins but NOT `zod`, so the promote tool below
+// declares a plain JSON Schema `input` instead.
 //
-// Follow-up to #275 (gap #2, issue #259) — beyond `session.idle`/
-// `file.edited`, this now also forwards `permission.updated`/
-// `permission.replied`, `session.error`, `tui.toast.show` (warning/error
-// only), and `session.status`. All are non-blocking, OBSERVATIONAL events
-// from opencode's own event bus (the same `event` hook this file already
-// taps) — confirmed against the installed `@opencode-ai/sdk` package's own
-// generated types (`Event` union in dist/gen/types.gen.d.ts). Crucially,
-// `permission.updated`/`permission.replied` are NOT the same thing as
-// opencode's actual GATING hook, `permission.ask` (mutating `output.status`)
-// — that one is still deliberately NOT wired up here: there is no endpoint
-// yet to answer a real gate decision (issue #178), and wiring a blocking
-// permission hook with nothing to resolve it would hang every gated action
-// instead of just not being there — same reasoning as Claude Code's deferred
-// PreToolUse (see hook-adapters/claude-code.ts). `permission.updated` is
-// merely opencode telling the world a permission decision is now pending,
-// exactly as observational as `session.idle` telling the world a turn ended.
+// v2 differences from the 1.x plugin this replaces:
+//  - events come from `ctx.event.subscribe()` (an async iterable), and the
+//    payload is under `event.data` (1.x: `event.properties`). Event names
+//    changed — see mapOpenCodeEvent. `todo.updated`, `session.diff`,
+//    `tui.toast.show`, `worktree.failed` and `mcp.browser.open.failed` have
+//    no v2 server-side source, so those hook kinds are no longer emitted.
+//  - the plugin may run in a server whose `process.cwd()` is not the
+//    session's directory (and `setup` runs once per Location), so directories
+//    come from `event.location.directory` / `ctx.location.directory`, never
+//    from `process.cwd()`. Mullion launches opencode with `--standalone` so
+//    the server is private to the session and inherits its MULLION_* env —
+//    under the default shared background service they would be wrong.
+//  - the bash tool is now `shell` (`input.command`/`input.workdir`).
+//
+// Only non-blocking events are forwarded. The real gating hook,
+// `ctx.permission.hook("evaluate")`, is deliberately not wired up yet (issue
+// #178, same reasoning as Claude Code's deferred PreToolUse): with no
+// endpoint to answer a gate decision, a blocking hook would hang every gated
+// action instead of just not being there.
 
 import net from "node:net";
 import path from "node:path";
+import { readFileSync } from "node:fs";
+
+/** Per-plugin-instance bookkeeping the otherwise-pure mapper needs across
+ * events: v2 reports subagent activity as ordinary events on a CHILD session
+ * (`session.created` with a `parentID`), so a child's execution events must
+ * not be mistaken for the main session's turn boundaries; and
+ * `form.replied`/`form.cancelled` carry only a `sessionID`, so a pending
+ * question must be remembered to know the reply resolves one. */
+function createMapState() {
+  return { childSessions: new Set(), questionSessions: new Set() };
+}
 
 /** Issue #1230 — opencode has no Stop-analogue field carrying the agent's
  * own final turn text the way Claude Code/codex's Stop hook does, so this
- * reconstructs one from opencode's own `message.updated`/`message.part.
- * updated` event stream (confirmed live against installed opencode 1.18.31
- * via a scratch OPENCODE_CONFIG_DIR + `opencode run`): a `message.updated`
- * event with `info.role === "assistant"` announces a new assistant message
- * BEFORE any of its `message.part.updated` text arrives, so tracking "the
- * current assistant messageID" and resetting per-part text only when that
- * ID changes stays correctly scoped to one turn — including discarding the
- * PRECEDING `message.part.updated` for the user's own echoed prompt, whose
- * `part.messageID` never matches an assistant message ID. Parts are kept in
- * a Map keyed by `part.id` (not simply overwritten as one string) because
- * opencode replaces a part's text in place as it streams (observed: "" then
- * the full string, not incremental appends) but a turn can still produce
- * more than one distinct text part; joining every part id ever seen for the
- * current assistant message, in first-seen order, covers both.
- *
- * Kept as its own tracker object (not the module-level mutable state
- * `mapOpenCodeEvent` below deliberately avoids) so `mapOpenCodeEvent` itself
- * stays pure and single-call testable — `MullionHookEmitter` owns one
- * instance per opencode session process (see its `event` handler below). */
+ * reconstructs one from v2's `session.text.ended` events (`data.text`, keyed
+ * by `data.assistantMessageID` + `data.ordinal`). The tracked text is scoped
+ * to the CURRENT assistant message — reset when the message id changes and
+ * when a new execution starts — and parts are joined in ordinal order, so a
+ * message with several text blocks still reads as one turn. Child (subagent)
+ * sessions are ignored so their prose never lands on the main session's
+ * "done". Kept as its own tracker object so `mapOpenCodeEvent` stays pure;
+ * `setup` owns one instance per plugin instance. */
 function createAssistantTextTracker() {
   let assistantMessageId = null;
   let parts = new Map();
   return {
-    observe(event) {
-      if (event?.type === "message.updated" && event.properties?.info?.role === "assistant") {
-        const id = event.properties.info.id;
-        if (typeof id === "string" && id !== assistantMessageId) {
-          assistantMessageId = id;
+    observe(event, state) {
+      const data = event?.data;
+      if (!data || typeof data !== "object") return;
+      if (state?.childSessions?.has(data.sessionID)) return;
+      if (event.type === "session.execution.started") {
+        assistantMessageId = null;
+        parts = new Map();
+      } else if (event.type === "session.text.ended") {
+        if (typeof data.text !== "string" || typeof data.assistantMessageID !== "string") return;
+        if (data.assistantMessageID !== assistantMessageId) {
+          assistantMessageId = data.assistantMessageID;
           parts = new Map();
         }
-      } else if (
-        event?.type === "message.part.updated" &&
-        event.properties?.part?.type === "text"
-      ) {
-        const part = event.properties.part;
-        if (
-          assistantMessageId !== null &&
-          part.messageID === assistantMessageId &&
-          typeof part.text === "string"
-        ) {
-          parts.set(part.id, part.text);
-        }
+        parts.set(typeof data.ordinal === "number" ? data.ordinal : parts.size, data.text);
       }
     },
     current() {
-      return parts.size > 0 ? [...parts.values()].join("\n\n") : null;
+      if (parts.size === 0) return null;
+      return [...parts.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([, text]) => text)
+        .join("\n\n");
     },
   };
 }
 
-/** Maps one OpenCode plugin `event` payload to an array of hook-protocol
- * messages, or `null` if this event type isn't forwarded (yet, or ever).
- * Most events produce a single-element array; branch/worktree events may
- * produce two (cwd_changed + git_branch) when `cwd` is provided. Pure — no
- * I/O — so it's unit-tested directly by importing this file, via the
- * `MullionHookEmitter.mapOpenCodeEvent` property below rather than its own
- * module export — see that assignment for why. NOT `export`ed itself.
+function nonEmptyString(value) {
+  return typeof value === "string" && value.length > 0;
+}
+
+/** Maps one OpenCode v2 event (`{ type, data, location? }`) to an array of
+ * hook-protocol messages, or `null` if this event type isn't forwarded.
+ * Pure apart from mutating `state` (see createMapState) — no I/O — so it's
+ * unit-tested directly via the `mapOpenCodeEvent` property on the default
+ * export below. NOT exported itself (see the export note at the bottom).
  *
- * `cwd` — when provided, the opencode process's own cwd (process.cwd()),
- * included as a cwd_changed message alongside branch events so PtyManager's
- * liveCwd reflects the directory opencode is actually running from.
- *
- * `lastAssistantMessage` — issue #1230, the current turn's assistant text
- * reconstructed by createAssistantTextTracker above (or null); attached to
- * the "done" progress messages below, the same field name Claude Code's/
- * codex's Stop hook already carries it under. */
-function mapOpenCodeEvent(event, cwd, lastAssistantMessage = null) {
-  if (event?.type === "session.idle") {
-    // Issue #271 follow-up — session.idle's own payload already carries
-    // opencode's internal session id (properties.sessionID) for free, so
-    // reporting it here needs no extra hook registration. Sent alongside the
-    // existing progress message on every turn (not just once) — this is a
-    // LIVE fact, not an announcement, and PtyManager just overwrites its
-    // stored value each time. Lets a later promote export/import this
-    // session's real conversation history into the new worktree session
-    // instead of only a seed summary (see opencode-session-transfer.ts).
+ * `fallbackCwd` — used for cwd_changed when the event has no
+ * `location.directory`. `lastAssistantMessage` — issue #1230, the current
+ * turn's assistant text from createAssistantTextTracker (or null); attached
+ * to the "done" progress message, the same field name Claude Code's/codex's
+ * Stop hook carries it under. */
+function mapOpenCodeEvent(
+  event,
+  fallbackCwd,
+  lastAssistantMessage = null,
+  state = createMapState(),
+) {
+  const type = event?.type;
+  const data = event?.data;
+  if (typeof type !== "string" || !data || typeof data !== "object") return null;
+  const sessionID = data.sessionID;
+  const isChild = nonEmptyString(sessionID) && state.childSessions.has(sessionID);
+  const cwd = nonEmptyString(event.location?.directory) ? event.location.directory : fallbackCwd;
+
+  // Subagent events (issue #321). v2 has no dedicated subagent event: a
+  // subagent is a child session, so its lifecycle is `session.created` with
+  // a `parentID` through to that child's own execution end.
+  if (type === "session.created") {
+    if (nonEmptyString(data.parentID) && nonEmptyString(sessionID)) {
+      state.childSessions.add(sessionID);
+      return [{ kind: "subagent", state: "started" }];
+    }
+    return null;
+  }
+
+  // A turn started/ended/failed/was interrupted. Replaces 1.x's
+  // `session.idle`/`session.status`/`session.error`.
+  if (type === "session.execution.started") {
+    if (isChild) return null;
+    return [{ kind: "turn_start" }, { kind: "progress", phase: "generating" }];
+  }
+  if (
+    isChild &&
+    (type === "session.execution.succeeded" ||
+      type === "session.execution.failed" ||
+      type === "session.execution.interrupted")
+  ) {
+    state.childSessions.delete(sessionID);
+    return [{ kind: "subagent", state: "finished" }];
+  }
+  if (type === "session.execution.succeeded") {
+    // Issue #271 follow-up — the session id is reported on every finished
+    // turn (a LIVE fact, not an announcement; PtyManager just overwrites its
+    // stored value) so a later promote can export/import this session's real
+    // conversation history instead of only a seed summary (see
+    // opencode-session-transfer.ts).
     const progress = { kind: "progress", phase: "done" };
     if (lastAssistantMessage !== null) progress.lastAssistantMessage = lastAssistantMessage;
     const messages = [progress];
-    const sessionId = event.properties?.sessionID;
-    if (typeof sessionId === "string" && sessionId.length > 0) {
-      messages.push({ kind: "agent_session", sessionId });
-    }
+    if (nonEmptyString(sessionID)) messages.push({ kind: "agent_session", sessionId: sessionID });
     return messages;
   }
-  if (event?.type === "file.edited") {
-    const file = event.properties?.file;
-    if (typeof file !== "string" || file.length === 0) {
-      return null;
-    }
-    return [{ kind: "file_change", path: file, action: "modify" }];
-  }
-  // Fix: opencode v2 event names — opencode 1.18.7 fires `permission.asked`
-  // (v2 API), not `permission.updated` (v1). The v2 PermissionRequest type
-  // has `permission` (the permission type, e.g. "bash") and `patterns`
-  // (file paths) instead of v1's `title` (human-readable summary). Mapped to
-  // `permission_request` so it gets the dedicated purple "Needs permission"
-  // dot and output-immune attention semantics (see hook-protocol.ts's
-  // permission_request comment).
-  if (event?.type === "permission.asked") {
-    const permission = event.properties?.permission;
-    const pattern = event.properties?.patterns?.[0];
-    const summary = [permission, pattern]
-      .filter((s) => typeof s === "string" && s.length > 0)
-      .join(" ");
-    return [{ kind: "permission_request", tool: "opencode", summary }];
-  }
-  // Follow-up to #275 (gap #2), fixed by fix: status-clearing-semantics —
-  // the pending permission above has now been answered (by a human in the
-  // TUI, or auto-approved by opencode's own trust config). Mapped to
-  // `permission_resolved`, matching what `permission.updated` above actually
-  // raises (`permission_request`, not a generic `notification`) — this used
-  // to map to `notification_resolved`, whose handler only clears a confirmed
-  // `hookNotification` attention kind, not `permissionRequest`/
-  // `permissionState`, so answering an opencode permission cleared nothing
-  // at all. See PermissionResolvedHookMessage's doc comment in
-  // hook-protocol.ts.
-  if (event?.type === "permission.replied") {
-    return [{ kind: "permission_resolved" }];
-  }
-  // Follow-up to #275 (gap #2) — an agent-level error (provider auth, API
-  // failure, output-length limit, ...) is exactly a "needs your attention"
-  // event. Mapped to `tool_failure` (not a generic `notification`) so it
-  // gets the dedicated red error dot in the sidebar and counts in the
-  // aggregate attention badge. `MessageAbortedError` is the one member of
-  // this union that means the USER interrupted the turn themselves (Ctrl-C)
-  // — not attention-worthy, so it's the one error kind deliberately skipped.
-  // `error.data` is typed loosely by the SDK (only
-  // MessageOutputLengthError's `data` has no guaranteed `message` field), so
-  // this falls back to the error's own `name` rather than assuming one.
-  if (event?.type === "session.error") {
-    const error = event.properties?.error;
-    if (!error || error.name === "MessageAbortedError") {
-      return null;
-    }
-    const message = error.data?.message;
+  // An agent-level error (provider auth, API failure, ...) is exactly a
+  // "needs your attention" event — `tool_failure` gets the dedicated red
+  // error dot and counts in the aggregate attention badge. A user abort is
+  // a separate `session.execution.interrupted` event in v2 (deliberately NOT
+  // mapped — not attention-worthy), unlike 1.x's `MessageAbortedError`.
+  if (type === "session.execution.failed") {
+    const error = data.error;
+    if (!error || typeof error !== "object") return null;
+    const errorType = nonEmptyString(error.type) ? error.type : "error";
     return [
       {
         kind: "tool_failure",
         tool: "opencode",
-        error: error.name,
-        summary: typeof message === "string" && message.length > 0 ? message : error.name,
+        error: errorType,
+        summary: nonEmptyString(error.message) ? error.message : errorType,
       },
     ];
   }
-  // Follow-up to #275 (gap #2) — mirrors opencode's own user-facing toast,
-  // but only `warning`/`error` variants: `info`/`success` (e.g. "copied to
-  // clipboard") are routine confirmations, not attention-worthy, and would
-  // just be notification noise.
-  if (event?.type === "tui.toast.show") {
-    const { variant, title, message } = event.properties ?? {};
-    if (variant !== "warning" && variant !== "error") {
-      return null;
-    }
+  // A rate-limit/provider backoff is a stall worth surfacing as progress.
+  // NOTE: the backend's `progress` phase is a CLOSED enum
+  // (thinking|generating|done — see hook-protocol.ts's validateProgress);
+  // `generating` is purely a status_change and drives no attention itself.
+  if (type === "session.retry.scheduled") {
+    if (isChild) return null;
+    const message = data.error?.message;
     return [
       {
-        kind: "notification",
-        title: typeof title === "string" && title.length > 0 ? title : "opencode",
-        body: typeof message === "string" ? message : "",
+        kind: "progress",
+        phase: "generating",
+        detail: `retry attempt ${data.attempt}${nonEmptyString(message) ? `: ${message}` : ""}`,
       },
     ];
   }
-  // Question events — opencode's `question` tool fires these when the model
-  // asks the user a multiple-choice question. Mapped to a dedicated `question`
-  // hook kind so Mullion shows an "awaiting answer" session status, with
-  // output-immune semantics (mirroring permission_request/plan_ready).
-  if (event?.type === "question.asked") {
-    const questions = event.properties?.questions;
-    const first = Array.isArray(questions) && questions.length > 0 ? questions[0] : null;
-    const tool = event.properties?.tool;
-    const hasTool = tool && typeof tool.messageID === "string" && typeof tool.callID === "string";
+  // Files the agent changed during a step (relative to the session's
+  // directory) — v2's replacement for 1.x's `file.edited`. The noisier
+  // `filesystem.changed` watcher event is deliberately not used: it fires
+  // for every change on disk, not just the agent's own edits.
+  if (type === "session.step.ended") {
+    if (isChild || !Array.isArray(data.files)) return null;
+    const messages = data.files.filter(nonEmptyString).map((file) => ({
+      kind: "file_change",
+      path: nonEmptyString(cwd) && !path.isAbsolute(file) ? path.resolve(cwd, file) : file,
+      action: "modify",
+    }));
+    return messages.length > 0 ? messages : null;
+  }
+
+  // `permission.asked` -> `permission_request`, so it gets the dedicated
+  // purple "Needs permission" dot and output-immune attention semantics (see
+  // hook-protocol.ts's permission_request comment). v2's request carries
+  // `action` (e.g. "shell") and `resources` (e.g. file paths/commands).
+  if (type === "permission.asked") {
+    const summary = [data.action, data.resources?.[0]].filter(nonEmptyString).join(" ");
+    return [{ kind: "permission_request", tool: "opencode", summary }];
+  }
+  // The pending permission has been answered (by a human in the TUI, or
+  // auto-approved) — `permission_resolved` clears `permissionRequest`/
+  // `permissionState` (see PermissionResolvedHookMessage's doc comment in
+  // hook-protocol.ts).
+  if (type === "permission.replied") {
+    return [{ kind: "permission_resolved" }];
+  }
+
+  // Question events — opencode's `question` tool is a v2 *form* whose
+  // metadata.kind is "question". Mapped to a dedicated `question` hook kind
+  // so Mullion shows an "awaiting answer" session status, with output-immune
+  // semantics (mirroring permission_request/plan_ready).
+  if (type === "form.created") {
+    const form = data.form;
+    if (form?.metadata?.kind !== "question") return null;
+    if (nonEmptyString(form.sessionID)) state.questionSessions.add(form.sessionID);
+    const fields = Array.isArray(form.fields) ? form.fields : Object.values(form.fields ?? {});
+    const first = fields[0];
+    const tool = form.metadata.tool;
+    const hasTool = tool && nonEmptyString(tool.messageID) && nonEmptyString(tool.id);
+    const summary = first?.description ?? form.title;
     return [
       {
         kind: "question",
         state: "started",
-        header: typeof first?.header === "string" ? first.header.slice(0, 30) : undefined,
-        summary: typeof first?.question === "string" ? first.question : undefined,
-        ...(hasTool ? { tool: { messageID: tool.messageID, callID: tool.callID } } : {}),
+        header: nonEmptyString(first?.title) ? first.title.slice(0, 30) : undefined,
+        summary: nonEmptyString(summary) ? summary : undefined,
+        ...(hasTool ? { tool: { messageID: tool.messageID, callID: tool.id } } : {}),
       },
     ];
   }
-  if (event?.type === "question.replied" || event?.type === "question.rejected") {
+  if (type === "form.replied" || type === "form.cancelled") {
+    if (!nonEmptyString(sessionID) || !state.questionSessions.delete(sessionID)) return null;
     return [{ kind: "question", state: "finished" }];
   }
-  // Todo events — opencode fires `todo.updated` when the model's structured
-  // task list changes (the todowrite tool). Each event carries one todo
-  // item's new state. Forwarded for the timeline feed; no session-status
-  // impact.
-  if (event?.type === "todo.updated") {
-    const content = event.properties?.content;
-    const status = event.properties?.status;
-    if (typeof content !== "string" || typeof status !== "string") return null;
-    const priority = event.properties?.priority;
-    return [
-      {
-        kind: "todo",
-        content,
-        status,
-        priority:
-          typeof priority === "string" && ["high", "medium", "low"].includes(priority)
-            ? priority
-            : "medium",
-      },
-    ];
+
+  // Issue: sidebar worktree detection — opencode emits vcs.branch.updated
+  // when its VCS tracking detects a branch change. The event's own
+  // `location.directory` becomes a cwd_changed alongside, so PtyManager's
+  // liveCwd is updated together with liveBranch.
+  if (type === "vcs.branch.updated") {
+    if (!nonEmptyString(data.branch)) return null;
+    const messages = [{ kind: "git_branch", branch: data.branch }];
+    if (nonEmptyString(cwd)) messages.unshift({ kind: "cwd_changed", cwd });
+    return messages;
   }
-  // Session diff events — fires at turn end with per-file change summaries.
-  // Forwarded for the timeline feed; no session-status impact.
-  if (event?.type === "session.diff") {
-    const diff = event.properties?.diff;
-    if (!Array.isArray(diff) || diff.length === 0) return null;
-    const files = diff
-      .map((d) => ({
-        file: typeof d.file === "string" ? d.file : "",
-        additions: typeof d.additions === "number" ? d.additions : 0,
-        deletions: typeof d.deletions === "number" ? d.deletions : 0,
-        patch: typeof d.patch === "string" ? d.patch : undefined,
-      }))
-      .filter((f) => f.file.length > 0);
-    if (files.length === 0) return null;
-    return [{ kind: "session_diff", files }];
+
+  // Compaction events (issue #321).
+  if (type === "session.compaction.started") {
+    return isChild ? null : [{ kind: "compact", state: "started" }];
   }
-  // Worktree failure — surface as a notification so the user sees it in
-  // Mullion's event feed without needing to watch the PTY output.
-  if (event?.type === "worktree.failed") {
-    const error = event.properties?.error;
-    return [
-      {
-        kind: "notification",
-        title: "OpenCode",
-        body:
-          typeof error === "string" && error.length > 0
-            ? `Worktree creation failed: ${error}`
-            : "Worktree creation failed",
-      },
-    ];
-  }
-  // MCP browser auth failure — the MCP OAuth flow couldn't open a browser.
-  if (event?.type === "mcp.browser.open.failed") {
-    const mcpName = event.properties?.mcpName;
-    return [
-      {
-        kind: "notification",
-        title: "MCP auth failed",
-        body:
-          typeof mcpName === "string" && mcpName.length > 0
-            ? `${mcpName} failed to open browser for authentication`
-            : "MCP browser auth failed",
-      },
-    ];
-  }
-  // Follow-up to #275 (gap #2) — SessionStatus = idle | busy | retry{attempt,
-  // message, next}. `retry` (e.g. a rate-limit backoff) is a stall worth
-  // surfacing as a progress event; `busy`/`idle` give a richer working/idle
-  // signal than the bare `session.idle` event above, mapped the same way
-  // that event already is. NOTE: the backend's `progress` phase is a CLOSED
-  // enum (thinking|generating|done — see hook-protocol.ts's validateProgress)
-  // — `busy` maps to `generating`, not an invented "working", which the
-  // backend would reject. Only `done` drives attention (`agentIdle`);
-  // `generating` is purely a status_change, so `busy` causes no attention
-  // change of its own.
-  if (event?.type === "session.status") {
-    const status = event.properties?.status;
-    if (status?.type === "retry") {
-      return [
-        {
-          kind: "progress",
-          phase: "generating",
-          detail: `retry attempt ${status.attempt}: ${status.message}`,
-        },
-      ];
-    }
-    if (status?.type === "busy") {
-      return [{ kind: "turn_start" }, { kind: "progress", phase: "generating" }];
-    }
-    if (status?.type === "idle") {
-      const progress = { kind: "progress", phase: "done" };
-      if (lastAssistantMessage !== null) progress.lastAssistantMessage = lastAssistantMessage;
-      return [progress];
-    }
-    return null;
-  }
-  // Issue: sidebar worktree detection — opencode's SDK emits
-  // vcs.branch.updated when its internal VCS tracking detects a branch
-  // change (git checkout, worktree creation, etc.). When `cwd` is provided,
-  // also include a cwd_changed message so PtyManager's liveCwd can be
-  // updated alongside liveBranch.
-  if (event?.type === "vcs.branch.updated") {
-    const branch = event.properties?.branch;
-    if (typeof branch === "string" && branch.length > 0) {
-      const messages = [{ kind: "git_branch", branch }];
-      if (typeof cwd === "string" && cwd.length > 0) {
-        messages.unshift({ kind: "cwd_changed", cwd });
-      }
-      return messages;
-    }
-    return null;
-  }
-  // Issue: sidebar worktree detection — opencode emits worktree.ready when
-  // its own worktree management creates or enters a worktree (e.g. via the
-  // promote_to_worktree tool or opencode's own worktree feature). Forward
-  // the correct branch name so liveBranch reflects the actual worktree
-  // branch rather than the main checkout's branch.
-  if (event?.type === "worktree.ready") {
-    const branch = event.properties?.branch;
-    if (typeof branch === "string" && branch.length > 0) {
-      const messages = [{ kind: "git_branch", branch }];
-      if (typeof cwd === "string" && cwd.length > 0) {
-        messages.unshift({ kind: "cwd_changed", cwd });
-      }
-      return messages;
-    }
-    return null;
-  }
-  // Compaction events (issue #321)
-  if (event?.type === "session.compacting") {
-    const state = event.properties?.state;
-    if (state === "started") return [{ kind: "compact", state: "started" }];
-    if (state === "finished") return [{ kind: "compact", state: "finished" }];
-    return null;
-  }
-  // Subagent events (issue #321)
-  if (event?.type === "session.subagent") {
-    const state = event.properties?.state;
-    if (state === "started") return [{ kind: "subagent", state: "started" }];
-    if (state === "stopped") return [{ kind: "subagent", state: "finished" }];
-    return null;
+  if (type === "session.compaction.ended" || type === "session.compaction.failed") {
+    return isChild ? null : [{ kind: "compact", state: "finished" }];
   }
   return null;
 }
@@ -496,15 +397,19 @@ function parseGitCheckoutCommand(command) {
   return { branch: candidate };
 }
 
-/** Maps a `tool.execute.after` input to an array of hook-protocol messages,
- * or `null` when the tool execution doesn't warrant forwarding. Pure — no
- * I/O — so it's unit-testable, same pattern as mapOpenCodeEvent above. */
-function mapToolExecuteAfter(input, cwd) {
-  if (!input || typeof input !== "object") return null;
-  if (input.tool !== "bash" && input.tool !== "Bash") return null;
+/** Maps a v2 `tool.execute.after` event (`{ tool, input, status, ... }`) to an
+ * array of hook-protocol messages, or `null` when the tool execution doesn't
+ * warrant forwarding. Only the `shell` tool is inspected (1.x's `bash`), and
+ * commands are resolved against the call's own `workdir` (falling back to the
+ * session's directory) rather than the plugin process's cwd. Pure — no I/O —
+ * so it's unit-testable, same pattern as mapOpenCodeEvent above. */
+function mapToolExecuteAfter(event, fallbackCwd) {
+  if (!event || typeof event !== "object") return null;
+  if (event.tool !== "shell" || event.status === "error") return null;
 
-  const command = input.args?.command ?? input.args?.cmd;
+  const command = event.input?.command;
   if (typeof command !== "string" || command.length === 0) return null;
+  const cwd = nonEmptyString(event.input?.workdir) ? event.input.workdir : fallbackCwd;
 
   // git worktree add — extracts cwd_changed + git_branch with worktree path
   let worktreeResult = null;
@@ -609,11 +514,13 @@ function createSender() {
  * Opens a one-shot connection to the hook socket to send a blocking
  * promote_request (issue #271) and waits for a human decision — used by
  * the `promote_to_worktree` tool handler below. Returns a user-facing
- * string for the model to display. Never throws: every error path
+ * string for the model to display. `signal` (the tool call's own abort
+ * signal) resolves it as declined instead of leaving the socket wait dangling
+ * when the session is aborted. Never throws: every error path
  * (missing env, connection failure, timeout, malformed reply) returns a
  * declined message.
  */
-function promoteRequest(summary, suggestedBaseRef) {
+function promoteRequest(summary, suggestedBaseRef, signal) {
   const socketPath = process.env.MULLION_HOOK_SOCKET;
   const token = process.env.MULLION_HOOK_TOKEN;
   if (!socketPath) {
@@ -638,6 +545,10 @@ function promoteRequest(summary, suggestedBaseRef) {
       resolve(result);
     };
     const timer = setTimeout(() => finish("Declined: timed out waiting for a decision"), 290_000);
+    if (signal) {
+      if (signal.aborted) finish("Declined: aborted");
+      else signal.addEventListener("abort", () => finish("Declined: aborted"), { once: true });
+    }
 
     let buffer = "";
     socket.on("data", (chunk) => {
@@ -674,97 +585,174 @@ function promoteRequest(summary, suggestedBaseRef) {
   });
 }
 
-/** The actual plugin export OpenCode's auto-discovery loads (per the
- * documented `export const XPlugin = async (input) => Hooks` shape) — see
- * `@opencode-ai/plugin`'s `Plugin`/`Hooks` types for the authoritative
- * signature this conforms to.
- *
- * This file must have exactly one top-level `export`. Bisected empirically
- * against the installed OpenCode 1.18.4 binary, in response to opencode
- * failing to start under Mullion with "Unexpected server error": this file
- * previously also had a top-level `export function mapOpenCodeEvent`, and
- * with both that export and at least one other top-level function present
- * (e.g. `createSender` below, whether or not it was itself exported),
- * OpenCode's own plugin loader crashed the whole server on startup
- * (`TypeError: null is not an object (evaluating 'N.config')` in its log),
- * before a single event was ever dispatched. The exact mechanism inside
- * OpenCode's loader wasn't identified — only that this file has never
- * crashed it with exactly one export, and reliably did with two. Keep any
- * other helper in this file un-exported; expose it for this project's own
- * tests via a property on `MullionHookEmitter` instead (see below), never
- * via a second top-level `export`. */
-export const MullionHookEmitter = async () => {
-  const sender = createSender();
-  // Issue #1230 — one tracker per opencode session process (this factory
-  // runs once per plugin load), observing every event before mapOpenCodeEvent
-  // sees it so a "done" message can attach the turn's reconstructed text.
-  const assistantText = createAssistantTextTracker();
+const PROMOTE_TOOL_DESCRIPTION =
+  "Move the current session's work into a new, isolated git worktree. Blocks until a " +
+  "human approves or declines the request. On approval, this session ends and a new one " +
+  "starts in the worktree, seeded with `summary` as its starting context — the full " +
+  "conversation history is also carried over when possible, alongside the seed.";
 
-  // Lazy zod import for tool schema. Zod is available in OpenCode's own
-  // runtime (it's a dependency of @opencode-ai/plugin) but not guaranteed
-  // in every test environment — the try/catch makes the promote tool
-  // registration conditional rather than failing the whole plugin load.
-  let z = null;
-  try {
-    z = (await import("zod")).z;
-  } catch {
-    // zod not available — promote_to_worktree tool registration skipped
-  }
-
-  const promoteTool = z
-    ? {
-        description:
-          "Move the current session's work into a new, isolated git worktree. Blocks until a " +
-          "human approves or declines the request. On approval, this session ends and a new one " +
-          "starts in the worktree, seeded with `summary` as its starting context — the full " +
-          "conversation history is also carried over when possible, alongside the seed.",
-        args: {
-          summary: z
-            .string()
-            .describe("A seed/summary of the work so far, for the new session's starting context."),
-          suggestedBaseRef: z
-            .string()
-            .optional()
-            .describe(
-              "A base ref to suggest for the new worktree's branch (e.g. the current branch).",
-            ),
-        },
-        execute: async (args) => {
-          return promoteRequest(args.summary, args.suggestedBaseRef);
-        },
-      }
-    : null;
-
-  return {
-    tool: promoteTool ? { promote_to_worktree: promoteTool } : {},
-    event: async ({ event }) => {
-      assistantText.observe(event);
-      const messages = mapOpenCodeEvent(event, process.cwd(), assistantText.current());
-      if (messages) {
-        for (const msg of messages) sender.send(msg);
-      }
+const PROMOTE_TOOL_INPUT = {
+  type: "object",
+  properties: {
+    summary: {
+      type: "string",
+      description: "A seed/summary of the work so far, for the new session's starting context.",
     },
+    suggestedBaseRef: {
+      type: "string",
+      description: "A base ref to suggest for the new worktree's branch (e.g. the current branch).",
+    },
+  },
+  required: ["summary"],
+  additionalProperties: false,
+};
+
+/** Reads the per-session instruction files (tier-0 guide, workflow
+ * conventions, project briefing, promote seed — see hook-adapters/
+ * opencode.ts) whose absolute paths arrive as a JSON array in
+ * MULLION_OPENCODE_INSTRUCTIONS. v2 parses the config `instructions` key
+ * but never reads it, so these ride the session `context` hook instead.
+ * Never throws: an unreadable file is skipped. */
+function readInstructionTexts() {
+  let paths;
+  try {
+    paths = JSON.parse(process.env.MULLION_OPENCODE_INSTRUCTIONS ?? "[]");
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(paths)) return [];
+  const texts = [];
+  for (const file of paths) {
+    if (!nonEmptyString(file) || !path.isAbsolute(file)) continue;
+    try {
+      const text = readFileSync(file, "utf8").trim();
+      if (text.length > 0) texts.push(text);
+    } catch {
+      // missing/unreadable instruction file — skip, never fail the request
+    }
+  }
+  return texts;
+}
+
+/** The plugin OpenCode v2's loader accepts: exactly `export default { id,
+ * setup }` (it also accepts `{ id, effect }`). See `@opencode/plugin`'s
+ * Promise `Plugin.define` — an identity function, so a plain object literal
+ * with no `@opencode/plugin` import is equivalent.
+ *
+ * This file must have exactly one top-level `export` (the 1.x loader crashed
+ * on two; kept for the same safety under v2). Keep any other helper
+ * un-exported; expose it for this project's own tests via a property on the
+ * default export instead (see below), never via a second top-level `export`.
+ *
+ * `setup` runs once per Location in a server, so every piece of state below
+ * lives inside it, never at module scope. It returns a cleanup function that
+ * aborts the event subscription (v2 also closes the stream itself on
+ * unload). Outside a Mullion session (no hook socket/token env) it does
+ * nothing — a stray load must never crash or noisy-log opencode. */
+const MullionHookEmitter = {
+  id: "mullion-hook-emitter",
+  setup: async (ctx) => {
+    if (!process.env.MULLION_HOOK_SOCKET || !process.env.MULLION_HOOK_TOKEN) return undefined;
+
+    const sender = createSender();
+    const state = createMapState();
+    // Issue #1230 — observes every event before mapOpenCodeEvent sees it so
+    // a "done" message can attach the turn's reconstructed text.
+    const assistantText = createAssistantTextTracker();
+    const baseCwd = ctx.location?.directory;
+    const abort = new AbortController();
+    const registrations = [];
+
+    const forward = (messages) => {
+      if (messages) for (const msg of messages) sender.send(msg);
+    };
+
+    // Consume the event stream without blocking setup. A subscribe error
+    // (stream closed, aborted on cleanup) just ends the loop.
+    void (async () => {
+      try {
+        for await (const event of ctx.event.subscribe({ signal: abort.signal })) {
+          try {
+            assistantText.observe(event, state);
+            forward(mapOpenCodeEvent(event, baseCwd, assistantText.current(), state));
+          } catch {
+            // one malformed event must never end the stream
+          }
+        }
+      } catch {
+        // aborted / stream ended
+      }
+    })();
+
+    // `promote_to_worktree` (issue #271) — a blocking round trip to the human.
+    registrations.push(
+      await ctx.tool.transform((tools) => {
+        tools.add({
+          name: "promote_to_worktree",
+          description: PROMOTE_TOOL_DESCRIPTION,
+          input: PROMOTE_TOOL_INPUT,
+          execute: async (input, toolContext) => ({
+            content: await promoteRequest(
+              input?.summary,
+              input?.suggestedBaseRef,
+              toolContext?.signal,
+            ),
+          }),
+        });
+      }),
+    );
+
     // Issue: sidebar worktree detection — opencode's own vcs.branch.updated
     // reports the main checkout's branch, not the worktree's (see
-    // Sidebar.tsx and PaneTab.tsx comments). This hook intercepts Bash tool
+    // Sidebar.tsx and PaneTab.tsx comments). This hook intercepts shell tool
     // completions so we can parse `git worktree add` and `git checkout`/
     // `git switch` commands ourselves, extracting the real branch name and
     // worktree path — the same approach forwarder-core.mjs uses for Claude
-    // Code/Codex/agy, but from opencode's own plugin API instead of shell-
-    // command hooks.
-    "tool.execute.after": async (input, _output) => {
-      const messages = mapToolExecuteAfter(input, process.cwd());
-      if (messages) {
-        for (const msg of messages) sender.send(msg);
+    // Code/Codex/agy, but from opencode's own plugin API instead of
+    // shell-command hooks.
+    registrations.push(
+      await ctx.tool.hook("execute.after", (event) => {
+        forward(mapToolExecuteAfter(event, baseCwd));
+      }),
+    );
+
+    // Per-session instruction files (see readInstructionTexts). `context`
+    // fires for the primary agent loop only (compaction/title/generate are
+    // separate hooks). Idempotent: setup may run per Location, so a second
+    // instance's hook must not duplicate a part the first already added.
+    if (nonEmptyString(process.env.MULLION_OPENCODE_INSTRUCTIONS)) {
+      registrations.push(
+        await ctx.session.hook("context", (event) => {
+          for (const text of readInstructionTexts()) {
+            if (!event.system.some((part) => part?.text === text)) {
+              event.system.push({ type: "text", text });
+            }
+          }
+        }),
+      );
+    }
+
+    return async () => {
+      abort.abort();
+      for (const registration of registrations) {
+        try {
+          await registration?.dispose?.();
+        } catch {
+          // best-effort cleanup
+        }
       }
-    },
-  };
+    };
+  },
 };
 
 MullionHookEmitter.mapOpenCodeEvent = mapOpenCodeEvent;
+MullionHookEmitter.createMapState = createMapState;
 MullionHookEmitter.createAssistantTextTracker = createAssistantTextTracker;
 MullionHookEmitter.promoteRequest = promoteRequest;
+MullionHookEmitter.readInstructionTexts = readInstructionTexts;
 MullionHookEmitter.parseGitWorktreeAdd = parseWorktreeAddCommand;
 MullionHookEmitter.parseGitCheckout = parseGitCheckoutCommand;
 MullionHookEmitter.splitShellSegments = splitShellSegments;
 MullionHookEmitter.mapToolExecuteAfter = mapToolExecuteAfter;
+
+export default MullionHookEmitter;

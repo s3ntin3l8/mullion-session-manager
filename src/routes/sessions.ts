@@ -761,7 +761,7 @@ export async function sessionsRoute(app: FastifyInstance) {
         if (liveAgentSessionId) {
           // `repoCwd`, not `sourceCwd` — #693's own fix exists because
           // `row.cwd` (sourceCwd) can be a PRIOR promote's worktree that no
-          // longer exists on disk (a session promoted twice). `export`
+          // longer exists on disk (a session promoted twice). `session export`
           // only needs a valid cwd to launch opencode from; the session id
           // it operates on is globally unique in the shared DB, so the
           // directory doesn't need to be the session's own. `repoCwd` is
@@ -796,35 +796,32 @@ export async function sessionsRoute(app: FastifyInstance) {
       // Never pass both `initialPrompt` and `seedPrompt`: for an adapter
       // with argv support, `initialPrompt` alone starts a real turn — also
       // setting `seedPrompt` would double-deliver the same text (e.g.
-      // opencode would get it once via `--prompt` AND once via its static
-      // `instructions` file; Claude Code once as the submitted turn AND
-      // once as SessionStart `additionalContext`).
+      // opencode would get it once via `--prompt` AND once via its
+      // per-session instruction file; Claude Code once as the submitted turn
+      // AND once as SessionStart `additionalContext`).
       //
-      // Once history has been transferred, never deliver the caller's seed
-      // (or a synthesized "continue where you left off" nudge) as an
-      // `initialPrompt` argv turn — verified empirically (spike,
-      // 2026-08-16) that opencode's bare TUI command (what Mullion actually
-      // spawns — see hook-adapters/opencode.ts's own header) only
-      // auto-submits `--prompt` when it CREATES a session; combined with
-      // `--session <id>` or `--continue` (i.e. any resume) the flag is
-      // silently accepted but never submitted as a turn — confirmed by both
-      // leaving the process running well past its response latency and
-      // inspecting the session's message rows directly. An `initialPrompt`
-      // here would therefore just be silently dropped, same failure shape
-      // as the `--fork` directory bug this feature replaces.
+      // Once history has been transferred, deliberately never deliver the
+      // caller's seed (or a synthesized "continue where you left off" nudge)
+      // as an `initialPrompt` argv turn. On opencode 1.18 that was a hard
+      // limitation (`--prompt` paired with `--session`/`--continue` was
+      // silently never submitted); opencode v2 now does submit it, but this
+      // still isn't wanted: the resumed session's imported transcript is
+      // already on screen and `transferSuccessNote` below tells the user it is
+      // waiting for their next message — auto-submitting an extra turn on
+      // every resumed promote would change that behaviour, not fix anything.
       //
       // A caller-supplied seedPrompt must NOT be silently discarded outright
       // though (Hermes review, PR #696) — it still has a live, resume-safe
       // channel: the context-only `seedPrompt` field below isn't the CLI
-      // `--prompt` mechanism at all (for opencode it's a static settings
-      // file read at startup, per hook-adapters/opencode.ts), so it's
-      // unaffected by the resume bug above. Route the caller's seed through
-      // that channel whenever an initial-prompt turn isn't being sent —
-      // which now includes the resumed-transfer case, not just
-      // adapters/commands with no argv seed support at all. The resumed
-      // session's imported transcript plus this extra context, together
-      // with `transferSuccessNote` in `warnings` above, is the full
-      // acknowledgment; no separate synthesized nudge is needed.
+      // `--prompt` mechanism at all (for opencode it's a per-session
+      // instruction file appended to the system prompt, per
+      // hook-adapters/opencode.ts). Route the caller's seed through that
+      // channel whenever an initial-prompt turn isn't being sent — which
+      // includes the resumed-transfer case, not just adapters/commands with
+      // no argv seed support at all. The resumed session's imported transcript
+      // plus this extra context, together with `transferSuccessNote` in
+      // `warnings` above, is the full acknowledgment; no separate synthesized
+      // nudge is needed.
       const callerSeedPrompt =
         seedPrompt !== undefined && seedPrompt.length > 0 ? seedPrompt : undefined;
       const deliverAsInitialPrompt =

@@ -30,8 +30,9 @@ vi.mock("node:net", () => ({
   },
 }));
 
-const { MullionHookEmitter } = await import("../../src/hooks/opencode-plugin.js");
+const { default: MullionHookEmitter } = await import("../../src/hooks/opencode-plugin.js");
 const net = await import("node:net");
+const { createFakeCtx, flush } = await import("./helpers/opencode-ctx.js");
 
 describe("opencode-plugin.js reconnect race (Hermes review, PR #258)", () => {
   beforeEach(() => {
@@ -42,37 +43,45 @@ describe("opencode-plugin.js reconnect race (Hermes review, PR #258)", () => {
   });
 
   it("a stale socket's delayed 'close' does not clobber a newer, already-connected replacement", async () => {
-    const hooks = await MullionHookEmitter();
+    const fake = createFakeCtx();
+    const cleanup = (await MullionHookEmitter.setup(fake.ctx)) as () => Promise<void>;
 
-    // First event opens connection A.
-    await hooks.event?.({ event: { type: "session.idle", properties: { sessionID: "1" } } });
-    expect(createdSockets).toHaveLength(1);
-    const socketA = createdSockets[0];
+    try {
+      // First event opens connection A.
+      fake.push({ type: "session.execution.succeeded", data: { sessionID: "1" } });
+      await flush();
+      expect(createdSockets).toHaveLength(1);
+      const socketA = createdSockets[0];
 
-    // A errors (its handler nulls `conn` and calls destroy() — but does
-    // NOT yet fire 'close', mirroring the real, separate-tick behavior).
-    socketA.emit("error", new Error("ECONNRESET"));
-    expect(socketA.destroy).toHaveBeenCalledOnce();
+      // A errors (its handler nulls `conn` and calls destroy() — but does
+      // NOT yet fire 'close', mirroring the real, separate-tick behavior).
+      socketA.emit("error", new Error("ECONNRESET"));
+      expect(socketA.destroy).toHaveBeenCalledOnce();
 
-    // A second event arrives before A's 'close' fires — this must open a
-    // fresh connection B, since `conn` was nulled by A's error.
-    await hooks.event?.({ event: { type: "file.edited", properties: { file: "/x.ts" } } });
-    expect(createdSockets).toHaveLength(2);
-    const socketB = createdSockets[1];
-    socketB.emit("connect");
-    socketB.write.mockClear();
+      // A second event arrives before A's 'close' fires — this must open a
+      // fresh connection B, since `conn` was nulled by A's error.
+      fake.push({ type: "session.step.ended", data: { sessionID: "1", files: ["/x.ts"] } });
+      await flush();
+      expect(createdSockets).toHaveLength(2);
+      const socketB = createdSockets[1];
+      socketB.emit("connect");
+      socketB.write.mockClear();
 
-    // NOW A's delayed 'close' finally fires. Before the fix, this would
-    // null out `conn` (still pointing at B), silently breaking B for
-    // every future send.
-    socketA.emit("close");
+      // NOW A's delayed 'close' finally fires. Before the fix, this would
+      // null out `conn` (still pointing at B), silently breaking B for
+      // every future send.
+      socketA.emit("close");
 
-    // A third event must reuse B (no third connection created) and must
-    // actually reach the wire.
-    await hooks.event?.({ event: { type: "session.idle", properties: { sessionID: "1" } } });
-    expect(createdSockets).toHaveLength(2);
-    expect(socketB.write).toHaveBeenCalledWith(
-      `${JSON.stringify({ kind: "progress", phase: "done" })}\n`,
-    );
+      // A third event must reuse B (no third connection created) and must
+      // actually reach the wire.
+      fake.push({ type: "session.execution.succeeded", data: { sessionID: "1" } });
+      await flush();
+      expect(createdSockets).toHaveLength(2);
+      expect(socketB.write).toHaveBeenCalledWith(
+        `${JSON.stringify({ kind: "progress", phase: "done" })}\n`,
+      );
+    } finally {
+      await cleanup();
+    }
   });
 });

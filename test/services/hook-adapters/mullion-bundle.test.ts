@@ -17,6 +17,7 @@ import {
   deriveContentName,
   composeClaudeSessionBundle,
   deriveOpenCodeReviewerAgentFile,
+  deriveOpenCodeReviewerAgentConfig,
   rewriteBundleSkillName,
   deriveAgyAgentFile,
 } from "../../../src/services/hook-adapters/mullion-bundle.js";
@@ -380,6 +381,40 @@ describe("deriveOpenCodeReviewerAgentFile", () => {
   it("returns null for a dangerous frontmatter name", () => {
     expect(
       deriveOpenCodeReviewerAgentFile("---\nname: __proto__\ndescription: nope\n---\nbody"),
+    ).toBeNull();
+  });
+});
+
+// deriveOpenCodeReviewerAgentConfig — the opencode v2 per-session counterpart:
+// the reviewer rides OPENCODE_CONFIG_CONTENT as an inline `agents.<name>`
+// entry (v2's `agents.<name>` schema takes `system`/`description`/`mode`),
+// again translating rather than passing Claude Code's tools:/model: through.
+describe("deriveOpenCodeReviewerAgentConfig", () => {
+  it("returns an inline agents entry: description + subagent mode + the body as system", () => {
+    const result = deriveOpenCodeReviewerAgentConfig(VALID_REVIEWER_AGENT);
+    expect(result).not.toBeNull();
+    expect(result!.name).toBe("my-project-reviewer");
+    expect(result!.config).toEqual({
+      description: "Reviews diffs for this project's own invariants.",
+      mode: "subagent",
+      system: expect.stringContaining("You are reviewing a change in this project."),
+    });
+  });
+
+  it("never carries Claude Code's tools/model keys or the frontmatter itself", () => {
+    const { config } = deriveOpenCodeReviewerAgentConfig(VALID_REVIEWER_AGENT)!;
+    expect(Object.keys(config).sort()).toEqual(["description", "mode", "system"]);
+    expect(config.system).not.toContain("---");
+    expect(config.system).not.toContain("tools:");
+  });
+
+  it("returns null for unparseable frontmatter", () => {
+    expect(deriveOpenCodeReviewerAgentConfig("not a subagent file")).toBeNull();
+  });
+
+  it("returns null for a dangerous frontmatter name", () => {
+    expect(
+      deriveOpenCodeReviewerAgentConfig("---\nname: __proto__\ndescription: nope\n---\nbody"),
     ).toBeNull();
   });
 });

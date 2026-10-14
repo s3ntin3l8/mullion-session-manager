@@ -1,128 +1,100 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, beforeEach } from "vitest";
 import net from "node:net";
 import path from "node:path";
 import os from "node:os";
-import { mkdtempSync, rmSync } from "node:fs";
-import { MullionHookEmitter } from "../../src/hooks/opencode-plugin.js";
-import { openCodeAdapter } from "../../src/services/hook-adapters/opencode.js";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import MullionHookEmitter from "../../src/hooks/opencode-plugin.js";
+import { openCodeAdapter, OPENCODE_EMITS } from "../../src/services/hook-adapters/opencode.js";
+import { createFakeCtx, flush } from "./helpers/opencode-ctx.js";
 
-// Unlike forwarder.mjs (a subprocess entry point with a top-level `main()`
-// that runs on load), this plugin file has no top-level side effects — only
-// calling the exported MullionHookEmitter() factory, or its returned
-// `event` hook, does any I/O. That makes it safe to import and exercise
-// directly in-process here, no subprocess spawning needed (see the plan's
-// "Testability of the forwarder" note, which this plugin doesn't need the
-// same split for).
+// opencode v2 plugin (minimum 2.0.29). Unlike forwarder.mjs (a subprocess
+// entry point with a top-level `main()` that runs on load), this plugin file
+// has no top-level side effects — only calling `setup(ctx)` does any I/O. That
+// makes it safe to import and exercise directly in-process, with a fake
+// plugin `Context` (see helpers/opencode-ctx.ts) standing in for opencode.
 //
-// mapOpenCodeEvent/promoteRequest are read off MullionHookEmitter as
-// properties, not imported as their own named exports — the module must
-// have exactly one top-level `export`, or OpenCode's real plugin loader
-// crashes the whole server on startup (see opencode-plugin.js's own
-// comment on this).
-const { mapOpenCodeEvent, promoteRequest, mapToolExecuteAfter, createAssistantTextTracker } =
-  MullionHookEmitter;
+// mapOpenCodeEvent/promoteRequest/etc. are read off the default export as
+// properties, not imported as their own named exports — the module must have
+// exactly one top-level `export` (see opencode-plugin.js's own comment).
+const {
+  mapOpenCodeEvent,
+  promoteRequest,
+  mapToolExecuteAfter,
+  createAssistantTextTracker,
+  createMapState,
+  readInstructionTexts,
+} = MullionHookEmitter;
 
-describe("opencode-plugin.js module shape (regression: opencode startup crash)", () => {
-  it("exports exactly one top-level binding (MullionHookEmitter)", async () => {
+// v2 event envelope: the payload is under `data` (1.x: `properties`).
+const ev = (type: string, data: Record<string, unknown>, directory?: string) => ({
+  type,
+  data,
+  ...(directory ? { location: { directory } } : {}),
+});
+
+describe("opencode-plugin.js module shape (opencode v2 loader contract)", () => {
+  it("has exactly one top-level export: `default` (a second export crashed the 1.x loader)", async () => {
     const mod = await import("../../src/hooks/opencode-plugin.js");
-    expect(Object.keys(mod)).toEqual(["MullionHookEmitter"]);
+    expect(Object.keys(mod)).toEqual(["default"]);
+  });
+
+  it("is a { id, setup } definition — what v2's loader requires", () => {
+    expect(MullionHookEmitter.id).toBe("mullion-hook-emitter");
+    expect(typeof MullionHookEmitter.setup).toBe("function");
+  });
+
+  it("does not use the 1.x named factory shape", async () => {
+    const mod = (await import("../../src/hooks/opencode-plugin.js")) as Record<string, unknown>;
+    expect(mod.MullionHookEmitter).toBeUndefined();
   });
 });
 
-describe("mapOpenCodeEvent (issue #175)", () => {
-  // Issue #271 follow-up — session.idle's own payload carries opencode's
-  // internal session id for free; mapOpenCodeEvent now also reports it as a
-  // second "agent_session" message alongside the existing progress one, so a
-  // later promote can transfer this session's real conversation history.
-  it("maps session.idle to a done progress message plus the live agent_session id", () => {
-    expect(mapOpenCodeEvent({ type: "session.idle", properties: { sessionID: "1" } })).toEqual([
-      { kind: "progress", phase: "done" },
-      { kind: "agent_session", sessionId: "1" },
-    ]);
-  });
-
-  it("omits the agent_session message when session.idle carries no sessionID", () => {
-    expect(mapOpenCodeEvent({ type: "session.idle", properties: {} })).toEqual([
-      { kind: "progress", phase: "done" },
-    ]);
-  });
-
-  // Issue #1230 — opencode has no Stop-analogue field carrying this, so it's
-  // passed in by the caller (createAssistantTextTracker, tested separately
-  // below) rather than reconstructed by mapOpenCodeEvent itself.
-  it("attaches a non-null lastAssistantMessage to session.idle's done message", () => {
-    expect(
-      mapOpenCodeEvent({ type: "session.idle", properties: {} }, undefined, "All done."),
-    ).toEqual([{ kind: "progress", phase: "done", lastAssistantMessage: "All done." }]);
-  });
-
-  it("omits lastAssistantMessage from session.idle's done message when null (the default)", () => {
-    expect(mapOpenCodeEvent({ type: "session.idle", properties: {} })).toEqual([
-      { kind: "progress", phase: "done" },
-    ]);
-  });
-
-  it("maps file.edited to a file_change message", () => {
-    expect(mapOpenCodeEvent({ type: "file.edited", properties: { file: "/repo/a.ts" } })).toEqual([
-      { kind: "file_change", path: "/repo/a.ts", action: "modify" },
-    ]);
-  });
-
-  it("returns null when file.edited has no usable file path", () => {
-    expect(mapOpenCodeEvent({ type: "file.edited", properties: {} })).toBeNull();
-  });
-
-  it("returns null for an event type not forwarded", () => {
-    expect(mapOpenCodeEvent({ type: "unknown.event", properties: {} })).toBeNull();
-  });
-
-  it("returns null for a nullish event", () => {
-    expect(mapOpenCodeEvent(undefined)).toBeNull();
-    expect(mapOpenCodeEvent(null)).toBeNull();
-  });
-
-  describe("permission.asked / permission.replied (v2 fix)", () => {
-    it("maps permission.asked to a permission_request using permission+patterns as summary", () => {
-      expect(
-        mapOpenCodeEvent({
-          type: "permission.asked",
-          properties: { id: "p1", permission: "bash", patterns: ["rm -rf build/"], sessionID: "1" },
-        }),
-      ).toEqual([{ kind: "permission_request", tool: "opencode", summary: "bash rm -rf build/" }]);
+describe("mapOpenCodeEvent (opencode v2 events)", () => {
+  describe("turn lifecycle", () => {
+    // Issue #271 follow-up — the finished-turn event carries the session id
+    // for free; it's reported as an "agent_session" alongside the progress
+    // message so a later promote can transfer the real conversation history.
+    it("maps session.execution.succeeded to a done progress message plus the live agent_session id", () => {
+      expect(mapOpenCodeEvent(ev("session.execution.succeeded", { sessionID: "ses_1" }))).toEqual([
+        { kind: "progress", phase: "done" },
+        { kind: "agent_session", sessionId: "ses_1" },
+      ]);
     });
 
-    it("maps permission.asked with no patterns to a permission_request with just the permission type as summary", () => {
-      expect(
-        mapOpenCodeEvent({ type: "permission.asked", properties: { permission: "edit" } }),
-      ).toEqual([{ kind: "permission_request", tool: "opencode", summary: "edit" }]);
+    it("omits the agent_session message when no sessionID is present", () => {
+      expect(mapOpenCodeEvent(ev("session.execution.succeeded", {}))).toEqual([
+        { kind: "progress", phase: "done" },
+      ]);
     });
 
-    // Fix: status-clearing-semantics — was "notification_resolved", which
-    // permission.asked's own confirmedKind (permissionRequest, not
-    // hookNotification) meant this never actually cleared. See the plugin's
-    // own comment on this event.
-    it("maps permission.replied to permission_resolved, matching what permission.asked raises", () => {
+    // Issue #1230 — opencode has no Stop-analogue field carrying this, so it's
+    // passed in by the caller (createAssistantTextTracker, tested below).
+    it("attaches a non-null lastAssistantMessage to the done message", () => {
       expect(
-        mapOpenCodeEvent({
-          type: "permission.replied",
-          properties: { sessionID: "1", permissionID: "p1", response: "always" },
-        }),
-      ).toEqual([{ kind: "permission_resolved" }]);
+        mapOpenCodeEvent(ev("session.execution.succeeded", {}), undefined, "All done."),
+      ).toEqual([{ kind: "progress", phase: "done", lastAssistantMessage: "All done." }]);
     });
-  });
 
-  describe("session.error", () => {
-    it("maps a ProviderAuthError to a tool_failure using its data.message as summary", () => {
+    it("omits lastAssistantMessage when null (the default)", () => {
+      const [progress] = mapOpenCodeEvent(ev("session.execution.succeeded", {}))!;
+      expect(progress).not.toHaveProperty("lastAssistantMessage");
+    });
+
+    it("maps session.execution.started to turn_start + generating progress", () => {
+      expect(mapOpenCodeEvent(ev("session.execution.started", { sessionID: "ses_1" }))).toEqual([
+        { kind: "turn_start" },
+        { kind: "progress", phase: "generating" },
+      ]);
+    });
+
+    it("maps session.execution.failed to tool_failure with the structured error's type and message", () => {
       expect(
-        mapOpenCodeEvent({
-          type: "session.error",
-          properties: {
-            error: {
-              name: "ProviderAuthError",
-              data: { providerID: "anthropic", message: "bad key" },
-            },
-          },
-        }),
+        mapOpenCodeEvent(
+          ev("session.execution.failed", {
+            sessionID: "ses_1",
+            error: { type: "ProviderAuthError", message: "bad key" },
+          }),
+        ),
       ).toEqual([
         {
           kind: "tool_failure",
@@ -133,615 +105,422 @@ describe("mapOpenCodeEvent (issue #175)", () => {
       ]);
     });
 
-    it("falls back to the error's own name as summary when data.message is missing (e.g. MessageOutputLengthError)", () => {
+    it("falls back to the error type as summary when the message is empty, and to 'error' without a type", () => {
       expect(
-        mapOpenCodeEvent({
-          type: "session.error",
-          properties: { error: { name: "MessageOutputLengthError", data: {} } },
-        }),
-      ).toEqual([
-        {
-          kind: "tool_failure",
-          tool: "opencode",
-          error: "MessageOutputLengthError",
-          summary: "MessageOutputLengthError",
-        },
+        mapOpenCodeEvent(ev("session.execution.failed", { error: { type: "Boom", message: "" } })),
+      ).toEqual([{ kind: "tool_failure", tool: "opencode", error: "Boom", summary: "Boom" }]);
+      expect(mapOpenCodeEvent(ev("session.execution.failed", { error: {} }))).toEqual([
+        { kind: "tool_failure", tool: "opencode", error: "error", summary: "error" },
       ]);
     });
 
-    it("skips MessageAbortedError entirely (user-initiated Ctrl-C, not attention-worthy)", () => {
+    it("returns null for session.execution.failed without an error object", () => {
+      expect(mapOpenCodeEvent(ev("session.execution.failed", { sessionID: "s" }))).toBeNull();
+    });
+
+    // 1.x skipped MessageAbortedError; in v2 a user abort is its own event
+    // and is deliberately not attention-worthy.
+    it("does not map session.execution.interrupted (a user abort isn't attention-worthy)", () => {
       expect(
-        mapOpenCodeEvent({
-          type: "session.error",
-          properties: { error: { name: "MessageAbortedError", data: { message: "aborted" } } },
-        }),
+        mapOpenCodeEvent(ev("session.execution.interrupted", { sessionID: "s", reason: "user" })),
       ).toBeNull();
     });
 
-    it("returns null when no error is present on the event at all", () => {
-      expect(mapOpenCodeEvent({ type: "session.error", properties: {} })).toBeNull();
-    });
-  });
-
-  describe("tui.toast.show", () => {
-    it.each(["warning", "error"] as const)(
-      "maps a %s-variant toast to a notification",
-      (variant) => {
-        expect(
-          mapOpenCodeEvent({
-            type: "tui.toast.show",
-            properties: { variant, title: "Heads up", message: "Something needs attention" },
-          }),
-        ).toEqual([{ kind: "notification", title: "Heads up", body: "Something needs attention" }]);
-      },
-    );
-
-    it("falls back to a generic title when the toast has none", () => {
+    it("maps session.retry.scheduled to a generating progress message with the attempt and error", () => {
       expect(
-        mapOpenCodeEvent({
-          type: "tui.toast.show",
-          properties: { variant: "error", message: "Failed" },
-        }),
-      ).toEqual([{ kind: "notification", title: "opencode", body: "Failed" }]);
-    });
-
-    it.each(["info", "success"] as const)(
-      "filters out %s-variant toasts as routine noise",
-      (variant) => {
-        expect(
-          mapOpenCodeEvent({
-            type: "tui.toast.show",
-            properties: { variant, title: "Copied", message: "Copied to clipboard" },
+        mapOpenCodeEvent(
+          ev("session.retry.scheduled", {
+            sessionID: "s",
+            attempt: 2,
+            error: { type: "RateLimit", message: "rate limited" },
           }),
-        ).toBeNull();
-      },
-    );
-  });
-
-  describe("session.status", () => {
-    it("maps a retry status to a generating progress message — session is still working (issue #275)", () => {
-      expect(
-        mapOpenCodeEvent({
-          type: "session.status",
-          properties: {
-            sessionID: "1",
-            status: { type: "retry", attempt: 2, message: "rate limited", next: 5000 },
-          },
-        }),
+        ),
       ).toEqual([
         { kind: "progress", phase: "generating", detail: "retry attempt 2: rate limited" },
       ]);
     });
 
-    it("maps a busy status to turn_start + generating progress (clears finished latch before working)", () => {
+    it("omits the error text from a retry detail when there is none", () => {
       expect(
-        mapOpenCodeEvent({
-          type: "session.status",
-          properties: { sessionID: "1", status: { type: "busy" } },
-        }),
-      ).toEqual([{ kind: "turn_start" }, { kind: "progress", phase: "generating" }]);
+        mapOpenCodeEvent(ev("session.retry.scheduled", { sessionID: "s", attempt: 1 })),
+      ).toEqual([{ kind: "progress", phase: "generating", detail: "retry attempt 1" }]);
     });
+  });
 
-    it("maps an idle status to a done progress message, same as the session.idle event", () => {
-      expect(
-        mapOpenCodeEvent({
-          type: "session.status",
-          properties: { sessionID: "1", status: { type: "idle" } },
-        }),
-      ).toEqual([{ kind: "progress", phase: "done" }]);
-    });
-
-    it("returns null when properties.status itself is missing", () => {
-      expect(mapOpenCodeEvent({ type: "session.status", properties: {} })).toBeNull();
-    });
-
-    // Issue #1230 — same attachment as session.idle above.
-    it("attaches a non-null lastAssistantMessage to an idle status's done message", () => {
+  describe("session.step.ended files (file_change)", () => {
+    it("emits a file_change per changed file, absolutised against the event's own location", () => {
       expect(
         mapOpenCodeEvent(
-          { type: "session.status", properties: { status: { type: "idle" } } },
-          undefined,
-          "All done.",
+          ev("session.step.ended", { sessionID: "s", files: ["src/a.ts", "/abs/b.ts"] }, "/repo"),
+          "/fallback",
         ),
-      ).toEqual([{ kind: "progress", phase: "done", lastAssistantMessage: "All done." }]);
+      ).toEqual([
+        { kind: "file_change", path: "/repo/src/a.ts", action: "modify" },
+        { kind: "file_change", path: "/abs/b.ts", action: "modify" },
+      ]);
+    });
+
+    it("falls back to the plugin's directory when the event has no location", () => {
+      expect(
+        mapOpenCodeEvent(
+          ev("session.step.ended", { sessionID: "s", files: ["a.ts"] }),
+          "/fallback",
+        ),
+      ).toEqual([{ kind: "file_change", path: "/fallback/a.ts", action: "modify" }]);
+    });
+
+    it("returns null when there are no files", () => {
+      expect(mapOpenCodeEvent(ev("session.step.ended", { sessionID: "s" }))).toBeNull();
+      expect(mapOpenCodeEvent(ev("session.step.ended", { sessionID: "s", files: [] }))).toBeNull();
+      expect(mapOpenCodeEvent(ev("session.step.ended", { files: ["", 3] }))).toBeNull();
     });
   });
 
-  describe("session.compacting (issue #321)", () => {
-    it("maps session.compacting started to a compact message with state started", () => {
+  describe("permission.asked / permission.replied", () => {
+    // v2's request carries `action` (e.g. "shell") and `resources`.
+    it("maps permission.asked to permission_request with the action and first resource", () => {
       expect(
-        mapOpenCodeEvent({
-          type: "session.compacting",
-          properties: { state: "started" },
-        }),
-      ).toEqual([{ kind: "compact", state: "started" }]);
+        mapOpenCodeEvent(
+          ev("permission.asked", { sessionID: "s", action: "shell", resources: ["rm -rf /tmp/x"] }),
+        ),
+      ).toEqual([{ kind: "permission_request", tool: "opencode", summary: "shell rm -rf /tmp/x" }]);
     });
 
-    it("maps session.compacting finished to a compact message with state finished", () => {
-      expect(
-        mapOpenCodeEvent({
-          type: "session.compacting",
-          properties: { state: "finished" },
-        }),
-      ).toEqual([{ kind: "compact", state: "finished" }]);
+    it("tolerates a missing action or resources", () => {
+      expect(mapOpenCodeEvent(ev("permission.asked", { action: "edit" }))).toEqual([
+        { kind: "permission_request", tool: "opencode", summary: "edit" },
+      ]);
+      expect(mapOpenCodeEvent(ev("permission.asked", {}))).toEqual([
+        { kind: "permission_request", tool: "opencode", summary: "" },
+      ]);
     });
 
-    it("returns null when session.compacting state is missing", () => {
-      expect(
-        mapOpenCodeEvent({
-          type: "session.compacting",
-          properties: {},
-        }),
-      ).toBeNull();
+    it("maps permission.replied to permission_resolved (clears permissionRequest, not a generic notification)", () => {
+      expect(mapOpenCodeEvent(ev("permission.replied", { reply: "once" }))).toEqual([
+        { kind: "permission_resolved" },
+      ]);
     });
   });
 
-  describe("session.subagent (issue #321)", () => {
-    it("maps session.subagent started to a subagent message with state started", () => {
+  // v2 has no dedicated subagent/compaction-state events beyond these: a
+  // subagent is a CHILD SESSION, so its execution events must not be mistaken
+  // for the main session's turn boundaries.
+  describe("subagents (child sessions, issue #321)", () => {
+    it("maps a session.created with a parentID to subagent started", () => {
+      const state = createMapState();
       expect(
-        mapOpenCodeEvent({
-          type: "session.subagent",
-          properties: { state: "started" },
-        }),
+        mapOpenCodeEvent(
+          ev("session.created", { sessionID: "child", parentID: "main" }),
+          undefined,
+          null,
+          state,
+        ),
       ).toEqual([{ kind: "subagent", state: "started" }]);
     });
 
-    it("maps session.subagent stopped to a subagent message with state finished", () => {
+    it("does not map a top-level session.created", () => {
+      expect(mapOpenCodeEvent(ev("session.created", { sessionID: "main" }))).toBeNull();
+    });
+
+    it("maps the child's execution end to subagent finished — NOT a done progress for the main session", () => {
+      const state = createMapState();
+      mapOpenCodeEvent(
+        ev("session.created", { sessionID: "child", parentID: "main" }),
+        undefined,
+        null,
+        state,
+      );
       expect(
-        mapOpenCodeEvent({
-          type: "session.subagent",
-          properties: { state: "stopped" },
-        }),
+        mapOpenCodeEvent(
+          ev("session.execution.succeeded", { sessionID: "child" }),
+          undefined,
+          null,
+          state,
+        ),
       ).toEqual([{ kind: "subagent", state: "finished" }]);
     });
 
-    it("returns null when session.subagent state is missing", () => {
+    it.each(["session.execution.failed", "session.execution.interrupted"])(
+      "maps a child's %s to subagent finished too",
+      (type) => {
+        const state = createMapState();
+        mapOpenCodeEvent(
+          ev("session.created", { sessionID: "c", parentID: "m" }),
+          undefined,
+          null,
+          state,
+        );
+        expect(
+          mapOpenCodeEvent(
+            ev(type, { sessionID: "c", error: { type: "x", message: "y" } }),
+            undefined,
+            null,
+            state,
+          ),
+        ).toEqual([{ kind: "subagent", state: "finished" }]);
+      },
+    );
+
+    it("ignores a child's turn start, retry and compaction (those belong to the main session only)", () => {
+      const state = createMapState();
+      mapOpenCodeEvent(
+        ev("session.created", { sessionID: "c", parentID: "m" }),
+        undefined,
+        null,
+        state,
+      );
+      for (const type of [
+        "session.execution.started",
+        "session.retry.scheduled",
+        "session.compaction.started",
+        "session.compaction.ended",
+        "session.step.ended",
+      ]) {
+        expect(
+          mapOpenCodeEvent(ev(type, { sessionID: "c", files: ["a.ts"] }), undefined, null, state),
+        ).toBeNull();
+      }
+    });
+
+    it("still maps the MAIN session's turn end while a child exists", () => {
+      const state = createMapState();
+      mapOpenCodeEvent(
+        ev("session.created", { sessionID: "c", parentID: "m" }),
+        undefined,
+        null,
+        state,
+      );
       expect(
-        mapOpenCodeEvent({
-          type: "session.subagent",
-          properties: {},
-        }),
-      ).toBeNull();
+        mapOpenCodeEvent(
+          ev("session.execution.succeeded", { sessionID: "m" }),
+          undefined,
+          null,
+          state,
+        ),
+      ).toEqual([
+        { kind: "progress", phase: "done" },
+        { kind: "agent_session", sessionId: "m" },
+      ]);
     });
   });
-});
 
-describe("question.asked / question.replied / question.rejected (v2)", () => {
-  it("maps question.asked to a question:started hook message with header and summary", () => {
-    expect(
-      mapOpenCodeEvent({
-        type: "question.asked",
-        properties: {
-          id: "q1",
-          sessionID: "1",
-          questions: [
-            {
-              question: "Which mode?",
-              header: "Mode",
-              options: [{ label: "A", description: "Option A" }],
-              multiple: false,
-            },
-          ],
-          tool: { messageID: "m1", callID: "c1" },
+  describe("session.compaction.* (issue #321)", () => {
+    it("maps started to compact started", () => {
+      expect(mapOpenCodeEvent(ev("session.compaction.started", { sessionID: "s" }))).toEqual([
+        { kind: "compact", state: "started" },
+      ]);
+    });
+
+    it.each(["session.compaction.ended", "session.compaction.failed"])(
+      "maps %s to compact finished",
+      (type) => {
+        expect(mapOpenCodeEvent(ev(type, { sessionID: "s" }))).toEqual([
+          { kind: "compact", state: "finished" },
+        ]);
+      },
+    );
+  });
+
+  // opencode's `question` tool is a v2 form whose metadata.kind is "question".
+  describe("question forms", () => {
+    const questionForm = {
+      id: "form_1",
+      sessionID: "s",
+      title: "Which mode?",
+      metadata: { kind: "question", tool: { messageID: "msg_1", id: "call_1" } },
+      fields: [
+        { title: "A very long header that exceeds thirty characters", description: "Pick one" },
+      ],
+    };
+
+    it("maps a question form to question started, truncating the header to 30 chars", () => {
+      expect(mapOpenCodeEvent(ev("form.created", { form: questionForm }))).toEqual([
+        {
+          kind: "question",
+          state: "started",
+          header: "A very long header that exceed",
+          summary: "Pick one",
+          tool: { messageID: "msg_1", callID: "call_1" },
         },
-      }),
-    ).toEqual([
-      {
+      ]);
+    });
+
+    it("falls back to the form title for the summary, and omits tool when absent", () => {
+      const [msg] = mapOpenCodeEvent(
+        ev("form.created", {
+          form: { ...questionForm, metadata: { kind: "question" }, fields: [{ title: "Mode" }] },
+        }),
+      )!;
+      expect(msg).toEqual({
         kind: "question",
         state: "started",
         header: "Mode",
         summary: "Which mode?",
-        tool: { messageID: "m1", callID: "c1" },
-      },
-    ]);
-  });
-
-  it("maps question.asked with no questions to question:started without header/summary/tool", () => {
-    expect(
-      mapOpenCodeEvent({
-        type: "question.asked",
-        properties: { id: "q1", sessionID: "1", questions: [] },
-      }),
-    ).toEqual([{ kind: "question", state: "started", header: undefined, summary: undefined }]);
-  });
-
-  it("maps question.replied to question:finished", () => {
-    expect(
-      mapOpenCodeEvent({
-        type: "question.replied",
-        properties: { sessionID: "1", requestID: "q1", answers: [["A"]] },
-      }),
-    ).toEqual([{ kind: "question", state: "finished" }]);
-  });
-
-  it("maps question.rejected to question:finished", () => {
-    expect(
-      mapOpenCodeEvent({
-        type: "question.rejected",
-        properties: { sessionID: "1", requestID: "q1" },
-      }),
-    ).toEqual([{ kind: "question", state: "finished" }]);
-  });
-});
-
-describe("todo.updated (v2)", () => {
-  it("maps todo.updated to a todo hook message", () => {
-    expect(
-      mapOpenCodeEvent({
-        type: "todo.updated",
-        properties: {
-          sessionID: "1",
-          content: "Implement auth",
-          status: "in_progress",
-          priority: "high",
-        },
-      }),
-    ).toEqual([
-      { kind: "todo", content: "Implement auth", status: "in_progress", priority: "high" },
-    ]);
-  });
-
-  it("maps todo.updated without priority to default medium", () => {
-    expect(
-      mapOpenCodeEvent({
-        type: "todo.updated",
-        properties: { sessionID: "1", content: "Fix bug", status: "pending" },
-      }),
-    ).toEqual([{ kind: "todo", content: "Fix bug", status: "pending", priority: "medium" }]);
-  });
-
-  it("returns null when todo.updated has no content", () => {
-    expect(mapOpenCodeEvent({ type: "todo.updated", properties: { status: "done" } })).toBeNull();
-  });
-
-  it("clamps unknown priority to medium", () => {
-    expect(
-      mapOpenCodeEvent({
-        type: "todo.updated",
-        properties: { content: "Task", status: "pending", priority: "critical" },
-      }),
-    ).toEqual([{ kind: "todo", content: "Task", status: "pending", priority: "medium" }]);
-  });
-});
-
-describe("session.diff (v2)", () => {
-  it("maps session.diff to a session_diff hook message", () => {
-    expect(
-      mapOpenCodeEvent({
-        type: "session.diff",
-        properties: {
-          sessionID: "1",
-          diff: [{ file: "/repo/a.ts", additions: 10, deletions: 2, patch: "diff a.ts" }],
-        },
-      }),
-    ).toEqual([
-      {
-        kind: "session_diff",
-        files: [{ file: "/repo/a.ts", additions: 10, deletions: 2, patch: "diff a.ts" }],
-      },
-    ]);
-  });
-
-  it("maps session.diff without patches to file entries without patch", () => {
-    expect(
-      mapOpenCodeEvent({
-        type: "session.diff",
-        properties: {
-          sessionID: "1",
-          diff: [{ file: "/repo/b.ts", additions: 5, deletions: 1 }],
-        },
-      }),
-    ).toEqual([
-      {
-        kind: "session_diff",
-        files: [{ file: "/repo/b.ts", additions: 5, deletions: 1, patch: undefined }],
-      },
-    ]);
-  });
-
-  it("returns null when session.diff has an empty diff array", () => {
-    expect(
-      mapOpenCodeEvent({ type: "session.diff", properties: { sessionID: "1", diff: [] } }),
-    ).toBeNull();
-  });
-
-  it("returns null when session.diff has no diff field", () => {
-    expect(mapOpenCodeEvent({ type: "session.diff", properties: {} })).toBeNull();
-  });
-});
-
-describe("worktree.failed (v2)", () => {
-  it("maps worktree.failed to a notification with the error message", () => {
-    expect(
-      mapOpenCodeEvent({
-        type: "worktree.failed",
-        properties: { error: "branch already exists" },
-      }),
-    ).toEqual([
-      {
-        kind: "notification",
-        title: "OpenCode",
-        body: "Worktree creation failed: branch already exists",
-      },
-    ]);
-  });
-
-  it("maps worktree.failed without error to a generic notification", () => {
-    expect(mapOpenCodeEvent({ type: "worktree.failed", properties: {} })).toEqual([
-      { kind: "notification", title: "OpenCode", body: "Worktree creation failed" },
-    ]);
-  });
-});
-
-describe("mcp.browser.open.failed (v2)", () => {
-  it("maps mcp.browser.open.failed to a notification with the MCP server name", () => {
-    expect(
-      mapOpenCodeEvent({
-        type: "mcp.browser.open.failed",
-        properties: { mcpName: "github-mcp", url: "https://github.com/login/oauth" },
-      }),
-    ).toEqual([
-      {
-        kind: "notification",
-        title: "MCP auth failed",
-        body: "github-mcp failed to open browser for authentication",
-      },
-    ]);
-  });
-
-  it("maps mcp.browser.open.failed without mcpName to a generic notification", () => {
-    expect(mapOpenCodeEvent({ type: "mcp.browser.open.failed", properties: {} })).toEqual([
-      { kind: "notification", title: "MCP auth failed", body: "MCP browser auth failed" },
-    ]);
-  });
-});
-
-describe("vcs.branch.updated", () => {
-  it("maps a branch update to a git_branch message", () => {
-    expect(
-      mapOpenCodeEvent({
-        type: "vcs.branch.updated",
-        properties: { sessionID: "1", branch: "feat/opencode-signals" },
-      }),
-    ).toEqual([{ kind: "git_branch", branch: "feat/opencode-signals" }]);
-  });
-
-  it("maps a branch update with cwd to cwd_changed + git_branch", () => {
-    expect(
-      mapOpenCodeEvent(
-        {
-          type: "vcs.branch.updated",
-          properties: { sessionID: "1", branch: "feat/opencode-signals" },
-        },
-        "/home/user/project",
-      ),
-    ).toEqual([
-      { kind: "cwd_changed", cwd: "/home/user/project" },
-      { kind: "git_branch", branch: "feat/opencode-signals" },
-    ]);
-  });
-
-  it("returns null when branch is missing", () => {
-    expect(mapOpenCodeEvent({ type: "vcs.branch.updated", properties: {} })).toBeNull();
-  });
-
-  it("returns null when branch is an empty string", () => {
-    expect(
-      mapOpenCodeEvent({
-        type: "vcs.branch.updated",
-        properties: { sessionID: "1", branch: "" },
-      }),
-    ).toBeNull();
-  });
-});
-
-describe("worktree.ready", () => {
-  it("maps worktree.ready to a git_branch message", () => {
-    expect(
-      mapOpenCodeEvent({
-        type: "worktree.ready",
-        properties: { sessionID: "1", branch: "fix/sidebar-branch" },
-      }),
-    ).toEqual([{ kind: "git_branch", branch: "fix/sidebar-branch" }]);
-  });
-
-  it("maps worktree.ready with cwd to cwd_changed + git_branch", () => {
-    expect(
-      mapOpenCodeEvent(
-        {
-          type: "worktree.ready",
-          properties: { sessionID: "1", branch: "fix/sidebar-branch" },
-        },
-        "/home/user/wt",
-      ),
-    ).toEqual([
-      { kind: "cwd_changed", cwd: "/home/user/wt" },
-      { kind: "git_branch", branch: "fix/sidebar-branch" },
-    ]);
-  });
-
-  it("returns null when branch is missing", () => {
-    expect(mapOpenCodeEvent({ type: "worktree.ready", properties: {} })).toBeNull();
-  });
-
-  it("returns null when branch is an empty string", () => {
-    expect(
-      mapOpenCodeEvent({
-        type: "worktree.ready",
-        properties: { sessionID: "1", branch: "" },
-      }),
-    ).toBeNull();
-  });
-});
-
-describe("MullionHookEmitter (issue #175)", () => {
-  let dir: string;
-  let server: net.Server | null = null;
-  // The plugin deliberately keeps its connection open for reuse (see
-  // opencode-plugin.js's header comment) — server.close() alone waits
-  // forever for a connection nothing here ever ends, so every accepted
-  // socket is tracked and force-destroyed in afterEach instead.
-  let openSockets: net.Socket[] = [];
-
-  afterEach(async () => {
-    for (const socket of openSockets) socket.destroy();
-    openSockets = [];
-    if (server) {
-      await new Promise<void>((resolve) => server?.close(() => resolve()));
-      server = null;
-    }
-    if (dir) rmSync(dir, { recursive: true, force: true });
-    delete process.env.MULLION_HOOK_SOCKET;
-    delete process.env.MULLION_HOOK_TOKEN;
-  });
-
-  function collectLines(count: number): Promise<string[]> {
-    return new Promise((resolve) => {
-      server?.once("connection", (socket) => {
-        openSockets.push(socket);
-        let buffer = "";
-        const lines: string[] = [];
-        socket.on("data", (chunk: Buffer) => {
-          buffer += chunk.toString("utf8");
-          let idx = buffer.indexOf("\n");
-          while (idx !== -1) {
-            lines.push(buffer.slice(0, idx));
-            buffer = buffer.slice(idx + 1);
-            idx = buffer.indexOf("\n");
-            if (lines.length === count) {
-              resolve(lines);
-              return;
-            }
-          }
-        });
       });
     });
-  }
 
-  it("handshakes and forwards a mapped session.idle event", async () => {
-    dir = mkdtempSync(path.join(os.tmpdir(), "mullion-opencode-"));
-    const socketPath = path.join(dir, "hooks.sock");
-    server = net.createServer();
-    await new Promise<void>((resolve) => server?.listen(socketPath, () => resolve()));
-    process.env.MULLION_HOOK_SOCKET = socketPath;
-    process.env.MULLION_HOOK_TOKEN = "tok-456";
-
-    const linesPromise = collectLines(2);
-    const hooks = await MullionHookEmitter();
-    await hooks.event?.({ event: { type: "session.idle", properties: { sessionID: "1" } } });
-
-    const [handshakeLine, messageLine] = await linesPromise;
-    expect(JSON.parse(handshakeLine)).toEqual({ token: "tok-456" });
-    expect(JSON.parse(messageLine)).toEqual({ kind: "progress", phase: "done" });
-  });
-
-  it("sends multiple events over the same reused connection", async () => {
-    dir = mkdtempSync(path.join(os.tmpdir(), "mullion-opencode-"));
-    const socketPath = path.join(dir, "hooks.sock");
-    server = net.createServer();
-    await new Promise<void>((resolve) => server?.listen(socketPath, () => resolve()));
-    process.env.MULLION_HOOK_SOCKET = socketPath;
-    process.env.MULLION_HOOK_TOKEN = "tok-456";
-
-    // 4 lines, not 3: session.idle now sends TWO messages (progress, then
-    // the issue #271 follow-up's agent_session — see mapOpenCodeEvent's own
-    // test above), still over the same reused connection as file.edited's
-    // single file_change message.
-    const linesPromise = collectLines(4);
-    const hooks = await MullionHookEmitter();
-    await hooks.event?.({ event: { type: "session.idle", properties: { sessionID: "1" } } });
-    await hooks.event?.({ event: { type: "file.edited", properties: { file: "/repo/a.ts" } } });
-
-    const [, second, third, fourth] = await linesPromise;
-    expect(JSON.parse(second)).toEqual({ kind: "progress", phase: "done" });
-    expect(JSON.parse(third)).toEqual({ kind: "agent_session", sessionId: "1" });
-    expect(JSON.parse(fourth)).toEqual({
-      kind: "file_change",
-      path: "/repo/a.ts",
-      action: "modify",
+    it("handles fields given as a record rather than an array", () => {
+      const [msg] = mapOpenCodeEvent(
+        ev("form.created", {
+          form: { ...questionForm, fields: { mode: { title: "Mode", description: "d" } } },
+        }),
+      )!;
+      expect(msg).toMatchObject({ header: "Mode", summary: "d" });
     });
-  });
 
-  // Issue #1230 — end-to-end through the real event handler (not just
-  // mapOpenCodeEvent/createAssistantTextTracker in isolation), using a
-  // trimmed real event sequence captured live from installed opencode
-  // 1.18.31 (`opencode run` + a scratch OPENCODE_CONFIG_DIR plugin logging
-  // raw events) rather than a guessed shape: message.updated announcing the
-  // assistant message BEFORE its text streams in as "" then the final
-  // string, then session.idle.
-  it("attaches the reconstructed assistant text to session.idle's done message", async () => {
-    dir = mkdtempSync(path.join(os.tmpdir(), "mullion-opencode-"));
-    const socketPath = path.join(dir, "hooks.sock");
-    server = net.createServer();
-    await new Promise<void>((resolve) => server?.listen(socketPath, () => resolve()));
-    process.env.MULLION_HOOK_SOCKET = socketPath;
-    process.env.MULLION_HOOK_TOKEN = "tok-456";
+    it("ignores forms that aren't questions", () => {
+      expect(
+        mapOpenCodeEvent(
+          ev("form.created", { form: { ...questionForm, metadata: { kind: "login" } } }),
+        ),
+      ).toBeNull();
+      expect(mapOpenCodeEvent(ev("form.created", {}))).toBeNull();
+    });
 
-    const linesPromise = collectLines(2);
-    const hooks = await MullionHookEmitter();
-    await hooks.event?.({
-      event: {
-        type: "message.updated",
-        properties: { sessionID: "s1", info: { id: "msg-assistant-1", role: "assistant" } },
+    it.each(["form.replied", "form.cancelled"])(
+      "maps %s to question finished, but only for a session with a pending question",
+      (type) => {
+        const state = createMapState();
+        expect(mapOpenCodeEvent(ev(type, { sessionID: "s" }), undefined, null, state)).toBeNull();
+        mapOpenCodeEvent(ev("form.created", { form: questionForm }), undefined, null, state);
+        expect(mapOpenCodeEvent(ev(type, { sessionID: "s" }), undefined, null, state)).toEqual([
+          { kind: "question", state: "finished" },
+        ]);
+        // resolved once — a second reply is no longer a pending question
+        expect(mapOpenCodeEvent(ev(type, { sessionID: "s" }), undefined, null, state)).toBeNull();
       },
-    });
-    await hooks.event?.({
-      event: {
-        type: "message.part.updated",
-        properties: {
-          sessionID: "s1",
-          part: { id: "prt-1", messageID: "msg-assistant-1", type: "text", text: "" },
-        },
-      },
-    });
-    await hooks.event?.({
-      event: {
-        type: "message.part.updated",
-        properties: {
-          sessionID: "s1",
-          part: {
-            id: "prt-1",
-            messageID: "msg-assistant-1",
-            type: "text",
-            text: "hello there, this is a probe response",
-          },
-        },
-      },
-    });
-    await hooks.event?.({ event: { type: "session.idle", properties: { sessionID: "s1" } } });
+    );
+  });
 
-    const [, messageLine] = await linesPromise;
-    expect(JSON.parse(messageLine)).toEqual({
-      kind: "progress",
-      phase: "done",
-      lastAssistantMessage: "hello there, this is a probe response",
+  describe("vcs.branch.updated", () => {
+    it("maps to cwd_changed (from the event's location) + git_branch", () => {
+      expect(
+        mapOpenCodeEvent(ev("vcs.branch.updated", { branch: "feat/foo" }, "/repo/wt"), "/other"),
+      ).toEqual([
+        { kind: "cwd_changed", cwd: "/repo/wt" },
+        { kind: "git_branch", branch: "feat/foo" },
+      ]);
+    });
+
+    it("falls back to the plugin's own directory when the event has no location", () => {
+      expect(mapOpenCodeEvent(ev("vcs.branch.updated", { branch: "main" }), "/fallback")).toEqual([
+        { kind: "cwd_changed", cwd: "/fallback" },
+        { kind: "git_branch", branch: "main" },
+      ]);
+    });
+
+    it("emits only git_branch when no directory is known at all", () => {
+      expect(mapOpenCodeEvent(ev("vcs.branch.updated", { branch: "main" }))).toEqual([
+        { kind: "git_branch", branch: "main" },
+      ]);
+    });
+
+    it("returns null for a missing or empty branch", () => {
+      expect(mapOpenCodeEvent(ev("vcs.branch.updated", {}))).toBeNull();
+      expect(mapOpenCodeEvent(ev("vcs.branch.updated", { branch: "" }))).toBeNull();
     });
   });
 
-  it("never throws with no socket configured at all", async () => {
-    const hooks = await MullionHookEmitter();
-    await expect(
-      hooks.event?.({ event: { type: "session.idle", properties: { sessionID: "1" } } }),
-    ).resolves.toBeUndefined();
-  });
-
-  it("does not open a connection for an event with no mapping", async () => {
-    dir = mkdtempSync(path.join(os.tmpdir(), "mullion-opencode-"));
-    const socketPath = path.join(dir, "hooks.sock");
-    server = net.createServer();
-    await new Promise<void>((resolve) => server?.listen(socketPath, () => resolve()));
-    process.env.MULLION_HOOK_SOCKET = socketPath;
-    process.env.MULLION_HOOK_TOKEN = "tok-456";
-    let sawConnection = false;
-    server.on("connection", () => {
-      sawConnection = true;
+  describe("unhandled and 1.x-shaped events", () => {
+    it("returns null for an unhandled event type", () => {
+      expect(mapOpenCodeEvent(ev("model.updated", {}))).toBeNull();
     });
 
-    const hooks = await MullionHookEmitter();
-    await hooks.event?.({ event: { type: "unknown.event", properties: {} } });
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    it("returns null for malformed input", () => {
+      expect(mapOpenCodeEvent(null)).toBeNull();
+      expect(mapOpenCodeEvent(undefined)).toBeNull();
+      expect(mapOpenCodeEvent({ type: 3, data: {} })).toBeNull();
+      expect(mapOpenCodeEvent({ type: "session.execution.succeeded" })).toBeNull();
+    });
 
-    expect(sawConnection).toBe(false);
+    // The 1.x payload lived under `properties` — it must NOT be read any more.
+    it("does not read 1.x `properties` payloads", () => {
+      expect(mapOpenCodeEvent({ type: "session.idle", properties: { sessionID: "1" } })).toBeNull();
+      expect(
+        mapOpenCodeEvent({ type: "permission.asked", properties: { permission: "bash" } }),
+      ).toBeNull();
+    });
+
+    // v2 has no server-side publisher for these 1.x events (see opencode.ts).
+    it.each([
+      "todo.updated",
+      "session.diff",
+      "tui.toast.show",
+      "worktree.failed",
+      "mcp.browser.open.failed",
+    ])("does not map %s", (type) => {
+      expect(
+        mapOpenCodeEvent(
+          ev(type, { content: "x", status: "pending", variant: "error", diff: [{ file: "a" }] }),
+        ),
+      ).toBeNull();
+    });
+  });
+});
+
+// Issue #1230 — createAssistantTextTracker in isolation, over v2's
+// `session.text.ended` events (`data.text`, keyed by assistantMessageID + ordinal).
+describe("createAssistantTextTracker (issue #1230)", () => {
+  const text = (assistantMessageID: string, ordinal: number, body: string, sessionID = "s") =>
+    ev("session.text.ended", { sessionID, assistantMessageID, ordinal, text: body });
+
+  it("returns null before any text has been seen", () => {
+    expect(createAssistantTextTracker().current()).toBeNull();
+  });
+
+  it("returns the text of the current assistant message", () => {
+    const tracker = createAssistantTextTracker();
+    tracker.observe(text("msg_1", 0, "Hello."));
+    expect(tracker.current()).toBe("Hello.");
+  });
+
+  it("joins several text blocks of one message in ordinal order, however they arrive", () => {
+    const tracker = createAssistantTextTracker();
+    tracker.observe(text("msg_1", 1, "Second."));
+    tracker.observe(text("msg_1", 0, "First."));
+    expect(tracker.current()).toBe("First.\n\nSecond.");
+  });
+
+  it("replaces a block that is re-ended with the same ordinal", () => {
+    const tracker = createAssistantTextTracker();
+    tracker.observe(text("msg_1", 0, "draft"));
+    tracker.observe(text("msg_1", 0, "final"));
+    expect(tracker.current()).toBe("final");
+  });
+
+  it("resets when the assistant message id changes", () => {
+    const tracker = createAssistantTextTracker();
+    tracker.observe(text("msg_1", 0, "old turn"));
+    tracker.observe(text("msg_2", 0, "new turn"));
+    expect(tracker.current()).toBe("new turn");
+  });
+
+  it("resets when a new execution starts, so a tool-only turn never reports the previous turn's text", () => {
+    const tracker = createAssistantTextTracker();
+    tracker.observe(text("msg_1", 0, "previous turn"));
+    tracker.observe(ev("session.execution.started", { sessionID: "s" }));
+    expect(tracker.current()).toBeNull();
+  });
+
+  it("ignores a child (subagent) session's text so it never lands on the main session's done", () => {
+    const state = createMapState();
+    state.childSessions.add("child");
+    const tracker = createAssistantTextTracker();
+    tracker.observe(text("msg_1", 0, "main"), state);
+    tracker.observe(text("msg_9", 0, "subagent chatter", "child"), state);
+    expect(tracker.current()).toBe("main");
+    // and a child's execution.started must not wipe the main turn's text
+    tracker.observe(ev("session.execution.started", { sessionID: "child" }), state);
+    expect(tracker.current()).toBe("main");
+  });
+
+  it("ignores malformed events", () => {
+    const tracker = createAssistantTextTracker();
+    tracker.observe(null);
+    tracker.observe({ type: "session.text.ended" });
+    tracker.observe(ev("session.text.ended", { text: 3, assistantMessageID: "m" }));
+    tracker.observe(ev("session.text.ended", { text: "x" }));
+    expect(tracker.current()).toBeNull();
   });
 });
 
@@ -959,85 +738,6 @@ describe("promoteRequest (issue #271)", () => {
   });
 });
 
-describe("MullionHookEmitter tool registration (issue #271)", () => {
-  let dir: string;
-  let server: net.Server | null = null;
-  let openSockets: net.Socket[] = [];
-
-  afterEach(async () => {
-    for (const socket of openSockets) socket.destroy();
-    openSockets = [];
-    if (server) {
-      await new Promise<void>((resolve) => server?.close(() => resolve()));
-      server = null;
-    }
-    if (dir) rmSync(dir, { recursive: true, force: true });
-    delete process.env.MULLION_HOOK_SOCKET;
-    delete process.env.MULLION_HOOK_TOKEN;
-  });
-
-  it("registers promote_to_worktree tool when zod is available", async () => {
-    const hooks = await MullionHookEmitter();
-    expect(hooks.tool).toBeDefined();
-    expect(hooks.tool?.promote_to_worktree).toBeDefined();
-  });
-
-  it("tool has description, args, and execute", async () => {
-    const hooks = await MullionHookEmitter();
-    const tool = hooks.tool?.promote_to_worktree;
-    expect(tool).toBeDefined();
-    expect(typeof tool!.description).toBe("string");
-    expect(tool!.description.length).toBeGreaterThan(0);
-    expect(tool!.args).toBeDefined();
-    expect(typeof tool!.args.summary).toBe("object");
-    expect(typeof tool!.execute).toBe("function");
-  });
-
-  it("tool.args has required summary and optional suggestedBaseRef", async () => {
-    const hooks = await MullionHookEmitter();
-    const tool = hooks.tool?.promote_to_worktree;
-    expect(tool).toBeDefined();
-    expect(tool!.args.summary.isOptional?.()).toBe(false);
-    expect(tool!.args.suggestedBaseRef?.isOptional?.()).toBe(true);
-  });
-
-  it("tool.execute invokes promoteRequest", async () => {
-    dir = mkdtempSync(path.join(os.tmpdir(), "mullion-opencode-tool-"));
-    const socketPath = path.join(dir, "hooks.sock");
-    server = net.createServer((socket) => {
-      openSockets.push(socket);
-      let lines = 0;
-      socket.on("data", (chunk) => {
-        lines += (chunk.toString().match(/\n/g) || []).length;
-        if (lines >= 2) {
-          socket.write(
-            JSON.stringify({ decision: "accepted", worktreePath: "/wt", newSessionId: 1 }) + "\n",
-          );
-        }
-      });
-    });
-    await new Promise<void>((resolve) => server!.listen(socketPath, () => resolve()));
-    process.env.MULLION_HOOK_SOCKET = socketPath;
-    process.env.MULLION_HOOK_TOKEN = "tok-tool";
-
-    const hooks = await MullionHookEmitter();
-    const result = await hooks.tool!.promote_to_worktree.execute(
-      { summary: "do work", suggestedBaseRef: "main" },
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      {} as any,
-    );
-    expect(result).toContain("Approved");
-    expect(result).toContain("/wt");
-    expect(result).toContain("session 1");
-  });
-
-  it("still registers event hook alongside tool", async () => {
-    const hooks = await MullionHookEmitter();
-    expect(typeof hooks.event).toBe("function");
-    expect(hooks.tool?.promote_to_worktree).toBeDefined();
-  });
-});
-
 describe("parseGitWorktreeAdd (issue: sidebar worktree detection)", () => {
   it("extracts branch and worktree path from git worktree add -b", () => {
     expect(
@@ -1140,115 +840,179 @@ describe("splitShellSegments (issue: sidebar worktree detection)", () => {
   });
 });
 
-describe("mapToolExecuteAfter (issue: sidebar worktree detection)", () => {
+describe("mapToolExecuteAfter (issue: sidebar worktree detection; v2 `shell` tool)", () => {
+  const shell = (command: string, extra: Record<string, unknown> = {}) => ({
+    tool: "shell",
+    status: "completed",
+    input: { command, ...extra },
+  });
+
   it("returns cwd_changed + git_branch for git worktree add", () => {
-    const result = MullionHookEmitter.mapToolExecuteAfter(
-      { tool: "bash", args: { command: "git worktree add -b feat/x /path/wt main" } },
-      "/home/user/project",
-    );
-    expect(result).toEqual([
+    expect(
+      mapToolExecuteAfter(shell("git worktree add -b feat/x /path/wt main"), "/home/user/project"),
+    ).toEqual([
       { kind: "cwd_changed", cwd: "/path/wt" },
       { kind: "git_branch", branch: "feat/x", worktree: "/path/wt" },
     ]);
   });
 
-  it("resolves relative worktree path with cwd", () => {
-    const result = MullionHookEmitter.mapToolExecuteAfter(
-      { tool: "bash", args: { command: "git worktree add -b feat/x .worktrees/feat main" } },
-      "/home/user/project",
-    );
-    expect(result).toEqual([
+  it("resolves a relative worktree path against the fallback directory", () => {
+    expect(
+      mapToolExecuteAfter(
+        shell("git worktree add -b feat/x .worktrees/feat main"),
+        "/home/user/project",
+      ),
+    ).toEqual([
       { kind: "cwd_changed", cwd: "/home/user/project/.worktrees/feat" },
       { kind: "git_branch", branch: "feat/x", worktree: "/home/user/project/.worktrees/feat" },
     ]);
   });
 
-  it("returns git_branch for git checkout", () => {
-    const result = MullionHookEmitter.mapToolExecuteAfter(
-      { tool: "bash", args: { command: "git checkout feat/x" } },
-      "/home/user/project",
-    );
-    expect(result).toEqual([{ kind: "git_branch", branch: "feat/x" }]);
-  });
-
-  it("returns git_branch for git switch", () => {
-    const result = MullionHookEmitter.mapToolExecuteAfter(
-      { tool: "bash", args: { command: "git switch feat/x" } },
-      "/home/user/project",
-    );
-    expect(result).toEqual([{ kind: "git_branch", branch: "feat/x" }]);
-  });
-
-  it("returns null for non-bash tools", () => {
+  // The tool call's own `workdir` outranks the plugin's directory: the agent
+  // may run a command from a different directory than the session's.
+  it("resolves a relative worktree path against the call's own workdir when given", () => {
     expect(
-      MullionHookEmitter.mapToolExecuteAfter(
-        { tool: "read", args: { filePath: "/repo/a.ts" } },
+      mapToolExecuteAfter(
+        shell("git worktree add -b feat/x wt main", { workdir: "/elsewhere" }),
         "/home/user/project",
+      ),
+    ).toEqual([
+      { kind: "cwd_changed", cwd: "/elsewhere/wt" },
+      { kind: "git_branch", branch: "feat/x", worktree: "/elsewhere/wt" },
+    ]);
+  });
+
+  it("returns git_branch for git checkout and git switch", () => {
+    expect(mapToolExecuteAfter(shell("git checkout feat/x"), "/p")).toEqual([
+      { kind: "git_branch", branch: "feat/x" },
+    ]);
+    expect(mapToolExecuteAfter(shell("git switch feat/x"), "/p")).toEqual([
+      { kind: "git_branch", branch: "feat/x" },
+    ]);
+  });
+
+  it("returns null for non-shell tools, including 1.x's `bash` name", () => {
+    expect(
+      mapToolExecuteAfter({ tool: "read", input: { filePath: "/repo/a.ts" } }, "/p"),
+    ).toBeNull();
+    expect(
+      mapToolExecuteAfter({ tool: "bash", input: { command: "git checkout x" } }, "/p"),
+    ).toBeNull();
+  });
+
+  it("returns null when the shell call itself errored (the branch didn't change)", () => {
+    expect(
+      mapToolExecuteAfter(
+        { tool: "shell", status: "error", input: { command: "git checkout x" } },
+        "/p",
       ),
     ).toBeNull();
   });
 
-  it("returns null for missing/null input", () => {
-    expect(MullionHookEmitter.mapToolExecuteAfter(null)).toBeNull();
-    expect(MullionHookEmitter.mapToolExecuteAfter(undefined)).toBeNull();
+  it("returns null for a missing/malformed event or command", () => {
+    expect(mapToolExecuteAfter(null, "/p")).toBeNull();
+    expect(mapToolExecuteAfter(undefined, "/p")).toBeNull();
+    expect(mapToolExecuteAfter({ tool: "shell", input: {} }, "/p")).toBeNull();
+    expect(mapToolExecuteAfter({ tool: "shell", input: { command: "" } }, "/p")).toBeNull();
+    expect(mapToolExecuteAfter(shell("echo hi"), "/p")).toBeNull();
   });
 
   it("picks the last worktree add in a chained command", () => {
-    const result = MullionHookEmitter.mapToolExecuteAfter(
-      {
-        tool: "bash",
-        args: {
-          command:
-            "git worktree add -b old-feat /path/old-wt main && git worktree add -b feat/x /path/wt main",
-        },
-      },
-      "/home/user/project",
-    );
-    expect(result).toEqual([
+    expect(
+      mapToolExecuteAfter(
+        shell(
+          "git worktree add -b old-feat /path/old-wt main && git worktree add -b feat/x /path/wt main",
+        ),
+        "/home/user/project",
+      ),
+    ).toEqual([
       { kind: "cwd_changed", cwd: "/path/wt" },
       { kind: "git_branch", branch: "feat/x", worktree: "/path/wt" },
     ]);
   });
 
   it("ignores -C flags from non-git segments in chained command", () => {
-    const result = MullionHookEmitter.mapToolExecuteAfter(
-      {
-        tool: "bash",
-        args: {
-          command: "my-tool -C some_arg && git worktree add -b feat/x .worktrees/feat",
-        },
-      },
-      "/home/user/project",
-    );
-    expect(result).toEqual([
+    expect(
+      mapToolExecuteAfter(
+        shell("my-tool -C some_arg && git worktree add -b feat/x .worktrees/feat"),
+        "/home/user/project",
+      ),
+    ).toEqual([
       { kind: "cwd_changed", cwd: "/home/user/project/.worktrees/feat" },
       { kind: "git_branch", branch: "feat/x", worktree: "/home/user/project/.worktrees/feat" },
     ]);
   });
 
   it("uses git -C from matching worktree add segment even in chained command", () => {
-    const result = MullionHookEmitter.mapToolExecuteAfter(
-      {
-        tool: "bash",
-        args: {
-          command: "echo hello && git -C /repo worktree add -b feat/x .worktrees/feat",
-        },
-      },
-      "/home/user/project",
-    );
-    expect(result).toEqual([
+    expect(
+      mapToolExecuteAfter(
+        shell("echo hello && git -C /repo worktree add -b feat/x .worktrees/feat"),
+        "/home/user/project",
+      ),
+    ).toEqual([
       { kind: "cwd_changed", cwd: "/repo/.worktrees/feat" },
       { kind: "git_branch", branch: "feat/x", worktree: "/repo/.worktrees/feat" },
     ]);
   });
 });
 
-describe("MullionHookEmitter tool.execute.after hook (issue: sidebar worktree detection)", () => {
+describe("readInstructionTexts", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(path.join(os.tmpdir(), "mullion-opencode-instr-"));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+    delete process.env.MULLION_OPENCODE_INSTRUCTIONS;
+  });
+
+  it("reads the files listed in MULLION_OPENCODE_INSTRUCTIONS, in order, trimmed", () => {
+    const a = path.join(dir, "a.md");
+    const b = path.join(dir, "b.md");
+    writeFileSync(a, "  first \n");
+    writeFileSync(b, "second");
+    process.env.MULLION_OPENCODE_INSTRUCTIONS = JSON.stringify([a, b]);
+    expect(readInstructionTexts()).toEqual(["first", "second"]);
+  });
+
+  it("skips relative paths, unreadable files and empty files", () => {
+    const empty = path.join(dir, "empty.md");
+    const ok = path.join(dir, "ok.md");
+    writeFileSync(empty, "   \n");
+    writeFileSync(ok, "kept");
+    process.env.MULLION_OPENCODE_INSTRUCTIONS = JSON.stringify([
+      "relative/path.md",
+      path.join(dir, "missing.md"),
+      empty,
+      42,
+      ok,
+    ]);
+    expect(readInstructionTexts()).toEqual(["kept"]);
+  });
+
+  it("returns [] when the env var is unset, not JSON, or not an array", () => {
+    expect(readInstructionTexts()).toEqual([]);
+    process.env.MULLION_OPENCODE_INSTRUCTIONS = "not json";
+    expect(readInstructionTexts()).toEqual([]);
+    process.env.MULLION_OPENCODE_INSTRUCTIONS = JSON.stringify({ a: 1 });
+    expect(readInstructionTexts()).toEqual([]);
+  });
+});
+
+// `setup(ctx)` end to end: a fake opencode Context drives the plugin, and a
+// real unix-socket server stands in for Mullion's hook socket.
+describe("MullionHookEmitter.setup (opencode v2 plugin)", () => {
   let dir: string;
   let server: net.Server | null = null;
+  // The plugin keeps its connection open for reuse — server.close() alone
+  // waits forever for a connection nothing here ends, so every accepted
+  // socket is tracked and force-destroyed in afterEach.
   let openSockets: net.Socket[] = [];
+  let cleanup: (() => Promise<void> | void) | undefined;
 
   afterEach(async () => {
+    await cleanup?.();
+    cleanup = undefined;
     for (const socket of openSockets) socket.destroy();
     openSockets = [];
     if (server) {
@@ -1258,7 +1022,17 @@ describe("MullionHookEmitter tool.execute.after hook (issue: sidebar worktree de
     if (dir) rmSync(dir, { recursive: true, force: true });
     delete process.env.MULLION_HOOK_SOCKET;
     delete process.env.MULLION_HOOK_TOKEN;
+    delete process.env.MULLION_OPENCODE_INSTRUCTIONS;
   });
+
+  async function listen(token = "tok-456"): Promise<void> {
+    dir = mkdtempSync(path.join(os.tmpdir(), "mullion-opencode-"));
+    const socketPath = path.join(dir, "hooks.sock");
+    server = net.createServer();
+    await new Promise<void>((resolve) => server?.listen(socketPath, () => resolve()));
+    process.env.MULLION_HOOK_SOCKET = socketPath;
+    process.env.MULLION_HOOK_TOKEN = token;
+  }
 
   function collectLines(count: number): Promise<string[]> {
     return new Promise((resolve) => {
@@ -1283,24 +1057,139 @@ describe("MullionHookEmitter tool.execute.after hook (issue: sidebar worktree de
     });
   }
 
-  it("forwards cwd_changed + git_branch for git worktree add", async () => {
-    dir = mkdtempSync(path.join(os.tmpdir(), "mullion-opencode-wt-"));
-    const socketPath = path.join(dir, "hooks.sock");
-    server = net.createServer();
-    await new Promise<void>((resolve) => server?.listen(socketPath, () => resolve()));
-    process.env.MULLION_HOOK_SOCKET = socketPath;
-    process.env.MULLION_HOOK_TOKEN = "tok-wt";
+  const start = async (fake: ReturnType<typeof createFakeCtx>) => {
+    cleanup = (await MullionHookEmitter.setup(fake.ctx)) as typeof cleanup;
+    return cleanup;
+  };
 
+  it("does nothing — and never throws — outside a Mullion session (no hook socket/token env)", async () => {
+    const fake = createFakeCtx();
+    await expect(MullionHookEmitter.setup(fake.ctx)).resolves.toBeUndefined();
+    expect(fake.subscribed).toBe(false);
+    expect(fake.tools).toHaveLength(0);
+    expect(fake.toolHooks.size).toBe(0);
+    expect(fake.sessionHooks.size).toBe(0);
+  });
+
+  it("handshakes and forwards a mapped turn end read from ctx.event.subscribe", async () => {
+    await listen();
     const linesPromise = collectLines(3);
-    const hooks = await MullionHookEmitter();
-    await hooks["tool.execute.after"]?.(
-      {
-        tool: "bash",
-        args: { command: "git worktree add -b feat/x /path/wt main" },
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } as any,
-      {},
+    const fake = createFakeCtx();
+    await start(fake);
+
+    fake.push(ev("session.execution.succeeded", { sessionID: "ses_1" }));
+
+    const [handshake, progress, agentSession] = await linesPromise;
+    expect(JSON.parse(handshake)).toEqual({ token: "tok-456" });
+    expect(JSON.parse(progress)).toEqual({ kind: "progress", phase: "done" });
+    expect(JSON.parse(agentSession)).toEqual({ kind: "agent_session", sessionId: "ses_1" });
+  });
+
+  it("sends multiple events over the same reused connection", async () => {
+    await listen();
+    const linesPromise = collectLines(4);
+    const fake = createFakeCtx();
+    await start(fake);
+
+    fake.push(ev("session.execution.started", { sessionID: "s" }));
+    fake.push(ev("session.step.ended", { sessionID: "s", files: ["a.ts"] }, "/repo"));
+
+    const [, a, b, c] = await linesPromise;
+    expect(JSON.parse(a)).toEqual({ kind: "turn_start" });
+    expect(JSON.parse(b)).toEqual({ kind: "progress", phase: "generating" });
+    expect(JSON.parse(c)).toEqual({ kind: "file_change", path: "/repo/a.ts", action: "modify" });
+  });
+
+  // Issue #1230 — end to end through the real subscription loop: the turn's
+  // text is reconstructed from session.text.ended and attached to "done".
+  it("attaches the reconstructed assistant text to the turn's done message", async () => {
+    await listen();
+    const linesPromise = collectLines(3);
+    const fake = createFakeCtx();
+    await start(fake);
+
+    fake.push(
+      ev("session.text.ended", {
+        sessionID: "s1",
+        assistantMessageID: "msg_a",
+        ordinal: 0,
+        text: "All done.",
+      }),
     );
+    fake.push(ev("session.execution.succeeded", { sessionID: "s1" }));
+
+    const [, progress, agentSession] = await linesPromise;
+    expect(JSON.parse(progress)).toEqual({
+      kind: "progress",
+      phase: "done",
+      lastAssistantMessage: "All done.",
+    });
+    expect(JSON.parse(agentSession)).toEqual({ kind: "agent_session", sessionId: "s1" });
+  });
+
+  it("uses ctx.location.directory (not process.cwd()) as the cwd fallback", async () => {
+    await listen();
+    const linesPromise = collectLines(3);
+    const fake = createFakeCtx("/session/dir");
+    await start(fake);
+
+    fake.push(ev("vcs.branch.updated", { branch: "feat/x" }));
+
+    const [, cwdMsg, branchMsg] = await linesPromise;
+    expect(JSON.parse(cwdMsg)).toEqual({ kind: "cwd_changed", cwd: "/session/dir" });
+    expect(JSON.parse(branchMsg)).toEqual({ kind: "git_branch", branch: "feat/x" });
+  });
+
+  it("keeps consuming events after a malformed one", async () => {
+    await listen();
+    const linesPromise = collectLines(2);
+    const fake = createFakeCtx();
+    await start(fake);
+
+    fake.push(null);
+    fake.push({ type: "session.execution.started" });
+    fake.push(ev("session.execution.started", { sessionID: "s" }));
+
+    const [, first] = await linesPromise;
+    expect(JSON.parse(first)).toEqual({ kind: "turn_start" });
+  });
+
+  it("registers promote_to_worktree with a plain JSON Schema input (v2 provides no zod)", async () => {
+    await listen();
+    const fake = createFakeCtx();
+    await start(fake);
+
+    expect(fake.tools).toHaveLength(1);
+    const [tool] = fake.tools;
+    expect(tool.name).toBe("promote_to_worktree");
+    expect(tool.description).toMatch(/isolated git worktree/);
+    expect(tool.input).toMatchObject({
+      type: "object",
+      required: ["summary"],
+      properties: { summary: { type: "string" }, suggestedBaseRef: { type: "string" } },
+    });
+  });
+
+  it("promote_to_worktree returns { content } and declines when the call's signal is already aborted", async () => {
+    await listen();
+    const fake = createFakeCtx();
+    await start(fake);
+
+    const result = await fake.tools[0].execute({ summary: "s" }, { signal: AbortSignal.abort() });
+    expect(result).toEqual({ content: "Declined: aborted" });
+  });
+
+  it("forwards git branch changes from the shell tool's execute.after hook", async () => {
+    await listen("tok-wt");
+    const linesPromise = collectLines(3);
+    const fake = createFakeCtx("/home/user/project");
+    await start(fake);
+
+    fake.toolHooks.get("execute.after")!({
+      tool: "shell",
+      status: "completed",
+      input: { command: "git worktree add -b feat/x /path/wt main" },
+    });
 
     const [handshake, cwdMsg, branchMsg] = await linesPromise;
     expect(JSON.parse(handshake)).toEqual({ token: "tok-wt" });
@@ -1311,165 +1200,152 @@ describe("MullionHookEmitter tool.execute.after hook (issue: sidebar worktree de
       worktree: "/path/wt",
     });
   });
+
+  describe("instruction files via the session `context` hook", () => {
+    it("does not register a context hook when MULLION_OPENCODE_INSTRUCTIONS is unset", async () => {
+      await listen();
+      const fake = createFakeCtx();
+      await start(fake);
+      expect(fake.sessionHooks.has("context")).toBe(false);
+    });
+
+    it("appends each instruction file as a text system part, once", async () => {
+      await listen();
+      const a = path.join(dir, "tier0.md");
+      const b = path.join(dir, "briefing.md");
+      writeFileSync(a, "tier zero");
+      writeFileSync(b, "the briefing");
+      process.env.MULLION_OPENCODE_INSTRUCTIONS = JSON.stringify([a, b]);
+      const fake = createFakeCtx();
+      await start(fake);
+
+      const context = { system: [{ type: "text", text: "existing" }] };
+      fake.sessionHooks.get("context")!(context);
+      expect(context.system).toEqual([
+        { type: "text", text: "existing" },
+        { type: "text", text: "tier zero" },
+        { type: "text", text: "the briefing" },
+      ]);
+      // idempotent — setup may run per Location, and a request may re-run the hook
+      fake.sessionHooks.get("context")!(context);
+      expect(context.system).toHaveLength(3);
+    });
+  });
+
+  it("returns a cleanup that aborts the subscription and disposes every registration", async () => {
+    await listen();
+    process.env.MULLION_OPENCODE_INSTRUCTIONS = JSON.stringify([]);
+    const fake = createFakeCtx();
+    const stop = await start(fake);
+    expect(fake.aborted).toBe(false);
+    expect(fake.registrations.length).toBeGreaterThanOrEqual(3);
+
+    await stop!();
+    expect(fake.aborted).toBe(true);
+    expect(fake.registrations.every((r) => r.disposed)).toBe(true);
+
+    // events after cleanup are no longer consumed
+    await flush();
+  });
+
+  it("still finishes cleanup when a registration's dispose throws", async () => {
+    await listen();
+    const fake = createFakeCtx();
+    const stop = await start(fake);
+    fake.registrations[0].dispose = async () => {
+      throw new Error("boom");
+    };
+    await expect(stop!()).resolves.toBeUndefined();
+    expect(fake.aborted).toBe(true);
+  });
+});
+
+describe("promoteRequest abort signal", () => {
+  let dir: string;
+  let server: net.Server | null = null;
+  let openSockets: net.Socket[] = [];
+
+  afterEach(async () => {
+    for (const socket of openSockets) socket.destroy();
+    openSockets = [];
+    if (server) {
+      await new Promise<void>((resolve) => server?.close(() => resolve()));
+      server = null;
+    }
+    if (dir) rmSync(dir, { recursive: true, force: true });
+    delete process.env.MULLION_HOOK_SOCKET;
+    delete process.env.MULLION_HOOK_TOKEN;
+  });
+
+  it("resolves as declined when the signal aborts while waiting for a decision", async () => {
+    dir = mkdtempSync(path.join(os.tmpdir(), "mullion-opencode-"));
+    const socketPath = path.join(dir, "hooks.sock");
+    server = net.createServer((socket) => openSockets.push(socket));
+    await new Promise<void>((resolve) => server?.listen(socketPath, () => resolve()));
+    process.env.MULLION_HOOK_SOCKET = socketPath;
+    process.env.MULLION_HOOK_TOKEN = "tok";
+
+    const abort = new AbortController();
+    const resultPromise = promoteRequest("summary", undefined, abort.signal);
+    await new Promise<void>((resolve) => server?.once("connection", () => resolve()));
+    abort.abort();
+    await expect(resultPromise).resolves.toBe("Declined: aborted");
+  });
 });
 
 // Issue: extend surfaced session statuses — opencode's own capability-parity
 // test, mirroring forwarder-core.test.ts's "hook adapter emits capability
 // parity" block for the three shell-hook adapters. opencode has no
-// equivalent registered-hooks list to enumerate (its adapter, opencode.ts,
-// never touches hooks.json — see that adapter's own header comment): the
-// event-bus type strings mapOpenCodeEvent itself switches on ARE the
-// "registered events" here, so this drives every one of them through the
-// mapper directly instead. `promote_request` (the plugin's own tool, not an
-// `event` type) is asserted separately below — it has no mapper output to
-// drive through this table at all.
-// Issue #1230 — createAssistantTextTracker in isolation. Event shapes below
-// are trimmed from the same live capture (installed opencode 1.18.31)
-// MullionHookEmitter's own "attaches the reconstructed assistant text..."
-// test above drives end to end.
-describe("createAssistantTextTracker (issue #1230)", () => {
-  it("returns null before any assistant message is observed", () => {
-    expect(createAssistantTextTracker().current()).toBeNull();
-  });
-
-  it("ignores a text part belonging to the user's own message", () => {
-    const tracker = createAssistantTextTracker();
-    tracker.observe({
-      type: "message.updated",
-      properties: { info: { id: "msg-user-1", role: "user" } },
-    });
-    tracker.observe({
-      type: "message.part.updated",
-      properties: {
-        part: { id: "prt-1", messageID: "msg-user-1", type: "text", text: "the prompt" },
-      },
-    });
-    expect(tracker.current()).toBeNull();
-  });
-
-  it("tracks the assistant message's text, overwriting as it streams from empty to final", () => {
-    const tracker = createAssistantTextTracker();
-    tracker.observe({
-      type: "message.updated",
-      properties: { info: { id: "msg-a-1", role: "assistant" } },
-    });
-    tracker.observe({
-      type: "message.part.updated",
-      properties: { part: { id: "prt-1", messageID: "msg-a-1", type: "text", text: "" } },
-    });
-    expect(tracker.current()).toBe("");
-    tracker.observe({
-      type: "message.part.updated",
-      properties: { part: { id: "prt-1", messageID: "msg-a-1", type: "text", text: "hello" } },
-    });
-    expect(tracker.current()).toBe("hello");
-  });
-
-  it("joins more than one distinct text part for the same assistant message, in first-seen order", () => {
-    const tracker = createAssistantTextTracker();
-    tracker.observe({
-      type: "message.updated",
-      properties: { info: { id: "msg-a-1", role: "assistant" } },
-    });
-    tracker.observe({
-      type: "message.part.updated",
-      properties: { part: { id: "prt-1", messageID: "msg-a-1", type: "text", text: "first" } },
-    });
-    tracker.observe({
-      type: "message.part.updated",
-      properties: { part: { id: "prt-2", messageID: "msg-a-1", type: "text", text: "second" } },
-    });
-    expect(tracker.current()).toBe("first\n\nsecond");
-  });
-
-  it("resets once a new assistant message starts (a later turn)", () => {
-    const tracker = createAssistantTextTracker();
-    tracker.observe({
-      type: "message.updated",
-      properties: { info: { id: "msg-a-1", role: "assistant" } },
-    });
-    tracker.observe({
-      type: "message.part.updated",
-      properties: { part: { id: "prt-1", messageID: "msg-a-1", type: "text", text: "first turn" } },
-    });
-    tracker.observe({
-      type: "message.updated",
-      properties: { info: { id: "msg-a-2", role: "assistant" } },
-    });
-    expect(tracker.current()).toBeNull();
-    tracker.observe({
-      type: "message.part.updated",
-      properties: {
-        part: { id: "prt-9", messageID: "msg-a-2", type: "text", text: "second turn" },
-      },
-    });
-    expect(tracker.current()).toBe("second turn");
-  });
-
-  it("ignores a non-text part type (e.g. step-start/step-finish)", () => {
-    const tracker = createAssistantTextTracker();
-    tracker.observe({
-      type: "message.updated",
-      properties: { info: { id: "msg-a-1", role: "assistant" } },
-    });
-    tracker.observe({
-      type: "message.part.updated",
-      properties: { part: { id: "prt-1", messageID: "msg-a-1", type: "step-finish" } },
-    });
-    expect(tracker.current()).toBeNull();
-  });
-});
-
+// registered-hooks list to enumerate: the v2 event types mapOpenCodeEvent
+// itself switches on ARE the "registered events", so this drives every one of
+// them through the mapper directly. `promote_request` (the plugin's own tool,
+// not an event type) is asserted separately below.
 describe("mapOpenCodeEvent emits capability parity (issue: extend surfaced session statuses)", () => {
-  it("every handled event type's mapped kind(s) are declared in openCodeAdapter.emits", () => {
+  function driveAll(): Set<string> {
+    const state = createMapState();
+    const kinds = new Set<string>();
     const events = [
-      { type: "session.idle", properties: { sessionID: "1" } },
-      { type: "file.edited", properties: { file: "/repo/a.ts" } },
-      { type: "permission.asked", properties: { permission: "bash" } },
-      { type: "permission.replied", properties: {} },
-      {
-        type: "session.error",
-        properties: { error: { name: "ProviderAuthError", data: { message: "bad key" } } },
-      },
-      { type: "tui.toast.show", properties: { variant: "error", title: "Oops", message: "boom" } },
-      { type: "session.status", properties: { status: { type: "busy" } } },
-      { type: "session.status", properties: { status: { type: "idle" } } },
-      {
-        type: "session.status",
-        properties: { status: { type: "retry", attempt: 1, message: "rate limited" } },
-      },
-      { type: "vcs.branch.updated", properties: { branch: "feat/foo" } },
-      { type: "worktree.ready", properties: { branch: "fix/bar" } },
-      { type: "session.compacting", properties: { state: "started" } },
-      { type: "session.compacting", properties: { state: "finished" } },
-      { type: "session.subagent", properties: { state: "started" } },
-      { type: "session.subagent", properties: { state: "stopped" } },
-      {
-        type: "question.asked",
-        properties: { questions: [{ question: "Which mode?", header: "Mode" }] },
-      },
-      { type: "question.replied", properties: {} },
-      { type: "question.rejected", properties: {} },
-      { type: "todo.updated", properties: { content: "Fix bug", status: "pending" } },
-      {
-        type: "session.diff",
-        properties: { diff: [{ file: "/repo/a.ts", additions: 1, deletions: 0 }] },
-      },
-      { type: "worktree.failed", properties: { error: "exists" } },
-      { type: "mcp.browser.open.failed", properties: { mcpName: "mcp-github" } },
+      ev("session.execution.started", { sessionID: "m" }),
+      ev("session.execution.succeeded", { sessionID: "m" }),
+      ev("session.execution.failed", { sessionID: "m", error: { type: "E", message: "m" } }),
+      ev("session.retry.scheduled", { sessionID: "m", attempt: 1, error: { message: "x" } }),
+      ev("session.step.ended", { sessionID: "m", files: ["a.ts"] }, "/repo"),
+      ev("permission.asked", { action: "shell", resources: ["ls"] }),
+      ev("permission.replied", {}),
+      ev("vcs.branch.updated", { branch: "feat/foo" }, "/repo"),
+      ev("session.compaction.started", { sessionID: "m" }),
+      ev("session.compaction.ended", { sessionID: "m" }),
+      ev("session.compaction.failed", { sessionID: "m" }),
+      ev("session.created", { sessionID: "c", parentID: "m" }),
+      ev("session.execution.succeeded", { sessionID: "c" }),
+      ev("form.created", {
+        form: { sessionID: "m", title: "Q", metadata: { kind: "question" }, fields: [] },
+      }),
+      ev("form.replied", { sessionID: "m" }),
     ];
-
     for (const event of events) {
-      const mapped = mapOpenCodeEvent(event);
-      if (mapped === null) continue;
-      for (const msg of mapped) {
-        expect(openCodeAdapter.emits).toContain(msg.kind);
+      for (const msg of mapOpenCodeEvent(event, undefined, null, state) ?? []) {
+        kinds.add(msg.kind as string);
       }
+    }
+    return kinds;
+  }
+
+  it("every handled event type's mapped kind(s) are declared in openCodeAdapter.emits", () => {
+    for (const kind of driveAll()) {
+      expect(openCodeAdapter.emits).toContain(kind);
     }
   });
 
-  it("cwd_changed (emitted by vcs.branch.updated and worktree.ready when cwd is provided) is declared in emits", () => {
-    expect(openCodeAdapter.emits).toContain("cwd_changed");
+  // Guards the other direction: nothing is advertised that the plugin can no
+  // longer produce (1.x's notification/todo/session_diff, for instance).
+  it("every kind in OPENCODE_EMITS (except the tool-sourced promote_request) is actually producible", () => {
+    const producible = driveAll();
+    // cwd_changed/git_branch also come from the tool hook, agent_session etc. from events above
+    for (const kind of OPENCODE_EMITS) {
+      if (kind === "promote_request") continue;
+      expect(producible).toContain(kind);
+    }
   });
 
   it("promote_request (the plugin's own tool, not an event type) is declared in emits", () => {
@@ -1478,8 +1354,8 @@ describe("mapOpenCodeEvent emits capability parity (issue: extend surfaced sessi
 
   it("tool.execute.after's message kinds (git_branch, cwd_changed) are declared in emits", () => {
     const cases = [
-      { tool: "bash", args: { command: "git worktree add -b feat/x /path/wt main" } },
-      { tool: "bash", args: { command: "git checkout feat/x" } },
+      { tool: "shell", input: { command: "git worktree add -b feat/x /path/wt main" } },
+      { tool: "shell", input: { command: "git checkout feat/x" } },
     ];
     for (const input of cases) {
       const messages = mapToolExecuteAfter(input, "/tmp");
