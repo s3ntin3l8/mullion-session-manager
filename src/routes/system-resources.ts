@@ -3,7 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { getStoredSettings } from "../services/settings.js";
 import { expandHome, parseProjectsRootsEnv } from "../services/project-config.js";
-import { inspectDockerStorage, pruneDockerStorage } from "../services/docker-storage.js";
+import {
+  inspectDockerStorage,
+  pruneDockerStorage,
+  type DockerPruneMode,
+} from "../services/docker-storage.js";
 import { sampleSystemStats, type MonitoredPath } from "../services/system-stats.js";
 
 const STATS_CACHE_MS = 10_000;
@@ -42,12 +46,21 @@ export async function systemResourcesRoute(app: FastifyInstance) {
 
   app.get("/api/storage/docker", async () => inspectDockerStorage());
 
-  app.post(
+  app.post<{ Body?: { mode?: DockerPruneMode } }>(
     "/api/storage/docker/prune",
-    { config: { rateLimit: DOCKER_PRUNE_RATE_LIMIT } },
-    async (_request, reply) => {
+    {
+      config: { rateLimit: DOCKER_PRUNE_RATE_LIMIT },
+      schema: {
+        body: {
+          type: ["object", "null"],
+          properties: { mode: { type: "string", enum: ["safe", "aggressive"] } },
+          additionalProperties: false,
+        },
+      },
+    },
+    async (request, reply) => {
       try {
-        const result = await pruneDockerStorage();
+        const result = await pruneDockerStorage(request.body?.mode ?? "safe");
         cached = null;
         return result;
       } catch (error) {

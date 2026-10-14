@@ -14,6 +14,8 @@ import type {
   AuthStatus,
   SystemStats,
   DockerStorageStatus,
+  DockerPruneMode,
+  DockerPruneResult,
 } from "./types.js";
 import type { Launcher } from "../../../src/shared/types.js";
 
@@ -75,8 +77,11 @@ export const systemApi = {
 
   getSystemStats: () => request<SystemStats>("/api/system-stats"),
   getDockerStorage: () => request<DockerStorageStatus>("/api/storage/docker"),
-  pruneDockerStorage: () =>
-    request<{ output: string }>("/api/storage/docker/prune", { method: "POST" }),
+  pruneDockerStorage: (mode: DockerPruneMode = "safe") =>
+    request<DockerPruneResult>("/api/storage/docker/prune", {
+      method: "POST",
+      body: JSON.stringify({ mode }),
+    }),
 
   listOpenCodeModels: () => request<string[]>("/api/opencode/models"),
   listAgyModels: () => request<string[]>("/api/agy/models"),

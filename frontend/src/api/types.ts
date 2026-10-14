@@ -83,6 +83,15 @@ export interface DockerStorageStatus {
   }>;
   totalSizeBytes: number;
   reclaimableBytes: number;
+  estimates: { safeBytes: number | null; aggressiveBytes: number };
+  error?: string;
+}
+
+export type DockerPruneMode = "safe" | "aggressive";
+
+export interface DockerPruneResult {
+  output: string;
+  reclaimedBytes: number;
   error?: string;
 }
 

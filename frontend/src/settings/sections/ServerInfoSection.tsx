@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, ApiError } from "../../api/index.js";
 import type { ServerInfo, UpdateCheckResult, UpdateStatus } from "../../api/index.js";
-import type { DockerStorageStatus, SystemStats } from "../../api/index.js";
+import type { DockerPruneMode, DockerStorageStatus, SystemStats } from "../../api/index.js";
 import { usePolling } from "../../hooks/usePolling.js";
 import { formatRelativeAge } from "../../relativeTime.js";
 import { Eyebrow, SecondaryButton } from "../../ui/primitives.js";
@@ -47,6 +47,26 @@ export function ServerInfoSection() {
       .catch(() => setInfo(null));
     void refreshResources();
   }, []);
+
+  const runPrune = (mode: DockerPruneMode) => {
+    setPruning(true);
+    setPruneResult(null);
+    void (async () => {
+      try {
+        const result = await api.pruneDockerStorage(mode);
+        setPruneResult(
+          result.error
+            ? `Freed ${formatBytes(result.reclaimedBytes)}, then stopped: ${result.error}`
+            : `Freed ${formatBytes(result.reclaimedBytes)}.`,
+        );
+      } catch (error: unknown) {
+        setPruneResult(error instanceof ApiError ? error.message : "Docker cleanup failed.");
+      } finally {
+        setPruning(false);
+        await refreshResources();
+      }
+    })();
+  };
 
   if (!info) return <div className="settings-readonly-value">Loading…</div>;
 
@@ -152,39 +172,43 @@ export function ServerInfoSection() {
               <div className="settings-stat-value">{formatBytes(docker.totalSizeBytes)}</div>
             </div>
             <div className="settings-stat-card">
-              <div className="settings-stat-label">Potentially reclaimable</div>
-              <div className="settings-stat-value">{formatBytes(docker.reclaimableBytes)}</div>
+              <div className="settings-stat-label">Safe cleanup frees ≈</div>
+              <div className="settings-stat-value">
+                {docker.estimates?.safeBytes == null
+                  ? "unknown"
+                  : formatBytes(docker.estimates.safeBytes)}
+              </div>
+            </div>
+            <div className="settings-stat-card">
+              <div className="settings-stat-label">Aggressive cleanup frees ≈</div>
+              <div className="settings-stat-value">
+                {formatBytes(docker.estimates?.aggressiveBytes ?? docker.reclaimableBytes)}
+              </div>
             </div>
           </div>
           <div className="settings-footer-note">
-            Safe cleanup may remove stopped containers, unused networks, dangling images, and build
-            cache older than 7 days. It never uses <code>--all</code> or <code>--volumes</code>, so
-            tagged unused images and volumes are preserved.
+            Safe cleanup removes dangling images (any age), plus stopped containers, unused
+            networks, and build cache older than 7 days. Aggressive cleanup also removes{" "}
+            <strong>all unused images, including tagged ones</strong> (they must be pulled or
+            rebuilt again) and all unused build cache, and it drops the 7-day window for stopped
+            containers and unused networks too. Neither uses <code>--volumes</code>, so volumes are
+            always preserved. Figures are estimates.
           </div>
           {pruneResult && <div className="settings-footer-note">{pruneResult}</div>}
-          <div style={{ marginTop: 10 }}>
+          <div style={{ marginTop: 10, display: "flex", gap: 10 }}>
             <ConfirmButton
-              title="Remove eligible Docker objects older than 7 days"
+              title="Remove dangling images and stale containers, networks, and build cache"
               disabled={pruning}
-              onConfirm={() => {
-                setPruning(true);
-                setPruneResult(null);
-                void (async () => {
-                  try {
-                    await api.pruneDockerStorage();
-                    setPruneResult("Docker cleanup completed.");
-                  } catch (error: unknown) {
-                    setPruneResult(
-                      error instanceof ApiError ? error.message : "Docker cleanup failed.",
-                    );
-                  } finally {
-                    await refreshResources();
-                    setPruning(false);
-                  }
-                })();
-              }}
+              onConfirm={() => runPrune("safe")}
             >
-              {pruning ? "Cleaning up…" : "Clean up Docker…"}
+              {pruning ? "Cleaning up…" : "Clean up Docker (safe)…"}
+            </ConfirmButton>
+            <ConfirmButton
+              title="Remove ALL unused images (including tagged) and ALL unused build cache"
+              disabled={pruning}
+              onConfirm={() => runPrune("aggressive")}
+            >
+              {pruning ? "Cleaning up…" : "Aggressive cleanup…"}
             </ConfirmButton>
           </div>
         </>

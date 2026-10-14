@@ -54,6 +54,7 @@ const docker: DockerStorageStatus = {
   rows: [],
   totalSizeBytes: 10 * GIB,
   reclaimableBytes: 4 * GIB,
+  estimates: { safeBytes: 2 * GIB, aggressiveBytes: 3 * GIB },
 };
 
 function setup(overrides: { docker?: DockerStorageStatus } = {}) {
@@ -74,7 +75,8 @@ describe("Settings -> Server info resources", () => {
     expect(screen.getByText("Home, Working directory")).toBeInTheDocument();
     expect(screen.getByText("12 GiB free / 100 GiB (12.0%)")).toBeInTheDocument();
     expect(screen.getByText("10 GiB")).toBeInTheDocument();
-    expect(screen.getByText("4.0 GiB")).toBeInTheDocument();
+    expect(screen.getByText("2.0 GiB")).toBeInTheDocument();
+    expect(screen.getByText("3.0 GiB")).toBeInTheDocument();
   });
 
   it("shows which host features are on and offers the log level setting", async () => {
@@ -89,15 +91,34 @@ describe("Settings -> Server info resources", () => {
 
   it("requires two clicks, prunes once, and refreshes figures after success", async () => {
     setup();
-    vi.spyOn(api, "pruneDockerStorage").mockResolvedValue({ output: "done" });
+    vi.spyOn(api, "pruneDockerStorage").mockResolvedValue({
+      output: "done",
+      reclaimedBytes: GIB,
+    });
     render(<ServerInfoSection />);
-    const first = await screen.findByRole("button", { name: "Clean up Docker…" });
+    const first = await screen.findByRole("button", { name: "Clean up Docker (safe)…" });
     await userEvent.click(first);
     expect(api.pruneDockerStorage).not.toHaveBeenCalled();
     await userEvent.click(first);
     await waitFor(() => expect(api.pruneDockerStorage).toHaveBeenCalledOnce());
-    expect(await screen.findByText("Docker cleanup completed.")).toBeInTheDocument();
+    expect(api.pruneDockerStorage).toHaveBeenCalledWith("safe");
+    expect(await screen.findByText("Freed 1.0 GiB.")).toBeInTheDocument();
     await waitFor(() => expect(api.getDockerStorage).toHaveBeenCalledTimes(2));
+  });
+
+  it("runs the aggressive tier with its own mode", async () => {
+    setup();
+    vi.spyOn(api, "pruneDockerStorage").mockResolvedValue({
+      output: "done",
+      reclaimedBytes: 3 * GIB,
+      error: "step failed",
+    });
+    render(<ServerInfoSection />);
+    const button = await screen.findByRole("button", { name: "Aggressive cleanup…" });
+    await userEvent.click(button);
+    await userEvent.click(button);
+    await waitFor(() => expect(api.pruneDockerStorage).toHaveBeenCalledWith("aggressive"));
+    expect(await screen.findByText("Freed 3.0 GiB, then stopped: step failed")).toBeInTheDocument();
   });
 
   it("disables cleanup and explains why when Docker is unavailable", async () => {
@@ -107,6 +128,7 @@ describe("Settings -> Server info resources", () => {
         rows: [],
         totalSizeBytes: 0,
         reclaimableBytes: 0,
+        estimates: { safeBytes: null, aggressiveBytes: 0 },
         error: "permission denied",
       },
     });
@@ -121,7 +143,7 @@ describe("Settings -> Server info resources", () => {
     setup();
     vi.spyOn(api, "pruneDockerStorage").mockRejectedValue(new Error("failed"));
     render(<ServerInfoSection />);
-    const button = await screen.findByRole("button", { name: "Clean up Docker…" });
+    const button = await screen.findByRole("button", { name: "Clean up Docker (safe)…" });
     await userEvent.click(button);
     await userEvent.click(button);
     expect(await screen.findByText("Docker cleanup failed.")).toBeInTheDocument();
