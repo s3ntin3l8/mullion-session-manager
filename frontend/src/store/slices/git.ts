@@ -41,6 +41,7 @@ export const createGitSlice: StateCreator<DashboardState, [], [], GitSlice> = (s
   gitDiffStats: {},
   gitBranchesByProject: {},
   prsByProject: {},
+  defaultBranchCiByProject: {},
 
   // Batch git-status fetch: replaces N parallel per-project requests with
   // a single request to GET /api/projects/git-statuses (which replaces N
@@ -184,7 +185,7 @@ export const createGitSlice: StateCreator<DashboardState, [], [], GitSlice> = (s
     const run = async (scopeIds: number[] | undefined) => {
       const allProjects = get().projects;
       if (allProjects.length === 0) {
-        set({ gitBranchesByProject: {}, prsByProject: {} });
+        set({ gitBranchesByProject: {}, prsByProject: {}, defaultBranchCiByProject: {} });
         return;
       }
       const scoped = scopeIds !== undefined;
@@ -196,6 +197,9 @@ export const createGitSlice: StateCreator<DashboardState, [], [], GitSlice> = (s
         : {};
       const prsByProject: Record<number, GitHubPRsStatus | undefined> = scoped
         ? { ...get().prsByProject }
+        : {};
+      const defaultBranchCiByProject: DashboardState["defaultBranchCiByProject"] = scoped
+        ? { ...get().defaultBranchCiByProject }
         : {};
       try {
         const result = await api.getProjectGitRefsBatch(projectList.map((p) => p.id));
@@ -209,11 +213,13 @@ export const createGitSlice: StateCreator<DashboardState, [], [], GitSlice> = (s
           if (p.id in result.branches)
             gitBranchesByProject[p.id] = result.branches[p.id] ?? undefined;
           if (p.id in result.prs) prsByProject[p.id] = result.prs[p.id] ?? undefined;
+          if (p.id in result.defaultBranchCi)
+            defaultBranchCiByProject[p.id] = result.defaultBranchCi[p.id] ?? undefined;
         }
       } catch (err) {
         console.warn("[GitPanel] refreshGitRefs batch failed", err);
       }
-      set({ gitBranchesByProject, prsByProject });
+      set({ gitBranchesByProject, prsByProject, defaultBranchCiByProject });
     };
 
     gitRefsRefreshInFlight = run(projectIds).finally(() => {

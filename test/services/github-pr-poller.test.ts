@@ -3,6 +3,8 @@ import type { FastifyInstance } from "fastify";
 import type * as SettingsModule from "../../src/services/settings.js";
 
 const mockGetRepoPRsStatus = vi.hoisted(() => vi.fn());
+const mockGetDefaultBranchCi = vi.hoisted(() => vi.fn());
+const mockSetDefaultBranchCi = vi.hoisted(() => vi.fn());
 const mockResolveGitHubToken = vi.hoisted(() => vi.fn());
 const mockResolveGitHubRepo = vi.hoisted(() => vi.fn());
 const mockGetRemoteHostClient = vi.hoisted(() => vi.fn());
@@ -18,6 +20,8 @@ vi.mock("../../src/services/github.js", () => ({
   },
   getRepoPRsStatus: mockGetRepoPRsStatus,
   setRepoPRsStatus: vi.fn(),
+  getDefaultBranchCi: mockGetDefaultBranchCi,
+  setDefaultBranchCi: mockSetDefaultBranchCi,
 }));
 
 vi.mock("../../src/services/github-integration.js", () => ({
@@ -76,6 +80,9 @@ describe("startGitHubPRPoller", () => {
       prs: [],
       prSummary: { total: 0, pass: 0, fail: 0, pending: 0, unknown: 0 },
     });
+    mockGetDefaultBranchCi.mockReset();
+    mockGetDefaultBranchCi.mockResolvedValue("failure");
+    mockSetDefaultBranchCi.mockReset();
     mockResolveGitHubToken.mockReset();
     mockResolveGitHubRepo.mockReset();
     mockGetRemoteHostClient.mockReset();
@@ -130,6 +137,10 @@ describe("startGitHubPRPoller", () => {
     // Fire the second staggered timer.
     await vi.advanceTimersByTimeAsync(2_000);
     expect(mockGetRepoPRsStatus).toHaveBeenCalledTimes(2);
+
+    // Default-branch CI rides the same per-repo poll (right-sidebar badge).
+    expect(mockGetDefaultBranchCi).toHaveBeenCalledWith("ghp_token", "test-owner", "test-repo");
+    expect(mockSetDefaultBranchCi).toHaveBeenCalledTimes(2);
 
     cleanup();
     vi.useRealTimers();

@@ -2780,7 +2780,7 @@ describe("projects route", () => {
       const app = await buildApp();
       const res = await app.inject({ method: "GET", url: "/api/projects/git-refs" });
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toEqual({ branches: {}, prs: {} });
+      expect(res.json()).toEqual({ branches: {}, prs: {}, defaultBranchCi: {} });
       await app.close();
     });
 
@@ -2859,6 +2859,46 @@ describe("projects route", () => {
       await app.close();
     });
 
+    it("carries the poller's default-branch CI even when the repo has no open PRs", async () => {
+      const { execFileSync } = await import("node:child_process");
+      const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "batch-git-refs-ci-"));
+      for (const args of [
+        ["init", "-b", "main"],
+        ["remote", "add", "origin", "git@github.com:batch-ci/repo.git"],
+      ]) {
+        execFileSync("git", args, { cwd: projectCwd, stdio: "pipe", env: gitEnv() });
+      }
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: "batch-git-refs-ci", cwd: projectCwd },
+      });
+      const projectId = created.json().id as number;
+      const { setRepoPRsStatus, setDefaultBranchCi } = await import("../../src/services/github.js");
+
+      // Cold cache: the id is omitted so the client keeps its last-known-good.
+      let res = await app.inject({
+        method: "GET",
+        url: `/api/projects/git-refs?ids=${projectId}`,
+      });
+      expect(String(projectId) in res.json().defaultBranchCi).toBe(false);
+
+      // Zero open PRs collapses `prs` to null — the CI map must not.
+      setRepoPRsStatus("batch-ci", "repo", {
+        prs: [],
+        prSummary: { total: 0, pass: 0, fail: 0, pending: 0, unknown: 0 },
+      });
+      setDefaultBranchCi("batch-ci", "repo", "failure");
+      res = await app.inject({ method: "GET", url: `/api/projects/git-refs?ids=${projectId}` });
+      const body = res.json();
+      expect(body.prs[String(projectId)]).toBeNull();
+      expect(body.defaultBranchCi[String(projectId)]).toBe("failure");
+
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
+
     it("returns null branches and null prs for a local project that isn't a git repo", async () => {
       const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "batch-git-refs-none-"));
       const app = await buildApp();
@@ -2909,7 +2949,7 @@ describe("projects route", () => {
         url: `/api/projects/git-refs?ids=${projectId}`,
       });
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toEqual({ branches: {}, prs: {} });
+      expect(res.json()).toEqual({ branches: {}, prs: {}, defaultBranchCi: {} });
 
       await app.close();
     });

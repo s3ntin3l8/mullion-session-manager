@@ -2,6 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   GitHubApiError,
   getRepoStatus,
+  getDefaultBranchCi,
+  setDefaultBranchCi,
+  getCachedDefaultBranchCi,
   getCacheSizeForTests,
   MAX_CACHE_ENTRIES,
   fetchRequiredStatusContexts,
@@ -140,6 +143,50 @@ describe("getRepoStatus", () => {
     await expect(getRepoStatus("tok", "unreachable-owner", "unreachable-repo")).rejects.toThrow(
       GitHubApiError,
     );
+  });
+
+  it("re-reads default-branch CI on a 304 instead of freezing the cached ciStatus", async () => {
+    const RUN = (conclusion: string) => ({
+      name: "CI",
+      status: "completed",
+      conclusion,
+      html_url: "https://github.com/o/r/actions/runs/1",
+      head_sha: "abc",
+    });
+    let issuesCalls = 0;
+    let runsConclusion = "success";
+    fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/actions/runs")) {
+        return Promise.resolve(jsonResponse(200, { workflow_runs: [RUN(runsConclusion)] }));
+      }
+      if (/\/repos\/[^/]+\/[^/]+$/.test(url)) {
+        return Promise.resolve(jsonResponse(200, { default_branch: "main" }));
+      }
+      issuesCalls++;
+      return Promise.resolve(
+        issuesCalls === 1
+          ? jsonResponse(200, [ISSUE], { etag: '"v1"' })
+          : new Response(null, { status: 304 }),
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const first = await getRepoStatus("tok", "stale-ci-owner", "repo");
+      expect(first.ciStatus).toBe("success");
+
+      // Past the TTL, the issues call 304s but the default branch went red.
+      vi.setSystemTime(Date.now() + 5 * 60_000);
+      runsConclusion = "failure";
+      const second = await getRepoStatus("tok", "stale-ci-owner", "repo");
+
+      expect(issuesCalls).toBe(2);
+      expect(second.ciStatus).toBe("failure");
+      expect(second.openIssues).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("caps the module-level cache at MAX_CACHE_ENTRIES, evicting the oldest entry (Hermes review, PR #39)", async () => {
@@ -598,5 +645,51 @@ describe("fetchCheckRunsForHead", () => {
     await expect(
       fetchCheckRunsForHead("tok", "o", "check-runs-down-repo", "sha-head"),
     ).resolves.toEqual([]);
+  });
+});
+
+describe("default-branch CI cache", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it("getDefaultBranchCi aggregates the default branch's latest runs", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockGithubApi({
+        runs: [
+          { name: "CI", status: "completed", conclusion: "failure", html_url: "u", head_sha: "a" },
+        ],
+      }),
+    );
+    expect(await getDefaultBranchCi("tok", "dbci-owner", "repo")).toBe("failure");
+  });
+
+  it("getDefaultBranchCi degrades to null when Actions can't be read", async () => {
+    vi.stubGlobal("fetch", mockGithubApi({ runsOk: false }));
+    expect(await getDefaultBranchCi("tok", "dbci-owner", "repo")).toBeNull();
+  });
+
+  it("round-trips through set/get, distinguishing 'unknown' (undefined) from 'no signal' (null)", () => {
+    expect(getCachedDefaultBranchCi("dbci-rt", "repo")).toBeUndefined();
+    setDefaultBranchCi("dbci-rt", "repo", "in_progress");
+    expect(getCachedDefaultBranchCi("dbci-rt", "repo")).toBe("in_progress");
+    setDefaultBranchCi("dbci-rt", "repo", null);
+    expect(getCachedDefaultBranchCi("dbci-rt", "repo")).toBeNull();
+  });
+
+  it("drops an entry older than the max age", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    setDefaultBranchCi("dbci-old", "repo", "failure");
+    vi.setSystemTime(Date.now() + 16 * 60_000);
+    expect(getCachedDefaultBranchCi("dbci-old", "repo")).toBeUndefined();
+  });
+
+  it("evicts the oldest entry past MAX_CACHE_ENTRIES", () => {
+    for (let i = 0; i < MAX_CACHE_ENTRIES + 3; i++)
+      setDefaultBranchCi(`dbci-cap-${i}`, "r", "success");
+    expect(getCachedDefaultBranchCi("dbci-cap-0", "r")).toBeUndefined();
+    expect(getCachedDefaultBranchCi(`dbci-cap-${MAX_CACHE_ENTRIES + 2}`, "r")).toBe("success");
   });
 });

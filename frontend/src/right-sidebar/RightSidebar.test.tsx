@@ -46,6 +46,7 @@ beforeEach(() => {
     rightSidebarPinned: false,
     rightSidebarWidth: 340,
     prsByProject: {},
+    defaultBranchCiByProject: {},
   });
 });
 
@@ -126,6 +127,27 @@ describe("RightSidebar", () => {
 
     act(() => useDashboardStore.setState({ prsByProject: {} }));
     expect(github().querySelector(".right-rail-badge")).toBeNull();
+  });
+
+  it("badges the GitHub rail icon when the default branch CI is failing, alone or with PR checks", () => {
+    renderSidebar();
+    const github = () => screen.getByRole("button", { name: "GitHub" });
+
+    act(() => useDashboardStore.setState({ defaultBranchCiByProject: { 1: "success" } }));
+    expect(github().querySelector(".right-rail-badge")).toBeNull();
+
+    act(() => useDashboardStore.setState({ defaultBranchCiByProject: { 1: "failure" } }));
+    expect(github().querySelector(".right-rail-badge.alert")).toBeTruthy();
+    expect(github().title).toBe("GitHub — default branch CI failing");
+
+    act(() =>
+      useDashboardStore.setState({
+        prsByProject: {
+          1: { prs: [], prSummary: { total: 1, pass: 0, fail: 1, pending: 0, unknown: 0 } },
+        },
+      }),
+    );
+    expect(github().title).toBe("GitHub — 1 PR check failing, default branch CI failing");
   });
 
   it("switches views from the rail", async () => {

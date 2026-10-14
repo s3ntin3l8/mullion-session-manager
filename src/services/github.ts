@@ -251,6 +251,57 @@ async function fetchActionsRuns(
   }
 }
 
+// Default-branch CI for the right-sidebar rail badge. Computed by the
+// background poller (github-pr-poller.ts) and read warm by
+// /api/projects/git-refs, so the always-visible badge never costs a request
+// of its own. Not TTL-dropped on a poll interval's schedule like the PR cache
+// (the quiet poll interval can exceed CACHE_TTL_MS, and a vanishing badge
+// would read as "CI is fine"); a generous max-age just stops a repo that left
+// the poll set from showing a stale red forever.
+const DEFAULT_BRANCH_CI_MAX_AGE_MS = 15 * 60_000;
+
+interface DefaultBranchCiEntry {
+  ts: number;
+  status: GitHubCiStatus;
+}
+
+const defaultBranchCiCache = new Map<string, DefaultBranchCiEntry>();
+
+/** Latest-run-per-workflow aggregate for the repo's default branch. */
+export async function getDefaultBranchCi(
+  token: string,
+  owner: string,
+  repo: string,
+): Promise<GitHubCiStatus> {
+  return computeCiStatus(await fetchActionsRuns(token, owner, repo));
+}
+
+/** Writes the default-branch CI aggregate; called by the background poller. */
+export function setDefaultBranchCi(owner: string, repo: string, status: GitHubCiStatus): void {
+  const key = `${owner}/${repo}`;
+  if (!defaultBranchCiCache.has(key) && defaultBranchCiCache.size >= MAX_CACHE_ENTRIES) {
+    const oldestKey = defaultBranchCiCache.keys().next().value;
+    if (oldestKey !== undefined) defaultBranchCiCache.delete(oldestKey);
+  }
+  defaultBranchCiCache.set(key, { ts: Date.now(), status });
+}
+
+/**
+ * Warm-cache read. `undefined` means "not polled yet / too old" (the caller
+ * should leave whatever the client already has), distinct from `null` ("polled,
+ * no CI signal").
+ */
+export function getCachedDefaultBranchCi(owner: string, repo: string): GitHubCiStatus | undefined {
+  const key = `${owner}/${repo}`;
+  const entry = defaultBranchCiCache.get(key);
+  if (!entry) return undefined;
+  if (Date.now() - entry.ts > DEFAULT_BRANCH_CI_MAX_AGE_MS) {
+    defaultBranchCiCache.delete(key);
+    return undefined;
+  }
+  return entry.status;
+}
+
 /**
  * Fetches open issues *and* PRs for a repo in a single call — GitHub's
  * `/issues` endpoint returns both (a PR is also an "issue"; entries with a
@@ -294,6 +345,12 @@ export async function getRepoStatus(
   );
 
   if (res.status === 304 && cached) {
+    // The issues/PRs list is unchanged, but the default branch's CI is a
+    // separate lookup that moves on its own — returning the cached entry
+    // as-is here froze `ciStatus` for as long as nobody opened or closed an
+    // issue. Re-fetch just the runs.
+    const actionsRuns = await fetchActionsRuns(token, owner, repo);
+    cached.data = { ...cached.data, actionsRuns, ciStatus: computeCiStatus(actionsRuns) };
     cached.ts = Date.now();
     return cached.data;
   }

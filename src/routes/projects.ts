@@ -55,10 +55,12 @@ import {
   GitHubApiError,
   getRepoStatus,
   getPRsStatus,
+  getCachedDefaultBranchCi,
   computePRSummary,
   getWorkflowRunJobs,
   getJobLogs,
   getDefaultBranch,
+  type GitHubCiStatus,
   type GitHubPRsStatus,
   detectReleasePleaseConfig,
 } from "../services/github.js";
@@ -2407,7 +2409,13 @@ export async function projectsRoute(app: FastifyInstance) {
       const ids = parseIdListParam(request.query.ids);
       const branchesResult: Record<string, ProjectGitBranchesResult | null> = {};
       const prsResult: Record<string, GitHubPRsStatus | null> = {};
-      if (ids.length === 0) return { branches: branchesResult, prs: prsResult };
+      // Default-branch CI per project (right-sidebar rail badge). Kept apart
+      // from `prs`, which collapses to null when a repo has no open PRs —
+      // that is exactly when a red default branch matters most.
+      const defaultBranchCiResult: Record<string, GitHubCiStatus> = {};
+      if (ids.length === 0) {
+        return { branches: branchesResult, prs: prsResult, defaultBranchCi: defaultBranchCiResult };
+      }
 
       const rows = app.db.select().from(projects).where(inArray(projects.id, ids)).all();
 
@@ -2458,8 +2466,13 @@ export async function projectsRoute(app: FastifyInstance) {
             if (!result.value) {
               // Durable — no GitHub remote configured for this project.
               prsResult[project.id] = null;
+              defaultBranchCiResult[project.id] = null;
               return;
             }
+            // Present only once the poller has computed it, so a cold cache
+            // leaves the client's last-known-good alone.
+            const ci = getCachedDefaultBranchCi(result.value.owner, result.value.repo);
+            if (ci !== undefined) defaultBranchCiResult[project.id] = ci;
             const status = getPRsStatus(result.value.owner, result.value.repo);
             prsResult[project.id] = status && status.prs.length > 0 ? status : null;
           })();
@@ -2468,7 +2481,7 @@ export async function projectsRoute(app: FastifyInstance) {
         }),
       );
 
-      return { branches: branchesResult, prs: prsResult };
+      return { branches: branchesResult, prs: prsResult, defaultBranchCi: defaultBranchCiResult };
     },
   );
 
