@@ -102,6 +102,30 @@ describe("FilesSidebarView", () => {
     expect(actions.onOpenFileEditor).toHaveBeenCalledWith(4);
   });
 
+  it("drops a listing that resolves after the followed project changed", async () => {
+    let resolveOld: (v: {
+      path: string;
+      entries: ProjectDirEntry[];
+      truncated: boolean;
+    }) => void = () => {};
+    vi.mocked(api.listProjectFiles).mockImplementation((id) =>
+      id === 4
+        ? new Promise((r) => {
+            resolveOld = r;
+          })
+        : Promise.resolve({ path: "", entries: [entry("new.md", "file")], truncated: false }),
+    );
+    const { rerender } = renderView();
+    rerender(<FilesSidebarView projectId={5} actions={actions} />);
+    expect(await screen.findByText("new.md")).toBeTruthy();
+
+    resolveOld({ path: "", entries: [entry("stale.md", "file")], truncated: false });
+    await Promise.resolve();
+
+    expect(screen.queryByText("stale.md")).toBeNull();
+    expect(screen.getByText("new.md")).toBeTruthy();
+  });
+
   it("shows the API error message when listing fails", async () => {
     vi.mocked(api.listProjectFiles).mockRejectedValue(new ApiError("Nope", 403));
     renderView();

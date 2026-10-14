@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { api, ApiError } from "../api/index.js";
 import type { ProjectDirEntry } from "../api/index.js";
 import { ChevronDownIcon, ChevronRightIcon, FileTextIcon, FolderIcon } from "../ui/icons.js";
@@ -25,17 +25,23 @@ export function FilesSidebarView({ projectId, actions }: RightSidebarViewProps) 
   const [dirs, setDirs] = useState<Record<string, DirState>>({});
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set([""]));
   const [error, setError] = useState<string | null>(null);
+  // The project this view is currently showing — a listing that resolves
+  // after the followed project changed belongs to the old project and must
+  // not land in the new one's tree.
+  const activeProject = useRef(projectId);
 
   const loadDir = useCallback(
     async (dirPath: string) => {
       try {
         const listing = await api.listProjectFiles(projectId, dirPath);
+        if (activeProject.current !== projectId) return;
         setDirs((prev) => ({
           ...prev,
           [dirPath]: { entries: listing.entries, truncated: listing.truncated },
         }));
         setError(null);
       } catch (err) {
+        if (activeProject.current !== projectId) return;
         setError(err instanceof ApiError ? err.message : "Couldn't list files");
       }
     },
@@ -44,11 +50,12 @@ export function FilesSidebarView({ projectId, actions }: RightSidebarViewProps) 
 
   // Start over whenever the followed project changes.
   useEffect(() => {
+    activeProject.current = projectId;
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setDirs({});
     setExpanded(new Set([""]));
     void loadDir("");
-  }, [loadDir]);
+  }, [projectId, loadDir]);
 
   const toggleDir = (dirPath: string) => {
     const open = expanded.has(dirPath);
