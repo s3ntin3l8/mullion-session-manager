@@ -5,57 +5,43 @@ import os from "node:os";
 import path from "node:path";
 
 // Issue #271 follow-up — promote-to-worktree full-context carryover for
-// opencode. PR #688 investigated and dropped a `--session <id> --fork`
-// resume: verified empirically that `--fork` pins the forked session's
-// `directory` to the ORIGINAL session's stored directory even with an
-// explicit `--dir` pointing at the worktree, and that a shell tool call
-// inside the forked session actually ran with that wrong cwd — using it for
-// promote would have silently redirected a "promoted" agent's tool calls
-// back into the live main checkout, defeating worktree isolation.
+// opencode. A `--session <id> --fork` resume was rejected: `--fork` pins the
+// forked session's `directory` to the ORIGINAL session's stored directory,
+// so a "promoted" agent's tool calls would silently run back in the live
+// main checkout, defeating worktree isolation.
 //
-// This module is the alternative #688 didn't try, spiked afterward and
-// confirmed against the real installed opencode 1.18.18 binary (isolated
-// scratch repo + worktree, never the live session or a real checkout):
-// `opencode export <id>` -> id-rewrite -> `opencode import <file>` in the
-// worktree directory. The importer's own `Info` decode re-keys
-// `projectID`/`directory`/`path` to the CURRENT instance (the one running
-// `import`, i.e. the worktree) — exactly the override `--fork` was missing.
-// Confirmed live: a bash tool call in the imported session ran with cwd =
-// the worktree (not the source repo), on the worktree's own branch, and the
-// model correctly recalled a fact only present in the transferred history.
+// Instead: `opencode session export <id>` -> id-rewrite -> `opencode session
+// import <file> --directory <worktree>`. The importer re-keys the session's
+// location to the worktree, which is exactly the override `--fork` lacked.
 //
-// Two hazards this rests on, both read out of the decompiled 1.18.18 import
-// handler, and both are why every id gets rewritten before import rather
-// than reused verbatim:
-//  - The session row insert is an upsert keyed on `id` that overwrites
-//    `directory`/`path` on conflict — importing under the SAME session id
-//    would move the SOURCE session's own row into the worktree directory,
-//    hijacking the live session instead of copying it.
-//  - Message/part inserts are keyed on `id` and no-op on conflict — a
-//    same-id re-import would silently produce an EMPTY copy.
+// Why every id gets rewritten before import (v2 import 409s with
+// ImportConflictError on an existing session id rather than upserting, and
+// message ids must not collide with the source session's rows either).
 //
-// This is explicitly a capability probe, not a guaranteed mechanism: it
-// depends on decompiled internals of one opencode build, which could change
-// upstream with no warning. Every failure mode here degrades to
-// `{ transferred: false }` rather than throwing — the caller (routes/
-// sessions.ts's promote handler) MUST treat that as "fall back to the
-// ordinary seed prompt (if one was supplied)," never as a promote failure.
+// opencode v2 only (minimum 2.0.29): the export is flat
+// `{ info, messages: SessionMessage.Info[] }` — see rewriteSessionIds. Every
+// call passes `--standalone` so it runs against a private, per-invocation
+// server rather than attaching to (or spawning, with Mullion's own env) the
+// user's shared background service. v2's HTTP `session.move`/`fork` routes
+// are therefore not reachable from here — CLI export/import is the only
+// mechanism.
 //
-// A successful transfer does NOT get an auto-submitted continuation nudge.
-// A second empirical pass (this one against the actual bare TUI command
-// Mullion spawns, not `opencode run`) found that opencode's `--prompt`
-// never auto-submits when paired with `--session`/`--continue` — see
-// hook-adapters/opencode.ts's `resumeSessionArgs` comment for the full
-// writeup. The caller relies on the imported transcript being visible the
-// moment the session opens and surfaces a plain `warnings[]` note instead
-// of synthesizing a prompt that would just be silently dropped.
+// This is explicitly a capability probe, not a guaranteed mechanism. Every
+// failure mode degrades to `{ transferred: false }` rather than throwing —
+// the caller (routes/sessions.ts's promote handler) MUST treat that as "fall
+// back to the ordinary seed prompt (if one was supplied)," never as a
+// promote failure.
+//
+// A successful transfer is resumed with `--session <id>`; v2's TUI now
+// auto-submits `--prompt` on a resumed session too, so the caller may pair
+// them (see hook-adapters/opencode.ts's `resumeSessionArgs`).
 
 const OPENCODE_TRANSFER_TIMEOUT_MS = 20_000;
 // B9 — same escalation shape as git-refs.ts/git-worktree.ts's runGit
 // siblings (a SIGTERM grace period before SIGKILL).
 const KILL_ESCALATION_MS = 2_000;
 // A conversation transcript is unbounded in principle (long sessions,
-// attached files) — cap how much of `opencode export`'s stdout this module
+// attached files) — cap how much of `opencode session export`'s stdout this module
 // will buffer in memory, same "don't amplify a runaway output into an OOM"
 // posture as scrollback-buffer.ts's own SCROLLBACK_MAX_BYTES, just a more
 // generous ceiling since a full transcript is expected to be larger than a
@@ -173,12 +159,15 @@ interface RewriteResult {
   newSessionId: string;
 }
 
-/** Rewrites every id in an `opencode export` payload — the session's own
- * id, every message's id and `sessionID`, every part's id, `messageID`, and
- * `sessionID` — per this module's header comment. Pure, no I/O. Returns
- * `null` on any shape this function doesn't recognize (a version-skewed
- * opencode build changed its export format) rather than guessing — the
- * caller treats that identically to any other transfer failure. */
+/** Rewrites every id in an `opencode session export` payload — the
+ * session's own id, plus each message's `id` (and `sessionID` when present)
+ * — per this module's header comment. v2's export is flat
+ * (`{ info, messages: SessionMessage.Info[] }`, assistant content lives
+ * inline in the message), unlike 1.x's per-message `parts` arrays. Pure, no
+ * I/O. Returns `null` on any shape this function doesn't recognize (a
+ * version-skewed opencode build changed its export format) rather than
+ * guessing — the caller treats that identically to any other transfer
+ * failure. */
 export function rewriteSessionIds(exported: unknown): RewriteResult | null {
   if (!isRecord(exported)) return null;
   const info = exported.info;
@@ -192,28 +181,10 @@ export function rewriteSessionIds(exported: unknown): RewriteResult | null {
   const newInfo = { ...info, id: newSessionId };
 
   const newMessages = messages.map((entry) => {
-    if (!isRecord(entry)) return entry;
-    const msgInfo = entry.info;
-    if (!isRecord(msgInfo) || typeof msgInfo.id !== "string" || msgInfo.id.length === 0) {
-      return entry;
-    }
-    const newMsgInfo: Record<string, unknown> = { ...msgInfo, id: rewriteId(msgInfo.id, idMap) };
-    if (newMsgInfo.sessionID === oldSessionId) newMsgInfo.sessionID = newSessionId;
-
-    const parts = entry.parts;
-    const newParts = Array.isArray(parts)
-      ? parts.map((part) => {
-          if (!isRecord(part) || typeof part.id !== "string" || part.id.length === 0) return part;
-          const newPart: Record<string, unknown> = { ...part, id: rewriteId(part.id, idMap) };
-          if (typeof newPart.messageID === "string" && newPart.messageID.length > 0) {
-            newPart.messageID = rewriteId(newPart.messageID, idMap);
-          }
-          if (newPart.sessionID === oldSessionId) newPart.sessionID = newSessionId;
-          return newPart;
-        })
-      : parts;
-
-    return { ...entry, info: newMsgInfo, parts: newParts };
+    if (!isRecord(entry) || typeof entry.id !== "string" || entry.id.length === 0) return entry;
+    const newEntry: Record<string, unknown> = { ...entry, id: rewriteId(entry.id, idMap) };
+    if (newEntry.sessionID === oldSessionId) newEntry.sessionID = newSessionId;
+    return newEntry;
   });
 
   return { payload: { info: newInfo, messages: newMessages }, newSessionId };
@@ -228,9 +199,9 @@ interface OpencodeResult {
 /** Runs `opencode <args>` with `cwd` set, capturing stdout/stderr. Never
  * rejects — a spawn error, timeout, or output-size overrun resolves with
  * `code: null` the same way a non-zero exit does, so the caller can treat
- * every "didn't work" case uniformly. `--pure` is always the caller's job to
- * pass, not added here — export and import need it for different reasons
- * (neither should load Mullion's own opencode-plugin.js mid-transfer). */
+ * every "didn't work" case uniformly. `--standalone` is always the caller's
+ * job to pass, not added here (a private server per call, never the shared
+ * background service). */
 function runOpencode(cwd: string, args: string[]): Promise<OpencodeResult> {
   return new Promise((resolve) => {
     let stdout = "";
@@ -322,7 +293,7 @@ export interface TransferOpencodeSessionResult {
  * Attempts to carry `agentSessionId`'s full opencode conversation history
  * from `sourceCwd` into a brand-new session under `targetCwd` (the
  * promoted-to worktree). See this module's header comment for the mechanism
- * and its two prerequisites (fresh ids, `--pure` on both legs). Always
+ * and its two prerequisites (fresh ids, `--standalone` on both legs). Always
  * resolves — never throws — with `{ transferred: false, reason }` on any
  * failure: export non-zero, unparseable/unrecognized JSON, or import
  * non-zero. The caller MUST fall back to the ordinary seed-only promote path
@@ -359,21 +330,32 @@ export async function transferOpencodeSession(opts: {
   // below is the actual mitigation for this payload sitting on disk
   // briefly; do not add `--sanitize` without re-verifying this against
   // whatever opencode version is installed at the time.
-  const exportResult = await runOpencode(sourceCwd, ["export", agentSessionId, "--pure"]);
+  const exportResult = await runOpencode(sourceCwd, [
+    "session",
+    "export",
+    agentSessionId,
+    "--standalone",
+  ]);
   if (exportResult.code !== 0 || exportResult.stdout.trim().length === 0) {
-    return { transferred: false, reason: summarizeFailure("opencode export failed", exportResult) };
+    return {
+      transferred: false,
+      reason: summarizeFailure("opencode session export failed", exportResult),
+    };
   }
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(exportResult.stdout);
   } catch {
-    return { transferred: false, reason: "opencode export produced unparseable JSON" };
+    return { transferred: false, reason: "opencode session export produced unparseable JSON" };
   }
 
   const rewritten = rewriteSessionIds(parsed);
   if (!rewritten) {
-    return { transferred: false, reason: "opencode export payload had an unrecognized shape" };
+    return {
+      transferred: false,
+      reason: "opencode session export payload had an unrecognized shape",
+    };
   }
 
   // Written to a fresh, 0700 (mkdtemp's own default) temp directory rather
@@ -385,14 +367,23 @@ export async function transferOpencodeSession(opts: {
   const tempFile = path.join(tempDir, "session.json");
   try {
     await fs.writeFile(tempFile, JSON.stringify(rewritten.payload), { mode: 0o600 });
-    // No `--dir`: verified empirically (this module's header comment) that
-    // `opencode import` has no `--dir` flag at all — it derives directory
-    // purely from process cwd, unlike `run`/the bare top-level command.
-    const importResult = await runOpencode(targetCwd, ["import", tempFile, "--pure"]);
+    // v2's `session import --directory` re-keys the imported session's
+    // location to the worktree (it also defaults to the process cwd, which
+    // `runOpencode` sets to `targetCwd` too). `--standalone` keeps this a
+    // private, per-invocation server instead of attaching to (or spawning)
+    // the user's shared background service with Mullion's own env.
+    const importResult = await runOpencode(targetCwd, [
+      "session",
+      "import",
+      tempFile,
+      "--directory",
+      targetCwd,
+      "--standalone",
+    ]);
     if (importResult.code !== 0) {
       return {
         transferred: false,
-        reason: summarizeFailure("opencode import failed", importResult),
+        reason: summarizeFailure("opencode session import failed", importResult),
       };
     }
     return { transferred: true, newSessionId: rewritten.newSessionId };

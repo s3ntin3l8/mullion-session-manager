@@ -40,6 +40,7 @@ export default tseslint.config(
         // Node 18+ globals, for files that talk HTTP directly (for example,
         // scripts/capture-screenshots.mjs's own seed calls).
         fetch: "readonly",
+        AbortController: "readonly",
         AbortSignal: "readonly",
         // Node 21+ globals used by standalone scripts.
         WebSocket: "readonly",

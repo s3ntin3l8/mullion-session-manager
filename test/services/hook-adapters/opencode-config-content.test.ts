@@ -30,19 +30,23 @@ describe("opencode adapter configContent.model", () => {
     expect(cc.model).toBe("opencode-go/foo");
   });
 
-  it("sets configContent.small_model when ctx.smallModel is set", () => {
+  // opencode v2 dropped `small_model`: its 1.x value only migrates to the
+  // title agent's model, so Mullion sets that explicitly.
+  it("sets agents.title.model when ctx.smallModel is set (v2 has no small_model)", () => {
     const plan = openCodeAdapter.prepareLaunch({
       ...baseCtx,
       cwd: "/tmp",
       smallModel: "opencode-go/small",
     });
     const cc = JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT!);
-    expect(cc.small_model).toBe("opencode-go/small");
+    expect(cc.agents.title).toEqual({ model: "opencode-go/small" });
+    expect(cc.small_model).toBeUndefined();
   });
 
-  it("omits the small_model key when ctx.smallModel is unset", () => {
+  it("omits the agents key when ctx.smallModel is unset", () => {
     const plan = openCodeAdapter.prepareLaunch({ ...baseCtx, cwd: "/tmp" });
     const cc = JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT!);
+    expect(cc.agents).toBeUndefined();
     expect(cc.small_model).toBeUndefined();
   });
 });

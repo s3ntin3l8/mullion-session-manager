@@ -23,7 +23,7 @@ describe("listOpenCodeModels", () => {
     const result = await listOpenCodeModels({ exec });
     expect(exec).toHaveBeenCalledWith(
       "opencode",
-      ["models"],
+      ["models", "--standalone"],
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
     expect(result).toEqual([
@@ -101,7 +101,7 @@ describe("listOpenCodeModels", () => {
     await listOpenCodeModels({ exec });
     expect(exec).toHaveBeenCalledWith(
       "opencode",
-      ["models"],
+      ["models", "--standalone"],
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
   });

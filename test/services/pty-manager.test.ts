@@ -7619,7 +7619,7 @@ describe("PtyManager", () => {
       });
     });
 
-    it("spawns a matching (opencode) command with OPENCODE_CONFIG_DIR injected and the plugin file written, command left untouched (issue #175)", async () => {
+    it("spawns a matching (opencode) command with --standalone, the plugin file written and no OPENCODE_CONFIG_DIR (issue #175; opencode v2)", async () => {
       const session = manager.getOrCreate({
         id: "1",
         cwd: "/tmp",
@@ -7629,12 +7629,7 @@ describe("PtyManager", () => {
       });
       await waitForSpawn(session);
 
-      const pluginPath = path.join(
-        sessionsDir,
-        "1.opencode-config",
-        "plugins",
-        "mullion-hook-emitter.js",
-      );
+      const pluginPath = path.join(sessionsDir, "1.opencode-config", "plugin", "server.js");
       expect(fs.existsSync(pluginPath)).toBe(true);
 
       const call = vi
@@ -7642,8 +7637,11 @@ describe("PtyManager", () => {
         .mock.calls.findLast(([file]) => file === "systemd-run");
       const args = call?.[1] as string[];
       const opts = call?.[2] as { env?: Record<string, string> };
-      expect(args[args.length - 1]).toBe("opencode");
-      expect(opts.env?.OPENCODE_CONFIG_DIR).toBe(path.join(sessionsDir, "1.opencode-config"));
+      // v2: a private per-session server instead of the shared background
+      // service, and no OPENCODE_CONFIG_DIR (it would REPLACE the user's
+      // global config root).
+      expect(args[args.length - 1]).toBe("opencode --standalone");
+      expect(opts.env).not.toHaveProperty("OPENCODE_CONFIG_DIR");
     });
 
     // Issue #884 — session-lifecycle.ts's createSessionRecord threads a
@@ -7729,7 +7727,7 @@ describe("PtyManager", () => {
       fallbackManager.killAll();
     });
 
-    it("injects OPENCODE_CONFIG_CONTENT pointing at this session's own tier-0 guide push when injectAgentGuide is on (issue #949, formerly #437c; default manager — getInjectAgentGuide defaults to () => true)", async () => {
+    it("hands this session's own tier-0 guide push to the opencode plugin when injectAgentGuide is on (issue #949, formerly #437c; default manager — getInjectAgentGuide defaults to () => true)", async () => {
       const session = manager.getOrCreate({
         id: "1",
         cwd: "/tmp",
@@ -7747,13 +7745,13 @@ describe("PtyManager", () => {
       const tier0Path = path.join(sessionsDir, "1.opencode-tier0.md");
       // getInjectMullionBundle also defaults to () => true, and this
       // checkout genuinely ships src/bundle/ — the payload carries
-      // skills.paths alongside instructions, same as claude-code's
+      // skills alongside the plugin, same as claude-code's
       // --plugin-dir composing with --settings/--mcp-config
       // (pty-manager.test.ts's own claude-code describe above). Issue
       // #881 — mcp.mullion is now unconditional, so it's present here too.
       expect(JSON.parse(opts.env!.OPENCODE_CONFIG_CONTENT)).toEqual({
-        instructions: [tier0Path],
-        skills: { paths: [path.join(resolveMullionBundleDir()!, "skills")] },
+        skills: [path.join(resolveMullionBundleDir()!, "skills")],
+        plugins: [path.join(sessionsDir, "1.opencode-config", "plugin")],
         mcp: buildOpenCodeMcpConfig(
           resolveMcpServerPath(),
           manager.hookSocketPath,
@@ -7761,6 +7759,9 @@ describe("PtyManager", () => {
           manager.controlSocketPath,
         ),
       });
+      // v2 never reads the `instructions` config key, so the plugin gets the
+      // file paths via this env var instead.
+      expect(JSON.parse(opts.env!.MULLION_OPENCODE_INSTRUCTIONS)).toEqual([tier0Path]);
       // The tier-0 file itself is a real on-disk write (settingsFiles),
       // not just an env-var reference — same short block hooks.ts pushes
       // to the other three agents, `authEnabled` defaulting true here
@@ -7826,9 +7827,13 @@ describe("PtyManager", () => {
           session.hookToken,
           ungatedManager.controlSocketPath,
         ),
+        plugins: [path.join(sessionsDir, "2.opencode-config", "plugin")],
       });
-      // The plugin/OPENCODE_CONFIG_DIR mechanism is unaffected by this gate.
-      expect(opts.env?.OPENCODE_CONFIG_DIR).toBe(path.join(sessionsDir, "2.opencode-config"));
+      expect(opts.env).not.toHaveProperty("MULLION_OPENCODE_INSTRUCTIONS");
+      // The plugin mechanism is unaffected by this gate.
+      expect(
+        fs.existsSync(path.join(sessionsDir, "2.opencode-config", "plugin", "server.js")),
+      ).toBe(true);
 
       // This test's own manager, not the outer `manager` — same cleanup
       // reasoning as this describe block's other own-manager tests.
@@ -7842,7 +7847,7 @@ describe("PtyManager", () => {
     // openCodeAdapter.prepareLaunch()) and reaches the REAL env passed to
     // the spawned systemd-run process, not just a typechecked-but-untested
     // pass-through.
-    it("delivers a seedPrompt to opencode's OPENCODE_CONFIG_CONTENT instructions, independently of injectAgentGuide", async () => {
+    it("delivers a seedPrompt to the opencode plugin's instruction files, independently of injectAgentGuide", async () => {
       // getInjectMullionBundle: () => false too — keeps this test's payload
       // isolated to the seed path, its own point, not also asserting on
       // the bundle's independently-gated skills.paths.
@@ -7874,19 +7879,20 @@ describe("PtyManager", () => {
       // should be present alongside the unconditional mcp entry (issue
       // #881) — proves the gate is independent of that setting.
       expect(JSON.parse(opts.env!.OPENCODE_CONFIG_CONTENT)).toEqual({
-        instructions: [seedPath],
         mcp: buildOpenCodeMcpConfig(
           resolveMcpServerPath(),
           ungatedManager.hookSocketPath,
           session.hookToken,
           ungatedManager.controlSocketPath,
         ),
+        plugins: [path.join(sessionsDir, "3.opencode-config", "plugin")],
       });
+      expect(JSON.parse(opts.env!.MULLION_OPENCODE_INSTRUCTIONS)).toEqual([seedPath]);
 
       ungatedManager.killAll();
     });
 
-    it("omits skills.paths when the manager's getInjectMullionBundle reports the setting off, independently of injectAgentGuide", async () => {
+    it("omits skills when the manager's getInjectMullionBundle reports the setting off, independently of injectAgentGuide", async () => {
       const bundlelessManager = new PtyManager({
         sessionsDir,
         getInjectMullionBundle: () => false,
@@ -7908,14 +7914,17 @@ describe("PtyManager", () => {
       // OPENCODE_CONFIG_CONTENT is still present — just without skills.
       // mcp.mullion is unconditional (issue #881), so it's present too.
       expect(JSON.parse(opts.env!.OPENCODE_CONFIG_CONTENT)).toEqual({
-        instructions: [path.join(sessionsDir, "4.opencode-tier0.md")],
         mcp: buildOpenCodeMcpConfig(
           resolveMcpServerPath(),
           bundlelessManager.hookSocketPath,
           session.hookToken,
           bundlelessManager.controlSocketPath,
         ),
+        plugins: [path.join(sessionsDir, "4.opencode-config", "plugin")],
       });
+      expect(JSON.parse(opts.env!.MULLION_OPENCODE_INSTRUCTIONS)).toEqual([
+        path.join(sessionsDir, "4.opencode-tier0.md"),
+      ]);
 
       bundlelessManager.killAll();
     });

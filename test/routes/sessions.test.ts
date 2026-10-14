@@ -230,7 +230,7 @@ describe("sessions route", () => {
       .mocked(spawnChildProcess)
       .mock.calls.findLast(([command]) => command === "systemd-run");
     const args = call?.[1] as string[];
-    expect(args[args.length - 1]).toBe("opencode --prompt 'do the thing'");
+    expect(args[args.length - 1]).toBe("opencode --standalone --prompt 'do the thing'");
 
     await app.close();
   });
@@ -296,7 +296,7 @@ describe("sessions route", () => {
       .mocked(spawnChildProcess)
       .mock.calls.findLast(([command]) => command === "systemd-run");
     const args = call?.[1] as string[];
-    expect(args[args.length - 1]).toBe("opencode");
+    expect(args[args.length - 1]).toBe("opencode --standalone");
 
     await app.close();
   });
@@ -2734,7 +2734,7 @@ describe("sessions route", () => {
           .mocked(spawnChildProcess)
           .mock.calls.findLast(([command]) => command === "systemd-run");
         const args = call?.[1] as string[];
-        expect(args[args.length - 1]).toBe("opencode --prompt 'resume the refactor'");
+        expect(args[args.length - 1]).toBe("opencode --standalone --prompt 'resume the refactor'");
 
         // Never delivered a second time via the SessionStart channel too —
         // the never-both guard means this session has no stashed seed at

@@ -62,7 +62,7 @@ for why) instead check the opening line of their own prompt, since
 If the PROJECT you're running against has its own skill and/or reviewer
 subagent authored (either from Mullion's UI or scaffolded into the repo
 itself), you'll see those too — composed into the same bundle for Claude
-Code, or opencode's own `skills.paths`/`agent/<name>.md` config keys.
+Code, or opencode's own `skills`/`agents.<name>` config entries.
 Neither codex nor agy has an equivalent per-project channel; if one of
 those is missing a skill you'd expect, it needs a real repo write to reach
 it (`.agents/skills/<name>/SKILL.md`) — see
@@ -300,15 +300,16 @@ Claude Code, Codex, or agy command — an invalid value is rejected rather
 than silently ignored. Omit it and set `parentSessionId` to inherit the
 parent session's own model instead, but that inheritance is opencode-only;
 it's ignored for any other command. `smallModel` is the same idea for
-opencode's lightweight `small_model` config key specifically — meaningless,
-and ignored, for a non-opencode command either way.
+opencode's lightweight title-generation model (v2's replacement for the
+1.x `small_model` key) specifically — meaningless, and ignored, for a
+non-opencode command either way.
 
 **Do not bake prompt text into `command`.** Use `initialPrompt` (MCP) /
 `--initial-prompt` (CLI) instead — it's delivered via the target CLI's own
 first-turn flag (Claude Code/Codex's `-- <prompt>`, agy's `-i=<prompt>`,
 opencode's `--prompt <prompt>`), which actually starts a turn rather than
 sitting unread in the input box. This matters most for **opencode**: its
-bare positional argument is `[project]`, a directory to start in, not a
+bare positional argument is `[directory]`, a directory to start in, not a
 prompt — `opencode "do the thing"` doesn't fail loudly, it just tries to
 `cd` into a directory named "do the thing" and exits immediately. `command`
 should stay a bare agent invocation (`opencode`, `claude`, `codex`, `agy`,
@@ -374,7 +375,7 @@ all four.
   additive — never replaces your own `instructions`) at that file. Through
   issue #949 this channel carried the guide's FULL content instead — that
   changed once opencode also started pulling the `host`/`browser`/
-  `troubleshooting`/`session-ops` skills via `skills.paths` (issue #940,
+  `troubleshooting`/`session-ops` skills via its `skills` config entry (issue #940,
   the same bundle Claude Code gets via `--plugin-dir`), making a second
   full copy of the same content redundant. See that adapter's own doc
   comment for the full reasoning behind reflecting only the
@@ -491,7 +492,7 @@ separate from anything a session spawn does:
   `src/bundle/`, not every ordinary restart.
 - **A per-session fallback still exists for Claude Code and opencode.**
   Their adapters check the manifest at launch time and only fall back to
-  their own ephemeral per-session delivery (`--plugin-dir`, `skills.paths`)
+  their own ephemeral per-session delivery (`--plugin-dir`, `skills`)
   when boot-time sync hasn't installed the bundle on this host yet — e.g.
   right after a Mullion upgrade, before the next boot. Codex and agy keep
   their existing per-launch install step too, as the same kind of cheap

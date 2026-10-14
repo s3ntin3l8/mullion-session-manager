@@ -399,17 +399,15 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
   // once opencode-session-transfer.ts has actually imported the history —
   // never speculatively).
   //
-  // NOT a "resume, then submit this as its next turn" pipeline, despite
-  // the two being appended in sequence below — verified empirically
-  // (hook-adapters/opencode.ts's own `resumeSessionArgs` comment) that
-  // opencode's `--prompt` is silently ignored on ANY resumed session
-  // (`--session` or `--continue`), so a trailing `initialPromptArgs` after
-  // `resumeSessionArgs` would just be dropped, not delivered as a next
-  // turn. `session.initialPrompt` is therefore always unset whenever
-  // `resumeAgentSessionId` is set (routes/sessions.ts's promote handler
-  // keeps the two mutually exclusive) — this composition only still runs
-  // both blocks in the same function because a future agent adapter's
-  // `resumeSessionArgs` might not share opencode's `--prompt` limitation.
+  // NOT used as a "resume, then submit this as its next turn" pipeline,
+  // despite the two being appended in sequence below. opencode 1.18 silently
+  // ignored `--prompt` on ANY resumed session; v2 does submit it
+  // (hook-adapters/opencode.ts's `resumeSessionArgs` comment), but
+  // routes/sessions.ts's promote handler still deliberately keeps
+  // `session.initialPrompt` unset whenever `resumeAgentSessionId` is set (the
+  // imported transcript is already visible and the user is told the session
+  // is waiting for their next message) — so in practice only one of the two
+  // blocks fires. Both stay composable in this function.
   const resumeSessionArgs = session.resumeAgentSessionId
     ? getAdapterResumeSessionArgs(session.command, session.resumeAgentSessionId)
     : null;

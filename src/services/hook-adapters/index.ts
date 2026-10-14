@@ -165,7 +165,7 @@ export function applyHookAdapters(
     const plan = adapter.prepareLaunch(ctx);
     for (const file of plan.settingsFiles ?? []) {
       // recursive: true — OpenCode's adapter (issue #175) writes into a
-      // nested <sessionId>.opencode-config/plugins/ scratch directory that
+      // nested <sessionId>.opencode-config/plugin/ scratch directory that
       // doesn't exist yet; Claude Code's flat <sessionId>.hooks.json under
       // an already-existing sessionsDir made this a no-op before now.
       mkdirSync(path.dirname(file.path), { recursive: true });

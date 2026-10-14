@@ -133,7 +133,8 @@ export interface HookAdapterContext {
    * body); consumed by claude-code.ts's prepareLaunch (composed into a
    * per-session --plugin-dir bundle, hook-adapters/mullion-bundle.ts's
    * composeClaudeSessionBundle) and opencode.ts's prepareLaunch (written
-   * under the ephemeral OPENCODE_CONFIG_DIR and added to `skills.paths`).
+   * under the per-session ephemeral scratch dir and added to the `skills`
+   * list in OPENCODE_CONFIG_CONTENT).
    * Undefined/absent for codex and agy — neither has an ephemeral overlay
    * for project-scoped skills (see the plan's per-CLI coverage table; PR-6
    * is the repo-write fallback for those two). For agy's SKILL.md content
@@ -153,10 +154,11 @@ export interface HookAdapterContext {
    * and threaded in Claude Code's OWN subagent frontmatter shape (`name`/
    * `description`/`tools`/`model`); claude-code.ts writes it through
    * unchanged into the composed bundle's `agents/` dir, while opencode.ts
-   * MUST translate it first (mullion-bundle.ts's
-   * deriveOpenCodeReviewerAgentFile — see that function's own doc comment
-   * for why writing this shape verbatim into opencode's config hard-fails
-   * the whole session, not just that one skill). Undefined/absent for codex
+   * MUST translate it first into an inline `agents.<name>` config entry
+   * (mullion-bundle.ts's deriveOpenCodeReviewerAgentConfig; its file-shaped
+   * sibling deriveOpenCodeReviewerAgentFile documents why writing this shape
+   * verbatim into opencode's config hard-fails the whole session, not just
+   * that one skill). Undefined/absent for codex
    * and agy — for agy this is an empirically confirmed dead end (issue
    * #943's 2026-09-05 spike: agy discovers neither shape of a project-scope
    * agent file, with or without `--add-dir`), not an assumption pending

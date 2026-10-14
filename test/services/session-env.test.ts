@@ -164,6 +164,15 @@ describe("session-env", () => {
       expect(result.PATH).toBe("/usr/bin");
     });
 
+    it("strips MULLION_OPENCODE_INSTRUCTIONS so a nested Mullion never injects the outer session's guide/briefing files", () => {
+      const result = buildSessionEnv({
+        PATH: "/usr/bin",
+        MULLION_OPENCODE_INSTRUCTIONS: '["/data/sessions/9.opencode-tier0.md"]',
+      });
+      expect(result).not.toHaveProperty("MULLION_OPENCODE_INSTRUCTIONS");
+      expect(result.PATH).toBe("/usr/bin");
+    });
+
     it("strips MULLION_SOCKET_PATH/MULLION_SESSION_ID (Phase 4, #134) so a nested Mullion re-scrubs them", () => {
       // Same reasoning as the hook socket/token above — injected
       // per-session by pty-manager.ts AFTER buildSessionEnv() returns, so a

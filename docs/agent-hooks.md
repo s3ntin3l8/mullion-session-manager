@@ -333,185 +333,192 @@ empirically. The `commandTransform` function appends
 `--bare` in launcher commands unless you deliberately want a stripped-down
 session with no Mullion integration.
 
-**OpenCode** has no shell-command hooks at all — only a JS/TS plugin API,
-auto-discovered from a `plugins/` directory it scans (never referenced by
-argv or by its config file's own `plugin` array, which only accepts npm
-package names). When the launch command is a simple `opencode ...`
-invocation, Mullion:
+**OpenCode** (v2 — **minimum 2.0.29**; 1.x is no longer supported) has no
+shell-command hooks at all — only a JS plugin API. Three v2 facts, each
+verified against the installed 2.0.29 binary and its source, shape the whole
+adapter (`hook-adapters/opencode.ts`'s header carries the same list):
 
-1. Writes the shared plugin file (`src/hooks/opencode-plugin.js`) into an
-   ephemeral, per-session `<sessionId>.opencode-config/plugins/` directory
-   under the sessions directory.
-2. Sets `OPENCODE_CONFIG_DIR` to that directory — confirmed against the
-   installed OpenCode CLI to load **additively** alongside the user's real
-   global/project config, not in place of it, so this never disturbs an
-   existing `opencode.json` or its other plugins.
+1. **A shared background service.** By default the v2 TUI attaches to ONE
+   background server per user, spawned (detached, inheriting its env) by
+   whichever client started first, with `cwd` set to `$HOME`. Mullion's
+   per-session env (`MULLION_HOOK_SOCKET`/`MULLION_HOOK_TOKEN`, the config
+   content) would then belong to whichever session happened to spawn it first
+   — wrong for every other session, and leaking into the user's own
+   opencode. So the adapter's `commandTransform` inserts `--standalone`
+   right after the `opencode` token (a private `serve --stdio` server per
+   TUI, started in the TUI's directory with its env, dying with it), and
+   every opencode subprocess Mullion itself runs (`opencode-models.ts`,
+   `opencode-session-transfer.ts`) passes it too. A launcher command that
+   attaches to an existing server (`--server <url>`) bypasses all of what
+   follows — the plugin and config live in whatever server it connects to.
+2. **`OPENCODE_CONFIG_DIR` _replaces_ the user's global config root** (1.x
+   loaded it additively). Setting it would silently drop the user's own
+   `opencode.json` (MCP servers, `permission.skill` rules), global
+   `AGENTS.md`, skills and agents inside every Mullion session — so Mullion
+   **no longer sets it**. Everything rides `OPENCODE_CONFIG_CONTENT`
+   instead; config entries are **additive** across layers (verified: the
+   user's MCP servers and Mullion's both connect, and both sets of
+   permission rules apply).
+3. **The `instructions` config key is inert** in 2.0.29 (parsed, never
+   read).
 
-**The agent-guide tier-0 push** (issue #437c, redesigned by #949) rides the
-same additive-env-var posture, via a second variable:
-`OPENCODE_CONFIG_CONTENT`, a runtime override near the top of OpenCode's
-own documented config-precedence chain, set to `{"instructions": ["<path
-to a small tier-0 file this adapter writes itself>"]}`. Verified
-empirically this PR (`opencode debug config`, no live session or model
-call needed, so no "unverified — would need a paid model turn" caveat here
-unlike agy's `SessionStart`, or Codex's `apply_patch` extractor before
-issue #846's live verification) that OpenCode's `instructions` array
-**concatenates** with whatever the user's own project/global
-`instructions` already contains, including when combined with
-`OPENCODE_CONFIG_DIR` above — never replaces them. Also verified this
-merge is per-key, not a whole-layer shadow: unrelated top-level keys
-(`model`, `small_model`) in a project's own config survive fully intact
-when `OPENCODE_CONFIG_CONTENT` sets only `instructions`. OpenCode has no
-live hook round trip to reply to at all, so there is no per-event push the
-way the other three agents get one — but as of #949 the CONTENT is the
+When the launch command is a simple `opencode ...` invocation, Mullion:
+
+1. Writes the shared plugin file (`src/hooks/opencode-plugin.js`) as
+   `server.js` into an ephemeral, per-session
+   `<sessionId>.opencode-config/plugin/` directory under the sessions
+   directory, and references that **directory** from
+   `OPENCODE_CONFIG_CONTENT`'s `plugins` (a bare file path is rejected:
+   "configured plugin path must be a directory"). v2's loader requires
+   exactly `export default { id, setup }`; it provides `effect` and
+   `@opencode/plugin` to plugins but not `zod`, so the plugin imports only
+   `node:*` and declares its tool's `input` as plain JSON Schema.
+2. Adds `--standalone` (above).
+
+No write to opencode's resolved global config dir (`$XDG_CONFIG_HOME/opencode`
+when set, else `~/.config/opencode` — see `resolveOpenCodeConfigHome()`,
+`hook-adapters/opencode-skills.ts`) or a project's `.opencode/` happens at
+all — fully ephemeral, same posture as Claude Code's `--settings` file.
+
+**The rest of `OPENCODE_CONFIG_CONTENT`:** `mcp` (below), `skills` (v2's
+spelling of 1.x's `skills.paths`: the shipped bundle's skills dir unless
+`bundle-sync` already installed it globally, plus a project's own skill),
+`model`, `agents.title.model` (v2 has no `small_model`; its 1.x value only
+migrates to the title agent), a project's reviewer subagent as an inline
+`agents.<name>` entry (v2's `agent/<name>.md` discovery depended on the
+config-dir redirect; `deriveOpenCodeReviewerAgentConfig` drops the
+Claude-Code-only `tools`/`model` keys that would hard-fail opencode's config
+loader), and — Task Master sessions only — `permission.skill` denies for the
+three superpowers skills that gate on a human in the loop (both the user's and
+Mullion's rules apply; which wins on a shared skill name is unverified for v2,
+issue #1595).
+
+**The agent-guide tier-0 push** (issue #437c, redesigned by #949) and the
+other per-session instruction files — workflow conventions (#937), the
+project briefing, and the promote-flow seed (#678) — are written by the
+adapter with the same gating as ever, but delivered differently: their
+absolute paths go to the plugin as a JSON array in
+`MULLION_OPENCODE_INSTRUCTIONS`, and the plugin appends each file's text as
+a system part from its `ctx.session.hook("context", …)` hook (primary agent
+requests only; idempotent, since `setup` can run once per Location). **Verified live**
+(opencode 2.0.29, `opencode-go/minimax-m3`): a model asked for a codeword that
+existed only in an injected instruction file answered it correctly, both via
+`opencode run --standalone` and in the bare TUI in a pty. The
+order is `[tier-0, workflow-conventions, briefing, seed]`, matching
+`hooks.ts`'s ordering for the other three agents. The tier-0 CONTENT is the
 same short block every other agent's SessionStart reply carries
 (`buildAgentGuideBlock`, `src/services/agent-guide.ts`): session identity,
 the host-dependent auth-scope sentence, and a pointer to load the `host`
-skill for the rest. Through issue #949 this channel instead pointed
-straight at the FULL per-session copy of `docs/agent-guide.md`, so
-OpenCode's context got the guide's entire content loaded once at startup —
-that changed once OpenCode also started pulling the `host`/`browser`/
-`troubleshooting`/`session-ops` skills via `skills.paths` (issue #940, the
-same bundle Claude Code gets via `--plugin-dir`), making a second full
-copy of the same content redundant. **Confirmed live** (issue #949): with
-`OPENCODE_CONFIG_CONTENT` set exactly this way against a real installed
-1.18.27 binary, `opencode run` answered a two-part probe about its scope
-and the skill to load correctly from injected context alone, with no tool
-calls or file reads.
+skill for the rest. It is gated on the resolved `sessions.injectAgentGuide`
+value — possibly per-project-overridden, issue #884 — _at this session's own
+spawn time_ (`HookAdapterContext.injectAgentGuide`) — necessarily a
+spawn-time snapshot, since there is no later moment for OpenCode to re-check
+the setting against.
 
-As of the promote-flow first-turn fix, the promote-flow seed (issue
-#271/#678) no longer rides this `instructions` channel at all: it's sent
-as `--prompt <text>` argv instead, via `initialPromptArgs`, verified
-against the installed CLI to actually submit a turn rather than just add
-context — see `hook-adapters/opencode.ts`'s own comment.
-
-**MCP** (issue #881): the same `OPENCODE_CONFIG_CONTENT` payload also
-carries an `mcp.mullion` entry, registering Mullion's own MCP server
+**MCP** (issue #881): `OPENCODE_CONFIG_CONTENT` also carries an
+`mcp.mullion` entry, registering Mullion's own MCP server
 (`src/mcp/server.mjs`) so the `mcp__mullion__*` tools are available inside
 an OpenCode session too — unconditional, like Claude Code's `--mcp-config`
-above, not gated on any setting. The shape differs from Claude Code's
-`mcpServers.<name>` in two ways confirmed empirically against the installed
-OpenCode CLI (never against a user's real config): `command` is a single
-array **including** the executable (Claude Code splits `command`/`args`),
-and the env key is `environment`, not `env`. Verified two ways: config
-resolution via `opencode debug config`, and — the stronger check — a real
-`opencode mcp list` against a stdio probe server, which reported
-`mullion  connected`, confirming the server is actually spawned and
-initialized rather than merely present in resolved config. Same
-additive-merge and session-scoped-token-only posture as everything else on
-this channel — see `hook-adapters/opencode.ts`'s `buildOpenCodeMcpConfig`.
+above, not gated on any setting. Emitted in 1.x's `mcp.<name>` shape, which
+v2 still reads and migrates to `mcp.servers.<name>`; it differs from Claude
+Code's `mcpServers.<name>` in two ways: `command` is a single array
+**including** the executable (Claude Code splits `command`/`args`), and the
+env key is `environment`, not `env`. Same session-scoped-token-only posture
+as everything else on this channel — see `hook-adapters/opencode.ts`'s
+`buildOpenCodeMcpConfig`.
 
-**The `--pure` caveat:** opencode's `--pure` flag ("run without external
-plugins") disables the JS plugin loading mechanism. Mullion's
-`opencode-plugin.js` — which provides the hook forwarder, the
-`promote_to_worktree` tool, and all event forwarding — is loaded via that
-mechanism, so `--pure` voids it entirely. However,
-`OPENCODE_CONFIG_CONTENT` (instructions, skills.paths) and
-`OPENCODE_CONFIG_DIR` are env-var-based, not plugin-loaded; confirmed
-empirically to survive `--pure`. Avoid `--pure` in launcher commands unless
-you deliberately want a stripped-down session without Mullion's hook
-integration.
+**Events.** The plugin consumes `ctx.event.subscribe()` (an async iterable;
+the payload is under `event.data`, 1.x: `event.properties`) and forwards
+these non-blocking events (see `opencode-plugin.js`'s `mapOpenCodeEvent` for
+the authoritative mapping and `hook-adapters/opencode.ts`'s `OPENCODE_EMITS`
+for the capability list): `session.execution.started` (→ `turn_start` +
+`progress: generating`), `session.execution.succeeded` (→ `progress: done`,
+carrying the turn's reconstructed assistant text, plus `agent_session` with
+opencode's own session id for a later promote's history transfer),
+`session.execution.failed` (→ `tool_failure`; a user abort is the separate
+`session.execution.interrupted` and is deliberately not mapped),
+`session.retry.scheduled` (→ `progress: generating`), `session.step.ended`
+(→ `file_change`, from its `files`), `permission.asked` (→
+`permission_request`) and `permission.replied` (→ `permission_resolved`, not
+`notification_resolved` — that only clears a confirmed `hookNotification`,
+not `permissionState`), question forms — `form.created` with
+`metadata.kind: "question"` — and their `form.replied`/`form.cancelled`
+(→ `question`, started/finished), `vcs.branch.updated` (→ `cwd_changed` +
+`git_branch`, the directory taken from the event's own `location`, never
+`process.cwd()`), `session.compaction.*` (→ `compact`), and `session.created`
+with a `parentID` (→ `subagent`). **A subagent is a child session**, so the
+plugin remembers child session ids: a child's execution events become
+`subagent: finished`, and must not be mistaken for the main session's turn
+boundaries. Its `tool.execute.after` hook watches the **`shell`** tool
+(1.x: `bash`) for `git worktree add`/`checkout`/`switch`, resolving paths
+against the call's own `workdir`. It also exposes its own
+`promote_to_worktree` tool (→ `promote_request`, the same blocking flow
+issue #271 gives Claude Code via the `mullion` MCP server), whose wait is
+cancelled by the call's abort signal.
 
-That's only the no-transfer path, though. As of the full-context
-carryover (PR #696), an opencode promote goes further when it can: for a
-**local** opencode session whose live opencode session id is known (the
+**No longer emitted** (no v2 server-side source): `todo` (`todo.updated`),
+`session_diff` (`session.diff`), and `notification` (`tui.toast.show`,
+`worktree.failed`, `mcp.browser.open.failed`) — tracked in issue #1592; the
+frontend still renders those kinds for other agents. The 1.x file-watcher `file.edited` is replaced
+by `session.step.ended`'s `files`; the noisier `filesystem.changed` is
+deliberately not used.
+
+**Promote.** `--prompt <text>` on the default `opencode [directory]`
+command submits the first turn (verified against 2.0.29's TUI source). For
+a **local** opencode session whose live session id is known (the
 `agent_session` hook, above), Mullion first attempts to carry the **full
-conversation history** into the new worktree session via `opencode
-export`/`import` — the importer re-keys the imported session to the
-_current_ instance's project/directory, precisely the thing a `--fork`
-resume gets wrong — and then launches the promoted session with
-`--session <id>`. **No `--prompt` is sent on a resume**: verified against
-the bare-TUI command form Mullion actually spawns, opencode silently
-accepts but never auto-submits `--prompt` when combined with
-`--session`/`--continue` (the same failure shape as the `--fork`
-directory bug below), so a synthesized continuation nudge would just be
-dropped. Instead the transfer surfaces a `warnings[]` note: the full
-history carried over and the session is picking up where it left off,
-waiting for your next message — the imported transcript is already
-visible the moment it opens.
+conversation history** into the new worktree session via
+`opencode session export <id> --standalone` /
+`opencode session import <file> --directory <worktree> --standalone`
+(`opencode-session-transfer.ts`): v2's export is flat
+`{ info, messages }`, every id is rewritten before import (the importer
+returns 409 on an existing id instead of upserting), and the importer
+re-keys the session's location to the worktree — precisely the thing a
+`--fork` resume gets wrong. v2's HTTP `session.move`/`fork` routes would be
+the natural fit but are unreachable under `--standalone`'s private stdio
+server, so CLI export/import is the only mechanism. The promoted session
+launches with `--session <id>` (v2: "continue, **or create** if it doesn't
+exist"). v2's TUI does now auto-submit `--prompt` on a resumed session too
+(1.18 silently never did), but Mullion deliberately still sends none on a
+resume: the imported transcript is already visible and the transfer
+surfaces a `warnings[]` note that the session is picking up where it left
+off, waiting for your next message. A caller-supplied seed still reaches the
+model as context via `MULLION_OPENCODE_INSTRUCTIONS`.
 
-**Why not `--fork`:** a `--session <id> --fork` resume was investigated
-and dropped — opencode's `--fork` pins the forked session's `directory`
-to the _original_ session's stored directory even with an explicit
-`--dir` pointing at the worktree, and a live tool call inside the forked
-session actually ran with the wrong `cwd` (back in the main checkout,
-defeating worktree isolation). `export`/`import` was chosen instead
-because the importer re-keys to the current project/directory.
+**Why not `--fork`:** a `--session <id> --fork` resume was investigated and
+dropped — opencode's `--fork` pins the forked session's `directory` to the
+_original_ session's stored directory even with an explicit `--dir`
+pointing at the worktree, and a live tool call inside the forked session
+actually ran with the wrong `cwd` (back in the main checkout, defeating
+worktree isolation). `session export`/`import` was chosen instead because
+the importer re-keys to the target directory.
 
 The transfer is a capability probe, never a promote-blocking dependency:
-`opencode-session-transfer.ts` resolves `{ transferred: false, reason }`
-on every failure mode rather than throwing, and the promote handler falls
-through to the ordinary seed path unchanged — an argv `--prompt` first
-turn when a seed was supplied, else a cold start — each with its own
+`opencode-session-transfer.ts` resolves `{ transferred: false, reason }` on
+every failure mode rather than throwing, and the promote handler falls
+through to the ordinary seed path unchanged — an argv `--prompt` first turn
+when a seed was supplied, else a cold start — each with its own
 `warnings[]` entry. **Local host only:** `session-backend.ts`'s
-`RemoteBackend.spawn()` deliberately drops `resumeAgentSessionId` rather than forwarding it;
-remote-host carryover is an explicit follow-up, not silently
-half-implemented.
+`RemoteBackend.spawn()` deliberately drops `resumeAgentSessionId` rather
+than forwarding it; remote-host carryover is an explicit follow-up, not
+silently half-implemented.
 
-The `instructions`-based `seedPrompt` channel survives as a context-only
-fallback, for a caller that sets `seedPrompt` without also requesting
-`initialPrompt` — and, since a resume can't take an auto-submitted turn,
-also carries a caller-supplied seed on the transfer path as static
-context alongside the imported transcript.
+**Gating.** v2's plugin API exposes `ctx.permission.hook("evaluate", …)` as
+the real gating point, but it is deliberately not wired up (issue #178/#264;
+re-evaluation tracked in #1594): with no endpoint to answer a gate decision,
+a blocking hook would hang every gated action instead of just not being
+there. (The 1.x `permission.ask`
+hook — confirmed upstream to never fire for a first-encounter command, opencode
+issues #7006/#19927 — no longer exists.) Codex's own dialect shipped (see
+below); agy has no `PermissionRequest`-equivalent hook to build one on at all.
 
-Gated on the resolved `sessions.injectAgentGuide` value — possibly
-per-project-overridden, issue #884 — _at this session's own spawn time_
-(`HookAdapterContext.injectAgentGuide`, threaded from `PtyManager`/`Session`
-in `pty-manager.ts` down to `hook-adapters/opencode.ts`'s `prepareLaunch`) —
-necessarily a spawn-time snapshot, since there is no later moment for
-OpenCode to re-check the setting against. As of issue #884, `hooks.ts`'s
-SessionStart branch reads this SAME spawn-time-resolved value too (straight
-off the `Session` object), not just OpenCode — see that section's own doc
-comment below for why, and `prepareLaunch`'s own doc comment for the full
-reasoning here.
-
-No write to opencode's resolved global config dir (`$XDG_CONFIG_HOME/opencode`
-when set, else `~/.config/opencode` — see
-`resolveOpenCodeConfigHome()`, `hook-adapters/opencode-skills.ts`) or a
-project's `.opencode/` happens at all — fully ephemeral, same posture as
-Claude Code's `--settings` file, and
-strictly less persistent than the originally-planned managed-install
-fallback (superseded once `OPENCODE_CONFIG_DIR` was confirmed to work this
-way). The plugin forwards eighteen non-blocking event-bus types — one more
-than `OPENCODE_EMITS`'s previous count, since `question.replied` and
-`question.rejected` are two distinct event-bus type strings even though
-both map to the same `question: {state: "finished"}` message (rewritten
-here — a previous revision of this doc said only eight, several under stale
-v1 event names): `session.idle` (→ `progress: done`, plus `agent_session`
-carrying opencode's own internal session id for a later promote's history
-transfer), `file.edited` (→ `file_change`), `permission.asked` (→
-`permission_request` — opencode 1.18.7 renamed this from v1's
-`permission.updated`), `permission.replied` (→ `permission_resolved`, not
-`notification_resolved` as an earlier revision of this doc had it —
-`notification_resolved` only clears a confirmed `hookNotification`, not
-`permissionState`, so answering an opencode permission used to clear
-nothing), `session.error` (→ `tool_failure`, skipping the user's own
-`Ctrl-C`), `tui.toast.show` (→ `notification`, warning/error variants only),
-`question.asked` (→ `question`, started), `question.replied`/
-`question.rejected` (→ `question`, finished), `todo.updated` (→ `todo`),
-`session.diff` (→ `session_diff`), `worktree.failed`/`mcp.browser.open.failed`
-(→ `notification`, error variants), `session.status` (→ `progress`, or
-`turn_start` + `progress` on a `busy` status, including a `retry` backoff —
-never `notification`, unlike an earlier revision of this doc), `vcs.branch.updated`/
-`worktree.ready` (→ `git_branch`), and `session.compacting`/
-`session.subagent` (→ `compact`/`subagent`, started or finished). It also
-exposes its own
-`promote_to_worktree` tool (→ `promote_request`, the same blocking flow
-issue #271 gives Claude Code via the `mullion` MCP server). See
-`opencode-plugin.js`'s `mapOpenCodeEvent` for the authoritative mapping and
-`hook-adapters/opencode.ts`'s `OPENCODE_EMITS` for the capability list this
-adapter reports. OpenCode's real gating hook is `permission.ask` (mutating
-an `output.status` of `ask`/`deny`/`allow`), confirmed against the installed
-`@opencode-ai/plugin` package's own types — **not** `tool.execute.before`
-throwing, as originally assumed during planning. It's still not wired up,
-but not by choice: live testing against the installed CLI (1.18.21–1.18.23)
-confirmed `permission.ask` never fires at all, in either headless or
-interactive mode — a confirmed upstream bug (opencode issues #7006, #19927:
-`PermissionNext.ask()`'s own `if (!needsAsk)` guard skips the plugin trigger
-entirely for a first-encounter command, exactly the case remote approval
-would need). Tracked in issue #264 as blocked upstream, not as a Mullion gap
-— Codex's own dialect shipped (see below); agy has no `PermissionRequest`-
-equivalent hook to build one on at all.
+**Contract test:** `test/e2e/opencode-v2-contract.e2e.test.ts` (opt-in
+`make test-e2e`, CI installs the lockfile-pinned `@opencode/cli`) guards the
+facts above against a real binary — `--standalone`, additive
+`OPENCODE_CONFIG_CONTENT` layering, directory-plugin loading with events
+reaching a real hook socket, and the `session export/import` subcommands —
+in an isolated XDG sandbox with a private service port, so it never touches a
+developer's own opencode service.
 
 **Codex** reuses the same shared forwarder as Claude Code (`src/hooks/
 forwarder.mjs`, `codex` as its agent argv). As of this writing (rewritten
@@ -537,8 +544,9 @@ ephemeral** — two facts verified against the real installed Codex CLI during
 the original PR contradict what the plan before that assumed (the MCP
 server, added later, is a deliberate exception — see below):
 
-1. **`CODEX_HOME` is not a surgical knob.** Unlike OpenCode's
-   `OPENCODE_CONFIG_DIR`, it relocates auth, model config, MCP servers,
+1. **`CODEX_HOME` is not a surgical knob.** Like OpenCode v2's
+   `OPENCODE_CONFIG_DIR` (which Mullion therefore no longer sets), it
+   relocates auth, model config, MCP servers,
    trusted-project state, and history — pointing it at a fresh per-session
    scratch directory doesn't add hooks, it breaks Codex outright (its own
    diagnostics tool reports no credentials found against an empty one).

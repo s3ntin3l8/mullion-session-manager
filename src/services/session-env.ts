@@ -93,6 +93,10 @@ const RUNTIME_ONLY_SERVER_ENV_KEYS = [
   "MULLION_FORWARDER_PATH",
   "MULLION_FORWARDER_NODE",
   "OPENCODE_CONFIG_CONTENT",
+  // opencode v2: absolute paths of the per-session instruction files the
+  // plugin injects (hook-adapters/opencode.ts) — a stale value inherited from
+  // a parent Mullion-hosted session would inject ITS guide/briefing files.
+  "MULLION_OPENCODE_INSTRUCTIONS",
 ] as const;
 
 // Derived from the env schema (issue: hand-maintained denylist drifted and

@@ -96,7 +96,7 @@ way as a namespaced one.
   where boot-time sync hasn't run yet on this host) while Claude Code and
   opencode got a zero-copy per-session pointer instead
   (`hook-adapters/claude-code.ts`'s `--plugin-dir`,
-  `hook-adapters/opencode.ts`'s `skills.paths`); `bundle-sync` aligned all
+  `hook-adapters/opencode.ts`'s `skills` config entry); `bundle-sync` aligned all
   four onto the one boot-time mechanism. Claude Code's `--plugin-dir` is
   **not** fully retired by this, though: it's still emitted per-session
   whenever a project has its own DB-authored skill/reviewer content to
@@ -278,7 +278,7 @@ way as a namespaced one.
     extended — composes a per-session Claude Code `--plugin-dir` carrying a
     PROJECT's own DB-authored skill/reviewer subagent alongside the shipped
     bundle when one is configured; opencode's own project skill/reviewer
-    instead ride its `skills.paths`/`agent/` config keys directly — see
+    instead ride its `skills`/`agents` config entries directly — see
     [`agent-context.md`](agent-context.md)), `skills` (per-agent Skill
     discovery/enable-disable across Claude Code/codex/opencode/agy's own
     config locations, plus the hand-rolled SKILL.md frontmatter parser
@@ -293,9 +293,9 @@ way as a namespaced one.
     set" computation backing the scaffold-as-PR flow — see
     [`agent-context.md`](agent-context.md#scaffolding-it-into-the-repo-instead)),
     `opencode-session-transfer` (PR #696 — full opencode conversation-
-    history carryover into a promoted worktree via `opencode export`/
-    `import`, re-keying the imported session to the worktree's project/
-    directory; local host only — see [`agent-hooks.md`](agent-hooks.md)),
+    history carryover into a promoted worktree via `opencode session
+export`/`import --standalone`, re-keying the imported session to the
+    worktree's project/directory; local host only — see [`agent-hooks.md`](agent-hooks.md)),
     `agent-guide` (serves this doc set's own
     [`agent-guide.md`](agent-guide.md) into a spawned session at
     `SessionStart`).
@@ -342,8 +342,10 @@ way as a namespaced one.
   process: `forwarder.mjs` bridges a shell-command-hook agent's stdin JSON
   to the hook socket (`forwarder-core.mjs` holds its pure, unit-tested
   per-agent mapping logic); `opencode-plugin.js` is OpenCode's own bridge,
-  auto-injected via `OPENCODE_CONFIG_DIR` (OpenCode has no shell-command
-  hooks, only a JS/TS plugin API); `forwarder-shim.sh` is a small POSIX `sh`
+  auto-injected as a per-session plugin directory referenced from
+  `OPENCODE_CONFIG_CONTENT`, with the TUI launched `--standalone` (OpenCode
+  v2 has no shell-command hooks, only a JS plugin API — see
+  [`agent-hooks.md`](agent-hooks.md)); `forwarder-shim.sh` is a small POSIX `sh`
   script installed at a fixed, host-stable location
   (`~/.mullion/hooks/mullion-forwarder-shim.sh`) that agy's/Codex's
   host-global hook configs invoke instead of `forwarder.mjs` directly, so

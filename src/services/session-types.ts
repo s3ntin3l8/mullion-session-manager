@@ -331,10 +331,10 @@ export interface SessionInfo {
   liveBranch: string | null;
   /** Issue #271 follow-up — opencode's own internal session id, kept live by
    * the "agent_session" hook (hook-protocol.ts). Lets a later promote carry
-   * this session's real conversation history (opencode export/import) into
+   * this session's real conversation history (opencode session export/import) into
    * the new worktree session instead of only a seed summary. `null` for
    * every other agent, and for an opencode session before its first
-   * session.idle has fired. In-memory only, NOT part of `StoredStateFields`
+   * finished turn. In-memory only, NOT part of `StoredStateFields`
    * below — losing it across a restart just means the next promote falls
    * back to the ordinary seed-only path, same as if opencode had never
    * reported one; not worth the extra restore-path plumbing a state
