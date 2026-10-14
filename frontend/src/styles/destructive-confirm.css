@@ -186,10 +186,27 @@
   z-index: 10;
 }
 
+/* Drop-to-attach highlight shown while a file is dragged over the terminal.
+   pointer-events: none so it never swallows the drop itself. */
+.terminal-drop-overlay {
+  position: absolute;
+  inset: 4px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed var(--accent-solid);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent-solid) 12%, transparent);
+  color: var(--accent-solid);
+  font-size: 13px;
+  pointer-events: none;
+}
+
 /* Voice dictation mic button. Overlay collision map for this pane (see
    TerminalPane.tsx's own render comment for the full list): top-left = find
    bar; top-centre = copy/upload/voice-error toasts; top-right =
-   attach-image + this button, on a fine pointer, placed immediately to its
+   attach-image + this button (both fine-pointer only), placed immediately to its
    left (24px button + 6px gap = 38px). On a coarse pointer the mic is a
    key in MobileKeyBar instead (VoiceMicButton's "keyBar" variant): the
    floating bottom-right button it replaced covered the prompt. */

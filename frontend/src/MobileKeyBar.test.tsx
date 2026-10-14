@@ -18,6 +18,7 @@ beforeEach(() => {
     sendArrow: vi.fn(),
     sendCtrlC: vi.fn(),
     paste: vi.fn(),
+    attachImage: vi.fn(),
     openCopyMode: vi.fn(),
     setCtrlModifier: vi.fn(),
   };
@@ -37,9 +38,9 @@ describe("MobileKeyBar", () => {
   it("renders one fixed row of keys by default, as a labelled toolbar", () => {
     render(<MobileKeyBar sessionId={SESSION_ID} />);
     const toolbar = screen.getByRole("toolbar", { name: "Terminal keys" });
-    // Esc, Tab, ⇧Tab, Ctrl, ↑, ↓, ⋯ (no mic without published voice controls).
+    // Esc, Tab, ⇧Tab, Ctrl, ↑, ↓, attach-image, ⋯ (no mic without published voice controls).
     expect(toolbar.querySelectorAll(".mobile-key-bar-row")).toHaveLength(1);
-    expect(toolbar.querySelectorAll("button")).toHaveLength(7);
+    expect(toolbar.querySelectorAll("button")).toHaveLength(8);
   });
 
   it("toggles a second row with the remaining keys and remembers it", async () => {
@@ -211,6 +212,13 @@ describe("MobileKeyBar", () => {
     expect(handle.openCopyMode).toHaveBeenCalledTimes(1);
   });
 
+  it("shows the attach-image key in row 1 and routes it through the terminal handle", async () => {
+    const user = userEvent.setup();
+    render(<MobileKeyBar sessionId={SESSION_ID} />);
+    await user.click(screen.getByRole("button", { name: "Attach image" }));
+    expect(handle.attachImage).toHaveBeenCalledTimes(1);
+  });
+
   it("cycles sticky Ctrl off → once → locked → off and pushes it to the terminal", async () => {
     const user = userEvent.setup();
     render(<MobileKeyBar sessionId={SESSION_ID} />);
@@ -277,6 +285,7 @@ describe("MobileKeyBar — terminal remount", () => {
       sendArrow: vi.fn(),
       sendCtrlC: vi.fn(),
       paste: vi.fn(),
+      attachImage: vi.fn(),
       openCopyMode: vi.fn(),
       setCtrlModifier: vi.fn(),
     };

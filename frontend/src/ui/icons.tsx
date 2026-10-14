@@ -740,3 +740,12 @@ export function CopyIcon(props: IconProps) {
     </Svg>
   );
 }
+
+export function PasteIcon(props: IconProps) {
+  return (
+    <Svg strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <rect x="5" y="5" width="14" height="16" rx="2" />
+      <rect x="9" y="3" width="6" height="4" rx="1" />
+    </Svg>
+  );
+}
