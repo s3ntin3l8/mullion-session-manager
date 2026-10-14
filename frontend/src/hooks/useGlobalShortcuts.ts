@@ -99,14 +99,15 @@ export function useGlobalShortcuts({
         e.preventDefault();
         openSettings();
       } else if (
-        rightSidebarEnabled &&
         (e.metaKey || e.ctrlKey) &&
         e.altKey &&
         !e.shiftKey &&
         // `code`, not `key`: Option+B types "∫" on macOS and AltGr layouts
         // change `key` too. A focused terminal lets this chord through —
         // see attachKeyConflictHandler (lib/terminalKeys.ts).
-        e.code === "KeyB"
+        e.code === "KeyB" &&
+        // Not on phone, where the sidebar isn't rendered.
+        rightSidebarEnabled
       ) {
         e.preventDefault();
         useDashboardStore.getState().toggleRightSidebar();

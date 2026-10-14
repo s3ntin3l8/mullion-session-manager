@@ -88,7 +88,8 @@ export function RightSidebar({ tier, actions }: RightSidebarProps) {
   // or takes a floating drawer from tablet to desktop, closes it like the
   // left navigator does — `open` is persisted state, so it would otherwise
   // linger invisibly (phone) or as a stale overlay (desktop). A pinned drawer
-  // simply docks on desktop and stays.
+  // simply docks on desktop and stays. The reverse, desktop → tablet, never
+  // closes: a docked drawer just becomes a floating one, which is intended.
   const lastTier = useRef(tier);
   useEffect(() => {
     const prev = lastTier.current;
