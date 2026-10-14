@@ -1425,6 +1425,8 @@ describe("permission review gates (issue #1594)", () => {
   /** Every JSON line the plugin sent on a gate connection (not the shared sender). */
   let gateConnections: Array<{ socket: net.Socket; lines: Array<Record<string, unknown>> }> = [];
   let closedGateConnections = 0;
+  const allConnections: Array<{ lines: Array<Record<string, unknown>> }> = [];
+  const allLines = () => allConnections.flatMap((c) => c.lines);
 
   beforeEach(async () => {
     dir = mkdtempSync(path.join(os.tmpdir(), "mullion-opencode-gate-"));
@@ -1432,6 +1434,7 @@ describe("permission review gates (issue #1594)", () => {
     server = net.createServer((socket) => {
       sockets.push(socket);
       const conn = { socket, lines: [] as Array<Record<string, unknown>> };
+      allConnections.push(conn);
       let buffer = "";
       socket.on("data", (chunk: Buffer) => {
         buffer += chunk.toString("utf8");
@@ -1460,6 +1463,7 @@ describe("permission review gates (issue #1594)", () => {
     for (const s of sockets) s.destroy();
     sockets = [];
     gateConnections = [];
+    allConnections.length = 0;
     closedGateConnections = 0;
     await new Promise<void>((resolve) => server.close(() => resolve()));
     rmSync(dir, { recursive: true, force: true });
@@ -1588,6 +1592,42 @@ describe("permission review gates (issue #1594)", () => {
     // opencode publishes permission.replied for the sibling it also rejected
     fake.push(ev("permission.replied", { sessionID: "s", requestID: "per_b", reply: "reject" }));
     await until(() => closedGateConnections === 2);
+  });
+
+  it("sends no observational permission_request while a gate carries the attention signal", async () => {
+    const fake = await boot();
+    fake.push(asked("per_n"));
+    await until(() => gateConnections.length === 1);
+    await new Promise((r) => setTimeout(r, 60));
+    expect(allLines().some((l) => l.kind === "permission_request")).toBe(false);
+  });
+
+  it("falls back to the permission_request when the gate ends unanswered", async () => {
+    const fake = await boot();
+    fake.push(asked("per_f"));
+    await until(() => gateConnections.length === 1);
+    gateConnections[0].socket.write(JSON.stringify({ decision: "no_response" }) + "\n");
+    await until(() => allLines().some((l) => l.kind === "permission_request"));
+  });
+
+  it("an event still in flight after cleanup cannot re-open a gate", async () => {
+    const gates = (
+      MullionHookEmitter as unknown as {
+        createPermissionGates: (
+          reply: () => Promise<void>,
+          fallback?: () => void,
+        ) => {
+          open: (data: unknown) => boolean;
+          closeAll: () => void;
+        };
+      }
+    ).createPermissionGates(async () => {});
+    gates.closeAll();
+    expect(gates.open({ id: "per_late", sessionID: "s", action: "shell", resources: [] })).toBe(
+      false,
+    );
+    await new Promise((r) => setTimeout(r, 30));
+    expect(gateConnections).toHaveLength(0);
   });
 
   it("plugin cleanup closes every pending gate", async () => {

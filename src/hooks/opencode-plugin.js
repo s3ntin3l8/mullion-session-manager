@@ -666,8 +666,9 @@ function reviewGateRequest(prompt, gateId, signal) {
  * (issue #1594): one gate per pending opencode request id, answered via
  * `reply(sessionID, requestID, "once" | "reject", message?)` and lapsed when the request
  * is answered elsewhere or the plugin is torn down. */
-function createPermissionGates(reply) {
+function createPermissionGates(reply, fallback) {
   const pending = new Map();
+  let closed = false;
 
   function close(requestID) {
     const abort = pending.get(requestID);
@@ -677,12 +678,22 @@ function createPermissionGates(reply) {
   }
 
   return {
-    /** `permission.asked` -> open a gate for the request. */
+    /** `permission.asked` -> open a gate for the request. Returns whether a gate
+     * was opened (the caller then drops the observational `permission_request`
+     * — the gate already carries the attention signal — and `fallback(data)`
+     * re-sends it should the gate end without an answer). */
     open(data) {
       const requestID = data?.id;
       const sessionID = data?.sessionID;
-      if (!nonEmptyString(requestID) || !nonEmptyString(sessionID) || pending.has(requestID))
-        return;
+      // `closed`: an event already pulled from the iterator when cleanup ran
+      // must not re-open a gate nobody will ever close.
+      if (
+        closed ||
+        !nonEmptyString(requestID) ||
+        !nonEmptyString(sessionID) ||
+        pending.has(requestID)
+      )
+        return false;
       const abort = new AbortController();
       pending.set(requestID, abort);
       const prompt = [data.action, ...(Array.isArray(data.resources) ? data.resources : [])]
@@ -702,19 +713,22 @@ function createPermissionGates(reply) {
                 "reject",
                 nonEmptyString(decision.reason) ? decision.reason : undefined,
               );
-            }
-            // anything else (no_response / null): opencode's own dock decides
+            } else fallback?.(data); // no_response / null: opencode's own dock decides
           } catch {
-            // already answered in the TUI, or the request is gone
+            // Expected race, deliberately silent: the request was already
+            // answered in the TUI (reply -> NotFound) or is gone. Logging it
+            // would only spam opencode's output for a normal outcome.
           }
         },
       );
+      return true;
     },
     /** `permission.replied` -> the request was answered; lapse its gate. */
     replied(data) {
       close(data?.requestID);
     },
     closeAll() {
+      closed = true;
       for (const id of [...pending.keys()]) close(id);
     },
   };
@@ -801,8 +815,10 @@ const MullionHookEmitter = {
     // The plugin client's `session.permission.reply` takes one flat object:
     // both route params (`sessionID`, `requestID`) and the body (`decision`,
     // optional `message`) — verified live against 2.0.29.
-    const permissionGates = createPermissionGates((sessionID, requestID, decision, message) =>
-      ctx.permission.reply({ sessionID, requestID, decision, ...(message ? { message } : {}) }),
+    const permissionGates = createPermissionGates(
+      (sessionID, requestID, decision, message) =>
+        ctx.permission.reply({ sessionID, requestID, decision, ...(message ? { message } : {}) }),
+      (data) => forward(mapOpenCodeEvent({ type: "permission.asked", data }, baseCwd, null, state)),
     );
 
     const forward = (messages) => {
@@ -816,13 +832,14 @@ const MullionHookEmitter = {
         for await (const event of ctx.event.subscribe({ signal: abort.signal })) {
           try {
             assistantText.observe(event, state);
-            if (event?.type === "permission.asked") permissionGates.open(event.data);
-            else if (event?.type === "permission.replied") permissionGates.replied(event.data);
+            const gated = event?.type === "permission.asked" && permissionGates.open(event.data);
+            if (event?.type === "permission.replied") permissionGates.replied(event.data);
             // The reconstructed text is only used by the turn-end message —
             // don't sort/join it on every high-frequency event.
             const text =
               event?.type === "session.execution.succeeded" ? assistantText.current() : null;
-            forward(mapOpenCodeEvent(event, baseCwd, text, state));
+            const messages = mapOpenCodeEvent(event, baseCwd, text, state);
+            forward(gated ? messages?.filter((m) => m.kind !== "permission_request") : messages);
           } catch {
             // one malformed event must never end the stream
           }
