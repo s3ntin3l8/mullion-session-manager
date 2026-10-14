@@ -488,7 +488,13 @@ export function App() {
   // the ordering/coupling analysis proving this effect is independent of
   // every other effect in this file), but to keep the diff minimal and the
   // file's effect ordering easy to audit.
-  useGlobalShortcuts({ setPalette, setSettingsOpen, openSettings, openGlobalLauncher });
+  useGlobalShortcuts({
+    setPalette,
+    setSettingsOpen,
+    openSettings,
+    openGlobalLauncher,
+    rightSidebarEnabled: !isMobile,
+  });
 
   // Check for updates on mount and re-check every 30 minutes.
   // The backend caches results for 1h, so most re-checks are no-ops.
@@ -1203,6 +1209,24 @@ export function App() {
       onCommit: () => setSidebarOpen(true),
     });
   }, [compact, sidebarOpen]);
+
+  // Tablet: a leftward swipe from the right edge opens the right sidebar
+  // drawer (it dismisses itself — see RightSidebar). The rail sits on that
+  // edge, but a tap never travels the commit threshold, so rail taps are safe.
+  const rightSidebarOpen = useDashboardStore((s) => s.rightSidebarOpen);
+  useEffect(() => {
+    if (layoutTier !== "tablet" || rightSidebarOpen) return;
+    const el = appBodyRef.current;
+    if (!el) return;
+    return attachSidebarSwipeGesture({
+      element: el,
+      commitDirection: -1,
+      edge: "right",
+      edgeZonePx: 24,
+      ignoreSelector: ".mobile-key-bar, .tasks-phone-strip",
+      onCommit: () => useDashboardStore.getState().toggleRightSidebar(),
+    });
+  }, [layoutTier, rightSidebarOpen]);
 
   // ---- Sidebar width drag (same pattern as Dock's height drag) ----
   // Persists on drag end only, via the store action (not a direct

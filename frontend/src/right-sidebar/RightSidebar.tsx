@@ -1,6 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useDragResize } from "../hooks/useDragResize.js";
 import { useFollowedProject } from "../hooks/useFollowedProject.js";
+import { usePhoneBackStack } from "../hooks/usePhoneBackStack.js";
+import { attachSidebarSwipeGesture } from "../lib/sidebarSwipeGesture.js";
 import type { LayoutTier } from "../lib/layoutTier.js";
 import { useDashboardStore } from "../store/index.js";
 import { RIGHT_SIDEBAR_MAX_WIDTH, RIGHT_SIDEBAR_MIN_WIDTH } from "../store/constants.js";
@@ -69,6 +71,32 @@ export function RightSidebar({ tier, actions }: RightSidebarProps) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [overlay, close]);
 
+  // Tablet: Android back / the back gesture closes the floating drawer, and
+  // so does a rightward swipe on it (the mirror of the left navigator).
+  const tablet = tier === "tablet";
+  usePhoneBackStack(tablet && overlay, close);
+  const panelRef = useRef<HTMLElement>(null);
+  const panelMounted = open && !docked;
+  useEffect(() => {
+    if (!tablet || !panelMounted) return;
+    const el = panelRef.current;
+    if (!el) return;
+    return attachSidebarSwipeGesture({ element: el, commitDirection: 1, onCommit: close });
+  }, [tablet, panelMounted, close]);
+
+  // A tier change (rotate, fold/unfold, window resize) that lands on phone,
+  // or takes a floating drawer from tablet to desktop, closes it like the
+  // left navigator does — `open` is persisted state, so it would otherwise
+  // linger invisibly (phone) or as a stale overlay (desktop). A pinned drawer
+  // simply docks on desktop and stays.
+  const lastTier = useRef(tier);
+  useEffect(() => {
+    const prev = lastTier.current;
+    lastTier.current = tier;
+    if (prev === tier || !open) return;
+    if (tier === "phone" || (prev === "tablet" && tier === "desktop" && !pinned)) close();
+  }, [tier, open, pinned, close]);
+
   if (tier === "phone") return null;
 
   const view = RIGHT_SIDEBAR_VIEWS.find((v) => v.id === viewId) ?? RIGHT_SIDEBAR_VIEWS[0];
@@ -79,6 +107,7 @@ export function RightSidebar({ tier, actions }: RightSidebarProps) {
       {open && (
         <aside
           className={`right-sidebar-panel${docked ? " docked" : " overlay"}${dragging ? " resizing" : ""}`}
+          ref={panelRef}
           style={{ width }}
           aria-label={`${view.label} sidebar`}
         >
