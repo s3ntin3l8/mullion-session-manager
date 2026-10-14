@@ -400,11 +400,10 @@ adapter with the same gating as ever, but delivered differently: their
 absolute paths go to the plugin as a JSON array in
 `MULLION_OPENCODE_INSTRUCTIONS`, and the plugin appends each file's text as
 a system part from its `ctx.session.hook("context", …)` hook (primary agent
-requests only; idempotent, since `setup` can run once per Location). **Evidence
-level:** verified from the v2.0.29 source (the hook receives the draft request
-whose `system` array is sent verbatim, for the primary request only), and the
-hook registers cleanly in a real server — but it has not been observed firing
-in a live model turn. The
+requests only; idempotent, since `setup` can run once per Location). **Verified live**
+(opencode 2.0.29, `opencode-go/minimax-m3`): a model asked for a codeword that
+existed only in an injected instruction file answered it correctly, both via
+`opencode run --standalone` and in the bare TUI in a pty. The
 order is `[tier-0, workflow-conventions, briefing, seed]`, matching
 `hooks.ts`'s ordering for the other three agents. The tier-0 CONTENT is the
 same short block every other agent's SessionStart reply carries
