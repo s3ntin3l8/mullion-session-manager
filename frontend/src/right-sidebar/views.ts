@@ -56,15 +56,22 @@ function useGitBadge(projectId: number | null): RailBadge | null {
   return null;
 }
 
-// Failing PR checks come straight from the live store (kept fresh by the
-// /ws/github push), so the badge costs no extra requests. A default-branch CI
-// badge would need an always-on fetch — tracked in #1578.
+// Failing PR checks and a red default branch both come straight from the live
+// store (prsByProject from the /ws/github push, defaultBranchCiByProject from
+// the poller via the same refreshGitRefs batch), so the badge costs no extra
+// requests.
 function useGitHubBadge(projectId: number | null): RailBadge | null {
   const failing = useDashboardStore((s) =>
     projectId != null ? (s.prsByProject[projectId]?.prSummary.fail ?? 0) : 0,
   );
-  if (failing === 0) return null;
-  return { kind: "alert", title: `${failing} PR check${failing === 1 ? "" : "s"} failing` };
+  const defaultBranchFailing = useDashboardStore((s) =>
+    projectId != null ? s.defaultBranchCiByProject[projectId] === "failure" : false,
+  );
+  if (failing === 0 && !defaultBranchFailing) return null;
+  const reasons: string[] = [];
+  if (failing > 0) reasons.push(`${failing} PR check${failing === 1 ? "" : "s"} failing`);
+  if (defaultBranchFailing) reasons.push("default branch CI failing");
+  return { kind: "alert", title: reasons.join(", ") };
 }
 
 // Registry — adding a view is one entry here.

@@ -74,7 +74,7 @@ function defaultBatchResponse(ids: number[]): GitRefsBatchResult {
     branches[id] = branchesFor(`branch-${id}`);
     prs[id] = EMPTY_PRS;
   }
-  return { branches, prs };
+  return { branches, prs, defaultBranchCi: {} };
 }
 
 describe("store.refreshGitRefs (scoped vs. full refresh)", () => {
@@ -91,6 +91,7 @@ describe("store.refreshGitRefs (scoped vs. full refresh)", () => {
       projects: [PROJECT_1, PROJECT_2],
       gitBranchesByProject: {},
       prsByProject: {},
+      defaultBranchCiByProject: {},
     });
   });
 
@@ -128,6 +129,35 @@ describe("store.refreshGitRefs (scoped vs. full refresh)", () => {
     expect(useDashboardStore.getState().gitBranchesByProject[2]).toEqual(
       branchesFor("stale-branch-2"),
     );
+  });
+
+  it("stores default-branch CI per project, treats null as none, keeps last-known-good when omitted", async () => {
+    useDashboardStore.setState({ defaultBranchCiByProject: { 1: "success", 2: "failure" } });
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) =>
+      jsonResponse(200, {
+        ...defaultBatchResponse(idsFromGitRefsUrl(String(input))),
+        // Project 1 reports a failure, project 2 is omitted (poller cold).
+        defaultBranchCi: { 1: "failure" },
+      }),
+    );
+
+    await useDashboardStore.getState().refreshGitRefs();
+    // Unscoped replaces wholesale: omitted project 2 is simply unknown now.
+    expect(useDashboardStore.getState().defaultBranchCiByProject).toEqual({ 1: "failure" });
+
+    useDashboardStore.setState({ defaultBranchCiByProject: { 1: "failure", 2: "failure" } });
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) =>
+      jsonResponse(200, {
+        ...defaultBatchResponse(idsFromGitRefsUrl(String(input))),
+        defaultBranchCi: { 1: null },
+      }),
+    );
+    await useDashboardStore.getState().refreshGitRefs([1]);
+    // `null` ("no CI signal") clears project 1; a scoped call leaves 2 alone.
+    expect(useDashboardStore.getState().defaultBranchCiByProject).toEqual({
+      1: undefined,
+      2: "failure",
+    });
   });
 
   it("an unscoped call still replaces the maps wholesale (drops entries for projects no longer in the list)", async () => {

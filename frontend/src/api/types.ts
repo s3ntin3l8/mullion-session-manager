@@ -1020,6 +1020,9 @@ export interface GitStatusesBatchResult {
 export interface GitRefsBatchResult {
   branches: Record<string, GitBranchesResult | null>;
   prs: Record<string, GitHubPRsStatus | null>;
+  // Default-branch CI per project (the right-sidebar GitHub rail badge). An id
+  // absent from the map means the poller hasn't computed it yet.
+  defaultBranchCi: Record<string, GitHubCiStatus>;
 }
 
 // U4 — mirrors src/services/dock-config.ts's DockConfigReadResult 1:1. The

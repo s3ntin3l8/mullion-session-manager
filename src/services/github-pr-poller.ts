@@ -2,7 +2,12 @@ import type { FastifyInstance } from "fastify";
 import { projects } from "../db/schema.js";
 import { parseGitRemote, type GitHubRepoRef } from "./git-remote.js";
 import { resolveGitHubToken } from "./github-integration.js";
-import { GitHubApiError, getRepoPRsStatus, setRepoPRsStatus } from "./github.js";
+import {
+  GitHubApiError,
+  getRepoPRsStatus,
+  refreshDefaultBranchCi,
+  setRepoPRsStatus,
+} from "./github.js";
 import { ActivityTracker } from "./github-activity-tracker.js";
 import { resolveGitHubPoll, toActivityIntervals } from "./runtime-config.js";
 import { getStoredSettings } from "./settings.js";
@@ -73,6 +78,22 @@ export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTrac
     );
   }
 
+  // One repo's refresh: open PRs + their CI, then the default branch's CI for
+  // the right-sidebar badge. fetchActionsRuns (behind it) never throws —
+  // Actions being off or a lookup failing degrades to "no signal" — so it
+  // can't fail the PR half.
+  async function refreshRepo(
+    token: string,
+    owner: string,
+    repo: string,
+    repoKey: string,
+  ): Promise<void> {
+    const status = await getRepoPRsStatus(token, owner, repo);
+    setRepoPRsStatus(owner, repo, status);
+    activityTracker.recordPollResult(repoKey, repoHasActivity(status));
+    await refreshDefaultBranchCi(token, owner, repo);
+  }
+
   async function pollOnce(repoRows: { repoRef: GitHubRepoRef | null }[]): Promise<void> {
     if (running) return;
     running = true;
@@ -94,9 +115,7 @@ export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTrac
         }
 
         try {
-          const status = await getRepoPRsStatus(token, owner, repo);
-          setRepoPRsStatus(owner, repo, status);
-          activityTracker.recordPollResult(repoKey, repoHasActivity(status));
+          await refreshRepo(token, owner, repo, repoKey);
         } catch (err) {
           if (err instanceof GitHubApiError) {
             app.log.warn(
@@ -160,9 +179,7 @@ export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTrac
           const token = await resolveGitHubToken(app, repoRef, "read");
           if (!token) return;
           const repoKey = `${repoRef.owner}/${repoRef.repo}`;
-          const status = await getRepoPRsStatus(token, repoRef.owner, repoRef.repo);
-          setRepoPRsStatus(repoRef.owner, repoRef.repo, status);
-          activityTracker.recordPollResult(repoKey, repoHasActivity(status));
+          await refreshRepo(token, repoRef.owner, repoRef.repo, repoKey);
         } catch (err) {
           app.log.warn(
             { err, hostId: row.hostId, cwd: row.cwd },

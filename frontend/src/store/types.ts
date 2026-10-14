@@ -7,6 +7,7 @@ import type {
   DiscoveredDevice,
   GitBranchesResult,
   GitDiffStats,
+  GitHubCiStatus,
   GitHubPRsStatus,
   GitStatus,
   GitPullResult,
@@ -224,6 +225,10 @@ export interface GitSlice {
   // client-side, rather than firing one filtered `?branch=` request per
   // session (see api.ts's getProjectGitHubPRs doc comment).
   prsByProject: Record<number, GitHubPRsStatus | undefined>;
+  // Default-branch CI per project, filled by the same refreshGitRefs batch
+  // (computed server-side by the GitHub poller). `undefined` covers both "not
+  // known yet" and "no CI signal"; the right-sidebar GitHub rail badge reads it.
+  defaultBranchCiByProject: Record<number, NonNullable<GitHubCiStatus> | undefined>;
   refreshGitStatuses: () => Promise<void>;
   // Issue #202's other two git-refresh actions — see their own
   // implementations for the cadence each runs on.

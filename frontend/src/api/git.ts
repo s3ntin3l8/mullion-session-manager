@@ -66,7 +66,7 @@ export const gitApi = {
   // means "transiently unavailable," same last-known-good convention as
   // getProjectGitStatuses above.
   getProjectGitRefsBatch: (ids: number[]): Promise<GitRefsBatchResult> => {
-    if (ids.length === 0) return Promise.resolve({ branches: {}, prs: {} });
+    if (ids.length === 0) return Promise.resolve({ branches: {}, prs: {}, defaultBranchCi: {} });
     return request<GitRefsBatchResult>(`/api/projects/git-refs?ids=${ids.join(",")}`);
   },
 
