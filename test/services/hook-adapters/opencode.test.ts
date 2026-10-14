@@ -889,6 +889,13 @@ describe("openCodeAdapter.prepareLaunch — Task Master skill denials", () => {
     injectProjectBriefing: false,
   };
 
+  const SKILLS = ["brainstorming", "writing-plans", "finishing-a-development-branch"];
+  const agentDenies = SKILLS.map((resource) => ({ action: "skill", resource, effect: "deny" }));
+  const workerAgents = {
+    build: { permissions: agentDenies },
+    plan: { permissions: agentDenies },
+  };
+
   it("denies brainstorming / writing-plans / finishing-a-development-branch when ctx.taskId is set", () => {
     const plan = openCodeAdapter.prepareLaunch({ ...baseCtx, taskId: 348423 });
     expect(JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT)).toEqual({
@@ -900,6 +907,7 @@ describe("openCodeAdapter.prepareLaunch — Task Master skill denials", () => {
           "finishing-a-development-branch": "deny",
         },
       },
+      agents: workerAgents,
     });
   });
 
@@ -919,6 +927,7 @@ describe("openCodeAdapter.prepareLaunch — Task Master skill denials", () => {
           "finishing-a-development-branch": "deny",
         },
       },
+      agents: workerAgents,
     });
   });
 
@@ -950,10 +959,41 @@ describe("openCodeAdapter.prepareLaunch — Task Master skill denials", () => {
             "finishing-a-development-branch": "deny",
           },
         },
+        agents: workerAgents,
       });
     } finally {
       rmSync(realSessionsDir, { recursive: true, force: true });
     }
+  });
+
+  it("repeats the skill denies at agent level on build/plan so a user's agent-level allow cannot outrank them (v2 evaluates agent rules last, issue #1595)", () => {
+    const config = JSON.parse(
+      openCodeAdapter.prepareLaunch({ ...baseCtx, taskId: 7 }).envAdditions!
+        .OPENCODE_CONFIG_CONTENT,
+    );
+    expect(config.agents.build.permissions).toEqual(agentDenies);
+    expect(config.agents.plan.permissions).toEqual(agentDenies);
+  });
+
+  it("merges the agent-level denies into an existing same-named agent entry instead of replacing it", () => {
+    const config = JSON.parse(
+      openCodeAdapter.prepareLaunch({
+        ...baseCtx,
+        taskId: 7,
+        injectMullionBundle: true,
+        projectReviewerAgent: "---\nname: build\ndescription: d\n---\nbody",
+      }).envAdditions!.OPENCODE_CONFIG_CONTENT,
+    );
+    expect(config.agents.build.system).toBe("body");
+    expect(config.agents.build.mode).toBe("subagent");
+    expect(config.agents.build.permissions).toEqual(expect.arrayContaining(agentDenies));
+  });
+
+  it("adds no agent-level entries for a non-Task-Master session", () => {
+    const config = JSON.parse(
+      openCodeAdapter.prepareLaunch(baseCtx).envAdditions!.OPENCODE_CONFIG_CONTENT,
+    );
+    expect(config.agents?.build).toBeUndefined();
   });
 
   // Hermes review, PR #966 — regression guard for the opencode
