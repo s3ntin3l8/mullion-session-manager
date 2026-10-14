@@ -437,6 +437,32 @@ describe("usePanelOpener — project-scoped panel kinds", () => {
     expect(setSidebarOpen).not.toHaveBeenCalled();
   });
 
+  it("onOpenFile opens the file editor on that path, and re-targets it on a second file", () => {
+    const api = mockDockviewApi();
+    const { result } = setup({ dockviewApi: api });
+
+    result.current.onOpenFile(1, "src/a.ts");
+    expect(api.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "file-editor-1",
+        params: expect.objectContaining({ projectId: 1, path: "src/a.ts" }),
+      }),
+    );
+    expect(setViewMode).toHaveBeenCalledWith("list");
+
+    result.current.onOpenFile(1, "b.ts");
+    expect(api.addPanel).toHaveBeenCalledTimes(1);
+    expect(api.getPanel("file-editor-1")!.api.updateParameters).toHaveBeenCalledWith(
+      expect.objectContaining({ path: "b.ts", rev: expect.any(Number) }),
+    );
+  });
+
+  it("onOpenFile no-ops when dockviewApi is null", () => {
+    const { result } = setup({ dockviewApi: null });
+    expect(() => result.current.onOpenFile(1, "a.ts")).not.toThrow();
+    expect(setViewMode).not.toHaveBeenCalled();
+  });
+
   it("onOpenBrowser omits desktop positioning even with a tiled panel present (pre-existing asymmetry, deliberately preserved)", () => {
     const api = mockDockviewApi();
     api.addPanel({ id: "session-1", component: "terminal", params: {} }); // tiled

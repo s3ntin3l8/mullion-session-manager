@@ -22,7 +22,12 @@ function status(overrides: Partial<GitStatus> = {}): GitStatus {
   };
 }
 
-const actions = { onOpenGit: vi.fn(), onOpenGitHub: vi.fn() };
+const actions = {
+  onOpenGit: vi.fn(),
+  onOpenGitHub: vi.fn(),
+  onOpenFileEditor: vi.fn(),
+  onOpenFile: vi.fn(),
+};
 
 function renderSidebar(tier: LayoutTier = "desktop") {
   return render(<RightSidebar tier={tier} actions={actions} />);

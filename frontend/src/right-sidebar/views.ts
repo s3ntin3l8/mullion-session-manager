@@ -1,6 +1,7 @@
 import type { ComponentType, SVGProps } from "react";
 import { useDashboardStore } from "../store/index.js";
-import { GitBranchIcon, GitHubIcon } from "../ui/icons.js";
+import { FolderIcon, GitBranchIcon, GitHubIcon } from "../ui/icons.js";
+import { FilesSidebarView } from "./FilesSidebarView.js";
 import { GitHubSidebarView } from "./GitHubSidebarView.js";
 import { GitSidebarView } from "./GitSidebarView.js";
 
@@ -16,6 +17,8 @@ export type RailBadge =
 export interface RightSidebarActions {
   onOpenGit: (projectId: number) => void;
   onOpenGitHub: (projectId: number) => void;
+  onOpenFileEditor: (projectId: number) => void;
+  onOpenFile: (projectId: number, path: string) => void;
 }
 
 export interface RightSidebarViewProps {
@@ -64,7 +67,7 @@ function useGitHubBadge(projectId: number | null): RailBadge | null {
   return { kind: "alert", title: `${failing} PR check${failing === 1 ? "" : "s"} failing` };
 }
 
-// Registry — adding a view (a Files tree, say) is one entry here.
+// Registry — adding a view is one entry here.
 export const RIGHT_SIDEBAR_VIEWS: RightSidebarView[] = [
   {
     id: "git",
@@ -79,5 +82,12 @@ export const RIGHT_SIDEBAR_VIEWS: RightSidebarView[] = [
     icon: GitHubIcon,
     Component: GitHubSidebarView,
     useBadge: useGitHubBadge,
+  },
+  {
+    id: "files",
+    label: "Files",
+    icon: FolderIcon,
+    Component: FilesSidebarView,
+    useBadge: useNoBadge,
   },
 ];

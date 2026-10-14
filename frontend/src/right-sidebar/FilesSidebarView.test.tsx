@@ -1,0 +1,110 @@
+// @vitest-environment jsdom
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { FilesSidebarView } from "./FilesSidebarView.js";
+import { api, ApiError } from "../api/index.js";
+import type * as ApiModule from "../api/index.js";
+import type { ProjectDirEntry } from "../api/index.js";
+
+vi.mock("../api/index.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof ApiModule>();
+  return { ...actual, api: { ...actual.api, listProjectFiles: vi.fn() } };
+});
+
+const actions = {
+  onOpenGit: vi.fn(),
+  onOpenGitHub: vi.fn(),
+  onOpenFileEditor: vi.fn(),
+  onOpenFile: vi.fn(),
+};
+
+const entry = (name: string, kind: ProjectDirEntry["kind"], over = {}): ProjectDirEntry => ({
+  name,
+  kind,
+  size: 0,
+  ...over,
+});
+
+const LISTINGS: Record<string, ProjectDirEntry[]> = {
+  "": [
+    entry("src", "dir"),
+    entry("node_modules", "dir"),
+    entry(".git", "dir"),
+    entry("README.md", "file"),
+    entry("escape", "symlink", { targetKind: "outside" }),
+  ],
+  src: [entry("index.ts", "file")],
+};
+
+beforeEach(() => {
+  vi.mocked(api.listProjectFiles).mockImplementation(async (_id, path = "") => ({
+    path,
+    entries: LISTINGS[path] ?? [],
+    truncated: path === "src",
+  }));
+});
+
+afterEach(() => {
+  vi.clearAllMocks();
+});
+
+const renderView = () => render(<FilesSidebarView projectId={4} actions={actions} />);
+
+describe("FilesSidebarView", () => {
+  it("lists the root and hides noise directories", async () => {
+    renderView();
+    expect(await screen.findByText("README.md")).toBeTruthy();
+    expect(screen.getByText("src")).toBeTruthy();
+    expect(screen.queryByText("node_modules")).toBeNull();
+    expect(screen.queryByText(".git")).toBeNull();
+    expect(api.listProjectFiles).toHaveBeenCalledWith(4, "");
+  });
+
+  it("lazily loads a folder when expanded and collapses it again", async () => {
+    const user = userEvent.setup();
+    renderView();
+    await user.click(await screen.findByText("src"));
+    expect(await screen.findByText("index.ts")).toBeTruthy();
+    expect(screen.getByText("…list truncated")).toBeTruthy();
+    expect(api.listProjectFiles).toHaveBeenCalledWith(4, "src");
+    await user.click(screen.getByText("src"));
+    expect(screen.queryByText("index.ts")).toBeNull();
+    // Re-expanding reuses the loaded listing.
+    await user.click(screen.getByText("src"));
+    expect(await screen.findByText("index.ts")).toBeTruthy();
+    expect(api.listProjectFiles).toHaveBeenCalledTimes(2);
+  });
+
+  it("opens a clicked file via onOpenFile with its project-relative path", async () => {
+    const user = userEvent.setup();
+    renderView();
+    await user.click(await screen.findByText("src"));
+    await user.click(await screen.findByText("index.ts"));
+    expect(actions.onOpenFile).toHaveBeenCalledWith(4, "src/index.ts");
+  });
+
+  it("disables a symlink that points outside the project", async () => {
+    renderView();
+    const row = (await screen.findByText("escape")).closest("button");
+    expect(row?.disabled).toBe(true);
+  });
+
+  it("refresh re-lists open folders and Open Editor calls the opener", async () => {
+    const user = userEvent.setup();
+    renderView();
+    await user.click(await screen.findByText("src"));
+    await screen.findByText("index.ts");
+    vi.mocked(api.listProjectFiles).mockClear();
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(api.listProjectFiles).toHaveBeenCalledTimes(2));
+    await user.click(screen.getByRole("button", { name: "Open Editor" }));
+    expect(actions.onOpenFileEditor).toHaveBeenCalledWith(4);
+  });
+
+  it("shows the API error message when listing fails", async () => {
+    vi.mocked(api.listProjectFiles).mockRejectedValue(new ApiError("Nope", 403));
+    renderView();
+    expect(await screen.findByText("Nope")).toBeTruthy();
+  });
+});
