@@ -238,11 +238,11 @@ export interface CwdChangedHookMessage {
 }
 
 /** Promote-flow full-context carryover (issue #271 follow-up) — opencode's
- * own internal session id, so a later promote can `opencode export`/`import`
+ * own internal session id, so a later promote can `opencode session export`/`import`
  * this session's real conversation history into the new worktree session
  * instead of just a seed summary (see opencode-session-transfer.ts). Sent by
- * opencode-plugin.js on every `session.idle` (the event already carries
- * `properties.sessionID` for free — no extra hook registration needed),
+ * opencode-plugin.js on every finished turn (v2's `session.execution.succeeded`
+ * already carries `data.sessionID` for free — no extra hook registration needed),
  * overwriting any previous value: this is a LIVE "what's the current
  * opencode session id" fact, same posture as `cwd_changed`/`git_branch`
  * above, not a one-time announcement. Only opencode currently produces this

@@ -118,6 +118,25 @@ describe("mapOpenCodeEvent (opencode v2 events)", () => {
       expect(mapOpenCodeEvent(ev("session.execution.failed", { sessionID: "s" }))).toBeNull();
     });
 
+    it("clears a pending question when the turn fails or is interrupted (no form.replied will ever arrive)", () => {
+      const form = { sessionID: "s", title: "Q", metadata: { kind: "question" }, fields: [] };
+      for (const type of ["session.execution.failed", "session.execution.interrupted"]) {
+        const state = createMapState();
+        mapOpenCodeEvent(ev("form.created", { form }), undefined, null, state);
+        const out = mapOpenCodeEvent(
+          ev(type, { sessionID: "s", reason: "user", error: { type: "E", message: "m" } }),
+          undefined,
+          null,
+          state,
+        )!;
+        expect(out).toContainEqual({ kind: "question", state: "finished" });
+        // and only once
+        expect(
+          mapOpenCodeEvent(ev("form.replied", { sessionID: "s" }), undefined, null, state),
+        ).toBeNull();
+      }
+    });
+
     // 1.x skipped MessageAbortedError; in v2 a user abort is its own event
     // and is deliberately not attention-worthy.
     it("does not map session.execution.interrupted (a user abort isn't attention-worthy)", () => {
@@ -909,6 +928,18 @@ describe("mapToolExecuteAfter (issue: sidebar worktree detection; v2 `shell` too
     ).toBeNull();
   });
 
+  it("resolves a RELATIVE workdir against the session directory, not the plugin process's cwd", () => {
+    expect(
+      mapToolExecuteAfter(
+        shell("git worktree add -b feat/x wt main", { workdir: "sub" }),
+        "/home/user/project",
+      ),
+    ).toEqual([
+      { kind: "cwd_changed", cwd: "/home/user/project/sub/wt" },
+      { kind: "git_branch", branch: "feat/x", worktree: "/home/user/project/sub/wt" },
+    ]);
+  });
+
   it("returns null for a missing/malformed event or command", () => {
     expect(mapToolExecuteAfter(null, "/p")).toBeNull();
     expect(mapToolExecuteAfter(undefined, "/p")).toBeNull();
@@ -1229,6 +1260,21 @@ describe("MullionHookEmitter.setup (opencode v2 plugin)", () => {
       // idempotent — setup may run per Location, and a request may re-run the hook
       fake.sessionHooks.get("context")!(context);
       expect(context.system).toHaveLength(3);
+    });
+
+    it("reads the instruction files once, not on every model request", async () => {
+      await listen();
+      const a = path.join(dir, "once.md");
+      writeFileSync(a, "first read");
+      process.env.MULLION_OPENCODE_INSTRUCTIONS = JSON.stringify([a]);
+      const fake = createFakeCtx();
+      await start(fake);
+
+      fake.sessionHooks.get("context")!({ system: [] });
+      writeFileSync(a, "changed on disk");
+      const second = { system: [] as Array<{ type: string; text: string }> };
+      fake.sessionHooks.get("context")!(second);
+      expect(second.system).toEqual([{ type: "text", text: "first read" }]);
     });
   });
 

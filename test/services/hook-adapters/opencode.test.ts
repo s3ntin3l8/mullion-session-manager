@@ -240,6 +240,12 @@ describe("opencodeStandaloneTransform", () => {
     );
   });
 
+  it("is idempotent even when --standalone isn't right after the program token", () => {
+    expect(opencodeStandaloneTransform("opencode --model a/b --standalone")).toBe(
+      "opencode --model a/b --standalone",
+    );
+  });
+
   it("leaves a command that attaches to a server (--server) alone", () => {
     expect(opencodeStandaloneTransform("opencode --server http://127.0.0.1:4000")).toBe(
       "opencode --server http://127.0.0.1:4000",
@@ -570,6 +576,17 @@ describe("openCodeAdapter.prepareLaunch — per-project skill/reviewer (PR-5)", 
       },
     });
     expect(plan.settingsFiles?.some((f) => f.path.endsWith("my-project-reviewer.md"))).toBe(false);
+  });
+
+  it("never lets a reviewer named like an existing agents entry (e.g. title) overwrite it", () => {
+    const plan = openCodeAdapter.prepareLaunch({
+      ...ctx,
+      smallModel: "anthropic/claude-haiku-5-5",
+      projectReviewerAgent: "---\nname: title\ndescription: x\n---\nbody",
+    });
+    expect(JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT).agents).toEqual({
+      title: { model: "anthropic/claude-haiku-5-5" },
+    });
   });
 
   it("puts the title model and the reviewer agent in the same agents map", () => {

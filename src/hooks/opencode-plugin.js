@@ -163,7 +163,7 @@ function mapOpenCodeEvent(
     const error = data.error;
     if (!error || typeof error !== "object") return null;
     const errorType = nonEmptyString(error.type) ? error.type : "error";
-    return [
+    const messages = [
       {
         kind: "tool_failure",
         tool: "opencode",
@@ -171,6 +171,19 @@ function mapOpenCodeEvent(
         summary: nonEmptyString(error.message) ? error.message : errorType,
       },
     ];
+    // A turn that dies with a question still pending will never see its
+    // form.replied/cancelled — don't leave "awaiting answer" latched.
+    if (nonEmptyString(sessionID) && state.questionSessions.delete(sessionID)) {
+      messages.push({ kind: "question", state: "finished" });
+    }
+    return messages;
+  }
+  if (type === "session.execution.interrupted") {
+    // Same pending-question cleanup (e.g. Esc while a question form is open).
+    if (nonEmptyString(sessionID) && state.questionSessions.delete(sessionID)) {
+      return [{ kind: "question", state: "finished" }];
+    }
+    return null;
   }
   // A rate-limit/provider backoff is a stall worth surfacing as progress.
   // NOTE: the backend's `progress` phase is a CLOSED enum
@@ -409,7 +422,16 @@ function mapToolExecuteAfter(event, fallbackCwd) {
 
   const command = event.input?.command;
   if (typeof command !== "string" || command.length === 0) return null;
-  const cwd = nonEmptyString(event.input?.workdir) ? event.input.workdir : fallbackCwd;
+  // A relative `workdir` is relative to the SESSION's directory, not this
+  // plugin process's cwd.
+  let cwd = fallbackCwd;
+  if (nonEmptyString(event.input?.workdir)) {
+    const workdir = event.input.workdir;
+    cwd =
+      path.isAbsolute(workdir) || !nonEmptyString(fallbackCwd)
+        ? workdir
+        : path.resolve(fallbackCwd, workdir);
+  }
 
   // git worktree add — extracts cwd_changed + git_branch with worktree path
   let worktreeResult = null;
@@ -662,6 +684,7 @@ const MullionHookEmitter = {
     const baseCwd = ctx.location?.directory;
     const abort = new AbortController();
     const registrations = [];
+    let instructionTexts = null;
 
     const forward = (messages) => {
       if (messages) for (const msg of messages) sender.send(msg);
@@ -674,7 +697,11 @@ const MullionHookEmitter = {
         for await (const event of ctx.event.subscribe({ signal: abort.signal })) {
           try {
             assistantText.observe(event, state);
-            forward(mapOpenCodeEvent(event, baseCwd, assistantText.current(), state));
+            // The reconstructed text is only used by the turn-end message —
+            // don't sort/join it on every high-frequency event.
+            const text =
+              event?.type === "session.execution.succeeded" ? assistantText.current() : null;
+            forward(mapOpenCodeEvent(event, baseCwd, text, state));
           } catch {
             // one malformed event must never end the stream
           }
@@ -723,7 +750,10 @@ const MullionHookEmitter = {
     if (nonEmptyString(process.env.MULLION_OPENCODE_INSTRUCTIONS)) {
       registrations.push(
         await ctx.session.hook("context", (event) => {
-          for (const text of readInstructionTexts()) {
+          // The files never change after spawn — read them once, not on
+          // every model request.
+          instructionTexts ??= readInstructionTexts();
+          for (const text of instructionTexts) {
             if (!event.system.some((part) => part?.text === text)) {
               event.system.push({ type: "text", text });
             }

@@ -330,7 +330,9 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
   if (ctx.smallModel) agents.title = { model: ctx.smallModel };
   if (ctx.injectMullionBundle && ctx.projectReviewerAgent) {
     const reviewer = deriveOpenCodeReviewerAgentConfig(ctx.projectReviewerAgent);
-    if (reviewer) agents[reviewer.name] = reviewer.config;
+    // Never clobber an entry set above (e.g. a reviewer named `title` would
+    // otherwise replace the user's small-model setting).
+    if (reviewer && !(reviewer.name in agents)) agents[reviewer.name] = reviewer.config;
   }
   if (Object.keys(agents).length > 0) configContent.agents = agents;
 
@@ -431,7 +433,7 @@ const OPENCODE_SUBCOMMANDS = new Set([
 export function opencodeStandaloneTransform(command: string): string {
   // `--server <url>` attaches to an existing server; `--standalone` would
   // contradict it (and the plugin/config then live in that server anyway).
-  if (/(?:^|\s)--server(?:\s|=)/.test(command)) return command;
+  if (/(?:^|\s)--(?:server(?:\s|=)|standalone(?:\s|$))/.test(command)) return command;
   const m = /^(\s*(?:\S*\/)?opencode)(?=\s|$)(\s+(\S+))?/.exec(command);
   if (!m) return command;
   const next = m[3];
