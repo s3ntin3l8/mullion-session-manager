@@ -25,6 +25,12 @@ export function createFakeCtx(directory = "/work/dir") {
   const tools: FakeTool[] = [];
   const toolHooks = new Map<string, (event: unknown) => unknown>();
   const sessionHooks = new Map<string, (event: unknown) => unknown>();
+  const permissionReplies: Array<{
+    sessionID: string;
+    requestID: string;
+    decision: string;
+    message?: string;
+  }> = [];
 
   const registration = (): FakeRegistration => {
     const reg: FakeRegistration = {
@@ -70,6 +76,16 @@ export function createFakeCtx(directory = "/work/dir") {
         return registration();
       },
     },
+    permission: {
+      reply: async (input: {
+        sessionID: string;
+        requestID: string;
+        decision: string;
+        message?: string;
+      }) => {
+        permissionReplies.push(input);
+      },
+    },
     session: {
       hook: async (name: string, callback: (event: unknown) => unknown) => {
         sessionHooks.set(name, callback);
@@ -83,6 +99,7 @@ export function createFakeCtx(directory = "/work/dir") {
     tools,
     toolHooks,
     sessionHooks,
+    permissionReplies,
     registrations,
     /** Delivers one event to the plugin's subscription loop. */
     push(event: unknown) {

@@ -28,11 +28,15 @@
 //    under the default shared background service they would be wrong.
 //  - the bash tool is now `shell` (`input.command`/`input.workdir`).
 //
-// Only non-blocking events are forwarded. The real gating hook,
-// `ctx.permission.hook("evaluate")`, is deliberately not wired up yet (issue
-// #178, same reasoning as Claude Code's deferred PreToolUse): with no
-// endpoint to answer a gate decision, a blocking hook would hang every gated
-// action instead of just not being there.
+// Remote approval (issues #264 / #1594): the plugin never blocks opencode.
+// `ctx.permission.hook("evaluate")` is NOT wired — a blocking hook would hang
+// every gated action with no timeout. Instead, when opencode itself asks
+// (`permission.asked`, i.e. a rule resolved to "ask"), the native permission
+// dock stays up AND a Mullion review gate opens in parallel; Approve/Deny in
+// Mullion answers the pending request through `ctx.permission.reply`, and an
+// answer given in the TUI (`permission.replied`) lapses the gate. Whichever
+// side answers first wins; a gate timeout or no answer simply leaves opencode's
+// own dock in charge.
 
 import net from "node:net";
 import path from "node:path";
@@ -607,6 +611,115 @@ function promoteRequest(summary, suggestedBaseRef, signal) {
   });
 }
 
+/**
+ * Opens a one-shot connection to the hook socket with a `review_gate` message
+ * and waits for Mullion's decision (issue #1594) — the permission-prompt
+ * counterpart to promoteRequest. Resolves the backend's `{decision, reason?}`
+ * reply, or `null` for every non-answer (no env, timeout, error, close,
+ * malformed reply, or `signal` abort), in which case opencode's own dock
+ * stays in charge. Never rejects. Destroying the socket (abort) is also what
+ * tells the backend to lapse the gate. */
+function reviewGateRequest(prompt, gateId, signal) {
+  const socketPath = process.env.MULLION_HOOK_SOCKET;
+  const token = process.env.MULLION_HOOK_TOKEN;
+  if (!socketPath || !token) return Promise.resolve(null);
+
+  return new Promise((resolve) => {
+    const socket = net.createConnection(socketPath);
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(result);
+    };
+    const timer = setTimeout(() => finish(null), 285_000);
+    if (signal) {
+      if (signal.aborted) finish(null);
+      else signal.addEventListener("abort", () => finish(null), { once: true });
+    }
+
+    let buffer = "";
+    socket.on("data", (chunk) => {
+      buffer += chunk.toString("utf8");
+      const newlineIndex = buffer.indexOf("\n");
+      if (newlineIndex === -1) return;
+      try {
+        finish(JSON.parse(buffer.slice(0, newlineIndex)));
+      } catch {
+        finish(null);
+      }
+    });
+    socket.on("error", () => finish(null));
+    socket.on("close", () => finish(null));
+    socket.once("connect", () => {
+      socket.write(`${JSON.stringify({ token })}\n`);
+      socket.write(
+        `${JSON.stringify({ kind: "review_gate", state: "waiting", prompt, gateId })}\n`,
+      );
+    });
+  });
+}
+
+/** Per-instance bookkeeping for the review gates opened on `permission.asked`
+ * (issue #1594): one gate per pending opencode request id, answered via
+ * `reply(sessionID, requestID, "once" | "reject", message?)` and lapsed when the request
+ * is answered elsewhere or the plugin is torn down. */
+function createPermissionGates(reply) {
+  const pending = new Map();
+
+  function close(requestID) {
+    const abort = pending.get(requestID);
+    if (!abort) return;
+    pending.delete(requestID);
+    abort.abort();
+  }
+
+  return {
+    /** `permission.asked` -> open a gate for the request. */
+    open(data) {
+      const requestID = data?.id;
+      const sessionID = data?.sessionID;
+      if (!nonEmptyString(requestID) || !nonEmptyString(sessionID) || pending.has(requestID))
+        return;
+      const abort = new AbortController();
+      pending.set(requestID, abort);
+      const prompt = [data.action, ...(Array.isArray(data.resources) ? data.resources : [])]
+        .filter(nonEmptyString)
+        .join(" ")
+        .slice(0, 500);
+      void reviewGateRequest(prompt || "permission request", requestID, abort.signal).then(
+        async (decision) => {
+          if (abort.signal.aborted || pending.get(requestID) !== abort) return;
+          pending.delete(requestID);
+          try {
+            if (decision?.decision === "approved") await reply(sessionID, requestID, "once");
+            else if (decision?.decision === "denied") {
+              await reply(
+                sessionID,
+                requestID,
+                "reject",
+                nonEmptyString(decision.reason) ? decision.reason : undefined,
+              );
+            }
+            // anything else (no_response / null): opencode's own dock decides
+          } catch {
+            // already answered in the TUI, or the request is gone
+          }
+        },
+      );
+    },
+    /** `permission.replied` -> the request was answered; lapse its gate. */
+    replied(data) {
+      close(data?.requestID);
+    },
+    closeAll() {
+      for (const id of [...pending.keys()]) close(id);
+    },
+  };
+}
+
 const PROMOTE_TOOL_DESCRIPTION =
   "Move the current session's work into a new, isolated git worktree. Blocks until a " +
   "human approves or declines the request. On approval, this session ends and a new one " +
@@ -685,6 +798,12 @@ const MullionHookEmitter = {
     const abort = new AbortController();
     const registrations = [];
     let instructionTexts = null;
+    // The plugin client's `session.permission.reply` takes one flat object:
+    // both route params (`sessionID`, `requestID`) and the body (`decision`,
+    // optional `message`) — verified live against 2.0.29.
+    const permissionGates = createPermissionGates((sessionID, requestID, decision, message) =>
+      ctx.permission.reply({ sessionID, requestID, decision, ...(message ? { message } : {}) }),
+    );
 
     const forward = (messages) => {
       if (messages) for (const msg of messages) sender.send(msg);
@@ -697,6 +816,8 @@ const MullionHookEmitter = {
         for await (const event of ctx.event.subscribe({ signal: abort.signal })) {
           try {
             assistantText.observe(event, state);
+            if (event?.type === "permission.asked") permissionGates.open(event.data);
+            else if (event?.type === "permission.replied") permissionGates.replied(event.data);
             // The reconstructed text is only used by the turn-end message —
             // don't sort/join it on every high-frequency event.
             const text =
@@ -764,6 +885,7 @@ const MullionHookEmitter = {
 
     return async () => {
       abort.abort();
+      permissionGates.closeAll();
       for (const registration of registrations) {
         try {
           await registration?.dispose?.();
@@ -779,6 +901,8 @@ MullionHookEmitter.mapOpenCodeEvent = mapOpenCodeEvent;
 MullionHookEmitter.createMapState = createMapState;
 MullionHookEmitter.createAssistantTextTracker = createAssistantTextTracker;
 MullionHookEmitter.promoteRequest = promoteRequest;
+MullionHookEmitter.reviewGateRequest = reviewGateRequest;
+MullionHookEmitter.createPermissionGates = createPermissionGates;
 MullionHookEmitter.readInstructionTexts = readInstructionTexts;
 MullionHookEmitter.parseGitWorktreeAdd = parseWorktreeAddCommand;
 MullionHookEmitter.parseGitCheckout = parseGitCheckoutCommand;

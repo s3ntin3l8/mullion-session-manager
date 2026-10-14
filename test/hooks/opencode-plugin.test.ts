@@ -1389,9 +1389,13 @@ describe("mapOpenCodeEvent emits capability parity (issue: extend surfaced sessi
     const producible = driveAll();
     // cwd_changed/git_branch also come from the tool hook, agent_session etc. from events above
     for (const kind of OPENCODE_EMITS) {
-      if (kind === "promote_request") continue;
+      if (kind === "promote_request" || kind === "review_gate") continue;
       expect(producible).toContain(kind);
     }
+  });
+
+  it("review_gate (opened by the plugin's permission gate, not mapped) is declared in emits", () => {
+    expect(openCodeAdapter.emits).toContain("review_gate");
   });
 
   it("promote_request (the plugin's own tool, not an event type) is declared in emits", () => {
@@ -1410,5 +1414,220 @@ describe("mapOpenCodeEvent emits capability parity (issue: extend surfaced sessi
         expect(openCodeAdapter.emits).toContain(msg.kind);
       }
     }
+  });
+});
+
+describe("permission review gates (issue #1594)", () => {
+  let dir: string;
+  let server: net.Server;
+  let sockets: net.Socket[] = [];
+  let cleanup: (() => Promise<void> | void) | undefined;
+  /** Every JSON line the plugin sent on a gate connection (not the shared sender). */
+  let gateConnections: Array<{ socket: net.Socket; lines: Array<Record<string, unknown>> }> = [];
+  let closedGateConnections = 0;
+
+  beforeEach(async () => {
+    dir = mkdtempSync(path.join(os.tmpdir(), "mullion-opencode-gate-"));
+    const socketPath = path.join(dir, "hooks.sock");
+    server = net.createServer((socket) => {
+      sockets.push(socket);
+      const conn = { socket, lines: [] as Array<Record<string, unknown>> };
+      let buffer = "";
+      socket.on("data", (chunk: Buffer) => {
+        buffer += chunk.toString("utf8");
+        let idx = buffer.indexOf("\n");
+        while (idx !== -1) {
+          conn.lines.push(JSON.parse(buffer.slice(0, idx)));
+          buffer = buffer.slice(idx + 1);
+          idx = buffer.indexOf("\n");
+        }
+        if (conn.lines.some((l) => l.kind === "review_gate") && !gateConnections.includes(conn)) {
+          gateConnections.push(conn);
+        }
+      });
+      socket.on("close", () => {
+        if (gateConnections.includes(conn)) closedGateConnections++;
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(socketPath, () => resolve()));
+    process.env.MULLION_HOOK_SOCKET = socketPath;
+    process.env.MULLION_HOOK_TOKEN = "tok-gate";
+  });
+
+  afterEach(async () => {
+    await cleanup?.();
+    cleanup = undefined;
+    for (const s of sockets) s.destroy();
+    sockets = [];
+    gateConnections = [];
+    closedGateConnections = 0;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    rmSync(dir, { recursive: true, force: true });
+    delete process.env.MULLION_HOOK_SOCKET;
+    delete process.env.MULLION_HOOK_TOKEN;
+  });
+
+  async function until(cond: () => boolean): Promise<void> {
+    for (let i = 0; i < 100 && !cond(); i++) await new Promise((r) => setTimeout(r, 10));
+    expect(cond()).toBe(true);
+  }
+
+  const asked = (id: string) =>
+    ev("permission.asked", { id, sessionID: "s", action: "shell", resources: ["rm -rf build"] });
+
+  async function boot() {
+    const fake = createFakeCtx();
+    cleanup = (await MullionHookEmitter.setup(fake.ctx)) as typeof cleanup;
+    return fake;
+  }
+
+  it("opens a review_gate carrying the opencode request id and the action + resource", async () => {
+    const fake = await boot();
+    fake.push(asked("per_1"));
+    await until(() => gateConnections.length === 1);
+    const lines = gateConnections[0].lines;
+    expect(lines[0]).toEqual({ token: "tok-gate" });
+    expect(lines.find((l) => l.kind === "review_gate")).toEqual({
+      kind: "review_gate",
+      state: "waiting",
+      prompt: "shell rm -rf build",
+      gateId: "per_1",
+    });
+  });
+
+  it("an approved decision answers the pending request with reply 'once'", async () => {
+    const fake = await boot();
+    fake.push(asked("per_1"));
+    await until(() => gateConnections.length === 1);
+    gateConnections[0].socket.write(JSON.stringify({ decision: "approved" }) + "\n");
+    await until(() => fake.permissionReplies.length === 1);
+    expect(fake.permissionReplies[0]).toEqual({
+      sessionID: "s",
+      requestID: "per_1",
+      decision: "once",
+    });
+  });
+
+  it("a denied decision rejects with the reason as the message", async () => {
+    const fake = await boot();
+    fake.push(asked("per_2"));
+    await until(() => gateConnections.length === 1);
+    gateConnections[0].socket.write(
+      JSON.stringify({ decision: "denied", reason: "too risky" }) + "\n",
+    );
+    await until(() => fake.permissionReplies.length === 1);
+    expect(fake.permissionReplies[0]).toEqual({
+      sessionID: "s",
+      requestID: "per_2",
+      decision: "reject",
+      message: "too risky",
+    });
+  });
+
+  it("a denied decision without a reason rejects with no message", async () => {
+    const fake = await boot();
+    fake.push(asked("per_3"));
+    await until(() => gateConnections.length === 1);
+    gateConnections[0].socket.write(JSON.stringify({ decision: "denied" }) + "\n");
+    await until(() => fake.permissionReplies.length === 1);
+    expect(fake.permissionReplies[0]).toEqual({
+      sessionID: "s",
+      requestID: "per_3",
+      decision: "reject",
+    });
+  });
+
+  it("no_response leaves opencode's own dock in charge (no reply is sent)", async () => {
+    const fake = await boot();
+    fake.push(asked("per_4"));
+    await until(() => gateConnections.length === 1);
+    gateConnections[0].socket.write(JSON.stringify({ decision: "no_response" }) + "\n");
+    await new Promise((r) => setTimeout(r, 60));
+    expect(fake.permissionReplies).toHaveLength(0);
+  });
+
+  it("an answer given in the TUI (permission.replied) closes the gate connection", async () => {
+    const fake = await boot();
+    fake.push(asked("per_5"));
+    await until(() => gateConnections.length === 1);
+    fake.push(ev("permission.replied", { sessionID: "s", requestID: "per_5", reply: "once" }));
+    await until(() => closedGateConnections === 1);
+    expect(fake.permissionReplies).toHaveLength(0);
+  });
+
+  it("a duplicate permission.asked for the same request opens only one gate", async () => {
+    const fake = await boot();
+    fake.push(asked("per_6"));
+    fake.push(asked("per_6"));
+    await until(() => gateConnections.length === 1);
+    await new Promise((r) => setTimeout(r, 60));
+    expect(gateConnections).toHaveLength(1);
+  });
+
+  it("ignores a permission.asked without a session id (it could not be answered)", async () => {
+    const fake = await boot();
+    fake.push(ev("permission.asked", { id: "per_x", action: "shell", resources: ["ls"] }));
+    await new Promise((r) => setTimeout(r, 60));
+    expect(gateConnections).toHaveLength(0);
+  });
+
+  it("ignores a permission.asked without a request id", async () => {
+    const fake = await boot();
+    fake.push(ev("permission.asked", { action: "shell", resources: ["ls"] }));
+    await new Promise((r) => setTimeout(r, 60));
+    expect(gateConnections).toHaveLength(0);
+  });
+
+  it("a reject that opencode cascades to the session's other pending requests closes their gates too", async () => {
+    const fake = await boot();
+    fake.push(asked("per_a"));
+    fake.push(asked("per_b"));
+    await until(() => gateConnections.length === 2);
+    gateConnections[0].socket.write(JSON.stringify({ decision: "denied" }) + "\n");
+    await until(() => fake.permissionReplies.length === 1);
+    // opencode publishes permission.replied for the sibling it also rejected
+    fake.push(ev("permission.replied", { sessionID: "s", requestID: "per_b", reply: "reject" }));
+    await until(() => closedGateConnections === 2);
+  });
+
+  it("plugin cleanup closes every pending gate", async () => {
+    const fake = await boot();
+    fake.push(asked("per_7"));
+    await until(() => gateConnections.length === 1);
+    await cleanup?.();
+    cleanup = undefined;
+    await until(() => closedGateConnections === 1);
+  });
+
+  it("swallows a failing permission.reply (already answered in the TUI)", async () => {
+    const fake = await boot();
+    (fake.ctx.permission as { reply: unknown }).reply = async () => {
+      throw new Error("NotFound");
+    };
+    fake.push(asked("per_8"));
+    await until(() => gateConnections.length === 1);
+    gateConnections[0].socket.write(JSON.stringify({ decision: "approved" }) + "\n");
+    await new Promise((r) => setTimeout(r, 60));
+    // no unhandled rejection / crash: a later gate still works
+    fake.push(asked("per_9"));
+    await until(() => gateConnections.length === 2);
+  });
+
+  it("reviewGateRequest resolves null on a malformed reply", async () => {
+    const pending = MullionHookEmitter.reviewGateRequest("p", "g1");
+    await until(() => gateConnections.length === 1);
+    gateConnections[0].socket.write("not json\n");
+    await expect(pending).resolves.toBeNull();
+  });
+
+  it("reviewGateRequest resolves null without hook env", async () => {
+    delete process.env.MULLION_HOOK_SOCKET;
+    await expect(MullionHookEmitter.reviewGateRequest("p", "g1")).resolves.toBeNull();
+  });
+
+  it("reviewGateRequest resolves null immediately for an already-aborted signal", async () => {
+    const abort = new AbortController();
+    abort.abort();
+    await expect(MullionHookEmitter.reviewGateRequest("p", "g1", abort.signal)).resolves.toBeNull();
   });
 });
