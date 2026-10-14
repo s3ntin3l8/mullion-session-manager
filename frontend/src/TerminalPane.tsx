@@ -338,6 +338,8 @@ export function TerminalPane(props: {
   // primitive dep).
   const [fitRetryTick, setFitRetryTick] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // True while a file is dragged over the pane (desktop drop-to-attach).
+  const [dragActive, setDragActive] = useState(false);
   // Exposes the mount effect's own upload-and-inject logic to the "attach
   // image" button's file input handler below, same pattern as retryRef/
   // pasteHandlerRef — the button lives in this component's render, but the
@@ -1182,6 +1184,9 @@ export function TerminalPane(props: {
       paste: () => {
         term.focus();
         pasteHandlerRef.current();
+      },
+      attachImage: () => {
+        if (inputAffordancesRef.current) fileInputRef.current?.click();
       },
       // Opens the copy / scrollback sheet — the mobile Copy key-bar
       // button's entry. The touch long-press and the Find bar's "view as
@@ -2241,6 +2246,18 @@ export function TerminalPane(props: {
     return () => clearTimeout(timer);
   }, [uploadState]);
 
+  // Desktop drop-to-attach. Any file drag is claimed (preventDefault) so a
+  // stray drop never navigates the page; only where the attach affordances are
+  // enabled (read via the ref, like attachImage) does it highlight and upload.
+  const isFileDrag = (e: React.DragEvent) => e.dataTransfer.types.includes("Files");
+  const onFileDrag = (e: React.DragEvent) => {
+    if (!isFileDrag(e)) return;
+    e.preventDefault();
+    if (!inputAffordancesRef.current) return;
+    e.dataTransfer.dropEffect = "copy";
+    setDragActive(true);
+  };
+
   return (
     <div
       style={{
@@ -2259,7 +2276,21 @@ export function TerminalPane(props: {
         // terminal to a finger, so no native panning/pull-to-refresh there.
         touchAction: "pinch-zoom",
       }}
+      onDragEnter={onFileDrag}
+      onDragOver={onFileDrag}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragActive(false);
+      }}
+      onDrop={(e) => {
+        if (!isFileDrag(e)) return;
+        e.preventDefault();
+        setDragActive(false);
+        if (!inputAffordancesRef.current) return;
+        const file = Array.from(e.dataTransfer.files).find((f) => f.type.startsWith("image/"));
+        if (file) uploadImageRef.current(file);
+      }}
     >
+      {dragActive && <div className="terminal-drop-overlay">Drop image to attach</div>}
       {
         // Issue #91's padding is an absolute inset, NOT CSS padding on this
         // div: FitAddon.proposeDimensions() measures the computed
@@ -2303,10 +2334,11 @@ export function TerminalPane(props: {
           if (file) uploadImageRef.current(file);
         }}
       />
-      {(props.inputAffordances ?? true) && (
+      {(props.inputAffordances ?? true) && !isCoarsePointer && (
         <button
           className="pane-tab-btn terminal-attach-image-btn"
-          title="Attach image"
+          title="Attach image (or paste / drop one)"
+          aria-label="Attach image"
           onClick={() => fileInputRef.current?.click()}
         >
           <ImageIcon size={14} />

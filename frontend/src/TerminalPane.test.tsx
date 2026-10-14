@@ -2067,6 +2067,50 @@ describe("TerminalPane image paste/upload (issue #68)", () => {
     });
   });
 
+  it("uploads an image file dropped onto the pane and ignores non-image drops", async () => {
+    stubFakeWebSocket(true);
+    vi.mocked(api.uploadSessionImage).mockResolvedValue({ path: "/cwd/.mullion-uploads/d.png" });
+
+    const { container } = renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    const pane = container.firstElementChild as HTMLElement;
+
+    const text = new File(["x"], "notes.txt", { type: "text/plain" });
+    fireEvent.drop(pane, { dataTransfer: { types: ["Files"], files: [text] } });
+    expect(api.uploadSessionImage).not.toHaveBeenCalled();
+
+    fireEvent.dragEnter(pane, { dataTransfer: { types: ["Files"], files: [] } });
+    expect(screen.getByText("Drop image to attach")).toBeInTheDocument();
+
+    const img = new File(["fake"], "photo.png", { type: "image/png" });
+    fireEvent.drop(pane, { dataTransfer: { types: ["Files"], files: [img] } });
+    await waitFor(() => expect(api.uploadSessionImage).toHaveBeenCalledWith(1, img));
+    expect(screen.queryByText("Drop image to attach")).not.toBeInTheDocument();
+  });
+
+  it("swallows file drops (no navigation) but never uploads when inputAffordances is false", async () => {
+    stubFakeWebSocket(true);
+    const { container } = renderPane({ inputAffordances: false });
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    const img = new File(["fake"], "photo.png", { type: "image/png" });
+    const notPrevented = fireEvent.drop(container.firstElementChild as HTMLElement, {
+      dataTransfer: { types: ["Files"], files: [img] },
+    });
+    expect(notPrevented).toBe(false);
+    expect(api.uploadSessionImage).not.toHaveBeenCalled();
+    expect(screen.queryByText("Drop image to attach")).not.toBeInTheDocument();
+  });
+
+  it("ignores non-file drags", async () => {
+    stubFakeWebSocket(true);
+    const { container } = renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    fireEvent.dragEnter(container.firstElementChild as HTMLElement, {
+      dataTransfer: { types: ["text/plain"], files: [] },
+    });
+    expect(screen.queryByText("Drop image to attach")).not.toBeInTheDocument();
+  });
+
   it("shows an error toast when the upload fails", async () => {
     stubFakeWebSocket(true);
     vi.mocked(api.uploadSessionImage).mockRejectedValue(new Error("network error"));
@@ -4166,13 +4210,13 @@ describe("TerminalPane inputAffordances (PR3 — dock monitor terminal chrome)",
 
   it("renders the attach-image button and the mic button by default", () => {
     renderPane();
-    expect(screen.getByTitle("Attach image")).toBeInTheDocument();
+    expect(screen.getByTitle("Attach image (or paste / drop one)")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /dictation/i })).toBeInTheDocument();
   });
 
   it("hides both the attach-image button and the mic button when inputAffordances is false — a dock monitor's log stream has no interactive CLI to paste into or dictate to", () => {
     renderPane({ inputAffordances: false });
-    expect(screen.queryByTitle("Attach image")).not.toBeInTheDocument();
+    expect(screen.queryByTitle("Attach image (or paste / drop one)")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /dictation/i })).not.toBeInTheDocument();
   });
 
@@ -4447,6 +4491,40 @@ describe("TerminalPane key-bar handle: arrows, sticky Ctrl, paste, copy view", (
 
     onData("c");
     expect(sentText().at(-1)).toBe("\x03");
+  });
+});
+
+describe("TerminalPane attach-image on a coarse pointer (moves into the key bar)", () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({
+        matches: query === "(pointer: coarse)",
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+  });
+
+  it("hides the corner button and opens the file picker via the input handle", () => {
+    stubFakeWebSocket(true);
+    const { container } = renderPane();
+    expect(document.querySelector(".terminal-attach-image-btn")).toBeNull();
+
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const click = vi.spyOn(input, "click");
+    vi.mocked(registerTerminalInput).mock.calls[0]![1].attachImage();
+    expect(click).toHaveBeenCalledTimes(1);
+  });
+
+  it("attachImage is inert when inputAffordances is false", () => {
+    stubFakeWebSocket(true);
+    const { container } = renderPane({ inputAffordances: false });
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const click = vi.spyOn(input, "click");
+    vi.mocked(registerTerminalInput).mock.calls[0]![1].attachImage();
+    expect(click).not.toHaveBeenCalled();
   });
 });
 

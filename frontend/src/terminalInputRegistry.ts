@@ -43,6 +43,9 @@ export interface TerminalInputHandle {
   // Same clipboard path as Cmd+V (image-first, bracketed paste, trailing
   // newline stripped) — see TerminalPane.tsx's pasteHandlerRef.
   paste: () => void;
+  // Opens the image file picker (the same hidden input the desktop corner
+  // button uses) — the mobile key bar's attach-image entry.
+  attachImage: () => void;
   // Opens the copy view: the buffer as plain, natively selectable text
   // (xterm has no touch selection of its own).
   openCopyMode: () => void;

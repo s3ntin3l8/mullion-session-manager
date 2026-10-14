@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
-import { ChevronDownIcon, OverflowIcon } from "./ui/icons.js";
+import { ChevronDownIcon, CopyIcon, ImageIcon, OverflowIcon, PasteIcon } from "./ui/icons.js";
 import { getTerminalInputHandle, useTerminalInputHandle } from "./terminalInputRegistry.js";
 import type { CtrlModifierMode, TerminalInputHandle } from "./terminalInputRegistry.js";
 import { nextCtrlMode } from "./lib/ctrlModifier.js";
@@ -16,7 +16,7 @@ import { readBool, STORAGE_KEYS, writeBool } from "./lib/persistedState.js";
 // Layout (mobile UI overhaul, phase 3): fixed rows of equal-width keys that
 // always fit the screen — never a horizontally scrolling strip whose tail
 // keys end up off-screen. Row 1 holds the everyday keys plus the dictation
-// mic and a ⋯ toggle; ⋯ reveals row 2 with the rest (remembered per device).
+// mic, attach-image and a ⋯ toggle; ⋯ reveals row 2 with the rest (remembered per device).
 //
 // Rendered by App.tsx only when the active mobile pane is a terminal
 // session; `sessionId` is that session's id, used to look up its live
@@ -78,8 +78,8 @@ const ROW2: KeyBarKey[] = [
   { label: left, ariaLabel: "Arrow left", send: (h) => h.sendArrow("left") },
   { label: right, ariaLabel: "Arrow right", send: (h) => h.sendArrow("right") },
   { label: "↵+", ariaLabel: "Newline (no submit)", send: (h) => h.sendInput("\x1b\r") },
-  { label: "Paste", ariaLabel: "Paste", send: (h) => h.paste() },
-  { label: "Copy", ariaLabel: "Copy text", send: (h) => h.openCopyMode() },
+  { label: <PasteIcon size={15} />, ariaLabel: "Paste", send: (h) => h.paste() },
+  { label: <CopyIcon size={15} />, ariaLabel: "Copy text", send: (h) => h.openCopyMode() },
 ];
 
 // Stable press-feedback id for the ⋯ button, whose aria-label flips
@@ -87,6 +87,7 @@ const ROW2: KeyBarKey[] = [
 // key off an id that doesn't move, or the highlight would silently stop
 // matching the moment the label is renamed or (as today) swapped.
 const MORE_KEY = "More";
+const ATTACH_KEY = "Attach image";
 
 // preventDefault on pointerdown, not just onClick, is what keeps the
 // on-screen keyboard up WHILE it's already showing: a plain click's own
@@ -223,6 +224,21 @@ export function MobileKeyBar({ sessionId }: MobileKeyBarProps) {
             onCancel={voice.cancel}
           />
         )}
+        <button
+          type="button"
+          className={`mobile-key-bar-btn${pressedKey === ATTACH_KEY ? " pressed" : ""}`}
+          aria-label="Attach image"
+          onPointerDown={(event) => {
+            keepFocus(event);
+            onKeyPressStart(ATTACH_KEY);
+          }}
+          onPointerUp={onKeyPressEnd}
+          onPointerCancel={onKeyPressEnd}
+          onPointerLeave={onKeyPressEnd}
+          onClick={() => getTerminalInputHandle(sessionId)?.attachImage()}
+        >
+          <ImageIcon size={15} />
+        </button>
         <button
           type="button"
           className={`mobile-key-bar-btn${moreOpen ? " active" : ""}${
