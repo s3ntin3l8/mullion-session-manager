@@ -89,6 +89,7 @@ export type {
   ResourceSeverity,
   DockerStorageStatus,
   DockerPruneMode,
+  TempStorageStatus,
   DockerPruneResult,
   Project,
   CreateProjectDirOptions,

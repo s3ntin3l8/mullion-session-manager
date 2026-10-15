@@ -95,6 +95,14 @@ export interface DockerPruneResult {
   error?: string;
 }
 
+export interface TempStorageStatus {
+  available: boolean;
+  root: string;
+  estimates: { safeBytes: number; aggressiveBytes: number };
+  candidates: { safe: number; aggressive: number };
+  error?: string;
+}
+
 export interface Project {
   id: number;
   name: string;

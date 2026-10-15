@@ -127,4 +127,28 @@ describe("ui/ConfirmButton", () => {
 
     expect(onConfirm).not.toHaveBeenCalled();
   });
+
+  it("shows the check icon plus armedLabel and reserves both labels' width", async () => {
+    const user = userEvent.setup();
+    const onConfirm = vi.fn();
+    render(
+      <ConfirmButton
+        onConfirm={onConfirm}
+        title="Clean"
+        armedLabel="Confirm clean"
+        variant="neutral"
+      >
+        Clean
+      </ConfirmButton>,
+    );
+    const button = screen.getByRole("button", { name: "Clean" });
+    expect(button).toHaveClass("confirm-neutral", "confirm-btn-stable");
+    expect(button).not.toHaveClass("danger");
+    await user.click(button);
+    expect(button).toHaveClass("armed");
+    expect(screen.getByRole("button", { name: /Confirm clean/ })).toBe(button);
+    expect(screen.getByText("Clean")).toBeInTheDocument();
+    await user.click(button);
+    expect(onConfirm).toHaveBeenCalledOnce();
+  });
 });

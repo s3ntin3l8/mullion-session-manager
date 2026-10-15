@@ -167,7 +167,10 @@ way as a namespaced one.
 /api/opencode/models` and `GET /api/agy/models` — bare-array model catalogs
   for the Settings model pickers, despite the route's own name only naming
   opencode), `system-resources` (Settings → Server's resource-monitoring
-  surface — CPU/memory/disk sampling and Docker storage inspection/prune),
+  surface — CPU/memory/disk sampling, Docker storage inspection/prune, and the
+  host temp-file tier in `services/temp-storage.ts` — user-owned, socket-free,
+  non-denylisted top-level `os.tmpdir()` entries by newest in-tree mtime, plus
+  `npm cache clean` in aggressive mode),
   `internal-schemas` (not a route file at all — the extracted JSON Schema
   bodies/params `internal.ts`'s DB-less agent API registers, kept out of
   `internal.ts` itself to stop ~450 lines of hand-written schema literals

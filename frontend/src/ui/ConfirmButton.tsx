@@ -14,6 +14,8 @@ export function ConfirmButton({
   skipConfirm = false,
   disabled = false,
   allowDoubleClickConfirm = false,
+  armedLabel,
+  variant = "danger",
 }: {
   onConfirm: () => void;
   title: string;
@@ -29,6 +31,15 @@ export function ConfirmButton({
   // Session kill controls enable this so a quick second click on the newly
   // armed checkmark completes the expected two-click flow.
   allowDoubleClickConfirm?: boolean;
+  // When set, the armed state shows the check icon plus this text instead of
+  // the bare icon, and the button reserves room for the wider of the two
+  // labels so arming never changes its width (and so never shifts neighbours
+  // under the cursor — a second click meant for this button can't land on a
+  // sibling that slid into its place).
+  armedLabel?: ReactNode;
+  // "neutral" keeps the arm-then-confirm flow without the destructive red
+  // styling, for actions that are deliberate but not dangerous.
+  variant?: "danger" | "neutral";
 }) {
   const [armed, setArmed] = useState(false);
 
@@ -41,7 +52,9 @@ export function ConfirmButton({
   return (
     <button
       type="button"
-      className={`danger${armed ? " armed" : ""}`}
+      className={`${variant === "neutral" ? "confirm-neutral" : "danger"}${armed ? " armed" : ""}${
+        armedLabel ? " confirm-btn-stable" : ""
+      }`}
       disabled={disabled}
       // Independent review finding (PR #435) — armed used to replace `title`
       // outright with a generic "Click again to confirm", so a
@@ -82,7 +95,20 @@ export function ConfirmButton({
         }
       }}
     >
-      {armed ? <CheckIcon size={13} /> : children}
+      {armedLabel ? (
+        <>
+          <span className="confirm-btn-label" aria-hidden={armed || undefined} data-active={!armed}>
+            {children}
+          </span>
+          <span className="confirm-btn-label" aria-hidden={!armed || undefined} data-active={armed}>
+            <CheckIcon size={13} /> {armedLabel}
+          </span>
+        </>
+      ) : armed ? (
+        <CheckIcon size={13} />
+      ) : (
+        children
+      )}
     </button>
   );
 }
