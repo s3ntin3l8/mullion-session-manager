@@ -69,9 +69,11 @@ import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./typ
 export const OPENCODE_MIN_VERSION = "2.0.29";
 
 /** The `x.y.z` triple in `opencode --version` output (e.g. "opencode v2.0.29"
- * or "1.19.0"), or null if there isn't one. */
+ * or "1.19.0"), or null if there isn't one. The LAST match wins: the probe
+ * runs in a login shell, whose profile (nvm, direnv, motd…) can print its own
+ * versions to stdout before opencode's line. */
 export function parseOpencodeVersion(output: string): string | null {
-  return /(\d+)\.(\d+)\.(\d+)/.exec(output)?.[0] ?? null;
+  return [...output.matchAll(/(\d+)\.(\d+)\.(\d+)/g)].at(-1)?.[0] ?? null;
 }
 
 function versionTuple(version: string): [number, number, number] {

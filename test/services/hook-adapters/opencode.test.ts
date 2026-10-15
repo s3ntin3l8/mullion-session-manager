@@ -1063,6 +1063,7 @@ describe("opencode version gate (issue #1593)", () => {
   it("extracts the x.y.z from varied `--version` output", () => {
     expect(parseOpencodeVersion("opencode v2.0.29\n")).toBe("2.0.29");
     expect(parseOpencodeVersion("1.19.0")).toBe("1.19.0");
+    expect(parseOpencodeVersion("Now using node v18.2.0\nopencode v2.0.29\n")).toBe("2.0.29");
     expect(parseOpencodeVersion("unknown")).toBeNull();
     expect(parseOpencodeVersion("")).toBeNull();
   });
