@@ -23,7 +23,13 @@ import type { GitHubRepoRef } from "../services/git-remote.js";
 import { resolveRepoRefResult } from "../services/host-git.js";
 import { readGitBranch } from "../services/git-branch.js";
 import { listExistingProjectRuleFileNames } from "../services/agent-rules.js";
-import { getGitStatus, isGitRepo, type GitStatus } from "../services/git-status.js";
+import {
+  getGitStatus,
+  getGitStatusFailure,
+  isGitRepo,
+  type GitStatus,
+  type GitStatusFailure,
+} from "../services/git-status.js";
 import {
   getDiffStats,
   getDefaultBaseRef,
@@ -2230,6 +2236,7 @@ export async function projectsRoute(app: FastifyInstance) {
       const sessionIds = parseIdListParam(request.query.sessionIds);
 
       const projectsResult: Record<string, GitStatus | null> = {};
+      const problemsResult: Record<string, GitStatusFailure> = {};
       if (ids.length > 0) {
         const rows = app.db.select().from(projects).where(inArray(projects.id, ids)).all();
 
@@ -2242,6 +2249,12 @@ export async function projectsRoute(app: FastifyInstance) {
             const status = await getGitStatus(project.cwd);
             if (status) {
               projectsResult[project.id] = status;
+            } else {
+              // A repo whose `git status` fails (issue #1602): left out of
+              // `projects` so the client keeps last-known-good, but the reason
+              // is reported so it can say more than "not a git repository".
+              const failure = getGitStatusFailure(project.cwd);
+              if (failure) problemsResult[project.id] = failure;
             }
           } else {
             try {
@@ -2301,7 +2314,7 @@ export async function projectsRoute(app: FastifyInstance) {
         }
       }
 
-      return { projects: projectsResult, sessions: sessionsResult };
+      return { projects: projectsResult, sessions: sessionsResult, problems: problemsResult };
     },
   );
 
@@ -2612,7 +2625,11 @@ export async function projectsRoute(app: FastifyInstance) {
           return;
         }
         const status = await getGitStatus(project.cwd, { forceFresh: request.query.fresh === "1" });
-        if (!status) return reply.serviceUnavailable("git status is temporarily unavailable");
+        if (!status) {
+          return reply.serviceUnavailable(
+            getGitStatusFailure(project.cwd)?.message ?? "git status is temporarily unavailable",
+          );
+        }
         return status;
       }
 

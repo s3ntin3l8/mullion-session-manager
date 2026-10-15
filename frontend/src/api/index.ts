@@ -144,6 +144,7 @@ export type {
   ProjectSearchListing,
   GitFileDiffResponse,
   GitStatusesBatchResult,
+  GitStatusProblem,
   GitRefsBatchResult,
   DockConfigResult,
   DockControlInput,

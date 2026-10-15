@@ -2204,7 +2204,7 @@ describe("projects route", () => {
       const app = await buildApp();
       const res = await app.inject({ method: "GET", url: "/api/projects/git-statuses" });
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toEqual({ projects: {}, sessions: {} });
+      expect(res.json()).toEqual({ projects: {}, sessions: {}, problems: {} });
       await app.close();
     });
 
@@ -2212,7 +2212,7 @@ describe("projects route", () => {
       const app = await buildApp();
       const res = await app.inject({ method: "GET", url: "/api/projects/git-statuses?ids=" });
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toEqual({ projects: {}, sessions: {} });
+      expect(res.json()).toEqual({ projects: {}, sessions: {}, problems: {} });
       await app.close();
     });
 
@@ -2328,8 +2328,47 @@ describe("projects route", () => {
         url: `/api/projects/git-statuses?ids=${projectId}`,
       });
       expect(res.statusCode).toBe(200);
-      // Project is omitted (not in response) because git status failed.
-      expect(res.json()).toEqual({ projects: {}, sessions: {} });
+      // Project is omitted from `projects` because git status failed, but the
+      // failure is reported (issue #1602).
+      const body = res.json();
+      expect(body.projects).toEqual({});
+      expect(body.problems[String(projectId)]).toMatchObject({ reason: "failed" });
+
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("reports a checkout flipped to core.bare = true as a bare-repo problem (issue #1602)", async () => {
+      const { execFileSync } = await import("node:child_process");
+      const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "batch-git-status-bare-"));
+      const run = (args: string[]) =>
+        execFileSync("git", args, { cwd: projectCwd, stdio: "pipe", env: gitEnv() });
+      run(["init", "-b", "main"]);
+      run(["config", "core.bare", "true"]);
+
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: "batch-bare-flag", cwd: projectCwd },
+      });
+      const projectId = created.json().id as number;
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/git-statuses?ids=${projectId}`,
+      });
+      const body = res.json();
+      expect(body.projects[String(projectId)]).toBeUndefined();
+      expect(body.problems[String(projectId)].reason).toBe("bare-repo");
+      expect(body.problems[String(projectId)].message).toContain("git config core.bare false");
+
+      const single = await app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/git-status`,
+      });
+      expect(single.statusCode).toBe(503);
+      expect(single.json().message).toContain("core.bare");
 
       fs.rmSync(projectCwd, { recursive: true, force: true });
       await app.close();
@@ -2355,7 +2394,7 @@ describe("projects route", () => {
       });
       expect(res.statusCode).toBe(200);
       // Remote host unreachable — project omitted from response.
-      expect(res.json()).toEqual({ projects: {}, sessions: {} });
+      expect(res.json()).toEqual({ projects: {}, sessions: {}, problems: {} });
 
       await app.close();
     });
@@ -2770,7 +2809,7 @@ describe("projects route", () => {
         url: "/api/projects/git-statuses?sessionIds=999999",
       });
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toEqual({ projects: {}, sessions: {} });
+      expect(res.json()).toEqual({ projects: {}, sessions: {}, problems: {} });
       await app.close();
     });
   });

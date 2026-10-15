@@ -10,6 +10,7 @@ import type {
   GitHubCiStatus,
   GitHubPRsStatus,
   GitStatus,
+  GitStatusProblem,
   GitPullResult,
   Group,
   Host,
@@ -197,6 +198,10 @@ export interface GitSlice {
   // single project's git status being unavailable is routine, not a signal
   // the backend itself is down.
   gitStatuses: Record<number, GitStatus | null>;
+  // Why a project's git status is unavailable although it is a repo (issue
+  // #1602). Replaced wholesale by every batch refresh — a project that
+  // recovers drops out of it.
+  gitProblems: Record<number, GitStatusProblem>;
   // Per-session git status (issue #202) — same semantics as gitStatuses
   // above, keyed by session id instead of project id. Most sessions share
   // their project's own cwd (and therefore its status); a session running

@@ -6,6 +6,7 @@ import { execFileSync } from "node:child_process";
 import {
   getGitStatus,
   isGitRepo,
+  getGitStatusFailure,
   clearGitStatusCacheForTests,
 } from "../../src/services/git-status.js";
 import { gitEnv } from "../../src/services/git-env.js";
@@ -42,6 +43,29 @@ describe("getGitStatus", () => {
 
   it("returns null for a non-git-repo directory", async () => {
     expect(await getGitStatus(tmpDir)).toBeNull();
+  });
+
+  describe("getGitStatusFailure (issue #1602)", () => {
+    it("classifies core.bare = true as bare-repo, then clears once git status works again", async () => {
+      initRepo(tmpDir);
+      git(tmpDir, ["config", "core.bare", "true"]);
+      expect(await getGitStatus(tmpDir)).toBeNull();
+      expect(getGitStatusFailure(tmpDir)).toMatchObject({ reason: "bare-repo" });
+
+      git(tmpDir, ["config", "core.bare", "false"]);
+      expect(await getGitStatus(tmpDir, { forceFresh: true })).not.toBeNull();
+      expect(getGitStatusFailure(tmpDir)).toBeNull();
+    });
+
+    it("reports other failures with git's first stderr line", async () => {
+      initRepo(tmpDir);
+      fs.unlinkSync(path.join(tmpDir, ".git", "HEAD"));
+      expect(await getGitStatus(tmpDir)).toBeNull();
+      const failure = getGitStatusFailure(tmpDir);
+      expect(failure?.reason).toBe("failed");
+      expect(failure?.message).toMatch(/^git status failed: /);
+      expect(failure!.message.length).toBeLessThanOrEqual("git status failed: ".length + 200);
+    });
   });
 
   describe("isGitRepo", () => {

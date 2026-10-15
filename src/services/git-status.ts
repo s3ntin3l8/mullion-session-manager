@@ -35,6 +35,40 @@ const GIT_TIMEOUT_MS = 5_000;
 // requests termination, it doesn't guarantee it.
 const KILL_ESCALATION_MS = 2_000;
 
+/** Why a `git status` run produced nothing, for callers that want to tell the
+ * user more than "not a git repository" (issue #1602). */
+export type GitStatusFailureReason = "bare-repo" | "timeout" | "failed";
+export interface GitStatusFailure {
+  reason: GitStatusFailureReason;
+  message: string;
+}
+
+/** `git status` exits 128 with this when `core.bare = true` is set on a
+ * checkout that has a work tree — the failure mode behind issue #1602. */
+const BARE_REPO_STDERR = "must be run in a work tree";
+
+// Last failure per cwd; cleared by the next successful run. Never grows past
+// the number of distinct project/session cwds.
+const failures = new Map<string, GitStatusFailure>();
+
+/** The most recent failure for `cwd`, or null if its last `git status`
+ * succeeded (or none has run). Only meaningful once `isGitRepo(cwd)`. */
+export function getGitStatusFailure(cwd: string): GitStatusFailure | null {
+  return failures.get(cwd) ?? null;
+}
+
+function classifyFailure(stderr: string): GitStatusFailure {
+  if (stderr.includes(BARE_REPO_STDERR)) {
+    return {
+      reason: "bare-repo",
+      message:
+        "This checkout is configured as a bare repository (core.bare = true), so git status can't run. Fix with: git config core.bare false",
+    };
+  }
+  const line = stderr.trim().split("\n")[0].slice(0, 200);
+  return { reason: "failed", message: line ? `git status failed: ${line}` : "git status failed" };
+}
+
 /** Runs `git -C <cwd> status --porcelain=v2 --branch`, capturing stdout on
  * `'close'` (not `'exit'`) — the same stdout-delivery race documented in
  * session-process.ts's isMasterAliveStateBatch and agent-detect.ts's
@@ -96,6 +130,7 @@ function runGitStatus(cwd: string): Promise<string | null> {
     const timer = setTimeout(() => {
       child.kill(); // SIGTERM
       console.debug("[git-status] git status timed out", { cwd, timeoutMs: GIT_TIMEOUT_MS });
+      failures.set(cwd, { reason: "timeout", message: "git status timed out" });
       finish(null);
       // B9 — escalate to SIGKILL if still alive after a grace period.
       // `child.killed` only reflects whether a signal was successfully
@@ -111,10 +146,15 @@ function runGitStatus(cwd: string): Promise<string | null> {
     child.on("error", (err) => {
       clearKillTimer();
       console.debug("[git-status] git status spawn error", { cwd, err: String(err) });
+      failures.set(cwd, { reason: "failed", message: "git could not be started" });
       finish(null);
     });
     child.on("close", (code) => {
       clearKillTimer();
+      if (!settled) {
+        if (code === 0) failures.delete(cwd);
+        else failures.set(cwd, classifyFailure(stderr));
+      }
       if (code !== 0) {
         console.debug("[git-status] git status exited non-zero", {
           cwd,
@@ -312,6 +352,7 @@ export async function getGitStatus(
 
 /** Exported for tests only — production never needs to clear this. */
 export function clearGitStatusCacheForTests(): void {
+  failures.clear();
   cache.clear();
   inFlight.clear();
 }

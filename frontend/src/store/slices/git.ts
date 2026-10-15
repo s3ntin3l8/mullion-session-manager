@@ -37,6 +37,7 @@ let gitRefsRequeue: { scoped: boolean; ids: Set<number> } | null = null;
 
 export const createGitSlice: StateCreator<DashboardState, [], [], GitSlice> = (set, get) => ({
   gitStatuses: {},
+  gitProblems: {},
   sessionGitStatuses: {},
   gitDiffStats: {},
   gitBranchesByProject: {},
@@ -71,7 +72,7 @@ export const createGitSlice: StateCreator<DashboardState, [], [], GitSlice> = (s
         .sessions.filter((s) => s.kind === "terminal" && s.status !== "killed")
         .map((s) => s.id);
       if (projectIds.length === 0 && sessionIds.length === 0) {
-        set({ gitStatuses: {}, sessionGitStatuses: {} });
+        set({ gitStatuses: {}, gitProblems: {}, sessionGitStatuses: {} });
         return;
       }
 
@@ -88,6 +89,9 @@ export const createGitSlice: StateCreator<DashboardState, [], [], GitSlice> = (s
             ),
             ...result.sessions,
           },
+          gitProblems: Object.fromEntries(
+            Object.entries(result.problems ?? {}).map(([id, p]) => [Number(id), p]),
+          ),
         });
       } catch (err) {
         console.warn("[GitPanel] refreshGitStatuses batch failed", err);
