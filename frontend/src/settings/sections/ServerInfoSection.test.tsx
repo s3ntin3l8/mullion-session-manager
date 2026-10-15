@@ -8,8 +8,11 @@ import {
   type ServerInfo,
   type SystemStats,
   type TempStorageStatus,
+  type CacheStorageStatus,
 } from "../../api/index.js";
 import { ServerInfoSection } from "./ServerInfoSection.js";
+import { useDashboardStore } from "../../store/index.js";
+import { DEFAULT_SETTINGS } from "../../api/settings.js";
 
 const GIB = 1024 ** 3;
 const info = {
@@ -65,7 +68,17 @@ const tempUnavailable: TempStorageStatus = {
   candidates: { safe: 0, aggressive: 0 },
 };
 
-function setup(overrides: { docker?: DockerStorageStatus; temp?: TempStorageStatus } = {}) {
+const noCaches: CacheStorageStatus = { available: true, root: "/home/me/.cache", caches: [] };
+
+function setup(
+  overrides: {
+    docker?: DockerStorageStatus;
+    temp?: TempStorageStatus;
+    caches?: CacheStorageStatus;
+  } = {},
+) {
+  useDashboardStore.setState({ settings: DEFAULT_SETTINGS, settingsLoaded: true });
+  vi.spyOn(api, "getCacheStorage").mockResolvedValue(overrides.caches ?? noCaches);
   vi.spyOn(api, "getServerInfo").mockResolvedValue(info);
   vi.spyOn(api, "getSystemStats").mockResolvedValue(stats);
   vi.spyOn(api, "getDockerStorage").mockResolvedValue(overrides.docker ?? docker);
@@ -209,5 +222,66 @@ describe("Settings -> Server info resources", () => {
     await userEvent.click(button);
     await userEvent.click(button);
     expect(await screen.findByText("Freed 2 B, then stopped: boom")).toBeInTheDocument();
+  });
+
+  describe("opt-in ~/.cache cleanup (#1606)", () => {
+    const caches: CacheStorageStatus = {
+      available: true,
+      root: "/home/me/.cache",
+      caches: [
+        { id: "ms-playwright", label: "Playwright browsers", bytes: 2 * GIB, exists: true },
+        { id: "pip", label: "pip", bytes: GIB, exists: true },
+        { id: "go-build", label: "Go build cache", bytes: 0, exists: false },
+      ],
+    };
+
+    it("lists existing caches, hides missing ones, and saves the opted-in ids", async () => {
+      setup({ caches });
+      render(<ServerInfoSection />);
+      const toggle = await screen.findByRole("button", {
+        name: "Clean Playwright browsers in aggressive cleanup",
+      });
+      expect(screen.queryByText("Go build cache")).not.toBeInTheDocument();
+      await userEvent.click(toggle);
+      expect(useDashboardStore.getState().settings.diskCleanup.cacheDirs).toEqual([
+        "ms-playwright",
+      ]);
+    });
+
+    it("prunes caches only in aggressive mode and only when something is ticked", async () => {
+      setup({ caches });
+      useDashboardStore.setState({
+        settings: { ...DEFAULT_SETTINGS, diskCleanup: { cacheDirs: ["pip"] } },
+      });
+      vi.spyOn(api, "pruneDockerStorage").mockResolvedValue({ output: "", reclaimedBytes: GIB });
+      vi.spyOn(api, "pruneCacheStorage").mockResolvedValue({ output: "", reclaimedBytes: GIB });
+      render(<ServerInfoSection />);
+
+      const safe = await screen.findByRole("button", { name: "Clean up (safe)…" });
+      await userEvent.click(safe);
+      await userEvent.click(safe);
+      await screen.findByText("Freed 1.0 GiB.");
+      expect(api.pruneCacheStorage).not.toHaveBeenCalled();
+
+      const aggressive = await screen.findByRole("button", { name: "Aggressive cleanup…" });
+      await userEvent.click(aggressive);
+      await userEvent.click(aggressive);
+      expect(
+        await screen.findByText("Freed 2.0 GiB (Docker 1.0 GiB, caches 1.0 GiB)."),
+      ).toBeInTheDocument();
+      expect(api.pruneCacheStorage).toHaveBeenCalledOnce();
+    });
+
+    it("does not call the caches prune when nothing is ticked", async () => {
+      setup({ caches });
+      vi.spyOn(api, "pruneDockerStorage").mockResolvedValue({ output: "", reclaimedBytes: GIB });
+      vi.spyOn(api, "pruneCacheStorage");
+      render(<ServerInfoSection />);
+      const aggressive = await screen.findByRole("button", { name: "Aggressive cleanup…" });
+      await userEvent.click(aggressive);
+      await userEvent.click(aggressive);
+      await screen.findByText("Freed 1.0 GiB.");
+      expect(api.pruneCacheStorage).not.toHaveBeenCalled();
+    });
   });
 });

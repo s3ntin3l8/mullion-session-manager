@@ -13,6 +13,7 @@ import {
   pruneTempStorage,
   type TempPruneMode,
 } from "../services/temp-storage.js";
+import { inspectCacheStorage, pruneCacheStorage } from "../services/cache-storage.js";
 import { sampleSystemStats, type MonitoredPath } from "../services/system-stats.js";
 
 const STATS_CACHE_MS = 10_000;
@@ -128,6 +129,40 @@ export async function systemResourcesRoute(app: FastifyInstance) {
         }
         return reply.internalServerError(
           error instanceof Error ? error.message : "Temp file cleanup failed",
+        );
+      }
+    },
+  );
+
+  let cachesCached: {
+    expiresAt: number;
+    value: Promise<Awaited<ReturnType<typeof inspectCacheStorage>>>;
+  } | null = null;
+
+  app.get("/api/storage/caches", async () => {
+    if (cachesCached && cachesCached.expiresAt > Date.now()) return cachesCached.value;
+    const value = inspectCacheStorage();
+    cachesCached = { expiresAt: Date.now() + DOCKER_STORAGE_CACHE_MS, value };
+    return value;
+  });
+
+  // No body: which caches to empty is read from the stored settings, so a
+  // caller can't widen the set beyond what the user opted into.
+  app.post(
+    "/api/storage/caches/prune",
+    { config: { rateLimit: DOCKER_PRUNE_RATE_LIMIT } },
+    async (_request, reply) => {
+      try {
+        const result = await pruneCacheStorage(getStoredSettings(app.db).diskCleanup.cacheDirs);
+        cached = null;
+        cachesCached = null;
+        return result;
+      } catch (error) {
+        if (error instanceof Error && error.message === "CACHE_PRUNE_IN_PROGRESS") {
+          return reply.conflict("Cache cleanup is already running");
+        }
+        return reply.internalServerError(
+          error instanceof Error ? error.message : "Cache cleanup failed",
         );
       }
     },

@@ -1,3 +1,4 @@
+import { sanitizeCacheDirIds, type CacheDirId } from "./cache-storage.js";
 import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { settings as settingsTable } from "../db/schema.js";
@@ -134,6 +135,12 @@ export interface AppSettings {
   // this lets a fresh deploy keep working from its env config until someone
   // actually edits roots from the UI, at which point the DB value wins.
   projectRoots: string[];
+  // Settings -> Server -> Disk cleanup (issue #1606): which allowlisted
+  // ~/.cache subtrees the aggressive cleanup may empty. Empty = none; opt-in
+  // because they're slow to re-download (Playwright browsers, HF models).
+  diskCleanup: {
+    cacheDirs: CacheDirId[];
+  };
   launchers: {
     defaultShell: string;
     defaultAgent: string;
@@ -568,6 +575,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   layoutMode: "auto",
   tabletPaneCap: 2,
   projectRoots: [],
+  diskCleanup: { cacheDirs: [] },
   launchers: {
     defaultShell: "zsh",
     defaultAgent: "claude",
@@ -869,6 +877,9 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
         ? settings.layoutMode
         : DEFAULT_SETTINGS.layoutMode,
     tabletPaneCap: settings.tabletPaneCap === 3 ? 3 : 2,
+    // A patch can only ever replace the array wholesale; drop anything that
+    // isn't an allowlisted cache id so it can't be persisted, let alone acted on.
+    diskCleanup: { cacheDirs: sanitizeCacheDirIds(settings.diskCleanup.cacheDirs) },
     terminal: {
       ...settings.terminal,
       fontSize: safeNumber(settings.terminal.fontSize, {

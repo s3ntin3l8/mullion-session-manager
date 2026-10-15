@@ -16,6 +16,7 @@ import type {
   DockerStorageStatus,
   DockerPruneMode,
   TempStorageStatus,
+  CacheStorageStatus,
   DockerPruneResult,
 } from "./types.js";
 import type { Launcher } from "../../../src/shared/types.js";
@@ -90,6 +91,11 @@ export const systemApi = {
       method: "POST",
       body: JSON.stringify({ mode }),
     }),
+
+  getCacheStorage: () => request<CacheStorageStatus>("/api/storage/caches"),
+  // The server prunes whichever caches settings.diskCleanup.cacheDirs lists.
+  pruneCacheStorage: () =>
+    request<DockerPruneResult>("/api/storage/caches/prune", { method: "POST" }),
 
   listOpenCodeModels: () => request<string[]>("/api/opencode/models"),
   listAgyModels: () => request<string[]>("/api/agy/models"),

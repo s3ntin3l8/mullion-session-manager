@@ -90,6 +90,7 @@ export type {
   DockerStorageStatus,
   DockerPruneMode,
   TempStorageStatus,
+  CacheStorageStatus,
   DockerPruneResult,
   Project,
   CreateProjectDirOptions,

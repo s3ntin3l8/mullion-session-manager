@@ -527,6 +527,7 @@ function renderPane(
       layoutMode: "auto",
       tabletPaneCap: 2,
       projectRoots: [],
+      diskCleanup: { cacheDirs: [] },
       launchers: {
         defaultShell: "bash",
         defaultAgent: "claude",
