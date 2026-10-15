@@ -175,13 +175,14 @@ describe("temp-storage", () => {
     await first;
   });
 
-  it("skips live per-session scratch dirs by name", async () => {
+  it("leaves mullion-* dirs alone and all of claude-* when liveness is unknown", async () => {
     const claude = await makeEntry("claude-1000", 30 * DAY);
     const mullion = await makeEntry("mullion-scaffold-generate", 30 * DAY);
     await pruneTempStorage("aggressive", {
       root,
       npmCacheDir: npmDir,
       now: NOW,
+      claudeSessionsDir: path.join(path.dirname(root), "no-such-registry"),
       runNpmCacheClean: async () => "",
     });
     expect(await exists(claude)).toBe(true);
@@ -206,5 +207,117 @@ describe("temp-storage", () => {
     } finally {
       await fs.chmod(locked, 0o700);
     }
+  });
+
+  describe("claude session scratch (#1608)", () => {
+    const LIVE = "11111111-1111-4111-8111-111111111111";
+    const DEAD = "22222222-2222-4222-8222-222222222222";
+    const RECENT_DEAD = "33333333-3333-4333-8333-333333333333";
+    let registry: string;
+    let project: string;
+
+    async function startTicks(): Promise<string> {
+      const stat = await fs.readFile("/proc/self/stat", "utf8");
+      return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
+    }
+
+    async function session(id: string, ageMs: number) {
+      const dir = path.join(project, id);
+      await fs.mkdir(path.join(dir, "scratchpad"), { recursive: true });
+      const file = path.join(dir, "scratchpad", "note.txt");
+      await fs.writeFile(file, "s".repeat(200));
+      const t = new Date(NOW - ageMs);
+      await fs.utimes(file, t, t);
+      await fs.utimes(path.join(dir, "scratchpad"), t, t);
+      await fs.utimes(dir, t, t);
+      return dir;
+    }
+
+    beforeEach(async () => {
+      registry = path.join(path.dirname(root), "registry");
+      await fs.mkdir(registry);
+      // This very process stands in for a running Claude session.
+      await fs.writeFile(
+        path.join(registry, `${String(process.pid)}.json`),
+        JSON.stringify({ pid: process.pid, sessionId: LIVE, procStart: await startTicks() }),
+      );
+      project = path.join(root, "claude-1000", "-home-me-proj");
+      await fs.mkdir(project, { recursive: true });
+    });
+
+    const opts = () => ({
+      root,
+      npmCacheDir: npmDir,
+      now: NOW,
+      claudeSessionsDir: registry,
+      runNpmCacheClean: async () => "",
+    });
+
+    it("never removes a running session's scratch, however old", async () => {
+      const live = await session(LIVE, 60 * DAY);
+      await pruneTempStorage("aggressive", opts());
+      expect(await exists(live)).toBe(true);
+    });
+
+    it("removes a dead session after 24h in safe mode and any dead one in aggressive", async () => {
+      const dead = await session(DEAD, 3 * DAY);
+      const recent = await session(RECENT_DEAD, 2 * 60 * 60 * 1000);
+      await pruneTempStorage("safe", opts());
+      expect(await exists(dead)).toBe(false);
+      expect(await exists(recent)).toBe(true);
+      await pruneTempStorage("aggressive", opts());
+      expect(await exists(recent)).toBe(false);
+    });
+
+    it("keeps a dir touched in the last minute even in aggressive mode", async () => {
+      const fresh = await session(DEAD, 5000);
+      await pruneTempStorage("aggressive", opts());
+      expect(await exists(fresh)).toBe(true);
+    });
+
+    it("treats a registry entry whose process start time differs as dead (pid reuse)", async () => {
+      await fs.writeFile(
+        path.join(registry, "reused.json"),
+        JSON.stringify({ pid: process.pid, sessionId: DEAD, procStart: "1" }),
+      );
+      const reused = await session(DEAD, 3 * DAY);
+      await pruneTempStorage("safe", opts());
+      expect(await exists(reused)).toBe(false);
+    });
+
+    it("touches nothing under claude-* when the registry has an unparseable file", async () => {
+      await fs.writeFile(path.join(registry, "broken.json"), "{not json");
+      const dead = await session(DEAD, 30 * DAY);
+      const status = await inspectTempStorage(opts());
+      await pruneTempStorage("aggressive", opts());
+      expect(await exists(dead)).toBe(true);
+      expect(status.candidates).toEqual({ safe: 0, aggressive: 0 });
+    });
+
+    it("removes a project dir once its last session is gone, but not while others remain", async () => {
+      const dead = await session(DEAD, 3 * DAY);
+      const live = await session(LIVE, 3 * DAY);
+      await pruneTempStorage("safe", opts());
+      expect(await exists(dead)).toBe(false);
+      expect(await exists(project)).toBe(true);
+      await fs.rm(live, { recursive: true });
+      await session(DEAD, 3 * DAY);
+      await pruneTempStorage("safe", opts());
+      expect(await exists(project)).toBe(false);
+    });
+
+    it("applies the generic windows to non-session entries and counts scratch in estimates", async () => {
+      const dead = await session(DEAD, 3 * DAY);
+      const stray = path.join(root, "claude-1000", "old.log");
+      await fs.writeFile(stray, "l");
+      const t = new Date(NOW - 8 * DAY);
+      await fs.utimes(stray, t, t);
+      const status = await inspectTempStorage(opts());
+      expect(status.candidates.safe).toBe(2);
+      expect(status.estimates.safeBytes).toBeGreaterThanOrEqual(200);
+      await pruneTempStorage("safe", opts());
+      expect(await exists(dead)).toBe(false);
+      expect(await exists(stray)).toBe(false);
+    });
   });
 });

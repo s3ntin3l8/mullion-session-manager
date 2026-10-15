@@ -86,9 +86,11 @@ CI/CD. Frontend: React + [dockview](https://dockview.dev/) (tiled splits/tabs) a
   cleanup. Safe removes dangling Docker images plus stopped containers,
   networks older than 7 days and build cache older than 24 hours, and this user's `/tmp`
   entries untouched for 7+ days; aggressive also removes all unused images
-  and build cache, uses a 24h temp window, and clears the npm cache. Optionally, aggressive cleanup also empties
-  ticked `~/.cache` subtrees (Playwright, Hugging Face, pre-commit, pip, Go
-  build) — opt-in per cache in the same panel.
+  and build cache, uses a 24h temp window, and clears the npm cache. Claude
+  session scratch is removed per session, only once that session is no longer
+  running. Optionally, aggressive cleanup also empties ticked `~/.cache`
+  subtrees (Playwright, Hugging Face, pre-commit, pip, Go build) — opt-in per
+  cache in the same panel.
   Docker volumes are never touched. Separately, a dashboard-wide banner polls the
   same disk-usage data every 60s in the background and surfaces a
   warning/critical low-disk-space alert (dismissible for 24h at the warning
