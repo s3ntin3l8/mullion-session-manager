@@ -262,8 +262,8 @@ export function SpinnerIcon(props: IconProps) {
 export function RefreshIcon(props: IconProps) {
   return (
     <Svg strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" {...props}>
-      <polyline points="23 4 23 10 17 10" />
-      <path d="M20.5 15a9 9 0 1 1-2.1-9.4L23 10" />
+      <polyline points="21 4 21 10 15 10" />
+      <path d="M18.5 15a8 8 0 1 1-1.9-8.3L21 10" />
     </Svg>
   );
 }
@@ -486,10 +486,40 @@ export function GitBranchIcon(props: IconProps) {
   return (
     <Svg {...props}>
       <line x1="6" y1="3" x2="6" y2="15" />
+      <circle cx="18" cy="6" r="3" />
       <circle cx="6" cy="18" r="3" />
-      <circle cx="6" cy="6" r="3" />
-      <circle cx="18" cy="18" r="3" />
       <path d="M18 9a9 9 0 0 1-9 9" />
+    </Svg>
+  );
+}
+
+export function FilePlusIcon(props: IconProps) {
+  return (
+    <Svg strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+      <polyline points="14 3 14 8 19 8" />
+      <line x1="12" y1="12" x2="12" y2="18" />
+      <line x1="9" y1="15" x2="15" y2="15" />
+    </Svg>
+  );
+}
+
+export function FolderPlusIcon(props: IconProps) {
+  return (
+    <Svg strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+      <line x1="12" y1="10.5" x2="12" y2="15.5" />
+      <line x1="9.5" y1="13" x2="14.5" y2="13" />
+    </Svg>
+  );
+}
+
+export function ExternalLinkIcon(props: IconProps) {
+  return (
+    <Svg strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+      <polyline points="15 3 21 3 21 9" />
+      <line x1="10" y1="14" x2="21" y2="3" />
     </Svg>
   );
 }

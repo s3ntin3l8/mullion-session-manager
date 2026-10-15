@@ -1768,6 +1768,21 @@
   padding: 12px 14px;
   overflow-y: auto;
 }
+/* Embedded in the right sidebar: the drawer scrolls, not the panel. */
+.github-panel.embedded {
+  height: auto;
+  overflow: visible;
+  padding-top: 0;
+}
+.github-panel.embedded .github-panel-branch-labels {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.github-panel.embedded .github-panel-pr-author {
+  display: none;
+}
+
 /* PR 25 (frontend refactor plan) — was `.github-panel-empty`, borrowed
    as-is by six other panels (GitPanel, UnifiedBoard, DockConfigPanel,
    AgentRulesPanel, SkillsPanel, TaskDetail) plus GitHubPanel itself.

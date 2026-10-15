@@ -122,6 +122,18 @@ describe("FileEditorPanel", () => {
     expect(await screen.findByText(".env")).toBeInTheDocument();
   });
 
+  it("editor mode shows only the editor — no tree, no root listing fetch", async () => {
+    const { fn, calls } = mockFetch();
+    vi.stubGlobal("fetch", fn);
+    const { container } = render(
+      <FileEditorPanel params={{ projectId: 1, path: ".env", mode: "editor" }} />,
+    );
+    expect(await screen.findByLabelText("editor:.env")).toHaveValue("A=1\n");
+    expect(container.querySelector(".file-editor-tree")).toBeNull();
+    expect(screen.queryByText("New file")).toBeNull();
+    expect(calls.some((c) => c.url.includes("/files?path="))).toBe(false);
+  });
+
   it("opens a file, edits it, saves with the loaded mtime, and clears dirty", async () => {
     const { fn, calls } = mockFetch();
     vi.stubGlobal("fetch", fn);

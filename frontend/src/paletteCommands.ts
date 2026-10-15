@@ -153,7 +153,7 @@ export function buildPaletteCommands({
       {
         id: "file-editor",
         title: "Edit project files",
-        subtitle: ".env and other text files",
+        subtitle: "Browse and edit in the Files sidebar",
         icon: FileTextIcon,
         keywords: ["files", "edit", ".env"],
         placement: "project",

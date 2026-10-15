@@ -437,24 +437,25 @@ describe("usePanelOpener — project-scoped panel kinds", () => {
     expect(setSidebarOpen).not.toHaveBeenCalled();
   });
 
-  it("onOpenFile opens the file editor on that path, and re-targets it on a second file", () => {
+  it("onOpenFile opens an editor-only panel per file and focuses it on a repeat", () => {
     const api = mockDockviewApi();
     const { result } = setup({ dockviewApi: api });
 
     result.current.onOpenFile(1, "src/a.ts");
     expect(api.addPanel).toHaveBeenCalledWith(
       expect.objectContaining({
-        id: "file-editor-1",
-        params: expect.objectContaining({ projectId: 1, path: "src/a.ts" }),
+        id: `file-1-${encodeURIComponent("src/a.ts")}`,
+        component: "file-editor",
+        params: expect.objectContaining({ projectId: 1, path: "src/a.ts", mode: "editor" }),
       }),
     );
     expect(setViewMode).toHaveBeenCalledWith("list");
 
     result.current.onOpenFile(1, "b.ts");
-    expect(api.addPanel).toHaveBeenCalledTimes(1);
-    expect(api.getPanel("file-editor-1")!.api.updateParameters).toHaveBeenCalledWith(
-      expect.objectContaining({ path: "b.ts", rev: expect.any(Number) }),
-    );
+    expect(api.addPanel).toHaveBeenCalledTimes(2);
+
+    result.current.onOpenFile(1, "b.ts");
+    expect(api.addPanel).toHaveBeenCalledTimes(2);
   });
 
   it("onOpenFile no-ops when dockviewApi is null", () => {

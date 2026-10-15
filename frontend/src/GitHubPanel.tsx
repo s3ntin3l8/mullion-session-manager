@@ -431,7 +431,14 @@ function ReleaseSection({
   );
 }
 
-export function GitHubPanel({ params }: { params: GitHubPanelParams }) {
+export function GitHubPanel({
+  params,
+  embedded = false,
+}: {
+  params: GitHubPanelParams;
+  // Rendered inside the right sidebar: the drawer owns scrolling and padding.
+  embedded?: boolean;
+}) {
   const [status, setStatus] = useState<GitHubStatus | null | undefined>(undefined);
   const [prsStatus, setPrsStatus] = useState<GitHubPRsStatus | null | undefined>(undefined);
   const [releaseStatus, setReleaseStatus] = useState<ProjectReleaseStatus | null | undefined>(
@@ -493,7 +500,7 @@ export function GitHubPanel({ params }: { params: GitHubPanelParams }) {
   }
 
   return (
-    <div className="github-panel cmux-scroll">
+    <div className={embedded ? "github-panel embedded" : "github-panel cmux-scroll"}>
       {status && (
         <a
           className="github-panel-repo"

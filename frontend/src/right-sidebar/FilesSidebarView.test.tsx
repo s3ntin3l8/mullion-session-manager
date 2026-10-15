@@ -9,7 +9,15 @@ import type { ProjectDirEntry } from "../api/index.js";
 
 vi.mock("../api/index.js", async (importOriginal) => {
   const actual = await importOriginal<typeof ApiModule>();
-  return { ...actual, api: { ...actual.api, listProjectFiles: vi.fn() } };
+  return {
+    ...actual,
+    api: {
+      ...actual.api,
+      listProjectFiles: vi.fn(),
+      writeProjectFile: vi.fn(),
+      mkdirProjectDir: vi.fn(),
+    },
+  };
 });
 
 const actions = {
@@ -17,6 +25,11 @@ const actions = {
   onOpenGitHub: vi.fn(),
   onOpenFileEditor: vi.fn(),
   onOpenFile: vi.fn(),
+  onOpenAgentRules: vi.fn(),
+  onOpenProjectBriefing: vi.fn(),
+  onOpenProjectSetup: vi.fn(),
+  onOpenDockConfig: vi.fn(),
+  onOpenSkills: vi.fn(),
 };
 
 const entry = (name: string, kind: ProjectDirEntry["kind"], over = {}): ProjectDirEntry => ({
@@ -90,7 +103,7 @@ describe("FilesSidebarView", () => {
     expect(row?.disabled).toBe(true);
   });
 
-  it("refresh re-lists open folders and Open Editor calls the opener", async () => {
+  it("refresh re-lists open folders and the panel button calls the opener", async () => {
     const user = userEvent.setup();
     renderView();
     await user.click(await screen.findByText("src"));
@@ -98,8 +111,82 @@ describe("FilesSidebarView", () => {
     vi.mocked(api.listProjectFiles).mockClear();
     await user.click(screen.getByRole("button", { name: "Refresh" }));
     await waitFor(() => expect(api.listProjectFiles).toHaveBeenCalledTimes(2));
-    await user.click(screen.getByRole("button", { name: "Open Editor" }));
+    await user.click(screen.getByRole("button", { name: "Open file browser panel" }));
     expect(actions.onOpenFileEditor).toHaveBeenCalledWith(4);
+  });
+
+  it("New file creates in the selected folder, reloads it and opens the file", async () => {
+    vi.mocked(api.writeProjectFile).mockResolvedValue({ size: 0, mtimeMs: 1 });
+    const user = userEvent.setup();
+    renderView();
+    await user.click(await screen.findByText("src"));
+    await screen.findByText("index.ts");
+    vi.mocked(api.listProjectFiles).mockClear();
+
+    await user.click(screen.getByRole("button", { name: "New file in src" }));
+    await user.type(screen.getByPlaceholderText("New file in src"), "new.ts{Enter}");
+
+    await waitFor(() =>
+      expect(api.writeProjectFile).toHaveBeenCalledWith(4, "src/new.ts", "", { create: true }),
+    );
+    expect(api.listProjectFiles).toHaveBeenCalledWith(4, "src");
+    expect(actions.onOpenFile).toHaveBeenCalledWith(4, "src/new.ts");
+  });
+
+  it("New folder creates in the root by default; Escape cancels; '/' is rejected", async () => {
+    vi.mocked(api.mkdirProjectDir).mockResolvedValue(undefined as never);
+    const user = userEvent.setup();
+    renderView();
+    await screen.findByText("README.md");
+
+    await user.click(screen.getByRole("button", { name: "New folder in project root" }));
+    await user.type(screen.getByPlaceholderText("New folder in /"), "a/b{Enter}");
+    expect(await screen.findByText("A name can't contain '/'")).toBeTruthy();
+    expect(api.mkdirProjectDir).not.toHaveBeenCalled();
+
+    await user.clear(screen.getByPlaceholderText("New folder in /"));
+    await user.type(screen.getByPlaceholderText("New folder in /"), "docs{Enter}");
+    await waitFor(() => expect(api.mkdirProjectDir).toHaveBeenCalledWith(4, "docs"));
+    expect(actions.onOpenFile).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "New file in project root" }));
+    await user.keyboard("{Escape}");
+    expect(screen.queryByPlaceholderText("New file in /")).toBeNull();
+  });
+
+  it("ignores a second Enter while a create is in flight", async () => {
+    let finish: (v: { size: number; mtimeMs: number }) => void = () => {};
+    vi.mocked(api.writeProjectFile).mockImplementation(
+      () => new Promise((resolve) => (finish = resolve)),
+    );
+    const user = userEvent.setup();
+    renderView();
+    await screen.findByText("README.md");
+    await user.click(screen.getByRole("button", { name: "New file in project root" }));
+    await user.type(screen.getByPlaceholderText("New file in /"), "x.ts{Enter}{Enter}");
+    expect(api.writeProjectFile).toHaveBeenCalledTimes(1);
+    finish({ size: 0, mtimeMs: 1 });
+    await waitFor(() => expect(actions.onOpenFile).toHaveBeenCalledWith(4, "x.ts"));
+  });
+
+  it("clicking a file moves the create target to that file's folder", async () => {
+    const user = userEvent.setup();
+    renderView();
+    await user.click(await screen.findByText("src"));
+    await user.click(await screen.findByText("index.ts"));
+    expect(screen.getByRole("button", { name: "New file in src" })).toBeTruthy();
+    await user.click(screen.getByText("README.md"));
+    expect(screen.getByRole("button", { name: "New file in project root" })).toBeTruthy();
+  });
+
+  it("surfaces a create failure", async () => {
+    vi.mocked(api.writeProjectFile).mockRejectedValue(new ApiError("Already exists", 409));
+    const user = userEvent.setup();
+    renderView();
+    await screen.findByText("README.md");
+    await user.click(screen.getByRole("button", { name: "New file in project root" }));
+    await user.type(screen.getByPlaceholderText("New file in /"), "README.md{Enter}");
+    expect(await screen.findByText("Already exists")).toBeTruthy();
   });
 
   it("drops a listing that resolves after the followed project changed", async () => {

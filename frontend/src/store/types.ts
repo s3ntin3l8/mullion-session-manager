@@ -559,6 +559,7 @@ export interface UiSlice {
   // showing, `rightSidebarPinned` whether it docks (desktop only) instead of
   // overlaying the grid.
   rightSidebarView: string;
+  rightSidebarProjectRequest: { projectId: number; nonce: number } | null;
   rightSidebarOpen: boolean;
   rightSidebarPinned: boolean;
   rightSidebarWidth: number;
@@ -660,6 +661,9 @@ export interface UiSlice {
   setSidebarWidth: (value: number) => void;
   // Opens `view` (or, when it is already the open view, closes the drawer).
   toggleRightSidebarView: (view: string) => void;
+  // Asks the drawer to show `projectId` (pins its project picker); the nonce
+  // makes a repeat request for the same project still fire.
+  openRightSidebarView: (view: string, projectId?: number) => void;
   // Palette / shortcut entry point: close if open, else reopen the last view.
   toggleRightSidebar: () => void;
   closeRightSidebar: () => void;

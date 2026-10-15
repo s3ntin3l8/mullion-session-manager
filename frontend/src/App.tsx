@@ -1349,9 +1349,39 @@ export function App() {
   // dockview's tab text colors.
   const dockviewChromeBg = getSchemeBackground(settings.terminal.colorScheme, theme);
 
+  // Phone has no right sidebar, so only there does the palette's "Edit project
+  // files" still open the full file-editor panel.
+  const onOpenFilesFromPalette = useCallback(
+    (projectId: number) => {
+      if (isMobile) onOpenFileEditor(projectId);
+      else useDashboardStore.getState().openRightSidebarView("files", projectId);
+    },
+    [isMobile, onOpenFileEditor],
+  );
+
   const rightSidebarActions = useMemo(
-    () => ({ onOpenGit, onOpenGitHub, onOpenFileEditor, onOpenFile }),
-    [onOpenGit, onOpenGitHub, onOpenFileEditor, onOpenFile],
+    () => ({
+      onOpenGit,
+      onOpenGitHub,
+      onOpenFileEditor,
+      onOpenFile,
+      onOpenAgentRules,
+      onOpenProjectBriefing,
+      onOpenProjectSetup,
+      onOpenDockConfig,
+      onOpenSkills,
+    }),
+    [
+      onOpenGit,
+      onOpenGitHub,
+      onOpenFileEditor,
+      onOpenFile,
+      onOpenAgentRules,
+      onOpenProjectBriefing,
+      onOpenProjectSetup,
+      onOpenDockConfig,
+      onOpenSkills,
+    ],
   );
 
   const sidebar = (
@@ -1690,7 +1720,7 @@ export function App() {
           onOpenGitHub={onOpenGitHub}
           onOpenGit={onOpenGit}
           onOpenAgentRules={onOpenAgentRules}
-          onOpenFileEditor={onOpenFileEditor}
+          onOpenFileEditor={onOpenFilesFromPalette}
           onOpenProjectBriefing={onOpenProjectBriefing}
           onOpenProjectSetup={onOpenProjectSetup}
           onOpenDockConfig={onOpenDockConfig}

@@ -35,7 +35,21 @@
 .right-rail-btn.active {
   color: var(--fg);
   background: var(--seg);
-  box-shadow: inset -2px 0 0 var(--ring);
+}
+/* Active marker hugs the rail's right edge instead of an inset shadow, which
+   shifted the glyph off-center. */
+.right-rail-btn.active::after {
+  content: "";
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  right: -5px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--ring);
+}
+.right-rail-btn svg {
+  display: block;
 }
 
 .right-rail-badge {
@@ -62,7 +76,10 @@
   background: var(--r);
 }
 
+/* One horizontal inset for header, project picker, toolbar and view bodies so
+   every view's content lines up on the same left edge. */
 .right-sidebar-panel {
+  --rs-pad-x: 12px;
   position: relative;
   flex-shrink: 0;
   display: flex;
@@ -113,7 +130,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 10px 4px 12px;
+  min-height: 30px;
+  padding: 8px var(--rs-pad-x) 4px;
 }
 .right-sidebar-title {
   font-size: 11px;
@@ -144,10 +162,84 @@
 }
 
 .right-sidebar-project {
-  padding: 4px 10px 6px;
+  padding: 4px var(--rs-pad-x) 6px;
+}
+.right-sidebar-project > * {
+  width: 100%;
 }
 .right-sidebar-body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+}
+
+/* Shared view chrome */
+.right-sidebar-body > * {
+  padding-left: var(--rs-pad-x);
+  padding-right: var(--rs-pad-x);
+  padding-bottom: 12px;
+}
+.right-sidebar-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 0 8px;
+}
+.right-sidebar-toolbar .right-sidebar-icon-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.right-sidebar-body .source-control-body.embedded,
+.right-sidebar-body .github-panel.embedded {
+  padding-left: 0;
+  padding-right: 0;
+}
+.right-sidebar-body .file-editor-row {
+  border-radius: 6px;
+}
+.right-sidebar-body .files-sidebar-view .file-editor-new-input {
+  width: 100%;
+  margin: 0 0 6px;
+  box-sizing: border-box;
+}
+
+/* Project view */
+.project-sidebar-view {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.project-sidebar-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.project-sidebar-row:hover {
+  background: var(--seg);
+}
+.project-sidebar-row svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--muted);
+}
+.project-sidebar-row-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.project-sidebar-row-title {
+  font-size: 13px;
+}
+.project-sidebar-row-sub {
+  font-size: 11px;
+  color: var(--muted);
 }
