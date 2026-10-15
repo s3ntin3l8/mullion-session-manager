@@ -82,8 +82,12 @@ CI/CD. Frontend: React + [dockview](https://dockview.dev/) (tiled splits/tabs) a
   per-path disk usage (home, Mullion's own data/sessions directories, every
   configured project root) sampled from the host, plus a Docker storage
   breakdown — both measured when the page opens (or you click "Refresh
-  resources"), not continuously polled — with a one-click Docker prune for
-  objects older than 7 days. Separately, a dashboard-wide banner polls the
+  resources"), not continuously polled — with two-click safe and aggressive
+  cleanup. Safe removes dangling Docker images plus stopped containers,
+  networks, and build cache older than 7 days, and this user's `/tmp`
+  entries untouched for 7+ days; aggressive also removes all unused images
+  and build cache, uses a 24h temp window, and clears the npm cache.
+  Docker volumes are never touched. Separately, a dashboard-wide banner polls the
   same disk-usage data every 60s in the background and surfaces a
   warning/critical low-disk-space alert (dismissible for 24h at the warning
   level) even if you never open Settings.

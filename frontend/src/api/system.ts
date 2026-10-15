@@ -15,6 +15,7 @@ import type {
   SystemStats,
   DockerStorageStatus,
   DockerPruneMode,
+  TempStorageStatus,
   DockerPruneResult,
 } from "./types.js";
 import type { Launcher } from "../../../src/shared/types.js";
@@ -79,6 +80,13 @@ export const systemApi = {
   getDockerStorage: () => request<DockerStorageStatus>("/api/storage/docker"),
   pruneDockerStorage: (mode: DockerPruneMode = "safe") =>
     request<DockerPruneResult>("/api/storage/docker/prune", {
+      method: "POST",
+      body: JSON.stringify({ mode }),
+    }),
+
+  getTempStorage: () => request<TempStorageStatus>("/api/storage/temp"),
+  pruneTempStorage: (mode: DockerPruneMode = "safe") =>
+    request<DockerPruneResult>("/api/storage/temp/prune", {
       method: "POST",
       body: JSON.stringify({ mode }),
     }),

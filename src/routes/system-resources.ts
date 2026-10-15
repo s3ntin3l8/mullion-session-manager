@@ -8,6 +8,11 @@ import {
   pruneDockerStorage,
   type DockerPruneMode,
 } from "../services/docker-storage.js";
+import {
+  inspectTempStorage,
+  pruneTempStorage,
+  type TempPruneMode,
+} from "../services/temp-storage.js";
 import { sampleSystemStats, type MonitoredPath } from "../services/system-stats.js";
 
 const STATS_CACHE_MS = 10_000;
@@ -82,6 +87,47 @@ export async function systemResourcesRoute(app: FastifyInstance) {
         }
         return reply.internalServerError(
           error instanceof Error ? error.message : "Docker cleanup failed",
+        );
+      }
+    },
+  );
+
+  let tempCached: {
+    expiresAt: number;
+    value: Promise<Awaited<ReturnType<typeof inspectTempStorage>>>;
+  } | null = null;
+
+  app.get("/api/storage/temp", async () => {
+    if (tempCached && tempCached.expiresAt > Date.now()) return tempCached.value;
+    const value = inspectTempStorage();
+    tempCached = { expiresAt: Date.now() + DOCKER_STORAGE_CACHE_MS, value };
+    return value;
+  });
+
+  app.post<{ Body?: { mode?: TempPruneMode } }>(
+    "/api/storage/temp/prune",
+    {
+      config: { rateLimit: DOCKER_PRUNE_RATE_LIMIT },
+      schema: {
+        body: {
+          type: ["object", "null"],
+          properties: { mode: { type: "string", enum: ["safe", "aggressive"] } },
+          additionalProperties: false,
+        },
+      },
+    },
+    async (request, reply) => {
+      try {
+        const result = await pruneTempStorage(request.body?.mode ?? "safe");
+        cached = null;
+        tempCached = null;
+        return result;
+      } catch (error) {
+        if (error instanceof Error && error.message === "TEMP_PRUNE_IN_PROGRESS") {
+          return reply.conflict("Temp file cleanup is already running");
+        }
+        return reply.internalServerError(
+          error instanceof Error ? error.message : "Temp file cleanup failed",
         );
       }
     },
