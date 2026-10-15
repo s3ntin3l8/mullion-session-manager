@@ -3,7 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { Stats } from "node:fs";
-import { listClaudeScratchEntries, loadLiveSessionIds } from "./claude-scratch.js";
+import {
+  defaultClaudeSessionsDir,
+  listClaudeScratchEntries,
+  loadLiveSessionIds,
+} from "./claude-scratch.js";
 
 const SAFE_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const AGGRESSIVE_AGE_MS = 24 * 60 * 60 * 1000;
@@ -141,7 +145,7 @@ async function evaluateEntry(
 async function listCandidates(
   root: string,
   uid: number,
-): Promise<{ entries: Candidate[]; names: string[] }> {
+): Promise<{ entries: Candidate[]; names: string[]; rootDev: number }> {
   const rootDev = (await fs.stat(root)).dev;
   const entries: Candidate[] = [];
   const names = await fs.readdir(root);
@@ -149,7 +153,7 @@ async function listCandidates(
     const entry = await evaluateEntry(root, rootDev, uid, name);
     if (entry) entries.push(entry);
   }
-  return { entries, names };
+  return { entries, names, rootDev };
 }
 
 interface Target {
@@ -175,14 +179,17 @@ async function gatherTargets(
   root: string,
   uid: number,
   options: TempStorageOptions,
-): Promise<Target[]> {
-  const { entries, names } = await listCandidates(root, uid);
+): Promise<{ targets: Target[]; rootDev: number }> {
+  const { entries, names, rootDev } = await listCandidates(root, uid);
   const targets: Target[] = entries.map((entry) => ({
     entry,
     safeMs: SAFE_AGE_MS,
     aggressiveMs: AGGRESSIVE_AGE_MS,
   }));
-  const rootDev = (await fs.stat(root)).dev;
+  // One registry read serves every claude-<uid> dir (they belong to one user);
+  // the per-removal re-check in pruneTempStorage reads it again on purpose.
+  const registryDir = options.claudeSessionsDir ?? defaultClaudeSessionsDir();
+  let live: Set<string> | null | undefined;
   for (const name of names) {
     if (!/^claude-/.test(name)) continue;
     const claudeDir = path.join(root, name);
@@ -192,7 +199,7 @@ async function gatherTargets(
     } catch {
       continue;
     }
-    const live = await loadLiveSessionIds(options.claudeSessionsDir);
+    live ??= await loadLiveSessionIds(registryDir);
     if (live === null) continue;
     let scratch;
     try {
@@ -217,7 +224,7 @@ async function gatherTargets(
       });
     }
   }
-  return targets;
+  return { targets, rootDev };
 }
 
 export async function dirSize(dir: string): Promise<number> {
@@ -277,7 +284,7 @@ export async function inspectTempStorage(
   const now = options.now ?? Date.now();
   const uid = options.uid ?? process.getuid?.() ?? -1;
   try {
-    const targets = await gatherTargets(root, uid, options);
+    const { targets } = await gatherTargets(root, uid, options);
     const safe = targets.filter((t) => isDue(t, "safe", now));
     const aggressive = targets.filter((t) => isDue(t, "aggressive", now));
     const npmBytes = await dirSize(npmCachePath(options));
@@ -314,8 +321,10 @@ export async function pruneTempStorage(
     const now = options.now ?? Date.now();
     const uid = options.uid ?? process.getuid?.() ?? -1;
     // Recomputed here, never taken from an earlier preview.
-    const targets = (await gatherTargets(root, uid, options)).filter((t) => isDue(t, mode, now));
-    const rootDev = (await fs.stat(root)).dev;
+    const gathered = await gatherTargets(root, uid, options);
+    const targets = gathered.targets.filter((t) => isDue(t, mode, now));
+    const rootDev = gathered.rootDev;
+    const registryDir = options.claudeSessionsDir ?? defaultClaudeSessionsDir();
     let reclaimedBytes = 0;
     let removed = 0;
     const errors: string[] = [];
@@ -334,7 +343,7 @@ export async function pruneTempStorage(
       if (!fresh || now - fresh.newestMtimeMs <= windowFor(target, mode)) continue;
       if (target.sessionId !== undefined) {
         // A session may have started since listing; ask the registry again.
-        const live = await loadLiveSessionIds(options.claudeSessionsDir);
+        const live = await loadLiveSessionIds(registryDir);
         if (live === null || live.has(target.sessionId)) continue;
       }
       try {
