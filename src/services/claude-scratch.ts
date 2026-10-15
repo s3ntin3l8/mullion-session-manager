@@ -65,10 +65,12 @@ export async function loadLiveSessionIds(
       return null;
     }
     if (typeof entry.pid !== "number" || typeof entry.sessionId !== "string") return null;
-    // `pidDomain` is e.g. "linux:<machine>:pid:[4026533104]". A session in a
-    // different PID namespace (container, sandbox) has a pid that means
-    // nothing in this /proc, so we can't call it dead — assume it's running.
-    if (typeof entry.pidDomain === "string" && !entry.pidDomain.endsWith(`:${ownNamespace}`)) {
+    // `pidDomain` is e.g. "linux:<machine>:pid:[4026533104]". An entry from a
+    // different PID namespace (container, sandbox) has a pid that means nothing
+    // in this /proc, and one without it wasn't written by a Claude Code that
+    // can be verified at all — in both cases we can't call it dead, so assume
+    // it's running.
+    if (typeof entry.pidDomain !== "string" || !entry.pidDomain.endsWith(`:${ownNamespace}`)) {
       live.add(entry.sessionId);
       continue;
     }

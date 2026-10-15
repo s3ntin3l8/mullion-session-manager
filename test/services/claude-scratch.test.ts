@@ -18,6 +18,11 @@ afterEach(async () => {
   await fs.rm(base, { recursive: true, force: true });
 });
 
+// A pidDomain in this process's own PID namespace, like Claude Code writes.
+async function ownDomain(): Promise<string> {
+  return `linux:test:${await fs.readlink("/proc/self/ns/pid")}`;
+}
+
 async function startTicks(): Promise<string> {
   const stat = await fs.readFile("/proc/self/stat", "utf8");
   return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
@@ -32,14 +37,26 @@ describe("claude-scratch", () => {
   it("collects live session ids and drops dead pids and reused pids", async () => {
     const write = (name: string, body: unknown) =>
       fs.writeFile(path.join(base, name), JSON.stringify(body));
+    const pidDomain = await ownDomain();
     await write("live.json", {
       pid: process.pid,
       sessionId: "live",
       procStart: await startTicks(),
+      pidDomain,
     });
-    await write("nostart.json", { pid: process.pid, sessionId: "legacy" });
-    await write("reused.json", { pid: process.pid, sessionId: "reused", procStart: "1" });
-    await write("gone.json", { pid: 2 ** 22 + 12345, sessionId: "gone", procStart: "5" });
+    await write("nostart.json", { pid: process.pid, sessionId: "legacy", pidDomain });
+    await write("reused.json", {
+      pid: process.pid,
+      sessionId: "reused",
+      procStart: "1",
+      pidDomain,
+    });
+    await write("gone.json", {
+      pid: 2 ** 22 + 12345,
+      sessionId: "gone",
+      procStart: "5",
+      pidDomain,
+    });
     await fs.writeFile(path.join(base, "ignored.txt"), "not json, but not a registry file");
     const live = await loadLiveSessionIds(base);
     expect(live).toEqual(new Set(["live", "legacy"]));
@@ -53,12 +70,20 @@ describe("claude-scratch", () => {
     expect(await loadLiveSessionIds(base)).toBeNull();
   });
 
-  it("treats other PID namespaces and unrecognised procStart values as running", async () => {
+  it("treats unverifiable entries as running: other PID namespace, no pidDomain, odd procStart", async () => {
     const write = (name: string, body: unknown) =>
       fs.writeFile(path.join(base, name), JSON.stringify(body));
     await write("ns.json", { pid: 1, sessionId: "ns", pidDomain: "linux:x:pid:[1]" });
-    await write("odd.json", { pid: process.pid, sessionId: "odd", procStart: "n/a" });
-    expect(await loadLiveSessionIds(base)).toEqual(new Set(["ns", "odd"]));
+    // Not written by a Claude Code whose pid we can verify: even a dead pid and
+    // a mismatching procStart can't prove it's gone.
+    await write("nodomain.json", { pid: 2 ** 22 + 12345, sessionId: "nodomain", procStart: "1" });
+    await write("odd.json", {
+      pid: process.pid,
+      sessionId: "odd",
+      procStart: "n/a",
+      pidDomain: await ownDomain(),
+    });
+    expect(await loadLiveSessionIds(base)).toEqual(new Set(["ns", "nodomain", "odd"]));
   });
 
   it("offers only UUID-named session dirs, never other state under claude-<uid>", async () => {

@@ -138,14 +138,18 @@ async function evaluateEntry(
   return { name, fullPath, bytes, newestMtimeMs: newest };
 }
 
-async function listCandidates(root: string, uid: number): Promise<{ entries: Candidate[] }> {
+async function listCandidates(
+  root: string,
+  uid: number,
+): Promise<{ entries: Candidate[]; names: string[] }> {
   const rootDev = (await fs.stat(root)).dev;
   const entries: Candidate[] = [];
-  for (const name of await fs.readdir(root)) {
+  const names = await fs.readdir(root);
+  for (const name of names) {
     const entry = await evaluateEntry(root, rootDev, uid, name);
     if (entry) entries.push(entry);
   }
-  return { entries };
+  return { entries, names };
 }
 
 interface Target {
@@ -172,14 +176,14 @@ async function gatherTargets(
   uid: number,
   options: TempStorageOptions,
 ): Promise<Target[]> {
-  const { entries } = await listCandidates(root, uid);
+  const { entries, names } = await listCandidates(root, uid);
   const targets: Target[] = entries.map((entry) => ({
     entry,
     safeMs: SAFE_AGE_MS,
     aggressiveMs: AGGRESSIVE_AGE_MS,
   }));
   const rootDev = (await fs.stat(root)).dev;
-  for (const name of await fs.readdir(root)) {
+  for (const name of names) {
     if (!/^claude-/.test(name)) continue;
     const claudeDir = path.join(root, name);
     try {

@@ -216,6 +216,10 @@ describe("temp-storage", () => {
     let registry: string;
     let project: string;
 
+    async function ownDomain(): Promise<string> {
+      return `linux:test:${await fs.readlink("/proc/self/ns/pid")}`;
+    }
+
     async function startTicks(): Promise<string> {
       const stat = await fs.readFile("/proc/self/stat", "utf8");
       return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
@@ -239,7 +243,12 @@ describe("temp-storage", () => {
       // This very process stands in for a running Claude session.
       await fs.writeFile(
         path.join(registry, `${String(process.pid)}.json`),
-        JSON.stringify({ pid: process.pid, sessionId: LIVE, procStart: await startTicks() }),
+        JSON.stringify({
+          pid: process.pid,
+          sessionId: LIVE,
+          procStart: await startTicks(),
+          pidDomain: await ownDomain(),
+        }),
       );
       project = path.join(root, "claude-1000", "-home-me-proj");
       await fs.mkdir(project, { recursive: true });
@@ -278,7 +287,12 @@ describe("temp-storage", () => {
     it("treats a registry entry whose process start time differs as dead (pid reuse)", async () => {
       await fs.writeFile(
         path.join(registry, "reused.json"),
-        JSON.stringify({ pid: process.pid, sessionId: DEAD, procStart: "1" }),
+        JSON.stringify({
+          pid: process.pid,
+          sessionId: DEAD,
+          procStart: "1",
+          pidDomain: await ownDomain(),
+        }),
       );
       const reused = await session(DEAD, 3 * DAY);
       await pruneTempStorage("safe", opts());
@@ -345,7 +359,12 @@ describe("temp-storage", () => {
       );
       await fs.writeFile(
         path.join(registry, "odd.json"),
-        JSON.stringify({ pid: process.pid, sessionId: RECENT_DEAD, procStart: "n/a" }),
+        JSON.stringify({
+          pid: process.pid,
+          sessionId: RECENT_DEAD,
+          procStart: "n/a",
+          pidDomain: await ownDomain(),
+        }),
       );
       const other = await session(DEAD, 30 * DAY);
       const odd = await session(RECENT_DEAD, 30 * DAY);
