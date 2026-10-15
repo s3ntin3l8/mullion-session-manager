@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.3.39](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.38...v0.3.39) (2026-10-15)
+
+
+### Features
+
+* consolidate setup panels into a tabbed Project panel ([#1581](https://github.com/s3ntin3l8/mullion-session-manager/issues/1581)) ([cc5e008](https://github.com/s3ntin3l8/mullion-session-manager/commit/cc5e008c05ec4c8547cdc0c96bafa24cb0da1f49))
+* GitHub summary view in the right sidebar ([#1582](https://github.com/s3ntin3l8/mullion-session-manager/issues/1582)) ([e488522](https://github.com/s3ntin3l8/mullion-session-manager/commit/e488522816d3c31347a3d97597e53c552ceeef03))
+* **mobile:** attach-image key in key bar, icon Paste/Copy, desktop drop-to-attach ([#1589](https://github.com/s3ntin3l8/mullion-session-manager/issues/1589)) ([706e157](https://github.com/s3ntin3l8/mullion-session-manager/commit/706e1571f9b0fe5411e126c8b4fbea76cebe33d2))
+* **opencode:** derive session_diff and emit failure notifications under v2 ([#1599](https://github.com/s3ntin3l8/mullion-session-manager/issues/1599)) ([b3ae1d8](https://github.com/s3ntin3l8/mullion-session-manager/commit/b3ae1d876d61224294b77a5d98f19d0c94f37abe))
+* **opencode:** detect the installed opencode version and warn when it is older than 2.0.29 ([#1600](https://github.com/s3ntin3l8/mullion-session-manager/issues/1600)) ([3e80644](https://github.com/s3ntin3l8/mullion-session-manager/commit/3e80644c5f16332cbfb81320f06fa788d8b53b0b))
+* **opencode:** remote approval of permission prompts via a parallel review gate ([#1598](https://github.com/s3ntin3l8/mullion-session-manager/issues/1598)) ([59da360](https://github.com/s3ntin3l8/mullion-session-manager/commit/59da36094ca1edec650e2e56033d0718b4b64962))
+* **opencode:** support opencode v2 (min 2.0.29) ([#1596](https://github.com/s3ntin3l8/mullion-session-manager/issues/1596)) ([a4c3efc](https://github.com/s3ntin3l8/mullion-session-manager/commit/a4c3efc742570e79340f7c654ade779df95d9568))
+* **palette:** Toggle right sidebar command ([#1583](https://github.com/s3ntin3l8/mullion-session-manager/issues/1583)) ([9d6f061](https://github.com/s3ntin3l8/mullion-session-manager/commit/9d6f06191a872afb74fa1e98ccc949928045c4ec))
+* pinnable right sidebar with Git view ([#1580](https://github.com/s3ntin3l8/mullion-session-manager/issues/1580)) ([df69f46](https://github.com/s3ntin3l8/mullion-session-manager/commit/df69f469f80386714ddbaf2e4d3cde76b8756b66))
+* **right-sidebar:** default-branch CI badge on the GitHub rail icon ([#1588](https://github.com/s3ntin3l8/mullion-session-manager/issues/1588)) ([2052919](https://github.com/s3ntin3l8/mullion-session-manager/commit/2052919db73702682a3d1a61a273192bd6d0380b))
+* **right-sidebar:** Files view (project file tree) ([#1584](https://github.com/s3ntin3l8/mullion-session-manager/issues/1584)) ([a1f0c2d](https://github.com/s3ntin3l8/mullion-session-manager/commit/a1f0c2d6161781f2941fe57ce3f7c2613886c9b7))
+* **right-sidebar:** tablet right-edge swipe and Ctrl/Cmd+Alt+B toggle ([#1586](https://github.com/s3ntin3l8/mullion-session-manager/issues/1586)) ([0f083b6](https://github.com/s3ntin3l8/mullion-session-manager/commit/0f083b6e16f6384d8fa83b1c09ca069cfbee2394)), closes [#1579](https://github.com/s3ntin3l8/mullion-session-manager/issues/1579)
+
+
+### Bug Fixes
+
+* accurate Docker cleanup preview and aggressive cleanup tier ([#1587](https://github.com/s3ntin3l8/mullion-session-manager/issues/1587)) ([e2b876a](https://github.com/s3ntin3l8/mullion-session-manager/commit/e2b876abab67f0c850e70f421968ff0e368e6c1e))
+* faster launcher load and clearer project picker in mobile palette ([#1590](https://github.com/s3ntin3l8/mullion-session-manager/issues/1590)) ([13dfeed](https://github.com/s3ntin3l8/mullion-session-manager/commit/13dfeed349ada870988c2601d16dff6bc2108dca))
+* **opencode:** deny Task Master skills at agent level so a user's agent-level allow can't win ([#1597](https://github.com/s3ntin3l8/mullion-session-manager/issues/1597)) ([ffc1145](https://github.com/s3ntin3l8/mullion-session-manager/commit/ffc11454c719a4d334df14bb4abe9f92bdc4a32b)), closes [#1595](https://github.com/s3ntin3l8/mullion-session-manager/issues/1595)
+* **opencode:** treat --standalone=&lt;value&gt; as already present in the launch transform ([#1601](https://github.com/s3ntin3l8/mullion-session-manager/issues/1601)) ([6729347](https://github.com/s3ntin3l8/mullion-session-manager/commit/6729347231e261c528d5b77c467f60665abbe403))
+* **sessions:** let ending an exited session dismiss it ([#1575](https://github.com/s3ntin3l8/mullion-session-manager/issues/1575)) ([d54526b](https://github.com/s3ntin3l8/mullion-session-manager/commit/d54526bdb074dbb5fea41fd02d399ba35378dbad))
+
 ## [0.3.38](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.37...v0.3.38) (2026-10-12)
 
 
