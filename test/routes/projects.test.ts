@@ -2399,6 +2399,80 @@ describe("projects route", () => {
       await app.close();
     });
 
+    describe("remote host git status problems (issue #1612)", () => {
+      async function remoteProject(app: Awaited<ReturnType<typeof buildApp>>) {
+        const host = await app.inject({
+          method: "POST",
+          url: "/api/hosts",
+          payload: { name: "problem-host", baseUrl: "http://127.0.0.1:1", token: "t" },
+        });
+        const project = await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: { name: "remote-problem", cwd: "/x", hostId: host.json().id },
+        });
+        return project.json().id as number;
+      }
+      const stubAgent = (body: unknown) =>
+        vi.stubGlobal(
+          "fetch",
+          vi.fn().mockImplementation(
+            async () =>
+              new Response(JSON.stringify(body), {
+                status: 200,
+                headers: { "content-type": "application/json" },
+              }),
+          ),
+        );
+      const problem = { reason: "bare-repo", message: "core.bare = true on the agent" };
+
+      afterEach(() => vi.unstubAllGlobals());
+
+      it("reports the agent's problem in the batch and the per-project 503", async () => {
+        const app = await buildApp();
+        const projectId = await remoteProject(app);
+        stubAgent({ isRepo: true, status: null, problem });
+
+        const batch = await app.inject({
+          method: "GET",
+          url: `/api/projects/git-statuses?ids=${projectId}`,
+        });
+        expect(batch.json()).toEqual({
+          projects: {},
+          sessions: {},
+          problems: { [String(projectId)]: problem },
+        });
+
+        const single = await app.inject({
+          method: "GET",
+          url: `/api/projects/${projectId}/git-status`,
+        });
+        expect(single.statusCode).toBe(503);
+        expect(single.json().message).toBe(problem.message);
+        await app.close();
+      });
+
+      it("falls back to the generic text when an older agent sends no problem", async () => {
+        const app = await buildApp();
+        const projectId = await remoteProject(app);
+        stubAgent({ isRepo: true, status: null });
+
+        const batch = await app.inject({
+          method: "GET",
+          url: `/api/projects/git-statuses?ids=${projectId}`,
+        });
+        expect(batch.json().problems).toEqual({});
+
+        const single = await app.inject({
+          method: "GET",
+          url: `/api/projects/${projectId}/git-status`,
+        });
+        expect(single.statusCode).toBe(503);
+        expect(single.json().message).toBe("git status is temporarily unavailable");
+        await app.close();
+      });
+    });
+
     it("handles a mix of repo, non-repo, and transient-failure projects", async () => {
       const { execFileSync } = await import("node:child_process");
       const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "batch-mix-repo-"));

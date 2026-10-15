@@ -7,6 +7,7 @@ import {
   getGitStatus,
   isGitRepo,
   getGitStatusFailure,
+  toGitStatusFailure,
   clearGitStatusCacheForTests,
 } from "../../src/services/git-status.js";
 import { gitEnv } from "../../src/services/git-env.js";
@@ -43,6 +44,20 @@ describe("getGitStatus", () => {
 
   it("returns null for a non-git-repo directory", async () => {
     expect(await getGitStatus(tmpDir)).toBeNull();
+  });
+
+  describe("toGitStatusFailure (issue #1612)", () => {
+    it("accepts known reasons, rejects everything else", () => {
+      expect(toGitStatusFailure({ reason: "timeout", message: "slow" })).toEqual({
+        reason: "timeout",
+        message: "slow",
+      });
+      expect(toGitStatusFailure(null)).toBeUndefined();
+      expect(toGitStatusFailure("x")).toBeUndefined();
+      expect(toGitStatusFailure({ reason: "other", message: "m" })).toBeUndefined();
+      expect(toGitStatusFailure({ reason: "failed", message: 5 })).toBeUndefined();
+      expect(toGitStatusFailure({ reason: "failed", message: "" })).toBeUndefined();
+    });
   });
 
   describe("getGitStatusFailure (issue #1602)", () => {

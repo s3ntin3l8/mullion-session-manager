@@ -18,7 +18,7 @@ import type { SkillInfo, SkillAgent } from "./skills.js";
 import type { SessionInfo } from "./pty-manager.js";
 import type { DetectedAgent } from "./agent-detect.js";
 import type { GitHubRepoRef } from "./git-remote.js";
-import type { GitStatus } from "./git-status.js";
+import { toGitStatusFailure, type GitStatusResult } from "./git-status.js";
 import type { SshAuthSockSource } from "./ssh-agent-socket.js";
 import type { GitBranchInfo, GitWorktreeInfo } from "./git-refs.js";
 import type { GitDiffStats } from "./git-diff.js";
@@ -688,14 +688,18 @@ export class RemoteHostClient {
    * result could let a push silently exclude work committed moments ago
    * (see the route's own comment). Every existing caller (sidebar/GitPanel
    * polls) omits it and keeps the cached read, at the default timeout. */
-  resolveGitStatus(
-    cwd: string,
-    opts?: { fresh?: boolean },
-  ): Promise<{ isRepo: boolean; status: GitStatus | null }> {
+  resolveGitStatus(cwd: string, opts?: { fresh?: boolean }): Promise<GitStatusResult> {
     const url = `/internal/git-status?cwd=${encodeURIComponent(cwd)}${opts?.fresh ? "&fresh=1" : ""}`;
-    return opts?.fresh
-      ? this.request(url, undefined, GIT_STATUS_FRESH_REQUEST_TIMEOUT_MS)
-      : this.request(url);
+    return this.request<Omit<GitStatusResult, "problem"> & { problem?: unknown }>(
+      url,
+      undefined,
+      opts?.fresh ? GIT_STATUS_FRESH_REQUEST_TIMEOUT_MS : undefined,
+    ).then(({ problem, ...rest }) => {
+      // Issue #1612: `problem` is optional (old agents omit it) and validated
+      // here so nothing downstream trusts the agent's raw payload.
+      const validated = toGitStatusFailure(problem);
+      return validated ? { ...rest, problem: validated } : rest;
+    });
   }
 
   /** Local branches + worktrees (issue #162), plus remote-tracking branches

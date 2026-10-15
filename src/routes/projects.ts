@@ -26,6 +26,7 @@ import { listExistingProjectRuleFileNames } from "../services/agent-rules.js";
 import {
   getGitStatus,
   getGitStatusFailure,
+  type GitStatusResult,
   isGitRepo,
   type GitStatus,
   type GitStatusFailure,
@@ -2265,6 +2266,9 @@ export async function projectsRoute(app: FastifyInstance) {
                 projectsResult[project.id] = null;
               } else if (remoteResult.status) {
                 projectsResult[project.id] = remoteResult.status;
+              } else if (remoteResult.problem) {
+                // Issue #1612: the agent reported why `git status` failed.
+                problemsResult[project.id] = remoteResult.problem;
               }
             } catch (err) {
               app.log.warn(
@@ -2633,7 +2637,7 @@ export async function projectsRoute(app: FastifyInstance) {
         return status;
       }
 
-      let remoteResult: { isRepo: boolean; status: GitStatus | null };
+      let remoteResult: GitStatusResult;
       try {
         remoteResult = await getRemoteHostClient(app, project.hostId).resolveGitStatus(project.cwd);
       } catch (err) {
@@ -2645,7 +2649,9 @@ export async function projectsRoute(app: FastifyInstance) {
         return;
       }
       if (!remoteResult.status) {
-        return reply.serviceUnavailable("git status is temporarily unavailable");
+        return reply.serviceUnavailable(
+          remoteResult.problem?.message ?? "git status is temporarily unavailable",
+        );
       }
       return remoteResult.status;
     },

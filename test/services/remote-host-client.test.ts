@@ -427,6 +427,42 @@ describe("RemoteHostClient", () => {
     );
   });
 
+  describe("resolveGitStatus problem passthrough (issue #1612)", () => {
+    it("passes a valid problem through", async () => {
+      const problem = { reason: "bare-repo", message: "bare" };
+      fetchMock.mockResolvedValue(jsonResponse(200, { isRepo: true, status: null, problem }));
+      await expect(client().resolveGitStatus("/x")).resolves.toEqual({
+        isRepo: true,
+        status: null,
+        problem,
+      });
+    });
+
+    it("drops a malformed problem and caps an over-long message", async () => {
+      fetchMock.mockResolvedValue(
+        jsonResponse(200, {
+          isRepo: true,
+          status: null,
+          problem: { reason: "nope", message: "x" },
+        }),
+      );
+      await expect(client().resolveGitStatus("/x")).resolves.toEqual({
+        isRepo: true,
+        status: null,
+      });
+
+      fetchMock.mockResolvedValue(
+        jsonResponse(200, {
+          isRepo: true,
+          status: null,
+          problem: { reason: "failed", message: "y".repeat(1000) },
+        }),
+      );
+      const result = await client().resolveGitStatus("/x");
+      expect(result.problem?.message).toHaveLength(300);
+    });
+  });
+
   // #484 — opts.fresh appends &fresh=1 and requests the same cache-bypassing
   // read task-promote.ts's dirty-tree gate needs; every other caller omits
   // it and keeps the cached read (unchanged from the test right above).

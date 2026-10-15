@@ -43,7 +43,7 @@ import {
 } from "../services/dock-config.js";
 import { parseGitRemote } from "../services/git-remote.js";
 import { readGitBranch } from "../services/git-branch.js";
-import { getGitStatus, isGitRepo } from "../services/git-status.js";
+import { getGitStatus, getGitStatusFailure, isGitRepo } from "../services/git-status.js";
 import { getDiffStats, getDefaultBaseRef, getFileDiff } from "../services/git-diff.js";
 import {
   listBranches,
@@ -1149,7 +1149,12 @@ export async function internalRoutes(app: FastifyInstance) {
         return { isRepo: false, status: null };
       }
       const status = await getGitStatus(resolvedCwd, { forceFresh: fresh === "1" });
-      return { isRepo: true, status };
+      if (status) return { isRepo: true, status };
+      // Issue #1612: say *why* git status failed so the primary can show more
+      // than "not a repo or host unreachable". Additive — an old primary
+      // ignores the extra key; an old agent simply omits it.
+      const problem = getGitStatusFailure(resolvedCwd);
+      return problem ? { isRepo: true, status, problem } : { isRepo: true, status };
     },
   );
 
