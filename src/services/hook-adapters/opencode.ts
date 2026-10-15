@@ -495,7 +495,7 @@ const OPENCODE_SUBCOMMANDS = new Set([
 export function opencodeStandaloneTransform(command: string): string {
   // `--server <url>` attaches to an existing server; `--standalone` would
   // contradict it (and the plugin/config then live in that server anyway).
-  if (/(?:^|\s)--(?:server(?:\s|=)|standalone(?:\s|$))/.test(command)) return command;
+  if (/(?:^|\s)--(?:server(?:\s|=)|standalone(?:\s|=|$))/.test(command)) return command;
   const m = /^(\s*(?:\S*\/)?opencode)(?=\s|$)(\s+(\S+))?/.exec(command);
   if (!m) return command;
   const next = m[3];

@@ -247,6 +247,12 @@ describe("opencodeStandaloneTransform", () => {
     );
   });
 
+  it("treats the --standalone=<value> spelling as already present", () => {
+    expect(opencodeStandaloneTransform("opencode --standalone=true")).toBe(
+      "opencode --standalone=true",
+    );
+  });
+
   it("is idempotent even when --standalone isn't right after the program token", () => {
     expect(opencodeStandaloneTransform("opencode --model a/b --standalone")).toBe(
       "opencode --model a/b --standalone",
