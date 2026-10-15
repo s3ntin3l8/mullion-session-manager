@@ -43,6 +43,15 @@ export interface GitStatusFailure {
   message: string;
 }
 
+/** `/internal/git-status`'s `{ isRepo, status }` envelope plus the optional
+ * failure reason (issue #1612) — shared by the agent route, the remote client
+ * and the primary's routes so the shape can't drift. */
+export interface GitStatusResult {
+  isRepo: boolean;
+  status: GitStatus | null;
+  problem?: GitStatusFailure;
+}
+
 /** `git status` exits 128 with this when `core.bare = true` is set on a
  * checkout that has a work tree — the failure mode behind issue #1602. */
 const BARE_REPO_STDERR = "must be run in a work tree";

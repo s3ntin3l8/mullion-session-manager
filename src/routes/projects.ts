@@ -26,6 +26,7 @@ import { listExistingProjectRuleFileNames } from "../services/agent-rules.js";
 import {
   getGitStatus,
   getGitStatusFailure,
+  type GitStatusResult,
   isGitRepo,
   type GitStatus,
   type GitStatusFailure,
@@ -2636,7 +2637,7 @@ export async function projectsRoute(app: FastifyInstance) {
         return status;
       }
 
-      let remoteResult: { isRepo: boolean; status: GitStatus | null; problem?: GitStatusFailure };
+      let remoteResult: GitStatusResult;
       try {
         remoteResult = await getRemoteHostClient(app, project.hostId).resolveGitStatus(project.cwd);
       } catch (err) {
