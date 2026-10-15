@@ -170,7 +170,10 @@ way as a namespaced one.
   surface — CPU/memory/disk sampling, Docker storage inspection/prune, and the
   host temp-file tier in `services/temp-storage.ts` — user-owned, socket-free,
   non-denylisted top-level `os.tmpdir()` entries by newest in-tree mtime, plus
-  `npm cache clean` in aggressive mode, and the opt-in `~/.cache` allowlist in
+  `npm cache clean` in aggressive mode, per-session `claude-<uid>` scratch in
+  `services/claude-scratch.ts` (only sessions absent from Claude Code's
+  `~/.claude/sessions` registry; the whole tree is skipped when that registry
+  can't be read), and the opt-in `~/.cache` allowlist in
   `services/cache-storage.ts` — fixed ids, chosen via `settings.diskCleanup`,
   read server-side so a request can't widen the set),
   `internal-schemas` (not a route file at all — the extracted JSON Schema
