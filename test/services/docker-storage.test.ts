@@ -69,6 +69,14 @@ describe("Docker storage", () => {
     });
     expect(fake.calls.map((call) => call.args)).toEqual(DOCKER_SAFE_PRUNE_STEPS);
     expect(DOCKER_SAFE_PRUNE_STEPS[0]).not.toContain("--filter");
+    // Containers/networks keep the 7-day window; build cache frees after a day (#1607).
+    const untilFor = (verb: string) =>
+      DOCKER_SAFE_PRUNE_STEPS.find((step) => step[0] === verb)?.find((arg) =>
+        arg.startsWith("until="),
+      );
+    expect(untilFor("container")).toBe("until=168h");
+    expect(untilFor("network")).toBe("until=168h");
+    expect(untilFor("builder")).toBe("until=24h");
     for (const step of DOCKER_SAFE_PRUNE_STEPS) {
       expect(step).not.toContain("--all");
       expect(step).not.toContain("--volumes");
@@ -114,7 +122,7 @@ describe("Docker storage", () => {
     expect(parseReclaimed("nothing")).toBe(0);
   });
 
-  it("estimates the safe tier: dangling images at any age, old stopped containers and cache", () => {
+  it("estimates the safe tier: dangling images at any age, week-old containers, day-old cache", () => {
     const now = Date.parse("2026-10-14T12:00:00Z");
     const verbose = JSON.stringify({
       Images: [
@@ -137,8 +145,16 @@ describe("Docker storage", () => {
         {
           CacheType: "regular",
           InUse: "false",
-          LastUsedAt: "2026-10-13 09:38:53.402492998 +0000 UTC",
+          LastUsedAt: "2026-10-14 05:38:53.402492998 +0000 UTC",
           Size: "200MB",
+        },
+        {
+          // 30h old: past the 24h build-cache window (issue #1607) but well
+          // inside the 7-day container window, so only cache counts it.
+          CacheType: "regular",
+          InUse: "false",
+          LastUsedAt: "2026-10-13 06:00:00.000000000 +0000 UTC",
+          Size: "50MB",
         },
         {
           CacheType: "regular",
@@ -156,7 +172,7 @@ describe("Docker storage", () => {
     });
     const dangling = new Set(["sha256:dangling-new", "sha256:dangling-used"]);
     expect(estimateSafePrune(verbose, dangling, now)).toBe(
-      1000 ** 3 + 10 * 1000 ** 2 + 100 * 1000 ** 2,
+      1000 ** 3 + 10 * 1000 ** 2 + 100 * 1000 ** 2 + 50 * 1000 ** 2,
     );
   });
 

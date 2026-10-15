@@ -84,7 +84,7 @@ CI/CD. Frontend: React + [dockview](https://dockview.dev/) (tiled splits/tabs) a
   breakdown — both measured when the page opens (or you click "Refresh
   resources"), not continuously polled — with two-click safe and aggressive
   cleanup. Safe removes dangling Docker images plus stopped containers,
-  networks, and build cache older than 7 days, and this user's `/tmp`
+  networks older than 7 days and build cache older than 24 hours, and this user's `/tmp`
   entries untouched for 7+ days; aggressive also removes all unused images
   and build cache, uses a 24h temp window, and clears the npm cache.
   Docker volumes are never touched. Separately, a dashboard-wide banner polls the
