@@ -57,6 +57,24 @@ export function getGitStatusFailure(cwd: string): GitStatusFailure | null {
   return failures.get(cwd) ?? null;
 }
 
+const FAILURE_REASONS: readonly string[] = ["bare-repo", "timeout", "failed"];
+const MAX_FAILURE_MESSAGE_LENGTH = 300;
+
+/** Validates a `problem` received from a remote agent's `/internal/git-status`
+ * (issue #1612): only a known `reason` and a string `message` survive, with
+ * the message capped, so a malformed or skewed payload can't inject arbitrary
+ * shapes into the batch route's `problems`. */
+export function toGitStatusFailure(raw: unknown): GitStatusFailure | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const { reason, message } = raw as Record<string, unknown>;
+  if (typeof reason !== "string" || !FAILURE_REASONS.includes(reason)) return undefined;
+  if (typeof message !== "string" || message === "") return undefined;
+  return {
+    reason: reason as GitStatusFailureReason,
+    message: message.slice(0, MAX_FAILURE_MESSAGE_LENGTH),
+  };
+}
+
 function classifyFailure(stderr: string): GitStatusFailure {
   if (stderr.includes(BARE_REPO_STDERR)) {
     return {

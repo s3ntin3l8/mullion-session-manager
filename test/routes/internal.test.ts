@@ -1439,6 +1439,37 @@ describe("internal routes (agent role, issue #26)", () => {
     await app.close();
   });
 
+  it("includes a problem when git status fails in a repo, and omits it otherwise (issue #1612)", async () => {
+    const { execFileSync } = await import("node:child_process");
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "internal-git-status-problem-"));
+    const cwd = path.join(repoRoot, "bare-flagged");
+    fs.mkdirSync(cwd, { recursive: true });
+    execFileSync("git", ["init", "-b", "main"], { cwd, stdio: "pipe", env: gitEnv() });
+    execFileSync("git", ["config", "core.bare", "true"], { cwd, stdio: "pipe", env: gitEnv() });
+
+    const previousRoots = process.env.PROJECTS_ROOTS;
+    process.env.PROJECTS_ROOTS = repoRoot;
+    const app = await buildApp();
+    const get = () =>
+      app.inject({
+        method: "GET",
+        url: `/internal/git-status?cwd=${encodeURIComponent(cwd)}&fresh=1`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+
+    const broken = (await get()).json();
+    expect(broken).toMatchObject({ isRepo: true, status: null, problem: { reason: "bare-repo" } });
+
+    execFileSync("git", ["config", "core.bare", "false"], { cwd, stdio: "pipe", env: gitEnv() });
+    const healthy = (await get()).json();
+    expect(healthy.status).not.toBeNull();
+    expect(healthy).not.toHaveProperty("problem");
+
+    process.env.PROJECTS_ROOTS = previousRoots;
+    fs.rmSync(repoRoot, { recursive: true, force: true });
+    await app.close();
+  });
+
   it("reports isRepo: false for a directory that isn't a git repo (issue #76)", async () => {
     const notARepo = fs.mkdtempSync(path.join(os.tmpdir(), "internal-git-status-not-a-repo-"));
     const previousRoots = process.env.PROJECTS_ROOTS;
