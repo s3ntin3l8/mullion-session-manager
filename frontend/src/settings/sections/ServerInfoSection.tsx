@@ -97,7 +97,7 @@ export function ServerInfoSection() {
         // from the saved settings.
         const cacheResult =
           mode === "aggressive" && caches?.available && selectedCaches.length > 0
-            ? await settle("Cache cleanup failed.", () => api.pruneCacheStorage())
+            ? await settle("Cache cleanup failed.", () => api.pruneCacheStorage(selectedCaches))
             : null;
         const parts = [
           ["Docker", dockerResult],
@@ -311,7 +311,7 @@ export function ServerInfoSection() {
                 .reduce((sum, c) => sum + c.bytes, 0),
             )}
             ). They are rebuilt or re-downloaded on next use, e.g. Playwright browsers and Hugging
-            Face models.
+            Face models. Close anything using them first, such as a running Playwright browser.
           </div>
         </>
       )}

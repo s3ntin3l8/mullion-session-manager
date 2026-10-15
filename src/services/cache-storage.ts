@@ -100,12 +100,20 @@ export async function pruneCacheStorage(
       const full = path.join(root, dir);
       if (!(await realDirectory(full))) continue;
       const before = await dirSize(full);
-      let failed = 0;
-      for (const name of await fs.readdir(full)) {
+      let names: string[] = [];
+      try {
+        names = await fs.readdir(full);
+      } catch (error) {
+        // Unreadable or vanished since the check above: report it, move on.
+        if (errors.length < 3) {
+          errors.push(`${id}: ${error instanceof Error ? error.message : "cannot read directory"}`);
+        }
+        continue;
+      }
+      for (const name of names) {
         try {
           await fs.rm(path.join(full, name), { recursive: true, force: true });
         } catch (error) {
-          failed += 1;
           if (errors.length < 3) {
             errors.push(
               `${id}/${name}: ${error instanceof Error ? error.message : "remove failed"}`,
@@ -115,7 +123,6 @@ export async function pruneCacheStorage(
       }
       reclaimedBytes += Math.max(0, before - (await dirSize(full)));
       cleaned.push(id);
-      if (failed > 0 && errors.length >= 3) break;
     }
     return {
       output: `Cleaned ${String(cleaned.length)} cache${cleaned.length === 1 ? "" : "s"}${

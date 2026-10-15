@@ -270,6 +270,7 @@ describe("Settings -> Server info resources", () => {
         await screen.findByText("Freed 2.0 GiB (Docker 1.0 GiB, caches 1.0 GiB)."),
       ).toBeInTheDocument();
       expect(api.pruneCacheStorage).toHaveBeenCalledOnce();
+      expect(api.pruneCacheStorage).toHaveBeenCalledWith(["pip"]);
     });
 
     it("does not call the caches prune when nothing is ticked", async () => {

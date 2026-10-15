@@ -15,21 +15,37 @@ vi.mock("../../src/services/cache-storage.js", async (importOriginal) => ({
 import { buildTestApp } from "../helpers/app.js";
 
 describe("/api/storage/caches", () => {
-  it("prunes exactly the caches saved in settings and ignores any request body", async () => {
+  it("empties only ids that are both requested and saved, so neither side can widen the other", async () => {
     const app = await buildTestApp();
     await app.inject({
       method: "PATCH",
       url: "/api/settings",
       payload: { diskCleanup: { cacheDirs: ["pip", "../../etc", "go-build"] } },
     });
+    // The client just unticked go-build (its PATCH may still be debounced) and
+    // asks for pip plus a cache that was never opted in.
     const res = await app.inject({
       method: "POST",
       url: "/api/storage/caches/prune",
-      payload: { cacheDirs: ["huggingface"] },
+      payload: { cacheDirs: ["pip", "huggingface"] },
     });
     expect(res.statusCode).toBe(200);
-    expect(pruneCacheStorage).toHaveBeenLastCalledWith(["pip", "go-build"]);
+    expect(pruneCacheStorage).toHaveBeenLastCalledWith(["pip"]);
     expect(res.json()).toEqual({ output: "", reclaimedBytes: 9 });
+
+    // No body at all: fall back to the saved set.
+    await app.inject({ method: "POST", url: "/api/storage/caches/prune" });
+    expect(pruneCacheStorage).toHaveBeenLastCalledWith(["pip", "go-build"]);
+  });
+
+  it("rejects an oversized prune body", async () => {
+    const app = await buildTestApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/storage/caches/prune",
+      payload: { cacheDirs: Array.from({ length: 21 }, () => "pip") },
+    });
+    expect(res.statusCode).toBe(400);
   });
 
   it("prunes nothing when nothing is opted in", async () => {

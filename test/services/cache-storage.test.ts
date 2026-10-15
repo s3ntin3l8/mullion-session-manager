@@ -109,6 +109,21 @@ describe("cache-storage", () => {
     }
   });
 
+  it("reports an unreadable cache dir without failing or losing earlier work", async () => {
+    await fill("huggingface", { "m/w": "z".repeat(3000) });
+    await fill("pip", { f: "x" });
+    const pip = path.join(root, "pip");
+    await fs.chmod(pip, 0o000);
+    try {
+      const result = await pruneCacheStorage(["huggingface", "pip"], { cacheRoot: root });
+      expect(await fs.readdir(path.join(root, "huggingface"))).toEqual([]);
+      expect(result.reclaimedBytes).toBeGreaterThanOrEqual(3000);
+      if (process.getuid?.() !== 0) expect(result.error).toContain("pip");
+    } finally {
+      await fs.chmod(pip, 0o700);
+    }
+  });
+
   it("rejects a concurrent prune", async () => {
     await fill(
       "pip",

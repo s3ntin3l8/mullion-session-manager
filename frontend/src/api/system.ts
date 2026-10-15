@@ -93,9 +93,13 @@ export const systemApi = {
     }),
 
   getCacheStorage: () => request<CacheStorageStatus>("/api/storage/caches"),
-  // The server prunes whichever caches settings.diskCleanup.cacheDirs lists.
-  pruneCacheStorage: () =>
-    request<DockerPruneResult>("/api/storage/caches/prune", { method: "POST" }),
+  // The server empties only ids that are in this list AND in its saved
+  // settings.diskCleanup.cacheDirs (see the route for why both).
+  pruneCacheStorage: (cacheDirs: string[]) =>
+    request<DockerPruneResult>("/api/storage/caches/prune", {
+      method: "POST",
+      body: JSON.stringify({ cacheDirs }),
+    }),
 
   listOpenCodeModels: () => request<string[]>("/api/opencode/models"),
   listAgyModels: () => request<string[]>("/api/agy/models"),

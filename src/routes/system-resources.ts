@@ -146,14 +146,29 @@ export async function systemResourcesRoute(app: FastifyInstance) {
     return value;
   });
 
-  // No body: which caches to empty is read from the stored settings, so a
-  // caller can't widen the set beyond what the user opted into.
-  app.post(
+  // Both sides must agree: the client sends the ids it is showing as ticked
+  // (settings are saved on a short debounce, so the stored set can briefly lag
+  // an untick), and only ids that are ALSO in the stored opt-in set are
+  // emptied. Neither a request nor a stale store can widen the other.
+  app.post<{ Body?: { cacheDirs?: string[] } | null }>(
     "/api/storage/caches/prune",
-    { config: { rateLimit: DOCKER_PRUNE_RATE_LIMIT } },
-    async (_request, reply) => {
+    {
+      config: { rateLimit: DOCKER_PRUNE_RATE_LIMIT },
+      schema: {
+        body: {
+          type: ["object", "null"],
+          properties: { cacheDirs: { type: "array", items: { type: "string" }, maxItems: 20 } },
+          additionalProperties: false,
+        },
+      },
+    },
+    async (request, reply) => {
       try {
-        const result = await pruneCacheStorage(getStoredSettings(app.db).diskCleanup.cacheDirs);
+        const stored = getStoredSettings(app.db).diskCleanup.cacheDirs;
+        const requested = request.body?.cacheDirs;
+        const ids =
+          requested === undefined ? stored : stored.filter((id) => requested.includes(id));
+        const result = await pruneCacheStorage(ids);
         cached = null;
         cachesCached = null;
         return result;
