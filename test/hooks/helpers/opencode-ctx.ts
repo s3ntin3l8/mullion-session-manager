@@ -31,6 +31,8 @@ export function createFakeCtx(directory = "/work/dir") {
     decision: string;
     message?: string;
   }> = [];
+  let diffResult: unknown = [];
+  const diffCalls: unknown[] = [];
 
   const registration = (): FakeRegistration => {
     const reg: FakeRegistration = {
@@ -86,6 +88,13 @@ export function createFakeCtx(directory = "/work/dir") {
         permissionReplies.push(input);
       },
     },
+    vcs: {
+      diff: async (input: unknown) => {
+        diffCalls.push(input);
+        if (diffResult instanceof Error) throw diffResult;
+        return diffResult;
+      },
+    },
     session: {
       hook: async (name: string, callback: (event: unknown) => unknown) => {
         sessionHooks.set(name, callback);
@@ -100,6 +109,10 @@ export function createFakeCtx(directory = "/work/dir") {
     toolHooks,
     sessionHooks,
     permissionReplies,
+    diffCalls,
+    setDiffResult(result: unknown) {
+      diffResult = result;
+    },
     registrations,
     /** Delivers one event to the plugin's subscription loop. */
     push(event: unknown) {

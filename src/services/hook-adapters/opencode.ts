@@ -75,10 +75,12 @@ const OPENCODE_COMMAND_RE = /^(?:\S*\/)?opencode(?:\s|$)/;
 // file's parity test asserting mapOpenCodeEvent's output stays inside this
 // set.
 //
-// v2 dropped the server-side sources for 1.x's `notification` (toast,
-// worktree.failed, mcp.browser.open.failed), `todo` (todo.updated) and
-// `session_diff` (session.diff) events, so those kinds are no longer listed —
-// tracked in issue #1592.
+// v2 has no server-side source for 1.x's `todo` (no todo tool), `session.diff`
+// or the toast, so `todo` is no longer emitted. `session_diff` is derived by
+// the plugin (step files + `ctx.vcs.diff`, tool-sourced like promote_request —
+// no mapOpenCodeEvent output to parity-test it against) and `notification`
+// comes from v2's `worktree.failed` / `workspace.failed` /
+// `session.compaction.failed` (issue #1592).
 /** Per-session files/dirs the opencode adapter writes under sessionsDir (#949). */
 export function opencodeTier0Path(sessionsDir: string, id: string): string {
   return path.join(sessionsDir, `${id}.opencode-tier0.md`);
@@ -115,6 +117,8 @@ export const OPENCODE_EMITS = [
   // opencode's own permission dock (tool-sourced like promote_request, so
   // there is no mapOpenCodeEvent output to parity-test it against).
   "review_gate",
+  "session_diff",
+  "notification",
   // Issue #271 follow-up — the live opencode session id, reported on every
   // finished turn (see opencode-plugin.js's mapOpenCodeEvent) so a later
   // promote can carry full conversation history, not just a seed summary.

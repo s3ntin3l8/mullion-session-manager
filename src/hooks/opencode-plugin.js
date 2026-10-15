@@ -17,9 +17,11 @@
 // v2 differences from the 1.x plugin this replaces:
 //  - events come from `ctx.event.subscribe()` (an async iterable), and the
 //    payload is under `event.data` (1.x: `event.properties`). Event names
-//    changed — see mapOpenCodeEvent. `todo.updated`, `session.diff`,
-//    `tui.toast.show`, `worktree.failed` and `mcp.browser.open.failed` have
-//    no v2 server-side source, so those hook kinds are no longer emitted.
+//    changed — see mapOpenCodeEvent. `todo.updated` (no todo tool in v2) has
+//    no source, so `todo` is no longer emitted; `session.diff` and the toast
+//    are never published either, so `session_diff` is DERIVED (step files +
+//    `ctx.vcs.diff`, see createSessionDiffTracker) and `notification` comes
+//    from the failure events v2 does publish (issue #1592).
 //  - the plugin may run in a server whose `process.cwd()` is not the
 //    session's directory (and `setup` runs once per Location), so directories
 //    come from `event.location.directory` / `ctx.location.directory`, never
@@ -277,10 +279,92 @@ function mapOpenCodeEvent(
   if (type === "session.compaction.started") {
     return isChild ? null : [{ kind: "compact", state: "started" }];
   }
-  if (type === "session.compaction.ended" || type === "session.compaction.failed") {
+  if (type === "session.compaction.ended") {
     return isChild ? null : [{ kind: "compact", state: "finished" }];
   }
+  if (type === "session.compaction.failed") {
+    if (isChild) return null;
+    return [
+      { kind: "compact", state: "finished" },
+      { kind: "notification", title: "opencode compaction failed", body: errorText(data.error) },
+    ];
+  }
+
+  // Server-side failures v2 publishes in place of 1.x's toast
+  // (`worktree.failed` / `workspace.failed` carry just `message`).
+  if (type === "worktree.failed" || type === "workspace.failed") {
+    const what = type === "worktree.failed" ? "worktree" : "workspace";
+    return [{ kind: "notification", title: `opencode ${what} failed`, body: errorText(data) }];
+  }
   return null;
+}
+
+/** The human-readable message of a v2 error-ish payload (`{ message }` or
+ * `{ error: { message } }` callers pass the inner object); never empty. */
+function errorText(value) {
+  const message = nonEmptyString(value?.message) ? value.message : null;
+  return message ?? "unknown error";
+}
+
+/** Derives the `session_diff` v2 never publishes (issue #1592): `session.diff`
+ * has no publisher, but each step's `session.step.ended` lists the files it
+ * changed and the plugin's `ctx.vcs.diff` returns the working-copy diff. At
+ * the end of a turn that touched files, the diff entries for exactly those
+ * files are forwarded (counts only — no patch text, to keep the socket
+ * payload small). `getDiff` is injected (`() => ctx.vcs.diff({ mode:
+ * "working" })`); every failure is swallowed — a missing diff must never
+ * affect the turn. Child (subagent) sessions neither contribute nor end a
+ * turn. */
+function createSessionDiffTracker(getDiff, forward) {
+  const touched = new Set();
+  const stripDotSlash = (file) => file.replace(/^\.\//, "");
+  return {
+    observe(event, state) {
+      const type = event?.type;
+      const data = event?.data;
+      if (!data || typeof data !== "object") return;
+      const sessionID = data.sessionID;
+      if (nonEmptyString(sessionID) && state.childSessions.has(sessionID)) return;
+      if (type === "session.execution.started") {
+        touched.clear();
+      } else if (type === "session.step.ended") {
+        if (Array.isArray(data.files)) {
+          for (const file of data.files.filter(nonEmptyString)) touched.add(stripDotSlash(file));
+        }
+      } else if (type === "session.execution.succeeded" && touched.size > 0) {
+        const files = new Set(touched);
+        touched.clear();
+        void (async () => {
+          try {
+            const result = await getDiff();
+            const entries = Array.isArray(result) ? result : result?.data;
+            if (!Array.isArray(entries)) return;
+            const changed = entries
+              .filter(
+                (entry) =>
+                  nonEmptyString(entry?.file) &&
+                  [...files].some((file) => {
+                    const diffFile = stripDotSlash(entry.file);
+                    return (
+                      diffFile === file ||
+                      file.endsWith(`/${diffFile}`) ||
+                      diffFile.endsWith(`/${file}`)
+                    );
+                  }),
+              )
+              .map((entry) => ({
+                file: entry.file,
+                additions: Number.isFinite(entry.additions) ? entry.additions : 0,
+                deletions: Number.isFinite(entry.deletions) ? entry.deletions : 0,
+              }));
+            if (changed.length > 0) forward([{ kind: "session_diff", files: changed }]);
+          } catch {
+            // best-effort: the timeline entry is optional
+          }
+        })();
+      }
+    },
+  };
 }
 
 // ── Command parsing (issue: sidebar worktree detection) ──────────────
@@ -820,6 +904,10 @@ const MullionHookEmitter = {
         ctx.permission.reply({ sessionID, requestID, decision, ...(message ? { message } : {}) }),
       (data) => forward(mapOpenCodeEvent({ type: "permission.asked", data }, baseCwd, null, state)),
     );
+    const sessionDiff = createSessionDiffTracker(
+      () => ctx.vcs.diff({ mode: "working" }),
+      (messages) => forward(messages),
+    );
 
     const forward = (messages) => {
       if (messages) for (const msg of messages) sender.send(msg);
@@ -834,6 +922,7 @@ const MullionHookEmitter = {
             assistantText.observe(event, state);
             const gated = event?.type === "permission.asked" && permissionGates.open(event.data);
             if (event?.type === "permission.replied") permissionGates.replied(event.data);
+            sessionDiff.observe(event, state);
             // The reconstructed text is only used by the turn-end message —
             // don't sort/join it on every high-frequency event.
             const text =
@@ -920,6 +1009,7 @@ MullionHookEmitter.createAssistantTextTracker = createAssistantTextTracker;
 MullionHookEmitter.promoteRequest = promoteRequest;
 MullionHookEmitter.reviewGateRequest = reviewGateRequest;
 MullionHookEmitter.createPermissionGates = createPermissionGates;
+MullionHookEmitter.createSessionDiffTracker = createSessionDiffTracker;
 MullionHookEmitter.readInstructionTexts = readInstructionTexts;
 MullionHookEmitter.parseGitWorktreeAdd = parseWorktreeAddCommand;
 MullionHookEmitter.parseGitCheckout = parseGitCheckoutCommand;

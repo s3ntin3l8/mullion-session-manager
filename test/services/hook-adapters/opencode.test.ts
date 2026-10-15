@@ -859,12 +859,14 @@ describe("OPENCODE_EMITS (issue #321)", () => {
     expect(openCodeAdapter.emits).toContain("subagent");
   });
 
-  // opencode v2 has no server-side source for these three 1.x events (no
-  // todo tool, no session.diff, no toast / worktree.failed /
-  // mcp.browser.open.failed publisher), so advertising them would promise
-  // statuses the plugin can never produce.
-  it.each(["todo", "session_diff", "notification"])("no longer advertises %s", (kind) => {
-    expect(OPENCODE_EMITS).not.toContain(kind);
+  // opencode v2 has no todo tool, so `todo` can never be produced.
+  it("no longer advertises todo (no v2 source)", () => {
+    expect(OPENCODE_EMITS).not.toContain("todo");
+  });
+
+  it("advertises the derived session_diff and the failure-sourced notification (issue #1592)", () => {
+    expect(OPENCODE_EMITS).toContain("session_diff");
+    expect(OPENCODE_EMITS).toContain("notification");
   });
 });
 

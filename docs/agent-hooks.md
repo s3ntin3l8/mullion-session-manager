@@ -458,12 +458,21 @@ against the call's own `workdir`. It also exposes its own
 issue #271 gives Claude Code via the `mullion` MCP server), whose wait is
 cancelled by the call's abort signal.
 
-**No longer emitted** (no v2 server-side source): `todo` (`todo.updated`),
-`session_diff` (`session.diff`), and `notification` (`tui.toast.show`,
-`worktree.failed`, `mcp.browser.open.failed`) — tracked in issue #1592; the
-frontend still renders those kinds for other agents. The 1.x file-watcher `file.edited` is replaced
-by `session.step.ended`'s `files`; the noisier `filesystem.changed` is
-deliberately not used.
+**Derived instead of forwarded** (issue #1592; v2 publishes none of 1.x's
+`session.diff`, `tui.toast.show` or `todo.updated`): `session_diff` is built
+by the plugin — it collects `session.step.ended`'s `files` over a turn and, on
+`session.execution.succeeded`, calls `ctx.vcs.diff({ mode: "working" })` and
+forwards the entries for exactly those files (counts only, no patch text;
+best-effort, never affects the turn; subagent sessions are ignored).
+`notification` now comes from the failures v2 does publish: `worktree.failed`,
+`workspace.failed` and `session.compaction.failed` (title "opencode … failed",
+body = the error message).
+
+**No longer emitted:** `todo` — v2 has no todo tool or event, so there is
+nothing to forward (tracked upstream-blocked in issue #1592); the frontend
+still renders it for Claude Code. The 1.x file-watcher `file.edited` is
+replaced by `session.step.ended`'s `files`; the noisier `filesystem.changed`
+is deliberately not used.
 
 **Promote.** `--prompt <text>` on the default `opencode [directory]`
 command submits the first turn (verified against 2.0.29's TUI source). For

@@ -330,14 +330,40 @@ describe("mapOpenCodeEvent (opencode v2 events)", () => {
       ]);
     });
 
-    it.each(["session.compaction.ended", "session.compaction.failed"])(
-      "maps %s to compact finished",
-      (type) => {
-        expect(mapOpenCodeEvent(ev(type, { sessionID: "s" }))).toEqual([
-          { kind: "compact", state: "finished" },
-        ]);
-      },
-    );
+    it("maps ended to compact finished", () => {
+      expect(mapOpenCodeEvent(ev("session.compaction.ended", { sessionID: "s" }))).toEqual([
+        { kind: "compact", state: "finished" },
+      ]);
+    });
+
+    it("maps failed to compact finished plus a notification carrying the error (issue #1592)", () => {
+      expect(
+        mapOpenCodeEvent(
+          ev("session.compaction.failed", { sessionID: "s", error: { message: "too big" } }),
+        ),
+      ).toEqual([
+        { kind: "compact", state: "finished" },
+        { kind: "notification", title: "opencode compaction failed", body: "too big" },
+      ]);
+    });
+
+    it("falls back to 'unknown error' when a failure carries no message", () => {
+      expect(mapOpenCodeEvent(ev("session.compaction.failed", { sessionID: "s" }))).toEqual([
+        { kind: "compact", state: "finished" },
+        { kind: "notification", title: "opencode compaction failed", body: "unknown error" },
+      ]);
+    });
+  });
+
+  describe("server-side failure notifications (issue #1592)", () => {
+    it.each([
+      ["worktree.failed", "opencode worktree failed"],
+      ["workspace.failed", "opencode workspace failed"],
+    ])("maps %s to a notification", (type, title) => {
+      expect(mapOpenCodeEvent(ev(type, { message: "disk full" }))).toEqual([
+        { kind: "notification", title, body: "disk full" },
+      ]);
+    });
   });
 
   // opencode's `question` tool is a v2 form whose metadata.kind is "question".
@@ -461,19 +487,16 @@ describe("mapOpenCodeEvent (opencode v2 events)", () => {
     });
 
     // v2 has no server-side publisher for these 1.x events (see opencode.ts).
-    it.each([
-      "todo.updated",
-      "session.diff",
-      "tui.toast.show",
-      "worktree.failed",
-      "mcp.browser.open.failed",
-    ])("does not map %s", (type) => {
-      expect(
-        mapOpenCodeEvent(
-          ev(type, { content: "x", status: "pending", variant: "error", diff: [{ file: "a" }] }),
-        ),
-      ).toBeNull();
-    });
+    it.each(["todo.updated", "session.diff", "tui.toast.show", "mcp.browser.open.failed"])(
+      "does not map %s",
+      (type) => {
+        expect(
+          mapOpenCodeEvent(
+            ev(type, { content: "x", status: "pending", variant: "error", diff: [{ file: "a" }] }),
+          ),
+        ).toBeNull();
+      },
+    );
   });
 });
 
@@ -1361,7 +1384,8 @@ describe("mapOpenCodeEvent emits capability parity (issue: extend surfaced sessi
       ev("vcs.branch.updated", { branch: "feat/foo" }, "/repo"),
       ev("session.compaction.started", { sessionID: "m" }),
       ev("session.compaction.ended", { sessionID: "m" }),
-      ev("session.compaction.failed", { sessionID: "m" }),
+      ev("session.compaction.failed", { sessionID: "m", error: { message: "ctx too big" } }),
+      ev("worktree.failed", { message: "boom" }),
       ev("session.created", { sessionID: "c", parentID: "m" }),
       ev("session.execution.succeeded", { sessionID: "c" }),
       ev("form.created", {
@@ -1389,13 +1413,17 @@ describe("mapOpenCodeEvent emits capability parity (issue: extend surfaced sessi
     const producible = driveAll();
     // cwd_changed/git_branch also come from the tool hook, agent_session etc. from events above
     for (const kind of OPENCODE_EMITS) {
-      if (kind === "promote_request" || kind === "review_gate") continue;
+      if (kind === "promote_request" || kind === "review_gate" || kind === "session_diff") continue;
       expect(producible).toContain(kind);
     }
   });
 
   it("review_gate (opened by the plugin's permission gate, not mapped) is declared in emits", () => {
     expect(openCodeAdapter.emits).toContain("review_gate");
+  });
+
+  it("session_diff (derived in setup from step files + vcs.diff, not mapped) is declared in emits", () => {
+    expect(openCodeAdapter.emits).toContain("session_diff");
   });
 
   it("promote_request (the plugin's own tool, not an event type) is declared in emits", () => {
@@ -1669,5 +1697,103 @@ describe("permission review gates (issue #1594)", () => {
     const abort = new AbortController();
     abort.abort();
     await expect(MullionHookEmitter.reviewGateRequest("p", "g1", abort.signal)).resolves.toBeNull();
+  });
+});
+
+describe("createSessionDiffTracker (issue #1592)", () => {
+  const { createSessionDiffTracker } = MullionHookEmitter as unknown as {
+    createSessionDiffTracker: (
+      getDiff: () => Promise<unknown>,
+      forward: (messages: unknown[]) => void,
+    ) => { observe: (event: unknown, state: unknown) => void };
+  };
+
+  function setup(diff: () => Promise<unknown>) {
+    const out: unknown[][] = [];
+    const tracker = createSessionDiffTracker(diff, (m) => out.push(m));
+    return { out, tracker, state: createMapState() };
+  }
+  const settle = () => new Promise((r) => setTimeout(r, 10));
+
+  it("forwards the diff entries for exactly the files a turn touched (counts only)", async () => {
+    const { out, tracker, state } = setup(async () => ({
+      data: [
+        { file: "src/a.ts", patch: "@@", additions: 3, deletions: 1, status: "modified" },
+        { file: "src/untouched.ts", patch: "@@", additions: 9, deletions: 9, status: "modified" },
+      ],
+    }));
+    tracker.observe(ev("session.execution.started", { sessionID: "m" }), state);
+    tracker.observe(ev("session.step.ended", { sessionID: "m", files: ["./src/a.ts"] }), state);
+    tracker.observe(ev("session.execution.succeeded", { sessionID: "m" }), state);
+    await settle();
+    expect(out).toEqual([
+      [{ kind: "session_diff", files: [{ file: "src/a.ts", additions: 3, deletions: 1 }] }],
+    ]);
+  });
+
+  it("accepts a bare-array diff result and matches by path suffix", async () => {
+    const { out, tracker, state } = setup(async () => [
+      { file: "a.ts", additions: 1, deletions: 0 },
+    ]);
+    tracker.observe(ev("session.step.ended", { sessionID: "m", files: ["src/a.ts"] }), state);
+    tracker.observe(ev("session.execution.succeeded", { sessionID: "m" }), state);
+    await settle();
+    expect(out).toHaveLength(1);
+  });
+
+  it("emits nothing when the turn touched no files, and does not call vcs.diff", async () => {
+    let calls = 0;
+    const { out, tracker, state } = setup(async () => {
+      calls++;
+      return [];
+    });
+    tracker.observe(ev("session.execution.succeeded", { sessionID: "m" }), state);
+    await settle();
+    expect(calls).toBe(0);
+    expect(out).toHaveLength(0);
+  });
+
+  it("emits nothing when none of the touched files appear in the diff", async () => {
+    const { out, tracker, state } = setup(async () => [
+      { file: "other.ts", additions: 1, deletions: 1 },
+    ]);
+    tracker.observe(ev("session.step.ended", { sessionID: "m", files: ["a.ts"] }), state);
+    tracker.observe(ev("session.execution.succeeded", { sessionID: "m" }), state);
+    await settle();
+    expect(out).toHaveLength(0);
+  });
+
+  it("swallows a failing or malformed vcs.diff", async () => {
+    for (const diff of [
+      async () => {
+        throw new Error("no vcs");
+      },
+      async () => "nonsense",
+    ]) {
+      const { out, tracker, state } = setup(diff);
+      tracker.observe(ev("session.step.ended", { sessionID: "m", files: ["a.ts"] }), state);
+      tracker.observe(ev("session.execution.succeeded", { sessionID: "m" }), state);
+      await settle();
+      expect(out).toHaveLength(0);
+    }
+  });
+
+  it("ignores child (subagent) sessions and resets on a new turn", async () => {
+    const { out, tracker, state } = setup(async () => [
+      { file: "a.ts", additions: 1, deletions: 0 },
+    ]);
+    state.childSessions.add("child");
+    tracker.observe(ev("session.step.ended", { sessionID: "child", files: ["a.ts"] }), state);
+    tracker.observe(ev("session.execution.succeeded", { sessionID: "child" }), state);
+    tracker.observe(ev("session.step.ended", { sessionID: "m", files: ["a.ts"] }), state);
+    tracker.observe(ev("session.execution.started", { sessionID: "m" }), state);
+    tracker.observe(ev("session.execution.succeeded", { sessionID: "m" }), state);
+    await settle();
+    expect(out).toHaveLength(0);
+  });
+
+  it("ignores payload-less events", () => {
+    const { tracker, state } = setup(async () => []);
+    expect(() => tracker.observe({ type: "session.step.ended" }, state)).not.toThrow();
   });
 });
