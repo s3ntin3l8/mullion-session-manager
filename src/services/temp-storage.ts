@@ -142,7 +142,7 @@ function olderThan(entries: Candidate[], ageMs: number, now: number): Candidate[
   return entries.filter((entry) => now - entry.newestMtimeMs > ageMs);
 }
 
-async function dirSize(dir: string): Promise<number> {
+export async function dirSize(dir: string): Promise<number> {
   let total = 0;
   let names: string[];
   try {

@@ -143,6 +143,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   layoutMode: "auto",
   tabletPaneCap: 2,
   projectRoots: [],
+  diskCleanup: { cacheDirs: [] },
   launchers: {
     defaultShell: "zsh",
     defaultAgent: "claude",

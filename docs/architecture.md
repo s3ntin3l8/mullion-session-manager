@@ -170,7 +170,9 @@ way as a namespaced one.
   surface — CPU/memory/disk sampling, Docker storage inspection/prune, and the
   host temp-file tier in `services/temp-storage.ts` — user-owned, socket-free,
   non-denylisted top-level `os.tmpdir()` entries by newest in-tree mtime, plus
-  `npm cache clean` in aggressive mode),
+  `npm cache clean` in aggressive mode, and the opt-in `~/.cache` allowlist in
+  `services/cache-storage.ts` — fixed ids, chosen via `settings.diskCleanup`,
+  read server-side so a request can't widen the set),
   `internal-schemas` (not a route file at all — the extracted JSON Schema
   bodies/params `internal.ts`'s DB-less agent API registers, kept out of
   `internal.ts` itself to stop ~450 lines of hand-written schema literals

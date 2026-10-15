@@ -129,6 +129,14 @@ describe("deepMerge", () => {
 });
 
 describe("sanitizeSettings", () => {
+  it("keeps only allowlisted ~/.cache ids in diskCleanup.cacheDirs (#1606)", () => {
+    const dirty = mergeSettings({
+      diskCleanup: { cacheDirs: ["pip", "../../.ssh", "pip", "go-build", 3] },
+    });
+    expect(sanitizeSettings(dirty).diskCleanup.cacheDirs).toEqual(["pip", "go-build"]);
+    expect(sanitizeSettings(mergeSettings({})).diskCleanup.cacheDirs).toEqual([]);
+  });
+
   it("clamps out-of-range and non-finite numeric fields to their defaults", () => {
     const dirty = mergeSettings({
       terminal: { fontSize: 999, padding: -1, scrollback: -1, reconnect: { maxAttempts: 0 } },

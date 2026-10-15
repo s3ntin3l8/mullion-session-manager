@@ -6,15 +6,17 @@ import type {
   DockerStorageStatus,
   SystemStats,
   TempStorageStatus,
+  CacheStorageStatus,
 } from "../../api/index.js";
 import { usePolling } from "../../hooks/usePolling.js";
 import { formatRelativeAge } from "../../relativeTime.js";
-import { Eyebrow, SecondaryButton } from "../../ui/primitives.js";
+import { Eyebrow, SecondaryButton, Toggle } from "../../ui/primitives.js";
 import { LogLevelSetting } from "../RuntimeSettings.js";
 import { ErrorText } from "../../ui/ErrorText.js";
 import { claimPostUpdateReload } from "../../postUpdateReload.js";
 import { formatBytes } from "../../formatBytes.js";
 import { ConfirmButton } from "../../ui/ConfirmButton.js";
+import { useDashboardStore } from "../../store/index.js";
 
 function formatUptime(seconds: number): string {
   const d = Math.floor(seconds / 86400);
@@ -31,6 +33,16 @@ export function ServerInfoSection() {
   const [docker, setDocker] = useState<DockerStorageStatus | null>(null);
   const [resourceError, setResourceError] = useState<string | null>(null);
   const [temp, setTemp] = useState<TempStorageStatus | null>(null);
+  const [caches, setCaches] = useState<CacheStorageStatus | null>(null);
+  const settings = useDashboardStore((s) => s.settings);
+  const updateSettings = useDashboardStore((s) => s.updateSettings);
+  const selectedCaches = settings.diskCleanup.cacheDirs;
+  const hasCaches = !!caches?.available && caches.caches.some((c) => c.exists);
+  // A cache that was opted in but has since disappeared from disk stays listed
+  // (as "not found") so the stale opt-in can still be cleared.
+  const visibleCaches = (caches?.caches ?? []).filter(
+    (c) => c.exists || selectedCaches.includes(c.id),
+  );
   const [pruningMode, setPruningMode] = useState<DockerPruneMode | null>(null);
   const pruning = pruningMode !== null;
   const [pruneResult, setPruneResult] = useState<string | null>(null);
@@ -40,11 +52,13 @@ export function ServerInfoSection() {
       api.getSystemStats(),
       api.getDockerStorage(),
       api.getTempStorage().catch(() => null),
+      api.getCacheStorage().catch(() => null),
     ])
-      .then(([nextStats, nextDocker, nextTemp]) => {
+      .then(([nextStats, nextDocker, nextTemp, nextCaches]) => {
         setStats(nextStats);
         setDocker(nextDocker);
         setTemp(nextTemp);
+        setCaches(nextCaches);
         setResourceError(null);
       })
       .catch((error: unknown) => {
@@ -84,11 +98,27 @@ export function ServerInfoSection() {
         const tempResult = temp?.available
           ? await settle("Temp file cleanup failed.", () => api.pruneTempStorage(mode))
           : null;
-        const total = (dockerResult?.reclaimedBytes ?? 0) + (tempResult?.reclaimedBytes ?? 0);
-        const errors = [dockerResult?.error, tempResult?.error].filter(Boolean).join("; ");
+        // Caches are opt-in and aggressive-only; the server reads which ones
+        // from the saved settings.
+        const cacheResult =
+          mode === "aggressive" && caches?.available && selectedCaches.length > 0
+            ? await settle("Cache cleanup failed.", () => api.pruneCacheStorage(selectedCaches))
+            : null;
+        const parts = [
+          ["Docker", dockerResult],
+          ["temp files", tempResult],
+          ["caches", cacheResult],
+        ].filter((part): part is [string, NonNullable<typeof dockerResult>] => part[1] !== null);
+        const total = parts.reduce((sum, [, result]) => sum + result.reclaimedBytes, 0);
+        const errors = parts
+          .map(([, result]) => result.error)
+          .filter(Boolean)
+          .join("; ");
         let message = `Freed ${formatBytes(total)}`;
-        if (dockerResult && tempResult) {
-          message += ` (Docker ${formatBytes(dockerResult.reclaimedBytes)}, temp files ${formatBytes(tempResult.reclaimedBytes)})`;
+        if (parts.length > 1) {
+          message += ` (${parts
+            .map(([label, result]) => `${label} ${formatBytes(result.reclaimedBytes)}`)
+            .join(", ")})`;
         }
         setPruneResult(
           !errors ? `${message}.` : total === 0 ? errors : `${message}, then stopped: ${errors}`,
@@ -250,7 +280,45 @@ export function ServerInfoSection() {
           </div>
         </>
       )}
-      {(docker?.available || temp?.available) && (
+      {caches?.available && visibleCaches.length > 0 && (
+        <>
+          <div className="settings-info-table">
+            {visibleCaches.map((cache, i) => (
+              <div key={cache.id} className={`settings-info-row${i % 2 === 0 ? " zebra" : ""}`}>
+                <span className="settings-info-key">{cache.label}</span>
+                <span className="settings-info-value">
+                  {cache.exists ? formatBytes(cache.bytes) : "not found"}{" "}
+                  <Toggle
+                    size="small"
+                    on={selectedCaches.includes(cache.id)}
+                    ariaLabel={`Clean ${cache.label} in aggressive cleanup`}
+                    onChange={(on) =>
+                      updateSettings({
+                        diskCleanup: {
+                          cacheDirs: on
+                            ? [...selectedCaches, cache.id]
+                            : selectedCaches.filter((id) => id !== cache.id),
+                        },
+                      })
+                    }
+                  />
+                </span>
+              </div>
+            ))}
+          </div>
+          <div className="settings-footer-note">
+            Ticked caches under <code>{caches.root}</code> are emptied by aggressive cleanup only (
+            {formatBytes(
+              caches.caches
+                .filter((c) => selectedCaches.includes(c.id))
+                .reduce((sum, c) => sum + c.bytes, 0),
+            )}
+            ). They are rebuilt or re-downloaded on next use, e.g. Playwright browsers and Hugging
+            Face models. Close anything using them first, such as a running Playwright browser.
+          </div>
+        </>
+      )}
+      {(docker?.available || temp?.available || hasCaches) && (
         <>
           {pruneResult && <div className="settings-footer-note">{pruneResult}</div>}
           <div style={{ marginTop: 10, display: "flex", gap: 10 }}>

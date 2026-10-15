@@ -87,6 +87,19 @@ export interface DockerStorageStatus {
   error?: string;
 }
 
+export interface CacheDirStatus {
+  id: string;
+  label: string;
+  bytes: number;
+  exists: boolean;
+}
+
+export interface CacheStorageStatus {
+  available: boolean;
+  root: string;
+  caches: CacheDirStatus[];
+}
+
 export type DockerPruneMode = "safe" | "aggressive";
 
 export interface DockerPruneResult {
@@ -1548,6 +1561,10 @@ export interface AppSettings {
   layoutMode: LayoutMode;
   tabletPaneCap: TabletPaneCap;
   projectRoots: string[];
+  // Mirrors src/services/settings.ts's AppSettings.diskCleanup: which
+  // allowlisted ~/.cache subtrees the aggressive cleanup may empty (ids from
+  // GET /api/storage/caches). Empty = none.
+  diskCleanup: { cacheDirs: string[] };
   launchers: {
     defaultShell: string;
     defaultAgent: string;
