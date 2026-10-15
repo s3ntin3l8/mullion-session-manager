@@ -4,7 +4,11 @@ import { getCodexHookTrust, type CodexHookTrust } from "./hook-adapters/codex-tr
 import type { HookMessageKind } from "./hook-protocol.js";
 import { claudeCodeAdapter } from "./hook-adapters/claude-code.js";
 import { codexAdapter } from "./hook-adapters/codex.js";
-import { openCodeAdapter } from "./hook-adapters/opencode.js";
+import {
+  openCodeAdapter,
+  opencodeVersionWarning,
+  parseOpencodeVersion,
+} from "./hook-adapters/opencode.js";
 import { agyAdapter } from "./hook-adapters/agy.js";
 
 // Detects which shells and AI-CLI agents are actually usable on this host —
@@ -31,6 +35,12 @@ export interface DetectedAgent {
    * per-machine (not per-session), so it belongs in this host-level probe
    * rather than a new route — see getCodexHookTrust(). */
   hookTrust?: CodexHookTrust;
+  /** The CLI's reported `x.y.z` — only probed for opencode (issue #1593),
+   * whose adapter targets v2 only. Omitted when unavailable or unparseable. */
+  version?: string;
+  /** Set (opencode only) when `version` is older than the adapter's minimum,
+   * so the UI can say why a hosted session would fail to launch. */
+  versionWarning?: string;
   /** Issue: extend surfaced session statuses — the hook-protocol `kind`s
    * this agent's launch can ever produce (see the matching HookAgentAdapter's
    * own `emits` doc comment), so the frontend can hide status legend
@@ -80,12 +90,18 @@ const PROBE_KILL_ESCALATION_MS = 2_000;
  * PATH matches exactly what a spawned session would see. Never rejects —
  * "not found" and "probe itself failed to launch" both resolve to null. */
 function probe(bin: string): Promise<string | null> {
+  return runLoginShell(`command -v ${bin}`);
+}
+
+/** Runs one script in the same login-shell shape as `probe` and resolves its
+ * trimmed stdout (null when empty, failed or timed out). */
+function runLoginShell(script: string): Promise<string | null> {
   return new Promise((resolve) => {
     const shell = process.env.SHELL || "/bin/bash";
     let stdout = "";
     let settled = false;
 
-    const child = spawnChild(shell, ["-lc", `command -v ${bin}`], {
+    const child = spawnChild(shell, ["-lc", script], {
       env: buildSessionEnv(),
       // B7 — stderr is never read by anything below, so dropping it
       // entirely (rather than leaving it as a pipe no one drains) is what
@@ -161,6 +177,14 @@ export async function detectAgents(): Promise<DetectedAgent[]> {
   return Promise.all(
     candidates.map(async ({ bin, kind }) => {
       const resolvedPath = await probe(bin);
+      // opencode's adapter is v2-only (issue #1593): record its version and,
+      // if too old, why a hosted session would fail. The `--version` flag is
+      // global (never starts a server).
+      const version =
+        bin === "opencode" && resolvedPath !== null
+          ? parseOpencodeVersion((await runLoginShell("opencode --version")) ?? "")
+          : null;
+      const versionWarning = opencodeVersionWarning(version);
       return {
         id: `${kind}:${bin}`,
         title: bin,
@@ -172,6 +196,8 @@ export async function detectAgents(): Promise<DetectedAgent[]> {
         // compute even when Codex itself isn't installed (getCodexHookTrust
         // just reports "not-installed" in that case too).
         ...(bin === "codex" ? { hookTrust: getCodexHookTrust() } : {}),
+        ...(version ? { version } : {}),
+        ...(versionWarning ? { versionWarning } : {}),
         emits: HOOK_ADAPTER_EMITS_BY_BIN[bin] ?? [],
       };
     }),

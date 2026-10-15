@@ -59,6 +59,15 @@ describe("Settings -> Launchers", () => {
         emits: [],
         hookTrust: "pending",
       },
+      {
+        id: "opencode",
+        title: "opencode",
+        command: "opencode",
+        kind: "agent",
+        available: true,
+        path: "/usr/local/bin/opencode",
+        emits: [],
+      },
     ];
     skipFlags = { claude: "--dangerously-skip-permissions" };
     unexpectedCalls = [];
@@ -124,6 +133,30 @@ describe("Settings -> Launchers", () => {
     expect(screen.getByText("Skip perms")).toBeInTheDocument();
     expect(screen.getByText("Status")).toBeInTheDocument();
     expect(screen.getByText("Show")).toBeInTheDocument();
+  });
+
+  describe("opencode version warning (issue #1593)", () => {
+    it("renders 'update needed' and the warning text for an opencode that is too old", async () => {
+      const warning = "opencode 1.19.0 is too old: Mullion needs opencode 2.0.29 or newer.";
+      agentsDb = agentsDb.map((a) =>
+        a.id === "opencode" ? { ...a, version: "1.19.0", versionWarning: warning } : a,
+      );
+      render(<Settings onClose={vi.fn()} initialSection="launchers" />);
+
+      const row = await screen.findByTestId("launcher-row-opencode");
+      expect(within(row).getByText("update needed")).toBeInTheDocument();
+      expect(within(row).getByTitle(warning)).toBeInTheDocument();
+      expect(within(row).queryByText("available")).not.toBeInTheDocument();
+    });
+
+    it("renders the ordinary 'available' status for a supported opencode", async () => {
+      agentsDb = agentsDb.map((a) => (a.id === "opencode" ? { ...a, version: "2.0.29" } : a));
+      render(<Settings onClose={vi.fn()} initialSection="launchers" />);
+
+      const row = await screen.findByTestId("launcher-row-opencode");
+      expect(within(row).getByText("available")).toBeInTheDocument();
+      expect(within(row).queryByText("update needed")).not.toBeInTheDocument();
+    });
   });
 
   // Issue #882 — this badge (and the config-column remediation text) is the

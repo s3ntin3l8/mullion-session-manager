@@ -22,8 +22,15 @@ vi.mock("../../../src/services/bundle-sync.js", () => ({
     mockRemoveBundleContentForCli(cli),
 }));
 
-const { openCodeAdapter, buildOpenCodeMcpConfig, opencodeStandaloneTransform, OPENCODE_EMITS } =
-  await import("../../../src/services/hook-adapters/opencode.js");
+const {
+  openCodeAdapter,
+  buildOpenCodeMcpConfig,
+  opencodeStandaloneTransform,
+  OPENCODE_EMITS,
+  OPENCODE_MIN_VERSION,
+  opencodeVersionWarning,
+  parseOpencodeVersion,
+} = await import("../../../src/services/hook-adapters/opencode.js");
 const { resolveMcpServerPath } = await import("../../../src/services/hook-adapters/shared.js");
 const { buildAgentGuideBlock, sessionAgentGuidePath } =
   await import("../../../src/services/agent-guide.js");
@@ -1027,5 +1034,37 @@ describe("openCodeAdapter.prepareLaunch — Task Master skill denials", () => {
     for (const value of Object.values(config.permission.skill)) {
       expect(value).toBe("deny");
     }
+  });
+});
+
+describe("opencode version gate (issue #1593)", () => {
+  it.each([
+    ["2.0.29", false],
+    ["2.0.30", false],
+    ["2.1.0", false],
+    ["3.0.0", false],
+    ["2.0.28", true],
+    ["1.19.0", true],
+    ["1.99.99", true],
+  ])("version %s warns: %s", (version, warns) => {
+    expect(opencodeVersionWarning(version) !== null).toBe(warns);
+  });
+
+  it("never warns on a missing version", () => {
+    expect(opencodeVersionWarning(null)).toBeNull();
+  });
+
+  it("names the minimum and the upgrade command in the warning", () => {
+    const warning = opencodeVersionWarning("1.2.3")!;
+    expect(warning).toContain(OPENCODE_MIN_VERSION);
+    expect(warning).toContain("opencode upgrade");
+  });
+
+  it("extracts the x.y.z from varied `--version` output", () => {
+    expect(parseOpencodeVersion("opencode v2.0.29\n")).toBe("2.0.29");
+    expect(parseOpencodeVersion("1.19.0")).toBe("1.19.0");
+    expect(parseOpencodeVersion("Now using node v18.2.0\nopencode v2.0.29\n")).toBe("2.0.29");
+    expect(parseOpencodeVersion("unknown")).toBeNull();
+    expect(parseOpencodeVersion("")).toBeNull();
   });
 });

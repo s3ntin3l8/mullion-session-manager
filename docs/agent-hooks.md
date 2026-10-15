@@ -333,7 +333,7 @@ empirically. The `commandTransform` function appends
 `--bare` in launcher commands unless you deliberately want a stripped-down
 session with no Mullion integration.
 
-**OpenCode** (v2 — **minimum 2.0.29**; 1.x is no longer supported) has no
+**OpenCode** (v2 — **minimum 2.0.29**; 1.x is no longer supported — `GET /api/agents` reports the installed version via `opencode --version`, and Settings → Launchers shows an "update needed" badge with the upgrade hint when it is older, issue #1593) has no
 shell-command hooks at all — only a JS plugin API. Three v2 facts, each
 verified against the installed 2.0.29 binary and its source, shape the whole
 adapter (`hook-adapters/opencode.ts`'s header carries the same list):
