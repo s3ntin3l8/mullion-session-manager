@@ -320,7 +320,7 @@ function SourceControlView({
               supports. */}
           {gitStatus === null ? (
             <div className="github-panel-empty-row" title={effectiveProject?.cwd}>
-              {effectiveProjectId != null && gitProblems[effectiveProjectId]
+              {gitProblems[effectiveProjectId]
                 ? gitProblems[effectiveProjectId].message
                 : isRemoteProject
                   ? "Not a git repository, or the host is unreachable."
@@ -328,7 +328,7 @@ function SourceControlView({
             </div>
           ) : (
             <>
-              {effectiveProjectId != null && gitProblems[effectiveProjectId] && (
+              {gitProblems[effectiveProjectId] && (
                 <div className="github-panel-empty-row github-panel-conflicts">
                   Showing the last known status. {gitProblems[effectiveProjectId].message}
                 </div>
