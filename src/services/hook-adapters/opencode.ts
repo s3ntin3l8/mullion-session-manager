@@ -62,6 +62,38 @@ import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./typ
 // OPENCODE_EMITS below; the authoritative, tested mapping is its
 // mapOpenCodeEvent.
 
+/** The oldest opencode this adapter supports (issue #1593): v2's plugin API,
+ * `--standalone`, `session export/import`. A 1.x CLI rejects the plugin shape
+ * and the unknown `--standalone` flag, so a hosted session would abort at
+ * launch — agent-detect surfaces this as a warning instead. */
+export const OPENCODE_MIN_VERSION = "2.0.29";
+
+/** The `x.y.z` triple in `opencode --version` output (e.g. "opencode v2.0.29"
+ * or "1.19.0"), or null if there isn't one. */
+export function parseOpencodeVersion(output: string): string | null {
+  return /(\d+)\.(\d+)\.(\d+)/.exec(output)?.[0] ?? null;
+}
+
+function versionTuple(version: string): [number, number, number] {
+  const [a = 0, b = 0, c = 0] = version.split(".").map((part) => Number.parseInt(part, 10));
+  return [a, b, c];
+}
+
+/** A user-facing warning when `version` is older than OPENCODE_MIN_VERSION,
+ * else null (including for a null/unparseable version — never warn on doubt). */
+export function opencodeVersionWarning(version: string | null): string | null {
+  if (!version) return null;
+  const have = versionTuple(version);
+  const min = versionTuple(OPENCODE_MIN_VERSION);
+  for (let i = 0; i < 3; i++) {
+    if (have[i] > min[i]) return null;
+    if (have[i] < min[i]) {
+      return `opencode ${version} is too old: Mullion needs opencode ${OPENCODE_MIN_VERSION} or newer (hosted sessions will fail to launch). Update with \`opencode upgrade\`.`;
+    }
+  }
+  return null;
+}
+
 const OPENCODE_COMMAND_RE = /^(?:\S*\/)?opencode(?:\s|$)/;
 
 // Issue: extend surfaced session statuses — the hook-protocol `kind`s

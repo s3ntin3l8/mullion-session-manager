@@ -757,6 +757,9 @@ export interface Agent {
   /** Codex's `/hooks` trust status for Mullion's merged hooks (issue #259).
    * Only present on the "codex" agent. */
   hookTrust?: CodexHookTrust;
+  /** opencode only (issue #1593): its reported x.y.z, and a warning when too old for Mullion. */
+  version?: string;
+  versionWarning?: string;
   /** Rich statuses (issue: extend surfaced session statuses) — the
    * hook-protocol `kind`s this agent's launch can ever produce (mirrors
    * src/services/agent-detect.ts's DetectedAgent.emits 1:1). Empty for

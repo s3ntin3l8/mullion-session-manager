@@ -88,13 +88,16 @@ export function LaunchersSection() {
                 const logo = a.kind === "agent" ? resolveAgentLogo(agentId, theme) : null;
                 const hidden = settings.launchers.hiddenAgents.includes(agentId);
                 const hookTrustPending = a.hookTrust === "pending";
+                const versionWarning = a.versionWarning;
                 const skipFlag = skipPermissionFlags[agentId];
                 const configText =
                   (hookTrustPending
                     ? "Hooks not trusted yet. Run /hooks in a Codex session to enable status updates."
-                    : a.available
-                      ? (a.path ?? "")
-                      : "not found on PATH") + (skipFlag ? `  •  ${skipFlag}` : "");
+                    : versionWarning
+                      ? versionWarning
+                      : a.available
+                        ? (a.path ?? "")
+                        : "not found on PATH") + (skipFlag ? `  •  ${skipFlag}` : "");
                 return (
                   <div
                     key={a.id}
@@ -132,6 +135,8 @@ export function LaunchersSection() {
                     >
                       {hookTrustPending ? (
                         <span className="hook-trust-badge">trust pending</span>
+                      ) : versionWarning ? (
+                        <span className="hook-trust-badge">update needed</span>
                       ) : a.available ? (
                         "available"
                       ) : (

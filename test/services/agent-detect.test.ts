@@ -38,6 +38,8 @@ let available: Record<string, string>;
 let hangBins: Set<string> = new Set();
 const hungChildren = new Map<string, FakeChild>();
 let lastSpawnOpts: { stdio?: unknown } | undefined;
+// What `opencode --version` prints (issue #1593); null = the probe prints nothing.
+let opencodeVersionOutput: string | null = null;
 
 // getCodexHookTrust() reads the REAL ~/.codex (unless CODEX_HOME is set) —
 // mocked here for the same reason child_process is faked above: detectAgents
@@ -57,6 +59,13 @@ vi.mock("node:child_process", async (importOriginal) => {
       const child = makeFakeChild();
       lastSpawnOpts = opts;
       const script = args[args.length - 1] ?? "";
+      if (script === "opencode --version") {
+        setImmediate(() => {
+          if (opencodeVersionOutput) child.stdout.emit("data", Buffer.from(opencodeVersionOutput));
+          child.emit("close", 0);
+        });
+        return child;
+      }
       const match = /command -v (\S+)/.exec(script);
       const bin = match?.[1];
 
@@ -154,6 +163,51 @@ describe("detectAgents", () => {
     expect(byId["shell:bash"].hookTrust).toBeUndefined();
 
     codexHookTrust = "not-installed"; // reset for tests below
+  });
+});
+
+describe("opencode version detection (issue #1593)", () => {
+  async function opencodeAgent() {
+    const results = await detectAgents();
+    return results.find((r) => r.id === "agent:opencode")!;
+  }
+
+  it("records the version and no warning for a supported opencode", async () => {
+    available = { opencode: "/usr/local/bin/opencode" };
+    opencodeVersionOutput = "opencode v2.0.29\n";
+    const agent = await opencodeAgent();
+    expect(agent.version).toBe("2.0.29");
+    expect(agent.versionWarning).toBeUndefined();
+  });
+
+  it("warns for an opencode 1.x install", async () => {
+    available = { opencode: "/usr/local/bin/opencode" };
+    opencodeVersionOutput = "1.19.0\n";
+    const agent = await opencodeAgent();
+    expect(agent.version).toBe("1.19.0");
+    expect(agent.versionWarning).toContain("2.0.29");
+  });
+
+  it("does not warn when the version output is unparseable, and omits version", async () => {
+    available = { opencode: "/usr/local/bin/opencode" };
+    opencodeVersionOutput = "dev build";
+    const agent = await opencodeAgent();
+    expect(agent.version).toBeUndefined();
+    expect(agent.versionWarning).toBeUndefined();
+  });
+
+  it("does not probe the version of an opencode that is not installed", async () => {
+    available = {};
+    opencodeVersionOutput = "1.0.0";
+    const agent = await opencodeAgent();
+    expect(agent.available).toBe(false);
+    expect(agent.version).toBeUndefined();
+  });
+
+  it("never reports a version for other agents", async () => {
+    available = { claude: "/usr/local/bin/claude" };
+    const results = await detectAgents();
+    expect(results.find((r) => r.id === "agent:claude")?.version).toBeUndefined();
   });
 });
 
