@@ -58,9 +58,11 @@ let responseByProject: Record<number, () => Response>;
 
 describe("store.refreshGitStatuses (transient-failure last-known-good)", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
+  let problemsByProject: Record<number, { reason: string; message: string }>;
 
   beforeEach(() => {
     responseByProject = {};
+    problemsByProject = {};
     fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       // `sessionIds=` is optional and this store slice's own tests never set
@@ -84,7 +86,11 @@ describe("store.refreshGitStatuses (transient-failure last-known-good)", () => {
           }
           // Project omitted from body => transient failure (503-equivalent)
         }
-        return jsonResponse(200, { projects: body, sessions: {} });
+        return jsonResponse(200, {
+          projects: body,
+          sessions: {},
+          problems: problemsByProject,
+        });
       }
       throw new Error(`unhandled fetch in test: ${url}`);
     });
@@ -100,6 +106,20 @@ describe("store.refreshGitStatuses (transient-failure last-known-good)", () => {
     responseByProject[1] = () => new Response(null, { status: 204 });
     await useDashboardStore.getState().refreshGitStatuses();
     expect(useDashboardStore.getState().gitStatuses[1]).toBeNull();
+  });
+
+  it("stores per-project problems from the batch, and drops them once the project recovers (issue #1602)", async () => {
+    problemsByProject[1] = { reason: "bare-repo", message: "core.bare is set" };
+    await useDashboardStore.getState().refreshGitStatuses();
+    expect(useDashboardStore.getState().gitProblems[1]).toEqual({
+      reason: "bare-repo",
+      message: "core.bare is set",
+    });
+
+    problemsByProject = {};
+    responseByProject[1] = () => jsonResponse(200, CLEAN_STATUS);
+    await useDashboardStore.getState().refreshGitStatuses();
+    expect(useDashboardStore.getState().gitProblems).toEqual({});
   });
 
   it("writes the fetched status on success", async () => {

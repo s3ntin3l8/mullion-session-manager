@@ -151,6 +151,7 @@ function SourceControlView({
 }: SourceControlViewProps) {
   const projects = useDashboardStore((s) => s.projects);
   const gitStatuses = useDashboardStore((s) => s.gitStatuses);
+  const gitProblems = useDashboardStore((s) => s.gitProblems);
   const fetchProjectGit = useDashboardStore((s) => s.fetchProjectGit);
   const pullProjectGit = useDashboardStore((s) => s.pullProjectGit);
 
@@ -319,12 +320,19 @@ function SourceControlView({
               supports. */}
           {gitStatus === null ? (
             <div className="github-panel-empty-row" title={effectiveProject?.cwd}>
-              {isRemoteProject
-                ? "Not a git repository, or the host is unreachable."
-                : "Not a git repository, or `git status` failed."}
+              {gitProblems[effectiveProjectId]
+                ? gitProblems[effectiveProjectId].message
+                : isRemoteProject
+                  ? "Not a git repository, or the host is unreachable."
+                  : "Not a git repository."}
             </div>
           ) : (
             <>
+              {gitProblems[effectiveProjectId] && (
+                <div className="github-panel-empty-row github-panel-conflicts">
+                  Showing the last known status. {gitProblems[effectiveProjectId].message}
+                </div>
+              )}
               <div className="source-control-branch-row">
                 <GitBranchIcon size={13} />
                 <span className="source-control-branch-name">{gitStatus.branch}</span>

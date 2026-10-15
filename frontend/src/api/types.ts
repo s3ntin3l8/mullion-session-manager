@@ -1025,6 +1025,15 @@ export interface GitFileDiffResponse {
 export interface GitStatusesBatchResult {
   projects: Record<string, GitStatus | null>;
   sessions: Record<string, GitStatus | null>;
+  // Projects that ARE a repo but whose `git status` failed (issue #1602), with
+  // why — so the UI can say more than "not a git repository". Absent on older
+  // backends.
+  problems?: Record<string, GitStatusProblem>;
+}
+
+export interface GitStatusProblem {
+  reason: "bare-repo" | "timeout" | "failed";
+  message: string;
 }
 
 // GET /api/projects/git-refs' response shape (issue #1007) — batches

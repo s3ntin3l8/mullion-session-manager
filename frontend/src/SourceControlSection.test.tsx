@@ -347,6 +347,45 @@ describe("SourceControlSection (issue #433 scope B)", () => {
     expect(screen.queryByText("Not a git repository.")).toBeNull();
   });
 
+  it("shows the backend's reason when git status failed on a real repo (issue #1602)", async () => {
+    const user = userEvent.setup();
+    useDashboardStore.setState({
+      projects: [PROJECT_A],
+      sessions: [],
+      activePanelId: null,
+      gitStatuses: { [PROJECT_A.id]: null },
+      gitProblems: {
+        [PROJECT_A.id]: {
+          reason: "bare-repo",
+          message: "This checkout is configured as a bare repository (core.bare = true)",
+        },
+      },
+    });
+    render(<SourceControlSection onOpenGit={vi.fn()} />);
+    await user.click(screen.getByText("Source Control"));
+
+    expect(screen.getByText(/configured as a bare repository/)).toBeTruthy();
+    expect(screen.queryByText("Not a git repository.")).toBeNull();
+    useDashboardStore.setState({ gitProblems: {} });
+  });
+
+  it("keeps the last known status but explains a new git failure (issue #1602)", async () => {
+    const user = userEvent.setup();
+    useDashboardStore.setState({
+      projects: [PROJECT_A],
+      sessions: [],
+      activePanelId: null,
+      gitStatuses: { [PROJECT_A.id]: statusWith({ branch: "stale-branch" }) },
+      gitProblems: { [PROJECT_A.id]: { reason: "timeout", message: "git status timed out" } },
+    });
+    render(<SourceControlSection onOpenGit={vi.fn()} />);
+    await user.click(screen.getByText("Source Control"));
+
+    expect(screen.getByText("stale-branch")).toBeTruthy();
+    expect(screen.getByText(/Showing the last known status\. git status timed out/)).toBeTruthy();
+    useDashboardStore.setState({ gitProblems: {} });
+  });
+
   it("releases a pinned project id when that project is deleted, falling through to another project", async () => {
     const user = userEvent.setup();
     useDashboardStore.setState({

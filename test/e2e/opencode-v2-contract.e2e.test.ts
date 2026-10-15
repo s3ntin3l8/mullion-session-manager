@@ -30,6 +30,7 @@ import net from "node:net";
 import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { gitEnv } from "../../src/services/git-env.js";
 
 const PINNED_OPENCODE_VERSION = "2.0.29";
 const PLUGIN_SOURCE = path.resolve(import.meta.dirname, "../../src/hooks/opencode-plugin.js");
@@ -101,7 +102,9 @@ describeIfOpencode("opencode v2 contract (Mullion's integration assumptions)", (
     mkdirSync(path.join(root, "state"));
     mkdirSync(path.join(root, "data"));
     mkdirSync(path.join(root, "config", "opencode"), { recursive: true });
-    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: projectDir });
+    // gitEnv(): a GIT_DIR leaked from an outer git hook would make `git init`
+    // reinitialize *that* repo instead of this sandbox (issue #1602).
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: projectDir, env: gitEnv() });
 
     // Strip any ambient Mullion/opencode env so the resolved config is this
     // sandbox's alone, and isolate every XDG dir.
