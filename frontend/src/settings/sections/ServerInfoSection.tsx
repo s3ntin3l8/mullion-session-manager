@@ -219,10 +219,10 @@ export function ServerInfoSection() {
             </div>
           </div>
           <div className="settings-footer-note">
-            Safe cleanup removes dangling images (any age), plus stopped containers, unused
-            networks, and build cache older than 7 days. Aggressive cleanup also removes{" "}
-            <strong>all unused images, including tagged ones</strong> (they must be pulled or
-            rebuilt again) and all unused build cache, and it drops the 7-day window for stopped
+            Safe cleanup removes dangling images (any age), plus stopped containers and unused
+            networks older than 7 days, and build cache older than 24 hours. Aggressive cleanup also
+            removes <strong>all unused images, including tagged ones</strong> (they must be pulled
+            or rebuilt again) and all unused build cache, and it drops the 7-day window for stopped
             containers and unused networks too. Neither uses <code>--volumes</code>, so volumes are
             always preserved. Figures are estimates.
           </div>

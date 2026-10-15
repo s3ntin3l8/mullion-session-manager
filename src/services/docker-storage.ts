@@ -4,16 +4,20 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 const OUTPUT_LIMIT_BYTES = 1024 * 1024;
 const VERBOSE_OUTPUT_LIMIT_BYTES = 8 * 1024 * 1024;
 const COMMAND_TIMEOUT_MS = 30_000;
-const SAFE_PRUNE_AGE_MS = 168 * 60 * 60 * 1000;
+const SAFE_CONTAINER_AGE_MS = 168 * 60 * 60 * 1000;
+// Build cache is cheap to regenerate and piles up fastest, so safe cleanup
+// frees it after a day instead of a week (issue #1607). Today's cache stays.
+const SAFE_BUILD_CACHE_AGE_MS = 24 * 60 * 60 * 1000;
 // On the containerd image store `until=` compares against the image's local
 // record time (last tag/untag), and an image only becomes dangling when a newer
 // build takes its tag, so an age filter on images never matches. Dangling
-// images are therefore pruned at any age; everything else keeps the 7-day window.
+// images are therefore pruned at any age; everything except build cache keeps
+// the 7-day window.
 export const DOCKER_SAFE_PRUNE_STEPS: ReadonlyArray<readonly string[]> = [
   ["image", "prune", "--force"],
   ["container", "prune", "--force", "--filter", "until=168h"],
   ["network", "prune", "--force", "--filter", "until=168h"],
-  ["builder", "prune", "--force", "--filter", "until=168h"],
+  ["builder", "prune", "--force", "--filter", "until=24h"],
 ];
 // Never --volumes: volumes hold data. --all also removes unused tagged images.
 export const DOCKER_PRUNE_AGGRESSIVE_ARGS = ["system", "prune", "--all", "--force"] as const;
@@ -114,8 +118,8 @@ function parseDockerDate(value: unknown): number | null {
 
 /**
  * Mirrors the "safe" cleanup against `docker system df -v` output: dangling
- * images at any age, plus stopped containers and unused regular build cache
- * older than 7 days. Summing per-image unique sizes slightly understates
+ * images at any age, plus stopped containers older than 7 days and unused
+ * regular build cache older than 24 hours. Summing per-image unique sizes slightly understates
  * layers shared between dangling images, so treat the result as an estimate.
  */
 export function estimateSafePrune(
@@ -124,9 +128,9 @@ export function estimateSafePrune(
   now: number = Date.now(),
 ): number {
   const df = JSON.parse(verboseJson) as Record<string, Array<Record<string, unknown>> | undefined>;
-  const isOld = (value: unknown) => {
+  const isOld = (value: unknown, ageMs: number) => {
     const time = parseDockerDate(value);
-    return time !== null && now - time > SAFE_PRUNE_AGE_MS;
+    return time !== null && now - time > ageMs;
   };
   let total = 0;
   for (const image of df.Images ?? []) {
@@ -135,7 +139,7 @@ export function estimateSafePrune(
     }
   }
   for (const container of df.Containers ?? []) {
-    if (container.State !== "running" && isOld(container.CreatedAt)) {
+    if (container.State !== "running" && isOld(container.CreatedAt, SAFE_CONTAINER_AGE_MS)) {
       total += parseSize(container.Size);
     }
   }
@@ -143,7 +147,7 @@ export function estimateSafePrune(
     if (
       entry.CacheType === "regular" &&
       String(entry.InUse) === "false" &&
-      isOld(entry.LastUsedAt || entry.CreatedAt)
+      isOld(entry.LastUsedAt || entry.CreatedAt, SAFE_BUILD_CACHE_AGE_MS)
     ) {
       total += parseSize(entry.Size);
     }
