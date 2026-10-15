@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.3.40](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.39...v0.3.40) (2026-10-15)
+
+
+### Features
+
+* clean up Claude session scratch per session in temp cleanup ([#1615](https://github.com/s3ntin3l8/mullion-session-manager/issues/1615)) ([b0e404f](https://github.com/s3ntin3l8/mullion-session-manager/commit/b0e404f8cd1c7f2f4b90a5c40e5ade4cd9f7aea8))
+* free Docker build cache after 24h in safe cleanup ([#1613](https://github.com/s3ntin3l8/mullion-session-manager/issues/1613)) ([5ae0238](https://github.com/s3ntin3l8/mullion-session-manager/commit/5ae0238ee88d2ca86cb181ac9f3b4706b43fe20d))
+* **git:** report git status failure reasons for remote-host projects ([#1617](https://github.com/s3ntin3l8/mullion-session-manager/issues/1617)) ([1547c10](https://github.com/s3ntin3l8/mullion-session-manager/commit/1547c10ec7d9e40b3d5c233cf1a9153dba98c807))
+* opt-in ~/.cache cleanup in aggressive disk cleanup ([#1616](https://github.com/s3ntin3l8/mullion-session-manager/issues/1616)) ([2325090](https://github.com/s3ntin3l8/mullion-session-manager/commit/23250905fcc9574423e844031cfdbe3fde2d9ae0))
+* stable confirm buttons and host temp-file tier for disk cleanup ([#1610](https://github.com/s3ntin3l8/mullion-session-manager/issues/1610)) ([c80d36b](https://github.com/s3ntin3l8/mullion-session-manager/commit/c80d36b7e30c30f9e9a9bc2f29d270dbc4a7aa7e))
+
+
+### Bug Fixes
+
+* **git-status:** report why git status failed and guard tests against GIT_DIR leaks ([#1611](https://github.com/s3ntin3l8/mullion-session-manager/issues/1611)) ([e1b3f22](https://github.com/s3ntin3l8/mullion-session-manager/commit/e1b3f223116894d95e28d40e22c6d0e2af2c7721))
+* **right-sidebar:** polish icons, embed GitHub panel, editor-only file opens, Project view ([#1603](https://github.com/s3ntin3l8/mullion-session-manager/issues/1603)) ([48236f7](https://github.com/s3ntin3l8/mullion-session-manager/commit/48236f7c8feea52ef61f97833aecb1addde29ca2))
+
 ## [0.3.39](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.38...v0.3.39) (2026-10-15)
 
 
