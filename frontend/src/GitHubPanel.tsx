@@ -25,9 +25,38 @@ function runIdFromUrl(url: string): number | null {
   return match ? parseInt(match[1], 10) : null;
 }
 
-function runDotClass(run: GitHubActionsRun): "good" | "bad" | "pending" {
-  if (run.status !== "completed") return "pending";
-  return run.conclusion === "success" ? "good" : "bad";
+type DotClass = "good" | "bad" | "pending" | "none";
+
+const SKIPPED_CONCLUSIONS = new Set(["skipped", "cancelled", "neutral"]);
+
+function checkDotClass(status: string, conclusion: string | null): DotClass {
+  if (status !== "completed") return "pending";
+  if (conclusion === "success") return "good";
+  if (conclusion != null && SKIPPED_CONCLUSIONS.has(conclusion)) return "none";
+  return "bad";
+}
+
+function checkGlyph(status: string, conclusion: string | null): string {
+  switch (checkDotClass(status, conclusion)) {
+    case "good":
+      return "✓";
+    case "bad":
+      return "✗";
+    case "pending":
+      return "⋯";
+    default:
+      return "–";
+  }
+}
+
+function checkTitle(status: string, conclusion: string | null): string {
+  return status === "completed" ? (conclusion ?? "unknown") : status;
+}
+
+// Failures first, then in-progress, then everything that passed.
+function jobRank(job: GitHubJob): number {
+  const dot = checkDotClass(job.status, job.conclusion);
+  return dot === "bad" ? 0 : dot === "pending" ? 1 : 2;
 }
 
 function ciDotClass(status: "success" | "failure" | "in_progress"): "good" | "bad" | "pending" {
@@ -78,17 +107,11 @@ function JobRow({ projectId, runId, job }: { projectId: number; runId: number; j
           fetchLog();
         }}
       >
-        <span
-          className={`github-panel-ci-dot ${job.conclusion === "success" ? "good" : job.conclusion === "failure" ? "bad" : "pending"}`}
-        />
+        <span className={`github-panel-ci-dot ${checkDotClass(job.status, job.conclusion)}`} />
         <span className="github-panel-run-name">{job.name}</span>
-        <span className="github-panel-run-status">
-          {job.status === "completed" ? (job.conclusion ?? "unknown") : job.status}
+        <span className="github-panel-run-status" title={checkTitle(job.status, job.conclusion)}>
+          {checkGlyph(job.status, job.conclusion)}
         </span>
-        <ChevronDownIcon
-          size={10}
-          style={{ transform: log != null ? "rotate(180deg)" : undefined, flexShrink: 0 }}
-        />
       </button>
       {loading && <div className="github-panel-empty-row indent-job">Loading logs…</div>}
       {log && log.log && (
@@ -104,81 +127,119 @@ function JobRow({ projectId, runId, job }: { projectId: number; runId: number; j
   );
 }
 
-function WorkflowRunRow({ projectId, run }: { projectId: number; run: GitHubActionsRun }) {
-  const [expanded, setExpanded] = useState(false);
-  const [jobs, setJobs] = useState<GitHubJob[] | null | undefined>(undefined);
+type RunJobs = GitHubJob[] | null | undefined;
 
-  const toggle = useCallback(() => {
-    const next = !expanded;
-    setExpanded(next);
-    if (next && jobs === undefined) {
-      const runId = runIdFromUrl(run.htmlUrl);
-      if (runId == null) {
-        setJobs(null);
-        return;
-      }
-      api
-        .getGitHubRunJobs(projectId, runId)
-        .then((j) => setJobs(j))
-        .catch(() => setJobs(null));
-    }
-  }, [expanded, jobs, projectId, run.htmlUrl]);
+// One workflow run: a plain label, then its jobs on a single level —
+// failures first, skipped/cancelled folded into one expandable row.
+function RunGroup({
+  projectId,
+  run,
+  runId,
+  jobs,
+}: {
+  projectId: number;
+  run: GitHubActionsRun;
+  runId: number | null;
+  jobs: RunJobs;
+}) {
+  const [showSkipped, setShowSkipped] = useState(false);
+  const label = (
+    <a href={run.htmlUrl} target="_blank" rel="noreferrer" className="github-panel-ci-group-label">
+      <span className={`github-panel-ci-dot ${checkDotClass(run.status, run.conclusion)}`} />
+      {run.name}
+    </a>
+  );
+  if (runId == null) return <div className="github-panel-ci-group">{label}</div>;
 
-  const runId = runIdFromUrl(run.htmlUrl);
-  if (runId == null) {
-    return (
-      <a href={run.htmlUrl} target="_blank" rel="noreferrer" className="github-panel-run-row">
-        <span className={`github-panel-ci-dot ${runDotClass(run)}`} />
-        <span className="github-panel-run-name">{run.name}</span>
-        <span className="github-panel-run-status">
-          {run.status === "completed" ? (run.conclusion ?? "unknown") : run.status}
-        </span>
-      </a>
-    );
-  }
-
+  const active = (jobs ?? []).filter((j) => jobRank(j) < 2 || !isSkipped(j));
+  const skipped = (jobs ?? []).filter((j) => jobRank(j) === 2 && isSkipped(j));
+  active.sort((x, y) => jobRank(x) - jobRank(y));
   return (
-    <div className="github-panel-run-group">
-      <button
-        className="github-panel-run-row"
-        onClick={(e) => {
-          e.stopPropagation();
-          toggle();
-        }}
-      >
-        <span className={`github-panel-ci-dot ${runDotClass(run)}`} />
-        <span className="github-panel-run-name">{run.name}</span>
-        <span className="github-panel-run-status">
-          {run.status === "completed" ? (run.conclusion ?? "unknown") : run.status}
-        </span>
-        <ChevronDownIcon
-          size={10}
-          style={{ transform: expanded ? "rotate(180deg)" : undefined, flexShrink: 0 }}
-        />
-      </button>
-      {expanded && jobs !== undefined && jobs !== null && (
-        <div className="github-panel-jobs">
-          {jobs.map((job) => (
-            <JobRow key={job.id} projectId={projectId} runId={runId} job={job} />
-          ))}
-        </div>
-      )}
-      {expanded && jobs === null && (
+    <div className="github-panel-ci-group">
+      {label}
+      {jobs === undefined && <div className="github-panel-empty-row indent-job">Loading jobs…</div>}
+      {jobs === null && (
         <div className="github-panel-empty-row indent-job">Failed to load jobs</div>
       )}
-      {expanded && jobs === undefined && (
-        <div className="github-panel-empty-row indent-job">Loading jobs…</div>
+      {active.map((job) => (
+        <JobRow key={job.id} projectId={projectId} runId={runId} job={job} />
+      ))}
+      {skipped.length > 0 && (
+        <>
+          <button
+            className="github-panel-run-row indent-job"
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowSkipped(!showSkipped);
+            }}
+          >
+            <span className="github-panel-ci-dot none" />
+            <span className="github-panel-run-name">{skipped.length} skipped</span>
+            <ChevronDownIcon
+              size={10}
+              style={{ transform: showSkipped ? "rotate(180deg)" : undefined, flexShrink: 0 }}
+            />
+          </button>
+          {showSkipped &&
+            skipped.map((job) => (
+              <JobRow key={job.id} projectId={projectId} runId={runId} job={job} />
+            ))}
+        </>
       )}
     </div>
   );
 }
 
+function isSkipped(job: GitHubJob): boolean {
+  return checkDotClass(job.status, job.conclusion) === "none";
+}
+
+function prCiSummary(pr: GitHubPROrWithChecks, jobsByRun: Record<number, RunJobs>): string | null {
+  const loaded = Object.values(jobsByRun).filter((j): j is GitHubJob[] => Array.isArray(j));
+  if (loaded.length > 0 && loaded.length === pr.actionsRuns.length) {
+    const all = loaded.flat();
+    const failed = all.filter((j) => checkDotClass(j.status, j.conclusion) === "bad").length;
+    const pending = all.filter((j) => checkDotClass(j.status, j.conclusion) === "pending").length;
+    const skipped = all.filter(isSkipped).length;
+    const passed = all.length - failed - pending - skipped;
+    return [
+      failed > 0 ? `✗${failed}` : null,
+      pending > 0 ? `⋯${pending}` : null,
+      passed > 0 ? `✓${passed}` : null,
+      skipped > 0 ? `–${skipped}` : null,
+    ]
+      .filter(Boolean)
+      .join(" ");
+  }
+  if (pr.actionsRuns.length === 0) return null;
+  const failing = pr.actionsRuns.filter((r) => checkDotClass(r.status, r.conclusion) === "bad");
+  if (failing.length > 0) return `${failing.length} failing`;
+  return `${pr.actionsRuns.length} run${pr.actionsRuns.length === 1 ? "" : "s"}`;
+}
+
 function PRCard({ pr, projectId }: { pr: GitHubPROrWithChecks; projectId: number }) {
   const [expanded, setExpanded] = useState(false);
+  const [jobsByRun, setJobsByRun] = useState<Record<number, RunJobs>>({});
+
+  // Expanding fetches every run's jobs (once) so the body is one flat list.
+  const toggle = () => {
+    const next = !expanded;
+    setExpanded(next);
+    if (!next) return;
+    for (const run of pr.actionsRuns) {
+      const runId = runIdFromUrl(run.htmlUrl);
+      if (runId == null || jobsByRun[runId] !== undefined) continue;
+      api
+        .getGitHubRunJobs(projectId, runId)
+        .then((j) => setJobsByRun((m) => ({ ...m, [runId]: j })))
+        .catch(() => setJobsByRun((m) => ({ ...m, [runId]: null })));
+    }
+  };
+  const summary = prCiSummary(pr, jobsByRun);
 
   return (
     <div className="github-panel-pr-card">
-      <button className="github-panel-pr-header" onClick={() => setExpanded(!expanded)}>
+      <button className="github-panel-pr-header" onClick={toggle}>
         <span className={`github-panel-ci-dot ${pr.ciStatus ? ciDotClass(pr.ciStatus) : "none"}`} />
         <a
           href={pr.htmlUrl}
@@ -191,6 +252,7 @@ function PRCard({ pr, projectId }: { pr: GitHubPROrWithChecks; projectId: number
         </a>
         <span className="github-panel-row-title">{pr.title}</span>
         {pr.author && <span className="github-panel-pr-author">{pr.author}</span>}
+        {summary && <span className="github-panel-pr-ci-summary">{summary}</span>}
         <ChevronDownIcon
           size={12}
           style={{ transform: expanded ? "rotate(180deg)" : undefined, flexShrink: 0 }}
@@ -203,9 +265,18 @@ function PRCard({ pr, projectId }: { pr: GitHubPROrWithChecks; projectId: number
         {pr.actionsRuns.length === 0 && (
           <div className="github-panel-empty-row indent-run">No workflow runs for this PR</div>
         )}
-        {pr.actionsRuns.map((run) => (
-          <WorkflowRunRow key={run.htmlUrl} projectId={projectId} run={run} />
-        ))}
+        {pr.actionsRuns.map((run) => {
+          const runId = runIdFromUrl(run.htmlUrl);
+          return (
+            <RunGroup
+              key={run.htmlUrl}
+              projectId={projectId}
+              run={run}
+              runId={runId}
+              jobs={runId == null ? undefined : jobsByRun[runId]}
+            />
+          );
+        })}
       </CollapsibleSection>
     </div>
   );
@@ -608,7 +679,9 @@ export function GitHubPanel({
               target="_blank"
               rel="noreferrer"
             >
-              <span className={`github-panel-ci-dot ${runDotClass(run)}`} />
+              <span
+                className={`github-panel-ci-dot ${checkDotClass(run.status, run.conclusion)}`}
+              />
               <span className="github-panel-row-title">{run.name}</span>
               <span className="github-panel-row-number">
                 {run.status === "completed" ? (run.conclusion ?? "unknown") : run.status}

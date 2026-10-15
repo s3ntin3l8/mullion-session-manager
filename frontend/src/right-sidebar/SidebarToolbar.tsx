@@ -1,4 +1,7 @@
+import { useContext } from "react";
 import type { ComponentType, SVGProps } from "react";
+import { createPortal } from "react-dom";
+import { SidebarToolbarSlotContext } from "./sidebarToolbarSlot.js";
 
 export interface SidebarToolbarAction {
   key: string;
@@ -11,7 +14,8 @@ export interface SidebarToolbarAction {
 // A row of compact icon buttons shared by every right-sidebar view, so the
 // toolbars line up and match the drawer header's own icon buttons.
 export function SidebarToolbar({ actions }: { actions: SidebarToolbarAction[] }) {
-  return (
+  const slot = useContext(SidebarToolbarSlotContext);
+  const toolbar = (
     <div className="right-sidebar-toolbar" role="toolbar">
       {actions.map(({ key, label, icon: Icon, onClick, disabled }) => (
         <button
@@ -28,4 +32,5 @@ export function SidebarToolbar({ actions }: { actions: SidebarToolbarAction[] })
       ))}
     </div>
   );
+  return slot ? createPortal(toolbar, slot) : toolbar;
 }

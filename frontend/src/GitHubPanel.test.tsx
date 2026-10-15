@@ -275,7 +275,7 @@ describe("GitHubPanel", () => {
     expect(await screen.findByText("No workflow runs for this PR")).toBeInTheDocument();
   });
 
-  it("walks a PR's run through 'Loading jobs…' to the job list, then a job's log through 'Loading logs…' to its content", async () => {
+  it("walks a PR through 'Loading jobs…' to the job list, then a job's log through 'Loading logs…' to its content", async () => {
     const jobsGate = deferred<GitHubJob[]>();
     const logGate = deferred<GitHubLogResponse>();
     vi.stubGlobal(
@@ -295,9 +295,8 @@ describe("GitHubPanel", () => {
 
     const prHeader = await screen.findByText("Fix attention race");
     await userEvent.click(prHeader.closest("button")!);
-    const runHeader = await screen.findByText("CI");
-    await userEvent.click(runHeader.closest("button")!);
 
+    expect(await screen.findByText("CI")).toBeInTheDocument();
     expect(await screen.findByText("Loading jobs…")).toBeInTheDocument();
     jobsGate.resolve([JOB]);
     expect(await screen.findByText("build")).toBeInTheDocument();
@@ -315,8 +314,6 @@ describe("GitHubPanel", () => {
 
     const prHeader = await screen.findByText("Fix attention race");
     await userEvent.click(prHeader.closest("button")!);
-    const runHeader = await screen.findByText("CI");
-    await userEvent.click(runHeader.closest("button")!);
 
     expect(await screen.findByText("Failed to load jobs")).toBeInTheDocument();
   });
@@ -333,12 +330,47 @@ describe("GitHubPanel", () => {
 
     const prHeader = await screen.findByText("Fix attention race");
     await userEvent.click(prHeader.closest("button")!);
-    const runHeader = await screen.findByText("CI");
-    await userEvent.click(runHeader.closest("button")!);
     const jobHeader = await screen.findByText("build");
     await userEvent.click(jobHeader.closest("button")!);
 
     expect(await screen.findByText("No log output")).toBeInTheDocument();
+  });
+
+  it("lists failures first, folds skipped jobs into one row, and summarises the PR header", async () => {
+    const job = (id: number, name: string, conclusion: string | null, status = "completed") => ({
+      ...JOB,
+      id,
+      name,
+      status,
+      conclusion,
+    });
+    vi.stubGlobal(
+      "fetch",
+      mockFetchWithAccordion({
+        jobs: [
+          job(1, "lint", "success"),
+          job(2, "e2e", "failure"),
+          job(3, "shard-plan", "skipped"),
+          job(4, "merge", "skipped"),
+          job(5, "deploy", null, "in_progress"),
+        ],
+      }),
+    );
+    render(<GitHubPanel params={{ projectId: 11 }} />);
+
+    const prHeader = await screen.findByText("Fix attention race");
+    expect(screen.getByText("1 run")).toBeInTheDocument();
+    await userEvent.click(prHeader.closest("button")!);
+
+    expect(await screen.findByText("e2e")).toBeInTheDocument();
+    const names = screen.getAllByText(/^(lint|e2e|deploy)$/).map((n) => n.textContent);
+    expect(names).toEqual(["e2e", "deploy", "lint"]);
+    expect(screen.getByText("✗1 ⋯1 ✓1 –2")).toBeInTheDocument();
+    expect(screen.queryByText("shard-plan")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByText("2 skipped").closest("button")!);
+    expect(screen.getByText("shard-plan")).toBeInTheDocument();
+    expect(screen.getByText("merge")).toBeInTheDocument();
   });
 
   describe("Release section (#744)", () => {

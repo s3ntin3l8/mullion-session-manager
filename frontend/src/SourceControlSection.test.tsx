@@ -178,7 +178,7 @@ describe("SourceControlSection — embedded / controlled (right sidebar)", () =>
     seed();
     render(<SourceControlSection embedded onOpenGit={vi.fn()} />);
 
-    expect(screen.getByText("Follow active panel")).toBeTruthy();
+    expect(screen.getByText("Following: project-a")).toBeTruthy();
   });
 });
 

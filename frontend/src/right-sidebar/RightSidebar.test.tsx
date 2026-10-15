@@ -86,6 +86,16 @@ describe("RightSidebar", () => {
     expect(screen.queryByRole("complementary")).toBeNull();
   });
 
+  it("puts the project picker and the view's toolbar in one sub-bar row", async () => {
+    const user = userEvent.setup();
+    renderSidebar();
+    await user.click(screen.getByRole("button", { name: "Git" }));
+
+    const subbar = document.querySelector(".right-sidebar-subbar")!;
+    expect(subbar.contains(screen.getByRole("combobox", { name: "Project" }))).toBe(true);
+    expect(subbar.contains(screen.getByRole("button", { name: "Open Git panel" }))).toBe(true);
+  });
+
   it("shows a changed-file count badge on the rail", () => {
     useDashboardStore.setState({
       gitStatuses: {

@@ -20,11 +20,7 @@ describe("useFollowedProject", () => {
 
     expect(result.current.effectiveProjectId).toBe(1);
     expect(result.current.dropdownValue).toBe(FOLLOW_SENTINEL);
-    expect(result.current.dropdownOptions.map((o) => o.label)).toEqual([
-      "Follow active panel",
-      "a",
-      "b",
-    ]);
+    expect(result.current.dropdownOptions.map((o) => o.label)).toEqual(["Following: a", "a", "b"]);
   });
 
   it("follows the focused session's project", () => {
