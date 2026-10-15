@@ -98,7 +98,6 @@ export interface CacheStorageStatus {
   available: boolean;
   root: string;
   caches: CacheDirStatus[];
-  error?: string;
 }
 
 export type DockerPruneMode = "safe" | "aggressive";

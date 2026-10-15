@@ -38,6 +38,11 @@ export function ServerInfoSection() {
   const updateSettings = useDashboardStore((s) => s.updateSettings);
   const selectedCaches = settings.diskCleanup.cacheDirs;
   const hasCaches = !!caches?.available && caches.caches.some((c) => c.exists);
+  // A cache that was opted in but has since disappeared from disk stays listed
+  // (as "not found") so the stale opt-in can still be cleared.
+  const visibleCaches = (caches?.caches ?? []).filter(
+    (c) => c.exists || selectedCaches.includes(c.id),
+  );
   const [pruningMode, setPruningMode] = useState<DockerPruneMode | null>(null);
   const pruning = pruningMode !== null;
   const [pruneResult, setPruneResult] = useState<string | null>(null);
@@ -275,33 +280,31 @@ export function ServerInfoSection() {
           </div>
         </>
       )}
-      {caches && hasCaches && (
+      {caches?.available && visibleCaches.length > 0 && (
         <>
           <div className="settings-info-table">
-            {caches.caches
-              .filter((c) => c.exists)
-              .map((cache, i) => (
-                <div key={cache.id} className={`settings-info-row${i % 2 === 0 ? " zebra" : ""}`}>
-                  <span className="settings-info-key">{cache.label}</span>
-                  <span className="settings-info-value">
-                    {formatBytes(cache.bytes)}{" "}
-                    <Toggle
-                      size="small"
-                      on={selectedCaches.includes(cache.id)}
-                      ariaLabel={`Clean ${cache.label} in aggressive cleanup`}
-                      onChange={(on) =>
-                        updateSettings({
-                          diskCleanup: {
-                            cacheDirs: on
-                              ? [...selectedCaches, cache.id]
-                              : selectedCaches.filter((id) => id !== cache.id),
-                          },
-                        })
-                      }
-                    />
-                  </span>
-                </div>
-              ))}
+            {visibleCaches.map((cache, i) => (
+              <div key={cache.id} className={`settings-info-row${i % 2 === 0 ? " zebra" : ""}`}>
+                <span className="settings-info-key">{cache.label}</span>
+                <span className="settings-info-value">
+                  {cache.exists ? formatBytes(cache.bytes) : "not found"}{" "}
+                  <Toggle
+                    size="small"
+                    on={selectedCaches.includes(cache.id)}
+                    ariaLabel={`Clean ${cache.label} in aggressive cleanup`}
+                    onChange={(on) =>
+                      updateSettings({
+                        diskCleanup: {
+                          cacheDirs: on
+                            ? [...selectedCaches, cache.id]
+                            : selectedCaches.filter((id) => id !== cache.id),
+                        },
+                      })
+                    }
+                  />
+                </span>
+              </div>
+            ))}
           </div>
           <div className="settings-footer-note">
             Ticked caches under <code>{caches.root}</code> are emptied by aggressive cleanup only (

@@ -273,6 +273,20 @@ describe("Settings -> Server info resources", () => {
       expect(api.pruneCacheStorage).toHaveBeenCalledWith(["pip"]);
     });
 
+    it("keeps an opted-in cache that vanished from disk listed so the stale opt-in can be cleared", async () => {
+      setup({ caches });
+      useDashboardStore.setState({
+        settings: { ...DEFAULT_SETTINGS, diskCleanup: { cacheDirs: ["go-build"] } },
+      });
+      render(<ServerInfoSection />);
+      const toggle = await screen.findByRole("button", {
+        name: "Clean Go build cache in aggressive cleanup",
+      });
+      expect(screen.getByText("not found")).toBeInTheDocument();
+      await userEvent.click(toggle);
+      expect(useDashboardStore.getState().settings.diskCleanup.cacheDirs).toEqual([]);
+    });
+
     it("does not call the caches prune when nothing is ticked", async () => {
       setup({ caches });
       vi.spyOn(api, "pruneDockerStorage").mockResolvedValue({ output: "", reclaimedBytes: GIB });

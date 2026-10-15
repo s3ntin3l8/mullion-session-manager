@@ -35,7 +35,6 @@ export interface CacheStorageStatus {
   available: boolean;
   root: string;
   caches: CacheDirStatus[];
-  error?: string;
 }
 
 export interface CachePruneResult {
@@ -88,6 +87,8 @@ export async function pruneCacheStorage(
   ids: readonly string[],
   options: CacheStorageOptions = {},
 ): Promise<CachePruneResult> {
+  // Check-and-set with no await between them: JS runs this synchronously, so a
+  // second concurrent request can never slip past the guard.
   if (pruneRunning) throw new Error("CACHE_PRUNE_IN_PROGRESS");
   pruneRunning = true;
   try {
