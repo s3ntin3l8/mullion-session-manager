@@ -72,13 +72,48 @@ async function waitForHttp(url, timeoutMs = 90_000) {
   throw new Error(`Timed out waiting for ${url}${lastError ? `: ${lastError}` : ""}`);
 }
 
-/** Stops the demo's own session scopes; the pattern can only match this instance. */
-async function stopDemoScopes(instanceId) {
-  const pattern = `crs-session-${instanceId}-*`;
+/**
+ * Stops the demo's own session scopes. The name pattern is instance-namespaced,
+ * and each match is additionally checked the way the backend itself decides
+ * ownership (src/services/session-process.ts): its Description carries the dtach
+ * socket path, which must live in this demo's SESSIONS_DIR. A unit that fails
+ * that check is never stopped, even on an instanceId collision.
+ */
+async function stopDemoScopes(instanceId, sessionsDir) {
+  let units;
   try {
-    await execFileAsync("systemctl", ["--user", "stop", pattern]);
+    const { stdout } = await execFileAsync("systemctl", [
+      "--user",
+      "list-units",
+      `crs-session-${instanceId}-*`,
+      "--all",
+      "--no-legend",
+      "--plain",
+    ]);
+    units = stdout
+      .split("\n")
+      .map((line) => line.trim().split(/\s+/)[0])
+      .filter(Boolean);
   } catch {
-    // Nothing matched or no user bus: nothing to stop.
+    return; // No user bus: nothing to stop.
+  }
+  for (const unit of units) {
+    try {
+      const { stdout } = await execFileAsync("systemctl", [
+        "--user",
+        "show",
+        unit,
+        "--property=Description",
+        "--value",
+      ]);
+      if (!stdout.includes(`${sessionsDir}/`)) {
+        console.warn(`[demo] not stopping ${unit}: its socket is outside ${sessionsDir}`);
+        continue;
+      }
+      await execFileAsync("systemctl", ["--user", "stop", unit]);
+    } catch {
+      // Already gone.
+    }
   }
 }
 
@@ -131,7 +166,7 @@ export async function startDemo({ quiet = false, keep = false, seed = true } = {
   const stop = async () => {
     // Stop the sessions first: they live in systemd scopes, not in the
     // backend's process group, and would otherwise outlive it.
-    await stopDemoScopes(instanceId);
+    await stopDemoScopes(instanceId, sessionsDir);
     await Promise.all([killGroup(backend), killGroup(frontend)]);
     if (keep) return console.log(`[demo] kept ${demoDir}`);
     for (let attempt = 0; attempt < 5; attempt++) {

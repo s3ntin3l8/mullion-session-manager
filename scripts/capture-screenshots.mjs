@@ -189,7 +189,9 @@ async function recordLoop(browser, demo) {
     viewport: size,
     recordVideo: { dir: videoDir, size },
   });
-  const started = Date.now();
+  // Recording starts with the context; everything before `offset` (page load,
+  // opening the session) is trimmed off below.
+  const recordingStarted = Date.now();
   const page = await context.newPage();
   await page.goto(demo.frontendUrl, { waitUntil: "networkidle" });
   await collapseDock(page);
@@ -203,7 +205,9 @@ async function recordLoop(browser, demo) {
   });
   await page.locator(".session-item", { hasText: "loop-demo.sh" }).first().click();
   await page.waitForTimeout(1500);
-  const offset = (Date.now() - started) / 1000;
+  // Taken once the session is open, still inside the script's startDelay, so
+  // the trimmed loop begins on an empty terminal just before the first line.
+  const offset = (Date.now() - recordingStarted) / 1000;
   // 35 transcript lines at 0.25 s each, plus a beat at the end.
   await page.waitForTimeout(3000 + AUTH_TRANSCRIPT.length * 250 + 1500);
   await context.close();
