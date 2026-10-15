@@ -26,6 +26,31 @@ inherit `node_modules`: run `npm ci` at the repo root **and**
   (`files:`) rather than generic `types_or:`, so a hook only checks the
   workspace it actually applies to.
 
+## Demo instance and screenshots
+
+`make demo` starts a throwaway Mullion (backend and Vite frontend) seeded with
+demo projects, sessions and tasks, and prints its URL. Ctrl-C stops its
+sessions and deletes everything it created. `make screenshots` uses the same
+instance to regenerate `frontend/public/screenshots/` (referenced by the README
+and `frontend/public/site.webmanifest`), and `make screenshots-landing OUT=<dir>`
+writes 2x landing-page stills plus a short terminal loop (the loop needs
+`ffmpeg`).
+
+It is safe to run on a host that also runs a real Mullion, including from inside
+one of its sessions. `scripts/demo/env.mjs` enforces that, and
+`test/scripts/demo-env.test.ts` covers it:
+
+- Every demo process gets a clean environment. Only `PATH`, locale, `SHELL` and
+  the systemd user-bus variables are inherited, so no `MULLION_*` from the
+  hosting session gets through.
+- All state lives in one `mktemp` directory: the database, `SESSIONS_DIR`,
+  `CRS_CONFIG_DIR`, `HOME` and the demo projects.
+- The backend runs from a scratch directory without a `.env`.
+- The demo uses dedicated loopback ports that must be free.
+- `docker` is shadowed, so the Dock never probes real compose stacks.
+- Demo sessions run as `crs-session-<instanceId>-*` scopes, namespaced by the
+  scratch `SESSIONS_DIR`; teardown stops exactly those.
+
 ## Before opening a PR
 
 `make install-hooks` wires up local git hooks that catch most of this
