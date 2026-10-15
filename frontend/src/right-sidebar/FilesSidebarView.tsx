@@ -1,7 +1,17 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { api, ApiError } from "../api/index.js";
 import type { ProjectDirEntry } from "../api/index.js";
-import { ChevronDownIcon, ChevronRightIcon, FileTextIcon, FolderIcon } from "../ui/icons.js";
+import {
+  ChevronDownIcon,
+  ChevronRightIcon,
+  ExternalLinkIcon,
+  FilePlusIcon,
+  FileTextIcon,
+  FolderIcon,
+  FolderPlusIcon,
+  RefreshIcon,
+} from "../ui/icons.js";
+import { SidebarToolbar } from "./SidebarToolbar.js";
 import { EmptyStateNote } from "../ui/EmptyState.js";
 import type { RightSidebarViewProps } from "./views.js";
 
@@ -18,13 +28,17 @@ function joinPath(dir: string, name: string): string {
   return dir === "" ? name : `${dir}/${name}`;
 }
 
-// A read-only, lazily loaded project file tree for the right sidebar. A click
-// on a file opens it in the project's file editor panel; all editing (create,
-// rename, delete) stays in that panel.
+// A lazily loaded project file tree for the right sidebar. A click on a file
+// opens it in an editor-only panel; New file / New folder create inside the
+// last folder clicked. Rename and delete stay in the full file-editor panel.
 export function FilesSidebarView({ projectId, actions }: RightSidebarViewProps) {
   const [dirs, setDirs] = useState<Record<string, DirState>>({});
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set([""]));
   const [error, setError] = useState<string | null>(null);
+  // The folder New file / New folder create in: the last folder clicked.
+  const [selectedDir, setSelectedDir] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [newEntry, setNewEntry] = useState<{ kind: "file" | "dir"; name: string } | null>(null);
   // The project this view is currently showing — a listing that resolves
   // after the followed project changed belongs to the old project and must
   // not land in the new one's tree.
@@ -54,11 +68,15 @@ export function FilesSidebarView({ projectId, actions }: RightSidebarViewProps) 
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setDirs({});
     setExpanded(new Set([""]));
+    setSelectedDir("");
+    setNewEntry(null);
+    setCreating(false);
     void loadDir("");
   }, [projectId, loadDir]);
 
   const toggleDir = (dirPath: string) => {
     const open = expanded.has(dirPath);
+    setSelectedDir(dirPath);
     setExpanded((prev) => {
       const next = new Set(prev);
       if (open) next.delete(dirPath);
@@ -71,6 +89,43 @@ export function FilesSidebarView({ projectId, actions }: RightSidebarViewProps) 
   const refresh = () => {
     // Re-list everything that is currently open.
     for (const dirPath of expanded) void loadDir(dirPath);
+  };
+
+  const startCreate = (kind: "file" | "dir") => {
+    // Make sure the target folder is visible so the new entry shows up there.
+    if (!expanded.has(selectedDir)) toggleDir(selectedDir);
+    setNewEntry({ kind, name: "" });
+  };
+
+  const commitCreate = async () => {
+    if (!newEntry || creating) return;
+    const name = newEntry.name.trim();
+    if (!name) return setNewEntry(null);
+    if (name.includes("/")) {
+      setError("A name can't contain '/'");
+      return;
+    }
+    const target = joinPath(selectedDir, name);
+    const forProject = projectId;
+    setCreating(true);
+    try {
+      if (newEntry.kind === "file") {
+        await api.writeProjectFile(projectId, target, "", { create: true });
+      } else {
+        await api.mkdirProjectDir(projectId, target);
+      }
+      // The followed project changed mid-request: the new tree owns the view.
+      if (activeProject.current !== forProject) return;
+      setNewEntry(null);
+      setError(null);
+      await loadDir(selectedDir);
+      if (newEntry.kind === "file") actions.onOpenFile(projectId, target);
+    } catch (err) {
+      if (activeProject.current !== forProject) return;
+      setError(err instanceof ApiError ? err.message : "Couldn't create it");
+    } finally {
+      setCreating(false);
+    }
   };
 
   const renderDir = (dirPath: string, depth: number): ReactNode => {
@@ -92,7 +147,7 @@ export function FilesSidebarView({ projectId, actions }: RightSidebarViewProps) 
                 <div key={entryPath}>
                   <button
                     type="button"
-                    className="agent-rules-panel-row file-editor-row"
+                    className={`agent-rules-panel-row file-editor-row${entryPath === selectedDir ? " selected" : ""}`}
                     style={indent}
                     aria-expanded={open}
                     onClick={() => toggleDir(entryPath)}
@@ -113,7 +168,10 @@ export function FilesSidebarView({ projectId, actions }: RightSidebarViewProps) 
                 style={indent}
                 disabled={unopenable}
                 title={unopenable ? "Symlink to outside the project — can't be opened" : undefined}
-                onClick={() => actions.onOpenFile(projectId, entryPath)}
+                onClick={() => {
+                  setSelectedDir(dirPath);
+                  actions.onOpenFile(projectId, entryPath);
+                }}
               >
                 <FileTextIcon size={13} />
                 <span className="agent-rules-panel-row-name">{entry.name}</span>
@@ -134,18 +192,45 @@ export function FilesSidebarView({ projectId, actions }: RightSidebarViewProps) 
 
   return (
     <div className="files-sidebar-view">
-      <div className="source-control-actions">
-        <button type="button" className="git-panel-fetch-btn" onClick={refresh}>
-          Refresh
-        </button>
-        <button
-          type="button"
-          className="git-panel-fetch-btn"
-          onClick={() => actions.onOpenFileEditor(projectId)}
-        >
-          Open Editor
-        </button>
-      </div>
+      <SidebarToolbar
+        actions={[
+          { key: "refresh", label: "Refresh", icon: RefreshIcon, onClick: refresh },
+          {
+            key: "new-file",
+            label: `New file in ${selectedDir || "project root"}`,
+            icon: FilePlusIcon,
+            onClick: () => startCreate("file"),
+          },
+          {
+            key: "new-folder",
+            label: `New folder in ${selectedDir || "project root"}`,
+            icon: FolderPlusIcon,
+            onClick: () => startCreate("dir"),
+          },
+          {
+            key: "open-editor",
+            label: "Open file browser panel",
+            icon: ExternalLinkIcon,
+            onClick: () => actions.onOpenFileEditor(projectId),
+          },
+        ]}
+      />
+      {newEntry && (
+        <input
+          className="file-editor-new-input"
+          autoFocus
+          placeholder={`New ${newEntry.kind === "file" ? "file" : "folder"} in ${selectedDir || "/"}`}
+          value={newEntry.name}
+          onChange={(e) => setNewEntry({ ...newEntry, name: e.target.value })}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") void commitCreate();
+            else if (e.key === "Escape") setNewEntry(null);
+          }}
+          onBlur={() => {
+            if (!newEntry.name.trim()) setNewEntry(null);
+          }}
+        />
+      )}
       {error && <EmptyStateNote>{error}</EmptyStateNote>}
       {renderDir("", 0)}
     </div>

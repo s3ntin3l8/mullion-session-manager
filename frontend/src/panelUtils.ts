@@ -739,6 +739,35 @@ export function openFileEditorPanel(
   if (layout.tier === "phone") maximizeIfTiled(api, panel);
 }
 
+/** Opens `path` in an editor-only file panel (no file tree beside it) — one
+ * panel per file, so opening the same file again just focuses it. Used by the
+ * right sidebar's Files view, whose own tree already is the browser. */
+export function openFileOnlyPanel(
+  api: DockviewApi,
+  projectId: number,
+  projects: { id: number; name: string | null }[],
+  layout: LayoutContext,
+  path: string,
+): void {
+  const panelId = `file-${projectId}-${encodeURIComponent(path)}`;
+  const existing = api.getPanel(panelId);
+  if (existing) {
+    existing.api.setActive();
+    if (layout.tier === "phone") maximizeIfTiled(api, existing);
+    return;
+  }
+  const project = projects.find((p) => p.id === projectId);
+  const base = path.split("/").pop() || path;
+  const panel = api.addPanel({
+    id: panelId,
+    component: "file-editor",
+    title: project ? `${base} — ${project.name}` : base,
+    params: { projectId, path, mode: "editor", rev: Date.now() },
+    ...positioningForTier(api, layout),
+  });
+  if (layout.tier === "phone") maximizeIfTiled(api, panel);
+}
+
 function buildPanelBase(session: Session, projects: { id: number; name: string | null }[]) {
   const projectName = projects.find((p) => p.id === session.projectId)?.name ?? undefined;
   return {

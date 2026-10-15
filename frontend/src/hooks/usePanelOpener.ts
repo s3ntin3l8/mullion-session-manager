@@ -9,7 +9,7 @@ import {
   focusPanelForTier,
   isTiledPanel,
   maximizeIfTiled,
-  openFileEditorPanel,
+  openFileOnlyPanel,
   openDevicePanel,
   openOrFocusProjectPanel,
   openProjectHubPanel,
@@ -342,7 +342,7 @@ export function usePanelOpener({
     (projectId: number, path: string) => {
       if (!dockviewApi) return;
       leaveTaskView();
-      openFileEditorPanel(dockviewApi, projectId, projects, layout, { path });
+      openFileOnlyPanel(dockviewApi, projectId, projects, layout, path);
     },
     [dockviewApi, projects, layout, leaveTaskView],
   );

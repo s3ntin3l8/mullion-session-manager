@@ -1,9 +1,10 @@
 import type { ComponentType, SVGProps } from "react";
 import { useDashboardStore } from "../store/index.js";
-import { FolderIcon, GitBranchIcon, GitHubIcon } from "../ui/icons.js";
+import { FolderIcon, GitBranchIcon, GitHubIcon, GearIcon } from "../ui/icons.js";
 import { FilesSidebarView } from "./FilesSidebarView.js";
 import { GitHubSidebarView } from "./GitHubSidebarView.js";
 import { GitSidebarView } from "./GitSidebarView.js";
+import { ProjectSidebarView } from "./ProjectSidebarView.js";
 
 type ViewIconProps = SVGProps<SVGSVGElement> & { size?: number };
 
@@ -19,6 +20,11 @@ export interface RightSidebarActions {
   onOpenGitHub: (projectId: number) => void;
   onOpenFileEditor: (projectId: number) => void;
   onOpenFile: (projectId: number, path: string) => void;
+  onOpenAgentRules: (projectId: number) => void;
+  onOpenProjectBriefing: (projectId: number) => void;
+  onOpenProjectSetup: (projectId: number) => void;
+  onOpenDockConfig: (projectId: number) => void;
+  onOpenSkills: (projectId: number) => void;
 }
 
 export interface RightSidebarViewProps {
@@ -95,6 +101,13 @@ export const RIGHT_SIDEBAR_VIEWS: RightSidebarView[] = [
     label: "Files",
     icon: FolderIcon,
     Component: FilesSidebarView,
+    useBadge: useNoBadge,
+  },
+  {
+    id: "project",
+    label: "Project",
+    icon: GearIcon,
+    Component: ProjectSidebarView,
     useBadge: useNoBadge,
   },
 ];

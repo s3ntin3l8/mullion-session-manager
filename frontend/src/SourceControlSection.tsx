@@ -5,7 +5,14 @@ import { useDashboardStore } from "./store/index.js";
 import { parseUnifiedDiff, type DiffLine } from "./diffUtils.js";
 import { useAsyncData } from "./hooks/useAsyncData.js";
 import { Dropdown } from "./ui/primitives.js";
-import { ChevronDownIcon, GitBranchIcon } from "./ui/icons.js";
+import {
+  ChevronDownIcon,
+  ExternalLinkIcon,
+  GitBranchIcon,
+  PullIcon,
+  RefreshIcon,
+} from "./ui/icons.js";
+import { SidebarToolbar } from "./right-sidebar/SidebarToolbar.js";
 import { useFollowedProject } from "./hooks/useFollowedProject.js";
 import type { FollowedProject } from "./hooks/useFollowedProject.js";
 import { STORAGE_KEYS, readBool, writeBool } from "./lib/persistedState.js";
@@ -288,7 +295,7 @@ function SourceControlView({
         </div>
       )}
       {(embedded || !collapsed) && effectiveProjectId != null && (
-        <div className="source-control-body">
+        <div className={`source-control-body${embedded ? " embedded" : ""}`}>
           {followed && (
             <div onClick={(e) => e.stopPropagation()}>
               <Dropdown
@@ -314,7 +321,7 @@ function SourceControlView({
             <div className="github-panel-empty-row" title={effectiveProject?.cwd}>
               {isRemoteProject
                 ? "Not a git repository, or the host is unreachable."
-                : "Not a git repository."}
+                : "Not a git repository, or `git status` failed."}
             </div>
           ) : (
             <>
@@ -331,33 +338,64 @@ function SourceControlView({
                 )}
               </div>
 
-              <div className="source-control-actions">
-                <button
-                  className="git-panel-fetch-btn"
-                  onClick={handleFetch}
-                  disabled={isFetching || isPulling}
-                >
-                  {isFetching ? "⟳" : "↻"} Fetch
-                </button>
-                <button
-                  className="git-panel-fetch-btn"
-                  onClick={handlePull}
-                  disabled={isPulling || isFetching || gitStatus.behind === 0}
-                  title={
-                    gitStatus.behind === 0
-                      ? "Already up to date with tracking branch"
-                      : "Fast-forward pull from tracking branch"
-                  }
-                >
-                  {isPulling ? "⟳" : "↓"} Pull
-                </button>
-                <button
-                  className="git-panel-fetch-btn"
-                  onClick={() => onOpenGit(effectiveProjectId)}
-                >
-                  Open Git Panel
-                </button>
-              </div>
+              {embedded ? (
+                <SidebarToolbar
+                  actions={[
+                    {
+                      key: "fetch",
+                      label: isFetching ? "Fetching…" : "Fetch",
+                      icon: RefreshIcon,
+                      onClick: handleFetch,
+                      disabled: isFetching || isPulling,
+                    },
+                    {
+                      key: "pull",
+                      label: isPulling
+                        ? "Pulling…"
+                        : gitStatus.behind === 0
+                          ? "Pull (already up to date)"
+                          : "Pull (fast-forward from tracking branch)",
+                      icon: PullIcon,
+                      onClick: handlePull,
+                      disabled: isPulling || isFetching || gitStatus.behind === 0,
+                    },
+                    {
+                      key: "open",
+                      label: "Open Git panel",
+                      icon: ExternalLinkIcon,
+                      onClick: () => onOpenGit(effectiveProjectId),
+                    },
+                  ]}
+                />
+              ) : (
+                <div className="source-control-actions">
+                  <button
+                    className="git-panel-fetch-btn"
+                    onClick={handleFetch}
+                    disabled={isFetching || isPulling}
+                  >
+                    {isFetching ? "⟳" : "↻"} Fetch
+                  </button>
+                  <button
+                    className="git-panel-fetch-btn"
+                    onClick={handlePull}
+                    disabled={isPulling || isFetching || gitStatus.behind === 0}
+                    title={
+                      gitStatus.behind === 0
+                        ? "Already up to date with tracking branch"
+                        : "Fast-forward pull from tracking branch"
+                    }
+                  >
+                    {isPulling ? "⟳" : "↓"} Pull
+                  </button>
+                  <button
+                    className="git-panel-fetch-btn"
+                    onClick={() => onOpenGit(effectiveProjectId)}
+                  >
+                    Open Git Panel
+                  </button>
+                </div>
+              )}
 
               {pullError && (
                 <div className="github-panel-empty-row github-panel-conflicts">{pullError}</div>

@@ -105,6 +105,7 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     sidebarCollapsed: readBool(STORAGE_KEYS.sidebarCollapsed, false),
     sidebarWidth: readStoredSidebarWidth(),
     rightSidebarView: readString(STORAGE_KEYS.rightSidebarView, DEFAULT_RIGHT_SIDEBAR_VIEW),
+    rightSidebarProjectRequest: null,
     rightSidebarPinned,
     // Only a pinned drawer reopens on load — see STORAGE_KEYS.rightSidebarOpen.
     rightSidebarOpen: rightSidebarPinned && readBool(STORAGE_KEYS.rightSidebarOpen, false),
@@ -234,6 +235,23 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
       writeString(STORAGE_KEYS.rightSidebarView, view);
       writeBool(STORAGE_KEYS.rightSidebarOpen, true);
       set({ rightSidebarView: view, rightSidebarOpen: true });
+    },
+
+    // Opens (never toggles closed) the drawer on `view` — for callers that
+    // want a view shown, e.g. the palette's "Edit project files".
+    openRightSidebarView: (view, projectId) => {
+      writeString(STORAGE_KEYS.rightSidebarView, view);
+      writeBool(STORAGE_KEYS.rightSidebarOpen, true);
+      set((s) => ({
+        rightSidebarView: view,
+        rightSidebarOpen: true,
+        ...(projectId !== undefined && {
+          rightSidebarProjectRequest: {
+            projectId,
+            nonce: (s.rightSidebarProjectRequest?.nonce ?? 0) + 1,
+          },
+        }),
+      }));
     },
 
     toggleRightSidebar: () => {

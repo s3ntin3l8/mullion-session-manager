@@ -27,6 +27,26 @@ describe("right sidebar actions", () => {
     expect(localStorage.getItem("crs.rightSidebarOpen")).toBe("1");
   });
 
+  it("openRightSidebarView opens on that view and never toggles it closed", () => {
+    useDashboardStore.getState().openRightSidebarView("files");
+    useDashboardStore.getState().openRightSidebarView("files");
+
+    const s = useDashboardStore.getState();
+    expect(s.rightSidebarOpen).toBe(true);
+    expect(s.rightSidebarView).toBe("files");
+    expect(localStorage.getItem("crs.rightSidebarView")).toBe("files");
+    expect(localStorage.getItem("crs.rightSidebarOpen")).toBe("1");
+  });
+
+  it("openRightSidebarView with a project bumps a nonce so repeats still fire", () => {
+    useDashboardStore.getState().openRightSidebarView("files", 5);
+    const first = useDashboardStore.getState().rightSidebarProjectRequest;
+    useDashboardStore.getState().openRightSidebarView("files", 5);
+    const second = useDashboardStore.getState().rightSidebarProjectRequest;
+    expect(first?.projectId).toBe(5);
+    expect(second!.nonce).toBe(first!.nonce + 1);
+  });
+
   it("toggleRightSidebarView on the open view closes it but remembers the view", () => {
     useDashboardStore.getState().toggleRightSidebarView("git");
     useDashboardStore.getState().toggleRightSidebarView("git");

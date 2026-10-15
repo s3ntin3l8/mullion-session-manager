@@ -29,6 +29,17 @@ export function RightSidebar({ tier, actions }: RightSidebarProps) {
   const setStoredWidth = useDashboardStore((s) => s.setRightSidebarWidth);
   const close = useDashboardStore((s) => s.closeRightSidebar);
   const followed = useFollowedProject();
+  // A request to show a specific project (palette "Edit project files") pins
+  // the picker to it — render-phase adjustment keyed on the request's nonce.
+  // The request is deliberately never cleared: the nonce is the only dedupe,
+  // and resetting it to null would let a later request reuse an already-handled
+  // nonce and be skipped.
+  const projectRequest = useDashboardStore((s) => s.rightSidebarProjectRequest);
+  const [handledNonce, setHandledNonce] = useState(projectRequest?.nonce ?? 0);
+  if (projectRequest && projectRequest.nonce !== handledNonce) {
+    setHandledNonce(projectRequest.nonce);
+    followed.setPinnedProjectId(projectRequest.projectId);
+  }
 
   const [width, setWidth] = useState(storedWidth);
   // Follow the store if it changes from outside this component's own drag

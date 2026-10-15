@@ -28,6 +28,11 @@ const actions = {
   onOpenGitHub: vi.fn(),
   onOpenFileEditor: vi.fn(),
   onOpenFile: vi.fn(),
+  onOpenAgentRules: vi.fn(),
+  onOpenProjectBriefing: vi.fn(),
+  onOpenProjectSetup: vi.fn(),
+  onOpenDockConfig: vi.fn(),
+  onOpenSkills: vi.fn(),
 };
 
 function renderSidebar(tier: LayoutTier = "desktop") {
@@ -323,8 +328,44 @@ describe("RightSidebar", () => {
     useDashboardStore.setState({ rightSidebarOpen: true });
     renderSidebar();
 
-    await user.click(screen.getByRole("button", { name: "Open Git Panel" }));
+    await user.click(screen.getByRole("button", { name: "Open Git panel" }));
     expect(actions.onOpenGit).toHaveBeenCalledWith(1);
+  });
+
+  it("a project request from the store pins the drawer to that project", () => {
+    useDashboardStore.setState({
+      rightSidebarOpen: true,
+      rightSidebarView: "git",
+      projects: [
+        { id: 1, name: "alpha", cwd: "/a", hostId: "local" },
+        { id: 2, name: "beta", cwd: "/b", hostId: "local" },
+      ] as never,
+    });
+    renderSidebar();
+    act(() => useDashboardStore.getState().openRightSidebarView("git", 2));
+    expect(screen.getByText("beta")).toBeTruthy();
+  });
+
+  it("a repeat request for the same project re-pins after the user switched away", async () => {
+    const user = userEvent.setup();
+    useDashboardStore.setState({
+      rightSidebarOpen: true,
+      rightSidebarView: "git",
+      projects: [
+        { id: 1, name: "alpha", cwd: "/a", hostId: "local" },
+        { id: 2, name: "beta", cwd: "/b", hostId: "local" },
+      ] as never,
+    });
+    renderSidebar();
+    const select = screen.getByRole("combobox") as HTMLSelectElement;
+    act(() => useDashboardStore.getState().openRightSidebarView("git", 2));
+    expect(select.value).toBe("2");
+
+    await user.selectOptions(select, "__follow__");
+    expect(select.value).toBe("__follow__");
+
+    act(() => useDashboardStore.getState().openRightSidebarView("git", 2));
+    expect(select.value).toBe("2");
   });
 
   it("shows an empty state instead of a view when there are no projects", () => {

@@ -25,6 +25,9 @@ export interface FileEditorPanelParams {
   rev?: number;
   /** 1-based line to scroll to once `path` is open (terminal `file:line` links). */
   line?: number;
+  /** "editor" renders just the editor — no file tree beside it (opened from
+   * the right sidebar, whose own Files view is already the browser). */
+  mode?: "editor";
 }
 
 interface DirState {
@@ -63,6 +66,7 @@ function FileEditorBody({
   onDirtyChange?: (dirty: boolean) => void;
 }) {
   const { projectId, sessionId } = params;
+  const editorOnly = params.mode === "editor";
   const [dirs, setDirs] = useState<Record<string, DirState>>({});
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set([""]));
   const [rootError, setRootError] = useState<string | null>(null);
@@ -176,6 +180,10 @@ function FileEditorBody({
   useEffect(() => {
     let cancelled = false;
     void (async () => {
+      if (editorOnly) {
+        if (params.path && !dirtyRef.current) await openFile(params.path);
+        return;
+      }
       const ok = await loadDir("");
       if (!ok || cancelled || !params.path) return;
       await revealFile(params.path);
@@ -186,7 +194,7 @@ function FileEditorBody({
     return () => {
       cancelled = true;
     };
-  }, [loadDir, openFile, revealFile, params.path, params.rev]);
+  }, [editorOnly, loadDir, openFile, revealFile, params.path, params.rev]);
 
   // Debounced search; a stale response (older keystroke) is dropped.
   useEffect(() => {
@@ -488,7 +496,7 @@ function FileEditorBody({
     );
   };
 
-  if (!dirs[""]) {
+  if (!editorOnly && !dirs[""]) {
     if (rootError) {
       return (
         <EmptyStateNote>
@@ -512,121 +520,125 @@ function FileEditorBody({
     <div
       className={`agent-rules-panel file-editor-panel${treeOpen ? " tree-open" : ""}`}
       onKeyDown={(e) => {
-        if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "p") {
+        if (!editorOnly && (e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "p") {
           e.preventDefault();
           setTreeOpen(true);
           searchInputRef.current?.focus();
         }
       }}
     >
-      <div className="agent-rules-panel-list file-editor-tree cmux-scroll">
-        <div className="file-editor-tree-actions">
-          <button
-            className="git-panel-fetch-btn"
-            onClick={() => {
-              setTreeError(null);
-              void Promise.all([...expanded].map((d) => loadDir(d)));
-            }}
-          >
-            Refresh
-          </button>
-          <button
-            className="git-panel-fetch-btn"
-            onClick={() => setNewEntry({ kind: "file", name: "" })}
-            disabled={dirty}
-            title={dirty ? "Save or discard your changes first" : undefined}
-          >
-            New file
-          </button>
-          <button
-            className="git-panel-fetch-btn"
-            onClick={() => setNewEntry({ kind: "dir", name: "" })}
-          >
-            New folder
-          </button>
-        </div>
-        <input
-          ref={searchInputRef}
-          className="file-editor-new-input file-editor-search"
-          value={query}
-          placeholder="Search files (Ctrl+P)"
-          aria-label="Search files"
-          onChange={(e) => {
-            setQuery(e.target.value);
-            if (!e.target.value.trim()) clearSearch();
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "Escape") {
-              clearSearch();
-            } else if (e.key === "ArrowDown" && search) {
-              e.preventDefault();
-              setActiveIdx((i) => Math.min(i + 1, search.results.length - 1));
-            } else if (e.key === "ArrowUp" && search) {
-              e.preventDefault();
-              setActiveIdx((i) => Math.max(i - 1, 0));
-            } else if (e.key === "Enter" && search?.results[activeIdx] && !dirty) {
-              void openSearchResult(search.results[activeIdx].path);
-            }
-          }}
-        />
-        {newEntry !== null && (
-          <div className="file-editor-new">
-            <input
-              className="file-editor-new-input"
-              autoFocus
-              value={newEntry.name}
-              placeholder={`${newEntry.kind === "dir" ? "folder" : "file"} name in ${selectedDir || "project root"}`}
-              aria-label={newEntry.kind === "dir" ? "New folder name" : "New file name"}
-              onChange={(e) => setNewEntry({ ...newEntry, name: e.target.value })}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") void handleCreate();
-                if (e.key === "Escape") setNewEntry(null);
+      {!editorOnly && (
+        <div className="agent-rules-panel-list file-editor-tree cmux-scroll">
+          <div className="file-editor-tree-actions">
+            <button
+              className="git-panel-fetch-btn"
+              onClick={() => {
+                setTreeError(null);
+                void Promise.all([...expanded].map((d) => loadDir(d)));
               }}
-            />
+            >
+              Refresh
+            </button>
+            <button
+              className="git-panel-fetch-btn"
+              onClick={() => setNewEntry({ kind: "file", name: "" })}
+              disabled={dirty}
+              title={dirty ? "Save or discard your changes first" : undefined}
+            >
+              New file
+            </button>
+            <button
+              className="git-panel-fetch-btn"
+              onClick={() => setNewEntry({ kind: "dir", name: "" })}
+            >
+              New folder
+            </button>
           </div>
-        )}
-        {treeError && <div className="agent-rules-panel-notice error">{treeError}</div>}
-        {query.trim() ? (
-          <div className="file-editor-results" role="listbox" aria-label="Search results">
-            {searchError && <div className="agent-rules-panel-notice error">{searchError}</div>}
-            {search && search.results.length === 0 && !searchError && (
-              <div className="agent-rules-panel-row-meta">No matching files</div>
-            )}
-            {search?.results.map((r, i) => (
-              <button
-                key={r.path}
-                role="option"
-                aria-selected={i === activeIdx}
-                className={`agent-rules-panel-row file-editor-row${i === activeIdx ? " selected" : ""}`}
-                disabled={dirty}
-                title={dirty ? "Save or discard your changes first" : r.path}
-                onClick={() => void openSearchResult(r.path)}
-              >
-                <FileTextIcon size={13} />
-                <span className="agent-rules-panel-row-name">{r.path.split("/").pop()}</span>
-                {r.path.includes("/") && (
-                  <span className="agent-rules-panel-row-meta">{parentDir(r.path)}</span>
-                )}
-              </button>
-            ))}
-            {search?.truncated && (
-              <div className="agent-rules-panel-row-meta">
-                Search stopped early — a very large project; narrow the query.
-              </div>
-            )}
-          </div>
-        ) : (
-          renderDir("", 0)
-        )}
-      </div>
+          <input
+            ref={searchInputRef}
+            className="file-editor-new-input file-editor-search"
+            value={query}
+            placeholder="Search files (Ctrl+P)"
+            aria-label="Search files"
+            onChange={(e) => {
+              setQuery(e.target.value);
+              if (!e.target.value.trim()) clearSearch();
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                clearSearch();
+              } else if (e.key === "ArrowDown" && search) {
+                e.preventDefault();
+                setActiveIdx((i) => Math.min(i + 1, search.results.length - 1));
+              } else if (e.key === "ArrowUp" && search) {
+                e.preventDefault();
+                setActiveIdx((i) => Math.max(i - 1, 0));
+              } else if (e.key === "Enter" && search?.results[activeIdx] && !dirty) {
+                void openSearchResult(search.results[activeIdx].path);
+              }
+            }}
+          />
+          {newEntry !== null && (
+            <div className="file-editor-new">
+              <input
+                className="file-editor-new-input"
+                autoFocus
+                value={newEntry.name}
+                placeholder={`${newEntry.kind === "dir" ? "folder" : "file"} name in ${selectedDir || "project root"}`}
+                aria-label={newEntry.kind === "dir" ? "New folder name" : "New file name"}
+                onChange={(e) => setNewEntry({ ...newEntry, name: e.target.value })}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void handleCreate();
+                  if (e.key === "Escape") setNewEntry(null);
+                }}
+              />
+            </div>
+          )}
+          {treeError && <div className="agent-rules-panel-notice error">{treeError}</div>}
+          {query.trim() ? (
+            <div className="file-editor-results" role="listbox" aria-label="Search results">
+              {searchError && <div className="agent-rules-panel-notice error">{searchError}</div>}
+              {search && search.results.length === 0 && !searchError && (
+                <div className="agent-rules-panel-row-meta">No matching files</div>
+              )}
+              {search?.results.map((r, i) => (
+                <button
+                  key={r.path}
+                  role="option"
+                  aria-selected={i === activeIdx}
+                  className={`agent-rules-panel-row file-editor-row${i === activeIdx ? " selected" : ""}`}
+                  disabled={dirty}
+                  title={dirty ? "Save or discard your changes first" : r.path}
+                  onClick={() => void openSearchResult(r.path)}
+                >
+                  <FileTextIcon size={13} />
+                  <span className="agent-rules-panel-row-name">{r.path.split("/").pop()}</span>
+                  {r.path.includes("/") && (
+                    <span className="agent-rules-panel-row-meta">{parentDir(r.path)}</span>
+                  )}
+                </button>
+              ))}
+              {search?.truncated && (
+                <div className="agent-rules-panel-row-meta">
+                  Search stopped early — a very large project; narrow the query.
+                </div>
+              )}
+            </div>
+          ) : (
+            renderDir("", 0)
+          )}
+        </div>
+      )}
 
       <div className="agent-rules-panel-editor file-editor-main">
-        <button
-          className="git-panel-fetch-btn file-editor-tree-toggle"
-          onClick={() => setTreeOpen((v) => !v)}
-        >
-          Files
-        </button>
+        {!editorOnly && (
+          <button
+            className="git-panel-fetch-btn file-editor-tree-toggle"
+            onClick={() => setTreeOpen((v) => !v)}
+          >
+            Files
+          </button>
+        )}
         {!file ? (
           <EmptyStateNote>
             <FileTextIcon size={20} />
@@ -739,7 +751,7 @@ export function FileEditorPanel({ params }: { params: FileEditorPanelParams }) {
 
   return (
     <div className="file-editor-shell">
-      {(roots.length > 0 || sessionId !== undefined) && (
+      {params.mode !== "editor" && (roots.length > 0 || sessionId !== undefined) && (
         <div className="file-editor-rootbar">
           <label>
             <span className="agent-rules-panel-row-meta">Root</span>{" "}
