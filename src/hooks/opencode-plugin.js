@@ -165,6 +165,9 @@ function mapOpenCodeEvent(
   // error dot and counts in the aggregate attention badge. A user abort is
   // a separate `session.execution.interrupted` event in v2 (deliberately NOT
   // mapped — not attention-worthy), unlike 1.x's `MessageAbortedError`.
+  // NOTE: `session.execution.failed` intentionally maps ONLY to `tool_failure`
+  // (as 1.x's `session.error` did) with no paired `notification` — adding one
+  // would double up the attention badge for the same failure.
   if (type === "session.execution.failed") {
     const error = data.error;
     if (!error || typeof error !== "object") return null;
@@ -299,8 +302,9 @@ function mapOpenCodeEvent(
   return null;
 }
 
-/** The human-readable message of a v2 error-ish payload (`{ message }` or
- * `{ error: { message } }` callers pass the inner object); never empty. */
+/** `value.message` when it is a non-empty string, else "unknown error" — so a
+ * notification body is never empty. Callers pass the object that carries the
+ * message (`data` for worktree/workspace failures, `data.error` for compaction). */
 function errorText(value) {
   const message = nonEmptyString(value?.message) ? value.message : null;
   return message ?? "unknown error";
@@ -343,6 +347,9 @@ function createSessionDiffTracker(getDiff, forward) {
               .filter(
                 (entry) =>
                   nonEmptyString(entry?.file) &&
+                  // Deliberately bidirectional: a step may report `src/a.ts`
+                  // while the diff says `a.ts` (or the reverse), depending on
+                  // the Location root.
                   [...files].some((file) => {
                     const diffFile = stripDotSlash(entry.file);
                     return (
