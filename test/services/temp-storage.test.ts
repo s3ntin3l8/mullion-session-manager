@@ -174,4 +174,37 @@ describe("temp-storage", () => {
     release();
     await first;
   });
+
+  it("skips live per-session scratch dirs by name", async () => {
+    const claude = await makeEntry("claude-1000", 30 * DAY);
+    const mullion = await makeEntry("mullion-scaffold-generate", 30 * DAY);
+    await pruneTempStorage("aggressive", {
+      root,
+      npmCacheDir: npmDir,
+      now: NOW,
+      runNpmCacheClean: async () => "",
+    });
+    expect(await exists(claude)).toBe(true);
+    expect(await exists(mullion)).toBe(true);
+  });
+
+  it("keeps going past an entry it cannot remove and reports it", async () => {
+    const stuck = await makeEntry("stuck", 30 * DAY);
+    const locked = path.join(stuck, "locked");
+    await fs.mkdir(locked);
+    await fs.writeFile(path.join(locked, "f"), "z");
+    const t = new Date(NOW - 30 * DAY);
+    await fs.utimes(path.join(locked, "f"), t, t);
+    await fs.utimes(locked, t, t);
+    await fs.utimes(stuck, t, t);
+    await fs.chmod(locked, 0o500);
+    const other = await makeEntry("other", 30 * DAY);
+    try {
+      const result = await pruneTempStorage("safe", { root, npmCacheDir: npmDir, now: NOW });
+      expect(await exists(other)).toBe(false);
+      if (process.getuid?.() !== 0) expect(result.error).toContain("stuck");
+    } finally {
+      await fs.chmod(locked, 0o700);
+    }
+  });
 });

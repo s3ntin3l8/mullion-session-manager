@@ -36,7 +36,11 @@ export function ServerInfoSection() {
   const [pruneResult, setPruneResult] = useState<string | null>(null);
 
   const refreshResources = () => {
-    return Promise.all([api.getSystemStats(), api.getDockerStorage(), api.getTempStorage()])
+    return Promise.all([
+      api.getSystemStats(),
+      api.getDockerStorage(),
+      api.getTempStorage().catch(() => null),
+    ])
       .then(([nextStats, nextDocker, nextTemp]) => {
         setStats(nextStats);
         setDocker(nextDocker);

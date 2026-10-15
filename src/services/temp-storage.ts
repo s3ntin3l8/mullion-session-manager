@@ -22,6 +22,11 @@ const DENYLIST: ReadonlyArray<RegExp> = [
   /^snap-private-tmp$/,
   /^node-compile-cache$/,
   /^tsx-/,
+  // Live per-session scratch: tools read it back long after last writing it,
+  // so mtime alone can't prove it's stale.
+  /^claude-/,
+  /^mullion-/,
+  /^dbus-/,
 ];
 
 export type TempPruneMode = "safe" | "aggressive";
@@ -65,6 +70,9 @@ interface WalkResult {
   unsafe: boolean;
 }
 
+// Allocated bytes, matching what deleting actually frees.
+const diskBytes = (st: Stats) => st.blocks * 512;
+
 async function walk(dir: string, rootDev: number, budget: { left: number }): Promise<WalkResult> {
   const result: WalkResult = { bytes: 0, newestMtimeMs: 0, unsafe: false };
   let names: string[];
@@ -82,7 +90,7 @@ async function walk(dir: string, rootDev: number, budget: { left: number }): Pro
       continue; // vanished between readdir and lstat
     }
     if (st.isSocket() || st.dev !== rootDev) return { ...result, unsafe: true };
-    result.bytes += st.size;
+    result.bytes += diskBytes(st);
     result.newestMtimeMs = Math.max(result.newestMtimeMs, st.mtimeMs);
     if (st.isDirectory()) {
       const child = await walk(path.join(dir, name), rootDev, budget);
@@ -94,33 +102,40 @@ async function walk(dir: string, rootDev: number, budget: { left: number }): Pro
   return result;
 }
 
-async function listCandidates(
+async function evaluateEntry(
   root: string,
+  rootDev: number,
   uid: number,
-): Promise<{ entries: Candidate[]; rootDev: number }> {
-  const rootStat = await fs.lstat(root);
+  name: string,
+): Promise<Candidate | null> {
+  if (DENYLIST.some((re) => re.test(name))) return null;
+  const fullPath = path.join(root, name);
+  let st: Stats;
+  try {
+    st = await fs.lstat(fullPath);
+  } catch {
+    return null;
+  }
+  if (st.uid !== uid || st.isSocket() || st.dev !== rootDev) return null;
+  let bytes = diskBytes(st);
+  let newest = st.mtimeMs;
+  if (st.isDirectory()) {
+    const tree = await walk(fullPath, rootDev, { left: WALK_ENTRY_CAP });
+    if (tree.unsafe) return null;
+    bytes += tree.bytes;
+    newest = Math.max(newest, tree.newestMtimeMs);
+  }
+  return { name, fullPath, bytes, newestMtimeMs: newest };
+}
+
+async function listCandidates(root: string, uid: number): Promise<{ entries: Candidate[] }> {
+  const rootDev = (await fs.stat(root)).dev;
   const entries: Candidate[] = [];
   for (const name of await fs.readdir(root)) {
-    if (DENYLIST.some((re) => re.test(name))) continue;
-    const fullPath = path.join(root, name);
-    let st: Stats;
-    try {
-      st = await fs.lstat(fullPath);
-    } catch {
-      continue;
-    }
-    if (st.uid !== uid || st.isSocket() || st.dev !== rootStat.dev) continue;
-    let bytes = st.size;
-    let newest = st.mtimeMs;
-    if (st.isDirectory()) {
-      const tree = await walk(fullPath, rootStat.dev, { left: WALK_ENTRY_CAP });
-      if (tree.unsafe) continue;
-      bytes += tree.bytes;
-      newest = Math.max(newest, tree.newestMtimeMs);
-    }
-    entries.push({ name, fullPath, bytes, newestMtimeMs: newest });
+    const entry = await evaluateEntry(root, rootDev, uid, name);
+    if (entry) entries.push(entry);
   }
-  return { entries, rootDev: rootStat.dev };
+  return { entries };
 }
 
 function olderThan(entries: Candidate[], ageMs: number, now: number): Candidate[] {
@@ -138,7 +153,7 @@ async function dirSize(dir: string): Promise<number> {
   for (const name of names) {
     try {
       const st = await fs.lstat(path.join(dir, name));
-      total += st.size;
+      total += diskBytes(st);
       if (st.isDirectory()) total += await dirSize(path.join(dir, name));
     } catch {
       // vanished mid-walk
@@ -222,27 +237,29 @@ export async function pruneTempStorage(
     const uid = options.uid ?? process.getuid?.() ?? -1;
     // Recomputed here, never taken from an earlier preview.
     const { entries } = await listCandidates(root, uid);
-    const targets = olderThan(
-      entries,
-      mode === "aggressive" ? AGGRESSIVE_AGE_MS : SAFE_AGE_MS,
-      now,
-    );
+    const ageMs = mode === "aggressive" ? AGGRESSIVE_AGE_MS : SAFE_AGE_MS;
+    const targets = olderThan(entries, ageMs, now);
+    const rootDev = (await fs.stat(root)).dev;
     let reclaimedBytes = 0;
     let removed = 0;
+    const errors: string[] = [];
     for (const target of targets) {
+      // A big rm -r can take minutes and listing happened up front: re-check
+      // right before removal so something that started using this entry in
+      // the meantime is left alone.
+      const fresh = await evaluateEntry(root, rootDev, uid, target.name);
+      if (!fresh || now - fresh.newestMtimeMs <= ageMs) continue;
       try {
-        await fs.rm(target.fullPath, { recursive: true, force: true });
-        reclaimedBytes += target.bytes;
+        await fs.rm(fresh.fullPath, { recursive: true, force: true });
+        reclaimedBytes += fresh.bytes;
         removed += 1;
       } catch (error) {
-        return {
-          output: `Removed ${String(removed)} temp entries.`,
-          reclaimedBytes,
-          error: error instanceof Error ? error.message : "Temp cleanup failed",
-        };
+        // One stubborn entry (e.g. a root-owned file inside) must not block the rest.
+        errors.push(`${target.name}: ${error instanceof Error ? error.message : "remove failed"}`);
       }
     }
     let output = `Removed ${String(removed)} temp entries.`;
+    const tempError = errors.length > 0 ? errors.slice(0, 3).join("; ") : undefined;
     if (mode === "aggressive") {
       const before = await dirSize(npmCachePath(options));
       try {
@@ -252,11 +269,13 @@ export async function pruneTempStorage(
         return {
           output,
           reclaimedBytes,
-          error: error instanceof Error ? error.message : "npm cache clean failed",
+          error: [tempError, error instanceof Error ? error.message : "npm cache clean failed"]
+            .filter(Boolean)
+            .join("; "),
         };
       }
     }
-    return { output, reclaimedBytes };
+    return { output, reclaimedBytes, ...(tempError ? { error: tempError } : {}) };
   } finally {
     pruneRunning = false;
   }
