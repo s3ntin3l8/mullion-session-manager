@@ -194,6 +194,9 @@ async function gatherTargets(
     if (!/^claude-/.test(name)) continue;
     const claudeDir = path.join(root, name);
     try {
+      // First stat of this entry (the generic pass above skips claude-* on the
+      // denylist before statting): also guards against it having been swapped
+      // for a symlink or moved across filesystems since listCandidates.
       const st = await fs.lstat(claudeDir);
       if (!st.isDirectory() || st.uid !== uid || st.dev !== rootDev) continue;
     } catch {

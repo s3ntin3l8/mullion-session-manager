@@ -75,7 +75,10 @@ export async function loadLiveSessionIds(
       continue;
     }
     const start = await procStartTime(entry.pid);
-    if (start === null) continue; // process is gone
+    // Gone from /proc: skip it. Even if the file was left behind by a clean
+    // exit, or the process is about to die, the callers' mtime window (24h
+    // safe, 10 minutes aggressive) still protects a session that just ended.
+    if (start === null) continue;
     // Only a numeric, differing start time proves the pid was reused. Missing
     // or unrecognised values (older/newer Claude Code, another platform) can't
     // disprove "still running", so err that way.
