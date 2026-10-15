@@ -11,7 +11,8 @@ const SAFE_BUILD_CACHE_AGE_MS = 24 * 60 * 60 * 1000;
 // On the containerd image store `until=` compares against the image's local
 // record time (last tag/untag), and an image only becomes dangling when a newer
 // build takes its tag, so an age filter on images never matches. Dangling
-// images are therefore pruned at any age; everything else keeps the 7-day window.
+// images are therefore pruned at any age; everything except build cache keeps
+// the 7-day window.
 export const DOCKER_SAFE_PRUNE_STEPS: ReadonlyArray<readonly string[]> = [
   ["image", "prune", "--force"],
   ["container", "prune", "--force", "--filter", "until=168h"],
