@@ -329,3 +329,27 @@ button.danger.armed {
   font-weight: 600;
   animation: cmuxAttn 1.4s ease-out infinite;
 }
+
+/* ConfirmButton `variant="neutral"`: same arm-then-confirm flow as
+   button.danger.armed, in the accent tone instead of red. */
+button.confirm-neutral.armed {
+  background: color-mix(in srgb, var(--g) 15%, transparent);
+  border-color: var(--g);
+  color: var(--g);
+  font-weight: 600;
+}
+/* ConfirmButton `armedLabel`: both labels share one grid cell so the button is
+   always as wide as the wider one; the inactive label is only hidden, not
+   removed, so it still reserves its width. */
+button.confirm-btn-stable {
+  display: inline-grid;
+  justify-items: center;
+  align-items: center;
+}
+button.confirm-btn-stable > .confirm-btn-label {
+  grid-area: 1 / 1;
+  white-space: nowrap;
+}
+button.confirm-btn-stable > .confirm-btn-label[data-active="false"] {
+  visibility: hidden;
+}

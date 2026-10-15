@@ -7,6 +7,7 @@ import {
   type DockerStorageStatus,
   type ServerInfo,
   type SystemStats,
+  type TempStorageStatus,
 } from "../../api/index.js";
 import { ServerInfoSection } from "./ServerInfoSection.js";
 
@@ -57,10 +58,18 @@ const docker: DockerStorageStatus = {
   estimates: { safeBytes: 2 * GIB, aggressiveBytes: 3 * GIB },
 };
 
-function setup(overrides: { docker?: DockerStorageStatus } = {}) {
+const tempUnavailable: TempStorageStatus = {
+  available: false,
+  root: "/tmp",
+  estimates: { safeBytes: 0, aggressiveBytes: 0 },
+  candidates: { safe: 0, aggressive: 0 },
+};
+
+function setup(overrides: { docker?: DockerStorageStatus; temp?: TempStorageStatus } = {}) {
   vi.spyOn(api, "getServerInfo").mockResolvedValue(info);
   vi.spyOn(api, "getSystemStats").mockResolvedValue(stats);
   vi.spyOn(api, "getDockerStorage").mockResolvedValue(overrides.docker ?? docker);
+  vi.spyOn(api, "getTempStorage").mockResolvedValue(overrides.temp ?? tempUnavailable);
   vi.spyOn(api, "checkForUpdate").mockReturnValue(new Promise(() => {}));
 }
 
@@ -96,7 +105,7 @@ describe("Settings -> Server info resources", () => {
       reclaimedBytes: GIB,
     });
     render(<ServerInfoSection />);
-    const first = await screen.findByRole("button", { name: "Clean up Docker (safe)…" });
+    const first = await screen.findByRole("button", { name: "Clean up (safe)…" });
     await userEvent.click(first);
     expect(api.pruneDockerStorage).not.toHaveBeenCalled();
     await userEvent.click(first);
@@ -136,17 +145,69 @@ describe("Settings -> Server info resources", () => {
     expect(
       await screen.findByText(/Docker cleanup unavailable: permission denied/),
     ).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Clean up Docker/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Clean up/ })).not.toBeInTheDocument();
   });
 
   it("surfaces a cleanup failure", async () => {
     setup();
     vi.spyOn(api, "pruneDockerStorage").mockRejectedValue(new Error("failed"));
     render(<ServerInfoSection />);
-    const button = await screen.findByRole("button", { name: "Clean up Docker (safe)…" });
+    const button = await screen.findByRole("button", { name: "Clean up (safe)…" });
     await userEvent.click(button);
     await userEvent.click(button);
     expect(await screen.findByText("Docker cleanup failed.")).toBeInTheDocument();
     await waitFor(() => expect(api.getDockerStorage).toHaveBeenCalledTimes(2));
+  });
+
+  it("labels the armed safe button without moving or arming the aggressive one", async () => {
+    setup();
+    render(<ServerInfoSection />);
+    const safe = await screen.findByRole("button", { name: "Clean up (safe)…" });
+    await userEvent.click(safe);
+    expect(screen.getByRole("button", { name: /Confirm safe cleanup/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Aggressive cleanup…" })).not.toHaveClass("armed");
+  });
+
+  it("prunes Docker and temp files together and reports both", async () => {
+    setup({
+      temp: {
+        available: true,
+        root: "/tmp",
+        estimates: { safeBytes: GIB / 2, aggressiveBytes: GIB },
+        candidates: { safe: 1, aggressive: 2 },
+      },
+    });
+    vi.spyOn(api, "pruneDockerStorage").mockResolvedValue({ output: "", reclaimedBytes: GIB });
+    vi.spyOn(api, "pruneTempStorage").mockResolvedValue({ output: "", reclaimedBytes: GIB / 2 });
+    render(<ServerInfoSection />);
+    const button = await screen.findByRole("button", { name: "Clean up (safe)…" });
+    await userEvent.click(button);
+    await userEvent.click(button);
+    expect(
+      await screen.findByText("Freed 1.5 GiB (Docker 1.0 GiB, temp files 512 MiB)."),
+    ).toBeInTheDocument();
+    expect(api.pruneTempStorage).toHaveBeenCalledWith("safe");
+  });
+
+  it("offers temp cleanup when Docker is unavailable", async () => {
+    setup({
+      docker: { ...docker, available: false, error: "no docker" },
+      temp: {
+        available: true,
+        root: "/tmp",
+        estimates: { safeBytes: 0, aggressiveBytes: 0 },
+        candidates: { safe: 0, aggressive: 0 },
+      },
+    });
+    vi.spyOn(api, "pruneTempStorage").mockResolvedValue({
+      output: "",
+      reclaimedBytes: 2,
+      error: "boom",
+    });
+    render(<ServerInfoSection />);
+    const button = await screen.findByRole("button", { name: "Clean up (safe)…" });
+    await userEvent.click(button);
+    await userEvent.click(button);
+    expect(await screen.findByText("Freed 2 B, then stopped: boom")).toBeInTheDocument();
   });
 });

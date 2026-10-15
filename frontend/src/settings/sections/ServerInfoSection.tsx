@@ -1,7 +1,12 @@
 import { useEffect, useState } from "react";
 import { api, ApiError } from "../../api/index.js";
 import type { ServerInfo, UpdateCheckResult, UpdateStatus } from "../../api/index.js";
-import type { DockerPruneMode, DockerStorageStatus, SystemStats } from "../../api/index.js";
+import type {
+  DockerPruneMode,
+  DockerStorageStatus,
+  SystemStats,
+  TempStorageStatus,
+} from "../../api/index.js";
 import { usePolling } from "../../hooks/usePolling.js";
 import { formatRelativeAge } from "../../relativeTime.js";
 import { Eyebrow, SecondaryButton } from "../../ui/primitives.js";
@@ -25,14 +30,21 @@ export function ServerInfoSection() {
   const [stats, setStats] = useState<SystemStats | null>(null);
   const [docker, setDocker] = useState<DockerStorageStatus | null>(null);
   const [resourceError, setResourceError] = useState<string | null>(null);
-  const [pruning, setPruning] = useState(false);
+  const [temp, setTemp] = useState<TempStorageStatus | null>(null);
+  const [pruningMode, setPruningMode] = useState<DockerPruneMode | null>(null);
+  const pruning = pruningMode !== null;
   const [pruneResult, setPruneResult] = useState<string | null>(null);
 
   const refreshResources = () => {
-    return Promise.all([api.getSystemStats(), api.getDockerStorage()])
-      .then(([nextStats, nextDocker]) => {
+    return Promise.all([
+      api.getSystemStats(),
+      api.getDockerStorage(),
+      api.getTempStorage().catch(() => null),
+    ])
+      .then(([nextStats, nextDocker, nextTemp]) => {
         setStats(nextStats);
         setDocker(nextDocker);
+        setTemp(nextTemp);
         setResourceError(null);
       })
       .catch((error: unknown) => {
@@ -49,20 +61,40 @@ export function ServerInfoSection() {
   }, []);
 
   const runPrune = (mode: DockerPruneMode) => {
-    setPruning(true);
+    setPruningMode(mode);
     setPruneResult(null);
     void (async () => {
       try {
-        const result = await api.pruneDockerStorage(mode);
+        const settle = async (
+          fallback: string,
+          run: () => Promise<{ reclaimedBytes: number; error?: string }>,
+        ) => {
+          try {
+            return await run();
+          } catch (error: unknown) {
+            return {
+              reclaimedBytes: 0,
+              error: error instanceof ApiError ? error.message : fallback,
+            };
+          }
+        };
+        const dockerResult = docker?.available
+          ? await settle("Docker cleanup failed.", () => api.pruneDockerStorage(mode))
+          : null;
+        const tempResult = temp?.available
+          ? await settle("Temp file cleanup failed.", () => api.pruneTempStorage(mode))
+          : null;
+        const total = (dockerResult?.reclaimedBytes ?? 0) + (tempResult?.reclaimedBytes ?? 0);
+        const errors = [dockerResult?.error, tempResult?.error].filter(Boolean).join("; ");
+        let message = `Freed ${formatBytes(total)}`;
+        if (dockerResult && tempResult) {
+          message += ` (Docker ${formatBytes(dockerResult.reclaimedBytes)}, temp files ${formatBytes(tempResult.reclaimedBytes)})`;
+        }
         setPruneResult(
-          result.error
-            ? `Freed ${formatBytes(result.reclaimedBytes)}, then stopped: ${result.error}`
-            : `Freed ${formatBytes(result.reclaimedBytes)}.`,
+          !errors ? `${message}.` : total === 0 ? errors : `${message}, then stopped: ${errors}`,
         );
-      } catch (error: unknown) {
-        setPruneResult(error instanceof ApiError ? error.message : "Docker cleanup failed.");
       } finally {
-        setPruning(false);
+        setPruningMode(null);
         await refreshResources();
       }
     })();
@@ -156,7 +188,7 @@ export function ServerInfoSection() {
         </SecondaryButton>
       </div>
 
-      <Eyebrow title="Docker storage" desc="Measured when this page opens or refreshes." />
+      <Eyebrow title="Disk cleanup" desc="Measured when this page opens or refreshes." />
       {!docker && <div className="settings-readonly-value">Analyzing Docker…</div>}
       {docker && !docker.available && (
         <div className="settings-footer-note">
@@ -172,7 +204,7 @@ export function ServerInfoSection() {
               <div className="settings-stat-value">{formatBytes(docker.totalSizeBytes)}</div>
             </div>
             <div className="settings-stat-card">
-              <div className="settings-stat-label">Safe cleanup frees ≈</div>
+              <div className="settings-stat-label">Docker: safe frees ≈</div>
               <div className="settings-stat-value">
                 {docker.estimates?.safeBytes == null
                   ? "unknown"
@@ -180,7 +212,7 @@ export function ServerInfoSection() {
               </div>
             </div>
             <div className="settings-stat-card">
-              <div className="settings-stat-label">Aggressive cleanup frees ≈</div>
+              <div className="settings-stat-label">Docker: aggressive frees ≈</div>
               <div className="settings-stat-value">
                 {formatBytes(docker.estimates?.aggressiveBytes ?? docker.reclaimableBytes)}
               </div>
@@ -194,22 +226,54 @@ export function ServerInfoSection() {
             containers and unused networks too. Neither uses <code>--volumes</code>, so volumes are
             always preserved. Figures are estimates.
           </div>
+        </>
+      )}
+      {temp?.available && (
+        <>
+          <div className="settings-stat-grid">
+            <div className="settings-stat-card">
+              <div className="settings-stat-label">Temp files: safe frees ≈</div>
+              <div className="settings-stat-value">{formatBytes(temp.estimates.safeBytes)}</div>
+            </div>
+            <div className="settings-stat-card">
+              <div className="settings-stat-label">Temp files: aggressive frees ≈</div>
+              <div className="settings-stat-value">
+                {formatBytes(temp.estimates.aggressiveBytes)}
+              </div>
+            </div>
+          </div>
+          <div className="settings-footer-note">
+            Temp cleanup only touches entries in <code>{temp.root}</code> owned by this server's
+            user, and skips sockets and live tool caches. Safe removes entries untouched for 7+
+            days; aggressive uses a 24-hour window and also clears the npm cache (an{" "}
+            <code>npm ci</code> running in a session at that moment may fail).
+          </div>
+        </>
+      )}
+      {(docker?.available || temp?.available) && (
+        <>
           {pruneResult && <div className="settings-footer-note">{pruneResult}</div>}
           <div style={{ marginTop: 10, display: "flex", gap: 10 }}>
             <ConfirmButton
-              title="Remove dangling images and stale containers, networks, and build cache"
+              variant="neutral"
+              armedLabel="Confirm safe cleanup"
+              title="Remove dangling images and stale containers, networks, build cache, and temp files"
               disabled={pruning}
               onConfirm={() => runPrune("safe")}
             >
-              {pruning ? "Cleaning up…" : "Clean up Docker (safe)…"}
+              {pruningMode === "safe" ? "Cleaning up…" : "Clean up (safe)…"}
             </ConfirmButton>
-            <ConfirmButton
-              title="Remove ALL unused images (including tagged) and ALL unused build cache"
-              disabled={pruning}
-              onConfirm={() => runPrune("aggressive")}
-            >
-              {pruning ? "Cleaning up…" : "Aggressive cleanup…"}
-            </ConfirmButton>
+            <span style={{ marginLeft: "auto" }}>
+              <ConfirmButton
+                variant="danger"
+                armedLabel="Confirm aggressive cleanup"
+                title="Remove ALL unused images (including tagged), ALL unused build cache, recent temp files, and the npm cache"
+                disabled={pruning}
+                onConfirm={() => runPrune("aggressive")}
+              >
+                {pruningMode === "aggressive" ? "Cleaning up…" : "Aggressive cleanup…"}
+              </ConfirmButton>
+            </span>
           </div>
         </>
       )}
