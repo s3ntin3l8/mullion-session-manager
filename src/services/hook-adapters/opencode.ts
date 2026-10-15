@@ -111,6 +111,10 @@ export const OPENCODE_EMITS = [
   "git_branch",
   "cwd_changed",
   "promote_request",
+  // Issue #1594 — a Mullion review gate opened by the plugin alongside
+  // opencode's own permission dock (tool-sourced like promote_request, so
+  // there is no mapOpenCodeEvent output to parity-test it against).
+  "review_gate",
   // Issue #271 follow-up — the live opencode session id, reported on every
   // finished turn (see opencode-plugin.js's mapOpenCodeEvent) so a later
   // promote can carry full conversation history, not just a seed summary.

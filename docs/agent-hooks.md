@@ -18,14 +18,14 @@ The four integrations below are independently wired per CLI and drift
 independently — this table is the single summary; "Auto-injected agents"
 further down carries the full per-CLI detail each row links back to.
 
-| Capability                  | Claude Code                                                                                                                                                       | opencode                                                                                                                                  | codex                                                                                                                                          | agy                                                                                                                                         |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| Hook/event surface          | 21 wire-protocol kinds (`CLAUDE_CODE_EMITS`), from 18 registered Claude Code hooks (see "What's injected" below); `PermissionRequest` is the one blocking hook    | 16 event-bus types (`OPENCODE_EMITS`); no blocking hook — `permission.ask` never fires (upstream bug)                                     | 10 hook events (`CODEX_EMITS`); `PermissionRequest` is the one blocking hook                                                                   | 6 hook events (`AGY_EMITS`); no blocking hook — no `PermissionRequest` equivalent                                                           |
-| MCP server (`mullion`)      | ephemeral `--mcp-config` file, per session                                                                                                                        | ephemeral `OPENCODE_CONFIG_CONTENT.mcp.mullion`, per session                                                                              | ephemeral `-c mcp_servers.mullion.*` flags, per session                                                                                        | **managed, persistent** merge into `~/.gemini/config/mcp_config.json`                                                                       |
-| Bundle skill/agent delivery | boot-time global sync (`bundle-sync.ts`) into `resolveClaudeConfigDir()/skills`, plus a per-session `--plugin-dir` composed bundle for project-specific overrides | boot-time global sync into `resolveOpenCodeConfigHome()/skills`, plus a per-session `skills.paths` pointer for project-specific overrides | boot-time global sync into `resolveCodexAgentsSkillsDir()`, plus a fire-and-forget per-launch `installBundleSkills` fallback                   | boot-time global sync into `resolveAgyGlobalSkillsDir()`/`resolveAgyGlobalAgentsDir()`, plus the same per-launch fallback as codex          |
-| `--model` injection         | `buildModelFlag(command, ctx.model)` via `commandTransform`                                                                                                       | `OPENCODE_CONFIG_CONTENT.model`/`.small_model` (not `buildModelFlag` — a config key, not a CLI flag)                                      | `buildModelFlag(command, ctx.model, "-m")` via `commandTransform`                                                                              | `buildModelFlag(command, ctx.model)` via `commandTransform`                                                                                 |
-| Task Master skill deny      | none                                                                                                                                                              | `permission.skill.<name>: "deny"` for `brainstorming`/`writing-plans`/`finishing-a-development-branch`, gated on a task spawn             | `-c skills.config=[{name,enabled=false}, ...]` for the same three skills (`buildCodexSkillDenyFlag`, issues #965/#1282), gated on a task spawn | not possible — agy's skill data model has no per-skill disable bit at all (see "Skills Manager" below)                                      |
-| Removal on uninstall        | nothing persistent to remove (hooks/MCP are ephemeral); bundle skills removable via `mullion bundle remove`                                                       | same as Claude Code — ephemeral hooks/MCP, bundle skills removable via `bundle remove`                                                    | hand-edit `~/.codex/hooks.json` (see "Removing managed hooks" below); MCP is ephemeral; bundle skills removable via `bundle remove`            | hand-edit `~/.gemini/config/hooks.json`; `bundle remove` also auto-removes the `mullion` entry from `mcp_config.json` and the bundle skills |
+| Capability                  | Claude Code                                                                                                                                                       | opencode                                                                                                                                                           | codex                                                                                                                                          | agy                                                                                                                                         |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| Hook/event surface          | 21 wire-protocol kinds (`CLAUDE_CODE_EMITS`), from 18 registered Claude Code hooks (see "What's injected" below); `PermissionRequest` is the one blocking hook    | 16 hook kinds (`OPENCODE_EMITS`); no blocking hook — a `review_gate` opens beside opencode's own permission dock and answers it via `ctx.permission.reply` (#1594) | 10 hook events (`CODEX_EMITS`); `PermissionRequest` is the one blocking hook                                                                   | 6 hook events (`AGY_EMITS`); no blocking hook — no `PermissionRequest` equivalent                                                           |
+| MCP server (`mullion`)      | ephemeral `--mcp-config` file, per session                                                                                                                        | ephemeral `OPENCODE_CONFIG_CONTENT.mcp.mullion`, per session                                                                                                       | ephemeral `-c mcp_servers.mullion.*` flags, per session                                                                                        | **managed, persistent** merge into `~/.gemini/config/mcp_config.json`                                                                       |
+| Bundle skill/agent delivery | boot-time global sync (`bundle-sync.ts`) into `resolveClaudeConfigDir()/skills`, plus a per-session `--plugin-dir` composed bundle for project-specific overrides | boot-time global sync into `resolveOpenCodeConfigHome()/skills`, plus a per-session `skills.paths` pointer for project-specific overrides                          | boot-time global sync into `resolveCodexAgentsSkillsDir()`, plus a fire-and-forget per-launch `installBundleSkills` fallback                   | boot-time global sync into `resolveAgyGlobalSkillsDir()`/`resolveAgyGlobalAgentsDir()`, plus the same per-launch fallback as codex          |
+| `--model` injection         | `buildModelFlag(command, ctx.model)` via `commandTransform`                                                                                                       | `OPENCODE_CONFIG_CONTENT.model`/`.small_model` (not `buildModelFlag` — a config key, not a CLI flag)                                                               | `buildModelFlag(command, ctx.model, "-m")` via `commandTransform`                                                                              | `buildModelFlag(command, ctx.model)` via `commandTransform`                                                                                 |
+| Task Master skill deny      | none                                                                                                                                                              | `permission.skill.<name>: "deny"` for `brainstorming`/`writing-plans`/`finishing-a-development-branch`, gated on a task spawn                                      | `-c skills.config=[{name,enabled=false}, ...]` for the same three skills (`buildCodexSkillDenyFlag`, issues #965/#1282), gated on a task spawn | not possible — agy's skill data model has no per-skill disable bit at all (see "Skills Manager" below)                                      |
+| Removal on uninstall        | nothing persistent to remove (hooks/MCP are ephemeral); bundle skills removable via `mullion bundle remove`                                                       | same as Claude Code — ephemeral hooks/MCP, bundle skills removable via `bundle remove`                                                                             | hand-edit `~/.codex/hooks.json` (see "Removing managed hooks" below); MCP is ephemeral; bundle skills removable via `bundle remove`            | hand-edit `~/.gemini/config/hooks.json`; `bundle remove` also auto-removes the `mullion` entry from `mcp_config.json` and the bundle skills |
 
 ## What's injected
 
@@ -441,7 +441,7 @@ opencode's own session id for a later promote's history transfer),
 `session.execution.interrupted` and is deliberately not mapped),
 `session.retry.scheduled` (→ `progress: generating`), `session.step.ended`
 (→ `file_change`, from its `files`), `permission.asked` (→
-`permission_request`) and `permission.replied` (→ `permission_resolved`, not
+`permission_request`, plus the review gate below) and `permission.replied` (→ `permission_resolved`, not
 `notification_resolved` — that only clears a confirmed `hookNotification`,
 not `permissionState`), question forms — `form.created` with
 `metadata.kind: "question"` — and their `form.replied`/`form.cancelled`
@@ -505,14 +505,24 @@ when a seed was supplied, else a cold start — each with its own
 than forwarding it; remote-host carryover is an explicit follow-up, not
 silently half-implemented.
 
-**Gating.** v2's plugin API exposes `ctx.permission.hook("evaluate", …)` as
-the real gating point, but it is deliberately not wired up (issue #178/#264;
-re-evaluation tracked in #1594): with no endpoint to answer a gate decision,
-a blocking hook would hang every gated action instead of just not being
-there. (The 1.x `permission.ask`
-hook — confirmed upstream to never fire for a first-encounter command, opencode
-issues #7006/#19927 — no longer exists.) Codex's own dialect shipped (see
-below); agy has no `PermissionRequest`-equivalent hook to build one on at all.
+**Gating (issues #264 / #1594).** The plugin never blocks opencode: it does
+not wire `ctx.permission.hook("evaluate", …)` (a blocking hook has no timeout
+and would hang every gated action). Instead, when opencode itself asks —
+`permission.asked`, i.e. a permission rule resolved to `ask` — the native
+permission dock stays up **and** the plugin opens a `review_gate` on its own
+one-shot hook-socket connection (`gateId` = opencode's request id, `prompt` =
+action + first resource). Approve/Deny in Mullion's notification bell then
+answers the pending request through `ctx.permission.reply({ sessionID,
+requestID, decision: "once" | "reject", message? })` (a denial's reason rides
+along as the model-visible feedback); `no_response` (gate timeout) does
+nothing, leaving opencode's own dock in charge. An answer given in the TUI
+(`permission.replied`) closes the gate connection, which the backend lapses.
+Nothing is gated unless the user's own opencode config makes a rule `ask` —
+opencode's default `build` agent allows `shell` outright, so a first-encounter
+command is not intercepted. (The 1.x `permission.ask` hook — confirmed
+upstream to never fire for a first-encounter command, opencode issues
+#7006/#19927 — no longer exists.) Codex's own dialect shipped (see below); agy
+has no `PermissionRequest`-equivalent hook to build one on at all.
 
 **Contract test:** `test/e2e/opencode-v2-contract.e2e.test.ts` (opt-in
 `make test-e2e`, CI installs the lockfile-pinned `@opencode/cli`) guards the
@@ -921,9 +931,10 @@ Unlike Claude Code, Codex has no ExitPlanMode-equivalent tool to exempt, so
 every Codex `PermissionRequest` becomes a `review_gate` — there's no
 observational fallback shape left for this agent at all. agy has no
 `PermissionRequest`-equivalent hook at all, so it can't participate;
-OpenCode's own equivalent (`permission.ask`) is confirmed not to fire against
-the installed CLI at all (a real upstream bug, not a Mullion gap — see issue
-#264 for the tracking link).
+OpenCode has no blocking hook either (1.x's `permission.ask` never fired), but
+its plugin opens a non-blocking `review_gate` beside opencode's own permission
+dock and answers it through `ctx.permission.reply` — see the OpenCode
+section's "Gating" paragraph (issue #1594).
 
 **Fall-through, not fail-closed, when nobody answers.** This is the load-bearing
 difference from the old gate: a real human decision is always "approved" or
