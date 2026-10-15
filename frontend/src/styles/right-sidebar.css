@@ -174,7 +174,7 @@
 }
 
 /* Shared view chrome */
-.right-sidebar-body > * {
+.right-sidebar-body > *:not(.right-sidebar-toolbar) {
   padding-left: var(--rs-pad-x);
   padding-right: var(--rs-pad-x);
   padding-bottom: 12px;
