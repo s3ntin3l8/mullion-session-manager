@@ -269,8 +269,8 @@ describe("temp-storage", () => {
       expect(await exists(recent)).toBe(false);
     });
 
-    it("keeps a dir touched in the last minute even in aggressive mode", async () => {
-      const fresh = await session(DEAD, 5000);
+    it("keeps a dir touched in the last ten minutes even in aggressive mode", async () => {
+      const fresh = await session(DEAD, 5 * 60 * 1000);
       await pruneTempStorage("aggressive", opts());
       expect(await exists(fresh)).toBe(true);
     });
@@ -306,18 +306,52 @@ describe("temp-storage", () => {
       expect(await exists(project)).toBe(false);
     });
 
-    it("applies the generic windows to non-session entries and counts scratch in estimates", async () => {
+    it("never touches non-session state under claude-*, only counts session dirs in estimates", async () => {
       const dead = await session(DEAD, 3 * DAY);
-      const stray = path.join(root, "claude-1000", "old.log");
-      await fs.writeFile(stray, "l");
-      const t = new Date(NOW - 8 * DAY);
-      await fs.utimes(stray, t, t);
+      const old = new Date(NOW - 60 * DAY);
+      const keep: string[] = [];
+      for (const rel of [
+        path.join("claude-1000", "bundled-skills", "2.1.299", "abc", "SKILL.md"),
+        path.join("claude-1000", "emptyhome", ".config", "x"),
+        path.join("claude-1000", "old.log"),
+        path.join("claude-1000", "-home-me-proj", "tasks.lock"),
+      ]) {
+        const full = path.join(root, rel);
+        await fs.mkdir(path.dirname(full), { recursive: true });
+        await fs.writeFile(full, "z");
+        await fs.utimes(full, old, old);
+        // age the containing dirs too so only the "is it a session dir" rule can save them
+        for (let dir = path.dirname(full); dir !== root; dir = path.dirname(dir)) {
+          await fs.utimes(dir, old, old);
+        }
+        keep.push(full);
+      }
       const status = await inspectTempStorage(opts());
-      expect(status.candidates.safe).toBe(2);
-      expect(status.estimates.safeBytes).toBeGreaterThanOrEqual(200);
-      await pruneTempStorage("safe", opts());
+      expect(status.candidates.safe).toBe(1);
+      await pruneTempStorage("aggressive", opts());
       expect(await exists(dead)).toBe(false);
-      expect(await exists(stray)).toBe(false);
+      for (const f of keep) expect(await exists(f)).toBe(true);
+    });
+
+    it("assumes a session from another PID namespace, or with an unrecognised procStart, is running", async () => {
+      await fs.writeFile(
+        path.join(registry, "other-ns.json"),
+        JSON.stringify({
+          pid: 999_999,
+          sessionId: DEAD,
+          procStart: "1",
+          pidDomain: "linux:abc:pid:[1]",
+        }),
+      );
+      await fs.writeFile(
+        path.join(registry, "odd.json"),
+        JSON.stringify({ pid: process.pid, sessionId: RECENT_DEAD, procStart: "n/a" }),
+      );
+      const other = await session(DEAD, 30 * DAY);
+      const odd = await session(RECENT_DEAD, 30 * DAY);
+      await pruneTempStorage("aggressive", opts());
+      expect(await exists(other)).toBe(true);
+      expect(await exists(odd)).toBe(true);
     });
   });
 });

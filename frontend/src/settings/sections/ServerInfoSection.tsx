@@ -278,7 +278,7 @@ export function ServerInfoSection() {
             days; aggressive uses a 24-hour window and also clears the npm cache (an{" "}
             <code>npm ci</code> running in a session at that moment may fail). Claude scratch under{" "}
             <code>claude-*</code> is cleaned per session, and only for sessions that are no longer
-            running: safe after 24 hours, aggressive immediately.
+            running: safe after 24 hours, aggressive after 10 minutes.
           </div>
         </>
       )}

@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { resolveClaudeConfigDir } from "./hook-adapters/claude-code.js";
 
 // Claude Code keeps per-session scratch under
 // `<tmpdir>/claude-<uid>/<project-slug>/<session-uuid>/{scratchpad,tasks,images}`
@@ -13,7 +13,7 @@ const SESSION_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 
 export const isSessionUuid = (name: string) => SESSION_UUID.test(name);
 
-export const defaultClaudeSessionsDir = () => path.join(os.homedir(), ".claude", "sessions");
+export const defaultClaudeSessionsDir = () => path.join(resolveClaudeConfigDir(), "sessions");
 
 /** Field 22 of /proc/<pid>/stat (process start time in clock ticks), or null. */
 async function procStartTime(pid: number): Promise<string | null> {
@@ -23,6 +23,15 @@ async function procStartTime(pid: number): Promise<string | null> {
     // so count fields from the last ")": the remainder starts at field 3.
     const rest = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
     return rest[19] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** e.g. "pid:[4026533104]" — this process's PID namespace, or null if unknown. */
+async function ownPidNamespace(): Promise<string | null> {
+  try {
+    return await fs.readlink("/proc/self/ns/pid");
   } catch {
     return null;
   }
@@ -38,6 +47,8 @@ export async function loadLiveSessionIds(
   registryDir: string = defaultClaudeSessionsDir(),
 ): Promise<Set<string> | null> {
   if ((await procStartTime(process.pid)) === null) return null;
+  const ownNamespace = await ownPidNamespace();
+  if (ownNamespace === null) return null;
   let names: string[];
   try {
     names = await fs.readdir(registryDir);
@@ -47,64 +58,59 @@ export async function loadLiveSessionIds(
   const live = new Set<string>();
   for (const name of names) {
     if (!name.endsWith(".json")) continue;
-    let entry: { pid?: unknown; sessionId?: unknown; procStart?: unknown };
+    let entry: { pid?: unknown; sessionId?: unknown; procStart?: unknown; pidDomain?: unknown };
     try {
       entry = JSON.parse(await fs.readFile(path.join(registryDir, name), "utf8")) as typeof entry;
     } catch {
       return null;
     }
     if (typeof entry.pid !== "number" || typeof entry.sessionId !== "string") return null;
+    // `pidDomain` is e.g. "linux:<machine>:pid:[4026533104]". A session in a
+    // different PID namespace (container, sandbox) has a pid that means
+    // nothing in this /proc, so we can't call it dead — assume it's running.
+    if (typeof entry.pidDomain === "string" && !entry.pidDomain.endsWith(`:${ownNamespace}`)) {
+      live.add(entry.sessionId);
+      continue;
+    }
     const start = await procStartTime(entry.pid);
     if (start === null) continue; // process is gone
-    // A registry entry without procStart predates the pid-reuse guard; with
-    // only the pid to go on, err towards "still running".
-    if (entry.procStart === undefined || String(entry.procStart) === start) {
-      live.add(entry.sessionId);
-    }
+    // Only a numeric, differing start time proves the pid was reused. Missing
+    // or unrecognised values (older/newer Claude Code, another platform) can't
+    // disprove "still running", so err that way.
+    const proven = typeof entry.procStart === "string" && /^\d+$/.test(entry.procStart);
+    if (!proven || entry.procStart === start) live.add(entry.sessionId);
   }
   return live;
 }
 
 export interface ScratchEntry {
   fullPath: string;
-  /** Set for `<project>/<session-uuid>` directories. */
-  sessionId?: string;
+  sessionId: string;
 }
 
 /**
- * Enumerates the structure under one `claude-<uid>` directory: session
- * directories (identified by their UUID name) inside project directories, and
- * everything else at the same levels as plain entries. A top-level directory
- * with no UUID-named children is not a project directory (e.g. a build output
- * a tool dropped there) and is reported whole.
+ * Session directories (`<project>/<session-uuid>`) under one `claude-<uid>`
+ * directory — and nothing else. The same tree also holds state that running
+ * sessions read for their whole lifetime and that has no session id to check
+ * against (`bundled-skills/<version>`, `emptyhome`, shared logs and pid files),
+ * so only the UUID-named directories that liveness can actually vouch for are
+ * ever offered for removal.
  */
 export async function listClaudeScratchEntries(claudeDir: string): Promise<ScratchEntry[]> {
   const entries: ScratchEntry[] = [];
   for (const project of await fs.readdir(claudeDir)) {
     const projectPath = path.join(claudeDir, project);
-    let children: Array<{ name: string; isDirectory: boolean }>;
+    let children;
     try {
-      const stat = await fs.lstat(projectPath);
-      if (!stat.isDirectory()) {
-        entries.push({ fullPath: projectPath });
-        continue;
-      }
-      children = (await fs.readdir(projectPath, { withFileTypes: true })).map((d) => ({
-        name: d.name,
-        isDirectory: d.isDirectory(),
-      }));
+      if (!(await fs.lstat(projectPath)).isDirectory()) continue;
+      children = await fs.readdir(projectPath, { withFileTypes: true });
     } catch {
       continue; // vanished or unreadable
     }
-    if (!children.some((c) => c.isDirectory && isSessionUuid(c.name))) {
-      entries.push({ fullPath: projectPath });
-      continue;
-    }
     for (const child of children) {
-      entries.push({
-        fullPath: path.join(projectPath, child.name),
-        ...(child.isDirectory && isSessionUuid(child.name) ? { sessionId: child.name } : {}),
-      });
+      if (child.isDirectory() && isSessionUuid(child.name)) {
+        entries.push({ fullPath: path.join(projectPath, child.name), sessionId: child.name });
+      }
     }
   }
   return entries;

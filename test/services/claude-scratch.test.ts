@@ -53,18 +53,23 @@ describe("claude-scratch", () => {
     expect(await loadLiveSessionIds(base)).toBeNull();
   });
 
-  it("separates session dirs from other entries", async () => {
+  it("treats other PID namespaces and unrecognised procStart values as running", async () => {
+    const write = (name: string, body: unknown) =>
+      fs.writeFile(path.join(base, name), JSON.stringify(body));
+    await write("ns.json", { pid: 1, sessionId: "ns", pidDomain: "linux:x:pid:[1]" });
+    await write("odd.json", { pid: process.pid, sessionId: "odd", procStart: "n/a" });
+    expect(await loadLiveSessionIds(base)).toEqual(new Set(["ns", "odd"]));
+  });
+
+  it("offers only UUID-named session dirs, never other state under claude-<uid>", async () => {
     const claude = path.join(base, "claude-1000");
     await fs.mkdir(path.join(claude, "proj", UUID), { recursive: true });
     await fs.writeFile(path.join(claude, "proj", "stray.txt"), "x");
-    await fs.mkdir(path.join(claude, "next-branch"));
+    await fs.mkdir(path.join(claude, "bundled-skills", "2.1.299", "hash"), { recursive: true });
+    await fs.mkdir(path.join(claude, "emptyhome"));
     await fs.writeFile(path.join(claude, "top.log"), "x");
+    await fs.writeFile(path.join(claude, "proj", "plain-file"), "x");
     const entries = await listClaudeScratchEntries(claude);
-    const byName = Object.fromEntries(entries.map((e) => [path.relative(claude, e.fullPath), e]));
-    expect(byName[path.join("proj", UUID)]?.sessionId).toBe(UUID);
-    expect(byName[path.join("proj", "stray.txt")]?.sessionId).toBeUndefined();
-    expect(byName["next-branch"]?.sessionId).toBeUndefined();
-    expect(byName["top.log"]).toBeDefined();
-    expect(byName["proj"]).toBeUndefined();
+    expect(entries).toEqual([{ fullPath: path.join(claude, "proj", UUID), sessionId: UUID }]);
   });
 });

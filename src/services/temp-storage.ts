@@ -14,10 +14,10 @@ const NPM_TIMEOUT_MS = 120_000;
 // Claude session scratch (issue #1608): a session that is no longer running
 // only needs a day's grace in safe mode (long enough to --resume a crash with
 // its scratch intact); aggressive takes any dead session, but never a dir
-// touched in the last minute, which could belong to a session that is still
-// starting up and hasn't registered yet.
+// touched in the last ten minutes, which could belong to a session that is
+// still starting up, or one that doesn't register itself in the registry.
 const SESSION_SAFE_AGE_MS = 24 * 60 * 60 * 1000;
-const SESSION_AGGRESSIVE_AGE_MS = 60 * 1000;
+const SESSION_AGGRESSIVE_AGE_MS = 10 * 60 * 1000;
 
 // Live tool caches and per-user runtime dirs other processes expect to find.
 const DENYLIST: ReadonlyArray<RegExp> = [
@@ -197,7 +197,7 @@ async function gatherTargets(
       continue;
     }
     for (const item of scratch) {
-      if (item.sessionId !== undefined && live.has(item.sessionId)) continue;
+      if (live.has(item.sessionId)) continue;
       const entry = await evaluateEntry(
         path.dirname(item.fullPath),
         rootDev,
@@ -205,16 +205,12 @@ async function gatherTargets(
         path.basename(item.fullPath),
       );
       if (!entry) continue;
-      targets.push(
-        item.sessionId !== undefined
-          ? {
-              entry,
-              sessionId: item.sessionId,
-              safeMs: SESSION_SAFE_AGE_MS,
-              aggressiveMs: SESSION_AGGRESSIVE_AGE_MS,
-            }
-          : { entry, safeMs: SAFE_AGE_MS, aggressiveMs: AGGRESSIVE_AGE_MS },
-      );
+      targets.push({
+        entry,
+        sessionId: item.sessionId,
+        safeMs: SESSION_SAFE_AGE_MS,
+        aggressiveMs: SESSION_AGGRESSIVE_AGE_MS,
+      });
     }
   }
   return targets;
