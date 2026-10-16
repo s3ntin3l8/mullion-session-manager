@@ -106,7 +106,8 @@ function SettingsLoadingFallback({ onClose }: { onClose: () => void }) {
 
 const DEFAULT_WORKSPACE_NAME = "Default";
 // Issue #1618 — bounded retry for the initial GET /api/workspaces: up to 5
-// attempts, with backoff delays of 500ms, 1s, 2s and 4s between them.
+// attempts, with backoff delays of 500ms, 1s, 2s and 4s between them (a new
+// round starts on `online`/tab-visible after giving up).
 const WORKSPACE_LOAD_MAX_ATTEMPTS = 5;
 const WORKSPACE_LOAD_RETRY_BASE_MS = 500;
 // Mirrors src/services/hook-adapters/codex.ts's CODEX_COMMAND_RE — used only
@@ -340,11 +341,24 @@ export function App() {
   // workspacesLoaded false forever, with no active workspace and no autosave.
   // Giving up leaves workspacesLoaded false on purpose: flipping it with an
   // unknown (not genuinely empty) list would let the bootstrap below create a
-  // duplicate "Default". Any later successful refresh still selects a
-  // workspace via the stale-activeWorkspaceId fallback further down.
+  // duplicate "Default". Instead, giving up re-arms on the browser coming
+  // back online or the tab becoming visible again, starting a fresh bounded
+  // round, so a transient outage can't leave the app workspace-less for the
+  // rest of the session.
   useEffect(() => {
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    let rearmed = false;
+    const rearm = () => {
+      if (cancelled || !rearmed || document.visibilityState === "hidden") return;
+      disarm();
+      load(0);
+    };
+    const disarm = () => {
+      rearmed = false;
+      window.removeEventListener("online", rearm);
+      document.removeEventListener("visibilitychange", rearm);
+    };
     const load = (attempt: number) => {
       useDashboardStore
         .getState()
@@ -357,6 +371,9 @@ export function App() {
             if (cancelled) return;
             if (attempt + 1 >= WORKSPACE_LOAD_MAX_ATTEMPTS) {
               console.error("[workspace] failed to load workspaces, giving up", err);
+              rearmed = true;
+              window.addEventListener("online", rearm);
+              document.addEventListener("visibilitychange", rearm);
               return;
             }
             retryTimer = setTimeout(
@@ -370,6 +387,7 @@ export function App() {
     return () => {
       cancelled = true;
       clearTimeout(retryTimer);
+      disarm();
     };
   }, []);
 

@@ -58,18 +58,21 @@ export async function workspacesRoute(app: FastifyInstance) {
   // workspaces: the frontend's layout-change subscription and autosave are
   // keyed on an active workspace id, so an empty list left the first tiled
   // session behind the "Nothing tiled here yet" overlay with nothing
-  // persisted. Within this process the synchronous better-sqlite3 calls
-  // already can't interleave between concurrent requests; the `immediate`
-  // transaction takes the write lock before the check, so the
-  // check-then-insert is also atomic against a second connection to the
-  // same file. Note this makes a GET write (at most this one fixed row) —
-  // the one exception to auth.ts's "a bare GET can't mutate state" premise,
-  // and harmless: it only creates what the app would create anyway.
+  // persisted. The common (non-empty) case is a plain WAL snapshot read and
+  // never touches the write lock. Only an empty read enters an `immediate`
+  // transaction, which takes the write lock BEFORE re-checking, so the
+  // check-then-insert is atomic against a second connection to the same
+  // file too (within this process the synchronous better-sqlite3 calls
+  // can't interleave anyway). Note this makes a GET write (at most this one
+  // fixed row) — a documented exception to auth.ts's "a bare GET can't
+  // mutate state" premise; see the note there.
   app.get("/api/workspaces", async () => {
+    const existing = app.db.select().from(workspaces).all();
+    if (existing.length > 0) return existing.map(serialize);
     const rows = app.db.transaction(
       (tx) => {
-        const existing = tx.select().from(workspaces).all();
-        if (existing.length > 0) return existing;
+        const current = tx.select().from(workspaces).all();
+        if (current.length > 0) return current;
         return tx
           .insert(workspaces)
           .values({ name: DEFAULT_WORKSPACE_NAME, layout: null })

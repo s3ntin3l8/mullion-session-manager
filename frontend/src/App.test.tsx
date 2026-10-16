@@ -345,6 +345,51 @@ describe("App workspace bootstrap", () => {
       "[workspace] failed to load workspaces, giving up",
       expect.any(Error),
     );
+
+    // Coming back online starts a fresh round, which now succeeds and
+    // bootstraps — the give-up isn't terminal for the session.
+    refreshWorkspaces.mockResolvedValue(undefined);
+    await act(async () => {
+      window.dispatchEvent(new Event("online"));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(refreshWorkspaces).toHaveBeenCalledTimes(6);
+    expect(createWorkspace).toHaveBeenCalledTimes(1);
+
+    // Disarmed after re-arming once: a second event doesn't reload again.
+    await act(async () => {
+      window.dispatchEvent(new Event("online"));
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(refreshWorkspaces).toHaveBeenCalledTimes(6);
+  });
+
+  it("ignores a hidden-tab visibilitychange and stops listening after unmount", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const refreshWorkspaces = vi.fn().mockRejectedValue(new Error("offline"));
+    useDashboardStore.setState({ refreshWorkspaces, createWorkspace: vi.fn() });
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+
+    const { unmount } = render(<App />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(refreshWorkspaces).toHaveBeenCalledTimes(5);
+
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(refreshWorkspaces).toHaveBeenCalledTimes(5);
+
+    visibility.mockReturnValue("visible");
+    unmount();
+    await act(async () => {
+      window.dispatchEvent(new Event("online"));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(refreshWorkspaces).toHaveBeenCalledTimes(5);
   });
 
   it("handles a failed Default bootstrap instead of leaving an unhandled rejection", async () => {

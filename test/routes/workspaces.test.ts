@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
+import Database from "better-sqlite3";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
@@ -234,6 +235,36 @@ describe("workspaces route — default workspace bootstrap", () => {
 
     const listed = await app.inject({ method: "GET", url: "/api/workspaces" });
     expect(listed.json()).toHaveLength(1);
+    await app.close();
+  });
+
+  it("reads without the write lock when rows exist, and seeds under an immediate transaction", async () => {
+    const app = await buildApp();
+    const txSpy = vi.spyOn(app.db, "transaction");
+
+    // Empty table: the seed path runs inside an `immediate` transaction,
+    // which is what makes check-then-insert atomic across connections.
+    await app.inject({ method: "GET", url: "/api/workspaces" });
+    expect(txSpy).toHaveBeenCalledTimes(1);
+    expect(txSpy).toHaveBeenCalledWith(expect.any(Function), { behavior: "immediate" });
+
+    // Another connection to the same file holds the write lock. A non-empty
+    // list must still be served from a plain WAL read — no transaction, no
+    // waiting out busy_timeout.
+    txSpy.mockClear();
+    const other = new Database(freshDb);
+    other.exec("BEGIN IMMEDIATE");
+    try {
+      const started = Date.now();
+      const res = await app.inject({ method: "GET", url: "/api/workspaces" });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toHaveLength(1);
+      expect(Date.now() - started).toBeLessThan(2000);
+      expect(txSpy).not.toHaveBeenCalled();
+    } finally {
+      other.exec("ROLLBACK");
+      other.close();
+    }
     await app.close();
   });
 
