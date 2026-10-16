@@ -1439,6 +1439,119 @@ describe("runCommand", () => {
       }
     });
 
+    describe("session prompt", () => {
+      const ok = () => fakeClient({ request: vi.fn(async () => ({ delivered: true })) });
+
+      it("joins the remaining words as the text; no wait by default (default socket timeout)", async () => {
+        const client = ok();
+        expect(
+          await runCommand(["session", "prompt", "7", "fix", "the", "bug"], {
+            client,
+            io: fakeIo(),
+          }),
+        ).toBe(0);
+        expect(client.request).toHaveBeenCalledWith(
+          "sessions.prompt",
+          { sessionId: "7", text: "fix the bug" },
+          undefined,
+        );
+      });
+
+      it("--wait/--until/--timeout build the wait object and stretch the socket timeout; --no-submit sends submit:false", async () => {
+        const client = ok();
+        await runCommand(
+          [
+            "session",
+            "prompt",
+            "7",
+            "go",
+            "--wait",
+            "--until",
+            "finished, blocked",
+            "--timeout",
+            "30",
+          ],
+          { client, io: fakeIo() },
+        );
+        expect(client.request).toHaveBeenLastCalledWith(
+          "sessions.prompt",
+          {
+            sessionId: "7",
+            text: "go",
+            wait: { until: ["finished", "blocked"], timeoutMs: 30_000 },
+          },
+          { timeoutMs: 45_000 },
+        );
+        await runCommand(["session", "prompt", "7", "go", "--wait"], { client, io: fakeIo() });
+        expect(client.request).toHaveBeenLastCalledWith(
+          "sessions.prompt",
+          { sessionId: "7", text: "go", wait: {} },
+          { timeoutMs: 615_000 },
+        );
+        await runCommand(["session", "prompt", "7", "draft", "--no-submit"], {
+          client,
+          io: fakeIo(),
+        });
+        expect(client.request).toHaveBeenLastCalledWith(
+          "sessions.prompt",
+          { sessionId: "7", text: "draft", submit: false },
+          undefined,
+        );
+      });
+
+      it("with --session supplying the id, every positional is the text", async () => {
+        const client = ok();
+        await runCommand(["session", "prompt", "one", "two", "--session", "9"], {
+          client,
+          io: fakeIo(),
+        });
+        expect(client.request).toHaveBeenCalledWith(
+          "sessions.prompt",
+          { sessionId: "9", text: "one two" },
+          undefined,
+        );
+        // A lone word is the text too, never mistaken for an id.
+        await runCommand(["session", "prompt", "hello", "--session", "9"], {
+          client,
+          io: fakeIo(),
+        });
+        expect(client.request).toHaveBeenLastCalledWith(
+          "sessions.prompt",
+          { sessionId: "9", text: "hello" },
+          undefined,
+        );
+      });
+
+      it("reads the text from stdin when it is `-`", async () => {
+        const client = ok();
+        const io = fakeIo();
+        const run = runCommand(["session", "prompt", "7", "-"], { client, io });
+        await new Promise((resolve) => setImmediate(resolve));
+        io.stdin.emit("data", Buffer.from("multi\nline "));
+        io.stdin.emit("data", Buffer.from("prompt"));
+        io.stdin.emit("end");
+        expect(await run).toBe(0);
+        expect(client.request).toHaveBeenCalledWith(
+          "sessions.prompt",
+          { sessionId: "7", text: "multi\nline prompt" },
+          undefined,
+        );
+      });
+
+      it("rejects bad usage with exit code 2", async () => {
+        for (const argv of [
+          ["session", "prompt"],
+          ["session", "prompt", "7"],
+          ["session", "prompt", "7", "go", "--until", "done"],
+          ["session", "prompt", "7", "go", "--timeout", "5"],
+          ["session", "prompt", "7", "go", "--wait", "--no-submit"],
+          ["session", "prompt", "7", "go", "--wait", "--timeout", "0"],
+        ]) {
+          expect(await runCommand(argv, { client: fakeClient(), io: fakeIo() })).toBe(2);
+        }
+      });
+    });
+
     it("session spawn-child requires --command", async () => {
       const io = fakeIo();
       expect(await runCommand(["session", "spawn-child"], { client: fakeClient(), io })).toBe(2);

@@ -1521,6 +1521,143 @@ describe("PtyManager", () => {
     });
   });
 
+  describe("agent-driven input (sessions.prompt)", () => {
+    it("writeAgentInput delivers bytes but, unlike write(), leaves a confirmed attention flag alone", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      session.emitHookEvent({ kind: "notification", title: "Permission needed", body: "" });
+      expect(session.toInfo().attention).toBe(true);
+
+      expect(session.writeAgentInput("y")).toBe(true);
+      expect(fakePtyChildren[0].writeSpy).toHaveBeenCalledWith("y");
+      // A parent prompting a child is not the human acknowledging the badge.
+      expect(session.toInfo().attention).toBe(true);
+
+      session.write("y");
+      expect(session.toInfo().attention).toBe(false);
+    });
+
+    it("writeAgentInput reports a backpressure drop (and delivery when the window resets)", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        vi.setSystemTime(0);
+        expect(session.writeAgentInput("a".repeat(4 * 1024 * 1024))).toBe(true);
+        fakePtyChildren[0].writeSpy.mockClear();
+        expect(session.writeAgentInput("b")).toBe(false);
+        expect(fakePtyChildren[0].writeSpy).not.toHaveBeenCalled();
+        vi.setSystemTime(1_001);
+        expect(session.writeAgentInput("c")).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("beginAgentTurn clears the previous turn's finished latch and stale error, emitting agent_prompt only on a real change", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      const reasons = () =>
+        session
+          .getEvents()
+          .filter((e) => e.kind === "status_change")
+          .map((e) => (e.payload as { reason?: string }).reason);
+
+      // Nothing latched: no change, no event.
+      const before = session.eventSeqHead;
+      session.beginAgentTurn();
+      expect(session.eventSeqHead).toBe(before);
+
+      session.emitHookEvent({ kind: "progress", phase: "done" });
+      expect(session.toInfo().lastTurnEndedAt).not.toBeNull();
+      session.beginAgentTurn();
+      expect(session.toInfo().lastTurnEndedAt).toBeNull();
+      expect(reasons()).toContain("agent_prompt");
+    });
+
+    it("beginAgentTurn does not run the attention 'userInput' clear", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      session.emitHookEvent({ kind: "notification", title: "Permission needed", body: "" });
+      session.emitHookEvent({ kind: "progress", phase: "done" });
+      session.beginAgentTurn();
+      expect(session.toInfo().attention).toBe(true);
+    });
+
+    it("agentTurnInFlight: set by beginAgentTurn, cleared by a later turn end, by the staleness cap, or by a respawn", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      expect(session.agentTurnInFlight).toBe(false);
+
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        vi.setSystemTime(1_000_000);
+        session.beginAgentTurn();
+        expect(session.agentTurnInFlight).toBe(true);
+
+        // A turn end AFTER the prompt ends it…
+        vi.setSystemTime(1_005_000);
+        session.emitHookEvent({ kind: "progress", phase: "done" });
+        expect(session.agentTurnInFlight).toBe(false);
+
+        // …a new prompt starts a fresh one, which the staleness cap bounds.
+        vi.setSystemTime(1_010_000);
+        session.beginAgentTurn();
+        expect(session.agentTurnInFlight).toBe(true);
+        vi.setSystemTime(1_010_000 + 15 * 60_000 + 1);
+        expect(session.agentTurnInFlight).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("tracks the app's bracketed-paste mode", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      expect(session.bracketedPaste).toBe(false);
+      fakePtyChildren[0].emitData("\u001b[?2004h");
+      expect(session.bracketedPaste).toBe(true);
+      fakePtyChildren[0].emitData("\u001b[?2004l");
+      expect(session.bracketedPaste).toBe(false);
+    });
+  });
+
   it("resize updates the tracked size and calls through to the pty", async () => {
     const session = manager.getOrCreate({
       id: "1",

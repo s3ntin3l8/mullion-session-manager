@@ -27,6 +27,7 @@ describe("TOOLS registry (issue #271, #134 part 2)", () => {
       "spawn_child_session",
       "list_child_sessions",
       "wait_for_session",
+      "prompt_session",
       "kill_child_session",
       "stop_dock_session",
       "get_scrollback",
@@ -265,6 +266,47 @@ describe("session/project/preview tool handlers (issue #134 part 2)", () => {
       );
     }
     await expect(tool.handler({}, { waitForSession })).rejects.toThrow("sessionId is required");
+  });
+
+  it("prompt_session forwards the prompt; wait builds the wait object (50s default, clamped); validates input", async () => {
+    const tool = TOOLS.find((t) => t.name === "prompt_session")!;
+    const promptSession = vi.fn().mockResolvedValue({ delivered: true, submitted: true });
+    const text = await tool.handler({ sessionId: "7", text: "go" }, { promptSession });
+    expect(promptSession).toHaveBeenCalledWith({
+      sessionId: "7",
+      text: "go",
+      submit: undefined,
+      wait: undefined,
+    });
+    expect(JSON.parse(text)).toEqual({ delivered: true, submitted: true });
+
+    await tool.handler({ sessionId: "7", text: "go", wait: true }, { promptSession });
+    expect(promptSession).toHaveBeenLastCalledWith(
+      expect.objectContaining({ wait: { until: undefined, timeoutMs: 50_000 } }),
+    );
+    await tool.handler(
+      { sessionId: "7", text: "go", wait: true, until: ["finished"], timeoutSeconds: 1e12 },
+      { promptSession },
+    );
+    expect(promptSession).toHaveBeenLastCalledWith(
+      expect.objectContaining({ wait: { until: ["finished"], timeoutMs: 3_600_000 } }),
+    );
+    await tool.handler({ sessionId: "7", text: "draft", submit: false }, { promptSession });
+    expect(promptSession).toHaveBeenLastCalledWith(
+      expect.objectContaining({ submit: false, wait: undefined }),
+    );
+
+    for (const [args, message] of [
+      [{ text: "go" }, "sessionId is required"],
+      [{ sessionId: "7" }, "text is required"],
+      [{ sessionId: "7", text: "   " }, "text is required"],
+      [{ sessionId: "7", text: "go", submit: "yes" }, "submit must be a boolean"],
+      [{ sessionId: "7", text: "go", wait: "yes" }, "wait must be a boolean"],
+      [{ sessionId: "7", text: "go", wait: true, submit: false }, "wait cannot be combined"],
+      [{ sessionId: "7", text: "go", wait: true, timeoutSeconds: 0 }, "timeoutSeconds must be"],
+    ] as const) {
+      await expect(tool.handler(args, { promptSession })).rejects.toThrow(message);
+    }
   });
 
   it("kill_child_session kills the named child and requires a sessionId", async () => {

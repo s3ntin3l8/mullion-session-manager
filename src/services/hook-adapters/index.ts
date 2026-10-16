@@ -1,6 +1,6 @@
 import { writeFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
-import type { HookAdapterContext, HookAgentAdapter } from "./types.js";
+import type { HookAdapterContext, HookAgentAdapter, PromptFraming } from "./types.js";
 import type { HookMessageKind } from "../hook-protocol.js";
 import { claudeCodeAdapter } from "./claude-code.js";
 import { openCodeAdapter } from "./opencode.js";
@@ -81,6 +81,22 @@ export function getAdapterInitialPromptArgs(command: string, prompt: string): st
 export function adapterHasInitialPromptArgs(command: string): boolean {
   const adapter = ADAPTERS.find((candidate) => candidate.matches(command));
   return adapter?.initialPromptArgs !== undefined;
+}
+
+/**
+ * sessions.prompt — how to type `text` into the already-running agent that
+ * `command` resolves to, or `null` when the matched adapter (or no adapter,
+ * e.g. a plain shell or `aider`) has no opt-in `submitPrompt`. Pure lookup,
+ * same shape as getAdapterInitialPromptArgs above — and the sanctioned way
+ * for callers to branch on the agent family without parsing `command`.
+ */
+export function getAdapterPromptFraming(
+  command: string,
+  text: string,
+  ctx: { bracketedPaste: boolean },
+): PromptFraming | null {
+  const adapter = ADAPTERS.find((candidate) => candidate.matches(command));
+  return adapter?.submitPrompt?.(text, ctx) ?? null;
 }
 
 /**

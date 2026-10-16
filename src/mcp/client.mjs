@@ -472,6 +472,20 @@ export class MullionClient {
     );
   }
 
+  /** Types a prompt into a child agent (sessions.prompt), optionally waiting
+   * for its turn to end. The socket timeout outlasts the wait, as in
+   * waitForSession. */
+  async promptSession({ sessionId, text, submit, wait }) {
+    const body = { sessionId, text };
+    if (submit !== undefined) body.submit = submit;
+    if (wait !== undefined) body.wait = wait;
+    const socketTimeoutMs =
+      wait !== undefined
+        ? (wait.timeoutMs ?? WAIT_DEFAULT_TIMEOUT_MS) + WAIT_SOCKET_SLACK_MS
+        : undefined;
+    return this.controlRequest("sessions.prompt", body, socketTimeoutMs);
+  }
+
   /** Kills a child session. Session scope may only name a child of its own
    * session (control-socket.ts's resolveOwnedSessionId). */
   async killChildSession(sessionId) {

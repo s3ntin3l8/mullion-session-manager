@@ -147,6 +147,7 @@ describe("mcp/server.mjs (issue #271)", () => {
       "spawn_child_session",
       "list_child_sessions",
       "wait_for_session",
+      "prompt_session",
       "kill_child_session",
       "stop_dock_session",
       "get_scrollback",

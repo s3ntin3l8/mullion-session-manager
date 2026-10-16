@@ -356,6 +356,46 @@ describe("MullionClient (issue #271)", () => {
       }
     });
 
+    it("promptSession sends sessions.prompt; the socket timeout only stretches when waiting", async () => {
+      const seen: number[] = [];
+      const bodies: unknown[] = [];
+      const original = MullionSocketClient.prototype.request;
+      const spy = vi.spyOn(MullionSocketClient.prototype, "request").mockImplementation(function (
+        this: MullionSocketClient,
+        op: string,
+        body: unknown,
+      ) {
+        seen.push(this.requestTimeoutMs);
+        return original.call(this, op, body);
+      });
+      try {
+        const socketPath = await startControlServer((msg, socket) => {
+          expect(msg.op).toBe("sessions.prompt");
+          bodies.push(msg.body);
+          socket.write(
+            `${JSON.stringify({ id: msg.id, ok: true, status: 200, result: { delivered: true } })}\n`,
+          );
+        });
+        const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+        await client.promptSession({ sessionId: "5", text: "go" });
+        await client.promptSession({
+          sessionId: "5",
+          text: "go",
+          submit: true,
+          wait: { until: ["done"], timeoutMs: 2_000 },
+        });
+        await client.promptSession({ sessionId: "5", text: "go", wait: {} });
+        expect(bodies).toEqual([
+          { sessionId: "5", text: "go" },
+          { sessionId: "5", text: "go", submit: true, wait: { until: ["done"], timeoutMs: 2_000 } },
+          { sessionId: "5", text: "go", wait: {} },
+        ]);
+        expect(seen).toEqual([30_000, 17_000, 615_000]);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
     it("waitForSession sends sessions.wait with only the options given", async () => {
       const bodies: unknown[] = [];
       const socketPath = await startControlServer((msg, socket) => {

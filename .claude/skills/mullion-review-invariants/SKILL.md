@@ -21,10 +21,13 @@ Alongside that, a narrow set of helpers inspects `session.command` from
 outside the adapters: `commandIsOpencode`/`commandModelCli`
 (`hook-adapters/index.ts`) and `buildModelFlag` (`hook-adapters/shared.ts`),
 plus `validateModel`/`validateCliModel` (`services/task-model-resolve.ts`)
-and `commandSupportsSeed` (`services/task-agent-resolve.ts`) — what callers
-elsewhere (`task-claim.ts`, `task-reconciler.ts`, `routes/sessions.ts`) use
-to branch on a command's agent family, inject a model flag, or decide
-whether a real first-turn prompt can be delivered.
+`commandSupportsSeed` (`services/task-agent-resolve.ts`), and
+`getAdapterPromptFraming` (`hook-adapters/index.ts` — the pure adapter lookup
+`sessions.prompt` in `plugins/control-socket.ts` uses to frame input for the
+child's agent family) — what callers elsewhere (`task-claim.ts`,
+`task-reconciler.ts`, `routes/sessions.ts`) use to branch on a command's agent
+family, inject a model flag, or decide whether a real first-turn prompt can be
+delivered.
 
 **Red flag:** any new code that calls `.split()`, a regex, or a shell
 parser on `session.command` or `workspace.layout` **outside** a hook
