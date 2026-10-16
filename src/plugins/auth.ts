@@ -157,7 +157,11 @@ function isProtectedPath(pathname: string): boolean {
  * match the dashboard's own origin (derived per-request — see
  * requestOrigin above — never hardcoded, since this app deploys under
  * whatever hostname the operator points at it). GET/HEAD are exempt (they
- * shouldn't mutate state, and this keeps navigations/links working);
+ * shouldn't mutate state, and this keeps navigations/links working — one
+ * known, deliberate exception: GET /api/workspaces seeds a single fixed
+ * "Default" row when the table is empty (issue #1618, routes/workspaces.ts).
+ * A cross-origin GET can only create what the app itself would, so it's
+ * left exempt; any NEW GET that writes must be weighed against this gate);
  * Bearer-token requests are exempt entirely (that credential can never be
  * attached by a page the browser didn't run same-origin script in — a
  * cross-origin script can't read or set an Authorization header without a
@@ -231,7 +235,8 @@ export const authPlugin = fp(async (app: FastifyInstance) => {
     // (WebSockets and simple-form POSTs aren't blocked by SOP/CORS). Reject
     // only a PRESENT, MISMATCHED Origin: Node `ws` clients (remote-host
     // upstream) and the control socket's app.inject send none, and a bare
-    // browser GET/HEAD can't mutate state.
+    // browser GET/HEAD can't mutate state (bar GET /api/workspaces' seeded
+    // "Default" row — see this plugin's doc comment).
     app.addHook("onRequest", async (request, reply) => {
       if (isPreviewBypass(request)) return;
       const isWebSocketUpgrade = requestPathname(request.url).startsWith("/ws/");

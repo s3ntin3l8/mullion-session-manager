@@ -49,9 +49,39 @@ function serialize(row: typeof workspaces.$inferSelect) {
   };
 }
 
+// Issue #1618 — the name GET /api/workspaces seeds when the table is empty.
+// Mirrors the frontend's own DEFAULT_WORKSPACE_NAME (App.tsx).
+export const DEFAULT_WORKSPACE_NAME = "Default";
+
 export async function workspacesRoute(app: FastifyInstance) {
+  // Issue #1618 — a fresh (or fully emptied) database must never list zero
+  // workspaces: the frontend's layout-change subscription and autosave are
+  // keyed on an active workspace id, so an empty list left the first tiled
+  // session behind the "Nothing tiled here yet" overlay with nothing
+  // persisted. The common (non-empty) case is a plain WAL snapshot read and
+  // never touches the write lock. Only an empty read enters an `immediate`
+  // transaction, which takes the write lock BEFORE re-checking, so the
+  // check-then-insert is atomic against a second connection to the same
+  // file too (within this process the synchronous better-sqlite3 calls
+  // can't interleave anyway). Note this makes a GET write (at most this one
+  // fixed row) — a documented exception to auth.ts's "a bare GET can't
+  // mutate state" premise; see the note there.
   app.get("/api/workspaces", async () => {
-    return app.db.select().from(workspaces).all().map(serialize);
+    const existing = app.db.select().from(workspaces).all();
+    if (existing.length > 0) return existing.map(serialize);
+    const rows = app.db.transaction(
+      (tx) => {
+        const current = tx.select().from(workspaces).all();
+        if (current.length > 0) return current;
+        return tx
+          .insert(workspaces)
+          .values({ name: DEFAULT_WORKSPACE_NAME, layout: null })
+          .returning()
+          .all();
+      },
+      { behavior: "immediate" },
+    );
+    return rows.map(serialize);
   });
 
   app.post<{ Body: CreateWorkspaceBody }>(

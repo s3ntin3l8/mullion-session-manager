@@ -183,8 +183,10 @@ export async function seedDemo({ api, root }) {
   });
 
   // A real install always has at least one workspace; without one the
-  // dashboard has nowhere to persist (or count) its tiled layout.
-  await api("/api/workspaces", { method: "POST", body: JSON.stringify({ name: "Default" }) });
+  // dashboard has nowhere to persist (or count) its tiled layout. GET seeds
+  // "Default" itself on an empty table (issue #1618) — POSTing one here
+  // would add a second if the browser's own first load won the race.
+  await api("/api/workspaces");
 
   await api("/api/settings", {
     method: "PATCH",
