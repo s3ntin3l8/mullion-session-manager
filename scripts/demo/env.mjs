@@ -137,6 +137,15 @@ export function assertDemoEnv(env, demoDir, { cwd, collect = false } = {}) {
     if (env[key] !== undefined && !(path.isAbsolute(env[key]) && inside(demoDir, env[key])))
       problems.push(`${key} must be an absolute path inside the demo dir`);
   }
+  // ensureSessionsDir() (src/plugins/pty.ts) silently moves SESSIONS_DIR to
+  // /tmp/ms-<hash> when its longest socket path would pass 107 bytes; the
+  // backend's sockets, and so teardown's ownership check, would then point
+  // somewhere else. Refuse a path that long instead.
+  if (
+    env.SESSIONS_DIR !== undefined &&
+    Buffer.byteLength(path.join(path.resolve(env.SESSIONS_DIR), "999999999999.sock")) > 107
+  )
+    problems.push("SESSIONS_DIR is too long; the backend would relocate it");
   for (const key of ["HOME", "TMPDIR"])
     if (env[key] === undefined) problems.push(`${key} must be set (inside the demo dir)`);
   if (env.DATABASE_URL !== undefined) {

@@ -72,6 +72,8 @@ describe("assertDemoEnv refuses a poisoned environment", () => {
   it("secrets", () => refuses({ DB_ENCRYPTION_KEY: "k", MULLION_AGENT_TOKEN: "t" })); // pragma: allowlist secret
   it("devices or the browser", () => refuses({ DEVICE_ENABLED: "true" }));
   it("a PATH without the docker shim first", () => refuses({ PATH: "/usr/bin" }));
+  it("a SESSIONS_DIR long enough for the backend to relocate it", () =>
+    refuses({ SESSIONS_DIR: path.join(demoDir, "x".repeat(100)) }));
   it("a working directory holding a .env", () => {
     const cwd = mkdtempSync(path.join(demoDir, "cwd-"));
     writeFileSync(path.join(cwd, ".env"), "PROJECTS_ROOTS=/home/me/projects\n");
@@ -146,47 +148,75 @@ describe("scope ownership", () => {
 describe("stopDemoScopes", () => {
   const sessionsDir = path.join(demoDir, "s");
   const id = instanceIdFor(sessionsDir);
+  const realSessions = "/home/me/opt/mullion/data/sessions";
   const own = `crs-session-${id}-1`;
-  const foreign = `crs-session-${id}-2`;
-  const fakeSystemctl = (overrides: Record<string, () => never> = {}) => {
+  const collision = `crs-session-${id}-2`; // our name prefix, a real instance's socket
+  const real = `crs-session-${instanceIdFor(realSessions)}-3`;
+  const unreadable = `crs-session-${id}-4`;
+  const descriptions: Record<string, string> = {
+    [own]: `dtach -n ${path.join(sessionsDir, "1.sock")} -z bash\n`,
+    [collision]: `dtach -n ${path.join(realSessions, "2.sock")} -z bash\n`,
+    [real]: `dtach -n ${path.join(realSessions, "3.sock")} -z bash\n`,
+    [unreadable]: "something else\n",
+  };
+  const fakeSystemctl = (
+    overrides: Record<string, () => never> = {},
+    units = [own, collision, real],
+  ) => {
     const stopped: string[] = [];
     const run = async (args: string[]) => {
       const [verb, unit] = args;
       if (overrides[verb]) overrides[verb]();
+      if (verb === "show-environment") return { stdout: "" };
       if (verb === "list-units")
-        return { stdout: `${own} loaded active running x\n${foreign} loaded active running x\n` };
-      if (verb === "show") {
-        const dir = unit === own ? sessionsDir : "/home/me/opt/mullion/data/sessions";
-        return { stdout: `dtach -n ${path.join(dir, "1.sock")} -z bash\n` };
-      }
+        return { stdout: units.map((u) => `${u} loaded active running x\n`).join("") };
+      if (verb === "show") return { stdout: descriptions[unit] };
       stopped.push(unit);
       return { stdout: "" };
     };
     return { run, stopped };
   };
+  const fail =
+    (message: string, extra: object = {}) =>
+    () => {
+      throw Object.assign(new Error(message), extra);
+    };
 
-  it("stops its own scope and skips a foreign one", async () => {
+  it("stops only scopes whose socket is in its SESSIONS_DIR", async () => {
     const { run, stopped } = fakeSystemctl();
     expect(await stopDemoScopes(id, sessionsDir, run)).toEqual([]);
     expect(stopped).toEqual([own]);
   });
 
-  it("reports a failed listing instead of treating it as nothing to stop", async () => {
-    const { run } = fakeSystemctl({
-      "list-units": () => {
-        throw Object.assign(new Error("Failed to connect to bus"), { code: 1 });
-      },
+  it("treats a missing systemctl as nothing to stop", async () => {
+    const { run, stopped } = fakeSystemctl({
+      "show-environment": fail("spawn systemctl ENOENT", { code: "ENOENT" }),
     });
-    expect(await stopDemoScopes(id, sessionsDir, run)).toEqual([`crs-session-${id}-*`]);
+    expect(await stopDemoScopes(id, sessionsDir, run)).toEqual([]);
+    expect(stopped).toEqual([]);
+  });
+
+  it("treats systemctl without a user bus as nothing to stop", async () => {
+    const { run } = fakeSystemctl({
+      "show-environment": fail("Failed to connect to bus: No such file or directory", { code: 1 }),
+    });
+    expect(await stopDemoScopes(id, sessionsDir, run)).toEqual([]);
+  });
+
+  it("reports a failed listing when the bus is up", async () => {
+    const { run } = fakeSystemctl({ "list-units": fail("Connection timed out", { code: 1 }) });
+    expect(await stopDemoScopes(id, sessionsDir, run)).toEqual(["crs-session-*"]);
   });
 
   it("reports a failed stop", async () => {
-    const { run } = fakeSystemctl({
-      stop: () => {
-        throw Object.assign(new Error("Access denied"), { stderr: "Access denied" });
-      },
-    });
+    const { run } = fakeSystemctl({ stop: fail("Access denied", { stderr: "Access denied" }) });
     expect(await stopDemoScopes(id, sessionsDir, run)).toEqual([own]);
+  });
+
+  it("reports, but does not stop, a unit in its namespace it cannot verify", async () => {
+    const { run, stopped } = fakeSystemctl({}, [own, unreadable]);
+    expect(await stopDemoScopes(id, sessionsDir, run)).toEqual([unreadable]);
+    expect(stopped).toEqual([own]);
   });
 });
 

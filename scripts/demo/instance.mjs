@@ -5,7 +5,14 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { assertDemoEnv, assertPortsFree, demoEnv, instanceIdFor, ownsScope } from "./env.mjs";
+import {
+  assertDemoEnv,
+  assertPortsFree,
+  demoEnv,
+  extractDtachSocketPath,
+  instanceIdFor,
+  ownsScope,
+} from "./env.mjs";
 import { seedDemo } from "./seed.mjs";
 
 /**
@@ -75,22 +82,31 @@ async function waitForHttp(url, timeoutMs = 90_000) {
 const systemctl = (args) => execFileAsync("systemctl", ["--user", ...args]);
 
 /**
- * Stops the demo's own session scopes. The name pattern is instance-namespaced,
- * and each match is additionally checked with the backend's own ownership rule
- * (ownsScope in ./env.mjs, mirroring src/services/session-process.ts): its
- * Description names the dtach socket, which must sit in this demo's
- * SESSIONS_DIR. A unit that fails that check is never stopped, even on an
- * instanceId collision.
+ * Stops the demo's own session scopes. Every `crs-session-*` scope is checked
+ * with the backend's own ownership rule (ownsScope in ./env.mjs, mirroring
+ * src/services/session-process.ts): its Description names the dtach socket,
+ * which must sit in this demo's SESSIONS_DIR. Only those are stopped, so a real
+ * instance's scopes on the same host are never touched, even on an instanceId
+ * collision.
  *
- * Returns the units it could not account for (listing or stop failed), so the
- * caller can keep the scratch dir instead of orphaning live scopes.
+ * Returns the units it could not account for (listing or stop failed, or a
+ * unit in the demo's namespace whose socket can't be read), so the caller can
+ * keep the scratch dir instead of deleting it under live scopes.
  */
 export async function stopDemoScopes(instanceId, sessionsDir, run = systemctl) {
+  // Same probe as isSystemctlUserAvailable() in session-process.ts: without a
+  // reachable user bus (no systemctl, CI, a plain container) the backend can't
+  // have created scopes, so there is nothing to stop.
+  try {
+    await run(["show-environment"]);
+  } catch {
+    return [];
+  }
   let units;
   try {
     const { stdout } = await run([
       "list-units",
-      `crs-session-${instanceId}-*`,
+      "crs-session-*",
       "--all",
       "--no-legend",
       "--plain",
@@ -100,21 +116,26 @@ export async function stopDemoScopes(instanceId, sessionsDir, run = systemctl) {
       .map((line) => line.trim().split(/\s+/)[0])
       .filter(Boolean);
   } catch (err) {
-    // No systemctl at all: the backend can't have created scopes either.
-    if (err.code === "ENOENT") return [];
-    // A non-matching pattern exits 0, so this is a real failure.
-    console.warn(`[demo] could not list crs-session-${instanceId}-* scopes: ${err.message}`);
-    return [`crs-session-${instanceId}-*`];
+    // The bus answered and a non-matching pattern exits 0: a real failure.
+    console.warn(`[demo] could not list crs-session-* scopes: ${err.message}`);
+    return ["crs-session-*"];
   }
+  const ownNamespace = `crs-session-${instanceId}-`;
   const failed = [];
   for (const unit of units) {
     try {
       const { stdout } = await run(["show", unit, "--property=Description", "--value"]);
-      if (!ownsScope(stdout, sessionsDir)) {
-        console.warn(`[demo] not stopping ${unit}: its socket is outside ${sessionsDir}`);
-        continue;
+      if (ownsScope(stdout, sessionsDir)) {
+        await run(["stop", unit]);
+      } else if (unit.startsWith(ownNamespace)) {
+        if (extractDtachSocketPath(stdout) === null) {
+          // The backend calls this "unverifiable", not dead: report, don't guess.
+          console.warn(`[demo] cannot verify ${unit}: no dtach socket in its description`);
+          failed.push(unit);
+        } else {
+          console.warn(`[demo] not stopping ${unit}: its socket is outside ${sessionsDir}`);
+        }
       }
-      await run(["stop", unit]);
     } catch (err) {
       if (/not loaded|not found/i.test(err.stderr ?? "")) continue; // Exited meanwhile.
       console.warn(`[demo] could not stop ${unit}: ${err.message}`);

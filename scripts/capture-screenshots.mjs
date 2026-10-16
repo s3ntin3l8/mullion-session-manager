@@ -124,7 +124,6 @@ async function captureDesktop(browser, demo) {
   await page.waitForTimeout(1000);
   await shot(page, "desktop-kanban.png");
 
-  // Back to the dockview workspace so later shots don't inherit the kanban view.
   await context.close();
 }
 
