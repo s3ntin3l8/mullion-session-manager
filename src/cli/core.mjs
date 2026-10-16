@@ -9,7 +9,14 @@
 
 import fs from "node:fs";
 import net from "node:net";
-import { MullionSocketError, isMissingIdError, resolveOwnSessionId } from "./client.mjs";
+import {
+  MullionSocketError,
+  WAIT_DEFAULT_TIMEOUT_MS,
+  WAIT_MAX_TIMEOUT_MS,
+  WAIT_SOCKET_SLACK_MS,
+  isMissingIdError,
+  resolveOwnSessionId,
+} from "./client.mjs";
 
 /** Read all of stdin as a string. Used for --flag/- piped input. */
 function readStdin() {
@@ -806,7 +813,7 @@ const sessionCommands = {
         .split(",")
         .map((s) => s.trim())
         .filter(Boolean);
-    let timeoutMs = 600_000;
+    let timeoutMs = WAIT_DEFAULT_TIMEOUT_MS;
     if (flags.timeout !== undefined) {
       const seconds = Number(flags.timeout);
       if (!Number.isFinite(seconds) || seconds <= 0) {
@@ -814,7 +821,7 @@ const sessionCommands = {
       }
       // Clamp to the server's own 1 h max: a larger value would overflow the
       // socket client's 32-bit setTimeout and fire after 1 ms.
-      timeoutMs = Math.round(Math.min(seconds, 3600) * 1000);
+      timeoutMs = Math.min(Math.round(seconds * 1000), WAIT_MAX_TIMEOUT_MS);
       body.timeoutMs = timeoutMs;
     }
     if (flags["after-seq"] !== undefined) {
@@ -824,7 +831,9 @@ const sessionCommands = {
       }
       body.afterSeq = seq;
     }
-    const result = await client.request("sessions.wait", body, { timeoutMs: timeoutMs + 15_000 });
+    const result = await client.request("sessions.wait", body, {
+      timeoutMs: timeoutMs + WAIT_SOCKET_SLACK_MS,
+    });
     return { json: result };
   },
   async create(client, args) {

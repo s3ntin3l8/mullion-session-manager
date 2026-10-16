@@ -1,10 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  WAIT_DEFAULT_TIMEOUT_MS,
+  WAIT_MAX_TIMEOUT_MS,
+  WAIT_SOCKET_SLACK_MS,
+} from "../../src/cli/client.mjs";
+import {
   DEFAULT_WAIT_TIMEOUT_MS,
   DEFAULT_WAIT_UNTIL,
   MAX_WAIT_TIMEOUT_MS,
   parseWaitTimeout,
   parseWaitUntil,
+  WAIT_TICK_MS,
   waitForSession,
   type WaitDeps,
   type WaitSnapshot,
@@ -260,6 +266,16 @@ describe("waitForSession", () => {
       waitForSession({ until: until("done"), timeoutMs: 60_000 }, { ...f.deps, signal: ac.signal }),
     ).resolves.toEqual({ aborted: true });
     expect(f.listeners.size).toBe(0);
+  });
+});
+
+describe("client/server wait-constant contract", () => {
+  it("the CLI/MCP client's wait defaults mirror the server's", () => {
+    expect(WAIT_DEFAULT_TIMEOUT_MS).toBe(DEFAULT_WAIT_TIMEOUT_MS);
+    expect(WAIT_MAX_TIMEOUT_MS).toBe(MAX_WAIT_TIMEOUT_MS);
+    // The socket slack must exceed the 1 s tick, or the client timer could fire
+    // before the server answers a wait that ends on its own timeout.
+    expect(WAIT_SOCKET_SLACK_MS).toBeGreaterThan(WAIT_TICK_MS);
   });
 });
 

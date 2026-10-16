@@ -258,6 +258,11 @@ describe("session/project/preview tool handlers (issue #134 part 2)", () => {
         tool.handler({ sessionId: "7", timeoutSeconds }, { waitForSession }),
       ).rejects.toThrow("timeoutSeconds must be a positive number");
     }
+    for (const afterSeq of [-1, 1.5, "3", Number.NaN]) {
+      await expect(tool.handler({ sessionId: "7", afterSeq }, { waitForSession })).rejects.toThrow(
+        "afterSeq must be a non-negative integer",
+      );
+    }
     await expect(tool.handler({}, { waitForSession })).rejects.toThrow("sessionId is required");
   });
 

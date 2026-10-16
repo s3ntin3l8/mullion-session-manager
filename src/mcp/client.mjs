@@ -1,5 +1,11 @@
 import net from "node:net";
-import { MullionSocketClient, isMissingIdError, resolveOwnSessionId } from "../cli/client.mjs";
+import {
+  MullionSocketClient,
+  WAIT_DEFAULT_TIMEOUT_MS,
+  WAIT_SOCKET_SLACK_MS,
+  isMissingIdError,
+  resolveOwnSessionId,
+} from "../cli/client.mjs";
 
 // Issue #271 — the transport half of the `mullion mcp` server (issue #134's
 // eventual CLI/MCP surface starts here): a thin client wrapping however a
@@ -454,7 +460,11 @@ export class MullionClient {
     if (until !== undefined) body.until = until;
     if (timeoutMs !== undefined) body.timeoutMs = timeoutMs;
     if (afterSeq !== undefined) body.afterSeq = afterSeq;
-    return this.controlRequest("sessions.wait", body, (timeoutMs ?? 600_000) + 15_000);
+    return this.controlRequest(
+      "sessions.wait",
+      body,
+      (timeoutMs ?? WAIT_DEFAULT_TIMEOUT_MS) + WAIT_SOCKET_SLACK_MS,
+    );
   }
 
   /** Kills a child session. Session scope may only name a child of its own

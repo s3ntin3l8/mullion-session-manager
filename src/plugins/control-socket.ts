@@ -802,6 +802,10 @@ export const OPS: Record<string, OpSpec> = {
               };
             },
             eventSeqHead: () => app.pty.get(id)?.eventSeqHead ?? 0,
+            // Bound ONCE, at wait start. If the child's Session isn't in
+            // app.pty yet (or is replaced mid-wait) this is a no-op and the
+            // wait is woken only by the 1 s tick — added latency, not a
+            // correctness gap (a `gone` child still matches via readStatus).
             subscribe: (listener) => app.pty.get(id)?.onEvent(() => listener()) ?? (() => {}),
           },
         );

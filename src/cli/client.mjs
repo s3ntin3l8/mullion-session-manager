@@ -15,6 +15,14 @@ import { EventEmitter } from "node:events";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
+// sessions.wait: the server's own default and max (services/session-wait.ts's
+// DEFAULT_WAIT_TIMEOUT_MS / MAX_WAIT_TIMEOUT_MS — test/services/session-wait.test.ts
+// pins these to them) plus the slack added to the SOCKET request timeout so it
+// always outlasts the server-side wait. Shared by the CLI and the MCP client.
+export const WAIT_DEFAULT_TIMEOUT_MS = 600_000;
+export const WAIT_MAX_TIMEOUT_MS = 3_600_000;
+export const WAIT_SOCKET_SLACK_MS = 15_000;
+
 /** Discovery order from the plan: an explicit override, then the sibling of
  * the hook socket in this process's own SESSIONS_DIR (set for every spawned
  * session), then the same XDG state-dir fallback hooks.ts/pty-manager.ts use

@@ -6,6 +6,8 @@
 // shape by server.mjs) or throws, which server.mjs turns into a tool-level
 // `isError: true` result rather than a protocol-level failure.
 
+import { WAIT_MAX_TIMEOUT_MS } from "../cli/client.mjs";
+
 /**
  * Issue #271, option 2 — lets the model itself decide "start work now" and
  * hand Mullion a seed/summary + an optional suggested base ref. Blocks
@@ -395,12 +397,20 @@ const waitForSession = {
     if (!Number.isFinite(seconds) || seconds <= 0) {
       throw new Error("timeoutSeconds must be a positive number");
     }
+    // Same local check as the CLI's --after-seq (saves a round trip and the
+    // server's raw 400).
+    if (
+      args.afterSeq !== undefined &&
+      (typeof args.afterSeq !== "number" || !Number.isInteger(args.afterSeq) || args.afterSeq < 0)
+    ) {
+      throw new Error("afterSeq must be a non-negative integer");
+    }
     const result = await client.waitForSession({
       sessionId: args.sessionId,
       until: args.until,
       // Clamp to the server's 1 h max (a larger value would overflow the
       // socket client's 32-bit setTimeout).
-      timeoutMs: Math.round(Math.min(seconds, 3600) * 1000),
+      timeoutMs: Math.min(Math.round(seconds * 1000), WAIT_MAX_TIMEOUT_MS),
       afterSeq: args.afterSeq,
     });
     return JSON.stringify(result);
