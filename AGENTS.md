@@ -42,9 +42,10 @@ context if you're running inside a Mullion-hosted session.
   session, prefer `mullion review` (or the `request_review` MCP tool): the
   Mullion server relays the request straight to the Hermes API, and a repeat
   request for the same PR is refused during a cooldown. `make review` is the
-  shorthand — it runs `mullion review` inside a session and otherwise posts
-  that same `@s3ntin3l8-hermes Review` comment on the current branch's PR
-  (via `gh pr comment`). Either way it is for requesting a re-review after
+  shorthand — it runs `mullion review` inside a session (falling back to the
+  comment if the relay is unavailable, but not on a cooldown refusal) and
+  otherwise posts that same `@s3ntin3l8-hermes Review` comment on the current
+  branch's PR (via `gh pr comment`). Either way it is for requesting a re-review after
   pushing fixes, not something to run right after opening the PR (the
   auto-review already covers that). Fixing
   the code is not enough to address feedback — reply to each inline comment

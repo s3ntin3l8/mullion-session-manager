@@ -316,6 +316,33 @@ describe("hermes review relay", () => {
       );
     });
 
+    it("bounds the prompt by bytes read, not by what's forwarded (streamed body)", async () => {
+      let pulled = 0;
+      const chunk = new Uint8Array(50_000).fill(120);
+      const stream = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          pulled += 1;
+          controller.enqueue(chunk);
+          if (pulled > 100) controller.close();
+        },
+      });
+      promptResponse = async () => new Response(stream, { status: 200 });
+      await expect(requestHermesReview(app, PR)).rejects.toThrow(/too large/);
+      // Stopped reading shortly after the 200KB cap, not the whole stream.
+      expect(pulled).toBeLessThan(10);
+    });
+
+    it("keeps the API's own error text as server-side detail for a rejected dispatch", async () => {
+      dispatch = async () => new Response('{"error":"model not found: nope"}', { status: 400 });
+      const err = (await requestHermesReview(app, PR).catch(
+        (e: unknown) => e,
+      )) as HermesUnavailableError;
+      expect(err).toBeInstanceOf(HermesUnavailableError);
+      expect(err.message).toContain("HTTP 400");
+      expect(err.message).not.toContain("model not found");
+      expect(err.detail).toContain("model not found: nope");
+    });
+
     it("only one of two concurrent requests for the same PR dispatches", async () => {
       const results = await Promise.allSettled([
         requestHermesReview(app, PR),

@@ -43,6 +43,7 @@ vi.mock("../../src/services/hermes-review.js", async (orig) => ({
 
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
+import { GitHubApiError } from "../../src/services/github-fetch.js";
 import { projects, sessions } from "../../src/db/schema.js";
 import {
   HermesAuthError,
@@ -165,10 +166,46 @@ describe("POST /api/sessions/:id/review-request", () => {
   });
 
   it("404s an explicit PR that doesn't exist in the repo", async () => {
-    mocks.getPullRequestByNumber.mockRejectedValue(new Error("Not Found"));
+    mocks.getPullRequestByNumber.mockRejectedValue(new GitHubApiError("Not Found", 404));
     const res = await post(sessionId, { prNumber: 12345 });
     expect(res.statusCode).toBe(404);
+    expect(res.json().message).toContain("PR #12345");
     expect(mocks.requestHermesReview).not.toHaveBeenCalled();
+  });
+
+  describe("GitHub lookup failures other than 404", () => {
+    it.each([
+      [401, "HTTP 401"],
+      [403, "HTTP 403"],
+      [429, "HTTP 429"],
+      [500, "HTTP 500"],
+      [0, "unreachable"],
+    ])("explicit PR: status %i is a 502, never 'not found'", async (status, text) => {
+      mocks.getPullRequestByNumber.mockRejectedValue(new GitHubApiError("boom", status));
+      const res = await post(sessionId, { prNumber: 5 });
+      expect(res.statusCode).toBe(502);
+      expect(res.json().message).toContain(text);
+      expect(res.json().message).not.toContain("not found");
+      expect(mocks.requestHermesReview).not.toHaveBeenCalled();
+    });
+
+    it("branch lookup: a 401 is a 502 instead of an unhandled 500", async () => {
+      mocks.findPullRequestByHead.mockRejectedValue(new GitHubApiError("Bad credentials", 401));
+      const res = await post(sessionId, {});
+      expect(res.statusCode).toBe(502);
+    });
+
+    it("branch lookup: a 404 means the repo isn't accessible", async () => {
+      mocks.findPullRequestByHead.mockRejectedValue(new GitHubApiError("Not Found", 404));
+      const res = await post(sessionId, {});
+      expect(res.statusCode).toBe(404);
+      expect(res.json().message).toContain("acme/widgets");
+    });
+
+    it("a non-GitHub error is not swallowed", async () => {
+      mocks.getPullRequestByNumber.mockRejectedValue(new Error("kaboom"));
+      expect((await post(sessionId, { prNumber: 5 })).statusCode).toBe(500);
+    });
   });
 
   it("404s when the branch has no open PR", async () => {

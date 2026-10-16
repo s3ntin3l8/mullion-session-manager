@@ -6,6 +6,7 @@ import { getGitStatus } from "../services/git-status.js";
 import { resolveRepoRef } from "../services/host-git.js";
 import { resolveGitHubToken } from "../services/github-integration.js";
 import { findPullRequestByHead, getPullRequestByNumber } from "../services/github-write.js";
+import { GitHubApiError } from "../services/github-fetch.js";
 import {
   HermesAuthError,
   HermesNotConfiguredError,
@@ -67,22 +68,41 @@ export async function reviewRequestRoute(app: FastifyInstance) {
       if (!token) return reply.preconditionFailed("No GitHub credentials are configured");
 
       let prNumber = request.body.prNumber;
-      if (prNumber !== undefined) {
-        try {
+      try {
+        if (prNumber !== undefined) {
           await getPullRequestByNumber(token, owner, repo, prNumber);
-        } catch {
-          return reply.notFound(`PR #${prNumber} was not found in ${owner}/${repo}`);
+        } else {
+          const branch =
+            app.pty.get(String(sessionId))?.liveBranch ??
+            (await getGitStatus(session.cwd ?? project.cwd))?.branch;
+          if (!branch || branch === "(detached)") {
+            return reply.notFound("Could not determine this session's branch — pass prNumber");
+          }
+          const pr = await findPullRequestByHead(token, owner, repo, `${owner}:${branch}`);
+          if (!pr) return reply.notFound(`No open PR found for branch ${branch}`);
+          prNumber = pr.number;
         }
-      } else {
-        const branch =
-          app.pty.get(String(sessionId))?.liveBranch ??
-          (await getGitStatus(session.cwd ?? project.cwd))?.branch;
-        if (!branch || branch === "(detached)") {
-          return reply.notFound("Could not determine this session's branch — pass prNumber");
+      } catch (err) {
+        // Only a genuine 404 means "no such PR". An expired token, a rate
+        // limit or an unreachable GitHub (statusCode 0) must not tell the
+        // agent the PR doesn't exist — that sends it retrying the wrong way.
+        if (!(err instanceof GitHubApiError)) throw err;
+        if (err.statusCode === 404) {
+          return reply.notFound(
+            prNumber !== undefined
+              ? `PR #${prNumber} was not found in ${owner}/${repo}`
+              : `${owner}/${repo} was not found or is not accessible`,
+          );
         }
-        const pr = await findPullRequestByHead(token, owner, repo, `${owner}:${branch}`);
-        if (!pr) return reply.notFound(`No open PR found for branch ${branch}`);
-        prNumber = pr.number;
+        app.log.warn(
+          { status: err.statusCode, detail: err.message },
+          "review-request: GitHub lookup failed",
+        );
+        return reply.badGateway(
+          err.statusCode === 0
+            ? "GitHub is unreachable — try again shortly"
+            : `GitHub rejected the PR lookup (HTTP ${err.statusCode})`,
+        );
       }
 
       try {

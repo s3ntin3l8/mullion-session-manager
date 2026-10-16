@@ -102,6 +102,26 @@ export function resetHermesReviewState(): void {
   promptCache.clear();
 }
 
+// Reads at most `maxBytes` of a response body, so the cap bounds the memory
+// spent reading it (not just what's forwarded). Returns null when exceeded.
+async function readBounded(res: Response, maxBytes: number): Promise<string | null> {
+  if (!res.body) return "";
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      void reader.cancel().catch(() => undefined);
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
 async function loadReviewPrompt(promptRepo: string, promptPath: string): Promise<string> {
   const key = `${promptRepo}:${promptPath}`;
   const cached = promptCache.get(key);
@@ -122,10 +142,8 @@ async function loadReviewPrompt(promptRepo: string, promptPath: string): Promise
   if (!res.ok) {
     throw new HermesUnavailableError(`Could not fetch the review prompt (HTTP ${res.status})`, url);
   }
-  const text = await res.text();
-  if (text.length > MAX_PROMPT_BYTES) {
-    throw new HermesUnavailableError("The review prompt is too large", url);
-  }
+  const text = await readBounded(res, MAX_PROMPT_BYTES);
+  if (text === null) throw new HermesUnavailableError("The review prompt is too large", url);
   promptCache.set(key, { text, fetchedAt: Date.now() });
   return text;
 }
@@ -265,12 +283,19 @@ async function dispatchReview(
     }
   }
   if (res) {
-    void res.body?.cancel().catch(() => undefined);
-    if (res.status === 401 || res.status === 403) throw new HermesAuthError(res.status);
+    if (res.status === 401 || res.status === 403) {
+      void res.body?.cancel().catch(() => undefined);
+      throw new HermesAuthError(res.status);
+    }
     if (!res.ok) {
+      // The API's own error text usually names the problem (e.g. a wrong
+      // `model`); keep a bounded snippet as server-side detail only.
+      const snippet = (await readBounded(res, 2_000).catch(() => null)) ?? "(body too large)";
       throw new HermesUnavailableError(
         `Hermes API returned HTTP ${res.status} — review not dispatched`,
+        `HTTP ${res.status}: ${snippet.slice(0, 500)}`,
       );
     }
+    void res.body?.cancel().catch(() => undefined);
   }
 }
