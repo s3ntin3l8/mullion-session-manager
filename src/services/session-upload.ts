@@ -158,7 +158,11 @@ export function saveSessionFileUpload(cwd: string, buffer: Buffer, originalName:
   const uploadDir = ensureUploadDir(cwd);
   const fileDir = path.join(uploadDir, crypto.randomUUID());
   mkdirSync(fileDir);
-  const filePath = path.join(fileDir, sanitizeUploadName(originalName));
+  const filePath = path.resolve(fileDir, sanitizeUploadName(originalName));
+  // Containment guard (also the CodeQL js/path-injection barrier): the
+  // caller-supplied name must not resolve outside its own uuid directory,
+  // even if sanitizeUploadName ever regressed.
+  if (!filePath.startsWith(fileDir + path.sep)) throw new Error("Invalid upload file name");
   writeFileSync(filePath, buffer);
   return filePath;
 }

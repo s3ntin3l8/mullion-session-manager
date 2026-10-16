@@ -2163,6 +2163,58 @@ describe("TerminalPane image paste/upload (issue #68)", () => {
     expect(peak).toBe(3);
   });
 
+  it("skips zero-size untyped entries when the browser has no webkitGetAsEntry", async () => {
+    stubFakeWebSocket(true);
+    vi.mocked(api.uploadSessionFile).mockResolvedValue({ path: "/cwd/.mullion-uploads/u/f.txt" });
+
+    const { container } = renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    const folder = new File([], "folder", { type: "" });
+    const file = new File(["y"], "f.txt", { type: "text/plain" });
+    const item = (f: File) => ({ kind: "file", getAsFile: () => f });
+    fireEvent.drop(container.firstElementChild as HTMLElement, {
+      dataTransfer: { types: ["Files"], files: [folder, file], items: [item(folder), item(file)] },
+    });
+
+    await waitFor(() => expect(api.uploadSessionFile).toHaveBeenCalledTimes(1));
+    expect(api.uploadSessionFile).toHaveBeenCalledWith(1, file, "f.txt");
+  });
+
+  it("keeps the uploading indicator on until every overlapping batch has settled, then reports a failure from any", async () => {
+    stubFakeWebSocket(true);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const gates: Array<(ok: boolean) => void> = [];
+    vi.mocked(api.uploadSessionFile).mockImplementation(
+      (_id, _blob, name) =>
+        new Promise((resolve, reject) => {
+          gates.push((ok) => (ok ? resolve({ path: `/p/${name}` }) : reject(new Error("boom"))));
+        }),
+    );
+
+    const { container } = renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    const pane = container.firstElementChild as HTMLElement;
+    const drop = (name: string) =>
+      fireEvent.drop(pane, {
+        dataTransfer: { types: ["Files"], files: [new File(["x"], name)] },
+      });
+
+    drop("one.txt");
+    drop("two.txt");
+    await waitFor(() => expect(gates).toHaveLength(2));
+    expect(screen.getByText("Uploading…")).toBeInTheDocument();
+
+    gates[0]!(false); // first batch fails while the second is still running
+    await waitFor(() => expect(warn).toHaveBeenCalled());
+    expect(screen.getByText("Uploading…")).toBeInTheDocument();
+    expect(screen.queryByText("Upload failed")).not.toBeInTheDocument();
+
+    gates[1]!(true);
+    await waitFor(() => expect(screen.getByText("Upload failed")).toBeInTheDocument());
+    expect(getLatestTermInstance().paste).toHaveBeenCalledWith("/p/two.txt ");
+    warn.mockRestore();
+  });
+
   it("skips dropped directories", async () => {
     stubFakeWebSocket(true);
     vi.mocked(api.uploadSessionFile).mockResolvedValue({ path: "/cwd/.mullion-uploads/u/f.txt" });

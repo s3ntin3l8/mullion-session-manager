@@ -65,9 +65,14 @@ function droppedFiles(dt: DataTransfer): File[] {
   const out: File[] = [];
   for (const item of Array.from(dt.items)) {
     if (item.kind !== "file") continue;
-    if (item.webkitGetAsEntry?.()?.isDirectory) continue;
     const file = item.getAsFile();
-    if (file) out.push(file);
+    if (!file) continue;
+    // Without webkitGetAsEntry, a folder is indistinguishable from a file
+    // except by its zero size and empty type — and an empty file is not worth
+    // uploading anyway.
+    const entry = item.webkitGetAsEntry?.();
+    if (entry ? entry.isDirectory : file.size === 0 && file.type === "") continue;
+    out.push(file);
   }
   return out;
 }
@@ -1502,8 +1507,15 @@ export function TerminalPane(props: {
     // one paste. One failed upload flags the error state but doesn't discard
     // the others' paths. A bare Blob (clipboard image) has no name, so it gets
     // one from its mime subtype to keep a usable extension.
+    //
+    // Batches can overlap (a second drop while the first is still going): the
+    // indicator stays "uploading" until the last one settles, and a failure in
+    // any of them is reported once they all have.
+    let batchesInFlight = 0;
+    let sawUploadFailure = false;
     function uploadAndInjectFiles(files: Blob[]): void {
       if (files.length === 0) return;
+      batchesInFlight++;
       setUploadState("uploading");
       const uploadOne = (file: Blob) =>
         api.uploadSessionFile(
@@ -1538,7 +1550,11 @@ export function TerminalPane(props: {
           }
         }
         if (paths.length > 0) pasteToTerminal(`${paths.join(" ")} `);
-        setUploadState(failed ? "error" : "idle");
+        sawUploadFailure ||= failed;
+        if (--batchesInFlight === 0) {
+          setUploadState(sawUploadFailure ? "error" : "idle");
+          sawUploadFailure = false;
+        }
       });
     }
     uploadImageRef.current = uploadAndInjectFiles;
