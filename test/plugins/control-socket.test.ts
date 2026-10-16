@@ -1105,6 +1105,72 @@ describe("controlSocketPlugin (issue #185)", () => {
       });
     });
 
+    // The test project is /tmp (no git remote), so a request that is routed
+    // and pinned correctly reaches the real route and stops at its own 412
+    // "no GitHub remote" — enough to prove scope + pinning without GitHub or
+    // Hermes. The route's own behavior is covered in
+    // test/routes/review-request.test.ts.
+    describe("reviews.request", () => {
+      it("session scope: defaults to its own pinned session and reaches the route", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession();
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(`${JSON.stringify({ id: 1, op: "reviews.request", body: {} })}\n`);
+        const reply = await waitForReply(socket);
+        expect(reply.ok).toBe(false);
+        expect(reply.status).toBe(412);
+        expect(String(reply.error)).toContain("GitHub remote");
+        socket.destroy();
+      });
+
+      it("session scope: rejects targeting a different session id", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession();
+        const { sessionId: otherSessionId } = await createRealSession();
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(
+          `${JSON.stringify({ id: 1, op: "reviews.request", body: { sessionId: otherSessionId } })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        expect(reply.ok).toBe(false);
+        expect(reply.status).toBe(403);
+        socket.destroy();
+      });
+
+      it("full scope: requires an explicit sessionId", async () => {
+        app = await buildApp();
+        await app.ready();
+        await createRealSession();
+        const socket = await fullScopeSocket();
+        socket.write(`${JSON.stringify({ id: 1, op: "reviews.request", body: {} })}\n`);
+        const reply = await waitForReply(socket);
+        expect(reply.ok).toBe(false);
+        expect(reply.status).toBe(400);
+        socket.destroy();
+      });
+
+      it("full scope: routes an explicit sessionId and forwards prNumber to the route", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId } = await createRealSession();
+        const injectSpy = vi.spyOn(app, "inject");
+        const socket = await fullScopeSocket();
+        socket.write(
+          `${JSON.stringify({ id: 1, op: "reviews.request", body: { sessionId, prNumber: 5 } })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        expect(reply.status).toBe(412);
+        const forwarded = injectSpy.mock.calls
+          .map(([opts]) => opts as { url?: string; payload?: unknown })
+          .find((o) => o.url === `/api/sessions/${sessionId}/review-request`);
+        expect(forwarded).toBeDefined();
+        expect(JSON.parse(String(forwarded!.payload))).toEqual({ prNumber: 5 });
+        socket.destroy();
+      });
+    });
+
     describe("sessions.rename", () => {
       it("full scope: renames by explicit sessionId", async () => {
         app = await buildApp();

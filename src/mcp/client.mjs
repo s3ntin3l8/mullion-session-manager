@@ -49,6 +49,11 @@ import {
 
 const PROMOTE_TIMEOUT_MS = 295_000;
 const BROWSER_ACTION_TIMEOUT_MS = 30_000;
+// reviews.request does up to four sequential network calls server-side (GitHub
+// PR lookup, prompt fetch, Hermes health, Hermes dispatch ~15s), which can
+// crowd the 30s default and leave the agent seeing an error for a review that
+// DID dispatch — and then re-requesting it.
+const REVIEW_REQUEST_TIMEOUT_MS = 60_000;
 
 // isMissingIdError/resolveOwnSessionId used to be private to this file
 // (issue #1291, Hermes review PR #1292); moved to cli/client.mjs (issue
@@ -488,6 +493,26 @@ export class MullionClient {
         throw err;
       }
       return this.controlRequest("sessions.scrollback", { sessionId: this.ownSessionId });
+    }
+  }
+
+  /** Asks the Mullion server to relay a Hermes review request for this
+   * session's PR. `prNumber` is optional — the server resolves the PR from
+   * the session's branch when omitted. Same "try direct, retry only on the
+   * specific no-pin 400" shape as getScrollback above. */
+  async requestReview(prNumber) {
+    const body = prNumber === undefined ? {} : { prNumber };
+    try {
+      return await this.controlRequest("reviews.request", body, REVIEW_REQUEST_TIMEOUT_MS);
+    } catch (err) {
+      if (!isMissingIdError(err, "'sessionId' is required") || this.ownSessionId === undefined) {
+        throw err;
+      }
+      return this.controlRequest(
+        "reviews.request",
+        { ...body, sessionId: this.ownSessionId },
+        REVIEW_REQUEST_TIMEOUT_MS,
+      );
     }
   }
 

@@ -150,6 +150,7 @@ describe("mcp/server.mjs (issue #271)", () => {
       "kill_child_session",
       "stop_dock_session",
       "get_scrollback",
+      "request_review",
       "list_projects",
       "list_actions",
       "create_preview",

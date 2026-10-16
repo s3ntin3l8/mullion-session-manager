@@ -172,8 +172,9 @@ const browserAction = {
 // config (that would leak the operator's own credential onto disk for any
 // agent to read). They work when `mullion mcp` is run directly with
 // MULLION_AUTH_TOKEN set. get_scrollback (defaults to the caller's own
-// session) and list_actions (defaults to the caller's own project) are
-// reachable at session scope too.
+// session), list_actions (defaults to the caller's own project) and
+// request_review (always the caller's own session's PR) are reachable at
+// session scope too.
 
 const listSessions = {
   name: "list_sessions",
@@ -462,6 +463,33 @@ const getScrollback = {
     const result = await client.getScrollback(args?.sessionId);
     const b64 = typeof result?.b64 === "string" ? result.b64 : "";
     return Buffer.from(b64, "base64").toString("utf8");
+  },
+};
+
+const requestReview = {
+  name: "request_review",
+  description:
+    "Ask the Mullion server to request an automated Hermes review of this session's pull " +
+    "request. Reachable from inside a normal agent session (session scope). The review is " +
+    "dispatched asynchronously and posts to the PR as the review bot within a few minutes — " +
+    "wait for it rather than requesting again; repeat requests for the same PR are refused " +
+    "for a cooldown period. Omit pr_number to use the open PR for the session's current " +
+    "branch. Fails with a clear message if the relay isn't configured in Mullion's " +
+    "Settings → Integrations, the project is on a remote host, or no PR exists yet. Use this " +
+    "for a re-review after pushing fixes; a newly opened PR is reviewed automatically.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      pr_number: {
+        type: "integer",
+        minimum: 1,
+        description: "PR number to review. Defaults to the open PR for the current branch.",
+      },
+    },
+  },
+  async handler(args, client) {
+    const result = await client.requestReview(args?.pr_number);
+    return JSON.stringify(result);
   },
 };
 
@@ -804,6 +832,7 @@ export const TOOLS = [
   killChildSession,
   stopDockSession,
   getScrollback,
+  requestReview,
   listProjects,
   listActions,
   createPreview,

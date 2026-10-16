@@ -955,6 +955,19 @@ export const OPS: Record<string, OpSpec> = {
         : { method: "PATCH", url: `/api/sessions/${enc(id)}`, payload: json({ name: body.name }) },
     ),
   ),
+  // Reachable at session scope: an agent asking the Mullion server to relay a
+  // Hermes review request for the PR of the repo it is working in. Pinned to
+  // the caller's own session (same target-id shape as sessions.get); the repo
+  // is derived server-side from that session's project (routes/
+  // review-request.ts), and the Hermes URL/key never reach the session.
+  "reviews.request": routeOp(
+    ["full", "session"],
+    onSession((id, { body }) => ({
+      method: "POST",
+      url: `/api/sessions/${enc(id)}/review-request`,
+      payload: json(body?.prNumber === undefined ? {} : { prNumber: body.prNumber }),
+    })),
+  ),
   // Reachable at session scope — same target-id shape as sessions.get.
   "sessions.scrollback": routeOp(
     ["full", "session"],

@@ -456,6 +456,12 @@ export interface SetGitHubAppResult {
 // (plus the separately-fetched `githubApp` status GET /api/integrations/github
 // merges in) — never carries the token itself, same "hasToken-only" rule as
 // Host above (there `hasToken`, here `connected`).
+/** Never carries the key — see src/services/hermes-integration.ts. */
+export interface HermesIntegration {
+  hasKey: boolean;
+  updatedAt: string | null;
+}
+
 export interface GitHubIntegration {
   connected: boolean;
   tokenType: "pat" | "oauth" | null;
@@ -1715,6 +1721,15 @@ export interface AppSettings {
   };
   hosts: {
     heartbeatSeconds: number;
+  };
+  // Non-secret half of the Hermes review relay — the key itself is
+  // write-only via api.setHermesKey and never part of settings.
+  reviewRelay: {
+    apiUrl: string;
+    model: string;
+    promptRepo: string;
+    promptPath: string;
+    cooldownMinutes: number;
   };
   browser: {
     framerate: number;

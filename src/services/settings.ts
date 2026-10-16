@@ -446,6 +446,24 @@ export interface AppSettings {
     // HOST_HEARTBEAT_INTERVAL_SECONDS. 0 disables the heartbeat.
     heartbeatSeconds: number;
   };
+  // Non-secret half of the Hermes review relay (services/hermes-review.ts):
+  // an agent's `request_review` asks the Mullion server to POST a review
+  // request to this API instead of going through a GitHub workflow. The
+  // API key is deliberately NOT here — this blob is returned verbatim by
+  // GET /api/settings — it lives encrypted in the `integrations` table
+  // (services/hermes-integration.ts). Empty `apiUrl` means the feature is off.
+  reviewRelay: {
+    // Base URL of the Hermes API server, e.g. http://host:8643 (no trailing path).
+    apiUrl: string;
+    // Model name the API server advertises (API_SERVER_MODEL_NAME).
+    model: string;
+    // "owner/repo" holding the review prompt; fetched unauthenticated.
+    promptRepo: string;
+    // Path of the review prompt inside promptRepo.
+    promptPath: string;
+    // Minimum minutes between two requests for the same PR.
+    cooldownMinutes: number;
+  };
   browser: {
     // BROWSER_FRAMERATE. Applied to the next browser stream that opens.
     framerate: number;
@@ -589,6 +607,13 @@ export const DEFAULT_SETTINGS: AppSettings = {
   },
   hosts: {
     heartbeatSeconds: -1,
+  },
+  reviewRelay: {
+    apiUrl: "",
+    model: "hermes-agent",
+    promptRepo: "",
+    promptPath: "hermes-review-prompt.md",
+    cooldownMinutes: 10,
   },
   browser: {
     framerate: -1,
@@ -1097,7 +1122,30 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
         fallback: DEFAULT_SETTINGS.taskMaster.reviewCiWaitMinutes,
       }),
     },
+    reviewRelay: {
+      apiUrl: safeString(settings.reviewRelay.apiUrl, DEFAULT_SETTINGS.reviewRelay.apiUrl),
+      model: safeString(settings.reviewRelay.model, DEFAULT_SETTINGS.reviewRelay.model),
+      promptRepo: safeString(
+        settings.reviewRelay.promptRepo,
+        DEFAULT_SETTINGS.reviewRelay.promptRepo,
+      ),
+      promptPath: safeString(
+        settings.reviewRelay.promptPath,
+        DEFAULT_SETTINGS.reviewRelay.promptPath,
+      ),
+      cooldownMinutes: safeNumber(settings.reviewRelay.cooldownMinutes, {
+        min: 0,
+        max: 1440,
+        fallback: DEFAULT_SETTINGS.reviewRelay.cooldownMinutes,
+      }),
+    },
   };
+}
+
+// deepMerge only proves a field is *a* string; trim it so a stray space from
+// the settings form can't turn "http://host:8643 " into an invalid URL.
+function safeString(value: unknown, fallback: string): string {
+  return typeof value === "string" ? value.trim() : fallback;
 }
 
 /** Deep-merges a possibly-partial/older stored blob over the current defaults. */

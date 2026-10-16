@@ -59,8 +59,8 @@ keys, and agy via `~/.gemini/config/mcp_config.json` — each auto-registered
 the same way `--mcp-config` is for Claude Code.
 
 - **MCP tool** — lower overhead for a tool-calling model, no subprocess
-  spawn. Prefer for `get_scrollback`, `list_actions`, `browser_action`,
-  `use_browser`, `promote_to_worktree`, `spawn_child_session`,
+  spawn. Prefer for `get_scrollback`, `list_actions`, `request_review`,
+  `browser_action`, `use_browser`, `promote_to_worktree`, `spawn_child_session`,
   `list_devices`, `use_device`/`device_action`, and `start_device`/
   `stop_device` — the ops actually reachable at session scope.
 - **`mullion` CLI** — better for `--json` in a shell pipeline, an

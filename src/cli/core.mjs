@@ -127,7 +127,7 @@ const TOP_LEVEL_ALIASES = {
 // resolve verb="--kind" -> "unknown command" if it were a NOUNS entry
 // instead — `history` has no noun/verb split at all, just flags, the same
 // shape `notify`/`config` already have.
-const STANDALONE_COMMANDS = new Set(["notify", "mcp", "config", "history"]);
+const STANDALONE_COMMANDS = new Set(["notify", "mcp", "config", "history", "review"]);
 const NOUNS = new Set([
   "session",
   "browser",
@@ -1372,6 +1372,40 @@ async function runNotify(client, args, opts, io) {
   return { text: "notification sent" };
 }
 
+// reviews.request does several sequential network calls server-side (GitHub
+// PR lookup, prompt fetch, Hermes health + dispatch), which can crowd the
+// client's 30s default — see REVIEW_REQUEST_TIMEOUT_MS in mcp/client.mjs.
+const REVIEW_REQUEST_TIMEOUT_MS = 60_000;
+
+async function runReview(client, args, opts, io) {
+  const { flags } = extractFlags(args, { pr: "string" });
+  const body = {};
+  if (flags.pr !== undefined) {
+    const prNumber = Number(flags.pr);
+    if (!Number.isInteger(prNumber) || prNumber < 1) {
+      throw new CliUsageError("--pr must be a positive integer");
+    }
+    body.prNumber = prNumber;
+  }
+  if (opts.session !== undefined) body.sessionId = opts.session;
+  client.requestTimeoutMs = REVIEW_REQUEST_TIMEOUT_MS;
+  const result =
+    opts.session !== undefined
+      ? await client.request("reviews.request", body)
+      : await requestOwnSessionFallback(
+          client,
+          "reviews.request",
+          body,
+          io,
+          "'sessionId' is required",
+          (ownId) => ({ ...body, sessionId: ownId }),
+        );
+  return {
+    json: result,
+    text: `review requested for ${result.repo}#${result.prNumber} — it will post to the PR in a few minutes`,
+  };
+}
+
 async function runConfig(client, _args, _opts, io) {
   const info = {
     socketPath: client.socketPath,
@@ -1437,6 +1471,7 @@ export const COMMANDS = {
   device: deviceCommands,
   events: eventsCommands,
   notify: runNotify,
+  review: runReview,
   config: runConfig,
   history: runHistory,
 };
@@ -1457,6 +1492,7 @@ Commands:
   history [--session <id>] [--kind <k>] [--since <ms>] [--until <ms>]
           [--limit <n>] [--cursor <c>]
   notify --message <text> [--title <t>]
+  review [--pr <n>]
   mcp
   config
 
