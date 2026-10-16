@@ -832,8 +832,9 @@ async function refuseIfBlockedOrGone(
   if (opts.refuseBusy && snapshot.severity === "busy") {
     return bad(
       409,
-      `agent_busy: the session is ${snapshot.status} — wait for its current turn to end ` +
-        "(sessions.wait) before prompting with `wait`, or prompt without `wait` to queue the message",
+      `agent_busy: the session is ${snapshot.status} — prompt without \`wait\` to queue the ` +
+        'message, or let it go quiet first (sessions.wait with until=["done","dormant"]; ' +
+        "the default `until` never matches a child that stays busy on background tasks or subagents)",
     );
   }
   return null;

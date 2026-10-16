@@ -39,8 +39,10 @@ child's terminal, submits it, and waits for the turn to end. It works for
 Claude Code, Codex and opencode children. It is refused with `409
 agent_blocked` while the child is stuck on a permission/plan/question dialog
 (typing would answer it — resolve that first, e.g. by telling the human), `409
-agent_busy` if you ask to `wait` while the child is mid-turn (call
-`wait_for_session` first), and `501` for a shell child. A prompt you send does
+agent_busy` if you ask to `wait` while the child is mid-turn (prompt without
+`wait` to queue the message, or `wait_for_session` with `until: ["done",
+"dormant"]` first — a child with background tasks stays busy), and `501` for a
+shell child. A prompt you send does
 not clear the child's attention badge for the human.
 
 Only your own children are reachable — a sibling or unrelated session is `403`.

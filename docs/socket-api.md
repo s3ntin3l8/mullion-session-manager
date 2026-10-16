@@ -355,8 +355,11 @@ the prompt _was_ delivered either way).
   reply says the text may still be in the child's input box). `409 agent_gone`
   if it has exited; `409 agent_busy` for a prompt with `wait` while the child is
   mid-turn (the in-flight turn's end would otherwise satisfy the wait before
-  the prompted turn ran — let it finish with `sessions.wait` first, or send
-  without `wait`, in which case the TUI queues the message); `501` unsupported
+  the prompted turn ran). Send without `wait` instead — the TUI queues the
+  message — or let the child go quiet first with `sessions.wait` using
+  `until: ["done","dormant"]` (the default `until` never matches `busy`, and a
+  child with outstanding background tasks or subagents stays `busy` even after
+  its turn ends); `501` unsupported
   agent; `503` if the bytes could not be delivered (write-backpressure cap, no
   live PTY); `413`/`400` for bad text/arguments; `429` if `wait` would exceed
   `MAX_WAITS_PER_CONNECTION`. A session that is not in this host's PTY manager
