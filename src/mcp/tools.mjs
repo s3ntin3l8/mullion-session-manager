@@ -389,6 +389,12 @@ const waitForSession = {
       throw new Error("sessionId is required");
     }
     const seconds = typeof args.timeoutSeconds === "number" ? args.timeoutSeconds : 50;
+    // Same check as the CLI: a non-positive timeout would otherwise reach the
+    // server's 400 — or, with the +15 s socket slack, fire the client timer
+    // first and surface as a misleading "timed out waiting for a reply".
+    if (!Number.isFinite(seconds) || seconds <= 0) {
+      throw new Error("timeoutSeconds must be a positive number");
+    }
     const result = await client.waitForSession({
       sessionId: args.sessionId,
       until: args.until,

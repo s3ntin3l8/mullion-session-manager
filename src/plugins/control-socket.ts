@@ -73,7 +73,10 @@ export const MAX_OPEN_CHANNELS = 16;
 /** Max simultaneously pending sessions.wait ops on one connection. Each holds
  * an in-flight slot and re-reads status every tick, so an uncapped fan-out
  * could fill MAX_INFLIGHT_OPS (pausing the socket and starving the
- * connection's other ops) and multiply the per-tick work. */
+ * connection's other ops) and multiply the per-tick work. Each pending wait
+ * costs ~2 injected REST reads + 1 DB read per second; raising this cap
+ * safely means deriving the status in-process (as buildLiveInfo does) rather
+ * than re-entering GET /api/sessions/:id on every tick. */
 export const MAX_WAITS_PER_CONNECTION = 4;
 /** Once this many reply bytes are queued unwritten, stop reading requests
  * until the socket 'drain's. */
@@ -720,6 +723,14 @@ export const OPS: Record<string, OpSpec> = {
   // `afterSeq` is the stale-latch guard (see WaitOptions); the reply carries
   // the session's current `eventSeq` so a caller can chain it into the next
   // wait.
+  //
+  // Deliberately a raw OpSpec rather than routeOp(): a long-lived, cancellable
+  // handler can't be expressed as a Route to forward. That means routeOp's
+  // compile-time scope guard (#1546) does not cover it, so this handler must
+  // do its own pin work — it resolves its target through
+  // resolveOwnedSessionId({childOnly:true}) FIRST, before any other work, and
+  // test/plugins/control-socket.test.ts's sessions.wait block asserts the
+  // self / stranger / no-target 403s that guard exists for.
   "sessions.wait": {
     scopes: ["full", "session"],
     handler: async ({ app, conn, body, reply }) => {
