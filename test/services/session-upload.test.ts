@@ -9,12 +9,14 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { lutimesSync, utimesSync } from "node:fs";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   MAX_UPLOAD_BYTES,
   UPLOAD_SUBDIR,
   extensionForMime,
   matchesMagicBytes,
+  pruneUploadDir,
   sanitizeUploadName,
   saveSessionFileUpload,
   saveSessionUpload,
@@ -248,6 +250,69 @@ describe("session-upload", () => {
       const p = saveSessionUpload(cwd, PNG_BYTES, "image/png");
       expect(existsSync(p)).toBe(true);
       expect(existsSync(path.join(cwd, UPLOAD_SUBDIR, ".gitignore"))).toBe(false);
+    });
+  });
+
+  describe("pruneUploadDir (issue #1637)", () => {
+    const DAY = 86_400_000;
+    function age(p: string, days: number) {
+      const t = new Date(Date.now() - days * DAY);
+      utimesSync(p, t, t);
+    }
+
+    it("removes stale image files and generic-file directories, keeps fresh ones and .gitignore", () => {
+      const oldImg = saveSessionUpload(cwd, PNG_BYTES, "image/png");
+      const oldFile = saveSessionFileUpload(cwd, Buffer.from("a"), "a.txt");
+      const freshFile = saveSessionFileUpload(cwd, Buffer.from("b"), "b.txt");
+      age(oldImg, 10);
+      age(path.dirname(oldFile), 10);
+
+      pruneUploadDir(path.join(cwd, UPLOAD_SUBDIR), 7 * DAY);
+
+      expect(existsSync(oldImg)).toBe(false);
+      expect(existsSync(path.dirname(oldFile))).toBe(false);
+      expect(existsSync(freshFile)).toBe(true);
+      expect(existsSync(path.join(cwd, UPLOAD_SUBDIR, ".gitignore"))).toBe(true);
+    });
+
+    it("unlinks a symlinked child without following it", () => {
+      saveSessionUpload(cwd, PNG_BYTES, "image/png");
+      const outside = mkdtempSync(path.join(os.tmpdir(), "mullion-outside-"));
+      writeFileSync(path.join(outside, "keep.txt"), "keep");
+      const link = path.join(cwd, UPLOAD_SUBDIR, "link");
+      symlinkSync(outside, link);
+      const t = new Date(Date.now() - 10 * DAY);
+      // lutimes: age the link itself, not its target.
+      lutimesSync(link, t, t);
+
+      pruneUploadDir(path.join(cwd, UPLOAD_SUBDIR), 7 * DAY);
+
+      expect(existsSync(link)).toBe(false);
+      expect(existsSync(path.join(outside, "keep.txt"))).toBe(true);
+      rmSync(outside, { recursive: true, force: true });
+    });
+
+    it("does nothing when maxAgeMs is 0, and is throttled to once an hour per dir", () => {
+      const f = saveSessionFileUpload(cwd, Buffer.from("a"), "a.txt");
+      const dir = path.join(cwd, UPLOAD_SUBDIR);
+      age(path.dirname(f), 10);
+
+      pruneUploadDir(dir, 0);
+      expect(existsSync(f)).toBe(true);
+
+      const now = Date.now();
+      pruneUploadDir(dir, 7 * DAY, now); // runs, removes
+      expect(existsSync(f)).toBe(false);
+      const g = saveSessionFileUpload(cwd, Buffer.from("b"), "b.txt");
+      age(path.dirname(g), 10);
+      pruneUploadDir(dir, 7 * DAY, now + 60_000); // throttled
+      expect(existsSync(g)).toBe(true);
+      pruneUploadDir(dir, 7 * DAY, now + 2 * 3_600_000); // an hour later
+      expect(existsSync(g)).toBe(false);
+    });
+
+    it("tolerates a missing directory", () => {
+      expect(() => pruneUploadDir(path.join(cwd, "nope"), DAY)).not.toThrow();
     });
   });
 });

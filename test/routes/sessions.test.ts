@@ -1312,6 +1312,88 @@ describe("sessions route", () => {
       await app.close();
     });
 
+    it("400s a mismatched image with the UPLOAD_IMAGE_MISMATCH code (issue #1637)", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${created.json().id}/uploads`,
+        headers: { "content-type": "image/png" },
+        payload: Buffer.from("definitely not a png"),
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ code: "UPLOAD_IMAGE_MISMATCH" });
+      await app.close();
+    });
+
+    it("502s a generic upload with UPLOAD_AGENT_OUTDATED when the agent answers 415/404 (issue #1637)", async () => {
+      const app = await buildApp();
+      const sessionBackendModule = await import("../../src/services/session-backend.js");
+      const { HostRequestError } = await import("../../src/services/remote-host-client.js");
+      const projectId = await createProject(app);
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+      const sessionId = created.json().id;
+      const spy = vi.spyOn(sessionBackendModule, "resolveBackend");
+      const fake = (status: number) =>
+        ({
+          uploadFile: vi.fn().mockRejectedValue(new HostRequestError("remote", status, "nope")),
+          uploadImage: vi.fn().mockRejectedValue(new HostRequestError("remote", status, "nope")),
+        }) as unknown as ReturnType<typeof sessionBackendModule.resolveBackend>;
+
+      for (const status of [415, 404]) {
+        spy.mockReturnValue(fake(status));
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/sessions/${sessionId}/uploads`,
+          headers: { "content-type": "application/octet-stream", "x-upload-filename": "a.pdf" },
+          payload: Buffer.from("data"),
+        });
+        expect(res.statusCode).toBe(502);
+        expect(res.json()).toMatchObject({ code: "UPLOAD_AGENT_OUTDATED" });
+      }
+
+      // An image upload hitting the same agent error stays a plain 502.
+      spy.mockReturnValue(fake(415));
+      const image = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/uploads`,
+        headers: { "content-type": "image/png" },
+        payload: PNG_BYTES,
+      });
+      expect(image.statusCode).toBe(502);
+      expect(image.json().code).toBeUndefined();
+
+      spy.mockRestore();
+      await app.close();
+    });
+
+    it("rate-limits uploads to 120 per minute per IP, returning 429 beyond that (issue #1637)", async () => {
+      const app = await buildApp();
+      const statuses: number[] = [];
+      for (let i = 0; i < 121; i++) {
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/sessions/999999/uploads",
+          headers: { "content-type": "image/png" },
+          payload: PNG_BYTES,
+        });
+        statuses.push(res.statusCode);
+      }
+      expect(statuses.slice(0, 120).every((c) => c === 404)).toBe(true);
+      expect(statuses[120]).toBe(429);
+      await app.close();
+    });
+
     it("415s a non-image content type (no matching content-type parser)", async () => {
       const app = await buildApp();
       const projectId = await createProject(app);

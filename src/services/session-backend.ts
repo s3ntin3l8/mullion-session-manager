@@ -328,6 +328,10 @@ export interface SessionBackend {
   readTaskCommitTitle(taskId: number): Promise<string | null>;
 }
 
+function uploadRetentionMs(app: FastifyInstance): number {
+  return app.config.MULLION_UPLOAD_RETENTION_DAYS * 86_400_000;
+}
+
 class LocalBackend implements SessionBackend {
   constructor(private readonly app: FastifyInstance) {}
 
@@ -416,11 +420,11 @@ class LocalBackend implements SessionBackend {
   }
 
   async uploadImage(cwd: string, buffer: Buffer, mime: string): Promise<{ path: string }> {
-    return { path: saveSessionUpload(cwd, buffer, mime) };
+    return { path: saveSessionUpload(cwd, buffer, mime, uploadRetentionMs(this.app)) };
   }
 
   async uploadFile(cwd: string, buffer: Buffer, name: string): Promise<{ path: string }> {
-    return { path: saveSessionFileUpload(cwd, buffer, name) };
+    return { path: saveSessionFileUpload(cwd, buffer, name, uploadRetentionMs(this.app)) };
   }
 
   async resolveReviewGate(

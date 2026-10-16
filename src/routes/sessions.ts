@@ -237,6 +237,10 @@ const declinePromoteSchema = {
   },
 };
 
+// Issue #1637: a drop is capped at 20 files, so this allows ~6 full drops a
+// minute. Must differ from RATE_LIMIT_MAX (checked at boot, issue #1006).
+const UPLOAD_RATE_LIMIT = { rateLimit: { max: 120, timeWindow: "1 minute" } };
+
 export async function sessionsRoute(app: FastifyInstance) {
   // Start the preview worktree sync tick on first route registration
   ensurePreviewSyncTick();
@@ -1244,7 +1248,7 @@ export async function sessionsRoute(app: FastifyInstance) {
 
   app.post<{ Params: { id: string } }>(
     "/api/sessions/:id/uploads",
-    { bodyLimit: MAX_UPLOAD_BYTES },
+    { config: UPLOAD_RATE_LIMIT, bodyLimit: MAX_UPLOAD_BYTES },
     async (request, reply) => {
       const sessionId = Number(request.params.id);
       if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
@@ -1282,7 +1286,12 @@ export async function sessionsRoute(app: FastifyInstance) {
       // leading bytes don't match the claimed image format — a client can't
       // smuggle arbitrary content onto disk under an image mime type.
       if (!isGenericFile && !matchesMagicBytes(request.body, mime)) {
-        return reply.badRequest("File content does not match the declared image type");
+        return reply.code(400).send({
+          statusCode: 400,
+          error: "Bad Request",
+          message: "File content does not match the declared image type",
+          code: "UPLOAD_IMAGE_MISMATCH",
+        });
       }
 
       try {
@@ -1301,6 +1310,22 @@ export async function sessionsRoute(app: FastifyInstance) {
         // with statusCode 409 — surface that as the client-visible conflict.
         if ((err as { statusCode?: number }).statusCode === 409) {
           return reply.conflict((err as Error).message);
+        }
+        // An agent that predates generic uploads only registers an `image/*`
+        // body parser, so it answers a generic upload with 415 (or 404 if
+        // the route itself is missing) — name that instead of a bare 502.
+        if (
+          isGenericFile &&
+          err instanceof HostRequestError &&
+          (err.statusCode === 415 || err.statusCode === 404)
+        ) {
+          return reply.code(502).send({
+            statusCode: 502,
+            error: "Bad Gateway",
+            message:
+              "The Mullion agent on this host is too old for non-image uploads — update it and retry",
+            code: "UPLOAD_AGENT_OUTDATED",
+          });
         }
         return reply.badGateway("Failed to upload file to host");
       }
