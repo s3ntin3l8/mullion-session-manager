@@ -3,8 +3,20 @@ import net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { assertDemoEnv, assertPortsFree, demoEnv, instanceIdFor } from "../../scripts/demo/env.mjs";
-import { deriveInstanceId, scopeUnitName } from "../../src/services/session-process.js";
+import {
+  assertDemoEnv,
+  assertPortsFree,
+  demoEnv,
+  extractDtachSocketPath,
+  instanceIdFor,
+  ownsScope,
+} from "../../scripts/demo/env.mjs";
+import { stopDemoScopes } from "../../scripts/demo/instance.mjs";
+import {
+  deriveInstanceId,
+  extractDtachSocketPath as backendExtractDtachSocketPath,
+  scopeUnitName,
+} from "../../src/services/session-process.js";
 
 const demoDir = mkdtempSync(path.join(tmpdir(), "mullion-demo-test-"));
 const bin = path.join(demoDir, "bin");
@@ -97,6 +109,84 @@ describe("instanceIdFor", () => {
     expect(id).toBe(deriveInstanceId(sessionsDir));
     expect(scopeUnitName(id, "7")).toBe(`crs-session-${id}-7`);
     expect(instanceIdFor("/home/me/opt/mullion/data/sessions")).not.toBe(id);
+  });
+});
+
+describe("scope ownership", () => {
+  const sessionsDir = path.join(demoDir, "s");
+  const describeScope = (socket: string) =>
+    `Mullion session 7: /usr/bin/dtach -n ${socket} -z /bin/bash -l`;
+
+  it("parses descriptions exactly like the backend", () => {
+    for (const description of [
+      describeScope(path.join(sessionsDir, "7.sock")),
+      `x dtach -n "/tmp/with space/7.sock" -z y`,
+      `x dtach -n '/tmp/single/7.sock' -z y`,
+      "no socket here",
+      "",
+    ])
+      expect(extractDtachSocketPath(description)).toBe(backendExtractDtachSocketPath(description));
+  });
+
+  it("owns a scope whose socket sits directly in SESSIONS_DIR", () => {
+    expect(ownsScope(describeScope(path.join(sessionsDir, "7.sock")), sessionsDir)).toBe(true);
+  });
+
+  it("does not own a scope whose socket is elsewhere, or unparseable", () => {
+    const real = "/home/me/opt/mullion/data/sessions";
+    expect(ownsScope(describeScope(path.join(real, "7.sock")), sessionsDir)).toBe(false);
+    expect(ownsScope(describeScope(path.join(sessionsDir, "sub", "7.sock")), sessionsDir)).toBe(
+      false,
+    );
+    expect(ownsScope(describeScope(`${sessionsDir}-other/7.sock`), sessionsDir)).toBe(false);
+    expect(ownsScope("not a dtach scope", sessionsDir)).toBe(false);
+  });
+});
+
+describe("stopDemoScopes", () => {
+  const sessionsDir = path.join(demoDir, "s");
+  const id = instanceIdFor(sessionsDir);
+  const own = `crs-session-${id}-1`;
+  const foreign = `crs-session-${id}-2`;
+  const fakeSystemctl = (overrides: Record<string, () => never> = {}) => {
+    const stopped: string[] = [];
+    const run = async (args: string[]) => {
+      const [verb, unit] = args;
+      if (overrides[verb]) overrides[verb]();
+      if (verb === "list-units")
+        return { stdout: `${own} loaded active running x\n${foreign} loaded active running x\n` };
+      if (verb === "show") {
+        const dir = unit === own ? sessionsDir : "/home/me/opt/mullion/data/sessions";
+        return { stdout: `dtach -n ${path.join(dir, "1.sock")} -z bash\n` };
+      }
+      stopped.push(unit);
+      return { stdout: "" };
+    };
+    return { run, stopped };
+  };
+
+  it("stops its own scope and skips a foreign one", async () => {
+    const { run, stopped } = fakeSystemctl();
+    expect(await stopDemoScopes(id, sessionsDir, run)).toEqual([]);
+    expect(stopped).toEqual([own]);
+  });
+
+  it("reports a failed listing instead of treating it as nothing to stop", async () => {
+    const { run } = fakeSystemctl({
+      "list-units": () => {
+        throw Object.assign(new Error("Failed to connect to bus"), { code: 1 });
+      },
+    });
+    expect(await stopDemoScopes(id, sessionsDir, run)).toEqual([`crs-session-${id}-*`]);
+  });
+
+  it("reports a failed stop", async () => {
+    const { run } = fakeSystemctl({
+      stop: () => {
+        throw Object.assign(new Error("Access denied"), { stderr: "Access denied" });
+      },
+    });
+    expect(await stopDemoScopes(id, sessionsDir, run)).toEqual([own]);
   });
 });
 

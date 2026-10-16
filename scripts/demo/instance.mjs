@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { assertDemoEnv, assertPortsFree, demoEnv, instanceIdFor } from "./env.mjs";
+import { assertDemoEnv, assertPortsFree, demoEnv, instanceIdFor, ownsScope } from "./env.mjs";
 import { seedDemo } from "./seed.mjs";
 
 /**
@@ -72,18 +72,23 @@ async function waitForHttp(url, timeoutMs = 90_000) {
   throw new Error(`Timed out waiting for ${url}${lastError ? `: ${lastError}` : ""}`);
 }
 
+const systemctl = (args) => execFileAsync("systemctl", ["--user", ...args]);
+
 /**
  * Stops the demo's own session scopes. The name pattern is instance-namespaced,
- * and each match is additionally checked the way the backend itself decides
- * ownership (src/services/session-process.ts): its Description carries the dtach
- * socket path, which must live in this demo's SESSIONS_DIR. A unit that fails
- * that check is never stopped, even on an instanceId collision.
+ * and each match is additionally checked with the backend's own ownership rule
+ * (ownsScope in ./env.mjs, mirroring src/services/session-process.ts): its
+ * Description names the dtach socket, which must sit in this demo's
+ * SESSIONS_DIR. A unit that fails that check is never stopped, even on an
+ * instanceId collision.
+ *
+ * Returns the units it could not account for (listing or stop failed), so the
+ * caller can keep the scratch dir instead of orphaning live scopes.
  */
-async function stopDemoScopes(instanceId, sessionsDir) {
+export async function stopDemoScopes(instanceId, sessionsDir, run = systemctl) {
   let units;
   try {
-    const { stdout } = await execFileAsync("systemctl", [
-      "--user",
+    const { stdout } = await run([
       "list-units",
       `crs-session-${instanceId}-*`,
       "--all",
@@ -94,27 +99,29 @@ async function stopDemoScopes(instanceId, sessionsDir) {
       .split("\n")
       .map((line) => line.trim().split(/\s+/)[0])
       .filter(Boolean);
-  } catch {
-    return; // No user bus: nothing to stop.
+  } catch (err) {
+    // No systemctl at all: the backend can't have created scopes either.
+    if (err.code === "ENOENT") return [];
+    // A non-matching pattern exits 0, so this is a real failure.
+    console.warn(`[demo] could not list crs-session-${instanceId}-* scopes: ${err.message}`);
+    return [`crs-session-${instanceId}-*`];
   }
+  const failed = [];
   for (const unit of units) {
     try {
-      const { stdout } = await execFileAsync("systemctl", [
-        "--user",
-        "show",
-        unit,
-        "--property=Description",
-        "--value",
-      ]);
-      if (!stdout.includes(`${sessionsDir}/`)) {
+      const { stdout } = await run(["show", unit, "--property=Description", "--value"]);
+      if (!ownsScope(stdout, sessionsDir)) {
         console.warn(`[demo] not stopping ${unit}: its socket is outside ${sessionsDir}`);
         continue;
       }
-      await execFileAsync("systemctl", ["--user", "stop", unit]);
-    } catch {
-      // Already gone.
+      await run(["stop", unit]);
+    } catch (err) {
+      if (/not loaded|not found/i.test(err.stderr ?? "")) continue; // Exited meanwhile.
+      console.warn(`[demo] could not stop ${unit}: ${err.message}`);
+      failed.push(unit);
     }
   }
+  return failed;
 }
 
 export async function startDemo({ quiet = false, keep = false, seed = true } = {}) {
@@ -166,9 +173,13 @@ export async function startDemo({ quiet = false, keep = false, seed = true } = {
   const stop = async () => {
     // Stop the sessions first: they live in systemd scopes, not in the
     // backend's process group, and would otherwise outlive it.
-    await stopDemoScopes(instanceId, sessionsDir);
+    const leaked = await stopDemoScopes(instanceId, sessionsDir);
     await Promise.all([killGroup(backend), killGroup(frontend)]);
     if (keep) return console.log(`[demo] kept ${demoDir}`);
+    if (leaked.length > 0)
+      return console.warn(
+        `[demo] kept ${demoDir}: ${leaked.join(", ")} may still be running; stop them, then remove it`,
+      );
     for (let attempt = 0; attempt < 5; attempt++) {
       await rm(demoDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 }).catch(
         (err) => console.warn(`[demo] cleanup attempt failed: ${err}`),
@@ -195,7 +206,7 @@ export async function startDemo({ quiet = false, keep = false, seed = true } = {
   try {
     // Inside the try so a refusal still removes the scratch dir.
     assertDemoEnv(backendEnv, demoDir, { cwd: runDir });
-    assertDemoEnv(frontendEnv, demoDir);
+    assertDemoEnv(frontendEnv, demoDir, { cwd: path.join(REPO_ROOT, "frontend") });
     console.log(`[demo] scratch dir ${demoDir} (instance ${instanceId})`);
     backend = spawnServer(
       "backend",

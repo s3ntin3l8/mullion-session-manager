@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import net from "node:net";
-import os from "node:os";
 import path from "node:path";
 
 /**
@@ -65,12 +64,28 @@ const SCRATCH_PATHS = [
 ];
 /** Path-ish keys that legitimately point outside the scratch dir. */
 // XDG_RUNTIME_DIR is the systemd user bus location systemd-run needs.
-const PATH_ALLOW = new Set(["PLAYWRIGHT_BROWSERS_PATH", "SCREENSHOTS_OUT_DIR", "XDG_RUNTIME_DIR"]);
+const PATH_ALLOW = new Set(["XDG_RUNTIME_DIR"]);
 const PATH_KEY = /(_DIR|_PATH|_FILE|_ROOTS)$/;
 
-/** Where Playwright keeps its browsers, resolved before HOME is redirected. */
-export function playwrightBrowsersPath(parent = process.env) {
-  return parent.PLAYWRIGHT_BROWSERS_PATH ?? path.join(os.homedir(), ".cache", "ms-playwright");
+// Same pattern as src/services/session-process.ts (DTACH_SOCKET_PATTERN); a
+// test asserts the two agree.
+const DTACH_SOCKET_PATTERN = /dtach\s+-n\s+(?:"([^"]+)"|'([^']+)'|(\S+))/;
+
+/** Mirror of extractDtachSocketPath() in src/services/session-process.ts. */
+export function extractDtachSocketPath(description) {
+  const match = DTACH_SOCKET_PATTERN.exec(description);
+  if (!match) return null;
+  return match[1] ?? match[2] ?? match[3] ?? null;
+}
+
+/**
+ * The backend's own ownership rule (listOwnedScopes in session-process.ts):
+ * a scope belongs to an instance when its dtach socket sits directly in that
+ * instance's SESSIONS_DIR. Teardown stops a unit only when this holds.
+ */
+export function ownsScope(description, sessionsDir) {
+  const socketPath = extractDtachSocketPath(description);
+  return socketPath !== null && path.dirname(socketPath) === path.resolve(sessionsDir);
 }
 
 /** Same derivation as src/services/session-process.ts: sha256(resolved sessionsDir)[0:8]. */
