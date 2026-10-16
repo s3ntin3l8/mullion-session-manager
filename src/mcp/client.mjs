@@ -428,6 +428,31 @@ export class MullionClient {
     }
   }
 
+  /** The calling session's children (or `sessionId`'s, at full scope). Same
+   * own-session fallback as getScrollback below. */
+  async listChildSessions(sessionId) {
+    if (sessionId !== undefined) {
+      return this.controlRequest("sessions.children", { sessionId });
+    }
+    try {
+      return await this.controlRequest("sessions.children", {});
+    } catch (err) {
+      if (!isMissingIdError(err, "'sessionId' is required") || this.ownSessionId === undefined) {
+        throw err;
+      }
+      return this.controlRequest("sessions.children", { sessionId: this.ownSessionId });
+    }
+  }
+
+  /** Kills a child session. Session scope may only name a child of its own
+   * session (control-socket.ts's resolveOwnedSessionId). */
+  async killChildSession(sessionId, cascade) {
+    return this.controlRequest("sessions.kill", {
+      sessionId,
+      ...(cascade !== undefined ? { cascade } : {}),
+    });
+  }
+
   /** Issue #1291 (Hermes review, PR #1292) — same "try direct, retry only
    * on the specific no-pin 400" shape as listActions/spawnChildSession
    * above; see ownSessionId's own doc comment for why. */

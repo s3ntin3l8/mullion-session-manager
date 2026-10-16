@@ -344,6 +344,74 @@ function resolveTargetSessionId(
   return { ok: true, id: provided };
 }
 
+/** Whether `id`'s DB row is still `active`. A hook token outlives its
+ * session's own intent (it stays valid until the process is reaped), so an
+ * op that lets a session act beyond itself re-checks the ROW — the source of
+ * intent; the in-memory PtyManager map can lack a live session (#1518). */
+function sessionRowIsActive(app: FastifyInstance, id: string): boolean {
+  const row = app.db
+    .select({ status: sessions.status })
+    .from(sessions)
+    .where(eq(sessions.id, Number(id)))
+    .get();
+  return row?.status === "active";
+}
+
+/**
+ * Like resolveTargetSessionId, but a session-scoped connection may ALSO name
+ * a child it spawned (`sessions.parent_session_id === its pinned id`) — the
+ * parent→child orchestration surface. Anything else, including a sibling, an
+ * unrelated session, or an id that doesn't exist, is the same 403 (never a
+ * 404, so a session can't probe which ids exist).
+ *
+ * The relationship is read from the DB row, not PtyManager, so a parent can
+ * still inspect a child that has already exited. Acting on a child also
+ * requires the CALLER's own row to still be active (see sessionRowIsActive).
+ * `childOnly` additionally rejects the connection's own session as a target
+ * (used by sessions.kill: a session may not kill itself through this socket).
+ */
+function resolveOwnedSessionId(
+  app: FastifyInstance,
+  conn: ConnectionState,
+  body: Record<string, unknown> | undefined,
+  opts: { childOnly?: boolean } = {},
+): { ok: true; id: string } | { ok: false; reply: ReplyPayload } {
+  if (conn.scope === "full") return resolveTargetSessionId(conn, body);
+
+  const pinnedId = conn.sessionId!;
+  const provided = extractSessionId(body);
+  const forbidden = (error: string): { ok: false; reply: ReplyPayload } => ({
+    ok: false,
+    reply: { ok: false, status: 403, error },
+  });
+
+  if (provided === null || provided === pinnedId) {
+    return opts.childOnly
+      ? forbidden("session-scoped connections may only target a child of their own session")
+      : { ok: true, id: pinnedId };
+  }
+
+  const childId = Number(provided);
+  const childRow = Number.isInteger(childId)
+    ? app.db
+        .select({ parentSessionId: sessions.parentSessionId })
+        .from(sessions)
+        .where(eq(sessions.id, childId))
+        .get()
+    : undefined;
+  if (!childRow || childRow.parentSessionId !== Number(pinnedId)) {
+    return forbidden(
+      "session-scoped connections may only target their own session or its children",
+    );
+  }
+  if (!sessionRowIsActive(app, pinnedId)) {
+    return forbidden("this session is no longer active");
+  }
+  // Canonical form, so a non-canonical spelling ("05", "0x5") that passed the
+  // numeric check above can't reach a downstream route as a different string.
+  return { ok: true, id: String(childId) };
+}
+
 /**
  * Resolves the `sessionId` filter `events.query` should apply — a variant of
  * resolveTargetSessionId's own shape, but for a QUERY rather than a
@@ -356,24 +424,16 @@ function resolveTargetSessionId(
  * its own `sessionIdFilter`, not a new isolation mechanism.
  */
 function resolveEventsSessionFilter(
+  app: FastifyInstance,
   conn: ConnectionState,
   body: Record<string, unknown> | undefined,
 ): { ok: true; sessionId: string | undefined } | { ok: false; reply: ReplyPayload } {
   const provided = extractSessionId(body);
 
   if (conn.scope === "session") {
-    const pinned = conn.sessionId!;
-    if (provided !== null && provided !== pinned) {
-      return {
-        ok: false,
-        reply: {
-          ok: false,
-          status: 403,
-          error: "session-scoped connections may only query their own session's events",
-        },
-      };
-    }
-    return { ok: true, sessionId: pinned };
+    // Own session, or a child of it — never "all sessions".
+    const target = resolveOwnedSessionId(app, conn, body);
+    return target.ok ? { ok: true, sessionId: target.id } : { ok: false, reply: target.reply };
   }
 
   return { ok: true, sessionId: provided ?? undefined };
@@ -494,13 +554,16 @@ type ResolveFn = (ctx: OpContext) => Route | ReplyPayload | Promise<Route | Repl
  *  - `unscoped`: the target is deliberately NOT pinned to the connection
  *    (a host-global read, or an explicit resource id by design) — a
  *    reviewed, greppable opt-out rather than an accident.
+ *  - `owned`: the target may be the connection's own session OR a child it
+ *    spawned (resolveOwnedSessionId) — wider than `pinned`, but still
+ *    bounded by the parent_session_id relationship, never an arbitrary id.
  * `routeOp`'s full-only overload also takes a bare function, because
  * `injectRoute` already structurally enforces full scope there; the
  * session-reachable overload does not, so an op can't list "session" with a
  * resolver that silently pins nothing (#1546).
  */
 export interface DeclaredResolver {
-  readonly target: "pinned" | "unscoped";
+  readonly target: "pinned" | "unscoped" | "owned";
   readonly run: ResolveFn;
 }
 
@@ -509,6 +572,10 @@ export const pinned = (run: ResolveFn): DeclaredResolver => ({ target: "pinned",
 
 /** Declares that `run` deliberately does not pin its target. */
 export const unscoped = (run: ResolveFn): DeclaredResolver => ({ target: "unscoped", run });
+
+/** Declares that `run` limits its target to the connection's own session or
+ * one of that session's children (resolveOwnedSessionId). */
+export const owned = (run: ResolveFn): DeclaredResolver => ({ target: "owned", run });
 
 type FullOnlyScopes = readonly ["full"];
 type SessionReachableScopes =
@@ -556,6 +623,13 @@ const onSession = (fn: (id: string, ctx: OpContext) => Route | ReplyPayload): Re
     return target.ok ? fn(target.id, ctx) : target.reply;
   });
 
+/** Resolver wrapper: own session or one of its children (resolveOwnedSessionId). */
+const onOwnedSession = (fn: (id: string, ctx: OpContext) => Route | ReplyPayload): Resolver =>
+  owned((ctx) => {
+    const target = resolveOwnedSessionId(ctx.app, ctx.conn, ctx.body);
+    return target.ok ? fn(target.id, ctx) : target.reply;
+  });
+
 /** Resolver wrapper: pins the target project (resolveTargetProjectId). */
 const onProject = (fn: (id: string, ctx: OpContext) => Route | ReplyPayload): Resolver =>
   pinned((ctx) => {
@@ -599,7 +673,32 @@ export const OPS: Record<string, OpSpec> = {
   // running inside that session actually uses.
   "sessions.get": routeOp(
     ["full", "session"],
-    onSession((id) => ({ method: "GET", url: `/api/sessions/${enc(id)}` })),
+    onOwnedSession((id) => ({ method: "GET", url: `/api/sessions/${enc(id)}` })),
+  ),
+  // The caller's own children (live and exited) with their derived status —
+  // the parent→child orchestration listing. Session scope is pinned to its
+  // OWN id as the parent (a session can only enumerate its own children);
+  // full scope names the parent via `sessionId`. An optional `status` filter
+  // (active|killed|exited) rides through.
+  "sessions.children": routeOp(
+    ["full", "session"],
+    pinned(({ app, conn, body }) => {
+      const target = resolveTargetSessionId(conn, body);
+      if (!target.ok) return target.reply;
+      // Same "caller must still be active" rule as every other op that
+      // looks at a child (resolveOwnedSessionId) — a killed parent's
+      // lingering hook token must not keep enumerating its children.
+      if (conn.scope === "session" && !sessionRowIsActive(app, target.id)) {
+        return bad(403, "this session is no longer active");
+      }
+      return {
+        method: "GET",
+        url: buildQueryUrl("/api/sessions", {
+          parentSessionId: target.id,
+          status: body?.status,
+        }),
+      };
+    }),
   ),
   // Full scope only (deliberately, not just because REST requires a
   // projectId a session-scoped connection wouldn't have handy) — an agent
@@ -649,16 +748,9 @@ export const OPS: Record<string, OpSpec> = {
       // token stays valid until the process is reaped, so re-check the ROW
       // (the source of intent; the in-memory PtyManager map can lack a live
       // session) and refuse to let a killed/exited parent keep spawning (#1518).
-      if (conn.scope === "session") {
-        const row = app.db
-          .select({ status: sessions.status })
-          .from(sessions)
-          .where(eq(sessions.id, Number(parent.id)))
-          .get();
-        if (row?.status !== "active") {
-          reply({ ok: false, status: 403, error: "the parent session is no longer active" });
-          return;
-        }
+      if (conn.scope === "session" && !sessionRowIsActive(app, parent.id)) {
+        reply({ ok: false, status: 403, error: "the parent session is no longer active" });
+        return;
       }
       const {
         sessionId: _sessionId,
@@ -701,24 +793,27 @@ export const OPS: Record<string, OpSpec> = {
       );
     },
   },
-  // Full scope only — see docs/socket-api.md: a session may not kill
-  // itself (or any other session) through this socket, matching the plan's
-  // per-scope allowlist. `body.sessionId` is always required here (no
-  // implicit "self" the way sessions.get/scrollback/rename have), since
-  // full-scope is the only scope that ever reaches this handler.
-  // `body.cascade` ("detach"|"kill", default "detach" — see
+  // Full scope: any session, `body.sessionId` required (no implicit "self").
+  // Session scope: a CHILD of the caller's own session only — a session may
+  // never kill itself or an unrelated session through this socket
+  // (resolveOwnedSessionId's `childOnly`). A child has no children of its own
+  // (one level of nesting), so `body.cascade` is moot there but still
+  // validated. `body.cascade` ("detach"|"kill", default "detach" — see
   // services/session-lifecycle.ts's killSession) rides through as a querystring on the
   // proxied DELETE, same transport reasoning as that route's own comment.
-  "sessions.kill": routeOp(["full"], ({ body }) => {
-    const id = extractSessionId(body);
-    if (id === null) return bad(400, "'sessionId' is required");
-    const cascade = body?.cascade;
-    if (cascade !== undefined && cascade !== "detach" && cascade !== "kill") {
-      return bad(400, "'cascade' must be 'detach' or 'kill'");
-    }
-    const query = cascade !== undefined ? { cascade } : undefined;
-    return { method: "DELETE", url: buildQueryUrl(`/api/sessions/${enc(id)}`, query) };
-  }),
+  "sessions.kill": routeOp(
+    ["full", "session"],
+    owned(({ app, conn, body }) => {
+      const target = resolveOwnedSessionId(app, conn, body, { childOnly: true });
+      if (!target.ok) return target.reply;
+      const cascade = body?.cascade;
+      if (cascade !== undefined && cascade !== "detach" && cascade !== "kill") {
+        return bad(400, "'cascade' must be 'detach' or 'kill'");
+      }
+      const query = cascade !== undefined ? { cascade } : undefined;
+      return { method: "DELETE", url: buildQueryUrl(`/api/sessions/${enc(target.id)}`, query) };
+    }),
+  ),
   // Reachable at session scope (an agent renaming its own session), same
   // target-id shape as sessions.get above.
   "sessions.rename": routeOp(
@@ -732,7 +827,7 @@ export const OPS: Record<string, OpSpec> = {
   // Reachable at session scope — same target-id shape as sessions.get.
   "sessions.scrollback": routeOp(
     ["full", "session"],
-    onSession((id) => ({ method: "GET", url: `/api/sessions/${enc(id)}/scrollback` })),
+    onOwnedSession((id) => ({ method: "GET", url: `/api/sessions/${enc(id)}/scrollback` })),
   ),
   // Phase 4 (#186) — opens a multiplexed PTY I/O stream on this connection,
   // keyed by this request's own `id`: attachSocketToSession/
@@ -955,8 +1050,8 @@ export const OPS: Record<string, OpSpec> = {
   // events.subscribe's isolation model rather than inventing a new one.
   "events.query": routeOp(
     ["full", "session"],
-    pinned(({ conn, body }) => {
-      const resolved = resolveEventsSessionFilter(conn, body);
+    owned(({ app, conn, body }) => {
+      const resolved = resolveEventsSessionFilter(app, conn, body);
       if (!resolved.ok) return resolved.reply;
       const queryBody: Record<string, unknown> = { ...body };
       if (resolved.sessionId !== undefined) queryBody.sessionId = resolved.sessionId;

@@ -54,7 +54,7 @@ itself.
 ## Commands
 
 ```
-mullion session list|get|create|spawn-child|kill|rename|logs|exec
+mullion session list|get|children|create|spawn-child|kill|rename|logs|exec
 mullion browser navigate|click|fill|type|press|select|check|uncheck|hover|
                 scroll|wait|dialog|get|eval|snapshot|screenshot|find|console|errors|
                 download
@@ -82,7 +82,8 @@ Aliases: `ps` → `session list`, `kill` → `session kill`, `logs` → `session
   inside (or pass `--session <id>`).
 - `session create --project <id> --command <cmd> [--name <n>] [--cwd <path>] [--kind terminal|dock] [--skip-permissions]`
 - `session spawn-child --command <cmd> [--parent <id>] [--name <n>] [--cwd <path>] [--kind terminal|dock] [--skip-permissions] [--initial-prompt <text>]` (Phase 5, issue #193 5.3b) — spawns a real child session (own PTY) of `--parent`, or of the session you're running inside when `--parent` is omitted (falls back to `--session`). No `--project` flag: the project is always derived from the parent. Reachable at session scope (`sessions.spawn_child`), unlike `session create` above — see [`socket-api.md`](socket-api.md) for the full validation rules (same project, one level of nesting, cwd containment — including the sibling-git-worktree exception on a local host — a per-parent live-child cap). `--kind`/`--skip-permissions` only take effect for a full-scope caller (`MULLION_AUTH_TOKEN` set); silently ignored at session scope. `--initial-prompt` is sent as the underlying `seedPrompt` field (matching the MCP `spawn_child_session` tool's `initialPrompt` param name, the clearer name from a caller's point of view) and is honored at both scopes. **No `--model`/`--small-model` flag exists on this command** — only the MCP `spawn_child_session` tool or a raw control-socket client can set the child's model/smallModel; when set there and `--parent`/`parentSessionId` is given, `model` inherits the parent session's own model **for opencode only** (ignored for any other command), and `smallModel` inherits the same way whenever the resolved command is an opencode adapter.
-- `session kill <id> [--cascade detach|kill]` — `detach` (default) leaves any live children of `<id>` running as independent top-level sessions; `kill` cascades to them too.
+- `session children [<id>] [--status active|killed|exited]` — lists the children (live and exited) of `<id>`, or of the session you're running inside when omitted, with their derived `sessionStatus`. Reachable at session scope for your own children only.
+- `session kill <id> [--cascade detach|kill]` — `detach` (default) leaves any live children of `<id>` running as independent top-level sessions; `kill` cascades to them too. At session scope `<id>` must be a child of your own session (killing yourself or an unrelated session is `403`). `session get <child>` and `session logs <child>` work for your children too.
 - `session rename <id> <name>` — or `session rename <name>` with `--session <id>` supplying the target.
 - `session logs <id>` (alias: `logs <id>`) — dumps the session's scrollback buffer (raw bytes, including ANSI escapes) to stdout. One-shot, not a live tail.
 - `session exec <command...> --project <id> [--kill-on-exit]` (alias: `exec`) — creates a session, attaches to it, and forwards your terminal's stdin/resize until the remote program exits or you interrupt (Ctrl-C). **Detaches, never kills, on interrupt** — the session keeps running in the background exactly like any other Mullion session; pass `--kill-on-exit` to kill it instead.

@@ -102,24 +102,26 @@ enough for everything a session needs to do to itself — get/rename/logs,
 the full `browser` surface, `project actions`, `events tail`, and your own
 MCP tools. It is **never** enough for **full-scope** ops:
 
-| Op                                                  | Scope           |
-| --------------------------------------------------- | --------------- |
-| `session get/rename/logs/scrollback`, `attach`      | full or session |
-| `attach` stream frames — `input`/`resize`/`detach`  | full or session |
-| `session list/create/kill`                          | **full only**   |
-| `session spawn-child` / `spawn_child_session`       | full or session |
-| `project actions`                                   | full or session |
-| `project list`, `project dock`                      | **full only**   |
-| `project get_tooling`                               | full or session |
-| `project set_tooling`                               | **full only**   |
-| `preview create/get/delete/list`                    | **full only**   |
-| `dock start/stop/list`                              | **full only**   |
-| `agents list`                                       | **full only**   |
-| `device list/get/action/start/terminate/discovered` | full or session |
-| `device create` (an emulator)                       | full or session |
-| `device delete/pair/pair-and-connect`               | **full only**   |
-| `bundle status/resync/remove`                       | **full only**   |
-| `browser` (any action), `events tail`               | full or session |
+| Op                                                  | Scope                             |
+| --------------------------------------------------- | --------------------------------- |
+| `session get/rename/logs/scrollback`, `attach`      | full or session                   |
+| `session children` / `list_child_sessions`          | full or session                   |
+| `session kill <child>` / `kill_child_session`       | session: children only; full: any |
+| `attach` stream frames — `input`/`resize`/`detach`  | full or session                   |
+| `session list/create`                               | **full only**                     |
+| `session spawn-child` / `spawn_child_session`       | full or session                   |
+| `project actions`                                   | full or session                   |
+| `project list`, `project dock`                      | **full only**                     |
+| `project get_tooling`                               | full or session                   |
+| `project set_tooling`                               | **full only**                     |
+| `preview create/get/delete/list`                    | **full only**                     |
+| `dock start/stop/list`                              | **full only**                     |
+| `agents list`                                       | **full only**                     |
+| `device list/get/action/start/terminate/discovered` | full or session                   |
+| `device create` (an emulator)                       | full or session                   |
+| `device delete/pair/pair-and-connect`               | **full only**                     |
+| `bundle status/resync/remove`                       | **full only**                     |
+| `browser` (any action), `events tail`               | full or session                   |
 
 (This mirrors `docs/socket-api.md`'s Ops table exactly — that's the
 authoritative source if it and this table ever drift; check there for
