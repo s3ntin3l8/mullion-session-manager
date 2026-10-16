@@ -339,6 +339,12 @@ const STREAK_GAP_MS = 4_000;
 // "working" rather than a single spawn-time prompt-draw burst.
 const SUSTAIN_MS = 1_000;
 
+// How long a turn started by an agent prompt (Session.beginAgentTurn) is
+// presumed still in flight if no turn-end signal ever arrives (an interrupted
+// turn may fire no Stop hook). Bounds how long `agentTurnInFlight` can wrongly
+// refuse a prompt+wait.
+const AGENT_TURN_IN_FLIGHT_MAX_MS = 15 * 60_000;
+
 // Output arriving within this window of a user keystroke is treated as echo
 // or a redraw of that input, not autonomous work — see toInfo()'s timing
 // fall-through (issue #97: a TUI's own keystroke echo kept accruing a
@@ -680,6 +686,8 @@ export class Session {
   private lastSeenSeq = 0;
   private lastActivityAt: number | null = null;
   private activityStreakStart: number | null = null;
+  // ms-epoch of the last agent prompt (beginAgentTurn); see agentTurnInFlight.
+  private agentPromptAt: number | null = null;
   // Lazily-built, then reused for every hook message — see emitHookEvent().
   private hookContext: SessionHookContext | null = null;
   // The `now` of the emitHookEvent() call currently dispatching.
@@ -1316,6 +1324,7 @@ export class Session {
     this.questionHeader = null;
     this.questionAt = null;
     this.attention.lastTurnEndedAt = null;
+    this.agentPromptAt = null;
     this.attention.turnEndPingSent = false;
     this.attention.backgroundTasks = [];
     this.attention.backgroundTasksAt = null;
@@ -2884,6 +2893,22 @@ export class Session {
    */
   beginAgentTurn(): void {
     if (this.clearTurnLatches()) this.emitEvent("status_change", { reason: "agent_prompt" });
+    this.agentPromptAt = Date.now();
+  }
+
+  /**
+   * True from an agent prompt (beginAgentTurn) until that turn ends — i.e. a
+   * turn-end signal (`lastTurnEndedAt`) at or after the prompt — or
+   * AGENT_TURN_IN_FLIGHT_MAX_MS passes. The derived status can't answer this:
+   * a just-prompted child reads `idle` until it has produced sustained output,
+   * so a second prompt+wait would otherwise slip past a "busy" check and
+   * match the FIRST turn's end.
+   */
+  get agentTurnInFlight(): boolean {
+    if (this.agentPromptAt === null) return false;
+    if (Date.now() - this.agentPromptAt > AGENT_TURN_IN_FLIGHT_MAX_MS) return false;
+    const ended = this.attention.lastTurnEndedAt;
+    return ended === null || ended < this.agentPromptAt;
   }
 
   /** Tracked DECSET 2004 state — whether the app inside has enabled bracketed paste. */

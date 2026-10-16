@@ -2146,7 +2146,9 @@ describe("controlSocketPlugin (issue #185)", () => {
             delivered: true,
             wait: { timedOut: true },
           });
-          // …and resolve once the agent's NEW turn ends.
+          // The first prompted turn ends (Stop hook)…
+          session.emitHookEvent({ kind: "progress", phase: "done" });
+          // …and a second prompt resolves once the agent's NEW turn ends.
           socket.write(
             `${JSON.stringify({ id: 9, op: "sessions.prompt", body: { sessionId: childId, text: "again", wait: { until: ["done"], timeoutMs: 10_000 } } })}\n`,
           );
@@ -2275,6 +2277,38 @@ describe("controlSocketPlugin (issue #185)", () => {
           socket.destroy();
         });
 
+        it("a second prompt+wait is refused (agent_busy) while the first prompted turn is still in flight, then allowed once it ends", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { childId, pty, socket } = await agentChild();
+          const session = app.pty.get(String(childId))!;
+          // Turn A: a plain prompt (no wait). The child still reads idle — it
+          // has produced no sustained output yet — but a turn is in flight.
+          expect(
+            await ask(socket, "sessions.prompt", { sessionId: childId, text: "turn A" }),
+          ).toMatchObject({ ok: true });
+          expect(session.agentTurnInFlight).toBe(true);
+          pty.writeSpy.mockClear();
+          const refused = await ask(socket, "sessions.prompt", {
+            sessionId: childId,
+            text: "turn B",
+            wait: true,
+          });
+          expect(refused).toMatchObject({ ok: false, status: 409 });
+          expect(refused.error).toMatch(/^agent_busy: /);
+          expect(pty.writeSpy).not.toHaveBeenCalled();
+          // Turn A ends (Stop hook): the child is free again.
+          session.emitHookEvent({ kind: "progress", phase: "done" });
+          expect(session.agentTurnInFlight).toBe(false);
+          const allowed = await ask(socket, "sessions.prompt", {
+            sessionId: childId,
+            text: "turn B",
+            wait: { until: ["awaiting_elicitation"], timeoutMs: 100 },
+          });
+          expect(allowed.result).toMatchObject({ delivered: true, wait: { timedOut: true } });
+          socket.destroy();
+        });
+
         it("409 agent_gone for an exited child", async () => {
           app = await buildApp();
           await app.ready();
@@ -2336,6 +2370,10 @@ describe("controlSocketPlugin (issue #185)", () => {
             [{ text: big }, 413],
             [{ text: "go", submit: "yes" }, 400],
             [{ text: "go", submit: false, wait: true }, 400],
+            [{ text: "go", wait: null }, 400],
+            [{ text: "go", wait: 0 }, 400],
+            [{ text: "go", wait: [] }, 400],
+            [{ text: "go", wait: "yes" }, 400],
             [{ text: "go", wait: { until: ["bogus"] } }, 400],
             [{ text: "go", wait: { timeoutMs: -1 } }, 400],
           ];

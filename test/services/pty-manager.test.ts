@@ -1608,6 +1608,39 @@ describe("PtyManager", () => {
       expect(session.toInfo().attention).toBe(true);
     });
 
+    it("agentTurnInFlight: set by beginAgentTurn, cleared by a later turn end, by the staleness cap, or by a respawn", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      expect(session.agentTurnInFlight).toBe(false);
+
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        vi.setSystemTime(1_000_000);
+        session.beginAgentTurn();
+        expect(session.agentTurnInFlight).toBe(true);
+
+        // A turn end AFTER the prompt ends it…
+        vi.setSystemTime(1_005_000);
+        session.emitHookEvent({ kind: "progress", phase: "done" });
+        expect(session.agentTurnInFlight).toBe(false);
+
+        // …a new prompt starts a fresh one, which the staleness cap bounds.
+        vi.setSystemTime(1_010_000);
+        session.beginAgentTurn();
+        expect(session.agentTurnInFlight).toBe(true);
+        vi.setSystemTime(1_010_000 + 15 * 60_000 + 1);
+        expect(session.agentTurnInFlight).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("tracks the app's bracketed-paste mode", async () => {
       const session = manager.getOrCreate({
         id: "1",

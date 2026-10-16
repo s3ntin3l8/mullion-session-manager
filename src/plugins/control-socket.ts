@@ -667,13 +667,6 @@ const onField = (key: string, fn: (id: string, ctx: OpContext) => Route | ReplyP
 
 const enc = encodeURIComponent;
 
-/** Narrows an arbitrary body value to a record (else an empty one). */
-function asRecord(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
 type WaitBodyOpts = {
   until: Set<string>;
   timeoutMs: number;
@@ -829,10 +822,10 @@ async function refuseIfBlockedOrGone(
   // A prompt that will be WAITED on must start from a quiet agent: a child
   // that is mid-turn queues the paste, so the in-flight turn's end would
   // satisfy the wait before the prompted turn ever ran.
-  if (opts.refuseBusy && snapshot.severity === "busy") {
+  if (opts.refuseBusy && (snapshot.severity === "busy" || app.pty.get(id)?.agentTurnInFlight)) {
     return bad(
       409,
-      `agent_busy: the session is ${snapshot.status} — prompt without \`wait\` to queue the ` +
+      `agent_busy: the session is ${snapshot.status} with a turn in flight — prompt without \`wait\` to queue the ` +
         'message, or let it go quiet first (sessions.wait with until=["done","dormant"]; ' +
         "the default `until` never matches a child that stays busy on background tasks or subagents)",
     );
@@ -976,11 +969,20 @@ export const OPS: Record<string, OpSpec> = {
       let waitOpts: Omit<WaitBodyOpts, "afterSeq"> | null = null;
       const waitArg = body?.wait;
       if (waitArg !== undefined && waitArg !== false) {
+        // Strict like `submit`: only `true` or an options object. null / 0 /
+        // [] / "yes" must not fall through to a default 10-minute wait.
+        if (
+          waitArg !== true &&
+          (typeof waitArg !== "object" || waitArg === null || Array.isArray(waitArg))
+        ) {
+          reply(bad(400, "'wait' must be a boolean or an object"));
+          return;
+        }
         if (!shouldSubmit) {
           reply(bad(400, "'wait' requires 'submit' (nothing to wait for otherwise)"));
           return;
         }
-        const parsed = parseWaitBody(waitArg === true ? {} : asRecord(waitArg), {
+        const parsed = parseWaitBody(waitArg === true ? {} : (waitArg as Record<string, unknown>), {
           allowAfterSeq: false,
         });
         if (!parsed.ok) {
