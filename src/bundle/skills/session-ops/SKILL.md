@@ -25,6 +25,24 @@ Once spawned, you can supervise your children without full scope:
 status (`working`, `finished`, `awaiting_permission`, `exited`, ...);
 `mullion session logs <childId>` / `get_scrollback` (with `sessionId`) reads
 its output; `mullion session kill <childId>` / `kill_child_session` stops it.
+
+To block until a child needs you — instead of polling — use
+`mullion session wait <childId>` / `wait_for_session`: it returns when the
+child finishes its turn, asks for permission/a plan decision/an answer, errors,
+or exits (or on timeout, `timedOut: true` — just call it again). Pass the
+previous result's `eventSeq` as `--after-seq`/`afterSeq` to ignore a status
+you've already seen.
+
+To give a running child a follow-up, use `mullion session prompt <childId>
+"<text>" --wait` / `prompt_session` (`wait: true`): it types the prompt into the
+child's terminal, submits it, and waits for the turn to end. It works for
+Claude Code, Codex and opencode children. It is refused with `409
+agent_blocked` while the child is stuck on a permission/plan/question dialog
+(typing would answer it — resolve that first, e.g. by telling the human), `409
+agent_busy` if you ask to `wait` while the child is mid-turn (call
+`wait_for_session` first), and `501` for a shell child. A prompt you send does
+not clear the child's attention badge for the human.
+
 Only your own children are reachable — a sibling or unrelated session is `403`.
 
 This is a genuine child session — it survives if you're later killed, not a

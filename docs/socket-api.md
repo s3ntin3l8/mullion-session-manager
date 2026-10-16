@@ -131,6 +131,8 @@ split across two cells.
 | `sessions.children`       | full, session   | `GET /api/sessions?parentSessionId=:id`                  | `session children`                                                  | `list_child_sessions`                      |
 | `sessions.create`         | full            | `POST /api/sessions`                                     | `session create`; `dock start`†                                     | `start_dock_session`†                      |
 | `sessions.spawn_child`    | full, session   | `POST /api/sessions`                                     | `session spawn-child`                                               | `spawn_child_session`                      |
+| `sessions.wait`           | full, session§  | — (server-side wait over `GET /api/sessions/:id`)        | `session wait`                                                      | `wait_for_session`                         |
+| `sessions.prompt`         | full, session§  | — (types into the child's PTY)                           | `session prompt`                                                    | `prompt_session`                           |
 | `sessions.kill`           | full, session‡  | `DELETE /api/sessions/:id`                               | `session kill` (alias `kill`); `dock stop`†                         | `stop_dock_session`†, `kill_child_session` |
 | `sessions.rename`         | full, session   | `PATCH /api/sessions/:id`                                | `session rename`                                                    | —                                          |
 | `sessions.scrollback`     | full, session   | `GET /api/sessions/:id/scrollback`                       | `session logs` (alias `logs`)                                       | `get_scrollback`                           |
@@ -286,8 +288,91 @@ optional `body.status` filter) with their derived `sessionStatus`; full scope
 names the parent via `body.sessionId`. `sessions.rename`, `attach`/`input`
 and `browser.*` remain self-only.
 
+§ `sessions.wait` and `sessions.prompt` at session scope may target **a child
+only** (waiting on yourself could only time out; prompting yourself is
+meaningless) — see below.
+
 ‡ `sessions.kill` at session scope may target **a child only** — a session
 may never kill itself or an unrelated session through this socket (`403`).
+
+**`sessions.wait`** blocks _server-side_ until a session's derived status
+matches, so an agent doesn't spend a model turn per poll. Body:
+`sessionId` (required; a child at session scope), `until` (array of
+statuses — e.g. `finished`, `awaiting_permission`, `exited` — and/or
+severities — `done`, `blocked`, `waiting`, `failed`, `gone`, `busy`,
+`dormant`; default `done`/`blocked`/`waiting`/`failed`/`gone`, i.e. anything
+needing attention), `timeoutMs` (default 600000, max 3600000) and `afterSeq`.
+The reply is `{status, severity, detail, timedOut, eventSeq}`; on a timeout
+`timedOut` is `true` and the status fields are the last observed values.
+`afterSeq` is the stale-latch guard: a match only counts once the session has
+emitted an event with `seq` different from `afterSeq`, i.e. a newer one — pass
+a previous reply's `eventSeq` to mean "something newer than what I've seen". A
+`gone` session always matches, and a cursor _ahead_ of the session's current
+head is treated as stale (event seqs reset when the server restarts) and
+ignored rather than wedging the wait. The check re-runs on every session event
+and on a 1 s tick (`idle` and `needs_input` are time-based and emit no event).
+The request stays in flight (counted against the per-connection
+`MAX_INFLIGHT_OPS`) until it resolves, and a closed connection abandons it with
+no reply. At most `MAX_WAITS_PER_CONNECTION` (4) waits may be pending per
+connection (the next gets `429`). A session-scoped waiter must stay `active`
+for the whole wait — if it is killed meanwhile the wait ends with `403`. Up to 2
+consecutive failed status reads are retried on the next tick rather than
+failing the wait. Its reliability tracks the hook coverage of the child's agent
+CLI (`docs/agent-hooks.md`). Clients must raise their own request timeout above
+`timeoutMs` — the `mullion` CLI and MCP client do.
+
+**`sessions.prompt`** types a prompt into a _running_ child agent and
+submits it as a new turn — the follow-up primitive after `sessions.spawn_child`
+(whose first-turn `seedPrompt` only works at launch). Body: `sessionId` (a
+child at session scope), `text` (required, max 32 KB), `submit` (default
+`true`; `false` pastes without pressing Enter), `wait` (`true`, or
+`{until?, timeoutMs?}` with the same meaning as `sessions.wait`; requires
+`submit`). Reply: `{delivered, submitted}` plus, with `wait`, a `wait` object
+(the `sessions.wait` result, or `{error, status}` if the wait itself failed —
+the prompt _was_ delivered either way).
+
+- **Delivery is per-agent and opt-in.** The input is framed by the matched
+  hook adapter's `submitPrompt`: a bracketed paste when the app has enabled it
+  (DECSET 2004, tracked by the terminal-mode tracker), then Enter after a
+  150 ms gap. Without bracketed paste the text is collapsed to one line, since
+  a bare newline would submit mid-prompt — note the tracked mode is forgotten
+  across a backend restart until the app re-asserts it, so a just-reattached
+  session can get a multi-line prompt folded into one line (safe, but lossy).
+  Enabled for **Claude Code, Codex and opencode**; agy, plain shells and
+  unknown CLIs get `501`. It is covered by tests of the framing and the
+  tracked-terminal-mode logic against a fake PTY, **not** yet against each live
+  TUI — re-verify when an agent CLI changes its input handling.
+- **The text is sanitized**: every control character except `\n` and `\t`
+  (notably ESC and the C1 range, incl. the 8-bit CSI), plus bidi marks, is
+  dropped, and U+0085/2028/2029 become newlines — so a prompt cannot end the
+  paste early with `ESC[201~` and have the rest interpreted as keystrokes.
+  Without bracketed paste, tabs become spaces (a raw Tab is a completion
+  keypress). Text that sanitizes to nothing is `400`, never a bare Enter.
+- **Refuses rather than guesses.** `409 agent_blocked` if the child is waiting
+  on a permission / plan / question / review-gate dialog (typing would answer
+  it — resolve that first); this is checked before typing **and again after the
+  150 ms gap** (if a dialog appeared in between, the Enter is withheld and the
+  reply says the text may still be in the child's input box). `409 agent_gone`
+  if it has exited; `409 agent_busy` for a prompt with `wait` while the child is
+  mid-turn (the in-flight turn's end would otherwise satisfy the wait before
+  the prompted turn ran — let it finish with `sessions.wait` first, or send
+  without `wait`, in which case the TUI queues the message); `501` unsupported
+  agent; `503` if the bytes could not be delivered (write-backpressure cap, no
+  live PTY); `413`/`400` for bad text/arguments; `429` if `wait` would exceed
+  `MAX_WAITS_PER_CONNECTION`. A session that is not in this host's PTY manager
+  — including a remote-host session (#1627) — is `409 … not running on this
+host`.
+- **One prompt at a time per session.** Concurrent prompts to one child are
+  serialized (body, gap, Enter each) so they can't interleave into one merged
+  prompt plus a stray empty submit.
+- **Not human input.** The write goes through `Session.writeAgentInput`, which
+  shares the backpressure accounting but skips `write()`'s user-input
+  bookkeeping, so a parent's prompt does **not** acknowledge the child's
+  pending attention badge or notification. It does start a new turn
+  (`Session.beginAgentTurn` clears the previous turn's `finished` latch, stale
+  error and background-task snapshot), and `wait` is armed with the child's
+  event seq from _after_ that — so the wait is satisfied only by the child's
+  own subsequent events, never by Mullion's bookkeeping or the previous turn.
 
 `sessions.create` is **full scope only** — deliberately: an agent inside a
 session has no business spawning an unrelated session. `body.sessionId` is

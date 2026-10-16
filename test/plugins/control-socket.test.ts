@@ -2254,6 +2254,27 @@ describe("controlSocketPlugin (issue #185)", () => {
           socket.destroy();
         });
 
+        it("409 agent_busy for prompt+wait while the child is mid-turn; a plain prompt (queued) is still allowed", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { childId, pty, socket } = await agentChild();
+          const session = app.pty.get(String(childId))!;
+          // A running subagent == status "subagent" (severity busy).
+          session.emitHookEvent({ kind: "subagent", state: "started", agentType: "Explore" });
+          pty.writeSpy.mockClear();
+          const refused = await ask(socket, "sessions.prompt", {
+            sessionId: childId,
+            text: "go",
+            wait: true,
+          });
+          expect(refused).toMatchObject({ ok: false, status: 409 });
+          expect(refused.error).toMatch(/^agent_busy: /);
+          expect(pty.writeSpy).not.toHaveBeenCalled();
+          const queued = await ask(socket, "sessions.prompt", { sessionId: childId, text: "go" });
+          expect(queued).toMatchObject({ ok: true, result: { delivered: true, submitted: true } });
+          socket.destroy();
+        });
+
         it("409 agent_gone for an exited child", async () => {
           app = await buildApp();
           await app.ready();

@@ -106,6 +106,8 @@ MCP tools. It is **never** enough for **full-scope** ops:
 | --------------------------------------------------- | --------------------------------- |
 | `session get/rename/logs/scrollback`, `attach`      | full or session                   |
 | `session children` / `list_child_sessions`          | full or session                   |
+| `session wait` / `wait_for_session`                 | session: children only; full: any |
+| `session prompt` / `prompt_session`                 | session: children only; full: any |
 | `session kill <child>` / `kill_child_session`       | session: children only; full: any |
 | `attach` stream frames — `input`/`resize`/`detach`  | full or session                   |
 | `session list/create`                               | **full only**                     |

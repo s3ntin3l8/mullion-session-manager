@@ -30,13 +30,7 @@ function readAll(stream) {
 
 /** Read all of stdin as a string. Used for --flag/- piped input. */
 function readStdin() {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    process.stdin.setEncoding("utf8");
-    process.stdin.on("data", (chunk) => chunks.push(chunk));
-    process.stdin.on("end", () => resolve(chunks.join("")));
-    process.stdin.on("error", reject);
-  });
+  return readAll(process.stdin);
 }
 
 export class CliUsageError extends Error {}

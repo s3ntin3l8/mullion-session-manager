@@ -808,7 +808,7 @@ async function withPromptLock<T>(key: object, fn: () => Promise<T>): Promise<T> 
 async function refuseIfBlockedOrGone(
   app: FastifyInstance,
   id: string,
-  opts: { note?: string } = {},
+  opts: { note?: string; refuseBusy?: boolean } = {},
 ): Promise<ReplyPayload | null> {
   let snapshot: WaitSnapshot | null;
   try {
@@ -825,6 +825,16 @@ async function refuseIfBlockedOrGone(
   }
   if (snapshot.severity === "gone") {
     return bad(409, `agent_gone: the session is ${snapshot.status}${opts.note ?? ""}`);
+  }
+  // A prompt that will be WAITED on must start from a quiet agent: a child
+  // that is mid-turn queues the paste, so the in-flight turn's end would
+  // satisfy the wait before the prompted turn ever ran.
+  if (opts.refuseBusy && snapshot.severity === "busy") {
+    return bad(
+      409,
+      `agent_busy: the session is ${snapshot.status} — wait for its current turn to end ` +
+        "(sessions.wait) before prompting with `wait`, or prompt without `wait` to queue the message",
+    );
   }
   return null;
 }
@@ -1003,7 +1013,7 @@ export const OPS: Record<string, OpSpec> = {
           if (session !== initial || !session.isAlive) {
             return bad(409, "the session is not running on this host");
           }
-          const refusal = await refuseIfBlockedOrGone(app, id);
+          const refusal = await refuseIfBlockedOrGone(app, id, { refuseBusy: waitOpts !== null });
           if (refusal) return refusal;
           const framing = getAdapterPromptFraming(session.command, text, {
             bracketedPaste: session.bracketedPaste,
