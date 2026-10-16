@@ -25,6 +25,8 @@ export interface TerminalToastsProps {
   copyFailedMessage: string | null;
   copyFailedToastKey: number;
   uploadState: "idle" | "uploading" | "error";
+  // Informational note about a drop (cap hit / entries skipped); null = none.
+  uploadNotice?: string | null;
   // Issue: small panes/floating windows ignoring input — true for as long as
   // this pane's viewport is smaller than the pty's applied grid (pty-
   // manager.ts's MIN_TERMINAL_COLS/ROWS floor), per TerminalPane's own
@@ -51,6 +53,7 @@ export function TerminalToasts({
   copyFailedMessage,
   copyFailedToastKey,
   uploadState,
+  uploadNotice,
   paneTooSmall,
   voiceError,
 }: TerminalToastsProps) {
@@ -71,6 +74,7 @@ export function TerminalToasts({
           {uploadState === "uploading" ? "Uploading…" : "Upload failed"}
         </div>
       )}
+      {uploadNotice && <div className="terminal-upload-indicator">{uploadNotice}</div>}
       {voiceError && <div className="terminal-upload-indicator error">{voiceError}</div>}
       {paneTooSmall && (
         <div className="terminal-too-small-indicator" title="Enlarge this pane to use it normally">

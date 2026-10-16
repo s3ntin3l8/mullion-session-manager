@@ -1293,13 +1293,13 @@ export async function sessionsRoute(app: FastifyInstance) {
         // (session-lifecycle.ts, reached via POST /api/sessions): an
         // unreachable host or an agent-side rejection is a gateway
         // failure, never a 500 — there's no row here to roll back.
-        app.log.error({ err, sessionId, hostId: project.hostId }, "session image upload failed");
+        app.log.error({ err, sessionId, hostId: project.hostId }, "session file upload failed");
         // The local backend tags an unusable `.mullion-uploads` (symlink/file)
         // with statusCode 409 — surface that as the client-visible conflict.
         if ((err as { statusCode?: number }).statusCode === 409) {
           return reply.conflict((err as Error).message);
         }
-        return reply.badGateway("Failed to upload image to host");
+        return reply.badGateway("Failed to upload file to host");
       }
     },
   );

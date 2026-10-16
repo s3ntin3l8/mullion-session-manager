@@ -4407,6 +4407,37 @@ describe("internal routes (agent role, issue #26)", () => {
       await app.close();
     });
 
+    it("does not let an image Content-Type reach generic mode just by adding a name", async () => {
+      const app = await buildApp();
+      const cwd = fs.mkdtempSync(path.join(projectsRoot, "upload-"));
+      const res = await app.inject({
+        method: "POST",
+        url: `/internal/uploads?cwd=${encodeURIComponent(cwd)}&name=a.png`,
+        headers: { authorization: `Bearer ${TOKEN}`, "content-type": "image/png" },
+        payload: Buffer.from("<html>not a png</html>"),
+      });
+      expect(res.statusCode).toBe(400);
+      expect(fs.existsSync(path.join(cwd, ".mullion-uploads"))).toBe(false);
+
+      fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("requires name for an octet-stream upload", async () => {
+      const app = await buildApp();
+      const cwd = fs.mkdtempSync(path.join(projectsRoot, "upload-"));
+      const res = await app.inject({
+        method: "POST",
+        url: `/internal/uploads?cwd=${encodeURIComponent(cwd)}`,
+        headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/octet-stream" },
+        payload: Buffer.from("x"),
+      });
+      expect(res.statusCode).toBe(400);
+
+      fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+    });
+
     it("rejects a request with a valid cwd but neither mime nor name", async () => {
       const app = await buildApp();
       const cwd = fs.mkdtempSync(path.join(projectsRoot, "upload-"));

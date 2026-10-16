@@ -1,11 +1,12 @@
 // Session lifecycle + persisted event history. Split out of the former flat
 // frontend/src/api.ts (PR 22 of the refactoring roadmap).
+import { UPLOAD_IMAGE_EXTENSIONS } from "../../../src/shared/constants.js";
 import { request } from "./client.js";
 import type { Session, EventHistoryPage, Preview, PromoteSessionResponse } from "./types.js";
 
-// Mirrors the backend's MIME_EXTENSIONS (session-upload.ts): the image types
-// it magic-byte-verifies. Any other file goes up as a generic upload.
-const UPLOAD_IMAGE_MIMES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+// The image types the backend magic-byte-verifies (shared, so the two sides
+// can't drift). Any other file goes up as a generic upload.
+const UPLOAD_IMAGE_MIMES = new Set<string>(Object.keys(UPLOAD_IMAGE_EXTENSIONS));
 
 export const sessionsApi = {
   // `status` (perf audit finding A6) lets a caller ask for only e.g. "active"

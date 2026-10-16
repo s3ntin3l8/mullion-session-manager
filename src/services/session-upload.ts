@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { lstatSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { UPLOAD_IMAGE_EXTENSIONS } from "../shared/constants.js";
 
 // Issue #68: a pasted/attached image can't travel down the terminal's own
 // byte stream (no Sixel/Kitty/iTerm2 support, and the CLI running in the PTY
@@ -17,12 +18,7 @@ import path from "node:path";
 // file's own leading signature bytes before anything is written, so a client
 // can't smuggle arbitrary content onto disk (e.g. HTML/script) under a
 // `.png`/`.jpg` extension by lying about Content-Type.
-const MIME_EXTENSIONS: Record<string, string> = {
-  "image/png": ".png",
-  "image/jpeg": ".jpg",
-  "image/gif": ".gif",
-  "image/webp": ".webp",
-};
+const MIME_EXTENSIONS: Record<string, string> = UPLOAD_IMAGE_EXTENSIONS;
 
 /**
  * True only when `buffer` actually starts with `mime`'s real file signature
@@ -80,7 +76,7 @@ export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 export const UPLOAD_SUBDIR = ".mullion-uploads";
 
 export function extensionForMime(mime: string): string | null {
-  return MIME_EXTENSIONS[mime] ?? null;
+  return Object.hasOwn(MIME_EXTENSIONS, mime) ? (MIME_EXTENSIONS[mime] ?? null) : null;
 }
 
 /**

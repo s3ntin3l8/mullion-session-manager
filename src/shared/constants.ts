@@ -90,6 +90,23 @@ export const MAX_TERMINAL_COLS = 4000;
 export const MAX_TERMINAL_ROWS = 1000;
 
 // ---------------------------------------------------------------------------
+// services/session-upload.ts / frontend api/sessions.ts — UPLOAD_IMAGE_EXTENSIONS
+// ---------------------------------------------------------------------------
+//
+// The image types a session upload is verified against (the backend
+// magic-byte-checks each). The frontend uses the keys to decide whether a
+// file travels under its own image mime or as a generic octet-stream upload,
+// so the two sides must agree — if they drifted, an image would silently take
+// the generic route and skip the magic-byte check. `as const` keeps the
+// backend's switch in matchesMagicBytes honest about the literal keys.
+export const UPLOAD_IMAGE_EXTENSIONS = {
+  "image/png": ".png",
+  "image/jpeg": ".jpg",
+  "image/gif": ".gif",
+  "image/webp": ".webp",
+} as const satisfies Record<string, string>;
+
+// ---------------------------------------------------------------------------
 // routes/projects.ts's stackSessionName() / frontend/src/dock/dockHelpers.ts —
 // DOCKER_STACK_SESSION_NAME_PREFIX
 // ---------------------------------------------------------------------------

@@ -37,6 +37,11 @@ describe("session-upload", () => {
   });
 
   describe("extensionForMime", () => {
+    it("does not resolve prototype keys as mime types", () => {
+      expect(extensionForMime("constructor")).toBeNull();
+      expect(extensionForMime("__proto__")).toBeNull();
+    });
+
     it("maps allow-listed image types", () => {
       expect(extensionForMime("image/png")).toBe(".png");
       expect(extensionForMime("image/jpeg")).toBe(".jpg");

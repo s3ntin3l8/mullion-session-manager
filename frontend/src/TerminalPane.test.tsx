@@ -2215,6 +2215,65 @@ describe("TerminalPane image paste/upload (issue #68)", () => {
     warn.mockRestore();
   });
 
+  it("uploads only the first 20 files of a larger drop and says so", async () => {
+    stubFakeWebSocket(true);
+    vi.mocked(api.uploadSessionFile).mockImplementation(async (_id, _blob, name) => ({
+      path: `/p/${name}`,
+    }));
+
+    const { container } = renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    const files = Array.from({ length: 25 }, (_, i) => new File(["x"], `f${i}.txt`));
+    fireEvent.drop(container.firstElementChild as HTMLElement, {
+      dataTransfer: { types: ["Files"], files },
+    });
+
+    await waitFor(() => expect(api.uploadSessionFile).toHaveBeenCalledTimes(20));
+    expect(screen.getByText("Only the first 20 of 25 files were uploaded")).toBeInTheDocument();
+  });
+
+  it("reports skipped folders in a notice", async () => {
+    stubFakeWebSocket(true);
+    vi.mocked(api.uploadSessionFile).mockResolvedValue({ path: "/p/f.txt" });
+
+    const { container } = renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    const dir = new File([], "folder");
+    const file = new File(["y"], "f.txt", { type: "text/plain" });
+    const entry = (isDirectory: boolean, f: File) => ({
+      kind: "file",
+      getAsFile: () => f,
+      webkitGetAsEntry: () => ({ isDirectory }),
+    });
+    fireEvent.drop(container.firstElementChild as HTMLElement, {
+      dataTransfer: {
+        types: ["Files"],
+        files: [dir, file],
+        items: [entry(true, dir), entry(false, file)],
+      },
+    });
+
+    expect(await screen.findByText("Skipped 1 folder(s) or empty file(s)")).toBeInTheDocument();
+  });
+
+  it("clears the uploading indicator when building a request throws synchronously", async () => {
+    stubFakeWebSocket(true);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.mocked(api.uploadSessionFile).mockImplementation(() => {
+      throw new URIError("URI malformed");
+    });
+
+    const { container } = renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    fireEvent.drop(container.firstElementChild as HTMLElement, {
+      dataTransfer: { types: ["Files"], files: [new File(["x"], "bad.txt")] },
+    });
+
+    expect(await screen.findByText("Upload failed")).toBeInTheDocument();
+    expect(screen.queryByText("Uploading…")).not.toBeInTheDocument();
+    warn.mockRestore();
+  });
+
   it("skips dropped directories", async () => {
     stubFakeWebSocket(true);
     vi.mocked(api.uploadSessionFile).mockResolvedValue({ path: "/cwd/.mullion-uploads/u/f.txt" });

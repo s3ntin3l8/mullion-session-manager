@@ -54,15 +54,21 @@ import type { ResizeMessage, GeometryMessage } from "../../src/shared/ws-protoco
 // The backend buffers each upload body in memory, so a multi-file drop is
 // uploaded a few at a time rather than all at once.
 const MAX_CONCURRENT_UPLOADS = 3;
+// Per drop/selection. Concurrency alone doesn't bound the request count or the
+// bytes written to the session cwd, and a huge burst can exhaust the app-wide
+// rate-limit bucket (tripping the client's global 429 breaker for every other
+// dashboard call). The remainder is reported in a toast, not silently dropped.
+const MAX_FILES_PER_UPLOAD = 20;
 
 // Files from a drop, minus folders (which the browser exposes as an empty
 // pseudo-file the upload would just fail on). Walks `items` (kind === "file")
 // rather than index-matching it against `files` — a drag from another app can
 // carry string items too, which would shift the indexes. Falls back to
 // `files` where `items` is unavailable.
-function droppedFiles(dt: DataTransfer): File[] {
-  if (!dt.items || dt.items.length === 0) return Array.from(dt.files);
+function droppedFiles(dt: DataTransfer): { files: File[]; skipped: number } {
+  if (!dt.items || dt.items.length === 0) return { files: Array.from(dt.files), skipped: 0 };
   const out: File[] = [];
+  let skipped = 0;
   for (const item of Array.from(dt.items)) {
     if (item.kind !== "file") continue;
     const file = item.getAsFile();
@@ -71,10 +77,13 @@ function droppedFiles(dt: DataTransfer): File[] {
     // except by its zero size and empty type — and an empty file is not worth
     // uploading anyway.
     const entry = item.webkitGetAsEntry?.();
-    if (entry ? entry.isDirectory : file.size === 0 && file.type === "") continue;
+    if (entry ? entry.isDirectory : file.size === 0 && file.type === "") {
+      skipped++;
+      continue;
+    }
     out.push(file);
   }
-  return out;
+  return { files: out, skipped };
 }
 
 // Independent code review, PR #708 — mirrors routes/terminal.ts's own
@@ -303,6 +312,9 @@ export function TerminalPane(props: {
   // so silently doing nothing while it's in flight (or on failure) would
   // read as broken rather than slow.
   const [uploadState, setUploadState] = useState<"idle" | "uploading" | "error">("idle");
+  // A short informational note about a drop (files over the per-drop cap, or
+  // folders/empty entries skipped) — not an error, so separate from uploadState.
+  const [uploadNotice, setUploadNotice] = useState<string | null>(null);
   // Set from the server's GeometryMessage echo (mount effect below) whenever
   // the applied pty geometry exceeds what actually fits this pane's own
   // container — i.e. the pane is smaller than pty-manager.ts's
@@ -370,7 +382,7 @@ export function TerminalPane(props: {
   // image" button's file input handler below, same pattern as retryRef/
   // pasteHandlerRef — the button lives in this component's render, but the
   // logic needs the mount effect's closures (pasteToTerminal, `destroyed`).
-  const uploadImageRef = useRef<(files: Blob[]) => void>(() => {});
+  const uploadFilesRef = useRef<(files: Blob[]) => void>(() => {});
   // Exposes a manual "Retry now" (design's Disconnected state) without
   // remounting the terminal/xterm instance itself — `connect`/backoff live
   // inside the effect below (closed over the real WS + timer), so this ref
@@ -529,7 +541,7 @@ export function TerminalPane(props: {
   // for the full design. useVoiceDictation owns the Web Speech state
   // machine; it has no reference to the live xterm Terminal instance, so
   // insertion goes through voiceInsertRef, same mount-effect-private-
-  // closure pattern as uploadImageRef above (see that ref's own comment).
+  // closure pattern as uploadFilesRef above (see that ref's own comment).
   const voiceInsertRef = useRef<(text: string) => void>(() => {});
   const voiceController = useVoiceDictation({
     enabled: terminalSettings.voice.enabled,
@@ -1513,11 +1525,17 @@ export function TerminalPane(props: {
     // any of them is reported once they all have.
     let batchesInFlight = 0;
     let sawUploadFailure = false;
-    function uploadAndInjectFiles(files: Blob[]): void {
-      if (files.length === 0) return;
+    function uploadAndInjectFiles(allFiles: Blob[]): void {
+      if (allFiles.length === 0) return;
+      const files = allFiles.slice(0, MAX_FILES_PER_UPLOAD);
+      if (allFiles.length > files.length) {
+        setUploadNotice(`Only the first ${files.length} of ${allFiles.length} files were uploaded`);
+      }
       batchesInFlight++;
       setUploadState("uploading");
-      const uploadOne = (file: Blob) =>
+      // async: a synchronous throw (e.g. encodeURIComponent on an unpaired
+      // surrogate in a file name) must reject, not escape Promise.all's setup.
+      const uploadOne = async (file: Blob) =>
         api.uploadSessionFile(
           props.params.sessionId,
           file,
@@ -1557,7 +1575,7 @@ export function TerminalPane(props: {
         }
       });
     }
-    uploadImageRef.current = uploadAndInjectFiles;
+    uploadFilesRef.current = uploadAndInjectFiles;
 
     // Checks the clipboard for an image entry (a screenshot or copied photo,
     // as opposed to copied text) and, if found, routes it through the upload
@@ -1997,7 +2015,7 @@ export function TerminalPane(props: {
       // The copy/scrollback sheet shows this session's buffer — never carry
       // it over to the next session this pane is switched to.
       setCopyModeSheet(null);
-      uploadImageRef.current = () => {};
+      uploadFilesRef.current = () => {};
       voiceInsertRef.current = () => {};
       // Drops any window/document listeners left by an in-progress hold —
       // without this, unmounting mid-hold (e.g. closing the pane while
@@ -2315,6 +2333,13 @@ export function TerminalPane(props: {
     return () => clearTimeout(timer);
   }, [uploadState]);
 
+  // Auto-dismisses the upload notice.
+  useEffect(() => {
+    if (uploadNotice === null) return;
+    const timer = setTimeout(() => setUploadNotice(null), 4000);
+    return () => clearTimeout(timer);
+  }, [uploadNotice]);
+
   // Desktop drop-to-attach. Any file drag is claimed (preventDefault) so a
   // stray drop never navigates the page; only where the attach affordances are
   // enabled (read via the ref, like attachImage) does it highlight and upload.
@@ -2355,8 +2380,9 @@ export function TerminalPane(props: {
         e.preventDefault();
         setDragActive(false);
         if (!inputAffordancesRef.current) return;
-        const files = droppedFiles(e.dataTransfer);
-        if (files.length > 0) uploadImageRef.current(files);
+        const { files, skipped } = droppedFiles(e.dataTransfer);
+        if (skipped > 0) setUploadNotice(`Skipped ${skipped} folder(s) or empty file(s)`);
+        if (files.length > 0) uploadFilesRef.current(files);
       }}
     >
       {dragActive && <div className="terminal-drop-overlay">Drop files to attach</div>}
@@ -2401,7 +2427,7 @@ export function TerminalPane(props: {
           const files = Array.from(event.target.files ?? []);
           // Reset so selecting the same file again still fires onChange.
           event.target.value = "";
-          if (files.length > 0) uploadImageRef.current(files);
+          if (files.length > 0) uploadFilesRef.current(files);
         }}
       />
       {(props.inputAffordances ?? true) && !isCoarsePointer && (
@@ -2538,6 +2564,7 @@ export function TerminalPane(props: {
         copyFailedMessage={copyFailedMessage}
         copyFailedToastKey={copyFailedToastKey}
         uploadState={uploadState}
+        uploadNotice={uploadNotice}
         paneTooSmall={paneTooSmall}
         voiceError={voiceController.error}
       />

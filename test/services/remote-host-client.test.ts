@@ -1184,7 +1184,7 @@ describe("RemoteHostClient", () => {
     );
   });
 
-  it("gives uploadImage a longer timeout than an ordinary request (issue #68 — up to 10 MiB over a WAN link)", async () => {
+  it("gives uploadImage a longer timeout than an ordinary request (issue #68 — up to 25 MiB over a WAN link)", async () => {
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
     fetchMock.mockImplementation(() =>
       Promise.resolve(jsonResponse(200, { path: "/x/.mullion-uploads/y.png" })),

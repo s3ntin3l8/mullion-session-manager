@@ -2307,11 +2307,17 @@ export async function internalRoutes(app: FastifyInstance) {
       if (mime && name) return reply.badRequest("mime and name are mutually exclusive");
       const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
       if (resolvedCwd === null) return;
-      if (!mime) {
-        if (!name) return reply.badRequest("either mime or name query param is required");
+      // Same signal as POST /api/sessions/:id/uploads: generic mode is chosen
+      // by Content-Type, so an image Content-Type can never reach it (and skip
+      // the magic-byte check) just by adding a `name`.
+      const isGenericFile =
+        request.headers["content-type"]?.split(";")[0]?.trim() === "application/octet-stream";
+      if (isGenericFile) {
+        if (!name) return reply.badRequest("name query param is required for a generic upload");
         if (!Buffer.isBuffer(request.body)) return reply.badRequest("expected a raw file body");
         return { path: saveSessionFileUpload(resolvedCwd, request.body, name) };
       }
+      if (!mime) return reply.badRequest("mime query param is required for an image upload");
       if (!extensionForMime(mime)) return reply.badRequest(`Unsupported image type: ${mime}`);
       if (!Buffer.isBuffer(request.body)) return reply.badRequest("expected a raw image body");
       // Content check, not just Content-Type: rejects a body whose actual

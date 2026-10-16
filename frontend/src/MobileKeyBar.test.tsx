@@ -215,7 +215,7 @@ describe("MobileKeyBar", () => {
   it("shows the attach-image key in row 1 and routes it through the terminal handle", async () => {
     const user = userEvent.setup();
     render(<MobileKeyBar sessionId={SESSION_ID} />);
-    await user.click(screen.getByRole("button", { name: "Attach image" }));
+    await user.click(screen.getByRole("button", { name: "Attach files" }));
     expect(handle.attachImage).toHaveBeenCalledTimes(1);
   });
 
