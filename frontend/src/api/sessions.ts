@@ -1,7 +1,12 @@
 // Session lifecycle + persisted event history. Split out of the former flat
 // frontend/src/api.ts (PR 22 of the refactoring roadmap).
+import { UPLOAD_IMAGE_EXTENSIONS } from "../../../src/shared/constants.js";
 import { request } from "./client.js";
 import type { Session, EventHistoryPage, Preview, PromoteSessionResponse } from "./types.js";
+
+// The image types the backend magic-byte-verifies (shared, so the two sides
+// can't drift). Any other file goes up as a generic upload.
+const UPLOAD_IMAGE_MIMES = new Set<string>(Object.keys(UPLOAD_IMAGE_EXTENSIONS));
 
 export const sessionsApi = {
   // `status` (perf audit finding A6) lets a caller ask for only e.g. "active"
@@ -159,17 +164,24 @@ export const sessionsApi = {
   ackAttention: (id: number) =>
     request<void>(`/api/sessions/${id}/attention/ack`, { method: "POST" }),
 
-  // Issue #68: uploads a pasted/attached image (Blob straight off the
-  // clipboard or a file input — never re-encoded) so the backend can write
-  // it under this session's own cwd and hand back the path to inject into
-  // the terminal. request()'s own header logic already sets Content-Type
-  // from init.headers when present, overriding its "application/json"
-  // default — passing the blob's own type here is enough, no separate
-  // raw-body fetch needed.
-  uploadSessionImage: (sessionId: number, blob: Blob) =>
+  // Issue #68: uploads a pasted/attached/dropped file (Blob straight off the
+  // clipboard, a file input, or a drop — never re-encoded) so the backend can
+  // write it under this session's own cwd and hand back the path to inject
+  // into the terminal. Images in a format the backend recognizes travel under
+  // their own mime (and get a magic-byte check there); anything else goes as
+  // application/octet-stream with the original name in X-Upload-Filename
+  // (URI-encoded — header values are ASCII-only), which the backend
+  // sanitizes. request()'s own header logic already sets Content-Type from
+  // init.headers when present, overriding its "application/json" default.
+  uploadSessionFile: (sessionId: number, blob: Blob, name?: string) =>
     request<{ path: string }>(`/api/sessions/${sessionId}/uploads`, {
       method: "POST",
       body: blob,
-      headers: { "Content-Type": blob.type },
+      headers: UPLOAD_IMAGE_MIMES.has(blob.type)
+        ? { "Content-Type": blob.type }
+        : {
+            "Content-Type": "application/octet-stream",
+            "X-Upload-Filename": encodeURIComponent(name ?? "file"),
+          },
     }),
 };

@@ -35,7 +35,7 @@ export const NONCE_TTL_MS = DRIFT_WINDOW_MS * 2;
 // signature (bodyHashed: false in the canonical string below): bodies too
 // large or too streaming-oriented to synchronously buffer and hash before
 // auth is decided — a dev-server preview response/request body (up to
-// MAX_PREVIEW_BODY_BYTES) and an image upload (MAX_UPLOAD_BYTES). Exported
+// MAX_PREVIEW_BODY_BYTES) and a file upload (MAX_UPLOAD_BYTES). Exported
 // so both sides derive the SAME bodyHashed verdict from the SAME request
 // path independently: remote-host-client.ts (deciding what to hash before
 // sending) and routes/internal.ts (deciding what to expect on receipt).

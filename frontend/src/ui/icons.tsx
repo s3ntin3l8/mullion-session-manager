@@ -550,7 +550,7 @@ export function GlobeIcon(props: IconProps) {
   );
 }
 
-// "Attach image" control (issue #68) — the classic picture-frame glyph, a
+// "Attach files" control (issue #68) — the classic picture-frame glyph, a
 // generic line glyph matching this file's usual convention (no design-file
 // source for this one — it's a new, small utility affordance, not a ported
 // element).

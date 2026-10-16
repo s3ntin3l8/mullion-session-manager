@@ -72,7 +72,7 @@ describe("TerminalToasts", () => {
         paneTooSmall={false}
       />,
     );
-    expect(screen.getByText("Uploading image…")).toBeInTheDocument();
+    expect(screen.getByText("Uploading…")).toBeInTheDocument();
   });
 
   it("renders an error toast with the error class", () => {
@@ -86,7 +86,7 @@ describe("TerminalToasts", () => {
         paneTooSmall={false}
       />,
     );
-    const toast = screen.getByText("Image upload failed");
+    const toast = screen.getByText("Upload failed");
     expect(toast).toHaveClass("error");
   });
 
@@ -102,7 +102,7 @@ describe("TerminalToasts", () => {
       />,
     );
     expect(screen.getByText("Copied")).toBeInTheDocument();
-    expect(screen.getByText("Uploading image…")).toBeInTheDocument();
+    expect(screen.getByText("Uploading…")).toBeInTheDocument();
   });
 
   // Issue: small panes/floating windows ignoring input — a standing
@@ -122,7 +122,7 @@ describe("TerminalToasts", () => {
     );
     expect(screen.getByText("Pane too small")).toBeInTheDocument();
     expect(screen.getByText("Copied")).toBeInTheDocument();
-    expect(screen.getByText("Uploading image…")).toBeInTheDocument();
+    expect(screen.getByText("Uploading…")).toBeInTheDocument();
   });
 
   it("does not render the too-small hint when the pane fits", () => {

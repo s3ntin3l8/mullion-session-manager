@@ -6,7 +6,7 @@ import type { SessionLiveness } from "./session-process.js";
 import type { CgroupProcess } from "./cgroup-inventory.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { getRemoteHostClient, HostRequestError, type SpawnResult } from "./remote-host-client.js";
-import { saveSessionUpload } from "./session-upload.js";
+import { saveSessionFileUpload, saveSessionUpload } from "./session-upload.js";
 import { taskReviewFindingsPath, taskCommitTitlePath } from "./task-prompt.js";
 import {
   checkoutBranchWorktree,
@@ -162,6 +162,10 @@ export interface SessionBackend {
   // on whichever host actually runs that session's CLI, since a file path
   // is only useful to a process that can open it — and returns that path.
   uploadImage(cwd: string, buffer: Buffer, mime: string): Promise<{ path: string }>;
+  // Generic-file counterpart to uploadImage (drag & drop of any file type):
+  // same placement under the session's cwd, keeping a sanitized copy of the
+  // original file name.
+  uploadFile(cwd: string, buffer: Buffer, name: string): Promise<{ path: string }>;
   // Issue #178 — delivers a human decision to a pending review gate, on
   // whichever host is actually holding the open hook connection (only that
   // process's hooks.ts can write the reply — see that file's
@@ -415,6 +419,10 @@ class LocalBackend implements SessionBackend {
     return { path: saveSessionUpload(cwd, buffer, mime) };
   }
 
+  async uploadFile(cwd: string, buffer: Buffer, name: string): Promise<{ path: string }> {
+    return { path: saveSessionFileUpload(cwd, buffer, name) };
+  }
+
   async resolveReviewGate(
     id: string,
     gateId: string | undefined,
@@ -616,6 +624,10 @@ class RemoteBackend implements SessionBackend {
 
   uploadImage(cwd: string, buffer: Buffer, mime: string): Promise<{ path: string }> {
     return this.client.uploadImage(cwd, buffer, mime);
+  }
+
+  uploadFile(cwd: string, buffer: Buffer, name: string): Promise<{ path: string }> {
+    return this.client.uploadFile(cwd, buffer, name);
   }
 
   resolveReviewGate(
