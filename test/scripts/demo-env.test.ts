@@ -198,9 +198,31 @@ describe("stopDemoScopes", () => {
 
   it("treats systemctl without a user bus as nothing to stop", async () => {
     const { run } = fakeSystemctl({
-      "show-environment": fail("Failed to connect to bus: No such file or directory", { code: 1 }),
+      "show-environment": fail("Command failed: systemctl --user show-environment", {
+        code: 1,
+        stderr: "Failed to connect to bus: No such file or directory",
+      }),
     });
     expect(await stopDemoScopes(id, sessionsDir, run)).toEqual([]);
+  });
+
+  it("reports a bus that times out instead of assuming there are no scopes", async () => {
+    const { run, stopped } = fakeSystemctl({
+      "show-environment": fail("Command failed: systemctl --user show-environment", {
+        killed: true,
+        signal: "SIGTERM",
+      }),
+    });
+    expect(await stopDemoScopes(id, sessionsDir, run)).toEqual(["crs-session-*"]);
+    expect(stopped).toEqual([]);
+  });
+
+  it("skips a unit that exited between the listing and its show", async () => {
+    const gone = `crs-session-${id}-5`;
+    descriptions[gone] = `${gone}\n`; // what systemd prints for a gone unit
+    const { run, stopped } = fakeSystemctl({}, [own, gone]);
+    expect(await stopDemoScopes(id, sessionsDir, run)).toEqual([]);
+    expect(stopped).toEqual([own]);
   });
 
   it("reports a failed listing when the bus is up", async () => {

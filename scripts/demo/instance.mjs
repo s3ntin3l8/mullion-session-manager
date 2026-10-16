@@ -27,8 +27,8 @@ import { seedDemo } from "./seed.mjs";
  * one mkdtemp dir, loopback-only dedicated ports that must be free, and a
  * backend started from a scratch directory without a .env. Demo sessions run
  * as `crs-session-<instanceId>-*` scopes, where instanceId hashes the scratch
- * SESSIONS_DIR, so they can't collide with a real instance's units; teardown
- * stops exactly those.
+ * SESSIONS_DIR. Teardown does not trust that prefix: it stops a scope only when
+ * its dtach socket sits in the demo's SESSIONS_DIR (see stopDemoScopes).
  */
 
 const execFileAsync = promisify(execFile);
@@ -79,7 +79,14 @@ async function waitForHttp(url, timeoutMs = 90_000) {
   throw new Error(`Timed out waiting for ${url}${lastError ? `: ${lastError}` : ""}`);
 }
 
-const systemctl = (args) => execFileAsync("systemctl", ["--user", ...args]);
+// Bounded like the backend's own calls (SYSTEMCTL_TIMEOUT_MS in
+// src/services/systemctl-runner.ts, #1232): a wedged user bus must not hang
+// teardown, and with it Ctrl-C on `make demo`.
+const systemctl = (args) => execFileAsync("systemctl", ["--user", ...args], { timeout: 5_000 });
+
+/** No systemctl, or systemctl without a user bus (CI, a plain container). */
+const noUserBus = (err) =>
+  err.code === "ENOENT" || /Failed to connect to bus/i.test(`${err.stderr ?? ""} ${err.message}`);
 
 /**
  * Stops the demo's own session scopes. Every `crs-session-*` scope is checked
@@ -94,19 +101,22 @@ const systemctl = (args) => execFileAsync("systemctl", ["--user", ...args]);
  * keep the scratch dir instead of deleting it under live scopes.
  */
 export async function stopDemoScopes(instanceId, sessionsDir, run = systemctl) {
-  // Same probe as isSystemctlUserAvailable() in session-process.ts: without a
-  // reachable user bus (no systemctl, CI, a plain container) the backend can't
-  // have created scopes, so there is nothing to stop.
+  // Same probe as isSystemctlUserAvailable() in session-process.ts. Without a
+  // user bus at all the backend can't have created scopes, so there is nothing
+  // to stop; any other failure (a timeout, a reset bus) may hide live ones.
   try {
     await run(["show-environment"]);
-  } catch {
-    return [];
+  } catch (err) {
+    if (noUserBus(err)) return [];
+    console.warn(`[demo] could not reach the systemd user bus: ${err.message}`);
+    return ["crs-session-*"];
   }
   let units;
   try {
     const { stdout } = await run([
       "list-units",
       "crs-session-*",
+      "--type=scope",
       "--all",
       "--no-legend",
       "--plain",
@@ -125,6 +135,8 @@ export async function stopDemoScopes(instanceId, sessionsDir, run = systemctl) {
   for (const unit of units) {
     try {
       const { stdout } = await run(["show", unit, "--property=Description", "--value"]);
+      // For a unit that is gone, systemd echoes its name as the Description.
+      if (stdout.trim() === unit) continue; // Exited since the listing.
       if (ownsScope(stdout, sessionsDir)) {
         await run(["stop", unit]);
       } else if (unit.startsWith(ownNamespace)) {
