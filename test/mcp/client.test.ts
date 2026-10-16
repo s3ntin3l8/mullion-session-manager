@@ -329,7 +329,7 @@ describe("MullionClient (issue #271)", () => {
       await expect(noEnv.listChildSessions()).rejects.toThrow("'sessionId' is required");
     });
 
-    it("killChildSession sends sessions.kill with sessionId and an optional cascade", async () => {
+    it("killChildSession sends sessions.kill with just the sessionId", async () => {
       const bodies: unknown[] = [];
       const socketPath = await startControlServer((msg, socket) => {
         expect(msg.op).toBe("sessions.kill");
@@ -338,8 +338,7 @@ describe("MullionClient (issue #271)", () => {
       });
       const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
       await client.killChildSession("9");
-      await client.killChildSession("9", "kill");
-      expect(bodies).toEqual([{ sessionId: "9" }, { sessionId: "9", cascade: "kill" }]);
+      expect(bodies).toEqual([{ sessionId: "9" }]);
     });
 
     it("stopDockSession sends sessions.kill with the given sessionId", async () => {

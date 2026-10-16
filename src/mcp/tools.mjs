@@ -335,9 +335,19 @@ const listChildSessions = {
     "status (e.g. working, finished, awaiting_permission, exited). Works from inside a normal " +
     "agent session (session scope). Use it after spawn_child_session to see what each child is " +
     "doing; read a child's output with get_scrollback.",
-  inputSchema: { type: "object", properties: {} },
-  async handler(_args, client) {
-    const result = await client.listChildSessions();
+  inputSchema: {
+    type: "object",
+    properties: {
+      sessionId: {
+        type: "string",
+        description:
+          "The parent session whose children to list. Defaults to the calling session; naming " +
+          "another session's id requires full scope (MULLION_AUTH_TOKEN).",
+      },
+    },
+  },
+  async handler(args, client) {
+    const result = await client.listChildSessions(args?.sessionId);
     return JSON.stringify(result);
   },
 };

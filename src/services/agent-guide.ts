@@ -182,7 +182,7 @@ export function buildAgentGuidePointer(guidePath: string, authEnabled: boolean):
   return [
     `Mullion agent guide available at ${guidePath}.`,
     authEnabled
-      ? "You have session-scope control-socket access via MULLION_HOOK_TOKEN; MULLION_AUTH_TOKEN is never present in a session. Full scope ops (session list/create/kill, dock control, previews) will 403 — that's expected."
+      ? "You have session-scope control-socket access via MULLION_HOOK_TOKEN; MULLION_AUTH_TOKEN is never present in a session. Full scope ops (session list/create, killing a session that is not your own child, dock control, previews) will 403 — that's expected."
       : "This host has in-app auth disabled, so every control-socket connection (including yours) resolves to full scope — session list/create/kill, dock control, and previews are all reachable, not just session-scoped ops.",
   ].join("\n");
 }

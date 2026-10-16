@@ -492,7 +492,7 @@ export function formatBrowserResult(action, result) {
 /** Enriches the server's flat "not permitted for this connection's scope"
  * 403 with what actually went wrong and how to fix it — the scope trap a
  * session-scoped connection (every session's own MULLION_HOOK_TOKEN) hits
- * on any full-scope-only op (sessions.list/create/kill, projects.list/dock,
+ * on any full-scope-only op (sessions.list/create, projects.list/dock,
  * previews.*, agents.list). A bare "403 forbidden" here would send an agent
  * running inside a session down a debugging rabbit hole for something
  * that's actually just "this op needs an operator credential." */

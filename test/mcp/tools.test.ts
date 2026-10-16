@@ -221,7 +221,9 @@ describe("session/project/preview tool handlers (issue #134 part 2)", () => {
     const tool = TOOLS.find((t) => t.name === "list_child_sessions")!;
     const listChildSessions = vi.fn().mockResolvedValue([{ id: 7, sessionStatus: "working" }]);
     const text = await tool.handler({}, { listChildSessions });
-    expect(listChildSessions).toHaveBeenCalledWith();
+    expect(listChildSessions).toHaveBeenCalledWith(undefined);
+    await tool.handler({ sessionId: "4" }, { listChildSessions });
+    expect(listChildSessions).toHaveBeenLastCalledWith("4");
     expect(JSON.parse(text)).toEqual([{ id: 7, sessionStatus: "working" }]);
   });
 

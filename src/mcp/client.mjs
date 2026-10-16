@@ -446,11 +446,9 @@ export class MullionClient {
 
   /** Kills a child session. Session scope may only name a child of its own
    * session (control-socket.ts's resolveOwnedSessionId). */
-  async killChildSession(sessionId, cascade) {
-    return this.controlRequest("sessions.kill", {
-      sessionId,
-      ...(cascade !== undefined ? { cascade } : {}),
-    });
+  async killChildSession(sessionId) {
+    // No `cascade`: a child never has children of its own (one level of nesting).
+    return this.controlRequest("sessions.kill", { sessionId });
   }
 
   /** Issue #1291 (Hermes review, PR #1292) — same "try direct, retry only

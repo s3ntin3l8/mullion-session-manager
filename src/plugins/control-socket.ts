@@ -418,10 +418,11 @@ function resolveOwnedSessionId(
  * single-target op: full scope may omit `sessionId` entirely (meaning
  * "every session"), where every other session-targeted op requires it.
  * Session scope still can't broaden its own view: it may omit `sessionId`
- * (defaulting to its own pinned session, same as sessions.get) or name that
- * exact session explicitly, but never a different one or "all sessions" —
- * reusing the same pin-enforcement `events.subscribe` already applies via
- * its own `sessionIdFilter`, not a new isolation mechanism.
+ * (defaulting to its own pinned session, same as sessions.get), name that
+ * exact session, or name one of its own CHILDREN (resolveOwnedSessionId) —
+ * but never an unrelated session or "all sessions". `events.subscribe`
+ * (live stream) is still pinned to the connection's own session only
+ * (#1626 tracks extending it to children).
  */
 function resolveEventsSessionFilter(
   app: FastifyInstance,

@@ -462,7 +462,7 @@ one session, sufficient for everything a session-scoped agent needs to do to
 itself (`session get/rename/logs`, the full `browser` subcommand,
 `project actions`, `events tail`, `history` — restricted to its own
 session's events). It is never sufficient for **full-scope**
-ops — `session list/create/kill`, `project dock`, `preview *`, and
+ops — `session list/create`, `session kill` of anything but your own child, `project dock`, `preview *`, and
 `mcp`-adjacent listing — because `MULLION_AUTH_TOKEN` is deliberately
 stripped from every spawned session's environment
 (`src/services/session-env.ts`) so a session can never mint itself operator

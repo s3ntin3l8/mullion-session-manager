@@ -20,8 +20,8 @@ grants you anything.
 
 `MULLION_HOOK_TOKEN` gives you **session scope**: everything you need to act
 on yourself (get/rename/logs, the `browser` surface, `project actions`, your
-own MCP tools), but full-scope ops (`session list/create/kill`, `dock
-start/stop/list`, `preview *`, `project list/dock`, `agents list`) will 403 —
+own MCP tools), but full-scope ops (`session list/create`, `session kill` of anything but your own
+child, `dock start/stop/list`, `preview *`, `project list/dock`, `agents list`) will 403 —
 that's expected, not a bug. Run `mullion config` to see your resolved scope.
 One exception: if this host has in-app auth disabled entirely, every
 connection resolves to full scope regardless.

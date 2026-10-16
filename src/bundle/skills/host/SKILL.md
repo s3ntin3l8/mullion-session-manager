@@ -29,7 +29,7 @@ defaults to you.
 session. Enough for get/rename/logs on yourself, the full `browser` surface,
 `project actions`, reading (not writing) `project tooling`, and most of the
 `device` surface. **Never** enough for full-scope ops: `session
-list/create/kill`, `dock start/stop/list`, `preview *`, `project list/dock`,
+list/create`, `session kill` of anything but your own child, `dock start/stop/list`, `preview *`, `project list/dock`,
 writing `project tooling`, `agents list`, `device delete/pair/pair-and-connect`,
 `bundle status/resync/remove` — these 403, and that's expected, not a bug.
 `session spawn-child` IS session-reachable (it targets a child of yourself,
