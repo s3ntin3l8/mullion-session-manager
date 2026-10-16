@@ -68,6 +68,7 @@ import { projectUrlsRoute } from "./routes/project-urls.js";
 import { agentRulesRoute } from "./routes/agent-rules.js";
 import { projectFilesRoute } from "./routes/project-files.js";
 import { projectToolingRoute } from "./routes/project-tooling.js";
+import { reviewRequestRoute } from "./routes/review-request.js";
 import { projectSetupRoute } from "./routes/project-setup.js";
 import { dockConfigRoute } from "./routes/dock-config.js";
 import { skillsRoute } from "./routes/skills.js";
@@ -568,6 +569,7 @@ export async function buildApp() {
   await app.register(agentRulesRoute);
   await app.register(projectFilesRoute);
   await app.register(projectToolingRoute);
+  await app.register(reviewRequestRoute);
   await app.register(projectSetupRoute);
   await app.register(dockConfigRoute);
   await app.register(skillsRoute);

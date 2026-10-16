@@ -227,6 +227,13 @@ export const DEFAULT_SETTINGS: AppSettings = {
   hosts: {
     heartbeatSeconds: -1,
   },
+  reviewRelay: {
+    apiUrl: "",
+    model: "hermes-agent",
+    promptRepo: "",
+    promptPath: "hermes-review-prompt.md",
+    cooldownMinutes: 10,
+  },
   browser: {
     framerate: -1,
     maxInstances: -1,

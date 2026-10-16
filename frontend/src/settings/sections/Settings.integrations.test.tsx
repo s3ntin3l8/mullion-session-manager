@@ -147,6 +147,12 @@ describe("Settings -> Integrations", () => {
         return Promise.resolve(new Response(null, { status: 204 }));
       }
 
+      // The Review relay card fetches its key summary on mount; its own
+      // behavior is covered in Settings.reviewRelay.test.tsx.
+      if (url === "/api/integrations/hermes" && method === "GET") {
+        return Promise.resolve(jsonResponse(200, { hasKey: false, updatedAt: null }));
+      }
+
       if (url === "/api/server-info" && method === "GET") {
         return Promise.resolve(jsonResponse(200, SERVER_INFO_FIXTURE));
       }

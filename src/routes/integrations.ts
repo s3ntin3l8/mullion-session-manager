@@ -22,6 +22,16 @@ import {
 } from "../services/github-device-flow.js";
 import { enableWebhooks, disableWebhooks } from "../services/github-webhook.js";
 import { computeKeyFingerprint } from "../services/github-app.js";
+import {
+  clearHermesKey,
+  getHermesIntegration,
+  setHermesKey,
+} from "../services/hermes-integration.js";
+import {
+  HermesNotConfiguredError,
+  HermesUnavailableError,
+  testHermesConnection,
+} from "../services/hermes-review.js";
 
 interface SetTokenBody {
   token: string;
@@ -343,4 +353,48 @@ export async function integrationsRoute(app: FastifyInstance) {
     await disableWebhooks(app);
     reply.code(204);
   });
+
+  // Hermes review relay key (services/hermes-review.ts). Write-only, same
+  // "never echo secrets back" posture as the GitHub token route above: GET
+  // returns only { hasKey, updatedAt }. The non-secret half (URL, model,
+  // prompt repo) lives in settings.reviewRelay.
+  app.get("/api/integrations/hermes", async () => getHermesIntegration(app));
+
+  app.put<{ Body: { key: string } }>(
+    "/api/integrations/hermes/key",
+    {
+      schema: {
+        body: {
+          type: "object",
+          required: ["key"],
+          additionalProperties: false,
+          properties: { key: { type: "string", minLength: 1 } },
+        },
+      },
+      config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
+    },
+    async (request) => setHermesKey(app, request.body.key),
+  );
+
+  app.delete("/api/integrations/hermes", async (_request, reply) => {
+    clearHermesKey(app);
+    reply.code(204);
+  });
+
+  // Health check against the configured API URL — needs no key, same as the
+  // GitHub workflow's pre-dispatch check.
+  app.post(
+    "/api/integrations/hermes/test",
+    { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    async (_request, reply) => {
+      try {
+        await testHermesConnection(app);
+      } catch (err) {
+        if (err instanceof HermesNotConfiguredError) return reply.badRequest(err.message);
+        if (err instanceof HermesUnavailableError) return reply.badGateway(err.message);
+        throw err;
+      }
+      return { ok: true };
+    },
+  );
 }

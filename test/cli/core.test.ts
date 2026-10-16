@@ -1093,6 +1093,75 @@ describe("runCommand", () => {
     // eager substitution — a "does not retry" companion test locks in that
     // the already-working (real session-scope) case takes no extra round
     // trip at all.
+    describe("review", () => {
+      const dispatched = { status: "dispatched", repo: "acme/widgets", prNumber: 42 };
+
+      it("requests a review of the session's own PR and prints a confirmation", async () => {
+        const client = fakeClient({ request: vi.fn(async () => dispatched) });
+        const io = fakeIo();
+        const code = await runCommand(["review"], { client, io });
+        expect(code).toBe(0);
+        expect(client.request).toHaveBeenCalledWith("reviews.request", {});
+        expect(io.written.join("")).toContain("review requested for acme/widgets#42");
+      });
+
+      it("gives the request a longer timeout than the 30s default", async () => {
+        const client = fakeClient({ request: vi.fn(async () => dispatched) });
+        await runCommand(["review"], { client, io: fakeIo() });
+        expect((client as unknown as { requestTimeoutMs: number }).requestTimeoutMs).toBe(60_000);
+      });
+
+      it("--pr forwards prNumber as an integer", async () => {
+        const client = fakeClient({ request: vi.fn(async () => dispatched) });
+        await runCommand(["review", "--pr", "7"], { client, io: fakeIo() });
+        expect(client.request).toHaveBeenCalledWith("reviews.request", { prNumber: 7 });
+      });
+
+      it.each(["abc", "0", "-3", "1.5"])("--pr %s is a usage error (exit 2)", async (bad) => {
+        const client = fakeClient();
+        const io = fakeIo();
+        expect(await runCommand(["review", "--pr", bad], { client, io })).toBe(2);
+        expect(io.stderr.write).toHaveBeenCalledWith(
+          expect.stringContaining("--pr must be a positive integer"),
+        );
+        expect(client.request).not.toHaveBeenCalled();
+      });
+
+      it("--session targets that session directly, with no fallback retry", async () => {
+        const client = fakeClient({ request: vi.fn(async () => dispatched) });
+        await runCommand(["review", "--session", "5"], { client, io: fakeIo() });
+        expect(client.request).toHaveBeenCalledTimes(1);
+        expect(client.request).toHaveBeenCalledWith("reviews.request", { sessionId: "5" });
+      });
+
+      it("retries with MULLION_SESSION_ID after the direct attempt 400s, keeping --pr", async () => {
+        let calls = 0;
+        const client = fakeClient({
+          request: vi.fn(async (_op, body) => {
+            calls += 1;
+            if (calls === 1) throw new MullionSocketError(400, "'sessionId' is required");
+            expect(body).toEqual({ prNumber: 7, sessionId: "42" });
+            return dispatched;
+          }),
+        });
+        const io = fakeIo();
+        io.env = { MULLION_SESSION_ID: "42" };
+        expect(await runCommand(["review", "--pr", "7"], { client, io })).toBe(0);
+        expect(calls).toBe(2);
+      });
+
+      it("surfaces a server error (e.g. the cooldown) with a non-zero exit", async () => {
+        const client = fakeClient({
+          request: vi.fn(async () => {
+            throw new MullionSocketError(409, "wait 120s before requesting another");
+          }),
+        });
+        const io = fakeIo();
+        expect(await runCommand(["review"], { client, io })).toBe(1);
+        expect(io.stderr.write).toHaveBeenCalledWith(expect.stringContaining("wait 120s"));
+      });
+    });
+
     describe("MULLION_SESSION_ID fallback on an auth-disabled host (issue #1457)", () => {
       it("session get retries with MULLION_SESSION_ID after the direct attempt 400s", async () => {
         let calls = 0;

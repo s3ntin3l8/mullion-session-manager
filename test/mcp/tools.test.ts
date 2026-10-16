@@ -30,6 +30,7 @@ describe("TOOLS registry (issue #271, #134 part 2)", () => {
       "kill_child_session",
       "stop_dock_session",
       "get_scrollback",
+      "request_review",
       "list_projects",
       "list_actions",
       "create_preview",
@@ -333,6 +334,34 @@ describe("session/project/preview tool handlers (issue #134 part 2)", () => {
     const text = await tool.handler({}, { listPreviews });
     expect(listPreviews).toHaveBeenCalledWith();
     expect(JSON.parse(text)).toEqual([{ slug: "abc" }]);
+  });
+
+  it("request_review passes pr_number to client.requestReview and returns the result", async () => {
+    const tool = TOOLS.find((t) => t.name === "request_review")!;
+    const requestReview = vi
+      .fn()
+      .mockResolvedValue({ status: "dispatched", repo: "a/b", prNumber: 7 });
+    const text = await tool.handler({ pr_number: 7 }, { requestReview });
+    expect(requestReview).toHaveBeenCalledWith(7);
+    expect(JSON.parse(text)).toEqual({ status: "dispatched", repo: "a/b", prNumber: 7 });
+  });
+
+  it("request_review defaults pr_number to undefined (the server resolves the branch's PR)", async () => {
+    const tool = TOOLS.find((t) => t.name === "request_review")!;
+    const requestReview = vi.fn().mockResolvedValue({ status: "dispatched" });
+    await tool.handler({}, { requestReview });
+    expect(requestReview).toHaveBeenCalledWith(undefined);
+    await tool.handler(undefined, { requestReview });
+    expect(requestReview).toHaveBeenLastCalledWith(undefined);
+  });
+
+  it("request_review inputSchema has an optional positive-integer pr_number", () => {
+    const tool = TOOLS.find((t) => t.name === "request_review")!;
+    expect(tool.inputSchema).toMatchObject({
+      type: "object",
+      properties: { pr_number: { type: "integer", minimum: 1 } },
+    });
+    expect(tool.inputSchema).not.toHaveProperty("required");
   });
 
   it("get_project_tooling calls client.getProjectTooling with the projectId", async () => {

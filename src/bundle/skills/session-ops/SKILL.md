@@ -79,5 +79,9 @@ What you _can_ do for a dev-server-shaped task, at session scope:
   plain foreground/background process in your own shell.
 - `mullion project actions` — whatever the project's own launcher config
   exposes as a one-shot action, distinct from a persistent dock monitor.
+- `mullion review` (or the `request_review` MCP tool) — ask the Mullion
+  server to relay an automated Hermes review of your PR. It posts to the PR
+  within a few minutes; wait for it instead of requesting again. Only works
+  once an operator has configured the review relay in Mullion's Settings.
 - Drive the browser (see the Mullion browser skill) against whatever's
   already listening, dock-managed or started in your own shell.

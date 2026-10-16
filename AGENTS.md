@@ -38,9 +38,13 @@ context if you're running inside a Mullion-hosted session.
   trigger entirely — see `docs/tasks.md`'s "External review workflows" for
   why. A re-review can be requested the same way
   (`@s3ntin3l8-hermes Review` on the PR) after pushing fixes, but keep it to
-  a couple of rounds — don't loop on it indefinitely. `make review` posts
+  a couple of rounds — don't loop on it indefinitely. Inside a Mullion
+  session, prefer `mullion review` (or the `request_review` MCP tool): the
+  Mullion server relays the request straight to the Hermes API, and a repeat
+  request for the same PR is refused during a cooldown. `make review` is the
+  shorthand — it runs `mullion review` inside a session and otherwise posts
   that same `@s3ntin3l8-hermes Review` comment on the current branch's PR
-  (via `gh pr comment`) — a shorthand for requesting a re-review after
+  (via `gh pr comment`). Either way it is for requesting a re-review after
   pushing fixes, not something to run right after opening the PR (the
   auto-review already covers that). Fixing
   the code is not enough to address feedback — reply to each inline comment
@@ -134,9 +138,10 @@ context if you're running inside a Mullion-hosted session.
 
 - `make wt name=<slug>` — create `.wt/<slug>` off the latest `origin/main`
   and run both `npm ci`s.
-- `make review` — post `@s3ntin3l8-hermes Review` on the current branch's
-  PR, to request a re-review after pushing fixes (not for the initial
-  review — that fires automatically on open).
+- `make review` — request a Hermes re-review of the current branch's PR
+  after pushing fixes (`mullion review` inside a Mullion session, otherwise
+  an `@s3ntin3l8-hermes Review` comment; not for the initial review — that
+  fires automatically on open).
 - `make dev` — backend (`tsx watch`) + frontend (Vite, HMR) together.
 - `make test-backend` — backend tests only, the fast inner loop; `make test`
   runs both workspaces.

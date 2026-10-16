@@ -461,6 +461,75 @@ describe("MullionClient (issue #271)", () => {
     // failing attempt, and a companion "does not retry" test locks in
     // that the already-working (real session-scope) case takes no extra
     // round trip at all.
+    describe("requestReview", () => {
+      it("sends reviews.request with no body fields by default", async () => {
+        const socketPath = await startControlServer((msg, socket) => {
+          expect(msg.op).toBe("reviews.request");
+          expect(msg.body).toEqual({});
+          socket.write(
+            `${JSON.stringify({ id: msg.id, ok: true, status: 200, result: { status: "dispatched", prNumber: 3 } })}\n`,
+          );
+        });
+        const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+        expect(await client.requestReview()).toEqual({ status: "dispatched", prNumber: 3 });
+      });
+
+      it("forwards an explicit prNumber", async () => {
+        const socketPath = await startControlServer((msg, socket) => {
+          expect(msg.body).toEqual({ prNumber: 9 });
+          socket.write(
+            `${JSON.stringify({ id: msg.id, ok: true, status: 200, result: { status: "dispatched" } })}\n`,
+          );
+        });
+        const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+        await client.requestReview(9);
+      });
+
+      it("uses a longer request timeout than the 30s default", async () => {
+        const client = new MullionClient({ MULLION_SOCKET_PATH: "/nonexistent.sock" });
+        const spy = vi.spyOn(client, "controlRequest").mockResolvedValue({ status: "dispatched" });
+        await client.requestReview(4);
+        expect(spy).toHaveBeenCalledWith("reviews.request", { prNumber: 4 }, 60_000);
+      });
+
+      it("retries with MULLION_SESSION_ID after the direct attempt 400s, keeping prNumber", async () => {
+        let calls = 0;
+        const socketPath = await startControlServer((msg, socket) => {
+          calls += 1;
+          if (calls === 1) {
+            expect(msg.body).toEqual({ prNumber: 9 });
+            socket.write(
+              `${JSON.stringify({ id: msg.id, ok: false, status: 400, error: "'sessionId' is required" })}\n`,
+            );
+            return;
+          }
+          expect(msg.body).toEqual({ prNumber: 9, sessionId: "42" });
+          socket.write(
+            `${JSON.stringify({ id: msg.id, ok: true, status: 200, result: { status: "dispatched" } })}\n`,
+          );
+        });
+        const client = new MullionClient({
+          MULLION_SOCKET_PATH: socketPath,
+          MULLION_SESSION_ID: "42",
+        });
+        await client.requestReview(9);
+        expect(calls).toBe(2);
+      });
+
+      it("does not retry an unrelated error, and rethrows the 400 without MULLION_SESSION_ID", async () => {
+        const socketPath = await startControlServer((msg, socket) => {
+          socket.write(
+            `${JSON.stringify({ id: msg.id, ok: false, status: 409, error: "cooldown" })}\n`,
+          );
+        });
+        const withId = new MullionClient({
+          MULLION_SOCKET_PATH: socketPath,
+          MULLION_SESSION_ID: "42",
+        });
+        await expect(withId.requestReview()).rejects.toMatchObject({ status: 409 });
+      });
+    });
+
     describe("ownSessionId fallback (issue #1291)", () => {
       it("getScrollback retries with MULLION_SESSION_ID after the direct attempt 400s", async () => {
         let calls = 0;

@@ -14,6 +14,7 @@ import {
 } from "../../ui/primitives.js";
 import { ErrorText } from "../../ui/ErrorText.js";
 import { GitHubPollingSettings } from "../RuntimeSettings.js";
+import { ReviewRelaySection } from "./ReviewRelaySection.js";
 
 // One credential for the whole install (issue #27), not per-project — see
 // src/services/github-integration.ts. Manages its own fetch rather than
@@ -195,6 +196,8 @@ export function IntegrationsSection() {
       />
 
       <GitHubPollingSettings />
+
+      <ReviewRelaySection />
     </>
   );
 }

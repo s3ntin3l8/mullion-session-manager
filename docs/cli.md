@@ -59,6 +59,7 @@ mullion browser navigate|click|fill|type|press|select|check|uncheck|hover|
                 scroll|wait|dialog|get|eval|snapshot|screenshot|find|console|errors|
                 download
 mullion project list|actions|dock|tooling
+mullion review [--pr <n>]
 mullion preview create|get|delete|list
 mullion dock start|stop|list
 mullion device list|create|pair|discovered|pair-and-connect|connect|start|
@@ -391,6 +392,17 @@ browser tab being open. See `src/plugins/event-store.ts`'s own doc comment.
   Deliberately has no `--session <id>`: hook-socket auth pins the connection
   to whichever session's token was presented, so there is no way to notify a
   _different_ session over this channel.
+
+### review
+
+- `review [--pr <n>]` — asks the Mullion server to relay a Hermes review
+  request for the PR of the session's project (the `reviews.request` op,
+  `request_review` over MCP). Without `--pr`, the open PR for the session's
+  current branch is used. The Hermes API URL and key are configured in
+  Settings → Integrations → Review relay and never reach the session. The
+  review is dispatched asynchronously and posts to the PR within a few
+  minutes; a repeat request for the same PR inside the configured cooldown
+  exits non-zero with a 409. Local-host projects only.
 
 ### mcp
 

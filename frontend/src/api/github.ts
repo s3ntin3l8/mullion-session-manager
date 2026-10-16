@@ -9,6 +9,7 @@ import type {
   GitHubLogResponse,
   WebhookRegistrationResult,
   GitHubIntegration,
+  HermesIntegration,
   SetGitHubAppResult,
   DeviceFlowStatus,
   ProjectReleaseStatus,
@@ -86,6 +87,21 @@ export const githubApi = {
       method: "PUT",
       body: JSON.stringify({ token }),
     }),
+
+  // Hermes review relay key — write-only, same never-echo-secrets shape as
+  // setGitHubToken: the response is just { hasKey, updatedAt }.
+  getHermesIntegration: () => request<HermesIntegration>("/api/integrations/hermes"),
+
+  setHermesKey: (key: string) =>
+    request<HermesIntegration>("/api/integrations/hermes/key", {
+      method: "PUT",
+      body: JSON.stringify({ key }),
+    }),
+
+  clearHermesKey: () => request<void>("/api/integrations/hermes", { method: "DELETE" }),
+
+  testHermesConnection: () =>
+    request<{ ok: boolean }>("/api/integrations/hermes/test", { method: "POST" }),
 
   disconnectGitHub: () => request<void>("/api/integrations/github", { method: "DELETE" }),
 

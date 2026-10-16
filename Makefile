@@ -76,5 +76,9 @@ wt: ## Create a developer worktree off origin/main: make wt name=<slug>
 	git worktree add .wt/$(name) -b $(name) origin/main
 	cd .wt/$(name) && npm ci && npm --prefix frontend ci
 
-review: ## Request a Hermes review on the current branch's PR
-	gh pr comment --body "@s3ntin3l8-hermes Review"
+review: ## Request a Hermes review on the current branch's PR (via the Mullion relay when run inside a session)
+	@if [ -n "$$MULLION_SOCKET_PATH" ] && command -v mullion >/dev/null 2>&1; then \
+		mullion review; \
+	else \
+		gh pr comment --body "@s3ntin3l8-hermes Review"; \
+	fi
