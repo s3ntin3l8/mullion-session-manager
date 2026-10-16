@@ -1168,6 +1168,26 @@ describe("runCommand", () => {
         expect(calls).toBe(2);
       });
 
+      it("session children retries with MULLION_SESSION_ID after the direct attempt 400s", async () => {
+        let calls = 0;
+        const client = fakeClient({
+          request: vi.fn(async (op, body) => {
+            calls += 1;
+            expect(op).toBe("sessions.children");
+            if (calls === 1) {
+              expect(body).toEqual({});
+              throw new MullionSocketError(400, "'sessionId' is required");
+            }
+            expect(body).toEqual({ sessionId: "42" });
+            return [];
+          }),
+        });
+        const io = fakeIo();
+        io.env = { MULLION_SESSION_ID: "42" };
+        expect(await runCommand(["session", "children"], { client, io })).toBe(0);
+        expect(calls).toBe(2);
+      });
+
       it("session spawn-child does not retry when --parent/--session was already given", async () => {
         const client = fakeClient({ request: vi.fn(async () => ({ id: 5 })) });
         const io = fakeIo();
@@ -1280,6 +1300,26 @@ describe("runCommand", () => {
     });
 
     // Phase 5 (Track B, issue #193 5.3b).
+    it("session children passes the parent id and --status through, and rejects a bad --status", async () => {
+      const client = fakeClient({ request: vi.fn(async () => []) });
+      expect(
+        await runCommand(["session", "children", "5", "--status", "exited"], {
+          client,
+          io: fakeIo(),
+        }),
+      ).toBe(0);
+      expect(client.request).toHaveBeenCalledWith("sessions.children", {
+        status: "exited",
+        sessionId: "5",
+      });
+      expect(
+        await runCommand(["session", "children", "5", "--status", "bogus"], {
+          client: fakeClient(),
+          io: fakeIo(),
+        }),
+      ).toBe(2);
+    });
+
     it("session spawn-child requires --command", async () => {
       const io = fakeIo();
       expect(await runCommand(["session", "spawn-child"], { client: fakeClient(), io })).toBe(2);

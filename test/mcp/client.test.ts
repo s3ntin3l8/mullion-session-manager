@@ -293,6 +293,54 @@ describe("MullionClient (issue #271)", () => {
       expect(await client.getScrollback(undefined)).toEqual({ b64: "" });
     });
 
+    it("listChildSessions sends sessions.children, with the given parent id when supplied", async () => {
+      const socketPath = await startControlServer((msg, socket) => {
+        expect(msg.op).toBe("sessions.children");
+        expect(msg.body).toEqual({ sessionId: "3" });
+        socket.write(`${JSON.stringify({ id: msg.id, ok: true, status: 200, result: [] })}\n`);
+      });
+      const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+      expect(await client.listChildSessions("3")).toEqual([]);
+    });
+
+    it("listChildSessions retries with MULLION_SESSION_ID after the direct attempt 400s, and rethrows otherwise", async () => {
+      let calls = 0;
+      const socketPath = await startControlServer((msg, socket) => {
+        calls += 1;
+        if (calls === 1) {
+          expect(msg.body).toEqual({});
+          socket.write(
+            `${JSON.stringify({ id: msg.id, ok: false, status: 400, error: "'sessionId' is required" })}\n`,
+          );
+          return;
+        }
+        expect(msg.body).toEqual({ sessionId: "42" });
+        socket.write(`${JSON.stringify({ id: msg.id, ok: true, status: 200, result: [] })}\n`);
+      });
+      const withEnv = new MullionClient({
+        MULLION_SOCKET_PATH: socketPath,
+        MULLION_SESSION_ID: "42",
+      });
+      expect(await withEnv.listChildSessions()).toEqual([]);
+      expect(calls).toBe(2);
+
+      calls = 0;
+      const noEnv = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+      await expect(noEnv.listChildSessions()).rejects.toThrow("'sessionId' is required");
+    });
+
+    it("killChildSession sends sessions.kill with just the sessionId", async () => {
+      const bodies: unknown[] = [];
+      const socketPath = await startControlServer((msg, socket) => {
+        expect(msg.op).toBe("sessions.kill");
+        bodies.push(msg.body);
+        socket.write(`${JSON.stringify({ id: msg.id, ok: true, status: 204, result: "" })}\n`);
+      });
+      const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+      await client.killChildSession("9");
+      expect(bodies).toEqual([{ sessionId: "9" }]);
+    });
+
     it("stopDockSession sends sessions.kill with the given sessionId", async () => {
       const socketPath = await startControlServer((msg, socket) => {
         expect(msg.op).toBe("sessions.kill");

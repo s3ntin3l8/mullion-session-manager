@@ -25,6 +25,8 @@ describe("TOOLS registry (issue #271, #134 part 2)", () => {
       "list_sessions",
       "start_dock_session",
       "spawn_child_session",
+      "list_child_sessions",
+      "kill_child_session",
       "stop_dock_session",
       "get_scrollback",
       "list_projects",
@@ -213,6 +215,28 @@ describe("session/project/preview tool handlers (issue #134 part 2)", () => {
     const text = await tool.handler({}, { getScrollback });
     expect(getScrollback).toHaveBeenCalledWith(undefined);
     expect(text).toBe("hello world");
+  });
+
+  it("list_child_sessions calls client.listChildSessions and returns its JSON", async () => {
+    const tool = TOOLS.find((t) => t.name === "list_child_sessions")!;
+    const listChildSessions = vi.fn().mockResolvedValue([{ id: 7, sessionStatus: "working" }]);
+    const text = await tool.handler({}, { listChildSessions });
+    expect(listChildSessions).toHaveBeenCalledWith(undefined);
+    await tool.handler({ sessionId: "4" }, { listChildSessions });
+    expect(listChildSessions).toHaveBeenLastCalledWith("4");
+    expect(JSON.parse(text)).toEqual([{ id: 7, sessionStatus: "working" }]);
+  });
+
+  it("kill_child_session kills the named child and requires a sessionId", async () => {
+    const tool = TOOLS.find((t) => t.name === "kill_child_session")!;
+    const killChildSession = vi.fn().mockResolvedValue("");
+    const text = await tool.handler({ sessionId: "7" }, { killChildSession });
+    expect(killChildSession).toHaveBeenCalledWith("7");
+    expect(JSON.parse(text)).toEqual({ killed: "7" });
+    await expect(tool.handler({}, { killChildSession })).rejects.toThrow("sessionId is required");
+    await expect(tool.handler({ sessionId: "" }, { killChildSession })).rejects.toThrow(
+      "sessionId is required",
+    );
   });
 
   it("list_projects calls client.listProjects with no arguments", async () => {

@@ -1036,7 +1036,7 @@ describe("controlSocketPlugin (issue #185)", () => {
           id: 1,
           ok: false,
           status: 403,
-          error: "session-scoped connections may only target their own session",
+          error: "session-scoped connections may only target their own session or its children",
         });
         socket.destroy();
       });
@@ -1658,7 +1658,7 @@ describe("controlSocketPlugin (issue #185)", () => {
         socket.destroy();
       });
 
-      it("session scope: rejected — a session may not kill itself or any other session through this socket", async () => {
+      it("session scope: rejected — a session may not kill itself through this socket", async () => {
         app = await buildApp();
         await app.ready();
         const { sessionId, hookToken } = await createRealSession();
@@ -1669,7 +1669,7 @@ describe("controlSocketPlugin (issue #185)", () => {
           id: 1,
           ok: false,
           status: 403,
-          error: "not permitted for this connection's scope",
+          error: "session-scoped connections may only target a child of their own session",
         });
         socket.destroy();
       });
@@ -1736,6 +1736,233 @@ describe("controlSocketPlugin (issue #185)", () => {
           ok: false,
           status: 400,
           error: "'cascade' must be 'detach' or 'kill'",
+        });
+        socket.destroy();
+      });
+    });
+
+    describe("parent→child ops (sessions.children, owned targets)", () => {
+      /** Spawns a child of the session behind `hookToken` through the real
+       * sessions.spawn_child op; returns the child's id and its own hook token. */
+      async function spawnChildOf(
+        hookToken: string,
+      ): Promise<{ childId: number; childToken: string }> {
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(
+          `${JSON.stringify({ id: 1, op: "sessions.spawn_child", body: { command: "bash" } })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        socket.destroy();
+        expect(reply.ok).toBe(true);
+        const childId = (reply.result as { id: number }).id;
+        return { childId, childToken: app!.pty.get(String(childId))!.hookToken };
+      }
+
+      async function ask(
+        socket: net.Socket,
+        op: string,
+        body?: Record<string, unknown>,
+      ): Promise<Record<string, unknown>> {
+        socket.write(`${JSON.stringify({ id: 1, op, body })}\n`);
+        return waitForReply(socket);
+      }
+
+      const NOT_MINE = {
+        ok: false,
+        status: 403,
+        error: "session-scoped connections may only target their own session or its children",
+      };
+
+      it("a parent can get and read the scrollback of its own child", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession();
+        const { childId } = await spawnChildOf(hookToken);
+        const socket = await sessionScopeSocket(hookToken);
+        const got = await ask(socket, "sessions.get", { sessionId: childId });
+        expect(got.ok).toBe(true);
+        expect((got.result as { id: number }).id).toBe(childId);
+        const scrollback = await ask(socket, "sessions.scrollback", { sessionId: childId });
+        expect(scrollback.ok).toBe(true);
+        expect(typeof (scrollback.result as { b64: unknown }).b64).toBe("string");
+        socket.destroy();
+      });
+
+      it("a parent can still inspect a child that has exited", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession();
+        const { childId } = await spawnChildOf(hookToken);
+        app.db.update(sessions).set({ status: "exited" }).where(eq(sessions.id, childId)).run();
+        const socket = await sessionScopeSocket(hookToken);
+        const got = await ask(socket, "sessions.get", { sessionId: childId });
+        expect(got.ok).toBe(true);
+        socket.destroy();
+      });
+
+      it("a session cannot reach an unrelated session, a sibling's child, or a nonexistent id — all the same 403", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession();
+        const other = await createRealSession();
+        const { childId: otherChild } = await spawnChildOf(other.hookToken);
+        const socket = await sessionScopeSocket(hookToken);
+        for (const sessionId of [other.sessionId, otherChild, 999999, "not-a-number"]) {
+          expect(await ask(socket, "sessions.get", { sessionId })).toEqual({ id: 1, ...NOT_MINE });
+        }
+        socket.destroy();
+      });
+
+      it("a child cannot reach its parent or a sibling", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId: parentId, hookToken } = await createRealSession();
+        const { childToken } = await spawnChildOf(hookToken);
+        const { childId: sibling } = await spawnChildOf(hookToken);
+        const socket = await sessionScopeSocket(childToken);
+        expect(await ask(socket, "sessions.get", { sessionId: parentId })).toEqual({
+          id: 1,
+          ...NOT_MINE,
+        });
+        expect(await ask(socket, "sessions.get", { sessionId: sibling })).toEqual({
+          id: 1,
+          ...NOT_MINE,
+        });
+        socket.destroy();
+      });
+
+      it("a parent whose own row is no longer active cannot reach its children", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId, hookToken } = await createRealSession();
+        const { childId } = await spawnChildOf(hookToken);
+        const socket = await sessionScopeSocket(hookToken);
+        app.db.update(sessions).set({ status: "killed" }).where(eq(sessions.id, sessionId)).run();
+        expect(await ask(socket, "sessions.get", { sessionId: childId })).toEqual({
+          id: 1,
+          ok: false,
+          status: 403,
+          error: "this session is no longer active",
+        });
+        socket.destroy();
+      });
+
+      it("sessions.kill: a parent kills its child; naming itself, a stranger, or nothing is 403", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId, hookToken } = await createRealSession();
+        const { sessionId: stranger } = await createRealSession();
+        const { childId } = await spawnChildOf(hookToken);
+        const socket = await sessionScopeSocket(hookToken);
+        expect(await ask(socket, "sessions.kill", { sessionId })).toMatchObject({
+          ok: false,
+          status: 403,
+        });
+        expect(await ask(socket, "sessions.kill")).toMatchObject({ ok: false, status: 403 });
+        expect(await ask(socket, "sessions.kill", { sessionId: stranger })).toEqual({
+          id: 1,
+          ...NOT_MINE,
+        });
+        expect(
+          await ask(socket, "sessions.kill", { sessionId: childId, cascade: "bogus" }),
+        ).toMatchObject({ ok: false, status: 400 });
+        expect(await ask(socket, "sessions.kill", { sessionId: childId })).toEqual({
+          id: 1,
+          ok: true,
+          status: 204,
+          result: "",
+        });
+        const row = app.db.select().from(sessions).where(eq(sessions.id, childId)).get();
+        expect(row?.status).toBe("killed");
+        socket.destroy();
+      });
+
+      it("sessions.children: session scope lists only its own children, with derived status", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession();
+        const other = await createRealSession();
+        const { childId: a } = await spawnChildOf(hookToken);
+        const { childId: b } = await spawnChildOf(hookToken);
+        await spawnChildOf(other.hookToken);
+        const socket = await sessionScopeSocket(hookToken);
+        const reply = await ask(socket, "sessions.children");
+        expect(reply.ok).toBe(true);
+        const rows = reply.result as Array<{ id: number; sessionStatus: string }>;
+        expect(rows.map((r) => r.id).sort()).toEqual([a, b].sort());
+        expect(rows.every((r) => typeof r.sessionStatus === "string")).toBe(true);
+        socket.destroy();
+      });
+
+      it("sessions.children: a parent whose own row is no longer active gets 403", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId, hookToken } = await createRealSession();
+        await spawnChildOf(hookToken);
+        const socket = await sessionScopeSocket(hookToken);
+        app.db.update(sessions).set({ status: "killed" }).where(eq(sessions.id, sessionId)).run();
+        expect(await ask(socket, "sessions.children")).toEqual({
+          id: 1,
+          ok: false,
+          status: 403,
+          error: "this session is no longer active",
+        });
+        socket.destroy();
+      });
+
+      it("a non-canonical spelling of a child's id still resolves to that child only", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession();
+        const { childId } = await spawnChildOf(hookToken);
+        const socket = await sessionScopeSocket(hookToken);
+        const got = await ask(socket, "sessions.get", { sessionId: `0${childId}` });
+        expect(got.ok).toBe(true);
+        expect((got.result as { id: number }).id).toBe(childId);
+        socket.destroy();
+      });
+
+      it("sessions.children: status filter, own-pin enforcement and full-scope parent naming", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId, hookToken } = await createRealSession();
+        const other = await createRealSession();
+        const { childId: live } = await spawnChildOf(hookToken);
+        const { childId: dead } = await spawnChildOf(hookToken);
+        app.db.update(sessions).set({ status: "exited" }).where(eq(sessions.id, dead)).run();
+
+        const session = await sessionScopeSocket(hookToken);
+        const exited = await ask(session, "sessions.children", { status: "exited" });
+        expect((exited.result as Array<{ id: number }>).map((r) => r.id)).toEqual([dead]);
+        // Naming a different parent is the pinned-session 403, not a listing.
+        expect(await ask(session, "sessions.children", { sessionId: other.sessionId })).toEqual({
+          id: 1,
+          ok: false,
+          status: 403,
+          error: "session-scoped connections may only target their own session",
+        });
+        session.destroy();
+
+        const full = await fullScopeSocket();
+        expect(await ask(full, "sessions.children")).toMatchObject({ ok: false, status: 400 });
+        const listed = await ask(full, "sessions.children", { sessionId });
+        expect((listed.result as Array<{ id: number }>).map((r) => r.id).sort()).toEqual(
+          [live, dead].sort(),
+        );
+        full.destroy();
+      });
+
+      it("events.query: a parent may name its child's id, a stranger's is 403", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession();
+        const { sessionId: stranger } = await createRealSession();
+        const { childId } = await spawnChildOf(hookToken);
+        const socket = await sessionScopeSocket(hookToken);
+        expect((await ask(socket, "events.query", { sessionId: childId })).ok).toBe(true);
+        expect(await ask(socket, "events.query", { sessionId: stranger })).toEqual({
+          id: 1,
+          ...NOT_MINE,
         });
         socket.destroy();
       });
@@ -2410,7 +2637,7 @@ describe("controlSocketPlugin (issue #185)", () => {
             id: 1,
             ok: false,
             status: 403,
-            error: "session-scoped connections may only query their own session's events",
+            error: "session-scoped connections may only target their own session or its children",
           });
           socket.destroy();
         });

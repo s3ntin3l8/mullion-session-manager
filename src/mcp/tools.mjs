@@ -328,12 +328,58 @@ const stopDockSession = {
   },
 };
 
+const listChildSessions = {
+  name: "list_child_sessions",
+  description:
+    "List the child sessions the calling session spawned (live and exited) with their derived " +
+    "status (e.g. working, finished, awaiting_permission, exited). Works from inside a normal " +
+    "agent session (session scope). Use it after spawn_child_session to see what each child is " +
+    "doing; read a child's output with get_scrollback.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      sessionId: {
+        type: "string",
+        description:
+          "The parent session whose children to list. Defaults to the calling session; naming " +
+          "another session's id requires full scope (MULLION_AUTH_TOKEN).",
+      },
+    },
+  },
+  async handler(args, client) {
+    const result = await client.listChildSessions(args?.sessionId);
+    return JSON.stringify(result);
+  },
+};
+
+const killChildSession = {
+  name: "kill_child_session",
+  description:
+    "Kill a child session the calling session spawned. Session scope may only name its own " +
+    "children — naming itself, a sibling or an unrelated session is rejected with 403.",
+  inputSchema: {
+    type: "object",
+    required: ["sessionId"],
+    properties: {
+      sessionId: { type: "string", description: "The child session id to kill." },
+    },
+  },
+  async handler(args, client) {
+    if (typeof args?.sessionId !== "string" || args.sessionId.length === 0) {
+      throw new Error("sessionId is required");
+    }
+    await client.killChildSession(args.sessionId);
+    return JSON.stringify({ killed: args.sessionId });
+  },
+};
+
 const getScrollback = {
   name: "get_scrollback",
   description:
     "Get a session's terminal scrollback, decoded as text. Omit sessionId to get the calling " +
-    "session's own scrollback (works from inside a normal agent session); targeting another " +
-    "session's id requires full scope (MULLION_AUTH_TOKEN).",
+    "session's own scrollback; a child session the caller spawned (see list_child_sessions) can " +
+    "be named too, from inside a normal agent session. Any other session's id requires full " +
+    "scope (MULLION_AUTH_TOKEN).",
   inputSchema: {
     type: "object",
     properties: {
@@ -688,6 +734,8 @@ export const TOOLS = [
   listSessions,
   startDockSession,
   spawnChildSession,
+  listChildSessions,
+  killChildSession,
   stopDockSession,
   getScrollback,
   listProjects,

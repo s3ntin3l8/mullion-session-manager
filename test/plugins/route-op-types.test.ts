@@ -1,7 +1,7 @@
 import path from "node:path";
 import ts from "typescript";
 import { describe, it, expect, vi } from "vitest";
-import { routeOp, pinned, unscoped } from "../../src/plugins/control-socket.js";
+import { routeOp, pinned, unscoped, owned } from "../../src/plugins/control-socket.js";
 
 // #1546 — routeOp's compile-time guard. tsc doesn't cover test/, so run the
 // compiler API over a fixture of accepted + @ts-expect-error'd shapes.
@@ -57,6 +57,7 @@ describe("routeOp runtime paths", () => {
   it.each([
     ["pinned", pinned],
     ["unscoped", unscoped],
+    ["owned", owned],
   ] as const)("%s resolver forwards at session scope", async (_n, wrap) => {
     const { ctx, inject, reply } = mk("session");
     await routeOp(["full", "session"], wrap(route)).handler(ctx);

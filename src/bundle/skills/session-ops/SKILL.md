@@ -20,6 +20,13 @@ if overridden, must stay inside the project directory or be another registered
 git worktree of the project's repo (`git worktree list`, e.g. a sibling
 `repo-pr408` checkout); any other outside path is rejected.
 
+Once spawned, you can supervise your children without full scope:
+`mullion session children` / `list_child_sessions` shows each child's derived
+status (`working`, `finished`, `awaiting_permission`, `exited`, ...);
+`mullion session logs <childId>` / `get_scrollback` (with `sessionId`) reads
+its output; `mullion session kill <childId>` / `kill_child_session` stops it.
+Only your own children are reachable — a sibling or unrelated session is `403`.
+
 This is a genuine child session — it survives if you're later killed, not a
 `Task`-tool subagent (no session, no PTY). A spawned child always starts as
 an ordinary, visible `terminal` session with permission prompts on; `kind`

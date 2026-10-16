@@ -250,6 +250,7 @@ export async function sessionsRoute(app: FastifyInstance) {
       projectId?: number;
       kind?: "terminal" | "dock";
       status?: "active" | "killed" | "exited";
+      parentSessionId?: number;
     };
   }>(
     "/api/sessions",
@@ -261,12 +262,13 @@ export async function sessionsRoute(app: FastifyInstance) {
             projectId: { type: "integer" },
             kind: { type: "string", enum: ["terminal", "dock"] },
             status: { type: "string", enum: ["active", "killed", "exited"] },
+            parentSessionId: { type: "integer" },
           },
         },
       },
     },
     async (request) => {
-      const { kind, status } = request.query;
+      const { kind, status, parentSessionId } = request.query;
       // Perf audit finding A6 — prod's own /api/sessions payload was 293
       // rows, 284 of them `killed` tombstones the frontend already filters
       // back out client-side (Sidebar.tsx). Nothing ever purges killed
@@ -279,6 +281,8 @@ export async function sessionsRoute(app: FastifyInstance) {
           : undefined,
         kind !== undefined ? eq(sessions.kind, kind) : undefined,
         status !== undefined ? eq(sessions.status, status) : undefined,
+        // The parent→child listing (control socket's sessions.children).
+        parentSessionId !== undefined ? eq(sessions.parentSessionId, parentSessionId) : undefined,
       ].filter((c) => c !== undefined);
 
       const rows =

@@ -492,7 +492,7 @@ export function formatBrowserResult(action, result) {
 /** Enriches the server's flat "not permitted for this connection's scope"
  * 403 with what actually went wrong and how to fix it — the scope trap a
  * session-scoped connection (every session's own MULLION_HOOK_TOKEN) hits
- * on any full-scope-only op (sessions.list/create/kill, projects.list/dock,
+ * on any full-scope-only op (sessions.list/create, projects.list/dock,
  * previews.*, agents.list). A bare "403 forbidden" here would send an agent
  * running inside a session down a debugging rabbit hole for something
  * that's actually just "this op needs an operator credential." */
@@ -705,6 +705,7 @@ const SESSION_SPAWN_CHILD_SPEC = {
   "initial-prompt": "string",
 };
 const SESSION_KILL_SPEC = { cascade: "string" };
+const SESSION_CHILDREN_SPEC = { status: "string" };
 
 function withSessionId(body, opts) {
   return opts.session !== undefined ? { ...body, sessionId: opts.session } : body;
@@ -761,6 +762,34 @@ const sessionCommands = {
       io,
       "'sessionId' is required",
       (ownId) => ({ sessionId: ownId }),
+    );
+    return { json: result };
+  },
+  // The parent→child listing: this session's own children (live and exited)
+  // with their derived status. Positional id / --session names the PARENT
+  // (full scope); at session scope it defaults to the caller's own session,
+  // same own-session fallback as `get`.
+  async children(client, args, opts, io) {
+    const { flags, rest } = extractFlags(args, SESSION_CHILDREN_SPEC);
+    const body = {};
+    if (flags.status !== undefined) {
+      if (!["active", "killed", "exited"].includes(flags.status)) {
+        throw new CliUsageError("--status must be 'active', 'killed' or 'exited'");
+      }
+      body.status = flags.status;
+    }
+    const id = rest[0] ?? opts.session;
+    if (id !== undefined) {
+      const result = await client.request("sessions.children", { ...body, sessionId: id });
+      return { json: result };
+    }
+    const result = await requestOwnSessionFallback(
+      client,
+      "sessions.children",
+      body,
+      io,
+      "'sessionId' is required",
+      (ownId) => ({ ...body, sessionId: ownId }),
     );
     return { json: result };
   },
@@ -1372,7 +1401,7 @@ export const COMMANDS = {
 export const USAGE = `Usage: mullion <command> [args] [flags]
 
 Commands:
-  session list|get|create|spawn-child|kill|rename|logs|exec
+  session list|get|children|create|spawn-child|kill|rename|logs|exec
   browser navigate|click|fill|type|press|select|check|uncheck|hover|
           scroll|wait|dialog|get|eval|snapshot|screenshot|find|console|errors|
           download
