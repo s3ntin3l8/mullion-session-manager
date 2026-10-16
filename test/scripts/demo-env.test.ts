@@ -11,7 +11,7 @@ import {
   instanceIdFor,
   ownsScope,
 } from "../../scripts/demo/env.mjs";
-import { stopDemoScopes } from "../../scripts/demo/instance.mjs";
+import { stopDemoScopes } from "../../scripts/demo/scopes.mjs";
 import {
   deriveInstanceId,
   extractDtachSocketPath as backendExtractDtachSocketPath,
