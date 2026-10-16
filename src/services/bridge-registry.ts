@@ -151,6 +151,13 @@ const PAIRING_CODE_TTL_MS = 10 * 60 * 1000;
 // still takes effect immediately.
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
+// The expiry column stores whole seconds — truncate so the value handed back
+// to the helper (pair/renew/auth replies) is exactly what a later read of
+// the row returns, on every path.
+function sessionExpiryFromNow(): Date {
+  return new Date(Math.floor((Date.now() + SESSION_TTL_MS) / 1000) * 1000);
+}
+
 export interface PairingCode {
   bridgeId: string;
   /** The raw, single-use bootstrap secret — embed this (and the primary's
@@ -203,7 +210,7 @@ function buildSession(
 } {
   const sessionId = crypto.randomBytes(32).toString("hex");
   const sessionSecret = crypto.randomBytes(32).toString("hex");
-  const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
+  const expiresAt = sessionExpiryFromNow();
   return {
     session: { bridgeId, sessionId, sessionSecret, expiresAt },
     row: {
@@ -350,10 +357,7 @@ export function extendBridgeSession(
   presentedSessionId: string,
 ): Date | null {
   if (!findLiveSession(app, bridgeId, presentedSessionId)) return null;
-  // The column stores whole seconds — truncate here so the value handed back
-  // to the caller (and on to the helper in the "ready" reply) is exactly what
-  // a later read of the row returns.
-  const expiresAt = new Date(Math.floor((Date.now() + SESSION_TTL_MS) / 1000) * 1000);
+  const expiresAt = sessionExpiryFromNow();
   app.db.update(bridges).set({ sessionExpiresAt: expiresAt }).where(eq(bridges.id, bridgeId)).run();
   return expiresAt;
 }

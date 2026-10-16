@@ -405,6 +405,31 @@ describe("agent-bridge routes (POST/GET/DELETE /api/bridges, GET /ws/agent-bridg
       );
     });
 
+    it("caps an oversized client-supplied bridge_id and labels an unrecognized handshake type in the reject log", async () => {
+      const { app, port } = await buildAndListen();
+      const warn = vi.spyOn(app.log, "warn");
+
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/agent-bridge`);
+      await waitForOpen(ws);
+      const replyPromise = waitForMessage(ws);
+      ws.send(JSON.stringify({ type: "auth", bridge_id: "x".repeat(200), session_id: "wrong" }));
+      await replyPromise;
+      expect(warn).toHaveBeenCalledWith(
+        { handshakeType: "auth", bridgeId: "x".repeat(64), reason: "invalid session credential" },
+        "agent-bridge handshake rejected",
+      );
+
+      const ws2 = new WebSocket(`ws://127.0.0.1:${port}/ws/agent-bridge`);
+      await waitForOpen(ws2);
+      const reply2 = waitForMessage(ws2);
+      ws2.send(JSON.stringify({ type: "paire", code: "x" }));
+      await reply2;
+      expect(warn).toHaveBeenCalledWith(
+        expect.objectContaining({ handshakeType: "paire" }),
+        "agent-bridge handshake rejected",
+      );
+    });
+
     it("rejects auth against an unknown bridge id", async () => {
       const { port } = await buildAndListen();
       const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/agent-bridge`);
@@ -446,10 +471,13 @@ describe("agent-bridge routes (POST/GET/DELETE /api/bridges, GET /ws/agent-bridg
       const body = (await res.json()) as { session_id: string; expires_at: string };
       expect(typeof body.session_id).toBe("string");
       expect(body.session_id).not.toBe(session_id);
-      // A fresh session gets a fresh 24h deadline, not the same instant as
-      // the one just replaced — confirms this is a real rotation, not an
-      // echo of the row's unchanged expiry.
-      expect(new Date(body.expires_at).getTime()).toBeGreaterThan(new Date(expires_at).getTime());
+      // Rotation is proven by the new session id above; the expiry is stored
+      // in whole seconds, so a renew landing in the same second as the pair
+      // can legitimately carry an identical deadline — it must never move
+      // backwards.
+      expect(new Date(body.expires_at).getTime()).toBeGreaterThanOrEqual(
+        new Date(expires_at).getTime(),
+      );
     });
 
     it("invalidates the OLD session id — a later auth with it is rejected", async () => {

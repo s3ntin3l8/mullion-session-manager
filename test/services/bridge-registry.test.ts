@@ -318,6 +318,23 @@ describe("bridge-registry", () => {
     });
   });
 
+  describe("session expiry precision", () => {
+    it("the expiry returned from redeem and rotate equals the stored row value (whole seconds)", async () => {
+      const app = await buildApp();
+      const pairing = issuePairingCode(app);
+      const session = redeemPairingCode(app, pairing.code, { name: "laptop" })!;
+      expect(session.expiresAt.getTime() % 1000).toBe(0);
+      expect(getBridgeRow(app, session.bridgeId)!.sessionExpiresAt!.getTime()).toBe(
+        session.expiresAt.getTime(),
+      );
+      const rotated = rotateBridgeSession(app, session.bridgeId, session.sessionId)!;
+      expect(getBridgeRow(app, session.bridgeId)!.sessionExpiresAt!.getTime()).toBe(
+        rotated.expiresAt.getTime(),
+      );
+      await app.close();
+    });
+  });
+
   describe("extendBridgeSession", () => {
     it("slides the expiry forward without changing the session id", async () => {
       const app = await buildApp();

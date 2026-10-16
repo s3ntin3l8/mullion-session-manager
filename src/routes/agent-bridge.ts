@@ -447,7 +447,10 @@ export async function agentBridgeRoute(app: FastifyInstance) {
           return;
         }
         if (!isClientHandshake(parsed)) {
-          sendError(app, socket, "unrecognized handshake — expected {type:'pair'|'auth', ...}");
+          const claimed = (parsed as { type?: unknown } | null)?.type;
+          sendError(app, socket, "unrecognized handshake — expected {type:'pair'|'auth', ...}", {
+            handshakeType: typeof claimed === "string" ? claimed.slice(0, 32) : typeof claimed,
+          });
           return;
         }
 

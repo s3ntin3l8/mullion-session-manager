@@ -112,8 +112,11 @@ valid for 7 days; the helper renews it while it is awake and connected, and
 every successful reconnect extends the expiry to a full 7 days again (the
 session id does not change). A laptop that stays asleep, offline, or quit for
 longer than that must be paired again, since the primary keeps no bootstrap
-credential for it. Revoke the bridge in Mullion if the laptop or credential
-may be compromised.
+credential for it. The extension has no absolute ceiling: a session id that
+reconnects at least once every 7 days stays valid indefinitely (the id is the
+credential, and the legitimate helper keeps working the same way an attacker
+holding a copy would). Revoke the bridge in Mullion if the laptop or credential
+may be compromised; revocation takes effect immediately.
 
 If pairing is redirected to an SSO login page, a forward-auth proxy is
 intercepting `/ws/agent-bridge` before it reaches Mullion. See the
