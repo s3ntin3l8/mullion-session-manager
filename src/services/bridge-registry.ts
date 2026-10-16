@@ -141,11 +141,15 @@ export function cleanupExpiredPairingCodes(app: FastifyInstance): void {
 // long if it's never used.
 const PAIRING_CODE_TTL_MS = 10 * 60 * 1000;
 
-// Matches hosts.ts's own SESSION_TTL_MS — a bridge's live session is
-// renewed well before expiry the same way an enrolled host's is
-// (agent-enrollment.ts's own renewal timer; Mullion Helper does the
-// equivalent for a bridge).
-const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+// Deliberately longer than hosts.ts's own 24h SESSION_TTL_MS: a laptop
+// helper sleeps, leaves the LAN, or is simply off for days, and a bridge
+// has no bootstrap credential to fall back on once its session lapses (the
+// only recovery is a brand-new pairing code). A helper renews while awake
+// (POST /api/bridges/renew) and every successful "auth" handshake slides
+// the expiry forward (extendBridgeSession), so this only bounds how long a
+// laptop can be unreachable before it must re-pair. Revoking from Settings
+// still takes effect immediately.
+const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 export interface PairingCode {
   bridgeId: string;
@@ -331,6 +335,27 @@ export function rotateBridgeSession(
   const row = findLiveSession(app, bridgeId, presentedSessionId);
   if (!row) return null;
   return issueSession(app, bridgeId);
+}
+
+/** Slides a live session's expiry forward to a full TTL from now WITHOUT
+ * rotating the session id — called on every accepted "auth" handshake so a
+ * helper that reconnects at least once per TTL never expires, even if its
+ * own renewal timer never fired (e.g. the laptop slept through it). Rotating
+ * here instead would invalidate a credential a still-in-flight reconnect is
+ * relying on (see routes/agent-bridge.ts's "auth" branch). Returns the new
+ * expiry, or null if there is no live session to extend. */
+export function extendBridgeSession(
+  app: FastifyInstance,
+  bridgeId: string,
+  presentedSessionId: string,
+): Date | null {
+  if (!findLiveSession(app, bridgeId, presentedSessionId)) return null;
+  // The column stores whole seconds — truncate here so the value handed back
+  // to the caller (and on to the helper in the "ready" reply) is exactly what
+  // a later read of the row returns.
+  const expiresAt = new Date(Math.floor((Date.now() + SESSION_TTL_MS) / 1000) * 1000);
+  app.db.update(bridges).set({ sessionExpiresAt: expiresAt }).where(eq(bridges.id, bridgeId)).run();
+  return expiresAt;
 }
 
 export function verifyBridgeSession(
