@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.3.41](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.40...v0.3.41) (2026-10-16)
+
+
+### Features
+
+* isolated demo instance and screenshot pipeline ([#1619](https://github.com/s3ntin3l8/mullion-session-manager/issues/1619)) ([56aec6d](https://github.com/s3ntin3l8/mullion-session-manager/commit/56aec6dcbd4ef83543f84e7eb9f43e13c685dae8))
+* parent sessions can inspect and kill their own children ([#1632](https://github.com/s3ntin3l8/mullion-session-manager/issues/1632)) ([504fd77](https://github.com/s3ntin3l8/mullion-session-manager/commit/504fd77cb349cea4374b9da9cf2c6a1351af212a))
+* relay Hermes review requests from Mullion sessions ([#1631](https://github.com/s3ntin3l8/mullion-session-manager/issues/1631)) ([1fe515c](https://github.com/s3ntin3l8/mullion-session-manager/commit/1fe515c1d80994c5aff6ad47247492d919a5c21a))
+* server-owned sessions.wait for child session status ([#1633](https://github.com/s3ntin3l8/mullion-session-manager/issues/1633)) ([7b7fd70](https://github.com/s3ntin3l8/mullion-session-manager/commit/7b7fd70375dedadbb98d7f4d67abe61c1e0e0b58))
+
+
+### Bug Fixes
+
+* **right-sidebar:** center icon buttons, inline project picker, flat CI checklist ([#1620](https://github.com/s3ntin3l8/mullion-session-manager/issues/1620)) ([3b6f539](https://github.com/s3ntin3l8/mullion-session-manager/commit/3b6f539ba5e914cce876861c63e6cc55a16ab3c0))
+
 ## [0.3.40](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.39...v0.3.40) (2026-10-15)
 
 
