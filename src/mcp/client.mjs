@@ -1,5 +1,11 @@
 import net from "node:net";
-import { MullionSocketClient, isMissingIdError, resolveOwnSessionId } from "../cli/client.mjs";
+import {
+  MullionSocketClient,
+  WAIT_DEFAULT_TIMEOUT_MS,
+  WAIT_SOCKET_SLACK_MS,
+  isMissingIdError,
+  resolveOwnSessionId,
+} from "../cli/client.mjs";
 
 // Issue #271 — the transport half of the `mullion mcp` server (issue #134's
 // eventual CLI/MCP surface starts here): a thin client wrapping however a
@@ -86,8 +92,11 @@ export class MullionClient {
    * it into a tool-level `isError:true` with the error's own message, the
    * same posture as this class's other methods never throwing something
    * unhelpful. */
-  async controlRequest(op, body) {
-    const client = new MullionSocketClient({ env: this._env });
+  async controlRequest(op, body, requestTimeoutMs) {
+    const client = new MullionSocketClient({
+      env: this._env,
+      ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
+    });
     try {
       return await client.request(op, body);
     } finally {
@@ -442,6 +451,20 @@ export class MullionClient {
       }
       return this.controlRequest("sessions.children", { sessionId: this.ownSessionId });
     }
+  }
+
+  /** Server-side wait on a child's derived status (sessions.wait). The
+   * socket request timeout is stretched to outlast the wait itself. */
+  async waitForSession({ sessionId, until, timeoutMs, afterSeq }) {
+    const body = { sessionId };
+    if (until !== undefined) body.until = until;
+    if (timeoutMs !== undefined) body.timeoutMs = timeoutMs;
+    if (afterSeq !== undefined) body.afterSeq = afterSeq;
+    return this.controlRequest(
+      "sessions.wait",
+      body,
+      (timeoutMs ?? WAIT_DEFAULT_TIMEOUT_MS) + WAIT_SOCKET_SLACK_MS,
+    );
   }
 
   /** Kills a child session. Session scope may only name a child of its own

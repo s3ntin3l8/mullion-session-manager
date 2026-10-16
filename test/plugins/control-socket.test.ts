@@ -1952,6 +1952,198 @@ describe("controlSocketPlugin (issue #185)", () => {
         full.destroy();
       });
 
+      describe("sessions.wait", () => {
+        const ANY = ["busy", "dormant", "waiting", "done", "blocked", "failed", "gone"];
+
+        it("a parent waits on its child; returns the derived status and the child's eventSeq", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { hookToken } = await createRealSession();
+          const { childId } = await spawnChildOf(hookToken);
+          const socket = await sessionScopeSocket(hookToken);
+          const reply = await ask(socket, "sessions.wait", { sessionId: childId, until: ANY });
+          expect(reply.ok).toBe(true);
+          expect(reply.result).toMatchObject({
+            timedOut: false,
+            status: expect.any(String),
+            severity: expect.any(String),
+            eventSeq: expect.any(Number),
+          });
+          socket.destroy();
+        });
+
+        it("times out with timedOut:true when the status never matches", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { hookToken } = await createRealSession();
+          const { childId } = await spawnChildOf(hookToken);
+          const socket = await sessionScopeSocket(hookToken);
+          const reply = await ask(socket, "sessions.wait", {
+            sessionId: childId,
+            until: ["awaiting_elicitation"],
+            timeoutMs: 100,
+          });
+          expect(reply.ok).toBe(true);
+          expect(reply.result).toMatchObject({ timedOut: true });
+          socket.destroy();
+        });
+
+        it("afterSeq equal to the child's current head holds a match back; a stale (ahead) cursor is ignored", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { hookToken } = await createRealSession();
+          const { childId } = await spawnChildOf(hookToken);
+          const socket = await sessionScopeSocket(hookToken);
+          const first = await ask(socket, "sessions.wait", { sessionId: childId, until: ANY });
+          const head = (first.result as { eventSeq: number }).eventSeq;
+          const held = await ask(socket, "sessions.wait", {
+            sessionId: childId,
+            until: ANY,
+            afterSeq: head,
+            timeoutMs: 100,
+          });
+          expect(held.result).toMatchObject({ timedOut: true });
+          const stale = await ask(socket, "sessions.wait", {
+            sessionId: childId,
+            until: ANY,
+            afterSeq: head + 1_000_000,
+            timeoutMs: 5_000,
+          });
+          expect(stale.result).toMatchObject({ timedOut: false });
+          socket.destroy();
+        });
+
+        it("caps pending waits per connection with a 429", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { hookToken } = await createRealSession();
+          const { childId } = await spawnChildOf(hookToken);
+          const socket = await sessionScopeSocket(hookToken);
+          const frames = collectFrames(socket);
+          for (let id = 1; id <= 5; id++) {
+            socket.write(
+              `${JSON.stringify({ id, op: "sessions.wait", body: { sessionId: childId, until: ["awaiting_elicitation"], timeoutMs: 60_000 } })}\n`,
+            );
+          }
+          await waitUntil(() => frames.some((f) => f.id === 5));
+          expect(frames.find((f) => f.id === 5)).toMatchObject({ ok: false, status: 429 });
+          // The first four are still pending (no replies).
+          expect(frames.filter((f) => f.id !== 5)).toEqual([]);
+          socket.destroy();
+        });
+
+        it("ends a pending wait with 403 once the waiting parent is no longer active", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { sessionId, hookToken } = await createRealSession();
+          const { childId } = await spawnChildOf(hookToken);
+          const socket = await sessionScopeSocket(hookToken);
+          socket.write(
+            `${JSON.stringify({ id: 1, op: "sessions.wait", body: { sessionId: childId, until: ["awaiting_elicitation"], timeoutMs: 60_000 } })}\n`,
+          );
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          app.db.update(sessions).set({ status: "killed" }).where(eq(sessions.id, sessionId)).run();
+          const reply = await waitForReply(socket);
+          expect(reply).toMatchObject({ ok: false, status: 403 });
+          socket.destroy();
+        });
+
+        it("a wait on an exited child resolves as gone regardless of afterSeq", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { hookToken } = await createRealSession();
+          const { childId } = await spawnChildOf(hookToken);
+          app.db.update(sessions).set({ status: "exited" }).where(eq(sessions.id, childId)).run();
+          const socket = await sessionScopeSocket(hookToken);
+          const reply = await ask(socket, "sessions.wait", {
+            sessionId: childId,
+            afterSeq: 1_000_000,
+            timeoutMs: 5_000,
+          });
+          expect(reply.result).toMatchObject({ severity: "gone", timedOut: false });
+          socket.destroy();
+        });
+
+        it("rejects bad arguments with 400", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { hookToken } = await createRealSession();
+          const { childId } = await spawnChildOf(hookToken);
+          const socket = await sessionScopeSocket(hookToken);
+          for (const extra of [
+            { until: [] },
+            { until: ["bogus"] },
+            { timeoutMs: -1 },
+            { timeoutMs: "5" },
+            { afterSeq: -1 },
+            { afterSeq: 1.5 },
+          ]) {
+            expect(
+              await ask(socket, "sessions.wait", { sessionId: childId, ...extra }),
+            ).toMatchObject({ ok: false, status: 400 });
+          }
+          socket.destroy();
+        });
+
+        it("session scope may not wait on itself, a stranger, or nothing", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { sessionId, hookToken } = await createRealSession();
+          const { sessionId: stranger } = await createRealSession();
+          const socket = await sessionScopeSocket(hookToken);
+          expect(await ask(socket, "sessions.wait", { sessionId })).toMatchObject({
+            ok: false,
+            status: 403,
+          });
+          expect(await ask(socket, "sessions.wait")).toMatchObject({ ok: false, status: 403 });
+          expect(await ask(socket, "sessions.wait", { sessionId: stranger })).toEqual({
+            id: 1,
+            ...NOT_MINE,
+          });
+          socket.destroy();
+        });
+
+        it("full scope: waits on any session by id; 400 without one", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { sessionId } = await createRealSession();
+          const full = await fullScopeSocket();
+          expect(await ask(full, "sessions.wait")).toMatchObject({ ok: false, status: 400 });
+          const reply = await ask(full, "sessions.wait", { sessionId, until: ANY });
+          expect(reply.result).toMatchObject({ timedOut: false });
+          full.destroy();
+        });
+
+        it("full scope: a nonexistent session is a 404", async () => {
+          app = await buildApp();
+          await app.ready();
+          const full = await fullScopeSocket();
+          expect(await ask(full, "sessions.wait", { sessionId: 999999 })).toMatchObject({
+            ok: false,
+            status: 404,
+          });
+          full.destroy();
+        });
+
+        it("a closed connection abandons the wait without error or reply", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { hookToken } = await createRealSession();
+          const { childId } = await spawnChildOf(hookToken);
+          const socket = await sessionScopeSocket(hookToken);
+          socket.write(
+            `${JSON.stringify({ id: 1, op: "sessions.wait", body: { sessionId: childId, until: ["awaiting_elicitation"] } })}\n`,
+          );
+          await new Promise((resolve) => setTimeout(resolve, 150));
+          socket.destroy();
+          await new Promise((resolve) => setTimeout(resolve, 150));
+          // Server still serves a fresh connection normally.
+          const again = await sessionScopeSocket(hookToken);
+          expect((await ask(again, "sessions.get")).ok).toBe(true);
+          again.destroy();
+        });
+      });
+
       it("events.query: a parent may name its child's id, a stranger's is 403", async () => {
         app = await buildApp();
         await app.ready();

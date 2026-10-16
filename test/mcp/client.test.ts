@@ -1,9 +1,10 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import net from "node:net";
 import path from "node:path";
 import os from "node:os";
 import { mkdtempSync, rmSync } from "node:fs";
 import { MullionClient } from "../../src/mcp/client.mjs";
+import { MullionSocketClient } from "../../src/cli/client.mjs";
 
 // Issue #271 — mirrors test/hooks/forwarder.test.ts's "real socket, real
 // client" posture for MullionClient.promoteRequest, the transport half of
@@ -327,6 +328,55 @@ describe("MullionClient (issue #271)", () => {
       calls = 0;
       const noEnv = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
       await expect(noEnv.listChildSessions()).rejects.toThrow("'sessionId' is required");
+    });
+
+    it("waitForSession stretches the socket request timeout to outlast the wait (+15 s), defaulting to the server's 10 min", async () => {
+      const seen: number[] = [];
+      const original = MullionSocketClient.prototype.request;
+      const spy = vi.spyOn(MullionSocketClient.prototype, "request").mockImplementation(function (
+        this: MullionSocketClient,
+        op: string,
+        body: unknown,
+      ) {
+        seen.push(this.requestTimeoutMs);
+        return original.call(this, op, body);
+      });
+      try {
+        const socketPath = await startControlServer((msg, socket) => {
+          socket.write(
+            `${JSON.stringify({ id: msg.id, ok: true, status: 200, result: { timedOut: false } })}\n`,
+          );
+        });
+        const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+        await client.waitForSession({ sessionId: "5", timeoutMs: 2_000 });
+        await client.waitForSession({ sessionId: "5" });
+        expect(seen).toEqual([17_000, 615_000]);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it("waitForSession sends sessions.wait with only the options given", async () => {
+      const bodies: unknown[] = [];
+      const socketPath = await startControlServer((msg, socket) => {
+        expect(msg.op).toBe("sessions.wait");
+        bodies.push(msg.body);
+        socket.write(
+          `${JSON.stringify({ id: msg.id, ok: true, status: 200, result: { timedOut: false } })}\n`,
+        );
+      });
+      const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+      await client.waitForSession({ sessionId: "5" });
+      await client.waitForSession({
+        sessionId: "5",
+        until: ["done"],
+        timeoutMs: 2_000,
+        afterSeq: 9,
+      });
+      expect(bodies).toEqual([
+        { sessionId: "5" },
+        { sessionId: "5", until: ["done"], timeoutMs: 2_000, afterSeq: 9 },
+      ]);
     });
 
     it("killChildSession sends sessions.kill with just the sessionId", async () => {

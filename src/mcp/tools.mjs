@@ -6,6 +6,8 @@
 // shape by server.mjs) or throws, which server.mjs turns into a tool-level
 // `isError: true` result rather than a protocol-level failure.
 
+import { WAIT_MAX_TIMEOUT_MS } from "../cli/client.mjs";
+
 /**
  * Issue #271, option 2 — lets the model itself decide "start work now" and
  * hand Mullion a seed/summary + an optional suggested base ref. Blocks
@@ -348,6 +350,69 @@ const listChildSessions = {
   },
   async handler(args, client) {
     const result = await client.listChildSessions(args?.sessionId);
+    return JSON.stringify(result);
+  },
+};
+
+const waitForSession = {
+  name: "wait_for_session",
+  description:
+    "Block (server-side) until a child session you spawned needs attention — finished its turn, " +
+    "is waiting on a permission/plan/question, hit an error, or exited — or until the timeout. " +
+    "Returns {status, severity, detail, timedOut, eventSeq}. Prefer this to polling " +
+    "list_child_sessions. The default timeout is 50s so it fits an MCP tool-call budget: on " +
+    "timedOut:true just call it again. Pass the previous result's eventSeq as afterSeq to ignore " +
+    "a status you've already seen. Session scope may only wait on its own children.",
+  inputSchema: {
+    type: "object",
+    required: ["sessionId"],
+    properties: {
+      sessionId: { type: "string", description: "The child session id to wait on." },
+      until: {
+        type: "array",
+        items: { type: "string" },
+        description:
+          "Statuses (e.g. 'finished', 'awaiting_permission', 'exited') and/or severities " +
+          "('done','blocked','waiting','failed','gone','busy','dormant') to stop at. Default: " +
+          "done, blocked, waiting, failed, gone.",
+      },
+      timeoutSeconds: {
+        type: "number",
+        description: "Max seconds to wait (default 50, max 3600).",
+      },
+      afterSeq: {
+        type: "number",
+        description: "Only match once the session has emitted an event newer than this seq.",
+      },
+    },
+  },
+  async handler(args, client) {
+    if (typeof args?.sessionId !== "string" || args.sessionId.length === 0) {
+      throw new Error("sessionId is required");
+    }
+    const seconds = typeof args.timeoutSeconds === "number" ? args.timeoutSeconds : 50;
+    // Same check as the CLI: a non-positive timeout would otherwise reach the
+    // server's 400 — or, with the +15 s socket slack, fire the client timer
+    // first and surface as a misleading "timed out waiting for a reply".
+    if (!Number.isFinite(seconds) || seconds <= 0) {
+      throw new Error("timeoutSeconds must be a positive number");
+    }
+    // Same local check as the CLI's --after-seq (saves a round trip and the
+    // server's raw 400).
+    if (
+      args.afterSeq !== undefined &&
+      (typeof args.afterSeq !== "number" || !Number.isInteger(args.afterSeq) || args.afterSeq < 0)
+    ) {
+      throw new Error("afterSeq must be a non-negative integer");
+    }
+    const result = await client.waitForSession({
+      sessionId: args.sessionId,
+      until: args.until,
+      // Clamp to the server's 1 h max (a larger value would overflow the
+      // socket client's 32-bit setTimeout).
+      timeoutMs: Math.min(Math.round(seconds * 1000), WAIT_MAX_TIMEOUT_MS),
+      afterSeq: args.afterSeq,
+    });
     return JSON.stringify(result);
   },
 };
@@ -735,6 +800,7 @@ export const TOOLS = [
   startDockSession,
   spawnChildSession,
   listChildSessions,
+  waitForSession,
   killChildSession,
   stopDockSession,
   getScrollback,
