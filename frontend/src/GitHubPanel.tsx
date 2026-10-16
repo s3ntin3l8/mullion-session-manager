@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api/index.js";
 import type {
   GitHubActionsRun,
@@ -99,7 +99,7 @@ function JobRow({ projectId, runId, job }: { projectId: number; runId: number; j
   }, [projectId, runId, job.id, log]);
 
   return (
-    <div className="github-panel-job-row">
+    <div>
       <button
         className="github-panel-run-row"
         onClick={(e) => {
@@ -196,7 +196,8 @@ function isSkipped(job: GitHubJob): boolean {
 
 function prCiSummary(pr: GitHubPROrWithChecks, jobsByRun: Record<number, RunJobs>): string | null {
   const loaded = Object.values(jobsByRun).filter((j): j is GitHubJob[] => Array.isArray(j));
-  if (loaded.length > 0 && loaded.length === pr.actionsRuns.length) {
+  const fetchable = pr.actionsRuns.filter((r) => runIdFromUrl(r.htmlUrl) != null).length;
+  if (loaded.length > 0 && loaded.length === fetchable) {
     const all = loaded.flat();
     const failed = all.filter((j) => checkDotClass(j.status, j.conclusion) === "bad").length;
     const pending = all.filter((j) => checkDotClass(j.status, j.conclusion) === "pending").length;
@@ -213,13 +214,16 @@ function prCiSummary(pr: GitHubPROrWithChecks, jobsByRun: Record<number, RunJobs
   }
   if (pr.actionsRuns.length === 0) return null;
   const failing = pr.actionsRuns.filter((r) => checkDotClass(r.status, r.conclusion) === "bad");
-  if (failing.length > 0) return `${failing.length} failing`;
+  if (failing.length > 0) return `${failing.length} failed`;
   return `${pr.actionsRuns.length} run${pr.actionsRuns.length === 1 ? "" : "s"}`;
 }
 
 function PRCard({ pr, projectId }: { pr: GitHubPROrWithChecks; projectId: number }) {
   const [expanded, setExpanded] = useState(false);
   const [jobsByRun, setJobsByRun] = useState<Record<number, RunJobs>>({});
+  // Run ids already requested (in flight or settled): a collapse/re-expand
+  // before the first batch resolves must not re-issue the fetches.
+  const requested = useRef(new Set<number>());
 
   // Expanding fetches every run's jobs (once) so the body is one flat list.
   const toggle = () => {
@@ -228,7 +232,8 @@ function PRCard({ pr, projectId }: { pr: GitHubPROrWithChecks; projectId: number
     if (!next) return;
     for (const run of pr.actionsRuns) {
       const runId = runIdFromUrl(run.htmlUrl);
-      if (runId == null || jobsByRun[runId] !== undefined) continue;
+      if (runId == null || requested.current.has(runId)) continue;
+      requested.current.add(runId);
       api
         .getGitHubRunJobs(projectId, runId)
         .then((j) => setJobsByRun((m) => ({ ...m, [runId]: j })))

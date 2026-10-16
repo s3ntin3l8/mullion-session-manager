@@ -84,7 +84,10 @@ export function useFollowedProject(): FollowedProject {
     pinnedProjectId ?? derivedId ?? lastDerivedId ?? projects[0]?.id ?? null;
   // While following, the option names the project actually on screen; once
   // pinned it reads as the action that releases the pin.
-  const followedName = projects.find((p) => p.id === effectiveProjectId)?.name;
+  // Only a real follow source counts — the first-project fallback isn't
+  // "following" anything.
+  const followSourceId = derivedId ?? lastDerivedId;
+  const followedName = projects.find((p) => p.id === followSourceId)?.name;
   const followLabel =
     pinnedProjectId == null && followedName ? `Following: ${followedName}` : "Follow active panel";
   const dropdownOptions = [

@@ -373,6 +373,34 @@ describe("GitHubPanel", () => {
     expect(screen.getByText("merge")).toBeInTheDocument();
   });
 
+  it("summarises only fetchable runs, and fetches each run's jobs once across re-expands", async () => {
+    const prs = structuredClone(PRS_WITH_RUN);
+    prs.prs[0].actionsRuns.push({
+      name: "Bare",
+      status: "completed",
+      conclusion: "success",
+      htmlUrl: "https://example.com/no-run-id",
+      headSha: "abc123",
+    });
+    const fetchMock = vi.fn((url: string) => {
+      if (url.endsWith("/github/prs")) return Promise.resolve(jsonResponse(200, prs));
+      if (url.endsWith("/release"))
+        return Promise.resolve(jsonResponse(200, RELEASE_NOT_CONFIGURED));
+      if (url.endsWith("/jobs")) return Promise.resolve(jsonResponse(200, [JOB]));
+      return Promise.resolve(jsonResponse(200, STATUS));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<GitHubPanel params={{ projectId: 12 }} />);
+
+    const header = (await screen.findByText("Fix attention race")).closest("button")!;
+    await userEvent.click(header);
+    await userEvent.click(header);
+    await userEvent.click(header);
+
+    expect(await screen.findByText("✓1")).toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter(([u]) => String(u).endsWith("/jobs"))).toHaveLength(1);
+  });
+
   describe("Release section (#744)", () => {
     const RELEASE_WORKFLOW = {
       id: 2,
