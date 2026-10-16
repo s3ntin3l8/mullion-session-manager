@@ -183,7 +183,13 @@ function sendError(
   message: string,
   context: { handshakeType?: string; bridgeId?: string } = {},
 ): void {
-  app.log.warn({ ...context, reason: message }, "agent-bridge handshake rejected");
+  // bridge_id is client-supplied and unauthenticated here — cap it so a
+  // peer can't write arbitrarily large log lines.
+  const bridgeId = context.bridgeId?.slice(0, 64);
+  app.log.warn(
+    { ...context, ...(bridgeId === undefined ? {} : { bridgeId }), reason: message },
+    "agent-bridge handshake rejected",
+  );
   if (socket.readyState !== socket.OPEN) return;
   socket.send(JSON.stringify({ type: "error", message }));
   socket.close();
