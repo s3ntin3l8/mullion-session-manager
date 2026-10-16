@@ -1873,10 +1873,10 @@
    matches a job row's 24px (and .github-panel-log's own 24px left padding,
    for the log-output placeholders). */
 .github-panel-empty-row.indent-run {
-  padding-left: 16px;
+  padding-left: 10px;
 }
 .github-panel-empty-row.indent-job {
-  padding-left: 24px;
+  padding-left: 18px;
 }
 .github-panel-row {
   display: flex;
@@ -2114,8 +2114,14 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 12px;
-  font-size: 12px;
+  width: 100%;
+  padding: 5px 12px 5px 18px;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  font: inherit;
+  font-size: 11.5px;
+  text-align: left;
   color: var(--fg);
   text-decoration: none;
 }
@@ -2134,31 +2140,34 @@
   color: var(--dim);
   font-family: "Geist Mono", monospace;
 }
-
-.github-panel-run-group {
-  border-top: 1px solid var(--border);
+.github-panel-pr-ci-summary {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--dim);
+  font-family: "Geist Mono", monospace;
 }
 
-.github-panel-run-group .github-panel-run-row {
-  padding-left: 16px;
+/* A workflow run in a PR's expanded CI list: a plain label above its jobs. */
+.github-panel-ci-group {
+  padding-bottom: 4px;
 }
-
-.github-panel-job-row {
-  border-top: 1px solid var(--border);
+.github-panel-ci-group-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px 2px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--dim);
+  text-decoration: none;
 }
-
-.github-panel-job-row .github-panel-run-row {
-  padding-left: 24px;
-  font-size: 11.5px;
-}
-
-.github-panel-jobs {
-  border-top: 1px solid var(--border);
+.github-panel-ci-group-label:hover {
+  color: var(--fg);
 }
 
 .github-panel-log {
   margin: 0;
-  padding: 8px 16px 8px 24px;
+  padding: 8px 16px 8px 18px;
   font-size: 10.5px;
   font-family: "Geist Mono", monospace;
   line-height: 1.4;

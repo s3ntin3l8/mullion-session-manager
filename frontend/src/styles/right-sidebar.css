@@ -22,6 +22,7 @@
   height: 30px;
   display: grid;
   place-items: center;
+  padding: 0;
   border: 0;
   border-radius: 7px;
   background: transparent;
@@ -149,6 +150,7 @@
   place-items: center;
   width: 24px;
   height: 24px;
+  padding: 0;
   border: 0;
   border-radius: 6px;
   background: transparent;
@@ -161,11 +163,33 @@
   background: var(--seg);
 }
 
-.right-sidebar-project {
-  padding: 4px var(--rs-pad-x) 6px;
+/* One row: project chip (left) + the active view's toolbar icons (right,
+   portaled in by SidebarToolbar). */
+.right-sidebar-subbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px var(--rs-pad-x) 6px;
 }
-.right-sidebar-project > * {
+.right-sidebar-subbar > .settings-dropdown {
+  flex: 1;
+  min-width: 0;
+}
+.right-sidebar-subbar .settings-dropdown select {
   width: 100%;
+  background-color: transparent;
+  border-color: transparent;
+  text-overflow: ellipsis;
+  font-weight: 600;
+}
+.right-sidebar-subbar .settings-dropdown select:hover {
+  background-color: var(--seg);
+}
+.right-sidebar-toolbar-slot {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
 }
 .right-sidebar-body {
   flex: 1;
@@ -184,6 +208,12 @@
   align-items: center;
   gap: 2px;
   padding: 2px 0 8px;
+}
+.right-sidebar-toolbar-slot .right-sidebar-toolbar {
+  padding: 0;
+}
+.right-sidebar-icon-btn svg {
+  display: block;
 }
 .right-sidebar-toolbar .right-sidebar-icon-btn:disabled {
   opacity: 0.4;

@@ -275,7 +275,7 @@ describe("GitHubPanel", () => {
     expect(await screen.findByText("No workflow runs for this PR")).toBeInTheDocument();
   });
 
-  it("walks a PR's run through 'Loading jobs…' to the job list, then a job's log through 'Loading logs…' to its content", async () => {
+  it("walks a PR through 'Loading jobs…' to the job list, then a job's log through 'Loading logs…' to its content", async () => {
     const jobsGate = deferred<GitHubJob[]>();
     const logGate = deferred<GitHubLogResponse>();
     vi.stubGlobal(
@@ -295,9 +295,8 @@ describe("GitHubPanel", () => {
 
     const prHeader = await screen.findByText("Fix attention race");
     await userEvent.click(prHeader.closest("button")!);
-    const runHeader = await screen.findByText("CI");
-    await userEvent.click(runHeader.closest("button")!);
 
+    expect(await screen.findByText("CI")).toBeInTheDocument();
     expect(await screen.findByText("Loading jobs…")).toBeInTheDocument();
     jobsGate.resolve([JOB]);
     expect(await screen.findByText("build")).toBeInTheDocument();
@@ -315,8 +314,6 @@ describe("GitHubPanel", () => {
 
     const prHeader = await screen.findByText("Fix attention race");
     await userEvent.click(prHeader.closest("button")!);
-    const runHeader = await screen.findByText("CI");
-    await userEvent.click(runHeader.closest("button")!);
 
     expect(await screen.findByText("Failed to load jobs")).toBeInTheDocument();
   });
@@ -333,12 +330,75 @@ describe("GitHubPanel", () => {
 
     const prHeader = await screen.findByText("Fix attention race");
     await userEvent.click(prHeader.closest("button")!);
-    const runHeader = await screen.findByText("CI");
-    await userEvent.click(runHeader.closest("button")!);
     const jobHeader = await screen.findByText("build");
     await userEvent.click(jobHeader.closest("button")!);
 
     expect(await screen.findByText("No log output")).toBeInTheDocument();
+  });
+
+  it("lists failures first, folds skipped jobs into one row, and summarises the PR header", async () => {
+    const job = (id: number, name: string, conclusion: string | null, status = "completed") => ({
+      ...JOB,
+      id,
+      name,
+      status,
+      conclusion,
+    });
+    vi.stubGlobal(
+      "fetch",
+      mockFetchWithAccordion({
+        jobs: [
+          job(1, "lint", "success"),
+          job(2, "e2e", "failure"),
+          job(3, "shard-plan", "skipped"),
+          job(4, "merge", "skipped"),
+          job(5, "deploy", null, "in_progress"),
+        ],
+      }),
+    );
+    render(<GitHubPanel params={{ projectId: 11 }} />);
+
+    const prHeader = await screen.findByText("Fix attention race");
+    expect(screen.getByText("1 run")).toBeInTheDocument();
+    await userEvent.click(prHeader.closest("button")!);
+
+    expect(await screen.findByText("e2e")).toBeInTheDocument();
+    const names = screen.getAllByText(/^(lint|e2e|deploy)$/).map((n) => n.textContent);
+    expect(names).toEqual(["e2e", "deploy", "lint"]);
+    expect(screen.getByText("✗1 ⋯1 ✓1 –2")).toBeInTheDocument();
+    expect(screen.queryByText("shard-plan")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByText("2 skipped").closest("button")!);
+    expect(screen.getByText("shard-plan")).toBeInTheDocument();
+    expect(screen.getByText("merge")).toBeInTheDocument();
+  });
+
+  it("summarises only fetchable runs, and fetches each run's jobs once across re-expands", async () => {
+    const prs = structuredClone(PRS_WITH_RUN);
+    prs.prs[0].actionsRuns.push({
+      name: "Bare",
+      status: "completed",
+      conclusion: "success",
+      htmlUrl: "https://example.com/no-run-id",
+      headSha: "abc123",
+    });
+    const fetchMock = vi.fn((url: string) => {
+      if (url.endsWith("/github/prs")) return Promise.resolve(jsonResponse(200, prs));
+      if (url.endsWith("/release"))
+        return Promise.resolve(jsonResponse(200, RELEASE_NOT_CONFIGURED));
+      if (url.endsWith("/jobs")) return Promise.resolve(jsonResponse(200, [JOB]));
+      return Promise.resolve(jsonResponse(200, STATUS));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<GitHubPanel params={{ projectId: 12 }} />);
+
+    const header = (await screen.findByText("Fix attention race")).closest("button")!;
+    await userEvent.click(header);
+    await userEvent.click(header);
+    await userEvent.click(header);
+
+    expect(await screen.findByText("✓1")).toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter(([u]) => String(u).endsWith("/jobs"))).toHaveLength(1);
   });
 
   describe("Release section (#744)", () => {

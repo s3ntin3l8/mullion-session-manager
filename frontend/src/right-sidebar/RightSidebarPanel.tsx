@@ -1,6 +1,8 @@
+import { useState } from "react";
 import { Dropdown } from "../ui/primitives.js";
 import { CloseIcon, PinIcon } from "../ui/icons.js";
 import type { FollowedProject } from "../hooks/useFollowedProject.js";
+import { SidebarToolbarSlotContext } from "./sidebarToolbarSlot.js";
 import type { RightSidebarActions, RightSidebarView } from "./views.js";
 
 export interface RightSidebarPanelProps {
@@ -25,6 +27,7 @@ export function RightSidebarPanel({
 }: RightSidebarPanelProps) {
   const View = view.Component;
   const projectId = followed.effectiveProjectId;
+  const [toolbarSlot, setToolbarSlot] = useState<HTMLElement | null>(null);
   return (
     <>
       <div className="right-sidebar-header">
@@ -57,16 +60,20 @@ export function RightSidebarPanel({
         <div className="github-panel-empty-row">No projects yet.</div>
       ) : (
         <>
-          <div className="right-sidebar-project">
+          <div className="right-sidebar-subbar">
             <Dropdown
               small
+              ariaLabel="Project"
               options={followed.dropdownOptions}
               value={followed.dropdownValue}
               onChange={followed.onDropdownChange}
             />
+            <div className="right-sidebar-toolbar-slot" ref={setToolbarSlot} />
           </div>
           <div className="right-sidebar-body cmux-scroll">
-            <View projectId={projectId} actions={actions} />
+            <SidebarToolbarSlotContext.Provider value={toolbarSlot}>
+              <View projectId={projectId} actions={actions} />
+            </SidebarToolbarSlotContext.Provider>
           </div>
         </>
       )}
