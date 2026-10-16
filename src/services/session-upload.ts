@@ -127,8 +127,9 @@ const MAX_UPLOAD_NAME_LENGTH = 100;
  * Reduces a caller-supplied file name to a safe, shell-friendly basename:
  * directory components dropped, every character outside `[A-Za-z0-9._-]`
  * replaced with `_`, leading dots stripped (no hidden files, no `..`), and
- * the length capped while keeping the extension. The result can be pasted
- * into a terminal without quoting. Falls back to `file`.
+ * the length capped while keeping the extension. The name part can be pasted
+ * into a terminal without quoting (the directory part is the session's own
+ * cwd and is not sanitized). Falls back to `file`.
  */
 export function sanitizeUploadName(name: string): string {
   const base = name.split(/[\\/]/).pop() ?? "";

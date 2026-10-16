@@ -2016,7 +2016,7 @@ describe("TerminalPane image paste/upload (issue #68)", () => {
 
     triggerPasteChord();
 
-    await waitFor(() => expect(api.uploadSessionFile).toHaveBeenCalledWith(1, blob));
+    await waitFor(() => expect(api.uploadSessionFile).toHaveBeenCalledWith(1, blob, "pasted.png"));
     await waitFor(() => {
       expect(getLatestTermInstance().paste).toHaveBeenCalledWith("/cwd/.mullion-uploads/x.png ");
     });
@@ -2139,6 +2139,30 @@ describe("TerminalPane image paste/upload (issue #68)", () => {
     expect(getByText("Upload failed")).toBeTruthy();
   });
 
+  it("uploads at most 3 files at a time", async () => {
+    stubFakeWebSocket(true);
+    let inFlight = 0;
+    let peak = 0;
+    vi.mocked(api.uploadSessionFile).mockImplementation(async (_id, _blob, name) => {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      await new Promise((r) => setTimeout(r, 5));
+      inFlight--;
+      return { path: `/p/${name}` };
+    });
+
+    const { container } = renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    const files = Array.from({ length: 7 }, (_, i) => new File(["x"], `f${i}.txt`));
+    fireEvent.drop(container.firstElementChild as HTMLElement, {
+      dataTransfer: { types: ["Files"], files },
+    });
+
+    await waitFor(() => expect(api.uploadSessionFile).toHaveBeenCalledTimes(7));
+    await waitFor(() => expect(getLatestTermInstance().paste).toHaveBeenCalled());
+    expect(peak).toBe(3);
+  });
+
   it("skips dropped directories", async () => {
     stubFakeWebSocket(true);
     vi.mocked(api.uploadSessionFile).mockResolvedValue({ path: "/cwd/.mullion-uploads/u/f.txt" });
@@ -2147,9 +2171,19 @@ describe("TerminalPane image paste/upload (issue #68)", () => {
     await waitFor(() => expect(fakeSocket.readyState).toBe(1));
     const dir = new File([], "folder", { type: "" });
     const file = new File(["y"], "f.txt", { type: "text/plain" });
-    const entry = (isDirectory: boolean) => ({ webkitGetAsEntry: () => ({ isDirectory }) });
+    const entry = (isDirectory: boolean, f: File) => ({
+      kind: "file",
+      getAsFile: () => f,
+      webkitGetAsEntry: () => ({ isDirectory }),
+    });
+    // A string item (e.g. text/uri-list) sits first and must not shift indexes.
+    const str = { kind: "string", getAsFile: () => null };
     fireEvent.drop(container.firstElementChild as HTMLElement, {
-      dataTransfer: { types: ["Files"], files: [dir, file], items: [entry(true), entry(false)] },
+      dataTransfer: {
+        types: ["Files"],
+        files: [dir, file],
+        items: [str, entry(true, dir), entry(false, file)],
+      },
     });
 
     await waitFor(() => expect(api.uploadSessionFile).toHaveBeenCalledTimes(1));
@@ -2381,7 +2415,7 @@ describe("TerminalPane opt-in Ctrl+V / Ctrl+C clipboard chords (issue #67 follow
 
     triggerCtrlVChord();
 
-    await waitFor(() => expect(api.uploadSessionFile).toHaveBeenCalledWith(1, blob));
+    await waitFor(() => expect(api.uploadSessionFile).toHaveBeenCalledWith(1, blob, "pasted.png"));
     await waitFor(() => {
       expect(getLatestTermInstance().paste).toHaveBeenCalledWith("/cwd/.mullion-uploads/z.png ");
     });

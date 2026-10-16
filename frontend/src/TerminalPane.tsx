@@ -51,6 +51,27 @@ import { useVoiceDictation } from "./voice/useVoiceDictation.js";
 // rather than through the named type.
 import type { ResizeMessage, GeometryMessage } from "../../src/shared/ws-protocol.js";
 
+// The backend buffers each upload body in memory, so a multi-file drop is
+// uploaded a few at a time rather than all at once.
+const MAX_CONCURRENT_UPLOADS = 3;
+
+// Files from a drop, minus folders (which the browser exposes as an empty
+// pseudo-file the upload would just fail on). Walks `items` (kind === "file")
+// rather than index-matching it against `files` — a drag from another app can
+// carry string items too, which would shift the indexes. Falls back to
+// `files` where `items` is unavailable.
+function droppedFiles(dt: DataTransfer): File[] {
+  if (!dt.items || dt.items.length === 0) return Array.from(dt.files);
+  const out: File[] = [];
+  for (const item of Array.from(dt.items)) {
+    if (item.kind !== "file") continue;
+    if (item.webkitGetAsEntry?.()?.isDirectory) continue;
+    const file = item.getAsFile();
+    if (file) out.push(file);
+  }
+  return out;
+}
+
 // Independent code review, PR #708 — mirrors routes/terminal.ts's own
 // isResizeMessage() runtime guard for the opposite direction of the same
 // socket. Unlike a plain `(parsed as {type?:unknown}).type === "geometry"`
@@ -1475,20 +1496,37 @@ export function TerminalPane(props: {
     // trailing space keeps it from running straight into whatever the user
     // types next.
     //
-    // Handles several files (a multi-file drop or picker selection): all are
-    // uploaded in parallel and the paths that made it are pasted together, in
-    // the order the files were given, as one paste. One failed upload flags
-    // the error state but doesn't discard the others' paths.
+    // Handles several files (a multi-file drop or picker selection): uploaded
+    // a few at a time (the backend buffers each body in memory) and the paths
+    // that made it are pasted together, in the order the files were given, as
+    // one paste. One failed upload flags the error state but doesn't discard
+    // the others' paths. A bare Blob (clipboard image) has no name, so it gets
+    // one from its mime subtype to keep a usable extension.
     function uploadAndInjectFiles(files: Blob[]): void {
       if (files.length === 0) return;
       setUploadState("uploading");
-      Promise.allSettled(
-        files.map((file) =>
+      const uploadOne = (file: Blob) =>
+        api.uploadSessionFile(
+          props.params.sessionId,
+          file,
           file instanceof File
-            ? api.uploadSessionFile(props.params.sessionId, file, file.name)
-            : api.uploadSessionFile(props.params.sessionId, file),
-        ),
-      ).then((results) => {
+            ? file.name
+            : `pasted.${file.type.split("/")[1]?.split("+")[0] || "bin"}`,
+        );
+      const results: PromiseSettledResult<{ path: string }>[] = new Array(files.length);
+      let next = 0;
+      const worker = async () => {
+        while (next < files.length) {
+          const i = next++;
+          results[i] = await uploadOne(files[i]!).then(
+            (value): PromiseFulfilledResult<{ path: string }> => ({ status: "fulfilled", value }),
+            (reason: unknown): PromiseRejectedResult => ({ status: "rejected", reason }),
+          );
+        }
+      };
+      Promise.all(
+        Array.from({ length: Math.min(MAX_CONCURRENT_UPLOADS, files.length) }, worker),
+      ).then(() => {
         if (destroyed) return;
         const paths: string[] = [];
         let failed = false;
@@ -2301,13 +2339,7 @@ export function TerminalPane(props: {
         e.preventDefault();
         setDragActive(false);
         if (!inputAffordancesRef.current) return;
-        // Folders show up in `files` too (as an empty pseudo-file the upload
-        // would just fail on), so skip any entry the browser reports as a
-        // directory. `items` and `files` are index-aligned for a drop.
-        const items = Array.from(e.dataTransfer.items ?? []);
-        const files = Array.from(e.dataTransfer.files).filter(
-          (_file, i) => !items[i]?.webkitGetAsEntry?.()?.isDirectory,
-        );
+        const files = droppedFiles(e.dataTransfer);
         if (files.length > 0) uploadImageRef.current(files);
       }}
     >

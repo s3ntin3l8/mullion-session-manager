@@ -4407,6 +4407,21 @@ describe("internal routes (agent role, issue #26)", () => {
       await app.close();
     });
 
+    it("rejects a request carrying both mime and name", async () => {
+      const app = await buildApp();
+      const cwd = fs.mkdtempSync(path.join(projectsRoot, "upload-"));
+      const res = await app.inject({
+        method: "POST",
+        url: `/internal/uploads?cwd=${encodeURIComponent(cwd)}&mime=image%2Fpng&name=a.png`,
+        headers: { authorization: `Bearer ${TOKEN}`, "content-type": "image/png" },
+        payload: PNG_BYTES,
+      });
+      expect(res.statusCode).toBe(400);
+
+      fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+    });
+
     it("requires cwd and mime query params", async () => {
       const app = await buildApp();
       const res = await app.inject({

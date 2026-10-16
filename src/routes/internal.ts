@@ -2308,6 +2308,7 @@ export async function internalRoutes(app: FastifyInstance) {
       }
       const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
       if (resolvedCwd === null) return;
+      if (mime && name) return reply.badRequest("mime and name are mutually exclusive");
       if (!mime && name) {
         if (!Buffer.isBuffer(request.body)) return reply.badRequest("expected a raw file body");
         return { path: saveSessionFileUpload(resolvedCwd, request.body, name) };
