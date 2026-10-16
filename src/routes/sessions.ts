@@ -1270,7 +1270,10 @@ export async function sessionsRoute(app: FastifyInstance) {
       if (isGenericFile) {
         const rawName = request.headers["x-upload-filename"];
         try {
-          if (typeof rawName === "string") fileName = decodeURIComponent(rawName);
+          // A present-but-empty header decodes to "", which the agent route
+          // would reject as a missing name — normalise so local and remote
+          // hosts behave the same.
+          if (typeof rawName === "string") fileName = decodeURIComponent(rawName) || "file";
         } catch {
           return reply.badRequest("Invalid X-Upload-Filename header");
         }

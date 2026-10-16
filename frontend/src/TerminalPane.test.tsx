@@ -2232,6 +2232,27 @@ describe("TerminalPane image paste/upload (issue #68)", () => {
     expect(screen.getByText("Only the first 20 of 25 files were uploaded")).toBeInTheDocument();
   });
 
+  it("stops adding files once a drop would exceed the total byte cap", async () => {
+    stubFakeWebSocket(true);
+    vi.mocked(api.uploadSessionFile).mockImplementation(async (_id, _blob, name) => ({
+      path: `/p/${name}`,
+    }));
+
+    const { container } = renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    const big = (name: string) => {
+      const f = new File(["x"], name);
+      Object.defineProperty(f, "size", { value: 60 * 1024 * 1024 });
+      return f;
+    };
+    fireEvent.drop(container.firstElementChild as HTMLElement, {
+      dataTransfer: { types: ["Files"], files: [big("a.bin"), big("b.bin")] },
+    });
+
+    await waitFor(() => expect(api.uploadSessionFile).toHaveBeenCalledTimes(1));
+    expect(screen.getByText("Only the first 1 of 2 files were uploaded")).toBeInTheDocument();
+  });
+
   it("reports skipped folders in a notice", async () => {
     stubFakeWebSocket(true);
     vi.mocked(api.uploadSessionFile).mockResolvedValue({ path: "/p/f.txt" });

@@ -1269,6 +1269,30 @@ describe("sessions route", () => {
       await app.close();
     });
 
+    it("treats a present-but-empty X-Upload-Filename like an absent one", async () => {
+      const app = await buildApp();
+      const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "sessions-upload-file-"));
+      const projectId = await createProjectWithCwd(app, cwd);
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${created.json().id}/uploads`,
+        headers: { "content-type": "application/octet-stream", "x-upload-filename": "" },
+        payload: Buffer.from("data"),
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(path.basename(res.json().path)).toBe("file");
+
+      fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+    });
+
     it("400s a generic upload with a malformed percent-encoded X-Upload-Filename", async () => {
       const app = await buildApp();
       const projectId = await createProject(app);

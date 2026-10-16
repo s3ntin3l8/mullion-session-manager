@@ -59,6 +59,8 @@ const MAX_CONCURRENT_UPLOADS = 3;
 // rate-limit bucket (tripping the client's global 429 breaker for every other
 // dashboard call). The remainder is reported in a toast, not silently dropped.
 const MAX_FILES_PER_UPLOAD = 20;
+// ...and in total bytes (each file is also capped server-side at 25 MiB).
+const MAX_BYTES_PER_UPLOAD = 100 * 1024 * 1024;
 
 // Files from a drop, minus folders (which the browser exposes as an empty
 // pseudo-file the upload would just fail on). Walks `items` (kind === "file")
@@ -1527,7 +1529,19 @@ export function TerminalPane(props: {
     let sawUploadFailure = false;
     function uploadAndInjectFiles(allFiles: Blob[]): void {
       if (allFiles.length === 0) return;
-      const files = allFiles.slice(0, MAX_FILES_PER_UPLOAD);
+      const files: Blob[] = [];
+      let totalBytes = 0;
+      for (const f of allFiles) {
+        if (files.length >= MAX_FILES_PER_UPLOAD || totalBytes + f.size > MAX_BYTES_PER_UPLOAD) {
+          break;
+        }
+        files.push(f);
+        totalBytes += f.size;
+      }
+      if (files.length === 0) {
+        setUploadNotice("Files too large to upload together (100 MB per drop)");
+        return;
+      }
       if (allFiles.length > files.length) {
         setUploadNotice(`Only the first ${files.length} of ${allFiles.length} files were uploaded`);
       }

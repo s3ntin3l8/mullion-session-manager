@@ -74,7 +74,7 @@ export function TerminalToasts({
           {uploadState === "uploading" ? "Uploading…" : "Upload failed"}
         </div>
       )}
-      {uploadNotice && <div className="terminal-upload-indicator">{uploadNotice}</div>}
+      {uploadNotice && <div className="terminal-upload-indicator notice">{uploadNotice}</div>}
       {voiceError && <div className="terminal-upload-indicator error">{voiceError}</div>}
       {paneTooSmall && (
         <div className="terminal-too-small-indicator" title="Enlarge this pane to use it normally">
