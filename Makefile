@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help install install-hooks dev test test-backend test-coverage test-patch-coverage test-e2e lint typecheck format format-check build clean wt review check-scope-leaks
+.PHONY: help install install-hooks dev demo screenshots screenshots-landing test test-backend test-coverage test-patch-coverage test-e2e lint typecheck format format-check build clean wt review check-scope-leaks
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -14,6 +14,15 @@ install-hooks: ## Install pre-commit hooks (requires pre-commit installed)
 
 dev: ## Start dev server
 	npm run dev
+
+demo: ## Throwaway isolated demo (scratch DB/sessions/HOME, clean env, loopback ports); Ctrl-C deletes it
+	node scripts/demo/instance.mjs
+
+screenshots: ## Regenerate README + PWA manifest screenshots from an isolated demo instance
+	node scripts/capture-screenshots.mjs
+
+screenshots-landing: ## Landing-page stills + terminal loop into OUT (default ./landing-shots); loop needs ffmpeg
+	node scripts/capture-screenshots.mjs --profile landing --out "$(or $(OUT),landing-shots)"
 
 test: ## Run tests (backend + frontend)
 	npm run test:all
