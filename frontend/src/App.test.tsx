@@ -267,3 +267,103 @@ describe("App tier wiring", () => {
     expect(useDashboardStore.getState().sidebarCollapsed).toBe(true);
   });
 });
+
+// Issue #1618 — the mount-time workspace load retries a bounded number of
+// times, and a failed "Default" bootstrap re-arms instead of latching.
+describe("App workspace bootstrap", () => {
+  const workspace = {
+    id: 7,
+    name: "Default",
+    layout: null,
+    groupId: null,
+    position: 0,
+    createdAt: "2026-01-01T00:00:00.000Z",
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    stubWidth("desktop");
+    useDashboardStore.setState({
+      workspaces: [],
+      activeWorkspaceId: null,
+      hydrateSettings: vi.fn(),
+      startThemeWatch: vi.fn(() => () => {}),
+    });
+    setLayoutMode("auto");
+  });
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+    vi.restoreAllMocks();
+  });
+
+  it("retries a failed initial load, then bootstraps once it succeeds", async () => {
+    const refreshWorkspaces = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValue(undefined);
+    const createWorkspace = vi.fn().mockResolvedValue(workspace);
+    useDashboardStore.setState({ refreshWorkspaces, createWorkspace });
+
+    render(<App />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(refreshWorkspaces).toHaveBeenCalledTimes(1);
+    expect(createWorkspace).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    expect(refreshWorkspaces).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(refreshWorkspaces).toHaveBeenCalledTimes(3);
+    expect(createWorkspace).toHaveBeenCalledTimes(1);
+    expect(createWorkspace).toHaveBeenCalledWith("Default");
+    expect(useDashboardStore.getState().activeWorkspaceId).toBe(workspace.id);
+  });
+
+  it("gives up after the bounded number of attempts without bootstrapping", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const refreshWorkspaces = vi.fn().mockRejectedValue(new Error("offline"));
+    const createWorkspace = vi.fn().mockResolvedValue(workspace);
+    useDashboardStore.setState({ refreshWorkspaces, createWorkspace });
+
+    render(<App />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(refreshWorkspaces).toHaveBeenCalledTimes(5);
+    expect(createWorkspace).not.toHaveBeenCalled();
+    expect(consoleError).toHaveBeenCalledWith(
+      "[workspace] failed to load workspaces, giving up",
+      expect.any(Error),
+    );
+  });
+
+  it("handles a failed Default bootstrap instead of leaving an unhandled rejection", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const refreshWorkspaces = vi.fn().mockResolvedValue(undefined);
+    const createWorkspace = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("boom"))
+      .mockResolvedValue(workspace);
+    useDashboardStore.setState({ refreshWorkspaces, createWorkspace });
+
+    render(<App />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(createWorkspace).toHaveBeenCalledTimes(1);
+    expect(consoleError).toHaveBeenCalledWith(
+      "[workspace] failed to create the default workspace",
+      expect.any(Error),
+    );
+  });
+});

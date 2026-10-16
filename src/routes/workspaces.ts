@@ -49,9 +49,34 @@ function serialize(row: typeof workspaces.$inferSelect) {
   };
 }
 
+// Issue #1618 — the name GET /api/workspaces seeds when the table is empty.
+// Mirrors the frontend's own DEFAULT_WORKSPACE_NAME (App.tsx).
+export const DEFAULT_WORKSPACE_NAME = "Default";
+
 export async function workspacesRoute(app: FastifyInstance) {
+  // Issue #1618 — a fresh (or fully emptied) database must never list zero
+  // workspaces: the frontend's layout-change subscription and autosave are
+  // keyed on an active workspace id, so an empty list left the first tiled
+  // session behind the "Nothing tiled here yet" overlay with nothing
+  // persisted. The check-then-insert runs inside one synchronous
+  // better-sqlite3 transaction, so concurrent GETs (two tabs on a fresh
+  // install) can't both observe an empty table and each seed a "Default".
+  // `immediate` takes the write lock up front, so this also holds against a
+  // second connection to the same file, not just within this process.
   app.get("/api/workspaces", async () => {
-    return app.db.select().from(workspaces).all().map(serialize);
+    const rows = app.db.transaction(
+      (tx) => {
+        const existing = tx.select().from(workspaces).all();
+        if (existing.length > 0) return existing;
+        return tx
+          .insert(workspaces)
+          .values({ name: DEFAULT_WORKSPACE_NAME, layout: null })
+          .returning()
+          .all();
+      },
+      { behavior: "immediate" },
+    );
+    return rows.map(serialize);
   });
 
   app.post<{ Body: CreateWorkspaceBody }>(

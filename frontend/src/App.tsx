@@ -105,6 +105,10 @@ function SettingsLoadingFallback({ onClose }: { onClose: () => void }) {
 }
 
 const DEFAULT_WORKSPACE_NAME = "Default";
+// Issue #1618 — bounded retry for the initial GET /api/workspaces: up to 5
+// attempts, with backoff delays of 500ms, 1s, 2s and 4s between them.
+const WORKSPACE_LOAD_MAX_ATTEMPTS = 5;
+const WORKSPACE_LOAD_RETRY_BASE_MS = 500;
 // Mirrors src/services/hook-adapters/codex.ts's CODEX_COMMAND_RE — used only
 // to decide whether to surface the hook-trust banner (issue #259) for a
 // currently-active session, never to make any backend decision. The
@@ -331,12 +335,42 @@ export function App() {
     return () => sub.dispose();
   }, [dockviewApi, panelsVersion]);
 
-  // Load the workspace list exactly once on mount.
+  // Load the workspace list once on mount, retrying a bounded number of
+  // times with backoff (issue #1618) — a single failed fetch used to leave
+  // workspacesLoaded false forever, with no active workspace and no autosave.
+  // Giving up leaves workspacesLoaded false on purpose: flipping it with an
+  // unknown (not genuinely empty) list would let the bootstrap below create a
+  // duplicate "Default". Any later successful refresh still selects a
+  // workspace via the stale-activeWorkspaceId fallback further down.
   useEffect(() => {
-    void useDashboardStore
-      .getState()
-      .refreshWorkspaces()
-      .then(() => setWorkspacesLoaded(true));
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    const load = (attempt: number) => {
+      useDashboardStore
+        .getState()
+        .refreshWorkspaces()
+        .then(
+          () => {
+            if (!cancelled) setWorkspacesLoaded(true);
+          },
+          (err: unknown) => {
+            if (cancelled) return;
+            if (attempt + 1 >= WORKSPACE_LOAD_MAX_ATTEMPTS) {
+              console.error("[workspace] failed to load workspaces, giving up", err);
+              return;
+            }
+            retryTimer = setTimeout(
+              () => load(attempt + 1),
+              WORKSPACE_LOAD_RETRY_BASE_MS * 2 ** attempt,
+            );
+          },
+        );
+    };
+    load(0);
+    return () => {
+      cancelled = true;
+      clearTimeout(retryTimer);
+    };
   }, []);
 
   // First-ever load (no workspaces exist at all, anywhere) auto-creates
@@ -355,12 +389,22 @@ export function App() {
     }
     if (bootstrappedRef.current) return;
     bootstrappedRef.current = true;
-    void useDashboardStore
+    // The backend now seeds "Default" itself whenever GET /api/workspaces
+    // sees an empty table (issue #1618), so this is a fallback. On failure
+    // the ref is re-armed so the next run of this effect can try again rather than
+    // latching "already bootstrapped" with nothing created.
+    useDashboardStore
       .getState()
       .createWorkspace(DEFAULT_WORKSPACE_NAME)
-      .then((workspace) => {
-        useDashboardStore.getState().setActiveWorkspaceId(workspace.id);
-      });
+      .then(
+        (workspace) => {
+          useDashboardStore.getState().setActiveWorkspaceId(workspace.id);
+        },
+        (err: unknown) => {
+          bootstrappedRef.current = false;
+          console.error("[workspace] failed to create the default workspace", err);
+        },
+      );
   }, [workspacesLoaded, workspaces.length]);
 
   // If activeWorkspaceId (persisted in localStorage) points at a workspace

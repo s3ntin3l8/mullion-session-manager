@@ -658,7 +658,7 @@ describe("useWorkspacePersistence", () => {
     consoleError.mockRestore();
   });
 
-  it("does nothing when there is no dockviewApi yet, or no activeWorkspaceId", () => {
+  it("restores nothing when there is no dockviewApi yet, or no activeWorkspaceId", () => {
     vi.useFakeTimers();
     const { api } = makeMockApi();
     const setPanelsVersion = makeSetPanelsVersion();
@@ -684,6 +684,35 @@ describe("useWorkspacePersistence", () => {
       }),
     );
     expect(api.clear).not.toHaveBeenCalled();
+    expect(api.fromJSON).not.toHaveBeenCalled();
+  });
+
+  // Issue #1618 — on a fresh install there's briefly (or, if the workspace
+  // list can't load, indefinitely) no active workspace. Layout changes must
+  // still bump panelsVersion so App.tsx's tiledPaneCount tracks the grid and
+  // the "Nothing tiled here yet" overlay clears; only the save is skipped.
+  it("bumps panelsVersion on layout changes without an active workspace, but never saves", () => {
+    vi.useFakeTimers();
+    const { api, fireLayoutChange } = makeMockApi();
+    const setPanelsVersion = makeSetPanelsVersion();
+
+    renderHook(() =>
+      useWorkspacePersistence({
+        dockviewApi: api,
+        activeWorkspaceId: null,
+        workspaces: [],
+        layoutTier: "desktop",
+        setPanelsVersion,
+      }),
+    );
+    expect(api.onDidLayoutChange).toHaveBeenCalledTimes(1);
+    setPanelsVersion.mockClear();
+
+    fireLayoutChange();
+    expect(setPanelsVersion).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS * 2);
+    expect(saveWorkspaceLayout).not.toHaveBeenCalled();
   });
 
   // Workspace-autosave rate-limit-storm fix, belt-and-braces leg — see
