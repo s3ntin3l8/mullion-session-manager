@@ -128,7 +128,7 @@ const PREVIEW_REQUEST_TIMEOUT_MS = 30_000;
 // a file upload (issue #68) can be up to MAX_UPLOAD_BYTES (25 MiB,
 // session-upload.ts) — a real, non-error transfer time over a WAN/VPN link
 // to a remote agent that REQUEST_TIMEOUT_MS's 5s is nowhere near generous
-// enough for. 25 MiB needs ~7 Mbit/s to finish inside this window.
+// enough for. 25 MiB needs ~3.5 Mbit/s to finish inside this window.
 const UPLOAD_REQUEST_TIMEOUT_MS = 60_000;
 
 // #484 — the four new task-git proxy calls each wrap an agent-side git

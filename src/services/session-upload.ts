@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { lstatSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { UPLOAD_IMAGE_EXTENSIONS } from "../shared/constants.js";
+import { MAX_UPLOAD_BYTES, UPLOAD_IMAGE_EXTENSIONS } from "../shared/constants.js";
 
 // Issue #68: a pasted/attached image can't travel down the terminal's own
 // byte stream (no Sixel/Kitty/iTerm2 support, and the CLI running in the PTY
@@ -67,11 +67,9 @@ export function matchesMagicBytes(buffer: Buffer, mime: string): boolean {
   }
 }
 
-// Generous enough for a screenshot, camera photo, or a typical PDF/log
-// attachment, small enough to keep a misbehaving/malicious client from
-// parking an arbitrarily large body on disk — mirrors the spirit of
-// websocket.ts's own maxPayload comment.
-export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+// Re-exported so existing importers keep their path; the value lives in
+// shared/constants.ts because the frontend pre-checks it too.
+export { MAX_UPLOAD_BYTES };
 
 export const UPLOAD_SUBDIR = ".mullion-uploads";
 

@@ -75,7 +75,15 @@ export function TerminalToasts({
         </div>
       )}
       {uploadNotice && <div className="terminal-upload-indicator notice">{uploadNotice}</div>}
-      {voiceError && <div className="terminal-upload-indicator error">{voiceError}</div>}
+      {voiceError && (
+        <div
+          className={`terminal-upload-indicator error${
+            uploadState !== "idle" || uploadNotice ? " stacked" : ""
+          }`}
+        >
+          {voiceError}
+        </div>
+      )}
       {paneTooSmall && (
         <div className="terminal-too-small-indicator" title="Enlarge this pane to use it normally">
           Pane too small

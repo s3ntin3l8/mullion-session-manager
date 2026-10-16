@@ -106,6 +106,13 @@ export const UPLOAD_IMAGE_EXTENSIONS = {
   "image/webp": ".webp",
 } as const satisfies Record<string, string>;
 
+// Per-file upload ceiling: the routes' bodyLimit and the frontend's own
+// pre-flight check (so an oversized file is reported up front instead of
+// 413ing as a generic "Upload failed"). Generous enough for a screenshot,
+// camera photo, or a typical PDF/log attachment, small enough to keep a
+// misbehaving/malicious client from parking an arbitrarily large body on disk.
+export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+
 // ---------------------------------------------------------------------------
 // routes/projects.ts's stackSessionName() / frontend/src/dock/dockHelpers.ts —
 // DOCKER_STACK_SESSION_NAME_PREFIX

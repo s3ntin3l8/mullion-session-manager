@@ -2229,7 +2229,7 @@ describe("TerminalPane image paste/upload (issue #68)", () => {
     });
 
     await waitFor(() => expect(api.uploadSessionFile).toHaveBeenCalledTimes(20));
-    expect(screen.getByText("Only the first 20 of 25 files were uploaded")).toBeInTheDocument();
+    expect(screen.getByText("5 file(s) over the per-drop limit skipped")).toBeInTheDocument();
   });
 
   it("stops adding files once a drop would exceed the total byte cap", async () => {
@@ -2242,15 +2242,81 @@ describe("TerminalPane image paste/upload (issue #68)", () => {
     await waitFor(() => expect(fakeSocket.readyState).toBe(1));
     const big = (name: string) => {
       const f = new File(["x"], name);
-      Object.defineProperty(f, "size", { value: 60 * 1024 * 1024 });
+      Object.defineProperty(f, "size", { value: 25 * 1024 * 1024 });
       return f;
     };
     fireEvent.drop(container.firstElementChild as HTMLElement, {
-      dataTransfer: { types: ["Files"], files: [big("a.bin"), big("b.bin")] },
+      dataTransfer: {
+        types: ["Files"],
+        files: ["a", "b", "c", "d", "e"].map((n) => big(`${n}.bin`)),
+      },
+    });
+
+    await waitFor(() => expect(api.uploadSessionFile).toHaveBeenCalledTimes(4));
+    expect(screen.getByText("1 file(s) over the per-drop limit skipped")).toBeInTheDocument();
+  });
+
+  it("skips only the file that busts the byte budget and keeps filling it", async () => {
+    stubFakeWebSocket(true);
+    vi.mocked(api.uploadSessionFile).mockImplementation(async (_id, _blob, name) => ({
+      path: `/p/${name}`,
+    }));
+
+    const { container } = renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    const sized = (name: string, mb: number) => {
+      const f = new File(["x"], name);
+      Object.defineProperty(f, "size", { value: mb * 1024 * 1024 });
+      return f;
+    };
+    fireEvent.drop(container.firstElementChild as HTMLElement, {
+      dataTransfer: {
+        types: ["Files"],
+        files: [
+          sized("a.bin", 25),
+          sized("b.bin", 25),
+          sized("c.bin", 25),
+          sized("d.bin", 20),
+          sized("e.bin", 25),
+          sized("f.bin", 2),
+        ],
+      },
+    });
+
+    await waitFor(() => expect(api.uploadSessionFile).toHaveBeenCalledTimes(5));
+    const names = vi.mocked(api.uploadSessionFile).mock.calls.map((c) => c[2]);
+    expect(names).toEqual(["a.bin", "b.bin", "c.bin", "d.bin", "f.bin"]);
+    expect(screen.getByText("1 file(s) over the per-drop limit skipped")).toBeInTheDocument();
+  });
+
+  it("skips a file over the per-file server limit up front and folds every skip into one notice", async () => {
+    stubFakeWebSocket(true);
+    vi.mocked(api.uploadSessionFile).mockResolvedValue({ path: "/p/ok.txt" });
+
+    const { container } = renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    const huge = new File(["x"], "huge.bin");
+    Object.defineProperty(huge, "size", { value: 30 * 1024 * 1024 });
+    const ok = new File(["y"], "ok.txt", { type: "text/plain" });
+    const entry = (isDirectory: boolean, f: File) => ({
+      kind: "file",
+      getAsFile: () => f,
+      webkitGetAsEntry: () => ({ isDirectory }),
+    });
+    const dir = new File([], "folder");
+    fireEvent.drop(container.firstElementChild as HTMLElement, {
+      dataTransfer: {
+        types: ["Files"],
+        files: [dir, huge, ok],
+        items: [entry(true, dir), entry(false, huge), entry(false, ok)],
+      },
     });
 
     await waitFor(() => expect(api.uploadSessionFile).toHaveBeenCalledTimes(1));
-    expect(screen.getByText("Only the first 1 of 2 files were uploaded")).toBeInTheDocument();
+    expect(api.uploadSessionFile).toHaveBeenCalledWith(1, ok, "ok.txt");
+    expect(
+      screen.getByText("1 folder(s)/empty file(s) skipped, 1 file(s) over 25 MB skipped"),
+    ).toBeInTheDocument();
   });
 
   it("reports skipped folders in a notice", async () => {
@@ -2274,7 +2340,7 @@ describe("TerminalPane image paste/upload (issue #68)", () => {
       },
     });
 
-    expect(await screen.findByText("Skipped 1 folder(s) or empty file(s)")).toBeInTheDocument();
+    expect(await screen.findByText("1 folder(s)/empty file(s) skipped")).toBeInTheDocument();
   });
 
   it("clears the uploading indicator when building a request throws synchronously", async () => {

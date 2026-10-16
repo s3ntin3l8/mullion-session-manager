@@ -50,6 +50,7 @@ import { useVoiceDictation } from "./voice/useVoiceDictation.js";
 // isn't imported here since its single field is checked structurally below
 // rather than through the named type.
 import type { ResizeMessage, GeometryMessage } from "../../src/shared/ws-protocol.js";
+import { MAX_UPLOAD_BYTES } from "../../src/shared/constants.js";
 
 // The backend buffers each upload body in memory, so a multi-file drop is
 // uploaded a few at a time rather than all at once.
@@ -384,7 +385,7 @@ export function TerminalPane(props: {
   // image" button's file input handler below, same pattern as retryRef/
   // pasteHandlerRef — the button lives in this component's render, but the
   // logic needs the mount effect's closures (pasteToTerminal, `destroyed`).
-  const uploadFilesRef = useRef<(files: Blob[]) => void>(() => {});
+  const uploadFilesRef = useRef<(files: Blob[], skippedEntries?: number) => void>(() => {});
   // Exposes a manual "Retry now" (design's Disconnected state) without
   // remounting the terminal/xterm instance itself — `connect`/backoff live
   // inside the effect below (closed over the real WS + timer), so this ref
@@ -1527,24 +1528,32 @@ export function TerminalPane(props: {
     // any of them is reported once they all have.
     let batchesInFlight = 0;
     let sawUploadFailure = false;
-    function uploadAndInjectFiles(allFiles: Blob[]): void {
-      if (allFiles.length === 0) return;
+    //
+    // `skippedEntries` is how many dropped folders/empty entries the caller
+    // already filtered out; it is folded into the same single notice as the
+    // limits applied here, since only one notice can render.
+    function uploadAndInjectFiles(allFiles: Blob[], skippedEntries = 0): void {
       const files: Blob[] = [];
       let totalBytes = 0;
+      let tooBig = 0;
+      let overLimit = 0;
       for (const f of allFiles) {
-        if (files.length >= MAX_FILES_PER_UPLOAD || totalBytes + f.size > MAX_BYTES_PER_UPLOAD) {
-          break;
+        if (f.size > MAX_UPLOAD_BYTES) tooBig++;
+        else if (files.length >= MAX_FILES_PER_UPLOAD || totalBytes + f.size > MAX_BYTES_PER_UPLOAD)
+          overLimit++;
+        else {
+          files.push(f);
+          totalBytes += f.size;
         }
-        files.push(f);
-        totalBytes += f.size;
       }
-      if (files.length === 0) {
-        setUploadNotice("Files too large to upload together (100 MB per drop)");
-        return;
+      const notes: string[] = [];
+      if (skippedEntries > 0) notes.push(`${skippedEntries} folder(s)/empty file(s) skipped`);
+      if (tooBig > 0) {
+        notes.push(`${tooBig} file(s) over ${MAX_UPLOAD_BYTES / (1024 * 1024)} MB skipped`);
       }
-      if (allFiles.length > files.length) {
-        setUploadNotice(`Only the first ${files.length} of ${allFiles.length} files were uploaded`);
-      }
+      if (overLimit > 0) notes.push(`${overLimit} file(s) over the per-drop limit skipped`);
+      if (notes.length > 0) setUploadNotice(notes.join(", "));
+      if (files.length === 0) return;
       batchesInFlight++;
       setUploadState("uploading");
       // async: a synchronous throw (e.g. encodeURIComponent on an unpaired
@@ -2395,8 +2404,7 @@ export function TerminalPane(props: {
         setDragActive(false);
         if (!inputAffordancesRef.current) return;
         const { files, skipped } = droppedFiles(e.dataTransfer);
-        if (skipped > 0) setUploadNotice(`Skipped ${skipped} folder(s) or empty file(s)`);
-        if (files.length > 0) uploadFilesRef.current(files);
+        if (files.length > 0 || skipped > 0) uploadFilesRef.current(files, skipped);
       }}
     >
       {dragActive && <div className="terminal-drop-overlay">Drop files to attach</div>}
