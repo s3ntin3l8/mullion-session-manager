@@ -69,6 +69,7 @@ mullion events tail [--children]
 mullion history [--session <id>] [--kind <k>] [--since <ms>] [--until <ms>]
                 [--limit <n>] [--cursor <c>]
 mullion notify --message "..." [--title "..."]
+mullion status <working|done|needs_input> [--message "..."]
 mullion mcp
 mullion config
 ```
@@ -397,6 +398,14 @@ browser tab being open. See `src/plugins/event-store.ts`'s own doc comment.
   Deliberately has no `--session <id>`: hook-socket auth pins the connection
   to whichever session's token was presented, so there is no way to notify a
   _different_ session over this channel.
+
+### status
+
+- `status <working|done|needs_input> [--message <text>]` — self-reports this
+  session's state for CLIs without a hook adapter (issue #1623). Maps onto the
+  existing hook messages (`turn_start`, `progress: done`, `notification`) over
+  the hook socket, so `session wait` / `sessions.wait` see it. Only works from
+  inside a session.
 
 ### review
 

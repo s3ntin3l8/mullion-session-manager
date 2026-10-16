@@ -11,11 +11,14 @@ import fs from "node:fs";
 import net from "node:net";
 import {
   MullionSocketError,
+  SELF_REPORT_STATES,
   WAIT_DEFAULT_TIMEOUT_MS,
   WAIT_MAX_TIMEOUT_MS,
   WAIT_SOCKET_SLACK_MS,
   isMissingIdError,
   resolveOwnSessionId,
+  sendHookMessage,
+  statusHookMessage,
 } from "./client.mjs";
 
 /** Reads a whole stream (io.stdin in production, a fake in tests) as UTF-8. */
@@ -131,7 +134,7 @@ const TOP_LEVEL_ALIASES = {
 // resolve verb="--kind" -> "unknown command" if it were a NOUNS entry
 // instead — `history` has no noun/verb split at all, just flags, the same
 // shape `notify`/`config` already have.
-const STANDALONE_COMMANDS = new Set(["notify", "mcp", "config", "history", "review"]);
+const STANDALONE_COMMANDS = new Set(["notify", "status", "mcp", "config", "history", "review"]);
 const NOUNS = new Set([
   "session",
   "browser",
@@ -1427,6 +1430,23 @@ async function runNotify(client, args, opts, io) {
   return { text: "notification sent" };
 }
 
+// status — self-reported state for CLIs without a hook adapter (issue #1623).
+// Same hook-socket channel as `notify`; see statusHookMessage in client.mjs.
+async function runStatus(client, args, opts, io) {
+  const { flags, rest } = extractFlags(args, { message: "string" });
+  const state = rest[0];
+  if (rest.length !== 1 || !SELF_REPORT_STATES.includes(state)) {
+    throw new CliUsageError(`usage: status <${SELF_REPORT_STATES.join("|")}> [--message <text>]`);
+  }
+  await sendHookMessage({
+    hookSocketPath: io.env.MULLION_HOOK_SOCKET,
+    hookToken: io.env.MULLION_HOOK_TOKEN,
+    message: statusHookMessage(state, flags.message),
+    what: "status",
+  });
+  return { text: `status reported: ${state}` };
+}
+
 // reviews.request does several sequential network calls server-side (GitHub
 // PR lookup, prompt fetch, Hermes health + dispatch), which can crowd the
 // client's 30s default — see REVIEW_REQUEST_TIMEOUT_MS in mcp/client.mjs.
@@ -1526,6 +1546,7 @@ export const COMMANDS = {
   device: deviceCommands,
   events: eventsCommands,
   notify: runNotify,
+  status: runStatus,
   review: runReview,
   config: runConfig,
   history: runHistory,
@@ -1547,6 +1568,7 @@ Commands:
   history [--session <id>] [--kind <k>] [--since <ms>] [--until <ms>]
           [--limit <n>] [--cursor <c>]
   notify --message <text> [--title <t>]
+  status <working|done|needs_input> [--message <text>]
   review [--pr <n>]
   mcp
   config

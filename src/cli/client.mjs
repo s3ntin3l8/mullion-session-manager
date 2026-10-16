@@ -351,3 +351,78 @@ class ControlStream extends EventEmitter {
     this.client.streams.delete(this.id);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Self-reported status (issue #1623) — for CLIs without a hook adapter. An
+// agent inside a session says what it is doing by writing the SAME hook
+// messages a real adapter would to the session's own hook socket
+// (MULLION_HOOK_SOCKET/MULLION_HOOK_TOKEN), so every existing latch,
+// persistence path, remote-host relay and `sessions.wait` rule applies
+// unchanged — there is deliberately no new status state or protocol kind.
+// ---------------------------------------------------------------------------
+
+export const SELF_REPORT_STATES = ["working", "done", "needs_input"];
+const SELF_REPORT_MESSAGE_MAX = 200;
+
+/**
+ * Maps a self-reported state onto an existing hook message:
+ *  - working     -> turn_start (clears the `finished` / awaiting_* latches)
+ *  - done        -> progress {phase:"done"} (latches `finished`)
+ *  - needs_input -> notification (needs_input attention; the message is its body)
+ * Returns null for an unknown state.
+ */
+export function statusHookMessage(state, message) {
+  const text =
+    typeof message === "string" && message.length > 0
+      ? message.slice(0, SELF_REPORT_MESSAGE_MAX)
+      : undefined;
+  switch (state) {
+    case "working":
+      return { kind: "turn_start" };
+    case "done":
+      return text === undefined
+        ? { kind: "progress", phase: "done" }
+        : { kind: "progress", phase: "done", lastAssistantMessage: text };
+    case "needs_input":
+      return { kind: "notification", title: "mullion", body: text ?? "needs input" };
+    default:
+      return null;
+  }
+}
+
+const HOOK_MESSAGE_TIMEOUT_MS = 5_000;
+
+/** Fire-and-forget write of one hook message (after the token handshake) to
+ * the session's own hook socket. Rejects on missing env, connect error or
+ * timeout; hooks.ts never replies, so success means "written to the wire". */
+export function sendHookMessage({ hookSocketPath, hookToken, message, what = "message" }) {
+  return new Promise((resolve, reject) => {
+    if (!hookSocketPath || !hookToken) {
+      reject(
+        new Error(
+          `MULLION_HOOK_SOCKET/MULLION_HOOK_TOKEN are not set — this only works from inside a Mullion session (${what})`,
+        ),
+      );
+      return;
+    }
+    const socket = net.createConnection(hookSocketPath);
+    let settled = false;
+    const finish = (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.destroy();
+      if (err) reject(err);
+      else resolve();
+    };
+    const timer = setTimeout(
+      () => finish(new Error(`timed out sending ${what}`)),
+      HOOK_MESSAGE_TIMEOUT_MS,
+    );
+    socket.once("error", (err) => finish(err));
+    socket.once("connect", () => {
+      socket.write(`${JSON.stringify({ token: hookToken })}\n`);
+      socket.write(`${JSON.stringify(message)}\n`, () => finish(null));
+    });
+  });
+}

@@ -6,7 +6,7 @@
 // shape by server.mjs) or throws, which server.mjs turns into a tool-level
 // `isError: true` result rather than a protocol-level failure.
 
-import { WAIT_MAX_TIMEOUT_MS } from "../cli/client.mjs";
+import { SELF_REPORT_STATES, WAIT_MAX_TIMEOUT_MS } from "../cli/client.mjs";
 
 /**
  * Issue #271, option 2 — lets the model itself decide "start work now" and
@@ -890,8 +890,37 @@ const deleteDevice = {
   },
 };
 
+const reportStatus = {
+  name: "report_status",
+  description:
+    "Report this session's own state to Mullion — for agents whose CLI has no Mullion hook " +
+    "adapter, so a parent's wait_for_session and the dashboard can tell when you are working, " +
+    "done, or need a human. `working` when you start a task, `done` when you finish it, " +
+    "`needs_input` when you are blocked on a person.",
+  inputSchema: {
+    type: "object",
+    required: ["state"],
+    properties: {
+      state: { type: "string", enum: SELF_REPORT_STATES },
+      message: {
+        type: "string",
+        description: "Short note (max 200 chars): what finished, or what you need.",
+      },
+    },
+  },
+  async handler(args, client) {
+    const state = typeof args?.state === "string" ? args.state : "";
+    if (!SELF_REPORT_STATES.includes(state)) {
+      throw new Error(`state must be one of ${SELF_REPORT_STATES.join(", ")}`);
+    }
+    await client.reportStatus(state, typeof args?.message === "string" ? args.message : undefined);
+    return `status reported: ${state}`;
+  },
+};
+
 export const TOOLS = [
   promoteToWorktree,
+  reportStatus,
   useBrowser,
   browserAction,
   listDevices,
