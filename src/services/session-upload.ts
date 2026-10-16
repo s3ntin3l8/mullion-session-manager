@@ -71,10 +71,11 @@ export function matchesMagicBytes(buffer: Buffer, mime: string): boolean {
   }
 }
 
-// Generous enough for a screenshot or camera photo, small enough to keep a
-// misbehaving/malicious client from parking an arbitrarily large body on
-// disk — mirrors the spirit of websocket.ts's own maxPayload comment.
-export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+// Generous enough for a screenshot, camera photo, or a typical PDF/log
+// attachment, small enough to keep a misbehaving/malicious client from
+// parking an arbitrarily large body on disk — mirrors the spirit of
+// websocket.ts's own maxPayload comment.
+export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 
 export const UPLOAD_SUBDIR = ".mullion-uploads";
 
@@ -113,6 +114,56 @@ export function saveSessionUpload(cwd: string, buffer: Buffer, mime: string): st
   const ext = extensionForMime(mime);
   if (!ext) throw new Error(`Unsupported image type: ${mime}`);
 
+  const uploadDir = ensureUploadDir(cwd);
+  const filename = `${crypto.randomUUID()}${ext}`;
+  const filePath = path.join(uploadDir, filename);
+  writeFileSync(filePath, buffer);
+  return filePath;
+}
+
+const MAX_UPLOAD_NAME_LENGTH = 100;
+
+/**
+ * Reduces a caller-supplied file name to a safe, shell-friendly basename:
+ * directory components dropped, every character outside `[A-Za-z0-9._-]`
+ * replaced with `_`, leading dots stripped (no hidden files, no `..`), and
+ * the length capped while keeping the extension. The result can be pasted
+ * into a terminal without quoting. Falls back to `file`.
+ */
+export function sanitizeUploadName(name: string): string {
+  const base = name.split(/[\\/]/).pop() ?? "";
+  const cleaned = base.replace(/[^A-Za-z0-9._-]/g, "_").replace(/^\.+/, "");
+  if (!cleaned) return "file";
+  if (cleaned.length <= MAX_UPLOAD_NAME_LENGTH) return cleaned;
+  const ext = path.extname(cleaned);
+  // A very long "extension" is just more name — don't let it eat the budget.
+  const keep = ext.length > 0 && ext.length <= 16 ? ext : "";
+  return cleaned.slice(0, MAX_UPLOAD_NAME_LENGTH - keep.length) + keep;
+}
+
+/**
+ * Generic-file counterpart to saveSessionUpload: writes `buffer` to
+ * `<cwd>/.mullion-uploads/<uuid>/<sanitized-name>` and returns the absolute
+ * path. No content-type allow-list, unlike the image path — Mullion never
+ * serves files out of a project directory, and the user already has a shell
+ * in that same directory, so an arbitrary file here grants nothing new. The
+ * on-disk name is still server-controlled: `sanitizeUploadName` strips
+ * everything but a plain basename, and the uuid directory keeps same-named
+ * uploads from colliding while the CLI still sees the original file name.
+ * The same containment, symlink, `.gitignore` and size-cap guarantees as
+ * saveSessionUpload apply (the size cap is the routes' bodyLimit).
+ */
+export function saveSessionFileUpload(cwd: string, buffer: Buffer, originalName: string): string {
+  const uploadDir = ensureUploadDir(cwd);
+  const fileDir = path.join(uploadDir, crypto.randomUUID());
+  mkdirSync(fileDir);
+  const filePath = path.join(fileDir, sanitizeUploadName(originalName));
+  writeFileSync(filePath, buffer);
+  return filePath;
+}
+
+/** Resolves, validates and (if needed) creates `<cwd>/.mullion-uploads`. */
+function ensureUploadDir(cwd: string): string {
   const root = path.resolve(cwd);
   const uploadDir = path.resolve(root, UPLOAD_SUBDIR);
   // Containment guard (also the CodeQL js/path-injection barrier): the
@@ -144,11 +195,7 @@ export function saveSessionUpload(cwd: string, buffer: Buffer, mime: string): st
       if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
     }
   }
-
-  const filename = `${crypto.randomUUID()}${ext}`;
-  const filePath = path.join(uploadDir, filename);
-  writeFileSync(filePath, buffer);
-  return filePath;
+  return uploadDir;
 }
 
 function uploadDirError(): Error {

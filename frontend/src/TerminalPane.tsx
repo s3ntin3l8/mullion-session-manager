@@ -344,7 +344,7 @@ export function TerminalPane(props: {
   // image" button's file input handler below, same pattern as retryRef/
   // pasteHandlerRef — the button lives in this component's render, but the
   // logic needs the mount effect's closures (pasteToTerminal, `destroyed`).
-  const uploadImageRef = useRef<(blob: Blob) => void>(() => {});
+  const uploadImageRef = useRef<(files: Blob[]) => void>(() => {});
   // Exposes a manual "Retry now" (design's Disconnected state) without
   // remounting the terminal/xterm instance itself — `connect`/backoff live
   // inside the effect below (closed over the real WS + timer), so this ref
@@ -1474,21 +1474,36 @@ export function TerminalPane(props: {
     // inject that path into the terminal exactly like a text paste. A
     // trailing space keeps it from running straight into whatever the user
     // types next.
-    function uploadAndInjectImage(blob: Blob): void {
+    //
+    // Handles several files (a multi-file drop or picker selection): all are
+    // uploaded in parallel and the paths that made it are pasted together, in
+    // the order the files were given, as one paste. One failed upload flags
+    // the error state but doesn't discard the others' paths.
+    function uploadAndInjectFiles(files: Blob[]): void {
+      if (files.length === 0) return;
       setUploadState("uploading");
-      api
-        .uploadSessionImage(props.params.sessionId, blob)
-        .then(({ path }) => {
-          if (destroyed) return;
-          pasteToTerminal(`${path} `);
-          setUploadState("idle");
-        })
-        .catch((err: unknown) => {
-          console.warn("[terminal] image upload failed:", err);
-          if (!destroyed) setUploadState("error");
-        });
+      Promise.allSettled(
+        files.map((file) =>
+          file instanceof File
+            ? api.uploadSessionFile(props.params.sessionId, file, file.name)
+            : api.uploadSessionFile(props.params.sessionId, file),
+        ),
+      ).then((results) => {
+        if (destroyed) return;
+        const paths: string[] = [];
+        let failed = false;
+        for (const result of results) {
+          if (result.status === "fulfilled") paths.push(result.value.path);
+          else {
+            failed = true;
+            console.warn("[terminal] file upload failed:", result.reason);
+          }
+        }
+        if (paths.length > 0) pasteToTerminal(`${paths.join(" ")} `);
+        setUploadState(failed ? "error" : "idle");
+      });
     }
-    uploadImageRef.current = uploadAndInjectImage;
+    uploadImageRef.current = uploadAndInjectFiles;
 
     // Checks the clipboard for an image entry (a screenshot or copied photo,
     // as opposed to copied text) and, if found, routes it through the upload
@@ -1505,7 +1520,7 @@ export function TerminalPane(props: {
         for (const item of items) {
           const imageType = item.types.find((t) => t.startsWith("image/"));
           if (!imageType) continue;
-          uploadAndInjectImage(await item.getType(imageType));
+          uploadAndInjectFiles([await item.getType(imageType)]);
           return true;
         }
       } catch (err) {
@@ -2238,7 +2253,7 @@ export function TerminalPane(props: {
   }, [props.active, isCoarsePointer]);
 
   // Auto-dismisses the "upload failed" toast — "uploading" instead clears
-  // itself the moment uploadAndInjectImage's promise settles (see the mount
+  // itself the moment uploadAndInjectFiles's promise settles (see the mount
   // effect above), so this only ever fires for the error state.
   useEffect(() => {
     if (uploadState !== "error") return;
@@ -2286,11 +2301,17 @@ export function TerminalPane(props: {
         e.preventDefault();
         setDragActive(false);
         if (!inputAffordancesRef.current) return;
-        const file = Array.from(e.dataTransfer.files).find((f) => f.type.startsWith("image/"));
-        if (file) uploadImageRef.current(file);
+        // Folders show up in `files` too (as an empty pseudo-file the upload
+        // would just fail on), so skip any entry the browser reports as a
+        // directory. `items` and `files` are index-aligned for a drop.
+        const items = Array.from(e.dataTransfer.items ?? []);
+        const files = Array.from(e.dataTransfer.files).filter(
+          (_file, i) => !items[i]?.webkitGetAsEntry?.()?.isDirectory,
+        );
+        if (files.length > 0) uploadImageRef.current(files);
       }}
     >
-      {dragActive && <div className="terminal-drop-overlay">Drop image to attach</div>}
+      {dragActive && <div className="terminal-drop-overlay">Drop files to attach</div>}
       {
         // Issue #91's padding is an absolute inset, NOT CSS padding on this
         // div: FitAddon.proposeDimensions() measures the computed
@@ -2325,20 +2346,21 @@ export function TerminalPane(props: {
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/*"
+        multiple
         style={{ display: "none" }}
         onChange={(event) => {
-          const file = event.target.files?.[0];
+          // Copy before the reset: `files` is a live list that the reset empties.
+          const files = Array.from(event.target.files ?? []);
           // Reset so selecting the same file again still fires onChange.
           event.target.value = "";
-          if (file) uploadImageRef.current(file);
+          if (files.length > 0) uploadImageRef.current(files);
         }}
       />
       {(props.inputAffordances ?? true) && !isCoarsePointer && (
         <button
           className="pane-tab-btn terminal-attach-image-btn"
-          title="Attach image (or paste / drop one)"
-          aria-label="Attach image"
+          title="Attach files (or paste an image / drop files)"
+          aria-label="Attach files"
           onClick={() => fileInputRef.current?.click()}
         >
           <ImageIcon size={14} />

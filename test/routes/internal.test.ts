@@ -4368,6 +4368,45 @@ describe("internal routes (agent role, issue #26)", () => {
       await app.close();
     });
 
+    it("saves a generic file (octet-stream + name param) under the sanitized name", async () => {
+      const app = await buildApp();
+      const cwd = fs.mkdtempSync(path.join(projectsRoot, "upload-"));
+      const body = Buffer.from("plain log contents");
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/internal/uploads?cwd=${encodeURIComponent(cwd)}&name=${encodeURIComponent("../server log.txt")}`,
+        headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/octet-stream" },
+        payload: body,
+      });
+
+      expect(res.statusCode).toBe(200);
+      const { path: uploadPath } = res.json();
+      expect(uploadPath.startsWith(path.join(cwd, ".mullion-uploads") + path.sep)).toBe(true);
+      expect(path.basename(uploadPath)).toBe("server_log.txt");
+      expect(fs.readFileSync(uploadPath)).toEqual(body);
+
+      fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("still confines a generic-file upload's cwd to this agent's PROJECTS_ROOTS", async () => {
+      const app = await buildApp();
+      const outsideRoots = fs.mkdtempSync(path.join(os.tmpdir(), "internal-upload-outside-"));
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/internal/uploads?cwd=${encodeURIComponent(outsideRoots)}&name=a.txt`,
+        headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/octet-stream" },
+        payload: Buffer.from("x"),
+      });
+      expect(res.statusCode).toBe(400);
+      expect(fs.existsSync(path.join(outsideRoots, ".mullion-uploads"))).toBe(false);
+
+      fs.rmSync(outsideRoots, { recursive: true, force: true });
+      await app.close();
+    });
+
     it("requires cwd and mime query params", async () => {
       const app = await buildApp();
       const res = await app.inject({

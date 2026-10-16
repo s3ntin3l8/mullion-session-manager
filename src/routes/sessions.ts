@@ -1232,6 +1232,15 @@ export async function sessionsRoute(app: FastifyInstance) {
   app.addContentTypeParser(/^image\//, { parseAs: "buffer" }, (_req, body, done) => {
     done(null, body);
   });
+  // Generic-file mode (drag & drop of any file type): the body is the raw
+  // file, the original name travels in the X-Upload-Filename header.
+  app.addContentTypeParser(
+    "application/octet-stream",
+    { parseAs: "buffer" },
+    (_req, body, done) => {
+      done(null, body);
+    },
+  );
 
   app.post<{ Params: { id: string } }>(
     "/api/sessions/:id/uploads",
@@ -1252,23 +1261,33 @@ export async function sessionsRoute(app: FastifyInstance) {
       // footgun.
       const rawContentType = request.headers["content-type"];
       const mime = rawContentType?.split(";")[0]?.trim();
-      if (!mime || !extensionForMime(mime)) {
-        return reply.badRequest(`Unsupported image type: ${rawContentType ?? "(missing)"}`);
+      const isGenericFile = mime === "application/octet-stream";
+      if (!mime || (!isGenericFile && !extensionForMime(mime))) {
+        return reply.badRequest(`Unsupported upload type: ${rawContentType ?? "(missing)"}`);
       }
-      if (!Buffer.isBuffer(request.body)) return reply.badRequest("expected a raw image body");
+      if (!Buffer.isBuffer(request.body)) return reply.badRequest("expected a raw file body");
+      let fileName = "file";
+      if (isGenericFile) {
+        const rawName = request.headers["x-upload-filename"];
+        try {
+          if (typeof rawName === "string") fileName = decodeURIComponent(rawName);
+        } catch {
+          return reply.badRequest("Invalid X-Upload-Filename header");
+        }
+      }
       // Content check, not just Content-Type: rejects a body whose actual
       // leading bytes don't match the claimed image format — a client can't
       // smuggle arbitrary content onto disk under an image mime type.
-      if (!matchesMagicBytes(request.body, mime)) {
+      if (!isGenericFile && !matchesMagicBytes(request.body, mime)) {
         return reply.badRequest("File content does not match the declared image type");
       }
 
       try {
-        return await resolveBackend(app, project.hostId).uploadImage(
-          row.cwd ?? project.cwd,
-          request.body,
-          mime,
-        );
+        const backend = resolveBackend(app, project.hostId);
+        const cwd = row.cwd ?? project.cwd;
+        return isGenericFile
+          ? await backend.uploadFile(cwd, request.body, fileName)
+          : await backend.uploadImage(cwd, request.body, mime);
       } catch (err) {
         // Same posture as createSessionRecord's own spawn-rollback catch
         // (session-lifecycle.ts, reached via POST /api/sessions): an

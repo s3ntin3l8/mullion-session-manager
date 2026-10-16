@@ -68,7 +68,7 @@ export function TerminalToasts({
       )}
       {uploadState !== "idle" && (
         <div className={`terminal-upload-indicator ${uploadState === "error" ? "error" : ""}`}>
-          {uploadState === "uploading" ? "Uploading image…" : "Image upload failed"}
+          {uploadState === "uploading" ? "Uploading…" : "Upload failed"}
         </div>
       )}
       {voiceError && <div className="terminal-upload-indicator error">{voiceError}</div>}

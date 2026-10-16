@@ -108,6 +108,7 @@ import {
   MAX_UPLOAD_BYTES,
   extensionForMime,
   matchesMagicBytes,
+  saveSessionFileUpload,
   saveSessionUpload,
 } from "../services/session-upload.js";
 import { buildUpstreamRequestHeaders, relayFetchResponse } from "../services/http-proxy.js";
@@ -2287,15 +2288,31 @@ export async function internalRoutes(app: FastifyInstance) {
   app.addContentTypeParser(/^image\//, { parseAs: "buffer" }, (_req, body, done) => {
     done(null, body);
   });
+  // Generic-file mode (drag & drop of any file type): the body is the raw
+  // file, the original name travels as the `name` query param.
+  app.addContentTypeParser(
+    "application/octet-stream",
+    { parseAs: "buffer" },
+    (_req, body, done) => {
+      done(null, body);
+    },
+  );
 
-  app.post<{ Querystring: { cwd?: string; mime?: string } }>(
+  app.post<{ Querystring: { cwd?: string; mime?: string; name?: string } }>(
     "/internal/uploads",
     { ...INTERNAL_RATE_LIMIT, bodyLimit: MAX_UPLOAD_BYTES },
     async (request, reply) => {
-      const { cwd, mime } = request.query;
-      if (!cwd || !mime) return reply.badRequest("cwd and mime query params are required");
+      const { cwd, mime, name } = request.query;
+      if (!cwd || (!mime && !name)) {
+        return reply.badRequest("cwd and either mime or name query params are required");
+      }
       const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
       if (resolvedCwd === null) return;
+      if (!mime && name) {
+        if (!Buffer.isBuffer(request.body)) return reply.badRequest("expected a raw file body");
+        return { path: saveSessionFileUpload(resolvedCwd, request.body, name) };
+      }
+      if (!mime) return reply.badRequest("mime query param is required");
       if (!extensionForMime(mime)) return reply.badRequest(`Unsupported image type: ${mime}`);
       if (!Buffer.isBuffer(request.body)) return reply.badRequest("expected a raw image body");
       // Content check, not just Content-Type: rejects a body whose actual

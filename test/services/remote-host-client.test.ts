@@ -1161,6 +1161,29 @@ describe("RemoteHostClient", () => {
     );
   });
 
+  it("uploads a generic file to /internal/uploads with cwd/name as query params and an octet-stream body", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(200, { path: "/remote/cwd/.mullion-uploads/u/My_Doc.pdf" }),
+    );
+    const buffer = Buffer.from("pdf bytes");
+
+    await expect(client().uploadFile("/remote/cwd", buffer, "My Doc.pdf")).resolves.toEqual({
+      path: "/remote/cwd/.mullion-uploads/u/My_Doc.pdf",
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://example.invalid:1234/internal/uploads?cwd=%2Fremote%2Fcwd&name=My+Doc.pdf",
+      expect.objectContaining({
+        method: "POST",
+        body: buffer,
+        headers: expect.objectContaining({
+          Authorization: "Bearer tok",
+          "content-type": "application/octet-stream",
+        }),
+      }),
+    );
+  });
+
   it("gives uploadImage a longer timeout than an ordinary request (issue #68 — up to 10 MiB over a WAN link)", async () => {
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
     fetchMock.mockImplementation(() =>

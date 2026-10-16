@@ -15,6 +15,8 @@ import {
   UPLOAD_SUBDIR,
   extensionForMime,
   matchesMagicBytes,
+  sanitizeUploadName,
+  saveSessionFileUpload,
   saveSessionUpload,
 } from "../../src/services/session-upload.js";
 
@@ -128,6 +130,84 @@ describe("session-upload", () => {
       const resolvedUploadDir = path.join(path.resolve(cwd), UPLOAD_SUBDIR);
 
       expect(filePath.startsWith(resolvedUploadDir + path.sep)).toBe(true);
+    });
+  });
+
+  describe("sanitizeUploadName", () => {
+    it("keeps a plain safe name unchanged", () => {
+      expect(sanitizeUploadName("report-v2.final.pdf")).toBe("report-v2.final.pdf");
+    });
+
+    it("drops directory components (traversal) from POSIX and Windows paths", () => {
+      expect(sanitizeUploadName("../../etc/passwd")).toBe("passwd");
+      expect(sanitizeUploadName("C:\\Users\\me\\doc.txt")).toBe("doc.txt");
+    });
+
+    it("replaces spaces, unicode and shell metacharacters with underscores", () => {
+      expect(sanitizeUploadName("my résumé (1) $x.pdf")).toBe("my_r_sum___1___x.pdf");
+    });
+
+    it("strips leading dots so no hidden file or `..` can result", () => {
+      expect(sanitizeUploadName(".bashrc")).toBe("bashrc");
+      expect(sanitizeUploadName("..")).toBe("file");
+    });
+
+    it("falls back to `file` for an empty name or a bare directory path", () => {
+      expect(sanitizeUploadName("")).toBe("file");
+      expect(sanitizeUploadName("some/dir/")).toBe("file");
+    });
+
+    it("caps the length at 100 characters while keeping a normal extension", () => {
+      const out = sanitizeUploadName(`${"a".repeat(300)}.pdf`);
+      expect(out).toHaveLength(100);
+      expect(out.endsWith(".pdf")).toBe(true);
+    });
+
+    it("does not let an absurdly long extension crowd out the name", () => {
+      const out = sanitizeUploadName(`a.${"b".repeat(300)}`);
+      expect(out).toHaveLength(100);
+    });
+  });
+
+  describe("saveSessionFileUpload", () => {
+    it("writes <cwd>/.mullion-uploads/<uuid>/<sanitized-name> and returns the path", () => {
+      const filePath = saveSessionFileUpload(cwd, Buffer.from("hello"), "My Notes.txt");
+
+      const uploadDir = path.join(path.resolve(cwd), UPLOAD_SUBDIR);
+      expect(path.dirname(path.dirname(filePath))).toBe(uploadDir);
+      expect(path.basename(filePath)).toBe("My_Notes.txt");
+      expect(readFileSync(filePath, "utf8")).toBe("hello");
+      expect(readFileSync(path.join(uploadDir, ".gitignore"), "utf8")).toBe("*\n");
+    });
+
+    it("keeps same-named uploads apart via the uuid directory", () => {
+      const first = saveSessionFileUpload(cwd, Buffer.from("a"), "x.txt");
+      const second = saveSessionFileUpload(cwd, Buffer.from("b"), "x.txt");
+
+      expect(first).not.toBe(second);
+      expect(readFileSync(first, "utf8")).toBe("a");
+      expect(readFileSync(second, "utf8")).toBe("b");
+    });
+
+    it("cannot escape the upload directory through the file name", () => {
+      const filePath = saveSessionFileUpload(cwd, Buffer.from("x"), "../../../evil.sh");
+
+      expect(filePath.startsWith(path.join(path.resolve(cwd), UPLOAD_SUBDIR) + path.sep)).toBe(
+        true,
+      );
+      expect(path.basename(filePath)).toBe("evil.sh");
+    });
+
+    it("refuses a symlinked .mullion-uploads like the image path does", () => {
+      const target = mkdtempSync(path.join(os.tmpdir(), "mullion-upload-target-"));
+      try {
+        symlinkSync(target, path.join(cwd, UPLOAD_SUBDIR));
+        expect(() => saveSessionFileUpload(cwd, Buffer.from("x"), "a.txt")).toThrow(
+          /not a regular/,
+        );
+      } finally {
+        rmSync(target, { recursive: true, force: true });
+      }
     });
   });
 

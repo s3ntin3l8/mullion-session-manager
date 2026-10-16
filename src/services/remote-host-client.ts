@@ -1331,6 +1331,25 @@ export class RemoteHostClient {
     );
   }
 
+  /**
+   * Generic-file counterpart to uploadImage: same `/internal/uploads`
+   * endpoint (so the unsigned-body path exemption applies unchanged), with
+   * `application/octet-stream` and the original file name as a `name` query
+   * param; the agent sanitizes it before touching disk.
+   */
+  uploadFile(cwd: string, buffer: Buffer, name: string): Promise<{ path: string }> {
+    const query = new URLSearchParams({ cwd, name });
+    return this.request(
+      `/internal/uploads?${query.toString()}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/octet-stream" },
+        body: buffer,
+      },
+      UPLOAD_REQUEST_TIMEOUT_MS,
+    );
+  }
+
   /** Fetches the scrollback replay buffer (Phase 4, #187) from whichever
    * agent actually runs this session's PTY, base64-decoded back into a
    * Buffer here so callers (session-backend.ts's RemoteBackend) never see

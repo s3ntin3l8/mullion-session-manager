@@ -1214,6 +1214,80 @@ describe("sessions route", () => {
       await app.close();
     });
 
+    it("saves a generic file (octet-stream + X-Upload-Filename) under the sanitized original name", async () => {
+      const app = await buildApp();
+      const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "sessions-upload-file-"));
+      const projectId = await createProjectWithCwd(app, cwd);
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+      const body = Buffer.from("%PDF-1.4 not really");
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${created.json().id}/uploads`,
+        headers: {
+          "content-type": "application/octet-stream",
+          "x-upload-filename": encodeURIComponent("../Q3 report (final).pdf"),
+        },
+        payload: body,
+      });
+
+      expect(res.statusCode).toBe(200);
+      const { path: uploadPath } = res.json();
+      expect(uploadPath.startsWith(path.join(cwd, ".mullion-uploads") + path.sep)).toBe(true);
+      expect(path.basename(uploadPath)).toBe("Q3_report__final_.pdf");
+      expect(fs.readFileSync(uploadPath)).toEqual(body);
+
+      fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("falls back to `file` when a generic upload has no X-Upload-Filename header", async () => {
+      const app = await buildApp();
+      const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "sessions-upload-file-"));
+      const projectId = await createProjectWithCwd(app, cwd);
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${created.json().id}/uploads`,
+        headers: { "content-type": "application/octet-stream" },
+        payload: Buffer.from("data"),
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(path.basename(res.json().path)).toBe("file");
+
+      fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("400s a generic upload with a malformed percent-encoded X-Upload-Filename", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${created.json().id}/uploads`,
+        headers: { "content-type": "application/octet-stream", "x-upload-filename": "%E0%A4%A" },
+        payload: Buffer.from("data"),
+      });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+
     it("415s a non-image content type (no matching content-type parser)", async () => {
       const app = await buildApp();
       const projectId = await createProject(app);
