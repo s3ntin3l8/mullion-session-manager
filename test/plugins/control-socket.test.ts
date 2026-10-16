@@ -2271,6 +2271,8 @@ describe("controlSocketPlugin (issue #185)", () => {
           });
           expect(refused).toMatchObject({ ok: false, status: 409 });
           expect(refused.error).toMatch(/^agent_busy: /);
+          // Busy because of a running subagent, not a prompted turn: the message must not claim one.
+          expect(refused.error).not.toMatch(/in flight/);
           expect(pty.writeSpy).not.toHaveBeenCalled();
           const queued = await ask(socket, "sessions.prompt", { sessionId: childId, text: "go" });
           expect(queued).toMatchObject({ ok: true, result: { delivered: true, submitted: true } });
@@ -2295,7 +2297,7 @@ describe("controlSocketPlugin (issue #185)", () => {
             wait: true,
           });
           expect(refused).toMatchObject({ ok: false, status: 409 });
-          expect(refused.error).toMatch(/^agent_busy: /);
+          expect(refused.error).toMatch(/^agent_busy: .*prompted turn still in flight/);
           expect(pty.writeSpy).not.toHaveBeenCalled();
           // Turn A ends (Stop hook): the child is free again.
           session.emitHookEvent({ kind: "progress", phase: "done" });

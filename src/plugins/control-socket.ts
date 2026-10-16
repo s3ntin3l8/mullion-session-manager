@@ -822,10 +822,13 @@ async function refuseIfBlockedOrGone(
   // A prompt that will be WAITED on must start from a quiet agent: a child
   // that is mid-turn queues the paste, so the in-flight turn's end would
   // satisfy the wait before the prompted turn ever ran.
-  if (opts.refuseBusy && (snapshot.severity === "busy" || app.pty.get(id)?.agentTurnInFlight)) {
+  // Name the in-flight turn only when that is what fired: a child that is busy
+  // on background tasks / subagents can be so AFTER its turn ended.
+  const turnInFlight = app.pty.get(id)?.agentTurnInFlight === true;
+  if (opts.refuseBusy && (snapshot.severity === "busy" || turnInFlight)) {
     return bad(
       409,
-      `agent_busy: the session is ${snapshot.status} with a turn in flight — prompt without \`wait\` to queue the ` +
+      `agent_busy: the session is ${snapshot.status}${turnInFlight ? " with a prompted turn still in flight" : ""} — prompt without \`wait\` to queue the ` +
         'message, or let it go quiet first (sessions.wait with until=["done","dormant"]; ' +
         "the default `until` never matches a child that stays busy on background tasks or subagents)",
     );
