@@ -179,6 +179,17 @@
   color: var(--r);
 }
 
+/* Informational drop note ("Only the first 20 of N…"): sits below the
+   status indicator so the two never paint over each other. */
+.terminal-upload-indicator.notice {
+  top: 40px;
+}
+
+/* A voice error shown while the upload indicator/notice is up goes below both. */
+.terminal-upload-indicator.stacked {
+  top: 72px;
+}
+
 .terminal-attach-image-btn {
   position: absolute;
   top: 8px;

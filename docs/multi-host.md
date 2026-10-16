@@ -283,7 +283,7 @@ signature at all, or a wrong one, is rejected outright; there's no
 "downgrade" path back to unsigned for a session-authenticated request.
 
 A handful of large/streaming request bodies (a remote-hosted preview
-request/response, an image upload) aren't hashed — hashing would mean
+request/response, a file upload) aren't hashed — hashing would mean
 buffering the whole body before auth is decided — but the request's method,
 path, and query string are still covered. The agent independently decides
 which routes fall into this category from the request path alone; nothing

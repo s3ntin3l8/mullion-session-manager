@@ -125,11 +125,11 @@ const LIVE_STATUS_CACHE_TTL_MS = 1_500;
 const PREVIEW_REQUEST_TIMEOUT_MS = 30_000;
 
 // Same reasoning as PREVIEW_REQUEST_TIMEOUT_MS above, for the same reason:
-// an image upload (issue #68) can be up to MAX_UPLOAD_BYTES (10 MiB,
+// a file upload (issue #68) can be up to MAX_UPLOAD_BYTES (25 MiB,
 // session-upload.ts) — a real, non-error transfer time over a WAN/VPN link
 // to a remote agent that REQUEST_TIMEOUT_MS's 5s is nowhere near generous
-// enough for.
-const UPLOAD_REQUEST_TIMEOUT_MS = 30_000;
+// enough for. 25 MiB needs ~3.5 Mbit/s to finish inside this window.
+const UPLOAD_REQUEST_TIMEOUT_MS = 60_000;
 
 // #484 — the four new task-git proxy calls each wrap an agent-side git
 // shell-out with its own timeout (git-push.ts/git-refs.ts/git-status.ts/
@@ -1325,6 +1325,25 @@ export class RemoteHostClient {
       {
         method: "POST",
         headers: { "content-type": mime },
+        body: buffer,
+      },
+      UPLOAD_REQUEST_TIMEOUT_MS,
+    );
+  }
+
+  /**
+   * Generic-file counterpart to uploadImage: same `/internal/uploads`
+   * endpoint (so the unsigned-body path exemption applies unchanged), with
+   * `application/octet-stream` and the original file name as a `name` query
+   * param; the agent sanitizes it before touching disk.
+   */
+  uploadFile(cwd: string, buffer: Buffer, name: string): Promise<{ path: string }> {
+    const query = new URLSearchParams({ cwd, name });
+    return this.request(
+      `/internal/uploads?${query.toString()}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/octet-stream" },
         body: buffer,
       },
       UPLOAD_REQUEST_TIMEOUT_MS,

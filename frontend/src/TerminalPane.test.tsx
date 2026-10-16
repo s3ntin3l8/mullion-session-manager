@@ -24,7 +24,7 @@ import { registerTerminalInput, unregisterTerminalInput } from "./terminalInputR
 
 vi.mock("./api/index.js", async (importOriginal) => {
   const actual = await importOriginal<typeof ApiModule>();
-  return { ...actual, api: { ...actual.api, uploadSessionImage: vi.fn() } };
+  return { ...actual, api: { ...actual.api, uploadSessionFile: vi.fn() } };
 });
 
 vi.mock("./terminalRepaintRegistry.js", () => ({
@@ -479,7 +479,7 @@ beforeEach(() => {
       };
     }),
   );
-  vi.mocked(api.uploadSessionImage).mockReset();
+  vi.mocked(api.uploadSessionFile).mockReset();
   vi.mocked(registerTerminalRepaint).mockClear();
   vi.mocked(unregisterTerminalRepaint).mockClear();
   vi.mocked(repaintAllTerminals).mockClear();
@@ -2009,14 +2009,14 @@ describe("TerminalPane image paste/upload (issue #68)", () => {
         readText: vi.fn().mockResolvedValue("should not be used"),
       },
     });
-    vi.mocked(api.uploadSessionImage).mockResolvedValue({ path: "/cwd/.mullion-uploads/x.png" });
+    vi.mocked(api.uploadSessionFile).mockResolvedValue({ path: "/cwd/.mullion-uploads/x.png" });
 
     renderPane();
     await waitFor(() => expect(fakeSocket.readyState).toBe(1));
 
     triggerPasteChord();
 
-    await waitFor(() => expect(api.uploadSessionImage).toHaveBeenCalledWith(1, blob));
+    await waitFor(() => expect(api.uploadSessionFile).toHaveBeenCalledWith(1, blob, "pasted.png"));
     await waitFor(() => {
       expect(getLatestTermInstance().paste).toHaveBeenCalledWith("/cwd/.mullion-uploads/x.png ");
     });
@@ -2039,7 +2039,7 @@ describe("TerminalPane image paste/upload (issue #68)", () => {
     triggerPasteChord();
 
     await waitFor(() => expect(getLatestTermInstance().paste).toHaveBeenCalledWith("hello"));
-    expect(api.uploadSessionImage).not.toHaveBeenCalled();
+    expect(api.uploadSessionFile).not.toHaveBeenCalled();
   });
 
   it("falls back to a text paste when navigator.clipboard.read is unavailable", async () => {
@@ -2055,12 +2055,12 @@ describe("TerminalPane image paste/upload (issue #68)", () => {
     triggerPasteChord();
 
     await waitFor(() => expect(getLatestTermInstance().paste).toHaveBeenCalledWith("plain text"));
-    expect(api.uploadSessionImage).not.toHaveBeenCalled();
+    expect(api.uploadSessionFile).not.toHaveBeenCalled();
   });
 
   it("uploads a file selected via the attach-image button and injects its path", async () => {
     stubFakeWebSocket(true);
-    vi.mocked(api.uploadSessionImage).mockResolvedValue({ path: "/cwd/.mullion-uploads/y.jpg" });
+    vi.mocked(api.uploadSessionFile).mockResolvedValue({ path: "/cwd/.mullion-uploads/y.jpg" });
 
     const { container } = renderPane();
     await waitFor(() => expect(fakeSocket.readyState).toBe(1));
@@ -2069,31 +2069,323 @@ describe("TerminalPane image paste/upload (issue #68)", () => {
     const file = new File(["fake"], "photo.png", { type: "image/png" });
     fireEvent.change(input, { target: { files: [file] } });
 
-    await waitFor(() => expect(api.uploadSessionImage).toHaveBeenCalledWith(1, file));
+    await waitFor(() => expect(api.uploadSessionFile).toHaveBeenCalledWith(1, file, "photo.png"));
     await waitFor(() => {
       expect(getLatestTermInstance().paste).toHaveBeenCalledWith("/cwd/.mullion-uploads/y.jpg ");
     });
   });
 
-  it("uploads an image file dropped onto the pane and ignores non-image drops", async () => {
+  it("uploads files of any type dropped onto the pane", async () => {
     stubFakeWebSocket(true);
-    vi.mocked(api.uploadSessionImage).mockResolvedValue({ path: "/cwd/.mullion-uploads/d.png" });
+    vi.mocked(api.uploadSessionFile).mockResolvedValue({
+      path: "/cwd/.mullion-uploads/d/notes.txt",
+    });
 
     const { container } = renderPane();
     await waitFor(() => expect(fakeSocket.readyState).toBe(1));
     const pane = container.firstElementChild as HTMLElement;
 
+    fireEvent.dragEnter(pane, { dataTransfer: { types: ["Files"], files: [] } });
+    expect(screen.getByText("Drop files to attach")).toBeInTheDocument();
+
     const text = new File(["x"], "notes.txt", { type: "text/plain" });
     fireEvent.drop(pane, { dataTransfer: { types: ["Files"], files: [text] } });
-    expect(api.uploadSessionImage).not.toHaveBeenCalled();
+    await waitFor(() => expect(api.uploadSessionFile).toHaveBeenCalledWith(1, text, "notes.txt"));
+    expect(screen.queryByText("Drop files to attach")).not.toBeInTheDocument();
+  });
 
-    fireEvent.dragEnter(pane, { dataTransfer: { types: ["Files"], files: [] } });
-    expect(screen.getByText("Drop image to attach")).toBeInTheDocument();
+  it("uploads every file of a multi-file drop and pastes the paths together in drop order", async () => {
+    stubFakeWebSocket(true);
+    vi.mocked(api.uploadSessionFile).mockImplementation(async (_id, _blob, name) => ({
+      path: `/cwd/.mullion-uploads/u/${name}`,
+    }));
 
-    const img = new File(["fake"], "photo.png", { type: "image/png" });
-    fireEvent.drop(pane, { dataTransfer: { types: ["Files"], files: [img] } });
-    await waitFor(() => expect(api.uploadSessionImage).toHaveBeenCalledWith(1, img));
-    expect(screen.queryByText("Drop image to attach")).not.toBeInTheDocument();
+    const { container } = renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    const img = new File(["i"], "a.png", { type: "image/png" });
+    const pdf = new File(["p"], "b.pdf", { type: "application/pdf" });
+    fireEvent.drop(container.firstElementChild as HTMLElement, {
+      dataTransfer: { types: ["Files"], files: [img, pdf] },
+    });
+
+    await waitFor(() => {
+      expect(getLatestTermInstance().paste).toHaveBeenCalledWith(
+        "/cwd/.mullion-uploads/u/a.png /cwd/.mullion-uploads/u/b.pdf ",
+      );
+    });
+    expect(api.uploadSessionFile).toHaveBeenCalledTimes(2);
+  });
+
+  it("still pastes the paths that uploaded when another file in the drop fails", async () => {
+    stubFakeWebSocket(true);
+    vi.mocked(api.uploadSessionFile).mockImplementation(async (_id, _blob, name) => {
+      if (name === "bad.bin") throw new Error("too large");
+      return { path: `/cwd/.mullion-uploads/u/${name}` };
+    });
+
+    const { container, getByText } = renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    const bad = new File(["x"], "bad.bin", { type: "" });
+    const good = new File(["y"], "good.txt", { type: "text/plain" });
+    fireEvent.drop(container.firstElementChild as HTMLElement, {
+      dataTransfer: { types: ["Files"], files: [bad, good] },
+    });
+
+    await waitFor(() => {
+      expect(getLatestTermInstance().paste).toHaveBeenCalledWith(
+        "/cwd/.mullion-uploads/u/good.txt ",
+      );
+    });
+    expect(getByText("Upload failed")).toBeTruthy();
+  });
+
+  it("uploads at most 3 files at a time", async () => {
+    stubFakeWebSocket(true);
+    let inFlight = 0;
+    let peak = 0;
+    vi.mocked(api.uploadSessionFile).mockImplementation(async (_id, _blob, name) => {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      await new Promise((r) => setTimeout(r, 5));
+      inFlight--;
+      return { path: `/p/${name}` };
+    });
+
+    const { container } = renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    const files = Array.from({ length: 7 }, (_, i) => new File(["x"], `f${i}.txt`));
+    fireEvent.drop(container.firstElementChild as HTMLElement, {
+      dataTransfer: { types: ["Files"], files },
+    });
+
+    await waitFor(() => expect(api.uploadSessionFile).toHaveBeenCalledTimes(7));
+    await waitFor(() => expect(getLatestTermInstance().paste).toHaveBeenCalled());
+    expect(peak).toBe(3);
+  });
+
+  it("skips zero-size untyped entries when the browser has no webkitGetAsEntry", async () => {
+    stubFakeWebSocket(true);
+    vi.mocked(api.uploadSessionFile).mockResolvedValue({ path: "/cwd/.mullion-uploads/u/f.txt" });
+
+    const { container } = renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    const folder = new File([], "folder", { type: "" });
+    const file = new File(["y"], "f.txt", { type: "text/plain" });
+    const item = (f: File) => ({ kind: "file", getAsFile: () => f });
+    fireEvent.drop(container.firstElementChild as HTMLElement, {
+      dataTransfer: { types: ["Files"], files: [folder, file], items: [item(folder), item(file)] },
+    });
+
+    await waitFor(() => expect(api.uploadSessionFile).toHaveBeenCalledTimes(1));
+    expect(api.uploadSessionFile).toHaveBeenCalledWith(1, file, "f.txt");
+  });
+
+  it("keeps the uploading indicator on until every overlapping batch has settled, then reports a failure from any", async () => {
+    stubFakeWebSocket(true);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const gates: Array<(ok: boolean) => void> = [];
+    vi.mocked(api.uploadSessionFile).mockImplementation(
+      (_id, _blob, name) =>
+        new Promise((resolve, reject) => {
+          gates.push((ok) => (ok ? resolve({ path: `/p/${name}` }) : reject(new Error("boom"))));
+        }),
+    );
+
+    const { container } = renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    const pane = container.firstElementChild as HTMLElement;
+    const drop = (name: string) =>
+      fireEvent.drop(pane, {
+        dataTransfer: { types: ["Files"], files: [new File(["x"], name)] },
+      });
+
+    drop("one.txt");
+    drop("two.txt");
+    await waitFor(() => expect(gates).toHaveLength(2));
+    expect(screen.getByText("Uploading…")).toBeInTheDocument();
+
+    gates[0]!(false); // first batch fails while the second is still running
+    await waitFor(() => expect(warn).toHaveBeenCalled());
+    expect(screen.getByText("Uploading…")).toBeInTheDocument();
+    expect(screen.queryByText("Upload failed")).not.toBeInTheDocument();
+
+    gates[1]!(true);
+    await waitFor(() => expect(screen.getByText("Upload failed")).toBeInTheDocument());
+    expect(getLatestTermInstance().paste).toHaveBeenCalledWith("/p/two.txt ");
+    warn.mockRestore();
+  });
+
+  it("uploads only the first 20 files of a larger drop and says so", async () => {
+    stubFakeWebSocket(true);
+    vi.mocked(api.uploadSessionFile).mockImplementation(async (_id, _blob, name) => ({
+      path: `/p/${name}`,
+    }));
+
+    const { container } = renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    const files = Array.from({ length: 25 }, (_, i) => new File(["x"], `f${i}.txt`));
+    fireEvent.drop(container.firstElementChild as HTMLElement, {
+      dataTransfer: { types: ["Files"], files },
+    });
+
+    await waitFor(() => expect(api.uploadSessionFile).toHaveBeenCalledTimes(20));
+    expect(screen.getByText("5 file(s) over the per-drop limit skipped")).toBeInTheDocument();
+  });
+
+  it("stops adding files once a drop would exceed the total byte cap", async () => {
+    stubFakeWebSocket(true);
+    vi.mocked(api.uploadSessionFile).mockImplementation(async (_id, _blob, name) => ({
+      path: `/p/${name}`,
+    }));
+
+    const { container } = renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    const big = (name: string) => {
+      const f = new File(["x"], name);
+      Object.defineProperty(f, "size", { value: 25 * 1024 * 1024 });
+      return f;
+    };
+    fireEvent.drop(container.firstElementChild as HTMLElement, {
+      dataTransfer: {
+        types: ["Files"],
+        files: ["a", "b", "c", "d", "e"].map((n) => big(`${n}.bin`)),
+      },
+    });
+
+    await waitFor(() => expect(api.uploadSessionFile).toHaveBeenCalledTimes(4));
+    expect(screen.getByText("1 file(s) over the per-drop limit skipped")).toBeInTheDocument();
+  });
+
+  it("skips only the file that busts the byte budget and keeps filling it", async () => {
+    stubFakeWebSocket(true);
+    vi.mocked(api.uploadSessionFile).mockImplementation(async (_id, _blob, name) => ({
+      path: `/p/${name}`,
+    }));
+
+    const { container } = renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    const sized = (name: string, mb: number) => {
+      const f = new File(["x"], name);
+      Object.defineProperty(f, "size", { value: mb * 1024 * 1024 });
+      return f;
+    };
+    fireEvent.drop(container.firstElementChild as HTMLElement, {
+      dataTransfer: {
+        types: ["Files"],
+        files: [
+          sized("a.bin", 25),
+          sized("b.bin", 25),
+          sized("c.bin", 25),
+          sized("d.bin", 20),
+          sized("e.bin", 25),
+          sized("f.bin", 2),
+        ],
+      },
+    });
+
+    await waitFor(() => expect(api.uploadSessionFile).toHaveBeenCalledTimes(5));
+    const names = vi.mocked(api.uploadSessionFile).mock.calls.map((c) => c[2]);
+    expect(names).toEqual(["a.bin", "b.bin", "c.bin", "d.bin", "f.bin"]);
+    expect(screen.getByText("1 file(s) over the per-drop limit skipped")).toBeInTheDocument();
+  });
+
+  it("skips a file over the per-file server limit up front and folds every skip into one notice", async () => {
+    stubFakeWebSocket(true);
+    vi.mocked(api.uploadSessionFile).mockResolvedValue({ path: "/p/ok.txt" });
+
+    const { container } = renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    const huge = new File(["x"], "huge.bin");
+    Object.defineProperty(huge, "size", { value: 30 * 1024 * 1024 });
+    const ok = new File(["y"], "ok.txt", { type: "text/plain" });
+    const entry = (isDirectory: boolean, f: File) => ({
+      kind: "file",
+      getAsFile: () => f,
+      webkitGetAsEntry: () => ({ isDirectory }),
+    });
+    const dir = new File([], "folder");
+    fireEvent.drop(container.firstElementChild as HTMLElement, {
+      dataTransfer: {
+        types: ["Files"],
+        files: [dir, huge, ok],
+        items: [entry(true, dir), entry(false, huge), entry(false, ok)],
+      },
+    });
+
+    await waitFor(() => expect(api.uploadSessionFile).toHaveBeenCalledTimes(1));
+    expect(api.uploadSessionFile).toHaveBeenCalledWith(1, ok, "ok.txt");
+    expect(
+      screen.getByText("1 folder(s)/empty file(s) skipped, 1 file(s) over 25 MB skipped"),
+    ).toBeInTheDocument();
+  });
+
+  it("reports skipped folders in a notice", async () => {
+    stubFakeWebSocket(true);
+    vi.mocked(api.uploadSessionFile).mockResolvedValue({ path: "/p/f.txt" });
+
+    const { container } = renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    const dir = new File([], "folder");
+    const file = new File(["y"], "f.txt", { type: "text/plain" });
+    const entry = (isDirectory: boolean, f: File) => ({
+      kind: "file",
+      getAsFile: () => f,
+      webkitGetAsEntry: () => ({ isDirectory }),
+    });
+    fireEvent.drop(container.firstElementChild as HTMLElement, {
+      dataTransfer: {
+        types: ["Files"],
+        files: [dir, file],
+        items: [entry(true, dir), entry(false, file)],
+      },
+    });
+
+    expect(await screen.findByText("1 folder(s)/empty file(s) skipped")).toBeInTheDocument();
+  });
+
+  it("clears the uploading indicator when building a request throws synchronously", async () => {
+    stubFakeWebSocket(true);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.mocked(api.uploadSessionFile).mockImplementation(() => {
+      throw new URIError("URI malformed");
+    });
+
+    const { container } = renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    fireEvent.drop(container.firstElementChild as HTMLElement, {
+      dataTransfer: { types: ["Files"], files: [new File(["x"], "bad.txt")] },
+    });
+
+    expect(await screen.findByText("Upload failed")).toBeInTheDocument();
+    expect(screen.queryByText("Uploading…")).not.toBeInTheDocument();
+    warn.mockRestore();
+  });
+
+  it("skips dropped directories", async () => {
+    stubFakeWebSocket(true);
+    vi.mocked(api.uploadSessionFile).mockResolvedValue({ path: "/cwd/.mullion-uploads/u/f.txt" });
+
+    const { container } = renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    const dir = new File([], "folder", { type: "" });
+    const file = new File(["y"], "f.txt", { type: "text/plain" });
+    const entry = (isDirectory: boolean, f: File) => ({
+      kind: "file",
+      getAsFile: () => f,
+      webkitGetAsEntry: () => ({ isDirectory }),
+    });
+    // A string item (e.g. text/uri-list) sits first and must not shift indexes.
+    const str = { kind: "string", getAsFile: () => null };
+    fireEvent.drop(container.firstElementChild as HTMLElement, {
+      dataTransfer: {
+        types: ["Files"],
+        files: [dir, file],
+        items: [str, entry(true, dir), entry(false, file)],
+      },
+    });
+
+    await waitFor(() => expect(api.uploadSessionFile).toHaveBeenCalledTimes(1));
+    expect(api.uploadSessionFile).toHaveBeenCalledWith(1, file, "f.txt");
   });
 
   it("swallows file drops (no navigation) but never uploads when inputAffordances is false", async () => {
@@ -2105,8 +2397,8 @@ describe("TerminalPane image paste/upload (issue #68)", () => {
       dataTransfer: { types: ["Files"], files: [img] },
     });
     expect(notPrevented).toBe(false);
-    expect(api.uploadSessionImage).not.toHaveBeenCalled();
-    expect(screen.queryByText("Drop image to attach")).not.toBeInTheDocument();
+    expect(api.uploadSessionFile).not.toHaveBeenCalled();
+    expect(screen.queryByText("Drop files to attach")).not.toBeInTheDocument();
   });
 
   it("ignores non-file drags", async () => {
@@ -2116,12 +2408,12 @@ describe("TerminalPane image paste/upload (issue #68)", () => {
     fireEvent.dragEnter(container.firstElementChild as HTMLElement, {
       dataTransfer: { types: ["text/plain"], files: [] },
     });
-    expect(screen.queryByText("Drop image to attach")).not.toBeInTheDocument();
+    expect(screen.queryByText("Drop files to attach")).not.toBeInTheDocument();
   });
 
   it("shows an error toast when the upload fails", async () => {
     stubFakeWebSocket(true);
-    vi.mocked(api.uploadSessionImage).mockRejectedValue(new Error("network error"));
+    vi.mocked(api.uploadSessionFile).mockRejectedValue(new Error("network error"));
 
     const { container, getByText } = renderPane();
     await waitFor(() => expect(fakeSocket.readyState).toBe(1));
@@ -2130,7 +2422,7 @@ describe("TerminalPane image paste/upload (issue #68)", () => {
     const file = new File(["fake"], "photo.png", { type: "image/png" });
     fireEvent.change(input, { target: { files: [file] } });
 
-    await waitFor(() => expect(getByText("Image upload failed")).toBeTruthy());
+    await waitFor(() => expect(getByText("Upload failed")).toBeTruthy());
   });
 });
 
@@ -2314,14 +2606,14 @@ describe("TerminalPane opt-in Ctrl+V / Ctrl+C clipboard chords (issue #67 follow
         readText: vi.fn().mockResolvedValue("should not be used"),
       },
     });
-    vi.mocked(api.uploadSessionImage).mockResolvedValue({ path: "/cwd/.mullion-uploads/z.png" });
+    vi.mocked(api.uploadSessionFile).mockResolvedValue({ path: "/cwd/.mullion-uploads/z.png" });
     renderPane();
     await waitFor(() => expect(fakeSocket.readyState).toBe(1));
     enableClipboardKeys(true, false);
 
     triggerCtrlVChord();
 
-    await waitFor(() => expect(api.uploadSessionImage).toHaveBeenCalledWith(1, blob));
+    await waitFor(() => expect(api.uploadSessionFile).toHaveBeenCalledWith(1, blob, "pasted.png"));
     await waitFor(() => {
       expect(getLatestTermInstance().paste).toHaveBeenCalledWith("/cwd/.mullion-uploads/z.png ");
     });
@@ -4218,13 +4510,15 @@ describe("TerminalPane inputAffordances (PR3 — dock monitor terminal chrome)",
 
   it("renders the attach-image button and the mic button by default", () => {
     renderPane();
-    expect(screen.getByTitle("Attach image (or paste / drop one)")).toBeInTheDocument();
+    expect(screen.getByTitle("Attach files (or paste an image / drop files)")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /dictation/i })).toBeInTheDocument();
   });
 
   it("hides both the attach-image button and the mic button when inputAffordances is false — a dock monitor's log stream has no interactive CLI to paste into or dictate to", () => {
     renderPane({ inputAffordances: false });
-    expect(screen.queryByTitle("Attach image (or paste / drop one)")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTitle("Attach files (or paste an image / drop files)"),
+    ).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /dictation/i })).not.toBeInTheDocument();
   });
 

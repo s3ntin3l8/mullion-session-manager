@@ -87,7 +87,7 @@ const ROW2: KeyBarKey[] = [
 // key off an id that doesn't move, or the highlight would silently stop
 // matching the moment the label is renamed or (as today) swapped.
 const MORE_KEY = "More";
-const ATTACH_KEY = "Attach image";
+const ATTACH_KEY = "Attach files";
 
 // preventDefault on pointerdown, not just onClick, is what keeps the
 // on-screen keyboard up WHILE it's already showing: a plain click's own
@@ -227,7 +227,7 @@ export function MobileKeyBar({ sessionId }: MobileKeyBarProps) {
         <button
           type="button"
           className={`mobile-key-bar-btn${pressedKey === ATTACH_KEY ? " pressed" : ""}`}
-          aria-label="Attach image"
+          aria-label="Attach files"
           onPointerDown={(event) => {
             keepFocus(event);
             onKeyPressStart(ATTACH_KEY);
