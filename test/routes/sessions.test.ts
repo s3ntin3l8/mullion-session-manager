@@ -1332,7 +1332,7 @@ describe("sessions route", () => {
       await app.close();
     });
 
-    it("502s a generic upload with UPLOAD_AGENT_OUTDATED when the agent answers 415/404 (issue #1637)", async () => {
+    it("502s a generic upload with UPLOAD_AGENT_OUTDATED when the agent answers 415 (issue #1637)", async () => {
       const app = await buildApp();
       const sessionBackendModule = await import("../../src/services/session-backend.js");
       const { HostRequestError } = await import("../../src/services/remote-host-client.js");
@@ -1350,17 +1350,23 @@ describe("sessions route", () => {
           uploadImage: vi.fn().mockRejectedValue(new HostRequestError("remote", status, "nope")),
         }) as unknown as ReturnType<typeof sessionBackendModule.resolveBackend>;
 
-      for (const status of [415, 404]) {
-        spy.mockReturnValue(fake(status));
-        const res = await app.inject({
+      const generic = () =>
+        app.inject({
           method: "POST",
           url: `/api/sessions/${sessionId}/uploads`,
           headers: { "content-type": "application/octet-stream", "x-upload-filename": "a.pdf" },
           payload: Buffer.from("data"),
         });
-        expect(res.statusCode).toBe(502);
-        expect(res.json()).toMatchObject({ code: "UPLOAD_AGENT_OUTDATED" });
-      }
+      spy.mockReturnValue(fake(415));
+      const outdated = await generic();
+      expect(outdated.statusCode).toBe(502);
+      expect(outdated.json()).toMatchObject({ code: "UPLOAD_AGENT_OUTDATED" });
+
+      // A 404 is ambiguous (not necessarily an old agent) — plain 502.
+      spy.mockReturnValue(fake(404));
+      const notFound = await generic();
+      expect(notFound.statusCode).toBe(502);
+      expect(notFound.json().code).toBeUndefined();
 
       // An image upload hitting the same agent error stays a plain 502.
       spy.mockReturnValue(fake(415));

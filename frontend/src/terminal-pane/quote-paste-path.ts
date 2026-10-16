@@ -8,5 +8,7 @@ const SAFE_PATH = /^[A-Za-z0-9._/@%+=:,-]+$/;
 
 export function quotePastedPath(p: string): string {
   if (SAFE_PATH.test(p)) return p;
-  return p.replace(/[^A-Za-z0-9._/@%+=:,-]/g, "\\$&");
+  // `u`: match whole code points, so an astral character (emoji) is escaped
+  // as one unit rather than split between its surrogate halves.
+  return p.replace(/[^A-Za-z0-9._/@%+=:,-]/gu, "\\$&");
 }

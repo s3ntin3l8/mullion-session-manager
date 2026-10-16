@@ -1312,13 +1312,10 @@ export async function sessionsRoute(app: FastifyInstance) {
           return reply.conflict((err as Error).message);
         }
         // An agent that predates generic uploads only registers an `image/*`
-        // body parser, so it answers a generic upload with 415 (or 404 if
-        // the route itself is missing) — name that instead of a bare 502.
-        if (
-          isGenericFile &&
-          err instanceof HostRequestError &&
-          (err.statusCode === 415 || err.statusCode === 404)
-        ) {
+        // body parser, so it answers a generic upload with 415 — name that
+        // instead of a bare 502. (404 is deliberately not matched: a current
+        // agent can 404 for unrelated reasons.)
+        if (isGenericFile && err instanceof HostRequestError && err.statusCode === 415) {
           return reply.code(502).send({
             statusCode: 502,
             error: "Bad Gateway",

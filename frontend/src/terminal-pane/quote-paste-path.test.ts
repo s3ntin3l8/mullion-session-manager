@@ -14,5 +14,6 @@ describe("quotePastedPath", () => {
 
   it("escapes non-ASCII characters", () => {
     expect(quotePastedPath("/h/é/f")).toBe("/h/\\é/f");
+    expect(quotePastedPath("/h/😀/f")).toBe("/h/\\😀/f");
   });
 });
