@@ -311,6 +311,19 @@ describe("session-upload", () => {
       expect(existsSync(g)).toBe(false);
     });
 
+    it("caps the throttle map, evicting the oldest dir (a re-scan, not a failure)", () => {
+      const dir = path.join(cwd, UPLOAD_SUBDIR);
+      saveSessionUpload(cwd, PNG_BYTES, "image/png");
+      const now = Date.now();
+      pruneUploadDir(dir, 7 * DAY, now);
+      for (let i = 0; i < 600; i++) pruneUploadDir(path.join(cwd, `other-${i}`), 7 * DAY, now);
+      // `dir` was evicted, so it is scanned again inside the throttle window.
+      const f = saveSessionFileUpload(cwd, Buffer.from("a"), "a.txt");
+      age(path.dirname(f), 10);
+      pruneUploadDir(dir, 7 * DAY, now + 60_000);
+      expect(existsSync(f)).toBe(false);
+    });
+
     it("tolerates a missing directory", () => {
       expect(() => pruneUploadDir(path.join(cwd, "nope"), DAY)).not.toThrow();
     });

@@ -172,7 +172,16 @@ export function saveSessionFileUpload(
 }
 
 const PRUNE_INTERVAL_MS = 60 * 60 * 1000;
+// Keyed by upload dir (one per project root / session cwd / task worktree),
+// so capped with oldest-first eviction like the repo's other module-level
+// Maps. Evicting only means one extra directory scan for that dir later.
+const MAX_PRUNE_ENTRIES = 500;
 const lastPrunedAt = new Map<string, number>();
+
+/** `MULLION_UPLOAD_RETENTION_DAYS` as milliseconds (0 = pruning off). */
+export function uploadRetentionMs(config: { MULLION_UPLOAD_RETENTION_DAYS: number }): number {
+  return config.MULLION_UPLOAD_RETENTION_DAYS * 86_400_000;
+}
 
 /**
  * Issue #1637: removes direct children of `uploadDir` (a `<uuid>.<ext>` image
@@ -186,6 +195,13 @@ export function pruneUploadDir(uploadDir: string, maxAgeMs: number, now = Date.n
   if (maxAgeMs <= 0) return;
   const last = lastPrunedAt.get(uploadDir);
   if (last !== undefined && now - last < PRUNE_INTERVAL_MS) return;
+  // delete-then-set refreshes insertion order, so eviction drops the
+  // least-recently-pruned dir.
+  lastPrunedAt.delete(uploadDir);
+  if (lastPrunedAt.size >= MAX_PRUNE_ENTRIES) {
+    const oldest = lastPrunedAt.keys().next().value;
+    if (oldest !== undefined) lastPrunedAt.delete(oldest);
+  }
   lastPrunedAt.set(uploadDir, now);
   try {
     for (const entry of readdirSync(uploadDir)) {

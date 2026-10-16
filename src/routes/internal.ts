@@ -110,6 +110,7 @@ import {
   matchesMagicBytes,
   saveSessionFileUpload,
   saveSessionUpload,
+  uploadRetentionMs,
 } from "../services/session-upload.js";
 import { buildUpstreamRequestHeaders, relayFetchResponse } from "../services/http-proxy.js";
 import { pipeWsFrames, toWsUrl } from "../services/ws-pipe.js";
@@ -2307,7 +2308,7 @@ export async function internalRoutes(app: FastifyInstance) {
       if (mime && name) return reply.badRequest("mime and name are mutually exclusive");
       const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
       if (resolvedCwd === null) return;
-      const retentionMs = app.config.MULLION_UPLOAD_RETENTION_DAYS * 86_400_000;
+      const retentionMs = uploadRetentionMs(app.config);
       // Same signal as POST /api/sessions/:id/uploads: generic mode is chosen
       // by Content-Type, so an image Content-Type can never reach it (and skip
       // the magic-byte check) just by adding a `name`.

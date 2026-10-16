@@ -238,8 +238,10 @@ const declinePromoteSchema = {
 };
 
 // Issue #1637: a drop is capped at 20 files, so this allows ~6 full drops a
-// minute. Must differ from RATE_LIMIT_MAX (checked at boot, issue #1006).
-const UPLOAD_RATE_LIMIT = { rateLimit: { max: 120, timeWindow: "1 minute" } };
+// minute (~3 if every file is a mislabelled image, which retries as generic
+// and costs two requests). Must differ from RATE_LIMIT_MAX (checked at boot,
+// issue #1006).
+const UPLOAD_RATE_LIMIT = { config: { rateLimit: { max: 120, timeWindow: "1 minute" } } };
 
 export async function sessionsRoute(app: FastifyInstance) {
   // Start the preview worktree sync tick on first route registration
@@ -1248,7 +1250,7 @@ export async function sessionsRoute(app: FastifyInstance) {
 
   app.post<{ Params: { id: string } }>(
     "/api/sessions/:id/uploads",
-    { config: UPLOAD_RATE_LIMIT, bodyLimit: MAX_UPLOAD_BYTES },
+    { ...UPLOAD_RATE_LIMIT, bodyLimit: MAX_UPLOAD_BYTES },
     async (request, reply) => {
       const sessionId = Number(request.params.id);
       if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
