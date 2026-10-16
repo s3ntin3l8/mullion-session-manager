@@ -214,6 +214,16 @@ export interface HookAdapterContext {
   taskId?: number;
 }
 
+/** How to type a prompt into an already-running agent so it is submitted as
+ * one turn (sessions.prompt). Written to the PTY as `body`, then — after
+ * `submitDelayMs`, so a TUI that coalesces a paste with an immediately
+ * following Enter doesn't swallow the Enter as part of the paste — `submit`. */
+export interface PromptFraming {
+  body: string;
+  submit: string;
+  submitDelayMs: number;
+}
+
 export interface HookLaunchPlan {
   /** Extra environment variables to merge into the session's env (e.g.
    * Codex's `CODEX_HOME` pointing at a scratch dir). Merged in addition to,
@@ -293,6 +303,13 @@ export interface HookAgentAdapter {
    * through `matches()` or any other command-line parser, so prompt text
    * containing shell metacharacters can never confuse those. */
   initialPromptArgs?(prompt: string): string;
+  /** Frames `text` for typing into this agent's running TUI (sessions.prompt)
+   * — distinct from `initialPromptArgs`, which only works at spawn time.
+   * Optional and OPT-IN per adapter: only an agent whose input handling has
+   * been confirmed to take a paste-then-Enter as a single submitted turn
+   * should define it; the rest get a 501 rather than a guess. `bracketedPaste`
+   * is the session's tracked DECSET 2004 state. */
+  submitPrompt?(text: string, ctx: { bracketedPaste: boolean }): PromptFraming;
   /** Issue #271 follow-up — builds the argv suffix that resumes an EXISTING
    * agent-native session by id, for routes/sessions.ts's promote handler
    * once opencode-session-transfer.ts has imported the source session's

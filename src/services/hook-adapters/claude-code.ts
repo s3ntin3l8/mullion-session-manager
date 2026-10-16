@@ -7,6 +7,7 @@ import {
   buildModelFlag,
   validateCliModel,
   SHELL_METACHARACTERS_RE,
+  standardPromptFraming,
 } from "./shared.js";
 import { resolveMullionBundleDir, composeClaudeSessionBundle } from "./mullion-bundle.js";
 import { isBundleSyncedFor, removeBundleContentForCli } from "../bundle-sync.js";
@@ -510,4 +511,6 @@ export const claudeCodeAdapter: HookAgentAdapter = {
   // prompt work (`claude -p -- '-x hello'` succeeds where `claude -p '-x
   // hello'` doesn't).
   initialPromptArgs: (prompt) => `-- ${shellQuote(prompt)}`,
+  // sessions.prompt: paste-then-Enter into the running TUI (see standardPromptFraming).
+  submitPrompt: standardPromptFraming,
 };

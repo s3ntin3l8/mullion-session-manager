@@ -355,6 +355,26 @@ const listChildSessions = {
   },
 };
 
+/**
+ * Shared by wait_for_session and prompt_session: `timeoutSeconds` (default 50
+ * so a call fits an MCP tool-call budget; clamped to the server's 1 h max,
+ * since a larger value would overflow the socket client's 32-bit setTimeout)
+ * -> `timeoutMs`, and `until` passed through. A non-positive timeout is
+ * rejected locally — it would otherwise reach the server's 400 or, with the
+ * socket slack, fire the client timer first and surface as a misleading
+ * "timed out waiting for a reply".
+ */
+function normalizeWaitArgs(args) {
+  const seconds = typeof args?.timeoutSeconds === "number" ? args.timeoutSeconds : 50;
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    throw new Error("timeoutSeconds must be a positive number");
+  }
+  return {
+    until: args?.until,
+    timeoutMs: Math.min(Math.round(seconds * 1000), WAIT_MAX_TIMEOUT_MS),
+  };
+}
+
 const waitForSession = {
   name: "wait_for_session",
   description:
@@ -391,13 +411,7 @@ const waitForSession = {
     if (typeof args?.sessionId !== "string" || args.sessionId.length === 0) {
       throw new Error("sessionId is required");
     }
-    const seconds = typeof args.timeoutSeconds === "number" ? args.timeoutSeconds : 50;
-    // Same check as the CLI: a non-positive timeout would otherwise reach the
-    // server's 400 — or, with the +15 s socket slack, fire the client timer
-    // first and surface as a misleading "timed out waiting for a reply".
-    if (!Number.isFinite(seconds) || seconds <= 0) {
-      throw new Error("timeoutSeconds must be a positive number");
-    }
+    const { until, timeoutMs } = normalizeWaitArgs(args);
     // Same local check as the CLI's --after-seq (saves a round trip and the
     // server's raw 400).
     if (
@@ -408,11 +422,71 @@ const waitForSession = {
     }
     const result = await client.waitForSession({
       sessionId: args.sessionId,
-      until: args.until,
-      // Clamp to the server's 1 h max (a larger value would overflow the
-      // socket client's 32-bit setTimeout).
-      timeoutMs: Math.min(Math.round(seconds * 1000), WAIT_MAX_TIMEOUT_MS),
+      until,
+      timeoutMs,
       afterSeq: args.afterSeq,
+    });
+    return JSON.stringify(result);
+  },
+};
+
+const promptSession = {
+  name: "prompt_session",
+  description:
+    "Type a prompt into a child session you spawned (Claude Code, Codex or opencode) and submit " +
+    "it as a new turn — the way to give a worker a follow-up after spawn_child_session. With " +
+    "wait:true it then blocks server-side until the child's turn ends (finished, or it needs a " +
+    "permission/plan/question answer, errored, or exited) and returns the wait result alongside " +
+    "{delivered, submitted}; on wait.timedOut:true call wait_for_session to keep waiting. " +
+    "Refused with 409 `agent_blocked` while the child is waiting on a dialog (typing would " +
+    "answer it — resolve that first) and 501 for a shell or unsupported agent. Session scope " +
+    "may only prompt its own children. Text is limited to 32 KB; control characters are dropped.",
+  inputSchema: {
+    type: "object",
+    required: ["sessionId", "text"],
+    properties: {
+      sessionId: { type: "string", description: "The child session id to prompt." },
+      text: { type: "string", description: "The prompt to submit (max 32 KB)." },
+      submit: {
+        type: "boolean",
+        description: "Press Enter after typing (default true). false only pastes the text.",
+      },
+      wait: {
+        type: "boolean",
+        description: "Block until the child's turn ends (default false). Requires submit.",
+      },
+      until: {
+        type: "array",
+        items: { type: "string" },
+        description: "With wait: statuses/severities to stop at (see wait_for_session).",
+      },
+      timeoutSeconds: {
+        type: "number",
+        description: "With wait: max seconds to wait (default 50, max 3600).",
+      },
+    },
+  },
+  async handler(args, client) {
+    if (typeof args?.sessionId !== "string" || args.sessionId.length === 0) {
+      throw new Error("sessionId is required");
+    }
+    if (typeof args.text !== "string" || args.text.trim().length === 0) {
+      throw new Error("text is required");
+    }
+    if (args.submit !== undefined && typeof args.submit !== "boolean") {
+      throw new Error("submit must be a boolean");
+    }
+    if (args.wait !== undefined && typeof args.wait !== "boolean") {
+      throw new Error("wait must be a boolean");
+    }
+    if (args.wait === true && args.submit === false) {
+      throw new Error("wait cannot be combined with submit:false");
+    }
+    const result = await client.promptSession({
+      sessionId: args.sessionId,
+      text: args.text,
+      submit: args.submit,
+      wait: args.wait === true ? normalizeWaitArgs(args) : undefined,
     });
     return JSON.stringify(result);
   },
@@ -829,6 +903,7 @@ export const TOOLS = [
   spawnChildSession,
   listChildSessions,
   waitForSession,
+  promptSession,
   killChildSession,
   stopDockSession,
   getScrollback,

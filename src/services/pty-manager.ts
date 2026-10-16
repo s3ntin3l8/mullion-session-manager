@@ -2854,6 +2854,45 @@ export class Session {
    */
   write(data: string): void {
     const now = Date.now();
+    this.writeToPty(data, now);
+    this.lastUserInputAt = now;
+    this.noteUserInput(data);
+  }
+
+  /**
+   * Input typed by an AGENT (sessions.prompt), not a human. Shares write()'s
+   * backpressure accounting (so an agent can't flood the PTY either) but
+   * deliberately skips every user-input side effect: it must NOT touch
+   * `lastUserInputAt` or run the genuine-user-input attention clears — a
+   * parent prompting a child is not the human acknowledging the child's
+   * pending badge/notification. Starting a new turn is explicit, via
+   * beginAgentTurn(). Returns false if the bytes were NOT delivered (dropped
+   * over the backpressure cap, or no live PTY) — unlike a human keystroke,
+   * a silently dropped prompt must be reportable.
+   */
+  writeAgentInput(data: string): boolean {
+    return this.writeToPty(data, Date.now());
+  }
+
+  /**
+   * An agent-driven prompt DOES start a new turn, so clear the same
+   * "previous turn" latches a genuine keystroke would (`finished`, stale
+   * error, stale backgroundTasks) — otherwise a wait started right after a
+   * prompt would instantly match the last turn's `finished`/`api_error`.
+   * Emits a status_change only if something actually changed. Does NOT run
+   * the attention "userInput" transition (see writeAgentInput).
+   */
+  beginAgentTurn(): void {
+    if (this.clearTurnLatches()) this.emitEvent("status_change", { reason: "agent_prompt" });
+  }
+
+  /** Tracked DECSET 2004 state — whether the app inside has enabled bracketed paste. */
+  get bracketedPaste(): boolean {
+    return this.modes.bracketedPaste;
+  }
+
+  /** The backpressure-windowed PTY write shared by write() and writeAgentInput(). */
+  private writeToPty(data: string, now: number): boolean {
     if (now - this.writeWindowStartedAt >= WRITE_BACKPRESSURE_WINDOW_MS) {
       this.writeWindowStartedAt = now;
       this.pendingWriteBytes = 0;
@@ -2869,11 +2908,16 @@ export class Session {
             `(further drops in this window are not logged individually)`,
         );
       }
-    } else {
-      this.pendingWriteBytes += byteLength;
-      this.ptyProcess?.write(data);
+      return false;
     }
-    this.lastUserInputAt = now;
+    this.pendingWriteBytes += byteLength;
+    if (!this.ptyProcess) return false;
+    this.ptyProcess.write(data);
+    return true;
+  }
+
+  /** write()'s human-input bookkeeping (split out so writeAgentInput can skip it). */
+  private noteUserInput(data: string): void {
     // Follow-up to #275 (gap #3): a genuine human keystroke (or a paste, or a
     // decline like Ctrl-C) is the authoritative "the user actually acted"
     // signal an OUTPUT_IMMUNE_KINDS-confirmed flag (hookNotification/
@@ -2919,36 +2963,46 @@ export class Session {
           advanceAttention(this.attention.state, { type: "userInput", now: Date.now() }),
         );
       }
-      // Rich statuses — a genuine keystroke means the user has responded to
-      // (or moved past) the last finished turn; clear the `finished` latch
-      // so the next poll doesn't keep reporting a turn that's no longer the
-      // current one. See SessionInfo.lastTurnEndedAt's doc comment.
-      let changed = this.attention.lastTurnEndedAt !== null;
-      this.attention.lastTurnEndedAt = null;
-      this.attention.turnEndPingSent = false;
-      // Issue #428 — same reasoning as turn_start's own clear: a genuine
-      // keystroke means the user has moved past the finished turn, so its
-      // backgroundTasks snapshot is stale too.
-      if (this.attention.backgroundTasks.length > 0) changed = true;
-      this.attention.backgroundTasks = [];
-      this.attention.backgroundTasksAt = null;
-      // Follow-up to fix: status-clearing-semantics — a genuine keystroke
-      // into a session showing a stale error IS the retry; typing is as
-      // authoritative an "unblocking action" as the agent's own recovery
-      // (the progress case above already treats forward progress this way).
-      // This used to be markViewed()'s job (cleared on a mere glance, no
-      // action required) — now that markViewed() is gone, a real keystroke
-      // is the replacement unblocking signal. Without this, a hookless or
-      // crashed agent would leave errorState clearable only by the TTL
-      // sweep (clearStaleErrorIfOlderThan).
-      if (this.errorState !== "idle") {
-        this.errorState = "idle";
-        this.errorAt = null;
-        this.errorDetail = null;
-        changed = true;
+      if (this.clearTurnLatches()) {
+        this.emitEvent("status_change", { reason: "genuine_user_input" });
       }
-      if (changed) this.emitEvent("status_change", { reason: "genuine_user_input" });
     }
+  }
+
+  /**
+   * Clears the latches describing the PREVIOUS turn, because a new one is
+   * starting (a genuine human keystroke via noteUserInput, or an agent's
+   * prompt via beginAgentTurn). Returns whether anything changed.
+   */
+  private clearTurnLatches(): boolean {
+    // Rich statuses — a new turn means the last finished one is superseded;
+    // clear the `finished` latch so the next poll doesn't keep reporting a
+    // turn that's no longer the current one. See SessionInfo.lastTurnEndedAt's
+    // doc comment.
+    let changed = this.attention.lastTurnEndedAt !== null;
+    this.attention.lastTurnEndedAt = null;
+    this.attention.turnEndPingSent = false;
+    // Issue #428 — same reasoning as turn_start's own clear: the backgroundTasks
+    // snapshot belongs to the finished turn, so it's stale too.
+    if (this.attention.backgroundTasks.length > 0) changed = true;
+    this.attention.backgroundTasks = [];
+    this.attention.backgroundTasksAt = null;
+    // Follow-up to fix: status-clearing-semantics — typing into a session
+    // showing a stale error IS the retry; it is as authoritative an
+    // "unblocking action" as the agent's own recovery (the progress case
+    // already treats forward progress this way). This used to be
+    // markViewed()'s job (cleared on a mere glance, no action required) —
+    // now that markViewed() is gone, a real keystroke (or a parent's prompt)
+    // is the replacement unblocking signal. Without this, a hookless or
+    // crashed agent would leave errorState clearable only by the TTL sweep
+    // (clearStaleErrorIfOlderThan).
+    if (this.errorState !== "idle") {
+      this.errorState = "idle";
+      this.errorAt = null;
+      this.errorDetail = null;
+      changed = true;
+    }
+    return changed;
   }
 
   /**

@@ -8,6 +8,7 @@ import {
   resolveMcpServerPath,
   buildModelFlag,
   SHELL_METACHARACTERS_RE,
+  standardPromptFraming,
 } from "./shared.js";
 import { ensureForwarderShim, forwarderHookCommand } from "./forwarder-shim.js";
 import { installBundleSkills, uninstallBundleSkills } from "./mullion-bundle.js";
@@ -749,4 +750,6 @@ export const codexAdapter: HookAgentAdapter = {
   // closes that, verified live to make an otherwise-rejected leading-hyphen
   // prompt reach codex's positional PROMPT argument instead.
   initialPromptArgs: (prompt) => `-- ${shellQuote(prompt)}`,
+  // sessions.prompt: paste-then-Enter into the running TUI (see standardPromptFraming).
+  submitPrompt: standardPromptFraming,
 };

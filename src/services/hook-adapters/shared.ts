@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { PromptFraming } from "./types.js";
 import { fileURLToPath } from "node:url";
 
 // Resolves the shared forwarder's absolute path relative to THIS module's
@@ -180,4 +181,48 @@ export function buildModelFlag(
     : /(?:^|\s)--model(?:[\s=]|$)/;
   if (existing.test(command)) return "";
   return ` --model ${shellQuote(model)}`;
+}
+
+/** Max prompt text sessions.prompt will type into an agent (bytes). */
+export const MAX_PROMPT_BYTES = 32 * 1024;
+/** Gap between the pasted body and the Enter that submits it. */
+const PROMPT_SUBMIT_DELAY_MS = 150;
+
+/**
+ * Prompt text made safe to type into a TUI: line endings normalized to LF
+ * (CRLF/CR, and the Unicode separators U+0085 / U+2028 / U+2029, all become
+ * "\n"), then EVERY other control character dropped — C0 (except tab and
+ * "\n"), DEL, and the C1 range U+0080–U+009F (U+009B is an 8-bit CSI) —
+ * plus bidi override/isolate marks. Most importantly ESC: without that a
+ * prompt containing `ESC[201~` would end a bracketed paste early and the rest
+ * be interpreted as raw keystrokes (e.g. answering a permission dialog).
+ */
+export function sanitizePromptText(text: string): string {
+  return text.replace(/\r\n?|[\u0085\u2028\u2029]/g, "\n").replace(
+    // eslint-disable-next-line no-control-regex
+    /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g,
+    "",
+  );
+}
+
+/**
+ * The standard "paste, then Enter" framing for a running agent TUI.
+ *
+ * With bracketed paste on, newlines (and tabs) survive inside the paste
+ * markers. With it off, a bare newline would submit mid-prompt and a raw tab
+ * is a completion keypress, so lines collapse to single spaces and tabs
+ * become spaces.
+ */
+export function standardPromptFraming(
+  text: string,
+  ctx: { bracketedPaste: boolean },
+): PromptFraming {
+  const clean = sanitizePromptText(text);
+  const body = ctx.bracketedPaste
+    ? `\u001b[200~${clean}\u001b[201~`
+    : clean
+        .replace(/\t/g, " ")
+        .replace(/\s*\n\s*/g, " ")
+        .trim();
+  return { body, submit: "\r", submitDelayMs: PROMPT_SUBMIT_DELAY_MS };
 }

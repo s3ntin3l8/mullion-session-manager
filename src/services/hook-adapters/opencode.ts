@@ -1,6 +1,11 @@
 import path from "node:path";
 import { existsSync, readFileSync } from "node:fs";
-import { resolveOpenCodePluginPath, resolveMcpServerPath, shellQuote } from "./shared.js";
+import {
+  resolveOpenCodePluginPath,
+  resolveMcpServerPath,
+  shellQuote,
+  standardPromptFraming,
+} from "./shared.js";
 import {
   agentGuideSourceExists,
   buildAgentGuideBlock,
@@ -524,6 +529,8 @@ export const openCodeAdapter: HookAgentAdapter = {
   // positional argument is `[directory]`, so an unflagged prompt would be
   // silently misread as one.
   initialPromptArgs: (prompt) => `--prompt ${shellQuote(prompt)}`,
+  // sessions.prompt: paste-then-Enter into the running TUI (see standardPromptFraming).
+  submitPrompt: standardPromptFraming,
   // Issue #271 follow-up — resume an existing session by id. v2's
   // `--session <id>` means "continue, or CREATE it if it doesn't exist".
   //

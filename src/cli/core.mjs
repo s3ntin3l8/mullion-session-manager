@@ -18,6 +18,16 @@ import {
   resolveOwnSessionId,
 } from "./client.mjs";
 
+/** Reads a whole stream (io.stdin in production, a fake in tests) as UTF-8. */
+function readAll(stream) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    stream.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    stream.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    stream.on("error", reject);
+  });
+}
+
 /** Read all of stdin as a string. Used for --flag/- piped input. */
 function readStdin() {
   return new Promise((resolve, reject) => {
@@ -714,6 +724,33 @@ const SESSION_SPAWN_CHILD_SPEC = {
 const SESSION_KILL_SPEC = { cascade: "string" };
 const SESSION_CHILDREN_SPEC = { status: "string" };
 const SESSION_WAIT_SPEC = { until: "string", timeout: "string", "after-seq": "string" };
+const SESSION_PROMPT_SPEC = {
+  wait: "boolean",
+  "no-submit": "boolean",
+  until: "string",
+  timeout: "string",
+};
+
+/** --until a,b / --timeout <seconds> -> {until?, timeoutMs?} (shared by `session wait` and `session prompt --wait`). */
+function parseWaitFlags(flags) {
+  const out = {};
+  if (flags.until !== undefined) {
+    out.until = flags.until
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+  if (flags.timeout !== undefined) {
+    const seconds = Number(flags.timeout);
+    if (!Number.isFinite(seconds) || seconds <= 0) {
+      throw new CliUsageError("--timeout must be a positive number of seconds");
+    }
+    // Clamp to the server's own 1 h max: a larger value would overflow the
+    // socket client's 32-bit setTimeout and fire after 1 ms.
+    out.timeoutMs = Math.min(Math.round(seconds * 1000), WAIT_MAX_TIMEOUT_MS);
+  }
+  return out;
+}
 
 function withSessionId(body, opts) {
   return opts.session !== undefined ? { ...body, sessionId: opts.session } : body;
@@ -807,23 +844,7 @@ const sessionCommands = {
     const { flags, rest } = extractFlags(args, SESSION_WAIT_SPEC);
     const id = rest[0] ?? opts.session;
     if (id === undefined) throw new CliUsageError("session id is required");
-    const body = { sessionId: id };
-    if (flags.until !== undefined)
-      body.until = flags.until
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean);
-    let timeoutMs = WAIT_DEFAULT_TIMEOUT_MS;
-    if (flags.timeout !== undefined) {
-      const seconds = Number(flags.timeout);
-      if (!Number.isFinite(seconds) || seconds <= 0) {
-        throw new CliUsageError("--timeout must be a positive number of seconds");
-      }
-      // Clamp to the server's own 1 h max: a larger value would overflow the
-      // socket client's 32-bit setTimeout and fire after 1 ms.
-      timeoutMs = Math.min(Math.round(seconds * 1000), WAIT_MAX_TIMEOUT_MS);
-      body.timeoutMs = timeoutMs;
-    }
+    const body = { sessionId: id, ...parseWaitFlags(flags) };
     if (flags["after-seq"] !== undefined) {
       const seq = Number(flags["after-seq"]);
       if (!Number.isInteger(seq) || seq < 0) {
@@ -832,8 +853,44 @@ const sessionCommands = {
       body.afterSeq = seq;
     }
     const result = await client.request("sessions.wait", body, {
-      timeoutMs: timeoutMs + WAIT_SOCKET_SLACK_MS,
+      timeoutMs: (body.timeoutMs ?? WAIT_DEFAULT_TIMEOUT_MS) + WAIT_SOCKET_SLACK_MS,
     });
+    return { json: result };
+  },
+  // Types a prompt into a running CHILD agent (Claude Code, Codex, opencode)
+  // and, with --wait, blocks until its turn ends. `<text>` is the remaining
+  // positionals joined by spaces, or `-` to read it from stdin. Refused (409)
+  // while the child is blocked on a dialog — typing would answer it.
+  async prompt(client, args, opts, io) {
+    const { flags, rest } = extractFlags(args, SESSION_PROMPT_SPEC);
+    // `<id> <text...>`; when --session supplies the id, EVERY positional is
+    // the text (a multi-word prompt makes "first positional is the id"
+    // ambiguous, so the two forms are not mixed).
+    const id = opts.session ?? rest[0];
+    const words = opts.session !== undefined ? rest : rest.slice(1);
+    if (id === undefined) throw new CliUsageError("session id is required");
+    let text = words.join(" ");
+    if (text === "-") text = await readAll(io.stdin);
+    if (text.trim().length === 0) throw new CliUsageError("prompt text is required");
+    const body = { sessionId: id, text };
+    if (flags["no-submit"] === true) body.submit = false;
+    const waiting = flags.wait === true;
+    if (!waiting && (flags.until !== undefined || flags.timeout !== undefined)) {
+      throw new CliUsageError("--until/--timeout only apply together with --wait");
+    }
+    if (waiting && flags["no-submit"] === true) {
+      throw new CliUsageError("--wait cannot be combined with --no-submit");
+    }
+    let socketTimeoutMs;
+    if (waiting) {
+      body.wait = parseWaitFlags(flags);
+      socketTimeoutMs = (body.wait.timeoutMs ?? WAIT_DEFAULT_TIMEOUT_MS) + WAIT_SOCKET_SLACK_MS;
+    }
+    const result = await client.request(
+      "sessions.prompt",
+      body,
+      socketTimeoutMs !== undefined ? { timeoutMs: socketTimeoutMs } : undefined,
+    );
     return { json: result };
   },
   async create(client, args) {
@@ -1479,7 +1536,7 @@ export const COMMANDS = {
 export const USAGE = `Usage: mullion <command> [args] [flags]
 
 Commands:
-  session list|get|children|wait|create|spawn-child|kill|rename|logs|exec
+  session list|get|children|wait|prompt|create|spawn-child|kill|rename|logs|exec
   browser navigate|click|fill|type|press|select|check|uncheck|hover|
           scroll|wait|dialog|get|eval|snapshot|screenshot|find|console|errors|
           download

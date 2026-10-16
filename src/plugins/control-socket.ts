@@ -23,7 +23,14 @@ import { reclaimSocketPath } from "../services/unix-socket.js";
 import { eq } from "drizzle-orm";
 import { sessions } from "../db/schema.js";
 import type { SessionSeverity, SessionStatus } from "../shared/types.js";
-import { parseWaitTimeout, parseWaitUntil, waitForSession } from "../services/session-wait.js";
+import {
+  parseWaitTimeout,
+  parseWaitUntil,
+  waitForSession,
+  type WaitSnapshot,
+} from "../services/session-wait.js";
+import { getAdapterPromptFraming } from "../services/hook-adapters/index.js";
+import { MAX_PROMPT_BYTES, sanitizePromptText } from "../services/hook-adapters/shared.js";
 
 // Phase 4 (#185) — a general-purpose Unix control socket: the transport
 // behind the `mullion` CLI (#134/#190) and any other local script that wants
@@ -660,6 +667,168 @@ const onField = (key: string, fn: (id: string, ctx: OpContext) => Route | ReplyP
 
 const enc = encodeURIComponent;
 
+/** Narrows an arbitrary body value to a record (else an empty one). */
+function asRecord(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+type WaitBodyOpts = {
+  until: Set<string>;
+  timeoutMs: number;
+  afterSeq?: number;
+};
+
+/** Parses sessions.wait's (and sessions.prompt's `wait`) until/timeoutMs[/afterSeq]. */
+function parseWaitBody(
+  body: Record<string, unknown> | undefined,
+  { allowAfterSeq }: { allowAfterSeq: boolean },
+): { ok: true; opts: WaitBodyOpts } | { ok: false; reply: ReplyPayload } {
+  const until = parseWaitUntil(body?.until);
+  if (!until.ok) return { ok: false, reply: bad(400, until.error) };
+  const timeout = parseWaitTimeout(body?.timeoutMs);
+  if (!timeout.ok) return { ok: false, reply: bad(400, timeout.error) };
+  const afterSeq = allowAfterSeq ? body?.afterSeq : undefined;
+  if (
+    afterSeq !== undefined &&
+    (typeof afterSeq !== "number" || !Number.isInteger(afterSeq) || afterSeq < 0)
+  ) {
+    return { ok: false, reply: bad(400, "'afterSeq' must be a non-negative integer") };
+  }
+  return {
+    ok: true,
+    opts: {
+      until: until.until,
+      timeoutMs: timeout.timeoutMs,
+      ...(afterSeq !== undefined ? { afterSeq } : {}),
+    },
+  };
+}
+
+/** A session's derived status via the SAME REST path GET /api/sessions/:id
+ * serves (so the derivation — and remote-host proxying — can't drift), or
+ * null if it doesn't exist. Throws on any other failure. */
+async function readDerivedStatus(app: FastifyInstance, id: string): Promise<WaitSnapshot | null> {
+  const res = await injectAndShape(app, {
+    method: "GET",
+    url: `/api/sessions/${enc(id)}`,
+    headers: buildAuthHeaders(app),
+  });
+  if (!res.ok) {
+    if (res.status === 404) return null;
+    throw new Error(res.error ?? "unable to read session status");
+  }
+  const row = res.result as {
+    sessionStatus: SessionStatus;
+    sessionStatusSeverity: SessionSeverity;
+    sessionStatusDetail: string | null;
+  };
+  return {
+    status: row.sessionStatus,
+    severity: row.sessionStatusSeverity,
+    detail: row.sessionStatusDetail ?? null,
+  };
+}
+
+/**
+ * Runs one server-side wait on `id` for this connection and maps the outcome
+ * to a reply. Enforces MAX_WAITS_PER_CONNECTION, aborts on socket close
+ * (returns null — nobody left to reply to), and, for a session-scoped
+ * waiter, requires it to stay active for the whole wait.
+ */
+async function runWait(
+  app: FastifyInstance,
+  conn: ConnectionState,
+  id: string,
+  opts: WaitBodyOpts,
+): Promise<ReplyPayload | null> {
+  if ((conn.activeWaits ?? 0) >= MAX_WAITS_PER_CONNECTION) {
+    return bad(429, "too many pending waits on this connection");
+  }
+  const controller = new AbortController();
+  const onClose = () => controller.abort();
+  conn.socket.once("close", onClose);
+  conn.activeWaits = (conn.activeWaits ?? 0) + 1;
+  try {
+    const result = await waitForSession(opts, {
+      signal: controller.signal,
+      // A session-scoped waiter must stay active for the whole wait (the
+      // same rule resolveOwnedSessionId applies at the start).
+      authorized: () => conn.scope !== "session" || sessionRowIsActive(app, conn.sessionId!),
+      readStatus: () => readDerivedStatus(app, id),
+      eventSeqHead: () => app.pty.get(id)?.eventSeqHead ?? 0,
+      // Bound ONCE, at wait start. If the child's Session isn't in app.pty
+      // yet (or is replaced mid-wait) this is a no-op and the wait is woken
+      // only by the 1 s tick — added latency, not a correctness gap (a
+      // `gone` child still matches via readStatus).
+      subscribe: (listener) => app.pty.get(id)?.onEvent(() => listener()) ?? (() => {}),
+    });
+    if ("aborted" in result) return null;
+    return {
+      ok: true,
+      status: 200,
+      result: { ...result, eventSeq: app.pty.get(id)?.eventSeqHead ?? 0 },
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return message === "session not found"
+      ? bad(404, message)
+      : message === "not authorized"
+        ? bad(403, "this session is no longer active")
+        : bad(500, message);
+  } finally {
+    conn.activeWaits -= 1;
+    conn.socket.off("close", onClose);
+  }
+}
+
+const promptLocks = new WeakMap<object, Promise<void>>();
+
+/** Serializes `fn` per key (a Session): FIFO, and a throwing `fn` still releases. */
+async function withPromptLock<T>(key: object, fn: () => Promise<T>): Promise<T> {
+  const previous = promptLocks.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const mine = new Promise<void>((resolve) => (release = resolve));
+  promptLocks.set(
+    key,
+    previous.then(() => mine),
+  );
+  await previous;
+  try {
+    return await fn();
+  } finally {
+    release();
+  }
+}
+
+/** A 409 reply if typing into this session now would be wrong — it is
+ * `blocked` on a dialog (typing would answer it) or gone — else null. Re-reads
+ * the derived status, so it is accurate at the moment it runs. */
+async function refuseIfBlockedOrGone(
+  app: FastifyInstance,
+  id: string,
+  opts: { note?: string } = {},
+): Promise<ReplyPayload | null> {
+  let snapshot: WaitSnapshot | null;
+  try {
+    snapshot = await readDerivedStatus(app, id);
+  } catch (err) {
+    return bad(500, err instanceof Error ? err.message : String(err));
+  }
+  if (snapshot === null) return bad(404, "session not found");
+  if (snapshot.severity === "blocked") {
+    return bad(
+      409,
+      `agent_blocked: the session is ${snapshot.status} — typing would answer its dialog; resolve that first${opts.note ?? ""}`,
+    );
+  }
+  if (snapshot.severity === "gone") {
+    return bad(409, `agent_gone: the session is ${snapshot.status}${opts.note ?? ""}`);
+  }
+  return null;
+}
+
 // Op registry — the extension point every later Phase 4 PR (4.2–4.5) appends
 // to, same "adding an op is a table entry, never a dispatch-loop change"
 // shape as src/mcp/tools.mjs's own TOOLS registry. Request/response ops
@@ -739,96 +908,160 @@ export const OPS: Record<string, OpSpec> = {
         reply(target.reply);
         return;
       }
-      const until = parseWaitUntil(body?.until);
-      if (!until.ok) {
-        reply(bad(400, until.error));
+      const parsed = parseWaitBody(body, { allowAfterSeq: true });
+      if (!parsed.ok) {
+        reply(parsed.reply);
         return;
       }
-      const timeout = parseWaitTimeout(body?.timeoutMs);
-      if (!timeout.ok) {
-        reply(bad(400, timeout.error));
+      // null == the peer hung up mid-wait; there is nobody to reply to.
+      const result = await runWait(app, conn, target.id, parsed.opts);
+      if (result) reply(result);
+    },
+  },
+  // Types a prompt into a running CHILD agent and (optionally) waits for its
+  // turn to end — the "lead agent drives a worker" primitive. Body:
+  // `sessionId` (a child at session scope), `text` (<= 32 KB), `submit`
+  // (default true; false pastes without pressing Enter), `wait` (true, or
+  // {until?, timeoutMs?} — see sessions.wait). Refuses rather than guesses:
+  //   - 409 if the child is `blocked` (typing would ANSWER a permission /
+  //     plan / question dialog) or gone;
+  //   - 501 if the child's agent has no opt-in `submitPrompt` framing
+  //     (hook-adapters/*: claude-code, codex, opencode; plain shells, agy and
+  //     unknown CLIs don't);
+  //   - 503 if the bytes could not be delivered (write backpressure).
+  // The input goes through Session.writeAgentInput, NOT write(): a parent's
+  // prompt must not read as the human acknowledging the child's pending
+  // attention. It still starts a new turn (Session.beginAgentTurn) so a
+  // following wait can't match the previous turn's `finished`.
+  "sessions.prompt": {
+    scopes: ["full", "session"],
+    handler: async ({ app, conn, body, reply }) => {
+      const target = resolveOwnedSessionId(app, conn, body, { childOnly: true });
+      if (!target.ok) {
+        reply(target.reply);
         return;
       }
-      const afterSeq = body?.afterSeq;
-      if (
-        afterSeq !== undefined &&
-        (typeof afterSeq !== "number" || !Number.isInteger(afterSeq) || afterSeq < 0)
-      ) {
-        reply(bad(400, "'afterSeq' must be a non-negative integer"));
+      const text = body?.text;
+      if (typeof text !== "string") {
+        reply(bad(400, "'text' is required"));
         return;
       }
-
-      if ((conn.activeWaits ?? 0) >= MAX_WAITS_PER_CONNECTION) {
-        reply(bad(429, "too many pending waits on this connection"));
+      if (Buffer.byteLength(text, "utf8") > MAX_PROMPT_BYTES) {
+        reply(bad(413, `'text' exceeds ${MAX_PROMPT_BYTES} bytes`));
         return;
+      }
+      // Validate what will actually be TYPED: text that is only control
+      // characters sanitizes to nothing and must not become a bare Enter.
+      if (sanitizePromptText(text).trim().length === 0) {
+        reply(bad(400, "'text' is required"));
+        return;
+      }
+      const submit = body?.submit;
+      if (submit !== undefined && typeof submit !== "boolean") {
+        reply(bad(400, "'submit' must be a boolean"));
+        return;
+      }
+      const shouldSubmit = submit !== false;
+      let waitOpts: Omit<WaitBodyOpts, "afterSeq"> | null = null;
+      const waitArg = body?.wait;
+      if (waitArg !== undefined && waitArg !== false) {
+        if (!shouldSubmit) {
+          reply(bad(400, "'wait' requires 'submit' (nothing to wait for otherwise)"));
+          return;
+        }
+        const parsed = parseWaitBody(waitArg === true ? {} : asRecord(waitArg), {
+          allowAfterSeq: false,
+        });
+        if (!parsed.ok) {
+          reply(parsed.reply);
+          return;
+        }
+        waitOpts = parsed.opts;
+        if ((conn.activeWaits ?? 0) >= MAX_WAITS_PER_CONNECTION) {
+          reply(bad(429, "too many pending waits on this connection"));
+          return;
+        }
       }
 
       const id = target.id;
-      const controller = new AbortController();
-      const onClose = () => controller.abort();
-      conn.socket.once("close", onClose);
-      conn.activeWaits = (conn.activeWaits ?? 0) + 1;
-      try {
-        const result = await waitForSession(
-          {
-            until: until.until,
-            timeoutMs: timeout.timeoutMs,
-            ...(afterSeq !== undefined ? { afterSeq } : {}),
-          },
-          {
-            signal: controller.signal,
-            // A session-scoped waiter must stay active for the whole wait (the
-            // same rule resolveOwnedSessionId applies at the start).
-            authorized: () => conn.scope !== "session" || sessionRowIsActive(app, conn.sessionId!),
-            readStatus: async () => {
-              const res = await injectAndShape(app, {
-                method: "GET",
-                url: `/api/sessions/${enc(id)}`,
-                headers: buildAuthHeaders(app),
-              });
-              if (!res.ok) {
-                if (res.status === 404) return null;
-                throw new Error(res.error ?? "unable to read session status");
-              }
-              const row = res.result as {
-                sessionStatus: SessionStatus;
-                sessionStatusSeverity: SessionSeverity;
-                sessionStatusDetail: string | null;
-              };
-              return {
-                status: row.sessionStatus,
-                severity: row.sessionStatusSeverity,
-                detail: row.sessionStatusDetail ?? null,
-              };
-            },
-            eventSeqHead: () => app.pty.get(id)?.eventSeqHead ?? 0,
-            // Bound ONCE, at wait start. If the child's Session isn't in
-            // app.pty yet (or is replaced mid-wait) this is a no-op and the
-            // wait is woken only by the 1 s tick — added latency, not a
-            // correctness gap (a `gone` child still matches via readStatus).
-            subscribe: (listener) => app.pty.get(id)?.onEvent(() => listener()) ?? (() => {}),
-          },
-        );
-        // Aborted == the peer hung up; there is nobody to reply to.
-        if ("aborted" in result) return;
-        reply({
-          ok: true,
-          status: 200,
-          result: { ...result, eventSeq: app.pty.get(id)?.eventSeqHead ?? 0 },
-        });
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        reply(
-          message === "session not found"
-            ? bad(404, message)
-            : message === "not authorized"
-              ? bad(403, "this session is no longer active")
-              : bad(500, message),
-        );
-      } finally {
-        conn.activeWaits -= 1;
-        conn.socket.off("close", onClose);
+      const initial = app.pty.get(id);
+      if (!initial || !initial.isAlive) {
+        // Also what a remote-host session looks like from here (its PTY lives
+        // on another host's PtyManager) — prompting those is not supported
+        // yet (#1627).
+        reply(bad(409, "the session is not running on this host"));
+        return;
       }
+
+      // One prompt at a time per session: two concurrent prompts would
+      // interleave (body A, body B, Enter A, Enter B) into one merged prompt
+      // and a stray empty submit.
+      const delivery = await withPromptLock(
+        initial,
+        async (): Promise<ReplyPayload | { afterSeq: number }> => {
+          const session = app.pty.get(id);
+          if (session !== initial || !session.isAlive) {
+            return bad(409, "the session is not running on this host");
+          }
+          const refusal = await refuseIfBlockedOrGone(app, id);
+          if (refusal) return refusal;
+          const framing = getAdapterPromptFraming(session.command, text, {
+            bracketedPaste: session.bracketedPaste,
+          });
+          if (framing === null) {
+            return bad(501, "prompt delivery is not supported for this session's agent");
+          }
+          if (!session.writeAgentInput(framing.body)) {
+            return bad(503, "the prompt was not delivered (write backpressure or no live process)");
+          }
+          if (shouldSubmit) {
+            await new Promise((resolve) => setTimeout(resolve, framing.submitDelayMs));
+            if (app.pty.get(id) !== session || !session.isAlive) {
+              return bad(409, "the session exited before the prompt could be submitted");
+            }
+            // A dialog can appear during the gap; Enter would then ANSWER it.
+            // The text is already typed and cannot be taken back, so say so.
+            const lateRefusal = await refuseIfBlockedOrGone(app, id, {
+              note: " — the text was typed but NOT submitted and may still be in its input box",
+            });
+            if (lateRefusal) return lateRefusal;
+            if (!session.writeAgentInput(framing.submit)) {
+              return bad(
+                503,
+                "the prompt was typed but could not be submitted (it may still be in the input box)",
+              );
+            }
+            session.beginAgentTurn();
+          }
+          // Armed AFTER beginAgentTurn(): its own agent_prompt event must not
+          // count as "the child started a turn" — only a later, real event
+          // (the agent's turn_start / progress hook) may satisfy the guard.
+          return { afterSeq: session.eventSeqHead };
+        },
+      );
+      if ("ok" in delivery) {
+        reply(delivery);
+        return;
+      }
+      const { afterSeq } = delivery;
+
+      const delivered = { delivered: true, submitted: shouldSubmit };
+      if (waitOpts === null) {
+        reply({ ok: true, status: 200, result: delivered });
+        return;
+      }
+      const waited = await runWait(app, conn, id, { ...waitOpts, afterSeq });
+      if (waited === null) return;
+      // The prompt WAS delivered; a failed wait is reported alongside, not
+      // as a failure of the whole op.
+      reply({
+        ok: true,
+        status: 200,
+        result: {
+          ...delivered,
+          wait: waited.ok ? waited.result : { error: waited.error, status: waited.status },
+        },
+      });
     },
   },
   // Full scope only (deliberately, not just because REST requires a

@@ -57,6 +57,16 @@ class FakePty {
   }
 }
 
+// A real `claude`/`opencode` child (the sessions.prompt tests) goes through
+// applyHookAdapters, whose prepareLaunch reads bundle-sync.ts's
+// isBundleSyncedFor off the REAL ~/.mullion — pin it so these tests don't
+// depend on the developer machine, but keep every other export real (the
+// bundle.status/resync/remove tests below use them).
+vi.mock("../../src/services/bundle-sync.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  isBundleSyncedFor: () => false,
+}));
+
 vi.mock("node-pty", () => ({
   spawn: vi.fn(() => new FakePty()),
 }));
@@ -1812,10 +1822,11 @@ describe("controlSocketPlugin (issue #185)", () => {
        * sessions.spawn_child op; returns the child's id and its own hook token. */
       async function spawnChildOf(
         hookToken: string,
+        command = "bash",
       ): Promise<{ childId: number; childToken: string }> {
         const socket = await sessionScopeSocket(hookToken);
         socket.write(
-          `${JSON.stringify({ id: 1, op: "sessions.spawn_child", body: { command: "bash" } })}\n`,
+          `${JSON.stringify({ id: 1, op: "sessions.spawn_child", body: { command } })}\n`,
         );
         const reply = await waitForReply(socket);
         socket.destroy();
@@ -2016,6 +2027,358 @@ describe("controlSocketPlugin (issue #185)", () => {
           [live, dead].sort(),
         );
         full.destroy();
+      });
+
+      describe("sessions.prompt", () => {
+        /** The FakePty of the most recently spawned session (the child just created). */
+        const lastPty = () => fakePtyChildren[fakePtyChildren.length - 1];
+        const writes = (pty: FakePty) => pty.writeSpy.mock.calls.map(([d]) => d as string);
+        const PASTE = "\u001b[200~";
+        const PASTE_END = "\u001b[201~";
+
+        async function agentChild(command = "claude") {
+          const parent = await createRealSession();
+          const { childId } = await spawnChildOf(parent.hookToken, command);
+          const pty = lastPty();
+          const socket = await sessionScopeSocket(parent.hookToken);
+          return { ...parent, childId, pty, socket };
+        }
+
+        it("types the prompt as a bracketed paste, then submits with Enter", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { childId, pty, socket } = await agentChild();
+          pty.emitData("\u001b[?2004h"); // the TUI enabled bracketed paste
+          pty.writeSpy.mockClear();
+          const reply = await ask(socket, "sessions.prompt", {
+            sessionId: childId,
+            text: "fix the bug\nthen run the tests",
+          });
+          expect(reply).toMatchObject({
+            ok: true,
+            status: 200,
+            result: { delivered: true, submitted: true },
+          });
+          expect(writes(pty)).toEqual([
+            `${PASTE}fix the bug\nthen run the tests${PASTE_END}`,
+            "\r",
+          ]);
+          socket.destroy();
+        });
+
+        it("without bracketed paste, sends a single-line body", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { childId, pty, socket } = await agentChild("opencode");
+          pty.writeSpy.mockClear();
+          await ask(socket, "sessions.prompt", { sessionId: childId, text: "a\nb" });
+          expect(writes(pty)).toEqual(["a b", "\r"]);
+          socket.destroy();
+        });
+
+        it("strips escape sequences from the text so it cannot break out of the paste", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { childId, pty, socket } = await agentChild();
+          pty.emitData("\u001b[?2004h");
+          pty.writeSpy.mockClear();
+          await ask(socket, "sessions.prompt", {
+            sessionId: childId,
+            text: `hi${PASTE_END}\u0003y`,
+          });
+          expect(writes(pty)[0]).toBe(`${PASTE}hi[201~y${PASTE_END}`);
+          socket.destroy();
+        });
+
+        it("submit:false pastes without pressing Enter and does not start a turn", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { childId, pty, socket } = await agentChild();
+          pty.emitData("\u001b[?2004h");
+          pty.writeSpy.mockClear();
+          const reply = await ask(socket, "sessions.prompt", {
+            sessionId: childId,
+            text: "draft",
+            submit: false,
+          });
+          expect(reply.result).toEqual({ delivered: true, submitted: false });
+          expect(writes(pty)).toEqual([`${PASTE}draft${PASTE_END}`]);
+          socket.destroy();
+        });
+
+        it("does not read as the human acknowledging the child: its attention flag survives", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { childId, socket } = await agentChild();
+          const session = app.pty.get(String(childId))!;
+          session.emitHookEvent({ kind: "notification", title: "Permission needed", body: "" });
+          expect(session.toInfo().attention).toBe(true);
+          await ask(socket, "sessions.prompt", { sessionId: childId, text: "go" });
+          expect(session.toInfo().attention).toBe(true);
+          socket.destroy();
+        });
+
+        it("starts a new turn: the previous turn's finished latch is cleared", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { childId, socket } = await agentChild();
+          const session = app.pty.get(String(childId))!;
+          session.emitHookEvent({ kind: "progress", phase: "done" });
+          expect(session.toInfo().lastTurnEndedAt).not.toBeNull();
+          await ask(socket, "sessions.prompt", { sessionId: childId, text: "next" });
+          expect(session.toInfo().lastTurnEndedAt).toBeNull();
+          socket.destroy();
+        });
+
+        it("wait: a stale finished does not satisfy the wait; it resolves on the new turn's end", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { childId, socket } = await agentChild();
+          const session = app.pty.get(String(childId))!;
+          session.emitHookEvent({ kind: "progress", phase: "done" });
+          // The old `finished` must not match `done`: the wait has to time out…
+          const stale = await ask(socket, "sessions.prompt", {
+            sessionId: childId,
+            text: "go",
+            wait: { until: ["done"], timeoutMs: 300 },
+          });
+          expect(stale.result).toMatchObject({
+            delivered: true,
+            wait: { timedOut: true },
+          });
+          // …and resolve once the agent's NEW turn ends.
+          socket.write(
+            `${JSON.stringify({ id: 9, op: "sessions.prompt", body: { sessionId: childId, text: "again", wait: { until: ["done"], timeoutMs: 10_000 } } })}\n`,
+          );
+          await new Promise((resolve) => setTimeout(resolve, 400));
+          session.emitHookEvent({ kind: "progress", phase: "done" });
+          const done = await waitForReply(socket);
+          expect(done.result).toMatchObject({
+            delivered: true,
+            wait: { timedOut: false, status: "finished", severity: "done" },
+          });
+          socket.destroy();
+        });
+
+        it("wait:true uses the wait defaults", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { childId, socket } = await agentChild();
+          const session = app.pty.get(String(childId))!;
+          socket.write(
+            `${JSON.stringify({ id: 1, op: "sessions.prompt", body: { sessionId: childId, text: "go", wait: true } })}\n`,
+          );
+          await new Promise((resolve) => setTimeout(resolve, 300));
+          session.emitHookEvent({ kind: "progress", phase: "done" });
+          const reply = await waitForReply(socket);
+          expect(reply.result).toMatchObject({ delivered: true, wait: { timedOut: false } });
+          socket.destroy();
+        });
+
+        it("409 agent_blocked while the child is waiting on a permission dialog — and nothing is typed", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { childId, pty, socket } = await agentChild();
+          const session = app.pty.get(String(childId))!;
+          session.emitHookEvent({ kind: "permission_request", tool: "Bash", summary: "Run ls" });
+          pty.writeSpy.mockClear();
+          const reply = await ask(socket, "sessions.prompt", { sessionId: childId, text: "go" });
+          expect(reply).toMatchObject({ ok: false, status: 409 });
+          expect(reply.error).toMatch(/^agent_blocked: /);
+          expect(pty.writeSpy).not.toHaveBeenCalled();
+          socket.destroy();
+        });
+
+        it("a dialog that appears between the paste and the Enter is NOT answered", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { childId, pty, socket } = await agentChild();
+          const session = app.pty.get(String(childId))!;
+          pty.emitData("\u001b[?2004h");
+          pty.writeSpy.mockClear();
+          // The agent raises a permission dialog right after the paste lands.
+          pty.writeSpy.mockImplementationOnce(() => {
+            session.emitHookEvent({ kind: "permission_request", tool: "Bash", summary: "Run ls" });
+          });
+          const reply = await ask(socket, "sessions.prompt", { sessionId: childId, text: "go" });
+          expect(reply).toMatchObject({ ok: false, status: 409 });
+          expect(reply.error).toMatch(/^agent_blocked: .*NOT submitted/);
+          expect(writes(pty)).toEqual([`${PASTE}go${PASTE_END}`]); // no "\r"
+          socket.destroy();
+        });
+
+        it("serializes concurrent prompts to one child (no interleaved bodies and Enters)", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { childId, pty, socket } = await agentChild();
+          const other = await fullScopeSocket();
+          pty.emitData("\u001b[?2004h");
+          pty.writeSpy.mockClear();
+          const frames = collectFrames(socket);
+          const otherFrames = collectFrames(other);
+          socket.write(
+            `${JSON.stringify({ id: 1, op: "sessions.prompt", body: { sessionId: childId, text: "AAA" } })}\n`,
+          );
+          other.write(
+            `${JSON.stringify({ id: 2, op: "sessions.prompt", body: { sessionId: childId, text: "BBB" } })}\n`,
+          );
+          await vi.waitFor(() => expect([frames.length, otherFrames.length]).toEqual([1, 1]), {
+            timeout: 3_000,
+          });
+          const seq = writes(pty);
+          expect(seq).toHaveLength(4);
+          // Each body is immediately followed by its own Enter.
+          expect(seq[1]).toBe("\r");
+          expect(seq[3]).toBe("\r");
+          expect(new Set([seq[0], seq[2]])).toEqual(
+            new Set([`${PASTE}AAA${PASTE_END}`, `${PASTE}BBB${PASTE_END}`]),
+          );
+          socket.destroy();
+          other.destroy();
+        });
+
+        it("text that sanitizes to nothing is rejected, not turned into a bare Enter", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { childId, pty, socket } = await agentChild();
+          pty.writeSpy.mockClear();
+          for (const text of ["\u001b", "\u0003\u009b", " \u202e "]) {
+            expect(
+              await ask(socket, "sessions.prompt", { sessionId: childId, text }),
+            ).toMatchObject({
+              ok: false,
+              status: 400,
+            });
+          }
+          expect(pty.writeSpy).not.toHaveBeenCalled();
+          socket.destroy();
+        });
+
+        it("409 agent_gone for an exited child", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { childId, pty, socket } = await agentChild();
+          app.db.update(sessions).set({ status: "exited" }).where(eq(sessions.id, childId)).run();
+          pty.writeSpy.mockClear();
+          const reply = await ask(socket, "sessions.prompt", { sessionId: childId, text: "go" });
+          expect(reply).toMatchObject({ ok: false, status: 409 });
+          expect(reply.error).toMatch(/^agent_gone: /);
+          expect(pty.writeSpy).not.toHaveBeenCalled();
+          socket.destroy();
+        });
+
+        it("409 when the child's process is no longer running", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { childId, pty, socket } = await agentChild();
+          for (const cb of pty.exitListeners) cb();
+          pty.writeSpy.mockClear();
+          const reply = await ask(socket, "sessions.prompt", { sessionId: childId, text: "go" });
+          expect(reply).toMatchObject({ ok: false, status: 409 });
+          expect(pty.writeSpy).not.toHaveBeenCalled();
+          socket.destroy();
+        });
+
+        it("501 for a plain shell child, and nothing is typed", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { childId, pty, socket } = await agentChild("bash");
+          pty.writeSpy.mockClear();
+          const reply = await ask(socket, "sessions.prompt", { sessionId: childId, text: "go" });
+          expect(reply).toMatchObject({ ok: false, status: 501 });
+          expect(pty.writeSpy).not.toHaveBeenCalled();
+          socket.destroy();
+        });
+
+        it("503 when the write is dropped by backpressure", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { childId, socket } = await agentChild();
+          const session = app.pty.get(String(childId))!;
+          session.writeAgentInput("a".repeat(4 * 1024 * 1024)); // fills this window's cap
+          const reply = await ask(socket, "sessions.prompt", { sessionId: childId, text: "go" });
+          expect(reply).toMatchObject({ ok: false, status: 503 });
+          socket.destroy();
+        });
+
+        it("validates arguments before touching the child", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { childId, pty, socket } = await agentChild();
+          pty.writeSpy.mockClear();
+          const big = "x".repeat(32 * 1024 + 1);
+          const cases: Array<[Record<string, unknown>, number]> = [
+            [{}, 400],
+            [{ text: "" }, 400],
+            [{ text: "   " }, 400],
+            [{ text: 5 }, 400],
+            [{ text: big }, 413],
+            [{ text: "go", submit: "yes" }, 400],
+            [{ text: "go", submit: false, wait: true }, 400],
+            [{ text: "go", wait: { until: ["bogus"] } }, 400],
+            [{ text: "go", wait: { timeoutMs: -1 } }, 400],
+          ];
+          for (const [extra, status] of cases) {
+            expect(
+              await ask(socket, "sessions.prompt", { sessionId: childId, ...extra }),
+            ).toMatchObject({ ok: false, status });
+          }
+          expect(pty.writeSpy).not.toHaveBeenCalled();
+          socket.destroy();
+        });
+
+        it("session scope may only prompt its own children — not itself, a stranger, or nothing", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { sessionId, socket } = await agentChild();
+          const stranger = await createRealSession();
+          expect(await ask(socket, "sessions.prompt", { sessionId, text: "go" })).toMatchObject({
+            ok: false,
+            status: 403,
+          });
+          expect(await ask(socket, "sessions.prompt", { text: "go" })).toMatchObject({
+            ok: false,
+            status: 403,
+          });
+          expect(
+            await ask(socket, "sessions.prompt", { sessionId: stranger.sessionId, text: "go" }),
+          ).toEqual({ id: 1, ...NOT_MINE });
+          socket.destroy();
+        });
+
+        it("full scope can prompt any live agent session by id", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { childId, pty, socket } = await agentChild();
+          socket.destroy();
+          const full = await fullScopeSocket();
+          pty.writeSpy.mockClear();
+          const reply = await ask(full, "sessions.prompt", { sessionId: childId, text: "go" });
+          expect(reply.ok).toBe(true);
+          expect(writes(pty).at(-1)).toBe("\r");
+          full.destroy();
+        });
+
+        it("the cap on pending waits applies to prompt+wait (429, nothing typed)", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { childId, pty, socket } = await agentChild();
+          const frames = collectFrames(socket);
+          for (let id = 1; id <= 4; id++) {
+            socket.write(
+              `${JSON.stringify({ id, op: "sessions.wait", body: { sessionId: childId, until: ["awaiting_elicitation"], timeoutMs: 60_000 } })}\n`,
+            );
+          }
+          await new Promise((resolve) => setTimeout(resolve, 200));
+          pty.writeSpy.mockClear();
+          socket.write(
+            `${JSON.stringify({ id: 5, op: "sessions.prompt", body: { sessionId: childId, text: "go", wait: true } })}\n`,
+          );
+          await waitUntil(() => frames.some((f) => f.id === 5));
+          expect(frames.find((f) => f.id === 5)).toMatchObject({ ok: false, status: 429 });
+          expect(pty.writeSpy).not.toHaveBeenCalled();
+          socket.destroy();
+        });
       });
 
       describe("sessions.wait", () => {
